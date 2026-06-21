@@ -1,0 +1,10 @@
+import { ApiUrls } from '@/request/urls'
+import type { {{pascalCase name}}Data } from '@/services/{{camelCase name}}'
+import { registerMock } from './registry'
+
+/**
+ * {{pascalCase name}} 模块 Mock 数据(与 services/{{camelCase name}}.ts 一一对应)
+ */
+registerMock('GET', ApiUrls.{{camelCase name}}.data, (): {{pascalCase name}}Data => {
+  return { id: 'mock-1' }
+})

@@ -1,0 +1,42 @@
+// ============================================
+// 设计变量(SCSS 编译期变量)
+// 注意: 此文件已通过 vite additionalData 自动注入所有 scss,
+//       只允许放变量/函数,禁止输出任何 CSS 规则
+// 颜色类 token 在 themes.scss 中以 CSS 变量定义(支持深浅色切换)
+// TODO: 待 Figma MCP 恢复后,从设计稿提取真实 token 替换
+// ============================================
+
+// ----- 字号 -----
+$font-size-xs: 11px;
+$font-size-sm: 12px;
+$font-size-base: 13px;
+$font-size-lg: 14px;
+$font-size-xl: 18px;
+$font-size-xxl: 24px;
+
+// ----- 间距(4 的倍数体系) -----
+$spacing-xs: 4px;
+$spacing-sm: 8px;
+$spacing-md: 12px;
+$spacing-lg: 16px;
+$spacing-xl: 24px;
+$spacing-xxl: 32px;
+
+// ----- 圆角 -----
+$radius-sm: 4px;
+$radius-md: 8px;
+$radius-lg: 12px;
+$radius-xl: 16px;
+$radius-full: 9999px;
+
+// ----- 标题栏 -----
+$titlebar-height: 38px;
+
+// ----- 层级 -----
+$z-titlebar: 100;
+$z-modal: 1000;
+$z-toast: 2000;
+
+// ----- 动画时长 -----
+$duration-fast: 0.15s;
+$duration-base: 0.25s;

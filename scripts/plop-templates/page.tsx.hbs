@@ -1,0 +1,21 @@
+import { useTranslation } from 'react-i18next'
+import { useRequest } from 'ahooks'
+import { fetch{{pascalCase name}}Data } from '@/services/{{camelCase name}}'
+import styles from './{{camelCase name}}.module.scss'
+
+/**
+ * {{pascalCase name}} 页面
+ *
+ * 按 Figma 设计稿实现 UI,基础能力用法可参考 pages/Example。
+ */
+export default function {{pascalCase name}}Page(): React.JSX.Element {
+  const { t } = useTranslation()
+  const { data, loading } = useRequest(fetch{{pascalCase name}}Data)
+
+  return (
+    <div className={styles.page}>
+      <h1>{{pascalCase name}}</h1>
+      {loading ? <p>{t('common.loading')}</p> : <pre>{JSON.stringify(data, null, 2)}</pre>}
+    </div>
+  )
+}

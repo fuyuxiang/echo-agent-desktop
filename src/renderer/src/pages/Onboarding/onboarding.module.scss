@@ -1,0 +1,125 @@
+.page {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+}
+
+.card {
+  width: 480px;
+  padding: $spacing-xxl;
+  background: var(--bg-secondary);
+  border-radius: $radius-lg;
+  border: 1px solid var(--border);
+}
+
+.title {
+  font-size: $font-size-xxl;
+  margin-bottom: $spacing-xl;
+  text-align: center;
+}
+
+.section h2 {
+  font-size: $font-size-lg;
+  margin-bottom: $spacing-lg;
+}
+
+.providerList {
+  display: flex;
+  gap: $spacing-sm;
+  margin-bottom: $spacing-lg;
+  flex-wrap: wrap;
+}
+
+.providerBtn {
+  padding: $spacing-sm $spacing-lg;
+  border: 1px solid var(--border);
+  border-radius: $radius-md;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+
+  &.selected {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+    background: var(--bg-active);
+  }
+}
+
+.keyInput {
+  width: 100%;
+  padding: $spacing-md;
+  border: 1px solid var(--border);
+  border-radius: $radius-md;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  margin-bottom: $spacing-lg;
+  font-size: $font-size-base;
+}
+
+.submitBtn {
+  width: 100%;
+  padding: $spacing-md;
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: $radius-md;
+  cursor: pointer;
+  font-size: $font-size-base;
+}
+
+.progress {
+  margin: $spacing-lg 0;
+}
+
+.progressBar {
+  height: 4px;
+  background: var(--color-primary);
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+.progressText {
+  margin-top: $spacing-sm;
+  font-size: $font-size-sm;
+  color: var(--text-secondary);
+}
+
+.error {
+  margin-top: $spacing-md;
+  padding: $spacing-md;
+  background: var(--bg-error, rgba(255, 0, 0, 0.05));
+  border-radius: $radius-md;
+}
+
+.errorText {
+  color: var(--color-danger, #e53e3e);
+  font-size: $font-size-sm;
+  margin-bottom: $spacing-sm;
+}
+
+.retryRow {
+  display: flex;
+  gap: $spacing-sm;
+  margin-top: $spacing-sm;
+
+  input {
+    flex: 1;
+    padding: $spacing-sm;
+    border: 1px solid var(--border);
+    border-radius: $radius-sm;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+  }
+
+  button {
+    padding: $spacing-sm $spacing-lg;
+    border: 1px solid var(--color-primary);
+    color: var(--color-primary);
+    background: transparent;
+    border-radius: $radius-sm;
+    cursor: pointer;
+  }
+}

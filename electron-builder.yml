@@ -1,0 +1,62 @@
+# electron-builder 打包配置(mac / win)
+appId: com.echo.agent-desktop
+productName: Echo Agent
+
+directories:
+  buildResources: resources
+  output: release/${version}
+
+# 打包内容: 只带构建产物,排除源码
+files:
+  - out/**
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!scripts/*'
+  - '!docs/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintignore,eslint.config.mjs,.prettierignore,.prettierrc.json,commitlint.config.mjs}'
+  - '!{.env,.env.*,.npmrc,package-lock.json}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+
+# 额外资源(托盘图标等运行时读取的文件)
+extraResources:
+  - from: resources/trayTemplate.png
+    to: trayTemplate.png
+  - from: resources/models/asr
+    to: models/asr
+
+# 原生模块(better-sqlite3)自动按 Electron ABI rebuild
+npmRebuild: true
+
+# 不打包进 asar 的原生模块
+asarUnpack:
+  - resources/**
+  - '**/*.node'
+
+mac:
+  icon: resources/icon.png
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  # 暂无开发者证书,跳过签名(仅内部分发)
+  identity: null
+
+win:
+  icon: resources/icon.png
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  shortcutName: Echo Agent
+
+# 自动更新发布源(更新服务器就绪后取消注释并配置)
+# publish:
+#   provider: generic
+#   url: https://updates.echo.example.com

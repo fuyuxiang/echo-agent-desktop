@@ -1,0 +1,100 @@
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: $spacing-sm;
+  width: min(100%, 880px);
+  margin: 0 auto;
+  padding: 10px $spacing-xl;
+
+  &.userRow {
+    justify-content: flex-end;
+  }
+}
+
+.avatar {
+  @include flex-center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border-muted);
+  border-radius: $radius-full;
+  background: var(--color-bg-elevated);
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 750;
+  box-shadow: var(--shadow-card);
+}
+
+.userAvatar {
+  color: var(--color-text-2);
+}
+
+.messageStack {
+  display: flex;
+  max-width: min(76%, 720px);
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.userRow .messageStack {
+  align-items: flex-end;
+}
+
+.role {
+  padding: 0 2px;
+  color: var(--color-text-3);
+  font-size: $font-size-xs;
+  font-weight: 650;
+}
+
+.bubble {
+  width: fit-content;
+  max-width: 100%;
+  padding: 10px $spacing-md;
+  border: 1px solid var(--color-border-muted);
+  border-radius: $radius-lg;
+  font-size: $font-size-base;
+  line-height: 1.6;
+  box-shadow: var(--shadow-card);
+}
+
+.userBubble {
+  background: var(--color-bg-subtle);
+  color: var(--color-text-1);
+  font-weight: 500;
+}
+
+.assistantBubble {
+  background: var(--color-bg-container);
+  color: var(--color-text-1);
+  backdrop-filter: blur(14px);
+}
+
+.reasoning {
+  margin-bottom: $spacing-sm;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-muted);
+  border-radius: $radius-md;
+  background: var(--color-bg-subtle);
+  color: var(--color-text-2);
+  font-size: $font-size-sm;
+
+  summary {
+    cursor: pointer;
+    color: var(--color-text-3);
+    font-weight: 650;
+    user-select: none;
+  }
+
+  &[open] summary {
+    margin-bottom: 6px;
+  }
+}
+
+.system {
+  text-align: center;
+  color: var(--color-text-3);
+  font-size: $font-size-sm;
+  padding: $spacing-sm;
+}
