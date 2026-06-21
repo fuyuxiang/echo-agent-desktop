@@ -6,6 +6,7 @@ import {
   extractRecentRounds,
   buildPrimerText
 } from '../session-history'
+import type { SessionMessageLike } from '../session-history'
 
 describe('session-history', () => {
   it('48h 常量与 6 轮常量正确', () => {
@@ -20,12 +21,12 @@ describe('session-history', () => {
   })
 
   it('extractRecentRounds: 取最近 N 轮(user+assistant), 过滤 system', () => {
-    const msgs = [
-      { role: 'system' as const, content: 's' },
-      { role: 'user' as const, content: 'u1' },
-      { role: 'assistant' as const, content: 'a1' },
-      { role: 'user' as const, content: 'u2' },
-      { role: 'assistant' as const, content: 'a2' }
+    const msgs: SessionMessageLike[] = [
+      { role: 'system', content: 's' },
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'u2' },
+      { role: 'assistant', content: 'a2' }
     ]
     const out = extractRecentRounds(msgs, 1)
     expect(out).toEqual([
@@ -35,9 +36,9 @@ describe('session-history', () => {
   })
 
   it('extractRecentRounds: 不足 N 轮时返回全部(去 system)', () => {
-    const msgs = [
-      { role: 'user' as const, content: 'u1' },
-      { role: 'assistant' as const, content: 'a1' }
+    const msgs: SessionMessageLike[] = [
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' }
     ]
     expect(extractRecentRounds(msgs, 6)).toHaveLength(2)
   })
