@@ -40,6 +40,7 @@ export const IpcChannels = {
     sessionDelete: 'db:session:delete',
     sessionMessages: 'db:session:messages',
     sessionAppendMessage: 'db:session:append-message',
+    sessionDeleteMessage: 'db:session:delete-message',
     sessionUpdateTitle: 'db:session:update-title'
   },
 

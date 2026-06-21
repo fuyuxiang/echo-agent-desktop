@@ -56,6 +56,8 @@ const api: BridgeApi = {
       delete: (chatId) => ipcRenderer.invoke(IpcChannels.db.sessionDelete, chatId),
       getMessages: (chatId) => ipcRenderer.invoke(IpcChannels.db.sessionMessages, chatId),
       appendMessage: (input) => ipcRenderer.invoke(IpcChannels.db.sessionAppendMessage, input),
+      deleteLastAssistantMessage: (chatId) =>
+        ipcRenderer.invoke(IpcChannels.db.sessionDeleteMessage, chatId),
       updateTitle: (chatId, title) =>
         ipcRenderer.invoke(IpcChannels.db.sessionUpdateTitle, chatId, title)
     }
