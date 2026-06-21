@@ -1,73 +1,47 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useChatStore, type ChatSession } from '@/stores/chatStore'
 import { useAgentStore } from '@/stores/agentStore'
 import { agentWs } from '@/services/agent/ws'
-import { chatAPI, type Session } from '@/services/agent/chat'
+import { chatAPI } from '@/services/agent/chat'
+import { db } from '@/utils/db'
+import {
+  isSessionStale,
+  extractRecentRounds,
+  buildPrimerText,
+  type SessionMessageLike
+} from '@/services/session-history'
 import { toast } from '@/components/Toast'
 import { ROUTES } from '@/constants'
 
-function getSessionViewKey(session: Session, index: number): string {
-  return [
-    session.session_key || 'empty-session-key',
-    session.chat_id || 'empty-chat-id',
-    session.platform || 'empty-platform',
-    session.last_activity || 'empty-last-activity',
-    index
-  ].join('::')
-}
-
-function toChatSessions(
-  rawSessions: Session[],
-  deletedViewKeys: ReadonlySet<string>
-): ChatSession[] {
-  return rawSessions
-    .map((s, index) => ({
-      viewKey: getSessionViewKey(s, index),
-      key: s.session_key,
-      platform: s.platform,
-      chatId: s.chat_id,
-      lastActivity: s.last_activity,
-      messageCount: s.message_count
-    }))
-    .filter((s) => !deletedViewKeys.has(s.viewKey))
-}
-
 export interface SessionActions {
-  handleNewSession: () => void
+  handleNewSession: () => Promise<void>
 }
 
 export function useSessionActions(): SessionActions {
   const setCurrentSessionKey = useAgentStore((s) => s.setCurrentSessionKey)
   const clearMessages = useChatStore((s) => s.clearMessages)
   const clearExecutionEvents = useAgentStore((s) => s.clearExecutionEvents)
-  const addSession = useChatStore((s) => s.addSession)
-  const setActiveViewKey = useChatStore((s) => s.setActiveViewKey)
+  const setActiveChatId = useChatStore((s) => s.setActiveChatId)
+  const loadSessionsFromLocal = useChatStore((s) => s.loadSessionsFromLocal)
   const navigate = useNavigate()
   const location = useLocation()
 
-  const handleNewSession = useCallback((): void => {
-    const viewKey = `local-${Date.now()}`
-    addSession({
-      viewKey,
-      key: '',
-      platform: '',
-      chatId: '',
-      lastActivity: new Date().toISOString(),
-      messageCount: 0,
-      title: '新对话'
-    })
-    setActiveViewKey(viewKey)
-    setCurrentSessionKey('')
+  const handleNewSession = useCallback(async (): Promise<void> => {
+    const chatId = crypto.randomUUID()
+    await db.session.upsert({ chatId, title: '新对话', platform: 'desktop' })
+    await loadSessionsFromLocal()
+    setActiveChatId(chatId)
+    setCurrentSessionKey(chatId)
     clearMessages()
     clearExecutionEvents()
-    agentWs.switchSession('default')
+    agentWs.switchSession(chatId)
     if (!location.pathname.startsWith(ROUTES.chat)) {
       navigate(ROUTES.chat)
     }
   }, [
-    addSession,
-    setActiveViewKey,
+    loadSessionsFromLocal,
+    setActiveChatId,
     setCurrentSessionKey,
     clearMessages,
     clearExecutionEvents,
@@ -80,69 +54,50 @@ export function useSessionActions(): SessionActions {
 
 export interface SessionManager {
   sessions: ChatSession[]
-  activeSessionViewKey: string
-  selectingViewKey: string
-  deletingViewKey: string
-  handleNewSession: () => void
+  activeChatId: string
+  selectingChatId: string
+  deletingChatId: string
+  handleNewSession: () => Promise<void>
   handleSelectSession: (session: ChatSession) => Promise<void>
   handleDeleteSession: (session: ChatSession, e: React.MouseEvent) => Promise<void>
 }
 
 export function useSessionManager(): SessionManager {
   const sessions = useChatStore((s) => s.sessions)
-  const setSessions = useChatStore((s) => s.setSessions)
-  const setMessages = useChatStore((s) => s.setMessages)
   const clearMessages = useChatStore((s) => s.clearMessages)
-  const activeSessionViewKey = useChatStore((s) => s.activeViewKey)
-  const setActiveSessionViewKey = useChatStore((s) => s.setActiveViewKey)
+  const activeChatId = useChatStore((s) => s.activeChatId)
+  const setActiveChatId = useChatStore((s) => s.setActiveChatId)
+  const loadSessionsFromLocal = useChatStore((s) => s.loadSessionsFromLocal)
+  const loadMessagesFromLocal = useChatStore((s) => s.loadMessagesFromLocal)
   const wsConnected = useAgentStore((s) => s.wsConnected)
-  const currentSessionKey = useAgentStore((s) => s.currentSessionKey)
   const setCurrentSessionKey = useAgentStore((s) => s.setCurrentSessionKey)
   const clearExecutionEvents = useAgentStore((s) => s.clearExecutionEvents)
 
   const navigate = useNavigate()
   const location = useLocation()
 
-  const [selectingViewKey, setSelectingViewKey] = useState('')
-  const [deletingViewKey, setDeletingViewKey] = useState('')
-  const deletedSessionViewKeysRef = useRef<Set<string>>(new Set())
+  const [selectingChatId, setSelectingChatId] = useState('')
+  const [deletingChatId, setDeletingChatId] = useState('')
 
   useEffect(() => {
-    chatAPI
-      .getSessions()
-      .then((data) => setSessions(toChatSessions(data.sessions, deletedSessionViewKeysRef.current)))
-      .catch(() => {})
-  }, [wsConnected, setSessions])
+    loadSessionsFromLocal().catch(() => {})
+  }, [wsConnected, loadSessionsFromLocal])
 
-  const reloadSessions = useCallback(
-    async (deletedViewKeys = deletedSessionViewKeysRef.current): Promise<void> => {
-      const data = await chatAPI.getSessions()
-      setSessions(toChatSessions(data.sessions, deletedViewKeys))
-    },
-    [setSessions]
-  )
-
-  const handleNewSession = useCallback((): void => {
-    const viewKey = `local-${Date.now()}`
-    useChatStore.getState().addSession({
-      viewKey,
-      key: '',
-      platform: '',
-      chatId: '',
-      lastActivity: new Date().toISOString(),
-      messageCount: 0,
-      title: '新对话'
-    })
-    setActiveSessionViewKey(viewKey)
-    setCurrentSessionKey('')
+  const handleNewSession = useCallback(async (): Promise<void> => {
+    const chatId = crypto.randomUUID()
+    await db.session.upsert({ chatId, title: '新对话', platform: 'desktop' })
+    await loadSessionsFromLocal()
+    setActiveChatId(chatId)
+    setCurrentSessionKey(chatId)
     clearMessages()
     clearExecutionEvents()
-    agentWs.switchSession('default')
+    agentWs.switchSession(chatId)
     if (!location.pathname.startsWith(ROUTES.chat)) {
       navigate(ROUTES.chat)
     }
   }, [
-    setActiveSessionViewKey,
+    loadSessionsFromLocal,
+    setActiveChatId,
     setCurrentSessionKey,
     clearMessages,
     clearExecutionEvents,
@@ -151,105 +106,70 @@ export function useSessionManager(): SessionManager {
   ])
 
   const handleSelectSession = async (session: ChatSession): Promise<void> => {
-    const isActive = activeSessionViewKey
-      ? session.viewKey === activeSessionViewKey
-      : session.key === currentSessionKey
-    if (selectingViewKey || isActive) return
+    if (selectingChatId || session.chatId === activeChatId) return
 
-    if (!session.key) {
-      toast.error('该会话缺少运行时标识，无法打开')
-      return
-    }
-
-    setSelectingViewKey(session.viewKey)
+    setSelectingChatId(session.chatId)
     try {
-      setActiveSessionViewKey(session.viewKey)
-      setCurrentSessionKey(session.key)
-      clearMessages()
+      setActiveChatId(session.chatId)
+      setCurrentSessionKey(session.chatId)
       clearExecutionEvents()
-      agentWs.switchSession(session.key)
+      await loadMessagesFromLocal(session.chatId)
 
-      if (!location.pathname.startsWith(ROUTES.chat)) {
-        navigate(ROUTES.chat)
+      if (isSessionStale(session.lastActivity)) {
+        const msgs = useChatStore.getState().messages
+        const rounds = extractRecentRounds(
+          msgs.map((m) => ({ role: m.role, content: m.content })) as SessionMessageLike[]
+        )
+        useChatStore.getState().setPendingPrimer(buildPrimerText(rounds))
+      } else {
+        useChatStore.getState().setPendingPrimer('')
       }
 
-      const history = await chatAPI.getSessionMessages(session.key)
-      setMessages(
-        history.length > 0
-          ? history
-          : [
-              {
-                id: `system-session-${session.viewKey}`,
-                role: 'system',
-                content:
-                  '已切换到该会话。该会话暂无可展示的历史消息，继续发送消息会沿用这个会话上下文。',
-                timestamp: 0
-              }
-            ]
-      )
-      if (history.length === 0) {
-        toast.info('已切换会话；暂无可展示的历史消息')
+      agentWs.switchSession(session.chatId)
+      if (!location.pathname.startsWith(ROUTES.chat)) {
+        navigate(ROUTES.chat)
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       toast.error(`打开会话失败：${message}`)
     } finally {
-      setSelectingViewKey('')
+      setSelectingChatId('')
     }
   }
 
   const handleDeleteSession = async (session: ChatSession, e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
-    if (deletingViewKey) return
+    if (deletingChatId) return
 
-    setDeletingViewKey(session.viewKey)
+    setDeletingChatId(session.chatId)
     try {
-      const duplicateRuntimeKey =
-        session.key && sessions.filter((item) => item.key === session.key).length > 1
-      const canDeleteInRuntime = Boolean(session.key) && !duplicateRuntimeKey
+      await db.session.delete(session.chatId)
+      // Best-effort server cleanup; ignore failures since local is the source of truth.
+      chatAPI.deleteSession(session.chatId).catch(() => {})
+      await loadSessionsFromLocal()
 
-      if (canDeleteInRuntime) {
-        await chatAPI.deleteSession(session.key)
-      }
-
-      const nextDeletedViewKeys = new Set(deletedSessionViewKeysRef.current)
-      nextDeletedViewKeys.add(session.viewKey)
-      deletedSessionViewKeysRef.current = nextDeletedViewKeys
-      setSessions(
-        useChatStore.getState().sessions.filter((item) => item.viewKey !== session.viewKey)
-      )
-
-      const isDeletingActiveSession = activeSessionViewKey
-        ? activeSessionViewKey === session.viewKey
-        : currentSessionKey === session.key
-      if (isDeletingActiveSession) {
-        setActiveSessionViewKey('')
+      if (session.chatId === activeChatId) {
+        setActiveChatId('')
         setCurrentSessionKey('')
         clearMessages()
         clearExecutionEvents()
         agentWs.switchSession('default')
       }
 
-      try {
-        await reloadSessions(nextDeletedViewKeys)
-      } catch {
-        // local list already updated
-      }
-
-      toast.success(canDeleteInRuntime ? '会话已删除' : '已从当前列表移除')
+      toast.success('会话已删除')
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       toast.error(`删除会话失败：${message}`)
     } finally {
-      setDeletingViewKey('')
+      setDeletingChatId('')
     }
   }
 
   return {
     sessions,
-    activeSessionViewKey,
-    selectingViewKey,
-    deletingViewKey,
+    activeChatId,
+    selectingChatId,
+    deletingChatId,
     handleNewSession,
     handleSelectSession,
     handleDeleteSession
