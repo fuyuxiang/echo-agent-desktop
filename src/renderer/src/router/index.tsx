@@ -22,6 +22,7 @@ const OnboardingPage = lazy(() => import('@/pages/Onboarding'))
 const LoginPage = lazy(() => import('@/pages/Login'))
 const ExamplePage = lazy(() => import('@/pages/Example'))
 const MemoryPage = lazy(() => import('@/pages/Memory'))
+const AdminPage = lazy(() => import('@/pages/Admin'))
 
 /** 懒加载包装(统一 loading 兜底) */
 function lazyLoad(node: React.ReactNode): React.JSX.Element {
@@ -48,6 +49,13 @@ function RequireAuth({ children }: { children: React.ReactNode }): React.JSX.Ele
   // 水合未完成时不下判断,渲染占位兜底,避免误判未登录
   if (!hydrated) return <></>
   if (!isAuthed) return <Navigate to={ROUTES.login} replace />
+  return <>{children}</>
+}
+
+/** 管理员守卫:非管理员重定向回工作台 */
+function RequireAdmin({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const role = useUserStore((s) => s.user?.role)
+  if (role !== 'admin') return <Navigate to={ROUTES.chat} replace />
   return <>{children}</>
 }
 
@@ -86,7 +94,13 @@ export const router = createHashRouter([
       { path: 'channels', element: lazyLoad(<ChannelsPage />) },
       { path: 'settings', element: lazyLoad(<SettingsPage />) },
       { path: 'example', element: lazyLoad(<ExamplePage />) },
-      { path: 'memory', element: lazyLoad(<MemoryPage />) }
+      { path: 'memory', element: lazyLoad(<MemoryPage />) },
+      {
+        path: 'admin',
+        element: (
+          <RequireAdmin>{lazyLoad(<AdminPage />)}</RequireAdmin>
+        )
+      }
     ]
   },
   {
