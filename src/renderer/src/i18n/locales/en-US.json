@@ -12,6 +12,11 @@
     "appName": "Echo Agent"
   },
   "memory": {
+    "title": "Memory",
+    "personal": "Personal",
+    "project": "Project",
+    "loading": "Loading…",
+    "empty": "No memory yet",
     "shareTitle": "Share to project memory?",
     "sharePrompt": "This may help your teammates. Share it as team knowledge?",
     "share": "Share to project",
