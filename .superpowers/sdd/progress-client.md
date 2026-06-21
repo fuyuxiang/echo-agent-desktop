@@ -4,8 +4,8 @@ Plan: docs/superpowers/plans/2026-06-21-echo-agent-desktop-client.md
 Repo: /Users/fuyuxiang/Documents/100-主业/130-东方国信/13.代码仓库/echo-agent-desktop
 
 ## Tasks
-- [ ] Task 1: 基线导入与服务器地址配置
-- [ ] Task 2: server-connector 服务层(登录 + 用户态接口)
+- [x] Task 1: 基线导入与服务器地址配置
+- [x] Task 2: server-connector 服务层(登录 + 用户态接口)
 - [ ] Task 3: 用户态 store 与登录页
 - [ ] Task 4: 项目记忆服务层
 - [ ] Task 5: 个人记忆服务层
@@ -15,3 +15,5 @@ Repo: /Users/fuyuxiang/Documents/100-主业/130-东方国信/13.代码仓库/ech
 - [ ] Task 9: 设置页模型配置(A+B)
 - [ ] Task 10: 管理页(用户/组管理)
 - [ ] Task 11: 端到端联调与打包
+Task 1: complete (commit f11a616, review clean; Minor: sherpa-onnx-node stub type noted)
+Task 2: complete (commits f11a616..b0ebe37, fix: test URL const; review clean)

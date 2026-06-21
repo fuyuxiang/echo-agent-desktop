@@ -11,6 +11,12 @@
   "titlebar": {
     "appName": "Echo Agent"
   },
+  "login": {
+    "title": "登录 Echo Agent",
+    "username": "用户名",
+    "password": "密码",
+    "submit": "登录"
+  },
   "example": {
     "title": "Example 示例页",
     "description": "这是基建全链路示例页:网络请求(Mock)、本地数据库、KV 存储、Toast、日志、i18n 都在这里演示,新页面照此依葫芦画瓢。",
