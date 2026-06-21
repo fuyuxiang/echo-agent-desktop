@@ -10,6 +10,7 @@ import { agentWs } from '@/services/agent/ws'
 import { knowledgeAPI } from '@/services/agent/knowledge'
 import { skillsAPI } from '@/services/agent/skills'
 import skillDescriptionsZh from '@/services/agent/skill-descriptions'
+import { useSkillImport } from '@/hooks/useSkillImport'
 import { buildProjectMemoryContext } from '@/services/chat-inject'
 import { db } from '@/utils/db'
 import { logger } from '@/utils/logger'
@@ -149,6 +150,7 @@ export default function ChatPage(): React.JSX.Element {
   const [listening, setListening] = useState(false)
   // 技能选择浮层开关
   const [skillMenuOpen, setSkillMenuOpen] = useState(false)
+  const { importing: skillImporting, handleImport: handleSkillImport } = useSkillImport()
   // 待分流确认的项目记忆候选（null 表示当前无弹窗）
   const [candidate, setCandidate] = useState<MemoryCandidate | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
@@ -285,9 +287,13 @@ export default function ChatPage(): React.JSX.Element {
 
     const onDisconnected = (): void => {
       setWsConnected(false)
+      // Drop primer suppression on disconnect: the primer-turn final may never
+      // arrive after a drop, and leaving it set would swallow later replies.
+      primerPendingRef.current = false
     }
 
     const onProgress = (payload: Record<string, unknown>): void => {
+      if (primerPendingRef.current) return
       const meta = payload.metadata as Record<string, unknown> | undefined
       if (!meta) return
       const type = meta.progress_type as string
@@ -373,6 +379,9 @@ export default function ChatPage(): React.JSX.Element {
   const dispatchToAgent = useCallback(
     async (text: string) => {
       stoppedRef.current = false
+      // Any real user send clears primer suppression, so a missing primer-turn
+      // final can never permanently swallow subsequent replies.
+      primerPendingRef.current = false
       clearExecutionEvents()
       const memoryContext = await buildProjectMemoryContext(text)
       const outbound = buildOutboundText(text, activeSkill)
@@ -694,6 +703,24 @@ export default function ChatPage(): React.JSX.Element {
                 </button>
                 {skillMenuOpen && (
                   <div className={styles.skillMenu}>
+                    <button
+                      type="button"
+                      className={styles.skillImport}
+                      disabled={skillImporting}
+                      onClick={() => void handleSkillImport()}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      {skillImporting ? '导入中…' : t('chat.skill.import')}
+                    </button>
                     {enabledSkills.length === 0 ? (
                       <div className={styles.skillEmpty}>{t('chat.skill.empty')}</div>
                     ) : (
