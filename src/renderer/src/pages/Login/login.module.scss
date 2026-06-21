@@ -66,3 +66,16 @@
     cursor: not-allowed;
   }
 }
+
+.back {
+  width: 100%;
+  margin-top: $spacing-xs;
+  color: var(--color-text-3);
+  font-size: $font-size-sm;
+  text-align: center;
+  transition: color $duration-fast;
+
+  &:hover {
+    color: var(--color-text-1);
+  }
+}

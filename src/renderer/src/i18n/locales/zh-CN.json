@@ -7,6 +7,7 @@
     "loading": "加载中...",
     "empty": "暂无数据",
     "copySuccess": "已复制到剪贴板",
+    "login": "登录",
     "logout": "退出登录"
   },
   "titlebar": {
@@ -28,7 +29,8 @@
     "title": "登录 Echo Agent",
     "username": "用户名",
     "password": "密码",
-    "submit": "登录"
+    "submit": "登录",
+    "skip": "暂不登录,先进入桌面"
   },
   "admin": {
     "nav": "管理",
