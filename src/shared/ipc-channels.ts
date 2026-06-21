@@ -34,7 +34,13 @@ export const IpcChannels = {
     exampleList: 'db:example:list',
     exampleAdd: 'db:example:add',
     exampleRemove: 'db:example:remove',
-    exampleClear: 'db:example:clear'
+    exampleClear: 'db:example:clear',
+    sessionList: 'db:session:list',
+    sessionUpsert: 'db:session:upsert',
+    sessionDelete: 'db:session:delete',
+    sessionMessages: 'db:session:messages',
+    sessionAppendMessage: 'db:session:append-message',
+    sessionUpdateTitle: 'db:session:update-title'
   },
 
   /** 系统权限 */

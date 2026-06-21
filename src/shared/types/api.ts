@@ -3,6 +3,8 @@ import type {
   AgentEnvInfo,
   AgentProcessStatus,
   AgentStartResult,
+  ChatMessageRecord,
+  ChatSessionRecord,
   ExampleRecord,
   InstallProgressEvent,
   LogLevel,
@@ -65,6 +67,25 @@ export interface BridgeApi {
       remove: (id: number) => Promise<void>
       /** 清空示例表 */
       clear: () => Promise<void>
+    }
+    session: {
+      /** 会话列表(按最近活动倒序) */
+      list: () => Promise<ChatSessionRecord[]>
+      /** 确保会话存在(已存在不覆盖) */
+      upsert: (input: { chatId: string; title?: string | null; platform?: string }) => Promise<void>
+      /** 删除会话及其全部消息 */
+      delete: (chatId: string) => Promise<void>
+      /** 某会话全部消息(时间升序) */
+      getMessages: (chatId: string) => Promise<ChatMessageRecord[]>
+      /** 追加一条消息,返回完整记录 */
+      appendMessage: (input: {
+        chatId: string
+        role: string
+        content: string
+        reasoning?: string | null
+      }) => Promise<ChatMessageRecord>
+      /** 更新会话标题 */
+      updateTitle: (chatId: string, title: string) => Promise<void>
     }
   }
 
