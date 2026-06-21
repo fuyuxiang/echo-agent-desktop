@@ -29,12 +29,34 @@ const migrations: Migration[] = [
         )
       `)
     }
+  },
+  {
+    version: 2,
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+          chat_id       TEXT PRIMARY KEY,
+          title         TEXT,
+          platform      TEXT NOT NULL DEFAULT 'desktop',
+          created_at    INTEGER NOT NULL,
+          last_activity INTEGER NOT NULL,
+          message_count INTEGER NOT NULL DEFAULT 0,
+          pinned        INTEGER NOT NULL DEFAULT 0
+        )
+      `)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_messages (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          chat_id    TEXT NOT NULL,
+          role       TEXT NOT NULL,
+          content    TEXT NOT NULL,
+          reasoning  TEXT,
+          created_at INTEGER NOT NULL
+        )
+      `)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages(chat_id, created_at)`)
+    }
   }
-  // 后续迁移示例:
-  // {
-  //   version: 2,
-  //   up: (db) => db.exec(`ALTER TABLE example_records ADD COLUMN tag TEXT`)
-  // }
 ]
 
 /** 执行所有未应用的迁移 */
