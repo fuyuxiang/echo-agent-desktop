@@ -45,3 +45,13 @@ export interface AgentConfig {
   defaultModel: string
   providers: ModelProviderConfig[]
 }
+
+/** Agent 访问范围档位 */
+export type AccessScope = 'restricted' | 'full'
+
+/** Agent 访问范围配置(持久化于主进程 electron-store) */
+export interface AgentScopeConfig {
+  scope: AccessScope
+  /** restricted 档锁定的工作目录;full 档忽略。未选时为空字符串 */
+  workspaceDir: string
+}

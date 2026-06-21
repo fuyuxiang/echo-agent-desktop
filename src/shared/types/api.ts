@@ -2,6 +2,7 @@ import type {
   AgentConfig,
   AgentEnvInfo,
   AgentProcessStatus,
+  AgentScopeConfig,
   AgentStartResult,
   ChatMessageRecord,
   ChatSessionRecord,
@@ -151,6 +152,8 @@ export interface BridgeApi {
     resetEnv: (pipIndex?: string) => Promise<{ success: boolean; error?: string }>
     updateConfig: (config: AgentConfig) => Promise<{ success: boolean }>
     getLogs: () => Promise<string>
+    getScope: () => Promise<AgentScopeConfig>
+    setScope: (config: AgentScopeConfig) => Promise<AgentStartResult>
     httpProxy: (opts: {
       url: string
       method?: string

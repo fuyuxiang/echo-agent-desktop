@@ -89,6 +89,8 @@ export const IpcChannels = {
     resetEnv: 'agent:reset-env',
     updateConfig: 'agent:update-config',
     getLogs: 'agent:get-logs',
+    getScope: 'agent:get-scope',
+    setScope: 'agent:set-scope',
     onStatusChanged: 'agent:status-changed',
     onInstallProgress: 'agent:install-progress',
     /** 通过主进程代理 HTTP 请求（绕过渲染进程 CORS 限制） */
