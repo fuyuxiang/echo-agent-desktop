@@ -10,6 +10,24 @@
     "login": "登录",
     "logout": "退出登录"
   },
+  "scope": {
+    "title": "访问范围",
+    "restricted": "基础访问",
+    "restrictedDesc": "仅在指定文件夹内工作,禁用终端命令",
+    "full": "完全访问",
+    "fullDesc": "可访问整台电脑,允许终端命令",
+    "fullWarning": "agent 可读写你的文件并执行命令",
+    "chooseFolder": "选择文件夹…",
+    "current": "当前",
+    "apply": "应用并重启",
+    "cancel": "取消",
+    "switching": "切换中…",
+    "folderUnavailable": "文件夹不可用,请重新选择",
+    "switched": "已切换访问范围",
+    "switchFailed": "切换失败",
+    "confirmFull": "完全访问允许 agent 读写所有文件并执行终端命令,确认?",
+    "confirmInterrupt": "正在生成回复,切换会中断当前对话,继续?"
+  },
   "titlebar": {
     "appName": "Echo Agent"
   },
