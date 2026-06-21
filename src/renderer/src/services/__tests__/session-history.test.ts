@@ -46,6 +46,8 @@ describe('session-history', () => {
     expect(buildPrimerText([])).toBe('')
     const text = buildPrimerText([{ role: 'user', content: '你好' }])
     expect(text).toContain('你好')
+    expect(text).toContain('历史回顾')
+    expect(text).toContain('不是新任务')
     expect(text.length).toBeGreaterThan('你好'.length)
   })
 })
