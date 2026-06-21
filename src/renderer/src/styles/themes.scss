@@ -1,0 +1,172 @@
+// ============================================
+// 主题色 token(CSS 变量,支持 light/dark 切换)
+// html[data-theme='light' | 'dark'] 由 hooks/useTheme 控制
+// TODO: 待 Figma MCP 恢复后,从设计稿提取真实色值替换
+// ============================================
+
+:root,
+html[data-theme='light'] {
+  // 品牌色
+  --color-primary: #0088ff;
+  --color-primary-hover: #0a7be0;
+  --color-primary-active: #006dcc;
+  --color-primary-soft: rgba(0, 136, 255, 0.14);
+
+  // 功能色
+  --color-success: #128a4a;
+  --color-success-soft: rgba(17, 185, 129, 0.14);
+  --color-warning: #b7791f;
+  --color-warning-soft: rgba(245, 158, 11, 0.14);
+  --color-danger: #c92a2a;
+  --color-danger-soft: rgba(239, 68, 68, 0.12);
+  --color-skill: #7c3aed;
+  --color-skill-soft: rgba(124, 58, 237, 0.12);
+
+  // 文字
+  --color-text-1: #222222;
+  --color-text-2: #5f6878;
+  --color-text-3: #8a93a4;
+  --color-text-placeholder: #949dad;
+
+  // 背景
+  --color-bg-page: #f5f7fa;
+  --color-bg-sidebar: #f4f7fb;
+  --color-bg-canvas: #fbfcfe;
+  --color-bg-container: rgba(255, 255, 255, 0.9);
+  --color-bg-elevated: rgba(255, 255, 255, 0.98);
+  --color-bg-subtle: #eef2f7;
+  --color-bg-hover: rgba(15, 23, 42, 0.055);
+  --color-bg-active: rgba(0, 136, 255, 0.12);
+  --color-bg-code: #f3f6fb;
+
+  // 边框 / 分割线
+  --color-border: rgba(15, 23, 42, 0.12);
+  --color-border-muted: rgba(15, 23, 42, 0.08);
+  --color-border-strong: rgba(15, 23, 42, 0.18);
+
+  // 阴影 / 背景层
+  --shadow-card: 0 10px 28px rgba(15, 23, 42, 0.06);
+  --shadow-card-strong: 0 14px 36px rgba(15, 23, 42, 0.09);
+  --shadow-panel: 0 16px 44px rgba(15, 23, 42, 0.06);
+  --shadow-composer: 0 18px 46px rgba(15, 23, 42, 0.1), 0 5px 16px rgba(15, 23, 42, 0.06);
+  --gradient-app: linear-gradient(180deg, #fbfcfe 0%, #ffffff 100%);
+  --gradient-sidebar: linear-gradient(
+    180deg,
+    rgba(248, 251, 254, 0.98) 0%,
+    rgba(242, 247, 252, 0.98) 100%
+  );
+  --gradient-topbar: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.82) 0%,
+    rgba(255, 255, 255, 0.58) 58%,
+    rgba(255, 255, 255, 0.3) 100%
+  );
+  --gradient-glaze:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.5), transparent 22%),
+    linear-gradient(
+      120deg,
+      rgba(255, 255, 255, 0.22),
+      transparent 34%,
+      rgba(255, 255, 255, 0.12) 74%,
+      transparent
+    );
+  --gradient-composer:
+    radial-gradient(circle at top left, rgba(0, 136, 255, 0.07), transparent 28%),
+    radial-gradient(circle at right 14% bottom 18%, rgba(0, 136, 255, 0.04), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 28%);
+  --selection: rgba(0, 136, 255, 0.18);
+
+  // 滚动条
+  --color-scrollbar: rgba(95, 104, 120, 0.22);
+  --color-scrollbar-hover: rgba(95, 104, 120, 0.32);
+
+  // 兼容旧变量名
+  --text-primary: var(--color-text-1);
+  --text-secondary: var(--color-text-2);
+  --text-tertiary: var(--color-text-3);
+  --bg-primary: var(--color-bg-canvas);
+  --bg-secondary: var(--color-bg-container);
+  --bg-sidebar: var(--color-bg-sidebar);
+  --bg-hover: var(--color-bg-hover);
+  --bg-active: var(--color-bg-active);
+  --bg-code: var(--color-bg-code);
+  --bg-error: var(--color-danger-soft);
+  --border: var(--color-border);
+}
+
+html[data-theme='dark'] {
+  --color-primary: #339cff;
+  --color-primary-hover: #58adff;
+  --color-primary-active: #7cbdff;
+  --color-primary-soft: rgba(51, 156, 255, 0.18);
+
+  --color-success: #40c977;
+  --color-success-soft: rgba(64, 201, 119, 0.18);
+  --color-warning: #fbbf24;
+  --color-warning-soft: rgba(245, 158, 11, 0.18);
+  --color-danger: #fa423e;
+  --color-danger-soft: rgba(250, 66, 62, 0.18);
+  --color-skill: #ad7bf9;
+  --color-skill-soft: rgba(173, 123, 249, 0.16);
+
+  --color-text-1: #ffffff;
+  --color-text-2: #c7c7c7;
+  --color-text-3: #858585;
+  --color-text-placeholder: #7a7a7a;
+
+  --color-bg-page: #101010;
+  --color-bg-sidebar: #141414;
+  --color-bg-canvas: #181818;
+  --color-bg-container: rgba(24, 24, 24, 0.92);
+  --color-bg-elevated: #202020;
+  --color-bg-subtle: #202020;
+  --color-bg-hover: rgba(255, 255, 255, 0.1);
+  --color-bg-active: rgba(51, 156, 255, 0.16);
+  --color-bg-code: #101010;
+
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-muted: rgba(255, 255, 255, 0.1);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
+
+  --shadow-card: 0 16px 42px rgba(0, 0, 0, 0.22);
+  --shadow-card-strong: 0 22px 56px rgba(0, 0, 0, 0.3);
+  --shadow-panel: 0 22px 58px rgba(0, 0, 0, 0.35);
+  --shadow-composer: 0 28px 78px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --gradient-app: linear-gradient(180deg, #101010 0%, #181818 100%);
+  --gradient-sidebar: linear-gradient(180deg, #181818 0%, #141414 45%, #101010 100%);
+  --gradient-topbar: linear-gradient(
+    180deg,
+    rgba(32, 32, 32, 0.86) 0%,
+    rgba(24, 24, 24, 0.7) 58%,
+    rgba(18, 18, 18, 0.42) 100%
+  );
+  --gradient-glaze:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 24%),
+    linear-gradient(
+      120deg,
+      rgba(255, 255, 255, 0.03),
+      transparent 35%,
+      rgba(255, 255, 255, 0.02) 72%,
+      transparent
+    );
+  --gradient-composer:
+    radial-gradient(circle at top left, rgba(51, 156, 255, 0.09), transparent 28%),
+    radial-gradient(circle at right 14% bottom 18%, rgba(51, 156, 255, 0.05), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 28%);
+  --selection: rgba(51, 156, 255, 0.24);
+
+  --color-scrollbar: rgba(170, 170, 170, 0.28);
+  --color-scrollbar-hover: rgba(200, 200, 200, 0.38);
+
+  --text-primary: var(--color-text-1);
+  --text-secondary: var(--color-text-2);
+  --text-tertiary: var(--color-text-3);
+  --bg-primary: var(--color-bg-canvas);
+  --bg-secondary: var(--color-bg-container);
+  --bg-sidebar: var(--color-bg-sidebar);
+  --bg-hover: var(--color-bg-hover);
+  --bg-active: var(--color-bg-active);
+  --bg-code: var(--color-bg-code);
+  --bg-error: var(--color-danger-soft);
+  --border: var(--color-border);
+}

@@ -1,0 +1,69 @@
+.page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-bg-canvas);
+}
+
+.content {
+  height: 100%;
+  padding: $spacing-xxl;
+  overflow-y: auto;
+  @include thin-scrollbar;
+
+  > :global(div) {
+    max-width: 860px;
+  }
+
+  :global(h2) {
+    margin: 0 0 $spacing-xl !important;
+    font-size: $font-size-xl;
+    font-weight: 700;
+    letter-spacing: 0;
+    color: var(--color-text-1);
+  }
+
+  :global(p) {
+    color: var(--color-text-2);
+  }
+
+  :global(button) {
+    min-height: 36px;
+    border: 1px solid var(--color-border-muted);
+    border-radius: $radius-full;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-1);
+    font-weight: 650;
+    box-shadow: var(--shadow-card);
+    transition:
+      background $duration-fast,
+      border-color $duration-fast,
+      opacity $duration-fast;
+
+    &:hover:not(:disabled) {
+      border-color: color-mix(in srgb, var(--color-primary) 34%, var(--color-border));
+      background: var(--color-primary-soft);
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+  }
+
+  :global(input:not([type='checkbox'])),
+  :global(select) {
+    min-height: 36px;
+    border: 1px solid var(--color-border);
+    border-radius: $radius-md;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-1);
+  }
+
+  :global([style*='background: var(--bg-secondary)']) {
+    border: 1px solid var(--color-border-muted);
+    background: var(--color-bg-container) !important;
+    box-shadow: var(--shadow-card);
+  }
+}

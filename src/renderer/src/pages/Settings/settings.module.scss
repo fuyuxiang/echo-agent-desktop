@@ -1,0 +1,110 @@
+.page {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-bg-canvas);
+}
+
+.nav {
+  width: 220px;
+  padding: $spacing-xl $spacing-md;
+  border-right: 1px solid var(--color-border-muted);
+  background: var(--color-bg-page);
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-xs;
+}
+
+.navItem {
+  min-height: 38px;
+  padding: 0 $spacing-md;
+  text-align: left;
+  background: transparent;
+  border-radius: $radius-lg;
+  font-size: $font-size-base;
+  font-weight: 600;
+  color: var(--color-text-2);
+  transition:
+    color $duration-fast,
+    background $duration-fast,
+    box-shadow $duration-fast;
+
+  &:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-1);
+  }
+
+  &.active {
+    background: var(--color-bg-elevated);
+    color: var(--color-text-1);
+    box-shadow: var(--shadow-card);
+  }
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: $spacing-xxl;
+  overflow-y: auto;
+  @include thin-scrollbar;
+
+  > :global(div) {
+    max-width: 760px;
+  }
+
+  :global(h2) {
+    margin: 0 0 $spacing-xl !important;
+    font-size: $font-size-xl;
+    font-weight: 700;
+    letter-spacing: 0;
+    color: var(--color-text-1);
+  }
+
+  :global(label) {
+    gap: $spacing-md;
+    padding: $spacing-md;
+    border: 1px solid var(--color-border-muted);
+    border-radius: $radius-lg;
+    background: var(--color-bg-container);
+    box-shadow: var(--shadow-card);
+  }
+
+  :global(input:not([type='checkbox'])),
+  :global(select) {
+    min-height: 36px;
+    border: 1px solid var(--color-border);
+    border-radius: $radius-md;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-1);
+  }
+
+  :global(input[type='checkbox']) {
+    accent-color: var(--color-primary);
+  }
+
+  :global(button) {
+    min-height: 34px;
+    border: 1px solid var(--color-border-muted);
+    border-radius: $radius-full;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-1);
+    font-weight: 650;
+    box-shadow: var(--shadow-card);
+    transition:
+      background $duration-fast,
+      border-color $duration-fast,
+      opacity $duration-fast;
+
+    &:hover:not(:disabled) {
+      border-color: color-mix(in srgb, var(--color-primary) 34%, var(--color-border));
+      background: var(--color-primary-soft);
+    }
+
+    &:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+  }
+}

@@ -1,0 +1,123 @@
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: $spacing-xl;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+}
+
+.title {
+  font-size: $font-size-xxl;
+  color: var(--color-text-1);
+}
+
+.description {
+  font-size: $font-size-sm;
+  color: var(--color-text-3);
+  line-height: 1.6;
+  user-select: text;
+}
+
+.card {
+  background: var(--color-bg-container);
+  border: 1px solid var(--color-border);
+  border-radius: $radius-lg;
+  padding: $spacing-lg;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+
+  h2 {
+    font-size: $font-size-lg;
+    color: var(--color-text-1);
+  }
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  flex-wrap: wrap;
+}
+
+.button {
+  padding: $spacing-sm $spacing-lg;
+  border-radius: $radius-md;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: $font-size-base;
+  transition: background $duration-fast;
+
+  &:hover {
+    background: var(--color-primary-hover);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.buttonGhost {
+  padding: $spacing-sm $spacing-lg;
+  border-radius: $radius-md;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-2);
+  font-size: $font-size-base;
+  transition: background $duration-fast;
+
+  &:hover {
+    background: var(--color-bg-hover);
+  }
+}
+
+.input {
+  flex: 1;
+  min-width: 200px;
+  padding: $spacing-sm $spacing-md;
+  border: 1px solid var(--color-border);
+  border-radius: $radius-md;
+  background: var(--color-bg-page);
+  color: var(--color-text-1);
+  font-size: $font-size-base;
+  outline: none;
+
+  &:focus {
+    border-color: var(--color-primary);
+  }
+}
+
+.greeting {
+  color: var(--color-primary);
+  cursor: pointer;
+  @include ellipsis;
+}
+
+.list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.listItem {
+  @include flex-between;
+  padding: $spacing-sm 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: $font-size-base;
+  color: var(--color-text-2);
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.done {
+  text-decoration: line-through;
+  color: var(--color-text-3);
+}
+
+.muted {
+  font-size: $font-size-xs;
+  color: var(--color-text-3);
+}

@@ -1,0 +1,17 @@
+import { request } from '@/request'
+import { ApiUrls } from '@/request/urls'
+
+/**
+ * {{pascalCase name}} 模块接口
+ */
+
+/** {{pascalCase name}} 数据 */
+export interface {{pascalCase name}}Data {
+  /** 唯一 ID */
+  id: string
+}
+
+/** 获取 {{pascalCase name}} 数据 */
+export function fetch{{pascalCase name}}Data(): Promise<{{pascalCase name}}Data> {
+  return request.get<{{pascalCase name}}Data>(ApiUrls.{{camelCase name}}.data)
+}

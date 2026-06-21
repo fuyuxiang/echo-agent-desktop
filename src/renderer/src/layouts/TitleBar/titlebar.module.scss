@@ -1,0 +1,53 @@
+.titlebar {
+  position: relative;
+  z-index: $z-titlebar;
+  display: flex;
+  align-items: center;
+  height: $titlebar-height;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--color-bg-page) 86%, transparent);
+  border-bottom: 1px solid var(--color-border-muted);
+  backdrop-filter: blur(22px);
+  @include app-drag;
+}
+
+// mac 红绿灯占位(系统按钮渲染在此区域上方)
+.macTrafficLightSpace {
+  width: 76px;
+  flex-shrink: 0;
+}
+
+.title {
+  flex: 1;
+  text-align: center;
+  font-size: $font-size-xs;
+  font-weight: 650;
+  color: var(--color-text-3);
+  letter-spacing: 0;
+  text-transform: uppercase;
+  @include ellipsis;
+}
+
+.winControls {
+  display: flex;
+  height: 100%;
+  // 按钮必须可点击,脱离拖拽区
+  @include app-no-drag;
+}
+
+.winButton {
+  @include flex-center;
+  width: 42px;
+  height: 100%;
+  color: var(--color-text-2);
+  transition: background $duration-fast;
+
+  &:hover {
+    background: var(--color-bg-hover);
+  }
+}
+
+.winClose:hover {
+  background: var(--color-danger);
+  color: #fff;
+}

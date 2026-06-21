@@ -1,0 +1,62 @@
+// ============================================
+// 通用 mixin(已自动注入所有 scss,直接 @include 使用)
+// ============================================
+
+/// 水平垂直居中(flex)
+@mixin flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/// 垂直居中、水平两端对齐
+@mixin flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/// 单行省略号
+@mixin ellipsis {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/// 多行省略号
+/// @param $lines 行数
+@mixin ellipsis-lines($lines: 2) {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: $lines;
+  overflow: hidden;
+}
+
+/// 窗口拖拽区域(自定义标题栏)
+@mixin app-drag {
+  -webkit-app-region: drag;
+}
+
+/// 拖拽区域内的可交互元素(按钮等必须声明,否则点不到)
+@mixin app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/// 细滚动条样式
+@mixin thin-scrollbar {
+  &::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  &::-webkit-scrollbar-thumb {
+    border-radius: 3px;
+    background: var(--color-scrollbar);
+
+    &:hover {
+      background: var(--color-scrollbar-hover);
+    }
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
