@@ -9,3 +9,7 @@ release
 # 规划与设计文档、SDD 工作文件不入库
 .superpowers/
 docs/superpowers/
+.claude/
+
+# 内嵌 Python 运行时由 scripts/fetch-python.mjs 构建前拉取, 不入库 (体积大)
+resources/python-standalone-*.tar.gz

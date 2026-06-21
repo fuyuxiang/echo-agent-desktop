@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { createHashRouter, Navigate, useRouteError } from 'react-router-dom'
 import { AppLayout } from '@/layouts/AppLayout'
+import { StartupGate } from '@/components/StartupGate'
 import { ROUTES } from '@/constants'
 import { useUserStore } from '@/stores/userStore'
 
@@ -60,7 +61,11 @@ function RouteErrorPage(): React.JSX.Element {
 export const router = createHashRouter([
   {
     path: '/',
-    element: <AppLayout />,
+    element: (
+      <StartupGate>
+        <AppLayout />
+      </StartupGate>
+    ),
     errorElement: <RouteErrorPage />,
     children: [
       { index: true, element: <Navigate to="chat" replace /> },

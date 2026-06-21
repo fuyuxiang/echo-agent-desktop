@@ -10,11 +10,15 @@ import {
   PIP_BIN,
   EMBEDDED_PYTHON_BIN,
   DEFAULT_PIP_INDEX,
-  LOGS_DIR
+  LOGS_DIR,
+  RUNTIME_RESOURCES_DIR
 } from './constants'
 import type { AgentEnvInfo, InstallProgressEvent } from '@shared/types'
 
 type ProgressCallback = (event: InstallProgressEvent) => void
+
+// 安装过程串行化: 避免渲染层重复触发 (React StrictMode / 重试) 导致并发解压/装包损坏环境
+let installInFlight: Promise<void> | null = null
 
 /** 检查 Python 环境状态 */
 export async function getEnvInfo(): Promise<AgentEnvInfo> {
@@ -24,7 +28,11 @@ export async function getEnvInfo(): Promise<AgentEnvInfo> {
 
   try {
     const pythonVersion = await runCommand(PYTHON_BIN, ['--version'])
-    const echoAgentVersion = await runCommand(PYTHON_BIN, ['-m', 'echo_agent', '--version'])
+    // echo-agent CLI 无 --version 子命令, 通过包元数据读取版本
+    const echoAgentVersion = await runCommand(PYTHON_BIN, [
+      '-c',
+      "import importlib.metadata as m; print(m.version('echo-agent'))"
+    ])
     return {
       pythonVersion: pythonVersion.trim().replace('Python ', ''),
       echoAgentVersion: echoAgentVersion.trim(),
@@ -36,11 +44,22 @@ export async function getEnvInfo(): Promise<AgentEnvInfo> {
   }
 }
 
-/** 初始化完整环境（首次安装） */
-export async function initializeEnvironment(
+/** 初始化完整环境（首次安装）。并发调用复用同一进行中的安装。 */
+export function initializeEnvironment(
   onProgress: ProgressCallback,
   pipIndex?: string
 ): Promise<void> {
+  if (installInFlight) {
+    log.info('[python-env] 安装已在进行中，复用当前任务')
+    return installInFlight
+  }
+  installInFlight = doInitialize(onProgress, pipIndex).finally(() => {
+    installInFlight = null
+  })
+  return installInFlight
+}
+
+async function doInitialize(onProgress: ProgressCallback, pipIndex?: string): Promise<void> {
   log.info('[python-env] 开始初始化 Python 环境')
   fs.mkdirSync(DESKTOP_DATA_DIR, { recursive: true })
   fs.mkdirSync(LOGS_DIR, { recursive: true })
@@ -73,11 +92,13 @@ export async function initializeEnvironment(
 async function extractPython(): Promise<void> {
   if (fs.existsSync(EMBEDDED_PYTHON_BIN)) return
 
-  // 查找打包时附带的 Python 压缩包
-  const resourcesDir = process.resourcesPath ?? path.join(__dirname, '../../resources')
+  // 查找打包时附带的 Python 压缩包 (均为 python-build-standalone 的 install_only tar.gz)
+  // 按平台+架构区分: mac 区分 arm64/x64, win 仅 x64
   const archiveName =
-    process.platform === 'win32' ? 'python-embed-win.zip' : 'python-standalone-mac.tar.gz'
-  const archivePath = path.join(resourcesDir, archiveName)
+    process.platform === 'win32'
+      ? 'python-standalone-win-x64.tar.gz'
+      : `python-standalone-mac-${process.arch === 'arm64' ? 'arm64' : 'x64'}.tar.gz`
+  const archivePath = path.join(RUNTIME_RESOURCES_DIR, archiveName)
 
   if (!fs.existsSync(archivePath)) {
     throw new Error(`内嵌 Python 包不存在: ${archivePath}`)
@@ -85,14 +106,9 @@ async function extractPython(): Promise<void> {
 
   fs.mkdirSync(PYTHON_DIR, { recursive: true })
 
-  if (process.platform === 'win32') {
-    await runCommand('powershell', [
-      '-Command',
-      `Expand-Archive -Path "${archivePath}" -DestinationPath "${PYTHON_DIR}" -Force`
-    ])
-  } else {
-    await runCommand('tar', ['-xzf', archivePath, '-C', PYTHON_DIR, '--strip-components=1'])
-  }
+  // 压缩包顶层为 python/ 目录, strip 后直接落到 PYTHON_DIR
+  // (Windows 10+ 内置 bsdtar, 与 macOS 用法一致)
+  await runCommand('tar', ['-xzf', archivePath, '-C', PYTHON_DIR, '--strip-components=1'])
 }
 
 /** 创建虚拟环境 */

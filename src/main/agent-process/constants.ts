@@ -3,6 +3,15 @@ import path from 'path'
 
 const HOME = app.getPath('home')
 
+/**
+ * 运行时资源目录 (随包分发的 Python 压缩包等):
+ * - 打包后: process.resourcesPath (app.asar 同级 Resources)
+ * - 开发期: 项目根的 resources/ (process.resourcesPath 此时指向 Electron 自带 Resources, 不可用)
+ */
+export const RUNTIME_RESOURCES_DIR = app.isPackaged
+  ? process.resourcesPath
+  : path.join(app.getAppPath(), 'resources')
+
 /** 桌面端数据根目录 */
 export const DESKTOP_DATA_DIR = path.join(HOME, '.echo-agent-desktop')
 

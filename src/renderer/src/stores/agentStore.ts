@@ -105,6 +105,7 @@ export const useAgentStore = create<AgentState>()(
     })),
     {
       name: 'agent',
+      version: 1,
       storage: createJSONStorage(() => electronStoreStorage),
       partialize: (s) => ({
         connectionMode: s.connectionMode,
@@ -112,6 +113,20 @@ export const useAgentStore = create<AgentState>()(
         remoteToken: s.remoteToken,
         currentSessionKey: s.currentSessionKey
       }),
+      // v0 -> v1: 清理早期测试残留的远程地址/Token，默认回落纯本地模式。
+      // 远程模式功能保留，用户可在设置里重新填写。
+      migrate: (persisted, version) => {
+        const state = (persisted ?? {}) as Partial<AgentState>
+        if (version < 1) {
+          return {
+            ...state,
+            connectionMode: 'local' as const,
+            remoteUrl: '',
+            remoteToken: ''
+          }
+        }
+        return state
+      },
       onRehydrateStorage: () => (state) => {
         if (!state) return
         if (state.connectionMode === 'remote' && state.remoteUrl) {

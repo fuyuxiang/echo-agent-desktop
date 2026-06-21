@@ -13,6 +13,8 @@ export interface ServerUser {
 export interface ModelConfigDTO {
   baseUrl: string | null
   modelName: string | null
+  /** 方案A: 服务端下发的真实 apiKey(已登录用户)。方案B 升级后应为 null */
+  apiKey?: string | null
   allowLocalOverride: boolean
   hasCredential: boolean
 }
