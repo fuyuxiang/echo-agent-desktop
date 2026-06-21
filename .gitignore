@@ -3,3 +3,7 @@ out
 dist
 .DS_Store
 *.log
+
+# 规划与设计文档、SDD 工作文件不入库
+.superpowers/
+docs/superpowers/
