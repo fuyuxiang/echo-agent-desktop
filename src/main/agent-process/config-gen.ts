@@ -39,6 +39,11 @@ export function generateAgentConfig(config: AgentConfig): void {
     '    enabled: false',
     '  stream_channels:',
     '    - "gateway:ws"',
+    // 桌面端默认开启细粒度流式: 降低切片阈值并关闭段落聚合,
+    // 让短回复也能逐段吐字(默认 180字/1.5秒/段落模式 对桌面端体验太迟钝)
+    '  stream_flush_chars: 24',
+    '  stream_flush_interval_ms: 250',
+    '  stream_paragraph_mode: false',
     ''
   ].join('\n')
 

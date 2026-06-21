@@ -19,6 +19,9 @@ import { BizError, SUCCESS_CODE, type BaseData } from './types'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
 
+/** 服务端"未认证/登录过期"业务码(echo-agent-server auth.ts: 4011) */
+const UNAUTH_CODE = 4011
+
 /**
  * 主进程代理 adapter:渲染进程经 IPC 走主进程发请求,绕过浏览器 CORS 限制。
  * 服务端(echo-agent-server)未开放跨域,且打包后渲染层是 file://,故所有
@@ -126,6 +129,12 @@ instance.interceptors.response.use(
       return response.data
     }
     if (body.code !== SUCCESS_CODE) {
+      // 未认证/登录过期: 清空本地登录态, 让 StartupGate 引导重新登录(避免 token 失效后死循环 401)
+      if (body.code === UNAUTH_CODE) {
+        void import('@/stores/userStore').then(({ useUserStore }) => {
+          if (useUserStore.getState().isAuthed) useUserStore.getState().signOut()
+        })
+      }
       toast.error(body.msg || '请求失败')
       logger.warn(`[request] 业务错误 code=${body.code} msg=${body.msg} url=${response.config.url}`)
       throw new BizError(body.code, body.msg)
