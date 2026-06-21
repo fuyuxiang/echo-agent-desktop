@@ -1,0 +1,84 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--color-bg-base) 55%, transparent);
+  backdrop-filter: blur(6px);
+  z-index: $z-modal;
+}
+
+.dialog {
+  width: 420px;
+  max-width: calc(100vw - #{$spacing-xl});
+  padding: $spacing-xl;
+  border-radius: $radius-xl;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-panel);
+}
+
+.title {
+  margin: 0 0 $spacing-sm;
+  font-size: $font-size-xl;
+  font-weight: 650;
+  color: var(--color-text-primary);
+}
+
+.prompt {
+  margin: 0 0 $spacing-md;
+  font-size: $font-size-base;
+  color: var(--color-text-secondary);
+}
+
+.content {
+  padding: $spacing-md;
+  border-radius: $radius-md;
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border);
+  font-size: $font-size-base;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.reason {
+  margin: $spacing-sm 0 0;
+  font-size: $font-size-sm;
+  color: var(--color-text-secondary);
+}
+
+.actions {
+  display: flex;
+  gap: $spacing-sm;
+  margin-top: $spacing-lg;
+}
+
+.shareBtn,
+.localBtn,
+.discardBtn {
+  flex: 1;
+  padding: $spacing-sm $spacing-md;
+  border-radius: $radius-md;
+  font-size: $font-size-base;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  transition: background $duration-fast;
+}
+
+.shareBtn {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+.localBtn {
+  background: var(--color-bg-base);
+  color: var(--color-text-primary);
+}
+
+.discardBtn {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
