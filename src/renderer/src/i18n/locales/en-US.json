@@ -50,7 +50,8 @@
       "pick": "Choose a skill",
       "using": "Using skill",
       "clear": "Clear skill",
-      "empty": "No enabled skills"
+      "empty": "No enabled skills",
+      "import": "Import skill"
     },
     "tools": {
       "analysis": {
