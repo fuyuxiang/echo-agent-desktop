@@ -26,6 +26,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const MODEL_PREFIX = 'sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20'
 const MODEL_DIR = path.join(__dirname, '..', 'resources', 'models', 'asr', MODEL_PREFIX)
 
+// 默认从公司内网源拉取; 可用环境变量 ASR_MODEL_BASE_URL 或 --base-url 覆盖
+const DEFAULT_BASE_URL = 'http://123.56.188.16/asr'
+
 // 文件名 -> 预期最小字节数(用于校验下载是否完整,避免半截文件)
 const FILES = {
   'encoder-epoch-99-avg-1.int8.onnx': 150_000_000,
@@ -38,7 +41,8 @@ function parseArgs() {
   const argv = process.argv.slice(2)
   const force = argv.includes('--force')
   const urlIdx = argv.indexOf('--base-url')
-  const baseUrl = (urlIdx >= 0 ? argv[urlIdx + 1] : process.env.ASR_MODEL_BASE_URL) || ''
+  const baseUrl =
+    (urlIdx >= 0 ? argv[urlIdx + 1] : process.env.ASR_MODEL_BASE_URL) || DEFAULT_BASE_URL
   return { force, baseUrl: baseUrl.replace(/\/+$/, '') }
 }
 
