@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
+import { db } from '@/utils/db'
 
 export interface ChatMessage {
   id: string
@@ -11,13 +12,12 @@ export interface ChatMessage {
 }
 
 export interface ChatSession {
-  viewKey: string
-  key: string
-  platform: string
+  /** 本地主键,也是发给服务端 WS 的 chat_id(uuid) */
   chatId: string
-  lastActivity: string
-  messageCount: number
   title?: string
+  platform: string
+  lastActivity: number
+  messageCount: number
   pinned?: boolean
 }
 
@@ -27,13 +27,18 @@ interface ChatState {
   currentStreamBuffer: string
   currentReasoningBuffer: string
   isGenerating: boolean
-  activeViewKey: string
+  activeChatId: string
+  /** 兜底重发用:待补发的首条消息(供后续任务衔接) */
+  pendingPrimer: string
 
   setSessions: (sessions: ChatSession[]) => void
   setMessages: (messages: ChatMessage[]) => void
   addSession: (session: ChatSession) => void
-  updateSessionTitle: (viewKey: string, title: string) => void
-  setActiveViewKey: (viewKey: string) => void
+  updateSessionTitle: (chatId: string, title: string) => void
+  setActiveChatId: (chatId: string) => void
+  setPendingPrimer: (primer: string) => void
+  loadSessionsFromLocal: () => Promise<void>
+  loadMessagesFromLocal: (chatId: string) => Promise<void>
   addUserMessage: (content: string) => void
   startAssistantMessage: () => void
   appendStreamDelta: (delta: string) => void
@@ -76,7 +81,8 @@ export const useChatStore = create<ChatState>()(
     currentStreamBuffer: '',
     currentReasoningBuffer: '',
     isGenerating: false,
-    activeViewKey: '',
+    activeChatId: '',
+    pendingPrimer: '',
 
     setSessions: (sessions) =>
       set((s) => {
@@ -90,15 +96,48 @@ export const useChatStore = create<ChatState>()(
       set((s) => {
         s.sessions.unshift(session)
       }),
-    updateSessionTitle: (viewKey, title) =>
+    updateSessionTitle: (chatId, title) =>
       set((s) => {
-        const target = s.sessions.find((item) => item.viewKey === viewKey)
+        const target = s.sessions.find((item) => item.chatId === chatId)
         if (target) target.title = title
       }),
-    setActiveViewKey: (viewKey) =>
+    setActiveChatId: (chatId) =>
       set((s) => {
-        s.activeViewKey = viewKey
+        s.activeChatId = chatId
       }),
+    setPendingPrimer: (primer) =>
+      set((s) => {
+        s.pendingPrimer = primer
+      }),
+
+    loadSessionsFromLocal: async () => {
+      const rows = await db.session.list()
+      set((s) => {
+        s.sessions = rows.map((r) => ({
+          chatId: r.chatId,
+          title: r.title ?? undefined,
+          platform: r.platform,
+          lastActivity: r.lastActivity,
+          messageCount: r.messageCount,
+          pinned: r.pinned === 1
+        }))
+      })
+    },
+
+    loadMessagesFromLocal: async (chatId) => {
+      const rows = await db.session.getMessages(chatId)
+      set((s) => {
+        s.messages = rows.map((r) => ({
+          id: `m-${r.id}`,
+          role: r.role as ChatMessage['role'],
+          content: r.content,
+          reasoning: r.reasoning ?? undefined,
+          timestamp: r.createdAt
+        }))
+        s.currentStreamBuffer = ''
+        s.currentReasoningBuffer = ''
+      })
+    },
 
     addUserMessage: (content) =>
       set((s) => {
