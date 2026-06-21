@@ -11,6 +11,13 @@
   "titlebar": {
     "appName": "Echo Agent"
   },
+  "memory": {
+    "shareTitle": "Share to project memory?",
+    "sharePrompt": "This may help your teammates. Share it as team knowledge?",
+    "share": "Share to project",
+    "localOnly": "Keep local only",
+    "discard": "Discard"
+  },
   "login": {
     "title": "Sign in to Echo Agent",
     "username": "Username",
