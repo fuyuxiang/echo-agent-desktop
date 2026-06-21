@@ -2,10 +2,11 @@ import { ipcMain, BrowserWindow } from 'electron'
 import { IpcChannels } from '@shared/ipc-channels'
 import * as pythonEnv from '../agent-process/python-env'
 import * as agentManager from '../agent-process/manager'
-import { generateAgentConfig } from '../agent-process/config-gen'
+import { generateAgentConfig, readAgentConfig } from '../agent-process/config-gen'
+import { getScopeConfig, setScopeConfig } from '../agent-process/scope'
 import { LOGS_DIR } from '../agent-process/constants'
 import { secureGet } from '../store'
-import type { AgentConfig, InstallProgressEvent } from '@shared/types'
+import type { AgentConfig, AgentScopeConfig, InstallProgressEvent } from '@shared/types'
 import fs from 'fs'
 import path from 'path'
 
@@ -65,6 +66,21 @@ export function registerAgentIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.agent.updateConfig, (_event, config: AgentConfig) => {
     generateAgentConfig(config)
+    return { success: true }
+  })
+
+  ipcMain.handle(IpcChannels.agent.getScope, () => getScopeConfig())
+
+  ipcMain.handle(IpcChannels.agent.setScope, async (_event, scope: AgentScopeConfig) => {
+    setScopeConfig(scope)
+    const keys = getApiKeysFromSecureStore()
+    // 重生成 yaml(workspace + tools 段随新档位变化)
+    const model = readModelConfigForRegen()
+    if (model) generateAgentConfig(model)
+    // agent 在运行时才重启;否则下次启动自然生效
+    if (agentManager.getStatus() === 'running' || agentManager.getStatus() === 'starting') {
+      return agentManager.restartAgent(keys)
+    }
     return { success: true }
   })
 
@@ -154,4 +170,9 @@ function getApiKeysFromSecureStore(): Record<string, string> {
   if (openrouterKey) keys.OPENROUTER_API_KEY = openrouterKey
 
   return keys
+}
+
+/** 读取当前模型配置用于重生成 yaml;无则返回 null(跳过重写,仅靠 -w 生效) */
+function readModelConfigForRegen(): AgentConfig | null {
+  return readAgentConfig()
 }
