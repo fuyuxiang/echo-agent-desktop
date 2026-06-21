@@ -127,6 +127,15 @@ export class AgentWebSocket {
 
   private dispatch(frame: WsFrame): void {
     const { type, ...payload } = frame
+    const previewLen =
+      typeof payload.text === 'string'
+        ? payload.text.length
+        : typeof payload.delta === 'string'
+          ? payload.delta.length
+          : 0
+    logger.info(
+      `[ws:dispatch] type=${type} kind=${payload.message_kind ?? ''} len=${previewLen}`
+    )
     this.emit(type, payload)
 
     // 按 message_kind 细分事件
