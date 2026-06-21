@@ -9,6 +9,7 @@ registerMock('POST', ServerApiUrls.login, () => ({
 registerMock('GET', ServerApiUrls.modelConfig, () => ({
   baseUrl: 'https://api.example.com/v1',
   modelName: 'gpt-4o',
+  apiKey: 'mock-api-key',
   allowLocalOverride: false,
   hasCredential: true
 }))

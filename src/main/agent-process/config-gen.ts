@@ -5,28 +5,25 @@ import type { AgentConfig, ModelProviderConfig } from '@shared/types'
 
 /**
  * 生成 echo-agent.yaml 配置文件
- * 桌面端控制配置生成，API Key 不写入文件（通过 env 注入）
+ * 桌面端控制配置生成。方案A: apiKey 直接写入 provider(来自服务器下发)。
  */
 export function generateAgentConfig(config: AgentConfig): void {
   fs.mkdirSync(path.dirname(AGENT_CONFIG_PATH), { recursive: true })
 
-  const providers = config.providers.map((p) => {
-    const entry: Record<string, unknown> = { name: p.name }
-    if (p.models?.length) entry.models = p.models
-    if (p.apiBase) entry.apiBase = p.apiBase
-    return entry
-  })
+  // YAML 字符串转义: 反斜杠与双引号
+  const q = (v: string): string => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 
   const yaml = [
-    `workspace: "${AGENT_WORKSPACE}"`,
+    `workspace: ${q(AGENT_WORKSPACE)}`,
     '',
     'models:',
-    `  defaultModel: "${config.defaultModel}"`,
+    `  defaultModel: ${q(config.defaultModel)}`,
     '  providers:',
-    ...providers.map((p) => {
-      const lines = [`    - name: "${p.name}"`]
-      if (p.models) lines.push(`      models: ${JSON.stringify(p.models)}`)
-      if (p.apiBase) lines.push(`      apiBase: "${p.apiBase}"`)
+    ...config.providers.map((p) => {
+      const lines = [`    - name: ${q(p.name)}`]
+      if (p.models?.length) lines.push(`      models: ${JSON.stringify(p.models)}`)
+      if (p.apiBase) lines.push(`      apiBase: ${q(p.apiBase)}`)
+      if (p.apiKey) lines.push(`      apiKey: ${q(p.apiKey)}`)
       return lines.join('\n')
     }),
     '',

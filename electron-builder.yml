@@ -36,6 +36,10 @@ asarUnpack:
 mac:
   icon: resources/icon.png
   category: public.app-category.productivity
+  # 内嵌 Python 运行时 (构建前由 scripts/fetch-python.mjs 拉取, 按架构选择)
+  extraResources:
+    - from: resources/python-standalone-mac-${arch}.tar.gz
+      to: python-standalone-mac-${arch}.tar.gz
   target:
     - target: dmg
       arch: [arm64, x64]
@@ -46,6 +50,10 @@ mac:
 
 win:
   icon: resources/icon.png
+  # 内嵌 Python 运行时 (构建前由 scripts/fetch-python.mjs 拉取)
+  extraResources:
+    - from: resources/python-standalone-win-x64.tar.gz
+      to: python-standalone-win-x64.tar.gz
   target:
     - target: nsis
       arch: [x64]

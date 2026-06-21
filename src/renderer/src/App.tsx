@@ -5,6 +5,7 @@ import { router } from '@/router'
 import { ToastContainer } from '@/components/Toast'
 import { useTheme } from '@/hooks'
 import { useAppStore } from '@/stores/appStore'
+import { useAgentStore } from '@/stores/agentStore'
 import { logger } from '@/utils'
 import i18n from '@/i18n'
 
@@ -33,6 +34,20 @@ export default function App(): React.JSX.Element {
       i18n.changeLanguage(language)
     }
   }, [language])
+
+  // 跟踪本地 Agent 进程状态: 运行后同步实际端口, 使 baseUrl 指向本机 Agent
+  useEffect(() => {
+    const { setProcessStatus, setLocalPort } = useAgentStore.getState()
+    const unsubscribe = window.api.agent.onStatusChanged((status) => {
+      setProcessStatus(status)
+      if (status === 'running') {
+        window.api.agent.getPort().then((port) => {
+          if (port) setLocalPort(port)
+        })
+      }
+    })
+    return unsubscribe
+  }, [])
 
   return (
     <ErrorBoundary
