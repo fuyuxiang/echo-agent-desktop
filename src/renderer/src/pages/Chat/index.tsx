@@ -140,11 +140,14 @@ export default function ChatPage(): React.JSX.Element {
   const clearExecutionEvents = useAgentStore((s) => s.clearExecutionEvents)
   const skills = useSkillStore((s) => s.skills)
   const setSkills = useSkillStore((s) => s.setSkills)
-  const selectedSkill = useSkillStore((s) => s.selectedSkill)
+  const activeSkill = useSkillStore((s) => s.activeSkill)
+  const setActiveSkill = useSkillStore((s) => s.setActiveSkill)
 
   const [inputText, setInputText] = useState('')
   const [uploading, setUploading] = useState(false)
   const [listening, setListening] = useState(false)
+  // 技能选择浮层开关
+  const [skillMenuOpen, setSkillMenuOpen] = useState(false)
   // 待分流确认的项目记忆候选（null 表示当前无弹窗）
   const [candidate, setCandidate] = useState<MemoryCandidate | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
@@ -159,6 +162,7 @@ export default function ChatPage(): React.JSX.Element {
   } | null>(null)
   const composerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const skillMenuRef = useRef<HTMLDivElement>(null)
   // 用户点「停止」后置 true,忽略本轮后续 streaming/final 帧;下次发送时复位
   const stoppedRef = useRef(false)
 
@@ -325,6 +329,18 @@ export default function ChatPage(): React.JSX.Element {
     virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'smooth' })
   }, [messages.length])
 
+  // 点击技能浮层外部时关闭
+  useEffect(() => {
+    if (!skillMenuOpen) return
+    const onPointerDown = (e: PointerEvent): void => {
+      if (skillMenuRef.current && !skillMenuRef.current.contains(e.target as Node)) {
+        setSkillMenuOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [skillMenuOpen])
+
   useEffect(() => {
     return () => {
       if (recognitionRef.current) {
@@ -344,11 +360,11 @@ export default function ChatPage(): React.JSX.Element {
       stoppedRef.current = false
       clearExecutionEvents()
       const memoryContext = await buildProjectMemoryContext(text)
-      const outbound = buildOutboundText(text, selectedSkill)
+      const outbound = buildOutboundText(text, activeSkill)
       const finalText = memoryContext ? `${memoryContext}\n\n${outbound}` : outbound
       agentWs.sendMessage(finalText)
     },
-    [selectedSkill, clearExecutionEvents]
+    [activeSkill, clearExecutionEvents]
   )
 
   const handleSend = useCallback(async () => {
@@ -549,6 +565,8 @@ export default function ChatPage(): React.JSX.Element {
   }
 
   const canSend = wsConnected && inputText.trim().length > 0
+  // 仅展示已启用的技能(未启用的后端不加载,选了也无效)
+  const enabledSkills = skills.filter((s) => s.enabled)
 
   return (
     <div className={styles.page}>
@@ -617,7 +635,69 @@ export default function ChatPage(): React.JSX.Element {
             rows={4}
           />
           <div className={styles.composerBar}>
-            <div className={styles.composerTools}></div>
+            <div className={styles.composerTools}>
+              <div className={styles.skillPicker} ref={skillMenuRef}>
+                <button
+                  type="button"
+                  className={`${styles.skillTrigger} ${activeSkill ? styles.skillActive : ''}`}
+                  onClick={() => setSkillMenuOpen((v) => !v)}
+                  title={
+                    activeSkill ? `${t('chat.skill.using')}: ${activeSkill}` : t('chat.skill.pick')
+                  }
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M12 3 4 7v6c0 4.5 3.4 7.3 8 8 4.6-.7 8-3.5 8-8V7l-8-4Z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  <span>{activeSkill ?? t('chat.skill.label')}</span>
+                  {activeSkill && (
+                    <span
+                      className={styles.skillClear}
+                      role="button"
+                      aria-label={t('chat.skill.clear')}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setActiveSkill(null)
+                        setSkillMenuOpen(false)
+                      }}
+                    >
+                      ✕
+                    </span>
+                  )}
+                </button>
+                {skillMenuOpen && (
+                  <div className={styles.skillMenu}>
+                    {enabledSkills.length === 0 ? (
+                      <div className={styles.skillEmpty}>{t('chat.skill.empty')}</div>
+                    ) : (
+                      enabledSkills.map((s) => (
+                        <button
+                          key={s.name}
+                          type="button"
+                          className={`${styles.skillItem} ${
+                            activeSkill === s.name ? styles.skillItemActive : ''
+                          }`}
+                          onClick={() => {
+                            setActiveSkill(activeSkill === s.name ? null : s.name)
+                            setSkillMenuOpen(false)
+                          }}
+                        >
+                          <span className={styles.skillItemName}>{s.name}</span>
+                          {s.description && (
+                            <span className={styles.skillItemDesc}>{s.description}</span>
+                          )}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
             <div className={styles.composerActions}>
               <button
                 className={styles.iconBtn}
