@@ -17,8 +17,9 @@
 
 .pageHeader {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: $spacing-md;
   padding-bottom: $spacing-lg;
 
   span {
@@ -33,6 +34,44 @@
     font-size: $font-size-xl;
     font-weight: 700;
     color: var(--color-text-1);
+  }
+}
+
+.pageHeaderText {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.importBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: $radius-full;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: $font-size-sm;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background $duration-fast,
+    opacity $duration-fast,
+    transform $duration-fast;
+
+  &:hover {
+    background: color-mix(in srgb, var(--color-primary) 88%, #000);
+  }
+
+  &:active {
+    transform: scale(0.97);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 }
 

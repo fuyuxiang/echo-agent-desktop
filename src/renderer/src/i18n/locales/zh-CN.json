@@ -50,7 +50,8 @@
       "pick": "选择技能",
       "using": "正在使用技能",
       "clear": "取消技能",
-      "empty": "暂无已启用的技能"
+      "empty": "暂无已启用的技能",
+      "import": "导入技能"
     },
     "tools": {
       "analysis": {
