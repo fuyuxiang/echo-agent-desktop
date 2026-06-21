@@ -13,3 +13,6 @@ docs/superpowers/
 
 # 内嵌 Python 运行时由 scripts/fetch-python.mjs 构建前拉取, 不入库 (体积大)
 resources/python-standalone-*.tar.gz
+
+# 本地语音识别(sherpa-onnx)模型由 scripts/fetch-asr.mjs 构建前拉取, 不入库 (约 189MB)
+resources/models/asr/

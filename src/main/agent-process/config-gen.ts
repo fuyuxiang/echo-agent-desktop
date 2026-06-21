@@ -38,7 +38,9 @@ export function generateAgentConfig(config: AgentConfig): void {
     '  cli:',
     '    enabled: false',
     '  stream_channels:',
-    '    - "gateway:ws"',
+    // 桌面端 auth 上报 platform=desktop, 后端 channel 实际为 gateway:desktop;
+    // 用 gateway:* 通配命中所有网关连接, 避免写死具体 platform 导致流式开关失配
+    '    - "gateway:*"',
     // 桌面端默认开启细粒度流式: 降低切片阈值并关闭段落聚合,
     // 让短回复也能逐段吐字(默认 180字/1.5秒/段落模式 对桌面端体验太迟钝)
     '  stream_flush_chars: 24',
