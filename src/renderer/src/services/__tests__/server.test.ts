@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { login } from '../server'
 import { request } from '@/request'
+import { ServerApiUrls } from '@/request/urls'
 
 vi.mock('@/request', () => ({ request: { post: vi.fn(), get: vi.fn() } }))
 
@@ -12,7 +13,7 @@ describe('server service', () => {
       user: { id: 'u1', username: 'a', role: 'member', groupId: 'g1' }
     })
     const res = await login('a', 'pw')
-    expect(request.post).toHaveBeenCalledWith('/api/auth/login', { username: 'a', password: 'pw' })
+    expect(request.post).toHaveBeenCalledWith(ServerApiUrls.login, { username: 'a', password: 'pw' })
     expect(res.token).toBe('t1')
     expect(res.user.groupId).toBe('g1')
   })
