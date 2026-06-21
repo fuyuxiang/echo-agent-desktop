@@ -8,6 +8,9 @@ import { useSkillStore } from '@/stores/skillStore'
 import { agentWs } from '@/services/agent/ws'
 import { knowledgeAPI } from '@/services/agent/knowledge'
 import { skillsAPI } from '@/services/agent/skills'
+import { buildProjectMemoryContext } from '@/services/chat-inject'
+import { confirmShareToProject, type MemoryCandidate } from '@/services/memory-router'
+import { ShareMemoryDialog } from '@/components/ShareMemoryDialog'
 import { toast } from '@/components/Toast'
 import { permission } from '@/utils/permission'
 import styles from './chat.module.scss'
@@ -65,6 +68,8 @@ export default function ChatPage(): React.JSX.Element {
   const [inputText, setInputText] = useState('')
   const [uploading, setUploading] = useState(false)
   const [listening, setListening] = useState(false)
+  // 待分流确认的项目记忆候选（null 表示当前无弹窗）
+  const [candidate, setCandidate] = useState<MemoryCandidate | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const recognitionRef = useRef<{
@@ -200,19 +205,43 @@ export default function ChatPage(): React.JSX.Element {
     }
   }, [])
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const text = inputText.trim()
     if (!text || !wsConnected) return
     addUserMessage(text)
     clearExecutionEvents()
-    agentWs.sendMessage(buildOutboundText(text, selectedSkill))
     setInputText('')
+    // 注入项目记忆上下文（服务器不可达时降级为空串，不影响正常发送）
+    const memoryContext = await buildProjectMemoryContext(text)
+    const outbound = buildOutboundText(text, selectedSkill)
+    const finalText = memoryContext ? `${memoryContext}\n\n${outbound}` : outbound
+    agentWs.sendMessage(finalText)
   }, [inputText, wsConnected, selectedSkill, addUserMessage, clearExecutionEvents])
+
+  // 分流确认：用户在 ShareMemoryDialog 选择后调用，写入结果并提示
+  const handleMemoryDecide = useCallback(
+    async (decision: 'share' | 'local' | 'discard') => {
+      if (!candidate) return
+      const current = candidate
+      setCandidate(null)
+      try {
+        const { shared } = await confirmShareToProject(current, decision)
+        if (shared) toast.success('已共享到项目记忆')
+      } catch {
+        toast.error('共享到项目记忆失败')
+      }
+    },
+    [candidate]
+  )
+
+  // TODO(Task 11 联调): 候选来源待与 echo-agent 联调确定——
+  // 目前 WS 协议尚未约定"值得共享的项目记忆候选"的下行信号，
+  // 不臆造协议、不做假数据自动弹窗。届时在收到该信号处调用 setCandidate(candidate) 即可触发弹窗。
 
   const handleKeyDown = (e: React.KeyboardEvent): void => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleSend()
+      void handleSend()
     }
   }
 
@@ -398,7 +427,7 @@ export default function ChatPage(): React.JSX.Element {
                   />
                 </svg>
               </button>
-              <button className={styles.sendBtn} onClick={handleSend} disabled={!canSend}>
+              <button className={styles.sendBtn} onClick={() => void handleSend()} disabled={!canSend}>
                 <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
                   <path
                     d="M5 12h13m0 0-5-5m5 5-5 5"
@@ -421,6 +450,7 @@ export default function ChatPage(): React.JSX.Element {
           </div>
         </div>
       </div>
+      {candidate && <ShareMemoryDialog candidate={candidate} onDecide={handleMemoryDecide} />}
     </div>
   )
 }

@@ -11,6 +11,13 @@
   "titlebar": {
     "appName": "Echo Agent"
   },
+  "memory": {
+    "shareTitle": "共享到项目记忆？",
+    "sharePrompt": "这条内容可能对同组成员有帮助，是否共享为团队知识？",
+    "share": "共享到项目",
+    "localOnly": "仅本地保留",
+    "discard": "忽略"
+  },
   "login": {
     "title": "登录 Echo Agent",
     "username": "用户名",
