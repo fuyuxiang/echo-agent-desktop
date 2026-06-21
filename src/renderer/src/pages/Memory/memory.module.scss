@@ -70,6 +70,61 @@
   gap: $spacing-sm;
 }
 
+.toolbar {
+  display: flex;
+  gap: $spacing-sm;
+  margin-bottom: $spacing-md;
+}
+
+.search {
+  flex: 1;
+  padding: $spacing-sm $spacing-md;
+  border-radius: $radius-lg;
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-bg-container);
+  color: var(--color-text-1);
+  font-size: $font-size-base;
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-skill);
+  }
+}
+
+.searchBtn {
+  padding: $spacing-sm $spacing-lg;
+  border-radius: $radius-lg;
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-bg-container);
+  color: var(--color-text-1);
+  font-weight: 600;
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--color-skill);
+  }
+}
+
+.cardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: $spacing-sm;
+}
+
+.deleteBtn {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-3);
+  font-size: $font-size-xs;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--color-danger, #ef4444);
+  }
+}
+
 .card {
   padding: $spacing-md;
   border-radius: $radius-lg;
