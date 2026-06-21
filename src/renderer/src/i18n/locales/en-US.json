@@ -45,6 +45,13 @@
     "regenerate": "Regenerate",
     "stop": "Stop",
     "thinking": "Echo is thinking",
+    "skill": {
+      "label": "Skill",
+      "pick": "Choose a skill",
+      "using": "Using skill",
+      "clear": "Clear skill",
+      "empty": "No enabled skills"
+    },
     "tools": {
       "analysis": {
         "name": "Data Analysis",
