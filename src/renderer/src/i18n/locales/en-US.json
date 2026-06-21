@@ -29,6 +29,23 @@
     "password": "Password",
     "submit": "Sign In"
   },
+  "model": {
+    "title": "Model Configuration",
+    "serverManaged": "Managed by your administrator and cannot be changed locally.",
+    "overrideAllowed": "Local override is allowed. Edit below and save.",
+    "baseUrl": "Base URL",
+    "modelName": "Model Name",
+    "credentialFromServer": "Credential injected by the server",
+    "effectiveServer": "Effective: server configuration",
+    "effectiveLocal": "Effective: local configuration",
+    "loadFailed": "Failed to load server configuration",
+    "loading": "Loading...",
+    "provider": "Provider",
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "Enter {{key}}",
+    "save": "Save",
+    "saved": "Saved"
+  },
   "example": {
     "title": "Example Page",
     "description": "This page demonstrates the full infrastructure chain: network request (mock), local database, KV storage, toast, logger and i18n. Copy this page to build new ones.",

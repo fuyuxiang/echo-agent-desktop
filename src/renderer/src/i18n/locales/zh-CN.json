@@ -29,6 +29,23 @@
     "password": "密码",
     "submit": "登录"
   },
+  "model": {
+    "title": "模型配置",
+    "serverManaged": "由管理员统一下发，无法在本地修改。",
+    "overrideAllowed": "管理员允许本地覆盖，可在下方修改后保存。",
+    "baseUrl": "Base URL",
+    "modelName": "模型名称",
+    "credentialFromServer": "凭证由服务端注入",
+    "effectiveServer": "当前生效：服务端配置",
+    "effectiveLocal": "当前生效：本地配置",
+    "loadFailed": "加载服务端配置失败",
+    "loading": "加载中...",
+    "provider": "Provider",
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "输入 {{key}}",
+    "save": "保存",
+    "saved": "已保存"
+  },
   "example": {
     "title": "Example 示例页",
     "description": "这是基建全链路示例页:网络请求(Mock)、本地数据库、KV 存储、Toast、日志、i18n 都在这里演示,新页面照此依葫芦画瓢。",
