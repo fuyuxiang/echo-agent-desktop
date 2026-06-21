@@ -19,6 +19,8 @@ export const ROUTES = {
   settings: '/settings',
   /** 首次运行引导 */
   onboarding: '/onboarding',
+  /** 登录页 */
+  login: '/login',
   /** 示例页(基建演示) */
   example: '/example'
   // plop-route-constant

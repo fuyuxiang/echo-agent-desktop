@@ -11,6 +11,12 @@
   "titlebar": {
     "appName": "Echo Agent"
   },
+  "login": {
+    "title": "Sign in to Echo Agent",
+    "username": "Username",
+    "password": "Password",
+    "submit": "Sign In"
+  },
   "example": {
     "title": "Example Page",
     "description": "This page demonstrates the full infrastructure chain: network request (mock), local database, KV storage, toast, logger and i18n. Copy this page to build new ones.",
