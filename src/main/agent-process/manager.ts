@@ -4,7 +4,6 @@ import { log } from '../logger'
 import {
   PYTHON_BIN,
   AGENT_CONFIG_PATH,
-  AGENT_WORKSPACE,
   READY_SIGNAL_PREFIX,
   HEALTH_CHECK_TIMEOUT,
   MAX_RESTART_ATTEMPTS,
@@ -12,6 +11,7 @@ import {
   RESTART_STABLE_RESET_MS,
   SIGKILL_GRACE_MS
 } from './constants'
+import { resolveWorkspace } from './scope'
 import { checkHealth } from './health'
 import { getEnvInfo } from './python-env'
 import { hasAgentConfig } from './config-gen'
@@ -108,7 +108,8 @@ async function doSpawn(apiKeys?: Record<string, string>): Promise<AgentStartResu
     ...apiKeys
   }
 
-  const args = ['run', '-c', AGENT_CONFIG_PATH, '-w', AGENT_WORKSPACE]
+  const workspace = resolveWorkspace()
+  const args = ['run', '-c', AGENT_CONFIG_PATH, '-w', workspace]
 
   log.info(`[agent] Spawning: ${PYTHON_BIN} -m echo_agent ${args.join(' ')}`)
 
