@@ -10,6 +10,24 @@
     "login": "Sign In",
     "logout": "Sign Out"
   },
+  "scope": {
+    "title": "Access scope",
+    "restricted": "Restricted",
+    "restrictedDesc": "Work only inside the chosen folder; terminal disabled",
+    "full": "Full access",
+    "fullDesc": "Access the whole computer; terminal allowed",
+    "fullWarning": "The agent can read/write your files and run commands",
+    "chooseFolder": "Choose folder…",
+    "current": "Current",
+    "apply": "Apply & restart",
+    "cancel": "Cancel",
+    "switching": "Switching…",
+    "folderUnavailable": "Folder unavailable, please reselect",
+    "switched": "Access scope switched",
+    "switchFailed": "Switch failed",
+    "confirmFull": "Full access lets the agent read/write all files and run terminal commands. Confirm?",
+    "confirmInterrupt": "A reply is generating; switching will interrupt it. Continue?"
+  },
   "titlebar": {
     "appName": "Echo Agent"
   },
