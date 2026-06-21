@@ -14,3 +14,4 @@ export { registerMock, resolveMock, type MockHandler } from './registry'
 
 // ===== 在此引入各模块 Mock(新增文件记得 import) =====
 import './example'
+import './server'
