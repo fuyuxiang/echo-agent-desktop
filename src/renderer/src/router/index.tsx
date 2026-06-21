@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense } from 'react'
 import { createHashRouter, Navigate, useRouteError } from 'react-router-dom'
 import { AppLayout } from '@/layouts/AppLayout'
 import { ROUTES } from '@/constants'
@@ -10,7 +10,8 @@ import { useUserStore } from '@/stores/userStore'
  * - 页面一律懒加载(lazy),保证首屏速度
  * - 导航跳转引用 constants/ROUTES 常量
  * - 子路由使用相对路径(不含前导 /)
- * - 未登录访问受保护页面时,RequireAuth 重定向至登录页
+ * - 登录非强制:启动直接进工作台,用户可在使用中随时登录
+ * - 仅管理页受 RequireAdmin 守卫(需管理员角色)
  */
 
 const ChatPage = lazy(() => import('@/pages/Chat'))
@@ -30,29 +31,8 @@ function lazyLoad(node: React.ReactNode): React.JSX.Element {
 }
 
 /**
- * 路由守卫:未登录跳转登录页
- *
- * persist 走 electron-store(getItem 异步),首帧水合未完成时 isAuthed 仍是初始 false,
- * 直接判定会把已登录用户误踢回登录页。这里先等水合完成再判断登录态。
+ * 管理员守卫:非管理员(含未登录)重定向回工作台
  */
-function RequireAuth({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const isAuthed = useUserStore((s) => s.isAuthed)
-  const [hydrated, setHydrated] = useState(() => useUserStore.persist.hasHydrated())
-
-  useEffect(() => {
-    // 订阅水合完成事件;若订阅时已水合(竞态),立即补一次
-    const unsub = useUserStore.persist.onFinishHydration(() => setHydrated(true))
-    if (useUserStore.persist.hasHydrated()) setHydrated(true)
-    return unsub
-  }, [])
-
-  // 水合未完成时不下判断,渲染占位兜底,避免误判未登录
-  if (!hydrated) return <></>
-  if (!isAuthed) return <Navigate to={ROUTES.login} replace />
-  return <>{children}</>
-}
-
-/** 管理员守卫:非管理员重定向回工作台 */
 function RequireAdmin({ children }: { children: React.ReactNode }): React.JSX.Element {
   const role = useUserStore((s) => s.user?.role)
   if (role !== 'admin') return <Navigate to={ROUTES.chat} replace />
@@ -80,11 +60,7 @@ function RouteErrorPage(): React.JSX.Element {
 export const router = createHashRouter([
   {
     path: '/',
-    element: (
-      <RequireAuth>
-        <AppLayout />
-      </RequireAuth>
-    ),
+    element: <AppLayout />,
     errorElement: <RouteErrorPage />,
     children: [
       { index: true, element: <Navigate to="chat" replace /> },
