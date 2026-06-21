@@ -49,6 +49,15 @@ const api: BridgeApi = {
       add: (content) => ipcRenderer.invoke(IpcChannels.db.exampleAdd, content),
       remove: (id) => ipcRenderer.invoke(IpcChannels.db.exampleRemove, id),
       clear: () => ipcRenderer.invoke(IpcChannels.db.exampleClear)
+    },
+    session: {
+      list: () => ipcRenderer.invoke(IpcChannels.db.sessionList),
+      upsert: (input) => ipcRenderer.invoke(IpcChannels.db.sessionUpsert, input),
+      delete: (chatId) => ipcRenderer.invoke(IpcChannels.db.sessionDelete, chatId),
+      getMessages: (chatId) => ipcRenderer.invoke(IpcChannels.db.sessionMessages, chatId),
+      appendMessage: (input) => ipcRenderer.invoke(IpcChannels.db.sessionAppendMessage, input),
+      updateTitle: (chatId, title) =>
+        ipcRenderer.invoke(IpcChannels.db.sessionUpdateTitle, chatId, title)
     }
   },
 

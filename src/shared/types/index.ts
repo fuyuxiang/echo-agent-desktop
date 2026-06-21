@@ -43,6 +43,27 @@ export interface ExampleRecord {
   createdAt: number
 }
 
+/** 本地会话记录 */
+export interface ChatSessionRecord {
+  chatId: string
+  title: string | null
+  platform: string
+  createdAt: number
+  lastActivity: number
+  messageCount: number
+  pinned: number
+}
+
+/** 本地会话消息记录 */
+export interface ChatMessageRecord {
+  id: number
+  chatId: string
+  role: string
+  content: string
+  reasoning: string | null
+  createdAt: number
+}
+
 /** 系统通知参数 */
 export interface NotifyOptions {
   /** 通知标题 */
