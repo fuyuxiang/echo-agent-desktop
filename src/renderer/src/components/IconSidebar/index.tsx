@@ -1,7 +1,9 @@
 import { useLocation, useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { ROUTES } from '@/constants'
 import { SessionList } from '@/components/SessionList'
 import { useSessionActions } from '@/hooks/useSessionManager'
+import { useUserStore } from '@/stores/userStore'
 import styles from './sidebar.module.scss'
 import clsx from 'clsx'
 
@@ -19,9 +21,17 @@ const navItems: NavItem[] = [
 const bottomItems: NavItem[] = [{ icon: <SettingsIcon />, route: ROUTES.settings, label: '设置' }]
 
 export function IconSidebar(): React.JSX.Element {
+  const { t } = useTranslation()
   const location = useLocation()
   const navigate = useNavigate()
   const { handleNewSession } = useSessionActions()
+  const role = useUserStore((s) => s.user?.role)
+
+  // 管理入口仅对管理员可见
+  const bottomNav: NavItem[] =
+    role === 'admin'
+      ? [{ icon: <AdminIcon />, route: ROUTES.admin, label: t('admin.nav') }, ...bottomItems]
+      : bottomItems
 
   const renderItem = (item: NavItem): React.JSX.Element => (
     <button
@@ -55,7 +65,7 @@ export function IconSidebar(): React.JSX.Element {
       <div className={styles.sessions}>
         <SessionList />
       </div>
-      <div className={styles.bottom}>{bottomItems.map(renderItem)}</div>
+      <div className={styles.bottom}>{bottomNav.map(renderItem)}</div>
     </nav>
   )
 }
@@ -105,6 +115,26 @@ function ExtensionsIcon(): React.JSX.Element {
       strokeWidth="2"
     >
       <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" />
+    </svg>
+  )
+}
+
+function AdminIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
     </svg>
   )
 }
