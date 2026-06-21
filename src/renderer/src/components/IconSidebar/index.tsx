@@ -14,8 +14,7 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { icon: <KnowledgeIcon />, route: ROUTES.knowledge, label: '知识库' },
-  { icon: <ExtensionsIcon />, route: ROUTES.skills, label: '技能库' }
+  { icon: <KnowledgeIcon />, route: ROUTES.knowledge, label: '我的文档' }
 ]
 
 const bottomItems: NavItem[] = [{ icon: <SettingsIcon />, route: ROUTES.settings, label: '设置' }]
@@ -29,11 +28,8 @@ export function IconSidebar(): React.JSX.Element {
   const isAuthed = useUserStore((s) => s.isAuthed)
   const signOut = useUserStore((s) => s.signOut)
 
-  // 记忆区入口走 i18n，与现有导航项并列展示
-  const mainNav: NavItem[] = [
-    ...navItems,
-    { icon: <MemoryIcon />, route: ROUTES.memory, label: t('memory.title') }
-  ]
+  // 记忆区与技能库已并入设置页,侧边栏只保留我的文档入口
+  const mainNav: NavItem[] = navItems
 
   // 管理入口仅对管理员可见
   const bottomNav: NavItem[] =
@@ -63,10 +59,10 @@ export function IconSidebar(): React.JSX.Element {
         <button
           className={clsx(styles.item, styles.newSession)}
           onClick={handleNewSession}
-          title="新会话"
+          title="新建会话"
         >
           <NewSessionIcon />
-          <span className={styles.itemLabel}>新会话</span>
+          <span className={styles.itemLabel}>新建会话</span>
         </button>
         <div className={styles.navGroup}>{mainNav.map(renderItem)}</div>
       </div>
@@ -129,21 +125,6 @@ function KnowledgeIcon(): React.JSX.Element {
   )
 }
 
-function ExtensionsIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-    >
-      <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" />
-    </svg>
-  )
-}
-
 function AdminIcon(): React.JSX.Element {
   return (
     <svg
@@ -176,24 +157,6 @@ function SettingsIcon(): React.JSX.Element {
     >
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  )
-}
-
-function MemoryIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2z" />
-      <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z" />
     </svg>
   )
 }

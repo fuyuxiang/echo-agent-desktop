@@ -40,6 +40,10 @@ interface ChatState {
   appendReasoningDelta: (delta: string) => void
   finalizeAssistantMessage: (fullContent: string) => void
   setIsGenerating: (generating: boolean) => void
+  /** 前端侧停止生成:定格当前流式消息并结束生成态(后端那次推理可能仍在跑) */
+  stopGenerating: () => void
+  /** 删除最后一条 assistant 消息(用于重新生成) */
+  removeLastAssistant: () => void
   clearMessages: () => void
 }
 
@@ -160,6 +164,32 @@ export const useChatStore = create<ChatState>()(
     setIsGenerating: (generating) =>
       set((s) => {
         s.isGenerating = generating
+      }),
+    stopGenerating: () =>
+      set((s) => {
+        const last = s.messages[s.messages.length - 1]
+        if (last?.isStreaming) {
+          // 定格已收到的内容;若空内容则移除占位气泡
+          if (s.currentStreamBuffer.trim()) {
+            last.content = s.currentStreamBuffer
+            if (s.currentReasoningBuffer.trim()) last.reasoning = s.currentReasoningBuffer
+            last.isStreaming = false
+          } else {
+            s.messages.pop()
+          }
+        }
+        s.currentStreamBuffer = ''
+        s.currentReasoningBuffer = ''
+        s.isGenerating = false
+      }),
+    removeLastAssistant: () =>
+      set((s) => {
+        const idx = [...s.messages].reverse().findIndex((m) => m.role === 'assistant')
+        if (idx === -1) return
+        s.messages.splice(s.messages.length - 1 - idx, 1)
+        s.currentStreamBuffer = ''
+        s.currentReasoningBuffer = ''
+        s.isGenerating = false
       }),
     clearMessages: () =>
       set((s) => {

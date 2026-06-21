@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { MessageBubble } from '@/components/MessageBubble'
 import { FileDropZone } from '@/components/FileDropZone'
@@ -48,13 +49,66 @@ function buildOutboundText(text: string, selectedSkill: string | null): string {
   return `${CHINESE_OUTPUT_DIRECTIVE}\n\n用户任务：\n${task}`
 }
 
+/**
+ * 欢迎首屏工具箱磁贴(参考办公小浣熊「数据分析 / 一图读懂 / 知识库问答 / 文案生成」)
+ * 点击磁贴 = 往输入框填入引导语并聚焦,不臆造后端能力
+ * tint 为磁贴左侧图标底色(紫/薄荷交替),呼应办公小浣熊磁贴质感
+ */
+interface ToolboxItem {
+  key: string
+  icon: string
+  tint: string
+  nameKey: string
+  descKey: string
+  promptKey: string
+}
+
+const TOOLBOX: ToolboxItem[] = [
+  {
+    key: 'analysis',
+    icon: '📊',
+    tint: 'rgba(142, 107, 242, 0.12)',
+    nameKey: 'chat.tools.analysis.name',
+    descKey: 'chat.tools.analysis.desc',
+    promptKey: 'chat.tools.analysis.prompt'
+  },
+  {
+    key: 'chart',
+    icon: '📈',
+    tint: 'rgba(171, 231, 213, 0.16)',
+    nameKey: 'chat.tools.chart.name',
+    descKey: 'chat.tools.chart.desc',
+    promptKey: 'chat.tools.chart.prompt'
+  },
+  {
+    key: 'knowledge',
+    icon: '📚',
+    tint: 'rgba(142, 107, 242, 0.12)',
+    nameKey: 'chat.tools.knowledge.name',
+    descKey: 'chat.tools.knowledge.desc',
+    promptKey: 'chat.tools.knowledge.prompt'
+  },
+  {
+    key: 'writing',
+    icon: '✍️',
+    tint: 'rgba(171, 231, 213, 0.16)',
+    nameKey: 'chat.tools.writing.name',
+    descKey: 'chat.tools.writing.desc',
+    promptKey: 'chat.tools.writing.prompt'
+  }
+]
+
 export default function ChatPage(): React.JSX.Element {
+  const { t } = useTranslation()
   const messages = useChatStore((s) => s.messages)
   const addUserMessage = useChatStore((s) => s.addUserMessage)
   const startAssistantMessage = useChatStore((s) => s.startAssistantMessage)
   const appendStreamDelta = useChatStore((s) => s.appendStreamDelta)
   const appendReasoningDelta = useChatStore((s) => s.appendReasoningDelta)
   const finalizeAssistantMessage = useChatStore((s) => s.finalizeAssistantMessage)
+  const stopGenerating = useChatStore((s) => s.stopGenerating)
+  const removeLastAssistant = useChatStore((s) => s.removeLastAssistant)
+  const isGenerating = useChatStore((s) => s.isGenerating)
 
   const wsConnected = useAgentStore((s) => s.wsConnected)
   const baseUrl = useAgentStore((s) => s.baseUrl)
@@ -81,6 +135,15 @@ export default function ChatPage(): React.JSX.Element {
     pollTimer: ReturnType<typeof setInterval>
   } | null>(null)
   const composerRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // 用户点「停止」后置 true,忽略本轮后续 streaming/final 帧;下次发送时复位
+  const stoppedRef = useRef(false)
+
+  // 工具箱磁贴点击:填充输入框并聚焦(纯前端引导,不直接发送)
+  const fillPrompt = useCallback((prompt: string) => {
+    setInputText(prompt)
+    textareaRef.current?.focus()
+  }, [])
 
   useEffect(() => {
     if (skills.length > 0) return
@@ -103,6 +166,7 @@ export default function ChatPage(): React.JSX.Element {
     }
 
     const onStreaming = (payload: Record<string, unknown>): void => {
+      if (stoppedRef.current) return
       if (!useChatStore.getState().isGenerating) startAssistantMessage()
       const text = getPayloadText(payload)
       if (!text) return
@@ -115,6 +179,7 @@ export default function ChatPage(): React.JSX.Element {
     }
 
     const onFinal = (payload: Record<string, unknown>): void => {
+      if (stoppedRef.current) return
       finalizeAssistantMessage(getPayloadText(payload))
 
       const state = useChatStore.getState()
@@ -205,18 +270,42 @@ export default function ChatPage(): React.JSX.Element {
     }
   }, [])
 
+  // 实际发送一段用户文本到 agent(注入项目记忆 + 中文指令);供首次发送与重新生成复用
+  const dispatchToAgent = useCallback(
+    async (text: string) => {
+      stoppedRef.current = false
+      clearExecutionEvents()
+      const memoryContext = await buildProjectMemoryContext(text)
+      const outbound = buildOutboundText(text, selectedSkill)
+      const finalText = memoryContext ? `${memoryContext}\n\n${outbound}` : outbound
+      agentWs.sendMessage(finalText)
+    },
+    [selectedSkill, clearExecutionEvents]
+  )
+
   const handleSend = useCallback(async () => {
     const text = inputText.trim()
-    if (!text || !wsConnected) return
+    if (!text || !wsConnected || isGenerating) return
     addUserMessage(text)
-    clearExecutionEvents()
     setInputText('')
-    // 注入项目记忆上下文（服务器不可达时降级为空串，不影响正常发送）
-    const memoryContext = await buildProjectMemoryContext(text)
-    const outbound = buildOutboundText(text, selectedSkill)
-    const finalText = memoryContext ? `${memoryContext}\n\n${outbound}` : outbound
-    agentWs.sendMessage(finalText)
-  }, [inputText, wsConnected, selectedSkill, addUserMessage, clearExecutionEvents])
+    await dispatchToAgent(text)
+  }, [inputText, wsConnected, isGenerating, addUserMessage, dispatchToAgent])
+
+  // 停止生成:前端侧定格当前流式消息并忽略后续帧(WS 协议无中断帧,后端推理可能仍在跑)
+  const handleStop = useCallback(() => {
+    stoppedRef.current = true
+    stopGenerating()
+  }, [stopGenerating])
+
+  // 重新生成:取最近一条 user 消息,删除最后一条 assistant 后重发
+  const handleRegenerate = useCallback(async () => {
+    if (!wsConnected || isGenerating) return
+    const msgs = useChatStore.getState().messages
+    const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
+    if (!lastUser) return
+    removeLastAssistant()
+    await dispatchToAgent(lastUser.content)
+  }, [wsConnected, isGenerating, removeLastAssistant, dispatchToAgent])
 
   // 分流确认：用户在 ShareMemoryDialog 选择后调用，写入结果并提示
   const handleMemoryDecide = useCallback(
@@ -355,16 +444,45 @@ export default function ChatPage(): React.JSX.Element {
         <FileDropZone onDrop={handleFileDrop}>
           <div className={styles.messageList}>
             {messages.length === 0 && (
-              <div className={styles.emptyState}>
-                <div className={styles.emptyMark}>E</div>
-                <h2>本地工作台已就绪</h2>
-                <p>{wsConnected ? '等待新的任务。' : '正在等待 Agent 连接。'}</p>
+              <div className={styles.welcome}>
+                <div className={styles.welcomeMark}>E</div>
+                <h1 className={styles.welcomeTitle}>{t('chat.welcomeTitle')}</h1>
+                <p className={styles.welcomeSubtitle}>
+                  {wsConnected ? t('chat.welcomeSubtitle') : t('chat.waitingAgent')}
+                </p>
+                <div className={styles.toolbox}>
+                  {TOOLBOX.map((tool) => (
+                    <button
+                      key={tool.key}
+                      type="button"
+                      className={styles.toolCard}
+                      style={{ '--tool-tint': tool.tint } as React.CSSProperties}
+                      onClick={() => fillPrompt(t(tool.promptKey))}
+                      disabled={!wsConnected}
+                    >
+                      <span className={styles.toolIcon}>{tool.icon}</span>
+                      <span className={styles.toolText}>
+                        <span className={styles.toolName}>{t(tool.nameKey)}</span>
+                        <span className={styles.toolDesc}>{t(tool.descKey)}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
             <Virtuoso
               ref={virtuosoRef}
               data={messages}
-              itemContent={(_, msg) => <MessageBubble message={msg} />}
+              itemContent={(index, msg) => (
+                <MessageBubble
+                  message={msg}
+                  onRegenerate={
+                    msg.role === 'assistant' && index === messages.length - 1 && !isGenerating
+                      ? () => void handleRegenerate()
+                      : undefined
+                  }
+                />
+              )}
               followOutput="smooth"
               className={styles.virtuoso}
             />
@@ -373,6 +491,7 @@ export default function ChatPage(): React.JSX.Element {
 
         <div className={styles.composer} ref={composerRef}>
           <textarea
+            ref={textareaRef}
             className={styles.input}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
@@ -427,18 +546,35 @@ export default function ChatPage(): React.JSX.Element {
                   />
                 </svg>
               </button>
-              <button className={styles.sendBtn} onClick={() => void handleSend()} disabled={!canSend}>
-                <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
-                  <path
-                    d="M5 12h13m0 0-5-5m5 5-5 5"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
+              {isGenerating ? (
+                <button
+                  className={styles.stopBtn}
+                  onClick={handleStop}
+                  title={t('chat.stop')}
+                  aria-label={t('chat.stop')}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  className={styles.sendBtn}
+                  onClick={() => void handleSend()}
+                  disabled={!canSend}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M5 12h13m0 0-5-5m5 5-5 5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              )}
             </div>
             <input
               ref={fileInputRef}
