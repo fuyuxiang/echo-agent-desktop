@@ -40,7 +40,19 @@ export function MessageBubble({ message, onRegenerate }: MessageBubbleProps): Re
         <span className={styles.role}>{isUser ? 'You' : 'Echo'}</span>
         <div className={clsx(styles.bubble, isUser ? styles.userBubble : styles.assistantBubble)}>
           {isUser ? (
-            message.content
+            <>
+              {message.attachments && message.attachments.length > 0 && (
+                <div className={styles.bubbleAttachments}>
+                  {message.attachments.map((att) => (
+                    <span key={att.id} className={styles.bubbleAttachment} title={att.name}>
+                      <span aria-hidden="true">📎</span>
+                      <span className={styles.bubbleAttachmentName}>{att.name}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {message.content}
+            </>
           ) : isThinking ? (
             <div className={styles.thinking}>
               <span className={styles.thinkingDots} aria-hidden="true">

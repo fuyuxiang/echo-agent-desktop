@@ -7,7 +7,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { useAgentStore } from '@/stores/agentStore'
 import { useSkillStore } from '@/stores/skillStore'
 import { agentWs } from '@/services/agent/ws'
-import { knowledgeAPI } from '@/services/agent/knowledge'
+import { attachmentsAPI } from '@/services/agent/attachments'
 import { skillsAPI } from '@/services/agent/skills'
 import skillDescriptionsZh from '@/services/agent/skill-descriptions'
 import { useSkillImport } from '@/hooks/useSkillImport'
@@ -88,6 +88,15 @@ interface ToolboxItem {
   promptKey: string
 }
 
+/** 待发送附件:上传中→就绪/失败,就绪后随消息携带 remoteId 发往 agent */
+interface PendingAttachment {
+  localId: string
+  name: string
+  size: number
+  status: 'uploading' | 'ready' | 'error'
+  remoteId?: string
+}
+
 const TOOLBOX: ToolboxItem[] = [
   {
     key: 'analysis',
@@ -147,6 +156,8 @@ export default function ChatPage(): React.JSX.Element {
 
   const [inputText, setInputText] = useState('')
   const [uploading, setUploading] = useState(false)
+  // 待发送附件:点上传/拖拽后先挂在此处,等用户输入文字一并发送(不立即入知识库)
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [listening, setListening] = useState(false)
   // 技能选择浮层开关
   const [skillMenuOpen, setSkillMenuOpen] = useState(false)
@@ -400,7 +411,7 @@ export default function ChatPage(): React.JSX.Element {
 
   // 实际发送一段用户文本到 agent(注入项目记忆 + 中文指令);供首次发送与重新生成复用
   const dispatchToAgent = useCallback(
-    async (text: string) => {
+    async (text: string, attachments?: Array<{ id: string; name: string }>) => {
       stoppedRef.current = false
       // Any real user send clears primer suppression, so a missing primer-turn
       // final can never permanently swallow subsequent replies.
@@ -409,19 +420,27 @@ export default function ChatPage(): React.JSX.Element {
       const memoryContext = await buildProjectMemoryContext(text)
       const outbound = buildOutboundText(text, activeSkill)
       const finalText = memoryContext ? `${memoryContext}\n\n${outbound}` : outbound
-      agentWs.sendMessage(finalText)
+      agentWs.sendMessage(finalText, attachments)
     },
     [activeSkill, clearExecutionEvents]
   )
 
   const handleSend = useCallback(async () => {
     const text = inputText.trim()
-    if (!text || !wsConnected || isGenerating) return
+    const readyAttachments = pendingAttachments.filter((a) => a.status === 'ready')
+    const stillUploading = pendingAttachments.some((a) => a.status === 'uploading')
+    // 可发送条件:有文本或有就绪附件;附件仍在上传中时拦截,提示等待
+    if ((!text && readyAttachments.length === 0) || !wsConnected || isGenerating) return
+    if (stillUploading) {
+      toast.error('附件仍在上传中，请稍候')
+      return
+    }
     // 发送守卫: 新会话路径存在 waitForWsReady 等待窗口(此时 isGenerating 仍为 false),
     // 没有该守卫的话窗口内重复回车会对同一会话重复发送
     if (sendingRef.current) return
     sendingRef.current = true
     try {
+      const outboundAttachments = readyAttachments.map((a) => ({ id: a.remoteId!, name: a.name }))
       let chatId = useChatStore.getState().activeChatId
       let isNewSession = false
       if (!chatId) {
@@ -443,12 +462,17 @@ export default function ChatPage(): React.JSX.Element {
         // 新建会话需让 socket 以新 chatId 重新 auth,否则首条消息仍发到旧 chatId(如 'default')
         agentWs.switchSession(chatId)
       }
-      addUserMessage(text)
+      addUserMessage(text, outboundAttachments)
       // 写库失败不阻断聊天:消息照常发往 agent、输入框照常清空
+      // 附件名追加到落库内容,便于历史回看时知道本轮带了哪些文件
+      const persistedContent = outboundAttachments.length
+        ? `${text}${text ? '\n' : ''}[附件] ${outboundAttachments.map((a) => a.name).join('、')}`
+        : text
       void db.session
-        .appendMessage({ chatId, role: 'user', content: text })
+        .appendMessage({ chatId, role: 'user', content: persistedContent })
         .catch((err) => logger.warn('[chat] 用户消息写库失败:', err))
       setInputText('')
+      setPendingAttachments([])
       if (isNewSession) {
         // switchSession 异步重连,等新连接 auth 成功(OPEN)后再发,避免被静默丢弃
         const ready = await waitForWsReady()
@@ -457,11 +481,11 @@ export default function ChatPage(): React.JSX.Element {
           return
         }
       }
-      await dispatchToAgent(text)
+      await dispatchToAgent(text, outboundAttachments)
     } finally {
       sendingRef.current = false
     }
-  }, [inputText, wsConnected, isGenerating, addUserMessage, dispatchToAgent])
+  }, [inputText, pendingAttachments, wsConnected, isGenerating, addUserMessage, dispatchToAgent])
 
   // 停止生成:前端侧定格当前流式消息并忽略后续帧(WS 协议无中断帧,后端推理可能仍在跑)
   const handleStop = useCallback(() => {
@@ -524,37 +548,55 @@ export default function ChatPage(): React.JSX.Element {
     }
   }
 
-  const uploadFiles = async (files: File[]): Promise<void> => {
+  // 暂存并后台上传附件:点上传/拖拽即调用,文件先入 agent 媒体缓存拿到 remoteId,
+  // 真正发送在 handleSend(连同输入文字一起发给 agent),不立即入知识库
+  const stageAttachments = async (files: File[]): Promise<void> => {
     if (files.length === 0) return
+    const staged: PendingAttachment[] = files.map((file) => ({
+      localId: `att-${crypto.randomUUID()}`,
+      name: file.name,
+      size: file.size,
+      status: 'uploading'
+    }))
+    setPendingAttachments((prev) => [...prev, ...staged])
     setUploading(true)
     try {
-      let successCount = 0
-      const failed: string[] = []
-
-      for (const file of files) {
-        try {
-          await knowledgeAPI.upload(file)
-          successCount++
-        } catch {
-          failed.push(file.name)
-        }
-      }
-
-      if (successCount > 0) toast.success(`已上传 ${successCount} 个文件到知识库`)
-      if (failed.length > 0) toast.error(`上传失败：${failed.join('、')}`)
+      await Promise.all(
+        files.map(async (file, i) => {
+          const localId = staged[i].localId
+          try {
+            const ref = await attachmentsAPI.upload(file)
+            setPendingAttachments((prev) =>
+              prev.map((a) =>
+                a.localId === localId ? { ...a, status: 'ready', remoteId: ref.id } : a
+              )
+            )
+          } catch (err) {
+            logger.warn('[chat] 附件上传失败:', err)
+            setPendingAttachments((prev) =>
+              prev.map((a) => (a.localId === localId ? { ...a, status: 'error' } : a))
+            )
+            toast.error(`附件上传失败：${file.name}`)
+          }
+        })
+      )
     } finally {
       setUploading(false)
     }
   }
 
+  const removePendingAttachment = (localId: string): void => {
+    setPendingAttachments((prev) => prev.filter((a) => a.localId !== localId))
+  }
+
   const handleFileDrop = async (files: File[]): Promise<void> => {
-    await uploadFiles(files)
+    await stageAttachments(files)
   }
 
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
     const files = Array.from(e.target.files ?? [])
     e.target.value = ''
-    await uploadFiles(files)
+    await stageAttachments(files)
   }
 
   const handleVoiceInput = async (): Promise<void> => {
@@ -626,7 +668,9 @@ export default function ChatPage(): React.JSX.Element {
     }
   }
 
-  const canSend = wsConnected && inputText.trim().length > 0
+  const hasReadyAttachment = pendingAttachments.some((a) => a.status === 'ready')
+  const canSend =
+    wsConnected && (inputText.trim().length > 0 || hasReadyAttachment)
   // 仅展示已启用的技能(未启用的后端不加载,选了也无效)
   const enabledSkills = skills.filter((s) => s.enabled)
 
@@ -682,6 +726,38 @@ export default function ChatPage(): React.JSX.Element {
         </FileDropZone>
 
         <div className={styles.composer} ref={composerRef}>
+          {pendingAttachments.length > 0 && (
+            <div className={styles.attachmentBar}>
+              {pendingAttachments.map((att) => (
+                <div
+                  key={att.localId}
+                  className={`${styles.attachmentChip} ${
+                    att.status === 'error' ? styles.attachmentError : ''
+                  }`}
+                  title={att.name}
+                >
+                  <span className={styles.attachmentIcon} aria-hidden="true">
+                    {att.status === 'uploading' ? '⏳' : att.status === 'error' ? '⚠️' : '📎'}
+                  </span>
+                  <span className={styles.attachmentName}>{att.name}</span>
+                  {att.status === 'uploading' && (
+                    <span className={styles.attachmentStatus}>上传中</span>
+                  )}
+                  {att.status === 'error' && (
+                    <span className={styles.attachmentStatus}>失败</span>
+                  )}
+                  <button
+                    type="button"
+                    className={styles.attachmentRemove}
+                    onClick={() => removePendingAttachment(att.localId)}
+                    aria-label={`移除附件 ${att.name}`}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             className={styles.input}
@@ -785,8 +861,8 @@ export default function ChatPage(): React.JSX.Element {
                 className={styles.iconBtn}
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploading}
-                title={uploading ? '上传中' : '上传文件'}
-                aria-label={uploading ? '上传中' : '上传文件'}
+                title={uploading ? '上传中' : '添加附件'}
+                aria-label={uploading ? '上传中' : '添加附件'}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
                   <path

@@ -301,6 +301,70 @@
   backdrop-filter: blur(24px);
 }
 
+.attachmentBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $spacing-xs;
+  padding-bottom: 2px;
+}
+
+.attachmentChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 8px 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 24%, var(--color-border));
+  border-radius: $radius-full;
+  background: var(--color-primary-soft);
+  color: var(--color-text-1);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.attachmentError {
+  border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.attachmentIcon {
+  flex-shrink: 0;
+}
+
+.attachmentName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachmentStatus {
+  flex-shrink: 0;
+  color: var(--color-text-3);
+  font-size: 11px;
+}
+
+.attachmentRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: $radius-full;
+  background: transparent;
+  color: var(--color-text-3);
+  font-size: 11px;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-1);
+  }
+}
+
 .composerBar {
   display: flex;
   align-items: center;
