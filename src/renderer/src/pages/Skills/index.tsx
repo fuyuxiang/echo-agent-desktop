@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useSkillStore } from '@/stores/skillStore'
 import { skillsAPI, type Skill } from '@/services/agent/skills'
+import { useSkillImport } from '@/hooks/useSkillImport'
 import styles from './skills.module.scss'
 import clsx from 'clsx'
 
@@ -30,6 +31,7 @@ interface SkillGroup {
 export default function SkillsPage(): React.JSX.Element {
   const { skills, selectedSkill, setSkills, setSelectedSkill } = useSkillStore()
   const [detail, setDetail] = useState<{ content: string; files: string[] } | null>(null)
+  const { importing, handleImport } = useSkillImport()
 
   useEffect(() => {
     skillsAPI
@@ -100,8 +102,23 @@ export default function SkillsPage(): React.JSX.Element {
     <div className={styles.page}>
       <div className={styles.main}>
         <div className={styles.pageHeader}>
-          <span>Skills</span>
-          <strong>技能库</strong>
+          <div className={styles.pageHeaderText}>
+            <span>Skills</span>
+            <strong>技能库</strong>
+          </div>
+          <button className={styles.importBtn} onClick={handleImport} disabled={importing}>
+            <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            {importing ? '导入中…' : '导入技能'}
+          </button>
         </div>
         <div className={styles.groupList}>
           {groups.map((group) => (
