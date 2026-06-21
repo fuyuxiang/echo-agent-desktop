@@ -21,11 +21,11 @@ export const PYTHON_DIR = path.join(DESKTOP_DATA_DIR, 'python')
 /** 虚拟环境目录 */
 export const VENV_DIR = path.join(DESKTOP_DATA_DIR, 'venv')
 
-/** Agent 工作空间（echo-agent 数据目录） */
-export const AGENT_WORKSPACE = path.join(DESKTOP_DATA_DIR, 'agent-data')
+/** 完全访问档的默认工作空间（echo-agent 数据目录） */
+export const DEFAULT_AGENT_WORKSPACE = path.join(DESKTOP_DATA_DIR, 'agent-data')
 
 /** 配置文件路径 */
-export const AGENT_CONFIG_PATH = path.join(AGENT_WORKSPACE, 'echo-agent.yaml')
+export const AGENT_CONFIG_PATH = path.join(DEFAULT_AGENT_WORKSPACE, 'echo-agent.yaml')
 
 /** 日志目录 */
 export const LOGS_DIR = path.join(DESKTOP_DATA_DIR, 'logs')
