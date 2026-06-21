@@ -22,7 +22,6 @@
     "apply": "Apply & restart",
     "cancel": "Cancel",
     "switching": "Switching…",
-    "folderUnavailable": "Folder unavailable, please reselect",
     "switched": "Access scope switched",
     "switchFailed": "Switch failed",
     "confirmFull": "Full access lets the agent read/write all files and run terminal commands. Confirm?",

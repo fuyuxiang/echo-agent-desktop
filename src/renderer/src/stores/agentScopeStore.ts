@@ -30,11 +30,18 @@ export const useAgentScopeStore = create<AgentScopeState>()(
       })
       try {
         const result = await window.api.agent.setScope({ scope, workspaceDir })
-        set((s) => {
-          s.scope = scope
-          s.workspaceDir = workspaceDir
-        })
+        // 仅在切换成功时才更新本地状态, 失败时保留先前生效的范围,
+        // 让 UI 继续展示实际生效的访问范围
+        if (result.success) {
+          set((s) => {
+            s.scope = scope
+            s.workspaceDir = workspaceDir
+          })
+        }
         return result
+      } catch (err) {
+        // IPC 整体 reject(非 {success:false}) 时也转为失败结果, 避免未处理的 promise rejection
+        return { success: false, error: err instanceof Error ? err.message : String(err) }
       } finally {
         set((s) => {
           s.switching = false
