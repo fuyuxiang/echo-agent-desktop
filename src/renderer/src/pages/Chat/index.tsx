@@ -9,6 +9,7 @@ import { useSkillStore } from '@/stores/skillStore'
 import { agentWs } from '@/services/agent/ws'
 import { knowledgeAPI } from '@/services/agent/knowledge'
 import { skillsAPI } from '@/services/agent/skills'
+import skillDescriptionsZh from '@/services/agent/skill-descriptions'
 import { buildProjectMemoryContext } from '@/services/chat-inject'
 import { db } from '@/utils/db'
 import { logger } from '@/utils/logger'
@@ -688,8 +689,10 @@ export default function ChatPage(): React.JSX.Element {
                           }}
                         >
                           <span className={styles.skillItemName}>{s.name}</span>
-                          {s.description && (
-                            <span className={styles.skillItemDesc}>{s.description}</span>
+                          {(skillDescriptionsZh[s.name] ?? s.description) && (
+                            <span className={styles.skillItemDesc}>
+                              {skillDescriptionsZh[s.name] ?? s.description}
+                            </span>
                           )}
                         </button>
                       ))
