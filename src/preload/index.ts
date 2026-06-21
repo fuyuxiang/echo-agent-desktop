@@ -3,6 +3,7 @@ import type { BridgeApi } from '@shared/types/api'
 import type {
   AgentConfig,
   AgentProcessStatus,
+  AgentScopeConfig,
   InstallProgressEvent,
   LogLevel,
   MediaPermissionType,
@@ -109,6 +110,9 @@ const api: BridgeApi = {
     updateConfig: (config: AgentConfig) =>
       ipcRenderer.invoke(IpcChannels.agent.updateConfig, config),
     getLogs: () => ipcRenderer.invoke(IpcChannels.agent.getLogs),
+    getScope: () => ipcRenderer.invoke(IpcChannels.agent.getScope),
+    setScope: (config: AgentScopeConfig) =>
+      ipcRenderer.invoke(IpcChannels.agent.setScope, config),
     httpProxy: (opts: {
       url: string
       method?: string
