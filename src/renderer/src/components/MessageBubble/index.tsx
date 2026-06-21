@@ -30,6 +30,9 @@ export function MessageBubble({ message, onRegenerate }: MessageBubbleProps): Re
     }
   }
 
+  // 流式中且正文与过程摘要均为空 = 等待首个增量帧, 显示「思考中」占位提示
+  const isThinking = message.isStreaming && !message.content && !message.reasoning
+
   return (
     <div className={clsx(styles.row, isUser && styles.userRow)}>
       {!isUser && <div className={styles.avatar}>E</div>}
@@ -38,6 +41,15 @@ export function MessageBubble({ message, onRegenerate }: MessageBubbleProps): Re
         <div className={clsx(styles.bubble, isUser ? styles.userBubble : styles.assistantBubble)}>
           {isUser ? (
             message.content
+          ) : isThinking ? (
+            <div className={styles.thinking}>
+              <span className={styles.thinkingDots} aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+              <span>{t('chat.thinking')}</span>
+            </div>
           ) : (
             <>
               {message.reasoning && (

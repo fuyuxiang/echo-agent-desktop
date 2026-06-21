@@ -39,13 +39,27 @@ function setStatus(status: AgentProcessStatus): void {
   statusChangeCallback?.(status)
 }
 
-/** 启动 Agent 进程 */
+let startInFlight: Promise<AgentStartResult> | null = null
+
+/** 启动 Agent 进程(幂等: 并发/重复调用复用同一次启动, 避免重复 spawn 多个进程) */
 export async function startAgent(apiKeys?: Record<string, string>): Promise<AgentStartResult> {
   if (currentStatus === 'running' && currentPort) {
     const alive = await checkHealth(currentPort)
     if (alive) return { success: true, port: currentPort }
   }
 
+  // 已有启动进行中(starting), 复用之, 不再 spawn 新进程
+  if (startInFlight) {
+    return startInFlight
+  }
+
+  startInFlight = doStart(apiKeys).finally(() => {
+    startInFlight = null
+  })
+  return startInFlight
+}
+
+async function doStart(apiKeys?: Record<string, string>): Promise<AgentStartResult> {
   const envInfo = await getEnvInfo()
   if (envInfo.status !== 'ready') {
     return { success: false, error: 'Python 环境未就绪，请先完成初始化' }
@@ -62,8 +76,15 @@ export async function startAgent(apiKeys?: Record<string, string>): Promise<Agen
 }
 
 async function doSpawn(apiKeys?: Record<string, string>): Promise<AgentStartResult> {
+  // 剔除继承自用户环境的代理变量: 本地 agent 直连模型厂商, 不应走用户机器的本地代理
+  // (否则在配了 SOCKS/HTTP 代理的机器上, agent 的 httpx 会因代理不可用/缺 socksio 而初始化失败)
+  const cleanEnv: NodeJS.ProcessEnv = { ...process.env }
+  for (const k of Object.keys(cleanEnv)) {
+    if (/^(all|http|https|ftp|no)_proxy$/i.test(k)) delete cleanEnv[k]
+  }
+
   const env = {
-    ...process.env,
+    ...cleanEnv,
     ECHO_AGENT_DISABLE_LAZY_INSTALLS: '1',
     ...apiKeys
   }

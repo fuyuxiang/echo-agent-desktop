@@ -10,6 +10,7 @@ import { agentWs } from '@/services/agent/ws'
 import { knowledgeAPI } from '@/services/agent/knowledge'
 import { skillsAPI } from '@/services/agent/skills'
 import { buildProjectMemoryContext } from '@/services/chat-inject'
+import { logger } from '@/utils/logger'
 import { confirmShareToProject, type MemoryCandidate } from '@/services/memory-router'
 import { ShareMemoryDialog } from '@/components/ShareMemoryDialog'
 import { toast } from '@/components/Toast'
@@ -158,18 +159,31 @@ export default function ChatPage(): React.JSX.Element {
 
     const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws'
     const { currentSessionKey: sessionKey, remoteToken } = useAgentStore.getState()
-    agentWs.connect(wsUrl, sessionKey || 'default', remoteToken)
 
     const onAuthOk = (payload: Record<string, unknown>): void => {
       setWsConnected(true)
       if (payload.session_key) setCurrentSessionKey(payload.session_key as string)
     }
 
+    // 本轮 streaming 帧统计:用于判断后端是逐段下发(流式)还是只发 final(伪流式)
+    let streamFrameCount = 0
+    let streamCharCount = 0
+
     const onStreaming = (payload: Record<string, unknown>): void => {
       if (stoppedRef.current) return
-      if (!useChatStore.getState().isGenerating) startAssistantMessage()
+      if (!useChatStore.getState().isGenerating) {
+        startAssistantMessage()
+        streamFrameCount = 0
+        streamCharCount = 0
+      }
       const text = getPayloadText(payload)
       if (!text) return
+
+      streamFrameCount++
+      streamCharCount += text.length
+      logger.info(
+        `[chat:onStreaming] 第${streamFrameCount}帧 reasoning=${isReasoningPayload(payload)} 本帧长度=${text.length} 累计=${streamCharCount}`
+      )
 
       if (isReasoningPayload(payload)) {
         appendReasoningDelta(text)
@@ -180,7 +194,17 @@ export default function ChatPage(): React.JSX.Element {
 
     const onFinal = (payload: Record<string, unknown>): void => {
       if (stoppedRef.current) return
-      finalizeAssistantMessage(getPayloadText(payload))
+      // 非流式回复(只有 final 帧、无 streaming 增量)时, 先建占位气泡, 否则 finalize 无目标导致回复不显示
+      if (!useChatStore.getState().isGenerating) startAssistantMessage()
+      const finalText = getPayloadText(payload)
+      logger.info(
+        `[chat:onFinal] 最终回复长度=${finalText.length} 本轮streaming帧数=${streamFrameCount} ` +
+          `${streamFrameCount === 0 ? '⚠️ 后端未下发流式增量帧(伪流式)' : '✓ 后端逐段下发(真流式)'} ` +
+          `预览=${finalText.slice(0, 40)}`
+      )
+      streamFrameCount = 0
+      streamCharCount = 0
+      finalizeAssistantMessage(finalText)
 
       const state = useChatStore.getState()
       const userMessages = state.messages.filter((m) => m.role === 'user')
@@ -241,6 +265,9 @@ export default function ChatPage(): React.JSX.Element {
     agentWs.on('message.final', onFinal)
     agentWs.on('message.progress', onProgress)
     agentWs.on('_disconnected', onDisconnected)
+
+    // 先注册监听再连接, 避免 auth_ok 在监听注册前到达被丢弃(导致 wsConnected 永为 false)
+    agentWs.connect(wsUrl, sessionKey || 'default', remoteToken)
 
     return () => {
       agentWs.off('auth_ok', onAuthOk)
