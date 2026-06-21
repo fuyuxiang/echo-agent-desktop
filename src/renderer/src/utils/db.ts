@@ -56,6 +56,10 @@ export const db = {
     }): Promise<ChatMessageRecord> {
       return window.api.db.session.appendMessage(input)
     },
+    /** 删除最后一条 assistant 消息(重新生成时撤销上一轮回复) */
+    deleteLastAssistantMessage(chatId: string): Promise<void> {
+      return window.api.db.session.deleteLastAssistantMessage(chatId)
+    },
     /** 更新标题 */
     updateTitle(chatId: string, title: string): Promise<void> {
       return window.api.db.session.updateTitle(chatId, title)

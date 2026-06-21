@@ -13,22 +13,15 @@ import {
   deleteChatSession,
   getChatMessages,
   appendChatMessage,
-  updateChatSessionTitle
+  updateChatSessionTitle,
+  deleteLastAssistantMessage
 } from '../session'
+import { runMigrations } from '../../migrations'
 
 beforeEach(() => {
   memDb = new Database(':memory:')
-  memDb.exec(`
-    CREATE TABLE chat_sessions (
-      chat_id TEXT PRIMARY KEY, title TEXT, platform TEXT NOT NULL DEFAULT 'desktop',
-      created_at INTEGER NOT NULL, last_activity INTEGER NOT NULL,
-      message_count INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE chat_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, role TEXT NOT NULL,
-      content TEXT NOT NULL, reasoning TEXT, created_at INTEGER NOT NULL
-    );
-  `)
+  // 跑真实迁移建表(从 user_version 0 升到最新),避免手抄 DDL 与 migration 漂移
+  runMigrations(memDb)
 })
 
 describe('session DAO', () => {
@@ -74,5 +67,24 @@ describe('session DAO', () => {
     const s = listChatSessions()[0]
     expect(s.title).toBe('orig')
     expect(s.messageCount).toBe(1)
+  })
+
+  it('deleteLastAssistantMessage 删最后一条 assistant 并对称维护 messageCount', () => {
+    upsertChatSession({ chatId: 'c1' })
+    appendChatMessage({ chatId: 'c1', role: 'user', content: 'hi' })
+    appendChatMessage({ chatId: 'c1', role: 'assistant', content: 'first' })
+    deleteLastAssistantMessage('c1')
+    const msgs = getChatMessages('c1')
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].role).toBe('user')
+    expect(listChatSessions()[0].messageCount).toBe(1)
+  })
+
+  it('deleteLastAssistantMessage 无 assistant 时空操作且 messageCount 不变', () => {
+    upsertChatSession({ chatId: 'c1' })
+    appendChatMessage({ chatId: 'c1', role: 'user', content: 'hi' })
+    deleteLastAssistantMessage('c1')
+    expect(getChatMessages('c1')).toHaveLength(1)
+    expect(listChatSessions()[0].messageCount).toBe(1)
   })
 })
