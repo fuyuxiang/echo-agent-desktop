@@ -176,7 +176,7 @@
   height: 100%;
 }
 
-.emptyState {
+.welcome {
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -187,23 +187,10 @@
   gap: $spacing-sm;
   padding: $spacing-xl;
   text-align: center;
-  pointer-events: none;
-
-  h2 {
-    margin: $spacing-sm 0 0;
-    font-size: $font-size-xl;
-    font-weight: 700;
-    letter-spacing: 0;
-  }
-
-  p {
-    margin: 0;
-    color: var(--color-text-3);
-    font-size: $font-size-base;
-  }
+  overflow-y: auto;
 }
 
-.emptyMark {
+.welcomeMark {
   @include flex-center;
   width: 56px;
   height: 56px;
@@ -214,6 +201,88 @@
   font-size: 24px;
   font-weight: 760;
   box-shadow: var(--shadow-card);
+}
+
+.welcomeTitle {
+  margin: $spacing-sm 0 0;
+  font-size: 26px;
+  font-weight: 760;
+  letter-spacing: 0;
+  color: var(--color-text-1);
+}
+
+.welcomeSubtitle {
+  margin: 0;
+  color: var(--color-text-3);
+  font-size: $font-size-base;
+}
+
+.toolbox {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(210px, 260px));
+  gap: $spacing-md;
+  margin-top: $spacing-lg;
+}
+
+.toolCard {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  padding: $spacing-md $spacing-lg;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 14px;
+  background: var(--color-bg-elevated);
+  text-align: left;
+  box-shadow: var(--shadow-card);
+  transition:
+    transform $duration-fast,
+    border-color $duration-fast,
+    box-shadow $duration-fast;
+
+  &:hover:not(:disabled) {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--color-primary) 32%, var(--color-border));
+    box-shadow: var(--shadow-card-strong);
+  }
+
+  &:active:not(:disabled) {
+    transform: translateY(0);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.toolIcon {
+  @include flex-center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--tool-tint, var(--color-primary-soft));
+  font-size: 20px;
+  line-height: 1;
+}
+
+.toolText {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.toolName {
+  font-size: $font-size-base;
+  font-weight: 650;
+  color: var(--color-text-1);
+}
+
+.toolDesc {
+  font-size: $font-size-xs;
+  color: var(--color-text-3);
+  @include ellipsis;
 }
 
 .composer {
@@ -566,7 +635,7 @@ button.toolPill {
   border-radius: $radius-full;
   font-size: $font-size-base;
   font-weight: 700;
-  box-shadow: 0 10px 24px rgba(0, 136, 255, 0.22);
+  box-shadow: 0 10px 24px rgba(142, 107, 242, 0.28);
   transition:
     transform $duration-fast,
     filter $duration-fast,
@@ -584,5 +653,30 @@ button.toolPill {
     opacity: 0.45;
     cursor: not-allowed;
     box-shadow: none;
+  }
+}
+
+.stopBtn {
+  @include flex-center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  color: var(--color-danger);
+  border-radius: $radius-full;
+  box-shadow: var(--shadow-card);
+  transition:
+    transform $duration-fast,
+    background $duration-fast,
+    border-color $duration-fast;
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--color-danger) 42%, var(--color-border));
+    background: var(--color-danger-soft);
+  }
+
+  &:active {
+    transform: scale(0.96);
   }
 }

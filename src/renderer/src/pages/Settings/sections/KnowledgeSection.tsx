@@ -63,7 +63,7 @@ export function KnowledgeSection(): React.JSX.Element {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 24 }}>知识库</h2>
+      <h2 style={{ marginBottom: 24 }}>我的文档</h2>
       {status && (
         <p style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 16 }}>
           已索引: {status.indexed} / {status.total}

@@ -32,6 +32,38 @@
     "submit": "Sign In",
     "skip": "Skip for now, enter the desktop"
   },
+  "chat": {
+    "welcomeTitle": "Your smart assistant",
+    "welcomeSubtitle": "What can I help you with today?",
+    "waitingAgent": "Waiting for the agent to connect…",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyFailed": "Copy failed",
+    "regenerate": "Regenerate",
+    "stop": "Stop",
+    "tools": {
+      "analysis": {
+        "name": "Data Analysis",
+        "desc": "Upload data, uncover trends",
+        "prompt": "I have a dataset and want to analyze it. Help me figure out which angles to start from."
+      },
+      "chart": {
+        "name": "Visualize",
+        "desc": "Turn data into clear charts",
+        "prompt": "Please help me turn the data into charts suitable for visualization, and explain the key point of each."
+      },
+      "knowledge": {
+        "name": "Knowledge Q&A",
+        "desc": "Answer from your documents",
+        "prompt": "Based on my knowledge base, help me answer the following question: "
+      },
+      "writing": {
+        "name": "Writing",
+        "desc": "Draft, polish and rewrite",
+        "prompt": "Please help me draft some copy on the topic of: "
+      }
+    }
+  },
   "admin": {
     "nav": "Admin",
     "title": "Users & Groups",

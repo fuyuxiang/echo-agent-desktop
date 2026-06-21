@@ -32,6 +32,38 @@
     "submit": "登录",
     "skip": "暂不登录,先进入桌面"
   },
+  "chat": {
+    "welcomeTitle": "你的智能小助手",
+    "welcomeSubtitle": "今天帮你做些什么？",
+    "waitingAgent": "正在等待 Agent 连接…",
+    "copy": "复制",
+    "copied": "已复制",
+    "copyFailed": "复制失败",
+    "regenerate": "重新生成",
+    "stop": "停止生成",
+    "tools": {
+      "analysis": {
+        "name": "数据分析",
+        "desc": "上传表格，洞察趋势与关系",
+        "prompt": "我有一份数据，想做数据分析，请帮我梳理可以从哪些维度入手。"
+      },
+      "chart": {
+        "name": "一图读懂",
+        "desc": "把数据变成清晰的图表",
+        "prompt": "请帮我把数据整理成适合可视化的图表，并说明每张图表达的重点。"
+      },
+      "knowledge": {
+        "name": "知识库问答",
+        "desc": "基于你的资料快速回答",
+        "prompt": "基于我的知识库，帮我回答以下问题："
+      },
+      "writing": {
+        "name": "文案生成",
+        "desc": "起草、润色与改写文字",
+        "prompt": "请帮我起草一段文案，主题是："
+      }
+    }
+  },
   "admin": {
     "nav": "管理",
     "title": "用户与组管理",

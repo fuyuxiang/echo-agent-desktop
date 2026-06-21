@@ -98,3 +98,34 @@
   font-size: $font-size-sm;
   padding: $spacing-sm;
 }
+
+.actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity $duration-fast;
+
+  .row:hover & {
+    opacity: 1;
+  }
+}
+
+.actionBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: $radius-md;
+  color: var(--color-text-3);
+  font-size: $font-size-xs;
+  font-weight: 600;
+  transition:
+    color $duration-fast,
+    background $duration-fast;
+
+  &:hover {
+    color: var(--color-primary);
+    background: var(--color-primary-soft);
+  }
+}
