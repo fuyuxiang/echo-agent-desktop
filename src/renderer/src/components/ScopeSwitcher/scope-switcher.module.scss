@@ -1,0 +1,148 @@
+.wrap {
+  position: relative;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-surface-2, rgba(255, 255, 255, 0.04));
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    background: var(--color-surface-3, rgba(255, 255, 255, 0.08));
+  }
+  &.switching {
+    opacity: 0.6;
+    cursor: default;
+  }
+}
+
+.icon {
+  font-size: 16px;
+  flex: 0 0 auto;
+}
+
+.barText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.scopeName {
+  font-size: 13px;
+}
+
+.folder {
+  font-size: 11px;
+  opacity: 0.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 41;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--color-surface-1, #1e1e1e);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.panelTitle {
+  font-size: 12px;
+  opacity: 0.6;
+  margin-bottom: 8px;
+}
+
+.option {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+  cursor: pointer;
+
+  span {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+.optName {
+  font-size: 13px;
+}
+.optDesc {
+  font-size: 11px;
+  opacity: 0.6;
+}
+.warning {
+  font-size: 11px;
+  color: var(--color-warning, #e6a23c);
+}
+
+.folderRow {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.chooseBtn {
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.15));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.currentDir {
+  font-size: 11px;
+  opacity: 0.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.cancel,
+.applyBtn {
+  font-size: 13px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.15));
+  background: transparent;
+  color: inherit;
+}
+.applyBtn {
+  background: var(--color-primary, #4f7cff);
+  border-color: transparent;
+  color: #fff;
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
