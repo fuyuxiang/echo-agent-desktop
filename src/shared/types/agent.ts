@@ -36,6 +36,8 @@ export interface ModelProviderConfig {
   name: 'openai' | 'anthropic' | 'gemini' | 'bedrock' | 'openrouter'
   models?: string[]
   apiBase?: string
+  /** 方案A: 直接写入 yaml 的 apiKey(来自服务器下发) */
+  apiKey?: string
 }
 
 /** Agent 配置（用于生成 echo-agent.yaml） */

@@ -19,6 +19,64 @@ import { BizError, SUCCESS_CODE, type BaseData } from './types'
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'
 
+/**
+ * 主进程代理 adapter:渲染进程经 IPC 走主进程发请求,绕过浏览器 CORS 限制。
+ * 服务端(echo-agent-server)未开放跨域,且打包后渲染层是 file://,故所有
+ * 业务请求统一走主进程 net.fetch。仅在 Electron(window.api 存在)时启用。
+ */
+async function ipcProxyAdapter(config: AxiosRequestConfig): Promise<AxiosResponse> {
+  const base = (config.baseURL ?? '').replace(/\/+$/, '')
+  const rawUrl = config.url ?? ''
+  let url = /^https?:\/\//.test(rawUrl) ? rawUrl : `${base}${rawUrl}`
+
+  // 拼接 query 参数
+  if (config.params && typeof config.params === 'object') {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(config.params as Record<string, unknown>)) {
+      if (v !== undefined && v !== null) qs.append(k, String(v))
+    }
+    const q = qs.toString()
+    if (q) url += (url.includes('?') ? '&' : '?') + q
+  }
+
+  const headers: Record<string, string> = {}
+  for (const [k, v] of Object.entries((config.headers ?? {}) as Record<string, unknown>)) {
+    if (v !== undefined && v !== null && typeof v !== 'object') headers[k] = String(v)
+  }
+
+  const body =
+    config.data === undefined || config.data === null
+      ? undefined
+      : typeof config.data === 'string'
+        ? config.data
+        : JSON.stringify(config.data)
+  if (body && !headers['Content-Type'] && !headers['content-type']) {
+    headers['Content-Type'] = 'application/json'
+  }
+
+  const result = await window.api.agent.httpProxy({
+    url,
+    method: (config.method ?? 'get').toUpperCase(),
+    headers,
+    body
+  })
+
+  let data: unknown
+  try {
+    data = JSON.parse(result.body)
+  } catch {
+    data = result.body
+  }
+
+  return {
+    data,
+    status: result.status,
+    statusText: result.ok ? 'OK' : 'Error',
+    headers: {},
+    config
+  } as AxiosResponse
+}
+
 /** Mock adapter:拦截请求,从注册表返回数据(模拟 300ms 网络延迟) */
 async function mockAdapter(config: AxiosRequestConfig): Promise<AxiosResponse> {
   const method = (config.method ?? 'get').toUpperCase()
@@ -41,10 +99,13 @@ async function mockAdapter(config: AxiosRequestConfig): Promise<AxiosResponse> {
   return { data: body, status: 200, statusText: 'OK', headers: {}, config } as AxiosResponse
 }
 
+const hasIpcProxy =
+  typeof window !== 'undefined' && typeof window.api?.agent?.httpProxy === 'function'
+
 const instance = axios.create({
   baseURL: API_HOST,
   timeout: 15000,
-  ...(USE_MOCK ? { adapter: mockAdapter } : {})
+  ...(USE_MOCK ? { adapter: mockAdapter } : hasIpcProxy ? { adapter: ipcProxyAdapter } : {})
 })
 
 // ===== 请求拦截器:自动携带 token =====
