@@ -1,39 +1,40 @@
 /**
- * 会话历史相关纯函数:失效判定与兜底重发素材提取
+ * Pure helpers for session history: staleness detection and fallback replay material extraction.
  *
- * 服务端按 session_key 持久化对话上下文,TTL 72h。客户端无探测接口,
- * 改用本地 lastActivity 时间戳保守判定(48h):超阈值视为服务端可能已失效,
- * 重开会话时把最近 N 轮原文拼成"历史回顾"喂回去重建上下文。
+ * The server persists conversation context keyed by session_key with a 72h TTL. The client has no
+ * probe endpoint, so it conservatively relies on a local lastActivity timestamp (48h): once the
+ * threshold is exceeded the server context is treated as possibly expired, and when reopening the
+ * session the most recent N rounds are concatenated into a "history recap" and fed back to rebuild context.
  */
 
-/** 失效阈值:服务端 TTL 72h,取保守值 48h 留安全余量 */
+/** Staleness threshold: server TTL is 72h, use a conservative 48h for safety margin */
 export const SESSION_STALE_MS = 48 * 60 * 60 * 1000
 
-/** 兜底重发轮数(一轮 = 一次 user+assistant 往返) */
+/** Number of fallback replay rounds (one round = one user+assistant exchange) */
 export const REPLAY_ROUNDS = 6
 
-/** 重发素材的最小消息形状 */
+/** Minimal message shape used as replay material */
 export interface PrimerMessage {
   role: 'user' | 'assistant'
   content: string
 }
 
-/** 距上次活动是否已超过失效阈值 */
+/** Whether the time since the last activity exceeds the staleness threshold */
 export function isSessionStale(lastActivity: number, now: number = Date.now()): boolean {
   return now - lastActivity > SESSION_STALE_MS
 }
 
-/** 取最近 rounds 轮的 user/assistant 原文(过滤 system),保持时间顺序 */
+/** Take the most recent `rounds` of user/assistant messages (filtering out system), preserving order */
 export function extractRecentRounds(
   messages: PrimerMessage[],
   rounds: number = REPLAY_ROUNDS
 ): PrimerMessage[] {
   const dialog = messages.filter((m) => m.role === 'user' || m.role === 'assistant')
-  // 一轮约两条消息,取最近 rounds*2 条作近似(足够覆盖续聊场景)
+  // One round is roughly two messages; take the last rounds*2 as an approximation (enough to cover continued chats)
   return dialog.slice(-rounds * 2)
 }
 
-/** 把最近若干轮拼成"历史回顾"上下文文本;空则返回空串 */
+/** Concatenate the most recent rounds into a "history recap" context text; returns empty string when empty */
 export function buildPrimerText(rounds: PrimerMessage[]): string {
   if (rounds.length === 0) return ''
   const lines = rounds.map((m) => {
