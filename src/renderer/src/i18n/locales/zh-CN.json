@@ -45,6 +45,13 @@
     "regenerate": "重新生成",
     "stop": "停止生成",
     "thinking": "Echo 正在思考",
+    "skill": {
+      "label": "技能",
+      "pick": "选择技能",
+      "using": "正在使用技能",
+      "clear": "取消技能",
+      "empty": "暂无已启用的技能"
+    },
     "tools": {
       "analysis": {
         "name": "数据分析",
