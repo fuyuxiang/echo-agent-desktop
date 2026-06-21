@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { storage } from '@/utils'
+import { toast } from '@/components/Toast'
 import { fetchModelConfig, type ModelConfigDTO } from '@/services/server'
 import {
   resolveEffectiveModelConfig,
@@ -25,6 +26,7 @@ export function ModelSection(): React.JSX.Element {
   const [provider, setProvider] = useState<Provider>('openai')
   const [apiKey, setApiKey] = useState('')
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
 
   // 服务端下发配置(A)
   const [serverConfig, setServerConfig] = useState<ModelConfigDTO | null>(null)
@@ -75,31 +77,39 @@ export function ModelSection(): React.JSX.Element {
   const canOverride = serverConfig?.allowLocalOverride === true
 
   const handleSave = async (): Promise<void> => {
-    await window.api.store.secureSet(KEY_MAP[provider], apiKey)
+    if (saving) return
+    setSaving(true)
+    try {
+      await window.api.store.secureSet(KEY_MAP[provider], apiKey)
 
-    if (serverConfig) {
-      // 仅当允许覆盖时才持久化本地配置,否则确保不残留旧覆盖
-      const local: LocalModelConfig | null = canOverride ? { baseUrl, modelName } : null
-      if (canOverride) {
-        await storage.set(LOCAL_CONFIG_KEY, local)
-      } else {
-        await storage.remove(LOCAL_CONFIG_KEY)
+      if (serverConfig) {
+        // 仅当允许覆盖时才持久化本地配置,否则确保不残留旧覆盖
+        const local: LocalModelConfig | null = canOverride ? { baseUrl, modelName } : null
+        if (canOverride) {
+          await storage.set(LOCAL_CONFIG_KEY, local)
+        } else {
+          await storage.remove(LOCAL_CONFIG_KEY)
+        }
+
+        const effective = resolveEffectiveModelConfig(serverConfig, local)
+        await window.api.agent.updateConfig({
+          defaultModel: effective.modelName ?? '',
+          providers: [
+            {
+              name: provider,
+              ...(effective.baseUrl ? { apiBase: effective.baseUrl } : {})
+            }
+          ]
+        })
       }
 
-      const effective = resolveEffectiveModelConfig(serverConfig, local)
-      await window.api.agent.updateConfig({
-        defaultModel: effective.modelName ?? '',
-        providers: [
-          {
-            name: provider,
-            ...(effective.baseUrl ? { apiBase: effective.baseUrl } : {})
-          }
-        ]
-      })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      toast.error(`保存失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setSaving(false)
     }
-
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
   }
 
   const effectiveSource =
@@ -191,10 +201,10 @@ export function ModelSection(): React.JSX.Element {
 
         <button
           onClick={handleSave}
-          disabled={loading}
+          disabled={loading || saving}
           style={{ padding: '8px 16px', alignSelf: 'flex-start', cursor: 'pointer' }}
         >
-          {saved ? t('model.saved') : t('model.save')}
+          {saving ? t('model.saving', '保存中…') : saved ? t('model.saved') : t('model.save')}
         </button>
       </div>
     </div>

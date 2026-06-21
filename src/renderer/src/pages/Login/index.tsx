@@ -22,9 +22,13 @@ export default function Login(): React.JSX.Element {
 
   async function onSubmit(e: React.FormEvent): Promise<void> {
     e.preventDefault()
+    const u = username.trim()
+    const p = password.trim()
+    // 防纯空格绕过 disabled: trim 后为空则不提交
+    if (!u || !p || loading) return
     setLoading(true)
     try {
-      await signIn(username, password)
+      await signIn(u, p)
       navigate(ROUTES.chat, { replace: true })
     } catch {
       // 业务错误已由拦截器 toast,无需重复处理

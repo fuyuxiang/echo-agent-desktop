@@ -171,6 +171,12 @@ export default function ChatPage(): React.JSX.Element {
   // primer(历史回顾)回合进行中置 true:其 streaming/final 帧不进 UI、不落库;
   // 消费掉该回合的 final 后复位,使 primer 之后用户的正常消息不受影响
   const primerPendingRef = useRef(false)
+  // 本轮流式回复归属的 chatId 快照:流式开始时记录,落库时使用,
+  // 避免回复到达时用户已切换会话导致 onFinal 用实时 activeChatId 写错会话
+  const streamOwnerChatIdRef = useRef<string>('')
+  // 发送进行中守卫:覆盖新会话 waitForWsReady 等待窗口(此时 isGenerating 仍为 false),
+  // 防止该窗口内重复回车对同一会话发出多条消息
+  const sendingRef = useRef(false)
 
   // 工具箱磁贴点击:填充输入框并聚焦(纯前端引导,不直接发送)
   const fillPrompt = useCallback((prompt: string) => {
@@ -215,6 +221,7 @@ export default function ChatPage(): React.JSX.Element {
       // primer 回合:丢弃所有流式帧,不建气泡、不累积
       if (primerPendingRef.current) return
       if (!useChatStore.getState().isGenerating) {
+        streamOwnerChatIdRef.current = useChatStore.getState().activeChatId
         startAssistantMessage()
         streamFrameCount = 0
         streamCharCount = 0
@@ -244,7 +251,10 @@ export default function ChatPage(): React.JSX.Element {
         return
       }
       // 非流式回复(只有 final 帧、无 streaming 增量)时, 先建占位气泡, 否则 finalize 无目标导致回复不显示
-      if (!useChatStore.getState().isGenerating) startAssistantMessage()
+      if (!useChatStore.getState().isGenerating) {
+        streamOwnerChatIdRef.current = useChatStore.getState().activeChatId
+        startAssistantMessage()
+      }
       const finalText = getPayloadText(payload)
       logger.info(
         `[chat:onFinal] 最终回复长度=${finalText.length} 本轮streaming帧数=${streamFrameCount} ` +
@@ -256,9 +266,11 @@ export default function ChatPage(): React.JSX.Element {
       finalizeAssistantMessage(finalText)
 
       const state = useChatStore.getState()
-      const chatId = state.activeChatId
+      // 落库归属本轮流式开始时的会话, 而非到达时的 activeChatId(用户可能已切换会话)
+      const chatId = streamOwnerChatIdRef.current || state.activeChatId
       const last = state.messages[state.messages.length - 1]
-      if (chatId && last && last.role === 'assistant') {
+      // 仅在内容非空时落库, 避免空 final 持久化空 assistant 气泡
+      if (chatId && last && last.role === 'assistant' && last.content.trim()) {
         void db.session.appendMessage({
           chatId,
           role: 'assistant',
@@ -266,6 +278,7 @@ export default function ChatPage(): React.JSX.Element {
           reasoning: last.reasoning ?? null
         })
       }
+      streamOwnerChatIdRef.current = ''
 
       const userMessages = state.messages.filter((m) => m.role === 'user')
       if (userMessages.length === 1 && chatId) {
@@ -290,10 +303,19 @@ export default function ChatPage(): React.JSX.Element {
       // Drop primer suppression on disconnect: the primer-turn final may never
       // arrive after a drop, and leaving it set would swallow later replies.
       primerPendingRef.current = false
+      // 断线时若正在生成, 服务端那次推理已无法回流: 定格当前流式气泡并复位生成态,
+      // 否则 isGenerating/isStreaming 永真, 界面卡在"思考中"且无法再发送消息
+      if (useChatStore.getState().isGenerating) {
+        stopGenerating()
+        streamOwnerChatIdRef.current = ''
+        toast.error('连接已断开，本次回复已中断')
+      }
     }
 
     const onProgress = (payload: Record<string, unknown>): void => {
       if (primerPendingRef.current) return
+      // 用户已点停止: 不再累积工具调用/记忆/引用事件(后端推理可能仍在跑)
+      if (stoppedRef.current) return
       const meta = payload.metadata as Record<string, unknown> | undefined
       if (!meta) return
       const type = meta.progress_type as string
@@ -347,6 +369,7 @@ export default function ChatPage(): React.JSX.Element {
   }, [baseUrl])
 
   useEffect(() => {
+    if (messages.length === 0) return
     virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'smooth' })
   }, [messages.length])
 
@@ -394,42 +417,50 @@ export default function ChatPage(): React.JSX.Element {
   const handleSend = useCallback(async () => {
     const text = inputText.trim()
     if (!text || !wsConnected || isGenerating) return
-    let chatId = useChatStore.getState().activeChatId
-    let isNewSession = false
-    if (!chatId) {
-      isNewSession = true
-      chatId = crypto.randomUUID()
-      try {
-        await db.session.upsert({ chatId, title: '新对话', platform: 'desktop' })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        logger.warn('[chat] 创建会话写库失败:', message)
-        toast.error(`创建会话失败：${message}`)
-        return
+    // 发送守卫: 新会话路径存在 waitForWsReady 等待窗口(此时 isGenerating 仍为 false),
+    // 没有该守卫的话窗口内重复回车会对同一会话重复发送
+    if (sendingRef.current) return
+    sendingRef.current = true
+    try {
+      let chatId = useChatStore.getState().activeChatId
+      let isNewSession = false
+      if (!chatId) {
+        isNewSession = true
+        chatId = crypto.randomUUID()
+        try {
+          await db.session.upsert({ chatId, title: '新对话', platform: 'desktop' })
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          logger.warn('[chat] 创建会话写库失败:', message)
+          toast.error(`创建会话失败：${message}`)
+          return
+        }
+        useChatStore.getState().setActiveChatId(chatId)
+        useAgentStore.getState().setCurrentSessionKey(chatId)
+        // Brand-new session: drop any primer prepared for a previously opened session
+        useChatStore.getState().setPendingPrimer('')
+        await useChatStore.getState().loadSessionsFromLocal()
+        // 新建会话需让 socket 以新 chatId 重新 auth,否则首条消息仍发到旧 chatId(如 'default')
+        agentWs.switchSession(chatId)
       }
-      useChatStore.getState().setActiveChatId(chatId)
-      useAgentStore.getState().setCurrentSessionKey(chatId)
-      // Brand-new session: drop any primer prepared for a previously opened session
-      useChatStore.getState().setPendingPrimer('')
-      await useChatStore.getState().loadSessionsFromLocal()
-      // 新建会话需让 socket 以新 chatId 重新 auth,否则首条消息仍发到旧 chatId(如 'default')
-      agentWs.switchSession(chatId)
-    }
-    addUserMessage(text)
-    // 写库失败不阻断聊天:消息照常发往 agent、输入框照常清空
-    void db.session
-      .appendMessage({ chatId, role: 'user', content: text })
-      .catch((err) => logger.warn('[chat] 用户消息写库失败:', err))
-    setInputText('')
-    if (isNewSession) {
-      // switchSession 异步重连,等新连接 auth 成功(OPEN)后再发,避免被静默丢弃
-      const ready = await waitForWsReady()
-      if (!ready) {
-        toast.error('连接未就绪，消息发送失败，请重试')
-        return
+      addUserMessage(text)
+      // 写库失败不阻断聊天:消息照常发往 agent、输入框照常清空
+      void db.session
+        .appendMessage({ chatId, role: 'user', content: text })
+        .catch((err) => logger.warn('[chat] 用户消息写库失败:', err))
+      setInputText('')
+      if (isNewSession) {
+        // switchSession 异步重连,等新连接 auth 成功(OPEN)后再发,避免被静默丢弃
+        const ready = await waitForWsReady()
+        if (!ready) {
+          toast.error('连接未就绪，消息发送失败，请重试')
+          return
+        }
       }
+      await dispatchToAgent(text)
+    } finally {
+      sendingRef.current = false
     }
-    await dispatchToAgent(text)
   }, [inputText, wsConnected, isGenerating, addUserMessage, dispatchToAgent])
 
   // 停止生成:前端侧定格当前流式消息并忽略后续帧(WS 协议无中断帧,后端推理可能仍在跑)
