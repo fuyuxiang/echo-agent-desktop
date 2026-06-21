@@ -26,6 +26,7 @@ export function IconSidebar(): React.JSX.Element {
   const navigate = useNavigate()
   const { handleNewSession } = useSessionActions()
   const role = useUserStore((s) => s.user?.role)
+  const isAuthed = useUserStore((s) => s.isAuthed)
   const signOut = useUserStore((s) => s.signOut)
 
   // 记忆区入口走 i18n，与现有导航项并列展示
@@ -74,10 +75,21 @@ export function IconSidebar(): React.JSX.Element {
       </div>
       <div className={styles.bottom}>
         {bottomNav.map(renderItem)}
-        <button className={styles.item} onClick={() => signOut()} title={t('common.logout')}>
-          <LogoutIcon />
-          <span className={styles.itemLabel}>{t('common.logout')}</span>
-        </button>
+        {isAuthed ? (
+          <button className={styles.item} onClick={() => signOut()} title={t('common.logout')}>
+            <LogoutIcon />
+            <span className={styles.itemLabel}>{t('common.logout')}</span>
+          </button>
+        ) : (
+          <button
+            className={styles.item}
+            onClick={() => navigate(ROUTES.login)}
+            title={t('common.login')}
+          >
+            <LoginIcon />
+            <span className={styles.itemLabel}>{t('common.login')}</span>
+          </button>
+        )}
       </div>
     </nav>
   )
@@ -201,6 +213,25 @@ function LogoutIcon(): React.JSX.Element {
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
       <path d="M16 17l5-5-5-5" />
       <path d="M21 12H9" />
+    </svg>
+  )
+}
+
+function LoginIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+      <path d="M10 17l5-5-5-5" />
+      <path d="M15 12H3" />
     </svg>
   )
 }

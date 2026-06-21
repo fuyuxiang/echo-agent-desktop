@@ -54,6 +54,13 @@ export default function Login(): React.JSX.Element {
         <button className={styles.submit} disabled={loading || !username || !password}>
           {loading ? t('common.loading') : t('login.submit')}
         </button>
+        <button
+          type="button"
+          className={styles.back}
+          onClick={() => navigate(ROUTES.chat, { replace: true })}
+        >
+          {t('login.skip')}
+        </button>
       </form>
     </div>
   )
