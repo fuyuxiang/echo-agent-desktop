@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
-import { AGENT_CONFIG_PATH, AGENT_WORKSPACE } from './constants'
+import { AGENT_CONFIG_PATH } from './constants'
+import { resolveWorkspace, getScopeConfig } from './scope'
 import type { AgentConfig, ModelProviderConfig } from '@shared/types'
 
 /**
@@ -13,8 +14,11 @@ export function generateAgentConfig(config: AgentConfig): void {
   // YAML 字符串转义: 反斜杠与双引号
   const q = (v: string): string => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 
+  const workspace = resolveWorkspace()
+  const restricted = getScopeConfig().scope === 'restricted'
+
   const yaml = [
-    `workspace: ${q(AGENT_WORKSPACE)}`,
+    `workspace: ${q(workspace)}`,
     '',
     'models:',
     `  defaultModel: ${q(config.defaultModel)}`,
@@ -33,6 +37,10 @@ export function generateAgentConfig(config: AgentConfig): void {
     '  port: 0',
     '  auth:',
     '    mode: open',
+    '',
+    'tools:',
+    `  restrict_to_workspace: ${restricted}`,
+    `  profile: ${q(restricted ? 'coding' : 'full')}`,
     '',
     'channels:',
     '  cli:',
