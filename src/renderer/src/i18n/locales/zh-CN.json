@@ -22,7 +22,6 @@
     "apply": "应用并重启",
     "cancel": "取消",
     "switching": "切换中…",
-    "folderUnavailable": "文件夹不可用,请重新选择",
     "switched": "已切换访问范围",
     "switchFailed": "切换失败",
     "confirmFull": "完全访问允许 agent 读写所有文件并执行终端命令,确认?",
