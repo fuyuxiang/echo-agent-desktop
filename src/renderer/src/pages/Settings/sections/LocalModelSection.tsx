@@ -42,6 +42,15 @@ export function LocalModelSection(): React.JSX.Element {
     })
   }, [])
 
+  // 修改地址后, 上一次的检测结果立即失效(online/models/version),
+  // 避免用户对新地址沿用旧地址的检测数据点"启用"
+  const handleBaseUrlChange = (value: string): void => {
+    setBaseUrl(value)
+    setOnline(null)
+    setModels([])
+    setVersion('')
+  }
+
   const handleDetect = async (): Promise<void> => {
     setDetecting(true)
     setHint('')
@@ -138,7 +147,7 @@ export function LocalModelSection(): React.JSX.Element {
           <div style={{ display: 'flex', gap: 8 }}>
             <input
               value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
+              onChange={(e) => handleBaseUrlChange(e.target.value)}
               style={{ flex: 1, padding: '8px', boxSizing: 'border-box' }}
               placeholder={DEFAULT_OLLAMA_BASE_URL}
             />

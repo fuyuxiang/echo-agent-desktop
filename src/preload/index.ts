@@ -114,6 +114,7 @@ const api: BridgeApi = {
       method?: string
       headers?: Record<string, string>
       body?: string
+      timeoutMs?: number
     }) =>
       ipcRenderer.invoke(IpcChannels.agent.httpProxy, opts) as Promise<{
         ok: boolean

@@ -67,11 +67,14 @@ export async function pullOllamaModel(baseUrl: string, name: string): Promise<vo
   })
   if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.body}`)
   // 非流式响应末尾应含 status: success;失败时 Ollama 返回 error 字段
+  let data: { status?: string; error?: string } | null = null
   try {
-    const data = JSON.parse(resp.body) as { status?: string; error?: string }
-    if (data.error) throw new Error(data.error)
+    data = JSON.parse(resp.body) as { status?: string; error?: string }
   } catch (e) {
-    // 解析失败不视为致命(只要 HTTP ok),记录日志即可
+    // 仅"解析失败"容忍(只要 HTTP ok),记录日志即可
     logger.warn('[ollama] pull 响应解析异常:', e)
   }
+  // error 字段是真正的拉取失败, 必须向上抛(不能被解析容错吞掉),
+  // 否则调用方会误判模型已就绪
+  if (data?.error) throw new Error(data.error)
 }

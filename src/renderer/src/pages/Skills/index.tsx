@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { useSkillStore } from '@/stores/skillStore'
 import { skillsAPI, type Skill } from '@/services/agent/skills'
 import { useSkillImport } from '@/hooks/useSkillImport'
+import { toast } from '@/components/Toast'
 import styles from './skills.module.scss'
 import clsx from 'clsx'
 
@@ -31,12 +32,13 @@ interface SkillGroup {
 export default function SkillsPage(): React.JSX.Element {
   const { skills, selectedSkill, setSkills, setSelectedSkill } = useSkillStore()
   const [detail, setDetail] = useState<{ content: string; files: string[] } | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const { importing, handleImport } = useSkillImport()
 
   useEffect(() => {
     skillsAPI
       .list()
-      .then((data) => setSkills(data.skills ?? data))
+      .then((data) => setSkills(data.skills ?? []))
       .catch(() => {})
   }, [setSkills])
 
@@ -84,11 +86,22 @@ export default function SkillsPage(): React.JSX.Element {
     }
   }
 
-  const handleDelete = async (_name: string): Promise<void> => {
-    setSelectedSkill(null)
-    setDetail(null)
-    const updated = await skillsAPI.list()
-    setSkills(updated.skills ?? updated)
+  const handleDelete = async (name: string): Promise<void> => {
+    if (deleting) return
+    if (!window.confirm(`确定删除技能「${name}」？此操作不可撤销。`)) return
+    setDeleting(true)
+    try {
+      await skillsAPI.remove(name)
+      setSelectedSkill(null)
+      setDetail(null)
+      const updated = await skillsAPI.list()
+      setSkills(updated.skills ?? updated)
+      toast.success('技能已删除')
+    } catch (e) {
+      toast.error(`删除失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const handleClose = (): void => {
@@ -157,8 +170,12 @@ export default function SkillsPage(): React.JSX.Element {
             >
               {currentSkill?.enabled ? '禁用' : '启用'}
             </button>
-            <button className={styles.deleteBtn} onClick={() => handleDelete(selectedSkill)}>
-              删除
+            <button
+              className={styles.deleteBtn}
+              onClick={() => handleDelete(selectedSkill)}
+              disabled={deleting}
+            >
+              {deleting ? '删除中…' : '删除'}
             </button>
             <button className={styles.closeBtn} onClick={handleClose}>
               ✕

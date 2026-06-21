@@ -156,6 +156,8 @@ export interface BridgeApi {
       method?: string
       headers?: Record<string, string>
       body?: string
+      /** 单次请求超时(ms),默认 30000 */
+      timeoutMs?: number
     }) => Promise<{ ok: boolean; status: number; body: string }>
     onStatusChanged: (callback: (status: AgentProcessStatus) => void) => () => void
     onInstallProgress: (callback: (event: InstallProgressEvent) => void) => () => void

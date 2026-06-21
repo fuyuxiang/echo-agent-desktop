@@ -31,14 +31,21 @@ export const knowledgeAPI = {
       .post<{ success?: boolean }>(`${getBaseUrl()}${AgentApiUrls.knowledgeRebuild}`)
       .then((r) => r.data),
 
-  upload: (file: File) => {
+  upload: async (file: File) => {
     // 文件上传需要特殊处理，暂时保留 fetch 方式（文件上传场景较少）
+    const { remoteToken } = useAgentStore.getState()
     const form = new FormData()
     form.append('file', file)
-    return fetch(`${getBaseUrl()}${AgentApiUrls.knowledgeUpload}`, {
+    const resp = await fetch(`${getBaseUrl()}${AgentApiUrls.knowledgeUpload}`, {
       method: 'POST',
+      headers: remoteToken ? { 'X-Echo-Agent-Token': remoteToken } : undefined,
       body: form
-    }).then((r) => r.json())
+    })
+    // 必须检查 HTTP 状态: 否则 4xx/5xx 会被 r.json() 当成功解析, 上传失败被静默吞掉
+    if (!resp.ok) {
+      throw new Error(`上传失败 HTTP ${resp.status}`)
+    }
+    return resp.json()
   },
 
   listDocuments: () =>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AgentEnvInfo } from '@shared/types'
+import { toast } from '@/components/Toast'
 
 export function EnvironmentSection(): React.JSX.Element {
   const [info, setInfo] = useState<AgentEnvInfo | null>(null)
@@ -14,19 +15,39 @@ export function EnvironmentSection(): React.JSX.Element {
 
   const handleUpgrade = async (): Promise<void> => {
     setLoading(true)
-    await window.api.agent.upgrade()
-    const updated = await window.api.agent.getEnvInfo()
-    setInfo(updated)
-    setLoading(false)
+    try {
+      const result = await window.api.agent.upgrade()
+      if (result.success) {
+        toast.success(result.version ? `已升级到 ${result.version}` : '升级完成')
+      } else {
+        toast.error(result.error ?? '升级失败')
+      }
+      const updated = await window.api.agent.getEnvInfo()
+      setInfo(updated)
+    } catch (e) {
+      toast.error(`升级失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleReset = async (): Promise<void> => {
     if (!confirm('确定重置 Python 环境？这将删除 venv 并重新安装。')) return
     setLoading(true)
-    await window.api.agent.resetEnv()
-    const updated = await window.api.agent.getEnvInfo()
-    setInfo(updated)
-    setLoading(false)
+    try {
+      const result = await window.api.agent.resetEnv()
+      if (result.success) {
+        toast.success('环境已重置')
+      } else {
+        toast.error(result.error ?? '重置失败')
+      }
+      const updated = await window.api.agent.getEnvInfo()
+      setInfo(updated)
+    } catch (e) {
+      toast.error(`重置失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -54,14 +75,18 @@ export function EnvironmentSection(): React.JSX.Element {
             <button
               onClick={handleUpgrade}
               disabled={loading}
-              style={{ padding: '8px 16px', cursor: 'pointer' }}
+              style={{ padding: '8px 16px', cursor: loading ? 'default' : 'pointer' }}
             >
-              升级 echo-agent
+              {loading ? '处理中…' : '升级 echo-agent'}
             </button>
             <button
               onClick={handleReset}
               disabled={loading}
-              style={{ padding: '8px 16px', cursor: 'pointer', color: 'var(--color-danger, red)' }}
+              style={{
+                padding: '8px 16px',
+                cursor: loading ? 'default' : 'pointer',
+                color: 'var(--color-danger, red)'
+              }}
             >
               重置环境
             </button>

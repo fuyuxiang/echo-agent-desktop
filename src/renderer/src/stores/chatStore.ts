@@ -134,8 +134,11 @@ export const useChatStore = create<ChatState>()(
           reasoning: r.reasoning ?? undefined,
           timestamp: r.createdAt
         }))
+        // 切换会话时必须复位生成态, 否则上一会话的 isGenerating=true 会被带入新会话,
+        // 导致发送按钮变停止按钮、无法发送(会话被锁死)
         s.currentStreamBuffer = ''
         s.currentReasoningBuffer = ''
+        s.isGenerating = false
       })
     },
 
@@ -235,6 +238,8 @@ export const useChatStore = create<ChatState>()(
         s.messages = []
         s.currentStreamBuffer = ''
         s.currentReasoningBuffer = ''
+        // 新建/清空会话同样复位生成态, 避免上一会话生成中状态残留导致新会话锁死
+        s.isGenerating = false
       })
   }))
 )

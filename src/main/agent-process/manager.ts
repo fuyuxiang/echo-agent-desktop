@@ -7,11 +7,12 @@ import {
   AGENT_WORKSPACE,
   READY_SIGNAL_PREFIX,
   HEALTH_CHECK_TIMEOUT,
-  HEALTH_CHECK_INTERVAL,
   MAX_RESTART_ATTEMPTS,
-  SHUTDOWN_TIMEOUT
+  SHUTDOWN_TIMEOUT,
+  RESTART_STABLE_RESET_MS,
+  SIGKILL_GRACE_MS
 } from './constants'
-import { waitForHealth, checkHealth } from './health'
+import { checkHealth } from './health'
 import { getEnvInfo } from './python-env'
 import { hasAgentConfig } from './config-gen'
 import type { AgentProcessStatus, AgentStartResult } from '@shared/types'
@@ -21,6 +22,14 @@ let currentPort: number | null = null
 let currentStatus: AgentProcessStatus = 'stopped'
 let restartCount = 0
 let statusChangeCallback: ((status: AgentProcessStatus) => void) | null = null
+
+/**
+ * 主动停止守卫: stopAgent 期间置位, 防止 proc.exit 的自动重启逻辑误判为"崩溃"而拉起新进程。
+ */
+let stopping = false
+
+/** 稳定运行计时器: 进程稳定运行一段时间后归零重启计数, 避免长期运行后偶发崩溃被旧计数拖入 error 态 */
+let stableResetTimer: ReturnType<typeof setTimeout> | null = null
 
 export function getStatus(): AgentProcessStatus {
   return currentStatus
@@ -37,6 +46,13 @@ export function onStatusChange(cb: (status: AgentProcessStatus) => void): void {
 function setStatus(status: AgentProcessStatus): void {
   currentStatus = status
   statusChangeCallback?.(status)
+}
+
+function clearStableResetTimer(): void {
+  if (stableResetTimer) {
+    clearTimeout(stableResetTimer)
+    stableResetTimer = null
+  }
 }
 
 let startInFlight: Promise<AgentStartResult> | null = null
@@ -69,8 +85,11 @@ async function doStart(apiKeys?: Record<string, string>): Promise<AgentStartResu
     return { success: false, error: '配置文件不存在，请先完成初始设置' }
   }
 
-  setStatus('starting')
+  // 新一轮显式启动: 解除停止守卫并重置重启计数
+  stopping = false
   restartCount = 0
+
+  setStatus('starting')
 
   return doSpawn(apiKeys)
 }
@@ -101,105 +120,141 @@ async function doSpawn(apiKeys?: Record<string, string>): Promise<AgentStartResu
 
   agentProcess = proc
 
-  // 解析 stdout 等待就绪信号
-  const portPromise = new Promise<number | null>((resolve) => {
-    const timeout = setTimeout(() => resolve(null), HEALTH_CHECK_TIMEOUT)
-    let resolved = false
+  // 解析 stdout 等待就绪信号(按行缓冲: 就绪信号可能被拆分到多个 data chunk)
+  const port = await waitForReadySignal(proc)
 
-    proc.stdout?.on('data', (data: Buffer) => {
-      const line = data.toString()
-      log.debug(`[agent:stdout] ${line.trim()}`)
-
-      if (!resolved && line.includes(READY_SIGNAL_PREFIX)) {
-        const match = line.match(/port=(\d+)/)
-        if (match) {
-          resolved = true
-          clearTimeout(timeout)
-          resolve(parseInt(match[1], 10))
-        }
-      }
-    })
-    proc.stderr?.on('data', (data: Buffer) => {
-      log.debug(`[agent:stderr] ${data.toString().trim()}`)
-    })
-
-    proc.on('error', () => {
-      if (!resolved) {
-        resolved = true
-        clearTimeout(timeout)
-        resolve(null)
-      }
-    })
-
-    proc.on('exit', () => {
-      if (!resolved) {
-        resolved = true
-        clearTimeout(timeout)
-        resolve(null)
-      }
-    })
-  })
-
-  // 等待就绪信号或 fallback 到 health check
-  let port = await portPromise
-
-  if (!port) {
-    // fallback: 尝试默认端口 9000 的 health check
-    log.warn('[agent] 未收到就绪信号，fallback 到 health check 轮询')
-    const healthy = await waitForHealth(9000, HEALTH_CHECK_TIMEOUT, HEALTH_CHECK_INTERVAL)
-    if (healthy) port = 9000
+  // 进程已被替换(并发重启)或已被主动停止: 放弃本次结果, 由新流程接管
+  if (agentProcess !== proc) {
+    return { success: false, error: '启动已被新的启动/停止操作取代' }
   }
 
   if (!port) {
     setStatus('error')
     kill()
-    return { success: false, error: '启动超时: 30秒内未收到就绪信号' }
+    return { success: false, error: `启动超时: ${Math.round(HEALTH_CHECK_TIMEOUT / 1000)}秒内未收到就绪信号` }
   }
 
   currentPort = port
   setStatus('running')
   log.info(`[agent] 启动成功, port=${port}`)
 
-  // 监听退出，自动重启
+  // 稳定运行一段时间后归零重启计数(区分"崩溃循环"与"长期运行后的偶发崩溃")
+  clearStableResetTimer()
+  stableResetTimer = setTimeout(() => {
+    restartCount = 0
+    stableResetTimer = null
+  }, RESTART_STABLE_RESET_MS)
+
+  // 监听退出，自动重启(仅在非主动停止、当前归属本进程时)
   proc.on('exit', (code) => {
+    // 已被替换为新进程: 旧进程退出与状态机无关
+    if (agentProcess !== proc) return
+
+    clearStableResetTimer()
     log.warn(`[agent] 进程退出, code=${code}`)
-    if (currentStatus === 'running' && restartCount < MAX_RESTART_ATTEMPTS) {
+
+    if (stopping) {
+      // 主动停止流程会自行收尾, 这里不介入
+      return
+    }
+
+    if (restartCount < MAX_RESTART_ATTEMPTS) {
       restartCount++
       log.info(`[agent] 自动重启 (${restartCount}/${MAX_RESTART_ATTEMPTS})`)
       setStatus('starting')
-      doSpawn(apiKeys)
-    } else if (currentStatus !== 'stopped') {
+      void doSpawn(apiKeys)
+    } else {
+      log.error(`[agent] 已达最大重启次数(${MAX_RESTART_ATTEMPTS}), 放弃重启`)
+      currentPort = null
+      agentProcess = null
       setStatus('error')
     }
   })
 
   return { success: true, port }
 }
-/** 停止 Agent 进程 */
+
+/** 解析 stdout 就绪信号, 返回端口; 超时/进程退出/出错返回 null。按行缓冲避免信号被 chunk 拆断。 */
+function waitForReadySignal(proc: ChildProcess): Promise<number | null> {
+  return new Promise<number | null>((resolve) => {
+    let resolved = false
+    let stdoutBuf = ''
+
+    const finish = (value: number | null): void => {
+      if (resolved) return
+      resolved = true
+      clearTimeout(timeout)
+      proc.stdout?.off('data', onStdout)
+      proc.off('error', onError)
+      proc.off('exit', onExit)
+      resolve(value)
+    }
+
+    const timeout = setTimeout(() => finish(null), HEALTH_CHECK_TIMEOUT)
+
+    const onStdout = (data: Buffer): void => {
+      stdoutBuf += data.toString()
+      let idx: number
+      while ((idx = stdoutBuf.indexOf('\n')) >= 0) {
+        const line = stdoutBuf.slice(0, idx)
+        stdoutBuf = stdoutBuf.slice(idx + 1)
+        log.debug(`[agent:stdout] ${line.trim()}`)
+        if (line.includes(READY_SIGNAL_PREFIX)) {
+          const match = line.match(/port=(\d+)/)
+          if (match) {
+            finish(parseInt(match[1], 10))
+            return
+          }
+        }
+      }
+      // 行内信号(无换行结尾)也尝试匹配, 兼容 agent 不带换行直接 flush 的情况
+      if (stdoutBuf.includes(READY_SIGNAL_PREFIX)) {
+        const match = stdoutBuf.match(/port=(\d+)/)
+        if (match) finish(parseInt(match[1], 10))
+      }
+    }
+
+    const onError = (): void => finish(null)
+    const onExit = (): void => finish(null)
+
+    proc.stdout?.on('data', onStdout)
+    proc.stderr?.on('data', (data: Buffer) => {
+      log.debug(`[agent:stderr] ${data.toString().trim()}`)
+    })
+    proc.on('error', onError)
+    proc.on('exit', onExit)
+  })
+}
+
+/** 停止 Agent 进程(主动停止: 阻止自动重启, 优雅关闭失败再强杀) */
 export async function stopAgent(): Promise<void> {
+  stopping = true
+  clearStableResetTimer()
+
   if (!agentProcess && !currentPort) {
     setStatus('stopped')
+    stopping = false
     return
   }
+
+  const proc = agentProcess
 
   // 尝试优雅关闭（通过 API）
   if (currentPort) {
     try {
       await httpPost(`http://127.0.0.1:${currentPort}/api/v1/shutdown`)
       // 等待进程退出
-      const exitPromise = new Promise<void>((resolve) => {
-        const timeout = setTimeout(() => resolve(), SHUTDOWN_TIMEOUT)
-        if (agentProcess) {
-          agentProcess.on('exit', () => {
-            clearTimeout(timeout)
-            resolve()
-          })
-        } else {
+      await new Promise<void>((resolve) => {
+        if (!proc || proc.exitCode !== null) {
+          resolve()
+          return
+        }
+        const timeout = setTimeout(resolve, SHUTDOWN_TIMEOUT)
+        proc.once('exit', () => {
           clearTimeout(timeout)
           resolve()
-        }
+        })
       })
-      await exitPromise
     } catch {
       log.warn('[agent] shutdown API 调用失败，直接 kill')
     }
@@ -207,6 +262,7 @@ export async function stopAgent(): Promise<void> {
 
   kill()
   setStatus('stopped')
+  stopping = false
 }
 
 /** 重启 */
@@ -216,21 +272,27 @@ export async function restartAgent(apiKeys?: Record<string, string>): Promise<Ag
 }
 
 function kill(): void {
-  if (!agentProcess) return
+  const proc = agentProcess
+  // 先解除全局引用, 防止 exit handler 把本次 kill 误判为崩溃
+  agentProcess = null
+  currentPort = null
+  if (!proc || proc.exitCode !== null) return
+
   try {
     if (process.platform === 'win32') {
-      spawn('taskkill', ['/T', '/F', '/PID', String(agentProcess.pid)])
+      if (proc.pid) {
+        spawn('taskkill', ['/T', '/F', '/PID', String(proc.pid)])
+      }
     } else {
-      agentProcess.kill('SIGTERM')
+      proc.kill('SIGTERM')
+      // 宽限期后若仍存活则强杀(在被捕获的 proc 引用上执行, 不依赖已被置空的全局引用)
       setTimeout(() => {
-        agentProcess?.kill('SIGKILL')
-      }, 5000)
+        if (proc.exitCode === null) proc.kill('SIGKILL')
+      }, SIGKILL_GRACE_MS)
     }
   } catch (e) {
     log.error('[agent] kill 失败:', e)
   }
-  agentProcess = null
-  currentPort = null
 }
 
 function httpPost(url: string): Promise<void> {
