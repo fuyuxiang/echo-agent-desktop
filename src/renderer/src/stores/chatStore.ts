@@ -2,6 +2,11 @@ import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { db } from '@/utils/db'
 
+export interface ChatAttachmentMeta {
+  id: string
+  name: string
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -9,6 +14,8 @@ export interface ChatMessage {
   reasoning?: string
   timestamp: number
   isStreaming?: boolean
+  /** 用户消息携带的附件（仅用于气泡展示，发送时另行附在 WS 帧上） */
+  attachments?: ChatAttachmentMeta[]
 }
 
 export interface ChatSession {
@@ -39,7 +46,7 @@ interface ChatState {
   setPendingPrimer: (primer: string) => void
   loadSessionsFromLocal: () => Promise<void>
   loadMessagesFromLocal: (chatId: string) => Promise<void>
-  addUserMessage: (content: string) => void
+  addUserMessage: (content: string, attachments?: ChatAttachmentMeta[]) => void
   startAssistantMessage: () => void
   appendStreamDelta: (delta: string) => void
   appendReasoningDelta: (delta: string) => void
@@ -142,13 +149,14 @@ export const useChatStore = create<ChatState>()(
       })
     },
 
-    addUserMessage: (content) =>
+    addUserMessage: (content, attachments) =>
       set((s) => {
         s.messages.push({
           id: `user-${++messageIdCounter}`,
           role: 'user',
           content,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          attachments: attachments && attachments.length > 0 ? attachments : undefined
         })
       }),
 

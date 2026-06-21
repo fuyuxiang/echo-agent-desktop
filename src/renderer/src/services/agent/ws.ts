@@ -52,9 +52,13 @@ export class AgentWebSocket {
     this.doConnect()
   }
 
-  /** 发送消息 */
-  sendMessage(text: string): void {
-    this.send({ type: 'message', text })
+  /** 发送消息（可携带附件引用，引用由 /chat/attachments 上传后获得） */
+  sendMessage(text: string, attachments?: Array<{ id: string; name: string }>): void {
+    const frame: Record<string, unknown> = { type: 'message', text }
+    if (attachments && attachments.length > 0) {
+      frame.attachments = attachments
+    }
+    this.send(frame)
   }
 
   on(event: string, handler: WsEventHandler): void {
