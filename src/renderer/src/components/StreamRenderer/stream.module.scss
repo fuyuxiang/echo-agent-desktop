@@ -1,0 +1,59 @@
+.renderer {
+  font-size: $font-size-base;
+  line-height: 1.6;
+  word-break: break-word;
+
+  p {
+    margin: 6px 0;
+  }
+  ul,
+  ol {
+    padding-left: $spacing-xl;
+    margin: 6px 0;
+  }
+
+  blockquote {
+    margin: $spacing-sm 0;
+    padding-left: $spacing-md;
+    border-left: 2px solid var(--color-border-strong);
+    color: var(--color-text-2);
+  }
+}
+
+.codeBlock {
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-bg-code);
+  border-radius: $radius-lg;
+  padding: $spacing-md;
+  overflow-x: auto;
+  font-family: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-size: $font-size-sm;
+  line-height: 1.55;
+  margin: $spacing-sm 0;
+  @include thin-scrollbar;
+}
+
+.inlineCode {
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-bg-code);
+  padding: 2px 6px;
+  border-radius: $radius-sm;
+  font-family: 'SF Mono', 'JetBrains Mono', 'IBM Plex Mono', monospace;
+  font-size: 0.9em;
+}
+
+.cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--color-primary);
+  animation: blink 1s step-end infinite;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}

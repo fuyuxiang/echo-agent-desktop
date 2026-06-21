@@ -1,0 +1,38 @@
+.container {
+  position: fixed;
+  top: calc($titlebar-height + $spacing-md);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: $z-toast;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: $spacing-sm;
+  pointer-events: none;
+}
+
+.toast {
+  padding: $spacing-sm $spacing-lg;
+  border-radius: $radius-md;
+  background: var(--color-bg-container);
+  color: var(--color-text-1);
+  font-size: $font-size-base;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--color-border);
+  max-width: 480px;
+  @include ellipsis;
+}
+
+.success {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+
+.error {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.info {
+  color: var(--color-text-1);
+}

@@ -1,0 +1,120 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: $spacing-sm $spacing-md;
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: $font-size-sm;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.newBtn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: $radius-sm;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: $font-size-lg;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 $spacing-sm;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: $spacing-sm $spacing-sm;
+  border-radius: $radius-sm;
+  cursor: pointer;
+  gap: $spacing-xs;
+  min-height: 36px;
+
+  &:hover {
+    background: var(--bg-hover);
+
+    .deleteBtn {
+      opacity: 1;
+    }
+  }
+
+  &.active {
+    background: var(--bg-active);
+  }
+}
+
+.itemTitle {
+  font-size: $font-size-sm;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.itemTitleInput {
+  font-size: $font-size-sm;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--color-primary);
+  border-radius: $radius-sm;
+  background: var(--bg-hover);
+  padding: 2px 4px;
+  outline: none;
+}
+
+.itemMeta {
+  font-size: $font-size-xs;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: $spacing-xs;
+}
+
+.deleteBtn {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: $font-size-sm;
+  opacity: 0;
+  padding: 0 2px;
+  line-height: 1;
+
+  &:hover {
+    color: var(--danger);
+  }
+}
+
+.empty {
+  padding: $spacing-lg $spacing-md;
+  font-size: $font-size-xs;
+  color: var(--text-tertiary);
+  text-align: center;
+}

@@ -1,0 +1,31 @@
+{
+  "common": {
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "loading": "Loading...",
+    "empty": "No data",
+    "copySuccess": "Copied to clipboard"
+  },
+  "titlebar": {
+    "appName": "Echo Agent"
+  },
+  "example": {
+    "title": "Example Page",
+    "description": "This page demonstrates the full infrastructure chain: network request (mock), local database, KV storage, toast, logger and i18n. Copy this page to build new ones.",
+    "greetingTitle": "1. Network Request + Mock",
+    "fetchGreeting": "Fetch Greeting",
+    "listTitle": "2. List Data from API",
+    "dbTitle": "3. Local Database (SQLite)",
+    "dbPlaceholder": "Type and press Enter to insert into DB",
+    "dbClear": "Clear Records",
+    "storageTitle": "4. KV Storage + Theme / Language",
+    "switchTheme": "Toggle Theme",
+    "switchLang": "切换语言 (中文)",
+    "toastTitle": "5. Global Toast",
+    "toastSuccess": "Success Toast",
+    "toastError": "Error Toast",
+    "noRecords": "No records yet, type something above"
+  }
+}

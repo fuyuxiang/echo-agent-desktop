@@ -1,0 +1,31 @@
+{
+  "common": {
+    "confirm": "确定",
+    "cancel": "取消",
+    "save": "保存",
+    "delete": "删除",
+    "loading": "加载中...",
+    "empty": "暂无数据",
+    "copySuccess": "已复制到剪贴板"
+  },
+  "titlebar": {
+    "appName": "Echo Agent"
+  },
+  "example": {
+    "title": "Example 示例页",
+    "description": "这是基建全链路示例页:网络请求(Mock)、本地数据库、KV 存储、Toast、日志、i18n 都在这里演示,新页面照此依葫芦画瓢。",
+    "greetingTitle": "1. 网络请求 + Mock",
+    "fetchGreeting": "请求问候语",
+    "listTitle": "2. 接口列表数据",
+    "dbTitle": "3. 本地数据库 (SQLite)",
+    "dbPlaceholder": "输入内容后回车写入数据库",
+    "dbClear": "清空记录",
+    "storageTitle": "4. KV 存储 + 主题/语言",
+    "switchTheme": "切换主题",
+    "switchLang": "切换语言 (English)",
+    "toastTitle": "5. Toast 全局提示",
+    "toastSuccess": "成功提示",
+    "toastError": "错误提示",
+    "noRecords": "数据库暂无记录,输入内容试试"
+  }
+}
