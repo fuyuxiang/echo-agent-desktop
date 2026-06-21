@@ -54,3 +54,14 @@ export const ApiUrls = {
     list: '/api/example/list'
   }
 } as const
+
+/** echo-agent-server(项目记忆服务)API 路径 */
+export const ServerApiUrls = {
+  login: '/api/auth/login',
+  modelConfig: '/api/model-config',
+  projectMemory: '/api/project-memory',
+  projectMemorySearch: '/api/project-memory/search',
+  adminUsers: '/api/admin/users',
+  adminGroups: '/api/admin/groups',
+  adminModelConfig: '/api/admin/model-config'
+} as const
