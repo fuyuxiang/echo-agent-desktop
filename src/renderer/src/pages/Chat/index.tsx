@@ -25,6 +25,27 @@ const CHINESE_OUTPUT_DIRECTIVE = [
   '3. 如需说明处理过程，只输出简洁的中文过程摘要，不输出隐藏推理链路。'
 ].join('\n')
 
+/**
+ * 等待 WS 重连并 auth 后进入 OPEN(sendMessage 仅在 OPEN 时才真正发出)。
+ * 用于新建会话:switchSession 是异步重连,需等连接就绪再发首条消息,避免被静默丢弃。
+ * 带超时兜底,避免无限等待。
+ */
+function waitForWsReady(timeoutMs = 5000): Promise<boolean> {
+  if (agentWs.connected) return Promise.resolve(true)
+  const start = Date.now()
+  return new Promise((resolve) => {
+    const timer = setInterval(() => {
+      if (agentWs.connected) {
+        clearInterval(timer)
+        resolve(true)
+      } else if (Date.now() - start >= timeoutMs) {
+        clearInterval(timer)
+        resolve(false)
+      }
+    }, 50)
+  })
+}
+
 function getPayloadText(payload: Record<string, unknown>): string {
   const value = payload.text ?? payload.delta ?? payload.content ?? payload.message
   return typeof value === 'string' ? value : ''
@@ -334,18 +355,40 @@ export default function ChatPage(): React.JSX.Element {
     const text = inputText.trim()
     if (!text || !wsConnected || isGenerating) return
     let chatId = useChatStore.getState().activeChatId
+    let isNewSession = false
     if (!chatId) {
+      isNewSession = true
       chatId = crypto.randomUUID()
-      await db.session.upsert({ chatId, title: '新对话', platform: 'desktop' })
+      try {
+        await db.session.upsert({ chatId, title: '新对话', platform: 'desktop' })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        logger.warn('[chat] 创建会话写库失败:', message)
+        toast.error(`创建会话失败：${message}`)
+        return
+      }
       useChatStore.getState().setActiveChatId(chatId)
       useAgentStore.getState().setCurrentSessionKey(chatId)
       // Brand-new session: drop any primer prepared for a previously opened session
       useChatStore.getState().setPendingPrimer('')
       await useChatStore.getState().loadSessionsFromLocal()
+      // 新建会话需让 socket 以新 chatId 重新 auth,否则首条消息仍发到旧 chatId(如 'default')
+      agentWs.switchSession(chatId)
     }
     addUserMessage(text)
-    await db.session.appendMessage({ chatId, role: 'user', content: text })
+    // 写库失败不阻断聊天:消息照常发往 agent、输入框照常清空
+    void db.session
+      .appendMessage({ chatId, role: 'user', content: text })
+      .catch((err) => logger.warn('[chat] 用户消息写库失败:', err))
     setInputText('')
+    if (isNewSession) {
+      // switchSession 异步重连,等新连接 auth 成功(OPEN)后再发,避免被静默丢弃
+      const ready = await waitForWsReady()
+      if (!ready) {
+        toast.error('连接未就绪，消息发送失败，请重试')
+        return
+      }
+    }
     await dispatchToAgent(text)
   }, [inputText, wsConnected, isGenerating, addUserMessage, dispatchToAgent])
 
