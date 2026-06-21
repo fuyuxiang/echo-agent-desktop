@@ -6,6 +6,40 @@ import log from 'electron-log/main'
 
 let recognizer: InstanceType<typeof OnlineRecognizer> | null = null
 const streams = new Map<string, ReturnType<InstanceType<typeof OnlineRecognizer>['createStream']>>()
+/** 每个 stream 的最后活跃时间, 用于清理被遗弃(未调用 stop)的 stream, 防止原生句柄泄漏 */
+const streamLastActive = new Map<string, number>()
+/** 空闲多久后回收 stream (ms) */
+const STREAM_IDLE_TIMEOUT = 5 * 60_000
+let reapTimer: ReturnType<typeof setInterval> | null = null
+
+function touchStream(streamId: string): void {
+  streamLastActive.set(streamId, Date.now())
+}
+
+function discardStream(streamId: string): void {
+  streams.delete(streamId)
+  streamLastActive.delete(streamId)
+}
+
+/** 定期回收空闲 stream: 页面刷新/异常导航导致未调用 stop 时, 兜底释放原生 stream 句柄 */
+function ensureReaper(): void {
+  if (reapTimer) return
+  reapTimer = setInterval(() => {
+    const now = Date.now()
+    for (const [id, last] of streamLastActive) {
+      if (now - last > STREAM_IDLE_TIMEOUT) {
+        log.warn(`[ASR] 回收空闲 stream: ${id}`)
+        discardStream(id)
+      }
+    }
+    if (streams.size === 0 && reapTimer) {
+      clearInterval(reapTimer)
+      reapTimer = null
+    }
+  }, 60_000)
+  // 不阻止进程退出
+  reapTimer.unref?.()
+}
 
 function getModelDir(): string {
   if (app.isPackaged) {
@@ -51,6 +85,8 @@ export function createStream(): string {
   const streamId = randomUUID()
   const stream = recognizer.createStream()
   streams.set(streamId, stream)
+  touchStream(streamId)
+  ensureReaper()
   return streamId
 }
 
@@ -58,6 +94,7 @@ export function feedAudio(streamId: string, samples: Float32Array): void {
   if (!recognizer) throw new Error('ASR recognizer not initialized')
   const stream = streams.get(streamId)
   if (!stream) throw new Error(`Stream ${streamId} not found`)
+  touchStream(streamId)
   stream.acceptWaveform({ sampleRate: 16000, samples })
   while (recognizer.isReady(stream)) {
     recognizer.decode(stream)
@@ -68,6 +105,7 @@ export function getResult(streamId: string): string {
   if (!recognizer) return ''
   const stream = streams.get(streamId)
   if (!stream) return ''
+  touchStream(streamId)
   return recognizer.getResult(stream).text
 }
 
@@ -81,6 +119,6 @@ export function stopStream(streamId: string): string {
     recognizer.decode(stream)
   }
   const finalResult = recognizer.getResult(stream).text
-  streams.delete(streamId)
+  discardStream(streamId)
   return finalResult
 }

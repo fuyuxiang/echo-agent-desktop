@@ -41,5 +41,10 @@ export const skillsAPI = {
       .post<{ success?: boolean; skill?: Skill }>(`${getBaseUrl()}${AgentApiUrls.skillImport}`, {
         path
       })
+      .then((r) => r.data),
+
+  remove: (name: string) =>
+    agentRequest
+      .delete<{ success?: boolean }>(`${getBaseUrl()}${AgentApiUrls.skillDelete(name)}`)
       .then((r) => r.data)
 }

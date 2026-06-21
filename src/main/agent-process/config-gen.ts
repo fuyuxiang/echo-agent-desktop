@@ -49,7 +49,14 @@ export function generateAgentConfig(config: AgentConfig): void {
     ''
   ].join('\n')
 
-  fs.writeFileSync(AGENT_CONFIG_PATH, yaml, 'utf-8')
+  // 配置含明文 apiKey(方案A: 服务端下发后写入 yaml 供 agent 读取):
+  // 以 0600 权限落盘, 仅当前用户可读写, 收紧明文密钥在磁盘上的暴露面。
+  fs.writeFileSync(AGENT_CONFIG_PATH, yaml, { encoding: 'utf-8', mode: 0o600 })
+  try {
+    fs.chmodSync(AGENT_CONFIG_PATH, 0o600)
+  } catch {
+    // Windows 或部分文件系统不支持 POSIX 权限位, 忽略
+  }
 }
 
 /** 检查配置文件是否存在 */

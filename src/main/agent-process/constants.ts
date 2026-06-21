@@ -65,3 +65,9 @@ export const MAX_RESTART_ATTEMPTS = 3
 
 /** 关闭等待超时 (ms) */
 export const SHUTDOWN_TIMEOUT = 15_000
+
+/** 进程稳定运行多久后归零重启计数 (ms) */
+export const RESTART_STABLE_RESET_MS = 60_000
+
+/** SIGTERM 后等待多久强制 SIGKILL (ms) */
+export const SIGKILL_GRACE_MS = 5_000
