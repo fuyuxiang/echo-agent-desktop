@@ -101,5 +101,7 @@ export type {
   InstallProgressEvent,
   AgentConnectionConfig,
   ModelProviderConfig,
-  AgentConfig
+  AgentConfig,
+  AccessScope,
+  AgentScopeConfig
 } from './agent'
