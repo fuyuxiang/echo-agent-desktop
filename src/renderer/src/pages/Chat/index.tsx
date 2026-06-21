@@ -10,6 +10,7 @@ import { agentWs } from '@/services/agent/ws'
 import { knowledgeAPI } from '@/services/agent/knowledge'
 import { skillsAPI } from '@/services/agent/skills'
 import { buildProjectMemoryContext } from '@/services/chat-inject'
+import { db } from '@/utils/db'
 import { logger } from '@/utils/logger'
 import { confirmShareToProject, type MemoryCandidate } from '@/services/memory-router'
 import { ShareMemoryDialog } from '@/components/ShareMemoryDialog'
@@ -158,11 +159,17 @@ export default function ChatPage(): React.JSX.Element {
     if (!baseUrl) return
 
     const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws'
-    const { currentSessionKey: sessionKey, remoteToken } = useAgentStore.getState()
+    const { remoteToken } = useAgentStore.getState()
+    const sessionKey = useChatStore.getState().activeChatId || 'default'
 
     const onAuthOk = (payload: Record<string, unknown>): void => {
       setWsConnected(true)
       if (payload.session_key) setCurrentSessionKey(payload.session_key as string)
+      const primer = useChatStore.getState().pendingPrimer
+      if (primer) {
+        agentWs.sendMessage(primer)
+        useChatStore.getState().setPendingPrimer('')
+      }
     }
 
     // 本轮 streaming 帧统计:用于判断后端是逐段下发(流式)还是只发 final(伪流式)
@@ -207,10 +214,20 @@ export default function ChatPage(): React.JSX.Element {
       finalizeAssistantMessage(finalText)
 
       const state = useChatStore.getState()
+      const chatId = state.activeChatId
+      const last = state.messages[state.messages.length - 1]
+      if (chatId && last && last.role === 'assistant') {
+        void db.session.appendMessage({
+          chatId,
+          role: 'assistant',
+          content: last.content,
+          reasoning: last.reasoning ?? null
+        })
+      }
+
       const userMessages = state.messages.filter((m) => m.role === 'user')
-      const activeKey = state.activeViewKey
-      if (userMessages.length === 1 && activeKey) {
-        const session = state.sessions.find((s) => s.viewKey === activeKey)
+      if (userMessages.length === 1 && chatId) {
+        const session = state.sessions.find((s) => s.chatId === chatId)
         if (session && (!session.title || session.title === '新对话')) {
           const raw = userMessages[0].content
           const cleaned = raw
@@ -218,7 +235,10 @@ export default function ChatPage(): React.JSX.Element {
             .replace(/^用户任务：\n?/, '')
             .trim()
           const title = cleaned.length > 20 ? cleaned.slice(0, 20) + '...' : cleaned
-          if (title) state.updateSessionTitle(activeKey, title)
+          if (title) {
+            state.updateSessionTitle(chatId, title)
+            void db.session.updateTitle(chatId, title)
+          }
         }
       }
     }
@@ -313,7 +333,18 @@ export default function ChatPage(): React.JSX.Element {
   const handleSend = useCallback(async () => {
     const text = inputText.trim()
     if (!text || !wsConnected || isGenerating) return
+    let chatId = useChatStore.getState().activeChatId
+    if (!chatId) {
+      chatId = crypto.randomUUID()
+      await db.session.upsert({ chatId, title: '新对话', platform: 'desktop' })
+      useChatStore.getState().setActiveChatId(chatId)
+      useAgentStore.getState().setCurrentSessionKey(chatId)
+      // Brand-new session: drop any primer prepared for a previously opened session
+      useChatStore.getState().setPendingPrimer('')
+      await useChatStore.getState().loadSessionsFromLocal()
+    }
     addUserMessage(text)
+    await db.session.appendMessage({ chatId, role: 'user', content: text })
     setInputText('')
     await dispatchToAgent(text)
   }, [inputText, wsConnected, isGenerating, addUserMessage, dispatchToAgent])
@@ -322,6 +353,17 @@ export default function ChatPage(): React.JSX.Element {
   const handleStop = useCallback(() => {
     stoppedRef.current = true
     stopGenerating()
+    const s = useChatStore.getState()
+    const chatId = s.activeChatId
+    const last = s.messages[s.messages.length - 1]
+    if (chatId && last && last.role === 'assistant' && last.content.trim()) {
+      void db.session.appendMessage({
+        chatId,
+        role: 'assistant',
+        content: last.content,
+        reasoning: last.reasoning ?? null
+      })
+    }
   }, [stopGenerating])
 
   // 重新生成:取最近一条 user 消息,删除最后一条 assistant 后重发
