@@ -19,6 +19,12 @@ export interface PrimerMessage {
   content: string
 }
 
+/** Input message role accepted by extractRecentRounds (system is filtered out) */
+export interface SessionMessageLike {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+}
+
 /** Whether the time since the last activity exceeds the staleness threshold */
 export function isSessionStale(lastActivity: number, now: number = Date.now()): boolean {
   return now - lastActivity > SESSION_STALE_MS
@@ -26,10 +32,12 @@ export function isSessionStale(lastActivity: number, now: number = Date.now()): 
 
 /** Take the most recent `rounds` of user/assistant messages (filtering out system), preserving order */
 export function extractRecentRounds(
-  messages: PrimerMessage[],
+  messages: SessionMessageLike[],
   rounds: number = REPLAY_ROUNDS
 ): PrimerMessage[] {
-  const dialog = messages.filter((m) => m.role === 'user' || m.role === 'assistant')
+  const dialog = messages.filter(
+    (m): m is PrimerMessage => m.role === 'user' || m.role === 'assistant'
+  )
   // One round is roughly two messages; take the last rounds*2 as an approximation (enough to cover continued chats)
   return dialog.slice(-rounds * 2)
 }
