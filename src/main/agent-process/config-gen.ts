@@ -78,7 +78,41 @@ export function readAgentConfig(): AgentConfig | null {
   const content = fs.readFileSync(AGENT_CONFIG_PATH, 'utf-8')
   const modelMatch = content.match(/defaultModel:\s*"?([^"\n]+)"?/)
   const defaultModel = modelMatch?.[1] ?? ''
-  const providerMatches = [...content.matchAll(/- name:\s*"?(\w+)"?/g)]
-  const providers = providerMatches.map((m) => ({ name: m[1] as ModelProviderConfig['name'] }))
+
+  // 与 generateAgentConfig 的 q() 反向: 去引号并反转义 \\ 与 \"
+  const unq = (v: string): string => {
+    const trimmed = v.trim()
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+      return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+    }
+    return trimmed
+  }
+
+  // 按 `    - name:` 切分各 provider 块, 保证字段与所属 provider 对应
+  const providers: ModelProviderConfig[] = []
+  const blocks = content.split(/^ {4}- name:/m)
+  // blocks[0] 是 providers 之前的内容, 跳过
+  for (let i = 1; i < blocks.length; i++) {
+    const block = blocks[i]
+    const nameMatch = block.match(/^\s*"?([^"\n]+)"?/)
+    if (!nameMatch) continue
+    const provider: ModelProviderConfig = {
+      name: unq(nameMatch[1]) as ModelProviderConfig['name']
+    }
+    const modelsMatch = block.match(/^\s*models:\s*(\[[^\n]*\])/m)
+    if (modelsMatch) {
+      try {
+        provider.models = JSON.parse(modelsMatch[1])
+      } catch {
+        // 解析失败则忽略 models
+      }
+    }
+    const apiBaseMatch = block.match(/^\s*apiBase:\s*(.+)$/m)
+    if (apiBaseMatch) provider.apiBase = unq(apiBaseMatch[1])
+    const apiKeyMatch = block.match(/^\s*apiKey:\s*(.+)$/m)
+    if (apiKeyMatch) provider.apiKey = unq(apiKeyMatch[1])
+    providers.push(provider)
+  }
+
   return { defaultModel, providers }
 }
