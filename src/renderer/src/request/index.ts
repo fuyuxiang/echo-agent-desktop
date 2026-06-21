@@ -97,6 +97,9 @@ export const request = {
   },
   delete<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
     return instance.delete(url, config)
+  },
+  patch<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
+    return instance.patch(url, data, config)
   }
 }
 
