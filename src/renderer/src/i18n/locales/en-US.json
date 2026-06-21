@@ -41,6 +41,7 @@
     "copyFailed": "Copy failed",
     "regenerate": "Regenerate",
     "stop": "Stop",
+    "thinking": "Echo is thinking",
     "tools": {
       "analysis": {
         "name": "Data Analysis",
