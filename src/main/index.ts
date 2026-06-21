@@ -99,11 +99,22 @@ if (!gotTheLock) {
     }
   })
 
-  app.on('before-quit', () => {
+  // 退出前优雅停止 Agent 子进程: 必须等待 stopAgent 完成再真正退出,
+  // 否则子进程(detached:false)在 POSIX 上不随主进程退出, 会残留孤儿 python 进程并占用端口。
+  let cleanupDone = false
+  app.on('before-quit', (event) => {
+    if (cleanupDone) return
+    event.preventDefault()
     destroyTray()
-    stopAgent().catch((e) => log.error('[main] Agent 停止失败:', e))
-    closeDatabase()
-    log.info('[main] 应用退出')
+    Promise.resolve()
+      .then(() => stopAgent())
+      .catch((e) => log.error('[main] Agent 停止失败:', e))
+      .finally(() => {
+        closeDatabase()
+        cleanupDone = true
+        log.info('[main] 应用退出')
+        app.quit()
+      })
   })
 }
 
