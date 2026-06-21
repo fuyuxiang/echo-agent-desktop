@@ -15,6 +15,7 @@ export const AgentApiUrls = {
   stats: '/api/v1/stats',
 
   message: '/api/v1/message',
+  chatAttachmentUpload: '/api/v1/chat/attachments',
   sessions: '/api/v1/sessions',
   sessionDetail: (key: string) => `/api/v1/sessions/${encodeURIComponent(key)}`,
   sessionMessages: (key: string) => `/api/v1/sessions/${encodeURIComponent(key)}/messages`,

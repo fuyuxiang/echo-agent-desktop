@@ -33,7 +33,7 @@ export function FileDropZone({ onDrop, children }: FileDropZoneProps): React.JSX
       onDrop={handleDrop}
     >
       {children}
-      {dragging && <div className={styles.overlay}>拖放文件到此处上传到知识库</div>}
+      {dragging && <div className={styles.overlay}>拖放文件到此处作为对话附件</div>}
     </div>
   )
 }
