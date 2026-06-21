@@ -21,6 +21,7 @@ const SettingsPage = lazy(() => import('@/pages/Settings'))
 const OnboardingPage = lazy(() => import('@/pages/Onboarding'))
 const LoginPage = lazy(() => import('@/pages/Login'))
 const ExamplePage = lazy(() => import('@/pages/Example'))
+const MemoryPage = lazy(() => import('@/pages/Memory'))
 
 /** 懒加载包装(统一 loading 兜底) */
 function lazyLoad(node: React.ReactNode): React.JSX.Element {
@@ -84,7 +85,8 @@ export const router = createHashRouter([
       { path: 'skills', element: lazyLoad(<SkillsPage />) },
       { path: 'channels', element: lazyLoad(<ChannelsPage />) },
       { path: 'settings', element: lazyLoad(<SettingsPage />) },
-      { path: 'example', element: lazyLoad(<ExamplePage />) }
+      { path: 'example', element: lazyLoad(<ExamplePage />) },
+      { path: 'memory', element: lazyLoad(<MemoryPage />) }
     ]
   },
   {

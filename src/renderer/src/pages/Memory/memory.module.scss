@@ -1,0 +1,112 @@
+.page {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-bg-canvas);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  padding: $spacing-xl;
+  overflow-y: auto;
+  @include thin-scrollbar;
+}
+
+.pageHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-bottom: $spacing-lg;
+
+  span {
+    font-size: $font-size-xs;
+    font-weight: 650;
+    line-height: 1;
+    color: var(--color-text-3);
+    text-transform: uppercase;
+  }
+
+  strong {
+    font-size: $font-size-xl;
+    font-weight: 700;
+    color: var(--color-text-1);
+  }
+}
+
+.tabs {
+  display: flex;
+  gap: $spacing-xs;
+  margin-bottom: $spacing-lg;
+  border-bottom: 1px solid var(--color-border-muted);
+}
+
+.tab {
+  padding: $spacing-sm $spacing-md;
+  border: none;
+  background: transparent;
+  color: var(--color-text-3);
+  font-size: $font-size-base;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color $duration-fast;
+
+  &:hover {
+    color: var(--color-text-1);
+  }
+
+  &.active {
+    color: var(--color-text-1);
+    border-bottom-color: var(--color-skill);
+  }
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+}
+
+.card {
+  padding: $spacing-md;
+  border-radius: $radius-lg;
+  border: 1px solid var(--color-border-muted);
+  background: var(--color-bg-container);
+  box-shadow: var(--shadow-card);
+}
+
+.content {
+  margin: 0;
+  font-size: $font-size-base;
+  line-height: 1.5;
+  color: var(--color-text-1);
+  white-space: pre-wrap;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $spacing-xs;
+  margin-top: $spacing-sm;
+}
+
+.tag {
+  padding: 2px 8px;
+  border-radius: $radius-full;
+  font-size: $font-size-xs;
+  font-weight: 600;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-3);
+  border: 1px solid var(--color-border-muted);
+}
+
+.empty {
+  display: grid;
+  min-height: 200px;
+  place-items: center;
+  color: var(--color-text-3);
+  font-size: $font-size-base;
+}

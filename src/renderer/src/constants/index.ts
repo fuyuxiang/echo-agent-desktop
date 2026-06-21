@@ -22,7 +22,9 @@ export const ROUTES = {
   /** 登录页 */
   login: '/login',
   /** 示例页(基建演示) */
-  example: '/example'
+  example: '/example',
+  /** Memory 页 */
+  memory: '/memory'
   // plop-route-constant
 } as const
 
