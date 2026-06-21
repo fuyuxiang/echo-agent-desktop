@@ -44,8 +44,8 @@ export function SessionList(): React.JSX.Element {
   return (
     <div className={styles.container}>
       <div className={styles.header}>
-        <span className={styles.title}>会话</span>
-        <button className={styles.newBtn} onClick={handleNewSession} title="新会话">
+        <span className={styles.title}>历史会话</span>
+        <button className={styles.newBtn} onClick={handleNewSession} title="新建会话">
           +
         </button>
       </div>

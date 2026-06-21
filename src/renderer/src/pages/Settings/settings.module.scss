@@ -108,3 +108,12 @@
     }
   }
 }
+
+// 记忆区 / 技能库分区:渲染整页组件,占满内容区且不套 .content 的全局样式
+.fullBleed {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
