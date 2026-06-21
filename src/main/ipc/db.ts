@@ -9,6 +9,7 @@ import {
 import {
   appendChatMessage,
   deleteChatSession,
+  deleteLastAssistantMessage,
   getChatMessages,
   listChatSessions,
   updateChatSessionTitle,
@@ -34,6 +35,10 @@ export function registerDbHandlers(): void {
     IpcChannels.db.sessionAppendMessage,
     (_e, input: { chatId: string; role: string; content: string; reasoning?: string | null }) =>
       appendChatMessage(input)
+  )
+  ipcMain.handle(
+    IpcChannels.db.sessionDeleteMessage,
+    (_e, chatId: string) => deleteLastAssistantMessage(chatId)
   )
   ipcMain.handle(
     IpcChannels.db.sessionUpdateTitle,

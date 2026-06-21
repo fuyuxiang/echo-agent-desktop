@@ -166,6 +166,9 @@ export default function ChatPage(): React.JSX.Element {
   const skillMenuRef = useRef<HTMLDivElement>(null)
   // 用户点「停止」后置 true,忽略本轮后续 streaming/final 帧;下次发送时复位
   const stoppedRef = useRef(false)
+  // primer(历史回顾)回合进行中置 true:其 streaming/final 帧不进 UI、不落库;
+  // 消费掉该回合的 final 后复位,使 primer 之后用户的正常消息不受影响
+  const primerPendingRef = useRef(false)
 
   // 工具箱磁贴点击:填充输入框并聚焦(纯前端引导,不直接发送)
   const fillPrompt = useCallback((prompt: string) => {
@@ -193,6 +196,9 @@ export default function ChatPage(): React.JSX.Element {
       if (payload.session_key) setCurrentSessionKey(payload.session_key as string)
       const primer = useChatStore.getState().pendingPrimer
       if (primer) {
+        // primer 是历史回顾文本,仅用于重建服务端上下文:发送前置抑制标志,
+        // 其回流帧不进 UI、不落库,避免产生无 user 对应的孤儿 assistant 行
+        primerPendingRef.current = true
         agentWs.sendMessage(primer)
         useChatStore.getState().setPendingPrimer('')
       }
@@ -204,6 +210,8 @@ export default function ChatPage(): React.JSX.Element {
 
     const onStreaming = (payload: Record<string, unknown>): void => {
       if (stoppedRef.current) return
+      // primer 回合:丢弃所有流式帧,不建气泡、不累积
+      if (primerPendingRef.current) return
       if (!useChatStore.getState().isGenerating) {
         startAssistantMessage()
         streamFrameCount = 0
@@ -227,6 +235,12 @@ export default function ChatPage(): React.JSX.Element {
 
     const onFinal = (payload: Record<string, unknown>): void => {
       if (stoppedRef.current) return
+      // primer 回合的 final:消费掉这一轮即解除抑制,不 finalize、不落库直接返回。
+      // 在 final 复位可覆盖「多帧 streaming + 一个 final」与「仅 final 无 streaming」两种情况。
+      if (primerPendingRef.current) {
+        primerPendingRef.current = false
+        return
+      }
       // 非流式回复(只有 final 帧、无 streaming 增量)时, 先建占位气泡, 否则 finalize 无目标导致回复不显示
       if (!useChatStore.getState().isGenerating) startAssistantMessage()
       const finalText = getPayloadText(payload)
@@ -433,6 +447,13 @@ export default function ChatPage(): React.JSX.Element {
     const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
     if (!lastUser) return
     removeLastAssistant()
+    // 同步删 DB 中最后一条 assistant 行,避免重做后旧+新两条并存(落库失败不阻断)
+    const chatId = useChatStore.getState().activeChatId
+    if (chatId) {
+      void db.session
+        .deleteLastAssistantMessage(chatId)
+        .catch((err) => logger.warn('[chat] 重新生成删除旧 assistant 落库失败:', err))
+    }
     await dispatchToAgent(lastUser.content)
   }, [wsConnected, isGenerating, removeLastAssistant, dispatchToAgent])
 

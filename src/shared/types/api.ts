@@ -84,6 +84,8 @@ export interface BridgeApi {
         content: string
         reasoning?: string | null
       }) => Promise<ChatMessageRecord>
+      /** 删除会话最后一条 assistant 消息(重新生成时撤销上一轮回复) */
+      deleteLastAssistantMessage: (chatId: string) => Promise<void>
       /** 更新会话标题 */
       updateTitle: (chatId: string, title: string) => Promise<void>
     }

@@ -156,3 +156,28 @@ export function appendChatMessage(input: {
 export function updateChatSessionTitle(chatId: string, title: string): void {
   getDb().prepare('UPDATE chat_sessions SET title = ? WHERE chat_id = ?').run(title, chatId)
 }
+
+/**
+ * 删除某会话最后一条 assistant 消息(用于重新生成,撤销上一轮回复)
+ * 同事务内删消息 + 把 message_count 减一(不减成负数);无 assistant 消息则空操作
+ */
+export function deleteLastAssistantMessage(chatId: string): void {
+  const db = getDb()
+  db.transaction(() => {
+    const row = db
+      .prepare(
+        `SELECT id FROM chat_messages
+         WHERE chat_id = ? AND role = 'assistant'
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1`
+      )
+      .get(chatId) as { id: number } | undefined
+    if (!row) return
+    db.prepare('DELETE FROM chat_messages WHERE id = ?').run(row.id)
+    db.prepare(
+      `UPDATE chat_sessions
+       SET message_count = MAX(0, message_count - 1)
+       WHERE chat_id = ?`
+    ).run(chatId)
+  })()
+}
