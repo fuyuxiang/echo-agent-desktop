@@ -11,7 +11,11 @@ export interface MemoryEntry {
   content: string
   type: string
   tier: string
+  key?: string
   tags: string[]
+  importance?: number
+  source_session?: string
+  access_count?: number
   created_at: string
   updated_at: string
 }
