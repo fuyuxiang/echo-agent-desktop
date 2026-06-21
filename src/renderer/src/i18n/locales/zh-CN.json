@@ -6,7 +6,8 @@
     "delete": "删除",
     "loading": "加载中...",
     "empty": "暂无数据",
-    "copySuccess": "已复制到剪贴板"
+    "copySuccess": "已复制到剪贴板",
+    "logout": "退出登录"
   },
   "titlebar": {
     "appName": "Echo Agent"
