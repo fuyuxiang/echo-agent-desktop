@@ -31,7 +31,7 @@ export function EnvironmentSection(): React.JSX.Element {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 24 }}>Python 环境</h2>
+      <h2 style={{ marginBottom: 24 }}>运行环境</h2>
       {info ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', gap: 8 }}>
