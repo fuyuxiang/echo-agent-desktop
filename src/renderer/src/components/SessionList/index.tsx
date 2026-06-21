@@ -1,35 +1,38 @@
 import { useState, useRef } from 'react'
 import { useSessionManager } from '@/hooks/useSessionManager'
 import { useChatStore } from '@/stores/chatStore'
+import { db } from '@/utils/db'
 import styles from './session-list.module.scss'
 
 export function SessionList(): React.JSX.Element {
   const {
     sessions,
-    activeSessionViewKey,
-    selectingViewKey,
-    deletingViewKey,
+    activeChatId,
+    selectingChatId,
+    deletingChatId,
     handleNewSession,
     handleSelectSession,
     handleDeleteSession
   } = useSessionManager()
 
   const updateSessionTitle = useChatStore((s) => s.updateSessionTitle)
-  const [editingViewKey, setEditingViewKey] = useState('')
+  const [editingChatId, setEditingChatId] = useState('')
   const [editText, setEditText] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const startEditing = (viewKey: string, currentTitle: string): void => {
-    setEditingViewKey(viewKey)
+  const startEditing = (chatId: string, currentTitle: string): void => {
+    setEditingChatId(chatId)
     setEditText(currentTitle)
     setTimeout(() => inputRef.current?.select(), 0)
   }
 
   const commitEdit = (): void => {
-    if (editingViewKey && editText.trim()) {
-      updateSessionTitle(editingViewKey, editText.trim())
+    if (editingChatId && editText.trim()) {
+      const title = editText.trim()
+      updateSessionTitle(editingChatId, title)
+      void db.session.updateTitle(editingChatId, title)
     }
-    setEditingViewKey('')
+    setEditingChatId('')
   }
 
   const handleEditKeyDown = (e: React.KeyboardEvent): void => {
@@ -37,7 +40,7 @@ export function SessionList(): React.JSX.Element {
       e.preventDefault()
       commitEdit()
     } else if (e.key === 'Escape') {
-      setEditingViewKey('')
+      setEditingChatId('')
     }
   }
 
@@ -51,17 +54,17 @@ export function SessionList(): React.JSX.Element {
       </div>
       <div className={styles.list}>
         {sessions.map((s) => {
-          const isActive = activeSessionViewKey ? s.viewKey === activeSessionViewKey : false
-          const displayTitle = s.title || s.chatId || s.platform || '未命名会话'
+          const isActive = activeChatId ? s.chatId === activeChatId : false
+          const displayTitle = s.title || '未命名会话'
 
           return (
             <div
-              key={s.viewKey}
+              key={s.chatId}
               className={`${styles.item} ${isActive ? styles.active : ''}`}
               onClick={() => handleSelectSession(s)}
-              aria-busy={selectingViewKey === s.viewKey}
+              aria-busy={selectingChatId === s.chatId}
             >
-              {editingViewKey === s.viewKey ? (
+              {editingChatId === s.chatId ? (
                 <input
                   ref={inputRef}
                   className={styles.itemTitleInput}
@@ -77,18 +80,18 @@ export function SessionList(): React.JSX.Element {
                   className={styles.itemTitle}
                   onDoubleClick={(e) => {
                     e.stopPropagation()
-                    startEditing(s.viewKey, displayTitle)
+                    startEditing(s.chatId, displayTitle)
                   }}
                 >
                   {displayTitle}
                 </span>
               )}
               <span className={styles.itemMeta}>
-                {selectingViewKey === s.viewKey ? '...' : `${s.messageCount} 条`}
+                {selectingChatId === s.chatId ? '...' : `${s.messageCount} 条`}
                 <button
                   className={styles.deleteBtn}
                   onClick={(e) => handleDeleteSession(s, e)}
-                  disabled={deletingViewKey === s.viewKey}
+                  disabled={deletingChatId === s.chatId}
                   title="删除"
                 >
                   ×
