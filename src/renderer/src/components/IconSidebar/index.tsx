@@ -26,6 +26,13 @@ export function IconSidebar(): React.JSX.Element {
   const navigate = useNavigate()
   const { handleNewSession } = useSessionActions()
   const role = useUserStore((s) => s.user?.role)
+  const signOut = useUserStore((s) => s.signOut)
+
+  // 记忆区入口走 i18n，与现有导航项并列展示
+  const mainNav: NavItem[] = [
+    ...navItems,
+    { icon: <MemoryIcon />, route: ROUTES.memory, label: t('memory.title') }
+  ]
 
   // 管理入口仅对管理员可见
   const bottomNav: NavItem[] =
@@ -60,12 +67,18 @@ export function IconSidebar(): React.JSX.Element {
           <NewSessionIcon />
           <span className={styles.itemLabel}>新会话</span>
         </button>
-        <div className={styles.navGroup}>{navItems.map(renderItem)}</div>
+        <div className={styles.navGroup}>{mainNav.map(renderItem)}</div>
       </div>
       <div className={styles.sessions}>
         <SessionList />
       </div>
-      <div className={styles.bottom}>{bottomNav.map(renderItem)}</div>
+      <div className={styles.bottom}>
+        {bottomNav.map(renderItem)}
+        <button className={styles.item} onClick={() => signOut()} title={t('common.logout')}>
+          <LogoutIcon />
+          <span className={styles.itemLabel}>{t('common.logout')}</span>
+        </button>
+      </div>
     </nav>
   )
 }
@@ -151,6 +164,43 @@ function SettingsIcon(): React.JSX.Element {
     >
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  )
+}
+
+function MemoryIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2z" />
+      <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z" />
+    </svg>
+  )
+}
+
+function LogoutIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="M16 17l5-5-5-5" />
+      <path d="M21 12H9" />
     </svg>
   )
 }
