@@ -12,6 +12,11 @@
     "appName": "Echo Agent"
   },
   "memory": {
+    "title": "记忆区",
+    "personal": "个人记忆",
+    "project": "项目记忆",
+    "loading": "加载中…",
+    "empty": "暂无记忆",
     "shareTitle": "共享到项目记忆？",
     "sharePrompt": "这条内容可能对同组成员有帮助，是否共享为团队知识？",
     "share": "共享到项目",
