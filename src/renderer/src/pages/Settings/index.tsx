@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { GeneralSection } from './sections/GeneralSection'
 import { ModelSection } from './sections/ModelSection'
+import { LocalModelSection } from './sections/LocalModelSection'
 import { ConnectionSection } from './sections/ConnectionSection'
-import { MemorySection } from './sections/MemorySection'
 import { EnvironmentSection } from './sections/EnvironmentSection'
 import { AboutSection } from './sections/AboutSection'
 import MemoryPage from '@/pages/Memory'
@@ -12,8 +12,8 @@ import styles from './settings.module.scss'
 type Section =
   | 'general'
   | 'model'
+  | 'localModel'
   | 'connection'
-  | 'memory'
   | 'memoryStore'
   | 'skills'
   | 'environment'
@@ -22,11 +22,11 @@ type Section =
 const SECTIONS: { key: Section; label: string }[] = [
   { key: 'general', label: '通用' },
   { key: 'model', label: '模型配置' },
+  { key: 'localModel', label: '本地模型' },
   { key: 'connection', label: '连接' },
   { key: 'skills', label: '技能库' },
-  { key: 'memoryStore', label: '记忆区' },
-  { key: 'memory', label: '记忆管理' },
-  { key: 'environment', label: 'Python 环境' },
+  { key: 'memoryStore', label: '记忆' },
+  { key: 'environment', label: '运行环境' },
   { key: 'about', label: '关于' }
 ]
 
@@ -42,14 +42,14 @@ export default function SettingsPage(): React.JSX.Element {
         return <GeneralSection />
       case 'model':
         return <ModelSection />
+      case 'localModel':
+        return <LocalModelSection />
       case 'connection':
         return <ConnectionSection />
       case 'skills':
         return <SkillsPage />
       case 'memoryStore':
         return <MemoryPage />
-      case 'memory':
-        return <MemorySection />
       case 'environment':
         return <EnvironmentSection />
       case 'about':
