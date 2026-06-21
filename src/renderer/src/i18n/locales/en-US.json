@@ -6,7 +6,8 @@
     "delete": "Delete",
     "loading": "Loading...",
     "empty": "No data",
-    "copySuccess": "Copied to clipboard"
+    "copySuccess": "Copied to clipboard",
+    "logout": "Sign Out"
   },
   "titlebar": {
     "appName": "Echo Agent"
