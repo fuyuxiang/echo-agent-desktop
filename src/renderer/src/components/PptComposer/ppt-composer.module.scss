@@ -1,0 +1,38 @@
+.wrap { position: relative; display: inline-flex; }
+.trigger {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: $radius-md;
+  border: 1px solid var(--color-border); background: var(--color-bg-elevated);
+  color: var(--color-text-1); font-size: $font-size-sm; cursor: pointer;
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+.panel {
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: $z-modal;
+  width: 320px; padding: $spacing-lg; display: flex; flex-direction: column; gap: $spacing-md;
+  background: var(--color-bg-elevated); border: 1px solid var(--color-border);
+  border-radius: $radius-xl; box-shadow: var(--shadow-panel);
+}
+.title { margin: 0; font-size: $font-size-base; color: var(--color-text-1); }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: $font-size-sm; color: var(--color-text-2); }
+.input, .textarea {
+  padding: 6px 8px; border-radius: $radius-md; border: 1px solid var(--color-border);
+  background: var(--color-bg); color: var(--color-text-1); font-size: $font-size-sm;
+}
+.textarea { resize: vertical; }
+.segmented { display: inline-flex; gap: 4px; }
+.seg, .segActive {
+  padding: 4px 12px; border-radius: $radius-md; border: 1px solid var(--color-border);
+  background: var(--color-bg); color: var(--color-text-1); cursor: pointer; font-size: $font-size-sm;
+}
+.segActive { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.colors { display: inline-flex; gap: 6px; }
+.color, .colorActive { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
+.colorActive { border-color: var(--color-text-1); }
+.checkRow { display: inline-flex; align-items: center; gap: 6px; font-size: $font-size-sm; color: var(--color-text-2); }
+.actions { display: flex; justify-content: flex-end; gap: $spacing-sm; }
+.cancelBtn, .submitBtn {
+  padding: 6px 16px; border-radius: $radius-md; cursor: pointer; font-size: $font-size-sm;
+  border: 1px solid var(--color-border);
+}
+.cancelBtn { background: var(--color-bg); color: var(--color-text-1); }
+.submitBtn { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
