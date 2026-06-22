@@ -85,7 +85,8 @@
       "extraPlaceholder": "Audience, style, focus (optional)",
       "generate": "Generate",
       "cancel": "Cancel",
-      "needTopic": "Please enter a topic first"
+      "needTopic": "Please enter a topic first",
+      "needSkill": "Please enable the ppt-author skill in the skill library first"
     },
     "tools": {
       "analysis": {
