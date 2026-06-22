@@ -3,6 +3,7 @@ import { registerAppHandlers } from './app'
 import { registerAsrHandlers } from './asr'
 import { registerDbHandlers } from './db'
 import { registerLogHandlers } from './log'
+import { registerMeetingHandlers } from './meeting'
 import { registerPermissionHandlers } from './permission'
 import { registerStoreHandlers } from './store'
 import { registerSystemHandlers } from './system'
@@ -22,4 +23,5 @@ export function registerAllIpcHandlers(): void {
   registerLogHandlers()
   registerAgentIpcHandlers()
   registerAsrHandlers()
+  registerMeetingHandlers()
 }
