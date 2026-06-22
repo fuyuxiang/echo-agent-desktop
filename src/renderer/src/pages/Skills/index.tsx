@@ -1,7 +1,9 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useSkillStore } from '@/stores/skillStore'
 import { skillsAPI, type Skill } from '@/services/agent/skills'
 import { useSkillImport } from '@/hooks/useSkillImport'
+import { useSkillDeps } from '@/hooks/useSkillDeps'
+import { SkillDepsDialog } from '@/components/SkillDepsDialog'
 import { toast } from '@/components/Toast'
 import styles from './skills.module.scss'
 import clsx from 'clsx'
@@ -34,6 +36,20 @@ export default function SkillsPage(): React.JSX.Element {
   const [detail, setDetail] = useState<{ content: string; files: string[] } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const { importing, handleImport } = useSkillImport()
+
+  const [depsPrompt, setDepsPrompt] = useState<{
+    name: string
+    missing: string[]
+    resolve: (ok: boolean) => void
+  } | null>(null)
+
+  const requestConfirm = useCallback(
+    (name: string, missing: string[]): Promise<boolean> =>
+      new Promise<boolean>((resolve) => setDepsPrompt({ name, missing, resolve })),
+    []
+  )
+
+  const { installing, ensureDeps } = useSkillDeps(requestConfirm)
 
   useEffect(() => {
     skillsAPI
@@ -70,6 +86,11 @@ export default function SkillsPage(): React.JSX.Element {
 
   const handleToggle = async (skill: Skill, e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
+    const enabling = !skill.enabled
+    if (enabling) {
+      const ok = await ensureDeps(skill.name)
+      if (!ok) return // 缺依赖未解决，不启用
+    }
     try {
       await skillsAPI.toggle(skill.name)
       const updated = await skillsAPI.list()
@@ -199,6 +220,22 @@ export default function SkillsPage(): React.JSX.Element {
             </div>
           )}
         </div>
+      )}
+
+      {depsPrompt && (
+        <SkillDepsDialog
+          skillName={depsPrompt.name}
+          missing={depsPrompt.missing}
+          installing={installing}
+          onConfirm={() => {
+            depsPrompt.resolve(true)
+            setDepsPrompt(null)
+          }}
+          onCancel={() => {
+            depsPrompt.resolve(false)
+            setDepsPrompt(null)
+          }}
+        />
       )}
     </div>
   )
