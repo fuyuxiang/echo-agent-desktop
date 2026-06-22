@@ -122,3 +122,81 @@ export function stopStream(streamId: string): string {
   discardStream(streamId)
   return finalResult
 }
+
+/** 样本数换算毫秒 */
+export function samplesToMs(sampleCount: number, sampleRate = 16000): number {
+  return Math.round((sampleCount / sampleRate) * 1000)
+}
+
+interface MeetingStreamState {
+  totalSamples: number
+  segStartSamples: number
+  idleConfirmed: { startMs: number; endMs: number; text: string }[]
+}
+const meetingStates = new Map<string, MeetingStreamState>()
+
+export function createMeetingStream(): string {
+  const streamId = createStream()
+  meetingStates.set(streamId, { totalSamples: 0, segStartSamples: 0, idleConfirmed: [] })
+  return streamId
+}
+
+export function feedMeetingAudio(streamId: string, samples: Float32Array): void {
+  if (!recognizer) throw new Error('ASR recognizer not initialized')
+  const stream = streams.get(streamId)
+  const state = meetingStates.get(streamId)
+  if (!stream || !state) throw new Error(`Meeting stream ${streamId} not found`)
+  touchStream(streamId)
+  stream.acceptWaveform({ sampleRate: 16000, samples })
+  state.totalSamples += samples.length
+  while (recognizer.isReady(stream)) recognizer.decode(stream)
+  if (recognizer.isEndpoint(stream)) {
+    const text = recognizer.getResult(stream).text
+    if (text) {
+      state.idleConfirmed.push({
+        startMs: samplesToMs(state.segStartSamples),
+        endMs: samplesToMs(state.totalSamples),
+        text
+      })
+    }
+    state.segStartSamples = state.totalSamples
+    recognizer.reset(stream)
+  }
+}
+
+export function pollMeetingStream(streamId: string): {
+  confirmed: { startMs: number; endMs: number; text: string }[]; partial: string
+} {
+  const stream = streams.get(streamId)
+  const state = meetingStates.get(streamId)
+  if (!stream || !state) return { confirmed: [], partial: '' }
+  const confirmed = state.idleConfirmed
+  state.idleConfirmed = []
+  const partial = recognizer ? recognizer.getResult(stream).text : ''
+  return { confirmed, partial }
+}
+
+export function stopMeetingStream(streamId: string): {
+  confirmed: { startMs: number; endMs: number; text: string }[]
+} {
+  const stream = streams.get(streamId)
+  const state = meetingStates.get(streamId)
+  if (!stream || !state || !recognizer) {
+    meetingStates.delete(streamId)
+    return { confirmed: [] }
+  }
+  stream.inputFinished()
+  while (recognizer.isReady(stream)) recognizer.decode(stream)
+  const tail = recognizer.getResult(stream).text
+  const confirmed = [...state.idleConfirmed]
+  if (tail) {
+    confirmed.push({
+      startMs: samplesToMs(state.segStartSamples),
+      endMs: samplesToMs(state.totalSamples),
+      text: tail
+    })
+  }
+  discardStream(streamId)
+  meetingStates.delete(streamId)
+  return { confirmed }
+}
