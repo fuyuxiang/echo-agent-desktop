@@ -103,5 +103,20 @@ export const IpcChannels = {
     feed: 'asr:feed',
     getResult: 'asr:get-result',
     stop: 'asr:stop'
+  },
+
+  /** 会议记录 */
+  meeting: {
+    start: 'meeting:start',
+    feed: 'meeting:feed',
+    poll: 'meeting:poll',
+    stop: 'meeting:stop',
+    diarize: 'meeting:diarize',
+    setSummary: 'meeting:set-summary',
+    list: 'meeting:list',
+    get: 'meeting:get',
+    remove: 'meeting:remove',
+    rename: 'meeting:rename',
+    markSource: 'meeting:mark-source'
   }
 } as const
