@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, session, desktopCapturer } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { setupLogger, log } from './logger'
 import { createMainWindow, showMainWindow } from './window'
@@ -47,6 +47,24 @@ if (!gotTheLock) {
     registerAllIpcHandlers()
     initASR()
     createMainWindow()
+
+    // 系统音频 loopback handler:渲染端 getDisplayMedia({audio:true}) 时,
+    // 回调系统音频轨(macOS 经 ScreenCaptureKit)。拿不到时渲染端自动降级仅麦克风。
+    session.defaultSession.setDisplayMediaRequestHandler(
+      (_request, callback) => {
+        desktopCapturer
+          .getSources({ types: ['screen'] })
+          .then((sources) => {
+            callback({ video: sources[0], audio: 'loopback' })
+          })
+          .catch((err) => {
+            log.warn('[main] desktopCapturer 获取屏幕源失败:', err)
+            callback({})
+          })
+      },
+      { useSystemPicker: false }
+    )
+
     setupTray()
     setupShortcuts()
     setupUpdater()
