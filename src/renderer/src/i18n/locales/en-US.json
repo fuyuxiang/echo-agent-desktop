@@ -70,6 +70,23 @@
       "empty": "No enabled skills",
       "import": "Import skill"
     },
+    "ppt": {
+      "trigger": "Make PPT",
+      "title": "Generate presentation",
+      "topic": "Topic",
+      "topicPlaceholder": "What is this deck about",
+      "pages": "Pages",
+      "lang": "Language",
+      "langZh": "Chinese",
+      "langEn": "English",
+      "themeColor": "Theme color",
+      "withImages": "Include images",
+      "extra": "Extra notes",
+      "extraPlaceholder": "Audience, style, focus (optional)",
+      "generate": "Generate",
+      "cancel": "Cancel",
+      "needTopic": "Please enter a topic first"
+    },
     "tools": {
       "analysis": {
         "name": "Data Analysis",

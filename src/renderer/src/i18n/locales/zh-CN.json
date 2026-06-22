@@ -70,6 +70,23 @@
       "empty": "暂无已启用的技能",
       "import": "导入技能"
     },
+    "ppt": {
+      "trigger": "生成 PPT",
+      "title": "生成演示文稿",
+      "topic": "主题",
+      "topicPlaceholder": "这份 PPT 讲什么",
+      "pages": "页数",
+      "lang": "语言",
+      "langZh": "中文",
+      "langEn": "英文",
+      "themeColor": "主题色",
+      "withImages": "包含配图",
+      "extra": "补充要求",
+      "extraPlaceholder": "受众、风格、重点(选填)",
+      "generate": "生成",
+      "cancel": "取消",
+      "needTopic": "请先填写主题"
+    },
     "tools": {
       "analysis": {
         "name": "数据分析",
