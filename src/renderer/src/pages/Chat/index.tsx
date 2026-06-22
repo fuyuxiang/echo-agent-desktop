@@ -17,6 +17,7 @@ import { logger } from '@/utils/logger'
 import { confirmShareToProject, type MemoryCandidate } from '@/services/memory-router'
 import { ShareMemoryDialog } from '@/components/ShareMemoryDialog'
 import { PptComposer } from '@/components/PptComposer'
+import { ScopeSwitcher } from '@/components/ScopeSwitcher'
 import { toast } from '@/components/Toast'
 import { permission } from '@/utils/permission'
 import styles from './chat.module.scss'
@@ -871,6 +872,7 @@ export default function ChatPage(): React.JSX.Element {
                   </div>
                 )}
               </div>
+              <ScopeSwitcher />
             </div>
             <div className={styles.composerActions}>
               <button

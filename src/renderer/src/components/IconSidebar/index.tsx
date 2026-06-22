@@ -2,7 +2,6 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ROUTES } from '@/constants'
 import { SessionList } from '@/components/SessionList'
-import { ScopeSwitcher } from '@/components/ScopeSwitcher'
 import { useSessionActions } from '@/hooks/useSessionManager'
 import { useUserStore } from '@/stores/userStore'
 import styles from './sidebar.module.scss'
@@ -71,7 +70,6 @@ export function IconSidebar(): React.JSX.Element {
         <SessionList />
       </div>
       <div className={styles.bottom}>
-        <ScopeSwitcher />
         {bottomNav.map(renderItem)}
         {isAuthed ? (
           <button className={styles.item} onClick={() => signOut()} title={t('common.logout')}>
