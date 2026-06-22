@@ -46,6 +46,7 @@ export function ScopeSwitcher(): React.JSX.Element {
   return (
     <div className={styles.wrap}>
       <button
+        type="button"
         className={clsx(styles.bar, switching && styles.switching)}
         onClick={openPanel}
         title={scope === 'restricted' ? workspaceDir : t('scope.full')}
@@ -70,6 +71,7 @@ export function ScopeSwitcher(): React.JSX.Element {
             <label className={styles.option}>
               <input
                 type="radio"
+                name="scope"
                 checked={draftScope === 'restricted'}
                 onChange={() => setDraftScope('restricted')}
               />
@@ -78,7 +80,7 @@ export function ScopeSwitcher(): React.JSX.Element {
                 <span className={styles.optDesc}>{t('scope.restrictedDesc')}</span>
                 {draftScope === 'restricted' && (
                   <span className={styles.folderRow}>
-                    <button className={styles.chooseBtn} onClick={chooseFolder}>
+                    <button type="button" className={styles.chooseBtn} onClick={chooseFolder}>
                       {t('scope.chooseFolder')}
                     </button>
                     {draftDir && (
@@ -94,6 +96,7 @@ export function ScopeSwitcher(): React.JSX.Element {
             <label className={styles.option}>
               <input
                 type="radio"
+                name="scope"
                 checked={draftScope === 'full'}
                 onChange={() => setDraftScope('full')}
               />
@@ -107,10 +110,15 @@ export function ScopeSwitcher(): React.JSX.Element {
             </label>
 
             <div className={styles.actions}>
-              <button className={styles.cancel} onClick={() => setOpen(false)}>
+              <button type="button" className={styles.cancel} onClick={() => setOpen(false)}>
                 {t('scope.cancel')}
               </button>
-              <button className={styles.applyBtn} disabled={!canApply} onClick={apply}>
+              <button
+                type="button"
+                className={styles.applyBtn}
+                disabled={!canApply}
+                onClick={apply}
+              >
                 {t('scope.apply')}
               </button>
             </div>
