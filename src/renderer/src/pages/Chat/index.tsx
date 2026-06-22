@@ -200,7 +200,7 @@ export default function ChatPage(): React.JSX.Element {
   const onGeneratePpt = useCallback(
     (prompt: string) => {
       const ppt = skills.find((s) => s.name === 'ppt-author')
-      if (!ppt) {
+      if (!ppt || !ppt.enabled) {
         toast.error(t('chat.ppt.needSkill'))
         return
       }
