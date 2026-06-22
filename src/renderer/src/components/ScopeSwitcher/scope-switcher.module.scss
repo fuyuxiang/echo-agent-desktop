@@ -1,22 +1,32 @@
 .wrap {
   position: relative;
+  flex: 0 0 auto;
 }
 
 .bar {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  border: none;
-  border-radius: 8px;
-  background: var(--color-surface-2, rgba(255, 255, 255, 0.04));
-  color: inherit;
+  gap: 6px;
+  height: 32px;
+  max-width: 220px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-muted);
+  border-radius: $radius-full;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-2);
   cursor: pointer;
   text-align: left;
+  font-size: $font-size-sm;
+  font-weight: 650;
+  transition:
+    background $duration-fast,
+    border-color $duration-fast,
+    color $duration-fast;
 
   &:hover {
-    background: var(--color-surface-3, rgba(255, 255, 255, 0.08));
+    border-color: color-mix(in srgb, var(--color-primary) 30%, var(--color-border));
+    background: var(--color-primary-soft);
+    color: var(--color-text-1);
   }
   &.switching {
     opacity: 0.6;
@@ -25,26 +35,34 @@
 }
 
 .icon {
-  font-size: 16px;
+  font-size: 14px;
   flex: 0 0 auto;
 }
 
 .barText {
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-width: 0;
 }
 
 .scopeName {
-  font-size: 13px;
+  font-size: $font-size-sm;
 }
 
 .folder {
-  font-size: 11px;
+  font-size: $font-size-sm;
   opacity: 0.6;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 110px;
+
+  &::before {
+    content: '·';
+    margin-right: 5px;
+    opacity: 0.7;
+  }
 }
 
 .backdrop {
@@ -55,14 +73,16 @@
 
 .panel {
   position: absolute;
-  bottom: calc(100% + 6px);
+  bottom: calc(100% + 8px);
   left: 0;
-  right: 0;
   z-index: 41;
+  width: min(320px, calc(100vw - 80px));
   padding: 12px;
-  border-radius: 10px;
-  background: var(--color-surface-1, #1e1e1e);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--color-border);
+  border-radius: $radius-lg;
+  background: color-mix(in srgb, var(--color-bg-elevated) 98%, transparent);
+  box-shadow: var(--shadow-card-strong);
+  backdrop-filter: blur(22px);
 }
 
 .panelTitle {
