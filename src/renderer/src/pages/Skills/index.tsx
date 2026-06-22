@@ -89,6 +89,8 @@ export default function SkillsPage(): React.JSX.Element {
     const enabling = !skill.enabled
     if (enabling) {
       const ok = await ensureDeps(skill.name)
+      // 关闭授权弹窗:确认后弹窗保持开启以显示"安装中",安装结束(此处)再关闭
+      setDepsPrompt(null)
       if (!ok) return // 缺依赖未解决，不启用
     }
     try {
@@ -228,8 +230,8 @@ export default function SkillsPage(): React.JSX.Element {
           missing={depsPrompt.missing}
           installing={installing}
           onConfirm={() => {
+            // 仅 resolve;弹窗保持开启展示"安装中",由 handleToggle 在 ensureDeps 结束后关闭
             depsPrompt.resolve(true)
-            setDepsPrompt(null)
           }}
           onCancel={() => {
             depsPrompt.resolve(false)
