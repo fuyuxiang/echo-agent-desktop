@@ -20,6 +20,21 @@ export interface SkillDetail {
   files: string[]
 }
 
+export interface SkillDeps {
+  name: string
+  requires: string[]
+  missing: string[]
+  satisfied: boolean
+}
+
+export interface InstallResult {
+  success: boolean
+  installed: string[]
+  skipped: string[]
+  rejected: string[]
+  detail: string
+}
+
 export const skillsAPI = {
   list: () =>
     agentRequest
@@ -46,5 +61,15 @@ export const skillsAPI = {
   remove: (name: string) =>
     agentRequest
       .delete<{ success?: boolean }>(`${getBaseUrl()}${AgentApiUrls.skillDelete(name)}`)
+      .then((r) => r.data),
+
+  getDeps: (name: string) =>
+    agentRequest
+      .get<SkillDeps>(`${getBaseUrl()}${AgentApiUrls.skillDeps(name)}`)
+      .then((r) => r.data),
+
+  installDeps: (name: string) =>
+    agentRequest
+      .post<InstallResult>(`${getBaseUrl()}${AgentApiUrls.skillInstallDeps(name)}`)
       .then((r) => r.data)
 }
