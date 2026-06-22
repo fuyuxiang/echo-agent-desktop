@@ -41,5 +41,7 @@ declare module 'sherpa-onnx-node' {
     isReady(stream: OnlineStream): boolean
     decode(stream: OnlineStream): void
     getResult(stream: OnlineStream): RecognitionResult
+    isEndpoint(stream: OnlineStream): boolean
+    reset(stream: OnlineStream): void
   }
 }
