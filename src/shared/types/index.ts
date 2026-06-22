@@ -105,3 +105,5 @@ export type {
   AccessScope,
   AgentScopeConfig
 } from './agent'
+
+export type { MeetingDTO, SegmentDTO, SummaryDTO, MeetingSummaryInput } from './meeting'

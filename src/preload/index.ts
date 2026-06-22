@@ -11,6 +11,7 @@ import type {
   OpenDialogOptions,
   SaveDialogOptions
 } from '@shared/types'
+import type { MeetingSummaryInput } from '@shared/types/meeting'
 import { IpcChannels } from '@shared/ipc-channels'
 
 /**
@@ -145,6 +146,24 @@ const api: BridgeApi = {
       ipcRenderer.invoke(IpcChannels.asr.feed, streamId, samples),
     getResult: (streamId: string) => ipcRenderer.invoke(IpcChannels.asr.getResult, streamId),
     stop: (streamId: string) => ipcRenderer.invoke(IpcChannels.asr.stop, streamId)
+  },
+
+  meeting: {
+    start: () => ipcRenderer.invoke(IpcChannels.meeting.start),
+    feed: (meetingId: string, samples: Float32Array) =>
+      ipcRenderer.invoke(IpcChannels.meeting.feed, meetingId, samples),
+    poll: (meetingId: string) => ipcRenderer.invoke(IpcChannels.meeting.poll, meetingId),
+    stop: (meetingId: string) => ipcRenderer.invoke(IpcChannels.meeting.stop, meetingId),
+    diarize: (meetingId: string) => ipcRenderer.invoke(IpcChannels.meeting.diarize, meetingId),
+    setSummary: (meetingId: string, data: MeetingSummaryInput) =>
+      ipcRenderer.invoke(IpcChannels.meeting.setSummary, meetingId, data),
+    list: () => ipcRenderer.invoke(IpcChannels.meeting.list),
+    get: (meetingId: string) => ipcRenderer.invoke(IpcChannels.meeting.get, meetingId),
+    remove: (meetingId: string) => ipcRenderer.invoke(IpcChannels.meeting.remove, meetingId),
+    rename: (meetingId: string, title: string) =>
+      ipcRenderer.invoke(IpcChannels.meeting.rename, meetingId, title),
+    markSource: (meetingId: string, source: string) =>
+      ipcRenderer.invoke(IpcChannels.meeting.markSource, meetingId, source)
   },
 
   platform: {

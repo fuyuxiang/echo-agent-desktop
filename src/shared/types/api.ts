@@ -15,6 +15,7 @@ import type {
   PermissionStatus,
   SaveDialogOptions
 } from './index'
+import type { MeetingDTO, SegmentDTO, SummaryDTO, MeetingSummaryInput } from './meeting'
 
 /**
  * preload 通过 contextBridge 暴露给渲染层的 API 形状(window.api)
@@ -172,6 +173,23 @@ export interface BridgeApi {
     feed: (streamId: string, samples: Float32Array) => Promise<void>
     getResult: (streamId: string) => Promise<string>
     stop: (streamId: string) => Promise<string>
+  }
+
+  /** 会议记录 */
+  meeting: {
+    start(): Promise<{ meetingId: string }>
+    feed(meetingId: string, samples: Float32Array): Promise<void>
+    poll(meetingId: string): Promise<{ segments: SegmentDTO[]; partial: string }>
+    stop(meetingId: string): Promise<{ meetingId: string; status: string }>
+    diarize(meetingId: string): Promise<{ segments: SegmentDTO[] }>
+    setSummary(meetingId: string, data: MeetingSummaryInput): Promise<void>
+    list(): Promise<{ meetings: MeetingDTO[] }>
+    get(
+      meetingId: string
+    ): Promise<{ meeting: MeetingDTO | null; segments: SegmentDTO[]; summary: SummaryDTO | null }>
+    remove(meetingId: string): Promise<void>
+    rename(meetingId: string, title: string): Promise<void>
+    markSource(meetingId: string, source: string): Promise<void>
   }
 
   /** 平台信息(同步常量,preload 注入) */
