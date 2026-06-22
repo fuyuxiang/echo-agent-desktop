@@ -44,8 +44,6 @@
     "sherpa-onnx-node": "^1.13.2"
   },
   "devDependencies": {
-    "@commitlint/cli": "^21.0.2",
-    "@commitlint/config-conventional": "^21.0.2",
     "@eslint/js": "^10.0.1",
     "@hookform/resolvers": "^5.4.0",
     "@testing-library/dom": "^10.4.1",
