@@ -207,5 +207,18 @@
     "toastSuccess": "Success Toast",
     "toastError": "Error Toast",
     "noRecords": "No records yet, type something above"
+  },
+  "skill": {
+    "deps": {
+      "title": "Install skill dependencies",
+      "prompt": "Skill \"{{name}}\" needs these packages in the local Python env:",
+      "source": "These dependencies are declared by the skill itself.",
+      "install": "Install",
+      "cancel": "Cancel",
+      "installing": "Installing…",
+      "installed": "Dependencies installed",
+      "failed": "Install failed: {{detail}}",
+      "checkFailed": "Could not verify skill dependencies; it may not run"
+    }
   }
 }
