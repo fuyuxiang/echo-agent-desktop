@@ -56,6 +56,47 @@ const migrations: Migration[] = [
       `)
       db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_messages_chat ON chat_messages(chat_id, created_at)`)
     }
+  },
+  {
+    version: 3,
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS meetings (
+          id            TEXT PRIMARY KEY,
+          title         TEXT,
+          started_at    INTEGER NOT NULL,
+          ended_at      INTEGER,
+          duration_ms   INTEGER NOT NULL DEFAULT 0,
+          audio_path    TEXT,
+          audio_source  TEXT NOT NULL DEFAULT 'mic',
+          status        TEXT NOT NULL DEFAULT 'recording',
+          created_at    INTEGER NOT NULL
+        )
+      `)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS meeting_segments (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          meeting_id  TEXT NOT NULL,
+          idx         INTEGER NOT NULL,
+          start_ms    INTEGER NOT NULL,
+          end_ms      INTEGER NOT NULL,
+          text        TEXT NOT NULL,
+          speaker     TEXT,
+          created_at  INTEGER NOT NULL
+        )
+      `)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_meeting_segments ON meeting_segments(meeting_id, idx)`)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS meeting_summaries (
+          meeting_id   TEXT PRIMARY KEY,
+          summary      TEXT NOT NULL,
+          key_points   TEXT,
+          action_items TEXT,
+          model        TEXT,
+          created_at   INTEGER NOT NULL
+        )
+      `)
+    }
   }
 ]
 
