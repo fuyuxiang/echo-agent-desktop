@@ -16,6 +16,7 @@ import { db } from '@/utils/db'
 import { logger } from '@/utils/logger'
 import { confirmShareToProject, type MemoryCandidate } from '@/services/memory-router'
 import { ShareMemoryDialog } from '@/components/ShareMemoryDialog'
+import { PptComposer } from '@/components/PptComposer'
 import { toast } from '@/components/Toast'
 import { permission } from '@/utils/permission'
 import styles from './chat.module.scss'
@@ -194,6 +195,20 @@ export default function ChatPage(): React.JSX.Element {
     setInputText(prompt)
     textareaRef.current?.focus()
   }, [])
+
+  // PPT 入口:激活 ppt-author 技能并把结构化 prompt 填入输入框,由用户确认后发送
+  const onGeneratePpt = useCallback(
+    (prompt: string) => {
+      const ppt = skills.find((s) => s.name === 'ppt-author')
+      if (!ppt) {
+        toast.error(t('chat.ppt.needSkill'))
+        return
+      }
+      setActiveSkill('ppt-author')
+      fillPrompt(prompt)
+    },
+    [skills, setActiveSkill, fillPrompt, t]
+  )
 
   useEffect(() => {
     if (skills.length > 0) return
@@ -774,6 +789,7 @@ export default function ChatPage(): React.JSX.Element {
           />
           <div className={styles.composerBar}>
             <div className={styles.composerTools}>
+              <PptComposer disabled={!wsConnected} onGenerate={onGeneratePpt} />
               <div className={styles.skillPicker} ref={skillMenuRef}>
                 <button
                   type="button"

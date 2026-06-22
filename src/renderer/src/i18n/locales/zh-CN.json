@@ -85,7 +85,8 @@
       "extraPlaceholder": "受众、风格、重点(选填)",
       "generate": "生成",
       "cancel": "取消",
-      "needTopic": "请先填写主题"
+      "needTopic": "请先填写主题",
+      "needSkill": "请先在技能库启用 ppt-author 技能"
     },
     "tools": {
       "analysis": {
