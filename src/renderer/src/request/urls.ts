@@ -31,6 +31,8 @@ export const AgentApiUrls = {
   skillToggle: (name: string) => `/api/v1/skills/${name}/toggle`,
   skillImport: '/api/v1/skills/import',
   skillDelete: (name: string) => `/api/v1/skills/${name}`,
+  skillDeps: (name: string) => `/api/v1/skills/${name}/deps`,
+  skillInstallDeps: (name: string) => `/api/v1/skills/${name}/deps/install`,
 
   channels: '/api/v1/channels',
 
