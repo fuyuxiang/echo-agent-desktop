@@ -15,6 +15,27 @@ export function mixToMono(a: Float32Array, b: Float32Array | null): Float32Array
   return out
 }
 
+/**
+ * 自适应增益:麦克风信号常偏弱(peak 仅 0.01~0.1),ASR 在弱信号上识别差。
+ * 按本帧峰值动态放大到目标峰值附近(上限 12 倍),再 clamp 到 [-1,1]。
+ * 纯静音帧(峰值极小)不放大,避免放大底噪。
+ */
+export function applyGain(samples: Float32Array, targetPeak = 0.5, maxGain = 12): Float32Array {
+  let peak = 0
+  for (let i = 0; i < samples.length; i++) {
+    const v = Math.abs(samples[i])
+    if (v > peak) peak = v
+  }
+  if (peak < 0.002) return samples // 静音帧,不放大底噪
+  const gain = Math.min(maxGain, targetPeak / peak)
+  if (gain <= 1) return samples
+  const out = new Float32Array(samples.length)
+  for (let i = 0; i < samples.length; i++) {
+    out[i] = Math.max(-1, Math.min(1, samples[i] * gain))
+  }
+  return out
+}
+
 interface Pipeline {
   micStream: MediaStream
   sysStream: MediaStream | null
@@ -76,7 +97,8 @@ export function useMeetingRecorder() {
     }
     processor.onaudioprocess = (e) => {
       const micData = new Float32Array(e.inputBuffer.getChannelData(0))
-      window.api.meeting.feed(meetingId, mixToMono(micData, lastSys))
+      const mixed = mixToMono(micData, lastSys)
+      window.api.meeting.feed(meetingId, applyGain(mixed))
     }
     micSrc.connect(processor)
     processor.connect(context.destination)

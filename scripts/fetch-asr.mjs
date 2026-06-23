@@ -1,7 +1,7 @@
 // 下载本地语音识别(sherpa-onnx)模型到 resources/models/asr/,
 // 随安装包一起分发。终端用户无需联网下载模型,客户端打开即可用。
 //
-// 模型不入库(约 189MB),由本脚本在构建前从公司内网源拉取。
+// 模型不入库(约 160MB),由本脚本在构建前从公司内网源拉取。
 //
 // 用法:
 //   ASR_MODEL_BASE_URL=https://内网地址/asr node scripts/fetch-asr.mjs
@@ -11,10 +11,10 @@
 // 基地址下应能按 <base>/<文件名> 直接取到下列 4 个文件。
 //
 // 产物 (路径与 src/main/asr/index.ts 约定一致):
-//   resources/models/asr/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/
-//     ├── encoder-epoch-99-avg-1.int8.onnx
-//     ├── decoder-epoch-99-avg-1.int8.onnx
-//     ├── joiner-epoch-99-avg-1.int8.onnx
+//   resources/models/asr/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30/
+//     ├── encoder.int8.onnx
+//     ├── decoder.onnx
+//     ├── joiner.int8.onnx
 //     └── tokens.txt
 
 import fs from 'node:fs'
@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { pipeline } from 'node:stream/promises'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const MODEL_PREFIX = 'sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20'
+const MODEL_PREFIX = 'sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30'
 const MODEL_DIR = path.join(__dirname, '..', 'resources', 'models', 'asr', MODEL_PREFIX)
 
 // 默认从公司内网源拉取; 可用环境变量 ASR_MODEL_BASE_URL 或 --base-url 覆盖
@@ -31,9 +31,9 @@ const DEFAULT_BASE_URL = 'http://123.56.188.16/asr'
 
 // 文件名 -> 预期最小字节数(用于校验下载是否完整,避免半截文件)
 const FILES = {
-  'encoder-epoch-99-avg-1.int8.onnx': 150_000_000,
-  'decoder-epoch-99-avg-1.int8.onnx': 10_000_000,
-  'joiner-epoch-99-avg-1.int8.onnx': 2_000_000,
+  'encoder.int8.onnx': 140_000_000,
+  'decoder.onnx': 3_000_000,
+  'joiner.int8.onnx': 500_000,
   'tokens.txt': 10_000
 }
 
