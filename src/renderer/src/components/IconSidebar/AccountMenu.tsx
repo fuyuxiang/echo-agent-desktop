@@ -87,7 +87,12 @@ export function AccountMenu(): React.JSX.Element {
           </div>
         </div>
       )}
-      <button className={styles.trigger} onClick={() => setOpen((v) => !v)}>
+      <button
+        className={styles.trigger}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
         <span className={styles.avatar}>{initial}</span>
         <div className={styles.identity}>
           <span className={styles.name}>{user.username}</span>
