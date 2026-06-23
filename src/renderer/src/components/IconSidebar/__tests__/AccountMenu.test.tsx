@@ -52,6 +52,13 @@ describe('AccountMenu', () => {
     expect(navigate).toHaveBeenCalledWith('/login')
   })
 
+  it('点设置项导航到 /settings', () => {
+    render(<AccountMenu />)
+    fireEvent.click(screen.getByText('付玉祥'))
+    fireEvent.click(screen.getByText('settings.nav'))
+    expect(navigate).toHaveBeenCalledWith('/settings')
+  })
+
   it('在菜单外 mousedown 关闭菜单', () => {
     render(<AccountMenu />)
     fireEvent.click(screen.getByText('付玉祥'))
