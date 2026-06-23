@@ -50,16 +50,16 @@ function getModelDir(): string {
 
 export function initASR(): void {
   const modelDir = getModelDir()
-  const modelPrefix = 'sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20'
+  const modelPrefix = 'sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30'
   const modelPath = path.join(modelDir, modelPrefix)
 
   try {
     recognizer = new OnlineRecognizer({
       modelConfig: {
         transducer: {
-          encoder: path.join(modelPath, 'encoder-epoch-99-avg-1.int8.onnx'),
-          decoder: path.join(modelPath, 'decoder-epoch-99-avg-1.int8.onnx'),
-          joiner: path.join(modelPath, 'joiner-epoch-99-avg-1.int8.onnx')
+          encoder: path.join(modelPath, 'encoder.int8.onnx'),
+          decoder: path.join(modelPath, 'decoder.onnx'),
+          joiner: path.join(modelPath, 'joiner.int8.onnx')
         },
         tokens: path.join(modelPath, 'tokens.txt'),
         numThreads: 2,
@@ -150,15 +150,16 @@ export function feedMeetingAudio(streamId: string, samples: Float32Array): void 
   stream.acceptWaveform({ sampleRate: 16000, samples })
   state.totalSamples += samples.length
   while (recognizer.isReady(stream)) recognizer.decode(stream)
-  if (recognizer.isEndpoint(stream)) {
-    const text = recognizer.getResult(stream).text
-    if (text) {
-      state.idleConfirmed.push({
-        startMs: samplesToMs(state.segStartSamples),
-        endMs: samplesToMs(state.totalSamples),
-        text
-      })
-    }
+  const curText = recognizer.getResult(stream).text
+  const ep = recognizer.isEndpoint(stream)
+  // 仅当端点触发且已识别出文本时才定稿+重置;空端点(静音)不重置,
+  // 避免把尚未形成文本的声学状态清掉(模型需要更长上下文才出字)
+  if (ep && curText) {
+    state.idleConfirmed.push({
+      startMs: samplesToMs(state.segStartSamples),
+      endMs: samplesToMs(state.totalSamples),
+      text: curText
+    })
     state.segStartSamples = state.totalSamples
     recognizer.reset(stream)
   }
