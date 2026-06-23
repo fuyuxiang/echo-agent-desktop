@@ -1,0 +1,148 @@
+.page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: $spacing-xxl;
+  overflow-y: auto;
+  background: var(--color-bg-canvas);
+
+  h2 {
+    margin: 0 0 $spacing-xl;
+    font-size: $font-size-xl;
+    font-weight: 700;
+    color: var(--color-text-1);
+  }
+}
+
+.empty {
+  padding: 48px 0;
+  text-align: center;
+  color: var(--color-text-3);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-border-muted);
+  border-radius: $radius-md;
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition:
+    border-color $duration-fast,
+    background $duration-fast;
+
+  &:hover {
+    border-color: color-mix(in srgb, var(--color-primary) 34%, var(--color-border));
+    background: var(--color-primary-soft);
+  }
+}
+
+.title {
+  font-weight: 650;
+  color: var(--color-text-1);
+}
+
+.meta {
+  font-size: $font-size-sm;
+  color: var(--color-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.detailHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: $spacing-lg;
+
+  button {
+    min-height: 32px;
+    padding: 4px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: $radius-md;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-1);
+    cursor: pointer;
+  }
+
+  .title {
+    flex: 1;
+    min-width: 0;
+    font-size: $font-size-lg;
+  }
+}
+
+.danger {
+  color: #e5484d !important;
+  border-color: #e5484d !important;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: $spacing-lg;
+
+  button {
+    padding: 6px 16px;
+    border: 1px solid var(--color-border);
+    border-radius: $radius-full;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-2);
+    cursor: pointer;
+  }
+}
+
+.tabActive {
+  background: var(--color-primary-soft) !important;
+  border-color: color-mix(in srgb, var(--color-primary) 34%, var(--color-border)) !important;
+  color: var(--color-text-1) !important;
+  font-weight: 650;
+}
+
+.summary {
+  max-width: 860px;
+  color: var(--color-text-1);
+  line-height: 1.7;
+
+  h4 {
+    margin: $spacing-lg 0 $spacing-sm;
+    color: var(--color-text-1);
+  }
+}
+
+.transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.seg {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.speaker {
+  flex: 0 0 auto;
+  font-weight: 650;
+  color: var(--color-primary);
+}
+
+.time {
+  flex: 0 0 auto;
+  color: var(--color-text-3);
+  font-variant-numeric: tabular-nums;
+}
