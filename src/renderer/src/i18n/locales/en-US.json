@@ -10,6 +10,9 @@
     "login": "Sign In",
     "logout": "Sign Out"
   },
+  "settings": {
+    "nav": "Settings"
+  },
   "scope": {
     "title": "Access scope",
     "restricted": "Restricted",

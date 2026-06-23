@@ -10,6 +10,9 @@
     "login": "登录",
     "logout": "退出登录"
   },
+  "settings": {
+    "nav": "设置"
+  },
   "scope": {
     "title": "访问范围",
     "restricted": "基础访问",
