@@ -88,6 +88,17 @@
       "needTopic": "Please enter a topic first",
       "needSkill": "Please enable the ppt-author skill in the skill library first"
     },
+    "meeting": {
+      "trigger": "Record Meeting",
+      "recording": "Recording",
+      "stop": "Stop",
+      "minimize": "Minimize",
+      "micOnly": "🎙 Microphone",
+      "micSystem": "🎙 Microphone + 🔊 System audio",
+      "processing": "Generating summary…",
+      "confirmStop": "End the meeting and generate a summary?",
+      "partialHint": "Listening…"
+    },
     "tools": {
       "analysis": {
         "name": "Data Analysis",

@@ -88,6 +88,17 @@
       "needTopic": "请先填写主题",
       "needSkill": "请先在技能库启用 ppt-author 技能"
     },
+    "meeting": {
+      "trigger": "记录会议",
+      "recording": "记录中",
+      "stop": "停止",
+      "minimize": "最小化",
+      "micOnly": "🎙 麦克风",
+      "micSystem": "🎙 麦克风 + 🔊 系统声音",
+      "processing": "正在生成纪要…",
+      "confirmStop": "结束会议并生成纪要?",
+      "partialHint": "正在聆听…"
+    },
     "tools": {
       "analysis": {
         "name": "数据分析",
