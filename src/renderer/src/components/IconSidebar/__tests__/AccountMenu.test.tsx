@@ -51,4 +51,20 @@ describe('AccountMenu', () => {
     fireEvent.click(screen.getByText('common.login'))
     expect(navigate).toHaveBeenCalledWith('/login')
   })
+
+  it('在菜单外 mousedown 关闭菜单', () => {
+    render(<AccountMenu />)
+    fireEvent.click(screen.getByText('付玉祥'))
+    expect(screen.getByText('common.logout')).toBeTruthy()
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByText('common.logout')).toBeNull()
+  })
+
+  it('按 Escape 关闭菜单', () => {
+    render(<AccountMenu />)
+    fireEvent.click(screen.getByText('付玉祥'))
+    expect(screen.getByText('common.logout')).toBeTruthy()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByText('common.logout')).toBeNull()
+  })
 })
