@@ -4,6 +4,7 @@ import { ROUTES } from '@/constants'
 import { SessionList } from '@/components/SessionList'
 import { useSessionActions } from '@/hooks/useSessionManager'
 import { useUserStore } from '@/stores/userStore'
+import { AccountMenu } from './AccountMenu'
 import styles from './sidebar.module.scss'
 import clsx from 'clsx'
 
@@ -18,25 +19,21 @@ const navItems: NavItem[] = [
   { icon: <MeetingNavIcon />, route: ROUTES.meeting, label: '会议' }
 ]
 
-const bottomItems: NavItem[] = [{ icon: <SettingsIcon />, route: ROUTES.settings, label: '设置' }]
-
 export function IconSidebar(): React.JSX.Element {
   const { t } = useTranslation()
   const location = useLocation()
   const navigate = useNavigate()
   const { handleNewSession } = useSessionActions()
   const role = useUserStore((s) => s.user?.role)
-  const isAuthed = useUserStore((s) => s.isAuthed)
-  const signOut = useUserStore((s) => s.signOut)
 
   // 记忆区与技能库已并入设置页,侧边栏只保留我的文档入口
   const mainNav: NavItem[] = navItems
 
-  // 管理入口仅对管理员可见
+  // 管理入口仅对管理员可见;设置已并入账户菜单
   const bottomNav: NavItem[] =
     role === 'admin'
-      ? [{ icon: <AdminIcon />, route: ROUTES.admin, label: t('admin.nav') }, ...bottomItems]
-      : bottomItems
+      ? [{ icon: <AdminIcon />, route: ROUTES.admin, label: t('admin.nav') }]
+      : []
 
   const renderItem = (item: NavItem): React.JSX.Element => (
     <button
@@ -72,21 +69,7 @@ export function IconSidebar(): React.JSX.Element {
       </div>
       <div className={styles.bottom}>
         {bottomNav.map(renderItem)}
-        {isAuthed ? (
-          <button className={styles.item} onClick={() => signOut()} title={t('common.logout')}>
-            <LogoutIcon />
-            <span className={styles.itemLabel}>{t('common.logout')}</span>
-          </button>
-        ) : (
-          <button
-            className={styles.item}
-            onClick={() => navigate(ROUTES.login)}
-            title={t('common.login')}
-          >
-            <LoginIcon />
-            <span className={styles.itemLabel}>{t('common.login')}</span>
-          </button>
-        )}
+        <AccountMenu />
       </div>
     </nav>
   )
@@ -162,60 +145,6 @@ function AdminIcon(): React.JSX.Element {
       <circle cx="9" cy="7" r="4" />
       <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
       <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-    </svg>
-  )
-}
-
-function SettingsIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-    >
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  )
-}
-
-function LogoutIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-      <path d="M16 17l5-5-5-5" />
-      <path d="M21 12H9" />
-    </svg>
-  )
-}
-
-function LoginIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
-      <path d="M10 17l5-5-5-5" />
-      <path d="M15 12H3" />
     </svg>
   )
 }
