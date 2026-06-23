@@ -17,6 +17,9 @@ import { logger } from '@/utils/logger'
 import { confirmShareToProject, type MemoryCandidate } from '@/services/memory-router'
 import { ShareMemoryDialog } from '@/components/ShareMemoryDialog'
 import { PptComposer } from '@/components/PptComposer'
+import { MeetingButton } from '@/components/MeetingButton'
+import { LivePanel } from '@/pages/Meeting/LivePanel'
+import { useMeetingRecorder } from '@/hooks/useMeetingRecorder'
 import { ScopeSwitcher } from '@/components/ScopeSwitcher'
 import { toast } from '@/components/Toast'
 import { permission } from '@/utils/permission'
@@ -155,6 +158,7 @@ export default function ChatPage(): React.JSX.Element {
   const setSkills = useSkillStore((s) => s.setSkills)
   const activeSkill = useSkillStore((s) => s.activeSkill)
   const setActiveSkill = useSkillStore((s) => s.setActiveSkill)
+  const meetingRec = useMeetingRecorder()
 
   const [inputText, setInputText] = useState('')
   const [uploading, setUploading] = useState(false)
@@ -872,6 +876,7 @@ export default function ChatPage(): React.JSX.Element {
                   </div>
                 )}
               </div>
+              <MeetingButton disabled={!wsConnected} onStart={() => void meetingRec.start()} />
               <ScopeSwitcher />
             </div>
             <div className={styles.composerActions}>
@@ -955,6 +960,7 @@ export default function ChatPage(): React.JSX.Element {
         </div>
       </div>
       {candidate && <ShareMemoryDialog candidate={candidate} onDecide={handleMemoryDecide} />}
+      <LivePanel />
     </div>
   )
 }
