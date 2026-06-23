@@ -27,8 +27,17 @@ export function LivePanel(): React.JSX.Element | null {
   const onStop = async (): Promise<void> => {
     if (!window.confirm(t('chat.meeting.confirmStop'))) return
     const id = rec.activeMeetingId
-    await rec.stop()
-    if (id) navigate(`/meeting/${id}`)
+    await rec.stop() // 内部已 stop + diarize
+    if (!id) return
+    navigate(`/meeting/${id}`)
+    // 后台生成纪要(失败静默,详情页可手动重试)
+    try {
+      const { segments } = await window.api.meeting.get(id)
+      const { generateSummary } = await import('@/services/meeting/summarize')
+      await generateSummary(id, segments)
+    } catch {
+      /* 详情页显示「暂无纪要」,留作手动重试 */
+    }
   }
 
   return (
