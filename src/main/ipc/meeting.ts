@@ -2,6 +2,7 @@ import { ipcMain, app } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import { randomUUID } from 'crypto'
+import { log } from '../logger'
 import { IpcChannels } from '@shared/ipc-channels'
 import type { MeetingSummaryInput } from '@shared/types/meeting'
 import {
@@ -13,6 +14,7 @@ import {
   finishMeeting,
   updateMeetingStatus,
   updateMeetingAudioSource,
+  updateSegmentSpeaker,
   upsertSummary,
   getSummary,
   removeMeeting,
@@ -85,7 +87,24 @@ export function registerMeetingHandlers(): void {
   })
 
   // diarization 在 Task 8 实现;此处留桩:不改 speaker,直接标 done
-  ipcMain.handle(IpcChannels.meeting.diarize, (_e, meetingId: string) => {
+  // 停止后对完整录音离线跑说话人分离,回填每段 speaker。
+  // 分离失败不阻塞:仍置 done,speaker 留空,转写与纪要不受影响。
+  ipcMain.handle(IpcChannels.meeting.diarize, async (_e, meetingId: string) => {
+    const meeting = getMeeting(meetingId)
+    if (!meeting?.audioPath || !fs.existsSync(meeting.audioPath)) {
+      updateMeetingStatus(meetingId, 'done')
+      return { segments: getSegments(meetingId) }
+    }
+    try {
+      const { runDiarization, alignSpeaker } = await import('../meeting/diarization')
+      const diar = await runDiarization(meeting.audioPath)
+      for (const seg of getSegments(meetingId)) {
+        const speaker = alignSpeaker(seg.startMs, seg.endMs, diar)
+        if (speaker) updateSegmentSpeaker(seg.id, speaker)
+      }
+    } catch (err) {
+      log.error('[meeting] 说话人分离失败:', err)
+    }
     updateMeetingStatus(meetingId, 'done')
     return { segments: getSegments(meetingId) }
   })

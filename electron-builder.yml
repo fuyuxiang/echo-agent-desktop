@@ -24,6 +24,8 @@ extraResources:
     to: trayTemplate.png
   - from: resources/models/asr
     to: models/asr
+  - from: resources/models/diarization
+    to: models/diarization
 
 # 原生模块(better-sqlite3)自动按 Electron ABI rebuild
 npmRebuild: true
