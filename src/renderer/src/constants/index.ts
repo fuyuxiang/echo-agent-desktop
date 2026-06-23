@@ -26,7 +26,9 @@ export const ROUTES = {
   /** Memory 页 */
   memory: '/memory',
   /** 管理页(仅管理员) */
-  admin: '/admin'
+  admin: '/admin',
+  /** 会议记录 */
+  meeting: '/meeting'
   // plop-route-constant
 } as const
 
