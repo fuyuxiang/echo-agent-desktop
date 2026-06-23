@@ -29,6 +29,26 @@ export default function MeetingDetail(): React.JSX.Element {
     navigate('/meeting')
   }
 
+  const onRegenSummary = async (): Promise<void> => {
+    try {
+      const { segments } = await window.api.meeting.get(id)
+      const { generateSummary } = await import('@/services/meeting/summarize')
+      await generateSummary(id, segments)
+      await load()
+    } catch {
+      /* 重新生成失败不崩页,用户可再次点击重试 */
+    }
+  }
+
+  const onRetryDiarize = async (): Promise<void> => {
+    try {
+      await window.api.meeting.diarize(id)
+      await load()
+    } catch {
+      /* 说话人分离失败不崩页,用户可再次点击重试 */
+    }
+  }
+
   if (!meeting) return <div className={styles.page}>加载中…</div>
   return (
     <div className={styles.page}>
@@ -81,11 +101,19 @@ export default function MeetingDetail(): React.JSX.Element {
           </div>
         ) : (
           <div className={styles.empty}>
-            {meeting.status === 'processing' ? '正在生成纪要…' : '暂无纪要'}
+            {meeting.status === 'processing' ? (
+              '正在生成纪要…'
+            ) : (
+              <>
+                <div>暂无纪要</div>
+                <button onClick={onRegenSummary}>重新生成纪要</button>
+              </>
+            )}
           </div>
         )
       ) : (
         <div className={styles.transcript}>
+          <button onClick={onRetryDiarize}>重试说话人分离</button>
           {segments.map((s) => (
             <div key={s.id} className={styles.seg}>
               {s.speaker && <span className={styles.speaker}>{s.speaker}</span>}

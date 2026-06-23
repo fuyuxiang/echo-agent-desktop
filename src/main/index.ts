@@ -7,6 +7,8 @@ import { setupShortcuts } from './shortcut'
 import { setupUpdater } from './updater'
 import { setupProtocol, extractDeepLinkFromArgv, handleDeepLink } from './protocol'
 import { setupDatabase, closeDatabase } from './db'
+import { findRecordingMeetings, updateMeetingStatus } from './db/dao/meeting'
+import { reapOrphans } from './meeting/orphan'
 import { registerAllIpcHandlers } from './ipc'
 import { initASR } from './asr'
 import { startAgent, stopAgent } from './agent-process/manager'
@@ -44,6 +46,11 @@ if (!gotTheLock) {
     })
 
     setupDatabase()
+    // 崩溃恢复:上次未正常结束(仍处 recording)的会议标记为 failed,
+    // 已转写分段与录音文件保留,仅记录其未正常结束。
+    for (const id of reapOrphans(findRecordingMeetings())) {
+      updateMeetingStatus(id, 'failed')
+    }
     registerAllIpcHandlers()
     initASR()
     createMainWindow()
