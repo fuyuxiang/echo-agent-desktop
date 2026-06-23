@@ -14,7 +14,8 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { icon: <KnowledgeIcon />, route: ROUTES.knowledge, label: '我的文档' }
+  { icon: <KnowledgeIcon />, route: ROUTES.knowledge, label: '我的文档' },
+  { icon: <MeetingNavIcon />, route: ROUTES.meeting, label: '会议' }
 ]
 
 const bottomItems: NavItem[] = [{ icon: <SettingsIcon />, route: ROUTES.settings, label: '设置' }]
@@ -121,6 +122,26 @@ function KnowledgeIcon(): React.JSX.Element {
       <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
       <path d="M8 7h8" />
       <path d="M8 11h6" />
+    </svg>
+  )
+}
+
+function MeetingNavIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <path d="M12 19v4" />
+      <path d="M8 23h8" />
     </svg>
   )
 }
