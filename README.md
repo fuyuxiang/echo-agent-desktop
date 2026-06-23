@@ -50,10 +50,6 @@ src/
     └── layouts/    布局 + 自定义标题栏
 ```
 
-## 开发规范
-
-页面开发请阅读 [docs/PAGE_GUIDE.md](docs/PAGE_GUIDE.md)(新建页面三步走 + 基础能力索引 + 禁止事项)。
-
 ## 说明
 
 - Electron 暂固定在 41.x:better-sqlite3 与 Electron ≥42 的 V8 API 存在已知编译不兼容([WiseLibs/better-sqlite3#1474](https://github.com/WiseLibs/better-sqlite3/issues/1474)),官方修复发版后再升级
