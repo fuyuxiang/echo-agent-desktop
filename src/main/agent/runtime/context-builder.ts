@@ -3,6 +3,7 @@ import type { ChatMessage } from '../providers'
 import type { MessageRow } from '../../db/dao/session'
 import type { MemoryGateway } from '../tools/memory-facade'
 import type { SkillGateway } from '../tools/skill-facade'
+import type { MemoryHit } from '../tools/memory-facade'
 
 const DEFAULT_MAX_HISTORY_TURNS = 12
 
@@ -13,6 +14,8 @@ export interface BuildContextInput {
   userText: string
   memory: MemoryGateway
   skills: SkillGateway
+  /** 已召回的 hits(由 AgentRuntime 提前调用,避免重复) */
+  recalledHits?: MemoryHit[]
   maxHistoryTurns?: number
 }
 
@@ -37,7 +40,7 @@ function sliceByTurns(history: MessageRow[], maxTurns: number): MessageRow[] {
 
 export async function buildContext(input: BuildContextInput): Promise<ChatMessage[]> {
   const maxTurns = input.maxHistoryTurns ?? DEFAULT_MAX_HISTORY_TURNS
-  const hits = await input.memory.recall(input.userText, input.chatId)
+  const hits = input.recalledHits ?? (await input.memory.recall(input.userText, input.chatId))
   const memoryBlock = hits.length ? `\n\n[相关记忆]\n${hits.map((h) => h.text).join('\n')}` : ''
   const skillBlock = input.skills.activePromptFragments(input.chatId).join('\n')
   const systemContent = [input.systemPrompt, skillBlock].filter(Boolean).join('\n\n') + memoryBlock
