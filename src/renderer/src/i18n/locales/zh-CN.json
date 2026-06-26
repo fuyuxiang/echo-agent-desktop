@@ -16,7 +16,7 @@
   "scope": {
     "title": "访问范围",
     "restricted": "基础访问",
-    "restrictedDesc": "仅在指定文件夹内工作,禁用终端命令",
+    "restrictedDesc": "仅在指定文件夹内工作,终端命令需逐次授权",
     "full": "完全访问",
     "fullDesc": "可访问整台电脑,允许终端命令",
     "fullWarning": "agent 可读写你的文件并执行命令",
@@ -234,5 +234,13 @@
       "failed": "依赖安装失败:{{detail}}",
       "checkFailed": "无法确认技能依赖,该技能可能无法运行"
     }
+  },
+  "permission": {
+    "title": "请求执行命令",
+    "prompt": "受限访问档下,agent 请求在工作目录执行以下命令。请确认是否允许:",
+    "allowOnce": "允许一次",
+    "allowSession": "本次会话允许 {{program}}",
+    "allowSessionHint": "本次会话内不再询问 {{program}} 命令",
+    "deny": "拒绝"
   }
 }

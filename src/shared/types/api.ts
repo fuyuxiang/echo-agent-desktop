@@ -7,6 +7,8 @@ import type {
   MediaPermissionType,
   NotifyOptions,
   OpenDialogOptions,
+  PermissionRequest,
+  PermissionResponse,
   PermissionStatus,
   SaveDialogOptions
 } from './index'
@@ -192,6 +194,12 @@ export interface BridgeApi {
       apiKeyStoreKey: string
     }): Promise<{ success: boolean }>
     onEvent(handler: (ev: Record<string, unknown>) => void): () => void
+  }
+
+  /** Agent 工具权限审批(受限档逐次授权) */
+  agentPermission: {
+    onRequest(handler: (req: PermissionRequest) => void): () => void
+    respond(res: PermissionResponse): Promise<{ ok: boolean }>
   }
 
   /** 认知记忆 IPC(P3) */
