@@ -37,11 +37,9 @@ export function ModelSection(): React.JSX.Element {
   const [baseUrl, setBaseUrl] = useState('')
   const [modelName, setModelName] = useState('')
 
-  // 加载服务端配置 + 本地覆盖
+  // 加载服务端配置 + 本地覆盖(loading 初始即 true,无需在此同步置位)
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setLoadError(false)
     Promise.all([
       fetchModelConfig(),
       storage.get<LocalModelConfig>(LOCAL_CONFIG_KEY)

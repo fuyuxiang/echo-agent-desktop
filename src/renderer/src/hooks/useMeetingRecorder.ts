@@ -68,7 +68,7 @@ export function useMeetingRecorder() {
       return
     }
 
-    let sysStream: MediaStream | null = null
+    let sysStream: MediaStream | null
     try {
       sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true })
       sysStream.getVideoTracks().forEach((t) => t.stop())
