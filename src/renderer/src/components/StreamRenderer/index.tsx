@@ -34,10 +34,7 @@ function CodeBlock({
 
   useEffect(() => {
     // 流式进行中不高亮(内容还在变),完成后再高亮一次
-    if (streaming) {
-      setHtml(null)
-      return
-    }
+    if (streaming) return
     let alive = true
     highlightCode(code, lang, getCurrentTheme()).then((result) => {
       if (alive) setHtml(result)
@@ -64,7 +61,7 @@ function CodeBlock({
           {t('chat.copy')}
         </button>
       </div>
-      {html ? (
+      {html && !streaming ? (
         <div className={styles.shiki} dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
         <pre className={styles.codeBlock}>

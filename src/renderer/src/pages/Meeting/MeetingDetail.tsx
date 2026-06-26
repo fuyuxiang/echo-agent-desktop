@@ -20,6 +20,8 @@ export default function MeetingDetail(): React.JSX.Element {
     setSummary(r.summary)
   }, [id])
   useEffect(() => {
+    // load 内的 setState 均在 await 之后,非同步级联;规则无法越过 async 边界,此处显式豁免
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load()
   }, [load])
 
