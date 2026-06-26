@@ -3,6 +3,7 @@ import { RouterProvider } from 'react-router-dom'
 import { ErrorBoundary } from 'react-error-boundary'
 import { router } from '@/router'
 import { ToastContainer } from '@/components/Toast'
+import { PermissionDialogContainer } from '@/components/PermissionDialog'
 import { useTheme } from '@/hooks'
 import { useAppStore } from '@/stores/appStore'
 import { useAgentScopeStore } from '@/stores/agentScopeStore'
@@ -47,6 +48,7 @@ export default function App(): React.JSX.Element {
     >
       <RouterProvider router={router} />
       <ToastContainer />
+      <PermissionDialogContainer />
     </ErrorBoundary>
   )
 }

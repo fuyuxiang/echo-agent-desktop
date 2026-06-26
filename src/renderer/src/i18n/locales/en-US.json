@@ -16,7 +16,7 @@
   "scope": {
     "title": "Access scope",
     "restricted": "Restricted",
-    "restrictedDesc": "Work only inside the chosen folder; terminal disabled",
+    "restrictedDesc": "Works only within the chosen folder; terminal commands require per-use approval",
     "full": "Full access",
     "fullDesc": "Access the whole computer; terminal allowed",
     "fullWarning": "The agent can read/write your files and run commands",
@@ -234,5 +234,13 @@
       "failed": "Install failed: {{detail}}",
       "checkFailed": "Could not verify skill dependencies; it may not run"
     }
+  },
+  "permission": {
+    "title": "Command execution requested",
+    "prompt": "Under restricted access, the agent wants to run the following command in the workspace. Allow it?",
+    "allowOnce": "Allow once",
+    "allowSession": "Allow {{program}} this session",
+    "allowSessionHint": "Won't ask again for {{program}} this session",
+    "deny": "Deny"
   }
 }
