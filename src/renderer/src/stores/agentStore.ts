@@ -2,7 +2,6 @@ import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { electronStoreStorage } from './persist-storage'
-import type { AgentProcessStatus } from '@shared/types'
 
 interface ToolCallEvent {
   id: string
@@ -15,74 +14,61 @@ interface ToolCallEvent {
 }
 
 interface AgentState {
-  processStatus: AgentProcessStatus
+  /** 原生 runtime 是否就绪(配置已注入主进程) */
+  ready: boolean
+  currentSessionKey: string
+  toolCalls: ToolCallEvent[]
+  retrievedMemories: Array<{ id: string; content: string; tier: string }>
+  citations: Array<{ path: string; chunk: string; score: number }>
+
+  /** 兼容旧 Python 时代字段(T11/P6 阶段彻底删除,只读 default 值,不持久化) */
+  processStatus: unknown
   connectionMode: 'local' | 'remote'
   baseUrl: string
   wsUrl: string
   remoteUrl: string
   remoteToken: string
-  currentSessionKey: string
   wsConnected: boolean
-  toolCalls: ToolCallEvent[]
-  retrievedMemories: Array<{ id: string; content: string; tier: string }>
-  citations: Array<{ path: string; chunk: string; score: number }>
 
-  setProcessStatus: (status: AgentProcessStatus) => void
-  setConnectionMode: (mode: 'local' | 'remote') => void
-  setLocalPort: (port: number) => void
-  setRemoteConfig: (url: string, token: string) => void
+  setReady: (ready: boolean) => void
   setCurrentSessionKey: (key: string) => void
-  setWsConnected: (connected: boolean) => void
   addToolCall: (event: ToolCallEvent) => void
   setRetrievedMemories: (entries: AgentState['retrievedMemories']) => void
   setCitations: (citations: AgentState['citations']) => void
   clearExecutionEvents: () => void
+
+  /** 兼容旧 Python 时代调用,T11/P6 阶段彻底删除(只 stub 不报错) */
+  setProcessStatus: (status: unknown) => void
+  setConnectionMode: (mode: 'local' | 'remote') => void
+  setLocalPort: (port: number) => void
+  setRemoteConfig: (url: string, token: string) => void
+  setWsConnected: (connected: boolean) => void
 }
 
 export const useAgentStore = create<AgentState>()(
   persist(
     immer((set) => ({
-      processStatus: 'stopped',
-      connectionMode: 'local',
-      baseUrl: 'http://127.0.0.1:9000',
-      wsUrl: 'ws://127.0.0.1:9000/ws',
-      remoteUrl: '',
-      remoteToken: '',
+      ready: false,
       currentSessionKey: '',
-      wsConnected: false,
       toolCalls: [],
       retrievedMemories: [],
       citations: [],
+      // 兼容旧字段(只读 default)
+      processStatus: 'stopped',
+      connectionMode: 'local',
+      baseUrl: '',
+      wsUrl: '',
+      remoteUrl: '',
+      remoteToken: '',
+      wsConnected: false,
 
-      setProcessStatus: (status) =>
+      setReady: (ready) =>
         set((s) => {
-          s.processStatus = status
-        }),
-      setConnectionMode: (mode) =>
-        set((s) => {
-          s.connectionMode = mode
-        }),
-      setLocalPort: (port) =>
-        set((s) => {
-          s.baseUrl = `http://127.0.0.1:${port}`
-          s.wsUrl = `ws://127.0.0.1:${port}/ws`
-        }),
-      setRemoteConfig: (url, token) =>
-        set((s) => {
-          s.remoteUrl = url
-          s.remoteToken = token
-          if (s.connectionMode === 'remote') {
-            s.baseUrl = url
-            s.wsUrl = url.replace(/^http/, 'ws') + '/ws'
-          }
+          s.ready = ready
         }),
       setCurrentSessionKey: (key) =>
         set((s) => {
           s.currentSessionKey = key
-        }),
-      setWsConnected: (connected) =>
-        set((s) => {
-          s.wsConnected = connected
         }),
       addToolCall: (event) =>
         set((s) => {
@@ -101,38 +87,29 @@ export const useAgentStore = create<AgentState>()(
           s.toolCalls = []
           s.retrievedMemories = []
           s.citations = []
-        })
+        }),
+
+      // 兼容旧调用,无实际操作。T11 删 ConnectionSection / P6 删 Onboarding 后整体移除
+      setProcessStatus: () => {},
+      setConnectionMode: () => {},
+      setLocalPort: () => {},
+      setRemoteConfig: () => {},
+      setWsConnected: () => {}
     })),
     {
       name: 'agent',
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => electronStoreStorage),
       partialize: (s) => ({
-        connectionMode: s.connectionMode,
-        remoteUrl: s.remoteUrl,
-        remoteToken: s.remoteToken,
         currentSessionKey: s.currentSessionKey
       }),
-      // v0 -> v1: 清理早期测试残留的远程地址/Token，默认回落纯本地模式。
-      // 远程模式功能保留，用户可在设置里重新填写。
+      // v1 -> v2: 删除远程连接字段,只保留 currentSessionKey
       migrate: (persisted, version) => {
-        const state = (persisted ?? {}) as Partial<AgentState>
-        if (version < 1) {
-          return {
-            ...state,
-            connectionMode: 'local' as const,
-            remoteUrl: '',
-            remoteToken: ''
-          }
+        const state = (persisted ?? {}) as Record<string, unknown>
+        if (version < 2) {
+          return { currentSessionKey: (state.currentSessionKey as string) ?? '' }
         }
         return state
-      },
-      onRehydrateStorage: () => (state) => {
-        if (!state) return
-        if (state.connectionMode === 'remote' && state.remoteUrl) {
-          state.baseUrl = state.remoteUrl
-          state.wsUrl = state.remoteUrl.replace(/^http/, 'ws') + '/ws'
-        }
       }
     }
   )
