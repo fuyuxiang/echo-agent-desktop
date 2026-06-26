@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, expectTypeOf } from 'vitest'
 import type { RuntimeEvent } from '../events'
 
 describe('RuntimeEvent', () => {
@@ -12,5 +12,14 @@ describe('RuntimeEvent', () => {
     ]
     const finals = evs.filter((e) => e.type === 'final')
     expect(finals).toHaveLength(1)
+  })
+  it('支持 memory_retrieved progress 变体', () => {
+    const e: RuntimeEvent = {
+      type: 'progress',
+      chatId: 'c1',
+      progressType: 'memory_retrieved',
+      hits: [{ id: '1', text: '用户喜欢咖啡', score: 0.9 }]
+    }
+    expectTypeOf(e).toMatchTypeOf<RuntimeEvent>()
   })
 })

@@ -12,6 +12,12 @@ export type RuntimeEvent =
       resultText?: string
       ok?: boolean
     }
+  | {
+      type: 'progress'
+      chatId: string
+      progressType: 'memory_retrieved'
+      hits: Array<{ id: string; text: string; score: number }>
+    }
   | { type: 'error'; chatId: string; message: string }
   | { type: 'done'; chatId: string }
 
