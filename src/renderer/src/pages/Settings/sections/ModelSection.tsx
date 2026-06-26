@@ -92,14 +92,12 @@ export function ModelSection(): React.JSX.Element {
         }
 
         const effective = resolveEffectiveModelConfig(serverConfig, local)
-        await window.api.agent.updateConfig({
-          defaultModel: effective.modelName ?? '',
-          providers: [
-            {
-              name: provider,
-              ...(effective.baseUrl ? { apiBase: effective.baseUrl } : {})
-            }
-          ]
+        // P6: 不再写 agent.yaml,改调 agent:chat:init 触发原生 runtime 重新装配
+        await window.api.agentChat.init({
+          providerId: provider,
+          model: effective.modelName ?? '',
+          baseUrl: effective.baseUrl ?? '',
+          apiKeyStoreKey: KEY_MAP[provider]
         })
       }
 

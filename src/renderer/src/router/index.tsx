@@ -20,7 +20,8 @@ const KnowledgePage = lazy(() => import('@/pages/Knowledge'))
 const SkillsPage = lazy(() => import('@/pages/Skills'))
 const ChannelsPage = lazy(() => import('@/pages/Channels'))
 const SettingsPage = lazy(() => import('@/pages/Settings'))
-const OnboardingPage = lazy(() => import('@/pages/Onboarding'))
+// P6: Onboarding 页面已删(Python 环境引导下线)
+// const OnboardingPage = lazy(() => import('@/pages/Onboarding'))
 const LoginPage = lazy(() => import('@/pages/Login'))
 const ExamplePage = lazy(() => import('@/pages/Example'))
 const MemoryPage = lazy(() => import('@/pages/Memory'))
@@ -91,9 +92,5 @@ export const router = createHashRouter([
   {
     path: ROUTES.login,
     element: lazyLoad(<LoginPage />)
-  },
-  {
-    path: ROUTES.onboarding,
-    element: lazyLoad(<OnboardingPage />)
   }
 ])

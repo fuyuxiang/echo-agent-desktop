@@ -9,11 +9,9 @@ import {
 } from '@/services/ollama'
 import {
   LOCAL_OLLAMA_CONFIG_KEY,
-  OLLAMA_PLACEHOLDER_API_KEY,
   toOllamaOpenAIBase,
   type LocalOllamaConfig
 } from '@/services/model-config'
-import { useAgentStore } from '@/stores/agentStore'
 import { logger } from '@/utils/logger'
 
 const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download'
@@ -97,24 +95,15 @@ export function LocalModelSection(): React.JSX.Element {
     try {
       const cfg: LocalOllamaConfig = { enabled: true, baseUrl, modelName: selected }
       await storage.set(LOCAL_OLLAMA_CONFIG_KEY, cfg)
-      await window.api.agent.updateConfig({
-        defaultModel: selected,
-        providers: [
-          {
-            name: 'openai',
-            apiBase: toOllamaOpenAIBase(baseUrl),
-            apiKey: OLLAMA_PLACEHOLDER_API_KEY
-          }
-        ]
+      // P6: 启用本地模型时直接装配原生 runtime(无 Python agent 拉起)
+      await window.api.agentChat.init({
+        providerId: 'openai',
+        model: selected,
+        baseUrl: toOllamaOpenAIBase(baseUrl),
+        apiKeyStoreKey: 'ollama-api-key'
       })
-      const result = await window.api.agent.restart()
-      if (result.success && result.port) {
-        useAgentStore.getState().setLocalPort(result.port)
-        setEnabled(true)
-        setHint(t('localModel.enabledOk'))
-      } else {
-        setHint(result.error ?? t('localModel.restartFailed'))
-      }
+      setEnabled(true)
+      setHint(t('localModel.enabledOk'))
     } catch (e) {
       setHint(e instanceof Error ? e.message : String(e))
     }
