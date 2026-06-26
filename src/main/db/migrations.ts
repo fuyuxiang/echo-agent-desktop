@@ -97,6 +97,17 @@ const migrations: Migration[] = [
         )
       `)
     }
+  },
+  {
+    version: 4,
+    up: (db) => {
+      // chat_messages 增加工具轨迹三列(承载 assistant.toolCalls / tool.toolCallId+toolName)
+      db.exec(`
+        ALTER TABLE chat_messages ADD COLUMN tool_calls TEXT;
+        ALTER TABLE chat_messages ADD COLUMN tool_call_id TEXT;
+        ALTER TABLE chat_messages ADD COLUMN tool_name TEXT;
+      `)
+    }
   }
 ]
 
