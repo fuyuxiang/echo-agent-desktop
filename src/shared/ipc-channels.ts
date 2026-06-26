@@ -118,5 +118,15 @@ export const IpcChannels = {
     remove: 'meeting:remove',
     rename: 'meeting:rename',
     markSource: 'meeting:mark-source'
+  },
+
+  /** 认知记忆系统(P3) */
+  agentMemory: {
+    list: 'agent:memory:list',
+    search: 'agent:memory:search',
+    get: 'agent:memory:get',
+    update: 'agent:memory:update',
+    delete: 'agent:memory:delete',
+    stats: 'agent:memory:stats'
   }
 } as const
