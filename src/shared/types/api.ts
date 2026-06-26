@@ -128,6 +128,15 @@ export interface BridgeApi {
     showOpenDialog: (options: OpenDialogOptions) => Promise<string[]>
     /** 打开文件保存对话框,返回保存路径(取消返回 null) */
     showSaveDialog: (options: SaveDialogOptions) => Promise<string | null>
+    /** 通用 HTTP 代理(绕过 CORS,P6 从 agent 段迁入) */
+    httpProxy: (opts: {
+      url: string
+      method?: string
+      headers?: Record<string, string>
+      body?: string
+      /** 单次请求超时(ms),默认 30000 */
+      timeoutMs?: number
+    }) => Promise<{ ok: boolean; status: number; body: string }>
   }
 
   /** 日志(渲染层日志汇入主进程统一落盘) */
