@@ -6,7 +6,7 @@ import { FileDropZone } from '@/components/FileDropZone'
 import { useChatStore } from '@/stores/chatStore'
 import { useAgentStore } from '@/stores/agentStore'
 import { useSkillStore } from '@/stores/skillStore'
-import { agentWs } from '@/services/agent/ws'
+import { agentWs } from '@/services/agent/runtime-client'
 import { attachmentsAPI } from '@/services/agent/attachments'
 import { skillsAPI } from '@/services/agent/skills'
 import skillDescriptionsZh from '@/services/agent/skill-descriptions'
@@ -149,10 +149,8 @@ export default function ChatPage(): React.JSX.Element {
   const removeLastAssistant = useChatStore((s) => s.removeLastAssistant)
   const isGenerating = useChatStore((s) => s.isGenerating)
 
-  const wsConnected = useAgentStore((s) => s.wsConnected)
-  const baseUrl = useAgentStore((s) => s.baseUrl)
+  const wsConnected = useAgentStore((s) => s.ready)
   const setWsConnected = useAgentStore((s) => s.setWsConnected)
-  const setCurrentSessionKey = useAgentStore((s) => s.setCurrentSessionKey)
   const clearExecutionEvents = useAgentStore((s) => s.clearExecutionEvents)
   const skills = useSkillStore((s) => s.skills)
   const setSkills = useSkillStore((s) => s.setSkills)
@@ -224,15 +222,11 @@ export default function ChatPage(): React.JSX.Element {
   }, [skills.length, setSkills])
 
   useEffect(() => {
-    if (!baseUrl) return
-
-    const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws'
-    const { remoteToken } = useAgentStore.getState()
     const sessionKey = useChatStore.getState().activeChatId || 'default'
 
-    const onAuthOk = (payload: Record<string, unknown>): void => {
+    const onAuthOk = (): void => {
+      // IPC 模式无 auth_ok,保留为 no-op 兼容旧事件名订阅
       setWsConnected(true)
-      if (payload.session_key) setCurrentSessionKey(payload.session_key as string)
       const primer = useChatStore.getState().pendingPrimer
       if (primer) {
         // primer 是历史回顾文本,仅用于重建服务端上下文:发送前置抑制标志,
@@ -385,8 +379,8 @@ export default function ChatPage(): React.JSX.Element {
     agentWs.on('message.progress', onProgress)
     agentWs.on('_disconnected', onDisconnected)
 
-    // 先注册监听再连接, 避免 auth_ok 在监听注册前到达被丢弃(导致 wsConnected 永为 false)
-    agentWs.connect(wsUrl, sessionKey || 'default', remoteToken)
+    // IPC 模式: connect 立即可用,无需等待 auth
+    agentWs.connect('', sessionKey || 'default')
 
     return () => {
       agentWs.off('auth_ok', onAuthOk)
@@ -397,7 +391,7 @@ export default function ChatPage(): React.JSX.Element {
       agentWs.disconnect()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl])
+  }, [])
 
   useEffect(() => {
     if (messages.length === 0) return
