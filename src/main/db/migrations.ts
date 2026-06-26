@@ -108,6 +108,91 @@ const migrations: Migration[] = [
         ALTER TABLE chat_messages ADD COLUMN tool_name TEXT;
       `)
     }
+  },
+  {
+    version: 5,
+    up: (db) => {
+      // 认知记忆系统四表:personal_memory(主表) + personal_memory_fts(FTS5 外部内容) +
+      // memory_links(Zettelkasten 链接网络) + memory_episodes(情景记忆)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS personal_memory (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          content       TEXT NOT NULL,
+          fts_content   TEXT NOT NULL DEFAULT '',
+          mem_type      TEXT NOT NULL,
+          tier          TEXT NOT NULL,
+          keywords      TEXT,
+          tags          TEXT,
+          context_desc  TEXT,
+          importance    REAL NOT NULL,
+          confidence    REAL NOT NULL DEFAULT 0.7,
+          salience      REAL,
+          provenance    TEXT,
+          embedding     BLOB,
+          access_count  INTEGER NOT NULL DEFAULT 0,
+          last_access   INTEGER,
+          created_at    INTEGER NOT NULL,
+          updated_at    INTEGER NOT NULL,
+          superseded_by INTEGER
+        )
+      `)
+      // FTS5 外部内容表:索引 personal_memory.fts_content 列,触发器保持同步
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS personal_memory_fts USING fts5(
+          fts_content,
+          content='personal_memory',
+          content_rowid='id',
+          tokenize='unicode61'
+        )
+      `)
+      // FTS 同步触发器(外部内容表标准三件套:AI 插入 / AD 删除 / AU 更新)
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS personal_memory_ai AFTER INSERT ON personal_memory BEGIN
+          INSERT INTO personal_memory_fts(rowid, fts_content) VALUES (new.id, new.fts_content);
+        END
+      `)
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS personal_memory_ad AFTER DELETE ON personal_memory BEGIN
+          INSERT INTO personal_memory_fts(personal_memory_fts, rowid, fts_content)
+          VALUES ('delete', old.id, old.fts_content);
+        END
+      `)
+      db.exec(`
+        CREATE TRIGGER IF NOT EXISTS personal_memory_au AFTER UPDATE ON personal_memory BEGIN
+          INSERT INTO personal_memory_fts(personal_memory_fts, rowid, fts_content)
+          VALUES ('delete', old.id, old.fts_content);
+          INSERT INTO personal_memory_fts(rowid, fts_content) VALUES (new.id, new.fts_content);
+        END
+      `)
+      // A-MEM 风格的 Zettelkasten 链接网络(主键三元组,支持多种关系)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_links (
+          from_id    INTEGER NOT NULL,
+          to_id      INTEGER NOT NULL,
+          relation   TEXT NOT NULL,
+          weight     REAL NOT NULL DEFAULT 1.0,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (from_id, to_id, relation)
+        )
+      `)
+      // 情景记忆(按会话+时间窗组织的事件片段,可被合并到 personal_memory)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_episodes (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          content       TEXT NOT NULL,
+          entities      TEXT,
+          session_key   TEXT NOT NULL,
+          message_range TEXT,
+          importance    REAL,
+          consolidated  INTEGER NOT NULL DEFAULT 0,
+          ts            INTEGER NOT NULL
+        )
+      `)
+      // 索引:加速按层级/归档状态/最近访问的常用查询
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_episodes_consolidated ON memory_episodes(consolidated, ts)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_tier ON personal_memory(tier, superseded_by)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_access ON personal_memory(last_access)`)
+    }
   }
 ]
 
