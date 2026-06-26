@@ -144,6 +144,7 @@ export const IpcChannels = {
     abort: 'agent:chat:abort',
     listSessions: 'agent:chat:list-sessions',
     deleteSession: 'agent:chat:delete-session',
-    event: 'agent:chat:event'
+    event: 'agent:chat:event',
+    init: 'agent:chat:init'
   }
 } as const

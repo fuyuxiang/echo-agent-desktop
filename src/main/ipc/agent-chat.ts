@@ -2,6 +2,7 @@
 import { ipcMain } from 'electron'
 import { IpcChannels } from '@shared/ipc-channels'
 import { getAgentRuntime } from '../agent/runtime-singleton'
+import { initAgentRuntime, type RuntimeInitConfig } from '../agent/runtime-singleton'
 import { listChatSessions, deleteChatSession } from '../db/dao/session'
 
 export function registerAgentChatIpc(): void {
@@ -22,6 +23,11 @@ export function registerAgentChatIpc(): void {
 
   ipcMain.handle(IpcChannels.agentChat.deleteSession, (_e, opts: { chatId: string }) => {
     deleteChatSession(opts.chatId)
+    return { success: true }
+  })
+
+  ipcMain.handle(IpcChannels.agentChat.init, (_e, cfg: RuntimeInitConfig) => {
+    initAgentRuntime(cfg)
     return { success: true }
   })
 }
