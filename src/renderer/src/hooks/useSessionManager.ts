@@ -2,8 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useChatStore, type ChatSession } from '@/stores/chatStore'
 import { useAgentStore } from '@/stores/agentStore'
-import { agentWs } from '@/services/agent/ws'
-import { chatAPI } from '@/services/agent/chat'
+import { agentWs } from '@/services/agent/runtime-client'
 import { db } from '@/utils/db'
 import {
   isSessionStale,
@@ -69,7 +68,7 @@ export function useSessionManager(): SessionManager {
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
   const loadSessionsFromLocal = useChatStore((s) => s.loadSessionsFromLocal)
   const loadMessagesFromLocal = useChatStore((s) => s.loadMessagesFromLocal)
-  const wsConnected = useAgentStore((s) => s.wsConnected)
+  const wsConnected = useAgentStore((s) => s.ready)
   const setCurrentSessionKey = useAgentStore((s) => s.setCurrentSessionKey)
   const clearExecutionEvents = useAgentStore((s) => s.clearExecutionEvents)
 
@@ -144,8 +143,8 @@ export function useSessionManager(): SessionManager {
     setDeletingChatId(session.chatId)
     try {
       await db.session.delete(session.chatId)
-      // Best-effort server cleanup; ignore failures since local is the source of truth.
-      chatAPI.deleteSession(session.chatId).catch(() => {})
+      // Best-effort cleanup; ignore failures since local is the source of truth.
+      window.api.agentChat.deleteSession(session.chatId).catch(() => {})
       await loadSessionsFromLocal()
 
       if (session.chatId === activeChatId) {
