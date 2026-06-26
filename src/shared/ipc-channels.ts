@@ -68,7 +68,9 @@ export const IpcChannels = {
     openExternal: 'system:open-external',
     showItemInFolder: 'system:show-item-in-folder',
     showOpenDialog: 'system:show-open-dialog',
-    showSaveDialog: 'system:show-save-dialog'
+    showSaveDialog: 'system:show-save-dialog',
+    /** 通用 HTTP 代理(P6: 从 agent 段迁出,Python 移除后仍给 CORS 受限场景用) */
+    httpProxy: 'system:http-proxy'
   },
 
   /** 渲染层日志汇入主进程 */
@@ -76,25 +78,10 @@ export const IpcChannels = {
     write: 'log:write'
   },
 
-  /** Agent 进程管理 */
+  /** Agent scope 配置(原生保留;Python 生命周期段已 P6 删除) */
   agent: {
-    getEnvInfo: 'agent:get-env-info',
-    start: 'agent:start',
-    stop: 'agent:stop',
-    restart: 'agent:restart',
-    getStatus: 'agent:get-status',
-    getPort: 'agent:get-port',
-    initEnv: 'agent:init-env',
-    upgrade: 'agent:upgrade',
-    resetEnv: 'agent:reset-env',
-    updateConfig: 'agent:update-config',
-    getLogs: 'agent:get-logs',
     getScope: 'agent:get-scope',
-    setScope: 'agent:set-scope',
-    onStatusChanged: 'agent:status-changed',
-    onInstallProgress: 'agent:install-progress',
-    /** 通过主进程代理 HTTP 请求（绕过渲染进程 CORS 限制） */
-    httpProxy: 'agent:http-proxy'
+    setScope: 'agent:set-scope'
   },
 
   /** 本地语音识别(sherpa-onnx) */

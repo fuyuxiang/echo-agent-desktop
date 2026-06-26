@@ -1,10 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { BridgeApi } from '@shared/types/api'
 import type {
-  AgentConfig,
-  AgentProcessStatus,
   AgentScopeConfig,
-  InstallProgressEvent,
   LogLevel,
   MediaPermissionType,
   NotifyOptions,
@@ -99,45 +96,9 @@ const api: BridgeApi = {
   },
 
   agent: {
-    getEnvInfo: () => ipcRenderer.invoke(IpcChannels.agent.getEnvInfo),
-    start: () => ipcRenderer.invoke(IpcChannels.agent.start),
-    stop: () => ipcRenderer.invoke(IpcChannels.agent.stop),
-    restart: () => ipcRenderer.invoke(IpcChannels.agent.restart),
-    getStatus: () => ipcRenderer.invoke(IpcChannels.agent.getStatus),
-    getPort: () => ipcRenderer.invoke(IpcChannels.agent.getPort),
-    initEnv: (pipIndex?: string) => ipcRenderer.invoke(IpcChannels.agent.initEnv, pipIndex),
-    upgrade: (pipIndex?: string) => ipcRenderer.invoke(IpcChannels.agent.upgrade, pipIndex),
-    resetEnv: (pipIndex?: string) => ipcRenderer.invoke(IpcChannels.agent.resetEnv, pipIndex),
-    updateConfig: (config: AgentConfig) =>
-      ipcRenderer.invoke(IpcChannels.agent.updateConfig, config),
-    getLogs: () => ipcRenderer.invoke(IpcChannels.agent.getLogs),
     getScope: () => ipcRenderer.invoke(IpcChannels.agent.getScope),
     setScope: (config: AgentScopeConfig) =>
-      ipcRenderer.invoke(IpcChannels.agent.setScope, config),
-    httpProxy: (opts: {
-      url: string
-      method?: string
-      headers?: Record<string, string>
-      body?: string
-      timeoutMs?: number
-    }) =>
-      ipcRenderer.invoke(IpcChannels.agent.httpProxy, opts) as Promise<{
-        ok: boolean
-        status: number
-        body: string
-      }>,
-    onStatusChanged: (callback) => {
-      const listener = (_e: Electron.IpcRendererEvent, status: unknown): void =>
-        callback(status as AgentProcessStatus)
-      ipcRenderer.on(IpcChannels.agent.onStatusChanged, listener)
-      return () => ipcRenderer.removeListener(IpcChannels.agent.onStatusChanged, listener)
-    },
-    onInstallProgress: (callback) => {
-      const listener = (_e: Electron.IpcRendererEvent, event: unknown): void =>
-        callback(event as InstallProgressEvent)
-      ipcRenderer.on(IpcChannels.agent.onInstallProgress, listener)
-      return () => ipcRenderer.removeListener(IpcChannels.agent.onInstallProgress, listener)
-    }
+      ipcRenderer.invoke(IpcChannels.agent.setScope, config)
   },
 
   asr: {

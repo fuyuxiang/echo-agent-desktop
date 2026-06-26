@@ -71,7 +71,7 @@ async function ipcProxyAdapter(config: AxiosRequestConfig): Promise<AxiosRespons
     throw new AxiosError('canceled', AxiosError.ERR_CANCELED, config as never)
   }
 
-  const result = await window.api.agent.httpProxy({
+  const result = await window.api.system.httpProxy({
     url,
     method: (config.method ?? 'get').toUpperCase(),
     headers,
@@ -144,7 +144,7 @@ async function mockAdapter(config: AxiosRequestConfig): Promise<AxiosResponse> {
 }
 
 const hasIpcProxy =
-  typeof window !== 'undefined' && typeof window.api?.agent?.httpProxy === 'function'
+  typeof window !== 'undefined' && typeof window.api?.system?.httpProxy === 'function'
 
 const instance = axios.create({
   baseURL: API_HOST,
