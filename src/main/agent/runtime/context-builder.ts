@@ -39,7 +39,7 @@ export async function buildContext(input: BuildContextInput): Promise<ChatMessag
   const maxTurns = input.maxHistoryTurns ?? DEFAULT_MAX_HISTORY_TURNS
   const hits = await input.memory.recall(input.userText, input.chatId)
   const memoryBlock = hits.length ? `\n\n[相关记忆]\n${hits.map((h) => h.text).join('\n')}` : ''
-  const skillBlock = input.skills.activePromptFragments().join('\n')
+  const skillBlock = input.skills.activePromptFragments(input.chatId).join('\n')
   const systemContent = [input.systemPrompt, skillBlock].filter(Boolean).join('\n\n') + memoryBlock
 
   const windowed = sliceByTurns(input.history, maxTurns)

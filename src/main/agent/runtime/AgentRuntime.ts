@@ -57,6 +57,12 @@ export class AgentRuntime {
     this.deps.sessions.abort(chatId)
   }
 
+  /** 基础 registry + 当前会话激活技能工具合并的工具表 schema */
+  private dynamicToolSchemas(chatId: string): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
+    const all = [...this.deps.tools.list(), ...this.deps.skills.tools(chatId)]
+    return all.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }))
+  }
+
   /** 收集一轮 provider 流;边收边 emit streaming */
   private async collect(
     chatId: string,
@@ -65,7 +71,7 @@ export class AgentRuntime {
   ): Promise<CollectedTurn> {
     const turn: CollectedTurn = { content: '', reasoning: '', toolCalls: [] }
     const byIndex = new Map<number, ToolCall>()
-    const req = { model: this.deps.model, messages, tools: this.deps.tools.toSchemas() }
+    const req = { model: this.deps.model, messages, tools: this.dynamicToolSchemas(chatId) }
     for await (const d of this.deps.provider.chat(req, signal)) {
       const delta = d as ChatDelta
       if (delta.type === 'text') {
@@ -104,7 +110,9 @@ export class AgentRuntime {
       })
       let resultText: string
       let ok: boolean
-      const tool = this.deps.tools.get(call.name)
+      const tool =
+        this.deps.tools.get(call.name) ??
+        this.deps.skills.tools(chatId).find((t) => t.name === call.name)
       if (!tool) {
         ok = false
         resultText = `未知工具: ${call.name}`
