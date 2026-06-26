@@ -1,4 +1,5 @@
 import { getDb } from '../index'
+import type { ToolCall } from '../../agent/providers'
 
 /**
  * 会话与消息 DAO(本地 SQLite,展示层唯一可信来源)
@@ -22,6 +23,9 @@ export interface MessageRow {
   role: string
   content: string
   reasoning: string | null
+  toolCalls?: ToolCall[]
+  toolCallId?: string
+  toolName?: string
   createdAt: number
 }
 
@@ -41,6 +45,9 @@ interface RawMessage {
   role: string
   content: string
   reasoning: string | null
+  tool_calls: string | null
+  tool_call_id: string | null
+  tool_name: string | null
   created_at: number
 }
 
@@ -63,6 +70,9 @@ function toMessage(r: RawMessage): MessageRow {
     role: r.role,
     content: r.content,
     reasoning: r.reasoning,
+    toolCalls: r.tool_calls ? (JSON.parse(r.tool_calls) as ToolCall[]) : undefined,
+    toolCallId: r.tool_call_id ?? undefined,
+    toolName: r.tool_name ?? undefined,
     createdAt: r.created_at
   }
 }
@@ -119,20 +129,28 @@ export function appendChatMessage(input: {
   role: string
   content: string
   reasoning?: string | null
+  toolCalls?: ToolCall[]
+  toolCallId?: string
+  toolName?: string
 }): MessageRow {
   const db = getDb()
   const createdAt = Date.now()
+  const toolCallsJson = input.toolCalls ? JSON.stringify(input.toolCalls) : null
   const id = db.transaction(() => {
     const result = db
       .prepare(
-        `INSERT INTO chat_messages (chat_id, role, content, reasoning, created_at)
-         VALUES (@chatId, @role, @content, @reasoning, @createdAt)`
+        `INSERT INTO chat_messages
+           (chat_id, role, content, reasoning, tool_calls, tool_call_id, tool_name, created_at)
+         VALUES (@chatId, @role, @content, @reasoning, @toolCalls, @toolCallId, @toolName, @createdAt)`
       )
       .run({
         chatId: input.chatId,
         role: input.role,
         content: input.content,
         reasoning: input.reasoning ?? null,
+        toolCalls: toolCallsJson,
+        toolCallId: input.toolCallId ?? null,
+        toolName: input.toolName ?? null,
         createdAt
       })
     db.prepare(
@@ -148,6 +166,9 @@ export function appendChatMessage(input: {
     role: input.role,
     content: input.content,
     reasoning: input.reasoning ?? null,
+    toolCalls: input.toolCalls,
+    toolCallId: input.toolCallId,
+    toolName: input.toolName,
     createdAt
   }
 }
