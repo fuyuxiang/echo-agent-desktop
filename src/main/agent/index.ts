@@ -8,6 +8,7 @@ import { readFileTool, writeFileTool, listDirTool, editFileTool } from './tools/
 import { shellTool } from './tools/shell'
 import { webSearchTool, webFetchTool } from './tools/web'
 import { AgentRuntime } from './runtime/AgentRuntime'
+import { getMemoryManager } from './memory/singleton'
 
 const DEFAULT_SYSTEM_PROMPT = '你是 Echo 桌面助手,可调用工具完成用户任务。'
 
@@ -30,7 +31,7 @@ export function createAgentRuntime(opts: {
     provider: opts.provider,
     tools: buildDefaultRegistry(),
     sessions: new SessionManager(),
-    memory: new NoopMemoryGateway(),
+    memory: getMemoryManager() ?? new NoopMemoryGateway(),
     skills: new NoopSkillGateway(),
     systemPrompt: opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
     model: opts.model,
