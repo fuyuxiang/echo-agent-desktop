@@ -136,5 +136,14 @@ export const IpcChannels = {
     active: 'agent:skill:active',
     activate: 'agent:skill:activate',
     deactivate: 'agent:skill:deactivate'
+  },
+
+  /** 原生 agent 对话主链路(P5) */
+  agentChat: {
+    send: 'agent:chat:send',
+    abort: 'agent:chat:abort',
+    listSessions: 'agent:chat:list-sessions',
+    deleteSession: 'agent:chat:delete-session',
+    event: 'agent:chat:event'
   }
 } as const
