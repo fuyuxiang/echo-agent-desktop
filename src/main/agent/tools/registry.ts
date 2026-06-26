@@ -1,5 +1,5 @@
 // src/main/agent/tools/registry.ts
-import type { ToolSchema } from '../../providers'
+import type { ToolSchema } from '../providers'
 import type { Tool } from './base'
 
 /** 工具注册表: 注册/查找/列出 + 转 provider ToolSchema */
