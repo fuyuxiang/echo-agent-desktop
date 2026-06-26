@@ -11,10 +11,11 @@ import { findRecordingMeetings, updateMeetingStatus } from './db/dao/meeting'
 import { reapOrphans } from './meeting/orphan'
 import { registerAllIpcHandlers } from './ipc'
 import { initASR } from './asr'
-import { startAgent, stopAgent } from './agent-process/manager'
-import { getEnvInfo } from './agent-process/python-env'
-import { hasAgentConfig } from './agent-process/config-gen'
-import { secureGet } from './store'
+// P5: Python agent 不再主进程拉起,改由渲染层 initAgentRuntime;以下导入保留到 P6 物理删除
+// import { startAgent, stopAgent } from './agent-process/manager'
+// import { getEnvInfo } from './agent-process/python-env'
+// import { hasAgentConfig } from './agent-process/config-gen'
+// import { secureGet } from './store'
 
 /**
  * 主进程入口
@@ -77,23 +78,9 @@ if (!gotTheLock) {
     setupUpdater()
     setupProtocol()
 
-    // 尝试自动启动 Agent（环境就绪且有配置时）
-    getEnvInfo()
-      .then(async (info) => {
-        if (info.status === 'ready' && hasAgentConfig()) {
-          log.info('[main] 环境就绪，自动启动 Agent')
-          const keys = getAutoStartApiKeys()
-          const result = await startAgent(keys)
-          if (!result.success) {
-            log.warn('[main] Agent 自动启动失败:', result.error)
-          }
-        } else {
-          log.info('[main] 环境未就绪或无配置，等待用户初始化')
-        }
-      })
-      .catch((e) => {
-        log.error('[main] Agent 启动检查失败:', e)
-      })
+    // P5: 不再自动拉起 Python Agent,运行时由渲染层配置就绪后经 agent:chat:init 装配
+    // (startAgent/stopAgent/getEnvInfo/hasAgentConfig 物理删除归 P6)
+    log.info('[main] 跳过 Python Agent 自动启动,等待渲染层 initAgentRuntime')
 
     // mac: 点击 Dock 图标且无窗口时重建窗口
     app.on('activate', () => {
@@ -131,9 +118,12 @@ if (!gotTheLock) {
     if (cleanupDone) return
     event.preventDefault()
     destroyTray()
+    // P5: 不再调 stopAgent,Python agent 进程已无启动接线
     Promise.resolve()
-      .then(() => stopAgent())
-      .catch((e) => log.error('[main] Agent 停止失败:', e))
+      .then(() => {
+        // 预留: 后续如果有原生 runtime 资源释放,放这里
+      })
+      .catch((e) => log.error('[main] 退出清理失败:', e))
       .finally(() => {
         closeDatabase()
         cleanupDone = true
@@ -143,17 +133,16 @@ if (!gotTheLock) {
   })
 }
 
-function getAutoStartApiKeys(): Record<string, string> {
-  const keys: Record<string, string> = {}
-  const openaiKey = secureGet('openai-api-key')
-  const anthropicKey = secureGet('anthropic-api-key')
-  const geminiKey = secureGet('gemini-api-key')
-  const openrouterKey = secureGet('openrouter-api-key')
-
-  if (openaiKey) keys.OPENAI_API_KEY = openaiKey
-  if (anthropicKey) keys.ANTHROPIC_API_KEY = anthropicKey
-  if (geminiKey) keys.GOOGLE_API_KEY = geminiKey
-  if (openrouterKey) keys.OPENROUTER_API_KEY = openrouterKey
-
-  return keys
-}
+// P5: getAutoStartApiKeys 不再使用,渲染层 initAgentRuntime 时单 key 取
+// function getAutoStartApiKeys(): Record<string, string> {
+//   const keys: Record<string, string> = {}
+//   const openaiKey = secureGet('openai-api-key')
+//   const anthropicKey = secureGet('anthropic-api-key')
+//   const geminiKey = secureGet('gemini-api-key')
+//   const openrouterKey = secureGet('openrouter-api-key')
+//   if (openaiKey) keys.OPENAI_API_KEY = openaiKey
+//   if (anthropicKey) keys.ANTHROPIC_API_KEY = anthropicKey
+//   if (geminiKey) keys.GOOGLE_API_KEY = geminiKey
+//   if (openrouterKey) keys.OPENROUTER_API_KEY = openrouterKey
+//   return keys
+// }
