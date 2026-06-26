@@ -1,3 +1,4 @@
+import { registerAgentChatIpc } from './agent-chat'
 import { registerAgentIpcHandlers } from './agent'
 import { registerAgentMemoryIpc } from './agent-memory'
 import { registerAgentSkillIpc } from './agent-skill'
@@ -28,4 +29,5 @@ export function registerAllIpcHandlers(): void {
   registerMeetingHandlers()
   registerAgentMemoryIpc()
   registerAgentSkillIpc()
+  registerAgentChatIpc()
 }
