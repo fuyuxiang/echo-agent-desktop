@@ -10,6 +10,7 @@ import type { SessionManager } from '../session/SessionManager'
 import type { MemoryGateway } from '../tools/memory-facade'
 import type { SkillGateway } from '../tools/skill-facade'
 import type { ToolContext } from '../tools/base'
+import { resolveWorkspace } from '../tools/scope'
 import { buildContext } from './context-builder'
 import type { RuntimeEvent, RuntimeEventHandler } from './events'
 
@@ -57,6 +58,12 @@ export class AgentRuntime {
     this.deps.sessions.abort(chatId)
   }
 
+  /** 释放运行时:中止全部在途会话并清空事件监听器 */
+  dispose(): void {
+    this.deps.sessions.abortAll()
+    this.handlers.clear()
+  }
+
   /** 基础 registry + 当前会话激活技能工具合并的工具表 schema */
   private dynamicToolSchemas(chatId: string): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
     const all = [...this.deps.tools.list(), ...this.deps.skills.tools(chatId)]
@@ -86,6 +93,9 @@ export class AgentRuntime {
         if (delta.name) cur.name = delta.name
         if (delta.argumentsDelta) cur.arguments += delta.argumentsDelta
         byIndex.set(delta.index, cur)
+      } else if (delta.type === 'error') {
+        // provider 上报的网络/鉴权/HTTP 错误必须冒泡,否则会被当成空回复持久化
+        throw new Error(delta.message)
       }
     }
     turn.toolCalls = [...byIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v)
@@ -100,6 +110,7 @@ export class AgentRuntime {
   ): Promise<ChatMessage[]> {
     const results: ChatMessage[] = []
     for (const call of toolCalls) {
+      if (signal.aborted) break
       this.emit({
         type: 'progress',
         chatId,
@@ -120,7 +131,7 @@ export class AgentRuntime {
         try {
           const ctx: ToolContext = {
             chatId,
-            workspace: '',
+            workspace: resolveWorkspace(),
             signal,
             onProgress: () => {}
           }
@@ -185,6 +196,11 @@ export class AgentRuntime {
       let reachedLimit = true
       for (let turn = 0; turn < maxTurns; turn++) {
         const collected = await this.collect(chatId, messages, ac.signal)
+        // 取消优先:中途取消不持久化部分/空回复,也不触发记忆抽取
+        if (ac.signal.aborted) {
+          reachedLimit = false
+          break
+        }
         if (collected.toolCalls.length === 0) {
           this.deps.sessions.appendMessage({
             chatId,
@@ -224,7 +240,10 @@ export class AgentRuntime {
         this.emit({ type: 'error', chatId, message: `已达最大工具轮数 ${maxTurns}` })
       }
     } catch (e) {
-      this.emit({ type: 'error', chatId, message: (e as Error).message })
+      // 取消导致的异常(AbortError / 派生的 error delta)不作为错误上报给用户
+      if (!ac.signal.aborted) {
+        this.emit({ type: 'error', chatId, message: (e as Error).message })
+      }
     } finally {
       this.emit({ type: 'done', chatId })
       this.deps.sessions.release(chatId)
