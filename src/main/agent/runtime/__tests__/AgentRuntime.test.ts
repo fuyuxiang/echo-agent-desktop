@@ -182,3 +182,32 @@ describe('AgentRuntime capture 接线', () => {
     expect(evs[evs.length - 1].type).toBe('done')
   })
 })
+
+describe('AgentRuntime 动态工具表(激活技能)', () => {
+  it('激活技能的工具进入请求工具表并可被调用', async () => {
+    const skillTool: Tool = {
+      name: 'generate_ppt',
+      description: 'd',
+      parameters: { type: 'object', properties: {} },
+      async execute() { return { ok: true, content: 'PPT_DONE' } }
+    }
+    const skills = {
+      activePromptFragments: (_c: string) => [],
+      tools: (chatId: string) => (chatId === 'c1' ? [skillTool] : [])
+    }
+    // 第一轮: 模型发起 generate_ppt 工具调用; 第二轮: 纯文本收尾
+    const provider = providerFrom([
+      [{ type: 'tool_call', index: 0, id: 't1', name: 'generate_ppt', argumentsDelta: '{}' }, { type: 'done' }],
+      [{ type: 'text', text: '完成' }, { type: 'done' }]
+    ])
+    const d = { ...deps(provider), skills }
+    const rt = new AgentRuntime(d)
+    const evs: RuntimeEvent[] = []
+    rt.on((e) => evs.push(e))
+    await rt.send('c1', '做个 PPT')
+    const toolResult = evs.find(
+      (e) => e.type === 'progress' && (e as { progressType?: string }).progressType === 'tool_result'
+    ) as { resultText: string }
+    expect(toolResult.resultText).toBe('PPT_DONE')
+  })
+})
