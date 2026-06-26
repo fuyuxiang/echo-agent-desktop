@@ -21,26 +21,30 @@ export class Extractor {
     )
     const facts = parseJsonLoose<{ facts: string[] }>(factsRaw)?.facts
     if (!facts || facts.length === 0) return []
-
     const written: number[] = []
     for (const fact of facts) {
-      const similar = this.deps.retriever.retrieve(fact, { topK: 3, expandLinks: false })
-      const similarText = similar
-        .map((s) => `[id=${s.record.id}] ${s.record.content}`)
-        .join('\n') || '(无)'
-      const decRaw = await this.deps.llm.complete(
-        `新事实: ${fact}\n已有相似记忆:\n${similarText}\n\n` +
-          `判断如何处理,只输出 JSON,op 取 ADD/UPDATE/DELETE/NOOP:\n` +
-          `ADD: {"op":"ADD","content":"","memType":"user|environment|procedural","importance":1-10,"keywords":[],"tags":[],"contextDesc":""}\n` +
-          `UPDATE: {"op":"UPDATE","targetId":数字,"content":"","importance":1-10}\n` +
-          `DELETE: {"op":"DELETE","targetId":数字}\nNOOP: {"op":"NOOP"}`
-      )
-      const dec = parseJsonLoose<ExtractDecision>(decRaw)
-      if (!dec) continue
-      const id = this.apply(dec, input.provenance)
+      const id = await this.decideAndApply(fact, input.provenance)
       if (id) written.push(id)
     }
     return written
+  }
+
+  /** 对单条事实: 检索相似 → LLM 决策 ADD/UPDATE/DELETE/NOOP → 落库。返回新记忆 id 或 null。 */
+  async decideAndApply(fact: string, provenance: Provenance): Promise<number | null> {
+    const similar = this.deps.retriever.retrieve(fact, { topK: 3, expandLinks: false })
+    const similarText = similar
+      .map((s) => `[id=${s.record.id}] ${s.record.content}`)
+      .join('\n') || '(无)'
+    const decRaw = await this.deps.llm.complete(
+      `新事实: ${fact}\n已有相似记忆:\n${similarText}\n\n` +
+        `判断如何处理,只输出 JSON,op 取 ADD/UPDATE/DELETE/NOOP:\n` +
+        `ADD: {"op":"ADD","content":"","memType":"user|environment|procedural","importance":1-10,"keywords":[],"tags":[],"contextDesc":""}\n` +
+        `UPDATE: {"op":"UPDATE","targetId":数字,"content":"","importance":1-10}\n` +
+        `DELETE: {"op":"DELETE","targetId":数字}\nNOOP: {"op":"NOOP"}`
+    )
+    const dec = parseJsonLoose<ExtractDecision>(decRaw)
+    if (!dec) return null
+    return this.apply(dec, provenance)
   }
 
   private apply(dec: ExtractDecision, provenance: Provenance): number | null {
