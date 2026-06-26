@@ -30,6 +30,11 @@ export class SessionManager {
     this.active.get(chatId)?.abort()
   }
 
+  /** 中止全部在途会话(运行时切换/销毁时调用) */
+  abortAll(): void {
+    for (const ac of this.active.values()) ac.abort()
+  }
+
   isBusy(chatId: string): boolean {
     return this.active.has(chatId)
   }

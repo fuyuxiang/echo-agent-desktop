@@ -19,6 +19,8 @@ let instance: AgentRuntime | null = null
 
 /** 配置就绪时装配单例: provider + runtime + 记忆门面 + 事件路由。 */
 export function initAgentRuntime(cfg: RuntimeInitConfig): void {
+  // 重入:先释放旧实例(中止在途会话 + 注销其事件 handler),避免孤立实例继续向窗口广播
+  instance?.dispose()
   const apiKey = secureGet(cfg.apiKeyStoreKey) ?? ''
   const provider = createProvider({
     providerId: cfg.providerId,
