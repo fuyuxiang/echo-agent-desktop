@@ -211,3 +211,23 @@ describe('AgentRuntime 动态工具表(激活技能)', () => {
     expect(toolResult.resultText).toBe('PPT_DONE')
   })
 })
+
+describe('AgentRuntime 召回可见性', () => {
+  it('send 前 emit memory_retrieved 且 recall 只调一次', async () => {
+    const provider = providerFrom([[{ type: 'text', text: 'ok' }, { type: 'done' }]])
+    const recall = vi.fn().mockResolvedValue([{ id: '1', text: '记忆A', score: 0.8 }])
+    const d = {
+      ...deps(provider),
+      memory: { recall, capture: vi.fn().mockResolvedValue(undefined) }
+    }
+    const rt = new AgentRuntime(d as unknown as AgentRuntimeDeps)
+    const evs: RuntimeEvent[] = []
+    rt.on((e) => evs.push(e))
+    await rt.send('c1', 'hi')
+    const mem = evs.find(
+      (e) => e.type === 'progress' && (e as { progressType?: string }).progressType === 'memory_retrieved'
+    ) as { hits: Array<{ text: string }> }
+    expect(mem.hits[0].text).toBe('记忆A')
+    expect(recall).toHaveBeenCalledTimes(1)
+  })
+})

@@ -169,13 +169,18 @@ export class AgentRuntime {
     const maxTurns = this.deps.maxToolTurns ?? DEFAULT_MAX_TOOL_TURNS
     try {
       this.deps.sessions.appendMessage({ chatId, role: 'user', content: userText })
+      const recalledHits = await this.deps.memory.recall(userText, chatId)
+      if (recalledHits.length > 0) {
+        this.emit({ type: 'progress', chatId, progressType: 'memory_retrieved', hits: recalledHits })
+      }
       const messages = await buildContext({
         chatId,
         systemPrompt: this.deps.systemPrompt,
         history: this.deps.sessions.history(chatId),
         userText,
         memory: this.deps.memory,
-        skills: this.deps.skills
+        skills: this.deps.skills,
+        recalledHits
       })
       let reachedLimit = true
       for (let turn = 0; turn < maxTurns; turn++) {
