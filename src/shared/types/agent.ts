@@ -39,3 +39,25 @@ export interface AgentScopeConfig {
   /** restricted 档锁定的工作目录;full 档忽略。未选时为空字符串 */
   workspaceDir: string
 }
+
+/** 一次工具权限审批请求(主进程 -> 渲染层) */
+export interface PermissionRequest {
+  /** 请求唯一 id,渲染层回填时带回 */
+  requestId: string
+  chatId: string
+  /** 动作类型,目前仅 shell 走审批 */
+  kind: 'shell'
+  /** 待执行的命令原文 */
+  command: string
+  /** 可被「本次会话允许」记住的程序名;复合命令为 null(不可记住) */
+  program: string | null
+}
+
+/** 用户对审批请求的选择 */
+export type ApprovalChoice = 'allow_once' | 'allow_session' | 'deny'
+
+/** 审批应答(渲染层 -> 主进程) */
+export interface PermissionResponse {
+  requestId: string
+  choice: ApprovalChoice
+}
