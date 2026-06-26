@@ -1,62 +1,29 @@
-import { useState, useCallback } from 'react'
-import { useSkillStore } from '@/stores/skillStore'
-import { skillsAPI } from '@/services/agent/skills'
+import { useCallback } from 'react'
 import { fileDialog } from '@/utils/dialog'
 import { toast } from '@/components/Toast'
 
 export interface SkillImport {
   importing: boolean
-  /** 选本地文件夹 -> 后端 import -> 重拉列表 -> 未启用则自动启用 */
+  /** P6 已下线: 技能动态加载已废除(代码型技能编译进 bundle, 提示词型从 builtin/ 静态登记) */
   handleImport: () => Promise<void>
 }
 
 /**
- * 导入技能(技能库页与聊天技能选择器共用)
- * 后端 import 接口只认本地目录,桌面端与 agent 同机,直接传绝对路径。
+ * 技能导入(P6 占位 stub)
+ *
+ * Python 时代走 lazy_deps + 后端 import 路径, P6 后代码型技能编译进 bundle,
+ * 提示词型在 src/main/agent/skills/builtin/ 静态登记。运行时导入接口下线。
  */
 export function useSkillImport(): SkillImport {
-  const setSkills = useSkillStore((s) => s.setSkills)
-  const [importing, setImporting] = useState(false)
-
   const handleImport = useCallback(async (): Promise<void> => {
-    if (importing) return
-    const [dir] = await fileDialog.open({
+    // 仍允许用户选目录(用于说明流程), 但实际不调后端 import
+    await fileDialog.open({
       properties: ['openDirectory'],
-      title: '选择技能文件夹（需包含 SKILL.md）'
+      title: '选择技能文件夹(已下线,仅作说明)'
     })
-    if (!dir) return
+    toast.error('技能运行时导入已下线,请编辑 src/main/agent/skills/builtin/ 静态登记')
+  }, [])
 
-    setImporting(true)
-    try {
-      const res = await skillsAPI.importFromPath(dir)
-      const imported = res.skill?.name
-      // import 返回的 enabled 不可靠,以重拉列表的真实状态为准
-      const list = await skillsAPI.list()
-      let latest = list.skills ?? []
-      setSkills(latest)
-
-      // 未启用则自动启用(满足"导入即启用")
-      const target = imported ? latest.find((s) => s.name === imported) : undefined
-      if (target && !target.enabled) {
-        await skillsAPI.toggle(target.name)
-        const refreshed = await skillsAPI.list()
-        latest = refreshed.skills ?? []
-        setSkills(latest)
-      }
-      toast.success(imported ? `技能已导入并启用：${imported}` : '技能已导入')
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      if (/409|exist/i.test(msg)) {
-        toast.error('该技能已存在')
-      } else if (/400|SKILL\.md|invalid/i.test(msg)) {
-        toast.error('所选文件夹不是有效技能（缺少 SKILL.md）')
-      } else {
-        toast.error(`导入失败：${msg}`)
-      }
-    } finally {
-      setImporting(false)
-    }
-  }, [importing, setSkills])
-
-  return { importing, handleImport }
+  return { importing: false, handleImport }
 }
+

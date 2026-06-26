@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useSkillStore } from '@/stores/skillStore'
 import { skillsAPI, type Skill } from '@/services/agent/skills'
+import { useChatStore } from '@/stores/chatStore'
 import { useSkillImport } from '@/hooks/useSkillImport'
 import { toast } from '@/components/Toast'
 import styles from './skills.module.scss'
@@ -31,15 +32,11 @@ interface SkillGroup {
 
 export default function SkillsPage(): React.JSX.Element {
   const { skills, selectedSkill, setSkills, setSelectedSkill } = useSkillStore()
+  const activeChatId = useChatStore((s) => s.activeChatId) || 'default'
   const [detail, setDetail] = useState<{ content: string; files: string[] } | null>(null)
+  const [activeIds, setActiveIds] = useState<string[]>([])
   const [deleting, setDeleting] = useState(false)
   const { importing, handleImport } = useSkillImport()
-
-  const [depsPrompt, setDepsPrompt] = useState<{
-    name: string
-    missing: string[]
-    resolve: (ok: boolean) => void
-  } | null>(null)
 
   useEffect(() => {
     skillsAPI
@@ -59,13 +56,21 @@ export default function SkillsPage(): React.JSX.Element {
       .catch(() => setDetail(null))
   }, [selectedSkill])
 
+  // 当前会话的激活技能(per chatId)
+  useEffect(() => {
+    window.api.agentSkill
+      .active(activeChatId)
+      .then((ids) => setActiveIds(ids as string[]))
+      .catch(() => setActiveIds([]))
+  }, [activeChatId, skills])
+
   const groups = useMemo<SkillGroup[]>(() => {
     const sorted = [...skills].sort((a, b) =>
-      a.name.localeCompare(b.name, 'zh-CN', { sensitivity: 'base' })
+      a.label.localeCompare(b.label, 'zh-CN', { sensitivity: 'base' })
     )
     const map = new Map<string, Skill[]>()
     for (const s of sorted) {
-      const letter = getInitialLetter(s.name)
+      const letter = getInitialLetter(s.label)
       if (!map.has(letter)) map.set(letter, [])
       map.get(letter)!.push(s)
     }
@@ -76,24 +81,17 @@ export default function SkillsPage(): React.JSX.Element {
 
   const handleToggle = async (skill: Skill, e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
-    const enabling = !skill.enabled
-    if (enabling) {
-      // P5 移除 Python 依赖安装通道:代码型技能内置已编译进 bundle,无需运行时安装
-      setDepsPrompt(null)
-    }
+    const isActive = activeIds.includes(skill.id)
     try {
-      await skillsAPI.toggle(skill.name)
-      const updated = await skillsAPI.list()
-      const list = updated.skills ?? updated
-      if (Array.isArray(list) && list.length > 0) {
-        setSkills(list)
+      if (isActive) {
+        await window.api.agentSkill.deactivate(activeChatId, skill.id)
+        setActiveIds((prev) => prev.filter((id) => id !== skill.id))
       } else {
-        // toggle 后列表为空，可能后端行为异常，先本地翻转状态
-        setSkills(skills.map((s) => (s.name === skill.name ? { ...s, enabled: !s.enabled } : s)))
+        await window.api.agentSkill.activate(activeChatId, skill.id)
+        setActiveIds((prev) => [...prev, skill.id])
       }
-    } catch {
-      // 接口失败时本地翻转
-      setSkills(skills.map((s) => (s.name === skill.name ? { ...s, enabled: !s.enabled } : s)))
+    } catch (err) {
+      toast.error(`切换失败:${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -102,12 +100,16 @@ export default function SkillsPage(): React.JSX.Element {
     if (!window.confirm(`确定删除技能「${name}」？此操作不可撤销。`)) return
     setDeleting(true)
     try {
-      await skillsAPI.remove(name)
-      setSelectedSkill(null)
-      setDetail(null)
-      const updated = await skillsAPI.list()
-      setSkills(updated.skills ?? updated)
-      toast.success('技能已删除')
+      const res = await skillsAPI.remove(name)
+      if (res.error) {
+        toast.error(res.error)
+      } else {
+        setSelectedSkill(null)
+        setDetail(null)
+        const updated = await skillsAPI.list()
+        setSkills(updated.skills ?? updated)
+        toast.success('技能已删除')
+      }
     } catch (e) {
       toast.error(`删除失败：${e instanceof Error ? e.message : String(e)}`)
     } finally {
@@ -120,7 +122,8 @@ export default function SkillsPage(): React.JSX.Element {
     setDetail(null)
   }
 
-  const currentSkill = skills.find((s) => s.name === selectedSkill)
+  const currentSkill = skills.find((s) => s.id === selectedSkill)
+  const currentIsActive = currentSkill ? activeIds.includes(currentSkill.id) : false
 
   return (
     <div className={styles.page}>
@@ -149,22 +152,25 @@ export default function SkillsPage(): React.JSX.Element {
             <div key={group.letter} className={styles.group}>
               <div className={styles.letterBadge}>{group.letter}</div>
               <div className={styles.grid}>
-                {group.items.map((s) => (
-                  <div
-                    key={s.name}
-                    className={clsx(styles.card, selectedSkill === s.name && styles.active)}
-                    onClick={() => setSelectedSkill(s.name)}
-                  >
-                    <div className={styles.cardIcon}>{s.name.charAt(0).toUpperCase()}</div>
-                    <div className={styles.cardBody}>
-                      <span className={styles.name}>{s.name}</span>
-                      <p className={styles.desc}>{s.description}</p>
+                {group.items.map((s) => {
+                  const isActive = activeIds.includes(s.id)
+                  return (
+                    <div
+                      key={s.id}
+                      className={clsx(styles.card, selectedSkill === s.id && styles.active)}
+                      onClick={() => setSelectedSkill(s.id)}
+                    >
+                      <div className={styles.cardIcon}>{s.label.charAt(0).toUpperCase()}</div>
+                      <div className={styles.cardBody}>
+                        <span className={styles.name}>{s.label}</span>
+                        <p className={styles.desc}>{s.description}</p>
+                      </div>
+                      <span className={clsx(styles.status, isActive && styles.on)}>
+                        {isActive ? '已激活' : '未激活'}
+                      </span>
                     </div>
-                    <span className={clsx(styles.status, s.enabled && styles.on)}>
-                      {s.enabled ? '已启用' : '未启用'}
-                    </span>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           ))}
@@ -176,10 +182,10 @@ export default function SkillsPage(): React.JSX.Element {
         <div className={styles.detailPanel}>
           <div className={styles.detailToolbar}>
             <button
-              className={clsx(styles.toggleBtn, currentSkill?.enabled && styles.on)}
+              className={clsx(styles.toggleBtn, currentIsActive && styles.on)}
               onClick={(e) => currentSkill && handleToggle(currentSkill, e)}
             >
-              {currentSkill?.enabled ? '禁用' : '启用'}
+              {currentIsActive ? '禁用' : '启用'}
             </button>
             <button
               className={styles.deleteBtn}
@@ -210,10 +216,6 @@ export default function SkillsPage(): React.JSX.Element {
             </div>
           )}
         </div>
-      )}
-
-      {depsPrompt && (
-        <div />
       )}
     </div>
   )
