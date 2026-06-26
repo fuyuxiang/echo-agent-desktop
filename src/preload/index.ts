@@ -87,7 +87,19 @@ const api: BridgeApi = {
     showOpenDialog: (options: OpenDialogOptions) =>
       ipcRenderer.invoke(IpcChannels.system.showOpenDialog, options),
     showSaveDialog: (options: SaveDialogOptions) =>
-      ipcRenderer.invoke(IpcChannels.system.showSaveDialog, options)
+      ipcRenderer.invoke(IpcChannels.system.showSaveDialog, options),
+    httpProxy: (opts: {
+      url: string
+      method?: string
+      headers?: Record<string, string>
+      body?: string
+      timeoutMs?: number
+    }) =>
+      ipcRenderer.invoke(IpcChannels.system.httpProxy, opts) as Promise<{
+        ok: boolean
+        status: number
+        body: string
+      }>
   },
 
   log: {
