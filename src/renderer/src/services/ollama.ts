@@ -24,7 +24,7 @@ async function proxy(
   url: string,
   opts?: { method?: string; body?: string }
 ): Promise<{ ok: boolean; status: number; body: string }> {
-  return window.api.agent.httpProxy({
+  return window.api.system.httpProxy({
     url,
     method: opts?.method ?? 'GET',
     headers: { 'Content-Type': 'application/json' },

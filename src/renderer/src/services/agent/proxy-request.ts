@@ -14,7 +14,7 @@ async function proxyFetch(
     headers['X-Echo-Agent-Token'] = remoteToken
   }
 
-  const result = await window.api.agent.httpProxy({
+  const result = await window.api.system.httpProxy({
     url,
     method: opts?.method || 'GET',
     headers,

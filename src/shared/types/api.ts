@@ -1,13 +1,8 @@
 import type {
-  AgentConfig,
-  AgentEnvInfo,
-  AgentProcessStatus,
   AgentScopeConfig,
-  AgentStartResult,
   ChatMessageRecord,
   ChatSessionRecord,
   ExampleRecord,
-  InstallProgressEvent,
   LogLevel,
   MediaPermissionType,
   NotifyOptions,
@@ -140,31 +135,10 @@ export interface BridgeApi {
     write: (level: LogLevel, message: string) => void
   }
 
-  /** Agent 进程管理 */
+  /** Agent scope 配置(P6 移除 Python 生命周期段后仅保留 scope) */
   agent: {
-    getEnvInfo: () => Promise<AgentEnvInfo>
-    start: () => Promise<AgentStartResult>
-    stop: () => Promise<void>
-    restart: () => Promise<AgentStartResult>
-    getStatus: () => Promise<AgentProcessStatus>
-    getPort: () => Promise<number | null>
-    initEnv: (pipIndex?: string) => Promise<{ success: boolean; error?: string }>
-    upgrade: (pipIndex?: string) => Promise<{ success: boolean; version?: string; error?: string }>
-    resetEnv: (pipIndex?: string) => Promise<{ success: boolean; error?: string }>
-    updateConfig: (config: AgentConfig) => Promise<{ success: boolean }>
-    getLogs: () => Promise<string>
     getScope: () => Promise<AgentScopeConfig>
-    setScope: (config: AgentScopeConfig) => Promise<AgentStartResult>
-    httpProxy: (opts: {
-      url: string
-      method?: string
-      headers?: Record<string, string>
-      body?: string
-      /** 单次请求超时(ms),默认 30000 */
-      timeoutMs?: number
-    }) => Promise<{ ok: boolean; status: number; body: string }>
-    onStatusChanged: (callback: (status: AgentProcessStatus) => void) => () => void
-    onInstallProgress: (callback: (event: InstallProgressEvent) => void) => () => void
+    setScope: (config: AgentScopeConfig) => Promise<{ success: boolean }>
   }
 
   /** 本地语音识别(sherpa-onnx 离线 ASR) */
