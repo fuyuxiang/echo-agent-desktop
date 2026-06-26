@@ -166,6 +166,21 @@ const api: BridgeApi = {
       ipcRenderer.invoke(IpcChannels.meeting.markSource, meetingId, source)
   },
 
+  agentChat: {
+    send: (chatId: string, text: string, attachments?: Array<{ id: string; name: string }>) =>
+      ipcRenderer.invoke(IpcChannels.agentChat.send, { chatId, text, attachments }),
+    abort: (chatId: string) => ipcRenderer.invoke(IpcChannels.agentChat.abort, { chatId }),
+    listSessions: () => ipcRenderer.invoke(IpcChannels.agentChat.listSessions),
+    deleteSession: (chatId: string) =>
+      ipcRenderer.invoke(IpcChannels.agentChat.deleteSession, { chatId }),
+    onEvent: (handler: (ev: Record<string, unknown>) => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, ev: Record<string, unknown>): void =>
+        handler(ev)
+      ipcRenderer.on(IpcChannels.agentChat.event, listener)
+      return () => ipcRenderer.removeListener(IpcChannels.agentChat.event, listener)
+    }
+  },
+
   platform: {
     isMac: process.platform === 'darwin',
     isWin: process.platform === 'win32',
