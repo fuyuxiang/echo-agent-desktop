@@ -1,5 +1,4 @@
-import { AgentWebSocket } from '@/services/agent/ws'
-import { useAgentStore } from '@/stores/agentStore'
+import { agentWs } from '@/services/agent/runtime-client'
 import type { SegmentDTO } from '@shared/types/meeting'
 
 export function buildSummaryPrompt(segments: SegmentDTO[]): string {
@@ -48,14 +47,11 @@ function getPayloadText(payload: Record<string, unknown>): string {
 
 export function generateSummary(meetingId: string, segments: SegmentDTO[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const { baseUrl, remoteToken } = useAgentStore.getState()
-    const ws = new AgentWebSocket()
-    const wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws'
+    const chatId = `meeting-summary-${meetingId}`
     let settled = false
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
-      ws.disconnect()
       reject(new Error('summary timeout'))
     }, 120_000)
 
@@ -67,13 +63,12 @@ export function generateSummary(meetingId: string, segments: SegmentDTO[]): Prom
       clearTimeout(timer)
       const parsed = parseSummary(text)
       await window.api.meeting.setSummary(meetingId, { ...parsed, model: 'agent' })
-      ws.disconnect()
       resolve()
     }
-    ws.on('message.final', onFinal)
-    ws.on('final', onFinal)
-    ws.connect(wsUrl, `meeting-summary-${meetingId}`, remoteToken)
-    // 等 auth 完成后发送
-    setTimeout(() => ws.sendMessage(buildSummaryPrompt(segments)), 800)
+    agentWs.on('message.final', onFinal)
+    agentWs.on('final', onFinal)
+    agentWs.connect('', chatId)
+    // IPC 立即可用,无需等 auth
+    setTimeout(() => agentWs.sendMessage(buildSummaryPrompt(segments)), 100)
   })
 }

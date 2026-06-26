@@ -202,6 +202,12 @@ export interface BridgeApi {
     abort(chatId: string): Promise<void>
     listSessions(): Promise<Array<{ chatId: string }>>
     deleteSession(chatId: string): Promise<{ success: boolean }>
+    init(cfg: {
+      providerId: string
+      model: string
+      baseUrl: string
+      apiKeyStoreKey: string
+    }): Promise<{ success: boolean }>
     onEvent(handler: (ev: Record<string, unknown>) => void): () => void
   }
 
