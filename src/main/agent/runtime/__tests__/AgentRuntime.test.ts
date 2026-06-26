@@ -158,3 +158,27 @@ describe('AgentRuntime 工具循环', () => {
     expect(evs.some((e) => e.type === 'error')).toBe(true)
   })
 })
+
+describe('AgentRuntime capture 接线', () => {
+  it('final 后 fire-and-forget 调用 memory.capture 一次', async () => {
+    const provider = providerFrom([[{ type: 'text', text: 'ok' }, { type: 'done' }]])
+    const d = deps(provider)
+    const captureSpy = vi.spyOn(d.memory, 'capture')
+    const rt = new AgentRuntime(d)
+    await rt.send('c1', 'hi')
+    expect(captureSpy).toHaveBeenCalledTimes(1)
+    expect(captureSpy.mock.calls[0][0]).toBe('c1')
+  })
+
+  it('capture 抛错不影响对话 final/done', async () => {
+    const provider = providerFrom([[{ type: 'text', text: 'ok' }, { type: 'done' }]])
+    const d = deps(provider)
+    vi.spyOn(d.memory, 'capture').mockRejectedValue(new Error('boom'))
+    const rt = new AgentRuntime(d)
+    const evs: RuntimeEvent[] = []
+    rt.on((e) => evs.push(e))
+    await rt.send('c1', 'hi')
+    expect(evs.some((e) => e.type === 'final')).toBe(true)
+    expect(evs[evs.length - 1].type).toBe('done')
+  })
+})

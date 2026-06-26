@@ -185,6 +185,10 @@ export class AgentRuntime {
             text: collected.content,
             reasoning: collected.reasoning || undefined
           })
+          // fire-and-forget: 抽取记忆,不 await、不进会阻断主流程的 catch
+          void this.deps.memory
+            .capture(chatId, [...messages, { role: 'assistant', content: collected.content }])
+            .catch(() => {})
           reachedLimit = false
           break
         }
