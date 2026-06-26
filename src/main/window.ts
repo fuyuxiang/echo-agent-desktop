@@ -38,7 +38,8 @@ export function createMainWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.mjs'),
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false
+      // preload 仅用 contextBridge/ipcRenderer,不依赖 Node 模块,可开启沙箱收敛提权面
+      sandbox: true
     }
   })
 
@@ -57,9 +58,10 @@ export function createMainWindow(): BrowserWindow {
     mainWindow?.webContents.send(IpcChannels.window.onMaximizeChanged, false)
   })
 
-  // 渲染层内的链接一律交给系统浏览器,禁止应用内开新窗口
+  // 渲染层内的链接一律交给系统浏览器,禁止应用内开新窗口;仅放行 http/https,
+  // 防止 file:/自定义协议被唤起触发本地程序执行
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
 
