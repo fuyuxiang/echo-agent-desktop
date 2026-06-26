@@ -60,3 +60,23 @@ describe('Extractor', () => {
     expect(await ex.extract({ userText: 'x', assistantText: 'y', provenance: prov })).toEqual([])
   })
 })
+
+describe('Extractor.decideAndApply', () => {
+  it('对单条 fact 做 ADD 决策并落库,返回新 id', async () => {
+    const llm: MemoryLLM = {
+      complete: async () =>
+        '{"op":"ADD","content":"用户喜欢喝美式","memType":"user","importance":7,"keywords":["咖啡"],"tags":["偏好"],"contextDesc":""}'
+    }
+    const ext = new Extractor({ llm, dao, retriever })
+    const id = await ext.decideAndApply('用户喜欢喝美式咖啡', { sessionKey: 'c1', messageIds: [] })
+    expect(id).not.toBeNull()
+    expect(dao.getMemory(id!)!.content).toBe('用户喜欢喝美式')
+  })
+
+  it('LLM 返回 NOOP 时不落库返回 null', async () => {
+    const llm: MemoryLLM = { complete: async () => '{"op":"NOOP"}' }
+    const ext = new Extractor({ llm, dao, retriever })
+    const id = await ext.decideAndApply('无关闲聊', { sessionKey: 'c1', messageIds: [] })
+    expect(id).toBeNull()
+  })
+})
