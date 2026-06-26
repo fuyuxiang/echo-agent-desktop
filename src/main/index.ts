@@ -1,4 +1,6 @@
 import { app, BrowserWindow, session, desktopCapturer } from 'electron'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { setupLogger, log } from './logger'
 import { createMainWindow, showMainWindow } from './window'
@@ -87,13 +89,19 @@ if (!gotTheLock) {
 
   // ===== 安全基线:统一管控所有 webContents =====
   app.on('web-contents-created', (_event, contents) => {
-    // 禁止页面内导航到外部站点(防钓鱼/注入)
+    // 禁止页面内导航到外部站点(防钓鱼/注入)。
+    // 打包后渲染层是 file://,仅放行打包内的 renderer 入口本身,
+    // 拒绝导航到任意其它本地 HTML(防注入后脱离打包资源约束)。
+    const rendererEntry = pathToFileURL(join(__dirname, '../renderer/index.html')).href
     contents.on('will-navigate', (event, url) => {
       const isDevServer =
         !app.isPackaged &&
         process.env['ELECTRON_RENDERER_URL'] &&
         url.startsWith(process.env['ELECTRON_RENDERER_URL'])
-      if (!isDevServer && !url.startsWith('file://')) {
+      // 去掉 query/hash 后与入口精确比对(SPA 路由可能追加 #/path)
+      const navPath = url.split(/[?#]/)[0]
+      const isRendererEntry = navPath === rendererEntry
+      if (!isDevServer && !isRendererEntry) {
         log.warn('[security] 拦截页面导航:', url)
         event.preventDefault()
       }
