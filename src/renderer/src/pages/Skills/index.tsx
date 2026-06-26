@@ -1,9 +1,7 @@
-import { useEffect, useState, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useSkillStore } from '@/stores/skillStore'
 import { skillsAPI, type Skill } from '@/services/agent/skills'
 import { useSkillImport } from '@/hooks/useSkillImport'
-import { useSkillDeps } from '@/hooks/useSkillDeps'
-import { SkillDepsDialog } from '@/components/SkillDepsDialog'
 import { toast } from '@/components/Toast'
 import styles from './skills.module.scss'
 import clsx from 'clsx'
@@ -43,14 +41,6 @@ export default function SkillsPage(): React.JSX.Element {
     resolve: (ok: boolean) => void
   } | null>(null)
 
-  const requestConfirm = useCallback(
-    (name: string, missing: string[]): Promise<boolean> =>
-      new Promise<boolean>((resolve) => setDepsPrompt({ name, missing, resolve })),
-    []
-  )
-
-  const { installing, ensureDeps } = useSkillDeps(requestConfirm)
-
   useEffect(() => {
     skillsAPI
       .list()
@@ -88,10 +78,8 @@ export default function SkillsPage(): React.JSX.Element {
     e.stopPropagation()
     const enabling = !skill.enabled
     if (enabling) {
-      const ok = await ensureDeps(skill.name)
-      // 关闭授权弹窗:确认后弹窗保持开启以显示"安装中",安装结束(此处)再关闭
+      // P5 移除 Python 依赖安装通道:代码型技能内置已编译进 bundle,无需运行时安装
       setDepsPrompt(null)
-      if (!ok) return // 缺依赖未解决，不启用
     }
     try {
       await skillsAPI.toggle(skill.name)
@@ -225,19 +213,7 @@ export default function SkillsPage(): React.JSX.Element {
       )}
 
       {depsPrompt && (
-        <SkillDepsDialog
-          skillName={depsPrompt.name}
-          missing={depsPrompt.missing}
-          installing={installing}
-          onConfirm={() => {
-            // 仅 resolve;弹窗保持开启展示"安装中",由 handleToggle 在 ensureDeps 结束后关闭
-            depsPrompt.resolve(true)
-          }}
-          onCancel={() => {
-            depsPrompt.resolve(false)
-            setDepsPrompt(null)
-          }}
-        />
+        <div />
       )}
     </div>
   )
