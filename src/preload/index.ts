@@ -187,6 +187,28 @@ const api: BridgeApi = {
     }
   },
 
+  agentMemory: {
+    list: (opts: { limit: number; offset: number }) =>
+      ipcRenderer.invoke(IpcChannels.agentMemory.list, opts),
+    search: (opts: { query: string; topK?: number }) =>
+      ipcRenderer.invoke(IpcChannels.agentMemory.search, opts),
+    get: (id: number) => ipcRenderer.invoke(IpcChannels.agentMemory.get, { id }),
+    update: (id: number, patch: Record<string, unknown>) =>
+      ipcRenderer.invoke(IpcChannels.agentMemory.update, { id, patch }),
+    delete: (id: number) => ipcRenderer.invoke(IpcChannels.agentMemory.delete, { id }),
+    stats: () => ipcRenderer.invoke(IpcChannels.agentMemory.stats)
+  },
+
+  agentSkill: {
+    list: () => ipcRenderer.invoke(IpcChannels.agentSkill.list),
+    active: (chatId: string) =>
+      ipcRenderer.invoke(IpcChannels.agentSkill.active, { chatId }),
+    activate: (chatId: string, skillId: string) =>
+      ipcRenderer.invoke(IpcChannels.agentSkill.activate, { chatId, skillId }),
+    deactivate: (chatId: string, skillId: string) =>
+      ipcRenderer.invoke(IpcChannels.agentSkill.deactivate, { chatId, skillId })
+  },
+
   platform: {
     isMac: process.platform === 'darwin',
     isWin: process.platform === 'win32',
