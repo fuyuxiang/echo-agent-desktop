@@ -192,6 +192,19 @@ export interface BridgeApi {
     markSource(meetingId: string, source: string): Promise<void>
   }
 
+  /** 原生 agent 对话主链路(P5) */
+  agentChat: {
+    send(
+      chatId: string,
+      text: string,
+      attachments?: Array<{ id: string; name: string }>
+    ): Promise<void>
+    abort(chatId: string): Promise<void>
+    listSessions(): Promise<Array<{ chatId: string }>>
+    deleteSession(chatId: string): Promise<{ success: boolean }>
+    onEvent(handler: (ev: Record<string, unknown>) => void): () => void
+  }
+
   /** 平台信息(同步常量,preload 注入) */
   platform: {
     /** 是否 macOS */
