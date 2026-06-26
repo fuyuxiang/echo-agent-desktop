@@ -62,6 +62,7 @@ describe('web tools', () => {
     expect((await webFetchTool.execute({ url: 'https://e.com' }, ctx())).ok).toBe(false)
   })
   it('web_search 解析结果数组', async () => {
+    kvRef.current.set('agent.searchEndpoint', 'https://search.example.com/q')
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -75,5 +76,15 @@ describe('web tools', () => {
     expect(r.ok).toBe(true)
     expect(r.content).toContain('T')
     expect(r.content).toContain('u')
+  })
+  it('web_search 未配置端点时返回 ok:false', async () => {
+    const { webSearchTool } = await import('../web')
+    expect((await webSearchTool.execute({ query: 'x' }, ctx())).ok).toBe(false)
+  })
+  it('web_fetch 拒绝内网地址(SSRF 防护)', async () => {
+    const { webFetchTool } = await import('../web')
+    expect((await webFetchTool.execute({ url: 'http://169.254.169.254/latest/meta-data/' }, ctx())).ok).toBe(false)
+    expect((await webFetchTool.execute({ url: 'http://127.0.0.1:8080/' }, ctx())).ok).toBe(false)
+    expect((await webFetchTool.execute({ url: 'file:///etc/passwd' }, ctx())).ok).toBe(false)
   })
 })
