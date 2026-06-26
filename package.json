@@ -42,6 +42,7 @@
     "electron-store": "^11.0.2",
     "electron-updater": "^6.8.9",
     "electron-window-state": "^5.0.3",
+    "pptxgenjs": "4.0.1",
     "sherpa-onnx-node": "^1.13.2"
   },
   "devDependencies": {
