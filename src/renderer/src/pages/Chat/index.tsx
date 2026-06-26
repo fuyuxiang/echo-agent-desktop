@@ -199,15 +199,20 @@ export default function ChatPage(): React.JSX.Element {
     textareaRef.current?.focus()
   }, [])
 
-  // PPT 入口:激活 ppt-author 技能并把结构化 prompt 填入输入框,由用户确认后发送
+  // PPT 入口:激活 ppt 技能并把结构化 prompt 填入输入框,由用户确认后发送
   const onGeneratePpt = useCallback(
     (prompt: string) => {
-      const ppt = skills.find((s) => s.name === 'ppt-author')
-      if (!ppt || !ppt.enabled) {
+      const ppt = skills.find((s) => s.id === 'ppt')
+      if (!ppt) {
         toast.error(t('chat.ppt.needSkill'))
         return
       }
-      setActiveSkill('ppt-author')
+      // 显式激活当前 chatId 的 ppt 技能
+      const chatId = useChatStore.getState().activeChatId
+      if (chatId) {
+        void window.api.agentSkill.activate(chatId, 'ppt')
+      }
+      setActiveSkill('ppt')
       fillPrompt(prompt)
     },
     [skills, setActiveSkill, fillPrompt, t]
@@ -686,7 +691,17 @@ export default function ChatPage(): React.JSX.Element {
   const canSend =
     wsConnected && (inputText.trim().length > 0 || hasReadyAttachment)
   // 仅展示已启用的技能(未启用的后端不加载,选了也无效)
-  const enabledSkills = skills.filter((s) => s.enabled)
+  // 当前会话已激活的技能 id(per chatId 激活,从主进程拉)
+  const activeChatId = useChatStore((s) => s.activeChatId)
+  const [activeSkillIds, setActiveSkillIds] = useState<string[]>([])
+  useEffect(() => {
+    const chatId = activeChatId || 'default'
+    window.api.agentSkill
+      .active(chatId)
+      .then((ids) => setActiveSkillIds(ids as string[]))
+      .catch(() => setActiveSkillIds([]))
+  }, [activeChatId, skills])
+  const enabledSkills = skills.filter((s) => activeSkillIds.includes(s.id))
 
   return (
     <div className={styles.page}>
@@ -848,20 +863,20 @@ export default function ChatPage(): React.JSX.Element {
                     ) : (
                       enabledSkills.map((s) => (
                         <button
-                          key={s.name}
+                          key={s.id}
                           type="button"
                           className={`${styles.skillItem} ${
-                            activeSkill === s.name ? styles.skillItemActive : ''
+                            activeSkill === s.id ? styles.skillItemActive : ''
                           }`}
                           onClick={() => {
-                            setActiveSkill(activeSkill === s.name ? null : s.name)
+                            setActiveSkill(activeSkill === s.id ? null : s.id)
                             setSkillMenuOpen(false)
                           }}
                         >
-                          <span className={styles.skillItemName}>{s.name}</span>
-                          {(skillDescriptionsZh[s.name] ?? s.description) && (
+                          <span className={styles.skillItemName}>{s.label}</span>
+                          {(skillDescriptionsZh[s.id] ?? s.description) && (
                             <span className={styles.skillItemDesc}>
-                              {skillDescriptionsZh[s.name] ?? s.description}
+                              {skillDescriptionsZh[s.id] ?? s.description}
                             </span>
                           )}
                         </button>
