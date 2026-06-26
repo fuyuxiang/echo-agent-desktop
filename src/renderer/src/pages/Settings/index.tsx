@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { GeneralSection } from './sections/GeneralSection'
 import { ModelSection } from './sections/ModelSection'
 import { LocalModelSection } from './sections/LocalModelSection'
-import { EnvironmentSection } from './sections/EnvironmentSection'
 import { AboutSection } from './sections/AboutSection'
 import MemoryPage from '@/pages/Memory'
 import SkillsPage from '@/pages/Skills'
@@ -14,7 +13,6 @@ type Section =
   | 'localModel'
   | 'memoryStore'
   | 'skills'
-  | 'environment'
   | 'about'
 
 const SECTIONS: { key: Section; label: string }[] = [
@@ -23,7 +21,6 @@ const SECTIONS: { key: Section; label: string }[] = [
   { key: 'localModel', label: '本地模型' },
   { key: 'skills', label: '技能库' },
   { key: 'memoryStore', label: '记忆' },
-  { key: 'environment', label: '运行环境' },
   { key: 'about', label: '关于' }
 ]
 
@@ -45,8 +42,6 @@ export default function SettingsPage(): React.JSX.Element {
         return <SkillsPage />
       case 'memoryStore':
         return <MemoryPage />
-      case 'environment':
-        return <EnvironmentSection />
       case 'about':
         return <AboutSection />
     }
