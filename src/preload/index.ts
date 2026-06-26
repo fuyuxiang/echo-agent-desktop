@@ -6,6 +6,8 @@ import type {
   MediaPermissionType,
   NotifyOptions,
   OpenDialogOptions,
+  PermissionRequest,
+  PermissionResponse,
   SaveDialogOptions
 } from '@shared/types'
 import type { MeetingSummaryInput } from '@shared/types/meeting'
@@ -158,6 +160,16 @@ const api: BridgeApi = {
       ipcRenderer.on(IpcChannels.agentChat.event, listener)
       return () => ipcRenderer.removeListener(IpcChannels.agentChat.event, listener)
     }
+  },
+
+  agentPermission: {
+    onRequest: (handler: (req: PermissionRequest) => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, req: PermissionRequest): void => handler(req)
+      ipcRenderer.on(IpcChannels.agentPermission.request, listener)
+      return () => ipcRenderer.removeListener(IpcChannels.agentPermission.request, listener)
+    },
+    respond: (res: PermissionResponse) =>
+      ipcRenderer.invoke(IpcChannels.agentPermission.respond, res)
   },
 
   agentMemory: {
