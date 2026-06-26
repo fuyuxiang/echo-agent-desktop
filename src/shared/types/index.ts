@@ -96,9 +96,7 @@ export interface SaveDialogOptions {
 
 export type {
   AgentProcessStatus,
-  AgentEnvInfo,
   AgentStartResult,
-  InstallProgressEvent,
   AgentConnectionConfig,
   ModelProviderConfig,
   AgentConfig,

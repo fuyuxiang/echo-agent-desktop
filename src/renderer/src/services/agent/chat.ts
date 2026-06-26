@@ -1,36 +1,14 @@
-import { agentRequest } from './proxy-request'
-import { AgentApiUrls } from '@/request/urls'
-import { useAgentStore } from '@/stores/agentStore'
-
-function getBaseUrl(): string {
-  return useAgentStore.getState().baseUrl
-}
-
+// src/renderer/src/services/agent/chat.ts
+// P6: 会话管理改走 window.api.agentChat + window.api.db.session,本文件保留空 stub 兼容旧 import
 export interface Session {
-  session_key: string
-  platform: string
-  chat_id: string
-  last_activity: string
-  message_count: number
+  chatId: string
+  title: string
+  createdAt: number
+  lastActivity: number
 }
 
 export const chatAPI = {
-  getSessions: () =>
-    agentRequest
-      .get<{ sessions: Session[] }>(`${getBaseUrl()}${AgentApiUrls.sessions}`)
-      .then((r) => r.data),
-
-  deleteSession: (key: string) =>
-    agentRequest.delete(`${getBaseUrl()}${AgentApiUrls.sessionDelete(key)}`).then((r) => r.data),
-
-  sendMessage: (text: string, opts?: { wait?: boolean }) =>
-    agentRequest
-      .post(`${getBaseUrl()}${AgentApiUrls.message}`, {
-        platform: 'desktop',
-        user_id: 'local-user',
-        chat_id: useAgentStore.getState().currentSessionKey,
-        text,
-        wait: opts?.wait ?? false
-      })
-      .then((r) => r.data)
+  list: (): Promise<{ sessions: Session[] }> => Promise.resolve({ sessions: [] }),
+  delete: (chatId: string): Promise<{ success?: boolean }> =>
+    window.api.agentChat.deleteSession(chatId).then(() => ({ success: true }))
 }

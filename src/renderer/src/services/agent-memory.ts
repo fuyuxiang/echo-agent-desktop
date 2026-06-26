@@ -1,46 +1,48 @@
+// src/renderer/src/services/agent-memory.ts
+// P6 sweep: 适配新 MemoryEntry(camelCase + id: number)
 import { memoryAPI, type MemoryEntry } from './agent/memory'
 
-/** 个人记忆(本地 echo-agent 维护,存于用户本机) */
+/** 对外暴露: id 仍以 string 表示(对外无感),字段对齐 P3 真实 MemoryRecord */
 export interface PersonalMemory {
   id: string
-  type: string
-  tier: string
-  key: string
   content: string
+  memType: string
+  tier: string
+  keywords: string[]
   tags: string[]
+  contextDesc: string
   importance: number
-  sourceSession: string
-  createdAt: string
-  updatedAt: string
+  confidence: number
+  salience: number | null
+  createdAt: number
+  updatedAt: number
 }
 
-/** 把 echo-agent 的 MemoryEntry(snake_case)映射为对外的 PersonalMemory(camelCase) */
 export function toPersonalMemory(entry: MemoryEntry): PersonalMemory {
   return {
-    id: entry.id,
-    type: entry.type,
-    tier: entry.tier,
-    key: entry.key ?? '',
+    id: String(entry.id),
     content: entry.content,
-    tags: entry.tags ?? [],
-    importance: entry.importance ?? 0,
-    sourceSession: entry.source_session ?? '',
-    createdAt: entry.created_at ?? '',
-    updatedAt: entry.updated_at ?? ''
+    memType: entry.memType,
+    tier: entry.tier,
+    keywords: entry.keywords,
+    tags: entry.tags,
+    contextDesc: entry.contextDesc,
+    importance: entry.importance,
+    confidence: entry.confidence,
+    salience: entry.salience,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt
   }
 }
 
-/** 列出全部个人记忆 */
 export function listPersonalMemory(): Promise<PersonalMemory[]> {
   return memoryAPI.list().then((r) => r.entries.map(toPersonalMemory))
 }
 
-/** 语义检索个人记忆 */
 export function searchPersonalMemory(query: string): Promise<PersonalMemory[]> {
   return memoryAPI.search(query).then((r) => r.results.map((x) => toPersonalMemory(x.entry)))
 }
 
-/** 删除一条个人记忆 */
 export function deletePersonalMemory(id: string): Promise<void> {
-  return memoryAPI.delete(id).then(() => {})
+  return memoryAPI.delete(Number(id)).then(() => {})
 }
