@@ -1,5 +1,23 @@
 // src/main/agent/runtime/__tests__/AgentRuntime.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import os from 'node:os'
+
+// AgentRuntime 经 tools/scope → workspace → store 间接依赖 electron / electron-store,node 环境需 mock
+vi.mock('electron', () => ({
+  app: { getPath: () => os.tmpdir(), getAppPath: () => os.tmpdir(), isPackaged: false },
+  safeStorage: { isEncryptionAvailable: () => false }
+}))
+vi.mock('electron-store', () => ({
+  default: class FakeStore {
+    get(): undefined {
+      return undefined
+    }
+    set(): void {}
+    delete(): void {}
+    clear(): void {}
+  }
+}))
+
 import { AgentRuntime, type AgentRuntimeDeps } from '../AgentRuntime'
 import { ToolRegistry } from '../../tools/registry'
 import { NoopMemoryGateway } from '../../tools/memory-facade'
@@ -156,6 +174,24 @@ describe('AgentRuntime 工具循环', () => {
     rt.on((e) => evs.push(e))
     await expect(rt.send('c1', 'x')).resolves.toBeUndefined()
     expect(evs.some((e) => e.type === 'error')).toBe(true)
+  })
+
+  it('流中 error delta 转 error 事件,不落空 final、不触发 capture', async () => {
+    // provider 流中吐 error(鉴权/HTTP/网络),不应被当成空回复
+    const provider = providerFrom([
+      [{ type: 'text', text: 'partial' }, { type: 'error', message: 'HTTP 401: invalid key' }]
+    ])
+    const d = deps(provider)
+    const captureSpy = vi.spyOn(d.memory, 'capture')
+    const rt = new AgentRuntime(d)
+    const evs: RuntimeEvent[] = []
+    rt.on((e) => evs.push(e))
+    await rt.send('c1', 'x')
+    const err = evs.find((e) => e.type === 'error') as { message: string } | undefined
+    expect(err?.message).toContain('401')
+    expect(evs.some((e) => e.type === 'final')).toBe(false)
+    expect(captureSpy).not.toHaveBeenCalled()
+    expect(evs[evs.length - 1].type).toBe('done')
   })
 })
 
