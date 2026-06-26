@@ -211,6 +211,35 @@ export interface BridgeApi {
     onEvent(handler: (ev: Record<string, unknown>) => void): () => void
   }
 
+  /** 认知记忆 IPC(P3) */
+  agentMemory: {
+    list(opts: { limit: number; offset: number }): Promise<Array<Record<string, unknown>>>
+    search(opts: { query: string; topK?: number }): Promise<Array<Record<string, unknown>>>
+    get(id: number): Promise<{ record: Record<string, unknown>; provenance: Record<string, unknown> | null } | null>
+    update(
+      id: number,
+      patch: { content?: string; importance?: number; keywords?: string[]; tags?: string[]; contextDesc?: string }
+    ): Promise<{ success: boolean }>
+    delete(id: number): Promise<{ success: boolean }>
+    stats(): Promise<{
+      total: number
+      byTier: Record<string, number>
+      byType: Record<string, number>
+      avgConfidence: number
+      linkCount: number
+      episodeCount: number
+      unconsolidatedCount: number
+    }>
+  }
+
+  /** 技能 IPC(P4) */
+  agentSkill: {
+    list(): Promise<Array<{ id: string; label: string; description: string; kind: 'prompt' | 'code' }>>
+    active(chatId: string): Promise<string[]>
+    activate(chatId: string, skillId: string): Promise<{ success: boolean }>
+    deactivate(chatId: string, skillId: string): Promise<{ success: boolean }>
+  }
+
   /** 平台信息(同步常量,preload 注入) */
   platform: {
     /** 是否 macOS */
