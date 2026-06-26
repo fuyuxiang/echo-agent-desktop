@@ -1,8 +1,9 @@
 // src/main/agent/skills/SkillManager.ts
 import type { SkillModule, SkillManifest } from './types'
 import type { Tool } from '../tools/base'
+import type { SkillGateway } from '../tools/skill-facade'
 
-export class SkillManager {
+export class SkillManager implements SkillGateway {
   private modules = new Map<string, SkillModule>()
   private activeByChat = new Map<string, Set<string>>()
 
