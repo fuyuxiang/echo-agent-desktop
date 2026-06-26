@@ -78,7 +78,7 @@ function toAnthropicMessage(m: ChatMessage): Record<string, unknown> {
     const blocks: Record<string, unknown>[] = []
     if (m.content) blocks.push({ type: 'text', text: m.content })
     for (const tc of m.toolCalls) {
-      let input: unknown = {}
+      let input: unknown
       try {
         input = JSON.parse(tc.arguments || '{}')
       } catch {
