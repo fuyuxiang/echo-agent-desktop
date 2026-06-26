@@ -101,7 +101,10 @@ export type {
   ModelProviderConfig,
   AgentConfig,
   AccessScope,
-  AgentScopeConfig
+  AgentScopeConfig,
+  PermissionRequest,
+  PermissionResponse,
+  ApprovalChoice
 } from './agent'
 
 export type { MeetingDTO, SegmentDTO, SummaryDTO, MeetingSummaryInput } from './meeting'

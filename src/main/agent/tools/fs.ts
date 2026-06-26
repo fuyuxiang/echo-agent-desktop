@@ -1,7 +1,7 @@
 // src/main/agent/tools/fs.ts
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { Tool, ToolResult } from './base'
+import type { Tool, ToolContext, ToolResult } from './base'
 import { assertInScope } from './scope'
 
 const MAX_READ_BYTES = 256 * 1024
@@ -18,9 +18,9 @@ export const readFileTool: Tool = {
     properties: { path: { type: 'string', description: '文件路径' } },
     required: ['path']
   },
-  async execute(args): Promise<ToolResult> {
+  async execute(args, ctx: ToolContext): Promise<ToolResult> {
     const p = String(args.path ?? '')
-    const scoped = assertInScope(p)
+    const scoped = await assertInScope(p, ctx.workspace)
     if (!scoped.ok) return fail(scoped.reason)
     try {
       const buf = await fs.readFile(scoped.resolved)
@@ -44,9 +44,9 @@ export const writeFileTool: Tool = {
     },
     required: ['path', 'content']
   },
-  async execute(args): Promise<ToolResult> {
+  async execute(args, ctx: ToolContext): Promise<ToolResult> {
     const p = String(args.path ?? '')
-    const scoped = assertInScope(p)
+    const scoped = await assertInScope(p, ctx.workspace)
     if (!scoped.ok) return fail(scoped.reason)
     try {
       await fs.mkdir(path.dirname(scoped.resolved), { recursive: true })
@@ -66,9 +66,9 @@ export const listDirTool: Tool = {
     properties: { path: { type: 'string' } },
     required: ['path']
   },
-  async execute(args): Promise<ToolResult> {
+  async execute(args, ctx: ToolContext): Promise<ToolResult> {
     const p = String(args.path ?? '')
-    const scoped = assertInScope(p)
+    const scoped = await assertInScope(p, ctx.workspace)
     if (!scoped.ok) return fail(scoped.reason)
     try {
       const entries = await fs.readdir(scoped.resolved, { withFileTypes: true })
@@ -92,11 +92,11 @@ export const editFileTool: Tool = {
     },
     required: ['path', 'oldText', 'newText']
   },
-  async execute(args): Promise<ToolResult> {
+  async execute(args, ctx: ToolContext): Promise<ToolResult> {
     const p = String(args.path ?? '')
     const oldText = String(args.oldText ?? '')
     const newText = String(args.newText ?? '')
-    const scoped = assertInScope(p)
+    const scoped = await assertInScope(p, ctx.workspace)
     if (!scoped.ok) return fail(scoped.reason)
     if (oldText === '') return fail('oldText 不能为空')
     try {

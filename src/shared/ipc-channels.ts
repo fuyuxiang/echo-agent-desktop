@@ -84,6 +84,14 @@ export const IpcChannels = {
     setScope: 'agent:set-scope'
   },
 
+  /** Agent 工具权限审批(受限档逐次授权) */
+  agentPermission: {
+    /** 主进程 -> 渲染层:请求用户对一次高危动作授权 */
+    request: 'agent:permission:request',
+    /** 渲染层 -> 主进程:回填用户决定 */
+    respond: 'agent:permission:respond'
+  },
+
   /** 本地语音识别(sherpa-onnx) */
   asr: {
     start: 'asr:start',
