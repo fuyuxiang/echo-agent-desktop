@@ -12,7 +12,7 @@ describe('冻结门面 Noop 实现', () => {
   })
   it('NoopSkillGateway 返回空提示与空工具', () => {
     const g = new NoopSkillGateway()
-    expect(g.activePromptFragments()).toEqual([])
-    expect(g.tools()).toEqual([])
+    expect(g.activePromptFragments('c1')).toEqual([])
+    expect(g.tools('c1')).toEqual([])
   })
 })
