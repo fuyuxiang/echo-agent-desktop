@@ -1,5 +1,6 @@
 import { registerAgentIpcHandlers } from './agent'
 import { registerAgentMemoryIpc } from './agent-memory'
+import { registerAgentSkillIpc } from './agent-skill'
 import { registerAppHandlers } from './app'
 import { registerAsrHandlers } from './asr'
 import { registerDbHandlers } from './db'
@@ -26,4 +27,5 @@ export function registerAllIpcHandlers(): void {
   registerAsrHandlers()
   registerMeetingHandlers()
   registerAgentMemoryIpc()
+  registerAgentSkillIpc()
 }
