@@ -5,7 +5,6 @@ import { router } from '@/router'
 import { ToastContainer } from '@/components/Toast'
 import { useTheme } from '@/hooks'
 import { useAppStore } from '@/stores/appStore'
-import { useAgentStore } from '@/stores/agentStore'
 import { useAgentScopeStore } from '@/stores/agentScopeStore'
 import { logger } from '@/utils'
 import i18n from '@/i18n'
@@ -36,19 +35,9 @@ export default function App(): React.JSX.Element {
     }
   }, [language])
 
-  // 跟踪本地 Agent 进程状态: 运行后同步实际端口, 使 baseUrl 指向本机 Agent
+  // P6: 加载 scope 配置(Python 状态订阅已移除)
   useEffect(() => {
-    const { setProcessStatus, setLocalPort } = useAgentStore.getState()
     void useAgentScopeStore.getState().loadScope()
-    const unsubscribe = window.api.agent.onStatusChanged((status) => {
-      setProcessStatus(status)
-      if (status === 'running') {
-        window.api.agent.getPort().then((port) => {
-          if (port) setLocalPort(port)
-        })
-      }
-    })
-    return unsubscribe
   }, [])
 
   return (
