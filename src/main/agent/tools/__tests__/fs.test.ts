@@ -17,7 +17,9 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'echo-fs-'))
   vi.resetModules()
   // full 档放行所有路径,聚焦 fs 行为
-  vi.doMock('../scope', () => ({ assertInScope: (p: string) => ({ ok: true, resolved: path.resolve(p) }) }))
+  vi.doMock('../scope', () => ({
+    assertInScope: async (p: string) => ({ ok: true, resolved: path.resolve(p) })
+  }))
 })
 
 describe('fs tools', () => {

@@ -11,6 +11,7 @@ import { registerPermissionHandlers } from './permission'
 import { registerStoreHandlers } from './store'
 import { registerSystemHandlers } from './system'
 import { registerWindowHandlers } from './window'
+import { registerApprovalBridge } from '../agent/permission/approval-bridge'
 
 /**
  * IPC handler 注册中心(app ready 后调用一次)
@@ -30,4 +31,5 @@ export function registerAllIpcHandlers(): void {
   registerAgentMemoryIpc()
   registerAgentSkillIpc()
   registerAgentChatIpc()
+  registerApprovalBridge()
 }
