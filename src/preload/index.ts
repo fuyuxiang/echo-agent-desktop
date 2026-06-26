@@ -173,6 +173,12 @@ const api: BridgeApi = {
     listSessions: () => ipcRenderer.invoke(IpcChannels.agentChat.listSessions),
     deleteSession: (chatId: string) =>
       ipcRenderer.invoke(IpcChannels.agentChat.deleteSession, { chatId }),
+    init: (cfg: {
+      providerId: string
+      model: string
+      baseUrl: string
+      apiKeyStoreKey: string
+    }) => ipcRenderer.invoke(IpcChannels.agentChat.init, cfg),
     onEvent: (handler: (ev: Record<string, unknown>) => void) => {
       const listener = (_e: Electron.IpcRendererEvent, ev: Record<string, unknown>): void =>
         handler(ev)
