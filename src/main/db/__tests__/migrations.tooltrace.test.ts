@@ -9,8 +9,8 @@ beforeEach(() => {
 })
 
 describe('migration v4 chat_messages 工具轨迹列', () => {
-  it('user_version 升到 4', () => {
-    expect(db.pragma('user_version', { simple: true })).toBe(4)
+  it('user_version 升到 5', () => {
+    expect(db.pragma('user_version', { simple: true })).toBe(5)
   })
   it('chat_messages 含 tool_calls/tool_call_id/tool_name 列', () => {
     const cols = (db.prepare("PRAGMA table_info(chat_messages)").all() as { name: string }[]).map(

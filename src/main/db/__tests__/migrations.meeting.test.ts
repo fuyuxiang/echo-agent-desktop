@@ -16,7 +16,7 @@ describe('migration v3 meeting tables', () => {
     expect(names).toContain('meeting_segments')
     expect(names).toContain('meeting_summaries')
   })
-  it('user_version 升到 4', () => {
-    expect(db.pragma('user_version', { simple: true })).toBe(4)
+  it('user_version 升到 5', () => {
+    expect(db.pragma('user_version', { simple: true })).toBe(5)
   })
 })
