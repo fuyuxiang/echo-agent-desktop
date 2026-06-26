@@ -128,5 +128,13 @@ export const IpcChannels = {
     update: 'agent:memory:update',
     delete: 'agent:memory:delete',
     stats: 'agent:memory:stats'
+  },
+
+  /** 技能体系(P4) */
+  agentSkill: {
+    list: 'agent:skill:list',
+    active: 'agent:skill:active',
+    activate: 'agent:skill:activate',
+    deactivate: 'agent:skill:deactivate'
   }
 } as const
