@@ -11,11 +11,7 @@ import { findRecordingMeetings, updateMeetingStatus } from './db/dao/meeting'
 import { reapOrphans } from './meeting/orphan'
 import { registerAllIpcHandlers } from './ipc'
 import { initASR } from './asr'
-// P5: Python agent 不再主进程拉起,改由渲染层 initAgentRuntime;以下导入保留到 P6 物理删除
-// import { startAgent, stopAgent } from './agent-process/manager'
-// import { getEnvInfo } from './agent-process/python-env'
-// import { hasAgentConfig } from './agent-process/config-gen'
-// import { secureGet } from './store'
+// P6: agent-process 已物理删除,Python agent 运行时下线
 
 /**
  * 主进程入口
