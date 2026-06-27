@@ -30,11 +30,9 @@ export async function applyServerModelConfigAndStart(): Promise<{
   ok: boolean
   error?: string
 }> {
-  logger.info('[model-bootstrap] 开始装配 agent runtime...')
   try {
     // C 本地模型(Ollama)优先
     const localModel = await storage.get<LocalOllamaConfig>(LOCAL_OLLAMA_CONFIG_KEY)
-    logger.info('[model-bootstrap] 本地模型配置:', localModel)
     if (localModel?.enabled && localModel.baseUrl && localModel.modelName) {
       // Ollama 走 OpenAI 兼容协议,本身无需 API Key
       await window.api.agentChat.init({
@@ -44,7 +42,7 @@ export async function applyServerModelConfigAndStart(): Promise<{
         apiKeyStoreKey: apiKeyStoreKey('ollama')
       })
       useAgentStore.getState().setReady(true)
-      logger.info(`[model-bootstrap] 本地模型(Ollama)已装配`)
+      logger.info('[model-bootstrap] 本地模型(Ollama)已装配')
       return { ok: true }
     }
 
@@ -52,16 +50,15 @@ export async function applyServerModelConfigAndStart(): Promise<{
     let cfg: ModelConfigDTO
     try {
       cfg = await fetchModelConfig()
-      logger.info('[model-bootstrap] 服务器模型配置:', cfg)
     } catch (e) {
-      // 未登录或网络错误:跳过服务器配置,不报错
+      // 未登录或网络错误:跳过服务器配置,不报错,让用户先用界面
       logger.warn('[model-bootstrap] 无法获取服务器模型配置(可能未登录):', e)
       return { ok: true }
     }
 
     if (!cfg.baseUrl || !cfg.modelName) {
-      logger.warn('[model-bootstrap] 服务器未配置模型,跳过初始化')
       // 不报错,让用户可以使用界面,在发送消息时再提示配置模型
+      logger.warn('[model-bootstrap] 服务器未配置模型,跳过初始化')
       return { ok: true }
     }
 
@@ -69,20 +66,17 @@ export async function applyServerModelConfigAndStart(): Promise<{
     const providerId = 'openai'
     const storeKey = apiKeyStoreKey(providerId)
 
-    // 如果服务器下发了 apiKey,先保存到 safeStorage(方案A 旧行为兼容)
+    // 服务器下发 apiKey 时先存入 safeStorage(方案A);主进程从 safeStorage 读取,渲染层不持有
     if (cfg.apiKey) {
-      logger.info('[model-bootstrap] 保存服务器下发的 API Key')
       await storage.secure.set(storeKey, cfg.apiKey)
     }
 
-    logger.info('[model-bootstrap] 准备初始化 runtime...')
     await window.api.agentChat.init({
       providerId,
       model: cfg.modelName,
       baseUrl: cfg.baseUrl,
       apiKeyStoreKey: storeKey
     })
-    logger.info('[model-bootstrap] init 调用完成,准备 setReady...')
     useAgentStore.getState().setReady(true)
     logger.info(`[model-bootstrap] agent runtime 已装配 provider=${providerId} model=${cfg.modelName}`)
     return { ok: true }

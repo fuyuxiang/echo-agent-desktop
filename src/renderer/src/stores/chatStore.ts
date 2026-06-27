@@ -135,13 +135,18 @@ export const useChatStore = create<ChatState>()(
     loadMessagesFromLocal: async (chatId) => {
       const rows = await db.session.getMessages(chatId)
       set((s) => {
-        s.messages = rows.map((r) => ({
-          id: `m-${r.id}`,
-          role: r.role as ChatMessage['role'],
-          content: r.content,
-          reasoning: r.reasoning ?? undefined,
-          timestamp: r.createdAt
-        }))
+        s.messages = rows.map((r) => {
+          // 兼容本次修复前落库的历史消息:正文里可能残留 <think> 标签,加载时剥离归位
+          const { reasoning: legacyReasoning, content } = parseThinkingTags(r.content)
+          const reasoning = r.reasoning ?? (legacyReasoning || undefined)
+          return {
+            id: `m-${r.id}`,
+            role: r.role as ChatMessage['role'],
+            content,
+            reasoning,
+            timestamp: r.createdAt
+          }
+        })
         // 切换会话时必须复位生成态, 否则上一会话的 isGenerating=true 会被带入新会话,
         // 导致发送按钮变停止按钮、无法发送(会话被锁死)
         s.currentStreamBuffer = ''
@@ -180,17 +185,8 @@ export const useChatStore = create<ChatState>()(
         s.currentStreamBuffer += delta
         const last = s.messages[s.messages.length - 1]
         if (last?.isStreaming) {
-          // 实时解析 <think> 标签，让思考过程在流式中也能显示
-          const { reasoning, content } = parseThinkingTags(s.currentStreamBuffer)
-          last.content = content
-          if (reasoning) {
-            // 合并流式 reasoning 和 <think> 标签中的内容
-            const combinedReasoning = [s.currentReasoningBuffer, reasoning]
-              .map((part) => part.trim())
-              .filter(Boolean)
-              .join('\n\n')
-            last.reasoning = combinedReasoning
-          }
+          // think 标签已在 provider 层归一为 reasoning,这里只追加纯正文
+          last.content = s.currentStreamBuffer
         }
       }),
 
@@ -207,18 +203,15 @@ export const useChatStore = create<ChatState>()(
       set((s) => {
         const last = s.messages[s.messages.length - 1]
         if (last?.isStreaming) {
+          // think 标签已在 provider 层剥离;final 正文与流式增量均为纯文本
           const resolvedContent = fullContent.trim() ? fullContent : s.currentStreamBuffer
-
-          // 解析并移除 <think> 标签
-          const { reasoning: thinkingReasoning, content: cleanedContent } = parseThinkingTags(resolvedContent)
-
-          const derivedReasoning = deriveReasoningFromStream(s.currentStreamBuffer, cleanedContent)
-          const reasoning = [s.currentReasoningBuffer, thinkingReasoning, derivedReasoning]
+          const derivedReasoning = deriveReasoningFromStream(s.currentStreamBuffer, resolvedContent)
+          const reasoning = [s.currentReasoningBuffer, derivedReasoning]
             .map((part) => part.trim())
             .filter(Boolean)
             .join('\n\n')
           if (reasoning) last.reasoning = reasoning
-          last.content = cleanedContent
+          last.content = resolvedContent
           last.isStreaming = false
         }
         s.currentStreamBuffer = ''
