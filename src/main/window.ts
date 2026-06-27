@@ -35,7 +35,7 @@ export function createMainWindow(): BrowserWindow {
     // mac: 隐藏标题栏但保留红绿灯;win: 完全无边框,标题栏自绘
     ...(isMac ? { titleBarStyle: 'hiddenInset' as const } : { frame: false }),
     webPreferences: {
-      preload: join(__dirname, '../preload/index.mjs'),
+      preload: join(__dirname, '../preload/index.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
       // preload 仅用 contextBridge/ipcRenderer,不依赖 Node 模块,可开启沙箱收敛提权面
