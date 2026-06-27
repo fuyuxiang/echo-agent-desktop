@@ -15,7 +15,6 @@ export function registerAgentChatIpc(): void {
         console.error('[agent-chat] 发送失败: runtime 未初始化')
         return
       }
-      console.log('[agent-chat] 发送消息 chatId=', opts.chatId, 'text=', opts.text.substring(0, 50))
       void rt.send(opts.chatId, opts.text)
     }
   )
