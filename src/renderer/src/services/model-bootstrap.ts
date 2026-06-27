@@ -25,11 +25,18 @@ function apiKeyStoreKey(providerId: string): string {
  *
  * 流程:拿 { providerId, model, baseUrl } -> 主进程用 safeStorage 取 apiKey -> createProvider -> createAgentRuntime。
  * 渲染层永不接触 apiKey。
+ *
+ * 返回:
+ * - configured:runtime 是否真正装配成功(init 调通)。false 表示发送会失败
+ * - retryable:本次未装配是否为暂时性原因(网络/超时),true 时上层可在网络恢复后重试
  */
 export async function applyServerModelConfigAndStart(): Promise<{
   ok: boolean
+  configured: boolean
+  retryable: boolean
   error?: string
 }> {
+  const agent = useAgentStore.getState()
   try {
     // C 本地模型(Ollama)优先
     const localModel = await storage.get<LocalOllamaConfig>(LOCAL_OLLAMA_CONFIG_KEY)
@@ -41,9 +48,10 @@ export async function applyServerModelConfigAndStart(): Promise<{
         baseUrl: toOllamaOpenAIBase(localModel.baseUrl),
         apiKeyStoreKey: apiKeyStoreKey('ollama')
       })
-      useAgentStore.getState().setReady(true)
+      agent.setReady(true)
+      agent.setConfigured(true)
       logger.info('[model-bootstrap] 本地模型(Ollama)已装配')
-      return { ok: true }
+      return { ok: true, configured: true, retryable: false }
     }
 
     // 尝试获取服务器模型配置(需要登录)
@@ -51,15 +59,17 @@ export async function applyServerModelConfigAndStart(): Promise<{
     try {
       cfg = await fetchModelConfig()
     } catch (e) {
-      // 未登录或网络错误:跳过服务器配置,不报错,让用户先用界面
-      logger.warn('[model-bootstrap] 无法获取服务器模型配置(可能未登录):', e)
-      return { ok: true }
+      // 网络/超时/未登录:UI 仍可用,但 runtime 未装配。标记 retryable,待网络恢复或登录后重试
+      logger.warn('[model-bootstrap] 无法获取服务器模型配置(可能未登录/网络异常):', e)
+      agent.setReady(true)
+      return { ok: true, configured: false, retryable: true }
     }
 
     if (!cfg.baseUrl || !cfg.modelName) {
-      // 不报错,让用户可以使用界面,在发送消息时再提示配置模型
+      // 服务器未配置模型:终态,等用户去配置,不必反复重试
       logger.warn('[model-bootstrap] 服务器未配置模型,跳过初始化')
-      return { ok: true }
+      agent.setReady(true)
+      return { ok: true, configured: false, retryable: false }
     }
 
     // 默认走 openai 兼容协议
@@ -77,12 +87,15 @@ export async function applyServerModelConfigAndStart(): Promise<{
       baseUrl: cfg.baseUrl,
       apiKeyStoreKey: storeKey
     })
-    useAgentStore.getState().setReady(true)
+    agent.setReady(true)
+    agent.setConfigured(true)
     logger.info(`[model-bootstrap] agent runtime 已装配 provider=${providerId} model=${cfg.modelName}`)
-    return { ok: true }
+    return { ok: true, configured: true, retryable: false }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     logger.error('[model-bootstrap] 装配失败:', msg)
-    return { ok: false, error: msg }
+    // init 抛错多为暂时性(主进程/网络),置就绪让 UI 可用,并允许重试
+    agent.setReady(true)
+    return { ok: false, configured: false, retryable: true, error: msg }
   }
 }
