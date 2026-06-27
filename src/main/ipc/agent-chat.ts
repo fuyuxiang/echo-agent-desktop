@@ -2,7 +2,7 @@
 import { ipcMain } from 'electron'
 import { IpcChannels } from '@shared/ipc-channels'
 import { getAgentRuntime } from '../agent/runtime-singleton'
-import { initAgentRuntime, type RuntimeInitConfig } from '../agent/runtime-singleton'
+import { initAgentRuntime, generateTitle, type RuntimeInitConfig } from '../agent/runtime-singleton'
 import { listChatSessions, deleteChatSession } from '../db/dao/session'
 import { clearSessionAllowlist } from '../agent/permission/broker'
 
@@ -37,4 +37,8 @@ export function registerAgentChatIpc(): void {
     initAgentRuntime(cfg)
     return { success: true }
   })
+
+  ipcMain.handle(IpcChannels.agentChat.generateTitle, (_e, opts: { firstUserMessage: string }) =>
+    generateTitle(opts.firstUserMessage)
+  )
 }
