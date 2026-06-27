@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 import { useMeetingStore } from '@/stores/meetingStore'
 import { permission } from '@/utils/permission'
 import { toast } from '@/components/Toast'
@@ -45,9 +45,16 @@ interface Pipeline {
   clockTimer: ReturnType<typeof setInterval>
 }
 
+/**
+ * 录制管线单例:useMeetingRecorder 在多处(Chat 输入栏、LivePanel 浮窗)被分别调用,
+ * 各自的 useRef 互不相通。若用 useRef 存管线,会出现「A 实例 start 把管线存进自己的 ref,
+ * B 实例 stop 时读到的是 null 而直接 return」的 bug,导致停止录制后窗口不消失、资源不释放。
+ * 故提升为模块级单例,让所有 hook 实例共享同一份管线引用。
+ */
+let activePipeline: Pipeline | null = null
+
 export function useMeetingRecorder() {
   const store = useMeetingStore()
-  const pipeRef = useRef<Pipeline | null>(null)
 
   const start = useCallback(async () => {
     if (store.recording) {
@@ -111,7 +118,7 @@ export function useMeetingRecorder() {
     }, 500)
     const clockTimer = setInterval(() => store.setElapsedMs(Date.now() - startedAt), 1000)
 
-    pipeRef.current = { micStream, sysStream, context, processor, pollTimer, clockTimer }
+    activePipeline = { micStream, sysStream, context, processor, pollTimer, clockTimer }
     store.setActiveMeetingId(meetingId)
     store.setAudioSource(source)
     store.setRecording(true)
@@ -119,23 +126,28 @@ export function useMeetingRecorder() {
   }, [store])
 
   const stop = useCallback(async () => {
-    const p = pipeRef.current
+    const p = activePipeline
     const id = store.activeMeetingId
-    if (!p || !id) return
-    clearInterval(p.pollTimer)
-    clearInterval(p.clockTimer)
-    p.processor.disconnect()
-    p.micStream.getTracks().forEach((t) => t.stop())
-    p.sysStream?.getTracks().forEach((t) => t.stop())
-    await p.context.close()
-    pipeRef.current = null
-    try {
-      await window.api.meeting.stop(id)
-      await window.api.meeting.diarize(id)
-    } catch (e) {
-      logger.error('[meeting] stop failed', e)
+    // 即使管线已被清理,只要还有 activeMeetingId 就要把录制态复位,避免浮窗残留
+    if (p) {
+      clearInterval(p.pollTimer)
+      clearInterval(p.clockTimer)
+      p.processor.disconnect()
+      p.micStream.getTracks().forEach((t) => t.stop())
+      p.sysStream?.getTracks().forEach((t) => t.stop())
+      await p.context.close()
+      activePipeline = null
+    }
+    if (id) {
+      try {
+        await window.api.meeting.stop(id)
+        await window.api.meeting.diarize(id)
+      } catch (e) {
+        logger.error('[meeting] stop failed', e)
+      }
     }
     store.setRecording(false)
+    store.setMinimized(false)
   }, [store])
 
   const toggleMinimize = useCallback(() => store.setMinimized(!store.minimized), [store])
