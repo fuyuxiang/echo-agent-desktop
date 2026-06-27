@@ -154,6 +154,8 @@ const api: BridgeApi = {
       baseUrl: string
       apiKeyStoreKey: string
     }) => ipcRenderer.invoke(IpcChannels.agentChat.init, cfg),
+    generateTitle: (firstUserMessage: string): Promise<string> =>
+      ipcRenderer.invoke(IpcChannels.agentChat.generateTitle, { firstUserMessage }),
     onEvent: (handler: (ev: Record<string, unknown>) => void) => {
       const listener = (_e: Electron.IpcRendererEvent, ev: Record<string, unknown>): void =>
         handler(ev)
