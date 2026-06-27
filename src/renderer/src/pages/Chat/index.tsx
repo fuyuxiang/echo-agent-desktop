@@ -79,6 +79,37 @@ function buildOutboundText(text: string, selectedSkill: string | null): string {
   return `${CHINESE_OUTPUT_DIRECTIVE}\n\n用户任务：\n${task}`
 }
 
+/** 截断兜底:LLM 标题不可用时,按首句/标点边界裁到 ~16 字,不强行加省略号 */
+function truncateTitle(text: string, max = 16): string {
+  const firstLine = (text.split('\n').find((l) => l.trim()) ?? '').trim()
+  if (!firstLine) return ''
+  // 优先在标点处断句,得到更自然的短标题
+  const sentence = firstLine.split(/[。！？!?；;\n]/)[0].trim() || firstLine
+  if (sentence.length <= max) return sentence
+  return sentence.slice(0, max) + '…'
+}
+
+/**
+ * 为会话生成标题:优先用 LLM 概括主题(参考豆包/ChatGPT),失败回退到截断首句。
+ * 异步执行,不阻塞消息流;生成后同步更新 store 与本地库。
+ */
+async function applySessionTitle(chatId: string, firstUserMessage: string): Promise<void> {
+  if (!firstUserMessage) return
+  let title = ''
+  try {
+    title = await window.api.agentChat.generateTitle(firstUserMessage)
+  } catch {
+    /* 忽略,走截断兜底 */
+  }
+  if (!title) title = truncateTitle(firstUserMessage)
+  if (!title) return
+  // 标题生成期间用户可能已改名/删会话,这里只在仍为占位名时回填,避免覆盖用户操作
+  const session = useChatStore.getState().sessions.find((s) => s.chatId === chatId)
+  if (session && session.title && session.title !== '新对话') return
+  useChatStore.getState().updateSessionTitle(chatId, title)
+  void db.session.updateTitle(chatId, title)
+}
+
 /**
  * 欢迎首屏工具箱磁贴(参考办公小浣熊「数据分析 / 一图读懂 / 知识库问答 / 文案生成」)
  * 点击磁贴 = 往输入框填入引导语并聚焦,不臆造后端能力
@@ -316,11 +347,7 @@ export default function ChatPage(): React.JSX.Element {
             .replace(CHINESE_OUTPUT_DIRECTIVE, '')
             .replace(/^用户任务：\n?/, '')
             .trim()
-          const title = cleaned.length > 20 ? cleaned.slice(0, 20) + '...' : cleaned
-          if (title) {
-            state.updateSessionTitle(chatId, title)
-            void db.session.updateTitle(chatId, title)
-          }
+          void applySessionTitle(chatId, cleaned)
         }
       }
     }
