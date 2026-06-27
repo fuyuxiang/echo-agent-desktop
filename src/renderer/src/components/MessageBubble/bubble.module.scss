@@ -57,6 +57,10 @@
   font-size: $font-size-base;
   line-height: 1.6;
   box-shadow: var(--shadow-card);
+  // 全局 body 禁用了文本选中(原生感),这里给消息正文显式放开,允许选中复制
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 .userBubble {
@@ -105,12 +109,16 @@
   background: var(--color-bg-subtle);
   color: var(--color-text-2);
   font-size: $font-size-sm;
+  // 思考过程正文也允许选中复制
+  user-select: text;
+  -webkit-user-select: text;
 
   summary {
     cursor: pointer;
     color: var(--color-text-3);
     font-weight: 650;
     user-select: none;
+    -webkit-user-select: none;
   }
 
   &[open] summary {
