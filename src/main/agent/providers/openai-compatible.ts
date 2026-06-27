@@ -30,7 +30,10 @@ export class OpenAICompatProvider implements ChatProvider {
         signal
       })
     } catch (e) {
-      yield { type: 'error', message: `请求失败: ${(e as Error).message}` }
+      // fetch 失败时原始网络原因藏在 cause 里(超时/DNS/证书),透出便于排查
+      const err = e as Error & { cause?: unknown }
+      const cause = err.cause instanceof Error ? err.cause.message : ''
+      yield { type: 'error', message: `请求失败: ${err.message}${cause ? ` (${cause})` : ''}` }
       return
     }
     if (!resp.ok || !resp.body) {
