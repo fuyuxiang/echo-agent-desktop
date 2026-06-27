@@ -1,4 +1,4 @@
-import { fetchModelConfig } from './server'
+import { fetchModelConfig, type ModelConfigDTO } from './server'
 import { storage } from '@/utils'
 import {
   LOCAL_OLLAMA_CONFIG_KEY,
