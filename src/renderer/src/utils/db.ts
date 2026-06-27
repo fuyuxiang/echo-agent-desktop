@@ -63,6 +63,10 @@ export const db = {
     /** 更新标题 */
     updateTitle(chatId: string, title: string): Promise<void> {
       return window.api.db.session.updateTitle(chatId, title)
+    },
+    /** 置顶/取消置顶 */
+    setPinned(chatId: string, pinned: boolean): Promise<void> {
+      return window.api.db.session.setPinned(chatId, pinned)
     }
   }
 }

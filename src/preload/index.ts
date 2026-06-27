@@ -60,7 +60,9 @@ const api: BridgeApi = {
       deleteLastAssistantMessage: (chatId) =>
         ipcRenderer.invoke(IpcChannels.db.sessionDeleteMessage, chatId),
       updateTitle: (chatId, title) =>
-        ipcRenderer.invoke(IpcChannels.db.sessionUpdateTitle, chatId, title)
+        ipcRenderer.invoke(IpcChannels.db.sessionUpdateTitle, chatId, title),
+      setPinned: (chatId, pinned) =>
+        ipcRenderer.invoke(IpcChannels.db.sessionSetPinned, chatId, pinned)
     }
   },
 
