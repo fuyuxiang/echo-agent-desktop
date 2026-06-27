@@ -66,7 +66,7 @@ export function MessageBubble({ message, onRegenerate }: MessageBubbleProps): Re
             <>
               {message.reasoning && (
                 <details className={styles.reasoning} open={message.isStreaming ? true : undefined}>
-                  <summary>过程摘要</summary>
+                  <summary>💭 思考过程</summary>
                   <StreamRenderer content={message.reasoning} />
                 </details>
               )}
