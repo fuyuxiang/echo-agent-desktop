@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { db } from '@/utils/db'
+import { parseThinkingTags } from '@/utils/parse-thinking'
 
 export interface ChatAttachmentMeta {
   id: string
@@ -179,7 +180,17 @@ export const useChatStore = create<ChatState>()(
         s.currentStreamBuffer += delta
         const last = s.messages[s.messages.length - 1]
         if (last?.isStreaming) {
-          last.content = s.currentStreamBuffer
+          // 实时解析 <think> 标签，让思考过程在流式中也能显示
+          const { reasoning, content } = parseThinkingTags(s.currentStreamBuffer)
+          last.content = content
+          if (reasoning) {
+            // 合并流式 reasoning 和 <think> 标签中的内容
+            const combinedReasoning = [s.currentReasoningBuffer, reasoning]
+              .map((part) => part.trim())
+              .filter(Boolean)
+              .join('\n\n')
+            last.reasoning = combinedReasoning
+          }
         }
       }),
 
@@ -197,13 +208,17 @@ export const useChatStore = create<ChatState>()(
         const last = s.messages[s.messages.length - 1]
         if (last?.isStreaming) {
           const resolvedContent = fullContent.trim() ? fullContent : s.currentStreamBuffer
-          const derivedReasoning = deriveReasoningFromStream(s.currentStreamBuffer, resolvedContent)
-          const reasoning = [s.currentReasoningBuffer, derivedReasoning]
+
+          // 解析并移除 <think> 标签
+          const { reasoning: thinkingReasoning, content: cleanedContent } = parseThinkingTags(resolvedContent)
+
+          const derivedReasoning = deriveReasoningFromStream(s.currentStreamBuffer, cleanedContent)
+          const reasoning = [s.currentReasoningBuffer, thinkingReasoning, derivedReasoning]
             .map((part) => part.trim())
             .filter(Boolean)
             .join('\n\n')
           if (reasoning) last.reasoning = reasoning
-          last.content = resolvedContent
+          last.content = cleanedContent
           last.isStreaming = false
         }
         s.currentStreamBuffer = ''
