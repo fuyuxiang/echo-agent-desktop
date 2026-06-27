@@ -11,7 +11,11 @@ export function registerAgentChatIpc(): void {
     IpcChannels.agentChat.send,
     (_e, opts: { chatId: string; text: string; attachments?: Array<{ id: string; name: string }> }) => {
       const rt = getAgentRuntime()
-      if (!rt) return // 未配置模型: 静默(也可由调用方先校验)
+      if (!rt) {
+        console.error('[agent-chat] 发送失败: runtime 未初始化')
+        return
+      }
+      console.log('[agent-chat] 发送消息 chatId=', opts.chatId, 'text=', opts.text.substring(0, 50))
       void rt.send(opts.chatId, opts.text)
     }
   )
