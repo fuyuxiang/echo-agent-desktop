@@ -59,6 +59,7 @@ export interface SessionManager {
   handleNewSession: () => Promise<void>
   handleSelectSession: (session: ChatSession) => Promise<void>
   handleDeleteSession: (session: ChatSession, e: React.MouseEvent) => Promise<void>
+  handleTogglePin: (session: ChatSession) => Promise<void>
 }
 
 export function useSessionManager(): SessionManager {
@@ -68,6 +69,7 @@ export function useSessionManager(): SessionManager {
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
   const loadSessionsFromLocal = useChatStore((s) => s.loadSessionsFromLocal)
   const loadMessagesFromLocal = useChatStore((s) => s.loadMessagesFromLocal)
+  const updateSessionPinned = useChatStore((s) => s.updateSessionPinned)
   const wsConnected = useAgentStore((s) => s.ready)
   const setCurrentSessionKey = useAgentStore((s) => s.setCurrentSessionKey)
   const clearExecutionEvents = useAgentStore((s) => s.clearExecutionEvents)
@@ -164,6 +166,19 @@ export function useSessionManager(): SessionManager {
     }
   }
 
+  const handleTogglePin = async (session: ChatSession): Promise<void> => {
+    const next = !session.pinned
+    // 乐观更新 + 重排;写库失败则回滚
+    updateSessionPinned(session.chatId, next)
+    try {
+      await db.session.setPinned(session.chatId, next)
+    } catch (err) {
+      updateSessionPinned(session.chatId, !next)
+      const message = err instanceof Error ? err.message : String(err)
+      toast.error(`${next ? '置顶' : '取消置顶'}失败：${message}`)
+    }
+  }
+
   return {
     sessions,
     activeChatId,
@@ -171,6 +186,7 @@ export function useSessionManager(): SessionManager {
     deletingChatId,
     handleNewSession,
     handleSelectSession,
-    handleDeleteSession
+    handleDeleteSession,
+    handleTogglePin
   }
 }

@@ -12,6 +12,7 @@ import {
   deleteLastAssistantMessage,
   getChatMessages,
   listChatSessions,
+  setChatSessionPinned,
   updateChatSessionTitle,
   upsertChatSession
 } from '../db/dao/session'
@@ -43,5 +44,9 @@ export function registerDbHandlers(): void {
   ipcMain.handle(
     IpcChannels.db.sessionUpdateTitle,
     (_e, chatId: string, title: string) => updateChatSessionTitle(chatId, title)
+  )
+  ipcMain.handle(
+    IpcChannels.db.sessionSetPinned,
+    (_e, chatId: string, pinned: boolean) => setChatSessionPinned(chatId, pinned)
   )
 }
