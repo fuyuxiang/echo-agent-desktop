@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { TitleBar } from '@/layouts/TitleBar'
 import { IconSidebar } from '@/components/IconSidebar'
@@ -10,31 +10,36 @@ import styles from './app-layout.module.scss'
 
 export function AppLayout(): React.JSX.Element {
   const isAuthed = useUserStore((s) => s.isAuthed)
-  const ready = useAgentStore((s) => s.ready)
+  const configured = useAgentStore((s) => s.configured)
   const bootingRef = useRef(false)
+  // 暂时性失败(网络/超时)后的重试节拍:递增即触发一次重装配
+  const [retryTick, setRetryTick] = useState(0)
 
-  // 应用启动时装配一次原生 AgentRuntime(setReady 后 UI 解除"等待 Agent 连接")。
-  // 无论是否登录都尝试初始化:Ollama 本地模型未登录可用;服务器模型登录后才拿得到配置;
-  // 即使失败也 setReady(true) 让 UI 可用,发送消息时再提示配置模型。
-  // 依赖 isAuthed:未登录启动后再登录时,重新尝试拉取服务器模型配置。
+  // 装配原生 AgentRuntime。ready=UI 可用门(装配/降级/失败兜底后都置位,解除"等待 Agent 连接");
+  // configured=runtime 真正装配成功。仅在尚未装配成功时尝试,避免重复装配。
+  // 触发时机:首次挂载、登录态变化(未登录→登录可拉到服务器配置)、暂时性失败后的定时重试。
   useEffect(() => {
-    if (ready || bootingRef.current) return
+    if (configured || bootingRef.current) return
     bootingRef.current = true
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
     applyServerModelConfigAndStart()
       .then((r) => {
-        if (!r.ok) {
-          logger.warn('[app-layout] agent runtime 装配失败:', r.error)
-          useAgentStore.getState().setReady(true)
+        if (!r.ok) logger.warn('[app-layout] agent runtime 装配失败:', r.error)
+        // 暂时性失败(网络/超时)且仍未装配:15s 后自动重试,网络恢复即自愈,无需重启
+        if (!r.configured && r.retryable) {
+          retryTimer = setTimeout(() => setRetryTick((t) => t + 1), 15000)
         }
       })
       .catch((e) => {
         logger.error('[app-layout] agent runtime 装配异常:', e)
         useAgentStore.getState().setReady(true)
+        retryTimer = setTimeout(() => setRetryTick((t) => t + 1), 15000)
       })
       .finally(() => {
         bootingRef.current = false
       })
-  }, [ready, isAuthed])
+    return () => clearTimeout(retryTimer)
+  }, [configured, isAuthed, retryTick])
 
   return (
     <div className={styles.layout}>

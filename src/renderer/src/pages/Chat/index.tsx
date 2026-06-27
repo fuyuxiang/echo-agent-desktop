@@ -477,6 +477,11 @@ export default function ChatPage(): React.JSX.Element {
       toast.error('附件仍在上传中，请稍候')
       return
     }
+    // runtime 未装配(模型未配置/网络未恢复):明确提示,避免发送后石沉大海
+    if (!useAgentStore.getState().configured) {
+      toast.error('模型尚未就绪，请检查网络或模型配置后重试')
+      return
+    }
     // 发送守卫: 新会话路径存在 waitForWsReady 等待窗口(此时 isGenerating 仍为 false),
     // 没有该守卫的话窗口内重复回车会对同一会话重复发送
     if (sendingRef.current) return

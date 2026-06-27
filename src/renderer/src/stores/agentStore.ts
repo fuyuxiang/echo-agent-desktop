@@ -14,8 +14,10 @@ interface ToolCallEvent {
 }
 
 interface AgentState {
-  /** 原生 runtime 是否就绪(配置已注入主进程) */
+  /** UI 可用门:true 后解除"等待 Agent 连接"遮罩。装配成功/降级/失败兜底后均置 true */
   ready: boolean
+  /** runtime 是否真正装配成功(init 调通)。为 false 时发送会失败,需重试装配 */
+  configured: boolean
   currentSessionKey: string
   toolCalls: ToolCallEvent[]
   retrievedMemories: Array<{ id: string; content: string; tier: string }>
@@ -31,6 +33,7 @@ interface AgentState {
   wsConnected: boolean
 
   setReady: (ready: boolean) => void
+  setConfigured: (configured: boolean) => void
   setCurrentSessionKey: (key: string) => void
   addToolCall: (event: ToolCallEvent) => void
   setRetrievedMemories: (entries: AgentState['retrievedMemories']) => void
@@ -49,6 +52,7 @@ export const useAgentStore = create<AgentState>()(
   persist(
     immer((set) => ({
       ready: false,
+      configured: false,
       currentSessionKey: '',
       toolCalls: [],
       retrievedMemories: [],
@@ -65,6 +69,10 @@ export const useAgentStore = create<AgentState>()(
       setReady: (ready) =>
         set((s) => {
           s.ready = ready
+        }),
+      setConfigured: (configured) =>
+        set((s) => {
+          s.configured = configured
         }),
       setCurrentSessionKey: (key) =>
         set((s) => {

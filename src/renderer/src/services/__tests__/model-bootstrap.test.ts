@@ -7,6 +7,7 @@ const storage = vi.hoisted(() => ({
 
 const logger = vi.hoisted(() => ({
   info: vi.fn(),
+  warn: vi.fn(),
   error: vi.fn()
 }))
 
@@ -16,7 +17,8 @@ const server = vi.hoisted(() => ({
 
 const agentStore = vi.hoisted(() => ({
   setReady: vi.fn(),
-  getState: vi.fn(() => ({ setReady: agentStore.setReady }))
+  setConfigured: vi.fn(),
+  getState: vi.fn(() => ({ setReady: agentStore.setReady, setConfigured: agentStore.setConfigured }))
 }))
 
 vi.mock('@/utils', () => ({ storage }))
@@ -32,7 +34,10 @@ beforeEach(() => {
       init: vi.fn(async () => ({ success: true }))
     }
   } as never
-  agentStore.getState.mockReturnValue({ setReady: agentStore.setReady })
+  agentStore.getState.mockReturnValue({
+    setReady: agentStore.setReady,
+    setConfigured: agentStore.setConfigured
+  })
 })
 
 describe('applyServerModelConfigAndStart', () => {
@@ -44,7 +49,11 @@ describe('applyServerModelConfigAndStart', () => {
     })
     const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
 
-    await expect(applyServerModelConfigAndStart()).resolves.toEqual({ ok: true })
+    await expect(applyServerModelConfigAndStart()).resolves.toEqual({
+      ok: true,
+      configured: true,
+      retryable: false
+    })
     expect(window.api.agentChat.init).toHaveBeenCalledWith({
       providerId: 'openai',
       model: 'qwen',
@@ -53,6 +62,7 @@ describe('applyServerModelConfigAndStart', () => {
     })
     expect(server.fetchModelConfig).not.toHaveBeenCalled()
     expect(agentStore.setReady).toHaveBeenCalledWith(true)
+    expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
   })
 
   it('没有本地模型时使用服务器模型配置装配 runtime', async () => {
@@ -65,7 +75,11 @@ describe('applyServerModelConfigAndStart', () => {
     })
     const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
 
-    await expect(applyServerModelConfigAndStart()).resolves.toEqual({ ok: true })
+    await expect(applyServerModelConfigAndStart()).resolves.toEqual({
+      ok: true,
+      configured: true,
+      retryable: false
+    })
     expect(window.api.agentChat.init).toHaveBeenCalledWith({
       providerId: 'openai',
       model: 'gpt-4o',
@@ -73,9 +87,10 @@ describe('applyServerModelConfigAndStart', () => {
       apiKeyStoreKey: 'openai-api-key'
     })
     expect(agentStore.setReady).toHaveBeenCalledWith(true)
+    expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
   })
 
-  it('服务器配置缺少 baseUrl/modelName 时返回失败，不初始化 runtime', async () => {
+  it('服务器未配置模型时降级为可用但未装配(终态,不重试)', async () => {
     storage.get.mockResolvedValueOnce(null)
     server.fetchModelConfig.mockResolvedValueOnce({
       baseUrl: '',
@@ -86,18 +101,38 @@ describe('applyServerModelConfigAndStart', () => {
     const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
 
     await expect(applyServerModelConfigAndStart()).resolves.toEqual({
-      ok: false,
-      error: '服务器未配置模型(baseUrl/modelName 为空)'
+      ok: true,
+      configured: false,
+      retryable: false
     })
     expect(window.api.agentChat.init).not.toHaveBeenCalled()
+    expect(agentStore.setReady).toHaveBeenCalledWith(true)
+    expect(agentStore.setConfigured).not.toHaveBeenCalled()
   })
 
-  it('装配异常时记录错误并返回错误消息', async () => {
+  it('拉取服务器配置失败(网络/超时)时降级为可用、标记可重试', async () => {
+    storage.get.mockResolvedValueOnce(null)
+    server.fetchModelConfig.mockRejectedValueOnce(new Error('fetch failed'))
+    const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
+
+    await expect(applyServerModelConfigAndStart()).resolves.toEqual({
+      ok: true,
+      configured: false,
+      retryable: true
+    })
+    expect(window.api.agentChat.init).not.toHaveBeenCalled()
+    expect(agentStore.setReady).toHaveBeenCalledWith(true)
+    expect(agentStore.setConfigured).not.toHaveBeenCalled()
+  })
+
+  it('装配异常时记录错误并返回可重试', async () => {
     storage.get.mockRejectedValueOnce(new Error('storage down'))
     const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
 
     await expect(applyServerModelConfigAndStart()).resolves.toEqual({
       ok: false,
+      configured: false,
+      retryable: true,
       error: 'storage down'
     })
     expect(logger.error).toHaveBeenCalledWith('[model-bootstrap] 装配失败:', 'storage down')
