@@ -36,6 +36,9 @@ export default defineConfig({
     }
   },
   renderer: {
+    server: {
+      port: 55133
+    },
     plugins: [
       react(),
       // import Icon from './icon.svg?react' 即可作为 React 组件使用
