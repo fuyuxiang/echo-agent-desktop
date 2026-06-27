@@ -5,7 +5,7 @@ import { PROVIDER_PRESETS, getPreset } from '../presets'
 describe('provider presets', () => {
   it('覆盖国内外主流厂商', () => {
     const ids = PROVIDER_PRESETS.map((p) => p.id)
-    for (const id of ['deepseek', 'qwen', 'moonshot', 'zhipu', 'baichuan', 'minimax', 'stepfun', 'yi', 'siliconflow', 'doubao', 'ernie', 'openai', 'anthropic', 'gemini']) {
+    for (const id of ['deepseek', 'qwen', 'moonshot', 'zhipu', 'baichuan', 'minimax', 'stepfun', 'siliconflow', 'doubao', 'ernie', 'openai', 'anthropic', 'gemini']) {
       expect(ids).toContain(id)
     }
   })

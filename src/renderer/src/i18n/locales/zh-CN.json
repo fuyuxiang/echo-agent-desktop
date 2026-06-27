@@ -171,7 +171,7 @@
     "effectiveLocal": "当前生效：本地配置",
     "loadFailed": "加载服务端配置失败",
     "loading": "加载中...",
-    "provider": "Provider",
+    "provider": "选择服务商",
     "apiKey": "API Key",
     "apiKeyPlaceholder": "输入 {{key}}",
     "save": "保存",

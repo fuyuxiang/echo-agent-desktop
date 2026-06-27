@@ -1,18 +1,7 @@
-import { Navigate } from 'react-router-dom'
-import { ROUTES } from '@/constants'
-import { useUserStore } from '@/stores/userStore'
-import { logger } from '@/utils'
-
 /**
- * P6 简化版启动守卫: 仅做登录态检查
- * (Python 环境检查 / Agent 拉起已全部下线)
- *
- * 用户态由 isAuthed 直接派生,避免 setState in effect。
+ * 启动守卫: 登录非强制,未登录也可进入主界面。
+ * 保留组件壳以便未来可插入其他启动检查(如版本升级引导)。
  */
 export function StartupGate({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const isAuthed = useUserStore((s) => s.isAuthed)
-  logger.info(`[startup] 启动守卫 isAuthed=${isAuthed}`)
-
-  if (!isAuthed) return <Navigate to={ROUTES.login} replace />
   return <>{children}</>
 }
