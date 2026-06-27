@@ -2,205 +2,140 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { storage } from '@/utils'
 import { toast } from '@/components/Toast'
-import { fetchModelConfig, type ModelConfigDTO } from '@/services/server'
-import {
-  resolveEffectiveModelConfig,
-  type LocalModelConfig
-} from '@/services/model-config'
+import { useAgentStore } from '@/stores/agentStore'
 
-const PROVIDERS = ['openai', 'anthropic', 'gemini', 'bedrock', 'openrouter'] as const
-type Provider = (typeof PROVIDERS)[number]
-const KEY_MAP: Record<string, string> = {
-  openai: 'openai-api-key',
-  anthropic: 'anthropic-api-key',
-  gemini: 'gemini-api-key',
-  bedrock: 'aws-access-key-id',
-  openrouter: 'openrouter-api-key'
+interface SavedModelConfig {
+  baseUrl: string
+  modelName: string
 }
 
-/** 本地覆盖配置持久化 key(走 storage,不用 localStorage) */
 const LOCAL_CONFIG_KEY = 'modelConfig.local'
+const API_KEY_STORE_KEY = 'openai-api-key'
 
 export function ModelSection(): React.JSX.Element {
   const { t } = useTranslation()
-  const [provider, setProvider] = useState<Provider>('openai')
-  const [apiKey, setApiKey] = useState('')
-  const [saved, setSaved] = useState(false)
-  const [saving, setSaving] = useState(false)
+  const configured = useAgentStore((s) => s.configured)
 
-  // 服务端下发配置(A)
-  const [serverConfig, setServerConfig] = useState<ModelConfigDTO | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState(false)
-
-  // 本地表单(B):允许覆盖时可编辑
   const [baseUrl, setBaseUrl] = useState('')
+  const [apiKey, setApiKey] = useState('')
   const [modelName, setModelName] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [loaded, setLoaded] = useState(false)
 
-  // 加载服务端配置 + 本地覆盖(loading 初始即 true,无需在此同步置位)
   useEffect(() => {
     let cancelled = false
     Promise.all([
-      fetchModelConfig(),
-      storage.get<LocalModelConfig>(LOCAL_CONFIG_KEY)
-    ])
-      .then(([server, local]) => {
-        if (cancelled) return
-        setServerConfig(server)
-        // 允许覆盖且有本地配置时回填本地值,否则展示服务端值
-        if (server.allowLocalOverride && local) {
-          setBaseUrl(local.baseUrl)
-          setModelName(local.modelName)
-        } else {
-          setBaseUrl(server.baseUrl ?? '')
-          setModelName(server.modelName ?? '')
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setLoadError(true)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
+      storage.get<SavedModelConfig>(LOCAL_CONFIG_KEY),
+      window.api.store.secureGet(API_KEY_STORE_KEY)
+    ]).then(([cfg, key]) => {
+      if (cancelled) return
+      if (cfg) {
+        setBaseUrl(cfg.baseUrl)
+        setModelName(cfg.modelName)
+      }
+      if (key) setApiKey(key)
+      setLoaded(true)
+    })
+    return () => { cancelled = true }
   }, [])
-
-  // 切换 provider 时读取对应密钥
-  useEffect(() => {
-    window.api.store.secureGet(KEY_MAP[provider]).then((val) => setApiKey(val ?? ''))
-  }, [provider])
-
-  const canOverride = serverConfig?.allowLocalOverride === true
 
   const handleSave = async (): Promise<void> => {
     if (saving) return
+    const url = baseUrl.trim()
+    const model = modelName.trim()
+    const key = apiKey.trim()
+    if (!url || !model || !key) {
+      toast.error(t('model.fillAll', '请填写完整的接口地址、API Key 和模型名称'))
+      return
+    }
     setSaving(true)
     try {
-      await window.api.store.secureSet(KEY_MAP[provider], apiKey)
-
-      if (serverConfig) {
-        // 仅当允许覆盖时才持久化本地配置,否则确保不残留旧覆盖
-        const local: LocalModelConfig | null = canOverride ? { baseUrl, modelName } : null
-        if (canOverride) {
-          await storage.set(LOCAL_CONFIG_KEY, local)
-        } else {
-          await storage.remove(LOCAL_CONFIG_KEY)
-        }
-
-        const effective = resolveEffectiveModelConfig(serverConfig, local)
-        // P6: 不再写 agent.yaml,改调 agent:chat:init 触发原生 runtime 重新装配
-        await window.api.agentChat.init({
-          providerId: provider,
-          model: effective.modelName ?? '',
-          baseUrl: effective.baseUrl ?? '',
-          apiKeyStoreKey: KEY_MAP[provider]
-        })
-      }
-
+      await window.api.store.secureSet(API_KEY_STORE_KEY, key)
+      await storage.set(LOCAL_CONFIG_KEY, { baseUrl: url, modelName: model })
+      await window.api.agentChat.init({
+        providerId: 'openai',
+        model,
+        baseUrl: url,
+        apiKeyStoreKey: API_KEY_STORE_KEY
+      })
+      useAgentStore.getState().setConfigured(true)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
+      toast.success(t('model.saveSuccess', '模型配置已保存并生效'))
     } catch (e) {
-      toast.error(`保存失败：${e instanceof Error ? e.message : String(e)}`)
+      toast.error(`${t('model.saveFailed', '保存失败')}：${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setSaving(false)
     }
   }
 
-  const effectiveSource =
-    serverConfig && resolveEffectiveModelConfig(serverConfig, canOverride ? { baseUrl, modelName } : null).source
+  if (!loaded) return <div />
 
   return (
     <div>
-      <h2 style={{ marginBottom: 24 }}>{t('model.title')}</h2>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 400 }}>
-        {loading && <p style={{ fontSize: 13 }}>{t('model.loading')}</p>}
-        {loadError && (
-          <p style={{ fontSize: 13, color: '#ef4444', margin: 0 }}>{t('model.loadFailed')}</p>
-        )}
-
-        {serverConfig && (
-          <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: 0 }}>
-            {canOverride ? t('model.overrideAllowed') : t('model.serverManaged')}
-          </p>
-        )}
-
+      <h2 style={{ marginBottom: 8 }}>{t('model.title')}</h2>
+      <p style={{ fontSize: 13, color: 'var(--color-text-3)', margin: '0 0 16px' }}>
+        {t('model.protocolHint', '仅支持 OpenAI 兼容协议 API（大多数国内外厂商均已支持）')}
+      </p>
+      {!configured && (
+        <p style={{ fontSize: 13, color: 'var(--color-warning, #f59e0b)', margin: '0 0 16px' }}>
+          {t('model.notConfigured', '尚未配置模型，请填写以下信息以启用 Agent')}
+        </p>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 420 }}>
         <label>
-          <span style={{ display: 'block', marginBottom: 4 }}>{t('model.provider')}</span>
-          <select
-            value={provider}
-            onChange={(e) => setProvider(e.target.value as Provider)}
-            style={{ width: '100%', padding: '8px' }}
-          >
-            {PROVIDERS.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          <span style={{ display: 'block', marginBottom: 4 }}>{t('model.baseUrl')}</span>
+          <span style={{ display: 'block', marginBottom: 4, fontSize: 13, fontWeight: 500 }}>
+            {t('model.baseUrl', '接口地址')}
+          </span>
           <input
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            readOnly={!canOverride}
-            style={{
-              width: '100%',
-              padding: '8px',
-              boxSizing: 'border-box',
-              opacity: canOverride ? 1 : 0.6
-            }}
-            placeholder="https://api.openai.com/v1"
+            style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--color-border)', boxSizing: 'border-box' }}
+            placeholder="https://api.deepseek.com"
           />
         </label>
 
         <label>
-          <span style={{ display: 'block', marginBottom: 4 }}>{t('model.modelName')}</span>
-          <input
-            value={modelName}
-            onChange={(e) => setModelName(e.target.value)}
-            readOnly={!canOverride}
-            style={{
-              width: '100%',
-              padding: '8px',
-              boxSizing: 'border-box',
-              opacity: canOverride ? 1 : 0.6
-            }}
-            placeholder="gpt-4o"
-          />
-        </label>
-
-        <label>
-          <span style={{ display: 'block', marginBottom: 4 }}>{t('model.apiKey')}</span>
+          <span style={{ display: 'block', marginBottom: 4, fontSize: 13, fontWeight: 500 }}>
+            API Key
+          </span>
           <input
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
-            placeholder={t('model.apiKeyPlaceholder', { key: KEY_MAP[provider] })}
+            style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--color-border)', boxSizing: 'border-box' }}
+            placeholder={t('model.apiKeyPlaceholder', '粘贴你的 API Key')}
           />
-          {serverConfig?.hasCredential && (
-            <span style={{ display: 'block', marginTop: 4, fontSize: 12, color: 'var(--text-tertiary)' }}>
-              {t('model.credentialFromServer')}
-            </span>
-          )}
         </label>
 
-        {effectiveSource && (
-          <p style={{ fontSize: 12, color: 'var(--text-tertiary)', margin: 0 }}>
-            {effectiveSource === 'local' ? t('model.effectiveLocal') : t('model.effectiveServer')}
-          </p>
-        )}
+        <label>
+          <span style={{ display: 'block', marginBottom: 4, fontSize: 13, fontWeight: 500 }}>
+            {t('model.modelName', '模型名称')}
+          </span>
+          <input
+            value={modelName}
+            onChange={(e) => setModelName(e.target.value)}
+            style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--color-border)', boxSizing: 'border-box' }}
+            placeholder="deepseek-chat"
+          />
+        </label>
 
         <button
           onClick={handleSave}
-          disabled={loading || saving}
-          style={{ padding: '8px 16px', alignSelf: 'flex-start', cursor: 'pointer' }}
+          disabled={saving || !baseUrl.trim() || !modelName.trim() || !apiKey.trim()}
+          style={{
+            padding: '10px 20px',
+            alignSelf: 'flex-start',
+            borderRadius: 6,
+            background: 'var(--color-primary)',
+            color: '#fff',
+            fontWeight: 600,
+            cursor: saving ? 'not-allowed' : 'pointer',
+            opacity: saving || !baseUrl.trim() || !modelName.trim() || !apiKey.trim() ? 0.5 : 1
+          }}
         >
-          {saving ? t('model.saving', '保存中…') : saved ? t('model.saved') : t('model.save')}
+          {saving ? t('model.saving', '保存中…') : saved ? t('model.saved', '已保存') : t('model.save', '保存并启用')}
         </button>
       </div>
     </div>
