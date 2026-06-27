@@ -36,11 +36,16 @@ export async function applyServerModelConfigAndStart(): Promise<{
     const localModel = await storage.get<LocalOllamaConfig>(LOCAL_OLLAMA_CONFIG_KEY)
     logger.info('[model-bootstrap] 本地模型配置:', localModel)
     if (localModel?.enabled && localModel.baseUrl && localModel.modelName) {
+      const ollamaKeyStoreKey = apiKeyStoreKey('ollama')
+      // Ollama 通常不需要 API Key,但为了保持一致性,如果有就存储
+      if (localModel.apiKey) {
+        await storage.secure.set(ollamaKeyStoreKey, localModel.apiKey)
+      }
       await window.api.agentChat.init({
         providerId: 'openai',
         model: localModel.modelName,
         baseUrl: toOllamaOpenAIBase(localModel.baseUrl),
-        apiKeyStoreKey: apiKeyStoreKey('ollama')
+        apiKeyStoreKey: ollamaKeyStoreKey
       })
       useAgentStore.getState().setReady(true)
       logger.info(`[model-bootstrap] 本地模型(Ollama)已装配`)
@@ -66,12 +71,20 @@ export async function applyServerModelConfigAndStart(): Promise<{
 
     // 默认走 openai 兼容协议
     const providerId = 'openai'
+    const storeKey = apiKeyStoreKey(providerId)
+
+    // 如果服务器下发了 apiKey,先保存到 safeStorage(方案A 旧行为兼容)
+    if (cfg.apiKey) {
+      logger.info('[model-bootstrap] 保存服务器下发的 API Key')
+      await storage.secure.set(storeKey, cfg.apiKey)
+    }
+
     logger.info('[model-bootstrap] 准备初始化 runtime...')
     await window.api.agentChat.init({
       providerId,
       model: cfg.modelName,
       baseUrl: cfg.baseUrl,
-      apiKeyStoreKey: apiKeyStoreKey(providerId)
+      apiKeyStoreKey: storeKey
     })
     logger.info('[model-bootstrap] init 调用完成,准备 setReady...')
     useAgentStore.getState().setReady(true)
