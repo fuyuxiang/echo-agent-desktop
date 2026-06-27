@@ -7,6 +7,7 @@ import {
 } from './model-config'
 import { logger } from '@/utils/logger'
 import { useAgentStore } from '@/stores/agentStore'
+import { useUserStore } from '@/stores/userStore'
 
 /** providerId -> safeStorage api key 名映射(沿用旧 key 名) */
 function apiKeyStoreKey(providerId: string): string {
@@ -37,11 +38,12 @@ export async function applyServerModelConfigAndStart(): Promise<{
   error?: string
 }> {
   const agent = useAgentStore.getState()
+  const LOCAL_CONFIG_KEY = 'modelConfig.local'
+
   try {
-    // C 本地模型(Ollama)优先
+    // ① Ollama 本地模型(显式启用,最高优先)
     const localModel = await storage.get<LocalOllamaConfig>(LOCAL_OLLAMA_CONFIG_KEY)
     if (localModel?.enabled && localModel.baseUrl && localModel.modelName) {
-      // Ollama 走 OpenAI 兼容协议,本身无需 API Key
       await window.api.agentChat.init({
         providerId: 'openai',
         model: localModel.modelName,
@@ -50,51 +52,74 @@ export async function applyServerModelConfigAndStart(): Promise<{
       })
       agent.setReady(true)
       agent.setConfigured(true)
-      logger.info('[model-bootstrap] 本地模型(Ollama)已装配')
+      logger.info('[model-bootstrap] Ollama 本地模型已装配')
       return { ok: true, configured: true, retryable: false }
     }
 
-    // 尝试获取服务器模型配置(需要登录)
-    let cfg: ModelConfigDTO
-    try {
-      cfg = await fetchModelConfig()
-    } catch (e) {
-      // 网络/超时/未登录:UI 仍可用,但 runtime 未装配。标记 retryable,待网络恢复或登录后重试
-      logger.warn('[model-bootstrap] 无法获取服务器模型配置(可能未登录/网络异常):', e)
+    // ② 已登录:优先从服务器拉取配置
+    let serverFetchFailed = false
+    if (useUserStore.getState().isAuthed) {
+      let cfg: ModelConfigDTO | null = null
+      try {
+        cfg = await fetchModelConfig()
+      } catch (e) {
+        serverFetchFailed = true
+        logger.warn('[model-bootstrap] 服务器配置拉取失败,尝试本地兜底:', e)
+      }
+
+      if (cfg?.baseUrl && cfg?.modelName) {
+        const providerId = 'openai'
+        const storeKey = apiKeyStoreKey(providerId)
+        if (cfg.apiKey) {
+          await storage.secure.set(storeKey, cfg.apiKey)
+        }
+        await window.api.agentChat.init({
+          providerId,
+          model: cfg.modelName,
+          baseUrl: cfg.baseUrl,
+          apiKeyStoreKey: storeKey
+        })
+        agent.setReady(true)
+        agent.setConfigured(true)
+        logger.info(`[model-bootstrap] 服务器配置已装配 model=${cfg.modelName}`)
+        return { ok: true, configured: true, retryable: false }
+      }
+      // 服务器无有效配置,fall through 到本地手动配置
+    }
+
+    // ③ 本地手动配置(未登录的唯一来源 / 已登录但服务器未配置的兜底)
+    const localCfg = await storage.get<{ baseUrl: string; modelName: string }>(LOCAL_CONFIG_KEY)
+    if (localCfg?.baseUrl && localCfg?.modelName) {
+      const storeKey = 'openai-api-key'
+      await window.api.agentChat.init({
+        providerId: 'openai',
+        model: localCfg.modelName,
+        baseUrl: localCfg.baseUrl,
+        apiKeyStoreKey: storeKey
+      })
       agent.setReady(true)
+      agent.setConfigured(true)
+      logger.info(`[model-bootstrap] 本地手动配置已装配 model=${localCfg.modelName}`)
+      return { ok: true, configured: true, retryable: false }
+    }
+
+    // ④ 无任何可用配置:UI 就绪但 runtime 未装配,用户需去设置页配置
+    agent.setReady(true)
+    const isAuthed = useUserStore.getState().isAuthed
+    if (serverFetchFailed) {
+      // 已登录但服务器配置拉取因网络/超时失败,且无本地兜底:标记可重试,网络恢复后自愈重装配
+      logger.info('[model-bootstrap] 服务器配置拉取失败且无本地兜底,等待网络恢复重试')
       return { ok: true, configured: false, retryable: true }
     }
-
-    if (!cfg.baseUrl || !cfg.modelName) {
-      // 服务器未配置模型:终态,等用户去配置,不必反复重试
-      logger.warn('[model-bootstrap] 服务器未配置模型,跳过初始化')
-      agent.setReady(true)
-      return { ok: true, configured: false, retryable: false }
+    if (isAuthed) {
+      logger.info('[model-bootstrap] 已登录但服务器/本地均无配置,等待用户配置')
+    } else {
+      logger.info('[model-bootstrap] 未登录且无本地配置,等待用户配置')
     }
-
-    // 默认走 openai 兼容协议
-    const providerId = 'openai'
-    const storeKey = apiKeyStoreKey(providerId)
-
-    // 服务器下发 apiKey 时先存入 safeStorage(方案A);主进程从 safeStorage 读取,渲染层不持有
-    if (cfg.apiKey) {
-      await storage.secure.set(storeKey, cfg.apiKey)
-    }
-
-    await window.api.agentChat.init({
-      providerId,
-      model: cfg.modelName,
-      baseUrl: cfg.baseUrl,
-      apiKeyStoreKey: storeKey
-    })
-    agent.setReady(true)
-    agent.setConfigured(true)
-    logger.info(`[model-bootstrap] agent runtime 已装配 provider=${providerId} model=${cfg.modelName}`)
-    return { ok: true, configured: true, retryable: false }
+    return { ok: true, configured: false, retryable: false }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     logger.error('[model-bootstrap] 装配失败:', msg)
-    // init 抛错多为暂时性(主进程/网络),置就绪让 UI 可用,并允许重试
     agent.setReady(true)
     return { ok: false, configured: false, retryable: true, error: msg }
   }

@@ -45,9 +45,11 @@ describe('AccountMenu', () => {
     expect(signOut).toHaveBeenCalledTimes(1)
   })
 
-  it('未登录态显示登录按钮', () => {
+  it('未登录态展开菜单显示登录按钮', () => {
     useUserStore.setState({ user: null, isAuthed: false })
     render(<AccountMenu />)
+    expect(screen.getByText('account.guest')).toBeTruthy()
+    fireEvent.click(screen.getByText('account.guest'))
     fireEvent.click(screen.getByText('common.login'))
     expect(navigate).toHaveBeenCalledWith('/login')
   })

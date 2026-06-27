@@ -21,14 +21,21 @@ const agentStore = vi.hoisted(() => ({
   getState: vi.fn(() => ({ setReady: agentStore.setReady, setConfigured: agentStore.setConfigured }))
 }))
 
+const userStore = vi.hoisted(() => ({
+  isAuthed: false,
+  getState: vi.fn(() => ({ isAuthed: userStore.isAuthed }))
+}))
+
 vi.mock('@/utils', () => ({ storage }))
 vi.mock('@/utils/logger', () => ({ logger }))
 vi.mock('../server', () => server)
 vi.mock('@/stores/agentStore', () => ({ useAgentStore: agentStore }))
+vi.mock('@/stores/userStore', () => ({ useUserStore: userStore }))
 
 beforeEach(() => {
   vi.resetModules()
   vi.clearAllMocks()
+  userStore.isAuthed = false
   window.api = {
     agentChat: {
       init: vi.fn(async () => ({ success: true }))
@@ -66,6 +73,7 @@ describe('applyServerModelConfigAndStart', () => {
   })
 
   it('没有本地模型时使用服务器模型配置装配 runtime', async () => {
+    userStore.isAuthed = true
     storage.get.mockResolvedValueOnce(null)
     server.fetchModelConfig.mockResolvedValueOnce({
       baseUrl: 'https://api.example.com/v1',
@@ -91,6 +99,7 @@ describe('applyServerModelConfigAndStart', () => {
   })
 
   it('服务器未配置模型时降级为可用但未装配(终态,不重试)', async () => {
+    userStore.isAuthed = true
     storage.get.mockResolvedValueOnce(null)
     server.fetchModelConfig.mockResolvedValueOnce({
       baseUrl: '',
@@ -111,6 +120,7 @@ describe('applyServerModelConfigAndStart', () => {
   })
 
   it('拉取服务器配置失败(网络/超时)时降级为可用、标记可重试', async () => {
+    userStore.isAuthed = true
     storage.get.mockResolvedValueOnce(null)
     server.fetchModelConfig.mockRejectedValueOnce(new Error('fetch failed'))
     const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
