@@ -150,7 +150,6 @@ export default function ChatPage(): React.JSX.Element {
   const isGenerating = useChatStore((s) => s.isGenerating)
 
   const wsConnected = useAgentStore((s) => s.ready)
-  const setWsConnected = useAgentStore((s) => s.setWsConnected)
   const clearExecutionEvents = useAgentStore((s) => s.clearExecutionEvents)
   const skills = useSkillStore((s) => s.skills)
   const setSkills = useSkillStore((s) => s.setSkills)
@@ -229,13 +228,11 @@ export default function ChatPage(): React.JSX.Element {
   useEffect(() => {
     const sessionKey = useChatStore.getState().activeChatId || 'default'
 
-    const onAuthOk = (): void => {
-      // IPC 模式无 auth_ok,保留为 no-op 兼容旧事件名订阅
-      setWsConnected(true)
+    // IPC 模式 connect 同步即用,无 auth 握手。会话就绪后若有 primer(历史回顾)则补发,
+    // 用于重建服务端上下文:其回流帧不进 UI、不落库,避免产生无 user 对应的孤儿 assistant 行。
+    const primeSession = (): void => {
       const primer = useChatStore.getState().pendingPrimer
       if (primer) {
-        // primer 是历史回顾文本,仅用于重建服务端上下文:发送前置抑制标志,
-        // 其回流帧不进 UI、不落库,避免产生无 user 对应的孤儿 assistant 行
         primerPendingRef.current = true
         agentWs.sendMessage(primer)
         useChatStore.getState().setPendingPrimer('')
@@ -329,7 +326,7 @@ export default function ChatPage(): React.JSX.Element {
     }
 
     const onDisconnected = (): void => {
-      setWsConnected(false)
+      // IPC 模式 ready 由 runtime 装配态决定,断开客户端包装不改 ready(runtime 仍在)
       // Drop primer suppression on disconnect: the primer-turn final may never
       // arrive after a drop, and leaving it set would swallow later replies.
       primerPendingRef.current = false
@@ -378,17 +375,16 @@ export default function ChatPage(): React.JSX.Element {
       }
     }
 
-    agentWs.on('auth_ok', onAuthOk)
     agentWs.on('message.streaming', onStreaming)
     agentWs.on('message.final', onFinal)
     agentWs.on('message.progress', onProgress)
     agentWs.on('_disconnected', onDisconnected)
 
-    // IPC 模式: connect 立即可用,无需等待 auth
+    // IPC 模式: connect 立即可用,无需等待 auth;连接后立刻补发 primer
     agentWs.connect('', sessionKey || 'default')
+    primeSession()
 
     return () => {
-      agentWs.off('auth_ok', onAuthOk)
       agentWs.off('message.streaming', onStreaming)
       agentWs.off('message.final', onFinal)
       agentWs.off('message.progress', onProgress)
