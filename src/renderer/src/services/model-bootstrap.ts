@@ -30,9 +30,11 @@ export async function applyServerModelConfigAndStart(): Promise<{
   ok: boolean
   error?: string
 }> {
+  logger.info('[model-bootstrap] 开始装配 agent runtime...')
   try {
     // C 本地模型(Ollama)优先
     const localModel = await storage.get<LocalOllamaConfig>(LOCAL_OLLAMA_CONFIG_KEY)
+    logger.info('[model-bootstrap] 本地模型配置:', localModel)
     if (localModel?.enabled && localModel.baseUrl && localModel.modelName) {
       await window.api.agentChat.init({
         providerId: 'openai',
@@ -45,19 +47,33 @@ export async function applyServerModelConfigAndStart(): Promise<{
       return { ok: true }
     }
 
-    const cfg = await fetchModelConfig()
+    // 尝试获取服务器模型配置(需要登录)
+    let cfg: ModelConfigDTO
+    try {
+      cfg = await fetchModelConfig()
+      logger.info('[model-bootstrap] 服务器模型配置:', cfg)
+    } catch (e) {
+      // 未登录或网络错误:跳过服务器配置,不报错
+      logger.warn('[model-bootstrap] 无法获取服务器模型配置(可能未登录):', e)
+      return { ok: true }
+    }
+
     if (!cfg.baseUrl || !cfg.modelName) {
-      return { ok: false, error: '服务器未配置模型(baseUrl/modelName 为空)' }
+      logger.warn('[model-bootstrap] 服务器未配置模型,跳过初始化')
+      // 不报错,让用户可以使用界面,在发送消息时再提示配置模型
+      return { ok: true }
     }
 
     // 默认走 openai 兼容协议
     const providerId = 'openai'
+    logger.info('[model-bootstrap] 准备初始化 runtime...')
     await window.api.agentChat.init({
       providerId,
       model: cfg.modelName,
       baseUrl: cfg.baseUrl,
       apiKeyStoreKey: apiKeyStoreKey(providerId)
     })
+    logger.info('[model-bootstrap] init 调用完成,准备 setReady...')
     useAgentStore.getState().setReady(true)
     logger.info(`[model-bootstrap] agent runtime 已装配 provider=${providerId} model=${cfg.modelName}`)
     return { ok: true }
