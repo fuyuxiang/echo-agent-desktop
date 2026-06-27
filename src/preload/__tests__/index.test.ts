@@ -136,6 +136,7 @@ describe('preload bridge', () => {
     await api.db.session.appendMessage({ chatId: 'c1', role: 'user', content: 'hi' })
     await api.db.session.deleteLastAssistantMessage('c1')
     await api.db.session.updateTitle('c1', 'title')
+    await api.db.session.setPinned('c1', true)
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.db.exampleAdd, 'row')
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.db.sessionAppendMessage, {
       chatId: 'c1',
@@ -143,6 +144,7 @@ describe('preload bridge', () => {
       content: 'hi'
     })
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.db.sessionUpdateTitle, 'c1', 'title')
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.db.sessionSetPinned, 'c1', true)
 
     await api.permission.check('microphone')
     await api.permission.request('camera')
