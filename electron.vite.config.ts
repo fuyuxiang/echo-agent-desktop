@@ -23,6 +23,16 @@ export default defineConfig({
       alias: {
         '@shared': resolve('src/shared')
       }
+    },
+    build: {
+      // sandbox 化的 preload 必须是 CommonJS;项目 package.json 为 type:module,
+      // 故显式输出 .cjs 以摆脱 ESM 解析(否则沙箱 preload 加载失败导致渲染层白屏)
+      rollupOptions: {
+        output: {
+          format: 'cjs',
+          entryFileNames: '[name].cjs'
+        }
+      }
     }
   },
   renderer: {
