@@ -5,7 +5,6 @@ import { IconSidebar } from '@/components/IconSidebar'
 import { useUserStore } from '@/stores/userStore'
 import { useAgentStore } from '@/stores/agentStore'
 import { applyServerModelConfigAndStart } from '@/services/model-bootstrap'
-import { toast } from '@/components/Toast'
 import { logger } from '@/utils'
 import styles from './app-layout.module.scss'
 
