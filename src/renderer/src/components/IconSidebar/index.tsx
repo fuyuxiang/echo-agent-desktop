@@ -29,7 +29,7 @@ export function IconSidebar(): React.JSX.Element {
   // 记忆区与技能库已并入设置页,侧边栏只保留我的文档入口
   const mainNav: NavItem[] = navItems
 
-  // 管理入口仅对管理员可见;设置已并入账户菜单
+  // 管理入口仅对管理员可见
   const bottomNav: NavItem[] =
     role === 'admin'
       ? [{ icon: <AdminIcon />, route: ROUTES.admin, label: t('admin.nav') }]

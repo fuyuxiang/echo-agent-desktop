@@ -11,7 +11,6 @@ import { attachmentsAPI } from '@/services/agent/attachments'
 import { skillsAPI } from '@/services/agent/skills'
 import skillDescriptionsZh from '@/services/agent/skill-descriptions'
 import { useSkillImport } from '@/hooks/useSkillImport'
-import { buildProjectMemoryContext } from '@/services/chat-inject'
 import { db } from '@/utils/db'
 import { logger } from '@/utils/logger'
 import { confirmShareToProject, type MemoryCandidate } from '@/services/memory-router'
@@ -24,13 +23,6 @@ import { ScopeSwitcher } from '@/components/ScopeSwitcher'
 import { toast } from '@/components/Toast'
 import { permission } from '@/utils/permission'
 import styles from './chat.module.scss'
-
-const CHINESE_OUTPUT_DIRECTIVE = [
-  '输出规则：',
-  '1. 默认使用简体中文进行流式输出和最终回答。',
-  '2. 代码、命令、日志、API 字段、错误栈和专有名词可以保留原文。',
-  '3. 如需说明处理过程，只输出简洁的中文过程摘要，不输出隐藏推理链路。'
-].join('\n')
 
 /**
  * 等待 WS 重连并 auth 后进入 OPEN(sendMessage 仅在 OPEN 时才真正发出)。
@@ -74,9 +66,7 @@ function isReasoningPayload(payload: Record<string, unknown>): boolean {
 }
 
 function buildOutboundText(text: string, selectedSkill: string | null): string {
-  const task = selectedSkill ? `请使用「${selectedSkill}」技能处理下面的任务：\n\n${text}` : text
-
-  return `${CHINESE_OUTPUT_DIRECTIVE}\n\n用户任务：\n${task}`
+  return selectedSkill ? `请使用「${selectedSkill}」技能处理下面的任务：\n\n${text}` : text
 }
 
 /** 截断兜底:LLM 标题不可用时,按首句/标点边界裁到 ~16 字,不强行加省略号 */
@@ -343,11 +333,7 @@ export default function ChatPage(): React.JSX.Element {
         const session = state.sessions.find((s) => s.chatId === chatId)
         if (session && (!session.title || session.title === '新对话')) {
           const raw = userMessages[0].content
-          const cleaned = raw
-            .replace(CHINESE_OUTPUT_DIRECTIVE, '')
-            .replace(/^用户任务：\n?/, '')
-            .trim()
-          void applySessionTitle(chatId, cleaned)
+          void applySessionTitle(chatId, raw.trim())
         }
       }
     }
@@ -455,14 +441,10 @@ export default function ChatPage(): React.JSX.Element {
   const dispatchToAgent = useCallback(
     async (text: string, attachments?: Array<{ id: string; name: string }>) => {
       stoppedRef.current = false
-      // Any real user send clears primer suppression, so a missing primer-turn
-      // final can never permanently swallow subsequent replies.
       primerPendingRef.current = false
       clearExecutionEvents()
-      const memoryContext = await buildProjectMemoryContext(text)
       const outbound = buildOutboundText(text, activeSkill)
-      const finalText = memoryContext ? `${memoryContext}\n\n${outbound}` : outbound
-      agentWs.sendMessage(finalText, attachments)
+      agentWs.sendMessage(outbound, attachments)
     },
     [activeSkill, clearExecutionEvents]
   )
@@ -510,14 +492,7 @@ export default function ChatPage(): React.JSX.Element {
         agentWs.switchSession(chatId)
       }
       addUserMessage(text, outboundAttachments)
-      // 写库失败不阻断聊天:消息照常发往 agent、输入框照常清空
-      // 附件名追加到落库内容,便于历史回看时知道本轮带了哪些文件
-      const persistedContent = outboundAttachments.length
-        ? `${text}${text ? '\n' : ''}[附件] ${outboundAttachments.map((a) => a.name).join('、')}`
-        : text
-      void db.session
-        .appendMessage({ chatId, role: 'user', content: persistedContent })
-        .catch((err) => logger.warn('[chat] 用户消息写库失败:', err))
+      // 用户消息由主进程 AgentRuntime 统一持久化,渲染层不再重复写库
       setInputText('')
       setPendingAttachments([])
       if (isNewSession) {

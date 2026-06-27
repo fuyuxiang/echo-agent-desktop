@@ -199,6 +199,12 @@ instance.interceptors.response.use(
     if (error instanceof BizError) {
       return Promise.reject(error)
     }
+    // HTTP 401/403: 认证失败,非网络错误,静默处理(未登录时的请求不应弹网络异常)
+    const status = (error as AxiosError)?.response?.status
+    if (status === 401 || status === 403) {
+      logger.warn(`[request] 认证失败(${status}) url=${(error as AxiosError)?.config?.url}`)
+      return Promise.reject(error)
+    }
     // 网络层错误(超时/断网/5xx/非法响应)
     const code = (error as AxiosError)?.code
     const msg =

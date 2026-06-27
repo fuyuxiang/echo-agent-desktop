@@ -33,6 +33,11 @@
   font-size: 13px;
 }
 
+.avatarGuest {
+  background: var(--color-bg-muted, #e5e7eb);
+  color: var(--color-text-3);
+}
+
 .avatarLg {
   width: 34px;
   height: 34px;

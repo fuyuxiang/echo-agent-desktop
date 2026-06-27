@@ -39,18 +39,12 @@ export function AccountMenu(): React.JSX.Element {
     }
   }, [open])
 
-  if (!isAuthed || !user) {
-    return (
-      <button className={styles.loginBtn} onClick={() => navigate(ROUTES.login)}>
-        {t('common.login')}
-      </button>
-    )
-  }
-
-  const initial = initialOf(user.username)
-  const meta = [ROLE_LABEL[user.role] ?? user.role, user.groupId ?? undefined]
-    .filter(Boolean)
-    .join(' · ')
+  const authed = isAuthed && user
+  const displayName = authed ? user.username : t('account.guest', '未登录')
+  const initial = authed ? initialOf(user.username) : '?'
+  const meta = authed
+    ? [ROLE_LABEL[user.role] ?? user.role, user.groupId ?? undefined].filter(Boolean).join(' · ')
+    : t('account.guestHint', '点击登录或配置')
 
   return (
     <div className={styles.root} ref={rootRef}>
@@ -59,11 +53,23 @@ export function AccountMenu(): React.JSX.Element {
           <div className={styles.menuHeader}>
             <span className={styles.avatarLg}>{initial}</span>
             <div className={styles.identity}>
-              <span className={styles.name}>{user.username}</span>
+              <span className={styles.name}>{displayName}</span>
               <span className={styles.meta}>{meta}</span>
             </div>
           </div>
           <div className={styles.menuList}>
+            {!authed && (
+              <button
+                className={styles.menuItem}
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false)
+                  navigate(ROUTES.login)
+                }}
+              >
+                {t('common.login')}
+              </button>
+            )}
             <button
               className={styles.menuItem}
               role="menuitem"
@@ -74,16 +80,18 @@ export function AccountMenu(): React.JSX.Element {
             >
               {t('settings.nav')}
             </button>
-            <button
-              className={clsx(styles.menuItem, styles.danger)}
-              role="menuitem"
-              onClick={() => {
-                setOpen(false)
-                signOut()
-              }}
-            >
-              {t('common.logout')}
-            </button>
+            {authed && (
+              <button
+                className={clsx(styles.menuItem, styles.danger)}
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false)
+                  signOut()
+                }}
+              >
+                {t('common.logout')}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -93,10 +101,10 @@ export function AccountMenu(): React.JSX.Element {
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className={styles.avatar}>{initial}</span>
+        <span className={clsx(styles.avatar, !authed && styles.avatarGuest)}>{initial}</span>
         <div className={styles.identity}>
-          <span className={styles.name}>{user.username}</span>
-          <span className={styles.meta}>{ROLE_LABEL[user.role] ?? user.role}</span>
+          <span className={styles.name}>{displayName}</span>
+          <span className={styles.meta}>{authed ? (ROLE_LABEL[user.role] ?? user.role) : t('account.guestHint', '点击登录或配置')}</span>
         </div>
       </button>
     </div>
