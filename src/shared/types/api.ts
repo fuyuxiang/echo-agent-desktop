@@ -193,6 +193,8 @@ export interface BridgeApi {
       baseUrl: string
       apiKeyStoreKey: string
     }): Promise<{ success: boolean }>
+    /** 用一次轻量补全为会话生成简短标题;未就绪/失败返回空串 */
+    generateTitle(firstUserMessage: string): Promise<string>
     onEvent(handler: (ev: Record<string, unknown>) => void): () => void
   }
 

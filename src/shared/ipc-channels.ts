@@ -140,6 +140,8 @@ export const IpcChannels = {
     listSessions: 'agent:chat:list-sessions',
     deleteSession: 'agent:chat:delete-session',
     event: 'agent:chat:event',
-    init: 'agent:chat:init'
+    init: 'agent:chat:init',
+    /** 用一次轻量补全为会话生成简短标题 */
+    generateTitle: 'agent:chat:generate-title'
   }
 } as const
