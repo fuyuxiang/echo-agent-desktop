@@ -43,6 +43,7 @@ interface ChatState {
   setMessages: (messages: ChatMessage[]) => void
   addSession: (session: ChatSession) => void
   updateSessionTitle: (chatId: string, title: string) => void
+  updateSessionPinned: (chatId: string, pinned: boolean) => void
   setActiveChatId: (chatId: string) => void
   setPendingPrimer: (primer: string) => void
   loadSessionsFromLocal: () => Promise<void>
@@ -108,6 +109,18 @@ export const useChatStore = create<ChatState>()(
       set((s) => {
         const target = s.sessions.find((item) => item.chatId === chatId)
         if (target) target.title = title
+      }),
+    updateSessionPinned: (chatId, pinned) =>
+      set((s) => {
+        const target = s.sessions.find((item) => item.chatId === chatId)
+        if (target) target.pinned = pinned
+        // 置顶优先,组内按最近活动倒序——与 DAO 排序保持一致,乐观更新即时重排
+        s.sessions.sort((a, b) => {
+          const ap = a.pinned ? 1 : 0
+          const bp = b.pinned ? 1 : 0
+          if (ap !== bp) return bp - ap
+          return b.lastActivity - a.lastActivity
+        })
       }),
     setActiveChatId: (chatId) =>
       set((s) => {

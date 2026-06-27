@@ -77,10 +77,10 @@ function toMessage(r: RawMessage): MessageRow {
   }
 }
 
-/** 会话列表(按最近活动倒序) */
+/** 会话列表(置顶优先,组内按最近活动倒序) */
 export function listChatSessions(): SessionRow[] {
   const rows = getDb()
-    .prepare('SELECT * FROM chat_sessions ORDER BY last_activity DESC')
+    .prepare('SELECT * FROM chat_sessions ORDER BY pinned DESC, last_activity DESC')
     .all() as RawSession[]
   return rows.map(toSession)
 }
@@ -176,6 +176,13 @@ export function appendChatMessage(input: {
 /** 更新会话标题 */
 export function updateChatSessionTitle(chatId: string, title: string): void {
   getDb().prepare('UPDATE chat_sessions SET title = ? WHERE chat_id = ?').run(title, chatId)
+}
+
+/** 置顶/取消置顶会话(pinned: 1/0) */
+export function setChatSessionPinned(chatId: string, pinned: boolean): void {
+  getDb()
+    .prepare('UPDATE chat_sessions SET pinned = ? WHERE chat_id = ?')
+    .run(pinned ? 1 : 0, chatId)
 }
 
 /**

@@ -87,6 +87,8 @@ export interface BridgeApi {
       deleteLastAssistantMessage: (chatId: string) => Promise<void>
       /** 更新会话标题 */
       updateTitle: (chatId: string, title: string) => Promise<void>
+      /** 置顶/取消置顶会话 */
+      setPinned: (chatId: string, pinned: boolean) => Promise<void>
     }
   }
 

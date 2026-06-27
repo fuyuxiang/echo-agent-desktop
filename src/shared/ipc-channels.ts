@@ -41,7 +41,8 @@ export const IpcChannels = {
     sessionMessages: 'db:session:messages',
     sessionAppendMessage: 'db:session:append-message',
     sessionDeleteMessage: 'db:session:delete-message',
-    sessionUpdateTitle: 'db:session:update-title'
+    sessionUpdateTitle: 'db:session:update-title',
+    sessionSetPinned: 'db:session:set-pinned'
   },
 
   /** 系统权限 */
