@@ -36,16 +36,12 @@ export async function applyServerModelConfigAndStart(): Promise<{
     const localModel = await storage.get<LocalOllamaConfig>(LOCAL_OLLAMA_CONFIG_KEY)
     logger.info('[model-bootstrap] 本地模型配置:', localModel)
     if (localModel?.enabled && localModel.baseUrl && localModel.modelName) {
-      const ollamaKeyStoreKey = apiKeyStoreKey('ollama')
-      // Ollama 通常不需要 API Key,但为了保持一致性,如果有就存储
-      if (localModel.apiKey) {
-        await storage.secure.set(ollamaKeyStoreKey, localModel.apiKey)
-      }
+      // Ollama 走 OpenAI 兼容协议,本身无需 API Key
       await window.api.agentChat.init({
         providerId: 'openai',
         model: localModel.modelName,
         baseUrl: toOllamaOpenAIBase(localModel.baseUrl),
-        apiKeyStoreKey: ollamaKeyStoreKey
+        apiKeyStoreKey: apiKeyStoreKey('ollama')
       })
       useAgentStore.getState().setReady(true)
       logger.info(`[model-bootstrap] 本地模型(Ollama)已装配`)
