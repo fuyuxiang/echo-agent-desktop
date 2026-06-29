@@ -44,6 +44,7 @@
     "electron-window-state": "^5.0.3",
     "pptxgenjs": "4.0.1",
     "sherpa-onnx-node": "^1.13.2",
+    "ws": "^8.21.0",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
@@ -56,6 +57,7 @@
     "@types/node": "^25.9.3",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.2.0",
     "ahooks": "^3.9.7",
     "axios": "^1.17.0",
