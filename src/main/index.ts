@@ -13,6 +13,7 @@ import { findRecordingMeetings, updateMeetingStatus } from './db/dao/meeting'
 import { reapOrphans } from './meeting/orphan'
 import { registerAllIpcHandlers } from './ipc'
 import { initASR } from './asr'
+import { startEchoAgent, stopEchoAgent } from './echo-agent'
 // P6: agent-process 已物理删除,Python agent 运行时下线
 
 /**
@@ -76,9 +77,8 @@ if (!gotTheLock) {
     setupUpdater()
     setupProtocol()
 
-    // P5: 不再自动拉起 Python Agent,运行时由渲染层配置就绪后经 agent:chat:init 装配
-    // (startAgent/stopAgent/getEnvInfo/hasAgentConfig 物理删除归 P6)
-    log.info('[main] 跳过 Python Agent 自动启动,等待渲染层 initAgentRuntime')
+    // echo-agent 进程接管:异步启动,不阻塞窗口。状态经 echoAgent:status-changed 推给渲染层。
+    void startEchoAgent().catch((e) => log.error('[main] echo-agent 启动失败:', e))
 
     // mac: 点击 Dock 图标且无窗口时重建窗口
     app.on('activate', () => {
@@ -122,12 +122,10 @@ if (!gotTheLock) {
     if (cleanupDone) return
     event.preventDefault()
     destroyTray()
-    // P5: 不再调 stopAgent,Python agent 进程已无启动接线
+    // echo-agent 进程接管:退出前优雅停止子进程,避免残留孤儿进程。
     Promise.resolve()
-      .then(() => {
-        // 预留: 后续如果有原生 runtime 资源释放,放这里
-      })
-      .catch((e) => log.error('[main] 退出清理失败:', e))
+      .then(() => stopEchoAgent())
+      .catch((e) => log.error('[main] echo-agent 停止失败:', e))
       .finally(() => {
         closeDatabase()
         cleanupDone = true
