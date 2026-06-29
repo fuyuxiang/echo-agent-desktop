@@ -5,7 +5,7 @@ const CONTROL_TYPES = new Set(['auth_ok', 'accepted', 'pong', 'auth'])
 export function translateFrame(frame: Frame, chatId: string): Frame[] {
   const type = frame.type as string | undefined
 
-  if (type === 'error' || 'error' in frame) {
+  if (type === 'error' || (frame.error != null && frame.error !== '')) {
     return [{ ...frame, type: 'error', chatId, message: frame.error ?? frame.message }]
   }
   if (type && CONTROL_TYPES.has(type)) {
