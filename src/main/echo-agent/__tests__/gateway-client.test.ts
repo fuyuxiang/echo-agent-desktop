@@ -152,6 +152,30 @@ describe('GatewayClient', () => {
     expect(events.some((e) => e.type === 'error')).toBe(true)
   })
 
+  it('a deliberate connect() restores reconnect ability after the budget is exhausted', () => {
+    let created = 0
+    const wss: ReturnType<typeof fakeWs>[] = []
+    const c = new GatewayClient({
+      wsUrl: 'ws://x/ws', token: 't',
+      createWs: () => { created++; const w = fakeWs(); wss.push(w); return w },
+      emit: () => {},
+      scheduleReconnect: (fn) => fn(),
+      maxReconnects: 2
+    })
+    c.connect('c1')
+    for (let i = 0; i < 4; i++) {
+      wss[wss.length - 1].fire('open')
+      wss[wss.length - 1].fire('close')
+    }
+    expect(created).toBe(1 + 2)   // budget exhausted (initial + 2 reconnects)
+    // caller deliberately reconnects → budget reset, auto-reconnect works again
+    c.connect('c1')
+    expect(created).toBe(4)
+    wss[wss.length - 1].fire('open')
+    wss[wss.length - 1].fire('close')
+    expect(created).toBe(5)
+  })
+
   it('resets reconnect attempts after auth_ok so a later close can reconnect again', () => {
     let created = 0
     const wss: ReturnType<typeof fakeWs>[] = []

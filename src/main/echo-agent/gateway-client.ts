@@ -69,6 +69,15 @@ export class GatewayClient {
   constructor(private deps: GatewayClientDeps) {}
 
   connect(chatId: string): void {
+    // public, deliberate connection → start with a fresh reconnect budget so a
+    // previously exhausted client can recover when the caller asks to reconnect
+    this.reconnectAttempts = 0
+    this.launch(chatId)
+  }
+
+  // wires up a ws for chatId without touching the reconnect budget; shared by
+  // connect() and the auto-reconnect path so the max cap is not bypassed
+  private launch(chatId: string): void {
     this.chatId = chatId
     this.closing = false
     this.authed = false
@@ -161,7 +170,8 @@ export class GatewayClient {
     const chatId = this.chatId
     schedule(() => {
       if (this.closing) return
-      this.connect(chatId)
+      // reconnect via launch() so the attempt budget keeps counting up
+      this.launch(chatId)
     })
   }
 }
