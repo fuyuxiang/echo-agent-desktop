@@ -5,9 +5,7 @@ import { getGatewayClient } from '../echo-agent'
 import type { Frame } from '../echo-agent/gateway-client'
 import { listChatSessions, deleteChatSession } from '../db/dao/session'
 import { clearSessionAllowlist } from '../agent/permission/broker'
-// NOTE: Task 6 will move generateTitle to '../echo-agent/title'. title.ts does
-// not exist yet, so keep using the working runtime-singleton implementation.
-import { generateTitle } from '../agent/runtime-singleton'
+import { generateTitle } from '../echo-agent/title'
 
 function broadcast(ev: Frame): void {
   for (const win of BrowserWindow.getAllWindows()) {
