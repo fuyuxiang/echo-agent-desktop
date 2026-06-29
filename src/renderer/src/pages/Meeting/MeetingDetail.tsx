@@ -33,9 +33,9 @@ export default function MeetingDetail(): React.JSX.Element {
 
   const onRegenSummary = async (): Promise<void> => {
     try {
-      const { segments } = await window.api.meeting.get(id)
+      const { meeting, segments } = await window.api.meeting.get(id)
       const { generateSummary } = await import('@/services/meeting/summarize')
-      await generateSummary(id, segments)
+      await generateSummary(id, segments, meeting?.title ?? '')
       await load()
     } catch {
       /* 重新生成失败不崩页,用户可再次点击重试 */
