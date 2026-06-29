@@ -31,8 +31,11 @@ export function writeModelConfig(deps: ConfigWriterDeps, cfg: ModelConfigInput):
   let existing = ''
   try {
     existing = deps.readFile(target)
-  } catch {
-    existing = '' // missing file → treat as empty
+  } catch (e) {
+    // only treat a missing file as empty; rethrow other errors (EACCES, etc.)
+    // so we never silently overwrite a config we failed to read
+    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e
+    existing = ''
   }
   const merged = mergeModelsBlock(existing, cfg)
   deps.ensureDir(dirname(target))
