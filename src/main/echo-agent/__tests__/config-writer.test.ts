@@ -45,7 +45,12 @@ describe('writeModelConfig', () => {
     const dirs: string[] = []
     const deps: ConfigWriterDeps = {
       homeDir: '/home/u',
-      readFile: (p) => { if (p in files) return files[p]; throw new Error('ENOENT') },
+      readFile: (p) => {
+        if (p in files) return files[p]
+        const err: NodeJS.ErrnoException = new Error('ENOENT')
+        err.code = 'ENOENT'
+        throw err
+      },
       writeFile: (p, data) => { files[p] = data },
       ensureDir: (p) => { dirs.push(p) }
     }
@@ -74,6 +79,24 @@ describe('writeModelConfig', () => {
     const out = parse(files['/home/u/.echo-agent/echo-agent.yaml'])
     expect(out.memory).toEqual({ enabled: true })
     expect(out.models.default_model).toBe('m')
+  })
+
+  it('rethrows non-ENOENT read errors without overwriting', () => {
+    const target = '/home/u/.echo-agent/echo-agent.yaml'
+    const files: Record<string, string> = { [target]: 'memory:\n  enabled: true\n' }
+    let wrote = false
+    const deps: ConfigWriterDeps = {
+      homeDir: '/home/u',
+      readFile: () => {
+        const err: NodeJS.ErrnoException = new Error('EACCES')
+        err.code = 'EACCES'
+        throw err
+      },
+      writeFile: (p, data) => { files[p] = data; wrote = true },
+      ensureDir: () => {}
+    }
+    expect(() => writeModelConfig(deps, { baseUrl: 'u', apiKey: 'k', model: 'm' })).toThrow()
+    expect(wrote).toBe(false)
   })
 })
 
