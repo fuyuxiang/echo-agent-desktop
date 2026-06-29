@@ -28,7 +28,8 @@ import {
   stopMeetingStream
 } from '../asr'
 import { summarizeMeeting, buildNotifyMessage } from '../echo-agent/meeting-summary'
-import { getGatewayClient } from '../echo-agent'
+import { getEchoAgentEndpoint } from '../echo-agent'
+import { notifyMeeting } from '../echo-agent/adapters'
 
 function meetingsDir(): string {
   return path.join(app.getPath('userData'), 'meetings')
@@ -116,13 +117,11 @@ export function registerMeetingHandlers(): void {
     async (_e, _meetingId: string, title: string, segments: SegmentDTO[]) => {
       const parsed = await summarizeMeeting(segments)
       if (!parsed) return null
-      // best-effort 告知 echo-agent:只发简短摘要消息,绝不发整段转写
+      // best-effort 告知 echo-agent:走一次性 HTTP POST,只发简短摘要,绝不发整段转写,
+      // 也不复用聊天 WS(避免重绑用户当前聊天会话)
       try {
-        const gw = getGatewayClient(() => {})
-        if (gw) {
-          gw.connect('meeting-notify')
-          gw.send(buildNotifyMessage(title, parsed))
-        }
+        const endpoint = getEchoAgentEndpoint()
+        if (endpoint) await notifyMeeting(endpoint, buildNotifyMessage(title, parsed))
       } catch (e) {
         log.warn('[meeting] 告知 echo-agent 失败:', e)
       }
