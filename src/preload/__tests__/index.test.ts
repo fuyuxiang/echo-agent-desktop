@@ -59,6 +59,7 @@ describe('preload bridge', () => {
       'asr',
       'db',
       'echoAgent',
+      'echoConfig',
       'log',
       'meeting',
       'permission',
