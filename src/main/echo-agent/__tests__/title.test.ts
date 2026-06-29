@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('../llm', () => ({
   getLLMProvider: vi.fn(() => null),
+  getLLMConfig: vi.fn(() => ({ baseUrl: 'u', apiKey: 'k', model: 'gpt-4o' })),
   setLLMConfig: vi.fn()
 }))
 
@@ -48,6 +49,19 @@ describe('generateTitle', () => {
   it('returns empty when provider yields error', async () => {
     const provider = fakeProvider([{ type: 'error' }])
     await expect(generateTitle('帮我写快排', { provider })).resolves.toBe('')
+  })
+  it('passes the configured model name into the chat request', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let captured: any = null
+    const provider = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      chat: async function* (req: any): any {
+        captured = req
+        yield { type: 'text', text: '标题' }
+      }
+    } as unknown as ChatProvider
+    await generateTitle('帮我写快排', { provider })
+    expect(captured?.model).toBe('gpt-4o')
   })
   it('delegates setTitleModelConfig to setLLMConfig (compat shim)', async () => {
     const { setLLMConfig } = await import('../llm')
