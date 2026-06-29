@@ -29,6 +29,16 @@ describe('installer', () => {
     const pip = calls.find((c) => c.includes('install') && c.some((a) => a.includes('echo-agent')))
     expect(pip).toBeTruthy()
     expect(pip).toContain('echo-agent[all]')
+    // pip must run on the venv python, not the bundled python
+    expect(pip![0]).toBe('/h/.echo-agent/runtime/bin/python')
+  })
+
+  it('throws with stderr when venv creation fails', async () => {
+    const runner: CommandRunner = {
+      run: vi.fn(async () => ({ code: 1, stdout: '', stderr: 'venv broken' }))
+    }
+    await expect(ensureInstalled(baseDeps({ runner, venvExists: () => false })))
+      .rejects.toThrow(/venv broken/)
   })
 
   it('skips venv creation when venv already exists', async () => {
