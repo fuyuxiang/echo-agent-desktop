@@ -152,5 +152,10 @@ export const IpcChannels = {
     update: 'echo:agent:update',
     /** 主进程 -> 渲染层:进程状态变化 */
     statusChanged: 'echo:agent:status-changed'
+  },
+
+  /** echo-agent 模型配置下发 */
+  echoConfig: {
+    apply: 'echo:config:apply'
   }
 } as const
