@@ -11,8 +11,14 @@ vi.mock('../../echo-agent/meeting-summary', () => ({
   summarizeMeeting: (...a: unknown[]) => summarizeMeeting(...a),
   buildNotifyMessage: (...a: unknown[]) => buildNotifyMessage(...a)
 }))
-const gw = { connect: vi.fn(), switchSession: vi.fn(), send: vi.fn() }
-vi.mock('../../echo-agent', () => ({ getGatewayClient: vi.fn(() => gw) }))
+const getEchoAgentEndpoint = vi.fn((..._a: unknown[]) => ({ baseUrl: 'http://127.0.0.1:1', token: 't' }))
+vi.mock('../../echo-agent', () => ({
+  getEchoAgentEndpoint: (...a: unknown[]) => getEchoAgentEndpoint(...a)
+}))
+const notifyMeeting = vi.fn()
+vi.mock('../../echo-agent/adapters', () => ({
+  notifyMeeting: (...a: unknown[]) => notifyMeeting(...a)
+}))
 // meeting dao mocked to no-op (handler under test only uses summarize path)
 vi.mock('../../db/dao/meeting', () => ({
   createMeeting: vi.fn(), listMeetings: vi.fn(), getMeeting: vi.fn(), appendSegment: vi.fn(),
@@ -33,7 +39,7 @@ describe('meeting:summarize ipc', () => {
     registerMeetingHandlers()
     const r = await handlers.get(IpcChannels.meeting.summarize)!({}, 'm1', '评审会', [{ text: 'x' }])
     expect(r).toEqual({ summary: 's', keyPoints: ['k'], actionItems: [] })
-    expect(gw.send).toHaveBeenCalledWith('NOTIFY')
+    expect(notifyMeeting).toHaveBeenCalledWith({ baseUrl: 'http://127.0.0.1:1', token: 't' }, 'NOTIFY')
   })
 
   it('returns null and skips notify when summary fails', async () => {
@@ -41,14 +47,23 @@ describe('meeting:summarize ipc', () => {
     registerMeetingHandlers()
     const r = await handlers.get(IpcChannels.meeting.summarize)!({}, 'm1', 't', [])
     expect(r).toBeNull()
-    expect(gw.send).not.toHaveBeenCalled()
+    expect(notifyMeeting).not.toHaveBeenCalled()
   })
 
   it('still returns parsed when notify throws', async () => {
     summarizeMeeting.mockResolvedValue({ summary: 's', keyPoints: [], actionItems: [] })
-    gw.send.mockImplementation(() => { throw new Error('ws down') })
+    notifyMeeting.mockRejectedValue(new Error('http down'))
     registerMeetingHandlers()
     const r = await handlers.get(IpcChannels.meeting.summarize)!({}, 'm1', 't', [])
     expect(r).toMatchObject({ summary: 's' })
+  })
+
+  it('returns parsed and skips notify when endpoint is null', async () => {
+    summarizeMeeting.mockResolvedValue({ summary: 's', keyPoints: [], actionItems: [] })
+    getEchoAgentEndpoint.mockReturnValue(null as unknown as { baseUrl: string; token: string })
+    registerMeetingHandlers()
+    const r = await handlers.get(IpcChannels.meeting.summarize)!({}, 'm1', 't', [])
+    expect(r).toMatchObject({ summary: 's' })
+    expect(notifyMeeting).not.toHaveBeenCalled()
   })
 })
