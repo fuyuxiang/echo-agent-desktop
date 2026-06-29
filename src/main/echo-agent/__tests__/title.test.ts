@@ -33,6 +33,14 @@ describe('generateTitle', () => {
     const provider = fakeProvider([{ type: 'text', text: '快速排序实现' }])
     await expect(generateTitle('帮我写快排', { provider })).resolves.toBe('快速排序实现')
   })
+  it('concatenates multiple text deltas before sanitizing', async () => {
+    setTitleModelConfig({ baseUrl: 'u', apiKey: 'k', model: 'm' })
+    const provider = fakeProvider([
+      { type: 'text', text: '快速' },
+      { type: 'text', text: '排序' }
+    ])
+    await expect(generateTitle('帮我写快排', { provider })).resolves.toBe('快速排序')
+  })
   it('returns empty when provider yields error', async () => {
     setTitleModelConfig({ baseUrl: 'u', apiKey: 'k', model: 'm' })
     const provider = fakeProvider([{ type: 'error' }])
