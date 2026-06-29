@@ -26,6 +26,11 @@ extraResources:
     to: models/asr
   - from: resources/models/diarization
     to: models/diarization
+  # 内置 Python 运行时(echo-agent 运行依赖)。fetch-python-runtime.mjs 按当前平台拉取
+  - from: resources/echo-runtime
+    to: echo-runtime
+    filter:
+      - '**/*'
 
 # 原生模块(better-sqlite3)自动按 Electron ABI rebuild
 npmRebuild: true
@@ -38,7 +43,6 @@ asarUnpack:
 mac:
   icon: resources/icon.png
   category: public.app-category.productivity
-  # P6: Python 运行时已下线,不再打包
   target:
     - target: dmg
       arch: [arm64, x64]
@@ -49,7 +53,6 @@ mac:
 
 win:
   icon: resources/icon.png
-  # P6: Python 运行时已下线,不再打包
   target:
     - target: nsis
       arch: [x64]
