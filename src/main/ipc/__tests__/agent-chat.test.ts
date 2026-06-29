@@ -1,44 +1,47 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const handlers = new Map<string, (...a: unknown[]) => unknown>()
 vi.mock('electron', () => ({
   ipcMain: { handle: (ch: string, fn: (...a: unknown[]) => unknown) => handlers.set(ch, fn) },
-  app: { getPath: () => '/tmp', getAppPath: () => '/tmp' }
+  BrowserWindow: { getAllWindows: () => [] }
+}))
+
+const gw = { switchSession: vi.fn(), send: vi.fn(), connect: vi.fn(), disconnect: vi.fn() }
+vi.mock('../../echo-agent', () => ({
+  getGatewayClient: vi.fn(() => gw),
+  resetGatewayClient: vi.fn()
 }))
 vi.mock('../../db/dao/session', () => ({
-  listChatSessions: () => [{ chatId: 'c1' }],
+  listChatSessions: vi.fn(() => [{ id: 's1' }]),
   deleteChatSession: vi.fn()
 }))
-vi.mock('../../store', () => ({ secureGet: () => 'fake-key' }))
-const sendSpy = vi.fn()
-const abortSpy = vi.fn()
+vi.mock('../../agent/permission/broker', () => ({ clearSessionAllowlist: vi.fn() }))
+// generateTitle still lives in runtime-singleton until Task 6 moves it to title.ts.
+// Mock it so the test does not pull in electron-store via runtime-singleton.
+vi.mock('../../agent/runtime-singleton', () => ({ generateTitle: vi.fn(() => 'title') }))
 
-import { IpcChannels } from '@shared/ipc-channels'
 import { registerAgentChatIpc } from '../agent-chat'
-import { resetAgentRuntimeForTest } from '../../agent/runtime-singleton'
+import { IpcChannels } from '@shared/ipc-channels'
 
-beforeEach(() => {
-  handlers.clear()
-  sendSpy.mockClear()
-  abortSpy.mockClear()
-  registerAgentChatIpc()
-})
-afterEach(() => resetAgentRuntimeForTest())
+describe('agent-chat ipc (gateway)', () => {
+  beforeEach(() => { handlers.clear(); gw.switchSession.mockClear(); gw.send.mockClear() })
 
-function invoke(ch: string, ...a: unknown[]): unknown {
-  return handlers.get(ch)!({}, ...a)
-}
-
-describe('agent-chat IPC', () => {
-  it('未初始化 send 不抛(优雅降级)', () => {
-    expect(() => invoke(IpcChannels.agentChat.send, { chatId: 'c1', text: 'hi' })).not.toThrow()
+  it('send switches session then sends text via gateway', () => {
+    registerAgentChatIpc()
+    handlers.get(IpcChannels.agentChat.send)!({}, { chatId: 'c1', text: 'hi' })
+    expect(gw.switchSession).toHaveBeenCalledWith('c1')
+    expect(gw.send).toHaveBeenCalledWith('hi', undefined)
   })
-  it('init 后 send 转 runtime.send', async () => {
-    resetAgentRuntimeForTest({ send: sendSpy, abort: abortSpy } as never)
-    await invoke(IpcChannels.agentChat.send, { chatId: 'c1', text: 'hi' })
-    expect(sendSpy).toHaveBeenCalledWith('c1', 'hi')
+
+  it('listSessions reads local sqlite', () => {
+    registerAgentChatIpc()
+    const r = handlers.get(IpcChannels.agentChat.listSessions)!()
+    expect(r).toEqual([{ id: 's1' }])
   })
-  it('listSessions 走 db dao', () => {
-    expect(invoke(IpcChannels.agentChat.listSessions)).toEqual([{ chatId: 'c1' }])
+
+  it('init returns success', () => {
+    registerAgentChatIpc()
+    const r = handlers.get(IpcChannels.agentChat.init)!({}, {})
+    expect(r).toEqual({ success: true })
   })
 })

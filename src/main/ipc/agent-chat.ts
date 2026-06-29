@@ -1,26 +1,40 @@
 // src/main/ipc/agent-chat.ts
-import { ipcMain } from 'electron'
+import { ipcMain, BrowserWindow } from 'electron'
 import { IpcChannels } from '@shared/ipc-channels'
-import { getAgentRuntime } from '../agent/runtime-singleton'
-import { initAgentRuntime, generateTitle, type RuntimeInitConfig } from '../agent/runtime-singleton'
+import { getGatewayClient } from '../echo-agent'
+import type { Frame } from '../echo-agent/gateway-client'
 import { listChatSessions, deleteChatSession } from '../db/dao/session'
 import { clearSessionAllowlist } from '../agent/permission/broker'
+// NOTE: Task 6 will move generateTitle to '../echo-agent/title'. title.ts does
+// not exist yet, so keep using the working runtime-singleton implementation.
+import { generateTitle } from '../agent/runtime-singleton'
+
+function broadcast(ev: Frame): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send(IpcChannels.agentChat.event, ev)
+  }
+}
+
+function client() {
+  return getGatewayClient(broadcast)
+}
 
 export function registerAgentChatIpc(): void {
   ipcMain.handle(
     IpcChannels.agentChat.send,
     (_e, opts: { chatId: string; text: string; attachments?: Array<{ id: string; name: string }> }) => {
-      const rt = getAgentRuntime()
-      if (!rt) {
-        console.error('[agent-chat] 发送失败: runtime 未初始化')
+      const c = client()
+      if (!c) {
+        broadcast({ type: 'error', chatId: opts.chatId, message: 'Agent 尚未就绪' })
         return
       }
-      void rt.send(opts.chatId, opts.text)
+      c.switchSession(opts.chatId)
+      c.send(opts.text, opts.attachments)
     }
   )
 
-  ipcMain.handle(IpcChannels.agentChat.abort, (_e, opts: { chatId: string }) => {
-    getAgentRuntime()?.abort(opts.chatId)
+  ipcMain.handle(IpcChannels.agentChat.abort, (_e, _opts: { chatId: string }) => {
+    // echo-agent WS 无显式 abort 帧;渲染层依赖本地停止累积。保留 handler 不报错。
   })
 
   ipcMain.handle(IpcChannels.agentChat.listSessions, () => listChatSessions())
@@ -32,8 +46,9 @@ export function registerAgentChatIpc(): void {
     return { success: true }
   })
 
-  ipcMain.handle(IpcChannels.agentChat.init, (_e, cfg: RuntimeInitConfig) => {
-    initAgentRuntime(cfg)
+  ipcMain.handle(IpcChannels.agentChat.init, (_e, _cfg: unknown) => {
+    // 语义改为确保 gateway client 就绪(实际连接在首次 send 时按 chatId 建立)
+    client()
     return { success: true }
   })
 
