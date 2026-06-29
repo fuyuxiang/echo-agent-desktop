@@ -53,12 +53,8 @@ export function ModelSection(): React.JSX.Element {
     try {
       await window.api.store.secureSet(API_KEY_STORE_KEY, key)
       await storage.set(LOCAL_CONFIG_KEY, { baseUrl: url, modelName: model })
-      await window.api.agentChat.init({
-        providerId: 'openai',
-        model,
-        baseUrl: url,
-        apiKeyStoreKey: API_KEY_STORE_KEY
-      })
+      // 写入 echo-agent.yaml 的 models 段并重启进程使配置生效(取代旧的 TS Runtime 装配)
+      await window.api.echoConfig.apply({ baseUrl: url, apiKey: key, model })
       useAgentStore.getState().setConfigured(true)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
