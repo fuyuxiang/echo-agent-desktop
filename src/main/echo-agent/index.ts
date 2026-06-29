@@ -1,0 +1,77 @@
+import { homedir } from 'node:os'
+import { existsSync } from 'node:fs'
+import log from 'electron-log/main'
+import type { EchoAgentEndpoint, EchoAgentStatus } from './types'
+import { EchoAgentManager } from './manager'
+import { ensureInstalled, updateEchoAgent as pipUpdate } from './installer'
+import { waitHealthy } from './health'
+import { pickFreePort, generateToken } from './runtime-config'
+import { venvDir, bundledPythonPath } from './paths'
+import { nodeCommandRunner, spawnGateway, shutdownGateway, fetchHealth } from './adapters'
+
+export interface StatusBus {
+  subscribe: (cb: (s: EchoAgentStatus) => void) => () => void
+  emit: (s: EchoAgentStatus) => void
+  last: () => EchoAgentStatus
+}
+
+export function createStatusBus(): StatusBus {
+  const subs = new Set<(s: EchoAgentStatus) => void>()
+  let lastStatus: EchoAgentStatus = { phase: 'idle' }
+  return {
+    subscribe(cb) { subs.add(cb); return () => subs.delete(cb) },
+    emit(s) { lastStatus = s; for (const cb of subs) cb(s) },
+    last() { return lastStatus }
+  }
+}
+
+const bus = createStatusBus()
+let manager: EchoAgentManager | null = null
+
+export function getEchoAgentManager(): EchoAgentManager {
+  if (manager) return manager
+  const homeDir = homedir()
+  const platform = process.platform
+  const arch = process.arch
+  const bundledPython = bundledPythonPath(process.resourcesPath, platform, arch)
+  manager = new EchoAgentManager({
+    ensureInstalled: (onProgress) =>
+      ensureInstalled({
+        runner: nodeCommandRunner, homeDir, platform, bundledPython,
+        venvExists: (dir) => existsSync(dir), onProgress
+      }),
+    update: (onProgress) =>
+      pipUpdate({
+        runner: nodeCommandRunner, homeDir, platform, bundledPython,
+        venvExists: (dir) => existsSync(dir), onProgress
+      }),
+    pickPort: pickFreePort,
+    genToken: generateToken,
+    spawnGateway: ({ port, token }) => spawnGateway({ port, token, homeDir, platform }),
+    waitHealthy: (baseUrl) =>
+      waitHealthy(baseUrl, { timeoutMs: 120_000, intervalMs: 1000, fetchFn: fetchHealth }),
+    shutdown: shutdownGateway,
+    onStatus: (s) => { log.info('[echo-agent] status:', s.phase, s.message ?? ''); bus.emit(s) }
+  })
+  return manager
+}
+
+export function getEchoAgentEndpoint(): EchoAgentEndpoint | null {
+  return manager?.getEndpoint() ?? null
+}
+
+export function onEchoAgentStatus(cb: (s: EchoAgentStatus) => void): () => void {
+  cb(bus.last())
+  return bus.subscribe(cb)
+}
+
+export function getEchoAgentStatus(): EchoAgentStatus {
+  return bus.last()
+}
+
+export async function startEchoAgent(): Promise<void> { await getEchoAgentManager().start() }
+export async function stopEchoAgent(): Promise<void> { await manager?.stop() }
+export async function updateEchoAgent(): Promise<void> { await getEchoAgentManager().runUpdate() }
+
+// reference to avoid unused warning (venvDir is reserved for the upcoming config-write plan)
+void venvDir
