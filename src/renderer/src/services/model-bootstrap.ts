@@ -2,6 +2,7 @@ import { fetchModelConfig, type ModelConfigDTO } from './server'
 import { storage } from '@/utils'
 import {
   LOCAL_OLLAMA_CONFIG_KEY,
+  OLLAMA_PLACEHOLDER_API_KEY,
   toOllamaOpenAIBase,
   type LocalOllamaConfig
 } from './model-config'
@@ -9,23 +10,11 @@ import { logger } from '@/utils/logger'
 import { useAgentStore } from '@/stores/agentStore'
 import { useUserStore } from '@/stores/userStore'
 
-/** providerId -> safeStorage api key 名映射(沿用旧 key 名) */
-function apiKeyStoreKey(providerId: string): string {
-  const map: Record<string, string> = {
-    openai: 'openai-api-key',
-    anthropic: 'anthropic-api-key',
-    gemini: 'gemini-api-key',
-    openrouter: 'openrouter-api-key',
-    deepseek: 'deepseek-api-key'
-  }
-  return map[providerId] ?? `${providerId}-api-key`
-}
-
 /**
- * 方案A: 登录后从服务器拉取模型配置,装配到主进程原生 AgentRuntime。
+ * 方案A: 登录后从服务器拉取模型配置,下发到 echo-agent。
  *
- * 流程:拿 { providerId, model, baseUrl } -> 主进程用 safeStorage 取 apiKey -> createProvider -> createAgentRuntime。
- * 渲染层永不接触 apiKey。
+ * 流程:拿 { baseUrl, apiKey, model } -> window.api.echoConfig.apply 写入 yaml 并重启 echo-agent 进程。
+ * apiKey 明文随 apply 传入(写进 yaml),不再走 safeStorage。
  *
  * 返回:
  * - configured:runtime 是否真正装配成功(init 调通)。false 表示发送会失败
@@ -44,11 +33,10 @@ export async function applyServerModelConfigAndStart(): Promise<{
     // ① Ollama 本地模型(显式启用,最高优先)
     const localModel = await storage.get<LocalOllamaConfig>(LOCAL_OLLAMA_CONFIG_KEY)
     if (localModel?.enabled && localModel.baseUrl && localModel.modelName) {
-      await window.api.agentChat.init({
-        providerId: 'openai',
-        model: localModel.modelName,
+      await window.api.echoConfig.apply({
         baseUrl: toOllamaOpenAIBase(localModel.baseUrl),
-        apiKeyStoreKey: apiKeyStoreKey('ollama')
+        apiKey: OLLAMA_PLACEHOLDER_API_KEY,
+        model: localModel.modelName
       })
       agent.setReady(true)
       agent.setConfigured(true)
@@ -68,16 +56,10 @@ export async function applyServerModelConfigAndStart(): Promise<{
       }
 
       if (cfg?.baseUrl && cfg?.modelName) {
-        const providerId = 'openai'
-        const storeKey = apiKeyStoreKey(providerId)
-        if (cfg.apiKey) {
-          await storage.secure.set(storeKey, cfg.apiKey)
-        }
-        await window.api.agentChat.init({
-          providerId,
-          model: cfg.modelName,
+        await window.api.echoConfig.apply({
           baseUrl: cfg.baseUrl,
-          apiKeyStoreKey: storeKey
+          apiKey: cfg.apiKey ?? '',
+          model: cfg.modelName
         })
         agent.setReady(true)
         agent.setConfigured(true)
@@ -90,12 +72,10 @@ export async function applyServerModelConfigAndStart(): Promise<{
     // ③ 本地手动配置(未登录的唯一来源 / 已登录但服务器未配置的兜底)
     const localCfg = await storage.get<{ baseUrl: string; modelName: string }>(LOCAL_CONFIG_KEY)
     if (localCfg?.baseUrl && localCfg?.modelName) {
-      const storeKey = 'openai-api-key'
-      await window.api.agentChat.init({
-        providerId: 'openai',
-        model: localCfg.modelName,
+      await window.api.echoConfig.apply({
         baseUrl: localCfg.baseUrl,
-        apiKeyStoreKey: storeKey
+        apiKey: '',
+        model: localCfg.modelName
       })
       agent.setReady(true)
       agent.setConfigured(true)
