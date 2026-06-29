@@ -51,4 +51,17 @@ describe('translateFrame', () => {
     expect(out[0]).toMatchObject({ type: 'error', chatId: 'c1' })
     expect(out[0].message ?? out[0].error).toBe('unauthorized')
   })
+
+  it('final message with error:null is not treated as error', () => {
+    const out = translateFrame(
+      { type: 'message', text: 'x', is_final: true, error: null }, 'c1'
+    )
+    expect(out).toHaveLength(2)
+    expect(out[0]).toMatchObject({ type: 'final', text: 'x', chatId: 'c1' })
+    expect(out[1]).toMatchObject({ type: 'done', chatId: 'c1' })
+  })
+
+  it('control frame with empty error string is not treated as error', () => {
+    expect(translateFrame({ type: 'auth_ok', error: '' }, 'c1')).toEqual([])
+  })
 })
