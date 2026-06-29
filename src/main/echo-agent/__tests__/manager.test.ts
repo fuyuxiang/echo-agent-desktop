@@ -137,3 +137,24 @@ describe('EchoAgentManager', () => {
     expect(m.getStatus().phase).toBe('ready')
   })
 })
+
+describe('EchoAgentManager.restart', () => {
+  it('stops then relaunches, returning to ready', async () => {
+    const { d } = deps()
+    const m = new EchoAgentManager(d)
+    await m.start()
+    await m.restart()
+    expect(d.shutdown).toHaveBeenCalled()
+    expect(m.getStatus().phase).toBe('ready')
+  })
+
+  it('relaunch acquires a fresh port and token', async () => {
+    const ports = [51111, 52222]
+    let i = 0
+    const { d } = deps({ pickPort: vi.fn(async () => ports[i++]) })
+    const m = new EchoAgentManager(d)
+    await m.start()
+    await m.restart()
+    expect(m.getEndpoint()?.baseUrl).toBe('http://127.0.0.1:52222')
+  })
+})
