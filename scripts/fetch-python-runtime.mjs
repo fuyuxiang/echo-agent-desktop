@@ -3,7 +3,7 @@
 // 用法: PYTHON_RUNTIME_BASE_URL=https://源地址 node scripts/fetch-python-runtime.mjs
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { pipeline } from 'node:stream/promises'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -52,6 +52,6 @@ async function main() {
 }
 
 // 仅作为脚本直接运行时执行 main(被测试 import 时不执行)
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((e) => { console.error(`[fetch-python] 错误: ${e.message}`); process.exit(1) })
 }
