@@ -83,3 +83,29 @@ export async function shutdownGateway(endpoint: EchoAgentEndpoint): Promise<void
     clearTimeout(t)
   }
 }
+
+// One-shot HTTP notify to echo-agent. Uses a dedicated chat_id so it never
+// rebinds the user's chat WS session. Only short summary text is sent here,
+// never the full transcript.
+export async function notifyMeeting(endpoint: EchoAgentEndpoint, text: string): Promise<void> {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), 5000)
+  try {
+    await fetch(`${endpoint.baseUrl}/api/message`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${endpoint.token}`
+      },
+      body: JSON.stringify({
+        platform: 'desktop',
+        user_id: 'desktop-user',
+        chat_id: 'meeting-notify',
+        text
+      }),
+      signal: ctrl.signal
+    })
+  } finally {
+    clearTimeout(t)
+  }
+}
