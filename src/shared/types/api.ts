@@ -196,6 +196,11 @@ export interface BridgeApi {
     remove(meetingId: string): Promise<void>
     rename(meetingId: string, title: string): Promise<void>
     markSource(meetingId: string, source: string): Promise<void>
+    summarize(
+      meetingId: string,
+      title: string,
+      segments: SegmentDTO[]
+    ): Promise<{ summary: string; keyPoints: string[]; actionItems: string[] } | null>
   }
 
   /** 原生 agent 对话主链路(P5) */
