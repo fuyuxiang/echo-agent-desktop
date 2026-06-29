@@ -112,18 +112,68 @@ describe('GatewayClient', () => {
     expect(events[0]).toMatchObject({ text: 'hi', chatId: 'c1' })
   })
 
-  it('reconnects once when ws closes unexpectedly', () => {
+  it('schedules a reconnect via scheduleReconnect on unexpected close', () => {
+    let created = 0
+    const scheduled: Array<() => void> = []
+    const wss: ReturnType<typeof fakeWs>[] = []
+    const c = new GatewayClient({
+      wsUrl: 'ws://x/ws', token: 't',
+      createWs: () => { created++; const w = fakeWs(); wss.push(w); return w },
+      emit: () => {},
+      scheduleReconnect: (fn) => { scheduled.push(fn) }
+    })
+    c.connect('c1')
+    wss[0].fire('open')
+    wss[0].fire('close')
+    expect(created).toBe(1)        // not reconnected synchronously
+    expect(scheduled).toHaveLength(1)
+    scheduled[0]()                 // run the scheduled reconnect
+    expect(created).toBe(2)
+  })
+
+  it('stops reconnecting after maxReconnects and emits an error', () => {
+    let created = 0
+    const events: Frame[] = []
+    const wss: ReturnType<typeof fakeWs>[] = []
+    const c = new GatewayClient({
+      wsUrl: 'ws://x/ws', token: 't',
+      createWs: () => { created++; const w = fakeWs(); wss.push(w); return w },
+      emit: (e) => events.push(e),
+      scheduleReconnect: (fn) => fn(),   // run reconnect synchronously
+      maxReconnects: 3
+    })
+    c.connect('c1')
+    // each unexpected close triggers one reconnect until the cap is hit
+    for (let i = 0; i < 5; i++) {
+      wss[wss.length - 1].fire('open')
+      wss[wss.length - 1].fire('close')
+    }
+    expect(created).toBe(1 + 3)   // initial + 3 reconnects
+    expect(events.some((e) => e.type === 'error')).toBe(true)
+  })
+
+  it('resets reconnect attempts after auth_ok so a later close can reconnect again', () => {
     let created = 0
     const wss: ReturnType<typeof fakeWs>[] = []
     const c = new GatewayClient({
       wsUrl: 'ws://x/ws', token: 't',
       createWs: () => { created++; const w = fakeWs(); wss.push(w); return w },
-      emit: () => {}
+      emit: () => {},
+      scheduleReconnect: (fn) => fn(),
+      maxReconnects: 2
     })
     c.connect('c1')
-    wss[0].fire('open')
-    wss[0].fire('close')
-    expect(created).toBe(2) // auto-reconnect created a second ws
+    // exhaust the budget with two reconnects (no auth_ok in between)
+    wss[wss.length - 1].fire('open')
+    wss[wss.length - 1].fire('close') // reconnect 1
+    wss[wss.length - 1].fire('open')
+    wss[wss.length - 1].fire('close') // reconnect 2
+    expect(created).toBe(3)           // capped at initial + 2
+    // now a successful auth resets the counter
+    wss[wss.length - 1].fire('open')
+    wss[wss.length - 1].fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    wss[wss.length - 1].fire('close')
+    expect(created).toBe(4)           // attempts reset → reconnect happens again
   })
 
   it('does not reconnect after explicit disconnect', () => {
@@ -132,7 +182,8 @@ describe('GatewayClient', () => {
     const c = new GatewayClient({
       wsUrl: 'ws://x/ws', token: 't',
       createWs: () => { created++; const w = fakeWs(); wss.push(w); return w },
-      emit: () => {}
+      emit: () => {},
+      scheduleReconnect: (fn) => fn()
     })
     c.connect('c1')
     wss[0].fire('open')
@@ -150,5 +201,18 @@ describe('GatewayClient', () => {
     c.switchSession('c2')
     const auth = JSON.parse(ws.sent[ws.sent.length - 1])
     expect(auth).toMatchObject({ type: 'auth', chat_id: 'c2' })
+  })
+
+  it('switchSession before auth_ok keeps emitting under the new chatId once authed', () => {
+    const ws = fakeWs()
+    const events: Frame[] = []
+    const c = new GatewayClient({ wsUrl: 'ws://x/ws', token: 't', createWs: () => ws, emit: (e) => events.push(e) })
+    c.connect('c1')
+    ws.fire('open')              // auth sent for c1, but not yet authed
+    c.switchSession('c2')        // ws present but not authed → no extra auth, chatId becomes c2
+    expect(ws.sent).toHaveLength(1)
+    ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    ws.fire('message', JSON.stringify({ type: 'message', text: 'hi', is_final: true }))
+    expect(events[0]).toMatchObject({ type: 'final', chatId: 'c2' })
   })
 })

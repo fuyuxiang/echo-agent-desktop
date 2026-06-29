@@ -43,6 +43,19 @@ export interface GatewayClientDeps {
   emit: (event: Frame) => void
   platform?: string
   userId?: string
+  // Schedule a reconnect attempt. Default applies a fixed backoff so that a
+  // crashing gateway cannot cause an unbounded, no-delay reconnect loop.
+  scheduleReconnect?: (fn: () => void) => void
+  // Hard cap on consecutive reconnect attempts before giving up.
+  maxReconnects?: number
+}
+
+const DEFAULT_MAX_RECONNECTS = 5
+const RECONNECT_DELAY_MS = 2000
+
+const defaultScheduleReconnect = (fn: () => void): void => {
+  const t = setTimeout(fn, RECONNECT_DELAY_MS)
+  ;(t as { unref?: () => void }).unref?.()
 }
 
 export class GatewayClient {
@@ -51,6 +64,7 @@ export class GatewayClient {
   private authed = false
   private pendingSend: string | null = null
   private closing = false
+  private reconnectAttempts = 0
 
   constructor(private deps: GatewayClientDeps) {}
 
@@ -67,6 +81,8 @@ export class GatewayClient {
   }
 
   switchSession(chatId: string): void {
+    // chatId is updated immediately so that, even before auth completes, a
+    // later auth_ok and any translated frames bind to the new session.
     this.chatId = chatId
     if (this.ws && this.authed) {
       this.authed = false
@@ -90,6 +106,7 @@ export class GatewayClient {
     this.ws?.close()
     this.ws = null
     this.authed = false
+    this.pendingSend = null
   }
 
   private sendAuth(): void {
@@ -111,6 +128,8 @@ export class GatewayClient {
     }
     if (frame.type === 'auth_ok') {
       this.authed = true
+      // a successful handshake means the connection is healthy again
+      this.reconnectAttempts = 0
       if (this.pendingSend) {
         this.ws?.send(this.pendingSend)
         this.pendingSend = null
@@ -125,7 +144,24 @@ export class GatewayClient {
   private onClose(): void {
     this.authed = false
     if (this.closing) return
-    // unexpected close → reconnect once to the same chat
-    this.connect(this.chatId)
+    const max = this.deps.maxReconnects ?? DEFAULT_MAX_RECONNECTS
+    if (this.reconnectAttempts >= max) {
+      // give up rather than hammering a persistently broken gateway
+      this.deps.emit({
+        type: 'error',
+        chatId: this.chatId,
+        message: 'gateway 连接已断开,重连失败'
+      })
+      return
+    }
+    this.reconnectAttempts++
+    // schedule (with backoff) instead of reconnecting synchronously so a
+    // crash-loop cannot spin without delay
+    const schedule = this.deps.scheduleReconnect ?? defaultScheduleReconnect
+    const chatId = this.chatId
+    schedule(() => {
+      if (this.closing) return
+      this.connect(chatId)
+    })
   }
 }
