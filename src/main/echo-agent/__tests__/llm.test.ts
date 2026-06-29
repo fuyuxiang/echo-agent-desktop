@@ -26,5 +26,6 @@ describe('llm shared config', () => {
     const p = getLLMProvider()
     expect(p).not.toBeNull()
     expect(createProvider).toHaveBeenCalledWith({ providerId: 'openai', model: 'm', baseUrl: 'u', apiKey: 'k' })
+    expect(p).toEqual({ __provider: true, cfg: { providerId: 'openai', model: 'm', baseUrl: 'u', apiKey: 'k' } })
   })
 })
