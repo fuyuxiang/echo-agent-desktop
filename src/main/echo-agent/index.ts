@@ -1,5 +1,5 @@
 import { homedir } from 'node:os'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import log from 'electron-log/main'
 import type { EchoAgentEndpoint, EchoAgentStatus } from './types'
 import { EchoAgentManager } from './manager'
@@ -8,6 +8,7 @@ import { waitHealthy } from './health'
 import { pickFreePort, generateToken } from './runtime-config'
 import { venvDir, bundledPythonPath } from './paths'
 import { nodeCommandRunner, spawnGateway, shutdownGateway, fetchHealth } from './adapters'
+import { writeModelConfig, type ConfigWriterDeps, type ModelConfigInput } from './config-writer'
 
 export interface StatusBus {
   subscribe: (cb: (s: EchoAgentStatus) => void) => () => void
@@ -72,6 +73,24 @@ export function getEchoAgentStatus(): EchoAgentStatus {
 export async function startEchoAgent(): Promise<void> { await getEchoAgentManager().start() }
 export async function stopEchoAgent(): Promise<void> { await manager?.stop() }
 export async function updateEchoAgent(): Promise<void> { await getEchoAgentManager().runUpdate() }
+
+export function buildConfigWriterDeps(): ConfigWriterDeps {
+  return {
+    homeDir: homedir(),
+    readFile: (p) => readFileSync(p, 'utf8'),
+    writeFile: (p, data) => writeFileSync(p, data, 'utf8'),
+    ensureDir: (p) => { mkdirSync(p, { recursive: true }) }
+  }
+}
+
+export async function applyModelConfig(cfg: ModelConfigInput): Promise<void> {
+  writeModelConfig(buildConfigWriterDeps(), cfg)
+  await getEchoAgentManager().restart()
+}
+
+export async function restartEchoAgent(): Promise<void> {
+  await getEchoAgentManager().restart()
+}
 
 // reference to avoid unused warning (venvDir is reserved for the upcoming config-write plan)
 void venvDir
