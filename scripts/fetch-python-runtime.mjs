@@ -15,10 +15,26 @@ function platformKey(platform, arch) {
   throw new Error(`unsupported platform: ${platform}/${arch}`)
 }
 
+function targetForKey(key, baseUrl) {
+  return { key, url: `${baseUrl}/${key}.tar.gz`, dest: path.join(ROOT, key) }
+}
+
 export function resolveTargets(platform, arch, baseUrl) {
   const key = platformKey(platform, arch)
-  const ext = platform === 'win32' ? 'tar.gz' : 'tar.gz'
-  return [{ key, url: `${baseUrl}/${key}.${ext}`, dest: path.join(ROOT, key) }]
+  return [targetForKey(key, baseUrl)]
+}
+
+// 返回某平台需打包的全部 arch 目标:
+// mac → arm64 + x64 两个(build:mac 同时出两份 dmg,任一 arch 的包都要含运行时);
+// win → x64;linux 不支持。
+export function resolveAllTargets(platform, baseUrl) {
+  if (platform === 'darwin') {
+    return ['mac-arm64', 'mac-x64'].map((k) => targetForKey(k, baseUrl))
+  }
+  if (platform === 'win32') {
+    return [targetForKey('win-x64', baseUrl)]
+  }
+  throw new Error(`unsupported platform: ${platform}`)
 }
 
 async function download(url, dest) {
@@ -32,7 +48,8 @@ async function download(url, dest) {
 async function main() {
   const baseUrl = (process.env.PYTHON_RUNTIME_BASE_URL || '').replace(/\/+$/, '')
   if (!baseUrl) throw new Error('未提供 PYTHON_RUNTIME_BASE_URL')
-  const targets = resolveTargets(process.platform, process.arch, baseUrl)
+  // 拉取当前平台全部目标 arch,使任一 arch 的安装包都含运行时
+  const targets = resolveAllTargets(process.platform, baseUrl)
   for (const t of targets) {
     if (fs.existsSync(t.dest) && !process.argv.includes('--force')) {
       console.log(`[fetch-python] 已存在, 跳过: ${t.key}`)
