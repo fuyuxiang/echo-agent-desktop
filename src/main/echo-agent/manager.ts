@@ -122,4 +122,15 @@ export class EchoAgentManager {
       this.set({ phase: 'error', message: e instanceof Error ? e.message : String(e) })
     }
   }
+
+  async restart(): Promise<void> {
+    try {
+      await this.stop()
+      // stop() 置 stopped=true;本次为配置变更触发的主动重启,需复位允许 launch() spawn。
+      this.stopped = false
+      await this.launch()
+    } catch (e) {
+      this.set({ phase: 'error', message: e instanceof Error ? e.message : String(e) })
+    }
+  }
 }
