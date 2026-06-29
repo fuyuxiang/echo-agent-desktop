@@ -25,6 +25,15 @@ export interface EchoAgentStatus {
 }
 
 /**
+ * 模型配置下发入参(渲染层本地手填,主进程落盘并下发给 echo-agent)
+ */
+export interface ModelConfigInput {
+  baseUrl: string
+  apiKey: string
+  model: string
+}
+
+/**
  * preload 通过 contextBridge 暴露给渲染层的 API 形状(window.api)
  *
  * - 渲染层一律通过 `utils/` 门面调用,不直接使用 window.api
@@ -263,5 +272,11 @@ export interface BridgeApi {
     update: () => Promise<void>
     /** 监听状态变化,返回取消监听函数 */
     onStatusChanged: (cb: (s: EchoAgentStatus) => void) => () => void
+  }
+
+  /** echo-agent 模型配置下发 */
+  echoConfig: {
+    /** 下发模型配置(baseUrl/apiKey/model) */
+    apply: (cfg: ModelConfigInput) => Promise<void>
   }
 }
