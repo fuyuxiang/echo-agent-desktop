@@ -3,6 +3,8 @@ import { buildSummaryPrompt, parseSummary, buildNotifyMessage, summarizeMeeting 
 import type { ChatProvider } from '../../agent/providers/types'
 import type { SegmentDTO } from '@shared/types/meeting'
 
+vi.mock('electron-log/main', () => ({ default: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }))
+
 vi.mock('../llm', () => ({
   getLLMProvider: vi.fn(() => null),
   getLLMConfig: vi.fn(() => ({ baseUrl: '', apiKey: '', model: 'test-model' }))
@@ -13,6 +15,16 @@ function seg(idx: number, text: string, speaker: string | null): SegmentDTO {
 }
 function fakeProvider(out: string): ChatProvider {
   return { chat: async function* (): any { yield { type: 'text', text: out } } } as unknown as ChatProvider
+}
+function errorProvider(): ChatProvider {
+  return {
+    chat: async function* (): any { yield { type: 'error', message: 'boom' } }
+  } as unknown as ChatProvider
+}
+function throwingProvider(): ChatProvider {
+  return {
+    chat: function (): any { throw new Error('chat failed') }
+  } as unknown as ChatProvider
 }
 
 describe('buildSummaryPrompt', () => {
@@ -60,5 +72,14 @@ describe('summarizeMeeting', () => {
     const provider = fakeProvider('## 摘要\n概括\n## 关键点\n- k1\n## 待办\n无')
     const r = await summarizeMeeting([seg(0, '内容', 'A')], { provider })
     expect(r).toEqual({ summary: '概括', keyPoints: ['k1'], actionItems: [] })
+  })
+  it('returns null when provider yields an error delta', async () => {
+    const r = await summarizeMeeting([seg(0, '内容', 'A')], { provider: errorProvider() })
+    expect(r).toBeNull()
+  })
+  it('returns null (does not throw) when provider chat throws', async () => {
+    await expect(
+      summarizeMeeting([seg(0, '内容', 'A')], { provider: throwingProvider() })
+    ).resolves.toBeNull()
   })
 })
