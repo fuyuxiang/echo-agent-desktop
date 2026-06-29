@@ -1,3 +1,4 @@
+import log from 'electron-log/main'
 import type { ChatProvider } from '../agent/providers/types'
 import type { SegmentDTO } from '@shared/types/meeting'
 import { getLLMProvider, getLLMConfig } from './llm'
@@ -78,10 +79,14 @@ export async function summarizeMeeting(
       signal
     )) {
       if (delta.type === 'text') out += delta.text
-      else if (delta.type === 'error') return null
+      else if (delta.type === 'error') {
+        log.warn('[meeting-summary] 摘要生成失败(provider error):', delta.message)
+        return null
+      }
     }
     return parseSummary(out)
-  } catch {
+  } catch (e) {
+    log.warn('[meeting-summary] 摘要生成失败:', e)
     return null
   }
 }
