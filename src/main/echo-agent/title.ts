@@ -1,18 +1,11 @@
 // src/main/echo-agent/title.ts
-import { createProvider } from '../agent/providers/factory'
 import type { ChatProvider } from '../agent/providers/types'
 import { sanitizeTitle } from '../agent/title'
+import { setLLMConfig, getLLMProvider, type LLMConfig } from './llm'
 
-export interface TitleModelConfig {
-  baseUrl: string
-  apiKey: string
-  model: string
-}
-
-let titleConfig: TitleModelConfig | null = null
-
-export function setTitleModelConfig(cfg: TitleModelConfig | null): void {
-  titleConfig = cfg
+/** 兼容旧调用方:标题配置即共享 LLM 配置 */
+export function setTitleModelConfig(cfg: LLMConfig | null): void {
+  setLLMConfig(cfg)
 }
 
 export function buildTitlePrompt(firstUserMessage: string): string {
@@ -32,25 +25,15 @@ export async function generateTitle(
   deps?: { provider?: ChatProvider }
 ): Promise<string> {
   if (!firstUserMessage.trim()) return ''
-  const provider =
-    deps?.provider ??
-    (titleConfig
-      ? createProvider({
-          providerId: 'openai',
-          model: titleConfig.model,
-          baseUrl: titleConfig.baseUrl,
-          apiKey: titleConfig.apiKey
-        })
-      : null)
+  const provider = deps?.provider ?? getLLMProvider()
   if (!provider) return ''
 
-  const model = titleConfig?.model ?? 'gpt-4o-mini'
   const signal = AbortSignal.timeout(8000)
   try {
     let out = ''
     for await (const delta of provider.chat(
       {
-        model,
+        model: '',
         messages: [{ role: 'user', content: buildTitlePrompt(firstUserMessage) }],
         temperature: 0.3,
         maxTokens: 40

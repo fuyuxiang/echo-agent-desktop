@@ -11,7 +11,7 @@ import { nodeCommandRunner, spawnGateway, shutdownGateway, fetchHealth } from '.
 import { writeModelConfig, type ConfigWriterDeps, type ModelConfigInput } from './config-writer'
 import WebSocket from 'ws'
 import { GatewayClient, type Frame, type WsLike } from './gateway-client'
-import { setTitleModelConfig } from './title'
+import { setLLMConfig } from './llm'
 
 export interface StatusBus {
   subscribe: (cb: (s: EchoAgentStatus) => void) => () => void
@@ -89,7 +89,7 @@ export function buildConfigWriterDeps(): ConfigWriterDeps {
 export async function applyModelConfig(cfg: ModelConfigInput): Promise<void> {
   writeModelConfig(buildConfigWriterDeps(), cfg)
   // stash 同源配置供桌面直连 LLM 生成会话标题(独立于 TS AgentRuntime)
-  setTitleModelConfig({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model })
+  setLLMConfig({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model })
   await getEchoAgentManager().restart()
   // restart 换了 port/token,旧 gateway 单例仍连旧 endpoint;丢弃它,
   // 下次 send 时用新 endpoint 重建 client。
