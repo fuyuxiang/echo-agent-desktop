@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { parse } from 'yaml'
 import { mergeModelsBlock, writeModelConfig, type ConfigWriterDeps } from '../config-writer'
+
+// index.ts pulls in electron-log/main transitively; stub it so buildConfigWriterDeps
+// can be imported without an Electron runtime.
+vi.mock('electron-log/main', () => ({ default: { info() {}, warn() {}, error() {} } }))
+
+import { buildConfigWriterDeps } from '../index'
 
 const cfg = { baseUrl: 'https://api.x.com/v1', apiKey: 'sk-abc', model: 'gpt-4o' }
 
@@ -68,5 +74,16 @@ describe('writeModelConfig', () => {
     const out = parse(files['/home/u/.echo-agent/echo-agent.yaml'])
     expect(out.memory).toEqual({ enabled: true })
     expect(out.models.default_model).toBe('m')
+  })
+})
+
+describe('buildConfigWriterDeps', () => {
+  it('provides homeDir and fs-backed io', () => {
+    const d = buildConfigWriterDeps()
+    expect(typeof d.homeDir).toBe('string')
+    expect(d.homeDir.length).toBeGreaterThan(0)
+    expect(typeof d.readFile).toBe('function')
+    expect(typeof d.writeFile).toBe('function')
+    expect(typeof d.ensureDir).toBe('function')
   })
 })
