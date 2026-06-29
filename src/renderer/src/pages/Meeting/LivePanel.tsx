@@ -32,9 +32,9 @@ export function LivePanel(): React.JSX.Element | null {
     navigate(`/meeting/${id}`)
     // 后台生成纪要(失败静默,详情页可手动重试)
     try {
-      const { segments } = await window.api.meeting.get(id)
+      const { meeting, segments } = await window.api.meeting.get(id)
       const { generateSummary } = await import('@/services/meeting/summarize')
-      await generateSummary(id, segments)
+      await generateSummary(id, segments, meeting?.title ?? '')
     } catch {
       /* 详情页显示「暂无纪要」,留作手动重试 */
     }
