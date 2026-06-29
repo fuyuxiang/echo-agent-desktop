@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { translateFrame, GatewayClient, type WsLike, type Frame } from '../gateway-client'
+
+// importing ../index pulls in electron-log/main, which is not usable in tests
+vi.mock('electron-log/main', () => ({ default: { info() {}, warn() {}, error() {} } }))
+import { buildWsUrl } from '../index'
 
 function fakeWs(): WsLike & { fire: (ev: string, arg?: unknown) => void; sent: string[] } {
   const handlers: Record<string, (arg?: unknown) => void> = {}
@@ -238,5 +242,14 @@ describe('GatewayClient', () => {
     ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
     ws.fire('message', JSON.stringify({ type: 'message', text: 'hi', is_final: true }))
     expect(events[0]).toMatchObject({ type: 'final', chatId: 'c2' })
+  })
+})
+
+describe('buildWsUrl', () => {
+  it('converts http base + default ws path to ws url', () => {
+    expect(buildWsUrl('http://127.0.0.1:51234')).toBe('ws://127.0.0.1:51234/ws')
+  })
+  it('honours a custom ws path', () => {
+    expect(buildWsUrl('http://127.0.0.1:8', '/socket')).toBe('ws://127.0.0.1:8/socket')
   })
 })

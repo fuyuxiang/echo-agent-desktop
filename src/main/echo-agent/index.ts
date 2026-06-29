@@ -9,6 +9,8 @@ import { pickFreePort, generateToken } from './runtime-config'
 import { venvDir, bundledPythonPath } from './paths'
 import { nodeCommandRunner, spawnGateway, shutdownGateway, fetchHealth } from './adapters'
 import { writeModelConfig, type ConfigWriterDeps, type ModelConfigInput } from './config-writer'
+import WebSocket from 'ws'
+import { GatewayClient, type Frame, type WsLike } from './gateway-client'
 
 export interface StatusBus {
   subscribe: (cb: (s: EchoAgentStatus) => void) => () => void
@@ -94,3 +96,27 @@ export async function restartEchoAgent(): Promise<void> {
 
 // reference to avoid unused warning (venvDir is reserved for the upcoming config-write plan)
 void venvDir
+
+export function buildWsUrl(baseUrl: string, wsPath = '/ws'): string {
+  return baseUrl.replace(/^http/, 'ws') + wsPath
+}
+
+let gatewayClient: GatewayClient | null = null
+
+export function getGatewayClient(emit: (e: Frame) => void): GatewayClient | null {
+  if (gatewayClient) return gatewayClient
+  const endpoint = getEchoAgentEndpoint()
+  if (!endpoint) return null
+  gatewayClient = new GatewayClient({
+    wsUrl: buildWsUrl(endpoint.baseUrl),
+    token: endpoint.token,
+    createWs: (url) => new WebSocket(url) as unknown as WsLike,
+    emit
+  })
+  return gatewayClient
+}
+
+export function resetGatewayClient(): void {
+  gatewayClient?.disconnect()
+  gatewayClient = null
+}
