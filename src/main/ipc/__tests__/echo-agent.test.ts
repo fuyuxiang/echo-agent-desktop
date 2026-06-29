@@ -8,12 +8,13 @@ const statusFns: Array<(s: unknown) => void> = []
 vi.mock('../../echo-agent', () => ({
   getEchoAgentStatus: () => ({ phase: 'ready', port: 1 }),
   onEchoAgentStatus: (cb: (s: unknown) => void) => { statusFns.push(cb); return () => {} },
-  updateEchoAgent: vi.fn(async () => {})
+  updateEchoAgent: vi.fn(async () => {}),
+  applyModelConfig: vi.fn(async () => {})
 }))
 
 import { registerEchoAgentIpc } from '../echo-agent'
 import { IpcChannels } from '@shared/ipc-channels'
-import { updateEchoAgent } from '../../echo-agent'
+import { updateEchoAgent, applyModelConfig } from '../../echo-agent'
 
 describe('echo-agent ipc', () => {
   beforeEach(() => handlers.clear())
@@ -26,5 +27,15 @@ describe('echo-agent ipc', () => {
     registerEchoAgentIpc(() => null)
     await handlers.get(IpcChannels.echoAgent.update)!()
     expect(updateEchoAgent).toHaveBeenCalled()
+  })
+})
+
+describe('echo-config ipc', () => {
+  beforeEach(() => handlers.clear())
+  it('apply delegates to applyModelConfig with cfg', async () => {
+    registerEchoAgentIpc(() => null)
+    const cfg = { baseUrl: 'u', apiKey: 'k', model: 'm' }
+    await handlers.get(IpcChannels.echoConfig.apply)!({}, cfg)
+    expect(applyModelConfig).toHaveBeenCalledWith(cfg)
   })
 })
