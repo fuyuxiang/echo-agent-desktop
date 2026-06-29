@@ -88,6 +88,9 @@ export function buildConfigWriterDeps(): ConfigWriterDeps {
 export async function applyModelConfig(cfg: ModelConfigInput): Promise<void> {
   writeModelConfig(buildConfigWriterDeps(), cfg)
   await getEchoAgentManager().restart()
+  // restart 换了 port/token,旧 gateway 单例仍连旧 endpoint;丢弃它,
+  // 下次 send 时用新 endpoint 重建 client。
+  resetGatewayClient()
 }
 
 export async function restartEchoAgent(): Promise<void> {
