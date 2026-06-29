@@ -388,9 +388,31 @@ export default function ChatPage(): React.JSX.Element {
       }
     }
 
+    const onError = (payload: Record<string, unknown>): void => {
+      // primer 回合的错误不打扰用户(历史回顾失败可静默)
+      if (primerPendingRef.current) {
+        primerPendingRef.current = false
+        return
+      }
+      // 用户已点停止: 忽略迟到的错误帧,避免复位/提示干扰
+      if (stoppedRef.current) return
+      // 错误帧来源: Agent 未就绪 / 重连失败 / gateway error。透出真实文案,避免静默丢弃。
+      const message =
+        (typeof payload.message === 'string' && payload.message) ||
+        (typeof payload.error === 'string' && payload.error) ||
+        '对话出错'
+      toast.error(message)
+      // 若仍在生成: 复位界面,否则 isGenerating 永真卡在"思考中"
+      if (useChatStore.getState().isGenerating) {
+        stopGenerating()
+        streamOwnerChatIdRef.current = ''
+      }
+    }
+
     agentWs.on('message.streaming', onStreaming)
     agentWs.on('message.final', onFinal)
     agentWs.on('message.progress', onProgress)
+    agentWs.on('message.error', onError)
     agentWs.on('_disconnected', onDisconnected)
 
     // IPC 模式: connect 立即可用,无需等待 auth;连接后立刻补发 primer
@@ -401,6 +423,7 @@ export default function ChatPage(): React.JSX.Element {
       agentWs.off('message.streaming', onStreaming)
       agentWs.off('message.final', onFinal)
       agentWs.off('message.progress', onProgress)
+      agentWs.off('message.error', onError)
       agentWs.off('_disconnected', onDisconnected)
       agentWs.disconnect()
     }
@@ -492,7 +515,14 @@ export default function ChatPage(): React.JSX.Element {
         agentWs.switchSession(chatId)
       }
       addUserMessage(text, outboundAttachments)
-      // 用户消息由主进程 AgentRuntime 统一持久化,渲染层不再重复写库
+      // 用户消息落本地库(原 AgentRuntime 持久化已随后端切换到 gateway 移除)。
+      // 存用户原始输入 text(非 buildOutboundText 的技能前缀文本),与气泡显示一致;
+      // 此处 chatId 对应会话已在上方 upsert/已存在,不会写孤儿消息。失败仅 warn,不打断发送。
+      if (chatId) {
+        void db.session
+          .appendMessage({ chatId, role: 'user', content: text })
+          .catch((err) => logger.warn('[chat] 用户消息落库失败:', err))
+      }
       setInputText('')
       setPendingAttachments([])
       if (isNewSession) {
