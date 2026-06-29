@@ -15,6 +15,16 @@ import type {
 import type { MeetingDTO, SegmentDTO, SummaryDTO, MeetingSummaryInput } from './meeting'
 
 /**
+ * echo-agent 进程状态(与 main 端 echo-agent/types.ts 字段一致;shared 不依赖 main)
+ */
+export interface EchoAgentStatus {
+  phase: 'idle' | 'installing' | 'starting' | 'ready' | 'crashed' | 'updating' | 'error'
+  port?: number
+  message?: string
+  detail?: string
+}
+
+/**
  * preload 通过 contextBridge 暴露给渲染层的 API 形状(window.api)
  *
  * - 渲染层一律通过 `utils/` 门面调用,不直接使用 window.api
@@ -243,5 +253,15 @@ export interface BridgeApi {
     isWin: boolean
     /** process.platform 原始值 */
     platform: string
+  }
+
+  /** echo-agent 进程生命周期 */
+  echoAgent: {
+    /** 读取当前进程状态 */
+    getStatus: () => Promise<EchoAgentStatus>
+    /** 触发依赖更新 */
+    update: () => Promise<void>
+    /** 监听状态变化,返回取消监听函数 */
+    onStatusChanged: (cb: (s: EchoAgentStatus) => void) => () => void
   }
 }
