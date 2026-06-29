@@ -1,7 +1,7 @@
 // src/main/echo-agent/title.ts
 import type { ChatProvider } from '../agent/providers/types'
 import { sanitizeTitle } from '../agent/title'
-import { setLLMConfig, getLLMProvider, type LLMConfig } from './llm'
+import { setLLMConfig, getLLMConfig, getLLMProvider, type LLMConfig } from './llm'
 
 /** 兼容旧调用方:标题配置即共享 LLM 配置 */
 export function setTitleModelConfig(cfg: LLMConfig | null): void {
@@ -33,7 +33,7 @@ export async function generateTitle(
     let out = ''
     for await (const delta of provider.chat(
       {
-        model: '',
+        model: getLLMConfig()?.model ?? '',
         messages: [{ role: 'user', content: buildTitlePrompt(firstUserMessage) }],
         temperature: 0.3,
         maxTokens: 40
