@@ -39,6 +39,9 @@ beforeEach(() => {
   window.api = {
     agentChat: {
       init: vi.fn(async () => ({ success: true }))
+    },
+    echoConfig: {
+      apply: vi.fn(async () => undefined)
     }
   } as never
   agentStore.getState.mockReturnValue({
@@ -61,11 +64,10 @@ describe('applyServerModelConfigAndStart', () => {
       configured: true,
       retryable: false
     })
-    expect(window.api.agentChat.init).toHaveBeenCalledWith({
-      providerId: 'openai',
-      model: 'qwen',
+    expect(window.api.echoConfig.apply).toHaveBeenCalledWith({
       baseUrl: 'http://127.0.0.1:11434/v1',
-      apiKeyStoreKey: 'ollama-api-key'
+      apiKey: 'ollama',
+      model: 'qwen'
     })
     expect(server.fetchModelConfig).not.toHaveBeenCalled()
     expect(agentStore.setReady).toHaveBeenCalledWith(true)
@@ -88,11 +90,10 @@ describe('applyServerModelConfigAndStart', () => {
       configured: true,
       retryable: false
     })
-    expect(window.api.agentChat.init).toHaveBeenCalledWith({
-      providerId: 'openai',
-      model: 'gpt-4o',
+    expect(window.api.echoConfig.apply).toHaveBeenCalledWith({
       baseUrl: 'https://api.example.com/v1',
-      apiKeyStoreKey: 'openai-api-key'
+      apiKey: expect.any(String),
+      model: 'gpt-4o'
     })
     expect(agentStore.setReady).toHaveBeenCalledWith(true)
     expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
@@ -114,7 +115,7 @@ describe('applyServerModelConfigAndStart', () => {
       configured: false,
       retryable: false
     })
-    expect(window.api.agentChat.init).not.toHaveBeenCalled()
+    expect(window.api.echoConfig.apply).not.toHaveBeenCalled()
     expect(agentStore.setReady).toHaveBeenCalledWith(true)
     expect(agentStore.setConfigured).not.toHaveBeenCalled()
   })
@@ -130,7 +131,7 @@ describe('applyServerModelConfigAndStart', () => {
       configured: false,
       retryable: true
     })
-    expect(window.api.agentChat.init).not.toHaveBeenCalled()
+    expect(window.api.echoConfig.apply).not.toHaveBeenCalled()
     expect(agentStore.setReady).toHaveBeenCalledWith(true)
     expect(agentStore.setConfigured).not.toHaveBeenCalled()
   })
