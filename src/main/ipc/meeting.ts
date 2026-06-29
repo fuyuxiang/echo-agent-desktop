@@ -4,7 +4,7 @@ import fs from 'fs'
 import { randomUUID } from 'crypto'
 import { log } from '../logger'
 import { IpcChannels } from '@shared/ipc-channels'
-import type { MeetingSummaryInput } from '@shared/types/meeting'
+import type { MeetingSummaryInput, SegmentDTO } from '@shared/types/meeting'
 import {
   createMeeting,
   listMeetings,
@@ -27,6 +27,8 @@ import {
   pollMeetingStream,
   stopMeetingStream
 } from '../asr'
+import { summarizeMeeting, buildNotifyMessage } from '../echo-agent/meeting-summary'
+import { getGatewayClient } from '../echo-agent'
 
 function meetingsDir(): string {
   return path.join(app.getPath('userData'), 'meetings')
@@ -108,6 +110,25 @@ export function registerMeetingHandlers(): void {
     updateMeetingStatus(meetingId, 'done')
     return { segments: getSegments(meetingId) }
   })
+
+  ipcMain.handle(
+    IpcChannels.meeting.summarize,
+    async (_e, _meetingId: string, title: string, segments: SegmentDTO[]) => {
+      const parsed = await summarizeMeeting(segments)
+      if (!parsed) return null
+      // best-effort 告知 echo-agent:只发简短摘要消息,绝不发整段转写
+      try {
+        const gw = getGatewayClient(() => {})
+        if (gw) {
+          gw.connect('meeting-notify')
+          gw.send(buildNotifyMessage(title, parsed))
+        }
+      } catch (e) {
+        log.warn('[meeting] 告知 echo-agent 失败:', e)
+      }
+      return parsed
+    }
+  )
 
   ipcMain.handle(
     IpcChannels.meeting.setSummary,
