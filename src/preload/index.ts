@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { BridgeApi, EchoAgentStatus } from '@shared/types/api'
+import type { BridgeApi, EchoAgentStatus, ModelConfigInput } from '@shared/types/api'
 import type {
   AgentScopeConfig,
   LogLevel,
@@ -174,6 +174,10 @@ const api: BridgeApi = {
       ipcRenderer.on(IpcChannels.echoAgent.statusChanged, listener)
       return () => ipcRenderer.removeListener(IpcChannels.echoAgent.statusChanged, listener)
     }
+  },
+
+  echoConfig: {
+    apply: (cfg: ModelConfigInput) => ipcRenderer.invoke(IpcChannels.echoConfig.apply, cfg)
   },
 
   agentPermission: {
