@@ -1,4 +1,6 @@
 import { parse, stringify } from 'yaml'
+import { dirname } from 'node:path'
+import { configPath } from './paths'
 
 export interface ModelConfigInput {
   baseUrl: string
@@ -15,4 +17,24 @@ export function mergeModelsBlock(yamlText: string, cfg: ModelConfigInput): strin
     ]
   }
   return stringify(doc)
+}
+
+export interface ConfigWriterDeps {
+  readFile: (p: string) => string
+  writeFile: (p: string, data: string) => void
+  ensureDir: (p: string) => void
+  homeDir: string
+}
+
+export function writeModelConfig(deps: ConfigWriterDeps, cfg: ModelConfigInput): void {
+  const target = configPath(deps.homeDir)
+  let existing = ''
+  try {
+    existing = deps.readFile(target)
+  } catch {
+    existing = '' // missing file → treat as empty
+  }
+  const merged = mergeModelsBlock(existing, cfg)
+  deps.ensureDir(dirname(target))
+  deps.writeFile(target, merged)
 }
