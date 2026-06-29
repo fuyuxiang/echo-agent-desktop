@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { BridgeApi } from '@shared/types/api'
+import type { BridgeApi, EchoAgentStatus } from '@shared/types/api'
 import type {
   AgentScopeConfig,
   LogLevel,
@@ -163,6 +163,16 @@ const api: BridgeApi = {
         handler(ev)
       ipcRenderer.on(IpcChannels.agentChat.event, listener)
       return () => ipcRenderer.removeListener(IpcChannels.agentChat.event, listener)
+    }
+  },
+
+  echoAgent: {
+    getStatus: () => ipcRenderer.invoke(IpcChannels.echoAgent.getStatus),
+    update: () => ipcRenderer.invoke(IpcChannels.echoAgent.update),
+    onStatusChanged: (cb: (s: EchoAgentStatus) => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, s: EchoAgentStatus): void => cb(s)
+      ipcRenderer.on(IpcChannels.echoAgent.statusChanged, listener)
+      return () => ipcRenderer.removeListener(IpcChannels.echoAgent.statusChanged, listener)
     }
   },
 
