@@ -144,5 +144,13 @@ export const IpcChannels = {
     init: 'agent:chat:init',
     /** 用一次轻量补全为会话生成简短标题 */
     generateTitle: 'agent:chat:generate-title'
+  },
+
+  /** echo-agent 进程生命周期 */
+  echoAgent: {
+    getStatus: 'echo-agent:get-status',
+    update: 'echo-agent:update',
+    /** 主进程 -> 渲染层:进程状态变化 */
+    statusChanged: 'echo-agent:status-changed'
   }
 } as const

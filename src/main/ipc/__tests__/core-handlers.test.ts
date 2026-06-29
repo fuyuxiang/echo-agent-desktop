@@ -527,9 +527,10 @@ describe('IPC 注册中心', () => {
     vi.doMock('../../agent/permission/approval-bridge', () => ({
       registerApprovalBridge: mockRegister('approval-bridge')
     }))
+    vi.doMock('../echo-agent', () => ({ registerEchoAgentIpc: mockRegister('echo-agent') }))
 
     const { registerAllIpcHandlers } = await import('../index')
-    registerAllIpcHandlers()
+    registerAllIpcHandlers(() => null)
 
     expect(calls).toEqual([
       'window',
@@ -545,7 +546,8 @@ describe('IPC 注册中心', () => {
       'agent-memory',
       'agent-skill',
       'agent-chat',
-      'approval-bridge'
+      'approval-bridge',
+      'echo-agent'
     ])
   })
 })

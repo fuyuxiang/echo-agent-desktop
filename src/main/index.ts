@@ -50,7 +50,7 @@ if (!gotTheLock) {
     for (const id of reapOrphans(findRecordingMeetings())) {
       updateMeetingStatus(id, 'failed')
     }
-    registerAllIpcHandlers()
+    registerAllIpcHandlers(() => BrowserWindow.getAllWindows()[0] ?? null)
     initASR()
     createMainWindow()
 
