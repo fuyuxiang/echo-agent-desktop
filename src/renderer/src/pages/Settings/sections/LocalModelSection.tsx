@@ -9,6 +9,7 @@ import {
 } from '@/services/ollama'
 import {
   LOCAL_OLLAMA_CONFIG_KEY,
+  OLLAMA_PLACEHOLDER_API_KEY,
   toOllamaOpenAIBase,
   type LocalOllamaConfig
 } from '@/services/model-config'
@@ -95,12 +96,11 @@ export function LocalModelSection(): React.JSX.Element {
     try {
       const cfg: LocalOllamaConfig = { enabled: true, baseUrl, modelName: selected }
       await storage.set(LOCAL_OLLAMA_CONFIG_KEY, cfg)
-      // P6: 启用本地模型时直接装配原生 runtime(无 Python agent 拉起)
-      await window.api.agentChat.init({
-        providerId: 'openai',
-        model: selected,
+      // 写入 echo-agent.yaml 并重启进程,连本机 Ollama 的 OpenAI 兼容端点(取代旧的 TS Runtime 装配)
+      await window.api.echoConfig.apply({
         baseUrl: toOllamaOpenAIBase(baseUrl),
-        apiKeyStoreKey: 'ollama-api-key'
+        apiKey: OLLAMA_PLACEHOLDER_API_KEY,
+        model: selected
       })
       setEnabled(true)
       setHint(t('localModel.enabledOk'))
