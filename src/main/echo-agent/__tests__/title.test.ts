@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+vi.mock('../llm', () => ({
+  getLLMProvider: vi.fn(() => null),
+  setLLMConfig: vi.fn()
+}))
+
 import { buildTitlePrompt, generateTitle, setTitleModelConfig } from '../title'
+import { getLLMProvider } from '../llm'
 import type { ChatProvider } from '../../agent/providers/types'
 
 function fakeProvider(deltas: Array<{ type: string; text?: string }>): ChatProvider {
@@ -20,21 +27,18 @@ describe('buildTitlePrompt', () => {
 })
 
 describe('generateTitle', () => {
-  it('returns empty when no model config set', async () => {
-    setTitleModelConfig(null)
+  it('returns empty when no provider available', async () => {
+    vi.mocked(getLLMProvider).mockReturnValue(null)
     await expect(generateTitle('你好')).resolves.toBe('')
   })
   it('returns empty for blank input', async () => {
-    setTitleModelConfig({ baseUrl: 'u', apiKey: 'k', model: 'm' })
     await expect(generateTitle('   ')).resolves.toBe('')
   })
   it('returns sanitized title from provider deltas', async () => {
-    setTitleModelConfig({ baseUrl: 'u', apiKey: 'k', model: 'm' })
     const provider = fakeProvider([{ type: 'text', text: '快速排序实现' }])
     await expect(generateTitle('帮我写快排', { provider })).resolves.toBe('快速排序实现')
   })
   it('concatenates multiple text deltas before sanitizing', async () => {
-    setTitleModelConfig({ baseUrl: 'u', apiKey: 'k', model: 'm' })
     const provider = fakeProvider([
       { type: 'text', text: '快速' },
       { type: 'text', text: '排序' }
@@ -42,8 +46,12 @@ describe('generateTitle', () => {
     await expect(generateTitle('帮我写快排', { provider })).resolves.toBe('快速排序')
   })
   it('returns empty when provider yields error', async () => {
-    setTitleModelConfig({ baseUrl: 'u', apiKey: 'k', model: 'm' })
     const provider = fakeProvider([{ type: 'error' }])
     await expect(generateTitle('帮我写快排', { provider })).resolves.toBe('')
+  })
+  it('delegates setTitleModelConfig to setLLMConfig (compat shim)', async () => {
+    const { setLLMConfig } = await import('../llm')
+    setTitleModelConfig({ baseUrl: 'u', apiKey: 'k', model: 'm' })
+    expect(vi.mocked(setLLMConfig)).toHaveBeenCalledWith({ baseUrl: 'u', apiKey: 'k', model: 'm' })
   })
 })
