@@ -99,6 +99,32 @@ describe('applyServerModelConfigAndStart', () => {
     expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
   })
 
+  it('服务器下发的明文 apiKey 原样随 apply 透传', async () => {
+    userStore.isAuthed = true
+    storage.get.mockResolvedValueOnce(null)
+    server.fetchModelConfig.mockResolvedValueOnce({
+      baseUrl: 'https://api.example.com/v1',
+      modelName: 'gpt-4o',
+      apiKey: 'sk-secret',
+      allowLocalOverride: false,
+      hasCredential: true
+    })
+    const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
+
+    await expect(applyServerModelConfigAndStart()).resolves.toEqual({
+      ok: true,
+      configured: true,
+      retryable: false
+    })
+    expect(window.api.echoConfig.apply).toHaveBeenCalledWith({
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-secret',
+      model: 'gpt-4o'
+    })
+    expect(agentStore.setReady).toHaveBeenCalledWith(true)
+    expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
+  })
+
   it('服务器未配置模型时降级为可用但未装配(终态,不重试)', async () => {
     userStore.isAuthed = true
     storage.get.mockResolvedValueOnce(null)
