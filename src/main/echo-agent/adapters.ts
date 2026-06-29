@@ -42,8 +42,13 @@ export function spawnGateway(args: {
 }): SpawnedProc {
   const py = venvPython(args.homeDir, args.platform)
   const child = spawn(py, buildGatewayArgs(), {
-    env: buildGatewayEnv({ port: args.port, token: args.token }, process.env)
+    env: buildGatewayEnv({ port: args.port, token: args.token }, process.env),
+    stdio: ['ignore', 'pipe', 'pipe']
   })
+  // gateway is long-lived: drain stdout/stderr so the OS pipe buffer (~64KB)
+  // never fills up and blocks the child process
+  child.stdout?.on('data', () => {})
+  child.stderr?.on('data', () => {})
   return {
     pid: child.pid ?? -1,
     kill: (signal) => child.kill((signal as NodeJS.Signals) ?? 'SIGTERM'),
@@ -63,8 +68,18 @@ export async function fetchHealth(url: string): Promise<{ ok: boolean }> {
 }
 
 export async function shutdownGateway(endpoint: EchoAgentEndpoint): Promise<void> {
-  await fetch(`${endpoint.baseUrl}/api/shutdown`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${endpoint.token}` }
-  })
+  // bounded request: a hung gateway must not block app exit (stop() has a kill fallback)
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), 3000)
+  try {
+    await fetch(`${endpoint.baseUrl}/api/shutdown`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${endpoint.token}` },
+      signal: ctrl.signal
+    })
+  } catch {
+    // timeout or network error: swallow, kill fallback handles teardown
+  } finally {
+    clearTimeout(t)
+  }
 }
