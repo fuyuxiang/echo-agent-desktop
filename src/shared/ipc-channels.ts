@@ -108,6 +108,7 @@ export const IpcChannels = {
     poll: 'meeting:poll',
     stop: 'meeting:stop',
     diarize: 'meeting:diarize',
+    summarize: 'meeting:summarize',
     setSummary: 'meeting:set-summary',
     list: 'meeting:list',
     get: 'meeting:get',
