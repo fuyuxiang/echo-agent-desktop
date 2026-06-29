@@ -10,7 +10,7 @@ import type {
   PermissionResponse,
   SaveDialogOptions
 } from '@shared/types'
-import type { MeetingSummaryInput } from '@shared/types/meeting'
+import type { MeetingSummaryInput, SegmentDTO } from '@shared/types/meeting'
 import { IpcChannels } from '@shared/ipc-channels'
 
 /**
@@ -140,7 +140,9 @@ const api: BridgeApi = {
     rename: (meetingId: string, title: string) =>
       ipcRenderer.invoke(IpcChannels.meeting.rename, meetingId, title),
     markSource: (meetingId: string, source: string) =>
-      ipcRenderer.invoke(IpcChannels.meeting.markSource, meetingId, source)
+      ipcRenderer.invoke(IpcChannels.meeting.markSource, meetingId, source),
+    summarize: (meetingId: string, title: string, segments: SegmentDTO[]) =>
+      ipcRenderer.invoke(IpcChannels.meeting.summarize, meetingId, title, segments)
   },
 
   agentChat: {

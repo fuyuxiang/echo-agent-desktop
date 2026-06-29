@@ -195,8 +195,11 @@ describe('preload bridge', () => {
     await api.meeting.remove('m1')
     await api.meeting.rename('m1', 'title')
     await api.meeting.markSource('m1', 'mic+system')
+    await api.meeting.summarize('m1', 'title', [])
+    expect(typeof api.meeting.summarize).toBe('function')
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.meeting.rename, 'm1', 'title')
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.meeting.markSource, 'm1', 'mic+system')
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.meeting.summarize, 'm1', 'title', [])
   })
 
   it('agentChat/agentPermission/agentMemory/agentSkill 桥接请求与事件', async () => {
