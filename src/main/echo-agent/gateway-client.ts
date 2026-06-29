@@ -105,8 +105,14 @@ export class GatewayClient {
     const frame = JSON.stringify({ type: 'message', text, attachments })
     if (this.ws && this.authed) {
       this.ws.send(frame)
-    } else {
-      this.pendingSend = frame
+      return
+    }
+    this.pendingSend = frame
+    // self-heal: if the reconnect budget was exhausted (ws was dropped), a new
+    // send re-establishes the connection so the buffered frame can flush after
+    // auth_ok. connect() resets the reconnect budget.
+    if (!this.ws && !this.closing && this.chatId) {
+      this.connect(this.chatId)
     }
   }
 
@@ -161,6 +167,10 @@ export class GatewayClient {
         chatId: this.chatId,
         message: 'gateway 连接已断开,重连失败'
       })
+      // drop the dead ws but keep closing=false so a later send() can self-heal
+      // via switchSession()/connect() and reset the reconnect budget
+      this.ws?.close()
+      this.ws = null
       return
     }
     this.reconnectAttempts++
