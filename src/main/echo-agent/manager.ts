@@ -60,6 +60,11 @@ export class EchoAgentManager {
     if (ok) {
       this.set({ phase: 'ready', port })
     } else {
+      // health failed: clean up the spawned proc so it neither leaks
+      // nor triggers a crash-restart when it later exits on its own
+      this.proc?.kill()
+      this.proc = null
+      this.stopping = true
       this.set({ phase: 'error', port, message: 'gateway 健康检查超时' })
     }
   }

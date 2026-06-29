@@ -47,6 +47,22 @@ describe('EchoAgentManager', () => {
     expect(m.getStatus().phase).toBe('error')
   })
 
+  it('cleans up proc and prevents restart when health fails', async () => {
+    const spawnGateway = vi.fn(() => makeProc())
+    const { d } = deps({ waitHealthy: vi.fn(async () => false), spawnGateway })
+    const m = new EchoAgentManager(d)
+    await m.start()
+    expect(m.getStatus().phase).toBe('error')
+    const p = spawnGateway.mock.results[0].value as ReturnType<typeof makeProc>
+    expect(p.kill).toHaveBeenCalled()
+    // orphan exit must not relaunch
+    p.fireExit(1)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(spawnGateway).toHaveBeenCalledTimes(1)
+    expect(m.getStatus().phase).toBe('error')
+  })
+
   it('start goes error when install throws (message surfaced)', async () => {
     const { d } = deps({ ensureInstalled: vi.fn(async () => { throw new Error('no network') }) })
     const m = new EchoAgentManager(d)
