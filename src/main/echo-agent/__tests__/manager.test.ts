@@ -97,6 +97,37 @@ describe('EchoAgentManager', () => {
     expect(m.getStatus().phase).not.toBe('crashed')
   })
 
+  it('stop kills the proc (SIGTERM)', async () => {
+    const { d, proc } = deps()
+    const m = new EchoAgentManager(d)
+    await m.start()
+    await m.stop()
+    expect(proc.kill).toHaveBeenCalledWith('SIGTERM')
+  })
+
+  it('stop during install prevents gateway spawn after install resolves', async () => {
+    // ensureInstalled 用一个可控 promise 挂起,模拟安装期退出竞态
+    let release: () => void = () => {}
+    const gate = new Promise<void>((res) => { release = res })
+    const spawnGateway = vi.fn(() => makeProc())
+    const { d } = deps({
+      ensureInstalled: vi.fn(async () => { await gate }),
+      spawnGateway
+    })
+    const m = new EchoAgentManager(d)
+    const starting = m.start() // 在 installing 阶段挂起
+    await Promise.resolve()
+    expect(m.getStatus().phase).toBe('installing')
+    await m.stop() // 退出请求
+    release() // 让 ensureInstalled resolve
+    await starting
+    await Promise.resolve()
+    expect(spawnGateway).not.toHaveBeenCalled()
+    expect(['idle']).toContain(m.getStatus().phase)
+    expect(m.getStatus().phase).not.toBe('starting')
+    expect(m.getStatus().phase).not.toBe('ready')
+  })
+
   it('runUpdate stops, updates, restarts', async () => {
     const { d } = deps()
     const m = new EchoAgentManager(d)

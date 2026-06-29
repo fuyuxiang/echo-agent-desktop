@@ -23,6 +23,9 @@ export class EchoAgentManager {
   private endpoint: EchoAgentEndpoint | null = null
   private proc: SpawnedProc | null = null
   private stopping = false
+  // 一旦 stop() 被调用即置 true:用于堵住安装期退出竞态——
+  // in-flight 的 start() 在 ensureInstalled resolve 后不得再 spawn gateway。
+  private stopped = false
   private restarts = 0
 
   constructor(private deps: ManagerDeps) {}
@@ -37,9 +40,12 @@ export class EchoAgentManager {
 
   async start(): Promise<void> {
     try {
-      // fresh user-initiated start resets the crash-restart budget
+      // fresh user-initiated start resets the crash-restart budget and stop flag
       this.restarts = 0
+      this.stopped = false
       this.set({ phase: 'installing' })
+      // TODO: installer 的 pip 子进程当前未被跟踪/取消;安装期 stop() 只能堵住
+      // "退出后又拉起 gateway" 的竞态,在途的 pip 进程会继续跑到自然结束。
       await this.deps.ensureInstalled((line) => this.set({ phase: 'installing', detail: line }))
       await this.launch()
     } catch (e) {
@@ -48,6 +54,12 @@ export class EchoAgentManager {
   }
 
   private async launch(): Promise<void> {
+    // 退出/停止已请求(可能在 in-flight ensureInstalled 期间发生):不再拉起 gateway,
+    // 避免 stop() 之后 install resolve 又把进程重新 spawn 的竞态。
+    if (this.stopped) {
+      this.set({ phase: 'idle' })
+      return
+    }
     const port = await this.deps.pickPort()
     const token = this.deps.genToken()
     const baseUrl = `http://127.0.0.1:${port}`
@@ -82,10 +94,18 @@ export class EchoAgentManager {
 
   async stop(): Promise<void> {
     this.stopping = true
+    this.stopped = true
     if (this.endpoint) {
       try { await this.deps.shutdown(this.endpoint) } catch { /* fall through to kill */ }
     }
-    this.proc?.kill()
+    const proc = this.proc
+    if (proc) {
+      proc.kill('SIGTERM')
+      // 兜底:若进程忽略 SIGTERM 不退出,短延时后升级 SIGKILL 防止留孤儿。
+      // timer unref,绝不阻塞 app 退出。
+      const t = setTimeout(() => { proc.kill('SIGKILL') }, 3000)
+      ;(t as unknown as { unref?: () => void }).unref?.()
+    }
     this.proc = null
     this.set({ phase: 'idle' })
   }
@@ -93,6 +113,8 @@ export class EchoAgentManager {
   async runUpdate(): Promise<void> {
     try {
       await this.stop()
+      // stop() 置 stopped=true;本次更新是用户主动重启,需复位允许 launch() spawn。
+      this.stopped = false
       this.set({ phase: 'updating' })
       await this.deps.update((line) => this.set({ phase: 'updating', detail: line }))
       await this.launch()
