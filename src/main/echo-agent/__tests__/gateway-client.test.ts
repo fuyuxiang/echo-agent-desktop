@@ -180,6 +180,38 @@ describe('GatewayClient', () => {
     expect(created).toBe(5)
   })
 
+  it('self-heals: a send() after the reconnect budget is exhausted rebuilds the connection and flushes', () => {
+    let created = 0
+    const wss: ReturnType<typeof fakeWs>[] = []
+    const c = new GatewayClient({
+      wsUrl: 'ws://x/ws', token: 't',
+      createWs: () => { created++; const w = fakeWs(); wss.push(w); return w },
+      emit: () => {},
+      scheduleReconnect: (fn) => fn(),
+      maxReconnects: 1
+    })
+    c.connect('c1')
+    // exhaust the budget: initial + 1 reconnect, then give up (ws dropped)
+    wss[wss.length - 1].fire('open')
+    wss[wss.length - 1].fire('close') // reconnect 1
+    wss[wss.length - 1].fire('open')
+    wss[wss.length - 1].fire('close') // give up → ws = null
+    expect(created).toBe(2)
+
+    // ① a new send re-establishes the connection instead of buffering forever
+    c.send('after-giveup')
+    expect(created).toBe(3)
+    const fresh = wss[wss.length - 1]
+    fresh.fire('open')
+    const auth = JSON.parse(fresh.sent[0])
+    expect(auth).toMatchObject({ type: 'auth', chat_id: 'c1' })
+
+    // ② after auth_ok the buffered message flushes over the rebuilt connection
+    fresh.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    const msg = JSON.parse(fresh.sent[1])
+    expect(msg).toMatchObject({ type: 'message', text: 'after-giveup' })
+  })
+
   it('resets reconnect attempts after auth_ok so a later close can reconnect again', () => {
     let created = 0
     const wss: ReturnType<typeof fakeWs>[] = []
