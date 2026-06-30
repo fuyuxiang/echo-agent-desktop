@@ -4,11 +4,9 @@ import log from 'electron-log/main'
 import type { EchoAgentEndpoint, EchoAgentStatus } from './types'
 import { EchoAgentManager } from './manager'
 import { ensureInstalled, updateEchoAgent as pipUpdate } from './installer'
-import { waitHealthy } from './health'
-import { pickFreePort, generateToken } from './runtime-config'
-import { venvDir, bundledPythonPath } from './paths'
-import { nodeCommandRunner, spawnGateway, shutdownGateway, fetchHealth } from './adapters'
-import { writeModelConfig, type ConfigWriterDeps, type ModelConfigInput } from './config-writer'
+import { bundledPythonPath, configPath, echoHome } from './paths'
+import { nodeCommandRunner, spawnGateway, shutdownGateway } from './adapters'
+import { writeManagedConfig, type ConfigWriterDeps, type ModelConfigInput } from './config-writer'
 import WebSocket from 'ws'
 import { GatewayClient, type Frame, type WsLike } from './gateway-client'
 import { setLLMConfig } from './llm'
@@ -49,12 +47,10 @@ export function getEchoAgentManager(): EchoAgentManager {
         runner: nodeCommandRunner, homeDir, platform, bundledPython,
         venvExists: (dir) => existsSync(dir), onProgress
       }),
-    pickPort: pickFreePort,
-    genToken: generateToken,
-    spawnGateway: ({ port, token }) => spawnGateway({ port, token, homeDir, platform }),
-    waitHealthy: (baseUrl) =>
-      waitHealthy(baseUrl, { timeoutMs: 120_000, intervalMs: 1000, fetchFn: fetchHealth }),
+    spawnGateway: () =>
+      spawnGateway({ configPath: configPath(homeDir), workspace: echoHome(homeDir), homeDir, platform }),
     shutdown: shutdownGateway,
+    readyTimeoutMs: 120_000,
     onStatus: (s) => { log.info('[echo-agent] status:', s.phase, s.message ?? ''); bus.emit(s) }
   })
   return manager
@@ -87,11 +83,11 @@ export function buildConfigWriterDeps(): ConfigWriterDeps {
 }
 
 export async function applyModelConfig(cfg: ModelConfigInput): Promise<void> {
-  writeModelConfig(buildConfigWriterDeps(), cfg)
+  writeManagedConfig(buildConfigWriterDeps(), cfg)
   // stash 同源配置供桌面直连 LLM 生成会话标题(独立于 TS AgentRuntime)
   setLLMConfig({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model })
   await getEchoAgentManager().restart()
-  // restart 换了 port/token,旧 gateway 单例仍连旧 endpoint;丢弃它,
+  // restart 换了端口/路径,旧 gateway 单例仍连旧 endpoint;丢弃它,
   // 下次 send 时用新 endpoint 重建 client。
   resetGatewayClient()
 }
@@ -99,9 +95,6 @@ export async function applyModelConfig(cfg: ModelConfigInput): Promise<void> {
 export async function restartEchoAgent(): Promise<void> {
   await getEchoAgentManager().restart()
 }
-
-// reference to avoid unused warning (venvDir is reserved for the upcoming config-write plan)
-void venvDir
 
 export function buildWsUrl(baseUrl: string, wsPath = '/ws'): string {
   return baseUrl.replace(/^http/, 'ws') + wsPath
@@ -114,8 +107,8 @@ export function getGatewayClient(emit: (e: Frame) => void): GatewayClient | null
   const endpoint = getEchoAgentEndpoint()
   if (!endpoint) return null
   gatewayClient = new GatewayClient({
-    wsUrl: buildWsUrl(endpoint.baseUrl),
-    token: endpoint.token,
+    // WS 路径来自 ready 信号(endpoint.wsPath),不再硬编码 /ws
+    wsUrl: buildWsUrl(endpoint.baseUrl, endpoint.wsPath),
     createWs: (url) => new WebSocket(url) as unknown as WsLike,
     emit
   })

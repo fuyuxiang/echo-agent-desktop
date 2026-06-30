@@ -1,21 +1,32 @@
 import type { EchoAgentEndpoint, EchoAgentStatus } from './types'
+import { parseReadySignal } from './ready-signal'
 
 export interface SpawnedProc {
   pid: number
   kill: (signal?: string) => void
   onExit: (cb: (code: number | null) => void) => void
+  // 按行回调 stdout,供 manager 解析 ECHO_AGENT_READY 就绪信号
+  onStdoutLine: (cb: (line: string) => void) => void
 }
 
 export interface ManagerDeps {
   ensureInstalled: (onProgress: (l: string) => void) => Promise<void>
   update: (onProgress: (l: string) => void) => Promise<void>
-  pickPort: () => Promise<number>
-  genToken: () => string
-  spawnGateway: (args: { port: number; token: string }) => SpawnedProc
-  waitHealthy: (baseUrl: string) => Promise<boolean>
+  spawnGateway: () => SpawnedProc
   shutdown: (endpoint: EchoAgentEndpoint) => Promise<void>
   onStatus: (s: EchoAgentStatus) => void
+  // 启动后等待 ECHO_AGENT_READY 信号的超时(ms);到时未就绪 → error。
+  readyTimeoutMs?: number
+  // 注入式定时器(便于测试):到时调用 cb,返回取消函数。默认用 unref 的 setTimeout。
+  setTimer?: (cb: () => void, ms: number) => () => void
   maxRestarts?: number
+}
+
+// 默认定时器:unref 避免阻塞 app 退出,返回取消函数。
+const defaultSetTimer = (cb: () => void, ms: number): (() => void) => {
+  const t = setTimeout(cb, ms)
+  ;(t as unknown as { unref?: () => void }).unref?.()
+  return () => clearTimeout(t)
 }
 
 export class EchoAgentManager {
@@ -60,25 +71,42 @@ export class EchoAgentManager {
       this.set({ phase: 'idle' })
       return
     }
-    const port = await this.deps.pickPort()
-    const token = this.deps.genToken()
-    const baseUrl = `http://127.0.0.1:${port}`
-    this.endpoint = { baseUrl, token }
     this.stopping = false
-    this.set({ phase: 'starting', port })
-    this.proc = this.deps.spawnGateway({ port, token })
-    this.proc.onExit((code) => this.onExit(code))
-    const ok = await this.deps.waitHealthy(baseUrl)
-    if (ok) {
-      this.set({ phase: 'ready', port })
-    } else {
-      // health failed: clean up the spawned proc so it neither leaks
-      // nor triggers a crash-restart when it later exits on its own
-      this.proc?.kill()
-      this.proc = null
-      this.stopping = true
-      this.set({ phase: 'error', port, message: 'gateway 健康检查超时' })
-    }
+    this.set({ phase: 'starting' })
+    const proc = this.deps.spawnGateway()
+    this.proc = proc
+    proc.onExit((code) => this.onExit(code))
+
+    // 等待 ECHO_AGENT_READY 信号:命中则据信号派生 endpoint → ready;
+    // 超时未见信号 → kill + error(且不触发崩溃重启)。
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const timeoutMs = this.deps.readyTimeoutMs ?? 120_000
+      const cancelTimer = (this.deps.setTimer ?? defaultSetTimer)(() => {
+        if (settled) return
+        settled = true
+        proc.kill()
+        this.proc = null
+        this.stopping = true
+        this.set({ phase: 'error', message: 'gateway 启动超时:未收到 ready 信号' })
+        resolve()
+      }, timeoutMs)
+
+      proc.onStdoutLine((line) => {
+        if (settled) return
+        const sig = parseReadySignal(line)
+        if (!sig) return
+        settled = true
+        cancelTimer()
+        this.endpoint = {
+          baseUrl: `http://127.0.0.1:${sig.port}`,
+          apiPrefix: sig.apiPrefix,
+          wsPath: sig.wsPath
+        }
+        this.set({ phase: 'ready', port: sig.port })
+        resolve()
+      })
+    })
   }
 
   private onExit(code: number | null): void {
