@@ -60,10 +60,12 @@ describe('preload bridge', () => {
       'db',
       'echoAgent',
       'echoConfig',
+      'echoMemory',
       'log',
       'meeting',
       'permission',
       'platform',
+      'projectMemory',
       'store',
       'system',
       'window'
@@ -71,6 +73,8 @@ describe('preload bridge', () => {
     expect(api.platform.platform).toBe(process.platform)
     expect(api.platform.isMac).toBe(process.platform === 'darwin')
     expect(api.platform.isWin).toBe(process.platform === 'win32')
+    expect(typeof (api as any).projectMemory.listMirror).toBe('function')
+    expect(typeof (api as any).echoMemory.list).toBe('function')
   })
 
   it('window/app/log 桥接到 send/invoke 并正确解绑事件', async () => {

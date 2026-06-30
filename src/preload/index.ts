@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { BridgeApi, EchoAgentStatus, ModelConfigInput } from '@shared/types/api'
+import type { BridgeApi, EchoAgentStatus, ModelConfigInput, ProjectMemoryMirrorRow } from '@shared/types/api'
 import type {
   AgentScopeConfig,
   LogLevel,
@@ -180,6 +180,18 @@ const api: BridgeApi = {
 
   echoConfig: {
     apply: (cfg: ModelConfigInput) => ipcRenderer.invoke(IpcChannels.echoConfig.apply, cfg)
+  },
+
+  projectMemory: {
+    listMirror: () => ipcRenderer.invoke(IpcChannels.projectMemory.listMirror),
+    upsertMirror: (row: ProjectMemoryMirrorRow) =>
+      ipcRenderer.invoke(IpcChannels.projectMemory.upsertMirror, row),
+    deleteMirror: (serverId: string) =>
+      ipcRenderer.invoke(IpcChannels.projectMemory.deleteMirror, serverId)
+  },
+
+  echoMemory: {
+    list: (limit?: number) => ipcRenderer.invoke(IpcChannels.echoMemory.list, limit)
   },
 
   agentPermission: {
