@@ -38,6 +38,14 @@ export class EchoAgentManager {
   // in-flight 的 start() 在 ensureInstalled resolve 后不得再 spawn gateway。
   private stopped = false
   private restarts = 0
+  // 依赖是否已成功安装一次:install 幂等且昂贵(pip),成功后 restart/runUpdate
+  // 复用,不再重复 ensureInstalled。避免"配置变更重启"与"开机启动"并发各装一遍、
+  // 互相打断 pip 子进程的竞态。
+  private installed = false
+  // 生命周期操作互斥队列:start/stop/restart/runUpdate 串行执行,杜绝并发 spawn。
+  // 开机 start() 与渲染层 applyModelConfig→restart() 若并发,会各自 launch 出 gateway
+  // 抢端口/在未装完时起进程,导致崩溃重启循环、Agent 永不就绪。
+  private opQueue: Promise<void> = Promise.resolve()
 
   constructor(private deps: ManagerDeps) {}
 
@@ -49,19 +57,33 @@ export class EchoAgentManager {
     this.deps.onStatus(s)
   }
 
-  async start(): Promise<void> {
-    try {
-      // fresh user-initiated start resets the crash-restart budget and stop flag
-      this.restarts = 0
-      this.stopped = false
-      this.set({ phase: 'installing' })
-      // TODO: installer 的 pip 子进程当前未被跟踪/取消;安装期 stop() 只能堵住
-      // "退出后又拉起 gateway" 的竞态,在途的 pip 进程会继续跑到自然结束。
-      await this.deps.ensureInstalled((line) => this.set({ phase: 'installing', detail: line }))
-      await this.launch()
-    } catch (e) {
-      this.set({ phase: 'error', message: e instanceof Error ? e.message : String(e) })
-    }
+  // 把一个生命周期操作排到队尾串行执行;无论成败都让队列继续,不让一次失败卡死后续。
+  private enqueue(op: () => Promise<void>): Promise<void> {
+    const run = this.opQueue.then(op, op)
+    this.opQueue = run.catch(() => {})
+    return run
+  }
+
+  // 确保依赖已安装(仅首次真正执行 ensureInstalled);幂等。
+  private async ensureReady(): Promise<void> {
+    if (this.installed) return
+    this.set({ phase: 'installing' })
+    await this.deps.ensureInstalled((line) => this.set({ phase: 'installing', detail: line }))
+    this.installed = true
+  }
+
+  start(): Promise<void> {
+    return this.enqueue(async () => {
+      try {
+        // fresh user-initiated start resets the crash-restart budget and stop flag
+        this.restarts = 0
+        this.stopped = false
+        await this.ensureReady()
+        await this.launch()
+      } catch (e) {
+        this.set({ phase: 'error', message: e instanceof Error ? e.message : String(e) })
+      }
+    })
   }
 
   private async launch(): Promise<void> {
@@ -120,7 +142,14 @@ export class EchoAgentManager {
     void this.launch()
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    // stop 不入队:它必须能随时打断正在排队/进行的 start/restart(含安装期)。
+    // 置 stopped 标志后,入队中的操作在 launch 前看到 stopped 即放弃 spawn。
+    return this.doStop()
+  }
+
+  // 实际停止逻辑(不排队):供公开 stop() 及 restart/runUpdate 内部复用,避免自排队死锁。
+  private async doStop(): Promise<void> {
     this.stopping = true
     this.stopped = true
     if (this.endpoint) {
@@ -135,30 +164,39 @@ export class EchoAgentManager {
       ;(t as unknown as { unref?: () => void }).unref?.()
     }
     this.proc = null
+    this.endpoint = null
     this.set({ phase: 'idle' })
   }
 
-  async runUpdate(): Promise<void> {
-    try {
-      await this.stop()
-      // stop() 置 stopped=true;本次更新是用户主动重启,需复位允许 launch() spawn。
-      this.stopped = false
-      this.set({ phase: 'updating' })
-      await this.deps.update((line) => this.set({ phase: 'updating', detail: line }))
-      await this.launch()
-    } catch (e) {
-      this.set({ phase: 'error', message: e instanceof Error ? e.message : String(e) })
-    }
+  runUpdate(): Promise<void> {
+    return this.enqueue(async () => {
+      try {
+        await this.doStop()
+        // doStop() 置 stopped=true;本次更新是用户主动重启,需复位允许 launch() spawn。
+        this.stopped = false
+        this.set({ phase: 'updating' })
+        await this.deps.update((line) => this.set({ phase: 'updating', detail: line }))
+        await this.launch()
+      } catch (e) {
+        this.set({ phase: 'error', message: e instanceof Error ? e.message : String(e) })
+      }
+    })
   }
 
-  async restart(): Promise<void> {
-    try {
-      await this.stop()
-      // stop() 置 stopped=true;本次为配置变更触发的主动重启,需复位允许 launch() spawn。
-      this.stopped = false
-      await this.launch()
-    } catch (e) {
-      this.set({ phase: 'error', message: e instanceof Error ? e.message : String(e) })
-    }
+  restart(): Promise<void> {
+    return this.enqueue(async () => {
+      try {
+        await this.doStop()
+        // doStop() 置 stopped=true;本次为配置变更触发的主动重启,需复位允许 launch() spawn。
+        this.stopped = false
+        // 配置变更可能早于开机安装完成:restart 也须确保依赖装好再起,
+        // 否则会在 echo_agent 未装上时 spawn gateway → 崩溃重启循环 → Agent 永不就绪。
+        this.restarts = 0
+        await this.ensureReady()
+        await this.launch()
+      } catch (e) {
+        this.set({ phase: 'error', message: e instanceof Error ? e.message : String(e) })
+      }
+    })
   }
 }

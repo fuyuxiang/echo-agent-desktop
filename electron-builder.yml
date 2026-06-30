@@ -26,11 +26,6 @@ extraResources:
     to: models/asr
   - from: resources/models/diarization
     to: models/diarization
-  # 内置 Python 运行时(echo-agent 运行依赖)。fetch-python-runtime.mjs 按当前平台拉取
-  - from: resources/echo-runtime
-    to: echo-runtime
-    filter:
-      - '**/*'
 
 # 原生模块(better-sqlite3)自动按 Electron ABI rebuild
 npmRebuild: true
@@ -43,6 +38,11 @@ asarUnpack:
 mac:
   icon: resources/icon.png
   category: public.app-category.productivity
+  # 内置 Python 运行时:按 arch 各带一份(${arch} 由 electron-builder 替换为 arm64/x64),
+  # 每个包只含自身架构的运行时,首启解压到 ~/.echo-agent/python。
+  extraResources:
+    - from: resources/python-standalone-mac-${arch}.tar.gz
+      to: python-standalone-mac-${arch}.tar.gz
   target:
     - target: dmg
       arch: [arm64, x64]
@@ -53,6 +53,10 @@ mac:
 
 win:
   icon: resources/icon.png
+  # 内置 Python 运行时(build-standalone 仅提供 win x64)
+  extraResources:
+    - from: resources/python-standalone-win-x64.tar.gz
+      to: python-standalone-win-x64.tar.gz
   target:
     - target: nsis
       arch: [x64]
