@@ -13,6 +13,7 @@ describe('buildProjectMemoryContext', () => {
   it('prefixes project memory block before user text', () => {
     const out = buildProjectMemoryContext([pm('1', '用蓝绿部署'), pm('2', '灰度 10%')], '帮我部署')
     expect(out).toContain('用蓝绿部署')
+    expect(out).toContain('- 用蓝绿部署')
     expect(out).toContain('灰度 10%')
     expect(out.endsWith('帮我部署')).toBe(true)
     expect(out).toMatch(/项目记忆/)
