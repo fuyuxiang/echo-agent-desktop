@@ -179,4 +179,25 @@ describe('EchoAgentManager.restart', () => {
     await m.restart()
     expect(m.getEndpoint()?.baseUrl).toBe('http://127.0.0.1:52222')
   })
+
+  it('并发 start 与 restart:install 只执行一次,串行化后到达 ready', async () => {
+    // 复刻真实竞态:开机 start() 与渲染层 applyModelConfig→restart() 几乎同时触发。
+    // install 慢(gate 控制),期间 restart 入队。修复前两路并发各自 launch、在未装完时
+    // spawn gateway → 崩溃循环;修复后串行化 + installed 门,install 仅一次,最终 ready。
+    let release: () => void = () => {}
+    const gate = new Promise<void>((res) => { release = res })
+    const ensureInstalled = vi.fn(async () => { await gate })
+    const spawnGateway = vi.fn(() => { const p = makeProc(); autoReady(p); return p })
+    const { d } = deps({ ensureInstalled, spawnGateway })
+    const m = new EchoAgentManager(d)
+    const p1 = m.start()
+    const p2 = m.restart()
+    await Promise.resolve()
+    // install 尚未完成前,绝不应 spawn gateway
+    expect(spawnGateway).not.toHaveBeenCalled()
+    release()
+    await Promise.all([p1, p2])
+    expect(ensureInstalled).toHaveBeenCalledTimes(1)
+    expect(m.getStatus().phase).toBe('ready')
+  })
 })
