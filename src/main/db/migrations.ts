@@ -193,6 +193,21 @@ const migrations: Migration[] = [
       db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_tier ON personal_memory(tier, superseded_by)`)
       db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_access ON personal_memory(last_access)`)
     }
+  },
+  {
+    version: 6,
+    up: (db) => {
+      // 项目记忆本地镜像:下行同步落地,serverId 主键 + version 幂等去重
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS project_memory_mirror (
+          server_id   TEXT PRIMARY KEY,
+          content     TEXT NOT NULL,
+          tags        TEXT NOT NULL DEFAULT '[]',
+          version     INTEGER NOT NULL DEFAULT 0,
+          updated_at  INTEGER NOT NULL DEFAULT 0
+        );
+      `)
+    }
   }
 ]
 
