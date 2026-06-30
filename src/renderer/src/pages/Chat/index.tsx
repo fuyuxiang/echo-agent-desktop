@@ -14,6 +14,7 @@ import { useSkillImport } from '@/hooks/useSkillImport'
 import { db } from '@/utils/db'
 import { logger } from '@/utils/logger'
 import { confirmShareToProject, type MemoryCandidate } from '@/services/memory-router'
+import { retrieveForMessage } from '@/services/project-memory'
 import { ShareMemoryDialog } from '@/components/ShareMemoryDialog'
 import { PptComposer } from '@/components/PptComposer'
 import { MeetingButton } from '@/components/MeetingButton'
@@ -467,7 +468,11 @@ export default function ChatPage(): React.JSX.Element {
       primerPendingRef.current = false
       clearExecutionEvents()
       const outbound = buildOutboundText(text, activeSkill)
-      agentWs.sendMessage(outbound, attachments)
+      // 发给 agent 前注入团队项目记忆(best-effort:检索失败原样返回,不阻断发送)。
+      // 用户气泡与本地持久化仍存原始 text,只增强发给 agent 的内容;
+      // 技能前缀在前、项目记忆包裹其外,确保技能指令与参考记忆都进入 prompt。
+      const enriched = await retrieveForMessage(outbound)
+      agentWs.sendMessage(enriched, attachments)
     },
     [activeSkill, clearExecutionEvents]
   )
