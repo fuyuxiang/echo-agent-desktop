@@ -1,10 +1,12 @@
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { app } from 'electron'
 import log from 'electron-log/main'
 import type { EchoAgentEndpoint, EchoAgentStatus } from './types'
 import { EchoAgentManager } from './manager'
 import { ensureInstalled, updateEchoAgent as pipUpdate } from './installer'
-import { bundledPythonPath, configPath, echoHome } from './paths'
+import { bundledPythonArchive, configPath, echoHome } from './paths'
 import { nodeCommandRunner, spawnGateway, shutdownGateway } from './adapters'
 import { writeManagedConfig, type ConfigWriterDeps, type ModelConfigInput } from './config-writer'
 import WebSocket from 'ws'
@@ -35,17 +37,20 @@ export function getEchoAgentManager(): EchoAgentManager {
   const homeDir = homedir()
   const platform = process.platform
   const arch = process.arch
-  const bundledPython = bundledPythonPath(process.resourcesPath, platform, arch)
+  // dev 下 process.resourcesPath 指向 Electron 自带 Resources(无我们的资源),
+  // 须用项目 resources/;打包后才用 process.resourcesPath。对齐 ASR/diarization 约定。
+  const resourcesRoot = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources')
+  const pythonArchive = bundledPythonArchive(resourcesRoot, platform, arch)
   manager = new EchoAgentManager({
     ensureInstalled: (onProgress) =>
       ensureInstalled({
-        runner: nodeCommandRunner, homeDir, platform, bundledPython,
-        venvExists: (dir) => existsSync(dir), onProgress
+        runner: nodeCommandRunner, homeDir, platform, pythonArchive,
+        pathExists: (p) => existsSync(p), ensureDir: (p) => { mkdirSync(p, { recursive: true }) }, onProgress
       }),
     update: (onProgress) =>
       pipUpdate({
-        runner: nodeCommandRunner, homeDir, platform, bundledPython,
-        venvExists: (dir) => existsSync(dir), onProgress
+        runner: nodeCommandRunner, homeDir, platform, pythonArchive,
+        pathExists: (p) => existsSync(p), ensureDir: (p) => { mkdirSync(p, { recursive: true }) }, onProgress
       }),
     spawnGateway: () =>
       spawnGateway({ configPath: configPath(homeDir), workspace: echoHome(homeDir), homeDir, platform }),
