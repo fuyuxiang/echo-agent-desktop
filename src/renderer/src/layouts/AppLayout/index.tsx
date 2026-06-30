@@ -5,6 +5,10 @@ import { IconSidebar } from '@/components/IconSidebar'
 import { useUserStore } from '@/stores/userStore'
 import { useAgentStore } from '@/stores/agentStore'
 import { applyServerModelConfigAndStart } from '@/services/model-bootstrap'
+import {
+  startProjectMemorySync,
+  stopProjectMemorySync
+} from '@/services/project-memory'
 import { logger } from '@/utils'
 import styles from './app-layout.module.scss'
 
@@ -40,6 +44,17 @@ export function AppLayout(): React.JSX.Element {
       })
     return () => clearTimeout(retryTimer)
   }, [configured, isAuthed, retryTick])
+
+  // 项目记忆双向同步:仅登录后启用(读认知记忆上行 + 拉服务器项目记忆下行镜像)。
+  // 登出或卸载时停止定时器,避免无凭据时空跑/请求。
+  useEffect(() => {
+    if (isAuthed) {
+      startProjectMemorySync()
+    } else {
+      stopProjectMemorySync()
+    }
+    return () => stopProjectMemorySync()
+  }, [isAuthed])
 
   return (
     <div className={styles.layout}>
