@@ -62,17 +62,26 @@ describe('session DAO', () => {
   })
 
   it('setChatSessionPinned 置顶后排在最前(组内仍按 lastActivity)', () => {
-    upsertChatSession({ chatId: 'c1' })
-    appendChatMessage({ chatId: 'c1', role: 'user', content: 'a' }) // c1 更晚活动
-    upsertChatSession({ chatId: 'c2' })
-    // 置顶较早的 c2,应排到 c1 之前
-    setChatSessionPinned('c2', true)
-    const list = listChatSessions()
-    expect(list[0].chatId).toBe('c2')
-    expect(list[0].pinned).toBe(1)
-    // 取消置顶后回到按 lastActivity 倒序(c1 在前)
-    setChatSessionPinned('c2', false)
-    expect(listChatSessions()[0].chatId).toBe('c1')
+    // 用 fake timers 让各步 last_activity 确定且严格递增,避免同毫秒下排序歧义
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1000)
+      upsertChatSession({ chatId: 'c1' })
+      vi.setSystemTime(2000)
+      upsertChatSession({ chatId: 'c2' })
+      vi.setSystemTime(3000)
+      appendChatMessage({ chatId: 'c1', role: 'user', content: 'a' }) // c1 活动最晚
+      // 置顶较早活动的 c2,应排到 c1 之前
+      setChatSessionPinned('c2', true)
+      const list = listChatSessions()
+      expect(list[0].chatId).toBe('c2')
+      expect(list[0].pinned).toBe(1)
+      // 取消置顶后回到按 lastActivity 倒序(c1 在前)
+      setChatSessionPinned('c2', false)
+      expect(listChatSessions()[0].chatId).toBe('c1')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('upsert 重复 chatId 不覆盖已有标题与计数', () => {

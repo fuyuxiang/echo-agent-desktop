@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import Database from 'better-sqlite3'
-import { runMigrations } from '../migrations'
+import { runMigrations, LATEST_SCHEMA_VERSION } from '../migrations'
 
 let db: Database.Database
 beforeEach(() => {
@@ -16,7 +16,7 @@ describe('migration v3 meeting tables', () => {
     expect(names).toContain('meeting_segments')
     expect(names).toContain('meeting_summaries')
   })
-  it('user_version 升到 5', () => {
-    expect(db.pragma('user_version', { simple: true })).toBe(5)
+  it('user_version 升到最新 schema 版本', () => {
+    expect(db.pragma('user_version', { simple: true })).toBe(LATEST_SCHEMA_VERSION)
   })
 })

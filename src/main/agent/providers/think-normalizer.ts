@@ -10,7 +10,8 @@ import { ThinkTagSplitter } from './think-stream'
  * 统一归一为 {type:'reasoning'} | {type:'text'},前端只消费结构化 phase,无需懂标签语法。
  */
 export class ThinkNormalizingProvider implements ChatProvider {
-  constructor(private readonly inner: ChatProvider) {}
+  // 只读暴露被装饰的底层 provider,便于上层检视协议路由(测试/调试用),不改变装饰行为
+  constructor(readonly inner: ChatProvider) {}
 
   get name(): string {
     return this.inner.name
