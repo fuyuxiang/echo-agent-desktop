@@ -34,6 +34,27 @@ export interface ModelConfigInput {
 }
 
 /**
+ * 项目记忆本地镜像行(与 echo-agent 项目记忆双向同步的本地副本)
+ */
+export interface ProjectMemoryMirrorRow {
+  serverId: string
+  content: string
+  tags: string[]
+  version: number
+  updatedAt: number
+}
+
+/**
+ * 只读 echo-agent 认知记忆条目
+ */
+export interface EchoCognitiveEntry {
+  id: string
+  content: string
+  tags: string[]
+  importance: number
+}
+
+/**
  * preload 通过 contextBridge 暴露给渲染层的 API 形状(window.api)
  *
  * - 渲染层一律通过 `utils/` 门面调用,不直接使用 window.api
@@ -283,5 +304,21 @@ export interface BridgeApi {
   echoConfig: {
     /** 下发模型配置(baseUrl/apiKey/model) */
     apply: (cfg: ModelConfigInput) => Promise<void>
+  }
+
+  /** 项目记忆本地镜像 CRUD(与 echo-agent 双向同步) */
+  projectMemory: {
+    /** 读取全部本地镜像行 */
+    listMirror: () => Promise<ProjectMemoryMirrorRow[]>
+    /** 新增或更新一条镜像行 */
+    upsertMirror: (row: ProjectMemoryMirrorRow) => Promise<void>
+    /** 删除指定镜像行 */
+    deleteMirror: (serverId: string) => Promise<void>
+  }
+
+  /** 只读 echo-agent 认知记忆 */
+  echoMemory: {
+    /** 读取认知记忆条目(可选条数上限) */
+    list: (limit?: number) => Promise<EchoCognitiveEntry[]>
   }
 }
