@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { parse } from 'yaml'
-import { mergeModelsBlock, writeModelConfig, type ConfigWriterDeps } from '../config-writer'
+import { mergeManagedConfig, writeManagedConfig, type ConfigWriterDeps } from '../config-writer'
 
 // index.ts pulls in electron-log/main transitively; stub it so buildConfigWriterDeps
 // can be imported without an Electron runtime.
@@ -10,26 +10,44 @@ import { buildConfigWriterDeps } from '../index'
 
 const cfg = { baseUrl: 'https://api.x.com/v1', apiKey: 'sk-abc', model: 'gpt-4o' }
 
-describe('mergeModelsBlock', () => {
+describe('mergeManagedConfig', () => {
   it('writes models block on empty yaml', () => {
-    const out = parse(mergeModelsBlock('', cfg))
+    const out = parse(mergeManagedConfig('', cfg))
     expect(out.models.default_model).toBe('gpt-4o')
     expect(out.models.providers).toEqual([
       { name: 'desktop', apiKey: 'sk-abc', apiBase: 'https://api.x.com/v1', models: ['gpt-4o'] }
     ])
   })
 
-  it('preserves other top-level keys', () => {
-    const existing = 'memory:\n  enabled: true\ngateway:\n  port: 0\n'
-    const out = parse(mergeModelsBlock(existing, cfg))
+  it('writes gateway block for loopback + open auth (port 0 = OS assigned)', () => {
+    const out = parse(mergeManagedConfig('', cfg))
+    expect(out.gateway.enabled).toBe(true)
+    expect(out.gateway.host).toBe('127.0.0.1')
+    expect(out.gateway.port).toBe(0)
+    expect(out.gateway.auth.mode).toBe('open')
+  })
+
+  it('writes channels block so gateway mode has stream output and no cli', () => {
+    const out = parse(mergeManagedConfig('', cfg))
+    expect(out.channels.cli.enabled).toBe(false)
+    expect(out.channels.stream_channels).toEqual(['gateway:*'])
+    expect(out.channels.stream_paragraph_mode).toBe(false)
+  })
+
+  it('preserves non-managed top-level keys, overwrites managed ones', () => {
+    const existing = 'memory:\n  enabled: true\ngateway:\n  port: 9999\n'
+    const out = parse(mergeManagedConfig(existing, cfg))
+    // 非受管段原样保留
     expect(out.memory).toEqual({ enabled: true })
-    expect(out.gateway).toEqual({ port: 0 })
+    // 受管段(gateway)被改写为桌面部署所需值,旧 port 9999 被覆盖
+    expect(out.gateway.enabled).toBe(true)
+    expect(out.gateway.port).toBe(0)
     expect(out.models.default_model).toBe('gpt-4o')
   })
 
   it('overwrites a pre-existing models block', () => {
     const existing = 'models:\n  default_model: old\n  providers:\n    - name: old\nfoo: bar\n'
-    const out = parse(mergeModelsBlock(existing, cfg))
+    const out = parse(mergeManagedConfig(existing, cfg))
     expect(out.models.default_model).toBe('gpt-4o')
     expect(out.models.providers).toHaveLength(1)
     expect(out.models.providers[0].name).toBe('desktop')
@@ -37,7 +55,7 @@ describe('mergeModelsBlock', () => {
   })
 })
 
-describe('writeModelConfig', () => {
+describe('writeManagedConfig', () => {
   function fakeDeps(initial: Record<string, string> = {}): {
     deps: ConfigWriterDeps; files: Record<string, string>; dirs: string[]
   } {
@@ -59,23 +77,25 @@ describe('writeModelConfig', () => {
 
   it('writes merged yaml to configPath, treating missing file as empty', () => {
     const { deps, files } = fakeDeps()
-    writeModelConfig(deps, { baseUrl: 'u', apiKey: 'k', model: 'm' })
+    writeManagedConfig(deps, { baseUrl: 'u', apiKey: 'k', model: 'm' })
     const written = files['/home/u/.echo-agent/echo-agent.yaml']
     expect(written).toBeTruthy()
-    expect(parse(written).models.default_model).toBe('m')
+    const out = parse(written)
+    expect(out.models.default_model).toBe('m')
+    expect(out.gateway.enabled).toBe(true)
   })
 
   it('ensures the config directory exists before writing', () => {
     const { deps, dirs } = fakeDeps()
-    writeModelConfig(deps, { baseUrl: 'u', apiKey: 'k', model: 'm' })
+    writeManagedConfig(deps, { baseUrl: 'u', apiKey: 'k', model: 'm' })
     expect(dirs).toContain('/home/u/.echo-agent')
   })
 
-  it('preserves existing config keys', () => {
+  it('preserves existing non-managed config keys', () => {
     const { deps, files } = fakeDeps({
       '/home/u/.echo-agent/echo-agent.yaml': 'memory:\n  enabled: true\n'
     })
-    writeModelConfig(deps, { baseUrl: 'u', apiKey: 'k', model: 'm' })
+    writeManagedConfig(deps, { baseUrl: 'u', apiKey: 'k', model: 'm' })
     const out = parse(files['/home/u/.echo-agent/echo-agent.yaml'])
     expect(out.memory).toEqual({ enabled: true })
     expect(out.models.default_model).toBe('m')
@@ -95,7 +115,7 @@ describe('writeModelConfig', () => {
       writeFile: (p, data) => { files[p] = data; wrote = true },
       ensureDir: () => {}
     }
-    expect(() => writeModelConfig(deps, { baseUrl: 'u', apiKey: 'k', model: 'm' })).toThrow()
+    expect(() => writeManagedConfig(deps, { baseUrl: 'u', apiKey: 'k', model: 'm' })).toThrow()
     expect(wrote).toBe(false)
   })
 })

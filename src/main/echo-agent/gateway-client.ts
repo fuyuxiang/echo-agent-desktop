@@ -38,7 +38,8 @@ export interface WsLike {
 
 export interface GatewayClientDeps {
   wsUrl: string
-  token: string
+  // loopback + auth.mode=open 下 echo-agent 放行,无需 token;仅当将来启用 api_tokens 时传入
+  token?: string
   createWs: (url: string) => WsLike
   emit: (event: Frame) => void
   platform?: string

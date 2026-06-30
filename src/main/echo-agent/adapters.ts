@@ -21,49 +21,56 @@ export const nodeCommandRunner: CommandRunner = {
   }
 }
 
-export function buildGatewayArgs(): string[] {
-  return ['-m', 'echo_agent', 'run']
+export function buildGatewayArgs(configPath: string, workspace: string): string[] {
+  // gateway 子命令强制开启网关(run_gateway 设 gateway.enabled=True),
+  // 显式绑 loopback + port=0 让 OS 分配,实际端口经 stdout ready 信号回报。
+  return [
+    '-m', 'echo_agent', 'gateway',
+    '-c', configPath,
+    '-w', workspace,
+    '--host', '127.0.0.1',
+    '--port', '0'
+  ]
 }
 
-export function buildGatewayEnv(
-  args: { port: number; token: string },
-  base: NodeJS.ProcessEnv
-): NodeJS.ProcessEnv {
-  return {
-    ...base,
-    ECHO_AGENT_HOST: '127.0.0.1',
-    ECHO_AGENT_PORT: String(args.port),
-    ECHO_AGENT_API_TOKEN: args.token
+export function buildGatewayEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // 不再注入顶层 ECHO_AGENT_HOST/PORT/API_TOKEN:echo-agent 的 env 覆盖用双下划线
+  // 嵌套(ECHO_AGENT_GATEWAY__PORT),顶层键它不认。端口/绑定改由命令行参数传。
+  return { ...base }
+}
+
+// 把任意分块到达的 stdout 数据按行切分,半行缓冲到下一个 chunk 补全后再发射。
+// gateway 的 ready 信号可能与其他日志同批或被切断,必须按行解析。
+export function createLineBuffer(onLine: (line: string) => void): (chunk: string) => void {
+  let buf = ''
+  return (chunk: string): void => {
+    buf += chunk
+    let idx: number
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      onLine(buf.slice(0, idx))
+      buf = buf.slice(idx + 1)
+    }
   }
 }
 
 export function spawnGateway(args: {
-  port: number; token: string; homeDir: string; platform: NodeJS.Platform
+  configPath: string; workspace: string; homeDir: string; platform: NodeJS.Platform
 }): SpawnedProc {
   const py = venvPython(args.homeDir, args.platform)
-  const child = spawn(py, buildGatewayArgs(), {
-    env: buildGatewayEnv({ port: args.port, token: args.token }, process.env),
+  const child = spawn(py, buildGatewayArgs(args.configPath, args.workspace), {
+    env: buildGatewayEnv(process.env),
     stdio: ['ignore', 'pipe', 'pipe']
   })
-  // gateway is long-lived: drain stdout/stderr so the OS pipe buffer (~64KB)
-  // never fills up and blocks the child process
-  child.stdout?.on('data', () => {})
+  // stderr 仍排空避免 pipe 阻塞;stdout 行通过 onStdoutLine 暴露给 manager 解析 ready 信号
   child.stderr?.on('data', () => {})
   return {
     pid: child.pid ?? -1,
     kill: (signal) => child.kill((signal as NodeJS.Signals) ?? 'SIGTERM'),
-    onExit: (cb) => child.on('close', (code) => cb(code))
-  }
-}
-
-export async function fetchHealth(url: string): Promise<{ ok: boolean }> {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 5000)
-  try {
-    const res = await fetch(url, { signal: ctrl.signal })
-    return { ok: res.ok }
-  } finally {
-    clearTimeout(t)
+    onExit: (cb) => child.on('close', (code) => cb(code)),
+    onStdoutLine: (cb) => {
+      const push = createLineBuffer(cb)
+      child.stdout?.on('data', (d: Buffer) => push(d.toString()))
+    }
   }
 }
 
@@ -72,9 +79,8 @@ export async function shutdownGateway(endpoint: EchoAgentEndpoint): Promise<void
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), 3000)
   try {
-    await fetch(`${endpoint.baseUrl}/api/shutdown`, {
+    await fetch(`${endpoint.baseUrl}${endpoint.apiPrefix}/shutdown`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${endpoint.token}` },
       signal: ctrl.signal
     })
   } catch {
@@ -91,11 +97,10 @@ export async function notifyMeeting(endpoint: EchoAgentEndpoint, text: string): 
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), 5000)
   try {
-    await fetch(`${endpoint.baseUrl}/api/message`, {
+    await fetch(`${endpoint.baseUrl}${endpoint.apiPrefix}/message`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${endpoint.token}`
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         platform: 'desktop',
