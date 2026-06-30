@@ -2,28 +2,42 @@ import { describe, it, expect, vi } from 'vitest'
 import { EchoAgentManager, type ManagerDeps, type SpawnedProc } from '../manager'
 import type { EchoAgentStatus } from '../types'
 
-function makeProc(): SpawnedProc & { fireExit: (code: number | null) => void } {
-  let cb: (code: number | null) => void = () => {}
+const READY = 'ECHO_AGENT_READY port=51234 ws=/ws health=/api/v1/health'
+
+function makeProc(): SpawnedProc & {
+  fireExit: (code: number | null) => void
+  fireStdout: (line: string) => void
+} {
+  let exitCb: (code: number | null) => void = () => {}
+  let lineCb: (line: string) => void = () => {}
   return {
     pid: 123,
     kill: vi.fn(),
-    onExit: (fn) => { cb = fn },
-    fireExit: (code) => cb(code)
+    onExit: (fn) => { exitCb = fn },
+    onStdoutLine: (fn) => { lineCb = fn },
+    fireExit: (code) => exitCb(code),
+    fireStdout: (line) => lineCb(line)
   }
 }
 
-function deps(over: Partial<ManagerDeps> = {}): { d: ManagerDeps; statuses: EchoAgentStatus[]; proc: ReturnType<typeof makeProc> } {
+// 让 spawn 出的进程在被 spawn 后的微任务里自动发 ready 信号,模拟正常启动。
+function autoReady(proc: ReturnType<typeof makeProc>): void {
+  queueMicrotask(() => proc.fireStdout(READY))
+}
+
+function deps(over: Partial<ManagerDeps> = {}): {
+  d: ManagerDeps; statuses: EchoAgentStatus[]; proc: ReturnType<typeof makeProc>
+} {
   const statuses: EchoAgentStatus[] = []
   const proc = makeProc()
   const d: ManagerDeps = {
     ensureInstalled: vi.fn(async () => {}),
     update: vi.fn(async () => {}),
-    pickPort: vi.fn(async () => 51234),
-    genToken: vi.fn(() => 'tok'),
-    spawnGateway: vi.fn(() => proc),
-    waitHealthy: vi.fn(async () => true),
+    spawnGateway: vi.fn(() => { autoReady(proc); return proc }),
     shutdown: vi.fn(async () => {}),
     onStatus: (s) => statuses.push(s),
+    readyTimeoutMs: 1000,
+    setTimer: () => () => {}, // 默认不真正计时(测试手动控制),返回 cancel
     maxRestarts: 2,
     ...over
   }
@@ -31,39 +45,46 @@ function deps(over: Partial<ManagerDeps> = {}): { d: ManagerDeps; statuses: Echo
 }
 
 describe('EchoAgentManager', () => {
-  it('start reaches ready with port and endpoint', async () => {
+  it('start 收到 ready 信号后到达 ready,并据信号派生 endpoint', async () => {
     const { d } = deps()
     const m = new EchoAgentManager(d)
     await m.start()
     expect(m.getStatus().phase).toBe('ready')
     expect(m.getStatus().port).toBe(51234)
-    expect(m.getEndpoint()).toEqual({ baseUrl: 'http://127.0.0.1:51234', token: 'tok' })
+    expect(m.getEndpoint()).toEqual({
+      baseUrl: 'http://127.0.0.1:51234',
+      apiPrefix: '/api/v1',
+      wsPath: '/ws'
+    })
   })
 
-  it('start goes error when health never passes', async () => {
-    const { d } = deps({ waitHealthy: vi.fn(async () => false) })
+  it('超时未收到 ready 信号则 error 并 kill 进程', async () => {
+    // spawn 出的进程永不发 ready;setTimer 立即触发超时回调
+    const proc = makeProc()
+    const { d } = deps({
+      spawnGateway: vi.fn(() => proc), // 不 autoReady
+      setTimer: (cb) => { cb(); return () => {} }
+    })
     const m = new EchoAgentManager(d)
     await m.start()
     expect(m.getStatus().phase).toBe('error')
+    expect(proc.kill).toHaveBeenCalled()
   })
 
-  it('cleans up proc and prevents restart when health fails', async () => {
-    const spawnGateway = vi.fn(() => makeProc())
-    const { d } = deps({ waitHealthy: vi.fn(async () => false), spawnGateway })
+  it('超时 error 后孤儿退出不再拉起', async () => {
+    const proc = makeProc()
+    const spawnGateway = vi.fn(() => proc)
+    const { d } = deps({ spawnGateway, setTimer: (cb) => { cb(); return () => {} } })
     const m = new EchoAgentManager(d)
     await m.start()
     expect(m.getStatus().phase).toBe('error')
-    const p = spawnGateway.mock.results[0].value as ReturnType<typeof makeProc>
-    expect(p.kill).toHaveBeenCalled()
-    // orphan exit must not relaunch
-    p.fireExit(1)
-    await Promise.resolve()
-    await Promise.resolve()
+    proc.fireExit(1)
+    await Promise.resolve(); await Promise.resolve()
     expect(spawnGateway).toHaveBeenCalledTimes(1)
     expect(m.getStatus().phase).toBe('error')
   })
 
-  it('start goes error when install throws (message surfaced)', async () => {
+  it('安装抛错则 error 且透出消息', async () => {
     const { d } = deps({ ensureInstalled: vi.fn(async () => { throw new Error('no network') }) })
     const m = new EchoAgentManager(d)
     await m.start()
@@ -71,22 +92,20 @@ describe('EchoAgentManager', () => {
     expect(m.getStatus().message).toMatch(/no network/)
   })
 
-  it('restarts on unexpected crash up to maxRestarts then crashed', async () => {
-    const spawnGateway = vi.fn(() => makeProc())
+  it('异常崩溃重启到 maxRestarts 后 crashed', async () => {
+    const spawnGateway = vi.fn(() => { const p = makeProc(); autoReady(p); return p })
     const { d } = deps({ spawnGateway, maxRestarts: 2 })
     const m = new EchoAgentManager(d)
     await m.start()
-    // simulate 3 crashes
     for (let i = 0; i < 3; i++) {
       const p = spawnGateway.mock.results[spawnGateway.mock.results.length - 1].value as ReturnType<typeof makeProc>
       p.fireExit(1)
-      await Promise.resolve()
-      await Promise.resolve()
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
     }
     expect(m.getStatus().phase).toBe('crashed')
   })
 
-  it('stop prevents restart on exit', async () => {
+  it('stop 阻止退出后重启', async () => {
     const { d, proc } = deps()
     const m = new EchoAgentManager(d)
     await m.start()
@@ -97,7 +116,7 @@ describe('EchoAgentManager', () => {
     expect(m.getStatus().phase).not.toBe('crashed')
   })
 
-  it('stop kills the proc (SIGTERM)', async () => {
+  it('stop 发 SIGTERM', async () => {
     const { d, proc } = deps()
     const m = new EchoAgentManager(d)
     await m.start()
@@ -105,30 +124,27 @@ describe('EchoAgentManager', () => {
     expect(proc.kill).toHaveBeenCalledWith('SIGTERM')
   })
 
-  it('stop during install prevents gateway spawn after install resolves', async () => {
-    // ensureInstalled 用一个可控 promise 挂起,模拟安装期退出竞态
+  it('安装期 stop 阻止 install resolve 后再 spawn', async () => {
     let release: () => void = () => {}
     const gate = new Promise<void>((res) => { release = res })
-    const spawnGateway = vi.fn(() => makeProc())
+    const spawnGateway = vi.fn(() => { const p = makeProc(); autoReady(p); return p })
     const { d } = deps({
       ensureInstalled: vi.fn(async () => { await gate }),
       spawnGateway
     })
     const m = new EchoAgentManager(d)
-    const starting = m.start() // 在 installing 阶段挂起
+    const starting = m.start()
     await Promise.resolve()
     expect(m.getStatus().phase).toBe('installing')
-    await m.stop() // 退出请求
-    release() // 让 ensureInstalled resolve
+    await m.stop()
+    release()
     await starting
     await Promise.resolve()
     expect(spawnGateway).not.toHaveBeenCalled()
-    expect(['idle']).toContain(m.getStatus().phase)
-    expect(m.getStatus().phase).not.toBe('starting')
-    expect(m.getStatus().phase).not.toBe('ready')
+    expect(m.getStatus().phase).toBe('idle')
   })
 
-  it('runUpdate stops, updates, restarts', async () => {
+  it('runUpdate 停止-更新-重启回到 ready', async () => {
     const { d } = deps()
     const m = new EchoAgentManager(d)
     await m.start()
@@ -139,7 +155,7 @@ describe('EchoAgentManager', () => {
 })
 
 describe('EchoAgentManager.restart', () => {
-  it('stops then relaunches, returning to ready', async () => {
+  it('停止后重启回到 ready', async () => {
     const { d } = deps()
     const m = new EchoAgentManager(d)
     await m.start()
@@ -148,10 +164,16 @@ describe('EchoAgentManager.restart', () => {
     expect(m.getStatus().phase).toBe('ready')
   })
 
-  it('relaunch acquires a fresh port and token', async () => {
+  it('重启后据新 ready 信号刷新 endpoint', async () => {
     const ports = [51111, 52222]
     let i = 0
-    const { d } = deps({ pickPort: vi.fn(async () => ports[i++]) })
+    const spawnGateway = vi.fn(() => {
+      const p = makeProc()
+      const port = ports[i++]
+      queueMicrotask(() => p.fireStdout(`ECHO_AGENT_READY port=${port} ws=/ws health=/api/v1/health`))
+      return p
+    })
+    const { d } = deps({ spawnGateway })
     const m = new EchoAgentManager(d)
     await m.start()
     await m.restart()

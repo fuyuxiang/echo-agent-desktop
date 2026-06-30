@@ -10,7 +10,10 @@ export interface EchoAgentStatus {
 
 export interface EchoAgentEndpoint {
   baseUrl: string
-  token: string
+  // API 前缀与 WS 路径来自进程 stdout 的 ECHO_AGENT_READY 信号(echo-agent 契约),
+  // 不再硬编码:默认 apiPrefix=/api/v1, wsPath=/ws,但以信号回报为准。
+  apiPrefix: string
+  wsPath: string
 }
 
 export interface CommandResult {
