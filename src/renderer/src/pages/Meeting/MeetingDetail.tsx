@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import type { MeetingDTO, SegmentDTO, SummaryDTO } from '@shared/types/meeting'
 import { formatClock } from './format'
+import { toast } from '@/components/Toast'
 import styles from './meeting.module.scss'
 
 export default function MeetingDetail(): React.JSX.Element {
@@ -38,7 +39,8 @@ export default function MeetingDetail(): React.JSX.Element {
       await generateSummary(id, segments, meeting?.title ?? '')
       await load()
     } catch {
-      /* 重新生成失败不崩页,用户可再次点击重试 */
+      // 用户主动点"重新生成":失败给即时反馈,可再次点击重试
+      toast.error('生成会议纪要失败，请重试')
     }
   }
 
