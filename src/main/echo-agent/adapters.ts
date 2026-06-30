@@ -36,7 +36,14 @@ export function buildGatewayArgs(configPath: string, workspace: string): string[
 export function buildGatewayEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // 不再注入顶层 ECHO_AGENT_HOST/PORT/API_TOKEN:echo-agent 的 env 覆盖用双下划线
   // 嵌套(ECHO_AGENT_GATEWAY__PORT),顶层键它不认。端口/绑定改由命令行参数传。
-  return { ...base }
+  const env: NodeJS.ProcessEnv = { ...base }
+  // 剥离用户环境继承的代理变量:本地 agent 直连模型厂商,不应被用户机器的本地代理劫持。
+  for (const k of Object.keys(env)) {
+    if (/^(all|http|https|ftp|no)_proxy$/i.test(k)) delete env[k]
+  }
+  // 禁用 echo-agent 运行时按需 pip 安装:依赖应在 installer 阶段装齐,运行期不再联网装包。
+  env.ECHO_AGENT_DISABLE_LAZY_INSTALLS = '1'
+  return env
 }
 
 // 把任意分块到达的 stdout 数据按行切分,半行缓冲到下一个 chunk 补全后再发射。
@@ -63,10 +70,22 @@ export function spawnGateway(args: {
   })
   // stderr 仍排空避免 pipe 阻塞;stdout 行通过 onStdoutLine 暴露给 manager 解析 ready 信号
   child.stderr?.on('data', () => {})
+  // exit 上报去重:spawn 失败时 Node 发 'error'(非 'close'),无人接收会冒泡成主进程
+  // uncaughtException 并使 manager 收不到退出。这里把 'error' 也归一为一次 onExit(-1),
+  // 让 manager 走既有 error/重启路径。'error' 后通常无 'close',仍用 guard 防双发。
+  let exited = false
+  const onExitCbs: Array<(code: number | null) => void> = []
+  const fireExit = (code: number | null): void => {
+    if (exited) return
+    exited = true
+    for (const cb of onExitCbs) cb(code)
+  }
+  child.on('error', () => fireExit(-1))
+  child.on('close', (code) => fireExit(code))
   return {
     pid: child.pid ?? -1,
     kill: (signal) => child.kill((signal as NodeJS.Signals) ?? 'SIGTERM'),
-    onExit: (cb) => child.on('close', (code) => cb(code)),
+    onExit: (cb) => { onExitCbs.push(cb) },
     onStdoutLine: (cb) => {
       const push = createLineBuffer(cb)
       child.stdout?.on('data', (d: Buffer) => push(d.toString()))
