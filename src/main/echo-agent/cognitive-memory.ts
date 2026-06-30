@@ -29,8 +29,7 @@ export async function listCognitiveMemory(
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), 5000)
   try {
-    const res = await fetch(`${endpoint.baseUrl}/api/memory?limit=${limit}`, {
-      headers: { Authorization: `Bearer ${endpoint.token}` },
+    const res = await fetch(`${endpoint.baseUrl}${endpoint.apiPrefix}/memory?limit=${limit}`, {
       signal: ctrl.signal
     })
     if (!res.ok) return []
