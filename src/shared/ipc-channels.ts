@@ -158,5 +158,17 @@ export const IpcChannels = {
   /** echo-agent 模型配置下发 */
   echoConfig: {
     apply: 'echo:config:apply'
+  },
+
+  /** 项目记忆本地镜像 CRUD */
+  projectMemory: {
+    listMirror: 'project-memory:list-mirror',
+    upsertMirror: 'project-memory:upsert-mirror',
+    deleteMirror: 'project-memory:delete-mirror'
+  },
+
+  /** 只读 echo-agent 认知记忆 */
+  echoMemory: {
+    list: 'echo-memory:list'
   }
 } as const
