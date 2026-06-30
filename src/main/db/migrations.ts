@@ -211,6 +211,9 @@ const migrations: Migration[] = [
   }
 ]
 
+/** migrations 链里的最新 schema 版本号(迁移完成后 user_version 应等于此值) */
+export const LATEST_SCHEMA_VERSION = migrations.reduce((max, m) => Math.max(max, m.version), 0)
+
 /** 执行所有未应用的迁移 */
 export function runMigrations(db: Database.Database): void {
   const current = db.pragma('user_version', { simple: true }) as number
