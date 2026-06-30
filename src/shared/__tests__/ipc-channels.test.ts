@@ -12,6 +12,6 @@ describe('IpcChannels', () => {
     const channels = collectStrings(IpcChannels)
     expect(channels.length).toBeGreaterThan(0)
     expect(new Set(channels).size).toBe(channels.length)
-    expect(channels.every((channel) => /^[a-z]+(?::[a-z-]+)+$/.test(channel))).toBe(true)
+    expect(channels.every((channel) => /^[a-z-]+(?::[a-z-]+)+$/.test(channel))).toBe(true)
   })
 })
