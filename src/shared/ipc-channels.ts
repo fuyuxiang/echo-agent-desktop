@@ -150,6 +150,7 @@ export const IpcChannels = {
   /** echo-agent 进程生命周期 */
   echoAgent: {
     getStatus: 'echo:agent:get-status',
+    getVersion: 'echo:agent:get-version',
     update: 'echo:agent:update',
     /** 主进程 -> 渲染层:进程状态变化 */
     statusChanged: 'echo:agent:status-changed'

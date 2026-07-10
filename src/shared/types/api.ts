@@ -294,6 +294,8 @@ export interface BridgeApi {
   echoAgent: {
     /** 读取当前进程状态 */
     getStatus: () => Promise<EchoAgentStatus>
+    /** 读取当前安装的 echo-agent Python 包版本 */
+    getVersion: () => Promise<string | null>
     /** 触发依赖更新 */
     update: () => Promise<void>
     /** 监听状态变化,返回取消监听函数 */
