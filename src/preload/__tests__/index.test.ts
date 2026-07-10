@@ -113,6 +113,27 @@ describe('preload bridge', () => {
     expect(electron.ipcRenderer.send).toHaveBeenCalledWith(IpcChannels.log.write, 'warn', 'message')
   })
 
+  it('echo-agent 方法使用对应 IPC channel', async () => {
+    const api = await loadApi()
+    const onStatus = vi.fn()
+
+    await api.echoAgent.getStatus()
+    await api.echoAgent.getVersion()
+    await api.echoAgent.update()
+    const off = api.echoAgent.onStatusChanged(onStatus)
+    electron.listeners.get(IpcChannels.echoAgent.statusChanged)?.({}, { phase: 'ready' })
+    off()
+
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.echoAgent.getStatus)
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.echoAgent.getVersion)
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.echoAgent.update)
+    expect(onStatus).toHaveBeenCalledWith({ phase: 'ready' })
+    expect(electron.ipcRenderer.removeListener).toHaveBeenCalledWith(
+      IpcChannels.echoAgent.statusChanged,
+      expect.any(Function)
+    )
+  })
+
   it('store/db/permission/system/agent/asr/meeting 方法使用对应 IPC channel', async () => {
     const api = await loadApi()
 

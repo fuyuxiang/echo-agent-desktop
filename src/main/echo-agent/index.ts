@@ -6,7 +6,7 @@ import log from 'electron-log/main'
 import type { EchoAgentEndpoint, EchoAgentStatus } from './types'
 import { EchoAgentManager } from './manager'
 import { ensureInstalled, updateEchoAgent as pipUpdate } from './installer'
-import { bundledPythonArchive, configPath, echoHome } from './paths'
+import { bundledPythonArchive, configPath, echoHome, venvPython } from './paths'
 import { nodeCommandRunner, spawnGateway, shutdownGateway } from './adapters'
 import { writeManagedConfig, type ConfigWriterDeps, type ModelConfigInput } from './config-writer'
 import WebSocket from 'ws'
@@ -72,6 +72,15 @@ export function onEchoAgentStatus(cb: (s: EchoAgentStatus) => void): () => void 
 
 export function getEchoAgentStatus(): EchoAgentStatus {
   return bus.last()
+}
+
+export async function getEchoAgentVersion(): Promise<string | null> {
+  const res = await nodeCommandRunner.run(venvPython(homedir(), process.platform), [
+    '-c',
+    'import importlib.metadata as m\ntry:\n    print(m.version("echo-agent"))\nexcept m.PackageNotFoundError:\n    raise SystemExit(1)'
+  ])
+  if (res.code !== 0) return null
+  return res.stdout.trim() || null
 }
 
 export async function startEchoAgent(): Promise<void> { await getEchoAgentManager().start() }

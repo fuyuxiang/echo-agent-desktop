@@ -7,6 +7,7 @@ vi.mock('electron', () => ({
 const statusFns: Array<(s: unknown) => void> = []
 vi.mock('../../echo-agent', () => ({
   getEchoAgentStatus: () => ({ phase: 'ready', port: 1 }),
+  getEchoAgentVersion: vi.fn(async () => '0.3.0'),
   onEchoAgentStatus: (cb: (s: unknown) => void) => { statusFns.push(cb); return () => {} },
   updateEchoAgent: vi.fn(async () => {}),
   applyModelConfig: vi.fn(async () => {})
@@ -14,7 +15,7 @@ vi.mock('../../echo-agent', () => ({
 
 import { registerEchoAgentIpc } from '../echo-agent'
 import { IpcChannels } from '@shared/ipc-channels'
-import { updateEchoAgent, applyModelConfig } from '../../echo-agent'
+import { getEchoAgentVersion, updateEchoAgent, applyModelConfig } from '../../echo-agent'
 
 describe('echo-agent ipc', () => {
   beforeEach(() => handlers.clear())
@@ -27,6 +28,11 @@ describe('echo-agent ipc', () => {
     registerEchoAgentIpc(() => null)
     await handlers.get(IpcChannels.echoAgent.update)!()
     expect(updateEchoAgent).toHaveBeenCalled()
+  })
+  it('get-version returns installed package version', async () => {
+    registerEchoAgentIpc(() => null)
+    await expect(handlers.get(IpcChannels.echoAgent.getVersion)!()).resolves.toBe('0.3.0')
+    expect(getEchoAgentVersion).toHaveBeenCalled()
   })
 })
 

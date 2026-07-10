@@ -170,6 +170,7 @@ const api: BridgeApi = {
 
   echoAgent: {
     getStatus: () => ipcRenderer.invoke(IpcChannels.echoAgent.getStatus),
+    getVersion: () => ipcRenderer.invoke(IpcChannels.echoAgent.getVersion),
     update: () => ipcRenderer.invoke(IpcChannels.echoAgent.update),
     onStatusChanged: (cb: (s: EchoAgentStatus) => void) => {
       const listener = (_e: Electron.IpcRendererEvent, s: EchoAgentStatus): void => cb(s)
