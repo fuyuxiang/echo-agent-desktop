@@ -28,7 +28,11 @@ export const ROUTES = {
   /** 管理页(仅管理员) */
   admin: '/admin',
   /** 会议记录 */
-  meeting: '/meeting'
+  meeting: '/meeting',
+  /** kb 资料库 */
+  kbLibrary: '/kb-library',
+  /** kb 资料问答 */
+  kbQa: '/kb-qa'
   // plop-route-constant
 } as const
 
