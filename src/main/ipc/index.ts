@@ -12,6 +12,7 @@ import { registerPermissionHandlers } from './permission'
 import { registerProjectMemoryIpc } from './project-memory'
 import { registerStoreHandlers } from './store'
 import { registerSystemHandlers } from './system'
+import { registerModelIpcHandlers } from './models'
 import { registerWindowHandlers } from './window'
 import { registerApprovalBridge } from '../agent/permission/approval-bridge'
 
@@ -35,5 +36,6 @@ export function registerAllIpcHandlers(getWindow: () => Electron.BrowserWindow |
   registerAgentChatIpc()
   registerApprovalBridge()
   registerEchoAgentIpc(getWindow)
+  registerModelIpcHandlers()
   registerProjectMemoryIpc()
 }
