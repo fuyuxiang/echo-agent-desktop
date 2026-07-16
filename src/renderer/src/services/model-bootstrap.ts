@@ -37,14 +37,20 @@ export async function applyServerModelConfigAndStart(): Promise<{
       // + 等 ready 信号,最长 120s,首启还含 pip 安装)。ready 是"UI 可用门",不应被这整条
       // 后台装配链拖住;configured 仍在 apply 成功后置位,保证发送前能判断 runtime 是否真装好。
       agent.setReady(true)
-      await window.api.echoConfig.apply({
-        baseUrl: toOllamaOpenAIBase(localModel.baseUrl),
-        apiKey: OLLAMA_PLACEHOLDER_API_KEY,
-        model: localModel.modelName
-      })
-      agent.setConfigured(true)
-      logger.info('[model-bootstrap] Ollama 本地模型已装配')
-      return { ok: true, configured: true, retryable: false }
+      try {
+        await window.api.echoConfig.apply({
+          baseUrl: toOllamaOpenAIBase(localModel.baseUrl),
+          apiKey: OLLAMA_PLACEHOLDER_API_KEY,
+          model: localModel.modelName
+        })
+        agent.setConfigured(true)
+        logger.info('[model-bootstrap] Ollama 本地模型已装配')
+        return { ok: true, configured: true, retryable: false }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        logger.error('[model-bootstrap] Ollama 配置应用失败:', msg)
+        return { ok: false, configured: false, retryable: true, error: msg }
+      }
     }
 
     // ② 已登录:优先从服务器拉取配置
@@ -60,14 +66,20 @@ export async function applyServerModelConfigAndStart(): Promise<{
 
       if (cfg?.baseUrl && cfg?.modelName) {
         agent.setReady(true)
-        await window.api.echoConfig.apply({
-          baseUrl: cfg.baseUrl,
-          apiKey: cfg.apiKey ?? '',
-          model: cfg.modelName
-        })
-        agent.setConfigured(true)
-        logger.info(`[model-bootstrap] 服务器配置已装配 model=${cfg.modelName}`)
-        return { ok: true, configured: true, retryable: false }
+        try {
+          await window.api.echoConfig.apply({
+            baseUrl: cfg.baseUrl,
+            apiKey: cfg.apiKey ?? '',
+            model: cfg.modelName
+          })
+          agent.setConfigured(true)
+          logger.info(`[model-bootstrap] 服务器配置已装配 model=${cfg.modelName}`)
+          return { ok: true, configured: true, retryable: false }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          logger.error('[model-bootstrap] 服务器配置应用失败:', msg)
+          return { ok: false, configured: false, retryable: true, error: msg }
+        }
       }
       // 服务器无有效配置,fall through 到本地手动配置
     }
@@ -80,14 +92,20 @@ export async function applyServerModelConfigAndStart(): Promise<{
     }>(LOCAL_CONFIG_KEY)
     if (localCfg?.baseUrl && localCfg?.modelName) {
       agent.setReady(true)
-      await window.api.echoConfig.apply({
-        baseUrl: localCfg.baseUrl,
-        apiKey: localCfg.apiKey ?? '',
-        model: localCfg.modelName
-      })
-      agent.setConfigured(true)
-      logger.info(`[model-bootstrap] 本地手动配置已装配 model=${localCfg.modelName}`)
-      return { ok: true, configured: true, retryable: false }
+      try {
+        await window.api.echoConfig.apply({
+          baseUrl: localCfg.baseUrl,
+          apiKey: localCfg.apiKey ?? '',
+          model: localCfg.modelName
+        })
+        agent.setConfigured(true)
+        logger.info(`[model-bootstrap] 本地手动配置已装配 model=${localCfg.modelName}`)
+        return { ok: true, configured: true, retryable: false }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        logger.error('[model-bootstrap] 本地配置应用失败:', msg)
+        return { ok: false, configured: false, retryable: true, error: msg }
+      }
     }
 
     // ④ 无任何可用配置:UI 就绪但 runtime 未装配,用户需去设置页配置
