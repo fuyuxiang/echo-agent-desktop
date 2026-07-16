@@ -17,7 +17,6 @@ export function NetworkSection(): React.JSX.Element {
     e.preventDefault()
     if (settings) {
       await updateSettings({
-        id: settings.id,
         network: formData
       })
     }
