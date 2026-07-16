@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { EchoAgentManager, type ManagerDeps, type SpawnedProc } from '../manager'
 import type { EchoAgentStatus } from '../types'
+import { InstallationAbortedError } from '../types'
 
 const READY = 'ECHO_AGENT_READY port=51234 ws=/ws health=/api/v1/health'
 
@@ -199,5 +200,77 @@ describe('EchoAgentManager.restart', () => {
     await Promise.all([p1, p2])
     expect(ensureInstalled).toHaveBeenCalledTimes(1)
     expect(m.getStatus().phase).toBe('ready')
+  })
+})
+
+describe('EchoAgentManager abort behavior', () => {
+  it('doStop() aborts in-flight installation and transitions to idle', async () => {
+    let resolveInstall: () => void = () => {}
+    let capturedSignal: AbortSignal | undefined
+    const ensureInstalled = vi.fn(async (_onProgress: (l: string) => void, signal?: AbortSignal) => {
+      capturedSignal = signal
+      await new Promise<void>((res) => { resolveInstall = res })
+    })
+    const spawnGateway = vi.fn(() => { const p = makeProc(); autoReady(p); return p })
+    const { d } = deps({ ensureInstalled, spawnGateway })
+    const m = new EchoAgentManager(d)
+    // Start will be stuck in ensureInstalled
+    const startPromise = m.start()
+    await Promise.resolve()
+    expect(m.getStatus().phase).toBe('installing')
+    // Stop while installation is in-flight
+    await m.stop()
+    // The signal should have been aborted
+    expect(capturedSignal).toBeDefined()
+    expect(capturedSignal!.aborted).toBe(true)
+    // Should not have spawned gateway
+    expect(spawnGateway).not.toHaveBeenCalled()
+    expect(m.getStatus().phase).toBe('idle')
+    // Let the stuck install resolve (simulating the abort path in real code)
+    // In the real code, ensureInstalled would throw InstallationAbortedError
+    // after signal.abort() is called. Here we resolve manually to complete the test.
+    resolveInstall()
+    await startPromise.catch(() => {}) // swallow the error from the stale start
+  })
+
+  it('abort signal is passed to ensureInstalled', async () => {
+    let capturedSignal: AbortSignal | undefined
+    const ensureInstalled = vi.fn(async (_onProgress: (l: string) => void, signal?: AbortSignal) => {
+      capturedSignal = signal
+    })
+    const spawnGateway = vi.fn(() => { const p = makeProc(); autoReady(p); return p })
+    const { d } = deps({ ensureInstalled, spawnGateway })
+    const m = new EchoAgentManager(d)
+    await m.start()
+    // After successful start, signal was passed but not aborted
+    expect(capturedSignal).toBeDefined()
+    expect(capturedSignal!.aborted).toBe(false)
+    expect(m.getStatus().phase).toBe('ready')
+  })
+
+  it('doStop during installation aborts signal, InstallationAbortedError results in idle', async () => {
+    // Simulate the real flow: ensureInstalled reacts to abort by rejecting with InstallationAbortedError
+    let capturedSignal: AbortSignal | undefined
+    let rejectInstall: (err: Error) => void = () => {}
+    const ensureInstalled = vi.fn(async (_onProgress: (l: string) => void, signal?: AbortSignal) => {
+      capturedSignal = signal
+      await new Promise<void>((_resolve, reject) => {
+        rejectInstall = reject
+      })
+    })
+    const spawnGateway = vi.fn(() => { const p = makeProc(); autoReady(p); return p })
+    const { d } = deps({ ensureInstalled, spawnGateway })
+    const m = new EchoAgentManager(d)
+    const startPromise = m.start()
+    await Promise.resolve()
+    expect(m.getStatus().phase).toBe('installing')
+    // Abort the installation — simulate what the real installer does after signal.abort()
+    rejectInstall(new InstallationAbortedError())
+    // Now stop — abortController.abort() runs, but ensureInstalled already rejected
+    await m.stop()
+    // The start() promise should resolve (not reject) because ensureReady catches InstallationAbortedError
+    await startPromise
+    expect(m.getStatus().phase).toBe('idle')
+    expect(spawnGateway).not.toHaveBeenCalled()
   })
 })
