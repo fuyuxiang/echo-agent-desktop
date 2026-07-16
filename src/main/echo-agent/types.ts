@@ -30,6 +30,13 @@ export interface CommandRunner {
   ): Promise<CommandResult>
 }
 
+export class InstallationAbortedError extends Error {
+  constructor() {
+    super('安装已中止')
+    this.name = 'InstallationAbortedError'
+  }
+}
+
 export function isReady(status: EchoAgentStatus): boolean {
   return status.phase === 'ready' && typeof status.port === 'number'
 }
