@@ -78,21 +78,57 @@ export async function testProvider(request: ProviderTestRequest): Promise<Provid
     }
   }
 
-  try {
-    const startTime = Date.now()
-    // Simulate connection test - in production, this would make an actual API call
-    await new Promise(resolve => setTimeout(resolve, 100))
-    const latency = Date.now() - startTime
-
-    return {
-      success: true,
-      message: 'Connection successful',
-      latency
-    }
-  } catch (error) {
+  if (!provider.baseUrl) {
     return {
       success: false,
-      message: 'Connection failed',
+      message: '未配置 baseUrl',
+      error: 'Provider 未设置 baseUrl，无法测试连接'
+    }
+  }
+
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+
+    const startTime = Date.now()
+    const url = `${provider.baseUrl.replace(/\/+$/, '')}/v1/models`
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    }
+    if (provider.apiKey) {
+      headers['Authorization'] = `Bearer ${provider.apiKey}`
+    }
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: controller.signal
+    })
+
+    clearTimeout(timeout)
+    const latency = Date.now() - startTime
+
+    if (response.ok) {
+      const data = (await response.json()) as { data?: unknown[] }
+      return {
+        success: true,
+        message: `连接成功，发现 ${data.data?.length ?? 0} 个模型`,
+        latency
+      }
+    } else {
+      return {
+        success: false,
+        message: `HTTP ${response.status}: ${response.statusText}`,
+        latency
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      return { success: false, message: '连接超时（10秒）' }
+    }
+    return {
+      success: false,
+      message: '连接失败',
       error: error instanceof Error ? error.message : 'Unknown error'
     }
   }
