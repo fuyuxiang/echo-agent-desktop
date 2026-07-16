@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useKanbanStore } from '@/stores/kanbanStore'
-import type { KanbanTask } from '@shared/kanban-types'
+import type { KanbanTask, KanbanStatus, KanbanPriority } from '@shared/kanban-types'
 import TaskList from './TaskList'
 import TaskForm from './TaskForm'
 import styles from './kanban.module.scss'
@@ -39,8 +39,8 @@ export default function KanbanPage(): React.JSX.Element {
   const handleSubmit = async (data: {
     title: string
     description?: string
-    status?: string
-    priority?: string
+    status?: KanbanStatus
+    priority?: KanbanPriority
     assignee?: string
   }): Promise<void> => {
     if (editingTask) {
@@ -57,7 +57,7 @@ export default function KanbanPage(): React.JSX.Element {
     setEditingTask(null)
   }
 
-  const handleMove = async (taskId: string, status: string): Promise<void> => {
+  const handleMove = async (taskId: string, status: KanbanStatus): Promise<void> => {
     await moveTask(taskId, status)
   }
 
