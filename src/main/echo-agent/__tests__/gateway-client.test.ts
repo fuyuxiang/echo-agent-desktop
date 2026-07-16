@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import WebSocket from 'ws'
 import { translateFrame, GatewayClient, type WsLike, type Frame } from '../gateway-client'
 
 // importing ../index pulls in electron-log/main, which is not usable in tests
@@ -13,7 +14,8 @@ function fakeWs(): WsLike & { fire: (ev: string, arg?: unknown) => void; sent: s
     close: () => {},
     on: (ev, cb) => { handlers[ev] = cb },
     fire: (ev, arg) => handlers[ev]?.(arg),
-    sent
+    sent,
+    readyState: 1 // WebSocket.OPEN
   }
 }
 
@@ -274,6 +276,88 @@ describe('GatewayClient', () => {
     ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
     ws.fire('message', JSON.stringify({ type: 'message', text: 'hi', is_final: true }))
     expect(events[0]).toMatchObject({ type: 'final', chatId: 'c2' })
+  })
+
+  it('abort(chatId) sends abort frame when WS is open', () => {
+    const ws = fakeWs()
+    const c = new GatewayClient({ wsUrl: 'ws://x/ws', token: 't', createWs: () => ws, emit: () => {} })
+    c.connect('c1')
+    ws.fire('open')
+    ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    c.send('hello')              // creates an active request for c1
+    c.abort('c1')
+    const abortFrame = JSON.parse(ws.sent[ws.sent.length - 1])
+    expect(abortFrame).toMatchObject({ type: 'abort', chatId: 'c1' })
+  })
+
+  it('abort(chatId) is a no-op when chatId has no active request', () => {
+    const ws = fakeWs()
+    const c = new GatewayClient({ wsUrl: 'ws://x/ws', token: 't', createWs: () => ws, emit: () => {} })
+    c.connect('c1')
+    ws.fire('open')
+    ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    const sentBefore = ws.sent.length
+    c.abort('nonexistent')
+    // Only the abort frame should be sent (if ws is open), but no crash
+    const sentAfter = ws.sent.length
+    expect(sentAfter).toBe(sentBefore + 1) // abort frame sent since ws is open
+    const abortFrame = JSON.parse(ws.sent[sentAfter - 1])
+    expect(abortFrame).toMatchObject({ type: 'abort', chatId: 'nonexistent' })
+  })
+
+  it('activeRequests is cleaned up after done event', () => {
+    const ws = fakeWs()
+    const events: Frame[] = []
+    const c = new GatewayClient({ wsUrl: 'ws://x/ws', token: 't', createWs: () => ws, emit: (e) => events.push(e) })
+    c.connect('c1')
+    ws.fire('open')
+    ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    c.send('hello')
+    // send() creates an active request
+    expect((c as any).activeRequests.has('c1')).toBe(true)
+    ws.fire('message', JSON.stringify({ type: 'message', text: 'done', is_final: true, message_kind: 'final' }))
+    // After done event, activeRequests should be cleaned up
+    expect((c as any).activeRequests.has('c1')).toBe(false)
+  })
+
+  it('activeRequests is cleaned up after error event', () => {
+    const ws = fakeWs()
+    const events: Frame[] = []
+    const c = new GatewayClient({ wsUrl: 'ws://x/ws', token: 't', createWs: () => ws, emit: (e) => events.push(e) })
+    c.connect('c1')
+    ws.fire('open')
+    ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    c.send('hello')
+    expect((c as any).activeRequests.has('c1')).toBe(true)
+    ws.fire('message', JSON.stringify({ type: 'error', error: 'something went wrong' }))
+    expect((c as any).activeRequests.has('c1')).toBe(false)
+  })
+
+  it('abort suppresses subsequent events for the aborted request', () => {
+    const ws = fakeWs()
+    const events: Frame[] = []
+    const c = new GatewayClient({ wsUrl: 'ws://x/ws', token: 't', createWs: () => ws, emit: (e) => events.push(e) })
+    c.connect('c1')
+    ws.fire('open')
+    ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    c.send('hello')
+    c.abort('c1')
+    // After abort, further message frames should be suppressed
+    ws.fire('message', JSON.stringify({ type: 'message', text: 'late chunk', is_final: false }))
+    // No new events should have been emitted (only the abort-related ones)
+    expect(events).toHaveLength(0)
+  })
+
+  it('disconnect() aborts all active requests', () => {
+    const ws = fakeWs()
+    const c = new GatewayClient({ wsUrl: 'ws://x/ws', token: 't', createWs: () => ws, emit: () => {} })
+    c.connect('c1')
+    ws.fire('open')
+    ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    c.send('hello')
+    expect((c as any).activeRequests.size).toBeGreaterThan(0)
+    c.disconnect()
+    expect((c as any).activeRequests.size).toBe(0)
   })
 })
 
