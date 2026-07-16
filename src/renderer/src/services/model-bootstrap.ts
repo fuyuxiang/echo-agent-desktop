@@ -1,6 +1,7 @@
 import { fetchModelConfig, type ModelConfigDTO } from './server'
 import { storage } from '@/utils'
 import {
+  LOCAL_CONFIG_KEY,
   LOCAL_OLLAMA_CONFIG_KEY,
   OLLAMA_PLACEHOLDER_API_KEY,
   toOllamaOpenAIBase,
@@ -27,7 +28,6 @@ export async function applyServerModelConfigAndStart(): Promise<{
   error?: string
 }> {
   const agent = useAgentStore.getState()
-  const LOCAL_CONFIG_KEY = 'modelConfig.local'
 
   try {
     // ① Ollama 本地模型(显式启用,最高优先)

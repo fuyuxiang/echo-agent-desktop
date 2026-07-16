@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { storage } from '@/utils'
 import { toast } from '@/components/Toast'
 import { useAgentStore } from '@/stores/agentStore'
+import { LOCAL_CONFIG_KEY } from '@/services/model-config'
 
 interface SavedModelConfig {
   baseUrl: string
@@ -10,7 +11,6 @@ interface SavedModelConfig {
   apiKey?: string
 }
 
-const LOCAL_CONFIG_KEY = 'modelConfig.local'
 const API_KEY_STORE_KEY = 'openai-api-key'
 
 export function ModelSection(): React.JSX.Element {

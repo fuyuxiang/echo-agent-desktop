@@ -1,5 +1,8 @@
 import type { ModelConfigDTO } from './server'
 
+/** 本地手动配置(用户在设置页填写)持久化 key */
+export const LOCAL_CONFIG_KEY = 'modelConfig.local'
+
 /** 本地模型(Ollama)配置持久化 key */
 export const LOCAL_OLLAMA_CONFIG_KEY = 'modelConfig.localModel'
 
