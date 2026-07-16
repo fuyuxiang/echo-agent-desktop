@@ -67,6 +67,7 @@ describe('preload bridge', () => {
       'permission',
       'platform',
       'projectMemory',
+      'providers',
       'store',
       'system',
       'window'
