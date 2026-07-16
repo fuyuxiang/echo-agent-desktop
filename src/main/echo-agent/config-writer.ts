@@ -56,7 +56,6 @@ export function writeManagedConfig(deps: ConfigWriterDeps, cfg: ModelConfigInput
     // only treat a missing file as empty; rethrow other errors (EACCES, etc.)
     // so we never silently overwrite a config we failed to read
     if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e
-    existing = ''
   }
   const merged = mergeManagedConfig(existing, cfg)
   deps.ensureDir(dirname(target))
