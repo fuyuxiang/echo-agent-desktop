@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { skillsAPI, type Skill } from '@/services/agent/skills'
 import type { SkillConfig } from '@shared/skill-types'
@@ -34,22 +34,25 @@ export default function DiscoverPage(): React.JSX.Element {
   const [selectedSkill, setSelectedSkill] = useState<SkillConfig | null>(null)
   const [filterCategory, setFilterCategory] = useState<string>('all')
 
-  const loadSkills = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const result = await skillsAPI.list()
-      setSkills(result.skills.map(toSkillConfig))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    let ignore = false
+
+    async function fetchSkills(): Promise<void> {
+      try {
+        const result = await skillsAPI.list()
+        if (!ignore) setSkills(result.skills.map(toSkillConfig))
+      } catch (err) {
+        if (!ignore) setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!ignore) setLoading(false)
+      }
+    }
+
+    void fetchSkills()
+    return (): void => {
+      ignore = true
     }
   }, [])
-
-  useEffect(() => {
-    void loadSkills()
-  }, [loadSkills])
 
   const handleInstall = async (skillId: string): Promise<void> => {
     // IPC API does not provide installSkill; no-op for now
