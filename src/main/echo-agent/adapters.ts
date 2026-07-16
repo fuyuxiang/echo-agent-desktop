@@ -9,14 +9,23 @@ export const nodeCommandRunner: CommandRunner = {
       const child = spawn(cmd, args, { cwd: opts?.cwd, env: { ...process.env, ...opts?.env } })
       let stdout = ''
       let stderr = ''
+      // AbortSignal:终止时 kill 子进程,避免 app 退出后安装器残留。
+      const onAbort = (): void => { child.kill('SIGTERM') }
+      opts?.signal?.addEventListener('abort', onAbort, { once: true })
       child.stdout.on('data', (d: Buffer) => {
         const s = d.toString()
         stdout += s
         opts?.onStdout?.(s)
       })
       child.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
-      child.on('error', (e) => resolve({ code: -1, stdout, stderr: stderr + String(e) }))
-      child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }))
+      child.on('error', (e) => {
+        opts?.signal?.removeEventListener('abort', onAbort)
+        resolve({ code: -1, stdout, stderr: stderr + String(e) })
+      })
+      child.on('close', (code) => {
+        opts?.signal?.removeEventListener('abort', onAbort)
+        resolve({ code: code ?? -1, stdout, stderr })
+      })
     })
   }
 }

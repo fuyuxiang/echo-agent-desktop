@@ -10,8 +10,8 @@ export interface SpawnedProc {
 }
 
 export interface ManagerDeps {
-  ensureInstalled: (onProgress: (l: string) => void) => Promise<void>
-  update: (onProgress: (l: string) => void) => Promise<void>
+  ensureInstalled: (onProgress: (l: string) => void, signal?: AbortSignal) => Promise<void>
+  update: (onProgress: (l: string) => void, signal?: AbortSignal) => Promise<void>
   spawnGateway: () => SpawnedProc
   shutdown: (endpoint: EchoAgentEndpoint) => Promise<void>
   onStatus: (s: EchoAgentStatus) => void
@@ -42,6 +42,8 @@ export class EchoAgentManager {
   // 复用,不再重复 ensureInstalled。避免"配置变更重启"与"开机启动"并发各装一遍、
   // 互相打断 pip 子进程的竞态。
   private installed = false
+  // 用于取消正在进行的安装/更新子进程,doStop() 时 abort。
+  private abortController: AbortController | null = null
   // 生命周期操作互斥队列:start/stop/restart/runUpdate 串行执行,杜绝并发 spawn。
   // 开机 start() 与渲染层 applyModelConfig→restart() 若并发,会各自 launch 出 gateway
   // 抢端口/在未装完时起进程,导致崩溃重启循环、Agent 永不就绪。
@@ -67,9 +69,21 @@ export class EchoAgentManager {
   // 确保依赖已安装(仅首次真正执行 ensureInstalled);幂等。
   private async ensureReady(): Promise<void> {
     if (this.installed) return
+    this.abortController = new AbortController()
     this.set({ phase: 'installing' })
-    await this.deps.ensureInstalled((line) => this.set({ phase: 'installing', detail: line }))
-    this.installed = true
+    try {
+      await this.deps.ensureInstalled(
+        (line) => this.set({ phase: 'installing', detail: line }),
+        this.abortController.signal
+      )
+      this.installed = true
+    } catch (e) {
+      if (e instanceof Error && e.message === 'Installation aborted') {
+        this.set({ phase: 'idle' })
+        return
+      }
+      throw e
+    }
   }
 
   start(): Promise<void> {
@@ -152,6 +166,11 @@ export class EchoAgentManager {
   private async doStop(): Promise<void> {
     this.stopping = true
     this.stopped = true
+    // 取消正在进行的安装/更新子进程。
+    if (this.abortController) {
+      this.abortController.abort()
+      this.abortController = null
+    }
     if (this.endpoint) {
       try { await this.deps.shutdown(this.endpoint) } catch { /* fall through to kill */ }
     }
@@ -174,10 +193,18 @@ export class EchoAgentManager {
         await this.doStop()
         // doStop() 置 stopped=true;本次更新是用户主动重启,需复位允许 launch() spawn。
         this.stopped = false
+        this.abortController = new AbortController()
         this.set({ phase: 'updating' })
-        await this.deps.update((line) => this.set({ phase: 'updating', detail: line }))
+        await this.deps.update(
+          (line) => this.set({ phase: 'updating', detail: line }),
+          this.abortController.signal
+        )
         await this.launch()
       } catch (e) {
+        if (e instanceof Error && e.message === 'Installation aborted') {
+          this.set({ phase: 'idle' })
+          return
+        }
         this.set({ phase: 'error', message: e instanceof Error ? e.message : String(e) })
       }
     })
