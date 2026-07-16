@@ -125,6 +125,31 @@ describe('applyServerModelConfigAndStart', () => {
     expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
   })
 
+  it('本地手动配置装配时读取已保存的 apiKey', async () => {
+    userStore.isAuthed = false
+    storage.get
+      .mockResolvedValueOnce(null) // Ollama config
+      .mockResolvedValueOnce({
+        baseUrl: 'https://api.example.com/v1',
+        modelName: 'gpt-4o',
+        apiKey: 'sk-local'
+      })
+    const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
+
+    await expect(applyServerModelConfigAndStart()).resolves.toEqual({
+      ok: true,
+      configured: true,
+      retryable: false
+    })
+    expect(window.api.echoConfig.apply).toHaveBeenCalledWith({
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-local',
+      model: 'gpt-4o'
+    })
+    expect(agentStore.setReady).toHaveBeenCalledWith(true)
+    expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
+  })
+
   it('服务器未配置模型时降级为可用但未装配(终态,不重试)', async () => {
     userStore.isAuthed = true
     storage.get.mockResolvedValueOnce(null)
