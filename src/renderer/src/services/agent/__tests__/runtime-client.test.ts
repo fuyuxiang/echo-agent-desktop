@@ -2,19 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let eventHandler: ((ev: Record<string, unknown>) => void) | null = null
 const send = vi.fn()
-const getMessages = vi.fn()
 beforeEach(() => {
   send.mockClear()
-  getMessages.mockReset()
-  getMessages.mockResolvedValue([])
   eventHandler = null
   ;(globalThis as unknown as { window: unknown }).window = {
     api: {
-      db: {
-        session: {
-          getMessages
-        }
-      },
       agentChat: {
         send,
         abort: vi.fn(),
@@ -74,26 +66,15 @@ describe('runtime-client agentWs', () => {
     expect(got.length).toBe(0)
   })
 
-  it('switchSession 加载历史消息并 emit history.loaded', async () => {
-    getMessages.mockResolvedValue([
-      { id: 1, chatId: 'c2', role: 'user', content: 'hello', reasoning: null, createdAt: 1000 },
-      { id: 2, chatId: 'c2', role: 'assistant', content: 'hi there', reasoning: 'thinking...', createdAt: 1001 }
-    ])
+  it('switchSession 通知主进程切换网关会话', async () => {
     const ws = await load()
     ws.connect('', 'c1')
-    const got: Array<Record<string, unknown>> = []
-    ws.on('history.loaded', (p) => got.push(p))
     await ws.switchSession('c2')
-    expect(getMessages).toHaveBeenCalledWith('c2')
-    expect(got.length).toBe(2)
-    expect(got[0].role).toBe('user')
-    expect(got[0].content).toBe('hello')
-    expect(got[1].role).toBe('assistant')
-    expect(got[1].reasoning).toBe('thinking...')
+    expect(send).toHaveBeenCalledWith('c2', '', [])
   })
 
-  it('switchSession DB 读取失败时不抛异常', async () => {
-    getMessages.mockRejectedValue(new Error('db error'))
+  it('switchSession send 失败时不抛异常', async () => {
+    send.mockRejectedValueOnce(new Error('send error'))
     const ws = await load()
     ws.connect('', 'c1')
     // Should not throw
