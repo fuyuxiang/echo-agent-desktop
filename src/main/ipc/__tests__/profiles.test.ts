@@ -33,7 +33,7 @@ const { handlers, profileService } = vi.hoisted(() => {
       isActive: false,
       createdAt: '',
       updatedAt: '',
-      ...(data as Record<string, unknown>)?.profile
+      ...((data as Record<string, unknown>)?.profile ?? {})
     }))
   }
   return { handlers, profileService }
@@ -80,7 +80,7 @@ describe('profile IPC handlers', () => {
       total: 1,
       activeProfileId: 'p1'
     }
-    profileService.listProfiles.mockResolvedValueOnce(fakeResponse)
+    profileService.listProfiles.mockResolvedValueOnce(fakeResponse as any)
     const result = await invoke(IpcChannels.profiles.list)
     expect(profileService.listProfiles).toHaveBeenCalled()
     expect(result).toEqual(fakeResponse)
@@ -88,7 +88,7 @@ describe('profile IPC handlers', () => {
 
   it('profiles:get passes id to getProfile', async () => {
     const fakeProfile = { id: 'p1', name: 'Test Profile', color: '#000', isActive: true, createdAt: '', updatedAt: '' }
-    profileService.getProfile.mockResolvedValueOnce(fakeProfile)
+    profileService.getProfile.mockResolvedValueOnce(fakeProfile as any)
     const result = await invoke(IpcChannels.profiles.get, 'p1')
     expect(profileService.getProfile).toHaveBeenCalledWith('p1')
     expect(result).toEqual(fakeProfile)

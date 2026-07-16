@@ -81,7 +81,7 @@ describe('schedule IPC handlers', () => {
       schedules: [{ id: 's1', name: 'Daily Report', cronExpression: '0 9 * * *', isActive: true, runCount: 0, createdAt: '', updatedAt: '' }],
       total: 1
     }
-    scheduleService.listSchedules.mockResolvedValueOnce(fakeResponse)
+    scheduleService.listSchedules.mockResolvedValueOnce(fakeResponse as any)
     const result = await invoke(IpcChannels.schedules.list)
     expect(scheduleService.listSchedules).toHaveBeenCalled()
     expect(result).toEqual(fakeResponse)
@@ -89,7 +89,7 @@ describe('schedule IPC handlers', () => {
 
   it('schedules:get passes id to getSchedule', async () => {
     const fakeSchedule = { id: 's1', name: 'Daily Report', cronExpression: '0 9 * * *', isActive: true, runCount: 0, createdAt: '', updatedAt: '' }
-    scheduleService.getSchedule.mockResolvedValueOnce(fakeSchedule)
+    scheduleService.getSchedule.mockResolvedValueOnce(fakeSchedule as any)
     const result = await invoke(IpcChannels.schedules.get, 's1')
     expect(scheduleService.getSchedule).toHaveBeenCalledWith('s1')
     expect(result).toEqual(fakeSchedule)
@@ -131,7 +131,7 @@ describe('schedule IPC handlers', () => {
       logs: [{ id: 'l1', scheduleId: 's1', executedAt: '', status: 'success' as const }],
       total: 1
     }
-    scheduleService.listScheduleLogs.mockResolvedValueOnce(logResponse)
+    scheduleService.listScheduleLogs.mockResolvedValueOnce(logResponse as any)
     const result = await invoke(IpcChannels.schedules.listLogs, 's1')
     expect(scheduleService.listScheduleLogs).toHaveBeenCalledWith('s1')
     expect(result).toEqual(logResponse)
