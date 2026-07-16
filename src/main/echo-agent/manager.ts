@@ -96,7 +96,10 @@ export class EchoAgentManager {
         await this.ensureReady()
         await this.launch()
       } catch (e) {
-        this.set({ phase: 'error', message: e instanceof Error ? e.message : String(e) })
+        const message = e instanceof Error ? e.message : String(e)
+        this.set({ phase: 'error', message })
+        // 继续抛出让调用方知道失败
+        throw e
       }
     })
   }
@@ -223,7 +226,10 @@ export class EchoAgentManager {
         await this.ensureReady()
         await this.launch()
       } catch (e) {
-        this.set({ phase: 'error', message: e instanceof Error ? e.message : String(e) })
+        const message = e instanceof Error ? e.message : String(e)
+        this.set({ phase: 'error', message })
+        // 继续抛出让调用方知道失败
+        throw e
       }
     })
   }
