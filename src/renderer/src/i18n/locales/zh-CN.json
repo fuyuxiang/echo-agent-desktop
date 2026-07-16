@@ -260,5 +260,26 @@
     "update": "更新",
     "add": "添加",
     "cancel": "取消"
+  },
+  "providers": {
+    "title": "提供商管理",
+    "addProvider": "添加提供商",
+    "loading": "加载中...",
+    "noProviders": "暂无提供商配置",
+    "edit": "编辑",
+    "remove": "移除",
+    "test": "测试连接",
+    "editProvider": "编辑提供商",
+    "name": "名称",
+    "type": "类型",
+    "apiKey": "API Key",
+    "baseUrl": "Base URL",
+    "description": "描述",
+    "update": "更新",
+    "add": "添加",
+    "cancel": "取消",
+    "testSuccess": "连接成功",
+    "testFailed": "连接失败：{{message}}",
+    "models": "个模型"
   }
 }

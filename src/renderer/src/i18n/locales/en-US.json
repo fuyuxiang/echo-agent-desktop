@@ -260,5 +260,26 @@
     "update": "Update",
     "add": "Add",
     "cancel": "Cancel"
+  },
+  "providers": {
+    "title": "Providers",
+    "addProvider": "Add Provider",
+    "loading": "Loading...",
+    "noProviders": "No providers configured",
+    "edit": "Edit",
+    "remove": "Remove",
+    "test": "Test",
+    "editProvider": "Edit Provider",
+    "name": "Name",
+    "type": "Type",
+    "apiKey": "API Key",
+    "baseUrl": "Base URL",
+    "description": "Description",
+    "update": "Update",
+    "add": "Add",
+    "cancel": "Cancel",
+    "testSuccess": "Connection successful",
+    "testFailed": "Connection failed: {{message}}",
+    "models": "models"
   }
 }
