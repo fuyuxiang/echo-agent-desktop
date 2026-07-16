@@ -227,5 +227,46 @@ export const IpcChannels = {
     toggle: 'schedules:toggle',
     listLogs: 'schedules:list-logs',
     addLog: 'schedules:add-log'
+  },
+
+  /** 消息网关管理 CRUD + 连接测试/消息发送 */
+  gateway: {
+    listPlatforms: 'gateway:list-platforms',
+    listConfigs: 'gateway:list-configs',
+    addConfig: 'gateway:add-config',
+    updateConfig: 'gateway:update-config',
+    removeConfig: 'gateway:remove-config',
+    getStatus: 'gateway:get-status',
+    testConnection: 'gateway:test-connection',
+    sendMessage: 'gateway:send-message',
+    listMessages: 'gateway:list-messages'
+  },
+
+  /** 看板任务管理 CRUD + 移动/看板管理 */
+  kanban: {
+    listTasks: 'kanban:list-tasks',
+    getTask: 'kanban:get-task',
+    addTask: 'kanban:add-task',
+    updateTask: 'kanban:update-task',
+    deleteTask: 'kanban:delete-task',
+    moveTask: 'kanban:move-task',
+    listBoards: 'kanban:list-boards',
+    getBoard: 'kanban:get-board',
+    addBoard: 'kanban:add-board',
+    updateBoard: 'kanban:update-board',
+    deleteBoard: 'kanban:delete-board'
+  },
+
+  /** 灵魂配置管理 CRUD + 激活/模板管理 */
+  soul: {
+    list: 'soul:list',
+    get: 'soul:get',
+    add: 'soul:add',
+    update: 'soul:update',
+    delete: 'soul:delete',
+    setActive: 'soul:set-active',
+    addTemplate: 'soul:add-template',
+    updateTemplate: 'soul:update-template',
+    deleteTemplate: 'soul:delete-template'
   }
 } as const

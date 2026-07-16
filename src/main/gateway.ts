@@ -122,7 +122,7 @@ export async function getStatus(platformId: string): Promise<GatewayStatus> {
 }
 
 /** Test connection to a gateway platform */
-export async function testConnection(request: GatewayTestRequest): Promise<GatewayTestResult> {
+export async function testConnection(_request: GatewayTestRequest): Promise<GatewayTestResult> {
   const startTime = Date.now()
   await new Promise(resolve => setTimeout(resolve, 100))
   const latency = Date.now() - startTime
