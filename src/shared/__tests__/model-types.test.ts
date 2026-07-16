@@ -38,6 +38,7 @@ describe('Model Types', () => {
     expect(ModelProvider.ANTHROPIC).toBe('anthropic')
     expect(ModelProvider.GOOGLE).toBe('google')
     expect(ModelProvider.OPENROUTER).toBe('openrouter')
+    expect(ModelProvider.CUSTOM).toBe('custom')
   })
 
   it('should support optional fields in ModelConfig', () => {
