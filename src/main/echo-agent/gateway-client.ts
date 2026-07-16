@@ -1,3 +1,5 @@
+import WebSocket from 'ws'
+
 export type Frame = Record<string, unknown>
 
 const CONTROL_TYPES = new Set(['auth_ok', 'accepted', 'pong', 'auth'])
@@ -34,6 +36,7 @@ export interface WsLike {
   send(data: string): void
   close(): void
   on(ev: 'open' | 'message' | 'close' | 'error', cb: (arg?: unknown) => void): void
+  readonly readyState: number
 }
 
 export interface GatewayClientDeps {
@@ -66,6 +69,7 @@ export class GatewayClient {
   private pendingSend: string | null = null
   private closing = false
   private reconnectAttempts = 0
+  private activeRequests = new Map<string, AbortController>()
 
   constructor(private deps: GatewayClientDeps) {}
 
@@ -103,6 +107,9 @@ export class GatewayClient {
   }
 
   send(text: string, attachments?: Array<{ id: string; name: string }>): void {
+    const controller = new AbortController()
+    this.activeRequests.set(this.chatId, controller)
+
     const frame = JSON.stringify({ type: 'message', text, attachments })
     if (this.ws && this.authed) {
       this.ws.send(frame)
@@ -123,6 +130,24 @@ export class GatewayClient {
     this.ws = null
     this.authed = false
     this.pendingSend = null
+    // 清理所有活跃请求
+    for (const controller of this.activeRequests.values()) {
+      controller.abort()
+    }
+    this.activeRequests.clear()
+  }
+
+  abort(chatId: string): void {
+    const controller = this.activeRequests.get(chatId)
+    if (controller) {
+      controller.abort()
+      this.activeRequests.delete(chatId)
+    }
+
+    // 如果 WS 协议支持 abort 帧，发送它
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'abort', chatId }))
+    }
   }
 
   private sendAuth(): void {
@@ -152,8 +177,13 @@ export class GatewayClient {
       }
       return
     }
-    for (const ev of translateFrame(frame, this.chatId)) {
+    const events = translateFrame(frame, this.chatId)
+    for (const ev of events) {
       this.deps.emit(ev)
+      // 流完成或出错时清理活跃请求
+      if (ev.type === 'done' || ev.type === 'error') {
+        this.activeRequests.delete(this.chatId)
+      }
     }
   }
 
