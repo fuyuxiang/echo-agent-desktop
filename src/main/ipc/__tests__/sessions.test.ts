@@ -25,7 +25,7 @@ const { handlers, sessionService } = vi.hoisted(() => {
       updatedAt: '',
       messageCount: 0,
       isActive: true,
-      ...(data as Record<string, unknown>)?.session
+      ...((data as Record<string, unknown>)?.session ?? {})
     }))
   }
   return { handlers, sessionService }
@@ -71,7 +71,7 @@ describe('session IPC handlers', () => {
       total: 1,
       groupedByDate: { today: [{ id: 's1', title: 'Test' }], yesterday: [], thisWeek: [], older: [] }
     }
-    sessionService.listSessions.mockResolvedValueOnce(fakeResponse)
+    sessionService.listSessions.mockResolvedValueOnce(fakeResponse as any)
     const result = await invoke(IpcChannels.sessions.list)
     expect(sessionService.listSessions).toHaveBeenCalled()
     expect(result).toEqual(fakeResponse)
@@ -79,7 +79,7 @@ describe('session IPC handlers', () => {
 
   it('sessions:get passes id to getSession', async () => {
     const fakeSession = { id: 's1', title: 'Test Session' }
-    sessionService.getSession.mockResolvedValueOnce(fakeSession)
+    sessionService.getSession.mockResolvedValueOnce(fakeSession as any)
     const result = await invoke(IpcChannels.sessions.get, 's1')
     expect(sessionService.getSession).toHaveBeenCalledWith('s1')
     expect(result).toEqual(fakeSession)
@@ -102,7 +102,7 @@ describe('session IPC handlers', () => {
   it('sessions:search passes request to searchSessions', async () => {
     const req = { query: 'python', limit: 10 }
     const response = { results: [{ id: 's1', title: 'Python Tutorial' }], total: 1, query: 'python' }
-    sessionService.searchSessions.mockResolvedValueOnce(response)
+    sessionService.searchSessions.mockResolvedValueOnce(response as any)
     const result = await invoke(IpcChannels.sessions.search, req)
     expect(sessionService.searchSessions).toHaveBeenCalledWith(req)
     expect(result).toEqual(response)
@@ -115,7 +115,7 @@ describe('session IPC handlers', () => {
       exportedAt: '2024-01-01',
       version: '1.0.0'
     }
-    sessionService.exportSession.mockResolvedValueOnce(exportData)
+    sessionService.exportSession.mockResolvedValueOnce(exportData as any)
     const result = await invoke(IpcChannels.sessions.export, 's1')
     expect(sessionService.exportSession).toHaveBeenCalledWith('s1')
     expect(result).toEqual(exportData)
