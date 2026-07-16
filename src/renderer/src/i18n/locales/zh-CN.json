@@ -242,5 +242,23 @@
     "allowSession": "本次会话允许 {{program}}",
     "allowSessionHint": "本次会话内不再询问 {{program}} 命令",
     "deny": "拒绝"
+  },
+  "models": {
+    "title": "模型管理",
+    "addModel": "添加模型",
+    "loading": "加载中...",
+    "noModels": "暂无模型配置",
+    "tokens": "tokens",
+    "setActive": "设为活跃",
+    "edit": "编辑",
+    "remove": "移除",
+    "editModel": "编辑模型",
+    "name": "名称",
+    "provider": "服务商",
+    "contextWindow": "上下文窗口",
+    "maxTokens": "最大 Token 数",
+    "update": "更新",
+    "add": "添加",
+    "cancel": "取消"
   }
 }

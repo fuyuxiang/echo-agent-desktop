@@ -242,5 +242,23 @@
     "allowSession": "Allow {{program}} this session",
     "allowSessionHint": "Won't ask again for {{program}} this session",
     "deny": "Deny"
+  },
+  "models": {
+    "title": "Models",
+    "addModel": "Add Model",
+    "loading": "Loading...",
+    "noModels": "No models configured",
+    "tokens": "tokens",
+    "setActive": "Set Active",
+    "edit": "Edit",
+    "remove": "Remove",
+    "editModel": "Edit Model",
+    "name": "Name",
+    "provider": "Provider",
+    "contextWindow": "Context Window",
+    "maxTokens": "Max Tokens",
+    "update": "Update",
+    "add": "Add",
+    "cancel": "Cancel"
   }
 }
