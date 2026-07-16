@@ -1,0 +1,243 @@
+.container {
+  padding: $spacing-xl;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: $spacing-xl;
+}
+
+.addButton {
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  padding: $spacing-sm $spacing-md;
+  border-radius: $radius-md;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--color-primary-hover);
+  }
+}
+
+.error {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  padding: $spacing-md;
+  border-radius: $radius-md;
+  margin-bottom: $spacing-xl;
+}
+
+.loading {
+  text-align: center;
+  padding: $spacing-xl;
+}
+
+.empty {
+  text-align: center;
+  padding: $spacing-xxl;
+  color: var(--color-text-2);
+}
+
+.board {
+  display: flex;
+  gap: $spacing-md;
+  overflow-x: auto;
+  padding-bottom: $spacing-md;
+}
+
+.column {
+  min-width: 250px;
+  max-width: 300px;
+  background: var(--color-bg-2);
+  border-radius: $radius-md;
+  padding: $spacing-md;
+}
+
+.columnHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: $spacing-md;
+  padding-bottom: $spacing-sm;
+  border-bottom: 1px solid var(--color-border);
+
+  h3 {
+    margin: 0;
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    color: var(--color-text-2);
+  }
+}
+
+.taskCount {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  padding: $spacing-xs $spacing-sm;
+  border-radius: $radius-sm;
+  font-size: 0.75rem;
+}
+
+.columnContent {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+}
+
+.taskCard {
+  background: var(--color-bg-1);
+  border: 1px solid var(--color-border);
+  border-radius: $radius-md;
+  padding: $spacing-md;
+}
+
+.taskHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: $spacing-sm;
+
+  h4 {
+    margin: 0;
+    font-size: 0.875rem;
+  }
+}
+
+.priority {
+  padding: $spacing-xs $spacing-sm;
+  border-radius: $radius-sm;
+  font-size: 0.75rem;
+  font-weight: bold;
+
+  &.low {
+    background: var(--color-success-soft);
+    color: var(--color-success);
+  }
+
+  &.medium {
+    background: var(--color-warning-soft);
+    color: var(--color-warning);
+  }
+
+  &.high {
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+  }
+
+  &.critical {
+    background: var(--color-danger);
+    color: white;
+  }
+}
+
+.taskDescription {
+  margin: 0 0 $spacing-sm 0;
+  font-size: 0.8125rem;
+  color: var(--color-text-2);
+  line-height: 1.4;
+}
+
+.assignee {
+  font-size: 0.75rem;
+  color: var(--color-text-3);
+  margin-bottom: $spacing-sm;
+}
+
+.taskActions {
+  display: flex;
+  gap: $spacing-xs;
+  flex-wrap: wrap;
+}
+
+.editButton {
+  background: var(--color-warning);
+  color: var(--color-text-1);
+  border: none;
+  padding: $spacing-xs $spacing-sm;
+  border-radius: $radius-sm;
+  cursor: pointer;
+  font-size: 0.75rem;
+
+  &:hover {
+    background: var(--color-warning-hover);
+  }
+}
+
+.deleteButton {
+  background: var(--color-danger);
+  color: white;
+  border: none;
+  padding: $spacing-xs $spacing-sm;
+  border-radius: $radius-sm;
+  cursor: pointer;
+  font-size: 0.75rem;
+
+  &:hover {
+    background: var(--color-danger-hover);
+  }
+}
+
+.statusSelect {
+  padding: $spacing-xs $spacing-sm;
+  border: 1px solid var(--color-border);
+  border-radius: $radius-sm;
+  font-size: 0.75rem;
+  background: var(--color-bg-1);
+}
+
+.form {
+  max-width: 500px;
+}
+
+.field {
+  margin-bottom: $spacing-md;
+
+  label {
+    display: block;
+    margin-bottom: $spacing-xs;
+    font-weight: bold;
+  }
+
+  input,
+  select,
+  textarea {
+    width: 100%;
+    padding: $spacing-sm;
+    border: 1px solid var(--color-border);
+    border-radius: $radius-md;
+  }
+
+  textarea {
+    min-height: 100px;
+    resize: vertical;
+  }
+}
+
+.submitButton {
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  padding: $spacing-sm $spacing-md;
+  border-radius: $radius-md;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--color-primary-hover);
+  }
+}
+
+.cancelButton {
+  background: var(--color-text-2);
+  color: white;
+  border: none;
+  padding: $spacing-sm $spacing-md;
+  border-radius: $radius-md;
+  cursor: pointer;
+  margin-left: $spacing-sm;
+
+  &:hover {
+    background: var(--color-text-3);
+  }
+}
