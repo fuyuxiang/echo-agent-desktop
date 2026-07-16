@@ -56,4 +56,13 @@ describe('runtime-client agentWs', () => {
     })
     expect(got[0].progressType).toBe('memory_retrieved')
   })
+
+  it('route 过滤不同 chatId 的事件', async () => {
+    const ws = await load()
+    ws.connect('', 'c1')
+    const got: unknown[] = []
+    ws.on('message.streaming', (p) => got.push(p))
+    eventHandler!({ type: 'streaming', chatId: 'c2', delta: 'Leak', phase: 'text' })
+    expect(got.length).toBe(0)
+  })
 })
