@@ -72,8 +72,7 @@ describe('Model Store', () => {
       name: 'gpt-4',
       provider: 'openai',
       contextWindow: 128000,
-      maxTokens: 4096,
-      isActive: false
+      maxTokens: 4096
     }
     await useModelStore.getState().addModel(newModel)
     const state = useModelStore.getState()
@@ -89,8 +88,7 @@ describe('Model Store', () => {
       name: 'gpt-4',
       provider: 'openai',
       contextWindow: 128000,
-      maxTokens: 4096,
-      isActive: false
+      maxTokens: 4096
     })
     const model = useModelStore.getState().models[0]
 
@@ -111,8 +109,7 @@ describe('Model Store', () => {
       name: 'gpt-4',
       provider: 'openai',
       contextWindow: 128000,
-      maxTokens: 4096,
-      isActive: false
+      maxTokens: 4096
     })
     const model = useModelStore.getState().models[0]
 
@@ -129,15 +126,13 @@ describe('Model Store', () => {
       name: 'gpt-4',
       provider: 'openai',
       contextWindow: 128000,
-      maxTokens: 4096,
-      isActive: false
+      maxTokens: 4096
     })
     await useModelStore.getState().addModel({
       name: 'claude-3',
       provider: 'anthropic',
       contextWindow: 200000,
-      maxTokens: 4096,
-      isActive: false
+      maxTokens: 4096
     })
 
     const model = useModelStore.getState().models[0]
@@ -180,8 +175,7 @@ describe('Model Store', () => {
       name: 'gpt-4',
       provider: 'openai',
       contextWindow: 128000,
-      maxTokens: 4096,
-      isActive: true
+      maxTokens: 4096
     })
     const model = useModelStore.getState().models[0]
     expect(useModelStore.getState().activeModel?.id).toBe(model.id)

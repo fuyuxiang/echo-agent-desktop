@@ -10,8 +10,6 @@ export function ProviderSection(): React.JSX.Element {
     loading,
     error,
     fetchProviders,
-    addProvider,
-    updateProvider,
     removeProvider,
     testProvider
   } = useProviderStore()
