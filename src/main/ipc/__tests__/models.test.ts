@@ -47,7 +47,7 @@ describe('model IPC handlers', () => {
   })
 
   it('models:list delegates to listModels', async () => {
-    modelService.listModels.mockResolvedValueOnce({ models: [{ id: 'm1' }], total: 1 })
+    modelService.listModels.mockResolvedValueOnce({ models: [{ id: 'm1' }], total: 1 } as any)
     const result = await invoke(IpcChannels.models.list)
     expect(modelService.listModels).toHaveBeenCalled()
     expect(result).toEqual({ models: [{ id: 'm1' }], total: 1 })
@@ -55,7 +55,7 @@ describe('model IPC handlers', () => {
 
   it('models:get passes id to getModel', async () => {
     const fakeModel = { id: 'm1', name: 'GPT-4' }
-    modelService.getModel.mockResolvedValueOnce(fakeModel)
+    modelService.getModel.mockResolvedValueOnce(fakeModel as any)
     const result = await invoke(IpcChannels.models.get, 'm1')
     expect(modelService.getModel).toHaveBeenCalledWith('m1')
     expect(result).toEqual(fakeModel)
