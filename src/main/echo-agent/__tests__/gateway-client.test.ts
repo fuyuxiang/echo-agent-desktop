@@ -1,5 +1,4 @@
 import { describe, it, expect, vi } from 'vitest'
-import WebSocket from 'ws'
 import { translateFrame, GatewayClient, type WsLike, type Frame } from '../gateway-client'
 
 // importing ../index pulls in electron-log/main, which is not usable in tests

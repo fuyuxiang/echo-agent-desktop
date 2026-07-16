@@ -175,8 +175,9 @@ describe('Model Store', () => {
       name: 'gpt-4',
       provider: 'openai',
       contextWindow: 128000,
-      maxTokens: 4096
-    })
+      maxTokens: 4096,
+      isActive: true
+    } as any)
     const model = useModelStore.getState().models[0]
     expect(useModelStore.getState().activeModel?.id).toBe(model.id)
 

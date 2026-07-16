@@ -75,6 +75,9 @@ function installApi(): BridgeApi {
       active: vi.fn(async () => ['ppt']),
       activate: vi.fn(async () => ({ success: true })),
       deactivate: vi.fn(async () => ({ success: true }))
+    },
+    echoAgent: {
+      getEndpoint: vi.fn(async () => ({ baseUrl: 'https://agent.local', apiPrefix: '/api/v1', wsPath: '/ws' }))
     }
   } as unknown as BridgeApi
   window.api = api
