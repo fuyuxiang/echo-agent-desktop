@@ -1,4 +1,3 @@
-import Store from 'electron-store'
 import { randomUUID } from 'crypto'
 import type {
   ModelConfig,
@@ -6,22 +5,20 @@ import type {
   ModelAddRequest,
   ModelUpdateRequest
 } from '../shared/model-types'
+import { storeGet, storeSet } from './store'
 
-interface ModelsStore {
-  models: ModelConfig[]
-  activeModelId: string | null
+/** 读取模型列表 */
+function getModels(): ModelConfig[] {
+  return storeGet<ModelConfig[]>('models.models') ?? []
 }
 
-const store = new Store<ModelsStore>({
-  name: 'models',
-  defaults: {
-    models: [],
-    activeModelId: null
-  }
-})
+/** 读取当前激活模型 ID */
+function getActiveModelId(): string | null {
+  return storeGet<string | null>('models.activeModelId') ?? null
+}
 
 export async function listModels(): Promise<ModelListResponse> {
-  const models = store.get('models', [])
+  const models = getModels()
   return {
     models,
     total: models.length
@@ -29,12 +26,12 @@ export async function listModels(): Promise<ModelListResponse> {
 }
 
 export async function getModel(id: string): Promise<ModelConfig | null> {
-  const models = store.get('models', [])
+  const models = getModels()
   return models.find(m => m.id === id) || null
 }
 
 export async function addModel(request: ModelAddRequest): Promise<ModelConfig> {
-  const models = store.get('models', [])
+  const models = getModels()
   const isFirstModel = models.length === 0
   const newModel: ModelConfig = {
     id: randomUUID(),
@@ -49,15 +46,15 @@ export async function addModel(request: ModelAddRequest): Promise<ModelConfig> {
     updatedAt: new Date().toISOString()
   }
   models.push(newModel)
-  store.set('models', models)
+  storeSet('models.models', models)
   if (isFirstModel) {
-    store.set('activeModelId', newModel.id)
+    storeSet('models.activeModelId', newModel.id)
   }
   return newModel
 }
 
 export async function updateModel(request: ModelUpdateRequest): Promise<ModelConfig> {
-  const models = store.get('models', [])
+  const models = getModels()
   const index = models.findIndex(m => m.id === request.id)
   if (index === -1) {
     throw new Error(`Model not found: ${request.id}`)
@@ -68,32 +65,32 @@ export async function updateModel(request: ModelUpdateRequest): Promise<ModelCon
     updatedAt: new Date().toISOString()
   }
   models[index] = updated
-  store.set('models', models)
+  storeSet('models.models', models)
   return updated
 }
 
 export async function removeModel(id: string): Promise<void> {
-  const models = store.get('models', [])
+  const models = getModels()
   const filtered = models.filter(m => m.id !== id)
-  if (store.get('activeModelId') === id) {
+  if (getActiveModelId() === id) {
     const newActiveId = filtered.length > 0 ? filtered[0].id : null
     const updated = filtered.map(m => ({
       ...m,
       isActive: m.id === newActiveId
     }))
-    store.set('models', updated)
-    store.set('activeModelId', newActiveId)
+    storeSet('models.models', updated)
+    storeSet('models.activeModelId', newActiveId)
   } else {
-    store.set('models', filtered)
+    storeSet('models.models', filtered)
   }
 }
 
 export async function setActiveModel(id: string): Promise<void> {
-  const models = store.get('models', [])
+  const models = getModels()
   const updated = models.map(m => ({
     ...m,
     isActive: m.id === id
   }))
-  store.set('models', updated)
-  store.set('activeModelId', id)
+  storeSet('models.models', updated)
+  storeSet('models.activeModelId', id)
 }
