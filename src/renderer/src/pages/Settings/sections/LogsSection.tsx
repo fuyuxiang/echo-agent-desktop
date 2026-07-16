@@ -40,7 +40,7 @@ export function LogsSection(): React.JSX.Element {
         <button onClick={clearLogs} className={styles.clearButton}>
           {t('settings.clearLogs')}
         </button>
-        <button onClick={fetchLogs} className={styles.refreshButton}>
+        <button onClick={() => void fetchLogs()} className={styles.refreshButton}>
           {t('settings.refresh')}
         </button>
       </div>

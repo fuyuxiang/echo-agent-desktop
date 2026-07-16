@@ -9,7 +9,6 @@ export default function SoulPage(): React.JSX.Element {
   const { t } = useTranslation()
   const {
     souls,
-    activeSoul,
     loading,
     error,
     fetchSouls,

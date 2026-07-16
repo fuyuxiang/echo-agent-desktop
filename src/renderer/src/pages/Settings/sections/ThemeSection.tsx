@@ -14,7 +14,6 @@ export function ThemeSection(): React.JSX.Element {
     e.preventDefault()
     if (settings) {
       await updateSettings({
-        id: settings.id,
         theme
       })
     }

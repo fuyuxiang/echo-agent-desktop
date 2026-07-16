@@ -33,9 +33,11 @@ export const useSettingsStore = create<SettingsState>()(
       },
 
       updateSettings: async (request) => {
+        const currentId = get().settings?.id
+        if (!currentId) return
         set({ loading: true, error: null })
         try {
-          const settings = await window.api.settings.update(request)
+          const settings = await window.api.settings.update({ id: currentId, ...request })
           set({ settings, loading: false })
         } catch (error) {
           set({ error: error instanceof Error ? error.message : String(error), loading: false })

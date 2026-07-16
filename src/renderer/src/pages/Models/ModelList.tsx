@@ -12,7 +12,6 @@ interface ModelListProps {
 
 export default function ModelList({
   models,
-  activeModel,
   onEdit,
   onRemove,
   onSetActive
