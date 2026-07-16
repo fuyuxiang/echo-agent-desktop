@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { IpcChannels } from '@shared/ipc-channels'
 import {
+  createSession,
   listSessions,
   getSession,
   updateSession,
@@ -17,6 +18,10 @@ import type {
 
 /** 注册 sessions:* IPC handler */
 export function registerSessionIpcHandlers(): void {
+  ipcMain.handle(IpcChannels.sessions.create, (_e, request: { title: string; metadata?: Record<string, unknown> }) =>
+    createSession(request)
+  )
+
   ipcMain.handle(IpcChannels.sessions.list, () => listSessions())
 
   ipcMain.handle(IpcChannels.sessions.get, (_e, id: string) => getSession(id))

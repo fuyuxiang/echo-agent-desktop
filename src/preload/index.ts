@@ -12,6 +12,9 @@ import type {
   SaveDialogOptions
 } from '@shared/types'
 import type { MeetingSummaryInput, SegmentDTO } from '@shared/types/meeting'
+import type { SessionUpdateRequest, SessionSearchRequest, SessionImportData } from '@shared/session-types'
+import type { ProfileAddRequest, ProfileUpdateRequest, ProfileImportData } from '@shared/profile-types'
+import type { ScheduleAddRequest, ScheduleUpdateRequest, ScheduleExecutionLog } from '@shared/schedule-types'
 import { IpcChannels } from '@shared/ipc-channels'
 
 /**
@@ -244,6 +247,40 @@ const api: BridgeApi = {
     update: (request: ProviderUpdateRequest) => ipcRenderer.invoke(IpcChannels.providers.update, request),
     remove: (id: string) => ipcRenderer.invoke(IpcChannels.providers.remove, id),
     test: (request: ProviderTestRequest) => ipcRenderer.invoke(IpcChannels.providers.test, request)
+  },
+
+  sessions: {
+    create: (request: { title: string; metadata?: Record<string, unknown> }) =>
+      ipcRenderer.invoke(IpcChannels.sessions.create, request),
+    list: () => ipcRenderer.invoke(IpcChannels.sessions.list),
+    get: (id: string) => ipcRenderer.invoke(IpcChannels.sessions.get, id),
+    update: (request: SessionUpdateRequest) => ipcRenderer.invoke(IpcChannels.sessions.update, request),
+    delete: (id: string) => ipcRenderer.invoke(IpcChannels.sessions.delete, id),
+    search: (request: SessionSearchRequest) => ipcRenderer.invoke(IpcChannels.sessions.search, request),
+    export: (id: string) => ipcRenderer.invoke(IpcChannels.sessions.export, id),
+    import: (data: SessionImportData) => ipcRenderer.invoke(IpcChannels.sessions.import, data)
+  },
+
+  profiles: {
+    list: () => ipcRenderer.invoke(IpcChannels.profiles.list),
+    get: (id: string) => ipcRenderer.invoke(IpcChannels.profiles.get, id),
+    add: (request: ProfileAddRequest) => ipcRenderer.invoke(IpcChannels.profiles.add, request),
+    update: (request: ProfileUpdateRequest) => ipcRenderer.invoke(IpcChannels.profiles.update, request),
+    delete: (id: string) => ipcRenderer.invoke(IpcChannels.profiles.delete, id),
+    setActive: (id: string) => ipcRenderer.invoke(IpcChannels.profiles.setActive, id),
+    export: (id: string) => ipcRenderer.invoke(IpcChannels.profiles.export, id),
+    import: (data: ProfileImportData) => ipcRenderer.invoke(IpcChannels.profiles.import, data)
+  },
+
+  schedules: {
+    list: () => ipcRenderer.invoke(IpcChannels.schedules.list),
+    get: (id: string) => ipcRenderer.invoke(IpcChannels.schedules.get, id),
+    add: (request: ScheduleAddRequest) => ipcRenderer.invoke(IpcChannels.schedules.add, request),
+    update: (request: ScheduleUpdateRequest) => ipcRenderer.invoke(IpcChannels.schedules.update, request),
+    delete: (id: string) => ipcRenderer.invoke(IpcChannels.schedules.delete, id),
+    toggle: (id: string) => ipcRenderer.invoke(IpcChannels.schedules.toggle, id),
+    listLogs: (scheduleId: string) => ipcRenderer.invoke(IpcChannels.schedules.listLogs, scheduleId),
+    addLog: (log: Omit<ScheduleExecutionLog, 'id'>) => ipcRenderer.invoke(IpcChannels.schedules.addLog, log)
   },
 
   platform: {

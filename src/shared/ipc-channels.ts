@@ -195,6 +195,7 @@ export const IpcChannels = {
 
   /** 会话管理 CRUD + 搜索/导入导出 */
   sessions: {
+    create: 'sessions:create',
     list: 'sessions:list',
     get: 'sessions:get',
     update: 'sessions:update',
@@ -202,5 +203,29 @@ export const IpcChannels = {
     search: 'sessions:search',
     export: 'sessions:export',
     import: 'sessions:import'
+  },
+
+  /** 用户配置管理 CRUD + 激活/导入导出 */
+  profiles: {
+    list: 'profiles:list',
+    get: 'profiles:get',
+    add: 'profiles:add',
+    update: 'profiles:update',
+    delete: 'profiles:delete',
+    setActive: 'profiles:set-active',
+    export: 'profiles:export',
+    import: 'profiles:import'
+  },
+
+  /** 定时任务管理 CRUD + 执行日志 */
+  schedules: {
+    list: 'schedules:list',
+    get: 'schedules:get',
+    add: 'schedules:add',
+    update: 'schedules:update',
+    delete: 'schedules:delete',
+    toggle: 'schedules:toggle',
+    listLogs: 'schedules:list-logs',
+    addLog: 'schedules:add-log'
   }
 } as const

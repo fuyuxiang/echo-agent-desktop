@@ -15,6 +15,9 @@ import type {
 import type { MeetingDTO, SegmentDTO, SummaryDTO, MeetingSummaryInput } from './meeting'
 import type { ModelConfig, ModelListResponse, ModelAddRequest, ModelUpdateRequest } from '../model-types'
 import type { ProviderConfig, ProviderListResponse, ProviderAddRequest, ProviderUpdateRequest, ProviderTestResult, ProviderTestRequest } from '../provider-types'
+import type { SessionConfig, SessionListResponse, SessionSearchRequest, SessionSearchResponse, SessionExportData, SessionImportData, SessionUpdateRequest } from '../session-types'
+import type { ProfileConfig, ProfileListResponse, ProfileAddRequest, ProfileUpdateRequest, ProfileExportData, ProfileImportData } from '../profile-types'
+import type { ScheduleConfig, ScheduleListResponse, ScheduleAddRequest, ScheduleUpdateRequest, ScheduleExecutionLog, ScheduleExecutionLogResponse } from '../schedule-types'
 
 /**
  * echo-agent 进程状态(与 main 端 echo-agent/types.ts 字段一致;shared 不依赖 main)
@@ -356,5 +359,65 @@ export interface BridgeApi {
     remove: (id: string) => Promise<void>
     /** 测试提供商连接 */
     test: (request: ProviderTestRequest) => Promise<ProviderTestResult>
+  }
+
+  /** 会话管理 CRUD + 搜索/导入导出 */
+  sessions: {
+    /** 创建新会话 */
+    create: (request: { title: string; metadata?: Record<string, unknown> }) => Promise<SessionConfig>
+    /** 查询全部会话(按日期分组) */
+    list: () => Promise<SessionListResponse>
+    /** 查询单个会话 */
+    get: (id: string) => Promise<SessionConfig | null>
+    /** 更新会话 */
+    update: (request: SessionUpdateRequest) => Promise<SessionConfig>
+    /** 删除会话及其关联消息 */
+    delete: (id: string) => Promise<void>
+    /** 搜索会话 */
+    search: (request: SessionSearchRequest) => Promise<SessionSearchResponse>
+    /** 导出会话及消息 */
+    export: (id: string) => Promise<SessionExportData>
+    /** 导入会话及消息 */
+    import: (data: SessionImportData) => Promise<SessionConfig>
+  }
+
+  /** 用户配置管理 CRUD + 激活/导入导出 */
+  profiles: {
+    /** 查询全部配置 */
+    list: () => Promise<ProfileListResponse>
+    /** 查询单个配置 */
+    get: (id: string) => Promise<ProfileConfig | null>
+    /** 新增配置 */
+    add: (request: ProfileAddRequest) => Promise<ProfileConfig>
+    /** 更新配置 */
+    update: (request: ProfileUpdateRequest) => Promise<ProfileConfig>
+    /** 删除配置 */
+    delete: (id: string) => Promise<void>
+    /** 设置激活配置 */
+    setActive: (id: string) => Promise<void>
+    /** 导出配置 */
+    export: (id: string) => Promise<ProfileExportData>
+    /** 导入配置 */
+    import: (data: ProfileImportData) => Promise<ProfileConfig>
+  }
+
+  /** 定时任务管理 CRUD + 执行日志 */
+  schedules: {
+    /** 查询全部定时任务 */
+    list: () => Promise<ScheduleListResponse>
+    /** 查询单个定时任务 */
+    get: (id: string) => Promise<ScheduleConfig | null>
+    /** 新增定时任务 */
+    add: (request: ScheduleAddRequest) => Promise<ScheduleConfig>
+    /** 更新定时任务 */
+    update: (request: ScheduleUpdateRequest) => Promise<ScheduleConfig>
+    /** 删除定时任务 */
+    delete: (id: string) => Promise<void>
+    /** 切换定时任务启用状态 */
+    toggle: (id: string) => Promise<ScheduleConfig>
+    /** 查询执行日志 */
+    listLogs: (scheduleId: string) => Promise<ScheduleExecutionLogResponse>
+    /** 添加执行日志 */
+    addLog: (log: Omit<ScheduleExecutionLog, 'id'>) => Promise<ScheduleExecutionLog>
   }
 }
