@@ -6,7 +6,7 @@ interface TaskListProps {
   tasks: KanbanTask[]
   onEdit: (task: KanbanTask) => void
   onDelete: (id: string) => void
-  onMove: (taskId: string, status: string) => void
+  onMove: (taskId: string, status: KanbanStatus) => void
 }
 
 const KANBAN_COLUMNS: { status: KanbanStatus; label: string }[] = [
@@ -82,7 +82,7 @@ export default function TaskList({
                     </button>
                     <select
                       value={task.status}
-                      onChange={(e) => onMove(task.id, e.target.value)}
+                      onChange={(e) => onMove(task.id, e.target.value as KanbanStatus)}
                       className={styles.statusSelect}
                     >
                       {KANBAN_COLUMNS.map((col) => (

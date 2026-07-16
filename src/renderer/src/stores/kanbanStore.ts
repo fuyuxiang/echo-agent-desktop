@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { KanbanTask, KanbanAddRequest, KanbanUpdateRequest } from '@shared/kanban-types'
+import type { KanbanTask, KanbanAddRequest, KanbanUpdateRequest, KanbanStatus } from '@shared/kanban-types'
 
 interface KanbanState {
   tasks: KanbanTask[]
@@ -9,7 +9,7 @@ interface KanbanState {
   addTask: (request: KanbanAddRequest) => Promise<void>
   updateTask: (request: KanbanUpdateRequest) => Promise<void>
   deleteTask: (id: string) => Promise<void>
-  moveTask: (id: string, status: string) => Promise<void>
+  moveTask: (id: string, status: KanbanStatus) => Promise<void>
 }
 
 export const useKanbanStore = create<KanbanState>((set, get) => ({
@@ -60,10 +60,10 @@ export const useKanbanStore = create<KanbanState>((set, get) => ({
     }
   },
 
-  moveTask: async (id: string, status: string) => {
+  moveTask: async (id: string, status: KanbanStatus) => {
     set({ loading: true, error: null })
     try {
-      const updatedTask = await window.api.kanban.moveTask({ id, status: status as KanbanTask['status'] })
+      const updatedTask = await window.api.kanban.moveTask({ id, status })
       const tasks = get().tasks.map((t) => (t.id === id ? updatedTask : t))
       set({ tasks, loading: false })
     } catch (error) {
