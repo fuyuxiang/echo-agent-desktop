@@ -171,5 +171,15 @@ export const IpcChannels = {
   /** 只读 echo-agent 认知记忆 */
   echoMemory: {
     list: 'echo-memory:list'
+  },
+
+  /** 模型配置 CRUD */
+  models: {
+    list: 'models:list',
+    get: 'models:get',
+    add: 'models:add',
+    update: 'models:update',
+    remove: 'models:remove',
+    setActive: 'models:set-active'
   }
 } as const
