@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { ensureInstalled, updateEchoAgent, ensurePythonExtracted, DEFAULT_PIP_INDEX, type InstallerDeps } from '../installer'
 import type { CommandRunner, CommandResult } from '../types'
+import { InstallationAbortedError } from '../types'
 
 function fakeRunner(result: Partial<CommandResult> = {}): { runner: CommandRunner; calls: string[][] } {
   const calls: string[][] = []
@@ -115,5 +116,55 @@ describe('installer', () => {
     await updateEchoAgent(baseDeps({ runner, pathExists: () => true }))
     const upd = calls.find((c) => c.includes('-U'))
     expect(upd).toContain('echo-agent[all]')
+  })
+})
+
+describe('installer abort behavior', () => {
+  it('throws InstallationAbortedError when signal is already aborted before ensureInstalled', async () => {
+    const ac = new AbortController()
+    ac.abort()
+    const { runner: r } = fakeRunner()
+    await expect(ensureInstalled(baseDeps({ runner: r, abortSignal: ac.signal })))
+      .rejects.toBeInstanceOf(InstallationAbortedError)
+  })
+
+  it('throws InstallationAbortedError when signal is aborted between extraction and venv', async () => {
+    const ac = new AbortController()
+    // pathExists: only archive exists, extracted python and venv do not exist.
+    // This ensures tar actually runs, and ac.abort() is called during it.
+    const pathExists = (p: string) => p.includes('python-standalone')
+    const run: CommandRunner['run'] = vi.fn(async (cmd) => {
+      if (cmd === 'tar') ac.abort()
+      return { code: 0, stdout: '', stderr: '' }
+    })
+    const runner: CommandRunner = { run }
+    await expect(ensureInstalled(baseDeps({ runner, pathExists, abortSignal: ac.signal })))
+      .rejects.toBeInstanceOf(InstallationAbortedError)
+  })
+
+  it('throws InstallationAbortedError when signal is aborted before pip install (during venv creation)', async () => {
+    const ac = new AbortController()
+    // Extracted python exists → extraction skipped. Venv does NOT exist → venv creation runs.
+    // Abort signal during venv creation → check before pip catches it.
+    const pathExists = (p: string) => {
+      if (p.includes('python-standalone')) return true
+      // extracted python exists (but not runtime/venv)
+      return p.includes('/python/') && !p.includes('/runtime')
+    }
+    const run: CommandRunner['run'] = vi.fn(async () => {
+      ac.abort()
+      return { code: 0, stdout: '', stderr: '' }
+    })
+    const runner: CommandRunner = { run }
+    await expect(ensureInstalled(baseDeps({ runner, pathExists, abortSignal: ac.signal })))
+      .rejects.toBeInstanceOf(InstallationAbortedError)
+  })
+
+  it('throws InstallationAbortedError when ensurePythonExtracted is called with aborted signal', async () => {
+    const ac = new AbortController()
+    ac.abort()
+    const { runner: r } = fakeRunner()
+    await expect(ensurePythonExtracted(baseDeps({ runner: r, abortSignal: ac.signal })))
+      .rejects.toBeInstanceOf(InstallationAbortedError)
   })
 })
