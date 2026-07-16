@@ -19,6 +19,9 @@ import type { SessionConfig, SessionListResponse, SessionSearchRequest, SessionS
 import type { ProfileConfig, ProfileListResponse, ProfileAddRequest, ProfileUpdateRequest, ProfileExportData, ProfileImportData } from '../profile-types'
 import type { ScheduleConfig, ScheduleListResponse, ScheduleAddRequest, ScheduleUpdateRequest, ScheduleExecutionLog, ScheduleExecutionLogResponse } from '../schedule-types'
 import type { BackupConfig, BackupListResponse, BackupCreateRequest, BackupRestoreRequest, SettingsConfig, SettingsUpdateRequest, LogListResponse, LogQueryRequest } from '../settings-types'
+import type { GatewayPlatform, GatewayConfig, GatewayStatus, GatewayListResponse, GatewayConfigAddRequest, GatewayConfigUpdateRequest, GatewayTestResult } from '../gateway-types'
+import type { KanbanTask, KanbanBoard, KanbanListResponse, KanbanAddRequest, KanbanUpdateRequest, KanbanMoveRequest } from '../kanban-types'
+import type { SoulConfig, SoulTemplate, SoulListResponse, SoulAddRequest, SoulUpdateRequest } from '../soul-types'
 
 /**
  * echo-agent 进程状态(与 main 端 echo-agent/types.ts 字段一致;shared 不依赖 main)
@@ -320,6 +323,74 @@ export interface BridgeApi {
   logs: {
     /** 查询日志 */
     list: (request?: LogQueryRequest) => Promise<LogListResponse>
+    /** 清空日志 */
+    clear: () => Promise<void>
+  }
+
+  /** 消息网关管理 */
+  gateway: {
+    /** 查询支持的网关平台 */
+    listPlatforms: () => Promise<GatewayPlatform[]>
+    /** 查询全部网关配置(含状态) */
+    listConfigs: () => Promise<GatewayListResponse>
+    /** 新增网关配置 */
+    addConfig: (request: GatewayConfigAddRequest) => Promise<GatewayConfig>
+    /** 更新网关配置 */
+    updateConfig: (request: GatewayConfigUpdateRequest) => Promise<GatewayConfig>
+    /** 删除网关配置 */
+    removeConfig: (id: string) => Promise<void>
+    /** 查询连接状态 */
+    getStatus: (platformId: string) => Promise<GatewayStatus>
+    /** 测试网关连接 */
+    testConnection: (request: { platformId: string }) => Promise<GatewayTestResult>
+  }
+
+  /** 看板任务管理 */
+  kanban: {
+    /** 查询全部任务 */
+    listTasks: () => Promise<KanbanListResponse>
+    /** 查询单个任务 */
+    getTask: (id: string) => Promise<KanbanTask>
+    /** 新增任务 */
+    addTask: (request: KanbanAddRequest) => Promise<KanbanTask>
+    /** 更新任务 */
+    updateTask: (request: KanbanUpdateRequest) => Promise<KanbanTask>
+    /** 删除任务 */
+    deleteTask: (id: string) => Promise<void>
+    /** 移动任务到新状态 */
+    moveTask: (request: KanbanMoveRequest) => Promise<KanbanTask>
+    /** 查询全部看板 */
+    listBoards: () => Promise<KanbanBoard[]>
+    /** 查询单个看板 */
+    getBoard: (id: string) => Promise<KanbanBoard>
+    /** 新增看板 */
+    addBoard: (request: { name: string; metadata?: Record<string, unknown> }) => Promise<KanbanBoard>
+    /** 更新看板 */
+    updateBoard: (request: { id: string; name?: string; metadata?: Record<string, unknown> }) => Promise<KanbanBoard>
+    /** 删除看板 */
+    deleteBoard: (id: string) => Promise<void>
+  }
+
+  /** 灵魂配置管理 */
+  soul: {
+    /** 查询全部灵魂配置(含模板) */
+    list: () => Promise<SoulListResponse>
+    /** 查询单个灵魂配置 */
+    get: (id: string) => Promise<SoulConfig>
+    /** 新增灵魂配置 */
+    add: (request: SoulAddRequest) => Promise<SoulConfig>
+    /** 更新灵魂配置 */
+    update: (request: SoulUpdateRequest) => Promise<SoulConfig>
+    /** 删除灵魂配置 */
+    delete: (id: string) => Promise<void>
+    /** 设置活跃灵魂 */
+    setActive: (id: string) => Promise<SoulConfig>
+    /** 新增模板 */
+    addTemplate: (request: { name: string; content: string; category: string; description?: string }) => Promise<SoulTemplate>
+    /** 更新模板 */
+    updateTemplate: (request: { id: string; name?: string; content?: string; category?: string; description?: string }) => Promise<SoulTemplate>
+    /** 删除模板 */
+    deleteTemplate: (id: string) => Promise<void>
   }
 
   /** echo-agent 进程生命周期 */

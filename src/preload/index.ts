@@ -300,7 +300,44 @@ const api: BridgeApi = {
 
   logs: {
     list: (request?: { level?: string; startTime?: string; endTime?: string; limit?: number; offset?: number }) =>
-      ipcRenderer.invoke(IpcChannels.logs.list, request)
+      ipcRenderer.invoke(IpcChannels.logs.list, request),
+    clear: () => ipcRenderer.invoke(IpcChannels.logs.clear)
+  },
+
+  gateway: {
+    listPlatforms: () => ipcRenderer.invoke(IpcChannels.gateway.listPlatforms),
+    listConfigs: () => ipcRenderer.invoke(IpcChannels.gateway.listConfigs),
+    addConfig: (request) => ipcRenderer.invoke(IpcChannels.gateway.addConfig, request),
+    updateConfig: (request) => ipcRenderer.invoke(IpcChannels.gateway.updateConfig, request),
+    removeConfig: (id) => ipcRenderer.invoke(IpcChannels.gateway.removeConfig, id),
+    getStatus: (platformId) => ipcRenderer.invoke(IpcChannels.gateway.getStatus, platformId),
+    testConnection: (request) => ipcRenderer.invoke(IpcChannels.gateway.testConnection, request)
+  },
+
+  kanban: {
+    listTasks: () => ipcRenderer.invoke(IpcChannels.kanban.listTasks),
+    getTask: (id) => ipcRenderer.invoke(IpcChannels.kanban.getTask, id),
+    addTask: (request) => ipcRenderer.invoke(IpcChannels.kanban.addTask, request),
+    updateTask: (request) => ipcRenderer.invoke(IpcChannels.kanban.updateTask, request),
+    deleteTask: (id) => ipcRenderer.invoke(IpcChannels.kanban.deleteTask, id),
+    moveTask: (request) => ipcRenderer.invoke(IpcChannels.kanban.moveTask, request),
+    listBoards: () => ipcRenderer.invoke(IpcChannels.kanban.listBoards),
+    getBoard: (id) => ipcRenderer.invoke(IpcChannels.kanban.getBoard, id),
+    addBoard: (request) => ipcRenderer.invoke(IpcChannels.kanban.addBoard, request),
+    updateBoard: (request) => ipcRenderer.invoke(IpcChannels.kanban.updateBoard, request),
+    deleteBoard: (id) => ipcRenderer.invoke(IpcChannels.kanban.deleteBoard, id)
+  },
+
+  soul: {
+    list: () => ipcRenderer.invoke(IpcChannels.soul.list),
+    get: (id) => ipcRenderer.invoke(IpcChannels.soul.get, id),
+    add: (request) => ipcRenderer.invoke(IpcChannels.soul.add, request),
+    update: (request) => ipcRenderer.invoke(IpcChannels.soul.update, request),
+    delete: (id) => ipcRenderer.invoke(IpcChannels.soul.delete, id),
+    setActive: (id) => ipcRenderer.invoke(IpcChannels.soul.setActive, id),
+    addTemplate: (request) => ipcRenderer.invoke(IpcChannels.soul.addTemplate, request),
+    updateTemplate: (request) => ipcRenderer.invoke(IpcChannels.soul.updateTemplate, request),
+    deleteTemplate: (id) => ipcRenderer.invoke(IpcChannels.soul.deleteTemplate, id)
   },
 
   platform: {
