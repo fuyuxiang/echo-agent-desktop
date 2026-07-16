@@ -1,4 +1,5 @@
 import type { EchoAgentEndpoint, EchoAgentStatus } from './types'
+import { InstallationAbortedError } from './types'
 import { parseReadySignal } from './ready-signal'
 
 export interface SpawnedProc {
@@ -78,7 +79,7 @@ export class EchoAgentManager {
       )
       this.installed = true
     } catch (e) {
-      if (e instanceof Error && e.message === 'Installation aborted') {
+      if (e instanceof InstallationAbortedError) {
         this.set({ phase: 'idle' })
         return
       }
@@ -201,7 +202,7 @@ export class EchoAgentManager {
         )
         await this.launch()
       } catch (e) {
-        if (e instanceof Error && e.message === 'Installation aborted') {
+        if (e instanceof InstallationAbortedError) {
           this.set({ phase: 'idle' })
           return
         }

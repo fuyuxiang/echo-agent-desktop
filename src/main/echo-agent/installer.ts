@@ -1,5 +1,6 @@
 import { venvDir, venvPython, extractedPython, extractedPythonDir } from './paths'
 import type { CommandRunner } from './types'
+import { InstallationAbortedError } from './types'
 
 // 默认 pip 镜像源:清华(国内首启成功率高)。可经 deps.pipIndexUrl 覆盖。
 export const DEFAULT_PIP_INDEX = 'https://pypi.tuna.tsinghua.edu.cn/simple'
@@ -36,7 +37,7 @@ async function pip(deps: InstallerDeps, args: string[]): Promise<void> {
 // 首启把随包分发的 Python 运行时压缩包解压到用户数据区(~/.echo-agent/python)。
 // 已解压则跳过。打包资源区只读,故必须解压到可写的用户目录后再建 venv。
 export async function ensurePythonExtracted(deps: InstallerDeps): Promise<void> {
-  if (deps.abortSignal?.aborted) throw new Error('Installation aborted')
+  if (deps.abortSignal?.aborted) throw new InstallationAbortedError()
   const py = extractedPython(deps.homeDir, deps.platform)
   if (deps.pathExists(py)) return
   if (!deps.pathExists(deps.pythonArchive)) {
@@ -57,9 +58,9 @@ export async function ensurePythonExtracted(deps: InstallerDeps): Promise<void> 
 }
 
 export async function ensureInstalled(deps: InstallerDeps): Promise<void> {
-  if (deps.abortSignal?.aborted) throw new Error('Installation aborted')
+  if (deps.abortSignal?.aborted) throw new InstallationAbortedError()
   await ensurePythonExtracted(deps)
-  if (deps.abortSignal?.aborted) throw new Error('Installation aborted')
+  if (deps.abortSignal?.aborted) throw new InstallationAbortedError()
   const dir = venvDir(deps.homeDir)
   if (!deps.pathExists(dir)) {
     const bundledPython = extractedPython(deps.homeDir, deps.platform)
@@ -68,7 +69,7 @@ export async function ensureInstalled(deps: InstallerDeps): Promise<void> {
       throw new Error(`创建 venv 失败: ${res.stderr.slice(0, 500) || `exit ${res.code}`}`)
     }
   }
-  if (deps.abortSignal?.aborted) throw new Error('Installation aborted')
+  if (deps.abortSignal?.aborted) throw new InstallationAbortedError()
   await pip(deps, ['install', 'echo-agent[all]'])
 }
 
