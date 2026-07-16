@@ -24,6 +24,7 @@
     "new:page": "plop --plopfile scripts/plopfile.mjs",
     "postinstall": "electron-builder install-app-deps",
     "prepare": "husky",
+    "pretest": "cd tests/native-deps && npm install",
     "test": "vitest run"
   },
   "lint-staged": {
