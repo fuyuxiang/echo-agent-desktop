@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { BridgeApi, EchoAgentStatus, ModelConfigInput, ProjectMemoryMirrorRow } from '@shared/types/api'
+import type { BridgeApi, EchoAgentEndpoint, EchoAgentStatus, ModelConfigInput, ProjectMemoryMirrorRow } from '@shared/types/api'
 import type { ProviderAddRequest, ProviderUpdateRequest, ProviderTestRequest } from '@shared/provider-types'
 import type {
   AgentScopeConfig,
@@ -176,6 +176,8 @@ const api: BridgeApi = {
     getStatus: () => ipcRenderer.invoke(IpcChannels.echoAgent.getStatus),
     getVersion: () => ipcRenderer.invoke(IpcChannels.echoAgent.getVersion),
     update: () => ipcRenderer.invoke(IpcChannels.echoAgent.update),
+    getEndpoint: () =>
+      ipcRenderer.invoke(IpcChannels.echoAgent.getEndpoint) as Promise<EchoAgentEndpoint | null>,
     onStatusChanged: (cb: (s: EchoAgentStatus) => void) => {
       const listener = (_e: Electron.IpcRendererEvent, s: EchoAgentStatus): void => cb(s)
       ipcRenderer.on(IpcChannels.echoAgent.statusChanged, listener)
