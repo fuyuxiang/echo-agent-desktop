@@ -2,34 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const storeMock = vi.hoisted(() => {
   const data = new Map<string, unknown>()
-  class FakeStore {
-    constructor(options?: { defaults?: Record<string, unknown> }) {
-      if (options?.defaults) {
-        for (const [key, value] of Object.entries(options.defaults)) {
-          data.set(key, value)
-        }
-      }
-    }
-    get(key: string, defaultValue?: unknown): unknown {
-      if (data.has(key)) {
-        return data.get(key)
-      }
-      return defaultValue
-    }
-    set(key: string, value: unknown): void {
-      data.set(key, value)
-    }
-    delete(key: string): void {
-      data.delete(key)
-    }
-    clear(): void {
-      data.clear()
-    }
+  return {
+    data,
+    storeGet: vi.fn((key: string) => data.get(key)),
+    storeSet: vi.fn((key: string, value: unknown) => { data.set(key, value) })
   }
-  return { data, FakeStore }
 })
 
-vi.mock('electron-store', () => ({ default: storeMock.FakeStore }))
+vi.mock('../store', () => ({
+  storeGet: storeMock.storeGet,
+  storeSet: storeMock.storeSet
+}))
 
 beforeEach(() => {
   vi.resetModules()
