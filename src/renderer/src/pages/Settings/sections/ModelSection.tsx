@@ -7,6 +7,7 @@ import { useAgentStore } from '@/stores/agentStore'
 interface SavedModelConfig {
   baseUrl: string
   modelName: string
+  apiKey?: string
 }
 
 const LOCAL_CONFIG_KEY = 'modelConfig.local'
@@ -52,7 +53,7 @@ export function ModelSection(): React.JSX.Element {
     setSaving(true)
     try {
       await window.api.store.secureSet(API_KEY_STORE_KEY, key)
-      await storage.set(LOCAL_CONFIG_KEY, { baseUrl: url, modelName: model })
+      await storage.set(LOCAL_CONFIG_KEY, { baseUrl: url, modelName: model, apiKey: key })
       // 写入 echo-agent.yaml 的 models 段并重启进程使配置生效(取代旧的 TS Runtime 装配)
       await window.api.echoConfig.apply({ baseUrl: url, apiKey: key, model })
       useAgentStore.getState().setConfigured(true)
