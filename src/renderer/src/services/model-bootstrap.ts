@@ -33,12 +33,15 @@ export async function applyServerModelConfigAndStart(): Promise<{
     // ① Ollama 本地模型(显式启用,最高优先)
     const localModel = await storage.get<LocalOllamaConfig>(LOCAL_OLLAMA_CONFIG_KEY)
     if (localModel?.enabled && localModel.baseUrl && localModel.modelName) {
+      // 先解除 UI 遮罩再触发装配:apply 会 await 主进程 restart(写 yaml + spawn gateway
+      // + 等 ready 信号,最长 120s,首启还含 pip 安装)。ready 是"UI 可用门",不应被这整条
+      // 后台装配链拖住;configured 仍在 apply 成功后置位,保证发送前能判断 runtime 是否真装好。
+      agent.setReady(true)
       await window.api.echoConfig.apply({
         baseUrl: toOllamaOpenAIBase(localModel.baseUrl),
         apiKey: OLLAMA_PLACEHOLDER_API_KEY,
         model: localModel.modelName
       })
-      agent.setReady(true)
       agent.setConfigured(true)
       logger.info('[model-bootstrap] Ollama 本地模型已装配')
       return { ok: true, configured: true, retryable: false }
@@ -56,12 +59,12 @@ export async function applyServerModelConfigAndStart(): Promise<{
       }
 
       if (cfg?.baseUrl && cfg?.modelName) {
+        agent.setReady(true)
         await window.api.echoConfig.apply({
           baseUrl: cfg.baseUrl,
           apiKey: cfg.apiKey ?? '',
           model: cfg.modelName
         })
-        agent.setReady(true)
         agent.setConfigured(true)
         logger.info(`[model-bootstrap] 服务器配置已装配 model=${cfg.modelName}`)
         return { ok: true, configured: true, retryable: false }
@@ -70,14 +73,18 @@ export async function applyServerModelConfigAndStart(): Promise<{
     }
 
     // ③ 本地手动配置(未登录的唯一来源 / 已登录但服务器未配置的兜底)
-    const localCfg = await storage.get<{ baseUrl: string; modelName: string }>(LOCAL_CONFIG_KEY)
+    const localCfg = await storage.get<{
+      baseUrl: string
+      modelName: string
+      apiKey?: string
+    }>(LOCAL_CONFIG_KEY)
     if (localCfg?.baseUrl && localCfg?.modelName) {
+      agent.setReady(true)
       await window.api.echoConfig.apply({
         baseUrl: localCfg.baseUrl,
-        apiKey: '',
+        apiKey: localCfg.apiKey ?? '',
         model: localCfg.modelName
       })
-      agent.setReady(true)
       agent.setConfigured(true)
       logger.info(`[model-bootstrap] 本地手动配置已装配 model=${localCfg.modelName}`)
       return { ok: true, configured: true, retryable: false }
