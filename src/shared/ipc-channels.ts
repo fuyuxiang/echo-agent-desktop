@@ -152,6 +152,8 @@ export const IpcChannels = {
     getStatus: 'echo:agent:get-status',
     getVersion: 'echo:agent:get-version',
     update: 'echo:agent:update',
+    /** 获取当前 gateway endpoint(baseUrl/apiPrefix/wsPath) */
+    getEndpoint: 'echo:agent:get-endpoint',
     /** 主进程 -> 渲染层:进程状态变化 */
     statusChanged: 'echo:agent:status-changed'
   },
