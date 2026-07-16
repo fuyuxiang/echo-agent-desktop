@@ -13,8 +13,25 @@ class RuntimeClient {
     this._connected = true
   }
 
-  switchSession(chatId: string): void {
+  async switchSession(chatId: string): Promise<void> {
     this.chatId = chatId
+
+    // Load historical messages from DB and replay to UI
+    try {
+      const messages = await window.api.db.session.getMessages(chatId)
+      for (const msg of messages) {
+        this.emit('history.loaded', {
+          chatId,
+          role: msg.role,
+          content: msg.content,
+          reasoning: msg.reasoning ?? undefined,
+          id: msg.id,
+          createdAt: msg.createdAt
+        })
+      }
+    } catch {
+      // Gracefully handle DB read failures — session switch still succeeds
+    }
   }
 
   disconnect(): void {
