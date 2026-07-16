@@ -86,10 +86,9 @@ export async function testProvider(request: ProviderTestRequest): Promise<Provid
     }
   }
 
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10000)
   try {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 10000)
-
     const startTime = Date.now()
     const url = `${provider.baseUrl.replace(/\/+$/, '')}/v1/models`
     const headers: Record<string, string> = {
@@ -105,7 +104,6 @@ export async function testProvider(request: ProviderTestRequest): Promise<Provid
       signal: controller.signal
     })
 
-    clearTimeout(timeout)
     const latency = Date.now() - startTime
 
     if (response.ok) {
@@ -131,5 +129,7 @@ export async function testProvider(request: ProviderTestRequest): Promise<Provid
       message: '连接失败',
       error: error instanceof Error ? error.message : 'Unknown error'
     }
+  } finally {
+    clearTimeout(timeout)
   }
 }
