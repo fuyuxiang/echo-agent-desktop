@@ -42,15 +42,17 @@ export function getEchoAgentManager(): EchoAgentManager {
   const resourcesRoot = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources')
   const pythonArchive = bundledPythonArchive(resourcesRoot, platform, arch)
   manager = new EchoAgentManager({
-    ensureInstalled: (onProgress) =>
+    ensureInstalled: (onProgress, signal) =>
       ensureInstalled({
         runner: nodeCommandRunner, homeDir, platform, pythonArchive,
-        pathExists: (p) => existsSync(p), ensureDir: (p) => { mkdirSync(p, { recursive: true }) }, onProgress
+        pathExists: (p) => existsSync(p), ensureDir: (p) => { mkdirSync(p, { recursive: true }) }, onProgress,
+        abortSignal: signal
       }),
-    update: (onProgress) =>
+    update: (onProgress, signal) =>
       pipUpdate({
         runner: nodeCommandRunner, homeDir, platform, pythonArchive,
-        pathExists: (p) => existsSync(p), ensureDir: (p) => { mkdirSync(p, { recursive: true }) }, onProgress
+        pathExists: (p) => existsSync(p), ensureDir: (p) => { mkdirSync(p, { recursive: true }) }, onProgress,
+        abortSignal: signal
       }),
     spawnGateway: () =>
       spawnGateway({ configPath: configPath(homeDir), workspace: echoHome(homeDir), homeDir, platform }),

@@ -26,7 +26,7 @@ export interface CommandRunner {
   run(
     cmd: string,
     args: string[],
-    opts?: { cwd?: string; env?: Record<string, string>; onStdout?: (chunk: string) => void }
+    opts?: { cwd?: string; env?: Record<string, string>; onStdout?: (chunk: string) => void; signal?: AbortSignal }
   ): Promise<CommandResult>
 }
 

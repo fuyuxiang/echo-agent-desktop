@@ -17,13 +17,16 @@ export interface InstallerDeps {
   // pip 镜像源,默认 DEFAULT_PIP_INDEX。
   pipIndexUrl?: string
   onProgress?: (line: string) => void
+  // 中止信号:manager 退出时 abort 取消正在运行的子进程。
+  abortSignal?: AbortSignal
 }
 
 async function pip(deps: InstallerDeps, args: string[]): Promise<void> {
   const py = venvPython(deps.homeDir, deps.platform)
   const index = deps.pipIndexUrl ?? DEFAULT_PIP_INDEX
   const res = await deps.runner.run(py, ['-m', 'pip', ...args, '-i', index], {
-    onStdout: deps.onProgress
+    onStdout: deps.onProgress,
+    signal: deps.abortSignal
   })
   if (res.code !== 0) {
     throw new Error(`pip ${args.join(' ')} 失败: ${res.stderr.slice(0, 500) || `exit ${res.code}`}`)
@@ -33,6 +36,7 @@ async function pip(deps: InstallerDeps, args: string[]): Promise<void> {
 // 首启把随包分发的 Python 运行时压缩包解压到用户数据区(~/.echo-agent/python)。
 // 已解压则跳过。打包资源区只读,故必须解压到可写的用户目录后再建 venv。
 export async function ensurePythonExtracted(deps: InstallerDeps): Promise<void> {
+  if (deps.abortSignal?.aborted) throw new Error('Installation aborted')
   const py = extractedPython(deps.homeDir, deps.platform)
   if (deps.pathExists(py)) return
   if (!deps.pathExists(deps.pythonArchive)) {
@@ -44,7 +48,8 @@ export async function ensurePythonExtracted(deps: InstallerDeps): Promise<void> 
   deps.ensureDir(dir)
   // 系统 tar 跨平台可用(Win10+ 自带 bsdtar);压缩包顶层为 python/,strip 后落到 dir。
   const res = await deps.runner.run('tar', ['-xzf', deps.pythonArchive, '-C', dir, '--strip-components=1'], {
-    onStdout: deps.onProgress
+    onStdout: deps.onProgress,
+    signal: deps.abortSignal
   })
   if (res.code !== 0) {
     throw new Error(`解压 Python 运行时失败: ${res.stderr.slice(0, 500) || `exit ${res.code}`}`)
@@ -52,15 +57,18 @@ export async function ensurePythonExtracted(deps: InstallerDeps): Promise<void> 
 }
 
 export async function ensureInstalled(deps: InstallerDeps): Promise<void> {
+  if (deps.abortSignal?.aborted) throw new Error('Installation aborted')
   await ensurePythonExtracted(deps)
+  if (deps.abortSignal?.aborted) throw new Error('Installation aborted')
   const dir = venvDir(deps.homeDir)
   if (!deps.pathExists(dir)) {
     const bundledPython = extractedPython(deps.homeDir, deps.platform)
-    const res = await deps.runner.run(bundledPython, ['-m', 'venv', dir])
+    const res = await deps.runner.run(bundledPython, ['-m', 'venv', dir], { signal: deps.abortSignal })
     if (res.code !== 0) {
       throw new Error(`创建 venv 失败: ${res.stderr.slice(0, 500) || `exit ${res.code}`}`)
     }
   }
+  if (deps.abortSignal?.aborted) throw new Error('Installation aborted')
   await pip(deps, ['install', 'echo-agent[all]'])
 }
 
