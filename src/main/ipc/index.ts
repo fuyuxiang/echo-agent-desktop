@@ -9,7 +9,9 @@ import { registerEchoAgentIpc } from './echo-agent'
 import { registerLogHandlers } from './log'
 import { registerMeetingHandlers } from './meeting'
 import { registerPermissionHandlers } from './permission'
+import { registerProfileIpcHandlers } from './profiles'
 import { registerProjectMemoryIpc } from './project-memory'
+import { registerScheduleIpcHandlers } from './schedules'
 import { registerStoreHandlers } from './store'
 import { registerSystemHandlers } from './system'
 import { registerModelIpcHandlers } from './models'
@@ -41,5 +43,7 @@ export function registerAllIpcHandlers(getWindow: () => Electron.BrowserWindow |
   registerModelIpcHandlers()
   registerProviderIpcHandlers()
   registerSessionIpcHandlers()
+  registerProfileIpcHandlers()
+  registerScheduleIpcHandlers()
   registerProjectMemoryIpc()
 }
