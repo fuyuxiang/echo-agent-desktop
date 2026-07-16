@@ -34,6 +34,15 @@ export interface EchoAgentStatus {
 }
 
 /**
+ * echo-agent gateway endpoint(与 main 端 echo-agent/types.ts 字段一致)
+ */
+export interface EchoAgentEndpoint {
+  baseUrl: string
+  apiPrefix: string
+  wsPath: string
+}
+
+/**
  * 模型配置下发入参(渲染层本地手填,主进程落盘并下发给 echo-agent)
  */
 export interface ModelConfigInput {
@@ -401,6 +410,8 @@ export interface BridgeApi {
     getVersion: () => Promise<string | null>
     /** 触发依赖更新 */
     update: () => Promise<void>
+    /** 获取当前 gateway endpoint(baseUrl/apiPrefix/wsPath),未就绪时返回 null */
+    getEndpoint: () => Promise<EchoAgentEndpoint | null>
     /** 监听状态变化,返回取消监听函数 */
     onStatusChanged: (cb: (s: EchoAgentStatus) => void) => () => void
   }

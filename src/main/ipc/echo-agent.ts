@@ -3,6 +3,7 @@ import { IpcChannels } from '@shared/ipc-channels'
 import {
   getEchoAgentStatus,
   getEchoAgentVersion,
+  getEchoAgentEndpoint,
   onEchoAgentStatus,
   updateEchoAgent,
   applyModelConfig
@@ -13,6 +14,7 @@ export function registerEchoAgentIpc(getWindow: () => Electron.BrowserWindow | n
   ipcMain.handle(IpcChannels.echoAgent.getStatus, () => getEchoAgentStatus())
   ipcMain.handle(IpcChannels.echoAgent.getVersion, () => getEchoAgentVersion())
   ipcMain.handle(IpcChannels.echoAgent.update, () => updateEchoAgent())
+  ipcMain.handle(IpcChannels.echoAgent.getEndpoint, () => getEchoAgentEndpoint())
   ipcMain.handle(IpcChannels.echoConfig.apply, (_e, cfg: ModelConfigInput) => applyModelConfig(cfg))
 
   onEchoAgentStatus((status) => {

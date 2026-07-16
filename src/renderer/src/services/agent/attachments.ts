@@ -1,8 +1,12 @@
 import { AgentApiUrls } from '@/request/urls'
 import { useAgentStore } from '@/stores/agentStore'
 
-function getBaseUrl(): string {
-  return useAgentStore.getState().baseUrl
+async function getBaseUrl(): Promise<string> {
+  const endpoint = await window.api.echoAgent.getEndpoint()
+  if (!endpoint?.baseUrl) {
+    throw new Error('Agent 未就绪')
+  }
+  return endpoint.baseUrl
 }
 
 /** 后端 /chat/attachments 返回的附件引用，用于随后在 WS message 帧中携带 */
@@ -21,9 +25,10 @@ export const attachmentsAPI = {
    */
   upload: async (file: File): Promise<ChatAttachmentRef> => {
     const { remoteToken } = useAgentStore.getState()
+    const baseUrl = await getBaseUrl()
     const form = new FormData()
     form.append('file', file)
-    const resp = await fetch(`${getBaseUrl()}${AgentApiUrls.chatAttachmentUpload}`, {
+    const resp = await fetch(`${baseUrl}${AgentApiUrls.chatAttachmentUpload}`, {
       method: 'POST',
       headers: remoteToken ? { 'X-Echo-Agent-Token': remoteToken } : undefined,
       body: form
