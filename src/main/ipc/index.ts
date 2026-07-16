@@ -6,12 +6,15 @@ import { registerAppHandlers } from './app'
 import { registerAsrHandlers } from './asr'
 import { registerDbHandlers } from './db'
 import { registerEchoAgentIpc } from './echo-agent'
+import { registerGatewayIpcHandlers } from './gateway'
+import { registerKanbanIpcHandlers } from './kanban'
 import { registerLogHandlers } from './log'
 import { registerMeetingHandlers } from './meeting'
 import { registerPermissionHandlers } from './permission'
 import { registerProfileIpcHandlers } from './profiles'
 import { registerProjectMemoryIpc } from './project-memory'
 import { registerScheduleIpcHandlers } from './schedules'
+import { registerSoulIpcHandlers } from './soul'
 import { registerStoreHandlers } from './store'
 import { registerSystemHandlers } from './system'
 import { registerModelIpcHandlers } from './models'
@@ -46,4 +49,7 @@ export function registerAllIpcHandlers(getWindow: () => Electron.BrowserWindow |
   registerProfileIpcHandlers()
   registerScheduleIpcHandlers()
   registerProjectMemoryIpc()
+  registerGatewayIpcHandlers()
+  registerKanbanIpcHandlers()
+  registerSoulIpcHandlers()
 }
