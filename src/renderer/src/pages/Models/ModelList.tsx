@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type { ModelConfig } from '@shared/model-types'
 import styles from './models.module.scss'
 
@@ -16,8 +17,9 @@ export default function ModelList({
   onRemove,
   onSetActive
 }: ModelListProps): React.JSX.Element {
+  const { t } = useTranslation()
   if (models.length === 0) {
-    return <div className={styles.empty}>No models configured</div>
+    return <div className={styles.empty}>{t('models.noModels')}</div>
   }
 
   return (
@@ -30,7 +32,7 @@ export default function ModelList({
           <div className={styles.info}>
             <h3>{model.name}</h3>
             <p>
-              {model.provider} • {model.contextWindow.toLocaleString()} tokens
+              {model.provider} • {model.contextWindow.toLocaleString()} {t('models.tokens')}
             </p>
           </div>
           <div className={styles.actions}>
@@ -39,17 +41,17 @@ export default function ModelList({
                 onClick={() => onSetActive(model.id)}
                 className={styles.setActiveButton}
               >
-                Set Active
+                {t('models.setActive')}
               </button>
             )}
             <button onClick={() => onEdit(model)} className={styles.editButton}>
-              Edit
+              {t('models.edit')}
             </button>
             <button
               onClick={() => onRemove(model.id)}
               className={styles.removeButton}
             >
-              Remove
+              {t('models.remove')}
             </button>
           </div>
         </div>
