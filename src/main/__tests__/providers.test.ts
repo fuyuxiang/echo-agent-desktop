@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const storeMock = vi.hoisted(() => {
   const data = new Map<string, unknown>()
@@ -14,10 +14,18 @@ vi.mock('../store', () => ({
   storeSet: storeMock.storeSet
 }))
 
+const fetchMock = vi.fn<typeof fetch>()
+const originalFetch = globalThis.fetch
+
 beforeEach(() => {
   vi.resetModules()
   vi.clearAllMocks()
   storeMock.data.clear()
+  globalThis.fetch = fetchMock
+})
+
+afterEach(() => {
+  globalThis.fetch = originalFetch
 })
 
 describe('Providers Service', () => {
@@ -99,18 +107,115 @@ describe('Providers Service', () => {
     expect(found?.name).toBe('OpenAI')
   })
 
-  it('should test provider connection', async () => {
+  it('should return error for test when baseUrl is missing', async () => {
     const { addProvider, testProvider } = await import('../providers')
     const added = await addProvider({
       name: 'OpenAI',
       type: 'openai',
       apiKey: 'sk-test-key'
+      // no baseUrl
     })
 
     const result = await testProvider({ id: added.id })
-    expect(result).toBeDefined()
-    expect(typeof result.success).toBe('boolean')
-    expect(result.message).toBeDefined()
+    expect(result.success).toBe(false)
+    expect(result.message).toBe('未配置 baseUrl')
+  })
+
+  it('should test provider connection — success (200 with model list)', async () => {
+    const { addProvider, testProvider } = await import('../providers')
+    const added = await addProvider({
+      name: 'OpenAI',
+      type: 'openai',
+      apiKey: 'sk-test-key',
+      baseUrl: 'https://api.openai.com'
+    })
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: () => Promise.resolve({ data: [{ id: 'gpt-4' }, { id: 'gpt-3.5-turbo' }] })
+    } as Response)
+
+    const result = await testProvider({ id: added.id })
+    expect(result.success).toBe(true)
+    expect(result.message).toContain('2 个模型')
+    expect(typeof result.latency).toBe('number')
+    expect(result.latency).toBeGreaterThanOrEqual(0)
+  })
+
+  it('should test provider connection — HTTP 401 error', async () => {
+    const { addProvider, testProvider } = await import('../providers')
+    const added = await addProvider({
+      name: 'OpenAI',
+      type: 'openai',
+      apiKey: 'sk-bad-key',
+      baseUrl: 'https://api.openai.com'
+    })
+
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized'
+    } as Response)
+
+    const result = await testProvider({ id: added.id })
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('401')
+  })
+
+  it('should test provider connection — HTTP 500 error', async () => {
+    const { addProvider, testProvider } = await import('../providers')
+    const added = await addProvider({
+      name: 'OpenAI',
+      type: 'openai',
+      apiKey: 'sk-test-key',
+      baseUrl: 'https://api.openai.com'
+    })
+
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error'
+    } as Response)
+
+    const result = await testProvider({ id: added.id })
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('500')
+  })
+
+  it('should test provider connection — timeout (AbortError)', async () => {
+    const { addProvider, testProvider } = await import('../providers')
+    const added = await addProvider({
+      name: 'OpenAI',
+      type: 'openai',
+      apiKey: 'sk-test-key',
+      baseUrl: 'https://api.openai.com'
+    })
+
+    const abortError = new Error('The operation was aborted')
+    abortError.name = 'AbortError'
+    fetchMock.mockRejectedValueOnce(abortError)
+
+    const result = await testProvider({ id: added.id })
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('超时')
+  })
+
+  it('should test provider connection — network error (ECONNREFUSED)', async () => {
+    const { addProvider, testProvider } = await import('../providers')
+    const added = await addProvider({
+      name: 'Local',
+      type: 'openai',
+      baseUrl: 'http://localhost:11434'
+    })
+
+    fetchMock.mockRejectedValueOnce(new Error('connect ECONNREFUSED 127.0.0.1:11434'))
+
+    const result = await testProvider({ id: added.id })
+    expect(result.success).toBe(false)
+    expect(result.message).toBe('连接失败')
+    expect(result.error).toContain('ECONNREFUSED')
   })
 
   it('should handle update for non-existent provider', async () => {
