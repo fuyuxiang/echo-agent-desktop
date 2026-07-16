@@ -286,6 +286,11 @@ export const IpcChannels = {
 
   /** 日志查询 */
   logs: {
-    list: 'logs:list'
+    list: 'logs:list',
+    add: 'logs:add',
+    clear: 'logs:clear',
+    getById: 'logs:get-by-id',
+    delete: 'logs:delete',
+    stats: 'logs:stats'
   }
 } as const
