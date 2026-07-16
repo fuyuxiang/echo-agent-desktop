@@ -2,6 +2,11 @@ import { useState } from 'react'
 import { GeneralSection } from './sections/GeneralSection'
 import { ModelSection } from './sections/ModelSection'
 import { LocalModelSection } from './sections/LocalModelSection'
+import { ProviderSection } from './sections/ProviderSection'
+import { BackupSection } from './sections/BackupSection'
+import { LogsSection } from './sections/LogsSection'
+import { NetworkSection } from './sections/NetworkSection'
+import { ThemeSection } from './sections/ThemeSection'
 import { AboutSection } from './sections/AboutSection'
 import MemoryPage from '@/pages/Memory'
 import SkillsPage from '@/pages/Skills'
@@ -11,6 +16,11 @@ type Section =
   | 'general'
   | 'model'
   | 'localModel'
+  | 'providers'
+  | 'backup'
+  | 'logs'
+  | 'network'
+  | 'theme'
   | 'memoryStore'
   | 'skills'
   | 'about'
@@ -19,6 +29,11 @@ const SECTIONS: { key: Section; label: string }[] = [
   { key: 'general', label: '通用' },
   { key: 'model', label: '模型配置' },
   { key: 'localModel', label: '本地模型' },
+  { key: 'providers', label: '提供商' },
+  { key: 'backup', label: '备份' },
+  { key: 'logs', label: '日志' },
+  { key: 'network', label: '网络' },
+  { key: 'theme', label: '主题' },
   { key: 'skills', label: '技能库' },
   { key: 'memoryStore', label: '记忆' },
   { key: 'about', label: '关于' }
@@ -38,6 +53,16 @@ export default function SettingsPage(): React.JSX.Element {
         return <ModelSection />
       case 'localModel':
         return <LocalModelSection />
+      case 'providers':
+        return <ProviderSection />
+      case 'backup':
+        return <BackupSection />
+      case 'logs':
+        return <LogsSection />
+      case 'network':
+        return <NetworkSection />
+      case 'theme':
+        return <ThemeSection />
       case 'skills':
         return <SkillsPage />
       case 'memoryStore':
