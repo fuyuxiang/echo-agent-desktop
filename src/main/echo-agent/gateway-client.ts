@@ -141,7 +141,9 @@ export class GatewayClient {
     const controller = this.activeRequests.get(chatId)
     if (controller) {
       controller.abort()
-      this.activeRequests.delete(chatId)
+      // Don't delete from activeRequests here — onFrame() checks
+      // signal.aborted to suppress further events. The entry will be
+      // cleaned up by done/error events or by disconnect().
     }
 
     // 如果 WS 协议支持 abort 帧，发送它
@@ -175,6 +177,12 @@ export class GatewayClient {
         this.ws?.send(this.pendingSend)
         this.pendingSend = null
       }
+      return
+    }
+    // If the request was aborted, don't emit further events and clean up
+    const controller = this.activeRequests.get(this.chatId)
+    if (controller?.signal.aborted) {
+      this.activeRequests.delete(this.chatId)
       return
     }
     const events = translateFrame(frame, this.chatId)
