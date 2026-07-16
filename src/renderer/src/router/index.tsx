@@ -31,6 +31,8 @@ const MeetingDetailPage = lazy(() => import('@/pages/Meeting/MeetingDetail'))
 // P11 知识库:资料库 + 资料问答(页面实体由 H1 / H3 在后续 task 中创建)
 const KbLibraryPage = lazy(() => import('@/pages/KbLibrary'))
 const KbQAPage = lazy(() => import('@/pages/KbQA'))
+const ModelsPage = lazy(() => import('@/pages/Models'))
+const ProvidersPage = lazy(() => import('@/pages/Providers'))
 
 /** 懒加载包装(统一 loading 兜底) */
 function lazyLoad(node: React.ReactNode): React.JSX.Element {
@@ -86,6 +88,8 @@ export const router = createHashRouter([
       { path: 'meeting/:id', element: lazyLoad(<MeetingDetailPage />) },
       { path: 'kb-library', element: lazyLoad(<KbLibraryPage />) },
       { path: 'kb-qa', element: lazyLoad(<KbQAPage />) },
+      { path: 'models', element: lazyLoad(<ModelsPage />) },
+      { path: 'providers', element: lazyLoad(<ProvidersPage />) },
       {
         path: 'admin',
         element: (
