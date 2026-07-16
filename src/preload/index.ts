@@ -227,6 +227,15 @@ const api: BridgeApi = {
       ipcRenderer.invoke(IpcChannels.agentSkill.deactivate, { chatId, skillId })
   },
 
+  models: {
+    list: () => ipcRenderer.invoke(IpcChannels.models.list),
+    get: (id: string) => ipcRenderer.invoke(IpcChannels.models.get, id),
+    add: (request) => ipcRenderer.invoke(IpcChannels.models.add, request),
+    update: (request) => ipcRenderer.invoke(IpcChannels.models.update, request),
+    remove: (id: string) => ipcRenderer.invoke(IpcChannels.models.remove, id),
+    setActive: (id: string) => ipcRenderer.invoke(IpcChannels.models.setActive, id)
+  },
+
   platform: {
     isMac: process.platform === 'darwin',
     isWin: process.platform === 'win32',

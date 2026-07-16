@@ -63,6 +63,7 @@ describe('preload bridge', () => {
       'echoMemory',
       'log',
       'meeting',
+      'models',
       'permission',
       'platform',
       'projectMemory',
@@ -225,6 +226,24 @@ describe('preload bridge', () => {
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.meeting.rename, 'm1', 'title')
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.meeting.markSource, 'm1', 'mic+system')
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.meeting.summarize, 'm1', 'title', [])
+
+    await api.models.list()
+    await api.models.get('m1')
+    await api.models.add({ name: 'gpt-4', provider: 'openai', contextWindow: 128000, maxTokens: 4096 })
+    await api.models.update({ id: 'm1', name: 'updated' })
+    await api.models.remove('m1')
+    await api.models.setActive('m1')
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.models.list)
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.models.get, 'm1')
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.models.add, {
+      name: 'gpt-4',
+      provider: 'openai',
+      contextWindow: 128000,
+      maxTokens: 4096
+    })
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.models.update, { id: 'm1', name: 'updated' })
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.models.remove, 'm1')
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.models.setActive, 'm1')
   })
 
   it('agentChat/agentPermission/agentMemory/agentSkill 桥接请求与事件', async () => {
