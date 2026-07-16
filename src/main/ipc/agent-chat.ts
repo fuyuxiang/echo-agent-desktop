@@ -31,8 +31,11 @@ export function registerAgentChatIpc(): void {
     }
   )
 
-  ipcMain.handle(IpcChannels.agentChat.abort, (_e, _opts: { chatId: string }) => {
-    // echo-agent WS 无显式 abort 帧;渲染层依赖本地停止累积。保留 handler 不报错。
+  ipcMain.handle(IpcChannels.agentChat.abort, (_e, opts: { chatId: string }) => {
+    const c = client()
+    if (c) {
+      c.abort(opts.chatId)
+    }
   })
 
   ipcMain.handle(IpcChannels.agentChat.listSessions, () => listChatSessions())
