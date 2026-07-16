@@ -13,6 +13,7 @@ import type {
   SaveDialogOptions
 } from './index'
 import type { MeetingDTO, SegmentDTO, SummaryDTO, MeetingSummaryInput } from './meeting'
+import type { ModelConfig, ModelListResponse, ModelAddRequest, ModelUpdateRequest } from '../model-types'
 
 /**
  * echo-agent 进程状态(与 main 端 echo-agent/types.ts 字段一致;shared 不依赖 main)
@@ -322,5 +323,21 @@ export interface BridgeApi {
   echoMemory: {
     /** 读取认知记忆条目(可选条数上限) */
     list: (limit?: number) => Promise<EchoCognitiveEntry[]>
+  }
+
+  /** 模型配置 CRUD */
+  models: {
+    /** 查询全部模型配置 */
+    list: () => Promise<ModelListResponse>
+    /** 查询单个模型配置 */
+    get: (id: string) => Promise<ModelConfig | null>
+    /** 新增模型配置 */
+    add: (request: ModelAddRequest) => Promise<ModelConfig>
+    /** 更新模型配置 */
+    update: (request: ModelUpdateRequest) => Promise<ModelConfig>
+    /** 删除模型配置 */
+    remove: (id: string) => Promise<void>
+    /** 设置活跃模型 */
+    setActive: (id: string) => Promise<void>
   }
 }
