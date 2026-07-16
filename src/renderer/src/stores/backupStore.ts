@@ -19,7 +19,7 @@ export const useBackupStore = create<BackupState>((set, get) => ({
   fetchBackups: async () => {
     set({ loading: true, error: null })
     try {
-      const result = await window.api.invoke('backup:listBackups')
+      const result = await window.api.backup.list()
       set({ backups: result.backups, loading: false })
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error), loading: false })
@@ -29,7 +29,7 @@ export const useBackupStore = create<BackupState>((set, get) => ({
   createBackup: async (request: BackupCreateRequest) => {
     set({ loading: true, error: null })
     try {
-      const newBackup = await window.api.invoke('backup:createBackup', request)
+      const newBackup = await window.api.backup.create(request)
       const backups = [...get().backups, newBackup]
       set({ backups, loading: false })
     } catch (error) {
@@ -40,7 +40,7 @@ export const useBackupStore = create<BackupState>((set, get) => ({
   restoreBackup: async (request: BackupRestoreRequest) => {
     set({ loading: true, error: null })
     try {
-      await window.api.invoke('backup:restoreBackup', request)
+      await window.api.backup.restore(request)
       set({ loading: false })
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error), loading: false })
@@ -50,7 +50,7 @@ export const useBackupStore = create<BackupState>((set, get) => ({
   deleteBackup: async (id: string) => {
     set({ loading: true, error: null })
     try {
-      await window.api.invoke('backup:deleteBackup', id)
+      await window.api.backup.delete(id)
       const backups = get().backups.filter((b) => b.id !== id)
       set({ backups, loading: false })
     } catch (error) {
