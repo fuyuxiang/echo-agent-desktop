@@ -62,10 +62,21 @@ export async function listBackups(): Promise<BackupListResponse> {
     .map((d) => {
       const backupDir = path.join(backupRoot, d.name)
       const stat = fs.statSync(backupDir)
+
+      let name = d.name
+      let description: string | undefined
+      const metaPath = path.join(backupDir, 'meta.json')
+      if (fs.existsSync(metaPath)) {
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
+        name = meta.name ?? d.name
+        description = meta.description
+      }
+
       return {
         id: d.name,
-        name: d.name,
+        name,
         size: getDirSize(backupDir),
+        description,
         createdAt: stat.birthtime.toISOString()
       }
     })
@@ -102,6 +113,14 @@ export async function createBackup(request: BackupCreateRequest & { metadata?: R
       fs.cpSync(attachmentsDir, path.join(backupDir, 'attachments'), { recursive: true })
       log.info('[backup] 附件已备份')
     }
+
+    // Write meta.json sidecar file to persist name, description and createdAt
+    const meta = {
+      name: request.name,
+      description: request.description,
+      createdAt: new Date().toISOString()
+    }
+    fs.writeFileSync(path.join(backupDir, 'meta.json'), JSON.stringify(meta, null, 2))
 
     const size = getDirSize(backupDir)
 
@@ -163,10 +182,9 @@ export async function deleteBackup(id: string): Promise<void> {
   const backupRoot = getBackupRoot()
   const backupDir = path.join(backupRoot, id)
 
-  if (!fs.existsSync(backupDir)) {
-    throw new Error(`备份不存在: ${id}`)
+  if (fs.existsSync(backupDir)) {
+    fs.rmSync(backupDir, { recursive: true, force: true })
+    log.info('[backup] 备份已删除:', id)
   }
-
-  fs.rmSync(backupDir, { recursive: true, force: true })
-  log.info('[backup] 备份已删除:', id)
+  // No throw if not exists - silent no-op
 }
