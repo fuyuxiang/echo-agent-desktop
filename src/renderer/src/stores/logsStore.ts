@@ -17,7 +17,7 @@ export const useLogsStore = create<LogsState>((set) => ({
   fetchLogs: async (request?: LogQueryRequest) => {
     set({ loading: true, error: null })
     try {
-      const result = await window.api.invoke('logs:list', request)
+      const result = await window.api.logs.list(request)
       set({ logs: result.logs, loading: false })
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error), loading: false })
@@ -27,7 +27,7 @@ export const useLogsStore = create<LogsState>((set) => ({
   clearLogs: async () => {
     set({ loading: true, error: null })
     try {
-      await window.api.invoke('logs:clear')
+      await window.api.logs.clear()
       set({ logs: [], loading: false })
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error), loading: false })

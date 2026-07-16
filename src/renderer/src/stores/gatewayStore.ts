@@ -32,7 +32,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   fetchPlatforms: async () => {
     set({ loading: true, error: null })
     try {
-      const platforms = await window.api.invoke('gateway:listPlatforms')
+      const platforms = await window.api.gateway.listPlatforms()
       set({ platforms, loading: false })
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error), loading: false })
@@ -42,7 +42,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   fetchConfigs: async () => {
     set({ loading: true, error: null })
     try {
-      const result = await window.api.invoke('gateway:listConfigs')
+      const result = await window.api.gateway.listConfigs()
       set({
         configs: result.configs,
         statuses: result.statuses,
@@ -56,7 +56,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   addConfig: async (request: GatewayConfigAddRequest) => {
     set({ loading: true, error: null })
     try {
-      const newConfig = await window.api.invoke('gateway:addConfig', request)
+      const newConfig = await window.api.gateway.addConfig(request)
       const configs = [...get().configs, newConfig]
       set({ configs, loading: false })
     } catch (error) {
@@ -67,7 +67,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   updateConfig: async (request: GatewayConfigUpdateRequest) => {
     set({ loading: true, error: null })
     try {
-      const updatedConfig = await window.api.invoke('gateway:updateConfig', request)
+      const updatedConfig = await window.api.gateway.updateConfig(request)
       const configs = get().configs.map((c) => (c.id === request.id ? updatedConfig : c))
       set({ configs, loading: false })
     } catch (error) {
@@ -78,7 +78,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   removeConfig: async (id: string) => {
     set({ loading: true, error: null })
     try {
-      await window.api.invoke('gateway:removeConfig', id)
+      await window.api.gateway.removeConfig(id)
       const configs = get().configs.filter((c) => c.id !== id)
       set({ configs, loading: false })
     } catch (error) {
@@ -89,7 +89,7 @@ export const useGatewayStore = create<GatewayState>((set, get) => ({
   testConnection: async (platformId: string) => {
     set({ loading: true, error: null })
     try {
-      const result = await window.api.invoke('gateway:testConnection', { platformId })
+      const result = await window.api.gateway.testConnection({ platformId })
       set({ loading: false })
       return result
     } catch (error) {
