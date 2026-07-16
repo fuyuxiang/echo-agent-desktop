@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { ModelConfig } from '@shared/model-types'
 import styles from './models.module.scss'
 
@@ -18,6 +19,7 @@ export default function ModelForm({
   onSubmit,
   onCancel
 }: ModelFormProps): React.JSX.Element {
+  const { t } = useTranslation()
   const [formData, setFormData] = useState({
     name: model?.name || '',
     provider: model?.provider || 'openai',
@@ -32,9 +34,9 @@ export default function ModelForm({
 
   return (
     <form onSubmit={handleSubmit} className={styles.form}>
-      <h2>{model ? 'Edit Model' : 'Add Model'}</h2>
+      <h2>{model ? t('models.editModel') : t('models.addModel')}</h2>
       <div className={styles.field}>
-        <label htmlFor="name">Name</label>
+        <label htmlFor="name">{t('models.name')}</label>
         <input
           id="name"
           type="text"
@@ -44,7 +46,7 @@ export default function ModelForm({
         />
       </div>
       <div className={styles.field}>
-        <label htmlFor="provider">Provider</label>
+        <label htmlFor="provider">{t('models.provider')}</label>
         <select
           id="provider"
           value={formData.provider}
@@ -58,7 +60,7 @@ export default function ModelForm({
         </select>
       </div>
       <div className={styles.field}>
-        <label htmlFor="contextWindow">Context Window</label>
+        <label htmlFor="contextWindow">{t('models.contextWindow')}</label>
         <input
           id="contextWindow"
           type="number"
@@ -70,7 +72,7 @@ export default function ModelForm({
         />
       </div>
       <div className={styles.field}>
-        <label htmlFor="maxTokens">Max Tokens</label>
+        <label htmlFor="maxTokens">{t('models.maxTokens')}</label>
         <input
           id="maxTokens"
           type="number"
@@ -83,10 +85,10 @@ export default function ModelForm({
       </div>
       <div className={styles.actions}>
         <button type="submit" className={styles.submitButton}>
-          {model ? 'Update' : 'Add'}
+          {model ? t('models.update') : t('models.add')}
         </button>
         <button type="button" onClick={onCancel} className={styles.cancelButton}>
-          Cancel
+          {t('models.cancel')}
         </button>
       </div>
     </form>

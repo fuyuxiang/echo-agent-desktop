@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useModelStore } from '@/stores/modelStore'
 import type { ModelConfig } from '@shared/model-types'
 import ModelList from './ModelList'
@@ -6,6 +7,7 @@ import ModelForm from './ModelForm'
 import styles from './models.module.scss'
 
 export default function ModelsPage(): React.JSX.Element {
+  const { t } = useTranslation()
   const {
     models,
     activeModel,
@@ -58,14 +60,14 @@ export default function ModelsPage(): React.JSX.Element {
   return (
     <div className={styles.container}>
       <div className={styles.header}>
-        <h1>Models</h1>
+        <h1>{t('models.title')}</h1>
         <button onClick={handleAdd} className={styles.addButton}>
-          Add Model
+          {t('models.addModel')}
         </button>
       </div>
       {error && <div className={styles.error}>{error}</div>}
       {loading ? (
-        <div className={styles.loading}>Loading...</div>
+        <div className={styles.loading}>{t('models.loading')}</div>
       ) : showForm ? (
         <ModelForm
           model={editingModel}
