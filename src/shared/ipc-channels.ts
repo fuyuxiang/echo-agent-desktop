@@ -191,5 +191,16 @@ export const IpcChannels = {
     update: 'providers:update',
     remove: 'providers:remove',
     test: 'providers:test'
+  },
+
+  /** 会话管理 CRUD + 搜索/导入导出 */
+  sessions: {
+    list: 'sessions:list',
+    get: 'sessions:get',
+    update: 'sessions:update',
+    delete: 'sessions:delete',
+    search: 'sessions:search',
+    export: 'sessions:export',
+    import: 'sessions:import'
   }
 } as const
