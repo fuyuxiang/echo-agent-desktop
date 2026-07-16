@@ -1,0 +1,201 @@
+.container {
+  padding: $spacing-xl;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: $spacing-xl;
+}
+
+.filters {
+  display: flex;
+  gap: $spacing-md;
+}
+
+.filterSelect {
+  padding: $spacing-sm $spacing-md;
+  border: 1px solid var(--color-border);
+  border-radius: $radius-md;
+  background: var(--color-bg-1);
+}
+
+.error {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  padding: $spacing-md;
+  border-radius: $radius-md;
+  margin-bottom: $spacing-xl;
+}
+
+.loading {
+  text-align: center;
+  padding: $spacing-xl;
+}
+
+.empty {
+  text-align: center;
+  padding: $spacing-xxl;
+  color: var(--color-text-2);
+}
+
+.skillGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: $spacing-md;
+}
+
+.skillCard {
+  background: var(--color-bg-1);
+  border: 1px solid var(--color-border);
+  border-radius: $radius-md;
+  padding: $spacing-md;
+  transition: box-shadow 0.2s;
+
+  &:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+}
+
+.skillHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: $spacing-sm;
+
+  h3 {
+    margin: 0;
+    font-size: 1rem;
+  }
+}
+
+.version {
+  font-size: 0.75rem;
+  color: var(--color-text-3);
+  background: var(--color-bg-2);
+  padding: $spacing-xs $spacing-sm;
+  border-radius: $radius-sm;
+}
+
+.description {
+  margin: 0 0 $spacing-md 0;
+  font-size: 0.875rem;
+  color: var(--color-text-2);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.skillMeta {
+  display: flex;
+  gap: $spacing-md;
+  margin-bottom: $spacing-md;
+  font-size: 0.75rem;
+  color: var(--color-text-3);
+}
+
+.skillActions {
+  display: flex;
+  gap: $spacing-sm;
+}
+
+.viewButton {
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  padding: $spacing-xs $spacing-sm;
+  border-radius: $radius-md;
+  cursor: pointer;
+  font-size: 0.875rem;
+
+  &:hover {
+    background: var(--color-primary-hover);
+  }
+}
+
+.installButton {
+  background: var(--color-success);
+  color: white;
+  border: none;
+  padding: $spacing-xs $spacing-sm;
+  border-radius: $radius-md;
+  cursor: pointer;
+  font-size: 0.875rem;
+
+  &:hover {
+    background: var(--color-success-hover);
+  }
+}
+
+.uninstallButton {
+  background: var(--color-danger);
+  color: white;
+  border: none;
+  padding: $spacing-xs $spacing-sm;
+  border-radius: $radius-md;
+  cursor: pointer;
+  font-size: 0.875rem;
+
+  &:hover {
+    background: var(--color-danger-hover);
+  }
+}
+
+.skillDetail {
+  max-width: 800px;
+}
+
+.backButton {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: 0.875rem;
+  margin-bottom: $spacing-md;
+  padding: 0;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.detailHeader {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  margin-bottom: $spacing-md;
+
+  h2 {
+    margin: 0;
+  }
+}
+
+.detailMeta {
+  display: flex;
+  gap: $spacing-lg;
+  margin-bottom: $spacing-lg;
+  font-size: 0.875rem;
+  color: var(--color-text-2);
+}
+
+.detailDescription {
+  margin-bottom: $spacing-lg;
+
+  h3 {
+    margin: 0 0 $spacing-sm 0;
+    font-size: 1rem;
+  }
+
+  p {
+    margin: 0;
+    line-height: 1.6;
+  }
+}
+
+.detailActions {
+  display: flex;
+  gap: $spacing-md;
+}
