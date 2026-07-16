@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { ModelConfig, ModelDefinition } from '../model-types'
+import type { ModelConfig, ModelDefinition, ModelListResponse, ModelAddRequest, ModelUpdateRequest } from '../model-types'
 import { ModelProvider } from '../model-types'
 
 describe('Model Types', () => {
@@ -73,7 +73,7 @@ describe('Model Types', () => {
   })
 
   it('should define ModelListResponse interface', () => {
-    const response = {
+    const response: ModelListResponse = {
       models: [],
       total: 0
     }
@@ -83,7 +83,7 @@ describe('Model Types', () => {
   })
 
   it('should define ModelAddRequest interface', () => {
-    const request = {
+    const request: ModelAddRequest = {
       name: 'gpt-4-turbo',
       provider: ModelProvider.OPENAI,
       contextWindow: 128000,
@@ -94,7 +94,7 @@ describe('Model Types', () => {
   })
 
   it('should define ModelUpdateRequest interface', () => {
-    const request = {
+    const request: ModelUpdateRequest = {
       id: 'model-1',
       name: 'updated-name',
       isActive: false
