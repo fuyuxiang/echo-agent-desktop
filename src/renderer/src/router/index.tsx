@@ -33,6 +33,10 @@ const KbLibraryPage = lazy(() => import('@/pages/KbLibrary'))
 const KbQAPage = lazy(() => import('@/pages/KbQA'))
 const ModelsPage = lazy(() => import('@/pages/Models'))
 const ProvidersPage = lazy(() => import('@/pages/Providers'))
+const GatewayPage = lazy(() => import('@/pages/Gateway'))
+const KanbanPage = lazy(() => import('@/pages/Kanban'))
+const SoulPage = lazy(() => import('@/pages/Soul'))
+const DiscoverPage = lazy(() => import('@/pages/Discover'))
 
 /** 懒加载包装(统一 loading 兜底) */
 function lazyLoad(node: React.ReactNode): React.JSX.Element {
@@ -90,6 +94,10 @@ export const router = createHashRouter([
       { path: 'kb-qa', element: lazyLoad(<KbQAPage />) },
       { path: 'models', element: lazyLoad(<ModelsPage />) },
       { path: 'providers', element: lazyLoad(<ProvidersPage />) },
+      { path: 'gateway', element: lazyLoad(<GatewayPage />) },
+      { path: 'kanban', element: lazyLoad(<KanbanPage />) },
+      { path: 'soul', element: lazyLoad(<SoulPage />) },
+      { path: 'discover', element: lazyLoad(<DiscoverPage />) },
       {
         path: 'admin',
         element: (
