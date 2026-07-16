@@ -16,21 +16,11 @@ class RuntimeClient {
   async switchSession(chatId: string): Promise<void> {
     this.chatId = chatId
 
-    // Load historical messages from DB and replay to UI
+    // Notify the main process to switch the gateway session
     try {
-      const messages = await window.api.db.session.getMessages(chatId)
-      for (const msg of messages) {
-        this.emit('history.loaded', {
-          chatId,
-          role: msg.role,
-          content: msg.content,
-          reasoning: msg.reasoning ?? undefined,
-          id: msg.id,
-          createdAt: msg.createdAt
-        })
-      }
-    } catch {
-      // Gracefully handle DB read failures — session switch still succeeds
+      await window.api.agentChat.send(chatId, '', [])
+    } catch (e) {
+      console.warn('[runtime-client] switchSession failed:', e)
     }
   }
 
