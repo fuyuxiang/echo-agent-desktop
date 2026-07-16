@@ -181,5 +181,15 @@ export const IpcChannels = {
     update: 'models:update',
     remove: 'models:remove',
     setActive: 'models:set-active'
+  },
+
+  /** 提供商配置 CRUD */
+  providers: {
+    list: 'providers:list',
+    get: 'providers:get',
+    add: 'providers:add',
+    update: 'providers:update',
+    remove: 'providers:remove',
+    test: 'providers:test'
   }
 } as const
