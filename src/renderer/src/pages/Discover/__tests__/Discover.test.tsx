@@ -1,42 +1,28 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { SkillConfig, SkillCategory } from '@shared/skill-types'
+import type { SkillConfig } from '@shared/skill-types'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key })
 }))
 
-// Mock the store
-const mockFetchSkills = vi.fn()
-const mockInstallSkill = vi.fn()
-const mockUninstallSkill = vi.fn()
+// Mock skillsAPI - the Discover page now uses this instead of useSkillStore
+const mockSkillsList = vi.fn(async () => ({
+  skills: [{ id: 'ppt', label: 'PPT', description: 'A presentation skill', kind: 'code' as const }]
+}))
 
-let mockStoreState = {
-  skills: [] as SkillConfig[],
-  categories: [] as SkillCategory[],
-  loading: false,
-  error: null as string | null,
-  fetchSkills: mockFetchSkills,
-  installSkill: mockInstallSkill,
-  uninstallSkill: mockUninstallSkill
-}
-
-vi.mock('@/stores/skillStore', () => ({
-  useSkillStore: () => mockStoreState
+vi.mock('@/services/agent/skills', () => ({
+  skillsAPI: {
+    list: mockSkillsList
+  }
 }))
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockStoreState = {
-    skills: [],
-    categories: [],
-    loading: false,
-    error: null,
-    fetchSkills: mockFetchSkills,
-    installSkill: mockInstallSkill,
-    uninstallSkill: mockUninstallSkill
-  }
+  mockSkillsList.mockResolvedValue({
+    skills: [{ id: 'ppt', label: 'PPT', description: 'A presentation skill', kind: 'code' as const }]
+  })
 })
 
 afterEach(() => cleanup())
@@ -48,17 +34,17 @@ describe('Discover Page', () => {
     expect(screen.getByText('discover.title')).toBeTruthy()
   })
 
-  it('should call fetchSkills on mount', async () => {
+  it('should call skillsAPI.list on mount', async () => {
     const { default: Discover } = await import('..')
     render(<Discover />)
-    expect(mockFetchSkills).toHaveBeenCalled()
+    await waitFor(() => {
+      expect(mockSkillsList).toHaveBeenCalled()
+    })
   })
 
   it('should show loading state', async () => {
-    mockStoreState = {
-      ...mockStoreState,
-      loading: true
-    }
+    // Make the API return a never-resolving promise to keep loading state
+    mockSkillsList.mockReturnValue(new Promise(() => {}))
 
     const { default: Discover } = await import('..')
     render(<Discover />)
@@ -66,14 +52,13 @@ describe('Discover Page', () => {
   })
 
   it('should show error state', async () => {
-    mockStoreState = {
-      ...mockStoreState,
-      error: 'Failed to fetch skills'
-    }
+    mockSkillsList.mockRejectedValue(new Error('Failed to fetch skills'))
 
     const { default: Discover } = await import('..')
     render(<Discover />)
-    expect(screen.getByText('Failed to fetch skills')).toBeTruthy()
+    await waitFor(() => {
+      expect(screen.getByText('Failed to fetch skills')).toBeTruthy()
+    })
   })
 })
 

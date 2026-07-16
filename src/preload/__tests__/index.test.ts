@@ -62,6 +62,8 @@ describe('preload bridge', () => {
       'echoAgent',
       'echoConfig',
       'echoMemory',
+      'gateway',
+      'kanban',
       'log',
       'logs',
       'meeting',
@@ -74,6 +76,7 @@ describe('preload bridge', () => {
       'schedules',
       'sessions',
       'settings',
+      'soul',
       'store',
       'system',
       'window'
