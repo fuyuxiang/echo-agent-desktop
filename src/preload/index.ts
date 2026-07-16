@@ -283,6 +283,26 @@ const api: BridgeApi = {
     addLog: (log: Omit<ScheduleExecutionLog, 'id'>) => ipcRenderer.invoke(IpcChannels.schedules.addLog, log)
   },
 
+  backup: {
+    list: () => ipcRenderer.invoke(IpcChannels.backup.list),
+    create: (request: { name: string; description?: string }) =>
+      ipcRenderer.invoke(IpcChannels.backup.create, request),
+    restore: (request: { id: string }) =>
+      ipcRenderer.invoke(IpcChannels.backup.restore, request),
+    delete: (id: string) => ipcRenderer.invoke(IpcChannels.backup.delete, id)
+  },
+
+  settings: {
+    get: () => ipcRenderer.invoke(IpcChannels.settings.get),
+    update: (request: { theme?: string; language?: string; network?: { proxy?: string; timeout: number; retryCount?: number }; metadata?: Record<string, unknown> }) =>
+      ipcRenderer.invoke(IpcChannels.settings.update, request)
+  },
+
+  logs: {
+    list: (request?: { level?: string; startTime?: string; endTime?: string; limit?: number; offset?: number }) =>
+      ipcRenderer.invoke(IpcChannels.logs.list, request)
+  },
+
   platform: {
     isMac: process.platform === 'darwin',
     isWin: process.platform === 'win32',

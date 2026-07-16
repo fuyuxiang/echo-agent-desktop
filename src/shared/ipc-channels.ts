@@ -268,5 +268,24 @@ export const IpcChannels = {
     addTemplate: 'soul:add-template',
     updateTemplate: 'soul:update-template',
     deleteTemplate: 'soul:delete-template'
+  },
+
+  /** 备份管理 CRUD */
+  backup: {
+    list: 'backup:list',
+    create: 'backup:create',
+    restore: 'backup:restore',
+    delete: 'backup:delete'
+  },
+
+  /** 设置管理 */
+  settings: {
+    get: 'settings:get',
+    update: 'settings:update'
+  },
+
+  /** 日志查询 */
+  logs: {
+    list: 'logs:list'
   }
 } as const
