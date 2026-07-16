@@ -19,6 +19,29 @@ vi.mock('@/utils/window', () => ({ appWindow }))
 vi.mock('@/utils/platform', () => ({ isMac: false }))
 vi.mock('@/hooks', () => hooks)
 vi.mock('react-router-dom', () => ({ Outlet: () => <div>Outlet</div> }))
+vi.mock('@/utils', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+}))
+// Mock storage to prevent window.api.store calls from zustand persist middleware
+vi.mock('@/utils/storage', () => ({
+  storage: {
+    get: vi.fn(async () => undefined),
+    set: vi.fn(async () => undefined),
+    remove: vi.fn(async () => undefined)
+  }
+}))
+
+// Mock window.api for stores that use persist middleware (agentStore, userStore, etc.)
+beforeEach(() => {
+  ;(window as any).api = {
+    store: {
+      get: vi.fn(async () => undefined),
+      set: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
+    },
+    log: { write: vi.fn() }
+  }
+})
 
 beforeEach(() => {
   vi.clearAllMocks()

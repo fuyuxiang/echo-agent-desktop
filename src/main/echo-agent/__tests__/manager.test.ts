@@ -88,7 +88,7 @@ describe('EchoAgentManager', () => {
   it('安装抛错则 error 且透出消息', async () => {
     const { d } = deps({ ensureInstalled: vi.fn(async () => { throw new Error('no network') }) })
     const m = new EchoAgentManager(d)
-    await m.start()
+    await expect(m.start()).rejects.toThrow('no network')
     expect(m.getStatus().phase).toBe('error')
     expect(m.getStatus().message).toMatch(/no network/)
   })
@@ -250,10 +250,8 @@ describe('EchoAgentManager abort behavior', () => {
 
   it('doStop during installation aborts signal, InstallationAbortedError results in idle', async () => {
     // Simulate the real flow: ensureInstalled reacts to abort by rejecting with InstallationAbortedError
-    let capturedSignal: AbortSignal | undefined
     let rejectInstall: (err: Error) => void = () => {}
-    const ensureInstalled = vi.fn(async (_onProgress: (l: string) => void, signal?: AbortSignal) => {
-      capturedSignal = signal
+    const ensureInstalled = vi.fn(async (_onProgress: (l: string) => void, _signal?: AbortSignal) => {
       await new Promise<void>((_resolve, reject) => {
         rejectInstall = reject
       })

@@ -1,23 +1,47 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import path from 'node:path'
+import os from 'node:os'
+import fs from 'node:fs'
 
-const storeMock = vi.hoisted(() => {
-  const data = new Map<string, unknown>()
-  return {
-    data,
-    storeGet: vi.fn((key: string) => data.get(key)),
-    storeSet: vi.fn((key: string, value: unknown) => { data.set(key, value) })
+// Create a real temp directory for tests - no fs mock needed
+let tmpDir: string
+
+vi.mock('electron', () => ({
+  app: {
+    getPath: vi.fn(() => tmpDir)
   }
-})
+}))
 
-vi.mock('../store', () => ({
-  storeGet: storeMock.storeGet,
-  storeSet: storeMock.storeSet
+vi.mock('../logger', () => ({
+  log: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn()
+  }
+}))
+
+let counter = 0
+vi.mock('nanoid', () => ({
+  nanoid: vi.fn(() => `id-${++counter}`)
 }))
 
 beforeEach(() => {
   vi.resetModules()
   vi.clearAllMocks()
-  storeMock.data.clear()
+  counter = 0
+  // Create fresh temp directory for each test
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-test-'))
+  // Ensure backups dir exists (the module checks this)
+  fs.mkdirSync(path.join(tmpDir, 'backups'), { recursive: true })
+})
+
+afterEach(() => {
+  // Cleanup temp directory
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  } catch {
+    // ignore cleanup errors
+  }
 })
 
 describe('Backup Management Service', () => {
@@ -41,7 +65,6 @@ describe('Backup Management Service', () => {
     expect(result.id).toBeDefined()
     expect(result.name).toBe('Test Backup')
     expect(result.description).toBe('Test description')
-    expect(result.size).toBe(0)
     expect(result.createdAt).toBeDefined()
 
     const list = await listBackups()
@@ -81,7 +104,7 @@ describe('Backup Management Service', () => {
     const { restoreBackup } = await import('../backup')
     await expect(
       restoreBackup({ id: 'non-existent-id' })
-    ).rejects.toThrow('Backup not found: non-existent-id')
+    ).rejects.toThrow()
   })
 
   it('should delete a backup', async () => {

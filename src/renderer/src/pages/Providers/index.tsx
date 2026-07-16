@@ -53,7 +53,7 @@ export default function ProvidersPage(): React.JSX.Element {
 
   const handleTest = async (id: string): Promise<void> => {
     const result = await testProvider(id)
-    // eslint-disable-next-line no-alert
+     
     alert(result.success ? t('providers.testSuccess') : t('providers.testFailed', { message: result.message }))
   }
 
