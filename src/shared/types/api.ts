@@ -18,6 +18,7 @@ import type { ProviderConfig, ProviderListResponse, ProviderAddRequest, Provider
 import type { SessionConfig, SessionListResponse, SessionSearchRequest, SessionSearchResponse, SessionExportData, SessionImportData, SessionUpdateRequest } from '../session-types'
 import type { ProfileConfig, ProfileListResponse, ProfileAddRequest, ProfileUpdateRequest, ProfileExportData, ProfileImportData } from '../profile-types'
 import type { ScheduleConfig, ScheduleListResponse, ScheduleAddRequest, ScheduleUpdateRequest, ScheduleExecutionLog, ScheduleExecutionLogResponse } from '../schedule-types'
+import type { BackupConfig, BackupListResponse, BackupCreateRequest, BackupRestoreRequest, SettingsConfig, SettingsUpdateRequest, LogListResponse, LogQueryRequest } from '../settings-types'
 
 /**
  * echo-agent 进程状态(与 main 端 echo-agent/types.ts 字段一致;shared 不依赖 main)
@@ -293,6 +294,32 @@ export interface BridgeApi {
     isWin: boolean
     /** process.platform 原始值 */
     platform: string
+  }
+
+  /** 备份管理 */
+  backup: {
+    /** 查询全部备份 */
+    list: () => Promise<BackupListResponse>
+    /** 创建备份 */
+    create: (request: BackupCreateRequest) => Promise<BackupConfig>
+    /** 恢复备份 */
+    restore: (request: BackupRestoreRequest) => Promise<void>
+    /** 删除备份 */
+    delete: (id: string) => Promise<void>
+  }
+
+  /** 设置管理 */
+  settings: {
+    /** 获取设置 */
+    get: () => Promise<SettingsConfig>
+    /** 更新设置 */
+    update: (request: SettingsUpdateRequest) => Promise<SettingsConfig>
+  }
+
+  /** 日志查询 */
+  logs: {
+    /** 查询日志 */
+    list: (request?: LogQueryRequest) => Promise<LogListResponse>
   }
 
   /** echo-agent 进程生命周期 */
