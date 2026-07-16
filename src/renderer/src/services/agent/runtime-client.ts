@@ -48,6 +48,9 @@ class RuntimeClient {
 
   /** 把 RuntimeEvent 按 type 重 emit 成旧 WS 事件名,保持消费点兼容。 */
   private route(ev: Record<string, unknown>): void {
+    // 过滤：只处理当前会话的事件，切换会话后旧事件不再路由
+    if (ev.chatId && ev.chatId !== this.chatId) return
+
     const type = ev.type as string
     if (type === 'streaming') this.emit('message.streaming', ev)
     else if (type === 'final') this.emit('message.final', ev)
