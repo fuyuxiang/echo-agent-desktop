@@ -14,6 +14,7 @@ import type {
 } from './index'
 import type { MeetingDTO, SegmentDTO, SummaryDTO, MeetingSummaryInput } from './meeting'
 import type { ModelConfig, ModelListResponse, ModelAddRequest, ModelUpdateRequest } from '../model-types'
+import type { ProviderConfig, ProviderListResponse, ProviderAddRequest, ProviderUpdateRequest, ProviderTestResult, ProviderTestRequest } from '../provider-types'
 
 /**
  * echo-agent 进程状态(与 main 端 echo-agent/types.ts 字段一致;shared 不依赖 main)
@@ -339,5 +340,21 @@ export interface BridgeApi {
     remove: (id: string) => Promise<void>
     /** 设置活跃模型 */
     setActive: (id: string) => Promise<void>
+  }
+
+  /** 提供商配置 CRUD */
+  providers: {
+    /** 查询全部提供商配置 */
+    list: () => Promise<ProviderListResponse>
+    /** 查询单个提供商配置 */
+    get: (id: string) => Promise<ProviderConfig | null>
+    /** 新增提供商配置 */
+    add: (request: ProviderAddRequest) => Promise<ProviderConfig>
+    /** 更新提供商配置 */
+    update: (request: ProviderUpdateRequest) => Promise<ProviderConfig>
+    /** 删除提供商配置 */
+    remove: (id: string) => Promise<void>
+    /** 测试提供商连接 */
+    test: (request: ProviderTestRequest) => Promise<ProviderTestResult>
   }
 }

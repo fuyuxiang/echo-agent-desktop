@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { BridgeApi, EchoAgentStatus, ModelConfigInput, ProjectMemoryMirrorRow } from '@shared/types/api'
+import type { ProviderAddRequest, ProviderUpdateRequest, ProviderTestRequest } from '@shared/provider-types'
 import type {
   AgentScopeConfig,
   LogLevel,
@@ -234,6 +235,15 @@ const api: BridgeApi = {
     update: (request) => ipcRenderer.invoke(IpcChannels.models.update, request),
     remove: (id: string) => ipcRenderer.invoke(IpcChannels.models.remove, id),
     setActive: (id: string) => ipcRenderer.invoke(IpcChannels.models.setActive, id)
+  },
+
+  providers: {
+    list: () => ipcRenderer.invoke(IpcChannels.providers.list),
+    get: (id: string) => ipcRenderer.invoke(IpcChannels.providers.get, id),
+    add: (request: ProviderAddRequest) => ipcRenderer.invoke(IpcChannels.providers.add, request),
+    update: (request: ProviderUpdateRequest) => ipcRenderer.invoke(IpcChannels.providers.update, request),
+    remove: (id: string) => ipcRenderer.invoke(IpcChannels.providers.remove, id),
+    test: (request: ProviderTestRequest) => ipcRenderer.invoke(IpcChannels.providers.test, request)
   },
 
   platform: {
