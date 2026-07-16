@@ -1,5 +1,6 @@
 import { storeGet, storeSet } from './store'
 import { randomUUID } from 'crypto'
+import { log } from './logger'
 import type {
   BackupConfig,
   BackupListResponse,
@@ -43,7 +44,7 @@ export async function restoreBackup(request: BackupRestoreRequest): Promise<void
     throw new Error(`Backup not found: ${request.id}`)
   }
   // In real implementation, this would restore the backup data
-  console.log(`Restoring backup: ${backup.name}`)
+  log.info(`Restoring backup: ${backup.name}`)
 }
 
 export async function deleteBackup(id: string): Promise<void> {
