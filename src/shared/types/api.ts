@@ -18,6 +18,7 @@ import type { ProfileConfig, ProfileListResponse, ProfileAddRequest, ProfileUpda
 import type { ScheduleConfig, ScheduleListResponse, ScheduleAddRequest, ScheduleUpdateRequest, ScheduleExecutionLog, ScheduleExecutionLogResponse } from '../schedule-types'
 import type { BackupConfig, BackupListResponse, BackupCreateRequest, BackupRestoreRequest, SettingsConfig, SettingsUpdateRequest, LogListResponse, LogQueryRequest } from '../settings-types'
 import type { GatewayPlatform, GatewayConfig, GatewayStatus, GatewayListResponse, GatewayConfigAddRequest, GatewayConfigUpdateRequest, GatewayTestResult } from '../gateway-types'
+import type { OrgStatus, OrgLoginResult, SyncResult, RetrieveResult, OrgDocListResult, OrgScope, PromoteRequest, PromoteResult, MyPromotion } from './org'
 import type { KanbanTask, KanbanBoard, KanbanListResponse, KanbanAddRequest, KanbanUpdateRequest, KanbanMoveRequest } from '../kanban-types'
 import type { SoulConfig, SoulTemplate, SoulListResponse, SoulAddRequest, SoulUpdateRequest } from '../soul-types'
 
@@ -494,5 +495,50 @@ export interface BridgeApi {
     listLogs: (scheduleId: string) => Promise<ScheduleExecutionLogResponse>
     /** 添加执行日志 */
     addLog: (log: Omit<ScheduleExecutionLog, 'id'>) => Promise<ScheduleExecutionLog>
+  }
+
+  /**
+   * 企业组织知识库
+   *
+   * 全部经主进程转发。token 存在 safeStorage 加密区,渲染层拿不到也不该
+   * 拿到 —— 页面若被注入脚本,偷不走企业凭证。
+   */
+  org: {
+    /** 当前接入状态(是否配置、是否登录、缓存量、服务器可达性) */
+    status: () => Promise<OrgStatus>
+    /** 配置服务器地址。切换地址会清掉旧凭证与缓存 */
+    setServer: (url: string) => Promise<OrgStatus>
+    login: (username: string, password: string) => Promise<OrgLoginResult>
+    logout: () => Promise<void>
+    /** 拉取增量知识到本地缓存(离线兜底) */
+    sync: () => Promise<SyncResult>
+    /** 检索组织知识。服务器不可达时自动降级到本地缓存 */
+    retrieve: (
+      query: string,
+      opts?: { limit?: number; multiHop?: boolean }
+    ) => Promise<RetrieveResult>
+    listDocs: (params: {
+      scopeId?: string
+      q?: string
+      page?: number
+      size?: number
+    }) => Promise<OrgDocListResult>
+    /** 可写入的可见范围列表 */
+    scopes: () => Promise<OrgScope[]>
+    /** 提交候选知识。离线时入本地队列,联网后自动补提 */
+    promote: (req: PromoteRequest) => Promise<PromoteResult>
+    /** 我提交的(含本地未提交的) */
+    myPromotions: () => Promise<MyPromotion[]>
+    /** 上报问答质量,用于服务端质量看板 */
+    reportQa: (body: {
+      question: string
+      answered: boolean
+      citedChunks?: string[]
+      topScore?: number
+      latencyMs?: number
+      route?: 'fast' | 'agentic'
+    }) => Promise<void>
+    /** 监听接入状态变化,返回取消监听函数 */
+    onStatusChanged: (callback: (status: OrgStatus) => void) => () => void
   }
 }

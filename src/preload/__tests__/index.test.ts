@@ -67,6 +67,7 @@ describe('preload bridge', () => {
       'log',
       'logs',
       'meeting',
+      'org',
       'permission',
       'platform',
       'profiles',

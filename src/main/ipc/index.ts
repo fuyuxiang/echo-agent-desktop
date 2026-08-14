@@ -11,6 +11,7 @@ import { registerGatewayIpcHandlers } from './gateway'
 import { registerKanbanIpcHandlers } from './kanban'
 import { registerLogHandlers } from './log'
 import { registerLogsIpcHandlers } from './logs'
+import { registerOrgIpc } from './org'
 import { registerMeetingHandlers } from './meeting'
 import { registerPermissionHandlers } from './permission'
 import { registerProfileIpcHandlers } from './profiles'
@@ -54,4 +55,5 @@ export function registerAllIpcHandlers(getWindow: () => Electron.BrowserWindow |
   registerBackupIpcHandlers()
   registerSettingsIpcHandlers()
   registerLogsIpcHandlers()
+  registerOrgIpc(getWindow)
 }
