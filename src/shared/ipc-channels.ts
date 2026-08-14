@@ -274,5 +274,27 @@ export const IpcChannels = {
     getById: 'logs:get-by-id',
     delete: 'logs:delete',
     stats: 'logs:stats'
+  },
+
+  /**
+   * 企业组织知识库(echo-agent-server)
+   *
+   * 全部经主进程转发:凭证存在 safeStorage 加密区,渲染层拿不到 token,
+   * 即便页面被注入脚本也偷不走企业凭证。
+   */
+  org: {
+    status: 'org:status',
+    login: 'org:login',
+    logout: 'org:logout',
+    setServer: 'org:set-server',
+    sync: 'org:sync',
+    retrieve: 'org:retrieve',
+    listDocs: 'org:list-docs',
+    scopes: 'org:scopes',
+    promote: 'org:promote',
+    myPromotions: 'org:my-promotions',
+    reportQa: 'org:report-qa',
+    /** 主进程 -> 渲染层:登录态或可达性变化 */
+    onStatusChanged: 'org:status-changed'
   }
 } as const

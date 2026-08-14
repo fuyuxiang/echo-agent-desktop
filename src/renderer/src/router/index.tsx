@@ -35,6 +35,10 @@ const GatewayPage = lazy(() => import('@/pages/Gateway'))
 const KanbanPage = lazy(() => import('@/pages/Kanban'))
 const SoulPage = lazy(() => import('@/pages/Soul'))
 const DiscoverPage = lazy(() => import('@/pages/Discover'))
+// 企业版:组织知识问答与浏览。未接入企业服务器时页面自身给出引导,
+// 不做路由级拦截 —— 员工需要看到"怎么接入"而不是被重定向走。
+const AskPage = lazy(() => import('@/pages/Ask'))
+const OrgKnowledgePage = lazy(() => import('@/pages/OrgKnowledge'))
 
 /** 懒加载包装(统一 loading 兜底) */
 function lazyLoad(node: React.ReactNode): React.JSX.Element {
@@ -94,6 +98,8 @@ export const router = createHashRouter([
       { path: 'kanban', element: lazyLoad(<KanbanPage />) },
       { path: 'soul', element: lazyLoad(<SoulPage />) },
       { path: 'discover', element: lazyLoad(<DiscoverPage />) },
+      { path: 'ask', element: lazyLoad(<AskPage />) },
+      { path: 'org-knowledge', element: lazyLoad(<OrgKnowledgePage />) },
       {
         path: 'admin',
         element: (
