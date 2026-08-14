@@ -109,7 +109,8 @@ export const useAgentStore = create<AgentState>()(
       version: 2,
       storage: createJSONStorage(() => electronStoreStorage),
       partialize: (s) => ({
-        currentSessionKey: s.currentSessionKey
+        currentSessionKey: s.currentSessionKey,
+        configured: s.configured
       }),
       // v1 -> v2: 删除远程连接字段,只保留 currentSessionKey
       migrate: (persisted, version) => {
