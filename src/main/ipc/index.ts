@@ -20,8 +20,6 @@ import { registerSettingsIpcHandlers } from './settings'
 import { registerSoulIpcHandlers } from './soul'
 import { registerStoreHandlers } from './store'
 import { registerSystemHandlers } from './system'
-import { registerModelIpcHandlers } from './models'
-import { registerProviderIpcHandlers } from './providers'
 import { registerSessionIpcHandlers } from './sessions'
 import { registerWindowHandlers } from './window'
 import { registerApprovalBridge } from '../agent/permission/approval-bridge'
@@ -46,8 +44,6 @@ export function registerAllIpcHandlers(getWindow: () => Electron.BrowserWindow |
   registerAgentChatIpc()
   registerApprovalBridge()
   registerEchoAgentIpc(getWindow)
-  registerModelIpcHandlers()
-  registerProviderIpcHandlers()
   registerSessionIpcHandlers()
   registerProfileIpcHandlers()
   registerScheduleIpcHandlers()
