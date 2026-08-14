@@ -175,26 +175,6 @@ export const IpcChannels = {
     list: 'echo-memory:list'
   },
 
-  /** 模型配置 CRUD */
-  models: {
-    list: 'models:list',
-    get: 'models:get',
-    add: 'models:add',
-    update: 'models:update',
-    remove: 'models:remove',
-    setActive: 'models:set-active'
-  },
-
-  /** 提供商配置 CRUD */
-  providers: {
-    list: 'providers:list',
-    get: 'providers:get',
-    add: 'providers:add',
-    update: 'providers:update',
-    remove: 'providers:remove',
-    test: 'providers:test'
-  },
-
   /** 会话管理 CRUD + 搜索/导入导出 */
   sessions: {
     create: 'sessions:create',

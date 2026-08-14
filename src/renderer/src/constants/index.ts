@@ -32,11 +32,7 @@ export const ROUTES = {
   /** kb 资料库 */
   kbLibrary: '/kb-library',
   /** kb 资料问答 */
-  kbQa: '/kb-qa',
-  /** 模型管理 */
-  models: '/models',
-  /** 供应商管理 */
-  providers: '/providers'
+  kbQa: '/kb-qa'
   // plop-route-constant
 } as const
 

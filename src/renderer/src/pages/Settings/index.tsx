@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { GeneralSection } from './sections/GeneralSection'
 import { ModelSection } from './sections/ModelSection'
 import { LocalModelSection } from './sections/LocalModelSection'
-import { ProviderSection } from './sections/ProviderSection'
 import { BackupSection } from './sections/BackupSection'
 import { LogsSection } from './sections/LogsSection'
 import { NetworkSection } from './sections/NetworkSection'
@@ -16,7 +15,6 @@ type Section =
   | 'general'
   | 'model'
   | 'localModel'
-  | 'providers'
   | 'backup'
   | 'logs'
   | 'network'
@@ -29,7 +27,6 @@ const SECTIONS: { key: Section; label: string }[] = [
   { key: 'general', label: '通用' },
   { key: 'model', label: '模型配置' },
   { key: 'localModel', label: '本地模型' },
-  { key: 'providers', label: '提供商' },
   { key: 'backup', label: '备份' },
   { key: 'logs', label: '日志' },
   { key: 'network', label: '网络' },
@@ -53,8 +50,6 @@ export default function SettingsPage(): React.JSX.Element {
         return <ModelSection />
       case 'localModel':
         return <LocalModelSection />
-      case 'providers':
-        return <ProviderSection />
       case 'backup':
         return <BackupSection />
       case 'logs':
