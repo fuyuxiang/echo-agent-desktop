@@ -17,6 +17,10 @@ export interface InstallerDeps {
   ensureDir: (p: string) => void
   // pip 镜像源,默认 DEFAULT_PIP_INDEX。
   pipIndexUrl?: string
+  // 精确锁定的核心版本(如 "0.9.4")。缺省则装最新,仅用于开发。
+  coreVersion?: string
+  // 企业版插件版本(如 "1.0.2")。缺省 = 个人版,不装插件。
+  orgPluginVersion?: string
   onProgress?: (line: string) => void
   // 中止信号:manager 退出时 abort 取消正在运行的子进程。
   abortSignal?: AbortSignal
@@ -70,9 +74,19 @@ export async function ensureInstalled(deps: InstallerDeps): Promise<void> {
     }
   }
   if (deps.abortSignal?.aborted) throw new InstallationAbortedError()
-  await pip(deps, ['install', 'echo-agent[all]'])
+  // 双包精确锁版:范围号会让不同用户机器上装出不同组合,而插件依赖核心的
+  // pre_llm_call hook 契约。两个版本一起升,不允许各自漂移。
+  await pip(deps, ['install', ...packageSpecs(deps)])
 }
 
 export async function updateEchoAgent(deps: InstallerDeps): Promise<void> {
-  await pip(deps, ['install', '-U', 'echo-agent[all]'])
+  await pip(deps, ['install', '-U', ...packageSpecs(deps)])
+}
+
+// 企业版多装一个 echo-agent-org。个人版不装 —— 插件不存在时 echo-agent
+// 行为与从未有过插件完全一致(entry-points 扫不到即跳过)。
+function packageSpecs(deps: InstallerDeps): string[] {
+  const core = deps.coreVersion ? `echo-agent[all]==${deps.coreVersion}` : 'echo-agent[all]'
+  if (!deps.orgPluginVersion) return [core]
+  return [core, `echo-agent-org==${deps.orgPluginVersion}`]
 }
