@@ -8,6 +8,17 @@ export interface ModelConfigInput {
   model: string
 }
 
+// 企业组织知识库(echo-agent-org 插件)的受管配置。缺省 undefined = 个人版,
+// 此时不写 plugins 段,插件即便装上也不会挂载。
+export interface OrgConfigInput {
+  serverUrl: string
+  // 关掉注入但保留工具:用于排查"答案里的材料是否来自组织库"。
+  injectMode?: 'auto' | 'tool_only' | 'off'
+  materialTokenBudget?: number
+  // false 则强制单跳,控制 token 成本(agentic 循环是 3~10 倍)。
+  allowAgentic?: boolean
+}
+
 // 桌面端作为 echo-agent 的部署宿主,负责写齐"以 gateway 模式服务于本地单用户桌面"
 // 所需的全部受管配置段。这三段每次都被改写为桌面部署所需的值;其余字段(用户或
 // echo-agent setup 写过的)原样保留。
@@ -16,7 +27,11 @@ export interface ModelConfigInput {
 //               + auth.mode=open(loopback 下 echo-agent 放行,无需 token)
 //   - channels: 关 cli、注册 gateway:* 流式通道(否则进程因"无活跃 channel"退出),
 //               并下调流式切片阈值让短回复也逐段吐字
-export function mergeManagedConfig(yamlText: string, cfg: ModelConfigInput): string {
+export function mergeManagedConfig(
+  yamlText: string,
+  cfg: ModelConfigInput,
+  org?: OrgConfigInput
+): string {
   const doc = (yamlText.trim() ? parse(yamlText) : {}) as Record<string, unknown>
   doc.models = {
     default_model: cfg.model,
@@ -37,7 +52,42 @@ export function mergeManagedConfig(yamlText: string, cfg: ModelConfigInput): str
     stream_flush_interval_ms: 250,
     stream_paragraph_mode: false
   }
+  applyOrgConfig(doc, org)
   return stringify(doc)
+}
+
+// 插件配置的实际读取路径是 plugins.config.<config_key>(见 echo-agent 的
+// echo_agent/plugins/manager.py:141),不是 plugins.org。写错位置插件读到空
+// 配置,表现为"装了但不生效"。
+//
+// 只改写 plugins.config.org 这一个子键:用户或其他插件在 plugins 下的配置
+// (trusted_plugins、其他插件的 config)必须原样保留。
+//
+// token 不写在这里 —— 本函数每次都整段改写它托管的键,凭证会被覆盖;
+// 凭证走 orgCredentialsPath() 的独立文件(0600)。
+function applyOrgConfig(doc: Record<string, unknown>, org?: OrgConfigInput): void {
+  const plugins = (doc.plugins ?? {}) as Record<string, unknown>
+  const pluginConfigs = (plugins.config ?? {}) as Record<string, unknown>
+
+  if (!org?.serverUrl) {
+    // 个人版:移除受管段,避免遗留配置让插件指向已废弃的服务器。
+    if ('org' in pluginConfigs) {
+      delete pluginConfigs.org
+      plugins.config = pluginConfigs
+      doc.plugins = plugins
+    }
+    return
+  }
+
+  pluginConfigs.org = {
+    enabled: true,
+    server_url: org.serverUrl,
+    inject_mode: org.injectMode ?? 'auto',
+    material_token_budget: org.materialTokenBudget ?? 6000,
+    allow_agentic: org.allowAgentic ?? true
+  }
+  plugins.config = pluginConfigs
+  doc.plugins = plugins
 }
 
 export interface ConfigWriterDeps {
@@ -47,7 +97,11 @@ export interface ConfigWriterDeps {
   homeDir: string
 }
 
-export function writeManagedConfig(deps: ConfigWriterDeps, cfg: ModelConfigInput): void {
+export function writeManagedConfig(
+  deps: ConfigWriterDeps,
+  cfg: ModelConfigInput,
+  org?: OrgConfigInput
+): void {
   const target = configPath(deps.homeDir)
   let existing = ''
   try {
@@ -57,7 +111,7 @@ export function writeManagedConfig(deps: ConfigWriterDeps, cfg: ModelConfigInput
     // so we never silently overwrite a config we failed to read
     if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e
   }
-  const merged = mergeManagedConfig(existing, cfg)
+  const merged = mergeManagedConfig(existing, cfg, org)
   deps.ensureDir(dirname(target))
   deps.writeFile(target, merged)
 }

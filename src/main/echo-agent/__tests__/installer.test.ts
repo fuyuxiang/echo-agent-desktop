@@ -168,3 +168,50 @@ describe('installer abort behavior', () => {
       .rejects.toBeInstanceOf(InstallationAbortedError)
   })
 })
+
+// 企业版把 echo-agent-org 与核心一起装。个人版不装插件 —— echo-agent 的
+// entry-points 扫不到它,行为与从未有过插件完全一致。
+describe('installer org plugin', () => {
+  const pipArgsOf = (calls: string[][]): string[] =>
+    calls.find((c) => c.includes('pip') && c.includes('install')) ?? []
+
+  it('installs core only when no org plugin version (personal edition)', async () => {
+    const { runner, calls } = fakeRunner()
+    await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
+    const args = pipArgsOf(calls)
+    expect(args).toContain('echo-agent[all]')
+    expect(args.some((a) => a.includes('echo-agent-org'))).toBe(false)
+  })
+
+  it('installs both packages pinned when org plugin version is set', async () => {
+    const { runner, calls } = fakeRunner()
+    await ensureInstalled(
+      baseDeps({
+        runner,
+        pathExists: () => true,
+        coreVersion: '0.9.4',
+        orgPluginVersion: '1.0.2'
+      })
+    )
+    const args = pipArgsOf(calls)
+    expect(args).toContain('echo-agent[all]==0.9.4')
+    expect(args).toContain('echo-agent-org==1.0.2')
+  })
+
+  it('updates both packages together so versions cannot drift apart', async () => {
+    const { runner, calls } = fakeRunner()
+    await updateEchoAgent(
+      baseDeps({ runner, coreVersion: '0.9.4', orgPluginVersion: '1.0.2' })
+    )
+    const args = pipArgsOf(calls)
+    expect(args).toContain('-U')
+    expect(args).toContain('echo-agent[all]==0.9.4')
+    expect(args).toContain('echo-agent-org==1.0.2')
+  })
+
+  it('uses unpinned core when no version given (dev convenience)', async () => {
+    const { runner, calls } = fakeRunner()
+    await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
+    expect(pipArgsOf(calls)).toContain('echo-agent[all]')
+  })
+})

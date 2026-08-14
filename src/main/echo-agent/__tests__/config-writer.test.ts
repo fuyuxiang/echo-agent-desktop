@@ -130,3 +130,70 @@ describe('buildConfigWriterDeps', () => {
     expect(typeof d.ensureDir).toBe('function')
   })
 })
+
+// 插件配置的读取路径是 plugins.config.<config_key>(echo_agent/plugins/manager.py:141)。
+// 写成 plugins.org 会让插件读到空配置 —— 装了但不生效,且没有任何报错。
+describe('mergeManagedConfig org section', () => {
+  const org = { serverUrl: 'https://echo.corp.internal' }
+
+  it('omits plugins block entirely when no org config (personal edition)', () => {
+    const out = parse(mergeManagedConfig('', cfg))
+    expect(out.plugins).toBeUndefined()
+  })
+
+  it('writes org config under plugins.config.org, not plugins.org', () => {
+    const out = parse(mergeManagedConfig('', cfg, org))
+    expect(out.plugins.config.org.enabled).toBe(true)
+    expect(out.plugins.config.org.server_url).toBe('https://echo.corp.internal')
+    expect(out.plugins.org).toBeUndefined()
+  })
+
+  it('defaults inject_mode to auto so org answers are grounded by default', () => {
+    const out = parse(mergeManagedConfig('', cfg, org))
+    expect(out.plugins.config.org.inject_mode).toBe('auto')
+    expect(out.plugins.config.org.allow_agentic).toBe(true)
+    expect(out.plugins.config.org.material_token_budget).toBe(6000)
+  })
+
+  it('honours explicit inject_mode and agentic overrides', () => {
+    const out = parse(
+      mergeManagedConfig('', cfg, {
+        ...org,
+        injectMode: 'tool_only',
+        allowAgentic: false,
+        materialTokenBudget: 3000
+      })
+    )
+    expect(out.plugins.config.org.inject_mode).toBe('tool_only')
+    expect(out.plugins.config.org.allow_agentic).toBe(false)
+    expect(out.plugins.config.org.material_token_budget).toBe(3000)
+  })
+
+  it('preserves other plugins config and trusted_plugins', () => {
+    const existing = [
+      'plugins:',
+      '  trusted_plugins: ["other"]',
+      '  permission_mode: strict',
+      '  config:',
+      '    other:',
+      '      key: value'
+    ].join('\n')
+    const out = parse(mergeManagedConfig(existing, cfg, org))
+    expect(out.plugins.trusted_plugins).toEqual(['other'])
+    expect(out.plugins.permission_mode).toBe('strict')
+    expect(out.plugins.config.other).toEqual({ key: 'value' })
+    expect(out.plugins.config.org.server_url).toBe('https://echo.corp.internal')
+  })
+
+  it('removes a stale org block when switching back to personal edition', () => {
+    const withOrg = mergeManagedConfig('', cfg, org)
+    const out = parse(mergeManagedConfig(withOrg, cfg))
+    expect(out.plugins?.config?.org).toBeUndefined()
+  })
+
+  it('never writes the token into the config file', () => {
+    const text = mergeManagedConfig('', cfg, org)
+    expect(text).not.toContain('access_token')
+    expect(text).not.toContain('credentials')
+  })
+})
