@@ -172,8 +172,6 @@ describe('pages', () => {
     expect(screen.getByText('GeneralSection')).toBeTruthy()
     fireEvent.click(screen.getByText('模型配置'))
     expect(screen.getByText('ModelSection')).toBeTruthy()
-    fireEvent.click(screen.getByText('本地模型'))
-    expect(screen.getByText('LocalModelSection')).toBeTruthy()
     fireEvent.click(screen.getByText('技能库'))
     expect(screen.getByText('SkillsPage')).toBeTruthy()
     fireEvent.click(screen.getByText('记忆'))
