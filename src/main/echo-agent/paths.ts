@@ -9,6 +9,20 @@ export function venvDir(homeDir: string): string {
 export function configPath(homeDir: string): string {
   return join(echoHome(homeDir), 'echo-agent.yaml')
 }
+// echo-agent-org 插件的私有数据区。凭证与离线缓存刻意放在配置文件之外:
+// mergeManagedConfig 会整段改写它托管的键,token 落在那里会被覆盖掉;
+// 且凭证需要 0600 权限,YAML 配置给不了。
+export function orgPluginDir(homeDir: string): string {
+  return join(echoHome(homeDir), 'plugins', 'org')
+}
+// 企业身份的唯一可信来源(JWT)。插件按 mtime 变化重载,故 desktop 重登后无需重启 agent。
+export function orgCredentialsPath(homeDir: string): string {
+  return join(orgPluginDir(homeDir), 'credentials.json')
+}
+// L2/L3 热文档离线缓存。desktop 经 /api/v1/sync 写入,插件只读。
+export function orgCachePath(homeDir: string): string {
+  return join(orgPluginDir(homeDir), 'cache.db')
+}
 export function venvPython(homeDir: string, platform: NodeJS.Platform): string {
   const base = venvDir(homeDir)
   return platform === 'win32' ? join(base, 'Scripts', 'python.exe') : join(base, 'bin', 'python')
