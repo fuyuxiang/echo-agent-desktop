@@ -3,12 +3,14 @@ import { GeneralSection } from './sections/GeneralSection'
 import { ModelSection } from './sections/ModelSection'
 import { ThemeSection } from './sections/ThemeSection'
 import { AboutSection } from './sections/AboutSection'
+import { OrgSection } from './OrgSection'
 import MemoryPage from '@/pages/Memory'
 import SkillsPage from '@/pages/Skills'
 import styles from './settings.module.scss'
 
 type Section =
   | 'general'
+  | 'org'
   | 'model'
   | 'theme'
   | 'memoryStore'
@@ -17,6 +19,8 @@ type Section =
 
 const SECTIONS: { key: Section; label: string }[] = [
   { key: 'general', label: '通用' },
+  // 排在模型配置之前:企业版用户装完第一件事就是接入,模型由服务端下发
+  { key: 'org', label: '企业接入' },
   { key: 'model', label: '模型配置' },
   { key: 'theme', label: '主题' },
   { key: 'skills', label: '技能库' },
@@ -34,6 +38,8 @@ export default function SettingsPage(): React.JSX.Element {
     switch (active) {
       case 'general':
         return <GeneralSection />
+      case 'org':
+        return <OrgSection />
       case 'model':
         return <ModelSection />
       case 'theme':

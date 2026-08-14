@@ -11,6 +11,7 @@ import type {
   SaveDialogOptions
 } from '@shared/types'
 import type { MeetingSummaryInput, SegmentDTO } from '@shared/types/meeting'
+import type { OrgStatus } from '@shared/types/org'
 import type { SessionUpdateRequest, SessionSearchRequest, SessionImportData } from '@shared/session-types'
 import type { ProfileAddRequest, ProfileUpdateRequest, ProfileImportData } from '@shared/profile-types'
 import type { ScheduleAddRequest, ScheduleUpdateRequest, ScheduleExecutionLog } from '@shared/schedule-types'
@@ -321,6 +322,27 @@ const api: BridgeApi = {
     addTemplate: (request) => ipcRenderer.invoke(IpcChannels.soul.addTemplate, request),
     updateTemplate: (request) => ipcRenderer.invoke(IpcChannels.soul.updateTemplate, request),
     deleteTemplate: (id) => ipcRenderer.invoke(IpcChannels.soul.deleteTemplate, id)
+  },
+
+  org: {
+    status: () => ipcRenderer.invoke(IpcChannels.org.status),
+    setServer: (url) => ipcRenderer.invoke(IpcChannels.org.setServer, url),
+    login: (username, password) =>
+      ipcRenderer.invoke(IpcChannels.org.login, username, password),
+    logout: () => ipcRenderer.invoke(IpcChannels.org.logout),
+    sync: () => ipcRenderer.invoke(IpcChannels.org.sync),
+    retrieve: (query, opts) => ipcRenderer.invoke(IpcChannels.org.retrieve, query, opts),
+    listDocs: (params) => ipcRenderer.invoke(IpcChannels.org.listDocs, params),
+    scopes: () => ipcRenderer.invoke(IpcChannels.org.scopes),
+    promote: (req) => ipcRenderer.invoke(IpcChannels.org.promote, req),
+    myPromotions: () => ipcRenderer.invoke(IpcChannels.org.myPromotions),
+    reportQa: (body) => ipcRenderer.invoke(IpcChannels.org.reportQa, body),
+    onStatusChanged: (callback) => {
+      const listener = (_e: Electron.IpcRendererEvent, status: OrgStatus): void =>
+        callback(status)
+      ipcRenderer.on(IpcChannels.org.onStatusChanged, listener)
+      return () => ipcRenderer.removeListener(IpcChannels.org.onStatusChanged, listener)
+    }
   },
 
   platform: {

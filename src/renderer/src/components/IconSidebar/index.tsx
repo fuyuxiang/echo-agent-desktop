@@ -4,6 +4,7 @@ import { ROUTES } from '@/constants'
 import { SessionList } from '@/components/SessionList'
 import { useSessionActions } from '@/hooks/useSessionManager'
 import { useUserStore } from '@/stores/userStore'
+import { useOrgStore } from '@/stores/orgStore'
 import { AccountMenu } from './AccountMenu'
 import styles from './sidebar.module.scss'
 import clsx from 'clsx'
@@ -19,6 +20,15 @@ const navItems: NavItem[] = [
   { icon: <MeetingNavIcon />, route: ROUTES.meeting, label: '会议' }
 ]
 
+/**
+ * 企业版入口。仅在接入了企业服务器后出现 —— 个人版用户看到两个永远
+ * 提示"未接入"的菜单只会困惑。
+ */
+const orgNavItems: NavItem[] = [
+  { icon: <AskIcon />, route: ROUTES.ask, label: '组织问答' },
+  { icon: <OrgKnowledgeIcon />, route: ROUTES.orgKnowledge, label: '组织知识' }
+]
+
 export function IconSidebar(): React.JSX.Element {
   const { t } = useTranslation()
   const location = useLocation()
@@ -27,7 +37,9 @@ export function IconSidebar(): React.JSX.Element {
   const role = useUserStore((s) => s.user?.role)
 
   // 记忆区与技能库已并入设置页,侧边栏只保留我的文档入口
-  const mainNav: NavItem[] = navItems
+  // 企业入口按接入状态动态出现,配置了服务器地址即显示(未登录时页面内引导登录)
+  const orgConfigured = useOrgStore((s) => !!s.status?.configured)
+  const mainNav: NavItem[] = orgConfigured ? [...orgNavItems, ...navItems] : navItems
 
   // 管理入口仅对管理员可见
   const bottomNav: NavItem[] =
@@ -125,6 +137,43 @@ function MeetingNavIcon(): React.JSX.Element {
       <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
       <path d="M12 19v4" />
       <path d="M8 23h8" />
+    </svg>
+  )
+}
+
+function AskIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+  )
+}
+
+function OrgKnowledgeIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12 3 3 7.5l9 4.5 9-4.5L12 3z" />
+      <path d="M3 12.5 12 17l9-4.5" />
+      <path d="M3 17.5 12 22l9-4.5" />
     </svg>
   )
 }
