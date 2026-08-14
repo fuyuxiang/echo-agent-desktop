@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import type { MeetingDTO, SegmentDTO, SummaryDTO } from '@shared/types/meeting'
 import { formatClock } from './format'
 import { toast } from '@/components/Toast'
+import { CandidatePanel } from '@/components/CandidatePanel'
 import styles from './meeting.module.scss'
 
 export default function MeetingDetail(): React.JSX.Element {
@@ -102,6 +103,13 @@ export default function MeetingDetail(): React.JSX.Element {
                 </ul>
               </>
             )}
+            {/* 纪要之后紧跟沉淀入口:刚看完结论正是最想留存它的时候。
+                未接入企业服务器时该组件自身不渲染。 */}
+            <CandidatePanel
+              segments={segments}
+              meetingId={meeting.id}
+              meetingTitle={meeting.title ?? '未命名会议'}
+            />
           </div>
         ) : (
           <div className={styles.empty}>
