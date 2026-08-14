@@ -146,7 +146,9 @@ const api: BridgeApi = {
     markSource: (meetingId: string, source: string) =>
       ipcRenderer.invoke(IpcChannels.meeting.markSource, meetingId, source),
     summarize: (meetingId: string, title: string, segments: SegmentDTO[]) =>
-      ipcRenderer.invoke(IpcChannels.meeting.summarize, meetingId, title, segments)
+      ipcRenderer.invoke(IpcChannels.meeting.summarize, meetingId, title, segments),
+    extractCandidates: (segments: SegmentDTO[]) =>
+      ipcRenderer.invoke(IpcChannels.meeting.extractCandidates, segments)
   },
 
   agentChat: {
