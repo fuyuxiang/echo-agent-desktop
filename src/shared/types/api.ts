@@ -13,8 +13,6 @@ import type {
   SaveDialogOptions
 } from './index'
 import type { MeetingDTO, SegmentDTO, SummaryDTO, MeetingSummaryInput } from './meeting'
-import type { ModelConfig, ModelListResponse, ModelAddRequest, ModelUpdateRequest } from '../model-types'
-import type { ProviderConfig, ProviderListResponse, ProviderAddRequest, ProviderUpdateRequest, ProviderTestResult, ProviderTestRequest } from '../provider-types'
 import type { SessionConfig, SessionListResponse, SessionSearchRequest, SessionSearchResponse, SessionExportData, SessionImportData, SessionUpdateRequest } from '../session-types'
 import type { ProfileConfig, ProfileListResponse, ProfileAddRequest, ProfileUpdateRequest, ProfileExportData, ProfileImportData } from '../profile-types'
 import type { ScheduleConfig, ScheduleListResponse, ScheduleAddRequest, ScheduleUpdateRequest, ScheduleExecutionLog, ScheduleExecutionLogResponse } from '../schedule-types'
@@ -436,38 +434,6 @@ export interface BridgeApi {
   echoMemory: {
     /** 读取认知记忆条目(可选条数上限) */
     list: (limit?: number) => Promise<EchoCognitiveEntry[]>
-  }
-
-  /** 模型配置 CRUD */
-  models: {
-    /** 查询全部模型配置 */
-    list: () => Promise<ModelListResponse>
-    /** 查询单个模型配置 */
-    get: (id: string) => Promise<ModelConfig | null>
-    /** 新增模型配置 */
-    add: (request: ModelAddRequest) => Promise<ModelConfig>
-    /** 更新模型配置 */
-    update: (request: ModelUpdateRequest) => Promise<ModelConfig>
-    /** 删除模型配置 */
-    remove: (id: string) => Promise<void>
-    /** 设置活跃模型 */
-    setActive: (id: string) => Promise<void>
-  }
-
-  /** 提供商配置 CRUD */
-  providers: {
-    /** 查询全部提供商配置 */
-    list: () => Promise<ProviderListResponse>
-    /** 查询单个提供商配置 */
-    get: (id: string) => Promise<ProviderConfig | null>
-    /** 新增提供商配置 */
-    add: (request: ProviderAddRequest) => Promise<ProviderConfig>
-    /** 更新提供商配置 */
-    update: (request: ProviderUpdateRequest) => Promise<ProviderConfig>
-    /** 删除提供商配置 */
-    remove: (id: string) => Promise<void>
-    /** 测试提供商连接 */
-    test: (request: ProviderTestRequest) => Promise<ProviderTestResult>
   }
 
   /** 会话管理 CRUD + 搜索/导入导出 */
