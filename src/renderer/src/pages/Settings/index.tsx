@@ -1,10 +1,6 @@
 import { useState } from 'react'
 import { GeneralSection } from './sections/GeneralSection'
 import { ModelSection } from './sections/ModelSection'
-import { LocalModelSection } from './sections/LocalModelSection'
-import { BackupSection } from './sections/BackupSection'
-import { LogsSection } from './sections/LogsSection'
-import { NetworkSection } from './sections/NetworkSection'
 import { ThemeSection } from './sections/ThemeSection'
 import { AboutSection } from './sections/AboutSection'
 import MemoryPage from '@/pages/Memory'
@@ -14,10 +10,6 @@ import styles from './settings.module.scss'
 type Section =
   | 'general'
   | 'model'
-  | 'localModel'
-  | 'backup'
-  | 'logs'
-  | 'network'
   | 'theme'
   | 'memoryStore'
   | 'skills'
@@ -26,10 +18,6 @@ type Section =
 const SECTIONS: { key: Section; label: string }[] = [
   { key: 'general', label: '通用' },
   { key: 'model', label: '模型配置' },
-  { key: 'localModel', label: '本地模型' },
-  { key: 'backup', label: '备份' },
-  { key: 'logs', label: '日志' },
-  { key: 'network', label: '网络' },
   { key: 'theme', label: '主题' },
   { key: 'skills', label: '技能库' },
   { key: 'memoryStore', label: '记忆' },
@@ -48,14 +36,6 @@ export default function SettingsPage(): React.JSX.Element {
         return <GeneralSection />
       case 'model':
         return <ModelSection />
-      case 'localModel':
-        return <LocalModelSection />
-      case 'backup':
-        return <BackupSection />
-      case 'logs':
-        return <LogsSection />
-      case 'network':
-        return <NetworkSection />
       case 'theme':
         return <ThemeSection />
       case 'skills':
