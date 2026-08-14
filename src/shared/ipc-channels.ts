@@ -114,7 +114,9 @@ export const IpcChannels = {
     get: 'meeting:get',
     remove: 'meeting:remove',
     rename: 'meeting:rename',
-    markSource: 'meeting:mark-source'
+    markSource: 'meeting:mark-source',
+    /** 抽取可沉淀为组织知识的候选条目(企业版) */
+    extractCandidates: 'meeting:extract-candidates'
   },
 
   /** 认知记忆系统(P3) */

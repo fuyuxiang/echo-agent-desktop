@@ -169,3 +169,21 @@ export interface SyncResult {
   revoked: number
   error?: string
 }
+
+/**
+ * 会议中抽取出的候选知识。
+ *
+ * 带原文引用与时间戳,让审核人能核对是否曲解了发言,也让后来人能回溯
+ * "这话是谁在什么时候说的"。
+ */
+export interface KnowledgeCandidate {
+  id: string
+  kind: MemoryKind
+  content: string
+  rationale: string
+  /** 支撑该条的原文片段 */
+  quote: string
+  /** 在录音中的位置(毫秒),便于回听确认 */
+  startMs: number | null
+  speaker: string | null
+}
