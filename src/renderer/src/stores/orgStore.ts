@@ -36,6 +36,17 @@ export function isOrgReady(status: OrgStatus | null): boolean {
   return !!status?.configured && !!status.loggedIn
 }
 
+/**
+ * org 桥接是否可用。
+ *
+ * 正常情况下 preload 一定注入了它,但升级过程中可能出现老 preload 配新
+ * 渲染层的组合。少了这道判断,init() 会抛出无人接管的 rejection,把挂了
+ * 企业组件的整个页面(如会议详情)拖垮。
+ */
+function bridgeReady(): boolean {
+  return typeof window !== 'undefined' && !!window.api?.org
+}
+
 /** 缓存超过一天未更新就值得提示 —— 制度类内容一天的滞后通常可接受。 */
 export function isCacheStale(status: OrgStatus | null, now = Date.now()): boolean {
   if (!status?.lastSyncAt) return false
@@ -51,6 +62,7 @@ export const useOrgStore = create<OrgState>()(
     loggingIn: false,
 
     init: async () => {
+      if (!bridgeReady()) return
       const status = await window.api.org.status()
       set((s) => {
         s.status = status
@@ -70,6 +82,7 @@ export const useOrgStore = create<OrgState>()(
     },
 
     refreshStatus: async () => {
+      if (!bridgeReady()) return
       const status = await window.api.org.status()
       set((s) => {
         s.status = status

@@ -28,6 +28,7 @@ import {
   stopMeetingStream
 } from '../asr'
 import { summarizeMeeting, buildNotifyMessage } from '../echo-agent/meeting-summary'
+import { extractCandidates } from '../meeting/candidates'
 import { getEchoAgentEndpoint } from '../echo-agent'
 import { notifyMeeting } from '../echo-agent/adapters'
 
@@ -127,6 +128,13 @@ export function registerMeetingHandlers(): void {
       }
       return parsed
     }
+  )
+
+  // 候选知识抽取。失败返回空数组而非抛错 —— 抽不出东西只该让候选区为空,
+  // 不能让会议详情页崩掉。
+  ipcMain.handle(
+    IpcChannels.meeting.extractCandidates,
+    (_e, segments: SegmentDTO[]) => extractCandidates(segments)
   )
 
   ipcMain.handle(

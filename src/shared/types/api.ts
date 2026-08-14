@@ -18,7 +18,7 @@ import type { ProfileConfig, ProfileListResponse, ProfileAddRequest, ProfileUpda
 import type { ScheduleConfig, ScheduleListResponse, ScheduleAddRequest, ScheduleUpdateRequest, ScheduleExecutionLog, ScheduleExecutionLogResponse } from '../schedule-types'
 import type { BackupConfig, BackupListResponse, BackupCreateRequest, BackupRestoreRequest, SettingsConfig, SettingsUpdateRequest, LogListResponse, LogQueryRequest } from '../settings-types'
 import type { GatewayPlatform, GatewayConfig, GatewayStatus, GatewayListResponse, GatewayConfigAddRequest, GatewayConfigUpdateRequest, GatewayTestResult } from '../gateway-types'
-import type { OrgStatus, OrgLoginResult, SyncResult, RetrieveResult, OrgDocListResult, OrgScope, PromoteRequest, PromoteResult, MyPromotion } from './org'
+import type { OrgStatus, OrgLoginResult, SyncResult, RetrieveResult, OrgDocListResult, OrgScope, PromoteRequest, PromoteResult, MyPromotion, KnowledgeCandidate } from './org'
 import type { KanbanTask, KanbanBoard, KanbanListResponse, KanbanAddRequest, KanbanUpdateRequest, KanbanMoveRequest } from '../kanban-types'
 import type { SoulConfig, SoulTemplate, SoulListResponse, SoulAddRequest, SoulUpdateRequest } from '../soul-types'
 
@@ -239,6 +239,12 @@ export interface BridgeApi {
       title: string,
       segments: SegmentDTO[]
     ): Promise<{ summary: string; keyPoints: string[]; actionItems: string[] } | null>
+    /**
+     * 抽取可沉淀为组织知识的候选条目(企业版)。
+     * 与 summarize 的区别:纪要是给人读的散文,候选是要进组织库的结构化
+     * 条目 —— 带类型、依据与时间戳锚点。
+     */
+    extractCandidates(segments: SegmentDTO[]): Promise<KnowledgeCandidate[]>
   }
 
   /** 原生 agent 对话主链路(P5) */
