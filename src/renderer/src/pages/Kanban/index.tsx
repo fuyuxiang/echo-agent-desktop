@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useKanbanStore } from '@/stores/kanbanStore'
+import { useOrgStore, isOrgReady } from '@/stores/orgStore'
+import { PromoteDialog } from '@/components/PromoteDialog'
 import type { KanbanTask, KanbanStatus, KanbanPriority } from '@shared/kanban-types'
 import TaskList from './TaskList'
 import TaskForm from './TaskForm'
@@ -21,10 +23,14 @@ export default function KanbanPage(): React.JSX.Element {
 
   const [showForm, setShowForm] = useState(false)
   const [editingTask, setEditingTask] = useState<KanbanTask | null>(null)
+  const [promoteTask, setPromoteTask] = useState<KanbanTask | null>(null)
+  const orgStatus = useOrgStore((s) => s.status)
+  const initOrg = useOrgStore((s) => s.init)
 
   useEffect(() => {
     fetchTasks()
-  }, [fetchTasks])
+    void initOrg()
+  }, [fetchTasks, initOrg])
 
   const handleAdd = (): void => {
     setEditingTask(null)
@@ -58,7 +64,14 @@ export default function KanbanPage(): React.JSX.Element {
   }
 
   const handleMove = async (taskId: string, status: KanbanStatus): Promise<void> => {
+    const before = tasks.find((x) => x.id === taskId)
     await moveTask(taskId, status)
+
+    // 任务刚完成时是回顾解法的最佳时机 —— 过几天细节就忘了,再想沉淀也
+    // 写不出有用的东西。只在首次进入 done 时提示,反复拖动不重复打扰。
+    if (status === 'done' && before && before.status !== 'done' && isOrgReady(orgStatus)) {
+      setPromoteTask(before)
+    }
   }
 
   return (
@@ -84,6 +97,20 @@ export default function KanbanPage(): React.JSX.Element {
           onEdit={handleEdit}
           onDelete={deleteTask}
           onMove={handleMove}
+        />
+      )}
+      {promoteTask && (
+        <PromoteDialog
+          source="task"
+          // 预填任务标题与说明,但类型默认 howto —— 任务沉淀多是"这件事
+          // 该怎么做",而非会上定下的决策。
+          defaultKind="howto"
+          defaultContent={
+            promoteTask.description
+              ? `${promoteTask.title}:${promoteTask.description}`
+              : promoteTask.title
+          }
+          onClose={() => setPromoteTask(null)}
         />
       )}
     </div>

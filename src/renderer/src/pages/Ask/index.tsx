@@ -84,6 +84,7 @@ export function AskPage(): React.JSX.Element {
 
   const offline = status?.reachable === false
   const stale = isCacheStale(status)
+  const staleCount = result?.chunks.filter((c) => c.stale).length ?? 0
 
   return (
     <div className={styles.page}>
@@ -178,6 +179,13 @@ export function AskPage(): React.JSX.Element {
                   {result.fromCache && ' · 本地缓存'}
                 </span>
               </div>
+              {/* 单条卡片各自带「可能过时」标记,但 8 条里有 3 条过时需要逐条
+                  看才能发现。在顶部汇总一次,让用户先知道要留个心。 */}
+              {staleCount > 0 && (
+                <div className={styles.staleNote}>
+                  其中 {staleCount} 条来自时效性内容且已超过 90 天未更新,建议与维护人核实后再依据它做决定。
+                </div>
+              )}
               {result.chunks.map((c, i) => (
                 <CitationCard
                   key={c.chunkId}
