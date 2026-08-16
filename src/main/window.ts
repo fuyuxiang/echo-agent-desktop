@@ -3,6 +3,7 @@ import { BrowserWindow, shell } from 'electron'
 import windowStateKeeper from 'electron-window-state'
 import { is } from '@electron-toolkit/utils'
 import { IpcChannels } from '@shared/ipc-channels'
+import { takePendingDeepLink } from './protocol'
 
 /** 主窗口实例(单窗口应用;多窗口需求出现时再扩展为 Map 管理) */
 let mainWindow: BrowserWindow | null = null
@@ -48,6 +49,11 @@ export function createMainWindow(): BrowserWindow {
   // 准备好再显示,避免白屏闪烁
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+    // 冷启动时 open-url 可能早于 webContents 订阅者注册;补发一次缓存的 deep link
+    const pending = takePendingDeepLink()
+    if (pending) {
+      mainWindow?.webContents.send(IpcChannels.app.onDeepLink, pending)
+    }
   })
 
   // 最大化状态变化推送给渲染层(标题栏按钮图标切换用)

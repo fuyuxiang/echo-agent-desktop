@@ -57,7 +57,9 @@ function installApi(): BridgeApi {
       getVersion: vi.fn(async () => '1.0.0'),
       relaunch: vi.fn(),
       quit: vi.fn(),
-      checkForUpdates: vi.fn(async () => null)
+      checkForUpdates: vi.fn(async () => null),
+      onUpdateDownloaded: vi.fn(() => vi.fn()),
+      installUpdate: vi.fn(async () => true)
     },
     system: {
       notify: vi.fn(async () => undefined),
@@ -187,6 +189,12 @@ describe('utils facades', () => {
     await appControl.checkForUpdates()
     expect(api.app.relaunch).toHaveBeenCalledTimes(1)
     expect(api.app.quit).toHaveBeenCalledTimes(1)
+
+    const offUpdate = vi.fn()
+    vi.mocked(api.app.onUpdateDownloaded).mockReturnValueOnce(offUpdate)
+    expect(appControl.onUpdateDownloaded(vi.fn())).toBe(offUpdate)
+    await expect(appControl.installUpdate()).resolves.toBe(true)
+    expect(api.app.installUpdate).toHaveBeenCalledTimes(1)
 
     await expect(storage.get('k')).resolves.toBe('stored')
     await storage.set('k', 1)

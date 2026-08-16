@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useNavigate } from 'react-router-dom'
 import { TitleBar } from '@/layouts/TitleBar'
 import { IconSidebar } from '@/components/IconSidebar'
 import { useUserStore } from '@/stores/userStore'
@@ -9,7 +9,7 @@ import {
   startProjectMemorySync,
   stopProjectMemorySync
 } from '@/services/project-memory'
-import { logger } from '@/utils'
+import { appControl, logger } from '@/utils'
 import styles from './app-layout.module.scss'
 
 export function AppLayout(): React.JSX.Element {
@@ -18,6 +18,7 @@ export function AppLayout(): React.JSX.Element {
   const bootingRef = useRef(false)
   // 暂时性失败(网络/超时)后的重试节拍:递增即触发一次重装配
   const [retryTick, setRetryTick] = useState(0)
+  const navigate = useNavigate()
 
   // 装配原生 AgentRuntime。ready=UI 可用门(装配/降级/失败兜底后都置位,解除"等待 Agent 连接");
   // configured=runtime 真正装配成功。仅在尚未装配成功时尝试,避免重复装配。
@@ -55,6 +56,19 @@ export function AppLayout(): React.JSX.Element {
     }
     return () => stopProjectMemorySync()
   }, [isAuthed])
+
+  // Deep link(echo-agent://...)唤起时由主进程推送解析后的路径 + query,
+  // 这里拼成 hash 路由的完整地址并跳转。主进程已做白名单校验,这里只负责跳转。
+  useEffect(() => {
+    return appControl.onDeepLink((payload) => {
+      const qs = Object.entries(payload.query)
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+        .join('&')
+      const target = qs ? `${payload.path}?${qs}` : payload.path
+      logger.info('[app-layout] deep link 跳转:', target)
+      navigate(target)
+    })
+  }, [navigate])
 
   return (
     <div className={styles.layout}>
