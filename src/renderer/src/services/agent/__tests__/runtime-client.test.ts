@@ -66,6 +66,24 @@ describe('runtime-client agentWs', () => {
     expect(got.length).toBe(0)
   })
 
+  it('memory-candidate 事件重 emit 到 memory-candidate 通道', async () => {
+    const ws = await load()
+    ws.connect('', 'c1')
+    const got: Array<Record<string, unknown>> = []
+    ws.on('memory-candidate', (p) => got.push(p))
+    eventHandler!({
+      type: 'memory-candidate',
+      chatId: 'c1',
+      content: '团队约定每周一晨会',
+      tags: ['convention'],
+      reason: '多次出现,值得共享'
+    })
+    expect(got).toHaveLength(1)
+    expect(got[0].content).toBe('团队约定每周一晨会')
+    expect(got[0].tags).toEqual(['convention'])
+    expect(got[0].reason).toBe('多次出现,值得共享')
+  })
+
   it('switchSession 通知主进程切换网关会话', async () => {
     const ws = await load()
     ws.connect('', 'c1')

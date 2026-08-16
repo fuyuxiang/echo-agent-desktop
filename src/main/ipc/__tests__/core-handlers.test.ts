@@ -66,7 +66,9 @@ const electron = vi.hoisted(() => {
 })
 
 const updater = vi.hoisted(() => ({
-  checkForUpdates: vi.fn(async () => '2.0.0')
+  checkForUpdates: vi.fn(async () => '2.0.0'),
+  installUpdate: vi.fn(() => true),
+  setUpdateDownloadedListener: vi.fn()
 }))
 
 const asr = vi.hoisted(() => ({
@@ -227,12 +229,13 @@ afterEach(() => {
 })
 
 describe('基础 IPC handlers', () => {
-  it('app handlers 映射版本、重启、退出和检查更新', async () => {
+  it('app handlers 映射版本、重启、退出、检查更新与安装', async () => {
     const { registerAppHandlers } = await import('../app')
     registerAppHandlers()
 
     expect(invoke(IpcChannels.app.getVersion)).toBe('1.2.3')
     expect(await invoke<Promise<string | null>>(IpcChannels.app.checkForUpdates)).toBe('2.0.0')
+    expect(invoke(IpcChannels.app.installUpdate)).toBe(true)
 
     emit(IpcChannels.app.relaunch)
     expect(electron.app.relaunch).toHaveBeenCalledTimes(1)
@@ -240,6 +243,7 @@ describe('基础 IPC handlers', () => {
 
     emit(IpcChannels.app.quit)
     expect(electron.app.quit).toHaveBeenCalledTimes(1)
+    expect(updater.setUpdateDownloadedListener).toHaveBeenCalledTimes(1)
   })
 
   it('asr handlers 透传 stream 生命周期', async () => {
