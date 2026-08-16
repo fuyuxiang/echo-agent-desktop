@@ -20,7 +20,12 @@ vi.mock('@/utils/platform', () => ({ isMac: false }))
 vi.mock('@/hooks', () => hooks)
 vi.mock('react-router-dom', () => ({ Outlet: () => <div>Outlet</div> }))
 vi.mock('@/utils', () => ({
-  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  appControl: {
+    onDeepLink: vi.fn(() => () => undefined),
+    onUpdateDownloaded: vi.fn(() => () => undefined),
+    installUpdate: vi.fn(async () => false)
+  }
 }))
 // Mock storage to prevent window.api.store calls from zustand persist middleware
 vi.mock('@/utils/storage', () => ({
@@ -73,7 +78,13 @@ describe('layouts', () => {
     vi.resetModules()
     vi.doMock('@/layouts/TitleBar', () => ({ TitleBar: () => <div>TitleBar</div> }))
     vi.doMock('@/components/IconSidebar', () => ({ IconSidebar: () => <div>IconSidebar</div> }))
-    vi.doMock('react-router-dom', () => ({ Outlet: () => <div>Outlet</div> }))
+    vi.doMock('@/utils/app', () => ({
+      appControl: { onDeepLink: vi.fn(() => () => undefined), onUpdateDownloaded: vi.fn(() => () => undefined), installUpdate: vi.fn(async () => false) }
+    }))
+    vi.doMock('react-router-dom', () => ({
+      Outlet: () => <div>Outlet</div>,
+      useNavigate: () => vi.fn()
+    }))
     const [{ AppLayout }, { MainLayout }] = await Promise.all([
       import('../AppLayout'),
       import('../MainLayout')

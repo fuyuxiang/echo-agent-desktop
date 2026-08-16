@@ -58,7 +58,13 @@ export const IpcChannels = {
     getVersion: 'app:get-version',
     relaunch: 'app:relaunch',
     quit: 'app:quit',
-    checkForUpdates: 'app:check-for-updates'
+    checkForUpdates: 'app:check-for-updates',
+    /** 主进程 -> 渲染层:更新已下载,询问用户是否立即安装 */
+    onUpdateDownloaded: 'app:update-downloaded',
+    /** 渲染层 -> 主进程:用户确认后立即退出并安装已下载的更新 */
+    installUpdate: 'app:install-update',
+    /** 主进程 -> 渲染层:deep link 已解析,带跳转路径 + query */
+    onDeepLink: 'app:deep-link'
   },
 
   /** 系统能力(通知/剪贴板/shell/对话框) */

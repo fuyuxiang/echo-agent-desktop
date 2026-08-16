@@ -34,7 +34,7 @@ export function registerAllIpcHandlers(getWindow: () => Electron.BrowserWindow |
   registerStoreHandlers()
   registerDbHandlers()
   registerPermissionHandlers()
-  registerAppHandlers()
+  registerAppHandlers(getWindow)
   registerSystemHandlers()
   registerLogHandlers()
   registerAgentIpcHandlers()

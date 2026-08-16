@@ -82,7 +82,22 @@ const api: BridgeApi = {
     getVersion: () => ipcRenderer.invoke(IpcChannels.app.getVersion),
     relaunch: () => ipcRenderer.send(IpcChannels.app.relaunch),
     quit: () => ipcRenderer.send(IpcChannels.app.quit),
-    checkForUpdates: () => ipcRenderer.invoke(IpcChannels.app.checkForUpdates)
+    checkForUpdates: () => ipcRenderer.invoke(IpcChannels.app.checkForUpdates),
+    onUpdateDownloaded: (callback) => {
+      const listener = (_e: Electron.IpcRendererEvent, info: { version: string }): void =>
+        callback(info)
+      ipcRenderer.on(IpcChannels.app.onUpdateDownloaded, listener)
+      return () => ipcRenderer.removeListener(IpcChannels.app.onUpdateDownloaded, listener)
+    },
+    installUpdate: () => ipcRenderer.invoke(IpcChannels.app.installUpdate) as Promise<boolean>,
+    onDeepLink: (callback) => {
+      const listener = (
+        _e: Electron.IpcRendererEvent,
+        payload: { path: string; query: Record<string, string> }
+      ): void => callback(payload)
+      ipcRenderer.on(IpcChannels.app.onDeepLink, listener)
+      return () => ipcRenderer.removeListener(IpcChannels.app.onDeepLink, listener)
+    }
   },
 
   system: {
