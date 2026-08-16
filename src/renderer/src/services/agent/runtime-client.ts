@@ -66,6 +66,10 @@ class RuntimeClient {
     else if (type === 'done') this.emit('message.done', ev)
     // 兼容旧 'final' 裸事件名(summarize 同时监听了 'final')
     if (type === 'final') this.emit('final', ev)
+    // 项目记忆候选下行:agent 推送 type='memory-candidate' 的事件后,
+    // 这里把它转成 'memory-candidate' 通道供 ChatPage 触发 ShareMemoryDialog。
+    // 协议字段尚未联调约定,但消费点已就位,接入零改动。
+    if (type === 'memory-candidate') this.emit('memory-candidate', ev)
   }
 
   private emit(event: string, payload: Record<string, unknown>): void {

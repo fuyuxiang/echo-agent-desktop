@@ -171,6 +171,14 @@ export interface BridgeApi {
     quit: () => void
     /** 检查更新(更新服务器未配置时返回 null) */
     checkForUpdates: () => Promise<string | null>
+    /** 监听更新下载完成事件,返回取消监听函数 */
+    onUpdateDownloaded: (callback: (info: { version: string }) => void) => () => void
+    /** 立即退出并安装已下载的更新;未启用更新或未打包时返回 false */
+    installUpdate: () => Promise<boolean>
+    /** 监听 deep link(echo-agent://...),渲染层收到后跳转到 payload.path */
+    onDeepLink: (
+      callback: (payload: { path: string; query: Record<string, string> }) => void
+    ) => () => void
   }
 
   /** 系统能力 */

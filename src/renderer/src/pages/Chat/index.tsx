@@ -461,6 +461,24 @@ export default function ChatPage(): React.JSX.Element {
     }
   }, [])
 
+  // 订阅 agent 下行的项目记忆候选事件,触发 ShareMemoryDialog。
+  // 接入点已就位:运行时推送 type='memory-candidate' 且 payload 含 content/tags/reason 时,
+  // 自动设置 candidate 触发弹窗。当前 WS 协议尚未约定该下行信号,这里不臆造协议、不做假数据自动弹窗,
+  // 仅作为消费端的预留接入。
+  useEffect(() => {
+    const handler = (payload: Record<string, unknown>): void => {
+      const { content, tags, reason } = payload
+      if (typeof content !== 'string' || content.length === 0) return
+      const nextTags = Array.isArray(tags)
+        ? tags.filter((t): t is string => typeof t === 'string')
+        : []
+      const nextReason = typeof reason === 'string' ? reason : undefined
+      setCandidate({ content, tags: nextTags, reason: nextReason })
+    }
+    agentWs.on('memory-candidate', handler)
+    return () => agentWs.off('memory-candidate', handler)
+  }, [])
+
   // 实际发送一段用户文本到 agent(注入项目记忆 + 中文指令);供首次发送与重新生成复用
   const dispatchToAgent = useCallback(
     async (text: string, attachments?: Array<{ id: string; name: string }>) => {
@@ -593,10 +611,6 @@ export default function ChatPage(): React.JSX.Element {
     },
     [candidate]
   )
-
-  // TODO(Task 11 联调): 候选来源待与 echo-agent 联调确定——
-  // 目前 WS 协议尚未约定"值得共享的项目记忆候选"的下行信号，
-  // 不臆造协议、不做假数据自动弹窗。届时在收到该信号处调用 setCandidate(candidate) 即可触发弹窗。
 
   const handleKeyDown = (e: React.KeyboardEvent): void => {
     if (e.key === 'Enter' && !e.shiftKey) {
