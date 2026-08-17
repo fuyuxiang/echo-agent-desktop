@@ -162,7 +162,7 @@ export class OrgManager {
     query: string,
     opts: {
       limit?: number
-      multiHop?: boolean
+      multi_hop?: boolean
       scopes?: Array<'org' | 'team'>
     } = {}
   ): Promise<RetrieveResult> {
@@ -171,7 +171,7 @@ export class OrgManager {
       const res = await this.deps.client.retrieve({
         query,
         limit: opts.limit ?? 8,
-        multiHop: opts.multiHop,
+        multi_hop: opts.multi_hop,
         ...(wantScopes ? { scopes: wantScopes } : {})
       })
       this.reachable = true
@@ -318,9 +318,9 @@ export class OrgManager {
   async reportQa(body: {
     question: string
     answered: boolean
-    citedChunks?: string[]
-    topScore?: number
-    latencyMs?: number
+    cited_chunks?: string[]
+    top_score?: number
+    latency_ms?: number
     route?: 'fast' | 'agentic'
   }): Promise<void> {
     try {
@@ -330,7 +330,7 @@ export class OrgManager {
     }
   }
 
-  listDocs(params: { scopeId?: string; q?: string; page?: number; size?: number }) {
+  listDocs(params: { scope_id?: string; q?: string; page?: number; size?: number }) {
     return this.deps.client.listDocs(params)
   }
 }

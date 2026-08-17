@@ -59,7 +59,7 @@ export function OrgKnowledgePage(): React.JSX.Element {
       const res = await window.api.org.listDocs({
         page,
         size: 20,
-        scopeId: scopeId || undefined,
+        scope_id: scopeId || undefined,
         q: keyword || undefined
       })
       setDocs(res.items)
