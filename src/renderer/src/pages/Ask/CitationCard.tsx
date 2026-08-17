@@ -60,6 +60,14 @@ export function CitationCard({
       : chunk.sourceType === 'cache' ? '缓存'
       : '文档'
 
+  // L1/L2/L3 来源层级:让员工一眼看出这条引用来自个人记忆、团队还是组织层。
+  // L1 由 L1/L2/L3 合并层在桌面端补;当前服务端只发 L2/L3。
+  const layerLabel =
+    chunk.source === 'L1' ? 'L1 个人'
+      : chunk.source === 'L2' ? 'L2 团队'
+      : chunk.source === 'L3' ? 'L3 组织'
+      : null
+
   return (
     <article className={styles.card}>
       <header className={styles.cardHead}>
@@ -71,6 +79,7 @@ export function CitationCard({
         <span className={chunk.scopeKind === 'org' ? styles.tagOrg : styles.tagTeam}>
           {chunk.scopeKind === 'org' ? '全公司' : '团队'}
         </span>
+        {layerLabel && <span className={styles.tagLayer}>{layerLabel}</span>}
         <span className={styles.typeTag}>{typeLabel}</span>
         {chunk.stale && <span className={styles.tagStale}>可能过时</span>}
       </header>
