@@ -23,11 +23,13 @@ describe('Settings Types', () => {
         proxy: '',
         timeout: 30000
       },
+      agentRuntime: 'python',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }
     expect(settings).toBeDefined()
     expect(settings.theme).toBe('dark')
+    expect(settings.agentRuntime).toBe('python')
   })
 
   it('should support optional fields in SettingsConfig', () => {
@@ -40,6 +42,7 @@ describe('Settings Types', () => {
         timeout: 60000,
         retryCount: 3
       },
+      agentRuntime: 'python',
       metadata: { version: 2 },
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
