@@ -123,7 +123,7 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
 
   ipcMain.handle(
     IpcChannels.org.retrieve,
-    async (_e, query: string, opts?: { limit?: number; multiHop?: boolean }) => {
+    async (_e, query: string, opts?: { limit?: number; multi_hop?: boolean }) => {
       try {
         return await manager!.retrieve(query, opts ?? {})
       } catch (e) {
@@ -149,7 +149,7 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
 
   ipcMain.handle(
     IpcChannels.org.listDocs,
-    async (_e, params: { scopeId?: string; q?: string; page?: number; size?: number }) => {
+    async (_e, params: { scope_id?: string; q?: string; page?: number; size?: number }) => {
       try {
         return await manager!.listDocs(params ?? {})
       } catch (e) {

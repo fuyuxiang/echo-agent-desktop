@@ -209,10 +209,14 @@ export class OrgClient {
   }
 
   // ── 检索 ────────────────────────────────────────────────────────────────
+  /**
+   * snake_case 字段:与方案 §4.2 服务端契约一致。
+   * 服务端 schema 同时接受 camelCase 兼容旧调用,这里统一走 snake_case。
+   */
   retrieve(body: {
     query: string
     limit?: number
-    multiHop?: boolean
+    multi_hop?: boolean
     /** 手动限定 scope 子集:undefined = 全部可见,'org' 仅组织,'team' 仅团队,'local' 仅本地。 */
     scopes?: Array<'org' | 'team'>
   }): Promise<RetrieveResult> {
@@ -221,13 +225,13 @@ export class OrgClient {
 
   // ── 文档 ────────────────────────────────────────────────────────────────
   listDocs(params: {
-    scopeId?: string
+    scope_id?: string
     q?: string
     page?: number
     size?: number
   }): Promise<OrgDocListResult> {
     const qs = new URLSearchParams()
-    if (params.scopeId) qs.set('scopeId', params.scopeId)
+    if (params.scope_id) qs.set('scope_id', params.scope_id)
     if (params.q) qs.set('q', params.q)
     qs.set('page', String(params.page ?? 1))
     qs.set('size', String(params.size ?? 20))
@@ -251,9 +255,9 @@ export class OrgClient {
   qaEvent(body: {
     question: string
     answered: boolean
-    citedChunks?: string[]
-    topScore?: number
-    latencyMs?: number
+    cited_chunks?: string[]
+    top_score?: number
+    latency_ms?: number
     route?: 'fast' | 'agentic'
   }): Promise<{ id: string }> {
     return this.request('/api/v1/qa-events', { method: 'POST', body: JSON.stringify(body) })
@@ -281,7 +285,7 @@ export class OrgClient {
     purgeAll: boolean
     hasMore: boolean
   }> {
-    const qs = new URLSearchParams({ cursor: String(cursor), deviceId })
+    const qs = new URLSearchParams({ cursor: String(cursor), device_id: deviceId })
     return this.request(`/api/v1/sync?${qs.toString()}`)
   }
 }

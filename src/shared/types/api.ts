@@ -529,10 +529,10 @@ export interface BridgeApi {
     /** 检索组织知识。服务器不可达时自动降级到本地缓存 */
     retrieve: (
       query: string,
-      opts?: { limit?: number; multiHop?: boolean; scopes?: Array<'org' | 'team'> }
+      opts?: { limit?: number; multi_hop?: boolean; scopes?: Array<'org' | 'team'> }
     ) => Promise<RetrieveResult>
     listDocs: (params: {
-      scopeId?: string
+      scope_id?: string
       q?: string
       page?: number
       size?: number
@@ -547,9 +547,9 @@ export interface BridgeApi {
     reportQa: (body: {
       question: string
       answered: boolean
-      citedChunks?: string[]
-      topScore?: number
-      latencyMs?: number
+      cited_chunks?: string[]
+      top_score?: number
+      latency_ms?: number
       route?: 'fast' | 'agentic'
     }) => Promise<void>
     /** 监听接入状态变化,返回取消监听函数 */
