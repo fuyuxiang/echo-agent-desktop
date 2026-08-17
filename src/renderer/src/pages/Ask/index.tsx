@@ -55,9 +55,9 @@ export function AskPage(): React.JSX.Element {
         void window.api.org.reportQa({
           question: trimmed,
           answered: res.chunks.length > 0 || res.memories.length > 0,
-          citedChunks: res.chunks.map((c) => c.chunkId),
-          topScore: res.chunks[0]?.score,
-          latencyMs: Date.now() - started,
+          cited_chunks: res.chunks.map((c) => c.chunkId),
+          top_score: res.chunks[0]?.score,
+          latency_ms: Date.now() - started,
           route: deep ? 'agentic' : 'fast'
         })
       } catch (e) {
