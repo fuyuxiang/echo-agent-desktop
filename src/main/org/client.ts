@@ -161,6 +161,11 @@ export class OrgClient {
     }
   }
 
+  /** 给 OrgManager 主动获取一次当前 token(写插件凭证用)。 */
+  async getTokens(): Promise<Tokens | null> {
+    return this.deps.getTokens()
+  }
+
   // ── 认证 ────────────────────────────────────────────────────────────────
   async login(username: string, password: string, deviceId: string): Promise<OrgUser> {
     const res = await this.raw('/api/v1/auth/login', {
@@ -208,6 +213,8 @@ export class OrgClient {
     query: string
     limit?: number
     multiHop?: boolean
+    /** 手动限定 scope 子集:undefined = 全部可见,'org' 仅组织,'team' 仅团队,'local' 仅本地。 */
+    scopes?: Array<'org' | 'team'>
   }): Promise<RetrieveResult> {
     return this.request('/api/v1/retrieve', { method: 'POST', body: JSON.stringify(body) })
   }

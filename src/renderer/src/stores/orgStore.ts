@@ -151,7 +151,18 @@ export const useOrgStore = create<OrgState>()(
         s.askScope = scope
       }),
 
-    retrieve: (query, opts) => window.api.org.retrieve(query, opts),
+    retrieve: (query, opts) => {
+      // askScope → scopes 过滤;'local' 表示只查 L1 个人记忆,不在组织请求中传递,
+      // 由调用方在 UI 层合并;这里只处理 'org'/'team'。
+      const s = get()
+      const askScope = s.askScope
+      const scopesParam =
+        askScope === 'org' ? (['org'] as const) :
+        askScope === 'team' ? (['team'] as const) :
+        askScope === 'all' ? undefined :
+        undefined // 'local' 不混入服务端请求
+      return window.api.org.retrieve(query, { ...(opts ?? {}), scopes: scopesParam as Array<'org' | 'team'> | undefined })
+    },
 
     promote: (req) => window.api.org.promote(req),
 

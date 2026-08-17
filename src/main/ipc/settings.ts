@@ -16,9 +16,16 @@ function getOrCreateSettings(): SettingsConfig {
       network: {
         timeout: 30000
       },
+      // 默认唯一支持的运行时:Python echo-agent。第二期会删除 legacy-ts。
+      agentRuntime: 'python',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }
+    storeSet(SETTINGS_KEY, settings)
+  }
+  // 兼容旧 settings:补一个默认 runtime,不让旧存储里缺字段。
+  if (!settings.agentRuntime) {
+    settings.agentRuntime = 'python'
     storeSet(SETTINGS_KEY, settings)
   }
   return settings
@@ -35,6 +42,7 @@ export async function updateSettings(request: SettingsUpdateRequest): Promise<Se
     ...(request.theme !== undefined && { theme: request.theme }),
     ...(request.language !== undefined && { language: request.language }),
     ...(request.network !== undefined && { network: request.network }),
+    ...(request.agentRuntime !== undefined && { agentRuntime: request.agentRuntime }),
     ...(request.metadata !== undefined && { metadata: request.metadata }),
     updatedAt: new Date().toISOString()
   }
