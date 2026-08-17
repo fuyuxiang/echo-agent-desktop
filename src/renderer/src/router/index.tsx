@@ -39,6 +39,8 @@ const DiscoverPage = lazy(() => import('@/pages/Discover'))
 // 不做路由级拦截 —— 员工需要看到"怎么接入"而不是被重定向走。
 const AskPage = lazy(() => import('@/pages/Ask'))
 const OrgKnowledgePage = lazy(() => import('@/pages/OrgKnowledge'))
+// echo://doc/<id>/page/<n> 引用跳转落地:DocViewer 拉原文/PDF 并按页渲染。
+const DocViewerPage = lazy(() => import('@/pages/Knowledge/DocViewer'))
 
 /** 懒加载包装(统一 loading 兜底) */
 function lazyLoad(node: React.ReactNode): React.JSX.Element {
@@ -85,6 +87,7 @@ export const router = createHashRouter([
       { index: true, element: <Navigate to="chat" replace /> },
       { path: 'chat', element: lazyLoad(<ChatPage />) },
       { path: 'knowledge', element: lazyLoad(<KnowledgePage />) },
+      { path: 'knowledge/doc', element: lazyLoad(<DocViewerPage />) },
       { path: 'skills', element: lazyLoad(<SkillsPage />) },
       { path: 'channels', element: lazyLoad(<ChannelsPage />) },
       { path: 'settings', element: lazyLoad(<SettingsPage />) },

@@ -3,6 +3,12 @@ import type { NotifyOptions, OpenDialogOptions, SaveDialogOptions } from '@share
 import { IpcChannels } from '@shared/ipc-channels'
 import { log } from '../logger'
 import { getMainWindow } from '../window'
+import { parseDocReference } from '../protocol'
+
+/** 从 echo://doc/<id>... URL 提取 docId;解析失败返回空串。 */
+function extractDocId(url: string): string {
+  return parseDocReference(url)?.docId ?? ''
+}
 
 /** 注册系统能力类 IPC(通知/剪贴板/shell/对话框) */
 export function registerSystemHandlers(): void {
@@ -24,14 +30,16 @@ export function registerSystemHandlers(): void {
   )
 
   ipcMain.handle(IpcChannels.system.openExternal, (_e, url: string) => {
-    // echo://doc/<id>/page/<n> 引用跳转:走文档查看器,不发 OS-level openExternal,
-    // 由渲染层 CitationCard 监听 onDocReference 事件后自己拉原文。
+    // echo://doc/<id>/page/<n> 引用跳转:把 ref 解析成 hash query 推到渲染层,
+    // 由 /knowledge/doc 路由的 DocViewer 拉原文/PDF。
     if (url.startsWith('echo://')) {
       const win = getMainWindow()
       if (win && !win.isDestroyed()) {
+        const ref = encodeURIComponent(url)
+        // 触发渲染层 navigate;用广播 deep link 让前端用 react-router 跳转。
         win.webContents.send(IpcChannels.app.onDeepLink, {
           path: '/knowledge/doc',
-          query: { ref: url }
+          query: { id: extractDocId(url), ref }
         })
       }
       return
