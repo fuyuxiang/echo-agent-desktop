@@ -38,9 +38,27 @@ export function CitationCard({
   const long = chunk.text.length > 300
 
   const open = async (): Promise<void> => {
-    // 主进程按 openUrl 决定用哪种查看器(PDF 定位到页、媒体 seek 到秒)。
+    // 主进程按 openUrl 协议分发:
+    //   - echo://doc/<id>/page/<n>  → 跳到知识库文档查看器并定位 PDF 页;
+    //   - echo://doc/<id>/t/<ms>     → 媒体查看器 seek 到时间戳;
+    //   - 其余 http/https           → shell.openExternal。
+    // 真实查看器后续接入;这里先确保 openExternal 路径能识别 echo:// 并触发
+    // DeepLink 广播,渲染层路由 /knowledge/doc 拉原文。
     await window.api.system.openExternal(chunk.citation.openUrl)
   }
+
+  // 文档类型标签:告诉用户"这是 PDF / 视频 / 纯文本" —— 决定后面打开方式。
+  const typeLabel =
+    chunk.sourceType === 'pdf' ? 'PDF'
+      : chunk.sourceType === 'docx' ? 'Word'
+      : chunk.sourceType === 'pptx' ? 'PPT'
+      : chunk.sourceType === 'xlsx' ? '表格'
+      : chunk.sourceType === 'audio' ? '音频'
+      : chunk.sourceType === 'video' ? '视频'
+      : chunk.sourceType === 'image' ? '图片'
+      : chunk.sourceType === 'meeting' ? '会议'
+      : chunk.sourceType === 'cache' ? '缓存'
+      : '文档'
 
   return (
     <article className={styles.card}>
@@ -53,6 +71,7 @@ export function CitationCard({
         <span className={chunk.scopeKind === 'org' ? styles.tagOrg : styles.tagTeam}>
           {chunk.scopeKind === 'org' ? '全公司' : '团队'}
         </span>
+        <span className={styles.typeTag}>{typeLabel}</span>
         {chunk.stale && <span className={styles.tagStale}>可能过时</span>}
       </header>
 

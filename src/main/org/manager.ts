@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { chmod, mkdir, unlink, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type {
   OrgStatus,
   OrgUser,
@@ -11,6 +13,39 @@ import type {
 } from '@shared/types/org'
 import { OrgClient, OrgAuthError, OrgUnavailableError } from './client'
 import type { OrgCache } from './cache'
+
+/**
+ * 凭证文件路径。echo-agent-org 插件按 mtime 变化重载,桌面只要写一次
+ * 文件,Python agent 下次启动即会读到新 token。退出/换账号时清空文件。
+ */
+function pluginCredentialsPath(): string {
+  const home = process.env.ECHO_AGENT_HOME ?? join(process.env.HOME ?? '~', '.echo-agent')
+  return join(home, 'plugins', 'org', 'credentials.json')
+}
+
+async function writeCredentialsFile(payload: {
+  accessToken: string
+  refreshToken: string
+  userId: string
+}): Promise<void> {
+  const path = pluginCredentialsPath()
+  await mkdir(join(path, '..'), { recursive: true })
+  await writeFile(path, JSON.stringify(payload, null, 2))
+  // best-effort chmod,Windows 上无效
+  try {
+    await chmod(path, 0o600)
+  } catch {
+    /* ignore */
+  }
+}
+
+async function clearCredentialsFile(): Promise<void> {
+  try {
+    await unlink(pluginCredentialsPath())
+  } catch {
+    /* ignore */
+  }
+}
 
 /**
  * 组织知识服务。降级策略全部集中在这里,页面与 agent 都不必各自处理。
@@ -57,6 +92,16 @@ export class OrgManager {
     try {
       this.user = await this.deps.client.login(username, password, this.deps.deviceId)
       this.reachable = true
+      // 写一份凭证到 echo-agent-org 插件期望的文件位置,插件按 mtime
+      // 重载,Python agent 下次启动即会读到企业 token。
+      const tokens = await this.deps.client.getTokens()
+      if (tokens) {
+        await writeCredentialsFile({
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          userId: this.user.id
+        })
+      }
       // 登录后立刻拉一次,让离线兜底从第一分钟就有内容。失败不影响登录成功。
       void this.sync().catch(() => {})
       return { ok: true, user: this.user }
@@ -67,10 +112,15 @@ export class OrgManager {
   }
 
   async logout(): Promise<void> {
-    await this.deps.client.logout()
+    try {
+      await this.deps.client.logout()
+    } catch {
+      // 服务端不可达也要能本地登出,否则用户被困住
+    }
     this.user = null
-    // 登出即清缓存:换人登录同一台机器时,不能让上一个人的可见范围留在本地。
-    this.deps.cache.clearAll()
+    // 登出即清缓存 + 清插件凭证:换人登录同一台机器时,不能让上一个人的可见范围留在本地,
+    // 也不能让插件读到旧 token。
+    await Promise.all([clearCredentialsFile(), Promise.resolve(this.deps.cache.clearAll())])
   }
 
   /** 启动时恢复会话。失败静默 —— 未登录是正常状态,不该弹错误。 */
@@ -100,13 +150,29 @@ export class OrgManager {
    *
    * 返回结果里的 fromCache 让 UI 能明确告知"这是缓存内容,可能不是最新" ——
    * 静默降级会让员工把过期信息当现行制度用。
+   *
+   * scope 过滤:
+   *   - undefined → 服务端按 JWT 实时可见 scope 全集;
+   *   - ['org']   → 仅查组织层;
+   *   - ['team']  → 仅查用户可见的团队层;
+   *   - ['org','team'] → 同 undefined,显式表达。
+   * 'local' 不传:它指 L1 个人记忆,由桌面端另一条路径返回,不混入此处。
    */
-  async retrieve(query: string, opts: { limit?: number; multiHop?: boolean } = {}): Promise<RetrieveResult> {
+  async retrieve(
+    query: string,
+    opts: {
+      limit?: number
+      multiHop?: boolean
+      scopes?: Array<'org' | 'team'>
+    } = {}
+  ): Promise<RetrieveResult> {
+    const wantScopes = this.scopesFromAskScope(opts.scopes)
     try {
       const res = await this.deps.client.retrieve({
         query,
         limit: opts.limit ?? 8,
-        multiHop: opts.multiHop
+        multiHop: opts.multiHop,
+        ...(wantScopes ? { scopes: wantScopes } : {})
       })
       this.reachable = true
       return res
@@ -118,8 +184,28 @@ export class OrgManager {
       }
       this.reachable = false
       this.deps.log?.info(`组织检索降级到本地缓存: ${(e as Error).message}`)
+      // 缓存层目前不识别 scope 过滤 —— 离线时退到全量缓存,UI 会标注 fromCache。
       return this.deps.cache.search(query, opts.limit ?? 8)
     }
+  }
+
+  /**
+   * 把前端的 askScope 翻译成请求参数。
+   *
+   * - 'all' / undefined → 不传 scopes,服务端按实时可见全集;
+   * - 'org' → ['org']; 'team' → ['team']; 'local' → [] (本地层走另一条路径)。
+   *
+   * 注意:这里只影响在线请求;离线缓存目前无法区分 scope,会在 UI 标注。
+   */
+  private scopesFromAskScope(
+    scopes?: Array<'org' | 'team'>
+  ): Array<'org' | 'team'> | undefined {
+    if (!scopes) return undefined
+    const out: Array<'org' | 'team'> = []
+    for (const s of scopes) {
+      if (s === 'org' || s === 'team') out.push(s)
+    }
+    return out.length > 0 ? out : undefined
   }
 
   /**

@@ -4,6 +4,7 @@ import { TitleBar } from '@/layouts/TitleBar'
 import { IconSidebar } from '@/components/IconSidebar'
 import { useUserStore } from '@/stores/userStore'
 import { useAgentStore } from '@/stores/agentStore'
+import { useOrgStore, isOrgReady } from '@/stores/orgStore'
 import { applyServerModelConfigAndStart } from '@/services/model-bootstrap'
 import {
   startProjectMemorySync,
@@ -15,10 +16,26 @@ import styles from './app-layout.module.scss'
 export function AppLayout(): React.JSX.Element {
   const isAuthed = useUserStore((s) => s.isAuthed)
   const configured = useAgentStore((s) => s.configured)
+  const orgStatus = useOrgStore((s) => s.status)
+  const orgInit = useOrgStore((s) => s.init)
   const bootingRef = useRef(false)
   // 暂时性失败(网络/超时)后的重试节拍:递增即触发一次重装配
   const [retryTick, setRetryTick] = useState(0)
   const navigate = useNavigate()
+
+  // 启动时拉一次企业服务状态,后续由主进程推送。
+  useEffect(() => {
+    void orgInit()
+  }, [orgInit])
+
+  // 启动守卫:echo-agent gateway 就绪 + agent store ready 后,
+  // 若用户已登录但未接入组织,把"组织知识问答/沉淀"页提示到设置页;
+  // 普通聊天不受影响。这里只是诊断日志,真实拦截在页面内做。
+  useEffect(() => {
+    if (isAuthed && orgStatus && !isOrgReady(orgStatus)) {
+      logger.info('[app-layout] 企业服务未接入,组织知识功能将不可用')
+    }
+  }, [isAuthed, orgStatus])
 
   // 装配原生 AgentRuntime。ready=UI 可用门(装配/降级/失败兜底后都置位,解除"等待 Agent 连接");
   // configured=runtime 真正装配成功。仅在尚未装配成功时尝试,避免重复装配。

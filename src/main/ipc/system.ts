@@ -24,6 +24,18 @@ export function registerSystemHandlers(): void {
   )
 
   ipcMain.handle(IpcChannels.system.openExternal, (_e, url: string) => {
+    // echo://doc/<id>/page/<n> 引用跳转:走文档查看器,不发 OS-level openExternal,
+    // 由渲染层 CitationCard 监听 onDocReference 事件后自己拉原文。
+    if (url.startsWith('echo://')) {
+      const win = getMainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send(IpcChannels.app.onDeepLink, {
+          path: '/knowledge/doc',
+          query: { ref: url }
+        })
+      }
+      return
+    }
     // 仅允许 http/https,防止任意协议注入
     if (!/^https?:\/\//.test(url)) {
       log.warn('[system] 拦截非法外链:', url)

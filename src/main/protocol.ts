@@ -7,6 +7,19 @@ import { showMainWindow } from './window'
 const PROTOCOL = 'echo-agent'
 
 /**
+ * 引用跳转协议: echo://doc/<id>/page/<n> 与 echo://doc/<id>/t/<ms>
+ *
+ * 由 retrieve 接口的 citation.openUrl 产生,CitationCard 点击后通过
+ * window.api.system.openExternal 触发,主进程识别后分发:
+ *   - /doc/<id>/page/<n>  → 拉文档原文 + 跳到 PDF 页面
+ *   - /doc/<id>/t/<ms>     → 拉文档 + 媒体查看器 seek
+ *   - /doc/<id>            → 打开文档详情
+ *
+ * 注意:echo:// 不注册为 OS-level scheme,仅在 IPC 内部走 openExternal 分流。
+ */
+const DOC_PROTOCOL = 'echo'
+
+/**
  * Deep Link 下行 payload: 解析后的路径 + 查询参数。
  * 渲染层拿到后用 react-router 的 navigate(hash 路径)跳转。
  */
@@ -96,6 +109,10 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   } catch {
     return null
   }
+  // echo://doc/... 走文档跳转分支,不入 deep link。
+  if (parsed.protocol.replace(':', '') === DOC_PROTOCOL) {
+    return null
+  }
   if (parsed.protocol.replace(':', '') !== PROTOCOL) return null
 
   // 自定义协议会把第一段放在 host 中:
@@ -112,6 +129,47 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
     query[key] = value
   })
   return { path: normalized, query }
+}
+
+/**
+ * 解析 echo://doc/... 引用跳转 URL。
+ *
+ * 返回结构由调用方决定如何打开:
+ *   - 文档详情页(hash 路由)
+ *   - 调用 fetch /api/v1/docs/:id/raw 或 /content 拉原文
+ *   - 媒体类 seek 到时间戳
+ *
+ * 这里仅解析与基础校验,不做业务分发;真正的 viewer 留给渲染层。
+ */
+export interface DocReference {
+  docId: string
+  page?: number
+  startMs?: number
+}
+
+export function parseDocReference(url: string): DocReference | null {
+  if (typeof url !== 'string') return null
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  if (parsed.protocol.replace(':', '') !== DOC_PROTOCOL) return null
+  // echo://doc/<id>/page/<n>  或 echo://doc/<id>/t/<ms>
+  const segs = `${parsed.host}${parsed.pathname}`.split('/').filter(Boolean)
+  if (segs[0] !== 'doc') return null
+  const docId = segs[1]
+  if (!docId) return null
+  const out: DocReference = { docId }
+  for (let i = 2; i < segs.length; i += 2) {
+    const k = segs[i]
+    const v = Number(segs[i + 1])
+    if (!Number.isFinite(v)) continue
+    if (k === 'page') out.page = v
+    else if (k === 't') out.startMs = v
+  }
+  return out
 }
 
 /**

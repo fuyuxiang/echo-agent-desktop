@@ -529,7 +529,7 @@ export interface BridgeApi {
     /** 检索组织知识。服务器不可达时自动降级到本地缓存 */
     retrieve: (
       query: string,
-      opts?: { limit?: number; multiHop?: boolean }
+      opts?: { limit?: number; multiHop?: boolean; scopes?: Array<'org' | 'team'> }
     ) => Promise<RetrieveResult>
     listDocs: (params: {
       scopeId?: string

@@ -125,6 +125,8 @@ export function AskPage(): React.JSX.Element {
               key={s}
               type="button"
               className={askScope === s ? styles.chipActive : styles.chip}
+              // 真实生效:在 orgStore.retrieve 里把 askScope 翻译成 scopes 过滤。
+              title={`仅检索${SCOPE_LABEL[s]}`}
               onClick={() => setAskScope(s)}
             >
               {SCOPE_LABEL[s]}
