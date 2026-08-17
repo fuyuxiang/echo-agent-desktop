@@ -288,6 +288,7 @@ export class OrgCache {
       scopeKind: (r.scopeKind === 'team' ? 'team' : 'org') as 'team' | 'org',
       modality: String(r.modality ?? 'text'),
       sourceType: 'cache',
+      source: r.scopeKind === 'team' ? 'L2' : 'L3',
       citation: {
         page: r.locPage == null ? null : Number(r.locPage),
         heading: String(r.heading ?? ''),
