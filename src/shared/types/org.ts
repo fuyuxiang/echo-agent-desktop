@@ -68,6 +68,11 @@ export interface RetrievedChunk {
   /** volatile 且超过阈值未更新 —— 答案里要提示核实 */
   stale: boolean
   updatedAt: number
+  /**
+   * 知识层级。L1=个人记忆(本地),L2=团队文档,L3=组织文档。
+   * 当前实现总是 'L2' | 'L3'——'L1' 由 L1/L2/L3 合并层在桌面端合并后标。
+   */
+  source?: 'L1' | 'L2' | 'L3'
 }
 
 export interface OrgMemoryHit {
