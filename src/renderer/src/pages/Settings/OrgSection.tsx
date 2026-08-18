@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useOrgStore, isOrgReady, isCacheStale } from '@/stores/orgStore'
 import { toast } from '@/components/Toast'
 import styles from './org-section.module.scss'
 
-function fmtTime(ms: number | null): string {
-  if (!ms) return '从未'
+function fmtTime(
+  ms: number | null,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string {
+  if (!ms) return t('orgSection.never')
   return new Date(ms).toLocaleString()
 }
 
@@ -15,6 +19,7 @@ function fmtTime(ms: number | null): string {
  * 而言不存在。
  */
 export function OrgSection(): React.JSX.Element {
+  const { t } = useTranslation()
   const status = useOrgStore((s) => s.status)
   const syncing = useOrgStore((s) => s.syncing)
   const loggingIn = useOrgStore((s) => s.loggingIn)
@@ -43,48 +48,46 @@ export function OrgSection(): React.JSX.Element {
   const saveServer = async (): Promise<void> => {
     const url = serverInput.trim()
     if (url && !/^https?:\/\//.test(url)) {
-      toast.error('地址需以 http:// 或 https:// 开头')
+      toast.error(t('orgSection.urlInvalid'))
       return
     }
     // 换服务器会清掉凭证与缓存,这一点必须提前告知而不是事后发现。
     if (status?.loggedIn && url !== status.serverUrl) {
-      if (!window.confirm('更换服务器会清除当前登录状态与本地缓存,继续?')) return
+      if (!window.confirm(t('orgSection.changeServerConfirm'))) return
     }
     await setServer(url)
     setEditingServer(false)
-    toast.success(url ? '已保存服务器地址' : '已清除服务器配置')
+    toast.success(url ? t('orgSection.serverSaved') : t('orgSection.serverCleared'))
   }
 
   const doLogin = async (): Promise<void> => {
     if (!username.trim() || !password) {
-      toast.error('请填写用户名和密码')
+      toast.error(t('orgSection.fillCredentials'))
       return
     }
     const res = await login(username.trim(), password)
     if (res.ok) {
       setPassword('')
-      toast.success('已接入企业知识库')
+      toast.success(t('orgSection.connected'))
     } else {
-      toast.error(res.error ?? '登录失败')
+      toast.error(res.error ?? t('orgSection.loginFailed'))
     }
   }
 
   const doSync = async (): Promise<void> => {
     const res = await sync()
-    if (res.ok) toast.success('同步完成')
-    else toast.error(res.error ?? '同步失败')
+    if (res.ok) toast.success(t('orgSection.syncDone'))
+    else toast.error(res.error ?? t('orgSection.syncFailed'))
   }
 
   return (
     <section className={styles.wrap}>
-      <h3 className={styles.title}>企业知识库</h3>
-      <p className={styles.desc}>
-        接入后,问答会默认基于公司文档回答并给出引用;你也可以把工作中的结论沉淀回组织知识库。
-      </p>
+      <h3 className={styles.title}>{t('orgSection.title')}</h3>
+      <p className={styles.desc}>{t('orgSection.desc')}</p>
 
       {/* 服务器地址 */}
       <div className={styles.row}>
-        <span className={styles.rowLabel}>服务器地址</span>
+        <span className={styles.rowLabel}>{t('orgSection.serverUrl')}</span>
         {editingServer || !status?.configured ? (
           <div className={styles.inline}>
             <input
@@ -94,7 +97,7 @@ export function OrgSection(): React.JSX.Element {
               onChange={(e) => setServerInput(e.target.value)}
             />
             <button type="button" className={styles.primary} onClick={() => void saveServer()}>
-              保存
+              {t('common.save')}
             </button>
             {status?.configured && (
               <button
@@ -105,7 +108,7 @@ export function OrgSection(): React.JSX.Element {
                   setEditingServer(false)
                 }}
               >
-                取消
+                {t('common.cancel')}
               </button>
             )}
           </div>
@@ -113,7 +116,7 @@ export function OrgSection(): React.JSX.Element {
           <div className={styles.inline}>
             <code className={styles.code}>{status.serverUrl}</code>
             <button type="button" className={styles.linkBtn} onClick={() => setEditingServer(true)}>
-              修改
+              {t('common.save').replace(t('common.save'), t('orgSection.edit'))}
             </button>
           </div>
         )}
@@ -122,25 +125,25 @@ export function OrgSection(): React.JSX.Element {
       {/* 登录状态 */}
       {status?.configured && (
         <div className={styles.row}>
-          <span className={styles.rowLabel}>登录状态</span>
+          <span className={styles.rowLabel}>{t('orgSection.loginStatus')}</span>
           {ready ? (
             <div className={styles.inline}>
               <span className={styles.dotOk} />
               <span>
-                {status.user?.displayName ?? '已登录'}
+                {status.user?.displayName ?? t('orgSection.loggedIn')}
                 {status.user?.groups?.length
-                  ? `（${status.user.groups.map((g) => g.name).join('、')}）`
+                  ? `(${status.user.groups.map((g) => g.name).join(t('common.listJoiner'))})`
                   : ''}
               </span>
               <button type="button" className={styles.linkBtn} onClick={() => void logout()}>
-                退出
+                {t('common.logout')}
               </button>
             </div>
           ) : (
             <div className={styles.loginForm}>
               <input
                 className={styles.input}
-                placeholder="用户名"
+                placeholder={t('orgSection.usernamePlaceholder')}
                 autoComplete="username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -148,7 +151,7 @@ export function OrgSection(): React.JSX.Element {
               <input
                 className={styles.input}
                 type="password"
-                placeholder="密码"
+                placeholder={t('orgSection.passwordPlaceholder')}
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -162,7 +165,7 @@ export function OrgSection(): React.JSX.Element {
                 disabled={loggingIn}
                 onClick={() => void doLogin()}
               >
-                {loggingIn ? '登录中…' : '登录'}
+                {loggingIn ? t('orgSection.loggingIn') : t('common.login')}
               </button>
             </div>
           )}
@@ -173,30 +176,33 @@ export function OrgSection(): React.JSX.Element {
       {ready && status && (
         <>
           <div className={styles.row}>
-            <span className={styles.rowLabel}>服务器</span>
+            <span className={styles.rowLabel}>{t('orgSection.server')}</span>
             <div className={styles.inline}>
               {status.reachable === false ? (
                 <>
                   <span className={styles.dotWarn} />
-                  <span>不可达,当前使用本地缓存</span>
+                  <span>{t('orgSection.unreachable')}</span>
                 </>
               ) : (
                 <>
                   <span className={styles.dotOk} />
-                  <span>正常</span>
+                  <span>{t('orgSection.normal')}</span>
                 </>
               )}
             </div>
           </div>
 
           <div className={styles.row}>
-            <span className={styles.rowLabel}>离线缓存</span>
+            <span className={styles.rowLabel}>{t('orgSection.offlineCache')}</span>
             <div className={styles.inline}>
               <span>
-                {status.cachedDocs} 份文档 / {status.cachedChunks} 个片段
+                {t('orgSection.cachedDocs', {
+                  docs: status.cachedDocs,
+                  chunks: status.cachedChunks
+                })}
               </span>
               <span className={isCacheStale(status) ? styles.staleText : styles.muted}>
-                最后同步:{fmtTime(status.lastSyncAt)}
+                {t('orgSection.lastSync', { time: fmtTime(status.lastSyncAt, t) })}
               </span>
               <button
                 type="button"
@@ -204,14 +210,12 @@ export function OrgSection(): React.JSX.Element {
                 disabled={syncing}
                 onClick={() => void doSync()}
               >
-                {syncing ? '同步中…' : '立即同步'}
+                {syncing ? t('orgSection.syncing') : t('orgSection.syncNow')}
               </button>
             </div>
           </div>
 
-          <p className={styles.note}>
-            缓存用于断网时兜底,只读。你的个人数据与本机文件不会上传。
-          </p>
+          <p className={styles.note}>{t('orgSection.cacheNote')}</p>
         </>
       )}
     </section>
