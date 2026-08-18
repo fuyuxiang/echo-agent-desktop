@@ -96,7 +96,11 @@ async function applySessionTitle(chatId: string, firstUserMessage: string): Prom
   if (!title) return
   // 标题生成期间用户可能已改名/删会话,这里只在仍为占位名时回填,避免覆盖用户操作
   const session = useChatStore.getState().sessions.find((s) => s.chatId === chatId)
-  if (session && session.title && session.title !== '新对话') return
+  // 占位标题常量:与 Chat 渲染新建会话时使用的 i18n key 'chatDetail.defaultSessionTitle'
+  // 的中文 fallback 一致;模块级函数无法直接拿到 useTranslation(),这里用常量
+  // 与 fallback 对齐,避免在 zh-CN/en-US 切换时把英文占位识别为"用户已命名"。
+  const placeholderTitle = '新对话'
+  if (session && session.title && session.title !== placeholderTitle) return
   useChatStore.getState().updateSessionTitle(chatId, title)
   void db.session.updateTitle(chatId, title)
 }
@@ -349,7 +353,7 @@ export default function ChatPage(): React.JSX.Element {
       if (useChatStore.getState().isGenerating) {
         stopGenerating()
         streamOwnerChatIdRef.current = ''
-        toast.error('连接已断开，本次回复已中断')
+        toast.error(t('chat.errors.disconnected', '连接已断开，本次回复已中断'))
       }
     }
 
@@ -502,12 +506,12 @@ export default function ChatPage(): React.JSX.Element {
     // 可发送条件:有文本或有就绪附件;附件仍在上传中时拦截,提示等待
     if ((!text && readyAttachments.length === 0) || !wsConnected || isGenerating) return
     if (stillUploading) {
-      toast.error('附件仍在上传中，请稍候')
+      toast.error(t('chat.errors.attachmentUploading', '附件仍在上传中，请稍候'))
       return
     }
     // runtime 未装配(模型未配置/网络未恢复):明确提示,避免发送后石沉大海
     if (!useAgentStore.getState().configured) {
-      toast.error('模型尚未就绪，请检查网络或模型配置后重试')
+      toast.error(t('chat.errors.modelNotReady', '模型尚未就绪，请检查网络或模型配置后重试'))
       return
     }
     // 发送守卫: 新会话路径存在 waitForWsReady 等待窗口(此时 isGenerating 仍为 false),
@@ -522,7 +526,11 @@ export default function ChatPage(): React.JSX.Element {
         isNewSession = true
         chatId = crypto.randomUUID()
         try {
-          await db.session.upsert({ chatId, title: '新对话', platform: 'desktop' })
+          await db.session.upsert({
+            chatId,
+            title: t('chat.defaultSessionTitle', '新对话'),
+            platform: 'desktop'
+          })
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           logger.warn('[chat] 创建会话写库失败:', message)
@@ -552,7 +560,7 @@ export default function ChatPage(): React.JSX.Element {
         // switchSession 异步重连,等新连接 auth 成功(OPEN)后再发,避免被静默丢弃
         const ready = await waitForWsReady()
         if (!ready) {
-          toast.error('连接未就绪，消息发送失败，请重试')
+          toast.error(t('chat.errors.notReady', '连接未就绪，消息发送失败，请重试'))
           return
         }
       }
@@ -606,9 +614,9 @@ export default function ChatPage(): React.JSX.Element {
       setCandidate(null)
       try {
         const { shared } = await confirmShareToProject(current, decision)
-        if (shared) toast.success('已共享到项目记忆')
+        if (shared) toast.success(t('chat.memory.shared', '已共享到项目记忆'))
       } catch {
-        toast.error('共享到项目记忆失败')
+        toast.error(t('chat.memory.shareFailed', '共享到项目记忆失败'))
       }
     },
     [candidate]
@@ -692,7 +700,7 @@ export default function ChatPage(): React.JSX.Element {
 
     const permissionStatus = await permission.request('microphone')
     if (permissionStatus !== 'granted') {
-      toast.error('麦克风权限未开启')
+      toast.error(t('chat.errors.micPermission', '麦克风权限未开启'))
       return
     }
 
@@ -700,7 +708,7 @@ export default function ChatPage(): React.JSX.Element {
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
     } catch {
-      toast.error('无法访问麦克风')
+      toast.error(t('chat.errors.micAccess', '无法访问麦克风'))
       return
     }
 
@@ -737,7 +745,7 @@ export default function ChatPage(): React.JSX.Element {
       setListening(true)
     } catch {
       mediaStream.getTracks().forEach((t) => t.stop())
-      toast.error('语音识别启动失败')
+      toast.error(t('chat.errors.asrStart', '语音识别启动失败'))
     }
   }
 
@@ -824,10 +832,10 @@ export default function ChatPage(): React.JSX.Element {
                   </span>
                   <span className={styles.attachmentName}>{att.name}</span>
                   {att.status === 'uploading' && (
-                    <span className={styles.attachmentStatus}>上传中</span>
+                    <span className={styles.attachmentStatus}>{t('chat.attachment.uploading', '上传中')}</span>
                   )}
                   {att.status === 'error' && (
-                    <span className={styles.attachmentStatus}>失败</span>
+                    <span className={styles.attachmentStatus}>{t('chat.attachment.failed', '失败')}</span>
                   )}
                   <button
                     type="button"
@@ -849,8 +857,8 @@ export default function ChatPage(): React.JSX.Element {
             onKeyDown={handleKeyDown}
             placeholder={
               wsConnected
-                ? '今天帮你做些什么？@ 引用对话文件，/ 调用技能与指令'
-                : '等待 Agent 连接...'
+                ? t('chat.welcomeHint', '今天帮你做些什么？@ 引用对话文件，/ 调用技能与指令')
+                : t('chat.waitingAgent', '等待 Agent 连接...')
             }
             disabled={!wsConnected}
             rows={4}
@@ -947,8 +955,8 @@ export default function ChatPage(): React.JSX.Element {
                 className={styles.iconBtn}
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploading}
-                title={uploading ? '上传中' : '添加附件'}
-                aria-label={uploading ? '上传中' : '添加附件'}
+                title={uploading ? t('chat.attachment.uploading', '上传中') : t('chat.attachment.add', '添加附件')}
+                aria-label={uploading ? t('chat.attachment.uploading', '上传中') : t('chat.attachment.add', '添加附件')}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
                   <path
@@ -963,8 +971,8 @@ export default function ChatPage(): React.JSX.Element {
               <button
                 className={`${styles.iconBtn} ${listening ? styles.listening : ''}`}
                 onClick={handleVoiceInput}
-                title={listening ? '停止语音输入' : '语音输入'}
-                aria-label={listening ? '停止语音输入' : '语音输入'}
+                title={listening ? t('chat.voice.stop', '停止语音输入') : t('chat.voice.start', '语音输入')}
+                aria-label={listening ? t('chat.voice.stop', '停止语音输入') : t('chat.voice.start', '语音输入')}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
                   <path

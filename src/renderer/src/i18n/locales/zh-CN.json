@@ -29,6 +29,59 @@
     "orgKnowledge": "组织知识",
     "newSession": "新建会话"
   },
+  "ask": {
+    "scopeAll": "全部",
+    "scopeOrg": "组织库",
+    "scopeTeam": "我的团队",
+    "scopeLocal": "仅本机",
+    "scopeOnly": "仅检索{{scope}}",
+    "notReadyTitle": "尚未接入企业知识库",
+    "notReadyLoggedOut": "请在「设置 → 企业接入」登录后使用组织知识问答。",
+    "notReadyNoServer": "请在「设置 → 企业接入」填写企业服务器地址并登录。",
+    "offlineBanner": "离线模式:服务器不可达,以下结果来自本地缓存{{lastSync}},可能不是最新。",
+    "searchPlaceholder": "问一个问题,如:差旅住宿标准是多少",
+    "searching": "检索中…",
+    "search": "检索",
+    "cacheTag": "缓存",
+    "deep": "深度检索",
+    "deepHint": "用于对比、汇总类问题,更慢但更全",
+    "memoriesTitle": "已确认的组织约定",
+    "noResult": "没有找到相关内容。",
+    "suggestAsk": "这个问题可能需要问:",
+    "suggestOther": "可以试着换个说法,或联系管理员补充相关文档。",
+    "resultsHead": "「{{query}}」找到 {{count}} 条材料",
+    "rerankSkipped": "精排降级",
+    "fromCache": "本地缓存",
+    "staleNote": "其中 {{count}} 条来自时效性内容且已超过 90 天未更新,建议与维护人核实后再依据它做决定。",
+    "searchFailed": "检索失败:{{message}}"
+  },
+  "chatDetail": {
+    "defaultSessionTitle": "新对话",
+    "welcomeHint": "今天帮你做些什么？@ 引用对话文件，/ 调用技能与指令",
+    "waitingAgent": "等待 Agent 连接...",
+    "errors": {
+      "disconnected": "连接已断开，本次回复已中断",
+      "attachmentUploading": "附件仍在上传中，请稍候",
+      "modelNotReady": "模型尚未就绪，请检查网络或模型配置后重试",
+      "notReady": "连接未就绪，消息发送失败，请重试",
+      "micPermission": "麦克风权限未开启",
+      "micAccess": "无法访问麦克风",
+      "asrStart": "语音识别启动失败"
+    },
+    "attachment": {
+      "uploading": "上传中",
+      "failed": "失败",
+      "add": "添加附件"
+    },
+    "voice": {
+      "start": "语音输入",
+      "stop": "停止语音输入"
+    },
+    "memory": {
+      "shared": "已共享到项目记忆",
+      "shareFailed": "共享到项目记忆失败"
+    }
+  },
   "scope": {
     "title": "访问范围",
     "restricted": "基础访问",
