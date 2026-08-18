@@ -7,7 +7,13 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [{ webContents: { send: winSend } }] }
 }))
 
-const gw = { switchSession: vi.fn(), send: vi.fn(), connect: vi.fn(), disconnect: vi.fn() }
+const gw = {
+  switchSession: vi.fn(),
+  send: vi.fn(),
+  connect: vi.fn(),
+  disconnect: vi.fn(),
+  abort: vi.fn()
+}
 const getGatewayClient = vi.fn<(...a: unknown[]) => typeof gw | null>(() => gw)
 vi.mock('../../echo-agent', () => ({
   getGatewayClient: (...a: unknown[]) => getGatewayClient(...a),
@@ -35,11 +41,26 @@ describe('agent-chat ipc (gateway)', () => {
     getGatewayClient.mockReturnValue(gw)
   })
 
-  it('send switches session then sends text via gateway', () => {
+  it('send 仅通过 gateway 发送文本,不再耦合 switchSession', () => {
     registerAgentChatIpc()
     handlers.get(IpcChannels.agentChat.send)!({}, { chatId: 'c1', text: 'hi' })
-    expect(gw.switchSession).toHaveBeenCalledWith('c1')
-    expect(gw.send).toHaveBeenCalledWith('hi', undefined)
+    expect(gw.send).toHaveBeenCalledWith('hi', undefined, undefined)
+    expect(gw.switchSession).not.toHaveBeenCalled()
+  })
+
+  it('Regression: send 拒绝空文本(不允许幽灵回复)', () => {
+    registerAgentChatIpc()
+    const handler = handlers.get(IpcChannels.agentChat.send)!
+    expect(() => handler({}, { chatId: 'c1', text: '' })).toThrow()
+    expect(() => handler({}, { chatId: 'c1', text: '   ' })).toThrow()
+    expect(gw.send).not.toHaveBeenCalled()
+  })
+
+  it('switchSession 仅调用 gateway.switchSession', () => {
+    registerAgentChatIpc()
+    handlers.get(IpcChannels.agentChat.switchSession)!({}, { chatId: 'c2' })
+    expect(gw.switchSession).toHaveBeenCalledWith('c2')
+    expect(gw.send).not.toHaveBeenCalled()
   })
 
   it('send broadcasts error when gateway client is unavailable', () => {

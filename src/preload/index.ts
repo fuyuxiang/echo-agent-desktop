@@ -167,9 +167,16 @@ const api: BridgeApi = {
   },
 
   agentChat: {
-    send: (chatId: string, text: string, attachments?: Array<{ id: string; name: string }>) =>
-      ipcRenderer.invoke(IpcChannels.agentChat.send, { chatId, text, attachments }),
-    abort: (chatId: string) => ipcRenderer.invoke(IpcChannels.agentChat.abort, { chatId }),
+    send: (
+      chatId: string,
+      text: string,
+      attachments?: Array<{ id: string; name: string }>,
+      requestId?: string
+    ) => ipcRenderer.invoke(IpcChannels.agentChat.send, { chatId, text, attachments, requestId }),
+    switchSession: (chatId: string) =>
+      ipcRenderer.invoke(IpcChannels.agentChat.switchSession, { chatId }),
+    abort: (chatId: string, requestId?: string) =>
+      ipcRenderer.invoke(IpcChannels.agentChat.abort, { chatId, requestId }),
     listSessions: () => ipcRenderer.invoke(IpcChannels.agentChat.listSessions),
     deleteSession: (chatId: string) =>
       ipcRenderer.invoke(IpcChannels.agentChat.deleteSession, { chatId }),

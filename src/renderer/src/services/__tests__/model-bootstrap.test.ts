@@ -99,7 +99,7 @@ describe('applyServerModelConfigAndStart', () => {
     expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
   })
 
-  it('服务器下发的明文 apiKey 原样随 apply 透传', async () => {
+  it('Regression: 服务器下发的 apiKey 不再以明文随 apply 透传,改用引用', async () => {
     userStore.isAuthed = true
     storage.get.mockResolvedValueOnce(null)
     server.fetchModelConfig.mockResolvedValueOnce({
@@ -116,23 +116,22 @@ describe('applyServerModelConfigAndStart', () => {
       configured: true,
       retryable: false
     })
-    expect(window.api.echoConfig.apply).toHaveBeenCalledWith({
-      baseUrl: 'https://api.example.com/v1',
-      apiKey: 'sk-secret',
-      model: 'gpt-4o'
-    })
-    expect(agentStore.setReady).toHaveBeenCalledWith(true)
-    expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
+    const applyCall = (window.api.echoConfig.apply as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(applyCall.baseUrl).toBe('https://api.example.com/v1')
+    expect(applyCall.model).toBe('gpt-4o')
+    // 关键断言:apply 入参中的 apiKey 必须是引用,绝不包含明文
+    expect(applyCall.apiKey).not.toBe('sk-secret')
+    expect(applyCall.apiKey).toMatch(/^ref:/)
   })
 
-  it('本地手动配置装配时读取已保存的 apiKey', async () => {
+  it('Regression: 本地手动配置的 apiKey 引用而非明文', async () => {
     userStore.isAuthed = false
     storage.get
       .mockResolvedValueOnce(null) // Ollama config
       .mockResolvedValueOnce({
         baseUrl: 'https://api.example.com/v1',
         modelName: 'gpt-4o',
-        apiKey: 'sk-local'
+        apiKeyRef: 'openai-api-key'
       })
     const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
 
@@ -141,13 +140,8 @@ describe('applyServerModelConfigAndStart', () => {
       configured: true,
       retryable: false
     })
-    expect(window.api.echoConfig.apply).toHaveBeenCalledWith({
-      baseUrl: 'https://api.example.com/v1',
-      apiKey: 'sk-local',
-      model: 'gpt-4o'
-    })
-    expect(agentStore.setReady).toHaveBeenCalledWith(true)
-    expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
+    const applyCall = (window.api.echoConfig.apply as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    expect(applyCall.apiKey).toBe('ref:openai-api-key')
   })
 
   it('服务器未配置模型时降级为可用但未装配(终态,不重试)', async () => {

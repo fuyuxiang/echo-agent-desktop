@@ -277,16 +277,16 @@ describe('GatewayClient', () => {
     expect(events[0]).toMatchObject({ type: 'final', chatId: 'c2' })
   })
 
-  it('abort(chatId) sends abort frame when WS is open', () => {
+  it('abort(chatId, requestId) sends abort frame when WS is open', () => {
     const ws = fakeWs()
     const c = new GatewayClient({ wsUrl: 'ws://x/ws', token: 't', createWs: () => ws, emit: () => {} })
     c.connect('c1')
     ws.fire('open')
     ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
-    c.send('hello')              // creates an active request for c1
-    c.abort('c1')
+    c.send('hello', undefined, 'rid-1') // 2026-08 P0-5:send 显式带 requestId
+    c.abort('c1', 'rid-1')
     const abortFrame = JSON.parse(ws.sent[ws.sent.length - 1])
-    expect(abortFrame).toMatchObject({ type: 'abort', chatId: 'c1' })
+    expect(abortFrame).toMatchObject({ type: 'abort', chatId: 'c1', request_id: 'rid-1' })
   })
 
   it('abort(chatId) is a no-op when chatId has no active request', () => {
@@ -311,12 +311,12 @@ describe('GatewayClient', () => {
     c.connect('c1')
     ws.fire('open')
     ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
-    c.send('hello')
-    // send() creates an active request
-    expect((c as any).activeRequests.has('c1')).toBe(true)
-    ws.fire('message', JSON.stringify({ type: 'message', text: 'done', is_final: true, message_kind: 'final' }))
+    c.send('hello', undefined, 'rid-done')
+    // send() creates an active request keyed by requestId
+    expect((c as any).activeRequests.has('rid-done')).toBe(true)
+    ws.fire('message', JSON.stringify({ type: 'message', text: 'done', is_final: true, message_kind: 'final', request_id: 'rid-done' }))
     // After done event, activeRequests should be cleaned up
-    expect((c as any).activeRequests.has('c1')).toBe(false)
+    expect((c as any).activeRequests.has('rid-done')).toBe(false)
   })
 
   it('activeRequests is cleaned up after error event', () => {
@@ -326,10 +326,10 @@ describe('GatewayClient', () => {
     c.connect('c1')
     ws.fire('open')
     ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
-    c.send('hello')
-    expect((c as any).activeRequests.has('c1')).toBe(true)
-    ws.fire('message', JSON.stringify({ type: 'error', error: 'something went wrong' }))
-    expect((c as any).activeRequests.has('c1')).toBe(false)
+    c.send('hello', undefined, 'rid-err')
+    expect((c as any).activeRequests.has('rid-err')).toBe(true)
+    ws.fire('message', JSON.stringify({ type: 'error', error: 'something went wrong', request_id: 'rid-err' }))
+    expect((c as any).activeRequests.has('rid-err')).toBe(false)
   })
 
   it('abort suppresses subsequent events for the aborted request', () => {
@@ -339,10 +339,10 @@ describe('GatewayClient', () => {
     c.connect('c1')
     ws.fire('open')
     ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
-    c.send('hello')
-    c.abort('c1')
-    // After abort, further message frames should be suppressed
-    ws.fire('message', JSON.stringify({ type: 'message', text: 'late chunk', is_final: false }))
+    c.send('hello', undefined, 'rid-abort')
+    c.abort('c1', 'rid-abort')
+    // After abort, further message frames keyed by this requestId should be suppressed
+    ws.fire('message', JSON.stringify({ type: 'message', text: 'late chunk', is_final: false, request_id: 'rid-abort' }))
     // No new events should have been emitted (only the abort-related ones)
     expect(events).toHaveLength(0)
   })

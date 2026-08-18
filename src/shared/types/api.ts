@@ -257,12 +257,25 @@ export interface BridgeApi {
 
   /** 原生 agent 对话主链路(P5) */
   agentChat: {
+    /**
+     * 发送文本到当前会话。
+     * - text 不允许为空(IPC 守门,空文本会抛 EmptyMessageError)
+     * - requestId 由调用方生成(nanoid),流式响应按 requestId 路由,Stop 按 requestId 精准中止
+     * - 切勿用 send 来"切换会话"——切换请走 switchSession
+     */
     send(
       chatId: string,
       text: string,
-      attachments?: Array<{ id: string; name: string }>
+      attachments?: Array<{ id: string; name: string }>,
+      requestId?: string
     ): Promise<void>
-    abort(chatId: string): Promise<void>
+    /**
+     * 切换目标会话:仅切换,不发送任何文本。
+     * 拆出来是为了防止"切会话"被静默变成"发空消息"(2026-08 审计 P0-3)。
+     */
+    switchSession(chatId: string): Promise<void>
+    /** 中止请求。requestId 优先;省略则中止该会话当前活跃请求 */
+    abort(chatId: string, requestId?: string): Promise<void>
     listSessions(): Promise<Array<{ chatId: string }>>
     deleteSession(chatId: string): Promise<{ success: boolean }>
     init(cfg: {

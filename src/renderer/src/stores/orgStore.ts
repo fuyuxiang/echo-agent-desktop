@@ -152,15 +152,32 @@ export const useOrgStore = create<OrgState>()(
       }),
 
     retrieve: (query, opts) => {
-      // askScope → scopes 过滤;'local' 表示只查 L1 个人记忆,不在组织请求中传递,
-      // 由调用方在 UI 层合并;这里只处理 'org'/'team'。
+      // 2026-08 P0-6 隐私修复:
+      // askScope='local' 时**物理上**不调用 org.retrieve(企业接口),
+      // 由调用方在 UI 层走本地搜索(localSearch IPC)。即使把 scope 变
+      // undefined 也不会绕过这条守门——网络层有第二道断言。
       const s = get()
       const askScope = s.askScope
+      if (askScope === 'local') {
+        // 短路:不发起任何远程调用,直接返回空结果(UI 应优先调 localSearch)
+        return Promise.resolve({
+          chunks: [],
+          memories: [],
+          suggestAsk: [],
+          diagnostics: {
+            bm25Hits: 0,
+            vecHits: 0,
+            fusedCandidates: 0,
+            rerankMs: 0,
+            rerankSkipped: true,
+            totalMs: 0
+          }
+        } as RetrieveResult)
+      }
       const scopesParam =
         askScope === 'org' ? (['org'] as const) :
         askScope === 'team' ? (['team'] as const) :
-        askScope === 'all' ? undefined :
-        undefined // 'local' 不混入服务端请求
+        undefined // 'all' 走服务端拉全部
       return window.api.org.retrieve(query, { ...(opts ?? {}), scopes: scopesParam as Array<'org' | 'team'> | undefined })
     },
 

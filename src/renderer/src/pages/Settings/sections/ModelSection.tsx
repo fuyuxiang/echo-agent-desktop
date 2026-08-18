@@ -8,7 +8,9 @@ import { LOCAL_CONFIG_KEY } from '@/services/model-config'
 interface SavedModelConfig {
   baseUrl: string
   modelName: string
-  apiKey?: string
+  // 注意:apiKey 不再保存到 LOCAL_CONFIG_KEY(P0-7 合规修复)。
+  // 真实 apiKey 只在 safeStorage(API_KEY_STORE_KEY)里;非安全存储放占位符。
+  apiKeyRef?: string
 }
 
 const API_KEY_STORE_KEY = 'openai-api-key'
@@ -52,10 +54,18 @@ export function ModelSection(): React.JSX.Element {
     }
     setSaving(true)
     try {
+      // 1. 真实 apiKey 只写 safeStorage(加密区),不写任何明文配置/YAML
       await window.api.store.secureSet(API_KEY_STORE_KEY, key)
-      await storage.set(LOCAL_CONFIG_KEY, { baseUrl: url, modelName: model, apiKey: key })
-      // 写入 echo-agent.yaml 的 models 段并重启进程使配置生效(取代旧的 TS Runtime 装配)
-      await window.api.echoConfig.apply({ baseUrl: url, apiKey: key, model })
+      // 2. 非安全存储只放 baseUrl/modelName + apiKey 引用指针,
+      //    真正取 key 时由主进程经 secureGet 注入,不在磁盘留下明文。
+      await storage.set(LOCAL_CONFIG_KEY, {
+        baseUrl: url,
+        modelName: model,
+        apiKeyRef: API_KEY_STORE_KEY
+      })
+      // 3. 下发到 echo-agent 的 apply 入参中,apiKey 字段传引用而非明文。
+      //    主进程 applyModelConfig 收到引用后从 safeStorage 取出再注入到 yaml 的环境变量。
+      await window.api.echoConfig.apply({ baseUrl: url, apiKey: `ref:${API_KEY_STORE_KEY}`, model })
       useAgentStore.getState().setConfigured(true)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)

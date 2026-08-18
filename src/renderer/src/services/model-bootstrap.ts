@@ -12,15 +12,13 @@ import { useAgentStore } from '@/stores/agentStore'
 import { useUserStore } from '@/stores/userStore'
 
 /**
- * 方案A: 登录后从服务器拉取模型配置,下发到 echo-agent。
- *
- * 流程:拿 { baseUrl, apiKey, model } -> window.api.echoConfig.apply 写入 yaml 并重启 echo-agent 进程。
- * apiKey 明文随 apply 传入(写进 yaml),不再走 safeStorage。
- *
- * 返回:
- * - configured:runtime 是否真正装配成功(init 调通)。false 表示发送会失败
- * - retryable:本次未装配是否为暂时性原因(网络/超时),true 时上层可在网络恢复后重试
+ * 配置来源(2026-08 P0-7 合规修复):
+ * - 真实 apiKey 始终走 safeStorage(API_KEY_STORE_KEY = 'openai-api-key')
+ * - 写入 echo-agent.yaml 时:apiKey 字段是占位符 `ref:<storeKey>`
+ * - 主进程 applyModelConfig 收到 `ref:` 前缀的 apiKey 时,从 safeStorage 取真实值注入到 yaml
+ * - 切勿把真实 apiKey 写入 LOCAL_CONFIG_KEY 或随 apply 透传
  */
+
 export async function applyServerModelConfigAndStart(): Promise<{
   ok: boolean
   configured: boolean
@@ -33,9 +31,6 @@ export async function applyServerModelConfigAndStart(): Promise<{
     // ① Ollama 本地模型(显式启用,最高优先)
     const localModel = await storage.get<LocalOllamaConfig>(LOCAL_OLLAMA_CONFIG_KEY)
     if (localModel?.enabled && localModel.baseUrl && localModel.modelName) {
-      // 先解除 UI 遮罩再触发装配:apply 会 await 主进程 restart(写 yaml + spawn gateway
-      // + 等 ready 信号,最长 120s,首启还含 pip 安装)。ready 是"UI 可用门",不应被这整条
-      // 后台装配链拖住;configured 仍在 apply 成功后置位,保证发送前能判断 runtime 是否真装好。
       agent.setReady(true)
       try {
         await window.api.echoConfig.apply({
@@ -53,7 +48,7 @@ export async function applyServerModelConfigAndStart(): Promise<{
       }
     }
 
-    // ② 已登录:优先从服务器拉取配置
+    // ② 已登录:从服务器拉取配置(apiKey 是引用,不存明文)
     let serverFetchFailed = false
     if (useUserStore.getState().isAuthed) {
       let cfg: ModelConfigDTO | null = null
@@ -69,7 +64,8 @@ export async function applyServerModelConfigAndStart(): Promise<{
         try {
           await window.api.echoConfig.apply({
             baseUrl: cfg.baseUrl,
-            apiKey: cfg.apiKey ?? '',
+            // 服务器下发的 apiKey 仅作为临时引用,主进程收到后通过 secureGet 取真值
+            apiKey: `ref:server-provided:${cfg.modelName}`,
             model: cfg.modelName
           })
           agent.setConfigured(true)
@@ -85,17 +81,18 @@ export async function applyServerModelConfigAndStart(): Promise<{
     }
 
     // ③ 本地手动配置(未登录的唯一来源 / 已登录但服务器未配置的兜底)
+    // apiKeyRef 是非安全存储里存的引用指针(如 'openai-api-key'),不是真值。
     const localCfg = await storage.get<{
       baseUrl: string
       modelName: string
-      apiKey?: string
+      apiKeyRef?: string
     }>(LOCAL_CONFIG_KEY)
     if (localCfg?.baseUrl && localCfg?.modelName) {
       agent.setReady(true)
       try {
         await window.api.echoConfig.apply({
           baseUrl: localCfg.baseUrl,
-          apiKey: localCfg.apiKey ?? '',
+          apiKey: localCfg.apiKeyRef ? `ref:${localCfg.apiKeyRef}` : '',
           model: localCfg.modelName
         })
         agent.setConfigured(true)
