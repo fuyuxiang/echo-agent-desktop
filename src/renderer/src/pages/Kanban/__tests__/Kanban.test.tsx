@@ -181,12 +181,13 @@ describe('任务完成沉淀提示', () => {
   it('首次进入 done 时弹出沉淀对话框', async () => {
     const s = await moveTo('done', 'running')
     expect(mockMoveTask).toHaveBeenCalledWith('t1', 'done')
-    expect(await s.findByText('沉淀为组织知识')).toBeTruthy()
+    // i18n mock:t(key) = key,PromoteDialog 标题对应 promote.title
+    expect(await s.findByText('promote.title')).toBeTruthy()
   })
 
   it('预填任务标题与说明', async () => {
     const s = await moveTo('done', 'running')
-    await s.findByText('沉淀为组织知识')
+    await s.findByText('promote.title')
     const area = s.getAllByRole('textbox')[0] as HTMLTextAreaElement
     expect(area.value).toContain('修复导入乱码')
     expect(area.value).toContain('GBK')
@@ -195,11 +196,11 @@ describe('任务完成沉淀提示', () => {
   it('已是 done 再拖动不重复提示', async () => {
     const s = await moveTo('done', 'done')
     expect(mockMoveTask).toHaveBeenCalled()
-    expect(s.queryByText('沉淀为组织知识')).toBeNull()
+    expect(s.queryByText('promote.title')).toBeNull()
   })
 
   it('移到非 done 状态不提示', async () => {
     const s = await moveTo('review', 'running')
-    expect(s.queryByText('沉淀为组织知识')).toBeNull()
+    expect(s.queryByText('promote.title')).toBeNull()
   })
 })

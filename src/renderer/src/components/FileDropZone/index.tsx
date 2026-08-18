@@ -1,4 +1,5 @@
 import { useState, useCallback, type DragEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import styles from './dropzone.module.scss'
 import clsx from 'clsx'
 
@@ -8,6 +9,7 @@ interface FileDropZoneProps {
 }
 
 export function FileDropZone({ onDrop, children }: FileDropZoneProps): React.JSX.Element {
+  const { t } = useTranslation()
   const [dragging, setDragging] = useState(false)
 
   const handleDragOver = useCallback((e: DragEvent) => {
@@ -33,7 +35,7 @@ export function FileDropZone({ onDrop, children }: FileDropZoneProps): React.JSX
       onDrop={handleDrop}
     >
       {children}
-      {dragging && <div className={styles.overlay}>拖放文件到此处作为对话附件</div>}
+      {dragging && <div className={styles.overlay}>{t('common.dropFilesHere')}</div>}
     </div>
   )
 }

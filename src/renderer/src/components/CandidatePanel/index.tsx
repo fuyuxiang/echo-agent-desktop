@@ -1,14 +1,16 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useOrgStore, isOrgReady } from '@/stores/orgStore'
 import { toast } from '@/components/Toast'
 import type { KnowledgeCandidate } from '@shared/types/org'
 import type { SegmentDTO as Segment } from '@shared/types/meeting'
 import styles from './candidate-panel.module.scss'
 
-const KIND_LABEL: Record<string, string> = {
-  decision: '决策',
-  convention: '约定',
-  pitfall: '坑点'
+// 候选类型 → i18n key 映射
+const KIND_KEY: Record<string, string> = {
+  decision: 'candidate.kind.decision',
+  convention: 'candidate.kind.convention',
+  pitfall: 'candidate.kind.pitfall'
 }
 
 function fmtTime(ms: number | null): string {
@@ -35,6 +37,7 @@ export function CandidatePanel({
   meetingId: string
   meetingTitle: string
 }): React.JSX.Element | null {
+  const { t } = useTranslation()
   const status = useOrgStore((s) => s.status)
   const scopes = useOrgStore((s) => s.scopes)
   const promote = useOrgStore((s) => s.promote)
@@ -67,7 +70,7 @@ export function CandidatePanel({
 
   const extract = useCallback(async () => {
     if (segments.length === 0) {
-      toast.error('暂无转写内容')
+      toast.error(t('candidate.noTranscripts'))
       return
     }
     setLoading(true)
@@ -76,15 +79,15 @@ export function CandidatePanel({
       setCandidates(list)
       setSelected(new Set())
       if (list.length === 0) {
-        toast.info('没有识别出值得留存的内容')
+        toast.info(t('candidate.noCandidates'))
       }
     } catch (e) {
-      toast.error(`抽取失败:${(e as Error).message}`)
+      toast.error(t('candidate.extractFailed', { message: (e as Error).message }))
       setCandidates([])
     } finally {
       setLoading(false)
     }
-  }, [segments])
+  }, [segments, t])
 
   // 未接入企业服务器时整块不显示:个人版用户看到一个提交后无处可去的
   // 按钮只会困惑。
@@ -102,7 +105,7 @@ export function CandidatePanel({
   const submit = async (): Promise<void> => {
     if (!candidates || selected.size === 0) return
     if (!targetScope) {
-      toast.error('请选择共享范围')
+      toast.error(t('candidate.pickScope'))
       return
     }
     setSubmitting(true)
@@ -138,13 +141,13 @@ export function CandidatePanel({
       }
 
       if (failed > 0) {
-        toast.error(`${failed} 条提交失败`)
+        toast.error(t('candidate.submitFailed', { count: failed }))
       }
       if (ok > 0 || queued > 0) {
         toast.success(
           queued > 0
-            ? `已存入本地队列 ${queued} 条,联网后自动提交`
-            : `已提交 ${ok} 条,等待管理员审核`
+            ? t('candidate.queued', { count: queued })
+            : t('candidate.submitted', { count: ok })
         )
         setDone(true)
       }
@@ -157,10 +160,8 @@ export function CandidatePanel({
     <section className={styles.wrap}>
       <header className={styles.head}>
         <div>
-          <h4 className={styles.title}>沉淀为组织知识</h4>
-          <p className={styles.desc}>
-            从这次会议里挑出值得长期留存的结论,提交后经管理员审核进入组织知识库。
-          </p>
+          <h4 className={styles.title}>{t('candidate.title')}</h4>
+          <p className={styles.desc}>{t('candidate.desc')}</p>
         </div>
         {candidates === null && (
           <button
@@ -169,16 +170,16 @@ export function CandidatePanel({
             disabled={loading}
             onClick={() => void extract()}
           >
-            {loading ? '识别中…' : '识别候选'}
+            {loading ? t('candidate.extracting') : t('candidate.extract')}
           </button>
         )}
       </header>
 
       {candidates !== null && candidates.length === 0 && (
         <div className={styles.emptyBox}>
-          <p>没有识别出值得留存的内容。</p>
+          <p>{t('candidate.empty')}</p>
           <button type="button" className={styles.linkBtn} onClick={() => void extract()}>
-            重新识别
+            {t('candidate.retry')}
           </button>
         </div>
       )}
@@ -192,7 +193,7 @@ export function CandidatePanel({
                 <li key={c.id} className={checked ? styles.itemChecked : styles.item}>
                   <label className={styles.row}>
                     <input type="checkbox" checked={checked} onChange={() => toggle(c.id)} />
-                    <span className={styles.kind}>{KIND_LABEL[c.kind] ?? c.kind}</span>
+                    <span className={styles.kind}>{t(KIND_KEY[c.kind] ?? 'candidate.kind.other')}</span>
                     {c.speaker && <span className={styles.speaker}>{c.speaker}</span>}
                     {c.startMs != null && <span className={styles.ts}>{fmtTime(c.startMs)}</span>}
                   </label>
@@ -209,7 +210,11 @@ export function CandidatePanel({
                     <div className={styles.content}>{c.content}</div>
                   )}
 
-                  {c.rationale && <div className={styles.rationale}>依据:{c.rationale}</div>}
+                  {c.rationale && (
+                    <div className={styles.rationale}>
+                      {t('candidate.rationale', { text: c.rationale })}
+                    </div>
+                  )}
                   {c.quote && <blockquote className={styles.quote}>{c.quote}</blockquote>}
                 </li>
               )
@@ -218,7 +223,7 @@ export function CandidatePanel({
 
           <footer className={styles.foot}>
             <label className={styles.scopeLabel}>
-              共享给
+              {t('candidate.shareTo')}
               <select
                 className={styles.select}
                 value={targetScope}
@@ -226,19 +231,23 @@ export function CandidatePanel({
               >
                 {scopes.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.kind === 'org' ? '全公司' : `${s.name}(团队)`}
+                    {s.kind === 'org' ? t('candidate.orgScope') : t('candidate.teamScope', { name: s.name })}
                   </option>
                 ))}
               </select>
             </label>
-            <span className={styles.count}>已选 {selected.size} 条</span>
+            <span className={styles.count}>{t('candidate.selected', { count: selected.size })}</span>
             <button
               type="button"
               className={styles.primary}
               disabled={selected.size === 0 || submitting || done}
               onClick={() => void submit()}
             >
-              {done ? '已提交' : submitting ? '提交中…' : '提交审核'}
+              {done
+                ? t('candidate.submittedDone')
+                : submitting
+                  ? t('candidate.submitting')
+                  : t('candidate.submitReview')}
             </button>
           </footer>
         </>
