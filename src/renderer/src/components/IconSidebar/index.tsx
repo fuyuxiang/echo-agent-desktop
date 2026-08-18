@@ -12,12 +12,12 @@ import clsx from 'clsx'
 interface NavItem {
   icon: React.ReactNode
   route: string
-  label: string
+  labelKey: string
 }
 
 const navItems: NavItem[] = [
-  { icon: <KnowledgeIcon />, route: ROUTES.knowledge, label: '我的文档' },
-  { icon: <MeetingNavIcon />, route: ROUTES.meeting, label: '会议' }
+  { icon: <KnowledgeIcon />, route: ROUTES.knowledge, labelKey: 'sidebar.knowledge' },
+  { icon: <MeetingNavIcon />, route: ROUTES.meeting, labelKey: 'sidebar.meeting' }
 ]
 
 /**
@@ -25,8 +25,8 @@ const navItems: NavItem[] = [
  * 提示"未接入"的菜单只会困惑。
  */
 const orgNavItems: NavItem[] = [
-  { icon: <AskIcon />, route: ROUTES.ask, label: '组织问答' },
-  { icon: <OrgKnowledgeIcon />, route: ROUTES.orgKnowledge, label: '组织知识' }
+  { icon: <AskIcon />, route: ROUTES.ask, labelKey: 'sidebar.orgAsk' },
+  { icon: <OrgKnowledgeIcon />, route: ROUTES.orgKnowledge, labelKey: 'sidebar.orgKnowledge' }
 ]
 
 export function IconSidebar(): React.JSX.Element {
@@ -44,20 +44,23 @@ export function IconSidebar(): React.JSX.Element {
   // 管理入口仅对管理员可见
   const bottomNav: NavItem[] =
     role === 'admin'
-      ? [{ icon: <AdminIcon />, route: ROUTES.admin, label: t('admin.nav') }]
+      ? [{ icon: <AdminIcon />, route: ROUTES.admin, labelKey: 'admin.nav' }]
       : []
 
-  const renderItem = (item: NavItem): React.JSX.Element => (
-    <button
-      key={item.route}
-      className={clsx(styles.item, location.pathname.startsWith(item.route) && styles.active)}
-      onClick={() => navigate(item.route)}
-      title={item.label}
-    >
-      {item.icon}
-      <span className={styles.itemLabel}>{item.label}</span>
-    </button>
-  )
+  const renderItem = (item: NavItem): React.JSX.Element => {
+    const label = t(item.labelKey)
+    return (
+      <button
+        key={item.route}
+        className={clsx(styles.item, location.pathname.startsWith(item.route) && styles.active)}
+        onClick={() => navigate(item.route)}
+        title={label}
+      >
+        {item.icon}
+        <span className={styles.itemLabel}>{label}</span>
+      </button>
+    )
+  }
 
   return (
     <nav className={styles.sidebar}>
@@ -69,10 +72,10 @@ export function IconSidebar(): React.JSX.Element {
         <button
           className={clsx(styles.item, styles.newSession)}
           onClick={handleNewSession}
-          title="新建会话"
+          title={t('sidebar.newSession')}
         >
           <NewSessionIcon />
-          <span className={styles.itemLabel}>新建会话</span>
+          <span className={styles.itemLabel}>{t('sidebar.newSession')}</span>
         </button>
         <div className={styles.navGroup}>{mainNav.map(renderItem)}</div>
       </div>

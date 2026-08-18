@@ -11,7 +11,23 @@
     "logout": "退出登录"
   },
   "settings": {
-    "nav": "设置"
+    "nav": "设置",
+    "sections": {
+      "general": "通用",
+      "org": "企业接入",
+      "model": "模型配置",
+      "theme": "主题",
+      "skills": "技能库",
+      "memoryStore": "记忆",
+      "about": "关于"
+    }
+  },
+  "sidebar": {
+    "knowledge": "我的文档",
+    "meeting": "会议",
+    "orgAsk": "组织问答",
+    "orgKnowledge": "组织知识",
+    "newSession": "新建会话"
   },
   "scope": {
     "title": "访问范围",

@@ -170,13 +170,14 @@ describe('pages', () => {
 
     const { rerender } = render(<SettingsPage />)
     expect(screen.getByText('GeneralSection')).toBeTruthy()
-    fireEvent.click(screen.getByText('模型配置'))
+    // i18n 测试 mock:t(key) = key,所以 nav 标签是 settings.sections.* 形式的 key
+    fireEvent.click(screen.getByText('settings.sections.model'))
     expect(screen.getByText('ModelSection')).toBeTruthy()
-    fireEvent.click(screen.getByText('技能库'))
+    fireEvent.click(screen.getByText('settings.sections.skills'))
     expect(screen.getByText('SkillsPage')).toBeTruthy()
-    fireEvent.click(screen.getByText('记忆'))
+    fireEvent.click(screen.getByText('settings.sections.memoryStore'))
     expect(screen.getByText('MemoryPage')).toBeTruthy()
-    fireEvent.click(screen.getByText('关于'))
+    fireEvent.click(screen.getByText('settings.sections.about'))
     expect(screen.getByText('AboutSection')).toBeTruthy()
 
     rerender(<KnowledgePage />)
