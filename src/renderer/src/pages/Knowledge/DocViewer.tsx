@@ -6,6 +6,7 @@ import * as pdfjsLib from 'pdfjs-dist'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore pdfjs-dist 提供 legacy build 路径
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import styles from './DocViewer.module.scss'
 
 // pdfjsLib 类型在 CommonJS 形态下被推为 namespace;这里强制断言成 default。
 // pdfjs-dist 的 default export 在 ESM build 下导出 getDocument。
@@ -112,41 +113,47 @@ export default function DocViewer(): React.JSX.Element {
 
   if (!id) {
     return (
-      <div className="doc-viewer-empty">
+      <div className={styles.docViewerEmpty}>
         <p>缺少文档 id。</p>
-        <button type="button" onClick={() => navigate(-1)}>返回</button>
+        <button type="button" onClick={() => navigate(-1)}>
+          返回
+        </button>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="doc-viewer-empty">
+      <div className={styles.docViewerEmpty}>
         <h3>{meta?.title ?? '查看器错误'}</h3>
-        <p style={{ color: '#c00' }}>{error}</p>
-        <button type="button" onClick={() => navigate(-1)}>返回</button>
+        <p>{error}</p>
+        <button type="button" onClick={() => navigate(-1)}>
+          返回
+        </button>
       </div>
     )
   }
 
   return (
-    <div className="doc-viewer">
-      <header className="doc-viewer-head">
+    <div className={styles.docViewer}>
+      <header className={styles.docViewerHead}>
         <h3>{meta?.title ?? (busy ? '加载中...' : id)}</h3>
-        <div className="doc-viewer-meta">
-          {meta && <span className="tag">{meta.sourceType}</span>}
-          {pageFromUrl > 0 && <span className="loc">第 {pageFromUrl} 页</span>}
-          {startMs > 0 && <span className="loc">从 {Math.floor(startMs / 1000)}s 起</span>}
-          <button type="button" onClick={() => navigate(-1)}>返回</button>
+        <div className={styles.docViewerMeta}>
+          {meta && <span className={styles.tag}>{meta.sourceType}</span>}
+          {pageFromUrl > 0 && <span className={styles.loc}>第 {pageFromUrl} 页</span>}
+          {startMs > 0 && <span className={styles.loc}>从 {Math.floor(startMs / 1000)}s 起</span>}
+          <button type="button" onClick={() => navigate(-1)}>
+            返回
+          </button>
         </div>
       </header>
 
       {/* PDF / 图片:canvas 渲染当前页 */}
       {meta && (meta.sourceType === 'pdf' || meta.sourceType === 'image') && (
-        <div className="doc-viewer-canvas-wrap">
-          <canvas ref={canvasRef} className="doc-viewer-canvas" />
+        <div className={styles.docViewerCanvasWrap}>
+          <canvas ref={canvasRef} />
           {pageFromUrl > 1 && (
-            <div className="doc-viewer-nav">
+            <div className={styles.docViewerNav}>
               <button
                 type="button"
                 onClick={() => {
@@ -176,10 +183,10 @@ export default function DocViewer(): React.JSX.Element {
 
       {/* 文本类型:按 page / range 切片,直接展示 */}
       {meta && meta.sourceType !== 'pdf' && meta.sourceType !== 'image' && (
-        <article className="doc-viewer-text">
+        <article className={styles.docViewerText}>
           {meta.chunks.length > 0 ? (
             meta.chunks.map((c, idx) => (
-              <section key={idx} className="doc-viewer-chunk">
+              <section key={idx} className={styles.docViewerChunk}>
                 {c.heading ? <h4>{String(c.heading)}</h4> : null}
                 <p>{String(c.text ?? '')}</p>
               </section>
@@ -187,13 +194,13 @@ export default function DocViewer(): React.JSX.Element {
           ) : (
             <pre>{meta.text || '(无内容)'}</pre>
           )}
-          {meta.note && <p className="note">{meta.note}</p>}
+          {meta.note && <p className={styles.note}>{meta.note}</p>}
         </article>
       )}
 
       {/* 媒体类型:引导到外部播放器;此处只显示链接 */}
       {meta && (meta.sourceType === 'audio' || meta.sourceType === 'video') && (
-        <div className="doc-viewer-media">
+        <div className={styles.docViewerMedia}>
           <p>媒体查看器尚未接入,请通过主进程 OS 播放器打开:</p>
           <button
             type="button"
@@ -207,9 +214,7 @@ export default function DocViewer(): React.JSX.Element {
         </div>
       )}
 
-      {!meta && !busy && (
-        <div className="doc-viewer-empty">未找到内容</div>
-      )}
+      {!meta && !busy && <div className={styles.docViewerEmpty}>未找到内容</div>}
     </div>
   )
 }
