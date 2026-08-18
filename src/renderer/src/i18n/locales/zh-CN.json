@@ -229,6 +229,38 @@
     "stop": "停止",
     "stopTitle": "停止录音"
   },
+  "sessionList": {
+    "untitled": "未命名会话",
+    "searchPlaceholder": "搜索会话",
+    "clearSearch": "清空搜索",
+    "noMatch": "没有匹配的会话",
+    "empty": "暂无会话",
+    "confirmDelete": "删除?",
+    "moreActions": "更多操作",
+    "unpin": "取消置顶",
+    "pin": "置顶",
+    "rename": "重命名"
+  },
+  "accountMenu": {
+    "admin": "管理员",
+    "member": "成员"
+  },
+  "startupGate": {
+    "connecting": "正在连接企业知识库..."
+  },
+  "citationCard": {
+    "stale": "可能过时",
+    "collapse": "收起",
+    "expand": "展开全文",
+    "owner": "维护人:{{name}}",
+    "promote": "沉淀为知识"
+  },
+  "router": {
+    "renderError": "页面渲染出错",
+    "unknownError": "未知错误",
+    "reload": "重新加载",
+    "comingSoon": "该功能即将上线"
+  },
   "orgSection": {
     "never": "从未",
     "title": "企业知识库",
@@ -264,6 +296,8 @@
     "scopeOrg": "组织库",
     "scopeTeam": "我的团队",
     "scopeLocal": "仅本机",
+    "scopeOrgShort": "全公司",
+    "scopeTeamShort": "团队",
     "scopeOnly": "仅检索{{scope}}",
     "notReadyTitle": "尚未接入企业知识库",
     "notReadyLoggedOut": "请在「设置 → 企业接入」登录后使用组织知识问答。",
