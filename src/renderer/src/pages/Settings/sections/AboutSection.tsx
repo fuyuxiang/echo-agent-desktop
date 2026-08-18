@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { EchoAgentStatus } from '@shared/types/api'
 
 type UpdateState = 'idle' | 'running' | 'success' | 'error'
@@ -6,21 +7,28 @@ type UpdateState = 'idle' | 'running' | 'success' | 'error'
 const rowStyle = { display: 'flex', gap: 8, alignItems: 'center' }
 const labelStyle = { color: 'var(--text-tertiary)', width: 120, flex: '0 0 120px' }
 
-function statusText(status: EchoAgentStatus | null): string {
+// 状态 → i18n key 映射,避免在 JSX 里写大段硬编码中文
+const STATUS_KEY = {
+  idle: 'about.status.idle',
+  installing: 'about.status.installing',
+  starting: 'about.status.starting',
+  ready: 'about.status.ready',
+  crashed: 'about.status.crashed',
+  updating: 'about.status.updating',
+  error: 'about.status.error'
+} as const satisfies Record<EchoAgentStatus['phase'], string>
+
+function statusText(
+  status: EchoAgentStatus | null,
+  t: (key: string) => string
+): string {
   if (!status) return '...'
-  const labels: Record<EchoAgentStatus['phase'], string> = {
-    idle: '空闲',
-    installing: '安装中',
-    starting: '启动中',
-    ready: '已就绪',
-    crashed: '已崩溃',
-    updating: '升级中',
-    error: '异常'
-  }
-  return status.port ? `${labels[status.phase]} :${status.port}` : labels[status.phase]
+  const label = t(STATUS_KEY[status.phase])
+  return status.port ? `${label} :${status.port}` : label
 }
 
 export function AboutSection(): React.JSX.Element {
+  const { t } = useTranslation()
   const [version, setVersion] = useState('')
   const [agentVersion, setAgentVersion] = useState<string | null | undefined>(undefined)
   const [agentStatus, setAgentStatus] = useState<EchoAgentStatus | null>(null)
@@ -63,7 +71,9 @@ export function AboutSection(): React.JSX.Element {
       setAgentStatus(nextStatus)
       if (nextStatus.phase === 'error' || nextStatus.phase === 'crashed') {
         setUpdateState('error')
-        setUpdateError(nextStatus.message || 'echo-agent 升级后未能正常启动')
+        setUpdateError(
+          nextStatus.message || t('about.updateFailedGeneric', 'echo-agent 升级后未能正常启动')
+        )
         return
       }
       setUpdateState('success')
@@ -77,19 +87,23 @@ export function AboutSection(): React.JSX.Element {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 24 }}>关于</h2>
+      <h2 style={{ marginBottom: 24 }}>{t('about.title')}</h2>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={rowStyle}>
-          <span style={labelStyle}>Desktop 版本</span>
+          <span style={labelStyle}>{t('about.desktopVersion')}</span>
           <span>{version || '...'}</span>
         </div>
         <div style={rowStyle}>
-          <span style={labelStyle}>echo-agent 版本</span>
-          <span>{agentVersion === undefined ? '...' : agentVersion || '未安装'}</span>
+          <span style={labelStyle}>{t('about.agentVersion')}</span>
+          <span>
+            {agentVersion === undefined
+              ? '...'
+              : agentVersion || t('about.notInstalled')}
+          </span>
         </div>
         <div style={rowStyle}>
-          <span style={labelStyle}>echo-agent 状态</span>
-          <span>{statusText(agentStatus)}</span>
+          <span style={labelStyle}>{t('about.agentStatus')}</span>
+          <span>{statusText(agentStatus, t)}</span>
         </div>
         <div style={{ ...rowStyle, marginTop: 4 }}>
           <span style={labelStyle} />
@@ -108,19 +122,21 @@ export function AboutSection(): React.JSX.Element {
               cursor: updating ? 'default' : 'pointer'
             }}
           >
-            {updating ? '升级中...' : '升级 echo-agent'}
+            {updating ? t('about.updating') : t('about.update')}
           </button>
           {updateState === 'success' && (
-            <span style={{ color: 'var(--color-primary)', fontSize: 12 }}>升级完成</span>
+            <span style={{ color: 'var(--color-primary)', fontSize: 12 }}>
+              {t('about.updated')}
+            </span>
           )}
         </div>
         {updateState === 'error' && (
           <p style={{ fontSize: 12, color: 'var(--color-danger)', margin: 0 }}>
-            {updateError || '升级失败'}
+            {updateError || t('about.updateFailed')}
           </p>
         )}
         <p style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 16 }}>
-          Echo Agent Desktop - AI Agent 本地客户端
+          {t('about.tagline')}
         </p>
       </div>
     </div>
