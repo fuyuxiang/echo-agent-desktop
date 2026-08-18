@@ -29,10 +29,6 @@ export const ROUTES = {
   admin: '/admin',
   /** 会议记录 */
   meeting: '/meeting',
-  /** kb 资料库 */
-  kbLibrary: '/kb-library',
-  /** kb 资料问答 */
-  kbQa: '/kb-qa',
   /** 组织知识问答(企业版) */
   ask: '/ask',
   /** 组织知识浏览与我的提交(企业版) */
