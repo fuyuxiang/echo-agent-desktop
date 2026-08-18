@@ -369,6 +369,27 @@ const api: BridgeApi = {
     }
   },
 
+  /**
+   * 统一身份入口(2026-08 P1-2):渲染层只通过 window.api.identity 访问,
+   * 严禁直接调 org.logout 或改 safeStorage。
+   */
+  identity: {
+    current: (): Promise<{
+      userId: string
+      displayName: string
+      source: 'local' | 'org'
+      token?: string
+      role?: 'admin' | 'member'
+      groups?: Array<{ id: string; name: string }>
+    }> => ipcRenderer.invoke(IpcChannels.identity.current),
+    isOrgSignedIn: (): Promise<boolean> =>
+      ipcRenderer.invoke(IpcChannels.identity.isOrgSignedIn),
+    signOut: (): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke(IpcChannels.identity.signOut),
+    isSecureStoreAvailable: (): Promise<boolean> =>
+      ipcRenderer.invoke(IpcChannels.identity.isSecureStoreAvailable)
+  },
+
   platform: {
     isMac: process.platform === 'darwin',
     isWin: process.platform === 'win32',
