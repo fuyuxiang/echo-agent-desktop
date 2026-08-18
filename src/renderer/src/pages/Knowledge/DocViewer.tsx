@@ -50,8 +50,10 @@ export default function DocViewer(): React.JSX.Element {
   // 拉取文档详情 + 文本段
   useEffect(() => {
     if (!id) return
-    setBusy(true)
-    setError(null)
+    queueMicrotask(() => {
+      setBusy(true)
+      setError(null)
+    })
     const qs = pageFromUrl > 0 ? `?page=${pageFromUrl}` : ''
     void fetch(`/api/v1/docs/${encodeURIComponent(id)}/content${qs}`, {
       credentials: 'include'

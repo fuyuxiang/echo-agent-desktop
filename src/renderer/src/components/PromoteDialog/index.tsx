@@ -47,9 +47,15 @@ export function PromoteDialog({
 
   useEffect(() => {
     if (!targetScope && scopes.length > 0) {
-      // 默认投团队而非全公司:组织层的门槛更高,让用户主动选择升到那一层。
-      const team = scopes.find((s) => s.kind === 'team')
-      setTargetScope(team?.id ?? scopes[0].id)
+      // 推迟到下一个 tick,避免在 effect body 同步触发 setState
+      queueMicrotask(() => {
+        setTargetScope((cur) => {
+          if (cur) return cur
+          // 默认投团队而非全公司:组织层的门槛更高,让用户主动选择升到那一层。
+          const team = scopes.find((s) => s.kind === 'team')
+          return team?.id ?? scopes[0].id
+        })
+      })
     }
   }, [scopes, targetScope])
 
