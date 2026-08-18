@@ -120,7 +120,8 @@ describe('pages', () => {
     render(<MeetingPage />)
 
     expect(await screen.findByText('周会')).toBeTruthy()
-    expect(screen.getByText(/已完成/)).toBeTruthy()
+    // i18n mock:t(key) = key,Meeting 状态映射到 meeting.status.* 命名空间
+    expect(screen.getByText(/meeting\.status\.done/)).toBeTruthy()
     fireEvent.click(screen.getByText('周会'))
     expect(router.navigate).toHaveBeenCalledWith('/meeting/m1')
   })
