@@ -189,8 +189,6 @@ const ALLOWED_PATH_RULES: Array<{ prefix: string; exact?: boolean }> = [
   { prefix: '/settings' },
   { prefix: '/example' },
   { prefix: '/memory' },
-  { prefix: '/kb-library' },
-  { prefix: '/kb-qa' },
   { prefix: '/gateway' },
   { prefix: '/kanban' },
   { prefix: '/soul' },
