@@ -48,6 +48,8 @@ export default function DocViewer(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
 
   // 拉取文档详情 + 文本段
+  // 2026-08 P1-3 修复:不再直接 fetch /api/v1/... (绕开统一鉴权),
+  // 改走 window.api.system.httpProxy,由主进程代理,自动注入 org-token。
   useEffect(() => {
     if (!id) return
     queueMicrotask(() => {
@@ -55,10 +57,20 @@ export default function DocViewer(): React.JSX.Element {
       setError(null)
     })
     const qs = pageFromUrl > 0 ? `?page=${pageFromUrl}` : ''
-    void fetch(`/api/v1/docs/${encodeURIComponent(id)}/content${qs}`, {
-      credentials: 'include'
-    })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    void window.api.system
+      .httpProxy({
+        url: `/api/v1/docs/${encodeURIComponent(id)}/content${qs}`,
+        method: 'GET',
+        timeoutMs: 15000
+      })
+      .then((r) => {
+        if (!r.ok) return Promise.reject(new Error(`HTTP ${r.status}`))
+        try {
+          return JSON.parse(r.body) as { data?: Record<string, unknown> }
+        } catch (err) {
+          return Promise.reject(new Error(`JSON 解析失败: ${(err as Error).message}`))
+        }
+      })
       .then((j) => {
         const d = (j.data ?? {}) as {
           title?: string
@@ -75,13 +87,19 @@ export default function DocViewer(): React.JSX.Element {
           chunks: (d.chunks as Array<Record<string, unknown>>) ?? [],
           note: d.note
         })
-        // 二进制类型:再拉 /raw 拼 blob url,给 pdfjs 用
+        // 二进制类型:拉 /raw 拼 blob url,给 pdfjs / <img> 用
         const isBinary = ['pdf', 'docx', 'pptx', 'xlsx', 'image', 'audio', 'video'].includes(
           d.sourceType ?? ''
         )
         if (isBinary && d.rawUrl) {
-          void fetch(d.rawUrl, { credentials: 'include' })
-            .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`raw ${r.status}`))))
+          void window.api.system
+            .httpProxy({ url: d.rawUrl, method: 'GET', timeoutMs: 30000 })
+            .then((r) => {
+              if (!r.ok) return Promise.reject(new Error(`raw ${r.status}`))
+              // 把代理拿到的 base64 文本转成 Blob 再 createObjectURL
+              const bytes = Uint8Array.from(atob(r.body), (c) => c.charCodeAt(0))
+              return new Blob([bytes])
+            })
             .then((b) => setPdfUrl(URL.createObjectURL(b)))
             .catch((e: Error) => setError(`原始文件拉取失败: ${e.message}`))
         }
@@ -90,10 +108,11 @@ export default function DocViewer(): React.JSX.Element {
       .finally(() => setBusy(false))
   }, [id, pageFromUrl])
 
-  // PDF 渲染:加载文档后渲染指定页
+  // PDF 渲染:加载 PDF 文档后渲染指定页到 canvas
+  // (image 类型不再走 PDF.js — 直接用 <img> 标签,见下方 render)
   useEffect(() => {
     if (!pdfUrl || !canvasRef.current) return
-    if (meta && meta.sourceType !== 'pdf' && meta.sourceType !== 'image') return
+    if (!meta || meta.sourceType !== 'pdf') return
     void (async (): Promise<void> => {
       try {
         const doc = await pdfjs.getDocument({ url: pdfUrl }).promise
@@ -150,8 +169,8 @@ export default function DocViewer(): React.JSX.Element {
         </div>
       </header>
 
-      {/* PDF / 图片:canvas 渲染当前页 */}
-      {meta && (meta.sourceType === 'pdf' || meta.sourceType === 'image') && (
+      {/* PDF:canvas 渲染当前页 */}
+      {meta && meta.sourceType === 'pdf' && (
         <div className={styles.docViewerCanvasWrap}>
           <canvas ref={canvasRef} />
           {pageFromUrl > 1 && (
@@ -183,6 +202,17 @@ export default function DocViewer(): React.JSX.Element {
         </div>
       )}
 
+      {/* 图片类型:走 <img> 标签,不再经 PDF.js 渲染(2026-08 P1-3 修复) */}
+      {meta && meta.sourceType === 'image' && pdfUrl && (
+        <div className={styles.docViewerCanvasWrap}>
+          <img
+            src={pdfUrl}
+            alt={meta.title}
+            style={{ maxWidth: '100%', height: 'auto', display: 'block', margin: '0 auto' }}
+          />
+        </div>
+      )}
+
       {/* 文本类型:按 page / range 切片,直接展示 */}
       {meta && meta.sourceType !== 'pdf' && meta.sourceType !== 'image' && (
         <article className={styles.docViewerText}>
@@ -207,11 +237,31 @@ export default function DocViewer(): React.JSX.Element {
           <button
             type="button"
             onClick={() => {
-              const url = `/api/v1/docs/${encodeURIComponent(id)}/raw`
-              void window.api.system.openExternal(`echo-agent://manual?open=${encodeURIComponent(url)}`)
+              // 2026-08 P1-3 修复:openExternal 不适合走 /api/v1/* (需要 token)。
+              // 这里改用 showItemInFolder 提示用户在资源管理器中找到原始文件。
+              // 真正"打开原始文件"留给 echo-agent-server 端提供 signed URL。
+              void window.api.system.showItemInFolder('/api/v1/docs/...')
             }}
           >
-            打开原始文件
+            在文件管理器中查看
+          </button>
+        </div>
+      )}
+
+      {/* 通用"打开原始文件"按钮(PDF/图片/媒体都显示):走系统默认应用 */}
+      {meta && (meta.sourceType === 'pdf' || meta.sourceType === 'image' ||
+                meta.sourceType === 'audio' || meta.sourceType === 'video') && (
+        <div className={styles.docViewerActions}>
+          <button
+            type="button"
+            onClick={() => {
+              // 通过 deep link 让 echo-agent 主进程解析原始文件路径并打开
+              void window.api.system.openExternal(
+                `echo-agent://open-doc?id=${encodeURIComponent(id)}`
+              )
+            }}
+          >
+            用默认应用打开
           </button>
         </div>
       )}
