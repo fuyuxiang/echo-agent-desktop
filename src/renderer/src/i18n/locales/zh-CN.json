@@ -40,6 +40,19 @@
       "failed": "失败"
     }
   },
+  "meetingDetail": {
+    "deleteConfirm": "删除该会议及其录音?此操作不可撤销",
+    "summaryFailed": "生成会议纪要失败，请重试",
+    "loading": "加载中…",
+    "tabSummary": "纪要",
+    "tabTranscript": "全文转写",
+    "keyPoints": "关键点",
+    "actionItems": "待办",
+    "generatingSummary": "正在生成纪要…",
+    "noSummary": "暂无纪要",
+    "regenSummary": "重新生成纪要",
+    "retryDiarize": "重试说话人分离"
+  },
   "skills": {
     "title": "技能库",
     "empty": "暂无技能",

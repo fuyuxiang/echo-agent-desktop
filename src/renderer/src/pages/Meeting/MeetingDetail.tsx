@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useParams, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import type { MeetingDTO, SegmentDTO, SummaryDTO } from '@shared/types/meeting'
@@ -8,6 +9,7 @@ import { CandidatePanel } from '@/components/CandidatePanel'
 import styles from './meeting.module.scss'
 
 export default function MeetingDetail(): React.JSX.Element {
+  const { t } = useTranslation()
   const { id = '' } = useParams()
   const navigate = useNavigate()
   const [meeting, setMeeting] = useState<MeetingDTO | null>(null)
@@ -28,7 +30,7 @@ export default function MeetingDetail(): React.JSX.Element {
   }, [load])
 
   const onRemove = async (): Promise<void> => {
-    if (!window.confirm('删除该会议及其录音?此操作不可撤销')) return
+    if (!window.confirm(t('meetingDetail.deleteConfirm'))) return
     await window.api.meeting.remove(id)
     navigate('/meeting')
   }
@@ -41,7 +43,7 @@ export default function MeetingDetail(): React.JSX.Element {
       await load()
     } catch {
       // 用户主动点"重新生成":失败给即时反馈,可再次点击重试
-      toast.error('生成会议纪要失败，请重试')
+      toast.error(t('meetingDetail.summaryFailed'))
     }
   }
 
@@ -54,15 +56,17 @@ export default function MeetingDetail(): React.JSX.Element {
     }
   }
 
-  if (!meeting) return <div className={styles.page}>加载中…</div>
+  if (!meeting) return <div className={styles.page}>{t('meetingDetail.loading')}</div>
   return (
     <div className={styles.page}>
       <div className={styles.detailHead}>
         <button onClick={() => navigate('/meeting')}>←</button>
-        <span className={styles.title}>{meeting.title ?? '未命名会议'}</span>
+        <span className={styles.title}>
+          {meeting.title ?? t('meeting.untitled')}
+        </span>
         <span className={styles.meta}>{formatClock(meeting.durationMs)}</span>
         <button className={styles.danger} onClick={onRemove}>
-          删除
+          {t('common.delete')}
         </button>
       </div>
       <div className={styles.tabs}>
@@ -70,13 +74,13 @@ export default function MeetingDetail(): React.JSX.Element {
           className={tab === 'summary' ? styles.tabActive : ''}
           onClick={() => setTab('summary')}
         >
-          纪要
+          {t('meetingDetail.tabSummary')}
         </button>
         <button
           className={tab === 'transcript' ? styles.tabActive : ''}
           onClick={() => setTab('transcript')}
         >
-          全文转写
+          {t('meetingDetail.tabTranscript')}
         </button>
       </div>
       {tab === 'summary' ? (
@@ -85,7 +89,7 @@ export default function MeetingDetail(): React.JSX.Element {
             <ReactMarkdown>{summary.summary}</ReactMarkdown>
             {summary.keyPoints.length > 0 && (
               <>
-                <h4>关键点</h4>
+                <h4>{t('meetingDetail.keyPoints')}</h4>
                 <ul>
                   {summary.keyPoints.map((k, i) => (
                     <li key={i}>{k}</li>
@@ -95,7 +99,7 @@ export default function MeetingDetail(): React.JSX.Element {
             )}
             {summary.actionItems.length > 0 && (
               <>
-                <h4>待办</h4>
+                <h4>{t('meetingDetail.actionItems')}</h4>
                 <ul>
                   {summary.actionItems.map((a, i) => (
                     <li key={i}>{a}</li>
@@ -108,24 +112,26 @@ export default function MeetingDetail(): React.JSX.Element {
             <CandidatePanel
               segments={segments}
               meetingId={meeting.id}
-              meetingTitle={meeting.title ?? '未命名会议'}
+              meetingTitle={meeting.title ?? t('meeting.untitled')}
             />
           </div>
         ) : (
           <div className={styles.empty}>
             {meeting.status === 'processing' ? (
-              '正在生成纪要…'
+              t('meetingDetail.generatingSummary')
             ) : (
               <>
-                <div>暂无纪要</div>
-                <button onClick={onRegenSummary}>重新生成纪要</button>
+                <div>{t('meetingDetail.noSummary')}</div>
+                <button onClick={onRegenSummary}>
+                  {t('meetingDetail.regenSummary')}
+                </button>
               </>
             )}
           </div>
         )
       ) : (
         <div className={styles.transcript}>
-          <button onClick={onRetryDiarize}>重试说话人分离</button>
+          <button onClick={onRetryDiarize}>{t('meetingDetail.retryDiarize')}</button>
           {segments.map((s) => (
             <div key={s.id} className={styles.seg}>
               {s.speaker && <span className={styles.speaker}>{s.speaker}</span>}
