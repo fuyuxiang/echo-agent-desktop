@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ROUTES } from '@/constants'
 import { isOrgReady, useOrgStore } from '@/stores/orgStore'
@@ -125,6 +126,7 @@ function StartupScreen({
 }
 
 function StartupLoading(): React.JSX.Element {
+  const { t } = useTranslation()
   return (
     <div
       role="status"
@@ -148,7 +150,7 @@ function StartupLoading(): React.JSX.Element {
           <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" />
           <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
         </svg>
-        <span>正在连接企业知识库...</span>
+        <span>{t('startupGate.connecting')}</span>
       </div>
       <style>{'@keyframes startup-gate-spin { to { transform: rotate(360deg); } }'}</style>
     </div>

@@ -12,7 +12,7 @@ function initialOf(username: string): string {
   return /[a-z]/i.test(c) ? c.toUpperCase() : c
 }
 
-const ROLE_LABEL: Record<string, string> = { admin: '管理员', member: '成员' }
+const ROLE_LABEL: Record<string, string> = { admin: 'accountMenu.admin', member: 'accountMenu.member' }
 
 export function AccountMenu(): React.JSX.Element {
   const { t } = useTranslation()
@@ -43,7 +43,7 @@ export function AccountMenu(): React.JSX.Element {
   const displayName = authed ? user.username : t('account.guest', '未登录')
   const initial = authed ? initialOf(user.username) : '?'
   const meta = authed
-    ? [ROLE_LABEL[user.role] ?? user.role, user.groupId ?? undefined].filter(Boolean).join(' · ')
+    ? [t(ROLE_LABEL[user.role] ?? user.role), user.groupId ?? undefined].filter(Boolean).join(' · ')
     : t('account.guestHint', '点击登录或配置')
 
   return (
@@ -104,7 +104,7 @@ export function AccountMenu(): React.JSX.Element {
         <span className={clsx(styles.avatar, !authed && styles.avatarGuest)}>{initial}</span>
         <div className={styles.identity}>
           <span className={styles.name}>{displayName}</span>
-          <span className={styles.meta}>{authed ? (ROLE_LABEL[user.role] ?? user.role) : t('account.guestHint', '点击登录或配置')}</span>
+          <span className={styles.meta}>{authed ? t(ROLE_LABEL[user.role] ?? user.role) : t('account.guestHint', '点击登录或配置')}</span>
         </div>
       </button>
     </div>

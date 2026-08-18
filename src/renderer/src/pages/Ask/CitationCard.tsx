@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import type { RetrievedChunk } from '@shared/types/org'
 import styles from './ask.module.scss'
@@ -34,6 +35,7 @@ export function CitationCard({
   chunk: RetrievedChunk
   onPromote?: () => void
 }): React.JSX.Element {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const loc = locationLabel(chunk)
   const long = chunk.text.length > 300
@@ -85,11 +87,11 @@ export function CitationCard({
         </button>
         {loc && <span className={styles.loc}>{loc}</span>}
         <span className={chunk.scopeKind === 'org' ? styles.tagOrg : styles.tagTeam}>
-          {chunk.scopeKind === 'org' ? '全公司' : '团队'}
+          {chunk.scopeKind === 'org' ? t('ask.scopeOrgShort') : t('ask.scopeTeamShort')}
         </span>
         {layerLabel && <span className={styles.tagLayer}>{layerLabel}</span>}
         <span className={styles.typeTag}>{typeLabel}</span>
-        {chunk.stale && <span className={styles.tagStale}>可能过时</span>}
+        {chunk.stale && <span className={styles.tagStale}>{t('citationCard.stale')}</span>}
       </header>
 
       {chunk.citation.heading && <div className={styles.heading}>{chunk.citation.heading}</div>}
@@ -99,13 +101,17 @@ export function CitationCard({
       <footer className={styles.cardFoot}>
         {long && (
           <button type="button" className={styles.linkBtn} onClick={() => setExpanded(!expanded)}>
-            {expanded ? '收起' : '展开全文'}
+            {expanded ? t('citationCard.collapse') : t('citationCard.expand')}
           </button>
         )}
-        {chunk.owner && <span className={styles.owner}>维护人:{chunk.owner.displayName}</span>}
+        {chunk.owner && (
+          <span className={styles.owner}>
+            {t('citationCard.owner', { name: chunk.owner.displayName })}
+          </span>
+        )}
         {onPromote && (
           <button type="button" className={styles.linkBtn} onClick={onPromote}>
-            沉淀为知识
+            {t('citationCard.promote')}
           </button>
         )}
       </footer>
