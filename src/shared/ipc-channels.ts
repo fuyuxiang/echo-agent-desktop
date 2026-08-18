@@ -306,5 +306,22 @@ export const IpcChannels = {
     reportQa: 'org:report-qa',
     /** 主进程 -> 渲染层:登录态或可达性变化 */
     onStatusChanged: 'org:status-changed'
+  },
+
+  /**
+   * 统一身份入口(2026-08 P1-2 修复)
+   *
+   * 渲染端一律通过 window.api.identity.* 访问;严禁直接调用 org.logout 或
+   * 修改 safeStorage,以避免"退出登录只清一半"的串台 bug。
+   */
+  identity: {
+    /** 获取当前活跃身份快照(org 优先,本地兜底) */
+    current: 'identity:current',
+    /** 当前是否登录了企业账号 */
+    isOrgSignedIn: 'identity:is-org-signed-in',
+    /** 统一登出:清空所有 provider 的 token / 缓存 / 用户数据 */
+    signOut: 'identity:sign-out',
+    /** 当前 safeStorage 是否可用 */
+    isSecureStoreAvailable: 'identity:is-secure-store-available'
   }
 } as const
