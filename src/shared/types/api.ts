@@ -255,6 +255,28 @@ export interface BridgeApi {
     extractCandidates(segments: SegmentDTO[]): Promise<KnowledgeCandidate[]>
   }
 
+  /**
+   * 统一身份入口(2026-08 P1-2):渲染层只通过 window.api.identity 访问,
+   * 严禁直接调 org.logout 或改 safeStorage。
+   */
+  identity: {
+    /** 获取当前活跃身份快照(org 优先,本地兜底) */
+    current: () => Promise<{
+      userId: string
+      displayName: string
+      source: 'local' | 'org'
+      token?: string
+      role?: 'admin' | 'member'
+      groups?: Array<{ id: string; name: string }>
+    }>
+    /** 当前是否登录了企业账号 */
+    isOrgSignedIn: () => Promise<boolean>
+    /** 统一登出:清空所有 provider 的 token / 缓存 / 用户数据 */
+    signOut: () => Promise<{ ok: boolean }>
+    /** 当前 safeStorage 是否可用 */
+    isSecureStoreAvailable: () => Promise<boolean>
+  }
+
   /** 原生 agent 对话主链路(P5) */
   agentChat: {
     /**

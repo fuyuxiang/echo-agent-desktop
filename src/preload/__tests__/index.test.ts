@@ -63,6 +63,7 @@ describe('preload bridge', () => {
       'echoConfig',
       'echoMemory',
       'gateway',
+      'identity',
       'kanban',
       'log',
       'logs',

@@ -8,6 +8,7 @@ import { registerBackupIpcHandlers } from './backup'
 import { registerDbHandlers } from './db'
 import { registerEchoAgentIpc } from './echo-agent'
 import { registerGatewayIpcHandlers } from './gateway'
+import { registerIdentityIpc } from './identity'
 import { registerKanbanIpcHandlers } from './kanban'
 import { registerLogHandlers } from './log'
 import { registerLogsIpcHandlers } from './logs'
@@ -55,5 +56,6 @@ export function registerAllIpcHandlers(getWindow: () => Electron.BrowserWindow |
   registerBackupIpcHandlers()
   registerSettingsIpcHandlers()
   registerLogsIpcHandlers()
+  registerIdentityIpc()
   registerOrgIpc(getWindow)
 }
