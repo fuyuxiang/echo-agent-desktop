@@ -54,6 +54,39 @@
     "inactive": "未激活",
     "supportedFiles": "支持文件"
   },
+  "settings": {
+    "general": {
+      "title": "通用设置",
+      "theme": "主题",
+      "themeSystem": "跟随系统",
+      "themeLight": "浅色",
+      "themeDark": "深色",
+      "language": "语言",
+      "launchAtLogin": "开机自启"
+    }
+  },
+  "about": {
+    "title": "关于",
+    "desktopVersion": "Desktop 版本",
+    "agentVersion": "echo-agent 版本",
+    "agentStatus": "echo-agent 状态",
+    "notInstalled": "未安装",
+    "update": "升级 echo-agent",
+    "updating": "升级中...",
+    "updated": "升级完成",
+    "updateFailed": "升级失败",
+    "updateFailedGeneric": "echo-agent 升级后未能正常启动",
+    "tagline": "Echo Agent Desktop - AI Agent 本地客户端",
+    "status": {
+      "idle": "空闲",
+      "installing": "安装中",
+      "starting": "启动中",
+      "ready": "已就绪",
+      "crashed": "已崩溃",
+      "updating": "升级中",
+      "error": "异常"
+    }
+  },
   "ask": {
     "scopeAll": "全部",
     "scopeOrg": "组织库",
