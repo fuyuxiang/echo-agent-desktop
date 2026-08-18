@@ -77,11 +77,12 @@ describe('basic components', () => {
 
     const zone = screen.getByText('content')
     fireEvent.dragOver(zone)
-    expect(screen.getByText('拖放文件到此处作为对话附件')).toBeTruthy()
+    // i18n mock:t(key) = key,FileDropZone overlay 文案对应 common.dropFilesHere
+    expect(screen.getByText('common.dropFilesHere')).toBeTruthy()
     const file = new File(['a'], 'a.txt')
     fireEvent.drop(zone, { dataTransfer: { files: [file] } })
     expect(onDrop).toHaveBeenCalledWith([file])
-    expect(screen.queryByText('拖放文件到此处作为对话附件')).toBeNull()
+    expect(screen.queryByText('common.dropFilesHere')).toBeNull()
   })
 
   it('ListPanel 仅 visible=true 时渲染内容', async () => {

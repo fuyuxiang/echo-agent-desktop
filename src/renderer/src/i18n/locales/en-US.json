@@ -143,6 +143,84 @@
       "withdrawn": "Withdrawn"
     }
   },
+  "common": {
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "loading": "Loading...",
+    "empty": "No data",
+    "copySuccess": "Copied to clipboard",
+    "login": "Sign In",
+    "logout": "Sign Out",
+    "listJoiner": ", ",
+    "dropFilesHere": "Drop files here as chat attachments"
+  },
+  "candidate": {
+    "kind": {
+      "decision": "Decision",
+      "convention": "Convention",
+      "pitfall": "Pitfall",
+      "other": "Other"
+    },
+    "noTranscripts": "No transcripts yet",
+    "noCandidates": "Nothing worth saving was identified",
+    "extractFailed": "Extraction failed: {{message}}",
+    "pickScope": "Pick a sharing scope",
+    "submitFailed": "{{count}} submission(s) failed",
+    "queued": "{{count}} queued locally; will submit once online",
+    "submitted": "{{count}} submitted; awaiting admin review",
+    "title": "Promote to org knowledge",
+    "desc": "Pick conclusions from this meeting that are worth keeping. They enter the org library after admin review.",
+    "extracting": "Extracting…",
+    "extract": "Extract candidates",
+    "empty": "Nothing worth saving was identified.",
+    "retry": "Retry",
+    "rationale": "Rationale: {{text}}",
+    "shareTo": "Share with",
+    "orgScope": "Whole company",
+    "teamScope": "{{name}} (Team)",
+    "selected": "{{count}} selected",
+    "submittedDone": "Submitted",
+    "submitting": "Submitting…",
+    "submitReview": "Submit for review"
+  },
+  "promote": {
+    "title": "Promote to org knowledge",
+    "desc": "Submissions require admin review. Reviewers may adjust wording before approving.",
+    "type": "Type",
+    "kind": {
+      "decision": "Decision",
+      "convention": "Convention",
+      "fact": "Fact",
+      "pitfall": "Pitfall",
+      "howto": "How-to"
+    },
+    "kind.hint": {
+      "decision": "What was decided in the meeting",
+      "convention": "How the team usually does things",
+      "fact": "Objective numbers or rules",
+      "pitfall": "Mistakes to avoid",
+      "howto": "How to do it"
+    },
+    "content": "Content",
+    "contentPlaceholder": "State the conclusion in one sentence",
+    "rationale": "Rationale (optional)",
+    "rationalePlaceholder": "Why it holds. Clearer rationale gets through review faster.",
+    "shareScope": "Sharing scope",
+    "scopeOrg": "Whole company",
+    "scopeTeam": "{{name}} (Team)",
+    "fillContent": "Please fill in the content to promote",
+    "pickScope": "Pick a sharing scope",
+    "submitFailed": "Submission failed",
+    "queued": "Queued locally; will submit when online",
+    "submitted": "Submitted; everyone can find it after admin review",
+    "submitting": "Submitting…",
+    "submitReview": "Submit for review"
+  },
+  "chat": {
+    "thinkingProcess": "💭 Reasoning"
+  },
   "ask": {
     "scopeAll": "All",
     "scopeOrg": "Org",

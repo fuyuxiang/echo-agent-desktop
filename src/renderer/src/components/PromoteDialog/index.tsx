@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useOrgStore, isOrgReady } from '@/stores/orgStore'
 import { toast } from '@/components/Toast'
 import type { MemoryKind, PromotionSource } from '@shared/types/org'
 import styles from './promote-dialog.module.scss'
 
-const KINDS: { value: MemoryKind; label: string; hint: string }[] = [
-  { value: 'decision', label: '决策', hint: '会上定下来的事' },
-  { value: 'convention', label: '约定', hint: '团队默认这么做' },
-  { value: 'fact', label: '事实', hint: '客观的数字、规则' },
-  { value: 'pitfall', label: '坑点', hint: '踩过的坑,别人别再踩' },
-  { value: 'howto', label: '操作方法', hint: '具体怎么做' }
-]
+// 类型 → i18n key(label / hint)映射
+const KIND_KEY: Record<MemoryKind, { label: string; hint: string }> = {
+  decision: { label: 'promote.kind.decision', hint: 'promote.kind.hint.decision' },
+  convention: { label: 'promote.kind.convention', hint: 'promote.kind.hint.convention' },
+  fact: { label: 'promote.kind.fact', hint: 'promote.kind.hint.fact' },
+  pitfall: { label: 'promote.kind.pitfall', hint: 'promote.kind.hint.pitfall' },
+  howto: { label: 'promote.kind.howto', hint: 'promote.kind.hint.howto' }
+}
 
 /**
  * 沉淀对话框 —— 知识双向流动的入口。
@@ -35,6 +37,7 @@ export function PromoteDialog({
   onClose: () => void
   onDone?: () => void
 }): React.JSX.Element | null {
+  const { t } = useTranslation()
   const status = useOrgStore((s) => s.status)
   const scopes = useOrgStore((s) => s.scopes)
   const promote = useOrgStore((s) => s.promote)
@@ -64,11 +67,11 @@ export function PromoteDialog({
   const submit = async (): Promise<void> => {
     const text = content.trim()
     if (!text) {
-      toast.error('请填写要沉淀的内容')
+      toast.error(t('promote.fillContent'))
       return
     }
     if (!targetScope) {
-      toast.error('请选择共享范围')
+      toast.error(t('promote.pickScope'))
       return
     }
     setBusy(true)
@@ -80,15 +83,11 @@ export function PromoteDialog({
         targetScope
       })
       if (!res.ok) {
-        toast.error(res.error ?? '提交失败')
+        toast.error(res.error ?? t('promote.submitFailed'))
         return
       }
       // 离线入队要说清楚,否则用户以为已经生效了。
-      toast.success(
-        res.queued
-          ? '已存入本地队列,联网后会自动提交'
-          : '已提交,管理员审核通过后全员可检索到'
-      )
+      toast.success(res.queued ? t('promote.queued') : t('promote.submitted'))
       onDone?.()
       onClose()
     } finally {
@@ -99,29 +98,27 @@ export function PromoteDialog({
   return (
     <div className={styles.overlay} onClick={onClose}>
       <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
-        <h3 className={styles.title}>沉淀为组织知识</h3>
-        <p className={styles.desc}>
-          提交后需管理员审核。审核人可能会调整措辞后通过。
-        </p>
+        <h3 className={styles.title}>{t('promote.title')}</h3>
+        <p className={styles.desc}>{t('promote.desc')}</p>
 
-        <label className={styles.label}>类型</label>
+        <label className={styles.label}>{t('promote.type')}</label>
         <div className={styles.kinds}>
-          {KINDS.map((k) => (
+          {(Object.keys(KIND_KEY) as MemoryKind[]).map((k) => (
             <button
-              key={k.value}
+              key={k}
               type="button"
-              className={kind === k.value ? styles.kindActive : styles.kind}
-              onClick={() => setKind(k.value)}
-              title={k.hint}
+              className={kind === k ? styles.kindActive : styles.kind}
+              onClick={() => setKind(k)}
+              title={t(KIND_KEY[k].hint)}
             >
-              {k.label}
+              {t(KIND_KEY[k].label)}
             </button>
           ))}
         </div>
-        <div className={styles.kindHint}>{KINDS.find((k) => k.value === kind)?.hint}</div>
+        <div className={styles.kindHint}>{t(KIND_KEY[kind].hint)}</div>
 
         <label className={styles.label}>
-          内容
+          {t('promote.content')}
           <span className={styles.counter}>{content.length}/2000</span>
         </label>
         <textarea
@@ -130,20 +127,20 @@ export function PromoteDialog({
           maxLength={2000}
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          placeholder="一句话说清结论,如:采购申请统一走线上流程,纸质单据不再受理"
+          placeholder={t('promote.contentPlaceholder')}
         />
 
-        <label className={styles.label}>依据(可选)</label>
+        <label className={styles.label}>{t('promote.rationale')}</label>
         <textarea
           className={styles.textarea}
           rows={2}
           maxLength={2000}
           value={rationale}
           onChange={(e) => setRationale(e.target.value)}
-          placeholder="为什么成立。写清楚更容易通过审核,也让后来人信得过"
+          placeholder={t('promote.rationalePlaceholder')}
         />
 
-        <label className={styles.label}>共享范围</label>
+        <label className={styles.label}>{t('promote.shareScope')}</label>
         <select
           className={styles.select}
           value={targetScope}
@@ -151,17 +148,19 @@ export function PromoteDialog({
         >
           {scopes.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.kind === 'org' ? '全公司' : `${s.name}(团队)`}
+              {s.kind === 'org'
+                ? t('promote.scopeOrg')
+                : t('promote.scopeTeam', { name: s.name })}
             </option>
           ))}
         </select>
 
         <div className={styles.actions}>
           <button type="button" className={styles.ghost} onClick={onClose} disabled={busy}>
-            取消
+            {t('common.cancel')}
           </button>
           <button type="button" className={styles.primary} onClick={() => void submit()} disabled={busy}>
-            {busy ? '提交中…' : '提交审核'}
+            {busy ? t('promote.submitting') : t('promote.submitReview')}
           </button>
         </div>
       </div>
