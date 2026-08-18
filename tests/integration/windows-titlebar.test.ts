@@ -21,6 +21,7 @@ const STARTUP_GATE_TSX = join(
   __dirname,
   '../../src/renderer/src/components/StartupGate/index.tsx'
 )
+const ROUTER_TSX = join(__dirname, '../../src/renderer/src/router/index.tsx')
 
 describe('Regression: Windows frame:false + 自定义标题栏', () => {
   it('window.ts 在非 Mac 平台使用 frame:false', async () => {
@@ -56,6 +57,23 @@ describe('Regression: Windows frame:false + 自定义标题栏', () => {
     expect(src).not.toContain('frame:false')
     expect(src).not.toContain('minimize')
     expect(src).not.toContain('close')
+  })
+
+  it('LoginPage 路由也挂载 TitleBar(2026-08 P0-2 修复)', async () => {
+    // LoginPage 路由不在 AppLayout 内,需 router 层显式挂 TitleBar,
+    // 否则 Windows frame:false 时窗口无法拖动/最小化/关闭。
+    const src = await readFile(ROUTER_TSX, 'utf8')
+    // 必须导入 TitleBar
+    expect(src).toContain("from '@/layouts/TitleBar'")
+    // LoginPage 路由分支:从 `path: ROUTES.login` 开始到下一个顶层 `}` 为止
+    // 用 `path: ROUTES.login` 之后的整段查找 <TitleBar /> 即可(允许注释和 fragment)
+    const afterLogin = src.slice(src.indexOf('path: ROUTES.login'))
+    expect(afterLogin).toContain('<TitleBar')
+    // 顺序保护:TitleBar 在 LoginPage 之前出现
+    const titleIdx = afterLogin.indexOf('<TitleBar')
+    const loginIdx = afterLogin.indexOf('<LoginPage')
+    expect(titleIdx).toBeGreaterThan(-1)
+    expect(loginIdx).toBeGreaterThan(titleIdx)
   })
 })
 

@@ -7,7 +7,7 @@
  *
  * 本测试验证短路逻辑 + 第二道防线(网络层断言,见源码 net-call-interceptor.ts)。
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 
 const orgRetrieveCalls: Array<unknown[]> = []
 
