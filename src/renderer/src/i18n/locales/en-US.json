@@ -229,6 +229,38 @@
     "stop": "Stop",
     "stopTitle": "Stop recording"
   },
+  "sessionList": {
+    "untitled": "Untitled chat",
+    "searchPlaceholder": "Search chats",
+    "clearSearch": "Clear search",
+    "noMatch": "No matching chats",
+    "empty": "No chats yet",
+    "confirmDelete": "Delete?",
+    "moreActions": "More actions",
+    "unpin": "Unpin",
+    "pin": "Pin",
+    "rename": "Rename"
+  },
+  "accountMenu": {
+    "admin": "Admin",
+    "member": "Member"
+  },
+  "startupGate": {
+    "connecting": "Connecting to enterprise knowledge base..."
+  },
+  "citationCard": {
+    "stale": "Possibly outdated",
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "owner": "Owner: {{name}}",
+    "promote": "Promote"
+  },
+  "router": {
+    "renderError": "Page failed to render",
+    "unknownError": "Unknown error",
+    "reload": "Reload",
+    "comingSoon": "This feature is coming soon"
+  },
   "orgSection": {
     "never": "Never",
     "title": "Enterprise Knowledge Base",
@@ -264,6 +296,8 @@
     "scopeOrg": "Org",
     "scopeTeam": "My Team",
     "scopeLocal": "Local Only",
+    "scopeOrgShort": "Whole company",
+    "scopeTeamShort": "Team",
     "scopeOnly": "{{scope}} only",
     "notReadyTitle": "Enterprise knowledge base not connected",
     "notReadyLoggedOut": "Sign in under Settings → Enterprise to use org knowledge Q&A.",

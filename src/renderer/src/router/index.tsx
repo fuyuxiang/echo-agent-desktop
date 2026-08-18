@@ -57,17 +57,21 @@ function RequireAdmin({ children }: { children: React.ReactNode }): React.JSX.El
 
 function RouteErrorPage(): React.JSX.Element {
   const error = useRouteError() as Error
+  const t = (key: string, fallback: string) =>
+    typeof window !== 'undefined' && (window as { __t?: (k: string) => string }).__t
+      ? (window as unknown as { __t: (k: string) => string }).__t(key)
+      : fallback
   return (
     <div style={{ padding: 32, textAlign: 'center' }}>
-      <h2 style={{ marginBottom: 16 }}>页面渲染出错</h2>
+      <h2 style={{ marginBottom: 16 }}>{t('router.renderError', '页面渲染出错')}</h2>
       <p style={{ color: 'var(--text-secondary)', marginBottom: 16 }}>
-        {error?.message ?? '未知错误'}
+        {error?.message ?? t('router.unknownError', '未知错误')}
       </p>
       <button
         onClick={() => window.location.reload()}
         style={{ padding: '8px 16px', cursor: 'pointer' }}
       >
-        重新加载
+        {t('router.reload', '重新加载')}
       </button>
     </div>
   )
@@ -75,10 +79,14 @@ function RouteErrorPage(): React.JSX.Element {
 
 /** 暂未实装的入口统一占位文案(2026-08 P1-1) */
 function FeatureComingSoon({ name }: { name: string }): React.JSX.Element {
+  const t = (key: string, fallback: string) =>
+    typeof window !== 'undefined' && (window as { __t?: (k: string) => string }).__t
+      ? (window as unknown as { __t: (k: string) => string }).__t(key)
+      : fallback
   return (
     <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>
       <h2 style={{ marginBottom: 12 }}>{name}</h2>
-      <p>该功能即将上线</p>
+      <p>{t('router.comingSoon', '该功能即将上线')}</p>
     </div>
   )
 }

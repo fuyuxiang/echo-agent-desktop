@@ -1,4 +1,5 @@
 import { useState, useRef, useMemo, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useSessionManager } from '@/hooks/useSessionManager'
 import { useChatStore, type ChatSession } from '@/stores/chatStore'
 import { db } from '@/utils/db'
@@ -6,6 +7,7 @@ import { groupSessions } from './group'
 import styles from './session-list.module.scss'
 
 export function SessionList(): React.JSX.Element {
+  const { t } = useTranslation()
   const {
     sessions,
     activeChatId,
@@ -61,8 +63,9 @@ export function SessionList(): React.JSX.Element {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return sessions
-    return sessions.filter((s) => (s.title || '未命名会话').toLowerCase().includes(q))
-  }, [sessions, query])
+    const untitled = t('sessionList.untitled')
+    return sessions.filter((s) => (s.title || untitled).toLowerCase().includes(q))
+  }, [sessions, query, t])
 
   const groups = useMemo(() => groupSessions(filtered), [filtered])
 
@@ -74,10 +77,14 @@ export function SessionList(): React.JSX.Element {
           className={styles.searchInput}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="搜索会话"
+          placeholder={t('sessionList.searchPlaceholder')}
         />
         {query && (
-          <button className={styles.searchClear} onClick={() => setQuery('')} aria-label="清空搜索">
+          <button
+            className={styles.searchClear}
+            onClick={() => setQuery('')}
+            aria-label={t('sessionList.clearSearch')}
+          >
             ×
           </button>
         )}
@@ -90,7 +97,9 @@ export function SessionList(): React.JSX.Element {
           </div>
         ))}
         {groups.length === 0 && (
-          <div className={styles.empty}>{query ? '没有匹配的会话' : '暂无会话'}</div>
+          <div className={styles.empty}>
+            {query ? t('sessionList.noMatch') : t('sessionList.empty')}
+          </div>
         )}
       </div>
     </div>
@@ -98,7 +107,7 @@ export function SessionList(): React.JSX.Element {
 
   function renderItem(s: ChatSession): React.JSX.Element {
     const isActive = activeChatId ? s.chatId === activeChatId : false
-    const displayTitle = s.title || '未命名会话'
+    const displayTitle = s.title || t('sessionList.untitled')
     const isEditing = editingChatId === s.chatId
     const isConfirming = confirmingChatId === s.chatId
 
@@ -139,7 +148,7 @@ export function SessionList(): React.JSX.Element {
               e.stopPropagation()
               setMenuChatId(menuChatId === s.chatId ? '' : s.chatId)
             }}
-            aria-label="更多操作"
+            aria-label={t('sessionList.moreActions')}
           >
             <MoreIcon />
           </button>
@@ -161,7 +170,7 @@ export function SessionList(): React.JSX.Element {
         )}
         {isConfirming && (
           <span className={styles.confirm} onClick={(e) => e.stopPropagation()}>
-            <span className={styles.confirmText}>删除?</span>
+            <span className={styles.confirmText}>{t('sessionList.confirmDelete')}</span>
             <button
               className={styles.confirmYes}
               disabled={deletingChatId === s.chatId}
@@ -170,10 +179,10 @@ export function SessionList(): React.JSX.Element {
                 setConfirmingChatId('')
               }}
             >
-              删除
+              {t('common.delete')}
             </button>
             <button className={styles.confirmNo} onClick={() => setConfirmingChatId('')}>
-              取消
+              {t('common.cancel')}
             </button>
           </span>
         )}
@@ -191,6 +200,7 @@ interface SessionMenuProps {
 }
 
 function SessionMenu({ session, onPin, onRename, onDelete }: SessionMenuProps): React.JSX.Element {
+  const { t } = useTranslation()
   const stop = (fn: () => void) => (e: React.MouseEvent) => {
     e.stopPropagation()
     fn()
@@ -198,13 +208,13 @@ function SessionMenu({ session, onPin, onRename, onDelete }: SessionMenuProps): 
   return (
     <div className={styles.menu} onClick={(e) => e.stopPropagation()}>
       <button className={styles.menuItem} onClick={stop(onPin)}>
-        {session.pinned ? '取消置顶' : '置顶'}
+        {session.pinned ? t('sessionList.unpin') : t('sessionList.pin')}
       </button>
       <button className={styles.menuItem} onClick={stop(onRename)}>
-        重命名
+        {t('sessionList.rename')}
       </button>
       <button className={`${styles.menuItem} ${styles.menuItemDanger}`} onClick={stop(onDelete)}>
-        删除
+        {t('common.delete')}
       </button>
     </div>
   )
