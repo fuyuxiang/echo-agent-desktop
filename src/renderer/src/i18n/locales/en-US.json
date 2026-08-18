@@ -54,6 +54,39 @@
     "inactive": "Inactive",
     "supportedFiles": "Supported files"
   },
+  "settings": {
+    "general": {
+      "title": "General Settings",
+      "theme": "Theme",
+      "themeSystem": "System",
+      "themeLight": "Light",
+      "themeDark": "Dark",
+      "language": "Language",
+      "launchAtLogin": "Launch at login"
+    }
+  },
+  "about": {
+    "title": "About",
+    "desktopVersion": "Desktop version",
+    "agentVersion": "echo-agent version",
+    "agentStatus": "echo-agent status",
+    "notInstalled": "Not installed",
+    "update": "Update echo-agent",
+    "updating": "Updating...",
+    "updated": "Update complete",
+    "updateFailed": "Update failed",
+    "updateFailedGeneric": "echo-agent failed to start after update",
+    "tagline": "Echo Agent Desktop - AI Agent local client",
+    "status": {
+      "idle": "Idle",
+      "installing": "Installing",
+      "starting": "Starting",
+      "ready": "Ready",
+      "crashed": "Crashed",
+      "updating": "Updating",
+      "error": "Error"
+    }
+  },
   "ask": {
     "scopeAll": "All",
     "scopeOrg": "Org",
