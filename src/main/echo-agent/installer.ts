@@ -85,8 +85,20 @@ export async function updateEchoAgent(deps: InstallerDeps): Promise<void> {
 
 // 企业版多装一个 echo-agent-org。个人版不装 —— 插件不存在时 echo-agent
 // 行为与从未有过插件完全一致(entry-points 扫不到即跳过)。
+//
+// 2026-08 P0-安全修复:版本必须显式锁定。装 latest 会带来:
+//   - 离线启动失败(不同用户机器缓存命中不同版本)
+//   - 启动变慢(每次拉 pypi 索引)
+//   - 供应链攻击面(被劫持的索引可注入恶意版本)
+// 因此 coreVersion 必填;未传则直接抛错,而不是装 latest。
 function packageSpecs(deps: InstallerDeps): string[] {
-  const core = deps.coreVersion ? `echo-agent[all]==${deps.coreVersion}` : 'echo-agent[all]'
+  if (!deps.coreVersion) {
+    throw new Error(
+      'installer: 必须显式锁定 coreVersion(不允许装 echo-agent[all] latest)。' +
+        '请通过 deps.coreVersion 传入精确版本号,如 "0.9.4"。'
+    )
+  }
+  const core = `echo-agent[all]==${deps.coreVersion}`
   if (!deps.orgPluginVersion) return [core]
   return [core, `echo-agent-org==${deps.orgPluginVersion}`]
 }

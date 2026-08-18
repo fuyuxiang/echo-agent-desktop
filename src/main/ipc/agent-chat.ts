@@ -7,6 +7,14 @@ import { listChatSessions, deleteChatSession } from '../db/dao/session'
 import { clearSessionAllowlist } from '../agent/permission/broker'
 import { generateTitle } from '../echo-agent/title'
 
+/** 空消息错误:切勿在 send IPC 入口放过空文本(避免幽灵回复)。 */
+export class EmptyMessageError extends Error {
+  constructor() {
+    super('不允许发送空消息')
+    this.name = 'EmptyMessageError'
+  }
+}
+
 function broadcast(ev: Frame): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(IpcChannels.agentChat.event, ev)
@@ -18,25 +26,54 @@ function client() {
 }
 
 export function registerAgentChatIpc(): void {
+  // 仅发送文本:守门拒绝空内容;切换会话另走 switchSession IPC。
   ipcMain.handle(
     IpcChannels.agentChat.send,
-    (_e, opts: { chatId: string; text: string; attachments?: Array<{ id: string; name: string }> }) => {
+    (
+      _e,
+      opts: {
+        chatId: string
+        text: string
+        requestId?: string
+        attachments?: Array<{ id: string; name: string }>
+      }
+    ) => {
+      // 守门:空文本直接拒绝,避免幽灵回复和费用浪费。
+      if (!opts.text || !opts.text.trim()) {
+        throw new EmptyMessageError()
+      }
+      const c = client()
+      if (!c) {
+        broadcast({ type: 'error', chatId: opts.chatId, message: 'Agent 尚未就绪' })
+        return
+      }
+      // send 只负责发文本,不再隐式切换会话(防止 UI 切换会话被静默触发 send)。
+      c.send(opts.text, opts.attachments, opts.requestId)
+    }
+  )
+
+  // 独立 switchSession IPC:只切换目标会话,不触发任何文本发送。
+  ipcMain.handle(
+    IpcChannels.agentChat.switchSession,
+    (_e, opts: { chatId: string }) => {
       const c = client()
       if (!c) {
         broadcast({ type: 'error', chatId: opts.chatId, message: 'Agent 尚未就绪' })
         return
       }
       c.switchSession(opts.chatId)
-      c.send(opts.text, opts.attachments)
     }
   )
 
-  ipcMain.handle(IpcChannels.agentChat.abort, (_e, opts: { chatId: string }) => {
-    const c = client()
-    if (c) {
-      c.abort(opts.chatId)
+  ipcMain.handle(
+    IpcChannels.agentChat.abort,
+    (_e, opts: { chatId: string; requestId?: string }) => {
+      const c = client()
+      if (c) {
+        c.abort(opts.chatId, opts.requestId)
+      }
     }
-  })
+  )
 
   ipcMain.handle(IpcChannels.agentChat.listSessions, () => listChatSessions())
 

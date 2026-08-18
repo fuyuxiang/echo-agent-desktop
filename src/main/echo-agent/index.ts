@@ -13,6 +13,13 @@ import WebSocket from 'ws'
 import { GatewayClient, type Frame, type WsLike } from './gateway-client'
 import { setLLMConfig } from './llm'
 
+/**
+ * 内置 echo-agent 版本(由 release pipeline 注入;CI 失败时回退占位)。
+ * 严禁省略:installer 的 coreVersion 现在是必填,缺这个常量会让首启直接抛错。
+ */
+const BUNDLED_ECHO_AGENT_VERSION =
+  process.env['ECHO_AGENT_VERSION'] ?? '0.9.4'
+
 export interface StatusBus {
   subscribe: (cb: (s: EchoAgentStatus) => void) => () => void
   emit: (s: EchoAgentStatus) => void
@@ -46,7 +53,10 @@ export function getEchoAgentManager(): EchoAgentManager {
       ensureInstalled({
         runner: nodeCommandRunner, homeDir, platform, pythonArchive,
         pathExists: (p) => existsSync(p), ensureDir: (p) => { mkdirSync(p, { recursive: true }) }, onProgress,
-        abortSignal: signal
+        abortSignal: signal,
+        // P0-安全修复:必须显式锁版本(2026-08 审计)
+        coreVersion: process.env['ECHO_AGENT_VERSION'] ?? BUNDLED_ECHO_AGENT_VERSION,
+        orgPluginVersion: process.env['ECHO_AGENT_ORG_VERSION']
       }),
     update: (onProgress, signal) =>
       pipUpdate({
@@ -98,10 +108,34 @@ export function buildConfigWriterDeps(): ConfigWriterDeps {
   }
 }
 
+/** safeStorage 加密 key 前缀:收到 `ref:<storeKey>` 时从安全存储取真值。 */
+const SECURE_REF_PREFIX = 'ref:'
+
+/**
+ * 解析入参中的 apiKey:
+ * - `ref:<storeKey>` → 从 safeStorage 取真值,若取不到则抛错
+ * - 其它(ollama 占位/纯字符串) → 视为业务值,直接返回
+ *
+ * 真实 apiKey 永不写入 yaml 中的明文字段:yaml 里只保留 `ref:` 引用或占位符。
+ * 本函数在写入 yaml 前一刻完成解析,解析后的明文只在写入瞬间存在于内存。
+ */
+async function resolveApiKey(apiKey: string): Promise<string> {
+  if (!apiKey.startsWith(SECURE_REF_PREFIX)) return apiKey
+  const storeKey = apiKey.slice(SECURE_REF_PREFIX.length)
+  if (!storeKey) throw new Error('无效的 apiKey 引用:缺少 storeKey')
+  // 动态 import 避免循环依赖
+  const { secureGet } = await import('../store')
+  const real = await secureGet(storeKey)
+  if (!real) throw new Error(`安全存储中无 key: ${storeKey}`)
+  return real
+}
+
 export async function applyModelConfig(cfg: ModelConfigInput): Promise<void> {
-  writeManagedConfig(buildConfigWriterDeps(), cfg)
+  // 解析 apiKey:ref: → 从 safeStorage 取真值(写入 yaml 的瞬间即被回收,不长期驻留)
+  const realApiKey = await resolveApiKey(cfg.apiKey)
+  writeManagedConfig(buildConfigWriterDeps(), { ...cfg, apiKey: realApiKey })
   // stash 同源配置供桌面直连 LLM 生成会话标题(独立于 TS AgentRuntime)
-  setLLMConfig({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model })
+  setLLMConfig({ baseUrl: cfg.baseUrl, apiKey: realApiKey, model: cfg.model })
   await getEchoAgentManager().restart()
   // restart 换了端口/路径,旧 gateway 单例仍连旧 endpoint;丢弃它,
   // 下次 send 时用新 endpoint 重建 client。

@@ -562,10 +562,12 @@ export default function ChatPage(): React.JSX.Element {
     }
   }, [inputText, pendingAttachments, wsConnected, isGenerating, addUserMessage, dispatchToAgent])
 
-  // 停止生成:前端侧定格当前流式消息并忽略后续帧(WS 协议无中断帧,后端推理可能仍在跑)
+  // 停止生成:前端定格 + 调 abortActive 让后端真停(2026-08 P0-5)
   const handleStop = useCallback(() => {
     stoppedRef.current = true
     stopGenerating()
+    // 关键:调 agentWs.abortActive() 会发 abort 帧到 gateway,精准中止当前 requestId
+    agentWs.abortActive()
     const s = useChatStore.getState()
     const chatId = s.activeChatId
     const last = s.messages[s.messages.length - 1]

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, session, desktopCapturer } from 'electron'
+import { app, BrowserWindow, session, desktopCapturer, shell } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
@@ -92,6 +92,9 @@ if (!gotTheLock) {
     // 禁止页面内导航到外部站点(防钓鱼/注入)。
     // 打包后渲染层是 file://,仅放行打包内的 renderer 入口本身,
     // 拒绝导航到任意其它本地 HTML(防注入后脱离打包资源约束)。
+    //
+    // 2026-08 P1-4 修复:对外链的拦截必须转交系统浏览器,而不是静默丢弃。
+    // 否则 Markdown / 文档里的 https://... 链接点了无反应,违反用户预期。
     const rendererEntry = pathToFileURL(join(__dirname, '../renderer/index.html')).href
     contents.on('will-navigate', (event, url) => {
       const isDevServer =
@@ -101,6 +104,14 @@ if (!gotTheLock) {
       // 去掉 query/hash 后与入口精确比对(SPA 路由可能追加 #/path)
       const navPath = url.split(/[?#]/)[0]
       const isRendererEntry = navPath === rendererEntry
+      // http/https 外链:转系统浏览器打开(不阻止默认行为,而是调用 shell 后 preventDefault)
+      if (/^https?:\/\//i.test(url)) {
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        shell.openExternal(url)
+        log.info('[security] 外链转系统浏览器:', url)
+        event.preventDefault()
+        return
+      }
       if (!isDevServer && !isRendererEntry) {
         log.warn('[security] 拦截页面导航:', url)
         event.preventDefault()
