@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { GeneralSection } from './sections/GeneralSection'
 import { ModelSection } from './sections/ModelSection'
 import { ThemeSection } from './sections/ThemeSection'
@@ -17,21 +18,22 @@ type Section =
   | 'skills'
   | 'about'
 
-const SECTIONS: { key: Section; label: string }[] = [
-  { key: 'general', label: '通用' },
+const SECTIONS: { key: Section; labelKey: string }[] = [
+  { key: 'general', labelKey: 'settings.sections.general' },
   // 排在模型配置之前:企业版用户装完第一件事就是接入,模型由服务端下发
-  { key: 'org', label: '企业接入' },
-  { key: 'model', label: '模型配置' },
-  { key: 'theme', label: '主题' },
-  { key: 'skills', label: '技能库' },
-  { key: 'memoryStore', label: '记忆' },
-  { key: 'about', label: '关于' }
+  { key: 'org', labelKey: 'settings.sections.org' },
+  { key: 'model', labelKey: 'settings.sections.model' },
+  { key: 'theme', labelKey: 'settings.sections.theme' },
+  { key: 'skills', labelKey: 'settings.sections.skills' },
+  { key: 'memoryStore', labelKey: 'settings.sections.memoryStore' },
+  { key: 'about', labelKey: 'settings.sections.about' }
 ]
 
 // 这些分区直接渲染整页组件,需占满内容区且不被 .content 的全局样式覆盖
 const FULL_BLEED: Section[] = ['memoryStore', 'skills']
 
 export default function SettingsPage(): React.JSX.Element {
+  const { t } = useTranslation()
   const [active, setActive] = useState<Section>('general')
 
   const renderSection = (): React.JSX.Element => {
@@ -64,7 +66,7 @@ export default function SettingsPage(): React.JSX.Element {
             className={`${styles.navItem} ${active === s.key ? styles.active : ''}`}
             onClick={() => setActive(s.key)}
           >
-            {s.label}
+            {t(s.labelKey, s.key)}
           </button>
         ))}
       </nav>
