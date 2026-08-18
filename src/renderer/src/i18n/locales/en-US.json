@@ -106,6 +106,43 @@
     "deleteFailed": "Delete failed: {{message}}",
     "deleteConfirm": "Delete \"{{path}}\"? You'll need to rebuild the index afterwards."
   },
+  "channels": {
+    "title": "Automation",
+    "online": "Online",
+    "offline": "Offline",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "empty": "No automation channels",
+    "pickOne": "Pick a channel to view details"
+  },
+  "orgKnowledge": {
+    "notReadyTitle": "Enterprise knowledge base not connected",
+    "notReadyDesc": "Add an enterprise server under Settings → Enterprise and sign in.",
+    "tabDocs": "Org Docs",
+    "tabMine": "My Submissions",
+    "offlineBanner": "Server unreachable; document list temporarily unavailable. Cached content remains searchable in Q&A.",
+    "scopeAll": "All scopes",
+    "scopeOrg": "Whole company",
+    "searchPlaceholder": "Search titles",
+    "loading": "Loading…",
+    "noDocs": "No documents in this scope yet.",
+    "chunkCount": "{{count}} chunks",
+    "owner": "Owner: {{name}}",
+    "sensitivityInternal": "Internal",
+    "sensitivityConfidential": "Confidential",
+    "prev": "Previous",
+    "next": "Next",
+    "noMine": "You haven't submitted anything yet. Promote answers or meeting notes to contribute.",
+    "localPending": "Pending sync",
+    "noContent": "(no content)",
+    "reviewNote": "Reviewer note: {{note}}",
+    "state": {
+      "pending": "Pending review",
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "withdrawn": "Withdrawn"
+    }
+  },
   "ask": {
     "scopeAll": "All",
     "scopeOrg": "Org",

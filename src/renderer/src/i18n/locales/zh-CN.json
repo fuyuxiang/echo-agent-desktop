@@ -106,6 +106,43 @@
     "deleteFailed": "删除失败:{{message}}",
     "deleteConfirm": "确定删除文档「{{path}}」？删除后需重建索引才能生效。"
   },
+  "channels": {
+    "title": "自动化",
+    "online": "在线",
+    "offline": "离线",
+    "enabled": "已启用",
+    "disabled": "已禁用",
+    "empty": "暂无自动化入口",
+    "pickOne": "选择自动化入口查看详情"
+  },
+  "orgKnowledge": {
+    "notReadyTitle": "尚未接入企业知识库",
+    "notReadyDesc": "请在「设置 → 企业接入」配置服务器并登录。",
+    "tabDocs": "组织文档",
+    "tabMine": "我提交的",
+    "offlineBanner": "服务器不可达,文档列表暂时无法加载。已缓存的内容仍可在「问答」中检索。",
+    "scopeAll": "全部范围",
+    "scopeOrg": "全公司",
+    "searchPlaceholder": "搜索标题",
+    "loading": "加载中…",
+    "noDocs": "这个范围内还没有文档。",
+    "chunkCount": "{{count}} 个片段",
+    "owner": "维护:{{name}}",
+    "sensitivityInternal": "内部",
+    "sensitivityConfidential": "机密",
+    "prev": "上一页",
+    "next": "下一页",
+    "noMine": "还没有提交过知识。在问答结果或会议纪要里点「沉淀为知识」即可。",
+    "localPending": "待联网提交",
+    "noContent": "(无内容)",
+    "reviewNote": "审核意见:{{note}}",
+    "state": {
+      "pending": "待审核",
+      "approved": "已通过",
+      "rejected": "已驳回",
+      "withdrawn": "已撤回"
+    }
+  },
   "ask": {
     "scopeAll": "全部",
     "scopeOrg": "组织库",
