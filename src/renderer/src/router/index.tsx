@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
 import { createHashRouter, Navigate, useRouteError } from 'react-router-dom'
 import { AppLayout } from '@/layouts/AppLayout'
+import { TitleBar } from '@/layouts/TitleBar'
 import { StartupGate } from '@/components/StartupGate'
 import { ROUTES } from '@/constants'
 import { useUserStore } from '@/stores/userStore'
@@ -137,6 +138,13 @@ export const router = createHashRouter([
   },
   {
     path: ROUTES.login,
-    element: lazyLoad(<LoginPage />)
+    // 登录页不在 AppLayout 内,需自挂 TitleBar 以保证 Windows frame:false 时窗口可控
+    // (2026-08 P0-2 修复:之前 LoginPage 没有标题栏,Windows 下窗口无法拖动/关闭)
+    element: (
+      <>
+        <TitleBar />
+        {lazyLoad(<LoginPage />)}
+      </>
+    )
   }
 ])
