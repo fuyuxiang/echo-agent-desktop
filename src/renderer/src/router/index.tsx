@@ -4,6 +4,7 @@ import { AppLayout } from '@/layouts/AppLayout'
 import { StartupGate } from '@/components/StartupGate'
 import { ROUTES } from '@/constants'
 import { useUserStore } from '@/stores/userStore'
+import { isFeatureEnabled } from '@shared/feature-flags'
 
 /**
  * 路由表(HashRouter,适配 Electron file:// 协议)
@@ -71,6 +72,24 @@ function RouteErrorPage(): React.JSX.Element {
   )
 }
 
+/** 暂未实装的入口统一占位文案(2026-08 P1-1) */
+function FeatureComingSoon({ name }: { name: string }): React.JSX.Element {
+  return (
+    <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>
+      <h2 style={{ marginBottom: 12 }}>{name}</h2>
+      <p>该功能即将上线</p>
+    </div>
+  )
+}
+
+/**
+ * 路由表。featureFlag=false 的入口:
+ * - 路由仍存在(防止链接失效),但渲染 FeatureComingSoon 占位
+ * - 入口导航(menu/sidebar)按 flag 隐藏
+ *
+ * 注:不能用 `<Navigate to=...>` 把未实装入口重定向到别处——这会让用户
+ * 怀疑链接是否合法,且无法支持"该功能即将上线"的产品承诺。
+ */
 export const router = createHashRouter([
   {
     path: '/',
@@ -83,8 +102,18 @@ export const router = createHashRouter([
     children: [
       { index: true, element: <Navigate to="chat" replace /> },
       { path: 'chat', element: lazyLoad(<ChatPage />) },
-      { path: 'knowledge', element: lazyLoad(<KnowledgePage />) },
-      { path: 'knowledge/doc', element: lazyLoad(<DocViewerPage />) },
+      {
+        path: 'knowledge',
+        element: isFeatureEnabled('knowledge')
+          ? lazyLoad(<KnowledgePage />)
+          : lazyLoad(<FeatureComingSoon name="我的文档" />)
+      },
+      {
+        path: 'knowledge/doc',
+        element: isFeatureEnabled('knowledge')
+          ? lazyLoad(<DocViewerPage />)
+          : lazyLoad(<FeatureComingSoon name="文档查看" />)
+      },
       { path: 'skills', element: lazyLoad(<SkillsPage />) },
       { path: 'channels', element: lazyLoad(<ChannelsPage />) },
       { path: 'settings', element: lazyLoad(<SettingsPage />) },

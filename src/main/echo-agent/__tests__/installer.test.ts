@@ -16,6 +16,7 @@ function fakeRunner(result: Partial<CommandResult> = {}): { runner: CommandRunne
 
 // pathExists 桩:默认 archive 存在、解压 python 与 venv 都不存在(全新安装)。
 // over.exists 可按路径子串定制。
+// 2026-08 P0-安全:coreVersion 必填,baseDeps 默认给个固定值,测试覆盖。
 function baseDeps(over: Partial<InstallerDeps> = {}): InstallerDeps {
   const { runner } = fakeRunner()
   return {
@@ -25,6 +26,7 @@ function baseDeps(over: Partial<InstallerDeps> = {}): InstallerDeps {
     pythonArchive: '/res/python-standalone-mac-arm64.tar.gz',
     pathExists: (p: string) => p.includes('python-standalone'),
     ensureDir: () => {},
+    coreVersion: '0.9.4', // 测试默认带显式版本
     ...over
   }
 }
@@ -45,10 +47,10 @@ describe('installer', () => {
     const venv = calls.find((c) => c.includes('venv'))
     expect(venv![0]).toBe('/h/.echo-agent/python/bin/python3')
     expect(venv).toContain('/h/.echo-agent/runtime')
-    // 3) pip 用 venv python 装 echo-agent[all],带默认清华源
+    // 3) pip 用 venv python 装 echo-agent[all]==<pinned>,带默认清华源
     const pip = calls.find((c) => c.includes('install') && c.some((a) => a.includes('echo-agent')))
     expect(pip![0]).toBe('/h/.echo-agent/runtime/bin/python')
-    expect(pip).toContain('echo-agent[all]')
+    expect(pip).toContain('echo-agent[all]==0.9.4')
     expect(pip).toContain('-i')
     expect(pip).toContain(DEFAULT_PIP_INDEX)
   })
@@ -111,11 +113,11 @@ describe('installer', () => {
     expect(pip).toContain('https://my/simple')
   })
 
-  it('update runs pip install -U echo-agent[all]', async () => {
+  it('update runs pip install -U echo-agent[all]==<pinned>', async () => {
     const { runner, calls } = fakeRunner()
     await updateEchoAgent(baseDeps({ runner, pathExists: () => true }))
     const upd = calls.find((c) => c.includes('-U'))
-    expect(upd).toContain('echo-agent[all]')
+    expect(upd).toContain('echo-agent[all]==0.9.4')
   })
 })
 
@@ -179,7 +181,7 @@ describe('installer org plugin', () => {
     const { runner, calls } = fakeRunner()
     await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
     const args = pipArgsOf(calls)
-    expect(args).toContain('echo-agent[all]')
+    expect(args).toContain('echo-agent[all]==0.9.4')
     expect(args.some((a) => a.includes('echo-agent-org'))).toBe(false)
   })
 
@@ -209,9 +211,12 @@ describe('installer org plugin', () => {
     expect(args).toContain('echo-agent-org==1.0.2')
   })
 
-  it('uses unpinned core when no version given (dev convenience)', async () => {
-    const { runner, calls } = fakeRunner()
-    await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
-    expect(pipArgsOf(calls)).toContain('echo-agent[all]')
+  // 2026-08 P0-安全:不再支持 unpinned。
+  // 旧行为(装 latest)会让离线启动失败、引入供应链攻击面。
+  it('Regression: throws when coreVersion is missing (unpinned no longer allowed)', async () => {
+    const { runner } = fakeRunner()
+    await expect(
+      ensureInstalled(baseDeps({ runner, pathExists: () => true, coreVersion: undefined }))
+    ).rejects.toThrow(/必须显式锁定 coreVersion/)
   })
 })

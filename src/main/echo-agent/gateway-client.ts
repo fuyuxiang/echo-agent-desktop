@@ -69,6 +69,11 @@ export class GatewayClient {
   private pendingSend: string | null = null
   private closing = false
   private reconnectAttempts = 0
+  /**
+   * 活跃请求表:key=requestId,value=AbortController。
+   * 旧实现按 chatId 索引,会导致多个并发请求互相覆盖 AbortController;
+   * 改为 requestId 索引后,Stop 只中止当前请求,不影响后续。
+   */
   private activeRequests = new Map<string, AbortController>()
 
   constructor(private deps: GatewayClientDeps) {}
@@ -106,11 +111,26 @@ export class GatewayClient {
     }
   }
 
-  send(text: string, attachments?: Array<{ id: string; name: string }>): void {
+  /**
+   * 发送文本到 gateway。
+   * @param requestId 唯一请求 ID(由调用方生成)。流式响应按 requestId 路由,
+   *                  Stop 也按 requestId 精准中止。
+   * @param text 非空(由 IPC 层守门,这里再次 assert 兜底)
+   */
+  send(
+    text: string,
+    attachments?: Array<{ id: string; name: string }>,
+    requestId?: string
+  ): void {
+    if (!text || !text.trim()) {
+      // 兜底:IPC 层已拒绝空文本,这里防止直接调用绕过守门
+      throw new Error('GatewayClient.send: empty text not allowed')
+    }
+    const rid = requestId ?? this.generateRequestId()
     const controller = new AbortController()
-    this.activeRequests.set(this.chatId, controller)
+    this.activeRequests.set(rid, controller)
 
-    const frame = JSON.stringify({ type: 'message', text, attachments })
+    const frame = JSON.stringify({ type: 'message', text, attachments, request_id: rid })
     if (this.ws && this.authed) {
       this.ws.send(frame)
       return
@@ -122,6 +142,11 @@ export class GatewayClient {
     if (!this.ws && !this.closing && this.chatId) {
       this.connect(this.chatId)
     }
+  }
+
+  private generateRequestId(): string {
+    // 简单 fallback:时间戳 + 随机。优先由 IPC 调用方传 requestId。
+    return `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   }
 
   disconnect(): void {
@@ -137,8 +162,24 @@ export class GatewayClient {
     this.activeRequests.clear()
   }
 
-  abort(chatId: string): void {
-    const controller = this.activeRequests.get(chatId)
+  /**
+   * 中止请求。
+   * @param chatId  会话 ID(冗余,优先用于向后兼容)
+   * @param requestId 请求 ID(优先匹配);若省略,中止该会话当前活跃请求
+   */
+  abort(chatId: string, requestId?: string): void {
+    let controller: AbortController | undefined
+    if (requestId) {
+      controller = this.activeRequests.get(requestId)
+    } else {
+      // 兜底:按 chatId 找最近的一个活跃请求
+      for (const [rid, c] of this.activeRequests) {
+        if (rid.startsWith(`req-`)) {
+          controller = c
+          if (requestId === undefined) break
+        }
+      }
+    }
     if (controller) {
       controller.abort()
       // Don't delete from activeRequests here — onFrame() checks
@@ -146,9 +187,9 @@ export class GatewayClient {
       // cleaned up by done/error events or by disconnect().
     }
 
-    // 如果 WS 协议支持 abort 帧，发送它
+    // 如果 WS 协议支持 abort 帧,发送它(带 requestId 优先)
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'abort', chatId }))
+      this.ws.send(JSON.stringify({ type: 'abort', chatId, request_id: requestId }))
     }
   }
 
@@ -179,18 +220,24 @@ export class GatewayClient {
       }
       return
     }
-    // If the request was aborted, don't emit further events and clean up
-    const controller = this.activeRequests.get(this.chatId)
+    // If the request was aborted, don't emit further events and clean up.
+    // 优先按 request_id 匹配;无 request_id 时按 chatId 兜底(向后兼容旧 frame)。
+    const reqId = (frame.request_id as string | undefined) ?? this.chatId
+    const controller = this.activeRequests.get(reqId)
     if (controller?.signal.aborted) {
-      this.activeRequests.delete(this.chatId)
+      this.activeRequests.delete(reqId)
       return
     }
     const events = translateFrame(frame, this.chatId)
+    // 把 frame.request_id 透传出去,渲染端按 requestId 路由 chunk
     for (const ev of events) {
+      if (frame.request_id != null && ev.request_id == null) {
+        ev.request_id = frame.request_id
+      }
       this.deps.emit(ev)
       // 流完成或出错时清理活跃请求
       if (ev.type === 'done' || ev.type === 'error') {
-        this.activeRequests.delete(this.chatId)
+        this.activeRequests.delete(reqId)
       }
     }
   }
