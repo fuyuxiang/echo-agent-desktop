@@ -29,6 +29,59 @@
     "orgKnowledge": "Org Knowledge",
     "newSession": "New Chat"
   },
+  "ask": {
+    "scopeAll": "All",
+    "scopeOrg": "Org",
+    "scopeTeam": "My Team",
+    "scopeLocal": "Local Only",
+    "scopeOnly": "{{scope}} only",
+    "notReadyTitle": "Enterprise knowledge base not connected",
+    "notReadyLoggedOut": "Sign in under Settings → Enterprise to use org knowledge Q&A.",
+    "notReadyNoServer": "Add an enterprise server address under Settings → Enterprise and sign in.",
+    "offlineBanner": "Offline: server unreachable. Results below come from local cache{{lastSync}} and may be outdated.",
+    "searchPlaceholder": "Ask a question, e.g. travel expense policy",
+    "searching": "Searching…",
+    "search": "Search",
+    "cacheTag": "cached",
+    "deep": "Deep search",
+    "deepHint": "Better for comparison/summary questions; slower but more thorough",
+    "memoriesTitle": "Confirmed org conventions",
+    "noResult": "No relevant content found.",
+    "suggestAsk": "This question might be asked to: ",
+    "suggestOther": "Try rephrasing, or contact your admin to add documents.",
+    "resultsHead": "Found {{count}} materials for \"{{query}}\"",
+    "rerankSkipped": "rerank skipped",
+    "fromCache": "from cache",
+    "staleNote": "{{count}} of these are time-sensitive and have not been updated in over 90 days; please verify with the owner before relying on them.",
+    "searchFailed": "Search failed: {{message}}"
+  },
+  "chatDetail": {
+    "defaultSessionTitle": "New Chat",
+    "welcomeHint": "What can I help you with today? @ references a file, / invokes a skill",
+    "waitingAgent": "Waiting for the agent to connect…",
+    "errors": {
+      "disconnected": "Connection lost; the reply was interrupted",
+      "attachmentUploading": "Attachments still uploading, please wait",
+      "modelNotReady": "Model not ready. Check network or model config and try again",
+      "notReady": "Connection not ready; sending failed. Please retry",
+      "micPermission": "Microphone permission denied",
+      "micAccess": "Cannot access microphone",
+      "asrStart": "Speech recognition failed to start"
+    },
+    "attachment": {
+      "uploading": "Uploading",
+      "failed": "Failed",
+      "add": "Add attachment"
+    },
+    "voice": {
+      "start": "Voice input",
+      "stop": "Stop voice input"
+    },
+    "memory": {
+      "shared": "Shared to project memory",
+      "shareFailed": "Failed to share to project memory"
+    }
+  },
   "scope": {
     "title": "Access scope",
     "restricted": "Restricted",
