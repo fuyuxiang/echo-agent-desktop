@@ -87,6 +87,25 @@
       "error": "异常"
     }
   },
+  "knowledge": {
+    "title": "我的文档",
+    "indexed": "已索引: {{indexed}} / {{total}}",
+    "upload": "上传文档",
+    "uploading": "上传中…",
+    "uploaded": "成功上传 {{count}} 个文档",
+    "uploadFailed": "{{count}} 个文档上传失败:{{names}}",
+    "rejected": "已忽略不支持的文件:{{names}}",
+    "rebuild": "重建索引",
+    "rebuilding": "重建中…",
+    "rebuilt": "索引已重建",
+    "rebuildFailed": "重建失败:{{message}}",
+    "rebuildConfirm": "确定重建索引？该操作可能耗时较长。",
+    "delete": "删除",
+    "deleting": "删除中…",
+    "deleted": "文档已删除",
+    "deleteFailed": "删除失败:{{message}}",
+    "deleteConfirm": "确定删除文档「{{path}}」？删除后需重建索引才能生效。"
+  },
   "ask": {
     "scopeAll": "全部",
     "scopeOrg": "组织库",
