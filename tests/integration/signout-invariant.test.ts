@@ -73,3 +73,73 @@ describe('Regression: signOut 清空所有身份状态', () => {
     expect(indexedDbKeys.length).toBe(0)
   })
 })
+
+describe('Regression: UnifiedIdentityProvider 接口契约', () => {
+  it('IdentityProvider 接口含 getIdentity/isReady/signIn/signOut 四个方法', async () => {
+    // electron-store 需要在 Electron context 中初始化,这里用 vi.mock 替换
+    vi.doMock('../../src/main/store', () => ({
+      secureDelete: vi.fn(),
+      secureGet: vi.fn(() => undefined),
+      secureSet: vi.fn(),
+      storeGet: vi.fn(() => undefined),
+      storeDelete: vi.fn(),
+      storeClear: vi.fn()
+    }))
+
+    const { UnifiedIdentityProvider } = await import(
+      '../../src/main/identity/provider'
+    )
+    const provider = new UnifiedIdentityProvider()
+
+    expect(typeof provider.current).toBe('function')
+    expect(typeof provider.isOrgSignedIn).toBe('function')
+    expect(typeof provider.signOut).toBe('function')
+
+    vi.doUnmock('../../src/main/store')
+  })
+
+  it('LocalIdentityProvider 永远就绪(无需登录)', async () => {
+    vi.doMock('../../src/main/store', () => ({
+      secureDelete: vi.fn(),
+      secureGet: vi.fn(() => undefined),
+      secureSet: vi.fn(),
+      storeGet: vi.fn(() => undefined),
+      storeDelete: vi.fn(),
+      storeClear: vi.fn()
+    }))
+
+    const { LocalIdentityProvider } = await import(
+      '../../src/main/identity/provider'
+    )
+    const local = new LocalIdentityProvider()
+
+    const id = await local.getIdentity()
+    expect(id.source).toBe('local')
+    expect(id.userId).toBe('desktop-user')
+
+    expect(await local.isReady()).toBe(true)
+
+    vi.doUnmock('../../src/main/store')
+  })
+
+  it('OrgIdentityProvider 未登录时 getIdentity 返回 null', async () => {
+    vi.doMock('../../src/main/store', () => ({
+      secureDelete: vi.fn(),
+      secureGet: vi.fn(() => undefined),
+      secureSet: vi.fn(),
+      storeGet: vi.fn(() => undefined),
+      storeDelete: vi.fn(),
+      storeClear: vi.fn()
+    }))
+
+    const { OrgIdentityProvider } = await import(
+      '../../src/main/identity/provider'
+    )
+    const org = new OrgIdentityProvider()
+
+    expect(await org.getIdentity()).toBeNull()
+    expect(await org.isReady()).toBe(false)
+
+    vi.doUnmock('../../src/main/store')
+  })
+})
