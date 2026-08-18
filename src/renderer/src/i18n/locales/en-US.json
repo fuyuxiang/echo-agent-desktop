@@ -40,6 +40,19 @@
       "failed": "Failed"
     }
   },
+  "meetingDetail": {
+    "deleteConfirm": "Delete this meeting and its recording? This cannot be undone.",
+    "summaryFailed": "Failed to generate summary, please retry",
+    "loading": "Loading…",
+    "tabSummary": "Summary",
+    "tabTranscript": "Transcript",
+    "keyPoints": "Key points",
+    "actionItems": "Action items",
+    "generatingSummary": "Generating summary…",
+    "noSummary": "No summary yet",
+    "regenSummary": "Regenerate summary",
+    "retryDiarize": "Retry speaker diarization"
+  },
   "skills": {
     "title": "Skills",
     "empty": "No skills",
