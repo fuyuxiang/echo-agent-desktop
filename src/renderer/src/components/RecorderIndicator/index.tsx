@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useMeetingStore } from '@/stores/meetingStore'
 import { useMeetingRecorder } from '@/hooks/useMeetingRecorder'
 import styles from './recorder-indicator.module.scss'
@@ -15,6 +16,7 @@ import styles from './recorder-indicator.module.scss'
  * - 显眼的停止按钮(录音是高频隐私敏感操作,绝不能藏起来)
  */
 export function RecorderIndicator(): React.JSX.Element | null {
+  const { t } = useTranslation()
   const recording = useMeetingStore((s) => s.recording)
   const elapsedMs = useMeetingStore((s) => s.elapsedMs)
   const audioSource = useMeetingStore((s) => s.audioSource)
@@ -40,19 +42,24 @@ export function RecorderIndicator(): React.JSX.Element | null {
       data-recording="true"
     >
       <span className={styles.dot} aria-hidden="true" />
-      <span className={styles.label}>REC</span>
-      <span className={styles.clock} aria-label={`已录制 ${mm}:${ss}`}>
+      <span className={styles.label}>{t('recorder.recLabel')}</span>
+      <span
+        className={styles.clock}
+        aria-label={t('recorder.elapsedAria', { time: `${mm}:${ss}` })}
+      >
         {mm}:{ss}
       </span>
-      <span className={styles.source}>{audioSource === 'mic+system' ? '🎙+🔊' : '🎙'}</span>
+      <span className={styles.source}>
+        {audioSource === 'mic+system' ? t('recorder.micSystem') : t('recorder.micOnly')}
+      </span>
       <button
         type="button"
         className={styles.stopBtn}
         onClick={handleStop}
         disabled={!activeMeetingId}
-        title="停止录音"
+        title={t('recorder.stopTitle')}
       >
-        停止
+        {t('recorder.stop')}
       </button>
     </div>
   )
