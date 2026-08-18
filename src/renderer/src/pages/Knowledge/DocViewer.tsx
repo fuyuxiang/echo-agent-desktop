@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import * as pdfjsLib from 'pdfjs-dist'
 // workerSrc 必须指向 pdfjs-dist 的 worker 入口;vite 在打包时会把它
@@ -27,6 +28,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc
  * 这里只做 PDF 与文本预览;真实音视频播放器按方案 7.4 后续接入。
  */
 export default function DocViewer(): React.JSX.Element {
+  const { t } = useTranslation()
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const id = params.get('id') ?? ''
@@ -101,7 +103,9 @@ export default function DocViewer(): React.JSX.Element {
               return new Blob([bytes])
             })
             .then((b) => setPdfUrl(URL.createObjectURL(b)))
-            .catch((e: Error) => setError(`原始文件拉取失败: ${e.message}`))
+            .catch((e: Error) =>
+              setError(t('docViewer.rawFetchFailed', { message: e.message }))
+            )
         }
       })
       .catch((e: Error) => setError(e.message))
@@ -135,9 +139,9 @@ export default function DocViewer(): React.JSX.Element {
   if (!id) {
     return (
       <div className={styles.docViewerEmpty}>
-        <p>缺少文档 id。</p>
+        <p>{t('docViewer.missingId')}</p>
         <button type="button" onClick={() => navigate(-1)}>
-          返回
+          {t('docViewer.back')}
         </button>
       </div>
     )
@@ -146,10 +150,10 @@ export default function DocViewer(): React.JSX.Element {
   if (error) {
     return (
       <div className={styles.docViewerEmpty}>
-        <h3>{meta?.title ?? '查看器错误'}</h3>
+        <h3>{meta?.title ?? t('docViewer.viewerError')}</h3>
         <p>{error}</p>
         <button type="button" onClick={() => navigate(-1)}>
-          返回
+          {t('docViewer.back')}
         </button>
       </div>
     )
@@ -158,13 +162,21 @@ export default function DocViewer(): React.JSX.Element {
   return (
     <div className={styles.docViewer}>
       <header className={styles.docViewerHead}>
-        <h3>{meta?.title ?? (busy ? '加载中...' : id)}</h3>
+        <h3>{meta?.title ?? (busy ? t('docViewer.loading') : id)}</h3>
         <div className={styles.docViewerMeta}>
           {meta && <span className={styles.tag}>{meta.sourceType}</span>}
-          {pageFromUrl > 0 && <span className={styles.loc}>第 {pageFromUrl} 页</span>}
-          {startMs > 0 && <span className={styles.loc}>从 {Math.floor(startMs / 1000)}s 起</span>}
+          {pageFromUrl > 0 && (
+            <span className={styles.loc}>
+              {t('docViewer.pageLabel', { page: pageFromUrl })}
+            </span>
+          )}
+          {startMs > 0 && (
+            <span className={styles.loc}>
+              {t('docViewer.fromLabel', { seconds: Math.floor(startMs / 1000) })}
+            </span>
+          )}
           <button type="button" onClick={() => navigate(-1)}>
-            返回
+            {t('docViewer.back')}
           </button>
         </div>
       </header>
@@ -224,7 +236,7 @@ export default function DocViewer(): React.JSX.Element {
               </section>
             ))
           ) : (
-            <pre>{meta.text || '(无内容)'}</pre>
+            <pre>{meta.text || t('docViewer.noContent')}</pre>
           )}
           {meta.note && <p className={styles.note}>{meta.note}</p>}
         </article>
@@ -233,7 +245,7 @@ export default function DocViewer(): React.JSX.Element {
       {/* 媒体类型:引导到外部播放器;此处只显示链接 */}
       {meta && (meta.sourceType === 'audio' || meta.sourceType === 'video') && (
         <div className={styles.docViewerMedia}>
-          <p>媒体查看器尚未接入,请通过主进程 OS 播放器打开:</p>
+          <p>{t('docViewer.mediaNotReady')}</p>
           <button
             type="button"
             onClick={() => {
@@ -266,7 +278,9 @@ export default function DocViewer(): React.JSX.Element {
         </div>
       )}
 
-      {!meta && !busy && <div className={styles.docViewerEmpty}>未找到内容</div>}
+      {!meta && !busy && (
+        <div className={styles.docViewerEmpty}>{t('docViewer.notFound')}</div>
+      )}
     </div>
   )
 }

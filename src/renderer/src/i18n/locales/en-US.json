@@ -274,6 +274,18 @@
     "reload": "Reload",
     "comingSoon": "This feature is coming soon"
   },
+  "docViewer": {
+    "rawFetchFailed": "Failed to fetch original: {{message}}",
+    "missingId": "Missing document id.",
+    "back": "Back",
+    "viewerError": "Viewer error",
+    "loading": "Loading...",
+    "pageLabel": "Page {{page}}",
+    "fromLabel": "From {{seconds}}s",
+    "noContent": "(no content)",
+    "mediaNotReady": "Media viewer not yet integrated. Open with the OS player via main process:",
+    "notFound": "Not found"
+  },
   "orgSection": {
     "never": "Never",
     "title": "Enterprise Knowledge Base",
