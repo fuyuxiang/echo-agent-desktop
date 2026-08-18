@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useSkillStore } from '@/stores/skillStore'
 import { skillsAPI, type Skill } from '@/services/agent/skills'
 import { useChatStore } from '@/stores/chatStore'
@@ -31,6 +32,7 @@ interface SkillGroup {
 }
 
 export default function SkillsPage(): React.JSX.Element {
+  const { t } = useTranslation()
   const { skills, selectedSkill, setSkills, setSelectedSkill } = useSkillStore()
   const activeChatId = useChatStore((s) => s.activeChatId) || 'default'
   const [detail, setDetail] = useState<{ content: string; files: string[] } | null>(null)
@@ -108,7 +110,7 @@ export default function SkillsPage(): React.JSX.Element {
         setDetail(null)
         const updated = await skillsAPI.list()
         setSkills(updated.skills ?? updated)
-        toast.success('技能已删除')
+        toast.success(t('skills.deleted', '技能已删除'))
       }
     } catch (e) {
       toast.error(`删除失败：${e instanceof Error ? e.message : String(e)}`)
@@ -131,7 +133,7 @@ export default function SkillsPage(): React.JSX.Element {
         <div className={styles.pageHeader}>
           <div className={styles.pageHeaderText}>
             <span>Skills</span>
-            <strong>技能库</strong>
+            <strong>{t('skills.title')}</strong>
           </div>
           <button className={styles.importBtn} onClick={handleImport} disabled={importing}>
             <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
@@ -144,7 +146,7 @@ export default function SkillsPage(): React.JSX.Element {
                 strokeLinejoin="round"
               />
             </svg>
-            {importing ? '导入中…' : '导入技能'}
+            {importing ? t('skills.importing') : t('skills.import')}
           </button>
         </div>
         <div className={styles.groupList}>
@@ -166,7 +168,7 @@ export default function SkillsPage(): React.JSX.Element {
                         <p className={styles.desc}>{s.description}</p>
                       </div>
                       <span className={clsx(styles.status, isActive && styles.on)}>
-                        {isActive ? '已激活' : '未激活'}
+                        {isActive ? t('skills.active') : t('skills.inactive')}
                       </span>
                     </div>
                   )
@@ -174,7 +176,7 @@ export default function SkillsPage(): React.JSX.Element {
               </div>
             </div>
           ))}
-          {skills.length === 0 && <div className={styles.empty}>暂无技能</div>}
+          {skills.length === 0 && <div className={styles.empty}>{t('skills.empty')}</div>}
         </div>
       </div>
 
@@ -185,14 +187,14 @@ export default function SkillsPage(): React.JSX.Element {
               className={clsx(styles.toggleBtn, currentIsActive && styles.on)}
               onClick={(e) => currentSkill && handleToggle(currentSkill, e)}
             >
-              {currentIsActive ? '禁用' : '启用'}
+              {currentIsActive ? t('skills.disable') : t('skills.enable')}
             </button>
             <button
               className={styles.deleteBtn}
               onClick={() => handleDelete(selectedSkill)}
               disabled={deleting}
             >
-              {deleting ? '删除中…' : '删除'}
+              {deleting ? t('skills.deleting') : t('skills.delete')}
             </button>
             <button className={styles.closeBtn} onClick={handleClose}>
               ✕
@@ -207,7 +209,7 @@ export default function SkillsPage(): React.JSX.Element {
           <pre className={styles.content}>{detail.content}</pre>
           {detail.files?.length > 0 && (
             <div className={styles.files}>
-              <h3>支持文件</h3>
+              <h3>{t('skills.supportedFiles')}</h3>
               <ul>
                 {detail.files.map((f) => (
                   <li key={f}>{f}</li>
