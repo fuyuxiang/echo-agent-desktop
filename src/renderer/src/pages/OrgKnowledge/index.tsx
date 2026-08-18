@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useOrgStore, isOrgReady } from '@/stores/orgStore'
 import type { OrgDocument, MyPromotion } from '@shared/types/org'
 import styles from './org-knowledge.module.scss'
@@ -21,11 +22,12 @@ function fmtDate(ms: number): string {
   return new Date(ms).toLocaleDateString()
 }
 
-const STATE_LABEL: Record<string, string> = {
-  pending: '待审核',
-  approved: '已通过',
-  rejected: '已驳回',
-  withdrawn: '已撤回'
+// 状态 → i18n key 映射(避免在 JSX 里写大段硬编码中文)
+const STATE_KEY: Record<string, string> = {
+  pending: 'orgKnowledge.state.pending',
+  approved: 'orgKnowledge.state.approved',
+  rejected: 'orgKnowledge.state.rejected',
+  withdrawn: 'orgKnowledge.state.withdrawn'
 }
 
 /**
@@ -35,6 +37,7 @@ const STATE_LABEL: Record<string, string> = {
  * 什么。「我提交的」放在这里,让沉淀有反馈闭环:提了之后能看到审核结果。
  */
 export function OrgKnowledgePage(): React.JSX.Element {
+  const { t } = useTranslation()
   const status = useOrgStore((s) => s.status)
   const scopes = useOrgStore((s) => s.scopes)
   const init = useOrgStore((s) => s.init)
@@ -90,8 +93,8 @@ export function OrgKnowledgePage(): React.JSX.Element {
   if (!isOrgReady(status)) {
     return (
       <div className={styles.empty}>
-        <h3>尚未接入企业知识库</h3>
-        <p>请在「设置 → 企业接入」配置服务器并登录。</p>
+        <h3>{t('orgKnowledge.notReadyTitle')}</h3>
+        <p>{t('orgKnowledge.notReadyDesc')}</p>
       </div>
     )
   }
@@ -107,24 +110,20 @@ export function OrgKnowledgePage(): React.JSX.Element {
           className={tab === 'docs' ? styles.tabActive : styles.tab}
           onClick={() => setTab('docs')}
         >
-          组织文档
+          {t('orgKnowledge.tabDocs')}
         </button>
         <button
           type="button"
           className={tab === 'mine' ? styles.tabActive : styles.tab}
           onClick={() => setTab('mine')}
         >
-          我提交的
+          {t('orgKnowledge.tabMine')}
         </button>
       </div>
 
       {tab === 'docs' ? (
         <>
-          {offline && (
-            <div className={styles.banner}>
-              服务器不可达,文档列表暂时无法加载。已缓存的内容仍可在「问答」中检索。
-            </div>
-          )}
+          {offline && <div className={styles.banner}>{t('orgKnowledge.offlineBanner')}</div>}
 
           <div className={styles.filters}>
             <select
@@ -135,16 +134,16 @@ export function OrgKnowledgePage(): React.JSX.Element {
                 setPage(1)
               }}
             >
-              <option value="">全部范围</option>
+              <option value="">{t('orgKnowledge.scopeAll')}</option>
               {scopes.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.kind === 'org' ? '全公司' : s.name}
+                  {s.kind === 'org' ? t('orgKnowledge.scopeOrg') : s.name}
                 </option>
               ))}
             </select>
             <input
               className={styles.search}
-              placeholder="搜索标题"
+              placeholder={t('orgKnowledge.searchPlaceholder')}
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               onKeyDown={(e) => {
@@ -157,9 +156,9 @@ export function OrgKnowledgePage(): React.JSX.Element {
           </div>
 
           {loading ? (
-            <div className={styles.loading}>加载中…</div>
+            <div className={styles.loading}>{t('orgKnowledge.loading')}</div>
           ) : docs.length === 0 ? (
-            <div className={styles.noResult}>这个范围内还没有文档。</div>
+            <div className={styles.noResult}>{t('orgKnowledge.noDocs')}</div>
           ) : (
             <ul className={styles.list}>
               {docs.map((d) => (
@@ -176,17 +175,21 @@ export function OrgKnowledgePage(): React.JSX.Element {
                     </button>
                     <div className={styles.meta}>
                       <span className={d.scopeKind === 'org' ? styles.tagOrg : styles.tagTeam}>
-                        {d.scopeKind === 'org' ? '全公司' : d.scopeName}
+                        {d.scopeKind === 'org' ? t('orgKnowledge.scopeOrg') : d.scopeName}
                       </span>
                       {d.sensitivity > 0 && (
                         <span className={styles.tagSec}>
-                          {d.sensitivity === 1 ? '内部' : '机密'}
+                          {d.sensitivity === 1
+                            ? t('orgKnowledge.sensitivityInternal')
+                            : t('orgKnowledge.sensitivityConfidential')}
                         </span>
                       )}
                       <span>{d.sourceType}</span>
                       <span>{fmtBytes(d.byteSize)}</span>
-                      <span>{d.chunkCount} 个片段</span>
-                      {d.ownerName && <span>维护:{d.ownerName}</span>}
+                      <span>{t('orgKnowledge.chunkCount', { count: d.chunkCount })}</span>
+                      {d.ownerName && (
+                        <span>{t('orgKnowledge.owner', { name: d.ownerName })}</span>
+                      )}
                       <span>{fmtDate(d.updatedAt)}</span>
                     </div>
                   </div>
@@ -203,7 +206,7 @@ export function OrgKnowledgePage(): React.JSX.Element {
                 disabled={page <= 1}
                 onClick={() => setPage(page - 1)}
               >
-                上一页
+                {t('orgKnowledge.prev')}
               </button>
               <span className={styles.pageInfo}>
                 {page} / {pages}
@@ -214,7 +217,7 @@ export function OrgKnowledgePage(): React.JSX.Element {
                 disabled={page >= pages}
                 onClick={() => setPage(page + 1)}
               >
-                下一页
+                {t('orgKnowledge.next')}
               </button>
             </div>
           )}
@@ -222,11 +225,9 @@ export function OrgKnowledgePage(): React.JSX.Element {
       ) : (
         <>
           {loading ? (
-            <div className={styles.loading}>加载中…</div>
+            <div className={styles.loading}>{t('orgKnowledge.loading')}</div>
           ) : mine.length === 0 ? (
-            <div className={styles.noResult}>
-              还没有提交过知识。在问答结果或会议纪要里点「沉淀为知识」即可。
-            </div>
+            <div className={styles.noResult}>{t('orgKnowledge.noMine')}</div>
           ) : (
             <ul className={styles.list}>
               {mine.map((p) => {
@@ -236,22 +237,27 @@ export function OrgKnowledgePage(): React.JSX.Element {
                     <div className={styles.itemMain}>
                       <div className={styles.mineHead}>
                         <span className={styles[`state_${p.state}`] ?? styles.state_pending}>
-                          {p.local ? '待联网提交' : STATE_LABEL[p.state]}
+                          {p.local
+                            ? t('orgKnowledge.localPending')
+                            : t(STATE_KEY[p.state] ?? 'orgKnowledge.state.pending')}
                         </span>
                         {p.scopeName && (
                           <span className={styles.muted}>
-                            → {p.scopeKind === 'org' ? '全公司' : p.scopeName}
+                            →{' '}
+                            {p.scopeKind === 'org'
+                              ? t('orgKnowledge.scopeOrg')
+                              : p.scopeName}
                           </span>
                         )}
                         <span className={styles.muted}>{fmtDate(p.createdAt)}</span>
                       </div>
                       <div className={styles.mineContent}>
-                        {payload.content ?? payload.title ?? '(无内容)'}
+                        {payload.content ?? payload.title ?? t('orgKnowledge.noContent')}
                       </div>
                       {p.reviewNote && (
                         <div className={styles.reviewNote}>
-                          审核意见:{p.reviewNote}
-                          {p.reviewerName ? `(${p.reviewerName})` : ''}
+                          {t('orgKnowledge.reviewNote', { note: p.reviewNote })}
+                          {p.reviewerName ? ` (${p.reviewerName})` : ''}
                         </div>
                       )}
                     </div>
