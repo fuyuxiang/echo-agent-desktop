@@ -132,16 +132,17 @@ describe('pages', () => {
     render(<MeetingDetail />)
 
     expect(await screen.findByText('周会')).toBeTruthy()
-    expect(screen.getByText('会议纪要')).toBeTruthy()
-    expect(screen.getAllByText('关键点').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('待办').length).toBeGreaterThan(0)
+    // i18n mock:t(key)=key,MeetingDetail 子标题与按钮对应命名空间
+    expect(screen.getByText('meetingDetail.tabSummary')).toBeTruthy()
+    expect(screen.getAllByText('meetingDetail.keyPoints').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('meetingDetail.actionItems').length).toBeGreaterThan(0)
 
-    fireEvent.click(screen.getByText('全文转写'))
+    fireEvent.click(screen.getByText('meetingDetail.tabTranscript'))
     expect(screen.getByText('讨论项目进展')).toBeTruthy()
-    fireEvent.click(screen.getByText('重试说话人分离'))
+    fireEvent.click(screen.getByText('meetingDetail.retryDiarize'))
     await waitFor(() => expect(window.api.meeting.diarize).toHaveBeenCalledWith('m1'))
 
-    fireEvent.click(screen.getByText('删除'))
+    fireEvent.click(screen.getByText('common.delete'))
     await waitFor(() => expect(window.api.meeting.remove).toHaveBeenCalledWith('m1'))
     expect(router.navigate).toHaveBeenCalledWith('/meeting')
     confirm.mockRestore()
