@@ -11,7 +11,7 @@ import { useUserStore } from '@/stores/userStore'
  * - 页面一律懒加载(lazy),保证首屏速度
  * - 导航跳转引用 constants/ROUTES 常量
  * - 子路由使用相对路径(不含前导 /)
- * - 登录非强制:启动直接进工作台,用户可在使用中随时登录
+ * - 组织服务未接入时由 StartupGate 拦截,设置页与本地知识页仍可访问
  * - 仅管理页受 RequireAdmin 守卫(需管理员角色)
  */
 
@@ -28,15 +28,12 @@ const MemoryPage = lazy(() => import('@/pages/Memory'))
 const AdminPage = lazy(() => import('@/pages/Admin'))
 const MeetingPage = lazy(() => import('@/pages/Meeting'))
 const MeetingDetailPage = lazy(() => import('@/pages/Meeting/MeetingDetail'))
-// P11 知识库:资料库 + 资料问答(页面实体由 H1 / H3 在后续 task 中创建)
-const KbLibraryPage = lazy(() => import('@/pages/KbLibrary'))
-const KbQAPage = lazy(() => import('@/pages/KbQA'))
 const GatewayPage = lazy(() => import('@/pages/Gateway'))
 const KanbanPage = lazy(() => import('@/pages/Kanban'))
 const SoulPage = lazy(() => import('@/pages/Soul'))
 const DiscoverPage = lazy(() => import('@/pages/Discover'))
-// 企业版:组织知识问答与浏览。未接入企业服务器时页面自身给出引导,
-// 不做路由级拦截 —— 员工需要看到"怎么接入"而不是被重定向走。
+// 企业版入口:StartupGate 在未接入时拦截依赖组织服务的页面,
+// 设置页与本地知识页仍可访问。
 const AskPage = lazy(() => import('@/pages/Ask'))
 const OrgKnowledgePage = lazy(() => import('@/pages/OrgKnowledge'))
 // echo://doc/<id>/page/<n> 引用跳转落地:DocViewer 拉原文/PDF 并按页渲染。
@@ -95,8 +92,6 @@ export const router = createHashRouter([
       { path: 'memory', element: lazyLoad(<MemoryPage />) },
       { path: 'meeting', element: lazyLoad(<MeetingPage />) },
       { path: 'meeting/:id', element: lazyLoad(<MeetingDetailPage />) },
-      { path: 'kb-library', element: lazyLoad(<KbLibraryPage />) },
-      { path: 'kb-qa', element: lazyLoad(<KbQAPage />) },
       { path: 'gateway', element: lazyLoad(<GatewayPage />) },
       { path: 'kanban', element: lazyLoad(<KanbanPage />) },
       { path: 'soul', element: lazyLoad(<SoulPage />) },
