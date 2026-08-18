@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { TitleBar } from '@/layouts/TitleBar'
 import { IconSidebar } from '@/components/IconSidebar'
+import { RecorderIndicator } from '@/components/RecorderIndicator'
 import { useUserStore } from '@/stores/userStore'
 import { useAgentStore } from '@/stores/agentStore'
 import { useOrgStore, isOrgReady } from '@/stores/orgStore'
@@ -93,6 +94,8 @@ export function AppLayout(): React.JSX.Element {
       <div className={styles.body}>
         <IconSidebar />
         <section className={styles.workspace}>
+          {/* 录音指示器挂在布局层而非页面层:跨页面录音不丢失,提供全局停止入口(2026-08 P0-8) */}
+          <RecorderIndicator />
           <main className={styles.main}>
             <Outlet />
           </main>

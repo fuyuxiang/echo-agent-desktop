@@ -256,26 +256,27 @@ export class OrgCache {
     }
     if (!match) return empty
 
-    let rows: Record<string, unknown>[] = []
-    try {
-      rows = this.db
-        .prepare(
-          `SELECT c.chunk_id AS chunkId, c.doc_id AS docId, c.title AS docTitle,
-                  c.text, c.heading, c.loc_page AS locPage, c.loc_start_ms AS locStartMs,
-                  c.scope_kind AS scopeKind, c.modality, c.updated_at AS updatedAt,
-                  bm25(org_kb_fts) AS rank
-             FROM org_kb_fts
-             JOIN org_kb_fts_map m ON m.fts_rowid = org_kb_fts.rowid
-             JOIN org_kb_cache c ON c.chunk_id = m.chunk_id
-            WHERE org_kb_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?`
-        )
-        .all(match, limit) as Record<string, unknown>[]
-    } catch {
-      // 缓存损坏不该让对话失败
-      return empty
-    }
+    const rows: Record<string, unknown>[] = (() => {
+      try {
+        return this.db
+          .prepare(
+            `SELECT c.chunk_id AS chunkId, c.doc_id AS docId, c.title AS docTitle,
+                    c.text, c.heading, c.loc_page AS locPage, c.loc_start_ms AS locStartMs,
+                    c.scope_kind AS scopeKind, c.modality, c.updated_at AS updatedAt,
+                    bm25(org_kb_fts) AS rank
+               FROM org_kb_fts
+               JOIN org_kb_fts_map m ON m.fts_rowid = org_kb_fts.rowid
+               JOIN org_kb_cache c ON c.chunk_id = m.chunk_id
+              WHERE org_kb_fts MATCH ?
+              ORDER BY rank
+              LIMIT ?`
+          )
+          .all(match, limit) as Record<string, unknown>[]
+      } catch {
+        // 缓存损坏不该让对话失败
+        return []
+      }
+    })()
 
     const chunks: RetrievedChunk[] = rows.map((r) => ({
       chunkId: String(r.chunkId),

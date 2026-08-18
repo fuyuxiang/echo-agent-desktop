@@ -106,8 +106,7 @@ if (!gotTheLock) {
       const isRendererEntry = navPath === rendererEntry
       // http/https 外链:转系统浏览器打开(不阻止默认行为,而是调用 shell 后 preventDefault)
       if (/^https?:\/\//i.test(url)) {
-        // eslint-disable-next-line @typescript-eslint/no-floating-promises
-        shell.openExternal(url)
+        void shell.openExternal(url)
         log.info('[security] 外链转系统浏览器:', url)
         event.preventDefault()
         return
