@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { RetrievedChunk } from '@shared/types/org'
 import styles from './ask.module.scss'
 
@@ -36,14 +37,21 @@ export function CitationCard({
   const [expanded, setExpanded] = useState(false)
   const loc = locationLabel(chunk)
   const long = chunk.text.length > 300
+  const navigate = useNavigate()
 
   const open = async (): Promise<void> => {
-    // 主进程按 openUrl 协议分发:
-    //   - echo://doc/<id>/page/<n>  → 跳到知识库文档查看器并定位 PDF 页;
-    //   - echo://doc/<id>/t/<ms>     → 媒体查看器 seek 到时间戳;
-    //   - 其余 http/https           → shell.openExternal。
-    // 真实查看器后续接入;这里先确保 openExternal 路径能识别 echo:// 并触发
-    // DeepLink 广播,渲染层路由 /knowledge/doc 拉原文。
+    // PDF:直接跳到内置 DocViewer(hash 路由 /knowledge/doc)。
+    // DocViewer 读 query 的 id / page / startMs 三个字段,这里按字段名严格对齐。
+    if (chunk.sourceType === 'pdf') {
+      const params = new URLSearchParams()
+      params.set('id', chunk.docId)
+      if (chunk.citation.page != null) params.set('page', String(chunk.citation.page))
+      if (chunk.citation.startMs != null) params.set('startMs', String(chunk.citation.startMs))
+      navigate(`/knowledge/doc?${params.toString()}`)
+      return
+    }
+    // 非 PDF(Word/PPT/表格/音频/视频/图片/会议/缓存)→ 沿用 openExternal 走
+    // echo://doc/... 协议,后续主进程分发;此处维持原行为占位。
     await window.api.system.openExternal(chunk.citation.openUrl)
   }
 

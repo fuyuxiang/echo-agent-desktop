@@ -1,0 +1,300 @@
+// ============================================
+// DocViewer 样式
+//
+// 文档查看器布局:
+//   - 顶部标题栏(标题 + 类型/位置标签 + 返回按钮)
+//   - PDF / 图片:canvas 渲染当前页 + 翻页按钮
+//   - 文本:按 chunk 分段展示
+//   - 媒体:引导到外部播放器
+//   - 错误/空:统一提示面板
+// 暗色模式通过 CSS 变量自动适配,无需单独覆写。
+// ============================================
+
+.docViewer {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-lg;
+  width: 100%;
+  max-width: 960px;
+  padding: $spacing-xl $spacing-xxl;
+  margin: 0 auto;
+  color: var(--color-text-1);
+}
+
+.docViewerHead {
+  @include flex-between;
+  flex-wrap: wrap;
+  gap: $spacing-md;
+  padding-bottom: $spacing-md;
+  border-bottom: 1px solid var(--color-border-muted);
+
+  h3 {
+    margin: 0;
+    font-size: $font-size-xl;
+    font-weight: 700;
+    color: var(--color-text-1);
+    @include ellipsis;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+.docViewerMeta {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+  flex-wrap: wrap;
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 $spacing-sm;
+    border-radius: $radius-full;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
+    font-size: $font-size-xs;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .loc {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 $spacing-sm;
+    border-radius: $radius-sm;
+    background: var(--color-bg-subtle);
+    color: var(--color-text-2);
+    font-size: $font-size-xs;
+  }
+
+  button {
+    @include app-no-drag;
+    height: 30px;
+    padding: 0 $spacing-md;
+    border: 1px solid var(--color-border-muted);
+    border-radius: $radius-full;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-1);
+    font-size: $font-size-sm;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background $duration-fast,
+      border-color $duration-fast;
+
+    &:hover {
+      border-color: color-mix(in srgb, var(--color-primary) 34%, var(--color-border));
+      background: var(--color-primary-soft);
+    }
+  }
+}
+
+.docViewerCanvasWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: $spacing-md;
+  padding: $spacing-lg;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-muted);
+  border-radius: $radius-lg;
+  box-shadow: var(--shadow-card);
+
+  canvas {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--color-border-muted);
+    border-radius: $radius-sm;
+    box-shadow: var(--shadow-card);
+    background: #fff;
+  }
+}
+
+.docViewerNav {
+  display: flex;
+  align-items: center;
+  gap: $spacing-sm;
+
+  button {
+    @include app-no-drag;
+    min-width: 88px;
+    height: 32px;
+    padding: 0 $spacing-md;
+    border: 1px solid var(--color-border);
+    border-radius: $radius-full;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-1);
+    font-size: $font-size-sm;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background $duration-fast,
+      border-color $duration-fast;
+
+    &:hover {
+      border-color: color-mix(in srgb, var(--color-primary) 34%, var(--color-border));
+      background: var(--color-primary-soft);
+    }
+  }
+}
+
+.docViewerText {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+  padding: $spacing-lg;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-muted);
+  border-radius: $radius-lg;
+  box-shadow: var(--shadow-card);
+
+  pre {
+    margin: 0;
+    padding: $spacing-md;
+    background: var(--color-bg-code);
+    border-radius: $radius-md;
+    color: var(--color-text-1);
+    font-family:
+      ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    font-size: $font-size-sm;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .note {
+    margin: 0;
+    padding: $spacing-sm $spacing-md;
+    background: var(--color-warning-soft);
+    border-left: 3px solid var(--color-warning);
+    border-radius: $radius-sm;
+    color: var(--color-text-2);
+    font-size: $font-size-sm;
+  }
+}
+
+.docViewerChunk {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+  padding: $spacing-md 0;
+  border-bottom: 1px dashed var(--color-border-muted);
+
+  &:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  h4 {
+    margin: 0;
+    font-size: $font-size-lg;
+    font-weight: 650;
+    color: var(--color-text-1);
+  }
+
+  p {
+    margin: 0;
+    font-size: $font-size-base;
+    line-height: 1.7;
+    color: var(--color-text-2);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}
+
+.docViewerMedia {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+  padding: $spacing-lg;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-muted);
+  border-radius: $radius-lg;
+  box-shadow: var(--shadow-card);
+
+  p {
+    margin: 0;
+    color: var(--color-text-2);
+    font-size: $font-size-base;
+  }
+
+  button {
+    @include app-no-drag;
+    align-self: flex-start;
+    height: 32px;
+    padding: 0 $spacing-md;
+    border: 1px solid var(--color-primary);
+    border-radius: $radius-full;
+    background: var(--color-primary);
+    color: #fff;
+    font-size: $font-size-sm;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background $duration-fast,
+      opacity $duration-fast;
+
+    &:hover {
+      background: var(--color-primary-hover);
+    }
+  }
+}
+
+.docViewerEmpty {
+  @include flex-center;
+  flex-direction: column;
+  gap: $spacing-md;
+  min-height: 240px;
+  padding: $spacing-xl;
+  background: var(--color-bg-elevated);
+  border: 1px dashed var(--color-border);
+  border-radius: $radius-lg;
+  color: var(--color-text-2);
+  text-align: center;
+
+  h3 {
+    margin: 0;
+    font-size: $font-size-lg;
+    font-weight: 650;
+    color: var(--color-text-1);
+  }
+
+  p {
+    margin: 0;
+    font-size: $font-size-base;
+    color: var(--color-danger);
+  }
+
+  button {
+    @include app-no-drag;
+    height: 32px;
+    padding: 0 $spacing-md;
+    border: 1px solid var(--color-border);
+    border-radius: $radius-full;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-1);
+    font-size: $font-size-sm;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background $duration-fast,
+      border-color $duration-fast;
+
+    &:hover {
+      border-color: color-mix(in srgb, var(--color-primary) 34%, var(--color-border));
+      background: var(--color-primary-soft);
+    }
+  }
+}
+
+// 暗色模式:仅补充若干覆写,主要色板由 CSS 变量在 themes.scss 切换,
+// 这里只针对 canvas / 代码块这种"硬编码亮色背景"做兜底。
+:global(html[data-theme='dark']) {
+  .docViewerCanvasWrap canvas {
+    background: #1b1a22;
+  }
+}
