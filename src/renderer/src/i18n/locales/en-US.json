@@ -11,7 +11,23 @@
     "logout": "Sign Out"
   },
   "settings": {
-    "nav": "Settings"
+    "nav": "Settings",
+    "sections": {
+      "general": "General",
+      "org": "Enterprise",
+      "model": "Model",
+      "theme": "Theme",
+      "skills": "Skills",
+      "memoryStore": "Memory",
+      "about": "About"
+    }
+  },
+  "sidebar": {
+    "knowledge": "Documents",
+    "meeting": "Meetings",
+    "orgAsk": "Org Q&A",
+    "orgKnowledge": "Org Knowledge",
+    "newSession": "New Chat"
   },
   "scope": {
     "title": "Access scope",
