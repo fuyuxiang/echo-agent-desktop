@@ -29,6 +29,31 @@
     "orgKnowledge": "Org Knowledge",
     "newSession": "New Chat"
   },
+  "meeting": {
+    "title": "Meetings",
+    "empty": "No meetings yet",
+    "untitled": "Untitled meeting",
+    "status": {
+      "recording": "Recording",
+      "processing": "Processing",
+      "done": "Done",
+      "failed": "Failed"
+    }
+  },
+  "skills": {
+    "title": "Skills",
+    "empty": "No skills",
+    "import": "Import skill",
+    "importing": "Importing…",
+    "delete": "Delete",
+    "deleting": "Deleting…",
+    "deleted": "Skill deleted",
+    "enable": "Enable",
+    "disable": "Disable",
+    "active": "Active",
+    "inactive": "Inactive",
+    "supportedFiles": "Supported files"
+  },
   "ask": {
     "scopeAll": "All",
     "scopeOrg": "Org",
