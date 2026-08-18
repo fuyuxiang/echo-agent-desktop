@@ -274,6 +274,18 @@
     "reload": "重新加载",
     "comingSoon": "该功能即将上线"
   },
+  "docViewer": {
+    "rawFetchFailed": "原始文件拉取失败:{{message}}",
+    "missingId": "缺少文档 id。",
+    "back": "返回",
+    "viewerError": "查看器错误",
+    "loading": "加载中...",
+    "pageLabel": "第 {{page}} 页",
+    "fromLabel": "从 {{seconds}}s 起",
+    "noContent": "(无内容)",
+    "mediaNotReady": "媒体查看器尚未接入,请通过主进程 OS 播放器打开:",
+    "notFound": "未找到内容"
+  },
   "orgSection": {
     "never": "从未",
     "title": "企业知识库",
