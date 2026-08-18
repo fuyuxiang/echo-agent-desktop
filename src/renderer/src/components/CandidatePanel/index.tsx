@@ -54,8 +54,14 @@ export function CandidatePanel({
 
   useEffect(() => {
     if (!targetScope && scopes.length > 0) {
-      const team = scopes.find((s) => s.kind === 'team')
-      setTargetScope(team?.id ?? scopes[0].id)
+      // 推迟到下一个 tick,避免在 effect body 同步触发 setState
+      queueMicrotask(() => {
+        setTargetScope((cur) => {
+          if (cur) return cur
+          const team = scopes.find((s) => s.kind === 'team')
+          return team?.id ?? scopes[0].id
+        })
+      })
     }
   }, [scopes, targetScope])
 

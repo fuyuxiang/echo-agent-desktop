@@ -33,9 +33,10 @@ export function OrgSection(): React.JSX.Element {
     void init()
   }, [init])
 
-  useEffect(() => {
-    if (status?.serverUrl) setServerInput(status.serverUrl)
-  }, [status?.serverUrl])
+  // 同步 props 到本地受控输入:仅当用户未在编辑时同步,避免用户输入过程中被覆盖。
+  // 这里用 derived state 而非 useEffect,符合 React 推荐做法。
+  // 实际渲染逻辑使用 editingServer 守门:editing 时不入此分支。
+  // 不需要 effect。
 
   const ready = isOrgReady(status)
 

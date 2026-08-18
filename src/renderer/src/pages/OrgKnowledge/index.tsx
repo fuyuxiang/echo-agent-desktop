@@ -80,8 +80,11 @@ export function OrgKnowledgePage(): React.JSX.Element {
 
   useEffect(() => {
     if (!isOrgReady(status)) return
-    if (tab === 'docs') void loadDocs()
-    else void loadMine()
+    // 推迟到下一个 tick,避免 effect body 同步触发 setState 引发级联重渲染
+    queueMicrotask(() => {
+      if (tab === 'docs') void loadDocs()
+      else void loadMine()
+    })
   }, [tab, status, loadDocs, loadMine])
 
   if (!isOrgReady(status)) {

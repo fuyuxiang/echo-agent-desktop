@@ -219,7 +219,7 @@ describe('抽取流程', () => {
 
   it('provider 抛异常时返回空数组', async () => {
     const provider = {
-      async *chat() {
+      async chat() {
         throw new Error('网络中断')
       }
     } as never
