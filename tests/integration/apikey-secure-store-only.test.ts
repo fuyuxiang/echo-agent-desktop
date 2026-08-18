@@ -7,8 +7,6 @@
  * 主进程 applyModelConfig 写入 yaml 前从 safeStorage 取真值。
  */
 import { describe, it, expect } from 'vitest'
-import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
 
 /**
  * 集成断言:读取实际生成的 yaml,验证 apiKey 字段不是明文。
