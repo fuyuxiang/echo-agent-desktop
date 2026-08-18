@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useOrgStore, isOrgReady, isCacheStale, type AskScope } from '@/stores/orgStore'
 import { toast } from '@/components/Toast'
 import type { RetrieveResult, RetrievedChunk } from '@shared/types/org'
@@ -6,11 +7,11 @@ import { CitationCard } from './CitationCard'
 import { PromoteDialog } from '@/components/PromoteDialog'
 import styles from './ask.module.scss'
 
-const SCOPE_LABEL: Record<AskScope, string> = {
-  all: '全部',
-  org: '组织库',
-  team: '我的团队',
-  local: '仅本机'
+const SCOPE_KEY: Record<AskScope, string> = {
+  all: 'ask.scopeAll',
+  org: 'ask.scopeOrg',
+  team: 'ask.scopeTeam',
+  local: 'ask.scopeLocal'
 }
 
 /**
@@ -21,6 +22,7 @@ const SCOPE_LABEL: Record<AskScope, string> = {
  * 无从核实的话更可信。
  */
 export function AskPage(): React.JSX.Element {
+  const { t } = useTranslation()
   const status = useOrgStore((s) => s.status)
   const askScope = useOrgStore((s) => s.askScope)
   const setAskScope = useOrgStore((s) => s.setAskScope)
@@ -61,22 +63,20 @@ export function AskPage(): React.JSX.Element {
           route: deep ? 'agentic' : 'fast'
         })
       } catch (e) {
-        toast.error(`检索失败:${(e as Error).message}`)
+        toast.error(t('ask.searchFailed', { message: (e as Error).message }))
       } finally {
         setLoading(false)
       }
     },
-    [retrieve, deep]
+    [retrieve, deep, t]
   )
 
   if (!ready) {
     return (
       <div className={styles.empty}>
-        <h3>尚未接入企业知识库</h3>
+        <h3>{t('ask.notReadyTitle')}</h3>
         <p>
-          {status?.configured
-            ? '请在「设置 → 企业接入」登录后使用组织知识问答。'
-            : '请在「设置 → 企业接入」填写企业服务器地址并登录。'}
+          {status?.configured ? t('ask.notReadyLoggedOut') : t('ask.notReadyNoServer')}
         </p>
       </div>
     )
@@ -90,18 +90,18 @@ export function AskPage(): React.JSX.Element {
     <div className={styles.page}>
       {offline && (
         <div className={styles.banner} data-tone="warn">
-          离线模式:服务器不可达,以下结果来自本地缓存
-          {stale && status?.lastSyncAt
-            ? `(最后同步于 ${new Date(status.lastSyncAt).toLocaleString()})`
-            : ''}
-          ,可能不是最新。
+          {t('ask.offlineBanner', {
+            lastSync: stale && status?.lastSyncAt
+              ? new Date(status.lastSyncAt).toLocaleString()
+              : ''
+          })}
         </div>
       )}
 
       <div className={styles.searchBar}>
         <input
           className={styles.input}
-          placeholder="问一个问题,如:差旅住宿标准是多少"
+          placeholder={t('ask.searchPlaceholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -114,30 +114,32 @@ export function AskPage(): React.JSX.Element {
           disabled={loading || !query.trim()}
           onClick={() => void search(query)}
         >
-          {loading ? '检索中…' : '检索'}
+          {loading ? t('ask.searching') : t('ask.search')}
         </button>
       </div>
 
       <div className={styles.controls}>
         <div className={styles.scopes}>
-          {(Object.keys(SCOPE_LABEL) as AskScope[]).map((s) => (
+          {(Object.keys(SCOPE_KEY) as AskScope[]).map((s) => (
             <button
               key={s}
               type="button"
               className={askScope === s ? styles.chipActive : styles.chip}
               // 真实生效:在 orgStore.retrieve 里把 askScope 翻译成 scopes 过滤。
-              title={`仅检索${SCOPE_LABEL[s]}`}
+              title={t('ask.scopeOnly', { scope: t(SCOPE_KEY[s]) })}
               onClick={() => setAskScope(s)}
             >
-              {SCOPE_LABEL[s]}
-              {offline && (s === 'org' || s === 'team') && <span className={styles.cacheTag}>缓存</span>}
+              {t(SCOPE_KEY[s])}
+              {offline && (s === 'org' || s === 'team') && (
+                <span className={styles.cacheTag}>{t('ask.cacheTag')}</span>
+              )}
             </button>
           ))}
         </div>
         <label className={styles.deepToggle}>
           <input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} />
-          深度检索
-          <span className={styles.hint}>用于对比、汇总类问题,更慢但更全</span>
+          {t('ask.deep')}
+          <span className={styles.hint}>{t('ask.deepHint')}</span>
         </label>
       </div>
 
@@ -145,7 +147,7 @@ export function AskPage(): React.JSX.Element {
         <>
           {result.memories.length > 0 && (
             <section className={styles.section}>
-              <h4>已确认的组织约定</h4>
+              <h4>{t('ask.memoriesTitle')}</h4>
               {result.memories.map((m) => (
                 <div key={m.id} className={styles.memory}>
                   <span className={styles.kind}>{m.kind}</span>
@@ -157,36 +159,32 @@ export function AskPage(): React.JSX.Element {
 
           {result.chunks.length === 0 ? (
             <div className={styles.noResult}>
-              <p>没有找到相关内容。</p>
+              <p>{t('ask.noResult')}</p>
               {result.suggestAsk?.length ? (
                 <p className={styles.suggest}>
-                  这个问题可能需要问:
-                  {result.suggestAsk.map((p) => p.displayName).join('、')}
+                  {t('ask.suggestAsk')}
+                  {result.suggestAsk.map((p) => p.displayName).join(t('common.listJoiner'))}
                 </p>
               ) : (
-                <p className={styles.suggest}>
-                  可以试着换个说法,或联系管理员补充相关文档。
-                </p>
+                <p className={styles.suggest}>{t('ask.suggestOther')}</p>
               )}
             </div>
           ) : (
             <section className={styles.section}>
               <div className={styles.resultHead}>
                 <h4>
-                  「{asked}」找到 {result.chunks.length} 条材料
+                  {t('ask.resultsHead', { query: asked, count: result.chunks.length })}
                 </h4>
                 <span className={styles.diag}>
                   {result.diagnostics.totalMs}ms
-                  {result.diagnostics.rerankSkipped && ' · 精排降级'}
-                  {result.fromCache && ' · 本地缓存'}
+                  {result.diagnostics.rerankSkipped && ` · ${t('ask.rerankSkipped')}`}
+                  {result.fromCache && ` · ${t('ask.fromCache')}`}
                 </span>
               </div>
               {/* 单条卡片各自带「可能过时」标记,但 8 条里有 3 条过时需要逐条
                   看才能发现。在顶部汇总一次,让用户先知道要留个心。 */}
               {staleCount > 0 && (
-                <div className={styles.staleNote}>
-                  其中 {staleCount} 条来自时效性内容且已超过 90 天未更新,建议与维护人核实后再依据它做决定。
-                </div>
+                <div className={styles.staleNote}>{t('ask.staleNote', { count: staleCount })}</div>
               )}
               {result.chunks.map((c, i) => (
                 <CitationCard
