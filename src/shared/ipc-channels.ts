@@ -146,6 +146,8 @@ export const IpcChannels = {
   /** 原生 agent 对话主链路(P5) */
   agentChat: {
     send: 'agent:chat:send',
+    /** 切换目标会话:仅切会话,不发送任何文本(防幽灵回复)。 */
+    switchSession: 'agent:chat:switch-session',
     abort: 'agent:chat:abort',
     listSessions: 'agent:chat:list-sessions',
     deleteSession: 'agent:chat:delete-session',
