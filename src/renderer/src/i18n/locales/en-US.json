@@ -87,6 +87,25 @@
       "error": "Error"
     }
   },
+  "knowledge": {
+    "title": "My Documents",
+    "indexed": "Indexed: {{indexed}} / {{total}}",
+    "upload": "Upload documents",
+    "uploading": "Uploading…",
+    "uploaded": "Uploaded {{count}} document(s)",
+    "uploadFailed": "{{count}} document(s) failed: {{names}}",
+    "rejected": "Ignored unsupported files: {{names}}",
+    "rebuild": "Rebuild index",
+    "rebuilding": "Rebuilding…",
+    "rebuilt": "Index rebuilt",
+    "rebuildFailed": "Rebuild failed: {{message}}",
+    "rebuildConfirm": "Rebuild the index? This may take a while.",
+    "delete": "Delete",
+    "deleting": "Deleting…",
+    "deleted": "Document deleted",
+    "deleteFailed": "Delete failed: {{message}}",
+    "deleteConfirm": "Delete \"{{path}}\"? You'll need to rebuild the index afterwards."
+  },
   "ask": {
     "scopeAll": "All",
     "scopeOrg": "Org",

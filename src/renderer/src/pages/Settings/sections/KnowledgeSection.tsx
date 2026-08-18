@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { knowledgeAPI } from '@/services/agent/knowledge'
 import { toast } from '@/components/Toast'
 
@@ -28,6 +29,7 @@ async function fetchKnowledge(): Promise<{
 }
 
 export function KnowledgeSection(): React.JSX.Element {
+  const { t } = useTranslation()
   const [docs, setDocs] = useState<DocItem[]>([])
   const [status, setStatus] = useState<{ indexed: number; total: number } | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -64,7 +66,11 @@ export function KnowledgeSection(): React.JSX.Element {
     const allowed = files.filter((f) => isAllowedFile(f.name))
     const rejected = files.filter((f) => !isAllowedFile(f.name))
     if (rejected.length) {
-      toast.error(`已忽略不支持的文件：${rejected.map((f) => f.name).join('、')}`)
+      toast.error(
+        t('knowledge.rejected', {
+          names: rejected.map((f) => f.name).join(t('common.listJoiner', '、'))
+        })
+      )
     }
     if (!allowed.length) return
 
@@ -73,8 +79,15 @@ export function KnowledgeSection(): React.JSX.Element {
     const results = await Promise.allSettled(allowed.map((f) => knowledgeAPI.upload(f)))
     const failed = allowed.filter((_, i) => results[i].status === 'rejected')
     const okCount = allowed.length - failed.length
-    if (okCount > 0) toast.success(`成功上传 ${okCount} 个文档`)
-    if (failed.length) toast.error(`${failed.length} 个文档上传失败：${failed.map((f) => f.name).join('、')}`)
+    if (okCount > 0) toast.success(t('knowledge.uploaded', { count: okCount }))
+    if (failed.length) {
+      toast.error(
+        t('knowledge.uploadFailed', {
+          count: failed.length,
+          names: failed.map((f) => f.name).join(t('common.listJoiner', '、'))
+        })
+      )
+    }
     try {
       await refresh()
     } catch {
@@ -85,14 +98,16 @@ export function KnowledgeSection(): React.JSX.Element {
 
   const handleDelete = async (path: string): Promise<void> => {
     if (deletingPath) return
-    if (!window.confirm(`确定删除文档「${path}」？删除后需重建索引才能生效。`)) return
+    if (!window.confirm(t('knowledge.deleteConfirm', { path }))) return
     setDeletingPath(path)
     try {
       await knowledgeAPI.deleteDocument(path)
       await refresh()
-      toast.success('文档已删除')
+      toast.success(t('knowledge.deleted'))
     } catch (e) {
-      toast.error(`删除失败：${e instanceof Error ? e.message : String(e)}`)
+      toast.error(
+        t('knowledge.deleteFailed', { message: (e as Error).message })
+      )
     } finally {
       setDeletingPath('')
     }
@@ -100,14 +115,14 @@ export function KnowledgeSection(): React.JSX.Element {
 
   const handleRebuild = async (): Promise<void> => {
     if (rebuilding) return
-    if (!window.confirm('确定重建索引？该操作可能耗时较长。')) return
+    if (!window.confirm(t('knowledge.rebuildConfirm'))) return
     setRebuilding(true)
     try {
       await knowledgeAPI.rebuild()
       await refresh()
-      toast.success('索引已重建')
+      toast.success(t('knowledge.rebuilt'))
     } catch (e) {
-      toast.error(`重建失败：${e instanceof Error ? e.message : String(e)}`)
+      toast.error(t('knowledge.rebuildFailed', { message: (e as Error).message }))
     } finally {
       setRebuilding(false)
     }
@@ -115,10 +130,10 @@ export function KnowledgeSection(): React.JSX.Element {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 24 }}>我的文档</h2>
+      <h2 style={{ marginBottom: 24 }}>{t('knowledge.title')}</h2>
       {status && (
         <p style={{ fontSize: 12, color: 'var(--text-tertiary)', marginBottom: 16 }}>
-          已索引: {status.indexed} / {status.total}
+          {t('knowledge.indexed', { indexed: status.indexed, total: status.total })}
         </p>
       )}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
@@ -135,14 +150,14 @@ export function KnowledgeSection(): React.JSX.Element {
           disabled={uploading}
           style={{ padding: '8px 16px', cursor: uploading ? 'default' : 'pointer' }}
         >
-          {uploading ? '上传中…' : '上传文档'}
+          {uploading ? t('knowledge.uploading') : t('knowledge.upload')}
         </button>
         <button
           onClick={handleRebuild}
           disabled={rebuilding}
           style={{ padding: '8px 16px', cursor: rebuilding ? 'default' : 'pointer' }}
         >
-          {rebuilding ? '重建中…' : '重建索引'}
+          {rebuilding ? t('knowledge.rebuilding') : t('knowledge.rebuild')}
         </button>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -170,7 +185,7 @@ export function KnowledgeSection(): React.JSX.Element {
                 cursor: deletingPath === d.path ? 'default' : 'pointer'
               }}
             >
-              {deletingPath === d.path ? '删除中…' : '删除'}
+              {deletingPath === d.path ? t('knowledge.deleting') : t('knowledge.delete')}
             </button>
           </div>
         ))}
