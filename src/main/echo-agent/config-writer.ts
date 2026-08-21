@@ -8,10 +8,12 @@ export interface ModelConfigInput {
   model: string
 }
 
-// 企业组织知识库(echo-agent-org 插件)的受管配置。缺省 undefined = 个人版,
-// 此时不写 plugins 段,插件即便装上也不会挂载。
+// Desktop 内置企业组织知识库插件的受管配置。Desktop 正常启动始终传入;
+// undefined 仅保留给显式移除受管配置的测试/迁移工具。
 export interface OrgConfigInput {
   serverUrl: string
+  credentialsPath: string
+  cachePath: string
   // 关掉注入但保留工具:用于排查"答案里的材料是否来自组织库"。
   injectMode?: 'auto' | 'tool_only' | 'off'
   materialTokenBudget?: number
@@ -69,8 +71,7 @@ function applyOrgConfig(doc: Record<string, unknown>, org?: OrgConfigInput): voi
   const plugins = (doc.plugins ?? {}) as Record<string, unknown>
   const pluginConfigs = (plugins.config ?? {}) as Record<string, unknown>
 
-  if (!org?.serverUrl) {
-    // 个人版:移除受管段,避免遗留配置让插件指向已废弃的服务器。
+  if (!org) {
     if ('org' in pluginConfigs) {
       delete pluginConfigs.org
       plugins.config = pluginConfigs
@@ -79,15 +80,26 @@ function applyOrgConfig(doc: Record<string, unknown>, org?: OrgConfigInput): voi
     return
   }
 
+  // 企业插件随 Desktop 默认启用。server_url 允许为空:用户尚未配置企业
+  // 服务时插件会安全地不挂载 hook/tool,一旦设置地址并重启即可立即生效。
+  plugins.enabled = true
   pluginConfigs.org = {
     enabled: true,
     server_url: org.serverUrl,
+    credentials_path: org.credentialsPath,
+    cache_path: org.cachePath,
     inject_mode: org.injectMode ?? 'auto',
     material_token_budget: org.materialTokenBudget ?? 6000,
     allow_agentic: org.allowAgentic ?? true
   }
   plugins.config = pluginConfigs
   doc.plugins = plugins
+}
+
+export function mergeManagedOrgConfig(yamlText: string, org: OrgConfigInput): string {
+  const doc = (yamlText.trim() ? parse(yamlText) : {}) as Record<string, unknown>
+  applyOrgConfig(doc, org)
+  return stringify(doc)
 }
 
 export interface ConfigWriterDeps {
@@ -114,4 +126,17 @@ export function writeManagedConfig(
   const merged = mergeManagedConfig(existing, cfg, org)
   deps.ensureDir(dirname(target))
   deps.writeFile(target, merged)
+}
+
+/** 只更新企业插件段,不触碰已经装配好的模型/gateway/channel 配置。 */
+export function writeManagedOrgConfig(deps: ConfigWriterDeps, org: OrgConfigInput): void {
+  const target = configPath(deps.homeDir)
+  let existing = ''
+  try {
+    existing = deps.readFile(target)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e
+  }
+  deps.ensureDir(dirname(target))
+  deps.writeFile(target, mergeManagedOrgConfig(existing, org))
 }

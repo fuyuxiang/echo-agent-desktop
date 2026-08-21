@@ -26,6 +26,12 @@ extraResources:
     to: models/asr
   - from: resources/models/diarization
     to: models/diarization
+  - from: resources/echo-agent-org
+    to: echo-agent-org
+    filter:
+      - pyproject.toml
+      - README.md
+      - echo_agent_org/**
 
 # 原生模块(better-sqlite3)自动按 Electron ABI rebuild
 npmRebuild: true

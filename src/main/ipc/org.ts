@@ -7,6 +7,10 @@ import { OrgCache } from '../org/cache'
 import { OrgManager } from '../org/manager'
 import { getDb } from '../db'
 import { storeGet, storeSet, storeDelete, secureGet, secureSet, secureDelete } from '../store'
+import {
+  applyOrgPluginConfig,
+  setOrgServerUrlProvider
+} from '../echo-agent'
 
 /**
  * 企业知识库 IPC。
@@ -16,7 +20,7 @@ import { storeGet, storeSet, storeDelete, secureGet, secureSet, secureDelete } f
  */
 
 const TOKEN_KEY = 'org.tokens'
-const SERVER_KEY = 'org.serverUrl'
+const ORG_SERVER_KEY = 'org.serverUrl'
 const DEVICE_KEY = 'org.deviceId'
 
 let manager: OrgManager | null = null
@@ -47,13 +51,20 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
     storeSet(DEVICE_KEY, deviceId)
   }
 
-  const getServerUrl = (): string => storeGet<string>(SERVER_KEY) ?? ''
+  const getServerUrl = (): string => storeGet<string>(ORG_SERVER_KEY) ?? ''
+  setOrgServerUrlProvider(getServerUrl)
 
   const client = new OrgClient({
     getServerUrl,
     getTokens: async () => readTokens(),
-    saveTokens: async (t) => writeTokens(t),
-    clearTokens: async () => secureDelete(TOKEN_KEY)
+    saveTokens: async (t) => {
+      writeTokens(t)
+      await manager?.syncPluginCredentials(t)
+    },
+    clearTokens: async () => {
+      secureDelete(TOKEN_KEY)
+      await manager?.clearLocalSession()
+    }
   })
 
   // 缓存表在首次真正用到时才建。registerAllIpcHandlers 可能先于
@@ -93,10 +104,11 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
     if (trimmed !== prev) {
       // 换服务器意味着换了一套组织与权限,旧凭证和缓存都不再适用。
       secureDelete(TOKEN_KEY)
-      getCache().clearAll()
+      await manager!.clearLocalSession()
     }
-    if (trimmed) storeSet(SERVER_KEY, trimmed)
-    else storeDelete(SERVER_KEY)
+    if (trimmed) storeSet(ORG_SERVER_KEY, trimmed)
+    else storeDelete(ORG_SERVER_KEY)
+    await applyOrgPluginConfig()
     await notify()
     return manager!.status()
   })

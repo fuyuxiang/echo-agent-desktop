@@ -14,16 +14,17 @@ function payload(over: Partial<SyncPayload> = {}): SyncPayload {
     docs: [],
     memories: [],
     revokedDocs: [],
+    revokedMemories: [],
     purgeAll: false,
     ...over
   }
 }
 
-function doc(id: string, title: string, text: string) {
+function doc(id: string, title: string, text: string, scopeKind: 'org' | 'team' = 'org') {
   return {
     docId: id,
     title,
-    scopeKind: 'org',
+    scopeKind,
     updatedAt: Date.now(),
     chunks: [
       {
@@ -107,6 +108,15 @@ describe('缓存检索', () => {
     // 表还在
     expect(cache.stats().chunks).toBeGreaterThan(0)
   })
+
+  it('离线检索仍按组织/团队 scope 过滤', () => {
+    cache.applySync(
+      payload({ docs: [doc('d2', '团队差旅', '团队住宿标准 800 元每晚。', 'team')] }),
+      101
+    )
+    expect(cache.search('住宿标准', 8, ['org']).chunks.map((c) => c.docId)).toEqual(['d1'])
+    expect(cache.search('住宿标准', 8, ['team']).chunks.map((c) => c.docId)).toEqual(['d2'])
+  })
 })
 
 describe('权限收回', () => {
@@ -165,6 +175,15 @@ describe('权限收回', () => {
     expect(cache.stats().chunks).toBe(0)
     expect(cache.search('弹性工作制').chunks).toHaveLength(0)
     expect(cache.search('发票审核').chunks).toHaveLength(0)
+  })
+
+  it('revokedMemories 中的组织记忆被删除', () => {
+    cache.applySync(payload({
+      memories: [{ id: 'm1', kind: 'fact', content: '住宿需审批', scopeKind: 'org' }]
+    }), 150)
+    expect(cache.search('住宿').memories).toHaveLength(1)
+    cache.applySync(payload({ revokedMemories: ['m1'] }), 200)
+    expect(cache.search('住宿').memories).toHaveLength(0)
   })
 })
 
