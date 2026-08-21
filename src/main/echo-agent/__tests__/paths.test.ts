@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { join } from 'node:path'
 import {
   echoHome, venvDir, configPath, venvPython, bundledPythonKey,
-  bundledPythonArchive, extractedPythonDir, extractedPython
+  bundledPythonArchive, bundledOrgPluginPath, extractedPythonDir, extractedPython
 } from '../paths'
 
 describe('echo-agent paths', () => {
@@ -25,6 +25,9 @@ describe('echo-agent paths', () => {
       .toBe(join('/res', 'python-standalone-mac-arm64.tar.gz'))
     expect(bundledPythonArchive('/res', 'win32', 'x64'))
       .toBe(join('/res', 'python-standalone-win-x64.tar.gz'))
+  })
+  it('bundledOrgPluginPath points at the packaged plugin directory', () => {
+    expect(bundledOrgPluginPath('/res')).toBe(join('/res', 'echo-agent-org'))
   })
   it('extractedPythonDir/extractedPython resolve under user home', () => {
     expect(extractedPythonDir('/h')).toBe(join('/h', '.echo-agent', 'python'))

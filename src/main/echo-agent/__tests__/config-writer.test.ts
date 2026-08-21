@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { parse } from 'yaml'
-import { mergeManagedConfig, writeManagedConfig, type ConfigWriterDeps } from '../config-writer'
+import {
+  mergeManagedConfig,
+  mergeManagedOrgConfig,
+  writeManagedConfig,
+  writeManagedOrgConfig,
+  type ConfigWriterDeps
+} from '../config-writer'
 
 // index.ts pulls in electron-log/main transitively; stub it so buildConfigWriterDeps
 // can be imported without an Electron runtime.
@@ -134,7 +140,11 @@ describe('buildConfigWriterDeps', () => {
 // 插件配置的读取路径是 plugins.config.<config_key>(echo_agent/plugins/manager.py:141)。
 // 写成 plugins.org 会让插件读到空配置 —— 装了但不生效,且没有任何报错。
 describe('mergeManagedConfig org section', () => {
-  const org = { serverUrl: 'https://echo.corp.internal' }
+  const org = {
+    serverUrl: 'https://echo.corp.internal',
+    credentialsPath: '/home/u/.echo-agent/plugins/org/credentials.json',
+    cachePath: '/home/u/Library/Echo/echo.db'
+  }
 
   it('omits plugins block entirely when no org config (personal edition)', () => {
     const out = parse(mergeManagedConfig('', cfg))
@@ -145,6 +155,9 @@ describe('mergeManagedConfig org section', () => {
     const out = parse(mergeManagedConfig('', cfg, org))
     expect(out.plugins.config.org.enabled).toBe(true)
     expect(out.plugins.config.org.server_url).toBe('https://echo.corp.internal')
+    expect(out.plugins.config.org.credentials_path).toBe(org.credentialsPath)
+    expect(out.plugins.config.org.cache_path).toBe(org.cachePath)
+    expect(out.plugins.enabled).toBe(true)
     expect(out.plugins.org).toBeUndefined()
   })
 
@@ -191,9 +204,40 @@ describe('mergeManagedConfig org section', () => {
     expect(out.plugins?.config?.org).toBeUndefined()
   })
 
-  it('never writes the token into the config file', () => {
+  it('keeps the credentials file path in config but never writes a token', () => {
     const text = mergeManagedConfig('', cfg, org)
     expect(text).not.toContain('access_token')
-    expect(text).not.toContain('credentials')
+    expect(text).toContain('credentials_path')
+  })
+
+  it('keeps the plugin enabled while the enterprise server is not configured yet', () => {
+    const out = parse(mergeManagedConfig('', cfg, { ...org, serverUrl: '' }))
+    expect(out.plugins.config.org.enabled).toBe(true)
+    expect(out.plugins.config.org.server_url).toBe('')
+  })
+
+  it('can update only the org section without touching model config', () => {
+    const existing = mergeManagedConfig('', cfg)
+    const out = parse(mergeManagedOrgConfig(existing, org))
+    expect(out.models.default_model).toBe('gpt-4o')
+    expect(out.plugins.config.org.server_url).toBe(org.serverUrl)
+  })
+
+  it('writes only the org section through writeManagedOrgConfig', () => {
+    const target = '/home/u/.echo-agent/echo-agent.yaml'
+    const { deps, files } = (() => {
+      const files: Record<string, string> = { [target]: 'memory:\n  enabled: true\n' }
+      const deps: ConfigWriterDeps = {
+        homeDir: '/home/u',
+        readFile: (p) => files[p],
+        writeFile: (p, data) => { files[p] = data },
+        ensureDir: () => {}
+      }
+      return { deps, files }
+    })()
+    writeManagedOrgConfig(deps, org)
+    const out = parse(files[target])
+    expect(out.memory.enabled).toBe(true)
+    expect(out.plugins.config.org.cache_path).toBe(org.cachePath)
   })
 })
