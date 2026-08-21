@@ -38,8 +38,16 @@ export function AppLayout(): React.JSX.Element {
     }
   }, [isAuthed, orgStatus])
 
-  // 装配原生 AgentRuntime。ready=UI 可用门(装配/降级/失败兜底后都置位,解除"等待 Agent 连接");
-  // configured=runtime 真正装配成功。仅在尚未装配成功时尝试,避免重复装配。
+  // UI 可用门:组件挂载即解锁,解除"等待 Agent 连接"遮罩。
+  // 与 model-bootstrap 解耦——持久化 configured=true 时后者会被守卫短路,
+  // 但 ready 仍必须为 true,否则 Chat textarea 会一直 disabled。
+  // 这是会话级状态,不持久化,每次冷启动由组件挂载事件触发。
+  useEffect(() => {
+    useAgentStore.getState().setReady(true)
+  }, [])
+
+  // 装配原生 AgentRuntime。configured=runtime 真正装配成功;失败兜底不阻塞 UI
+  // (ready 由上面独立 effect 兜底)。仅在尚未装配成功时尝试,避免重复装配。
   // 触发时机:首次挂载、登录态变化(未登录→登录可拉到服务器配置)、暂时性失败后的定时重试。
   useEffect(() => {
     if (configured || bootingRef.current) return
@@ -55,7 +63,6 @@ export function AppLayout(): React.JSX.Element {
       })
       .catch((e) => {
         logger.error('[app-layout] agent runtime 装配异常:', e)
-        useAgentStore.getState().setReady(true)
         retryTimer = setTimeout(() => setRetryTick((t) => t + 1), 15000)
       })
       .finally(() => {
