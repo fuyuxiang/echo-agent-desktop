@@ -1,15 +1,4 @@
 {
-  "common": {
-    "confirm": "Confirm",
-    "cancel": "Cancel",
-    "save": "Save",
-    "delete": "Delete",
-    "loading": "Loading...",
-    "empty": "No data",
-    "copySuccess": "Copied to clipboard",
-    "login": "Sign In",
-    "logout": "Sign Out"
-  },
   "settings": {
     "nav": "Settings",
     "sections": {
@@ -20,6 +9,15 @@
       "skills": "Skills",
       "memoryStore": "Memory",
       "about": "About"
+    },
+    "general": {
+      "title": "General Settings",
+      "theme": "Theme",
+      "themeSystem": "System",
+      "themeLight": "Light",
+      "themeDark": "Dark",
+      "language": "Language",
+      "launchAtLogin": "Launch at login"
     }
   },
   "sidebar": {
@@ -66,17 +64,6 @@
     "active": "Active",
     "inactive": "Inactive",
     "supportedFiles": "Supported files"
-  },
-  "settings": {
-    "general": {
-      "title": "General Settings",
-      "theme": "Theme",
-      "themeSystem": "System",
-      "themeLight": "Light",
-      "themeDark": "Dark",
-      "language": "Language",
-      "launchAtLogin": "Launch at login"
-    }
   },
   "about": {
     "title": "About",
@@ -230,9 +217,6 @@
     "submitted": "Submitted; everyone can find it after admin review",
     "submitting": "Submitting…",
     "submitReview": "Submit for review"
-  },
-  "chat": {
-    "thinkingProcess": "💭 Reasoning"
   },
   "recorder": {
     "recLabel": "REC",
@@ -414,6 +398,7 @@
     "skip": "Skip for now, enter the desktop"
   },
   "chat": {
+    "thinkingProcess": "💭 Reasoning",
     "welcomeTitle": "Your smart assistant",
     "welcomeSubtitle": "What can I help you with today?",
     "waitingAgent": "Waiting for the agent to connect…",
