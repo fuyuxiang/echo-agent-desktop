@@ -5,6 +5,10 @@ import { InstallationAbortedError } from './types'
 // 默认 pip 镜像源:清华(国内首启成功率高)。可经 deps.pipIndexUrl 覆盖。
 export const DEFAULT_PIP_INDEX = 'https://pypi.tuna.tsinghua.edu.cn/simple'
 
+// `orgPluginVersion` 的特殊值:未指定具体版本时传此值,代表"装最新"。
+// 与 undefined 区分(undefined = 个人版,不装插件;具体版本 = 锁版)。
+export const ORG_PLUGIN_LATEST = 'latest'
+
 export interface InstallerDeps {
   runner: CommandRunner
   homeDir: string
@@ -17,9 +21,14 @@ export interface InstallerDeps {
   ensureDir: (p: string) => void
   // pip 镜像源,默认 DEFAULT_PIP_INDEX。
   pipIndexUrl?: string
-  // 精确锁定的核心版本(如 "0.9.4")。缺省则装最新,仅用于开发。
+  // 核心包版本策略:
+  //   - 未设置:装 latest(`pip install echo-agent[all]`)
+  //   - 已设置:锁到指定版本(escape hatch:CI / 紧急回滚通过 ECHO_AGENT_VERSION env 注入)
   coreVersion?: string
-  // 企业版插件版本(如 "1.0.2")。缺省 = 个人版,不装插件。
+  // 企业版插件版本策略:
+  //   - undefined:个人版,不装插件
+  //   - ORG_PLUGIN_LATEST('latest'):装最新
+  //   - 其它字符串:锁到指定版本
   orgPluginVersion?: string
   onProgress?: (line: string) => void
   // 中止信号:manager 退出时 abort 取消正在运行的子进程。
@@ -36,6 +45,16 @@ async function pip(deps: InstallerDeps, args: string[]): Promise<void> {
   if (res.code !== 0) {
     throw new Error(`pip ${args.join(' ')} 失败: ${res.stderr.slice(0, 500) || `exit ${res.code}`}`)
   }
+}
+
+// 探测 venv 里是否已装 echo-agent。pip show 退出码 0 = 已装。
+async function isEchoAgentInstalled(deps: InstallerDeps): Promise<boolean> {
+  if (deps.abortSignal?.aborted) throw new InstallationAbortedError()
+  const py = venvPython(deps.homeDir, deps.platform)
+  const res = await deps.runner.run(py, ['-m', 'pip', 'show', 'echo-agent'], {
+    signal: deps.abortSignal
+  })
+  return res.code === 0
 }
 
 // 首启把随包分发的 Python 运行时压缩包解压到用户数据区(~/.echo-agent/python)。
@@ -61,6 +80,16 @@ export async function ensurePythonExtracted(deps: InstallerDeps): Promise<void> 
   }
 }
 
+// 启动期安装/检测:确保 venv 与 Python 就绪 + echo-agent 已装。
+//
+// 策略:
+//   1) 解压 Python、创建 venv(如未就绪)
+//   2) 用 `pip show echo-agent` 检测是否已装
+//   3) 已装 → 直接 return,不再调 pip install(避免每次启动都打 pypi 索引)
+//   4) 未装 → pip install echo-agent[all](默认 latest;env 注入 coreVersion 则锁版)
+//
+// 跨进程幂等:第二次启动起,venv 已建、echo-agent 已装,整个函数除了一个
+// pip show 子进程以外什么都不做。
 export async function ensureInstalled(deps: InstallerDeps): Promise<void> {
   if (deps.abortSignal?.aborted) throw new InstallationAbortedError()
   await ensurePythonExtracted(deps)
@@ -74,11 +103,16 @@ export async function ensureInstalled(deps: InstallerDeps): Promise<void> {
     }
   }
   if (deps.abortSignal?.aborted) throw new InstallationAbortedError()
-  // 双包精确锁版:范围号会让不同用户机器上装出不同组合,而插件依赖核心的
-  // pre_llm_call hook 契约。两个版本一起升,不允许各自漂移。
+  // 已装就跳过:启动期不再触发 pip install。
+  // 升级路径在设置 → 关于 手动跑 updateEchoAgent,与启动期解耦。
+  if (await isEchoAgentInstalled(deps)) {
+    deps.onProgress?.('echo-agent 已安装,跳过 pip install')
+    return
+  }
   await pip(deps, ['install', ...packageSpecs(deps)])
 }
 
+// 用户主动触发(设置 → 关于 → 升级):无条件 -U 重装/升级。
 export async function updateEchoAgent(deps: InstallerDeps): Promise<void> {
   await pip(deps, ['install', '-U', ...packageSpecs(deps)])
 }
@@ -86,19 +120,16 @@ export async function updateEchoAgent(deps: InstallerDeps): Promise<void> {
 // 企业版多装一个 echo-agent-org。个人版不装 —— 插件不存在时 echo-agent
 // 行为与从未有过插件完全一致(entry-points 扫不到即跳过)。
 //
-// 2026-08 P0-安全修复:版本必须显式锁定。装 latest 会带来:
-//   - 离线启动失败(不同用户机器缓存命中不同版本)
-//   - 启动变慢(每次拉 pypi 索引)
-//   - 供应链攻击面(被劫持的索引可注入恶意版本)
-// 因此 coreVersion 必填;未传则直接抛错,而不是装 latest。
+// 版本策略(2026-08 修订):
+//   - 默认装 latest(env 未注入 ECHO_AGENT_VERSION 时)
+//   - env 显式注入 → 锁到指定版本,用于 CI / 紧急回滚
+//   - 装 latest 的副作用已在前置的 isEchoAgentInstalled 检测后避免
+//     (启动期不再触发,只有 About 页面"升级"按钮会跑这条路径)
 function packageSpecs(deps: InstallerDeps): string[] {
-  if (!deps.coreVersion) {
-    throw new Error(
-      'installer: 必须显式锁定 coreVersion(不允许装 echo-agent[all] latest)。' +
-        '请通过 deps.coreVersion 传入精确版本号,如 "0.9.4"。'
-    )
-  }
-  const core = `echo-agent[all]==${deps.coreVersion}`
+  const core = deps.coreVersion ? `echo-agent[all]==${deps.coreVersion}` : 'echo-agent[all]'
   if (!deps.orgPluginVersion) return [core]
-  return [core, `echo-agent-org==${deps.orgPluginVersion}`]
+  const org = deps.orgPluginVersion === ORG_PLUGIN_LATEST
+    ? 'echo-agent-org'
+    : `echo-agent-org==${deps.orgPluginVersion}`
+  return [core, org]
 }
