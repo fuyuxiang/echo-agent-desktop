@@ -3,17 +3,21 @@ import { ensureInstalled, updateEchoAgent, ensurePythonExtracted, DEFAULT_PIP_IN
 import type { CommandRunner, CommandResult } from '../types'
 import { InstallationAbortedError } from '../types'
 
-function fakeRunner(opts: { result?: Partial<CommandResult>; pipShowExists?: boolean } = {}): { runner: CommandRunner; calls: string[][] } {
+function fakeRunner(opts: {
+  result?: Partial<CommandResult>
+  coreInstalled?: boolean
+  orgInstalled?: boolean
+} = {}): { runner: CommandRunner; calls: string[][] } {
   const calls: string[][] = []
   const runner: CommandRunner = {
     run: vi.fn(async (cmd, args) => {
       calls.push([cmd, ...args])
-      // 默认：pip show echo-agent 返回"未安装"，让现有"首次安装"测试不需要额外 mock；
-      // 已装跳过分支单独传 pipShowExists: true。
-      const isPipShow = cmd.includes('python') && args?.includes('show') && args?.includes('echo-agent')
+      const isPipShow = cmd.includes('python') && args?.includes('show')
       if (isPipShow) {
-        return opts.pipShowExists
-          ? { code: 0, stdout: 'Name: echo-agent\nVersion: 0.3.7', stderr: '' }
+        const name = args[args.indexOf('show') + 1]
+        const installed = name === 'echo-agent' ? opts.coreInstalled : opts.orgInstalled
+        return installed
+          ? { code: 0, stdout: `Name: ${name}\nVersion: 1.0.0`, stderr: '' }
           : { code: 1, stdout: '', stderr: 'Package not found' }
       }
       return { code: 0, stdout: '', stderr: '', ...opts.result }
@@ -22,7 +26,6 @@ function fakeRunner(opts: { result?: Partial<CommandResult>; pipShowExists?: boo
   return { runner, calls }
 }
 
-// 默认不锁版本（走 latest）。需锁版本的测试自己传 coreVersion / orgPluginVersion。
 function baseDeps(over: Partial<InstallerDeps> = {}): InstallerDeps {
   const { runner } = fakeRunner()
   return {
@@ -30,7 +33,8 @@ function baseDeps(over: Partial<InstallerDeps> = {}): InstallerDeps {
     homeDir: '/h',
     platform: 'darwin',
     pythonArchive: '/res/python-standalone-mac-arm64.tar.gz',
-    pathExists: (p: string) => p.includes('python-standalone'),
+    orgPluginPath: '/res/echo-agent-org',
+    pathExists: (p: string) => p.includes('python-standalone') || p.includes('echo-agent-org'),
     ensureDir: () => {},
     ...over
   }
@@ -61,25 +65,16 @@ describe('installer', () => {
     expect(pip).toContain(DEFAULT_PIP_INDEX)
   })
 
-  it('pins core version when coreVersion is provided (escape hatch via env or caller)', async () => {
-    const { runner, calls } = fakeRunner()
-    await ensureInstalled(baseDeps({ runner, coreVersion: '0.3.7' }))
-    const pip = calls.find((c) => c.includes('install') && c.some((a) => a.includes('echo-agent')))
-    expect(pip).toContain('echo-agent[all]==0.3.7')
-  })
-
-  it('skips pip install when echo-agent is already installed (idempotent across process restarts)', async () => {
-    // 模拟"上次已成功装过":pip show echo-agent 返回 code 0。
-    const { runner, calls } = fakeRunner({ pipShowExists: true })
+  it('skips pip install when core and bundled plugin are already installed', async () => {
+    const { runner, calls } = fakeRunner({ coreInstalled: true, orgInstalled: true })
     await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
     // tar 跳过(extracted python 存在)、venv 跳过(venv 存在)、pip install 也跳过
     expect(calls.some((c) => c[0] === 'tar')).toBe(false)
     expect(calls.some((c) => c.includes('venv'))).toBe(false)
     expect(calls.some((c) => c.includes('install') && c.some((a) => a.includes('echo-agent')))).toBe(false)
-    // 但 pip show 必须跑过(检测语义)
-    const pipShow = calls.find((c) => c.includes('show') && c.includes('echo-agent'))
-    expect(pipShow).toBeTruthy()
-    expect(pipShow![0]).toBe('/h/.echo-agent/runtime/bin/python')
+    const pipShows = calls.filter((c) => c.includes('show'))
+    expect(pipShows).toHaveLength(2)
+    expect(pipShows[0][0]).toBe('/h/.echo-agent/runtime/bin/python')
   })
 
   it('skips extraction when python already extracted', async () => {
@@ -152,11 +147,12 @@ describe('installer', () => {
     expect(upd!.join(' ')).not.toMatch(/echo-agent\[all\]==/)
   })
 
-  it('update pins version when coreVersion is provided', async () => {
+  it('update also refreshes the bundled org plugin', async () => {
     const { runner, calls } = fakeRunner()
-    await updateEchoAgent(baseDeps({ runner, pathExists: () => true, coreVersion: '0.3.7' }))
-    const upd = calls.find((c) => c.includes('-U'))
-    expect(upd).toContain('echo-agent[all]==0.3.7')
+    await updateEchoAgent(baseDeps({ runner, pathExists: () => true }))
+    const updates = calls.filter((c) => c.includes('-U'))
+    expect(updates).toHaveLength(2)
+    expect(updates[1]).toContain('/res/echo-agent-org')
   })
 })
 
@@ -210,80 +206,38 @@ describe('installer abort behavior', () => {
   })
 })
 
-// 企业版把 echo-agent-org 与核心一起装。个人版不装插件 —— echo-agent 的
-// entry-points 扫不到它,行为与从未有过插件完全一致。
-describe('installer org plugin', () => {
-  const pipArgsOf = (calls: string[][]): string[] =>
-    calls.find((c) => c.includes('pip') && c.includes('install')) ?? []
-
-  it('installs core only when no org plugin version (personal edition, latest)', async () => {
+describe('installer bundled org plugin', () => {
+  it('installs latest core and bundled plugin on first launch', async () => {
     const { runner, calls } = fakeRunner()
     await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
-    const args = pipArgsOf(calls)
-    expect(args).toContain('echo-agent[all]')
-    expect(args.join(' ')).not.toMatch(/echo-agent\[all\]==/)
-    expect(args.some((a) => a.includes('echo-agent-org'))).toBe(false)
+    const installs = calls.filter((c) => c.includes('pip') && c.includes('install'))
+    expect(installs).toHaveLength(2)
+    expect(installs[0]).toContain('echo-agent[all]')
+    expect(installs[0].join(' ')).not.toMatch(/echo-agent\[all\]==/)
+    expect(installs[1]).toContain('/res/echo-agent-org')
   })
 
-  it('installs core + org plugin unpinned when neither version is set (latest, both packages)', async () => {
-    const { runner, calls } = fakeRunner()
-    await ensureInstalled(
-      baseDeps({
-        runner,
-        pathExists: () => true,
-        orgPluginVersion: 'latest'
-      })
-    )
-    const args = pipArgsOf(calls)
-    expect(args).toContain('echo-agent[all]')
-    expect(args).toContain('echo-agent-org')
-    expect(args.join(' ')).not.toMatch(/==/)
+  it('adds the bundled plugin for an existing core installation', async () => {
+    const { runner, calls } = fakeRunner({ coreInstalled: true, orgInstalled: false })
+    await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
+    const installs = calls.filter((c) => c.includes('pip') && c.includes('install'))
+    expect(installs).toHaveLength(1)
+    expect(installs[0]).toContain('/res/echo-agent-org')
+    expect(installs[0]).not.toContain('echo-agent[all]')
   })
 
-  it('installs both packages pinned when both versions are set', async () => {
-    const { runner, calls } = fakeRunner()
-    await ensureInstalled(
-      baseDeps({
-        runner,
-        pathExists: () => true,
-        coreVersion: '0.3.7',
-        orgPluginVersion: '1.0.2'
-      })
-    )
-    const args = pipArgsOf(calls)
-    expect(args).toContain('echo-agent[all]==0.3.7')
-    expect(args).toContain('echo-agent-org==1.0.2')
+  it('installs a missing core without reinstalling an existing plugin', async () => {
+    const { runner, calls } = fakeRunner({ coreInstalled: false, orgInstalled: true })
+    await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
+    const installs = calls.filter((c) => c.includes('pip') && c.includes('install'))
+    expect(installs).toHaveLength(1)
+    expect(installs[0]).toContain('echo-agent[all]')
   })
 
-  it('updates both packages together so versions cannot drift apart', async () => {
-    const { runner, calls } = fakeRunner()
-    await updateEchoAgent(
-      baseDeps({ runner, coreVersion: '0.3.7', orgPluginVersion: '1.0.2' })
-    )
-    const args = pipArgsOf(calls)
-    expect(args).toContain('-U')
-    expect(args).toContain('echo-agent[all]==0.3.7')
-    expect(args).toContain('echo-agent-org==1.0.2')
-  })
-
-  it('updates both packages unpinned when no versions provided (latest)', async () => {
-    const { runner, calls } = fakeRunner()
-    await updateEchoAgent(
-      baseDeps({ runner, orgPluginVersion: 'latest' })
-    )
-    const args = pipArgsOf(calls)
-    expect(args).toContain('-U')
-    expect(args).toContain('echo-agent[all]')
-    expect(args).toContain('echo-agent-org')
-    expect(args.join(' ')).not.toMatch(/==/)
-  })
-
-  // 新策略：coreVersion 不再必填。env var 未注入时一律装 latest。
-  it('coreVersion is optional; defaulting to latest is now the supported flow', async () => {
-    const { runner, calls } = fakeRunner()
-    await ensureInstalled(baseDeps({ runner, pathExists: () => true, coreVersion: undefined }))
-    const pip = calls.find((c) => c.includes('install') && c.some((a) => a.includes('echo-agent')))
-    expect(pip).toContain('echo-agent[all]')
-    expect(pip!.join(' ')).not.toMatch(/==/)
+  it('fails clearly when the bundled plugin resource is absent', async () => {
+    const { runner } = fakeRunner({ coreInstalled: true, orgInstalled: false })
+    await expect(
+      ensureInstalled(baseDeps({ runner, pathExists: (p) => !p.includes('echo-agent-org') }))
+    ).rejects.toThrow(/内置企业插件缺失/)
   })
 })

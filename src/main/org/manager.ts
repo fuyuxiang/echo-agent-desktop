@@ -25,12 +25,14 @@ function pluginCredentialsPath(): string {
 
 async function writeCredentialsFile(payload: {
   accessToken: string
-  refreshToken: string
   userId: string
 }): Promise<void> {
   const path = pluginCredentialsPath()
   await mkdir(join(path, '..'), { recursive: true })
-  await writeFile(path, JSON.stringify(payload, null, 2))
+  await writeFile(path, JSON.stringify({
+    access_token: payload.accessToken,
+    user_id: payload.userId
+  }, null, 2))
   // best-effort chmod,Windows 上无效
   try {
     await chmod(path, 0o600)
@@ -96,11 +98,7 @@ export class OrgManager {
       // 重载,Python agent 下次启动即会读到企业 token。
       const tokens = await this.deps.client.getTokens()
       if (tokens) {
-        await writeCredentialsFile({
-          accessToken: tokens.accessToken,
-          refreshToken: tokens.refreshToken,
-          userId: this.user.id
-        })
+        await this.syncPluginCredentials(tokens, this.user.id)
       }
       // 登录后立刻拉一次,让离线兜底从第一分钟就有内容。失败不影响登录成功。
       void this.sync().catch(() => {})
@@ -117,10 +115,22 @@ export class OrgManager {
     } catch {
       // 服务端不可达也要能本地登出,否则用户被困住
     }
+    await this.clearLocalSession()
+  }
+
+  /** safeStorage token 刷新后同步插件凭证,避免插件一小时后继续使用旧 access token。 */
+  async syncPluginCredentials(
+    tokens: { accessToken: string; refreshToken: string },
+    userId = this.user?.id ?? ''
+  ): Promise<void> {
+    await writeCredentialsFile({ accessToken: tokens.accessToken, userId })
+  }
+
+  /** 换服务器、登出或鉴权失效时统一清理本地企业身份和缓存。 */
+  async clearLocalSession(): Promise<void> {
     this.user = null
-    // 登出即清缓存 + 清插件凭证:换人登录同一台机器时,不能让上一个人的可见范围留在本地,
-    // 也不能让插件读到旧 token。
-    await Promise.all([clearCredentialsFile(), Promise.resolve(this.deps.cache.clearAll())])
+    await clearCredentialsFile()
+    this.deps.cache.clearAll()
   }
 
   /** 启动时恢复会话。失败静默 —— 未登录是正常状态,不该弹错误。 */
@@ -130,6 +140,8 @@ export class OrgManager {
     try {
       this.user = await this.deps.client.me()
       this.reachable = true
+      const tokens = await this.deps.client.getTokens()
+      if (tokens) await this.syncPluginCredentials(tokens, this.user.id)
       return this.user
     } catch (e) {
       if (e instanceof OrgUnavailableError) this.reachable = false
@@ -184,8 +196,7 @@ export class OrgManager {
       }
       this.reachable = false
       this.deps.log?.info(`组织检索降级到本地缓存: ${(e as Error).message}`)
-      // 缓存层目前不识别 scope 过滤 —— 离线时退到全量缓存,UI 会标注 fromCache。
-      return this.deps.cache.search(query, opts.limit ?? 8)
+      return this.deps.cache.search(query, opts.limit ?? 8, wantScopes)
     }
   }
 
@@ -195,7 +206,7 @@ export class OrgManager {
    * - 'all' / undefined → 不传 scopes,服务端按实时可见全集;
    * - 'org' → ['org']; 'team' → ['team']; 'local' → [] (本地层走另一条路径)。
    *
-   * 注意:这里只影响在线请求;离线缓存目前无法区分 scope,会在 UI 标注。
+   * 在线和离线缓存使用同一 scope 过滤,避免断网后扩大可见范围。
    */
   private scopesFromAskScope(
     scopes?: Array<'org' | 'team'>
@@ -296,7 +307,7 @@ export class OrgManager {
         this.deps.cache.applySync(page, page.nextCursor)
         docs += page.docs.length
         memories += page.memories.length
-        revoked += page.revokedDocs.length
+        revoked += page.revokedDocs.length + (page.revokedMemories?.length ?? 0)
         if (!page.hasMore) break
         if (page.nextCursor <= cursor) break
       }

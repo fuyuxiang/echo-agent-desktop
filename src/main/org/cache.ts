@@ -136,6 +136,7 @@ export interface SyncPayload {
   }[]
   memories: { id: string; kind: string; content: string; scopeKind: string }[]
   revokedDocs: string[]
+  revokedMemories?: string[]
   purgeAll: boolean
 }
 
@@ -150,6 +151,9 @@ export class OrgCache {
       if (payload.purgeAll) this.clearAll()
 
       for (const docId of payload.revokedDocs) this.removeDoc(docId)
+      for (const memoryId of payload.revokedMemories ?? []) {
+        this.db.prepare('DELETE FROM org_memory_cache WHERE id = ?').run(memoryId)
+      }
 
       // 被收回的文档即使同批里还带着更新内容也不写入。服务端在密级提升这类
       // 场景下会同时出现在两个列表里(文档本身有更新、对该用户已不可见),
@@ -239,7 +243,7 @@ export class OrgCache {
     this.setState('cursor', '0')
   }
 
-  search(query: string, limit = 8): RetrieveResult {
+  search(query: string, limit = 8, scopes?: Array<'org' | 'team'>): RetrieveResult {
     const match = buildMatch(query)
     const empty: RetrieveResult = {
       chunks: [],
@@ -258,6 +262,9 @@ export class OrgCache {
 
     const rows: Record<string, unknown>[] = (() => {
       try {
+        const scopeClause = scopes?.length
+          ? ` AND c.scope_kind IN (${scopes.map(() => '?').join(',')})`
+          : ''
         return this.db
           .prepare(
             `SELECT c.chunk_id AS chunkId, c.doc_id AS docId, c.title AS docTitle,
@@ -267,11 +274,11 @@ export class OrgCache {
                FROM org_kb_fts
                JOIN org_kb_fts_map m ON m.fts_rowid = org_kb_fts.rowid
                JOIN org_kb_cache c ON c.chunk_id = m.chunk_id
-              WHERE org_kb_fts MATCH ?
+              WHERE org_kb_fts MATCH ?${scopeClause}
               ORDER BY rank
               LIMIT ?`
           )
-          .all(match, limit) as Record<string, unknown>[]
+          .all(match, ...(scopes ?? []), limit) as Record<string, unknown>[]
       } catch {
         // 缓存损坏不该让对话失败
         return []

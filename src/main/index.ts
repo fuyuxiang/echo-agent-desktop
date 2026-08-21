@@ -13,7 +13,7 @@ import { findRecordingMeetings, updateMeetingStatus } from './db/dao/meeting'
 import { reapOrphans } from './meeting/orphan'
 import { registerAllIpcHandlers } from './ipc'
 import { initASR } from './asr'
-import { startEchoAgent, stopEchoAgent } from './echo-agent'
+import { startEchoAgent, stopEchoAgent, syncOrgPluginConfig } from './echo-agent'
 // P6: agent-process 已物理删除,Python agent 运行时下线
 
 /**
@@ -77,6 +77,12 @@ if (!gotTheLock) {
     setupUpdater()
     setupProtocol()
 
+    // 企业 IPC 已注入当前服务器地址;拉起进程前把内置插件配置同步到 YAML。
+    try {
+      syncOrgPluginConfig()
+    } catch (e) {
+      log.error('[main] 企业插件配置同步失败:', e)
+    }
     // echo-agent 进程接管:异步启动,不阻塞窗口。状态经 echoAgent:status-changed 推给渲染层。
     void startEchoAgent().catch((e) => log.error('[main] echo-agent 启动失败:', e))
 

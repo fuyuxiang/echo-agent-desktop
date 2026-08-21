@@ -3,10 +3,10 @@
  *
  * 2026-08 审计 P0-5:旧实现 handleStop 只置本地 stoppedRef,后端推理继续。
  * 修复后:handleStop 调 agentWs.abortActive() → IPC abort(requestId, chatId)
- * → 后端 GatewayClient 收到 abort 帧并取消 AbortController。
+ * → 后端 GatewayClient 发送 echo-agent interrupt 帧并取消 AbortController。
  *
  * 本测试覆盖完整链路:Chat 页 handleStop → runtime-client.abortActive
- * → preload abort → IPC → GatewayClient.abort → WS abort 帧。
+ * → preload abort → IPC → GatewayClient.abort → WS interrupt 帧。
  */
 import { describe, it, expect, vi } from 'vitest'
 
@@ -48,7 +48,7 @@ describe('Regression: Chat.handleStop 真正调 abort', () => {
     expect(abortCalls[0]).toMatchObject({ requestId: 'req-test-123' })
   })
 
-  it('后端 GatewayClient.abort 收到 requestId 后发 abort 帧', async () => {
+  it('后端 GatewayClient.abort 收到 requestId 后发 interrupt 帧', async () => {
     // 这里不复用 mock,因为 ws 模块的 mock 影响所有测试
     vi.doUnmock('ws')
     const { GatewayClient } = await import('../../src/main/echo-agent/gateway-client')
@@ -74,18 +74,18 @@ describe('Regression: Chat.handleStop 真正调 abort', () => {
 
     // 注入活跃请求
     c.send('hello', undefined, 'req-test-123')
-    // 再次清空 send 帧(只关注 abort)
+    // 再次清空 send 帧(只关注 interrupt)
     sentFrames.length = 0
 
     c.abort('c1', 'req-test-123')
 
-    // 应该发出 abort 帧,带 request_id
-    const abortFrame = sentFrames.find((f) => f.includes('"type":"abort"'))
+    // 这个集成 fake 没回 accepted,因此先发无 target 的兼容 interrupt;
+    // accepted.event_id 到达后的精确 target 由 GatewayClient 单测覆盖。
+    const abortFrame = sentFrames.find((f) => f.includes('"type":"interrupt"'))
     expect(abortFrame).toBeDefined()
-    const parsed = JSON.parse(abortFrame!) as { type: string; chatId: string; request_id: string }
-    expect(parsed.type).toBe('abort')
-    expect(parsed.chatId).toBe('c1')
-    expect(parsed.request_id).toBe('req-test-123')
+    const parsed = JSON.parse(abortFrame!) as { type: string; event_id?: string }
+    expect(parsed.type).toBe('interrupt')
+    expect(parsed.event_id).toBeUndefined()
   })
 
   it('abort 后到达的同 requestId chunk 不会被 emit', async () => {

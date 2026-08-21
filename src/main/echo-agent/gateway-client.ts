@@ -66,7 +66,7 @@ export class GatewayClient {
   private ws: WsLike | null = null
   private chatId = ''
   private authed = false
-  private pendingSend: string | null = null
+  private pendingSends: string[] = []
   private closing = false
   private reconnectAttempts = 0
   /**
@@ -75,6 +75,11 @@ export class GatewayClient {
    * 改为 requestId 索引后,Stop 只中止当前请求,不影响后续。
    */
   private activeRequests = new Map<string, AbortController>()
+  // echo-agent 的正式关联键是 accepted.event_id / metadata._inbound_event_id。
+  // Desktop 自己的 requestId 只存在于 UI,这里维护双向映射把两套协议接起来。
+  private awaitingAccepted: string[] = []
+  private requestToEventId = new Map<string, string>()
+  private eventToRequestId = new Map<string, string>()
 
   constructor(private deps: GatewayClientDeps) {}
 
@@ -129,13 +134,14 @@ export class GatewayClient {
     const rid = requestId ?? this.generateRequestId()
     const controller = new AbortController()
     this.activeRequests.set(rid, controller)
+    this.awaitingAccepted.push(rid)
 
     const frame = JSON.stringify({ type: 'message', text, attachments, request_id: rid })
     if (this.ws && this.authed) {
       this.ws.send(frame)
       return
     }
-    this.pendingSend = frame
+    this.pendingSends.push(frame)
     // self-heal: if the reconnect budget was exhausted (ws was dropped), a new
     // send re-establishes the connection so the buffered frame can flush after
     // auth_ok. connect() resets the reconnect budget.
@@ -154,20 +160,23 @@ export class GatewayClient {
     this.ws?.close()
     this.ws = null
     this.authed = false
-    this.pendingSend = null
+    this.pendingSends = []
     // 清理所有活跃请求
     for (const controller of this.activeRequests.values()) {
       controller.abort()
     }
     this.activeRequests.clear()
+    this.awaitingAccepted = []
+    this.requestToEventId.clear()
+    this.eventToRequestId.clear()
   }
 
   /**
    * 中止请求。
-   * @param chatId  会话 ID(冗余,优先用于向后兼容)
+   * @param _chatId 会话 ID(保留 IPC 兼容;Gateway 已由当前 WS 会话确定)
    * @param requestId 请求 ID(优先匹配);若省略,中止该会话当前活跃请求
    */
-  abort(chatId: string, requestId?: string): void {
+  abort(_chatId: string, requestId?: string): void {
     let controller: AbortController | undefined
     if (requestId) {
       controller = this.activeRequests.get(requestId)
@@ -187,9 +196,13 @@ export class GatewayClient {
       // cleaned up by done/error events or by disconnect().
     }
 
-    // 如果 WS 协议支持 abort 帧,发送它(带 requestId 优先)
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'abort', chatId, request_id: requestId }))
+    // echo-agent 使用 interrupt + accepted.event_id。尚未收到 accepted 时发送
+    // 无 target 的兼容帧;accepted 到达后会再补一条精确 target。
+    if (controller && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        type: 'interrupt',
+        event_id: requestId ? this.requestToEventId.get(requestId) : undefined
+      }))
     }
   }
 
@@ -214,32 +227,60 @@ export class GatewayClient {
       this.authed = true
       // a successful handshake means the connection is healthy again
       this.reconnectAttempts = 0
-      if (this.pendingSend) {
-        this.ws?.send(this.pendingSend)
-        this.pendingSend = null
+      for (const pending of this.pendingSends) {
+        this.ws?.send(pending)
+      }
+      this.pendingSends = []
+      return
+    }
+    if (frame.type === 'accepted') {
+      const eventId = typeof frame.event_id === 'string' ? frame.event_id : ''
+      if (eventId) {
+        const requestId = this.awaitingAccepted.shift()
+        if (requestId) {
+          this.requestToEventId.set(requestId, eventId)
+          this.eventToRequestId.set(eventId, requestId)
+          if (this.activeRequests.get(requestId)?.signal.aborted &&
+              this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'interrupt', event_id: eventId }))
+          }
+        }
       }
       return
     }
     // If the request was aborted, don't emit further events and clean up.
-    // 优先按 request_id 匹配;无 request_id 时按 chatId 兜底(向后兼容旧 frame)。
-    const reqId = (frame.request_id as string | undefined) ?? this.chatId
-    const controller = this.activeRequests.get(reqId)
-    if (controller?.signal.aborted) {
-      this.activeRequests.delete(reqId)
+    const meta = frame.metadata as Record<string, unknown> | undefined
+    const inboundEventId = String(meta?._inbound_event_id ?? frame.reply_to_id ?? '')
+    const reqId = (frame.request_id as string | undefined) ||
+      this.eventToRequestId.get(inboundEventId) ||
+      (this.activeRequests.size === 1 ? this.activeRequests.keys().next().value : undefined)
+    const active = reqId ? this.activeRequests.get(reqId) : undefined
+    if (active?.signal.aborted) {
+      if (frame.type === 'error' || frame.is_final === true || frame.message_kind === 'final') {
+        if (reqId) this.cleanupRequest(reqId)
+      }
       return
     }
     const events = translateFrame(frame, this.chatId)
     // 把 frame.request_id 透传出去,渲染端按 requestId 路由 chunk
     for (const ev of events) {
-      if (frame.request_id != null && ev.request_id == null) {
-        ev.request_id = frame.request_id
+      if (reqId && ev.request_id == null) {
+        ev.request_id = reqId
       }
       this.deps.emit(ev)
       // 流完成或出错时清理活跃请求
       if (ev.type === 'done' || ev.type === 'error') {
-        this.activeRequests.delete(reqId)
+        if (reqId) this.cleanupRequest(reqId)
       }
     }
+  }
+
+  private cleanupRequest(requestId: string): void {
+    this.activeRequests.delete(requestId)
+    this.awaitingAccepted = this.awaitingAccepted.filter((id) => id !== requestId)
+    const eventId = this.requestToEventId.get(requestId)
+    this.requestToEventId.delete(requestId)
+    if (eventId) this.eventToRequestId.delete(eventId)
   }
 
   private onClose(): void {
