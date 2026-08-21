@@ -1,15 +1,4 @@
 {
-  "common": {
-    "confirm": "确定",
-    "cancel": "取消",
-    "save": "保存",
-    "delete": "删除",
-    "loading": "加载中...",
-    "empty": "暂无数据",
-    "copySuccess": "已复制到剪贴板",
-    "login": "登录",
-    "logout": "退出登录"
-  },
   "settings": {
     "nav": "设置",
     "sections": {
@@ -20,6 +9,15 @@
       "skills": "技能库",
       "memoryStore": "记忆",
       "about": "关于"
+    },
+    "general": {
+      "title": "通用设置",
+      "theme": "主题",
+      "themeSystem": "跟随系统",
+      "themeLight": "浅色",
+      "themeDark": "深色",
+      "language": "语言",
+      "launchAtLogin": "开机自启"
     }
   },
   "sidebar": {
@@ -66,17 +64,6 @@
     "active": "已激活",
     "inactive": "未激活",
     "supportedFiles": "支持文件"
-  },
-  "settings": {
-    "general": {
-      "title": "通用设置",
-      "theme": "主题",
-      "themeSystem": "跟随系统",
-      "themeLight": "浅色",
-      "themeDark": "深色",
-      "language": "语言",
-      "launchAtLogin": "开机自启"
-    }
   },
   "about": {
     "title": "关于",
@@ -230,9 +217,6 @@
     "submitted": "已提交,管理员审核通过后全员可检索到",
     "submitting": "提交中…",
     "submitReview": "提交审核"
-  },
-  "chat": {
-    "thinkingProcess": "💭 思考过程"
   },
   "recorder": {
     "recLabel": "REC",
@@ -414,6 +398,7 @@
     "skip": "暂不登录,先进入桌面"
   },
   "chat": {
+    "thinkingProcess": "💭 思考过程",
     "welcomeTitle": "你的智能小助手",
     "welcomeSubtitle": "今天帮你做些什么？",
     "waitingAgent": "正在等待 Agent 连接…",
