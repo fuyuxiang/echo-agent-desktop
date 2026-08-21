@@ -205,7 +205,12 @@ export class OrgClient {
   }
 
   health(): Promise<{ ok: boolean }> {
-    return this.request('/api/v1/health', { method: 'GET' })
+    return this.raw('/api/v1/health', { method: 'GET', skipAuth: true })
+      .then(async (res) => {
+        if (!res.ok) throw new OrgUnavailableError(`服务器错误 ${res.status}`)
+        const body = await res.json() as { ok?: boolean }
+        return { ok: body.ok === true }
+      })
   }
 
   // ── 检索 ────────────────────────────────────────────────────────────────
@@ -231,7 +236,7 @@ export class OrgClient {
     size?: number
   }): Promise<OrgDocListResult> {
     const qs = new URLSearchParams()
-    if (params.scope_id) qs.set('scope_id', params.scope_id)
+    if (params.scope_id) qs.set('scopeId', params.scope_id)
     if (params.q) qs.set('q', params.q)
     qs.set('page', String(params.page ?? 1))
     qs.set('size', String(params.size ?? 20))
@@ -260,7 +265,17 @@ export class OrgClient {
     latency_ms?: number
     route?: 'fast' | 'agentic'
   }): Promise<{ id: string }> {
-    return this.request('/api/v1/qa-events', { method: 'POST', body: JSON.stringify(body) })
+    return this.request('/api/v1/qa-events', {
+      method: 'POST',
+      body: JSON.stringify({
+        question: body.question,
+        answered: body.answered,
+        citedChunks: body.cited_chunks,
+        topScore: body.top_score,
+        latencyMs: body.latency_ms,
+        route: body.route
+      })
+    })
   }
 
   // ── 同步 ────────────────────────────────────────────────────────────────
@@ -282,10 +297,11 @@ export class OrgClient {
     }[]
     memories: { id: string; kind: string; content: string; scopeKind: string }[]
     revokedDocs: string[]
+    revokedMemories: string[]
     purgeAll: boolean
     hasMore: boolean
   }> {
-    const qs = new URLSearchParams({ cursor: String(cursor), device_id: deviceId })
+    const qs = new URLSearchParams({ cursor: String(cursor), deviceId })
     return this.request(`/api/v1/sync?${qs.toString()}`)
   }
 }

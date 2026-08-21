@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { OrgCache } from '../cache'
 import { OrgManager } from '../manager'
 import { OrgClient, OrgAuthError, OrgUnavailableError } from '../client'
@@ -36,6 +39,7 @@ function seedCache(cache: OrgCache): void {
       ],
       memories: [],
       revokedDocs: [],
+      revokedMemories: [],
       purgeAll: false
     },
     1000
@@ -67,6 +71,27 @@ function makeManager(client: OrgClient, cache: OrgCache): OrgManager {
     deviceId: 'dev-test'
   })
 }
+
+describe('OrgManager 插件凭证', () => {
+  it('写入插件读取的 snake_case 字段且不落盘 refresh token', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'echo-org-creds-'))
+    const previous = process.env.ECHO_AGENT_HOME
+    process.env.ECHO_AGENT_HOME = root
+    try {
+      const manager = makeManager(stubClient({}), makeCache())
+      await manager.syncPluginCredentials(
+        { accessToken: 'access-token', refreshToken: 'refresh-token' },
+        'user-1'
+      )
+      const body = JSON.parse(readFileSync(join(root, 'plugins', 'org', 'credentials.json'), 'utf8'))
+      expect(body).toEqual({ access_token: 'access-token', user_id: 'user-1' })
+    } finally {
+      if (previous === undefined) delete process.env.ECHO_AGENT_HOME
+      else process.env.ECHO_AGENT_HOME = previous
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('OrgManager 检索降级', () => {
   let cache: OrgCache

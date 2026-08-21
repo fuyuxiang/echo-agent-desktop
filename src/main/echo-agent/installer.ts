@@ -4,10 +4,7 @@ import { InstallationAbortedError } from './types'
 
 // 默认 pip 镜像源:清华(国内首启成功率高)。可经 deps.pipIndexUrl 覆盖。
 export const DEFAULT_PIP_INDEX = 'https://pypi.tuna.tsinghua.edu.cn/simple'
-
-// `orgPluginVersion` 的特殊值:未指定具体版本时传此值,代表"装最新"。
-// 与 undefined 区分(undefined = 个人版,不装插件;具体版本 = 锁版)。
-export const ORG_PLUGIN_LATEST = 'latest'
+export const BUNDLED_ORG_DISTRIBUTION = 'echo-agent-desktop-org'
 
 export interface InstallerDeps {
   runner: CommandRunner
@@ -15,21 +12,14 @@ export interface InstallerDeps {
   platform: NodeJS.Platform
   // 随包分发的 Python 运行时压缩包路径(resources/python-standalone-<key>.tar.gz)。
   pythonArchive: string
+  // Desktop 内置企业插件源码目录(resources/echo-agent-org)。
+  orgPluginPath: string
   // 判定路径是否已存在(注入 existsSync,便于测试)。
   pathExists: (p: string) => boolean
   // 递归创建目录(注入 mkdirSync recursive,跨平台,便于测试)。
   ensureDir: (p: string) => void
   // pip 镜像源,默认 DEFAULT_PIP_INDEX。
   pipIndexUrl?: string
-  // 核心包版本策略:
-  //   - 未设置:装 latest(`pip install echo-agent[all]`)
-  //   - 已设置:锁到指定版本(escape hatch:CI / 紧急回滚通过 ECHO_AGENT_VERSION env 注入)
-  coreVersion?: string
-  // 企业版插件版本策略:
-  //   - undefined:个人版,不装插件
-  //   - ORG_PLUGIN_LATEST('latest'):装最新
-  //   - 其它字符串:锁到指定版本
-  orgPluginVersion?: string
   onProgress?: (line: string) => void
   // 中止信号:manager 退出时 abort 取消正在运行的子进程。
   abortSignal?: AbortSignal
@@ -47,11 +37,11 @@ async function pip(deps: InstallerDeps, args: string[]): Promise<void> {
   }
 }
 
-// 探测 venv 里是否已装 echo-agent。pip show 退出码 0 = 已装。
-async function isEchoAgentInstalled(deps: InstallerDeps): Promise<boolean> {
+// 探测 venv 里是否已装指定 distribution。pip show 退出码 0 = 已装。
+async function isPackageInstalled(deps: InstallerDeps, distribution: string): Promise<boolean> {
   if (deps.abortSignal?.aborted) throw new InstallationAbortedError()
   const py = venvPython(deps.homeDir, deps.platform)
-  const res = await deps.runner.run(py, ['-m', 'pip', 'show', 'echo-agent'], {
+  const res = await deps.runner.run(py, ['-m', 'pip', 'show', distribution], {
     signal: deps.abortSignal
   })
   return res.code === 0
@@ -84,12 +74,12 @@ export async function ensurePythonExtracted(deps: InstallerDeps): Promise<void> 
 //
 // 策略:
 //   1) 解压 Python、创建 venv(如未就绪)
-//   2) 用 `pip show echo-agent` 检测是否已装
-//   3) 已装 → 直接 return,不再调 pip install(避免每次启动都打 pypi 索引)
-//   4) 未装 → pip install echo-agent[all](默认 latest;env 注入 coreVersion 则锁版)
+//   2) 分别用 `pip show` 检测核心与 Desktop 内置企业插件
+//   3) 两者都已装 → 直接 return,不再调 pip install
+//   4) 核心未装 → pip install echo-agent[all](latest,不锁版本)
+//   5) 插件未装 → 从随包资源目录安装;兼容已装核心的存量用户自动补装
 //
-// 跨进程幂等:第二次启动起,venv 已建、echo-agent 已装,整个函数除了一个
-// pip show 子进程以外什么都不做。
+// 跨进程幂等:第二次启动起,venv、核心和插件都已就绪,只执行两个 pip show。
 export async function ensureInstalled(deps: InstallerDeps): Promise<void> {
   if (deps.abortSignal?.aborted) throw new InstallationAbortedError()
   await ensurePythonExtracted(deps)
@@ -103,33 +93,28 @@ export async function ensureInstalled(deps: InstallerDeps): Promise<void> {
     }
   }
   if (deps.abortSignal?.aborted) throw new InstallationAbortedError()
-  // 已装就跳过:启动期不再触发 pip install。
-  // 升级路径在设置 → 关于 手动跑 updateEchoAgent,与启动期解耦。
-  if (await isEchoAgentInstalled(deps)) {
-    deps.onProgress?.('echo-agent 已安装,跳过 pip install')
+  const coreInstalled = await isPackageInstalled(deps, 'echo-agent')
+  const orgInstalled = await isPackageInstalled(deps, BUNDLED_ORG_DISTRIBUTION)
+  if (coreInstalled && orgInstalled) {
+    deps.onProgress?.('echo-agent 与企业插件已安装,跳过 pip install')
     return
   }
-  await pip(deps, ['install', ...packageSpecs(deps)])
+  if (!coreInstalled) {
+    await pip(deps, ['install', 'echo-agent[all]'])
+  }
+  if (!orgInstalled) {
+    if (!deps.pathExists(deps.orgPluginPath)) {
+      throw new Error(`内置企业插件缺失: ${deps.orgPluginPath}`)
+    }
+    await pip(deps, ['install', deps.orgPluginPath])
+  }
 }
 
-// 用户主动触发(设置 → 关于 → 升级):无条件 -U 重装/升级。
+// 用户主动触发(设置 → 关于 → 升级):核心升级 latest,并刷新内置插件。
 export async function updateEchoAgent(deps: InstallerDeps): Promise<void> {
-  await pip(deps, ['install', '-U', ...packageSpecs(deps)])
-}
-
-// 企业版多装一个 echo-agent-org。个人版不装 —— 插件不存在时 echo-agent
-// 行为与从未有过插件完全一致(entry-points 扫不到即跳过)。
-//
-// 版本策略(2026-08 修订):
-//   - 默认装 latest(env 未注入 ECHO_AGENT_VERSION 时)
-//   - env 显式注入 → 锁到指定版本,用于 CI / 紧急回滚
-//   - 装 latest 的副作用已在前置的 isEchoAgentInstalled 检测后避免
-//     (启动期不再触发,只有 About 页面"升级"按钮会跑这条路径)
-function packageSpecs(deps: InstallerDeps): string[] {
-  const core = deps.coreVersion ? `echo-agent[all]==${deps.coreVersion}` : 'echo-agent[all]'
-  if (!deps.orgPluginVersion) return [core]
-  const org = deps.orgPluginVersion === ORG_PLUGIN_LATEST
-    ? 'echo-agent-org'
-    : `echo-agent-org==${deps.orgPluginVersion}`
-  return [core, org]
+  if (!deps.pathExists(deps.orgPluginPath)) {
+    throw new Error(`内置企业插件缺失: ${deps.orgPluginPath}`)
+  }
+  await pip(deps, ['install', '-U', 'echo-agent[all]'])
+  await pip(deps, ['install', '-U', deps.orgPluginPath])
 }

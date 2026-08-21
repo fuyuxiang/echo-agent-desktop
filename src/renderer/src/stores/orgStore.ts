@@ -178,7 +178,11 @@ export const useOrgStore = create<OrgState>()(
         askScope === 'org' ? (['org'] as const) :
         askScope === 'team' ? (['team'] as const) :
         undefined // 'all' 走服务端拉全部
-      return window.api.org.retrieve(query, { ...(opts ?? {}), scopes: scopesParam as Array<'org' | 'team'> | undefined })
+      return window.api.org.retrieve(query, {
+        limit: opts?.limit,
+        multi_hop: opts?.multiHop,
+        scopes: scopesParam as Array<'org' | 'team'> | undefined
+      })
     },
 
     promote: (req) => window.api.org.promote(req),
