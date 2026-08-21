@@ -14,11 +14,14 @@ import { GatewayClient, type Frame, type WsLike } from './gateway-client'
 import { setLLMConfig } from './llm'
 
 /**
- * 内置 echo-agent 版本(由 release pipeline 注入;CI 失败时回退占位)。
- * 严禁省略:installer 的 coreVersion 现在是必填,缺这个常量会让首启直接抛错。
+ * 版本注入策略(2026-08 修订):
+ *   - 默认不锁版本 → installer 走 `pip install echo-agent[all]`(latest)
+ *     且启动期已装则跳过,只有 About 页面的"升级"按钮会触发 pip install -U
+ *   - ECHO_AGENT_VERSION 环境变量 → 装/升到该指定版本
+ *     (CI 注入固定版本测试 / 紧急回滚到旧版本)
+ *   - ECHO_AGENT_ORG_VERSION 环境变量 → 插件同核心一起锁版
+ *     (默认装 latest org;env 不注入但想用个人版,需在调用方传 undefined)
  */
-const BUNDLED_ECHO_AGENT_VERSION =
-  process.env['ECHO_AGENT_VERSION'] ?? '0.9.4'
 
 export interface StatusBus {
   subscribe: (cb: (s: EchoAgentStatus) => void) => () => void
@@ -54,15 +57,19 @@ export function getEchoAgentManager(): EchoAgentManager {
         runner: nodeCommandRunner, homeDir, platform, pythonArchive,
         pathExists: (p) => existsSync(p), ensureDir: (p) => { mkdirSync(p, { recursive: true }) }, onProgress,
         abortSignal: signal,
-        // P0-安全修复:必须显式锁版本(2026-08 审计)
-        coreVersion: process.env['ECHO_AGENT_VERSION'] ?? BUNDLED_ECHO_AGENT_VERSION,
+        // 默认装 latest;env 注入 ECHO_AGENT_VERSION 时锁版(CI / 紧急回滚)
+        coreVersion: process.env['ECHO_AGENT_VERSION'],
+        // 默认不装 org 插件;env 注入 ECHO_AGENT_ORG_VERSION 时锁版;想装 latest 则传 'latest'
         orgPluginVersion: process.env['ECHO_AGENT_ORG_VERSION']
       }),
     update: (onProgress, signal) =>
       pipUpdate({
         runner: nodeCommandRunner, homeDir, platform, pythonArchive,
         pathExists: (p) => existsSync(p), ensureDir: (p) => { mkdirSync(p, { recursive: true }) }, onProgress,
-        abortSignal: signal
+        abortSignal: signal,
+        // 升级与首次安装版本策略一致(env 注入优先)
+        coreVersion: process.env['ECHO_AGENT_VERSION'],
+        orgPluginVersion: process.env['ECHO_AGENT_ORG_VERSION']
       }),
     spawnGateway: () =>
       spawnGateway({ configPath: configPath(homeDir), workspace: echoHome(homeDir), homeDir, platform }),
