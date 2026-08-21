@@ -14,7 +14,10 @@ interface ToolCallEvent {
 }
 
 interface AgentState {
-  /** UI 可用门:true 后解除"等待 Agent 连接"遮罩。装配成功/降级/失败兜底后均置 true */
+  /** UI 可用门:true 后解除"等待 Agent 连接"遮罩。
+   * 由 AppLayout 组件挂载时统一置位,与 configured 解耦——
+   * 否则持久化 configured=true 会短路 model-bootstrap,ready 永假,
+   * Chat textarea 一直 disabled。不持久化,每次冷启动重新挂载即重置。 */
   ready: boolean
   /** runtime 是否真正装配成功(init 调通)。为 false 时发送会失败,需重试装配 */
   configured: boolean
