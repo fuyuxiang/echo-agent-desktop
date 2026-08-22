@@ -57,7 +57,6 @@ describe('preload bridge', () => {
       'agentSkill',
       'app',
       'asr',
-      'asrConfig',
       'backup',
       'db',
       'echoAgent',

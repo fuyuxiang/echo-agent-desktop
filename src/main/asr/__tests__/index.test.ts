@@ -39,8 +39,8 @@ beforeEach(() => {
   vi.resetModules()
   vi.clearAllMocks()
   vi.useFakeTimers()
-  // 默认配置:硅基流动 ASR
-  deps.resolveASRConfig.mockResolvedValue({
+  // 2026-08 v2:resolveASRConfig 同步返回硬编码默认
+  deps.resolveASRConfig.mockReturnValue({
     baseUrl: 'https://api.siliconflow.cn/v1/audio/transcriptions',
     model: 'TeleAI/TeleSpeechASR',
     apiKey: 'sk-test'
@@ -63,11 +63,9 @@ function makeSamples(n: number): Float32Array {
 const SAMPLES_PER_3S = 16000 * 3
 
 describe('Chat 流式 ASR', () => {
-  it('createStream 在未配置时抛 AsrNotConfiguredError', async () => {
-    deps.resolveASRConfig.mockRejectedValueOnce(new Error('ASR 未配置'))
+  it('createStream 直接成功返回 streamId(默认配置开箱即用)', async () => {
     const { createStream } = await import('../index')
-
-    await expect(createStream()).rejects.toThrow()
+    await expect(createStream()).resolves.toEqual(expect.any(String))
   })
 
   it('feedAudio 累积到切片时长时自动 POST 上传,getResult 返回转写', async () => {
