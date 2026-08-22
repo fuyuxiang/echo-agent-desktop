@@ -39,11 +39,12 @@ function meetingsDir(): string {
 const sessions = new Map<string, { streamId: string; segIdx: number; startedAt: number }>()
 
 export function registerMeetingHandlers(): void {
-  ipcMain.handle(IpcChannels.meeting.start, () => {
+  ipcMain.handle(IpcChannels.meeting.start, async () => {
     const meetingId = randomUUID()
     const startedAt = Date.now()
     const audioPath = startRecording(meetingId, meetingsDir())
-    const streamId = createMeetingStream()
+    // createMeetingStream 现在是 async(2026-08 ASR 云端化):需异步解 apiKeyRef
+    const streamId = await createMeetingStream()
     createMeeting({
       id: meetingId,
       title: `会议 ${new Date(startedAt).toLocaleString()}`,
@@ -71,10 +72,11 @@ export function registerMeetingHandlers(): void {
     return { segments: getSegments(meetingId), partial }
   })
 
-  ipcMain.handle(IpcChannels.meeting.stop, (_e, meetingId: string) => {
+  ipcMain.handle(IpcChannels.meeting.stop, async (_e, meetingId: string) => {
     const s = sessions.get(meetingId)
     if (!s) return { meetingId, status: 'failed' }
-    const { confirmed } = stopMeetingStream(s.streamId)
+    // stopMeetingStream 现在是 async(2026-08 ASR 云端化):需 await 强制 flush 残余音频
+    const { confirmed } = await stopMeetingStream(s.streamId)
     for (const c of confirmed) {
       appendSegment({ meetingId, idx: s.segIdx++, startMs: c.startMs, endMs: c.endMs, text: c.text })
     }

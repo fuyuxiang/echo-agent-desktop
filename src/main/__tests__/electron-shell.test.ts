@@ -168,24 +168,8 @@ const storeMock = vi.hoisted(() => {
   return { data, FakeStore }
 })
 
-const asrMock = vi.hoisted(() => {
-  const stream = {
-    acceptWaveform: vi.fn(),
-    inputFinished: vi.fn()
-  }
-  const recognizer = {
-    createStream: vi.fn(() => stream),
-    isReady: vi.fn(() => false),
-    decode: vi.fn(),
-    getResult: vi.fn(() => ({ text: 'recognized' })),
-    isEndpoint: vi.fn(() => false),
-    reset: vi.fn()
-  }
-  const OnlineRecognizer = vi.fn(function () {
-    return recognizer
-  })
-  return { OnlineRecognizer, recognizer, stream }
-})
+// 2026-08 ASR 云端化:本地 sherpa-onnx 移除,asrMock 与对应的 vi.mock 已删除。
+// ASR 流式生命周期单测见 src/main/asr/__tests__/index.test.ts。
 
 vi.mock('electron', () => electron)
 vi.mock('electron-window-state', () => ({ default: windowState.factory }))
@@ -193,7 +177,6 @@ vi.mock('@electron-toolkit/utils', () => toolkit)
 vi.mock('electron-updater', () => ({ default: updater }))
 vi.mock('electron-log/main', () => ({ default: log }))
 vi.mock('electron-store', () => ({ default: storeMock.FakeStore }))
-vi.mock('sherpa-onnx-node', () => ({ OnlineRecognizer: asrMock.OnlineRecognizer }))
 
 beforeEach(() => {
   vi.resetModules()
@@ -208,9 +191,6 @@ beforeEach(() => {
   electron.icon.isEmpty.mockReturnValue(false)
   electron.safeStorage.isEncryptionAvailable.mockReturnValue(true)
   electron.safeStorage.decryptString.mockImplementation((buf: Buffer) => buf.toString().replace(/^enc:/, ''))
-  asrMock.recognizer.isReady.mockReturnValue(false)
-  asrMock.recognizer.getResult.mockReturnValue({ text: 'recognized' })
-  asrMock.recognizer.isEndpoint.mockReturnValue(false)
 })
 
 describe('window lifecycle', () => {
@@ -411,53 +391,6 @@ describe('store/permission/asr', () => {
     expect(log.info).toHaveBeenCalledWith('[permission] 开机自启已设置为:', true)
   })
 
-  it('ASR stream 和 meeting stream 生命周期与 recognizer 对齐', async () => {
-    const {
-      initASR,
-      createStream,
-      feedAudio,
-      getResult,
-      stopStream,
-      samplesToMs,
-      createMeetingStream,
-      feedMeetingAudio,
-      pollMeetingStream,
-      stopMeetingStream
-    } = await import('../asr')
-
-    expect(samplesToMs(16000)).toBe(1000)
-    expect(() => createStream()).toThrow('ASR recognizer not initialized')
-
-    initASR()
-    expect(asrMock.OnlineRecognizer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelConfig: expect.objectContaining({ provider: 'cpu' }),
-        enableEndpoint: true
-      })
-    )
-
-    const streamId = createStream()
-    const samples = new Float32Array([0.1, 0.2])
-    feedAudio(streamId, samples)
-    expect(asrMock.stream.acceptWaveform).toHaveBeenCalledWith({ sampleRate: 16000, samples })
-    expect(getResult(streamId)).toBe('recognized')
-    expect(stopStream(streamId)).toBe('recognized')
-    expect(asrMock.stream.inputFinished).toHaveBeenCalledTimes(1)
-    expect(getResult(streamId)).toBe('')
-
-    asrMock.recognizer.getResult.mockReturnValue({ text: 'segment' })
-    asrMock.recognizer.isEndpoint.mockReturnValue(true)
-    const meetingStreamId = createMeetingStream()
-    feedMeetingAudio(meetingStreamId, new Float32Array(1600))
-    const polled = pollMeetingStream(meetingStreamId)
-    expect(polled.confirmed).toEqual([{ startMs: 0, endMs: 100, text: 'segment' }])
-    expect(polled.partial).toBe('segment')
-    expect(asrMock.recognizer.reset).toHaveBeenCalledTimes(1)
-
-    asrMock.recognizer.getResult.mockReturnValue({ text: 'tail' })
-    expect(stopMeetingStream(meetingStreamId).confirmed).toEqual([
-      { startMs: 100, endMs: 100, text: 'tail' }
-    ])
-    expect(stopMeetingStream('missing').confirmed).toEqual([])
-  })
+  // 2026-08 ASR 云端化:原 sherpa-onnx 流式生命周期单测已删除。
+  // 新 ASR 切片上传单测见 src/main/asr/__tests__/index.test.ts。
 })

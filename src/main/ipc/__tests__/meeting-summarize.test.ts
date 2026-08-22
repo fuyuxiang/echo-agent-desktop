@@ -27,6 +27,17 @@ vi.mock('../../db/dao/meeting', () => ({
   getSummary: vi.fn(), removeMeeting: vi.fn(), renameMeeting: vi.fn(),
   findRecordingMeetings: vi.fn(() => [])
 }))
+// 2026-08 ASR 云端化:registerMeetingHandlers 链路会触达 ../asr → ./config-store → ../store,
+// 而本测试不关心 ASR/存储链路,mock 掉 '../store' 防止 electron-store 真实初始化(无 cwd 会抛 projectName)。
+vi.mock('../../store', () => ({
+  storeGet: vi.fn(),
+  storeSet: vi.fn(),
+  storeDelete: vi.fn(),
+  storeClear: vi.fn(),
+  secureGet: vi.fn(),
+  secureSet: vi.fn(),
+  secureDelete: vi.fn()
+}))
 
 import { registerMeetingHandlers } from '../meeting'
 import { IpcChannels } from '@shared/ipc-channels'

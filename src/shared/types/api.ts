@@ -219,12 +219,19 @@ export interface BridgeApi {
     setScope: (config: AgentScopeConfig) => Promise<{ success: boolean }>
   }
 
-  /** 本地语音识别(sherpa-onnx 离线 ASR) */
+  /** 云端语音识别(2026-08 重构:本地 sherpa 改为云端切片上传,IPC 接口保持兼容) */
   asr: {
     start: () => Promise<string>
     feed: (streamId: string, samples: Float32Array) => Promise<void>
     getResult: (streamId: string) => Promise<string>
     stop: (streamId: string) => Promise<string>
+  }
+
+  /** ASR 配置管理(apiKey 走主进程 safeStorage,渲染层不接触真实 key) */
+  asrConfig: {
+    save: (cfg: { baseUrl: string; model: string; apiKey?: string }) => Promise<void>
+    get: () => Promise<{ baseUrl: string; model: string; apiKeyRef?: string } | undefined>
+    clear: () => Promise<void>
   }
 
   /** 会议记录 */
