@@ -71,18 +71,20 @@ const updater = vi.hoisted(() => ({
   setUpdateDownloadedListener: vi.fn()
 }))
 
+// 2026-08 ASR 云端化:createStream/stopStream/createMeetingStream/stopMeetingStream
+// 由同步改为 async(异步解 apiKeyRef)。测试 mock 对应改为 async 返回。
 const asr = vi.hoisted(() => ({
-  createStream: vi.fn(() => 'stream-1'),
+  createStream: vi.fn(async () => 'stream-1'),
   feedAudio: vi.fn(),
   getResult: vi.fn(() => 'final text'),
-  stopStream: vi.fn(() => 'stopped text'),
-  createMeetingStream: vi.fn(() => 'meeting-stream-1'),
+  stopStream: vi.fn(async () => 'stopped text'),
+  createMeetingStream: vi.fn(async () => 'meeting-stream-1'),
   feedMeetingAudio: vi.fn(),
   pollMeetingStream: vi.fn(() => ({
     confirmed: [{ startMs: 0, endMs: 1000, text: 'hello' }],
     partial: 'partial'
   })),
-  stopMeetingStream: vi.fn(() => ({
+  stopMeetingStream: vi.fn(async () => ({
     confirmed: [{ startMs: 1000, endMs: 2000, text: 'bye' }]
   }))
 }))
@@ -251,11 +253,12 @@ describe('基础 IPC handlers', () => {
     registerAsrHandlers()
 
     const samples = new Float32Array([0.1, 0.2])
-    expect(invoke(IpcChannels.asr.start)).toBe('stream-1')
+    // 2026-08 ASR 云端化:start/stop 改为 async,需 await
+    await expect(invoke(IpcChannels.asr.start)).resolves.toBe('stream-1')
     invoke(IpcChannels.asr.feed, 'stream-1', samples)
     expect(asr.feedAudio).toHaveBeenCalledWith('stream-1', samples)
     expect(invoke(IpcChannels.asr.getResult, 'stream-1')).toBe('final text')
-    expect(invoke(IpcChannels.asr.stop, 'stream-1')).toBe('stopped text')
+    await expect(invoke(IpcChannels.asr.stop, 'stream-1')).resolves.toBe('stopped text')
   })
 
   it('db handlers 透传 example 与 session DAO', async () => {
@@ -461,7 +464,11 @@ describe('meeting IPC handlers', () => {
     )
     expect(polled.segments).toHaveLength(1)
 
-    const stopped = invoke<{ meetingId: string; status: string }>(IpcChannels.meeting.stop, started.meetingId)
+    // 2026-08 ASR 云端化:meeting.stop handler 改 async(flush 残余音频需 await)
+    const stopped = await invoke<{ meetingId: string; status: string }>(
+      IpcChannels.meeting.stop,
+      started.meetingId
+    )
     expect(stopped).toEqual({ meetingId: started.meetingId, status: 'processing' })
     expect(asr.stopMeetingStream).toHaveBeenCalledWith('meeting-stream-1')
     expect(recorder.finishRecording).toHaveBeenCalledWith(started.meetingId)
@@ -470,7 +477,11 @@ describe('meeting IPC handlers', () => {
     )
 
     expect(invoke(IpcChannels.meeting.poll, 'missing')).toEqual({ segments: [], partial: '' })
-    expect(invoke(IpcChannels.meeting.stop, 'missing')).toEqual({ meetingId: 'missing', status: 'failed' })
+    // 2026-08 ASR 云端化:meeting.stop 改 async,缺 meeting 时仍同步返回 status='failed'
+    await expect(invoke(IpcChannels.meeting.stop, 'missing')).resolves.toEqual({
+      meetingId: 'missing',
+      status: 'failed'
+    })
   })
 
   it('会议列表、详情、纪要、删除、重命名和音源更新走 DAO', async () => {
