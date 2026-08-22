@@ -99,18 +99,12 @@ export const IpcChannels = {
     respond: 'agent:permission:respond'
   },
 
-  /** 云端 ASR(2026-08 重构:本地 sherpa-onnx 改为云端切片上传) */
+  /** 云端 ASR(2026-08 重构:本地 sherpa-onnx 改为云端切片上传;默认 baseUrl/model/apiKey 硬编码,不暴露配置入口) */
   asr: {
     start: 'asr:start',
     feed: 'asr:feed',
     getResult: 'asr:get-result',
-    stop: 'asr:stop',
-    /** 保存 ASR 配置(baseUrl/model/apiKey,apiKey 走 safeStorage) */
-    saveConfig: 'asr:save-config',
-    /** 读取已持久化的 ASR 配置(仅 baseUrl/model/apiKeyRef,不含真实 key) */
-    getConfig: 'asr:get-config',
-    /** 清空 ASR 配置(普通 store + safeStorage 同步清,防残留串台) */
-    clearConfig: 'asr:clear-config'
+    stop: 'asr:stop'
   },
 
   /** 会议记录 */

@@ -144,17 +144,6 @@ const api: BridgeApi = {
     stop: (streamId: string) => ipcRenderer.invoke(IpcChannels.asr.stop, streamId)
   },
 
-  asrConfig: {
-    save: (cfg: { baseUrl: string; model: string; apiKey?: string }) =>
-      ipcRenderer.invoke(IpcChannels.asr.saveConfig, cfg),
-    get: () =>
-      ipcRenderer.invoke(IpcChannels.asr.getConfig) as Promise<
-        | { baseUrl: string; model: string; apiKeyRef?: string }
-        | undefined
-      >,
-    clear: () => ipcRenderer.invoke(IpcChannels.asr.clearConfig)
-  },
-
   meeting: {
     start: () => ipcRenderer.invoke(IpcChannels.meeting.start),
     feed: (meetingId: string, samples: Float32Array) =>

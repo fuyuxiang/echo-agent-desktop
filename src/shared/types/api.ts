@@ -227,13 +227,6 @@ export interface BridgeApi {
     stop: (streamId: string) => Promise<string>
   }
 
-  /** ASR 配置管理(apiKey 走主进程 safeStorage,渲染层不接触真实 key) */
-  asrConfig: {
-    save: (cfg: { baseUrl: string; model: string; apiKey?: string }) => Promise<void>
-    get: () => Promise<{ baseUrl: string; model: string; apiKeyRef?: string } | undefined>
-    clear: () => Promise<void>
-  }
-
   /** 会议记录 */
   meeting: {
     start(): Promise<{ meetingId: string }>
