@@ -1,203 +1,339 @@
-import { app } from 'electron'
-import path from 'path'
-import { OnlineRecognizer } from 'sherpa-onnx-node'
-import { randomUUID } from 'crypto'
-import log from 'electron-log/main'
+import { randomUUID } from 'node:crypto'
+import { log } from '../logger'
+import { type ASRConfigResolved, resolveASRConfig } from './config-store'
 
-let recognizer: InstanceType<typeof OnlineRecognizer> | null = null
-const streams = new Map<string, ReturnType<InstanceType<typeof OnlineRecognizer>['createStream']>>()
-/** 每个 stream 的最后活跃时间, 用于清理被遗弃(未调用 stop)的 stream, 防止原生句柄泄漏 */
-const streamLastActive = new Map<string, number>()
-/** 空闲多久后回收 stream (ms) */
-const STREAM_IDLE_TIMEOUT = 5 * 60_000
-let reapTimer: ReturnType<typeof setInterval> | null = null
+/**
+ * 云端 ASR 服务(2026-08 重构:本地 sherpa-onnx → 云端切片上传)
+ *
+ * 设计要点:
+ * - 不再依赖 sherpa-onnx-node / 本地模型,符合"完全移除本地 ASR"的产品决策
+ * - 兼容现有 IPC 签名(asr.start/feed/getResult/stop),渲染层零改动
+ * - 切片上传:每 3 秒把累积的 PCM 上传到 baseUrl/audio/transcriptions,
+ *   返回的转写文本追加到 confirmedText,getResult 返回拼接结果
+ * - 强制 flush:stop 时把未达阈值的样本一并提交,防止丢失
+ * - 错误降级:fetch 失败 → log.warn + 返回空文本,不抛崩上层
+ *
+ * 语义对比(与旧 sherpa 本地流式):
+ * - sherpa:边说边出字,延迟 < 100ms
+ * - 当前:每 3 秒一段,延迟 ~3 秒,API 调用频次大幅下降
+ */
 
-function touchStream(streamId: string): void {
-  streamLastActive.set(streamId, Date.now())
+const SAMPLE_RATE = 16000
+const CHUNK_MS = 3000
+const CHUNK_SAMPLES = (SAMPLE_RATE * CHUNK_MS) / 1000 // 48000
+
+/** Chat 流式状态:累积 PCM + 已上传样本位置 + 已确认文本 */
+interface ChatStreamState {
+  cfg: ASRConfigResolved
+  chunks: Float32Array[]
+  uploadedSamples: number
+  confirmedText: string
+  inflight: boolean
+  stopped: boolean
 }
 
-function discardStream(streamId: string): void {
-  streams.delete(streamId)
-  streamLastActive.delete(streamId)
-}
+const chatStreams = new Map<string, ChatStreamState>()
 
-/** 定期回收空闲 stream: 页面刷新/异常导航导致未调用 stop 时, 兜底释放原生 stream 句柄 */
-function ensureReaper(): void {
-  if (reapTimer) return
-  reapTimer = setInterval(() => {
-    const now = Date.now()
-    for (const [id, last] of streamLastActive) {
-      if (now - last > STREAM_IDLE_TIMEOUT) {
-        log.warn(`[ASR] 回收空闲 stream: ${id}`)
-        discardStream(id)
-      }
-    }
-    if (streams.size === 0 && reapTimer) {
-      clearInterval(reapTimer)
-      reapTimer = null
-    }
-  }, 60_000)
-  // 不阻止进程退出
-  reapTimer.unref?.()
+/** Meeting 流式状态:在 Chat 基础上加 segments 列表 */
+interface MeetingSegment {
+  startMs: number
+  endMs: number
+  text: string
 }
+interface MeetingStreamState extends ChatStreamState {
+  segments: MeetingSegment[]
+  partial: string
+  // 上次切片边界对应的累计样本位置(用于计算 segment 时间戳)
+  segStartSamples: number
+  totalSamples: number
+}
+const meetingStreams = new Map<string, MeetingStreamState>()
 
-function getModelDir(): string {
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'models', 'asr')
+/** Float32 [-1,1] → 16bit PCM LE(对齐 diarization.ts 工具) */
+function floatTo16BitPCM(samples: Float32Array): Buffer {
+  const buf = Buffer.allocUnsafe(samples.length * 2)
+  for (let i = 0; i < samples.length; i++) {
+    let s = Math.max(-1, Math.min(1, samples[i]))
+    s = s < 0 ? s * 0x8000 : s * 0x7fff
+    buf.writeInt16LE(s | 0, i * 2)
   }
-  return path.join(app.getAppPath(), 'resources', 'models', 'asr')
+  return buf
 }
 
-export function initASR(): void {
-  const modelDir = getModelDir()
-  const modelPrefix = 'sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30'
-  const modelPath = path.join(modelDir, modelPrefix)
+/** 构造符合 OpenAI Whisper 协议的 multipart/form-data */
+function buildFormData(pcm: Buffer, model: string, sampleRate: number): FormData {
+  // 伪造一个 .wav 头(MIME 由 model 自动推断,这里仍以 wav 上传兼容性最好;
+  // TeleSpeechASR/Whisper 都接受 wav/pcm/webm/m4a)
+  const wavHeader = Buffer.alloc(44)
+  wavHeader.write('RIFF', 0, 'ascii')
+  wavHeader.writeUInt32LE(36 + pcm.length, 4)
+  wavHeader.write('WAVE', 8, 'ascii')
+  wavHeader.write('fmt ', 12, 'ascii')
+  wavHeader.writeUInt32LE(16, 16)
+  wavHeader.writeUInt16LE(1, 20)
+  wavHeader.writeUInt16LE(1, 22)
+  wavHeader.writeUInt32LE(sampleRate, 24)
+  wavHeader.writeUInt32LE(sampleRate * 2, 28)
+  wavHeader.writeUInt16LE(2, 32)
+  wavHeader.writeUInt16LE(16, 34)
+  wavHeader.write('data', 36, 'ascii')
+  wavHeader.writeUInt32LE(pcm.length, 40)
+  const wavBuf = Buffer.concat([wavHeader, pcm])
 
+  const form = new FormData()
+  // Blob 在 Node 22+ / undici 上可用,这里是 Electron Node 环境,Blob 是 global
+  form.append('file', new Blob([wavBuf], { type: 'audio/wav' }), 'audio.wav')
+  form.append('model', model)
+  // response_format: 默认 json;有些服务需要 verbose_json 才返回 segment 时间戳
+  form.append('response_format', 'json')
+  return form
+}
+
+/**
+ * 把累积的 PCM 切片上传到云端并返回转写文本。
+ * 失败时返回空串(降级,不抛)。
+ */
+async function uploadChunk(cfg: ASRConfigResolved, samples: Float32Array): Promise<string> {
+  if (samples.length === 0) return ''
+  const pcm = floatTo16BitPCM(samples)
+  const form = buildFormData(pcm, cfg.model, SAMPLE_RATE)
   try {
-    recognizer = new OnlineRecognizer({
-      modelConfig: {
-        transducer: {
-          encoder: path.join(modelPath, 'encoder.int8.onnx'),
-          decoder: path.join(modelPath, 'decoder.onnx'),
-          joiner: path.join(modelPath, 'joiner.int8.onnx')
-        },
-        tokens: path.join(modelPath, 'tokens.txt'),
-        numThreads: 2,
-        provider: 'cpu'
-      },
-      enableEndpoint: true,
-      rule1MinTrailingSilence: 2.4,
-      rule2MinTrailingSilence: 1.2,
-      rule3MinUtteranceLength: 20,
-      decodingMethod: 'greedy_search'
+    const res = await fetch(cfg.baseUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${cfg.apiKey}` },
+      body: form
     })
-    log.info('[ASR] sherpa-onnx recognizer initialized')
-  } catch (err) {
-    log.error('[ASR] Failed to initialize recognizer:', err)
-    recognizer = null
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '')
+      log.warn(`[ASR] 上传失败 status=${res.status}: ${errText.slice(0, 200)}`)
+      return ''
+    }
+    const json = (await res.json()) as { text?: string }
+    return json.text ?? ''
+  } catch (e) {
+    log.warn('[ASR] 网络错误:', e instanceof Error ? e.message : String(e))
+    return ''
   }
 }
 
-export function createStream(): string {
-  if (!recognizer) {
-    throw new Error('ASR recognizer not initialized')
+/** 把数组里的 Float32Array 拼接成一个大数组(避免频繁拷贝,小数据足够) */
+function concatSamples(chunks: Float32Array[]): Float32Array {
+  let total = 0
+  for (const c of chunks) total += c.length
+  const out = new Float32Array(total)
+  let off = 0
+  for (const c of chunks) {
+    out.set(c, off)
+    off += c.length
   }
+  return out
+}
+
+/** 把累积的 chunks 合并,超过阈值的部分立即触发上传 */
+function maybeFlushChat(state: ChatStreamState): void {
+  const pendingSamples = state.chunks.reduce((n, c) => n + c.length, 0)
+  if (pendingSamples < CHUNK_SAMPLES || state.inflight) return
+  // 切片:取前 CHUNK_SAMPLES,剩余留到下次
+  let taken = 0
+  const takeChunks: Float32Array[] = []
+  while (taken < CHUNK_SAMPLES && state.chunks.length > 0) {
+    const head = state.chunks[0]
+    const need = CHUNK_SAMPLES - taken
+    if (head.length <= need) {
+      takeChunks.push(head)
+      taken += head.length
+      state.chunks.shift()
+    } else {
+      takeChunks.push(head.slice(0, need))
+      state.chunks[0] = head.slice(need)
+      taken += need
+    }
+  }
+  const samples = concatSamples(takeChunks)
+  state.inflight = true
+  void (async () => {
+    try {
+      const text = await uploadChunk(state.cfg, samples)
+      if (text) state.confirmedText = state.confirmedText ? `${state.confirmedText} ${text}` : text
+      state.uploadedSamples += samples.length
+    } finally {
+      state.inflight = false
+    }
+  })()
+}
+
+/** 强制把累积的 chunks 全部上传(同步等待 Promise),用于 stop */
+async function forceFlushChat(state: ChatStreamState): Promise<void> {
+  if (state.chunks.length === 0) return
+  const samples = concatSamples(state.chunks)
+  state.chunks = []
+  state.inflight = true
+  try {
+    const text = await uploadChunk(state.cfg, samples)
+    if (text) state.confirmedText = state.confirmedText ? `${state.confirmedText} ${text}` : text
+    state.uploadedSamples += samples.length
+  } finally {
+    state.inflight = false
+  }
+}
+
+// =================== Chat 流式 API ===================
+
+export async function createStream(): Promise<string> {
+  // 异步加载配置(从 safeStorage 解 apiKey);失败立刻抛,上层据此提示用户
+  const cfg = await resolveASRConfig()
   const streamId = randomUUID()
-  const stream = recognizer.createStream()
-  streams.set(streamId, stream)
-  touchStream(streamId)
-  ensureReaper()
+  chatStreams.set(streamId, {
+    cfg,
+    chunks: [],
+    uploadedSamples: 0,
+    confirmedText: '',
+    inflight: false,
+    stopped: false
+  })
+  log.info(`[ASR] stream ${streamId} created(baseUrl=${cfg.baseUrl})`)
   return streamId
 }
 
 export function feedAudio(streamId: string, samples: Float32Array): void {
-  if (!recognizer) throw new Error('ASR recognizer not initialized')
-  const stream = streams.get(streamId)
-  if (!stream) throw new Error(`Stream ${streamId} not found`)
-  touchStream(streamId)
-  stream.acceptWaveform({ sampleRate: 16000, samples })
-  while (recognizer.isReady(stream)) {
-    recognizer.decode(stream)
-  }
+  const state = chatStreams.get(streamId)
+  if (!state || state.stopped) return
+  state.chunks.push(samples)
+  maybeFlushChat(state)
 }
 
 export function getResult(streamId: string): string {
-  if (!recognizer) return ''
-  const stream = streams.get(streamId)
-  if (!stream) return ''
-  touchStream(streamId)
-  return recognizer.getResult(stream).text
+  const state = chatStreams.get(streamId)
+  if (!state) return ''
+  return state.confirmedText
 }
 
-export function stopStream(streamId: string): string {
-  if (!recognizer) return ''
-  const stream = streams.get(streamId)
-  if (!stream) return ''
+export async function stopStream(streamId: string): Promise<string> {
+  const state = chatStreams.get(streamId)
+  if (!state) return ''
+  state.stopped = true
+  await forceFlushChat(state)
+  const text = state.confirmedText
+  chatStreams.delete(streamId)
+  log.info(`[ASR] stream ${streamId} stopped, text=${text.length} chars`)
+  return text
+}
 
-  stream.inputFinished()
-  while (recognizer.isReady(stream)) {
-    recognizer.decode(stream)
+// =================== Meeting 流式 API(基于 Chat 的扩展) ===================
+
+/** 把 Chat 的 maybeFlushChat 复制给 Meeting,但额外写 segments */
+function maybeFlushMeeting(state: MeetingStreamState): void {
+  const pendingSamples = state.chunks.reduce((n, c) => n + c.length, 0)
+  if (pendingSamples < CHUNK_SAMPLES || state.inflight) return
+  let taken = 0
+  const takeChunks: Float32Array[] = []
+  while (taken < CHUNK_SAMPLES && state.chunks.length > 0) {
+    const head = state.chunks[0]
+    const need = CHUNK_SAMPLES - taken
+    if (head.length <= need) {
+      takeChunks.push(head)
+      taken += head.length
+      state.chunks.shift()
+    } else {
+      takeChunks.push(head.slice(0, need))
+      state.chunks[0] = head.slice(need)
+      taken += need
+    }
   }
-  const finalResult = recognizer.getResult(stream).text
-  discardStream(streamId)
-  return finalResult
+  const samples = concatSamples(takeChunks)
+  state.inflight = true
+  void (async () => {
+    try {
+      const text = await uploadChunk(state.cfg, samples)
+      if (text) {
+        state.segments.push({
+          startMs: Math.round((state.segStartSamples / SAMPLE_RATE) * 1000),
+          endMs: Math.round(((state.segStartSamples + samples.length) / SAMPLE_RATE) * 1000),
+          text
+        })
+        state.segStartSamples += samples.length
+        state.partial = text
+      }
+    } finally {
+      state.inflight = false
+    }
+  })()
 }
 
-/** 样本数换算毫秒 */
-export function samplesToMs(sampleCount: number, sampleRate = 16000): number {
-  return Math.round((sampleCount / sampleRate) * 1000)
+async function forceFlushMeeting(state: MeetingStreamState): Promise<void> {
+  if (state.chunks.length === 0) return
+  const samples = concatSamples(state.chunks)
+  state.chunks = []
+  state.inflight = true
+  try {
+    const text = await uploadChunk(state.cfg, samples)
+    if (text) {
+      state.segments.push({
+        startMs: Math.round((state.segStartSamples / SAMPLE_RATE) * 1000),
+        endMs: Math.round(((state.segStartSamples + samples.length) / SAMPLE_RATE) * 1000),
+        text
+      })
+      state.segStartSamples += samples.length
+    }
+  } finally {
+    state.inflight = false
+  }
 }
 
-interface MeetingStreamState {
-  totalSamples: number
-  segStartSamples: number
-  idleConfirmed: { startMs: number; endMs: number; text: string }[]
-}
-const meetingStates = new Map<string, MeetingStreamState>()
-
-export function createMeetingStream(): string {
-  const streamId = createStream()
-  meetingStates.set(streamId, { totalSamples: 0, segStartSamples: 0, idleConfirmed: [] })
+export async function createMeetingStream(): Promise<string> {
+  const cfg = await resolveASRConfig()
+  const streamId = randomUUID()
+  meetingStreams.set(streamId, {
+    cfg,
+    chunks: [],
+    uploadedSamples: 0,
+    confirmedText: '',
+    inflight: false,
+    stopped: false,
+    segments: [],
+    partial: '',
+    segStartSamples: 0,
+    totalSamples: 0
+  })
+  log.info(`[ASR/meeting] stream ${streamId} created`)
   return streamId
 }
 
 export function feedMeetingAudio(streamId: string, samples: Float32Array): void {
-  if (!recognizer) throw new Error('ASR recognizer not initialized')
-  const stream = streams.get(streamId)
-  const state = meetingStates.get(streamId)
-  if (!stream || !state) throw new Error(`Meeting stream ${streamId} not found`)
-  touchStream(streamId)
-  stream.acceptWaveform({ sampleRate: 16000, samples })
+  const state = meetingStreams.get(streamId)
+  if (!state || state.stopped) return
+  state.chunks.push(samples)
   state.totalSamples += samples.length
-  while (recognizer.isReady(stream)) recognizer.decode(stream)
-  const curText = recognizer.getResult(stream).text
-  const ep = recognizer.isEndpoint(stream)
-  // 仅当端点触发且已识别出文本时才定稿+重置;空端点(静音)不重置,
-  // 避免把尚未形成文本的声学状态清掉(模型需要更长上下文才出字)
-  if (ep && curText) {
-    state.idleConfirmed.push({
-      startMs: samplesToMs(state.segStartSamples),
-      endMs: samplesToMs(state.totalSamples),
-      text: curText
-    })
-    state.segStartSamples = state.totalSamples
-    recognizer.reset(stream)
-  }
+  maybeFlushMeeting(state)
 }
 
 export function pollMeetingStream(streamId: string): {
-  confirmed: { startMs: number; endMs: number; text: string }[]; partial: string
+  confirmed: MeetingSegment[]
+  partial: string
 } {
-  const stream = streams.get(streamId)
-  const state = meetingStates.get(streamId)
-  if (!stream || !state) return { confirmed: [], partial: '' }
-  const confirmed = state.idleConfirmed
-  state.idleConfirmed = []
-  const partial = recognizer ? recognizer.getResult(stream).text : ''
-  return { confirmed, partial }
+  const state = meetingStreams.get(streamId)
+  if (!state) return { confirmed: [], partial: '' }
+  // poll 时清空已读 confirmed,保留 partial
+  const confirmed = state.segments
+  state.segments = []
+  return { confirmed, partial: state.partial }
 }
 
-export function stopMeetingStream(streamId: string): {
-  confirmed: { startMs: number; endMs: number; text: string }[]
-} {
-  const stream = streams.get(streamId)
-  const state = meetingStates.get(streamId)
-  if (!stream || !state || !recognizer) {
-    meetingStates.delete(streamId)
-    return { confirmed: [] }
-  }
-  stream.inputFinished()
-  while (recognizer.isReady(stream)) recognizer.decode(stream)
-  const tail = recognizer.getResult(stream).text
-  const confirmed = [...state.idleConfirmed]
-  if (tail) {
-    confirmed.push({
-      startMs: samplesToMs(state.segStartSamples),
-      endMs: samplesToMs(state.totalSamples),
-      text: tail
-    })
-  }
-  discardStream(streamId)
-  meetingStates.delete(streamId)
+export async function stopMeetingStream(streamId: string): Promise<{ confirmed: MeetingSegment[] }> {
+  const state = meetingStreams.get(streamId)
+  if (!state) return { confirmed: [] }
+  state.stopped = true
+  await forceFlushMeeting(state)
+  const confirmed = state.segments
+  meetingStreams.delete(streamId)
+  log.info(`[ASR/meeting] stream ${streamId} stopped, segments=${confirmed.length}`)
   return { confirmed }
+}
+
+// 内部暴露,给可能的后续诊断/测试用
+export const _internals = {
+  chatStreams,
+  meetingStreams,
+  CHUNK_SAMPLES,
+  SAMPLE_RATE
 }

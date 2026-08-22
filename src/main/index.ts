@@ -12,7 +12,6 @@ import { setupDatabase, closeDatabase } from './db'
 import { findRecordingMeetings, updateMeetingStatus } from './db/dao/meeting'
 import { reapOrphans } from './meeting/orphan'
 import { registerAllIpcHandlers } from './ipc'
-import { initASR } from './asr'
 import { startEchoAgent, stopEchoAgent, syncOrgPluginConfig } from './echo-agent'
 // P6: agent-process 已物理删除,Python agent 运行时下线
 
@@ -52,7 +51,8 @@ if (!gotTheLock) {
       updateMeetingStatus(id, 'failed')
     }
     registerAllIpcHandlers(() => BrowserWindow.getAllWindows()[0] ?? null)
-    initASR()
+    // 2026-08 ASR 云端化:不再调用 initASR()。云端 ASR 是无状态 HTTP client,
+    // 每 stream 在 createStream/createMeetingStream 时按需异步解 apiKeyRef 即可。
     createMainWindow()
 
     // 系统音频 loopback handler:渲染端 getDisplayMedia({audio:true}) 时,
