@@ -180,8 +180,9 @@ async function forceFlushChat(state: ChatStreamState): Promise<void> {
 // =================== Chat 流式 API ===================
 
 export async function createStream(): Promise<string> {
-  // 异步加载配置(从 safeStorage 解 apiKey);失败立刻抛,上层据此提示用户
-  const cfg = await resolveASRConfig()
+  // 2026-08 v2:resolveASRConfig 改为同步(默认 baseUrl/model/apiKey 硬编码),
+  // 但保留 async 函数形态以兼容 IPC handler 与上层 await 调用。
+  const cfg = resolveASRConfig()
   const streamId = randomUUID()
   chatStreams.set(streamId, {
     cfg,
@@ -281,7 +282,7 @@ async function forceFlushMeeting(state: MeetingStreamState): Promise<void> {
 }
 
 export async function createMeetingStream(): Promise<string> {
-  const cfg = await resolveASRConfig()
+  const cfg = resolveASRConfig()
   const streamId = randomUUID()
   meetingStreams.set(streamId, {
     cfg,
