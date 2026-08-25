@@ -52,6 +52,13 @@ interface ChatState {
   startAssistantMessage: () => void
   appendStreamDelta: (delta: string) => void
   appendReasoningDelta: (delta: string) => void
+  /**
+   * 撤回本轮已流式展示的正文(后端 _stream_reset 帧)。
+   * 乐观流式下,工具轮次前的草稿("我看一下…")会先展示再作废;不清空的话
+   * 下一轮增量会拼接到废弃草稿后面,用户看到的是缝合起来的回复。
+   * 只清正文,保留 reasoning:思考过程不属于被撤回的草稿。
+   */
+  resetStreamDraft: () => void
   finalizeAssistantMessage: (fullContent: string) => void
   setIsGenerating: (generating: boolean) => void
   /** 前端侧停止生成:定格当前流式消息并结束生成态(后端那次推理可能仍在跑) */
@@ -209,6 +216,15 @@ export const useChatStore = create<ChatState>()(
         const last = s.messages[s.messages.length - 1]
         if (last?.isStreaming) {
           last.reasoning = s.currentReasoningBuffer
+        }
+      }),
+
+    resetStreamDraft: () =>
+      set((s) => {
+        s.currentStreamBuffer = ''
+        const last = s.messages[s.messages.length - 1]
+        if (last?.isStreaming) {
+          last.content = ''
         }
       }),
 
