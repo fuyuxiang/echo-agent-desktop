@@ -38,6 +38,9 @@ describe('mergeManagedConfig', () => {
     expect(out.channels.cli.enabled).toBe(false)
     expect(out.channels.stream_channels).toEqual(['gateway:*'])
     expect(out.channels.stream_paragraph_mode).toBe(false)
+    // gateway:desktop 必须在乐观流式名单里,否则带工具的轮次会把增量攒到
+    // 推理结束再一次性放出,客户端只收到一帧全文(表现为没有流式)。
+    expect(out.channels.stream_optimistic_channels).toContain('gateway:desktop')
   })
 
   it('preserves non-managed top-level keys, overwrites managed ones', () => {

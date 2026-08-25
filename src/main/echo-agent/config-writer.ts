@@ -52,7 +52,12 @@ export function mergeManagedConfig(
     stream_channels: ['gateway:*'],
     stream_flush_chars: 24,
     stream_flush_interval_ms: 250,
-    stream_paragraph_mode: false
+    stream_paragraph_mode: false,
+    // 必须显式放开 gateway:desktop 的乐观流式,否则 echo-agent 对"可能调工具的
+    // 轮次"走 draft_policy=buffer:增量被攒到推理结束再作为单个 delta 放出,
+    // 客户端只收到一帧全文,表现为完全没有流式效果。
+    // 桌面端可就地重绘(按累计缓冲重建气泡)并处理 _stream_reset 撤回帧,满足放开的前提。
+    stream_optimistic_channels: ['gateway:cli', 'gateway:desktop']
   }
   applyOrgConfig(doc, org)
   return stringify(doc)
