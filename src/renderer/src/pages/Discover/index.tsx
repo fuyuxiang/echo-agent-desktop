@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { skillsAPI, type Skill } from '@/services/agent/skills'
 import type { SkillConfig } from '@shared/skill-types'
+import { toast } from '@/components/Toast'
 import SkillList from './SkillList'
 import SkillDetail from './SkillDetail'
 import styles from './discover.module.scss'
@@ -55,13 +56,13 @@ export default function DiscoverPage(): React.JSX.Element {
   }, [])
 
   const handleInstall = async (skillId: string): Promise<void> => {
-    // IPC API does not provide installSkill; no-op for now
-    console.warn('installSkill not supported by IPC API:', skillId)
+    toast.info('技能安装请在 echo-agent 端操作(Desktop 仅展示已启用技能)')
+    void skillId
   }
 
   const handleUninstall = async (skillId: string): Promise<void> => {
-    // IPC API does not provide uninstallSkill; no-op for now
-    console.warn('uninstallSkill not supported by IPC API:', skillId)
+    toast.info('技能卸载请在 echo-agent 端操作(Desktop 仅展示已启用技能)')
+    void skillId
   }
 
   const handleSelectSkill = (skill: SkillConfig): void => {
