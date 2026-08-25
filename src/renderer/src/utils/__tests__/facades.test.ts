@@ -125,12 +125,6 @@ function installApi(): BridgeApi {
         unconsolidatedCount: 0
       }))
     },
-    agentSkill: {
-      list: vi.fn(async () => []),
-      active: vi.fn(async () => []),
-      activate: vi.fn(async () => ({ success: true })),
-      deactivate: vi.fn(async () => ({ success: true }))
-    },
     platform: {
       isMac: false,
       isWin: true,
