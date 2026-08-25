@@ -86,4 +86,66 @@ describe('agent-chat ipc (gateway)', () => {
     expect(r).toEqual({ success: true })
     expect(getGatewayClient).toHaveBeenCalled()
   })
+
+  it('sendSkillList 把 requestId 打进 skill.list 帧 JSON 整体透传给 gateway.send', () => {
+    registerAgentChatIpc()
+    handlers.get(IpcChannels.agentChat.sendSkillList)!({}, { requestId: 'skill-abc' })
+    expect(gw.send).toHaveBeenCalledTimes(1)
+    const frame = gw.send.mock.calls[0][0] as string
+    expect(typeof frame).toBe('string')
+    expect(JSON.parse(frame)).toEqual({ type: 'skill.list', request_id: 'skill-abc' })
+  })
+
+  it('sendSkillEnable 把 name + requestId 打进 skill.enable 帧,不能错放 attachments', () => {
+    registerAgentChatIpc()
+    handlers.get(IpcChannels.agentChat.sendSkillEnable)!({}, {
+      name: 'ppt-author',
+      requestId: 'skill-xyz'
+    })
+    expect(gw.send).toHaveBeenCalledTimes(1)
+    const frame = gw.send.mock.calls[0][0] as string
+    expect(JSON.parse(frame)).toEqual({
+      type: 'skill.enable',
+      name: 'ppt-author',
+      request_id: 'skill-xyz'
+    })
+    // 守门:name 必须进帧 body,不能漏到第二个参数(attachments)
+    expect(gw.send.mock.calls[0][1]).toBeUndefined()
+    expect(gw.send.mock.calls[0][2]).toBeUndefined()
+  })
+
+  it('sendSkillDisable 把 name + requestId 打进 skill.disable 帧', () => {
+    registerAgentChatIpc()
+    handlers.get(IpcChannels.agentChat.sendSkillDisable)!({}, {
+      name: 'memo-recorder',
+      requestId: 'skill-def'
+    })
+    expect(gw.send).toHaveBeenCalledTimes(1)
+    const frame = gw.send.mock.calls[0][0] as string
+    expect(JSON.parse(frame)).toEqual({
+      type: 'skill.disable',
+      name: 'memo-recorder',
+      request_id: 'skill-def'
+    })
+    expect(gw.send.mock.calls[0][1]).toBeUndefined()
+    expect(gw.send.mock.calls[0][2]).toBeUndefined()
+  })
+
+  it('skill IPC handler 在 gateway 不可用时广播 error 帧,带原 request_id', () => {
+    getGatewayClient.mockReturnValueOnce(null)
+    registerAgentChatIpc()
+    handlers.get(IpcChannels.agentChat.sendSkillEnable)!({}, {
+      name: 'ppt-author',
+      requestId: 'skill-nop'
+    })
+    expect(gw.send).not.toHaveBeenCalled()
+    expect(winSend).toHaveBeenCalledWith(
+      IpcChannels.agentChat.event,
+      expect.objectContaining({
+        type: 'error',
+        request_id: 'skill-nop',
+        message: expect.stringContaining('未就绪')
+      })
+    )
+  })
 })
