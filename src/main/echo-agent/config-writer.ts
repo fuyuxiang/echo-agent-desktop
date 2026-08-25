@@ -21,14 +21,35 @@ export interface OrgConfigInput {
   allowAgentic?: boolean
 }
 
+// channels 段:关 cli、注册 gateway:* 流式通道(否则进程因"无活跃 channel"退出),
+// 并下调流式切片阈值让短回复也逐段吐字。
+//
+// 单独抽出来是因为写入时机有讲究:它必须在 echo-agent 进程「启动前」就落盘,而不
+// 只是在 applyModelConfig 里跟着模型配置一起写。启动路径(main/index.ts)先拉起
+// 进程、渲染层随后才 apply,首次安装那次对话读到的是 apply 之前的 yaml —— 那时
+// 若 channels 缺失,乐观流式只能靠 echo-agent 的内置默认值兜底。见 syncManagedChannels。
+function buildManagedChannels(): Record<string, unknown> {
+  return {
+    cli: { enabled: false },
+    stream_channels: ['gateway:*'],
+    stream_flush_chars: 24,
+    stream_flush_interval_ms: 250,
+    stream_paragraph_mode: false,
+    // 必须显式放开 gateway:desktop 的乐观流式,否则 echo-agent 对"可能调工具的
+    // 轮次"走 draft_policy=buffer:增量被攒到推理结束再作为单个 delta 放出,
+    // 客户端只收到一帧全文,表现为完全没有流式效果。
+    // 桌面端可就地重绘(按累计缓冲重建气泡)并处理 _stream_reset 撤回帧,满足放开的前提。
+    stream_optimistic_channels: ['gateway:cli', 'gateway:desktop']
+  }
+}
+
 // 桌面端作为 echo-agent 的部署宿主,负责写齐"以 gateway 模式服务于本地单用户桌面"
 // 所需的全部受管配置段。这三段每次都被改写为桌面部署所需的值;其余字段(用户或
 // echo-agent setup 写过的)原样保留。
 //   - models:   模型与凭据(来源:服务器下发 / 设置页手填)
 //   - gateway:  强制开启 + 绑 loopback + port=0(OS 分配,实际端口经 stdout 信号回报)
 //               + auth.mode=open(loopback 下 echo-agent 放行,无需 token)
-//   - channels: 关 cli、注册 gateway:* 流式通道(否则进程因"无活跃 channel"退出),
-//               并下调流式切片阈值让短回复也逐段吐字
+//   - channels: 见 buildManagedChannels
 export function mergeManagedConfig(
   yamlText: string,
   cfg: ModelConfigInput,
@@ -47,19 +68,15 @@ export function mergeManagedConfig(
     port: 0,
     auth: { mode: 'open' }
   }
-  doc.channels = {
-    cli: { enabled: false },
-    stream_channels: ['gateway:*'],
-    stream_flush_chars: 24,
-    stream_flush_interval_ms: 250,
-    stream_paragraph_mode: false,
-    // 必须显式放开 gateway:desktop 的乐观流式,否则 echo-agent 对"可能调工具的
-    // 轮次"走 draft_policy=buffer:增量被攒到推理结束再作为单个 delta 放出,
-    // 客户端只收到一帧全文,表现为完全没有流式效果。
-    // 桌面端可就地重绘(按累计缓冲重建气泡)并处理 _stream_reset 撤回帧,满足放开的前提。
-    stream_optimistic_channels: ['gateway:cli', 'gateway:desktop']
-  }
+  doc.channels = buildManagedChannels()
   applyOrgConfig(doc, org)
+  return stringify(doc)
+}
+
+/** 只写 channels 段,供启动前同步;models/gateway/plugins 一概不碰。 */
+export function mergeManagedChannels(yamlText: string): string {
+  const doc = (yamlText.trim() ? parse(yamlText) : {}) as Record<string, unknown>
+  doc.channels = buildManagedChannels()
   return stringify(doc)
 }
 
@@ -144,4 +161,24 @@ export function writeManagedOrgConfig(deps: ConfigWriterDeps, org: OrgConfigInpu
   }
   deps.ensureDir(dirname(target))
   deps.writeFile(target, mergeManagedOrgConfig(existing, org))
+}
+
+/**
+ * 启动前把 channels 段同步到 yaml。
+ *
+ * 为什么不能只靠 applyModelConfig:那条路径由渲染层在模型装配完成后触发,而
+ * echo-agent 进程在 app.whenReady 里就已经拉起。首次安装(或用户尚未走完登录/
+ * 模型装配就发起对话)时,进程读到的是不含 channels 的 yaml,乐观流式退化为
+ * draft_policy=buffer —— 首屏对话表现为完全没有流式效果。
+ */
+export function writeManagedChannels(deps: ConfigWriterDeps): void {
+  const target = configPath(deps.homeDir)
+  let existing = ''
+  try {
+    existing = deps.readFile(target)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e
+  }
+  deps.ensureDir(dirname(target))
+  deps.writeFile(target, mergeManagedChannels(existing))
 }

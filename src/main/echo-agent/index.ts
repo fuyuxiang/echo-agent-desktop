@@ -18,6 +18,7 @@ import { nodeCommandRunner, spawnGateway, shutdownGateway } from './adapters'
 import {
   writeManagedConfig,
   writeManagedOrgConfig,
+  writeManagedChannels,
   type ConfigWriterDeps,
   type ModelConfigInput
 } from './config-writer'
@@ -178,6 +179,17 @@ export async function applyModelConfig(cfg: ModelConfigInput): Promise<void> {
 /** 启动前同步插件配置;只写文件,不会为了配置迁移额外拉起进程。 */
 export function syncOrgPluginConfig(): void {
   writeManagedOrgConfig(buildConfigWriterDeps(), getManagedOrgConfig())
+}
+
+/**
+ * 启动前同步 channels 段。与 syncOrgPluginConfig 一样只写文件。
+ *
+ * applyModelConfig 也会写这一段,但它由渲染层在模型装配后才触发,晚于进程拉起;
+ * 首次安装那次对话若读到不含 channels 的 yaml,乐观流式会退化成缓冲,首屏看起来
+ * 没有流式效果。这里补上,使进程无论何时启动都读到完整的桌面部署配置。
+ */
+export function syncManagedChannels(): void {
+  writeManagedChannels(buildConfigWriterDeps())
 }
 
 /** 企业服务器切换后刷新插件配置;Agent 已运行时重启使 hook/tool 立即重载。 */
