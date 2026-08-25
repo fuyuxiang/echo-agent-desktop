@@ -53,7 +53,7 @@ function installApi(): BridgeApi {
       listSessions: vi.fn(),
       init: vi.fn(),
       onEvent: vi.fn(),
-      sendSkillList: vi.fn(async () => [{ id: 'ppt', label: 'PPT', description: 'd', kind: 'code' }]),
+      sendSkillList: vi.fn(async () => [{ name: 'ppt-author', description: 'PPT 生成', category: 'creative', version: '1.0.0', tags: ['office'], enabled: true }]),
       sendSkillEnable: vi.fn(async () => undefined),
       sendSkillDisable: vi.fn(async () => undefined)
     },
