@@ -246,6 +246,25 @@ describe('core stores', () => {
     })
     expect(useChatStore.getState().isGenerating).toBe(false)
 
+    // 撤回帧:丢弃已展示的草稿正文,后续增量从空白重新累积(不能拼在草稿后面),
+    // 但 reasoning 要保留 —— 被撤回的只是草稿正文。
+    useChatStore.getState().startAssistantMessage()
+    useChatStore.getState().appendReasoningDelta('思考')
+    useChatStore.getState().appendStreamDelta('我看一下天气')
+    useChatStore.getState().resetStreamDraft()
+    expect(useChatStore.getState().messages.at(-1)).toMatchObject({
+      content: '',
+      reasoning: '思考',
+      isStreaming: true
+    })
+    useChatStore.getState().appendStreamDelta('今天晴')
+    expect(useChatStore.getState().messages.at(-1)?.content).toBe('今天晴')
+    useChatStore.getState().finalizeAssistantMessage('今天晴')
+    expect(useChatStore.getState().messages.at(-1)).toMatchObject({
+      content: '今天晴',
+      isStreaming: false
+    })
+
     useChatStore.getState().startAssistantMessage()
     useChatStore.getState().stopGenerating()
     expect(useChatStore.getState().messages.some((m) => m.isStreaming)).toBe(false)

@@ -46,6 +46,15 @@ function getPayloadText(payload: Record<string, unknown>): string {
   return typeof value === 'string' ? value : ''
 }
 
+/**
+ * 识别后端的流式撤回帧(metadata._stream_reset)。
+ * 后端乐观流式在工具调用轮次会先发草稿再撤回,见 echo_agent/agent/streaming.py 的 discard()。
+ */
+function isStreamResetPayload(payload: Record<string, unknown>): boolean {
+  const meta = payload.metadata as Record<string, unknown> | undefined
+  return payload._stream_reset === true || meta?._stream_reset === true
+}
+
 function isReasoningPayload(payload: Record<string, unknown>): boolean {
   const meta = payload.metadata as Record<string, unknown> | undefined
   const rawKind =
@@ -161,6 +170,7 @@ export default function ChatPage(): React.JSX.Element {
   const startAssistantMessage = useChatStore((s) => s.startAssistantMessage)
   const appendStreamDelta = useChatStore((s) => s.appendStreamDelta)
   const appendReasoningDelta = useChatStore((s) => s.appendReasoningDelta)
+  const resetStreamDraft = useChatStore((s) => s.resetStreamDraft)
   const finalizeAssistantMessage = useChatStore((s) => s.finalizeAssistantMessage)
   const stopGenerating = useChatStore((s) => s.stopGenerating)
   const removeLastAssistant = useChatStore((s) => s.removeLastAssistant)
@@ -234,6 +244,15 @@ export default function ChatPage(): React.JSX.Element {
         startAssistantMessage()
         streamFrameCount = 0
         streamCharCount = 0
+      }
+      // 撤回帧必须在空文本 return 之前处理:它本身不带正文(text 为空),
+      // 语义是"丢弃本轮已展示的草稿"。放在下面会被当成空帧直接丢掉。
+      if (isStreamResetPayload(payload)) {
+        logger.info(`[chat:onStreaming] 收到撤回帧,丢弃已展示草稿(原累计=${streamCharCount})`)
+        resetStreamDraft()
+        streamFrameCount = 0
+        streamCharCount = 0
+        return
       }
       const text = getPayloadText(payload)
       if (!text) return
