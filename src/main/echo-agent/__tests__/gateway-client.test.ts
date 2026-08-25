@@ -399,3 +399,66 @@ describe('buildWsUrl', () => {
     expect(buildWsUrl('http://127.0.0.1:8', '/socket')).toBe('ws://127.0.0.1:8/socket')
   })
 })
+
+describe('GatewayClient skill messages', () => {
+  it('sends skill.list frame as raw JSON passthrough with request_id', () => {
+    const ws = fakeWs()
+    const c = new GatewayClient({ wsUrl: 'ws://x/ws', token: 't', createWs: () => ws, emit: () => {} })
+    c.connect('c1')
+    ws.fire('open')
+    ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    const sentBefore = ws.sent.length
+    c.send(JSON.stringify({ type: 'skill.list', request_id: 'r-1' }))
+    expect(ws.sent).toHaveLength(sentBefore + 1)
+    expect(JSON.parse(ws.sent[sentBefore])).toEqual({
+      type: 'skill.list',
+      request_id: 'r-1'
+    })
+  })
+
+  it('emits skill.list_result to consumer with chatId and request_id', () => {
+    const ws = fakeWs()
+    const events: Frame[] = []
+    const c = new GatewayClient({ wsUrl: 'ws://x/ws', token: 't', createWs: () => ws, emit: (e) => events.push(e) })
+    c.connect('c1')
+    ws.fire('open')
+    ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    events.length = 0
+    ws.fire('message', JSON.stringify({
+      type: 'skill.list_result',
+      request_id: 'r-1',
+      skills: [{ name: 'ppt-author', status: 'enabled' }]
+    }))
+    const skillEvents = events.filter((e) => e.type === 'skill.list_result')
+    expect(skillEvents).toHaveLength(1)
+    expect(skillEvents[0]).toMatchObject({
+      type: 'skill.list_result',
+      chatId: 'c1',
+      request_id: 'r-1'
+    })
+    expect(skillEvents[0].skills).toEqual([{ name: 'ppt-author', status: 'enabled' }])
+  })
+
+  it('emits error frame with chatId when skill.enable fails', () => {
+    const ws = fakeWs()
+    const events: Frame[] = []
+    const c = new GatewayClient({ wsUrl: 'ws://x/ws', token: 't', createWs: () => ws, emit: (e) => events.push(e) })
+    c.connect('c1')
+    ws.fire('open')
+    ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
+    events.length = 0
+    ws.fire('message', JSON.stringify({
+      type: 'error',
+      message: 'failed to enable skill: ghost',
+      request_id: 'r-2'
+    }))
+    const errorEvents = events.filter((e) => e.type === 'error')
+    expect(errorEvents).toHaveLength(1)
+    expect(errorEvents[0]).toMatchObject({
+      type: 'error',
+      chatId: 'c1',
+      message: 'failed to enable skill: ghost',
+      request_id: 'r-2'
+    })
+  })
+})
