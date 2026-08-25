@@ -154,7 +154,12 @@ export const IpcChannels = {
     event: 'agent:chat:event',
     init: 'agent:chat:init',
     /** 用一次轻量补全为会话生成简短标题 */
-    generateTitle: 'agent:chat:generate-title'
+    generateTitle: 'agent:chat:generate-title',
+    /** Skills 桥接(2026-08 echo-agent 迁移):fire-and-await-ack 模型,
+     * 响应走 onEvent + request_id 配对,IPC 本身不返回数据 */
+    sendSkillList: 'agent:chat:send-skill-list',
+    sendSkillEnable: 'agent:chat:send-skill-enable',
+    sendSkillDisable: 'agent:chat:send-skill-disable'
   },
 
   /** echo-agent 进程生命周期 */

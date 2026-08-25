@@ -308,6 +308,15 @@ export interface BridgeApi {
     }): Promise<{ success: boolean }>
     /** 用一次轻量补全为会话生成简短标题;未就绪/失败返回空串 */
     generateTitle(firstUserMessage: string): Promise<string>
+    /**
+     * Skills 控制(2026-08 echo-agent 迁移)。
+     * - 全部走 fire-and-await-ack:IPC 本身只 promise<void>,响应通过 onEvent 异步配对(request_id)
+     * - requestId 由调用方生成(与 sendMessage 一致),错误和成功结果都按 request_id 路由回 renderer
+     * - enable/disable 需要 skill 名称(name),list 不需要
+     */
+    sendSkillList(requestId: string): Promise<void>
+    sendSkillEnable(name: string, requestId: string): Promise<void>
+    sendSkillDisable(name: string, requestId: string): Promise<void>
     onEvent(handler: (ev: Record<string, unknown>) => void): () => void
   }
 

@@ -93,4 +93,57 @@ export function registerAgentChatIpc(): void {
   ipcMain.handle(IpcChannels.agentChat.generateTitle, (_e, opts: { firstUserMessage: string }) =>
     generateTitle(opts.firstUserMessage)
   )
+
+  // Skills 桥接(2026-08 echo-agent 迁移):
+  // 三个 handler 都把请求打包成 { type: 'skill.*', request_id, name? } 帧,
+  // 走 GatewayClient.send(text) 整帧透传(Task 3 在 gateway-client.ts 已支持 skill.* 透传)。
+  // 响应(accepted/skill.list_result/error)由 echo-agent 通过 onEvent 反向广播回 renderer,
+  // renderer 用 request_id 异步配对,不依赖本 IPC 的返回值。
+  // name 必须放进帧 body,不能错放到 send 的 attachments 参数。
+  ipcMain.handle(
+    IpcChannels.agentChat.sendSkillList,
+    (_e, opts: { requestId: string }) => {
+      const c = client()
+      if (!c) {
+        broadcast({ type: 'error', request_id: opts.requestId, message: 'Agent 尚未就绪' })
+        return
+      }
+      const frame = JSON.stringify({ type: 'skill.list', request_id: opts.requestId })
+      c.send(frame)
+    }
+  )
+
+  ipcMain.handle(
+    IpcChannels.agentChat.sendSkillEnable,
+    (_e, opts: { name: string; requestId: string }) => {
+      const c = client()
+      if (!c) {
+        broadcast({ type: 'error', request_id: opts.requestId, message: 'Agent 尚未就绪' })
+        return
+      }
+      const frame = JSON.stringify({
+        type: 'skill.enable',
+        name: opts.name,
+        request_id: opts.requestId
+      })
+      c.send(frame)
+    }
+  )
+
+  ipcMain.handle(
+    IpcChannels.agentChat.sendSkillDisable,
+    (_e, opts: { name: string; requestId: string }) => {
+      const c = client()
+      if (!c) {
+        broadcast({ type: 'error', request_id: opts.requestId, message: 'Agent 尚未就绪' })
+        return
+      }
+      const frame = JSON.stringify({
+        type: 'skill.disable',
+        name: opts.name,
+        request_id: opts.requestId
+      })
+      c.send(frame)
+    }
+  )
 }

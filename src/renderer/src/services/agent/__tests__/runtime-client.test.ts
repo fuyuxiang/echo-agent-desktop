@@ -4,10 +4,16 @@ let eventHandler: ((ev: Record<string, unknown>) => void) | null = null
 const send = vi.fn()
 const switchSession = vi.fn()
 const abort = vi.fn()
+const sendSkillList = vi.fn()
+const sendSkillEnable = vi.fn()
+const sendSkillDisable = vi.fn()
 beforeEach(() => {
   send.mockClear()
   switchSession.mockClear()
   abort.mockClear()
+  sendSkillList.mockClear()
+  sendSkillEnable.mockClear()
+  sendSkillDisable.mockClear()
   eventHandler = null
   ;(globalThis as unknown as { window: unknown }).window = {
     api: {
@@ -17,6 +23,9 @@ beforeEach(() => {
         abort,
         listSessions: vi.fn(),
         deleteSession: vi.fn(),
+        sendSkillList,
+        sendSkillEnable,
+        sendSkillDisable,
         onEvent: (h: (ev: Record<string, unknown>) => void) => {
           eventHandler = h
           return () => {}
@@ -159,5 +168,34 @@ describe('runtime-client agentWs', () => {
     ws.abortActive()
     expect(abort).toHaveBeenCalledWith('c1', expect.stringMatching(/^req-/))
     expect(ws.currentRequestId).toBe('')
+  })
+
+  it('sendSkillList 触发 sendSkillList IPC 并生成非空 request_id 前缀 skill-', async () => {
+    const ws = await load()
+    ws.connect('', 'c1')
+    ws.sendSkillList()
+    expect(sendSkillList).toHaveBeenCalledTimes(1)
+    const rid = sendSkillList.mock.calls[0][0] as string
+    expect(typeof rid).toBe('string')
+    expect(rid.length).toBeGreaterThan(0)
+    expect(rid).toMatch(/^skill-/)
+  })
+
+  it('sendSkillEnable 传 name 和 skill- 前缀 request_id', async () => {
+    const ws = await load()
+    ws.connect('', 'c1')
+    ws.sendSkillEnable('ppt-author')
+    expect(sendSkillEnable).toHaveBeenCalledWith('ppt-author', expect.any(String))
+    const rid = sendSkillEnable.mock.calls[0][1] as string
+    expect(rid).toMatch(/^skill-/)
+  })
+
+  it('sendSkillDisable 传 name 和 skill- 前缀 request_id', async () => {
+    const ws = await load()
+    ws.connect('', 'c1')
+    ws.sendSkillDisable('ppt-author')
+    expect(sendSkillDisable).toHaveBeenCalledWith('ppt-author', expect.any(String))
+    const rid = sendSkillDisable.mock.calls[0][1] as string
+    expect(rid).toMatch(/^skill-/)
   })
 })
