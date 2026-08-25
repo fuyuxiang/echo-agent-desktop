@@ -143,26 +143,6 @@ describe('hooks', () => {
     expect(off).toHaveBeenCalledTimes(1)
   })
 
-  it('useSkillImport 保持下线提示并不调用后端动态导入', async () => {
-    const { useSkillImport } = await import('../useSkillImport')
-    function Probe(): React.JSX.Element {
-      const imp = useSkillImport()
-      return <button onClick={() => void imp.handleImport()}>{String(imp.importing)}</button>
-    }
-
-    render(<Probe />)
-    fireEvent.click(screen.getByText('false'))
-    await waitFor(() =>
-      expect(fileDialog.open).toHaveBeenCalledWith({
-        properties: ['openDirectory'],
-        title: '选择技能文件夹(已下线,仅作说明)'
-      })
-    )
-    expect(toast.error).toHaveBeenCalledWith(
-      '技能运行时导入已下线,请编辑 src/main/agent/skills/builtin/ 静态登记'
-    )
-  })
-
   it('useSessionActions 新建会话后更新本地 store、切换 runtime session 并导航到 chat', async () => {
     const chatId = '00000000-0000-4000-8000-000000000000'
     const randomUUID = vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(chatId)

@@ -75,13 +75,11 @@ describe('core stores', () => {
       { useAppStore },
       { useAgentStore },
       { useChannelStore },
-      { useSkillStore },
       { useMeetingStore }
     ] = await Promise.all([
       import('../appStore'),
       import('../agentStore'),
       import('../channelStore'),
-      import('../skillStore'),
       import('../meetingStore')
     ])
 
@@ -118,11 +116,6 @@ describe('core stores', () => {
 
     useChannelStore.getState().setChannels([{ id: 'ch1', name: '频道', enabled: true, running: false }])
     expect(useChannelStore.getState().channels[0].id).toBe('ch1')
-
-    useSkillStore.getState().setSkills([{ id: 'ppt', label: 'PPT', description: 'd', kind: 'code' }])
-    useSkillStore.getState().setSelectedSkill('ppt')
-    useSkillStore.getState().setActiveSkill('ppt')
-    expect(useSkillStore.getState()).toMatchObject({ selectedSkill: 'ppt', activeSkill: 'ppt' })
 
     useMeetingStore.getState().setActiveMeetingId('m1')
     useMeetingStore.getState().setRecording(true)
