@@ -135,14 +135,6 @@ export const IpcChannels = {
     stats: 'agent:memory:stats'
   },
 
-  /** 技能体系(P4) */
-  agentSkill: {
-    list: 'agent:skill:list',
-    active: 'agent:skill:active',
-    activate: 'agent:skill:activate',
-    deactivate: 'agent:skill:deactivate'
-  },
-
   /** 原生 agent 对话主链路(P5) */
   agentChat: {
     send: 'agent:chat:send',
