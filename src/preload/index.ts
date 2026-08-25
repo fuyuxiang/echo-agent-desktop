@@ -254,16 +254,6 @@ const api: BridgeApi = {
     stats: () => ipcRenderer.invoke(IpcChannels.agentMemory.stats)
   },
 
-  agentSkill: {
-    list: () => ipcRenderer.invoke(IpcChannels.agentSkill.list),
-    active: (chatId: string) =>
-      ipcRenderer.invoke(IpcChannels.agentSkill.active, { chatId }),
-    activate: (chatId: string, skillId: string) =>
-      ipcRenderer.invoke(IpcChannels.agentSkill.activate, { chatId, skillId }),
-    deactivate: (chatId: string, skillId: string) =>
-      ipcRenderer.invoke(IpcChannels.agentSkill.deactivate, { chatId, skillId })
-  },
-
   sessions: {
     create: (request: { title: string; metadata?: Record<string, unknown> }) =>
       ipcRenderer.invoke(IpcChannels.sessions.create, request),

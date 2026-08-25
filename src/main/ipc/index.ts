@@ -1,7 +1,6 @@
 import { registerAgentChatIpc } from './agent-chat'
 import { registerAgentIpcHandlers } from './agent'
 import { registerAgentMemoryIpc } from './agent-memory'
-import { registerAgentSkillIpc } from './agent-skill'
 import { registerAppHandlers } from './app'
 import { registerAsrHandlers } from './asr'
 import { registerBackupIpcHandlers } from './backup'
@@ -42,7 +41,6 @@ export function registerAllIpcHandlers(getWindow: () => Electron.BrowserWindow |
   registerAsrHandlers()
   registerMeetingHandlers()
   registerAgentMemoryIpc()
-  registerAgentSkillIpc()
   registerAgentChatIpc()
   registerApprovalBridge()
   registerEchoAgentIpc(getWindow)
