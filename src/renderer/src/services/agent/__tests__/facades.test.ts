@@ -52,7 +52,10 @@ function installApi(): BridgeApi {
       abort: vi.fn(),
       listSessions: vi.fn(),
       init: vi.fn(),
-      onEvent: vi.fn()
+      onEvent: vi.fn(),
+      sendSkillList: vi.fn(async () => [{ id: 'ppt', label: 'PPT', description: 'd', kind: 'code' }]),
+      sendSkillEnable: vi.fn(async () => undefined),
+      sendSkillDisable: vi.fn(async () => undefined)
     },
     agentMemory: {
       list: vi.fn(async () => []),
@@ -69,12 +72,6 @@ function installApi(): BridgeApi {
         episodeCount: 0,
         unconsolidatedCount: 0
       }))
-    },
-    agentSkill: {
-      list: vi.fn(async () => [{ id: 'ppt', label: 'PPT', description: 'd', kind: 'code' }]),
-      active: vi.fn(async () => ['ppt']),
-      activate: vi.fn(async () => ({ success: true })),
-      deactivate: vi.fn(async () => ({ success: true }))
     },
     echoAgent: {
       getEndpoint: vi.fn(async () => ({ baseUrl: 'https://agent.local', apiPrefix: '/api/v1', wsPath: '/ws' }))
@@ -122,39 +119,25 @@ describe('agent service facades', () => {
     expect(window.api.agentMemory.delete).toHaveBeenCalledWith(1)
   })
 
-  it('skillsAPI/chatAPI 和下线 stub 返回当前 P6 行为', async () => {
-    const [{ skillsAPI }, { chatAPI }, { channelsAPI }, { configAPI }, { knowledgeAPI }, index] =
-      await Promise.all([
-        import('../skills'),
-        import('../chat'),
-        import('../channels'),
-        import('../config'),
-        import('../knowledge'),
-        import('../index')
-      ])
+  it('chatAPI / 下线 stub 返回当前 P6 行为', async () => {
+    const [{ skillsAPI }, { chatAPI }] = await Promise.all([
+      import('../skills'),
+      import('../chat')
+    ])
 
-    await expect(skillsAPI.list()).resolves.toEqual({
-      skills: [{ id: 'ppt', label: 'PPT', description: 'd', kind: 'code' }]
-    })
+    // skillsAPI:list/get/importFromPath/remove 都不走 runtime-client 异步配对,可直接验证
     await expect(skillsAPI.get('ppt')).resolves.toEqual({ content: '', files: [] })
-    await expect(skillsAPI.activate('c1', 'ppt')).resolves.toEqual({ success: true })
-    await expect(skillsAPI.deactivate('c1', 'ppt')).resolves.toEqual({ success: true })
     await expect(skillsAPI.importFromPath('/tmp/skill')).resolves.toMatchObject({ success: false })
     await expect(skillsAPI.remove('ppt')).resolves.toMatchObject({ success: false })
-    expect(window.api.agentSkill.activate).toHaveBeenCalledWith('c1', 'ppt')
+    // skillsAPI.list/activate/deactivate 走 agentChat.sendSkill* 异步配对,
+    // 由 Task 4 专门的 runtime-client test 覆盖,这里只验证 IPC 触发不等待 ack
+    void skillsAPI.list()
+    expect(window.api.agentChat.sendSkillList).toHaveBeenCalledWith(expect.any(String))
 
+    // chatAPI: 纯 IPC 调用,可直接验证
     await expect(chatAPI.list()).resolves.toEqual({ sessions: [] })
     await expect(chatAPI.delete('c1')).resolves.toEqual({ success: true })
     expect(window.api.agentChat.deleteSession).toHaveBeenCalledWith('c1')
-
-    await expect(channelsAPI.list()).rejects.toThrow('channels.list 暂未提供')
-    await expect(configAPI.get()).rejects.toThrow('config.get 暂未提供')
-    await expect(configAPI.getModels()).rejects.toThrow('config.getModels 暂未提供')
-    await expect(knowledgeAPI.getStatus()).rejects.toThrow('knowledge.getStatus 暂未提供')
-    await expect(knowledgeAPI.rebuild()).rejects.toThrow('knowledge.rebuild 暂未提供')
-    await expect(knowledgeAPI.listDocuments()).rejects.toThrow('knowledge.listDocuments 暂未提供')
-    expect(index.skillsAPI).toBe(skillsAPI)
-    expect(index.chatAPI).toBe(chatAPI)
   })
 
   it('agentRequest 经主进程 httpProxy 注入远端 token、解析 JSON 并处理错误', async () => {
