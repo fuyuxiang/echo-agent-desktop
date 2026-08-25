@@ -3,8 +3,10 @@ import { parse } from 'yaml'
 import {
   mergeManagedConfig,
   mergeManagedOrgConfig,
+  mergeManagedChannels,
   writeManagedConfig,
   writeManagedOrgConfig,
+  writeManagedChannels,
   type ConfigWriterDeps
 } from '../config-writer'
 
@@ -242,5 +244,85 @@ describe('mergeManagedConfig org section', () => {
     const out = parse(files[target])
     expect(out.memory.enabled).toBe(true)
     expect(out.plugins.config.org.cache_path).toBe(org.cachePath)
+  })
+})
+
+// channels 段必须能独立于模型装配写入:进程在 app.whenReady 就拉起,而
+// applyModelConfig 由渲染层在登录/模型装配之后才触发。首次安装那次对话若读到
+// 不含 channels 的 yaml,乐观流式退化为 draft_policy=buffer,表现为没有流式。
+describe('managed channels sync (pre-launch)', () => {
+  const target = '/home/u/.echo-agent/echo-agent.yaml'
+
+  function fakeDeps(initial: Record<string, string> = {}): {
+    deps: ConfigWriterDeps; files: Record<string, string>; dirs: string[]
+  } {
+    const files: Record<string, string> = { ...initial }
+    const dirs: string[] = []
+    const deps: ConfigWriterDeps = {
+      homeDir: '/home/u',
+      readFile: (p) => {
+        if (p in files) return files[p]
+        const err: NodeJS.ErrnoException = new Error('ENOENT')
+        err.code = 'ENOENT'
+        throw err
+      },
+      writeFile: (p, data) => { files[p] = data },
+      ensureDir: (p) => { dirs.push(p) }
+    }
+    return { deps, files, dirs }
+  }
+
+  it('opts gateway:desktop into optimistic streaming on a fresh install', () => {
+    const { deps, files } = fakeDeps()
+    writeManagedChannels(deps)
+    const out = parse(files[target])
+    expect(out.channels.stream_optimistic_channels).toContain('gateway:desktop')
+    expect(out.channels.stream_channels).toEqual(['gateway:*'])
+    expect(out.channels.cli.enabled).toBe(false)
+  })
+
+  it('leaves models/gateway/plugins untouched', () => {
+    const { deps, files } = fakeDeps({
+      [target]:
+        'models:\n  default_model: keep-me\n' +
+        'gateway:\n  port: 4321\n' +
+        'plugins:\n  enabled: true\n' +
+        'memory:\n  enabled: true\n'
+    })
+    writeManagedChannels(deps)
+    const out = parse(files[target])
+    expect(out.models.default_model).toBe('keep-me')
+    expect(out.gateway.port).toBe(4321)
+    expect(out.plugins.enabled).toBe(true)
+    expect(out.memory.enabled).toBe(true)
+    expect(out.channels.stream_optimistic_channels).toContain('gateway:desktop')
+  })
+
+  it('ensures the config directory exists before writing', () => {
+    const { deps, dirs } = fakeDeps()
+    writeManagedChannels(deps)
+    expect(dirs).toContain('/home/u/.echo-agent')
+  })
+
+  it('agrees with what applyModelConfig would write', () => {
+    // 两条写入路径必须产出同一个 channels 段,否则 apply 前后行为会漂。
+    const viaChannels = parse(mergeManagedChannels('')).channels
+    const viaFullConfig = parse(mergeManagedConfig('', cfg)).channels
+    expect(viaChannels).toEqual(viaFullConfig)
+  })
+
+  it('rethrows a read error that is not ENOENT', () => {
+    const deps: ConfigWriterDeps = {
+      homeDir: '/home/u',
+      readFile: () => {
+        const err: NodeJS.ErrnoException = new Error('EACCES')
+        err.code = 'EACCES'
+        throw err
+      },
+      writeFile: () => {},
+      ensureDir: () => {}
+    }
+    // 读不动的配置绝不能被当成空文件覆盖掉。
+    expect(() => writeManagedChannels(deps)).toThrow()
   })
 })

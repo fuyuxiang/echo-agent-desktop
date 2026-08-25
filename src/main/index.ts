@@ -12,7 +12,12 @@ import { setupDatabase, closeDatabase } from './db'
 import { findRecordingMeetings, updateMeetingStatus } from './db/dao/meeting'
 import { reapOrphans } from './meeting/orphan'
 import { registerAllIpcHandlers } from './ipc'
-import { startEchoAgent, stopEchoAgent, syncOrgPluginConfig } from './echo-agent'
+import {
+  startEchoAgent,
+  stopEchoAgent,
+  syncOrgPluginConfig,
+  syncManagedChannels
+} from './echo-agent'
 // P6: agent-process 已物理删除,Python agent 运行时下线
 
 /**
@@ -82,6 +87,13 @@ if (!gotTheLock) {
       syncOrgPluginConfig()
     } catch (e) {
       log.error('[main] 企业插件配置同步失败:', e)
+    }
+    // channels 段同样要在拉起进程前落盘:applyModelConfig 写它的时机晚于此处,
+    // 首次安装那次对话否则读不到 stream_optimistic_channels,退化为无流式。
+    try {
+      syncManagedChannels()
+    } catch (e) {
+      log.error('[main] channels 配置同步失败:', e)
     }
     // echo-agent 进程接管:异步启动,不阻塞窗口。状态经 echoAgent:status-changed 推给渲染层。
     void startEchoAgent().catch((e) => log.error('[main] echo-agent 启动失败:', e))
