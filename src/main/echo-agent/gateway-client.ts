@@ -13,6 +13,10 @@ export function translateFrame(frame: Frame, chatId: string): Frame[] {
   if (type && CONTROL_TYPES.has(type)) {
     return []
   }
+  // skill.* 帧透传给消费端,保留 chatId 和原始字段(包括 request_id)
+  if (type && typeof type === 'string' && type.startsWith('skill.')) {
+    return [{ ...frame, chatId }]
+  }
   if (type !== 'message') {
     return []
   }
@@ -130,6 +134,31 @@ export class GatewayClient {
     if (!text || !text.trim()) {
       // 兜底:IPC 层已拒绝空文本,这里防止直接调用绕过守门
       throw new Error('GatewayClient.send: empty text not allowed')
+    }
+    // skill.* 帧直接转发,不走 message 协议:整体 JSON 透传,不解析字段,
+    // 不注册 activeRequest(技能调用是 fire-and-forget,无需按 requestId 中止)
+    try {
+      const parsed = JSON.parse(text)
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        typeof parsed.type === 'string' &&
+        parsed.type.startsWith('skill.')
+      ) {
+        const frame = text
+        if (this.ws && this.authed) {
+          this.ws.send(frame)
+          return
+        }
+        this.pendingSends.push(frame)
+        // self-heal: 与 message 路径一致,断线后 send 重建连接以清空缓冲
+        if (!this.ws && !this.closing && this.chatId) {
+          this.connect(this.chatId)
+        }
+        return
+      }
+    } catch {
+      /* 非 JSON 或解析失败,走原有 message 路径 */
     }
     const rid = requestId ?? this.generateRequestId()
     const controller = new AbortController()
