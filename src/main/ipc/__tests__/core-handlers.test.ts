@@ -537,7 +537,6 @@ describe('IPC 注册中心', () => {
     vi.doMock('../asr', () => ({ registerAsrHandlers: mockRegister('asr') }))
     vi.doMock('../meeting', () => ({ registerMeetingHandlers: mockRegister('meeting') }))
     vi.doMock('../agent-memory', () => ({ registerAgentMemoryIpc: mockRegister('agent-memory') }))
-    vi.doMock('../agent-skill', () => ({ registerAgentSkillIpc: mockRegister('agent-skill') }))
     vi.doMock('../agent-chat', () => ({ registerAgentChatIpc: mockRegister('agent-chat') }))
     vi.doMock('../../agent/permission/approval-bridge', () => ({
       registerApprovalBridge: mockRegister('approval-bridge')
@@ -559,7 +558,6 @@ describe('IPC 注册中心', () => {
       'asr',
       'meeting',
       'agent-memory',
-      'agent-skill',
       'agent-chat',
       'approval-bridge',
       'echo-agent'
