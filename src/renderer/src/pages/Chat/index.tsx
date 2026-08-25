@@ -5,18 +5,13 @@ import { MessageBubble } from '@/components/MessageBubble'
 import { FileDropZone } from '@/components/FileDropZone'
 import { useChatStore } from '@/stores/chatStore'
 import { useAgentStore } from '@/stores/agentStore'
-import { useSkillStore } from '@/stores/skillStore'
 import { agentWs } from '@/services/agent/runtime-client'
 import { attachmentsAPI } from '@/services/agent/attachments'
-import { skillsAPI } from '@/services/agent/skills'
-import skillDescriptionsZh from '@/services/agent/skill-descriptions'
-import { useSkillImport } from '@/hooks/useSkillImport'
 import { db } from '@/utils/db'
 import { logger } from '@/utils/logger'
 import { confirmShareToProject, type MemoryCandidate } from '@/services/memory-router'
 import { retrieveForMessage } from '@/services/project-memory'
 import { ShareMemoryDialog } from '@/components/ShareMemoryDialog'
-import { PptComposer } from '@/components/PptComposer'
 import { MeetingButton } from '@/components/MeetingButton'
 import { LivePanel } from '@/pages/Meeting/LivePanel'
 import { useMeetingRecorder } from '@/hooks/useMeetingRecorder'
@@ -64,10 +59,6 @@ function isReasoningPayload(payload: Record<string, unknown>): boolean {
     meta?.phase
   const kind = typeof rawKind === 'string' ? rawKind.toLowerCase() : ''
   return ['reasoning', 'thinking', 'thought', 'analysis', 'plan', 'process'].includes(kind)
-}
-
-function buildOutboundText(text: string, selectedSkill: string | null): string {
-  return selectedSkill ? `请使用「${selectedSkill}」技能处理下面的任务：\n\n${text}` : text
 }
 
 /** 截断兜底:LLM 标题不可用时,按首句/标点边界裁到 ~16 字,不强行加省略号 */
@@ -177,10 +168,6 @@ export default function ChatPage(): React.JSX.Element {
 
   const wsConnected = useAgentStore((s) => s.ready)
   const clearExecutionEvents = useAgentStore((s) => s.clearExecutionEvents)
-  const skills = useSkillStore((s) => s.skills)
-  const setSkills = useSkillStore((s) => s.setSkills)
-  const activeSkill = useSkillStore((s) => s.activeSkill)
-  const setActiveSkill = useSkillStore((s) => s.setActiveSkill)
   const meetingRec = useMeetingRecorder()
 
   const [inputText, setInputText] = useState('')
@@ -188,9 +175,6 @@ export default function ChatPage(): React.JSX.Element {
   // 待发送附件:点上传/拖拽后先挂在此处,等用户输入文字一并发送(不立即入知识库)
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [listening, setListening] = useState(false)
-  // 技能选择浮层开关
-  const [skillMenuOpen, setSkillMenuOpen] = useState(false)
-  const { importing: skillImporting, handleImport: handleSkillImport } = useSkillImport()
   // 待分流确认的项目记忆候选（null 表示当前无弹窗）
   const [candidate, setCandidate] = useState<MemoryCandidate | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
@@ -205,7 +189,6 @@ export default function ChatPage(): React.JSX.Element {
   } | null>(null)
   const composerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const skillMenuRef = useRef<HTMLDivElement>(null)
   // 用户点「停止」后置 true,忽略本轮后续 streaming/final 帧;下次发送时复位
   const stoppedRef = useRef(false)
   // primer(历史回顾)回合进行中置 true:其 streaming/final 帧不进 UI、不落库;
@@ -223,33 +206,6 @@ export default function ChatPage(): React.JSX.Element {
     setInputText(prompt)
     textareaRef.current?.focus()
   }, [])
-
-  // PPT 入口:激活 ppt 技能并把结构化 prompt 填入输入框,由用户确认后发送
-  const onGeneratePpt = useCallback(
-    (prompt: string) => {
-      const ppt = skills.find((s) => s.id === 'ppt')
-      if (!ppt) {
-        toast.error(t('chat.ppt.needSkill'))
-        return
-      }
-      // 显式激活当前 chatId 的 ppt 技能
-      const chatId = useChatStore.getState().activeChatId
-      if (chatId) {
-        void window.api.agentSkill.activate(chatId, 'ppt')
-      }
-      setActiveSkill('ppt')
-      fillPrompt(prompt)
-    },
-    [skills, setActiveSkill, fillPrompt, t]
-  )
-
-  useEffect(() => {
-    if (skills.length > 0) return
-    skillsAPI
-      .list()
-      .then((data) => setSkills(data.skills ?? []))
-      .catch(() => {})
-  }, [skills.length, setSkills])
 
   useEffect(() => {
     const sessionKey = useChatStore.getState().activeChatId || 'default'
@@ -440,18 +396,6 @@ export default function ChatPage(): React.JSX.Element {
     virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'smooth' })
   }, [messages.length])
 
-  // 点击技能浮层外部时关闭
-  useEffect(() => {
-    if (!skillMenuOpen) return
-    const onPointerDown = (e: PointerEvent): void => {
-      if (skillMenuRef.current && !skillMenuRef.current.contains(e.target as Node)) {
-        setSkillMenuOpen(false)
-      }
-    }
-    document.addEventListener('pointerdown', onPointerDown)
-    return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [skillMenuOpen])
-
   useEffect(() => {
     return () => {
       if (recognitionRef.current) {
@@ -483,20 +427,18 @@ export default function ChatPage(): React.JSX.Element {
     return () => agentWs.off('memory-candidate', handler)
   }, [])
 
-  // 实际发送一段用户文本到 agent(注入项目记忆 + 中文指令);供首次发送与重新生成复用
+  // 实际发送一段用户文本到 agent(注入项目记忆);供首次发送与重新生成复用
   const dispatchToAgent = useCallback(
     async (text: string, attachments?: Array<{ id: string; name: string }>) => {
       stoppedRef.current = false
       primerPendingRef.current = false
       clearExecutionEvents()
-      const outbound = buildOutboundText(text, activeSkill)
       // 发给 agent 前注入团队项目记忆(best-effort:检索失败原样返回,不阻断发送)。
-      // 用户气泡与本地持久化仍存原始 text,只增强发给 agent 的内容;
-      // 技能前缀在前、项目记忆包裹其外,确保技能指令与参考记忆都进入 prompt。
-      const enriched = await retrieveForMessage(outbound)
+      // 用户气泡与本地持久化仍存原始 text,只增强发给 agent 的内容。
+      const enriched = await retrieveForMessage(text)
       agentWs.sendMessage(enriched, attachments)
     },
-    [activeSkill, clearExecutionEvents]
+    [clearExecutionEvents]
   )
 
   const handleSend = useCallback(async () => {
@@ -547,7 +489,6 @@ export default function ChatPage(): React.JSX.Element {
       }
       addUserMessage(text, outboundAttachments)
       // 用户消息落本地库(原 AgentRuntime 持久化已随后端切换到 gateway 移除)。
-      // 存用户原始输入 text(非 buildOutboundText 的技能前缀文本),与气泡显示一致;
       // 此处 chatId 对应会话已在上方 upsert/已存在,不会写孤儿消息。失败仅 warn,不打断发送。
       if (chatId) {
         void db.session
@@ -752,18 +693,6 @@ export default function ChatPage(): React.JSX.Element {
   const hasReadyAttachment = pendingAttachments.some((a) => a.status === 'ready')
   const canSend =
     wsConnected && (inputText.trim().length > 0 || hasReadyAttachment)
-  // 仅展示已启用的技能(未启用的后端不加载,选了也无效)
-  // 当前会话已激活的技能 id(per chatId 激活,从主进程拉)
-  const activeChatId = useChatStore((s) => s.activeChatId)
-  const [activeSkillIds, setActiveSkillIds] = useState<string[]>([])
-  useEffect(() => {
-    const chatId = activeChatId || 'default'
-    window.api.agentSkill
-      .active(chatId)
-      .then((ids) => setActiveSkillIds(ids as string[]))
-      .catch(() => setActiveSkillIds([]))
-  }, [activeChatId, skills])
-  const enabledSkills = skills.filter((s) => activeSkillIds.includes(s.id))
 
   return (
     <div className={styles.page}>
@@ -865,88 +794,6 @@ export default function ChatPage(): React.JSX.Element {
           />
           <div className={styles.composerBar}>
             <div className={styles.composerTools}>
-              <PptComposer disabled={!wsConnected} onGenerate={onGeneratePpt} />
-              <div className={styles.skillPicker} ref={skillMenuRef}>
-                <button
-                  type="button"
-                  className={`${styles.skillTrigger} ${activeSkill ? styles.skillActive : ''}`}
-                  onClick={() => setSkillMenuOpen((v) => !v)}
-                  title={
-                    activeSkill ? `${t('chat.skill.using')}: ${activeSkill}` : t('chat.skill.pick')
-                  }
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      d="M12 3 4 7v6c0 4.5 3.4 7.3 8 8 4.6-.7 8-3.5 8-8V7l-8-4Z"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  <span>{activeSkill ?? t('chat.skill.label')}</span>
-                  {activeSkill && (
-                    <span
-                      className={styles.skillClear}
-                      role="button"
-                      aria-label={t('chat.skill.clear')}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setActiveSkill(null)
-                        setSkillMenuOpen(false)
-                      }}
-                    >
-                      ✕
-                    </span>
-                  )}
-                </button>
-                {skillMenuOpen && (
-                  <div className={styles.skillMenu}>
-                    <button
-                      type="button"
-                      className={styles.skillImport}
-                      disabled={skillImporting}
-                      onClick={() => void handleSkillImport()}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                      {skillImporting ? '导入中…' : t('chat.skill.import')}
-                    </button>
-                    {enabledSkills.length === 0 ? (
-                      <div className={styles.skillEmpty}>{t('chat.skill.empty')}</div>
-                    ) : (
-                      enabledSkills.map((s) => (
-                        <button
-                          key={s.id}
-                          type="button"
-                          className={`${styles.skillItem} ${
-                            activeSkill === s.id ? styles.skillItemActive : ''
-                          }`}
-                          onClick={() => {
-                            setActiveSkill(activeSkill === s.id ? null : s.id)
-                            setSkillMenuOpen(false)
-                          }}
-                        >
-                          <span className={styles.skillItemName}>{s.label}</span>
-                          {(skillDescriptionsZh[s.id] ?? s.description) && (
-                            <span className={styles.skillItemDesc}>
-                              {skillDescriptionsZh[s.id] ?? s.description}
-                            </span>
-                          )}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
               <MeetingButton disabled={!wsConnected} onStart={() => void meetingRec.start()} />
               <ScopeSwitcher />
             </div>
