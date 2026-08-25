@@ -1,6 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSkillStore } from '@/stores/skillStore'
 import { skillsAPI, type Skill } from '@/services/agent/skills'
 import { toast } from '@/components/Toast'
 import styles from './skills.module.scss'
@@ -31,7 +30,8 @@ interface SkillGroup {
 
 export default function SkillsPage(): React.JSX.Element {
   const { t } = useTranslation()
-  const { skills, selectedSkill, setSkills, setSelectedSkill } = useSkillStore()
+  const [skills, setSkills] = useState<Skill[]>([])
+  const [selectedSkill, setSelectedSkill] = useState<string | null>(null)
   const [detail, setDetail] = useState<{ content: string; files: string[] } | null>(null)
   const [toggling, setToggling] = useState(false)
 
