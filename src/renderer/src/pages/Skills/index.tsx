@@ -2,8 +2,6 @@ import { useEffect, useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSkillStore } from '@/stores/skillStore'
 import { skillsAPI, type Skill } from '@/services/agent/skills'
-import { useChatStore } from '@/stores/chatStore'
-import { useSkillImport } from '@/hooks/useSkillImport'
 import { toast } from '@/components/Toast'
 import styles from './skills.module.scss'
 import clsx from 'clsx'
@@ -34,11 +32,8 @@ interface SkillGroup {
 export default function SkillsPage(): React.JSX.Element {
   const { t } = useTranslation()
   const { skills, selectedSkill, setSkills, setSelectedSkill } = useSkillStore()
-  const activeChatId = useChatStore((s) => s.activeChatId) || 'default'
   const [detail, setDetail] = useState<{ content: string; files: string[] } | null>(null)
-  const [activeIds, setActiveIds] = useState<string[]>([])
-  const [deleting, setDeleting] = useState(false)
-  const { importing, handleImport } = useSkillImport()
+  const [toggling, setToggling] = useState(false)
 
   useEffect(() => {
     skillsAPI
@@ -58,14 +53,6 @@ export default function SkillsPage(): React.JSX.Element {
       .catch(() => setDetail(null))
   }, [selectedSkill])
 
-  // 当前会话的激活技能(per chatId)
-  useEffect(() => {
-    window.api.agentSkill
-      .active(activeChatId)
-      .then((ids) => setActiveIds(ids as string[]))
-      .catch(() => setActiveIds([]))
-  }, [activeChatId, skills])
-
   const groups = useMemo<SkillGroup[]>(() => {
     const sorted = [...skills].sort((a, b) =>
       a.label.localeCompare(b.label, 'zh-CN', { sensitivity: 'base' })
@@ -83,39 +70,20 @@ export default function SkillsPage(): React.JSX.Element {
 
   const handleToggle = async (skill: Skill, e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
-    const isActive = activeIds.includes(skill.id)
+    if (toggling) return
+    setToggling(true)
     try {
-      if (isActive) {
-        await window.api.agentSkill.deactivate(activeChatId, skill.id)
-        setActiveIds((prev) => prev.filter((id) => id !== skill.id))
+      if (skill.status === 'enabled') {
+        await skillsAPI.deactivate('default', skill.id)
       } else {
-        await window.api.agentSkill.activate(activeChatId, skill.id)
-        setActiveIds((prev) => [...prev, skill.id])
+        await skillsAPI.activate('default', skill.id)
       }
+      const updated = await skillsAPI.list()
+      setSkills(updated.skills ?? [])
     } catch (err) {
       toast.error(`切换失败:${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
-
-  const handleDelete = async (name: string): Promise<void> => {
-    if (deleting) return
-    if (!window.confirm(`确定删除技能「${name}」？此操作不可撤销。`)) return
-    setDeleting(true)
-    try {
-      const res = await skillsAPI.remove(name)
-      if (res.error) {
-        toast.error(res.error)
-      } else {
-        setSelectedSkill(null)
-        setDetail(null)
-        const updated = await skillsAPI.list()
-        setSkills(updated.skills ?? updated)
-        toast.success(t('skills.deleted', '技能已删除'))
-      }
-    } catch (e) {
-      toast.error(`删除失败：${e instanceof Error ? e.message : String(e)}`)
     } finally {
-      setDeleting(false)
+      setToggling(false)
     }
   }
 
@@ -125,7 +93,7 @@ export default function SkillsPage(): React.JSX.Element {
   }
 
   const currentSkill = skills.find((s) => s.id === selectedSkill)
-  const currentIsActive = currentSkill ? activeIds.includes(currentSkill.id) : false
+  const currentIsActive = currentSkill?.status === 'enabled'
 
   return (
     <div className={styles.page}>
@@ -135,19 +103,6 @@ export default function SkillsPage(): React.JSX.Element {
             <span>Skills</span>
             <strong>{t('skills.title')}</strong>
           </div>
-          <button className={styles.importBtn} onClick={handleImport} disabled={importing}>
-            <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            {importing ? t('skills.importing') : t('skills.import')}
-          </button>
         </div>
         <div className={styles.groupList}>
           {groups.map((group) => (
@@ -155,7 +110,7 @@ export default function SkillsPage(): React.JSX.Element {
               <div className={styles.letterBadge}>{group.letter}</div>
               <div className={styles.grid}>
                 {group.items.map((s) => {
-                  const isActive = activeIds.includes(s.id)
+                  const isActive = s.status === 'enabled'
                   return (
                     <div
                       key={s.id}
@@ -186,15 +141,9 @@ export default function SkillsPage(): React.JSX.Element {
             <button
               className={clsx(styles.toggleBtn, currentIsActive && styles.on)}
               onClick={(e) => currentSkill && handleToggle(currentSkill, e)}
+              disabled={toggling}
             >
               {currentIsActive ? t('skills.disable') : t('skills.enable')}
-            </button>
-            <button
-              className={styles.deleteBtn}
-              onClick={() => handleDelete(selectedSkill)}
-              disabled={deleting}
-            >
-              {deleting ? t('skills.deleting') : t('skills.delete')}
             </button>
             <button className={styles.closeBtn} onClick={handleClose}>
               ✕
