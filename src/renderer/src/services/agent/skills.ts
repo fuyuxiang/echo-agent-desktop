@@ -2,7 +2,7 @@
 // Skills 走 echo-agent 网关: Desktop 仅做镜像展示 + 激活态转发。
 // 真实数据(列表/状态/依赖/版本)由 echo-agent 通过 skill.list 帧返回;
 // 启用/禁用通过 skill.enable / skill.disable 帧发给 echo-agent。
-// 本地不再依赖 window.api.agentSkill.* IPC,该 IPC 将在后续 Task 6 中下线。
+// 原 window.api.agentSkill.* 已在 Task 6 删除,IPC 桥接走 agentChat.sendSkill* 异步配对。
 
 import { agentWs } from './runtime-client'
 
