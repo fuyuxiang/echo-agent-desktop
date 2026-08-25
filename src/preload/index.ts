@@ -188,6 +188,13 @@ const api: BridgeApi = {
     }) => ipcRenderer.invoke(IpcChannels.agentChat.init, cfg),
     generateTitle: (firstUserMessage: string): Promise<string> =>
       ipcRenderer.invoke(IpcChannels.agentChat.generateTitle, { firstUserMessage }),
+    // Skills 桥接:fire-and-await-ack,响应走 onEvent + request_id 配对
+    sendSkillList: (requestId: string): Promise<void> =>
+      ipcRenderer.invoke(IpcChannels.agentChat.sendSkillList, { requestId }) as Promise<void>,
+    sendSkillEnable: (name: string, requestId: string): Promise<void> =>
+      ipcRenderer.invoke(IpcChannels.agentChat.sendSkillEnable, { name, requestId }) as Promise<void>,
+    sendSkillDisable: (name: string, requestId: string): Promise<void> =>
+      ipcRenderer.invoke(IpcChannels.agentChat.sendSkillDisable, { name, requestId }) as Promise<void>,
     onEvent: (handler: (ev: Record<string, unknown>) => void) => {
       const listener = (_e: Electron.IpcRendererEvent, ev: Record<string, unknown>): void =>
         handler(ev)

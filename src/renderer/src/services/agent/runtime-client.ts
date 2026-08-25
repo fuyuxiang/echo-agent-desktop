@@ -9,6 +9,14 @@ function generateRequestId(): string {
   return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+/**
+ * 生成 skill request_id:与 message requestId 区分前缀(skill-*),便于路由识别。
+ * skill 请求独立于 activeRequestId,不参与 message 流式响应的 requestId 配对。
+ */
+function generateSkillRequestId(): string {
+  return `skill-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 class RuntimeClient {
   private listeners = new Map<string, Set<WsEventHandler>>()
   private chatId = ''
@@ -57,6 +65,84 @@ class RuntimeClient {
   }
 
   /**
+   * 拉取已安装 skills 列表。
+   * 内部:生成 request_id,通过 IPC 发 skill.list 帧;在 'skill.list' 通道里按 request_id
+   * 匹配到 skill.list_result(成功)/error(失败)后 resolve/reject,自带 10s 超时。
+   */
+  sendSkillList(): Promise<Array<Record<string, unknown>>> {
+    const rid = generateSkillRequestId()
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const handler = (ev: Record<string, unknown>): void => {
+        if (settled) return
+        if (ev.request_id !== rid) return
+        if (ev.type === 'skill.list_result') {
+          settled = true
+          agentWs.off('skill.list', handler)
+          resolve((ev.skills as Array<Record<string, unknown>>) ?? [])
+        } else if (ev.type === 'error') {
+          settled = true
+          agentWs.off('skill.list', handler)
+          reject(new Error(String(ev.message ?? 'unknown error')))
+        }
+      }
+      agentWs.on('skill.list', handler)
+      void window.api.agentChat.sendSkillList(rid)
+      setTimeout(() => {
+        if (!settled) {
+          settled = true
+          agentWs.off('skill.list', handler)
+          reject(new Error('sendSkillList timeout'))
+        }
+      }, 10_000)
+    })
+  }
+
+  /** 启用指定 skill(IPC 触发 echo-agent 在网关侧开启),等 accepted/ack 后 resolve。 */
+  sendSkillEnable(name: string): Promise<void> {
+    return this.sendSkillVoidFrame('skill.enable', name)
+  }
+
+  /** 关闭指定 skill,等 accepted/ack 后 resolve。 */
+  sendSkillDisable(name: string): Promise<void> {
+    return this.sendSkillVoidFrame('skill.disable', name)
+  }
+
+  private sendSkillVoidFrame(
+    type: 'skill.enable' | 'skill.disable',
+    name: string
+  ): Promise<void> {
+    const rid = generateSkillRequestId()
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const handler = (ev: Record<string, unknown>): void => {
+        if (settled) return
+        if (ev.request_id !== rid) return
+        if (ev.type === 'accepted') {
+          settled = true
+          agentWs.off('skill.list', handler)
+          resolve()
+        } else if (ev.type === 'error') {
+          settled = true
+          agentWs.off('skill.list', handler)
+          reject(new Error(String(ev.message ?? 'unknown error')))
+        }
+      }
+      agentWs.on('skill.list', handler)
+      void (type === 'skill.enable'
+        ? window.api.agentChat.sendSkillEnable(name, rid)
+        : window.api.agentChat.sendSkillDisable(name, rid))
+      setTimeout(() => {
+        if (!settled) {
+          settled = true
+          agentWs.off('skill.list', handler)
+          reject(new Error(`${type} timeout`))
+        }
+      }, 10_000)
+    })
+  }
+
+  /**
    * 中止当前活跃请求(若有)。
    * UI 的 Stop 按钮调这里;会同时调后端 abort 和本地丢弃后续 chunk。
    */
@@ -95,8 +181,20 @@ class RuntimeClient {
    * - 优先按 requestId 匹配(ev.request_id);命中则放行
    * - 没有 requestId 时按 chatId 兜底(向后兼容旧 frame)
    * - 已切换会话的旧请求,requestId 不再等于 activeRequestId,直接丢弃
+   * - skill.* 帧不走 message requestId 路由,直接转发到 'skill.list' 通道
+   *   (handler 内部按 request_id 自行配对,因为 skill 请求是独立的 fire-and-await-ack)
    */
   private route(ev: Record<string, unknown>): void {
+    const type = ev.type as string
+
+    // skill.* 帧必须在 activeRequestId 过滤前转发——skill 帧的 request_id
+    // 是 'skill-...' 前缀,跟 message 的 'req-...' 完全不同,会直接被过滤掉。
+    // 全部走单一 'skill.list' 通道,handler 内部按 ev.type/request_id 区分。
+    if (typeof type === 'string' && type.startsWith('skill.')) {
+      this.emit('skill.list', ev)
+      return
+    }
+
     const evReqId = ev.request_id as string | undefined
     const evChatId = ev.chatId as string | undefined
 
@@ -108,7 +206,6 @@ class RuntimeClient {
       if (evChatId && evChatId !== this.chatId) return
     }
 
-    const type = ev.type as string
     if (type === 'streaming') this.emit('message.streaming', ev)
     else if (type === 'final') this.emit('message.final', ev)
     else if (type === 'progress') this.emit('message.progress', ev)
