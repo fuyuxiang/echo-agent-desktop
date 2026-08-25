@@ -198,4 +198,46 @@ describe('runtime-client agentWs', () => {
     const rid = sendSkillDisable.mock.calls[0][1] as string
     expect(rid).toMatch(/^skill-/)
   })
+
+  it('sendSkillList 在收到 skill.list_result(skill- 前缀 request_id)时 resolve skills 数组', async () => {
+    const ws = await load()
+    ws.connect('', 'c1')
+    const promise = ws.sendSkillList()
+    const rid = sendSkillList.mock.calls[0][0] as string
+    const skills = [{ id: 'ppt-author', label: 'PPT' }]
+    eventHandler!({ type: 'skill.list_result', request_id: rid, skills })
+    await expect(promise).resolves.toEqual(skills)
+  })
+
+  it('sendSkillEnable 在收到 accepted(skill- 前缀 request_id)时 resolve', async () => {
+    const ws = await load()
+    ws.connect('', 'c1')
+    const promise = ws.sendSkillEnable('ppt-author')
+    const rid = sendSkillEnable.mock.calls[0][1] as string
+    eventHandler!({ type: 'accepted', request_id: rid })
+    await expect(promise).resolves.toBeUndefined()
+  })
+
+  it('sendSkillEnable 在收到 error 帧(skill- 前缀 request_id)时 reject 带 message', async () => {
+    const ws = await load()
+    ws.connect('', 'c1')
+    const promise = ws.sendSkillEnable('ppt-author')
+    const rid = sendSkillEnable.mock.calls[0][1] as string
+    eventHandler!({ type: 'error', request_id: rid, message: 'skill not found' })
+    await expect(promise).rejects.toThrow('skill not found')
+  })
+
+  it('Regression: sendSkillEnable 不匹配 skill- 前缀的 ack 帧(防止 message ack 误路由)', async () => {
+    // ack 帧的 request_id 若不是 skill- 前缀,说明它属于 message 流,
+    // 不应被 sendSkillEnable 的 handler 消费——避免误 resolve。
+    const ws = await load()
+    ws.connect('', 'c1')
+    const promise = ws.sendSkillEnable('ppt-author')
+    const rid = sendSkillEnable.mock.calls[0][1] as string
+    // 错误的 request_id 前缀(req- 误传)
+    eventHandler!({ type: 'accepted', request_id: 'req-other' })
+    // 此时 Promise 应仍未 settle;发一个匹配的 ack 来 resolve 清理
+    eventHandler!({ type: 'accepted', request_id: rid })
+    await expect(promise).resolves.toBeUndefined()
+  })
 })

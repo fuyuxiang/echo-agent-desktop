@@ -181,21 +181,24 @@ class RuntimeClient {
    * - 优先按 requestId 匹配(ev.request_id);命中则放行
    * - 没有 requestId 时按 chatId 兜底(向后兼容旧 frame)
    * - 已切换会话的旧请求,requestId 不再等于 activeRequestId,直接丢弃
-   * - skill.* 帧不走 message requestId 路由,直接转发到 'skill.list' 通道
-   *   (handler 内部按 request_id 自行配对,因为 skill 请求是独立的 fire-and-await-ack)
+   * - skill 异步配对帧(request_id 以 'skill-' 开头)走单一 'skill.list' 通道,
+   *   handler 内部按 ev.type/request_id 自行配对。
+   *   注意:不能用 type.startsWith('skill.') 识别 skill 帧——echo-agent 对
+   *   skill.enable/skill.disable 的响应 type 是 'accepted'/'error',不是 'skill.*';
+   *   skill.list 的响应 type 才是 'skill.list_result'。识别码是 request_id 前缀。
    */
   private route(ev: Record<string, unknown>): void {
-    const type = ev.type as string
+    const evReqId = ev.request_id as string | undefined
 
-    // skill.* 帧必须在 activeRequestId 过滤前转发——skill 帧的 request_id
-    // 是 'skill-...' 前缀,跟 message 的 'req-...' 完全不同,会直接被过滤掉。
+    // skill 帧必须在 activeRequestId 过滤前转发——skill 帧的 request_id 是
+    // 'skill-...' 前缀,跟 message 的 'req-...' 完全不同,会直接被过滤掉。
     // 全部走单一 'skill.list' 通道,handler 内部按 ev.type/request_id 区分。
-    if (typeof type === 'string' && type.startsWith('skill.')) {
+    if (typeof evReqId === 'string' && evReqId.startsWith('skill-')) {
       this.emit('skill.list', ev)
       return
     }
 
-    const evReqId = ev.request_id as string | undefined
+    const type = ev.type as string
     const evChatId = ev.chatId as string | undefined
 
     // requestId 路由优先
