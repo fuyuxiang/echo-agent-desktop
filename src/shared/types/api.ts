@@ -347,13 +347,7 @@ export interface BridgeApi {
     }>
   }
 
-  /** 技能 IPC(P4) */
-  agentSkill: {
-    list(): Promise<Array<{ id: string; label: string; description: string; kind: 'prompt' | 'code' }>>
-    active(chatId: string): Promise<string[]>
-    activate(chatId: string, skillId: string): Promise<{ success: boolean }>
-    deactivate(chatId: string, skillId: string): Promise<{ success: boolean }>
-  }
+  /** agent:skill IPC(P6 删除 agentSkill.*,走 agentChat.sendSkill* 异步配对) */
 
   /** 平台信息(同步常量,preload 注入) */
   platform: {

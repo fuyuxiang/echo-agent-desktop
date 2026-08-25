@@ -54,7 +54,6 @@ describe('preload bridge', () => {
       'agentChat',
       'agentMemory',
       'agentPermission',
-      'agentSkill',
       'app',
       'asr',
       'backup',
@@ -238,7 +237,7 @@ describe('preload bridge', () => {
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.meeting.summarize, 'm1', 'title', [])
   })
 
-  it('agentChat/agentPermission/agentMemory/agentSkill 桥接请求与事件', async () => {
+  it('agentChat/agentPermission/agentMemory 桥接请求与事件', async () => {
     const api = await loadApi()
 
     await api.agentChat.send('c1', 'hello', [{ id: 'a1', name: 'a.txt' }])
@@ -296,19 +295,6 @@ describe('preload bridge', () => {
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.agentMemory.update, {
       id: 1,
       patch: { content: 'new' }
-    })
-
-    await api.agentSkill.list()
-    await api.agentSkill.active('c1')
-    await api.agentSkill.activate('c1', 'ppt')
-    await api.agentSkill.deactivate('c1', 'ppt')
-    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.agentSkill.activate, {
-      chatId: 'c1',
-      skillId: 'ppt'
-    })
-    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.agentSkill.deactivate, {
-      chatId: 'c1',
-      skillId: 'ppt'
     })
   })
 })
