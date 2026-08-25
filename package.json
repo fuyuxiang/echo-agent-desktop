@@ -44,7 +44,6 @@
     "electron-updater": "^6.8.9",
     "electron-window-state": "^5.0.3",
     "pdfjs-dist": "^4.10.38",
-    "pptxgenjs": "4.0.1",
     "sherpa-onnx-node": "^1.13.2",
     "ws": "^8.21.0",
     "yaml": "^2.9.0"
