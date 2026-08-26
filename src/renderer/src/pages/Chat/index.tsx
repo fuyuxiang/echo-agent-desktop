@@ -9,9 +9,6 @@ import { agentWs } from '@/services/agent/runtime-client'
 import { attachmentsAPI } from '@/services/agent/attachments'
 import { db } from '@/utils/db'
 import { logger } from '@/utils/logger'
-import { confirmShareToProject, type MemoryCandidate } from '@/services/memory-router'
-import { retrieveForMessage } from '@/services/project-memory'
-import { ShareMemoryDialog } from '@/components/ShareMemoryDialog'
 import { MeetingButton } from '@/components/MeetingButton'
 import { LivePanel } from '@/pages/Meeting/LivePanel'
 import { useMeetingRecorder } from '@/hooks/useMeetingRecorder'
@@ -185,8 +182,6 @@ export default function ChatPage(): React.JSX.Element {
   // 待发送附件:点上传/拖拽后先挂在此处,等用户输入文字一并发送(不立即入知识库)
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
   const [listening, setListening] = useState(false)
-  // 待分流确认的项目记忆候选（null 表示当前无弹窗）
-  const [candidate, setCandidate] = useState<MemoryCandidate | null>(null)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const recognitionRef = useRef<{
@@ -428,34 +423,14 @@ export default function ChatPage(): React.JSX.Element {
     }
   }, [])
 
-  // 订阅 agent 下行的项目记忆候选事件,触发 ShareMemoryDialog。
-  // 接入点已就位:运行时推送 type='memory-candidate' 且 payload 含 content/tags/reason 时,
-  // 自动设置 candidate 触发弹窗。当前 WS 协议尚未约定该下行信号,这里不臆造协议、不做假数据自动弹窗,
-  // 仅作为消费端的预留接入。
-  useEffect(() => {
-    const handler = (payload: Record<string, unknown>): void => {
-      const { content, tags, reason } = payload
-      if (typeof content !== 'string' || content.length === 0) return
-      const nextTags = Array.isArray(tags)
-        ? tags.filter((t): t is string => typeof t === 'string')
-        : []
-      const nextReason = typeof reason === 'string' ? reason : undefined
-      setCandidate({ content, tags: nextTags, reason: nextReason })
-    }
-    agentWs.on('memory-candidate', handler)
-    return () => agentWs.off('memory-candidate', handler)
-  }, [])
-
-  // 实际发送一段用户文本到 agent(注入项目记忆);供首次发送与重新生成复用
+  // 实际发送一段用户文本到 Agent。组织知识由 echo-agent-org hook/tool
+  // 在 Agent 内统一注入，桌面端不再拼接另一套“项目记忆”上下文。
   const dispatchToAgent = useCallback(
     async (text: string, attachments?: Array<{ id: string; name: string }>) => {
       stoppedRef.current = false
       primerPendingRef.current = false
       clearExecutionEvents()
-      // 发给 agent 前注入团队项目记忆(best-effort:检索失败原样返回,不阻断发送)。
-      // 用户气泡与本地持久化仍存原始 text,只增强发给 agent 的内容。
-      const enriched = await retrieveForMessage(text)
-      agentWs.sendMessage(enriched, attachments)
+      agentWs.sendMessage(text, attachments)
     },
     [clearExecutionEvents]
   )
@@ -528,7 +503,7 @@ export default function ChatPage(): React.JSX.Element {
     } finally {
       sendingRef.current = false
     }
-  }, [inputText, pendingAttachments, wsConnected, isGenerating, addUserMessage, dispatchToAgent])
+  }, [inputText, pendingAttachments, wsConnected, isGenerating, addUserMessage, dispatchToAgent, t])
 
   // 停止生成:前端定格 + 调 abortActive 让后端真停(2026-08 P0-5)
   const handleStop = useCallback(() => {
@@ -565,22 +540,6 @@ export default function ChatPage(): React.JSX.Element {
     }
     await dispatchToAgent(lastUser.content)
   }, [wsConnected, isGenerating, removeLastAssistant, dispatchToAgent])
-
-  // 分流确认：用户在 ShareMemoryDialog 选择后调用，写入结果并提示
-  const handleMemoryDecide = useCallback(
-    async (decision: 'share' | 'local' | 'discard') => {
-      if (!candidate) return
-      const current = candidate
-      setCandidate(null)
-      try {
-        const { shared } = await confirmShareToProject(current, decision)
-        if (shared) toast.success(t('chat.memory.shared', '已共享到项目记忆'))
-      } catch {
-        toast.error(t('chat.memory.shareFailed', '共享到项目记忆失败'))
-      }
-    },
-    [candidate]
-  )
 
   const handleKeyDown = (e: React.KeyboardEvent): void => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -896,7 +855,6 @@ export default function ChatPage(): React.JSX.Element {
           </div>
         </div>
       </div>
-      {candidate && <ShareMemoryDialog candidate={candidate} onDecide={handleMemoryDecide} />}
       <LivePanel />
     </div>
   )

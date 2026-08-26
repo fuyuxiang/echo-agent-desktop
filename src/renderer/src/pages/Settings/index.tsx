@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { GeneralSection } from './sections/GeneralSection'
 import { ModelSection } from './sections/ModelSection'
+import { AsrSection } from './sections/AsrSection'
 import { ThemeSection } from './sections/ThemeSection'
 import { AboutSection } from './sections/AboutSection'
 import { OrgSection } from './OrgSection'
@@ -13,6 +14,7 @@ type Section =
   | 'general'
   | 'org'
   | 'model'
+  | 'asr'
   | 'theme'
   | 'memoryStore'
   | 'skills'
@@ -23,6 +25,7 @@ const SECTIONS: { key: Section; labelKey: string }[] = [
   // 排在模型配置之前:企业版用户装完第一件事就是接入,模型由服务端下发
   { key: 'org', labelKey: 'settings.sections.org' },
   { key: 'model', labelKey: 'settings.sections.model' },
+  { key: 'asr', labelKey: 'settings.sections.asr' },
   { key: 'theme', labelKey: 'settings.sections.theme' },
   { key: 'skills', labelKey: 'settings.sections.skills' },
   { key: 'memoryStore', labelKey: 'settings.sections.memoryStore' },
@@ -44,6 +47,8 @@ export default function SettingsPage(): React.JSX.Element {
         return <OrgSection />
       case 'model':
         return <ModelSection />
+      case 'asr':
+        return <AsrSection />
       case 'theme':
         return <ThemeSection />
       case 'skills':

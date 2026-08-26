@@ -7,7 +7,7 @@ import {
   searchPersonalMemory,
   deletePersonalMemory
 } from '@/services/agent-memory'
-import { listProjectMemory } from '@/services/server'
+import type { OrgMemory } from '@shared/types/org'
 import styles from './memory.module.scss'
 
 type Tab = 'personal' | 'project'
@@ -23,13 +23,19 @@ export default function MemoryPage(): React.JSX.Element {
     () => (query.trim() ? searchPersonalMemory(query.trim()) : listPersonalMemory()),
     { ready: tab === 'personal', refreshDeps: [tab] }
   )
-  const project = useRequest(() => listProjectMemory(), {
+  const project = useRequest(() => window.api.org.listMemories(), {
     ready: tab === 'project',
     refreshDeps: [tab]
   })
 
   const current = tab === 'personal' ? personal : project
-  const list = (tab === 'personal' ? personal.data : project.data) ?? []
+  const list = tab === 'personal'
+    ? (personal.data ?? [])
+    : (project.data ?? []).map((m: OrgMemory) => ({
+        id: m.id,
+        content: m.content,
+        tags: [m.kind, m.scopeName].filter(Boolean)
+      }))
 
   const handleSearch = (): void => {
     personal.refresh()

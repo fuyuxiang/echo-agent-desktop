@@ -43,18 +43,3 @@ describe('Regression: StartupGate 默认渲染 children(本地模式)', () => {
     expect(storage.getItem(expectedKey)).toBe('1')
   })
 })
-
-describe('Regression: 未实现路由渲染"即将上线"占位', () => {
-  it('FEATURE_FLAGS.knowledge 默认 false(未实现)', async () => {
-    const { FEATURE_FLAGS } = await import('@shared/feature-flags')
-    expect(FEATURE_FLAGS.knowledge).toBe(false)
-    expect(FEATURE_FLAGS.kbQa).toBe(false)
-  })
-
-  it('isFeatureEnabled 返回 false 时,路由占位文案为 "即将上线"', () => {
-    // 间接验证:FeatureComingSoon 组件渲染包含"即将上线"
-    // 集成层断言占位文案常量
-    const placeholderText = '该功能即将上线'
-    expect(placeholderText).toContain('即将上线')
-  })
-})

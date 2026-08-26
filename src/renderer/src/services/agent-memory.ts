@@ -44,5 +44,5 @@ export function searchPersonalMemory(query: string): Promise<PersonalMemory[]> {
 }
 
 export function deletePersonalMemory(id: string): Promise<void> {
-  return memoryAPI.delete(Number(id)).then(() => {})
+  return memoryAPI.delete(id).then(() => {})
 }

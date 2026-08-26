@@ -28,7 +28,8 @@ interface ChatStreamState {
   chunks: Float32Array[]
   uploadedSamples: number
   confirmedText: string
-  inflight: boolean
+  /** 严格串行的上传链，保证切片结果顺序与原始音频一致。 */
+  queue: Promise<void>
   stopped: boolean
 }
 
@@ -129,52 +130,50 @@ function concatSamples(chunks: Float32Array[]): Float32Array {
   return out
 }
 
-/** 把累积的 chunks 合并,超过阈值的部分立即触发上传 */
-function maybeFlushChat(state: ChatStreamState): void {
-  const pendingSamples = state.chunks.reduce((n, c) => n + c.length, 0)
-  if (pendingSamples < CHUNK_SAMPLES || state.inflight) return
-  // 切片:取前 CHUNK_SAMPLES,剩余留到下次
+/** 从队首精确取出 count 个样本，尾部不足时取全部。 */
+function takeSamples(state: ChatStreamState, count: number): Float32Array {
   let taken = 0
-  const takeChunks: Float32Array[] = []
-  while (taken < CHUNK_SAMPLES && state.chunks.length > 0) {
+  const selected: Float32Array[] = []
+  while (taken < count && state.chunks.length > 0) {
     const head = state.chunks[0]
-    const need = CHUNK_SAMPLES - taken
+    const need = count - taken
     if (head.length <= need) {
-      takeChunks.push(head)
+      selected.push(head)
       taken += head.length
       state.chunks.shift()
     } else {
-      takeChunks.push(head.slice(0, need))
+      selected.push(head.slice(0, need))
       state.chunks[0] = head.slice(need)
       taken += need
     }
   }
-  const samples = concatSamples(takeChunks)
-  state.inflight = true
-  void (async () => {
-    try {
-      const text = await uploadChunk(state.cfg, samples)
-      if (text) state.confirmedText = state.confirmedText ? `${state.confirmedText} ${text}` : text
-      state.uploadedSamples += samples.length
-    } finally {
-      state.inflight = false
-    }
-  })()
+  return concatSamples(selected)
+}
+
+function enqueueChatUpload(state: ChatStreamState, samples: Float32Array): void {
+  state.queue = state.queue.then(async () => {
+    const text = await uploadChunk(state.cfg, samples)
+    if (text) state.confirmedText = state.confirmedText ? `${state.confirmedText} ${text}` : text
+    state.uploadedSamples += samples.length
+  })
+}
+
+/** 把累积的 chunks 合并,超过阈值的部分立即触发上传 */
+function maybeFlushChat(state: ChatStreamState): void {
+  const pendingSamples = state.chunks.reduce((n, c) => n + c.length, 0)
+  const fullChunks = Math.floor(pendingSamples / CHUNK_SAMPLES)
+  for (let i = 0; i < fullChunks; i++) {
+    enqueueChatUpload(state, takeSamples(state, CHUNK_SAMPLES))
+  }
 }
 
 /** 强制把累积的 chunks 全部上传(同步等待 Promise),用于 stop */
 async function forceFlushChat(state: ChatStreamState): Promise<void> {
-  if (state.chunks.length === 0) return
-  const samples = concatSamples(state.chunks)
-  state.chunks = []
-  state.inflight = true
-  try {
-    const text = await uploadChunk(state.cfg, samples)
-    if (text) state.confirmedText = state.confirmedText ? `${state.confirmedText} ${text}` : text
-    state.uploadedSamples += samples.length
-  } finally {
-    state.inflight = false
+  const remaining = state.chunks.reduce((n, c) => n + c.length, 0)
+  if (remaining > 0) {
+    enqueueChatUpload(state, takeSamples(state, remaining))
   }
+  await state.queue
 }
 
 // =================== Chat 流式 API ===================
@@ -189,7 +188,7 @@ export async function createStream(): Promise<string> {
     chunks: [],
     uploadedSamples: 0,
     confirmedText: '',
-    inflight: false,
+    queue: Promise.resolve(),
     stopped: false
   })
   log.info(`[ASR] stream ${streamId} created(baseUrl=${cfg.baseUrl})`)
@@ -225,60 +224,35 @@ export async function stopStream(streamId: string): Promise<string> {
 /** 把 Chat 的 maybeFlushChat 复制给 Meeting,但额外写 segments */
 function maybeFlushMeeting(state: MeetingStreamState): void {
   const pendingSamples = state.chunks.reduce((n, c) => n + c.length, 0)
-  if (pendingSamples < CHUNK_SAMPLES || state.inflight) return
-  let taken = 0
-  const takeChunks: Float32Array[] = []
-  while (taken < CHUNK_SAMPLES && state.chunks.length > 0) {
-    const head = state.chunks[0]
-    const need = CHUNK_SAMPLES - taken
-    if (head.length <= need) {
-      takeChunks.push(head)
-      taken += head.length
-      state.chunks.shift()
-    } else {
-      takeChunks.push(head.slice(0, need))
-      state.chunks[0] = head.slice(need)
-      taken += need
-    }
+  const fullChunks = Math.floor(pendingSamples / CHUNK_SAMPLES)
+  for (let i = 0; i < fullChunks; i++) {
+    enqueueMeetingUpload(state, takeSamples(state, CHUNK_SAMPLES))
   }
-  const samples = concatSamples(takeChunks)
-  state.inflight = true
-  void (async () => {
-    try {
-      const text = await uploadChunk(state.cfg, samples)
-      if (text) {
-        state.segments.push({
-          startMs: Math.round((state.segStartSamples / SAMPLE_RATE) * 1000),
-          endMs: Math.round(((state.segStartSamples + samples.length) / SAMPLE_RATE) * 1000),
-          text
-        })
-        state.segStartSamples += samples.length
-        state.partial = text
-      }
-    } finally {
-      state.inflight = false
-    }
-  })()
 }
 
-async function forceFlushMeeting(state: MeetingStreamState): Promise<void> {
-  if (state.chunks.length === 0) return
-  const samples = concatSamples(state.chunks)
-  state.chunks = []
-  state.inflight = true
-  try {
+function enqueueMeetingUpload(state: MeetingStreamState, samples: Float32Array): void {
+  const startSamples = state.segStartSamples
+  state.segStartSamples += samples.length
+  state.queue = state.queue.then(async () => {
     const text = await uploadChunk(state.cfg, samples)
     if (text) {
       state.segments.push({
-        startMs: Math.round((state.segStartSamples / SAMPLE_RATE) * 1000),
-        endMs: Math.round(((state.segStartSamples + samples.length) / SAMPLE_RATE) * 1000),
+        startMs: Math.round((startSamples / SAMPLE_RATE) * 1000),
+        endMs: Math.round(((startSamples + samples.length) / SAMPLE_RATE) * 1000),
         text
       })
-      state.segStartSamples += samples.length
+      state.partial = text
     }
-  } finally {
-    state.inflight = false
+    state.uploadedSamples += samples.length
+  })
+}
+
+async function forceFlushMeeting(state: MeetingStreamState): Promise<void> {
+  const remaining = state.chunks.reduce((n, c) => n + c.length, 0)
+  if (remaining > 0) {
+    enqueueMeetingUpload(state, takeSamples(state, remaining))
   }
+  await state.queue
 }
 
 export async function createMeetingStream(): Promise<string> {
@@ -289,7 +263,7 @@ export async function createMeetingStream(): Promise<string> {
     chunks: [],
     uploadedSamples: 0,
     confirmedText: '',
-    inflight: false,
+    queue: Promise.resolve(),
     stopped: false,
     segments: [],
     partial: '',

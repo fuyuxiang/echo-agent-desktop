@@ -9,8 +9,12 @@ const router = vi.hoisted(() => ({
   params: { id: 'm1' }
 }))
 
-const userStore = vi.hoisted(() => ({
-  signIn: vi.fn(async () => undefined)
+const orgStore = vi.hoisted(() => ({
+  login: vi.fn(async () => ({ ok: true })),
+  init: vi.fn(async () => undefined),
+  promote: vi.fn(async () => ({ ok: true })),
+  scopes: [],
+  status: { configured: true }
 }))
 
 vi.mock('react-i18next', () => ({
@@ -24,9 +28,10 @@ vi.mock('react-router-dom', async (importOriginal) => {
     useParams: () => router.params
   }
 })
-vi.mock('@/stores/userStore', () => ({
-  useUserStore: (selector: (state: { signIn: typeof userStore.signIn }) => unknown) =>
-    selector({ signIn: userStore.signIn })
+vi.mock('@/stores/orgStore', () => ({
+  useOrgStore: (selector: (state: typeof orgStore) => unknown) => selector(orgStore),
+  isOrgReady: () => false,
+  isCacheStale: () => false
 }))
 vi.mock('../Settings/sections/GeneralSection', () => ({
   GeneralSection: () => <div>GeneralSection</div>
@@ -160,7 +165,7 @@ describe('pages', () => {
     })
     fireEvent.click(screen.getByText('login.submit'))
 
-    await waitFor(() => expect(userStore.signIn).toHaveBeenCalledWith('alice', 'secret'))
+    await waitFor(() => expect(orgStore.login).toHaveBeenCalledWith('alice', 'secret'))
     expect(router.navigate).toHaveBeenCalledWith('/chat', { replace: true })
   })
 

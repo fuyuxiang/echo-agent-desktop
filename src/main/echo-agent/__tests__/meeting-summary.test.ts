@@ -14,17 +14,23 @@ function seg(idx: number, text: string, speaker: string | null): SegmentDTO {
   return { id: idx, meetingId: 'm1', idx, startMs: 0, endMs: 0, text, speaker, createdAt: 0 }
 }
 function fakeProvider(out: string): ChatProvider {
-  return { chat: async function* (): any { yield { type: 'text', text: out } } } as unknown as ChatProvider
+  return { name: 'fake', async *chat() { yield { type: 'text' as const, text: out } } }
 }
 function errorProvider(): ChatProvider {
   return {
-    chat: async function* (): any { yield { type: 'error', message: 'boom' } }
-  } as unknown as ChatProvider
+    name: 'error',
+    async *chat() { yield { type: 'error' as const, message: 'boom' } }
+  }
 }
 function throwingProvider(): ChatProvider {
   return {
-    chat: function (): any { throw new Error('chat failed') }
-  } as unknown as ChatProvider
+    name: 'throwing',
+    chat: () => ({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => { throw new Error('chat failed') }
+      })
+    })
+  }
 }
 
 describe('buildSummaryPrompt', () => {

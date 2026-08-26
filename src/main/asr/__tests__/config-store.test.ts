@@ -1,45 +1,83 @@
 // @vitest-environment node
-// ASR 默认配置契约(2026-08 v2:硬编码 baseUrl/model/apiKey)
-//
-// 契约:
-// 1. resolveASRConfig() 同步返回硬编码默认(baseUrl/model/apiKey)
-// 2. 返回值包含硅基流动 TeleSpeechASR 默认值,无失败路径
-// 3. 类型导出 ASRConfigResolved 字段齐全
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-describe('ASR 默认配置契约', () => {
-  it('resolveASRConfig 同步返回硬编码默认 baseUrl', async () => {
-    const { resolveASRConfig } = await import('../config-store')
-    const cfg = resolveASRConfig()
-    expect(cfg.baseUrl).toBe('https://api.siliconflow.cn/v1/audio/transcriptions')
+const store = vi.hoisted(() => ({
+  get: vi.fn<(key: string) => string | undefined>(),
+  secureGet: vi.fn<(key: string) => string | undefined>()
+}))
+
+vi.mock('../../store', () => ({
+  storeGet: store.get,
+  secureGet: store.secureGet
+}))
+
+import {
+  ASR_API_KEY_STORE_KEY,
+  ASR_BASE_URL_STORE_KEY,
+  ASR_MODEL_STORE_KEY,
+  resolveASRConfig
+} from '../config-store'
+
+describe('ASR 安全配置契约', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    delete process.env.ECHO_ASR_API_KEY
+    delete process.env.ECHO_ASR_BASE_URL
+    delete process.env.ECHO_ASR_MODEL
   })
 
-  it('resolveASRConfig 返回硬编码默认 model', async () => {
-    const { resolveASRConfig } = await import('../config-store')
-    expect(resolveASRConfig().model).toBe('TeleAI/TeleSpeechASR')
+  afterEach(() => {
+    delete process.env.ECHO_ASR_API_KEY
+    delete process.env.ECHO_ASR_BASE_URL
+    delete process.env.ECHO_ASR_MODEL
   })
 
-  it('resolveASRConfig 返回非空 apiKey', async () => {
-    const { resolveASRConfig } = await import('../config-store')
-    const apiKey = resolveASRConfig().apiKey
-    expect(apiKey).toBeTruthy()
-    expect(apiKey.length).toBeGreaterThan(20)
+  it('没有凭证时明确拒绝启动，不携带任何硬编码密钥', () => {
+    expect(() => resolveASRConfig()).toThrow(/尚未配置 API Key/)
   })
 
-  it('resolveASRConfig 返回完整 ASRConfigResolved 字段', async () => {
-    const { resolveASRConfig } = await import('../config-store')
-    const cfg = resolveASRConfig()
-    expect(cfg).toEqual({
-      baseUrl: expect.any(String),
-      model: expect.any(String),
-      apiKey: expect.any(String)
+  it('从系统安全存储读取密钥，并使用非敏感默认地址和模型', () => {
+    store.secureGet.mockImplementation((key) => key === ASR_API_KEY_STORE_KEY ? 'secret' : undefined)
+    expect(resolveASRConfig()).toEqual({
+      baseUrl: 'https://api.siliconflow.cn/v1/audio/transcriptions',
+      model: 'TeleAI/TeleSpeechASR',
+      apiKey: 'secret'
     })
   })
 
-  it('多次调用返回稳定的硬编码值(无副作用)', async () => {
-    const { resolveASRConfig } = await import('../config-store')
-    const a = resolveASRConfig()
-    const b = resolveASRConfig()
-    expect(a).toEqual(b)
+  it('读取用户设置的地址和模型', () => {
+    store.secureGet.mockReturnValue('secret')
+    store.get.mockImplementation((key) => {
+      if (key === ASR_BASE_URL_STORE_KEY) return 'https://asr.example.com/transcribe'
+      if (key === ASR_MODEL_STORE_KEY) return 'corp-asr-v2'
+      return undefined
+    })
+    expect(resolveASRConfig()).toEqual({
+      baseUrl: 'https://asr.example.com/transcribe',
+      model: 'corp-asr-v2',
+      apiKey: 'secret'
+    })
+  })
+
+  it('受管环境变量优先于本地设置', () => {
+    store.secureGet.mockReturnValue('local-secret')
+    store.get.mockReturnValue('local-setting')
+    process.env.ECHO_ASR_API_KEY = 'managed-secret'
+    process.env.ECHO_ASR_BASE_URL = 'https://managed.example.com/asr'
+    process.env.ECHO_ASR_MODEL = 'managed-model'
+    expect(resolveASRConfig()).toEqual({
+      baseUrl: 'https://managed.example.com/asr',
+      model: 'managed-model',
+      apiKey: 'managed-secret'
+    })
+  })
+
+  it('拒绝把密钥发往非本机 HTTP 地址，但允许回环开发服务', () => {
+    store.secureGet.mockReturnValue('secret')
+    process.env.ECHO_ASR_BASE_URL = 'http://asr.example.com/transcribe'
+    expect(() => resolveASRConfig()).toThrow(/必须使用 HTTPS/)
+
+    process.env.ECHO_ASR_BASE_URL = 'http://127.0.0.1:9000/transcribe'
+    expect(resolveASRConfig().baseUrl).toBe('http://127.0.0.1:9000/transcribe')
   })
 })

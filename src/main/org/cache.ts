@@ -145,7 +145,7 @@ export class OrgCache {
     migrateOrgCache(db)
   }
 
-  applySync(payload: SyncPayload, cursor: number): void {
+  applySync(payload: SyncPayload, cursor: string | number): void {
     this.db.transaction(() => {
       // purgeAll:用户被禁用或移出所有分组,本地不该再留任何组织知识。
       if (payload.purgeAll) this.clearAll()
@@ -343,8 +343,8 @@ export class OrgCache {
     return { docs, chunks, lastSyncAt: last ? Number(last) : null }
   }
 
-  getCursor(): number {
-    return Number(this.getState('cursor') ?? '0')
+  getCursor(): string {
+    return this.getState('cursor') ?? '0'
   }
 
   getState(key: string): string | null {

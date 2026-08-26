@@ -3,10 +3,11 @@
  *
  * 2026-08 审计 P0-7:旧实现 ModelSection 同时把 apiKey 写入 LOCAL_CONFIG_KEY
  * (普通 storage) 和 yaml 配置文件,安全存储等于没存。
- * 修复后:apiKey 只写 safeStorage;yaml 中 apiKey 字段改为 `ref:<storeKey>` 占位符;
- * 主进程 applyModelConfig 写入 yaml 前从 safeStorage 取真值。
+ * 修复后:真实上游 key 只写 safeStorage；Agent YAML 只指向桌面端本地模型
+ * broker，并使用进程级环境变量承载 broker token，不再出现上游 key 或 ref。
  */
 import { describe, it, expect } from 'vitest'
+import { parse } from 'yaml'
 
 /**
  * 集成断言:读取实际生成的 yaml,验证 apiKey 字段不是明文。
@@ -17,7 +18,7 @@ import { describe, it, expect } from 'vitest'
 import { mergeManagedConfig } from '../../src/main/echo-agent/config-writer'
 
 describe('Regression: apiKey 不写入 yaml 明文', () => {
-  it('mergeManagedConfig 接收的 apiKey 字段必须是 ref: 占位符', () => {
+  it('yaml 不包含 safeStorage 引用或上游密钥', () => {
     const cfg = {
       baseUrl: 'https://api.example.com',
       apiKey: 'ref:openai-api-key', // 引用而非明文
@@ -26,14 +27,14 @@ describe('Regression: apiKey 不写入 yaml 明文', () => {
 
     const result = mergeManagedConfig('', cfg)
 
-    // yaml 中 apiKey 字段应等于 ref: 占位符(由主进程后续解析)
-    expect(result).toContain('apiKey: ref:openai-api-key')
-    // 绝不包含明文 key 字符串
+    const parsed = JSON.stringify(parse(result))
+    expect(parsed).not.toContain('ref:openai-api-key')
     expect(result).not.toContain('sk-secret')
     expect(result).not.toContain('sk-local')
+    expect(parsed).toContain('"apiKey":""')
   })
 
-  it('即使是"假"的明文传入,也不会与正常 ref 占位符混淆', () => {
+  it('即使调用方误传明文，配置生成器也会丢弃', () => {
     const cfg = {
       baseUrl: 'https://api.example.com',
       apiKey: 'sk-REAL-SECRET-1234567890',
@@ -42,10 +43,7 @@ describe('Regression: apiKey 不写入 yaml 明文', () => {
 
     const result = mergeManagedConfig('', cfg)
 
-    // 当前实现确实把传入的 apiKey 直接写到 yaml(2026-08 P0-7 之前的旧行为)。
-    // 这个测试**故意**失败以提醒:必须确保调用方传 ref: 占位符,而不是明文。
-    // 集成断言(ModelSection.handleSave)确保了这一点。
-    expect(result).toContain('sk-REAL-SECRET-1234567890')
+    expect(result).not.toContain('sk-REAL-SECRET-1234567890')
   })
 })
 

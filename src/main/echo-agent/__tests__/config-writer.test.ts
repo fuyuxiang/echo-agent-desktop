@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { parse } from 'yaml'
 import {
   mergeManagedConfig,
@@ -10,12 +10,6 @@ import {
   type ConfigWriterDeps
 } from '../config-writer'
 
-// index.ts pulls in electron-log/main transitively; stub it so buildConfigWriterDeps
-// can be imported without an Electron runtime.
-vi.mock('electron-log/main', () => ({ default: { info() {}, warn() {}, error() {} } }))
-
-import { buildConfigWriterDeps } from '../index'
-
 const cfg = { baseUrl: 'https://api.x.com/v1', apiKey: 'sk-abc', model: 'gpt-4o' }
 
 describe('mergeManagedConfig', () => {
@@ -23,8 +17,9 @@ describe('mergeManagedConfig', () => {
     const out = parse(mergeManagedConfig('', cfg))
     expect(out.models.default_model).toBe('gpt-4o')
     expect(out.models.providers).toEqual([
-      { name: 'desktop', apiKey: 'sk-abc', apiBase: 'https://api.x.com/v1', models: ['gpt-4o'] }
+      { name: 'desktop', apiKey: '', apiBase: 'https://api.x.com/v1', models: ['gpt-4o'] }
     ])
+    expect(JSON.stringify(out)).not.toContain('sk-abc')
   })
 
   it('writes gateway block for loopback + open auth (port 0 = OS assigned)', () => {
@@ -33,6 +28,16 @@ describe('mergeManagedConfig', () => {
     expect(out.gateway.host).toBe('127.0.0.1')
     expect(out.gateway.port).toBe(0)
     expect(out.gateway.auth.mode).toBe('open')
+  })
+
+  it('stores only the model key environment variable name', () => {
+    const out = parse(mergeManagedConfig('', {
+      ...cfg,
+      apiKeyEnv: 'ECHO_DESKTOP_MODEL_TOKEN'
+    }))
+    expect(out.models.providers[0].apiKey).toBe('')
+    expect(out.models.providers[0].apiKeyEnv).toBe('ECHO_DESKTOP_MODEL_TOKEN')
+    expect(JSON.stringify(out)).not.toContain('sk-abc')
   })
 
   it('writes channels block so gateway mode has stream output and no cli', () => {
@@ -128,17 +133,6 @@ describe('writeManagedConfig', () => {
     }
     expect(() => writeManagedConfig(deps, { baseUrl: 'u', apiKey: 'k', model: 'm' })).toThrow()
     expect(wrote).toBe(false)
-  })
-})
-
-describe('buildConfigWriterDeps', () => {
-  it('provides homeDir and fs-backed io', () => {
-    const d = buildConfigWriterDeps()
-    expect(typeof d.homeDir).toBe('string')
-    expect(d.homeDir.length).toBeGreaterThan(0)
-    expect(typeof d.readFile).toBe('function')
-    expect(typeof d.writeFile).toBe('function')
-    expect(typeof d.ensureDir).toBe('function')
   })
 })
 

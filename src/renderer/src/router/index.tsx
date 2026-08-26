@@ -4,8 +4,7 @@ import { AppLayout } from '@/layouts/AppLayout'
 import { TitleBar } from '@/layouts/TitleBar'
 import { StartupGate } from '@/components/StartupGate'
 import { ROUTES } from '@/constants'
-import { useUserStore } from '@/stores/userStore'
-import { isFeatureEnabled } from '@shared/feature-flags'
+import { useOrgStore } from '@/stores/orgStore'
 
 /**
  * 路由表(HashRouter,适配 Electron file:// 协议)
@@ -25,15 +24,12 @@ const SettingsPage = lazy(() => import('@/pages/Settings'))
 // P6: Onboarding 页面已删(Python 环境引导下线)
 // const OnboardingPage = lazy(() => import('@/pages/Onboarding'))
 const LoginPage = lazy(() => import('@/pages/Login'))
-const ExamplePage = lazy(() => import('@/pages/Example'))
 const MemoryPage = lazy(() => import('@/pages/Memory'))
 const AdminPage = lazy(() => import('@/pages/Admin'))
 const MeetingPage = lazy(() => import('@/pages/Meeting'))
 const MeetingDetailPage = lazy(() => import('@/pages/Meeting/MeetingDetail'))
-const GatewayPage = lazy(() => import('@/pages/Gateway'))
 const KanbanPage = lazy(() => import('@/pages/Kanban'))
-const SoulPage = lazy(() => import('@/pages/Soul'))
-const DiscoverPage = lazy(() => import('@/pages/Discover'))
+const SchedulesPage = lazy(() => import('@/pages/Schedules'))
 // 企业版入口:StartupGate 在未接入时拦截依赖组织服务的页面,
 // 设置页与本地知识页仍可访问。
 const AskPage = lazy(() => import('@/pages/Ask'))
@@ -50,7 +46,7 @@ function lazyLoad(node: React.ReactNode): React.JSX.Element {
  * 管理员守卫:非管理员(含未登录)重定向回工作台
  */
 function RequireAdmin({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const role = useUserStore((s) => s.user?.role)
+  const role = useOrgStore((s) => s.status?.user?.role)
   if (role !== 'admin') return <Navigate to={ROUTES.chat} replace />
   return <>{children}</>
 }
@@ -77,20 +73,6 @@ function RouteErrorPage(): React.JSX.Element {
   )
 }
 
-/** 暂未实装的入口统一占位文案(2026-08 P1-1) */
-function FeatureComingSoon({ name }: { name: string }): React.JSX.Element {
-  const t = (key: string, fallback: string) =>
-    typeof window !== 'undefined' && (window as { __t?: (k: string) => string }).__t
-      ? (window as unknown as { __t: (k: string) => string }).__t(key)
-      : fallback
-  return (
-    <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-secondary)' }}>
-      <h2 style={{ marginBottom: 12 }}>{name}</h2>
-      <p>{t('router.comingSoon', '该功能即将上线')}</p>
-    </div>
-  )
-}
-
 /**
  * 路由表。featureFlag=false 的入口:
  * - 路由仍存在(防止链接失效),但渲染 FeatureComingSoon 占位
@@ -111,29 +93,16 @@ export const router = createHashRouter([
     children: [
       { index: true, element: <Navigate to="chat" replace /> },
       { path: 'chat', element: lazyLoad(<ChatPage />) },
-      {
-        path: 'knowledge',
-        element: isFeatureEnabled('knowledge')
-          ? lazyLoad(<KnowledgePage />)
-          : lazyLoad(<FeatureComingSoon name="我的文档" />)
-      },
-      {
-        path: 'knowledge/doc',
-        element: isFeatureEnabled('knowledge')
-          ? lazyLoad(<DocViewerPage />)
-          : lazyLoad(<FeatureComingSoon name="文档查看" />)
-      },
+      { path: 'knowledge', element: lazyLoad(<KnowledgePage />) },
+      { path: 'knowledge/doc', element: lazyLoad(<DocViewerPage />) },
       { path: 'skills', element: lazyLoad(<SkillsPage />) },
       { path: 'channels', element: lazyLoad(<ChannelsPage />) },
       { path: 'settings', element: lazyLoad(<SettingsPage />) },
-      { path: 'example', element: lazyLoad(<ExamplePage />) },
       { path: 'memory', element: lazyLoad(<MemoryPage />) },
       { path: 'meeting', element: lazyLoad(<MeetingPage />) },
       { path: 'meeting/:id', element: lazyLoad(<MeetingDetailPage />) },
-      { path: 'gateway', element: lazyLoad(<GatewayPage />) },
       { path: 'kanban', element: lazyLoad(<KanbanPage />) },
-      { path: 'soul', element: lazyLoad(<SoulPage />) },
-      { path: 'discover', element: lazyLoad(<DiscoverPage />) },
+      { path: 'schedules', element: lazyLoad(<SchedulesPage />) },
       { path: 'ask', element: lazyLoad(<AskPage />) },
       { path: 'org-knowledge', element: lazyLoad(<OrgKnowledgePage />) },
       {

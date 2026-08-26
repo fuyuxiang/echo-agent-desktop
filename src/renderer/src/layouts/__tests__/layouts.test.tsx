@@ -38,7 +38,7 @@ vi.mock('@/utils/storage', () => ({
 
 // Mock window.api for stores that use persist middleware (agentStore, userStore, etc.)
 beforeEach(() => {
-  ;(window as any).api = {
+  ;(window as unknown as { api: unknown }).api = {
     store: {
       get: vi.fn(async () => undefined),
       set: vi.fn(async () => undefined),

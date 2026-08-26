@@ -45,6 +45,39 @@ export interface OrgStatus {
   cachedChunks: number
 }
 
+/** Server-side model metadata. Credentials intentionally never leave main. */
+export interface OrgModelConfig {
+  configured: boolean
+  chatProvider: string | null
+  chatModel: string | null
+  chatBaseUrl?: string | null
+  hasCredential: boolean
+  /** true means inference must go through the authenticated server proxy. */
+  proxied: boolean
+}
+
+export interface OrgAdminUser {
+  id: string
+  username: string
+  displayName: string
+  email: string | null
+  role: OrgRole
+  status: 'active' | 'disabled'
+  clearance: number
+  createdAt: number
+  lastSeenAt: number | null
+  groups: { id: string; name: string }[]
+}
+
+export interface OrgAdminGroup {
+  id: string
+  name: string
+  parentId: string | null
+  description: string | null
+  scopeId: string
+  memberCount?: number
+}
+
 export interface Citation {
   page: number | null
   heading: string
@@ -81,6 +114,24 @@ export interface OrgMemoryHit {
   content: string
   scopeKind: ScopeKind
   confidence: number
+}
+
+/** 组织记忆列表项。仅包含当前 JWT 可见范围内的服务端数据。 */
+export interface OrgMemory {
+  id: string
+  kind: string
+  content: string
+  rationale: string | null
+  confidence: number
+  hitCount: number
+  validUntil: number | null
+  status: 'active' | 'superseded' | 'retired'
+  createdAt: number
+  updatedAt: number
+  scopeId: string
+  scopeKind: ScopeKind
+  scopeName: string
+  authorName: string | null
 }
 
 export interface RetrieveDiagnostics {
@@ -123,6 +174,16 @@ export interface OrgDocListResult {
   total: number
   page: number
   size: number
+}
+
+export interface OrgDocContent {
+  docId: string
+  title: string
+  sourceType: string
+  text: string | null
+  chunks: Array<Record<string, unknown>>
+  rawUrl: string | null
+  note?: string
 }
 
 export type MemoryKind = 'fact' | 'decision' | 'convention' | 'pitfall' | 'howto'

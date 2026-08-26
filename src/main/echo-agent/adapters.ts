@@ -42,7 +42,10 @@ export function buildGatewayArgs(configPath: string, workspace: string): string[
   ]
 }
 
-export function buildGatewayEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function buildGatewayEnv(
+  base: NodeJS.ProcessEnv,
+  secrets?: { gatewayToken?: string; modelToken?: string }
+): NodeJS.ProcessEnv {
   // 不再注入顶层 ECHO_AGENT_HOST/PORT/API_TOKEN:echo-agent 的 env 覆盖用双下划线
   // 嵌套(ECHO_AGENT_GATEWAY__PORT),顶层键它不认。端口/绑定改由命令行参数传。
   const env: NodeJS.ProcessEnv = { ...base }
@@ -52,6 +55,12 @@ export function buildGatewayEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   }
   // 禁用 echo-agent 运行时按需 pip 安装:依赖应在 installer 阶段装齐,运行期不再联网装包。
   env.ECHO_AGENT_DISABLE_LAZY_INSTALLS = '1'
+  if (secrets?.gatewayToken) {
+    // echo-agent config loader accepts JSON containers for nested env settings.
+    // The token is per Desktop process and never touches echo-agent.yaml.
+    env.ECHO_AGENT_GATEWAY__AUTH__ADMIN_TOKENS = JSON.stringify([secrets.gatewayToken])
+  }
+  if (secrets?.modelToken) env.ECHO_DESKTOP_MODEL_TOKEN = secrets.modelToken
   return env
 }
 
@@ -70,11 +79,19 @@ export function createLineBuffer(onLine: (line: string) => void): (chunk: string
 }
 
 export function spawnGateway(args: {
-  configPath: string; workspace: string; homeDir: string; platform: NodeJS.Platform
+  configPath: string
+  workspace: string
+  homeDir: string
+  platform: NodeJS.Platform
+  gatewayToken?: string
+  modelToken?: string
 }): SpawnedProc {
   const py = venvPython(args.homeDir, args.platform)
   const child = spawn(py, buildGatewayArgs(args.configPath, args.workspace), {
-    env: buildGatewayEnv(process.env),
+    env: buildGatewayEnv(process.env, {
+      gatewayToken: args.gatewayToken,
+      modelToken: args.modelToken
+    }),
     stdio: ['ignore', 'pipe', 'pipe']
   })
   // stderr 仍排空避免 pipe 阻塞;stdout 行通过 onStdoutLine 暴露给 manager 解析 ready 信号
@@ -102,13 +119,14 @@ export function spawnGateway(args: {
   }
 }
 
-export async function shutdownGateway(endpoint: EchoAgentEndpoint): Promise<void> {
+export async function shutdownGateway(endpoint: EchoAgentEndpoint, token = ''): Promise<void> {
   // bounded request: a hung gateway must not block app exit (stop() has a kill fallback)
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), 3000)
   try {
     await fetch(`${endpoint.baseUrl}${endpoint.apiPrefix}/shutdown`, {
       method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       signal: ctrl.signal
     })
   } catch {
@@ -121,18 +139,24 @@ export async function shutdownGateway(endpoint: EchoAgentEndpoint): Promise<void
 // One-shot HTTP notify to echo-agent. Uses a dedicated chat_id so it never
 // rebinds the user's chat WS session. Only short summary text is sent here,
 // never the full transcript.
-export async function notifyMeeting(endpoint: EchoAgentEndpoint, text: string): Promise<void> {
+export async function notifyMeeting(
+  endpoint: EchoAgentEndpoint,
+  text: string,
+  token = '',
+  userId = 'desktop-user'
+): Promise<void> {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), 5000)
   try {
     await fetch(`${endpoint.baseUrl}${endpoint.apiPrefix}/message`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
       },
       body: JSON.stringify({
         platform: 'desktop',
-        user_id: 'desktop-user',
+        user_id: userId,
         chat_id: 'meeting-notify',
         text
       }),

@@ -21,10 +21,12 @@ export const ROUTES = {
   onboarding: '/onboarding',
   /** 登录页 */
   login: '/login',
-  /** 示例页(基建演示) */
-  example: '/example',
   /** Memory 页 */
   memory: '/memory',
+  /** Agent 任务看板 */
+  kanban: '/kanban',
+  /** Agent 定时任务 */
+  schedules: '/schedules',
   /** 管理页(仅管理员) */
   admin: '/admin',
   /** 会议记录 */
