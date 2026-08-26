@@ -1,24 +1,17 @@
 import { registerAgentChatIpc } from './agent-chat'
 import { registerAgentIpcHandlers } from './agent'
-import { registerAgentMemoryIpc } from './agent-memory'
 import { registerAppHandlers } from './app'
 import { registerAsrHandlers } from './asr'
 import { registerBackupIpcHandlers } from './backup'
 import { registerDbHandlers } from './db'
 import { registerEchoAgentIpc } from './echo-agent'
-import { registerGatewayIpcHandlers } from './gateway'
-import { registerIdentityIpc } from './identity'
-import { registerKanbanIpcHandlers } from './kanban'
 import { registerLogHandlers } from './log'
 import { registerLogsIpcHandlers } from './logs'
 import { registerOrgIpc } from './org'
 import { registerMeetingHandlers } from './meeting'
 import { registerPermissionHandlers } from './permission'
 import { registerProfileIpcHandlers } from './profiles'
-import { registerProjectMemoryIpc } from './project-memory'
-import { registerScheduleIpcHandlers } from './schedules'
 import { registerSettingsIpcHandlers } from './settings'
-import { registerSoulIpcHandlers } from './soul'
 import { registerStoreHandlers } from './store'
 import { registerSystemHandlers } from './system'
 import { registerSessionIpcHandlers } from './sessions'
@@ -40,20 +33,13 @@ export function registerAllIpcHandlers(getWindow: () => Electron.BrowserWindow |
   registerAgentIpcHandlers()
   registerAsrHandlers()
   registerMeetingHandlers()
-  registerAgentMemoryIpc()
   registerAgentChatIpc()
   registerApprovalBridge()
   registerEchoAgentIpc(getWindow)
   registerSessionIpcHandlers()
   registerProfileIpcHandlers()
-  registerScheduleIpcHandlers()
-  registerProjectMemoryIpc()
-  registerGatewayIpcHandlers()
-  registerKanbanIpcHandlers()
-  registerSoulIpcHandlers()
   registerBackupIpcHandlers()
   registerSettingsIpcHandlers()
   registerLogsIpcHandlers()
-  registerIdentityIpc()
   registerOrgIpc(getWindow)
 }

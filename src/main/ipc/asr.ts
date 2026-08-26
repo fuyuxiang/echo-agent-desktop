@@ -5,7 +5,7 @@ import { createStream, feedAudio, getResult, stopStream } from '../asr'
 /**
  * ASR IPC 注册(2026-08 v2)
  *
- * - 不再提供 asrConfig IPC,默认 baseUrl/model/apiKey 在 src/main/asr/config-store.ts 硬编码
+ * - API Key 由 safeStorage 或 ECHO_ASR_API_KEY 注入,不随应用分发
  * - 流式接口(createStream/start、stopStream/stop)保持 async 以便 IPC handler await
  */
 export function registerAsrHandlers(): void {

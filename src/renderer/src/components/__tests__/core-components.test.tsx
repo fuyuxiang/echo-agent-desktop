@@ -137,22 +137,6 @@ describe('basic components', () => {
     expect(screen.getByText('chat.thinking')).toBeTruthy()
   })
 
-  it('ShareMemoryDialog 把三个决策回调给调用方', async () => {
-    const { ShareMemoryDialog } = await import('../ShareMemoryDialog')
-    const onDecide = vi.fn()
-    render(
-      <ShareMemoryDialog
-        candidate={{ content: '需要共享的记忆', tags: ['team'], reason: '团队可复用' }}
-        onDecide={onDecide}
-      />
-    )
-    expect(screen.getByText('需要共享的记忆')).toBeTruthy()
-    fireEvent.click(screen.getByText('memory.share'))
-    fireEvent.click(screen.getByText('memory.localOnly'))
-    fireEvent.click(screen.getByText('memory.discard'))
-    expect(onDecide.mock.calls.map((c) => c[0])).toEqual(['share', 'local', 'discard'])
-  })
-
   it('StreamRenderer 流式时跳过高亮，完成后异步高亮代码块', async () => {
     const { StreamRenderer } = await import('../StreamRenderer')
     const markdown = '```ts\nconst a = 1\n```'

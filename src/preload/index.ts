@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { BridgeApi, EchoAgentEndpoint, EchoAgentStatus, ModelConfigInput, ProjectMemoryMirrorRow } from '@shared/types/api'
+import type { BridgeApi, EchoAgentEndpoint, EchoAgentStatus, ModelConfigInput } from '@shared/types/api'
 import type {
   AgentScopeConfig,
   LogLevel,
@@ -14,7 +14,6 @@ import type { MeetingSummaryInput, SegmentDTO } from '@shared/types/meeting'
 import type { OrgStatus } from '@shared/types/org'
 import type { SessionUpdateRequest, SessionSearchRequest, SessionImportData } from '@shared/session-types'
 import type { ProfileAddRequest, ProfileUpdateRequest, ProfileImportData } from '@shared/profile-types'
-import type { ScheduleAddRequest, ScheduleUpdateRequest, ScheduleExecutionLog } from '@shared/schedule-types'
 import { IpcChannels } from '@shared/ipc-channels'
 
 /**
@@ -49,12 +48,6 @@ const api: BridgeApi = {
   },
 
   db: {
-    example: {
-      list: () => ipcRenderer.invoke(IpcChannels.db.exampleList),
-      add: (content) => ipcRenderer.invoke(IpcChannels.db.exampleAdd, content),
-      remove: (id) => ipcRenderer.invoke(IpcChannels.db.exampleRemove, id),
-      clear: () => ipcRenderer.invoke(IpcChannels.db.exampleClear)
-    },
     session: {
       list: () => ipcRenderer.invoke(IpcChannels.db.sessionList),
       upsert: (input) => ipcRenderer.invoke(IpcChannels.db.sessionUpsert, input),
@@ -111,18 +104,7 @@ const api: BridgeApi = {
       ipcRenderer.invoke(IpcChannels.system.showOpenDialog, options),
     showSaveDialog: (options: SaveDialogOptions) =>
       ipcRenderer.invoke(IpcChannels.system.showSaveDialog, options),
-    httpProxy: (opts: {
-      url: string
-      method?: string
-      headers?: Record<string, string>
-      body?: string
-      timeoutMs?: number
-    }) =>
-      ipcRenderer.invoke(IpcChannels.system.httpProxy, opts) as Promise<{
-        ok: boolean
-        status: number
-        body: string
-      }>
+    ollamaRequest: (opts) => ipcRenderer.invoke(IpcChannels.system.ollamaRequest, opts)
   },
 
   log: {
@@ -209,6 +191,8 @@ const api: BridgeApi = {
     update: () => ipcRenderer.invoke(IpcChannels.echoAgent.update),
     getEndpoint: () =>
       ipcRenderer.invoke(IpcChannels.echoAgent.getEndpoint) as Promise<EchoAgentEndpoint | null>,
+    managementRequest: (request) =>
+      ipcRenderer.invoke(IpcChannels.echoAgent.managementRequest, request),
     onStatusChanged: (cb: (s: EchoAgentStatus) => void) => {
       const listener = (_e: Electron.IpcRendererEvent, s: EchoAgentStatus): void => cb(s)
       ipcRenderer.on(IpcChannels.echoAgent.statusChanged, listener)
@@ -220,18 +204,6 @@ const api: BridgeApi = {
     apply: (cfg: ModelConfigInput) => ipcRenderer.invoke(IpcChannels.echoConfig.apply, cfg)
   },
 
-  projectMemory: {
-    listMirror: () => ipcRenderer.invoke(IpcChannels.projectMemory.listMirror),
-    upsertMirror: (row: ProjectMemoryMirrorRow) =>
-      ipcRenderer.invoke(IpcChannels.projectMemory.upsertMirror, row),
-    deleteMirror: (serverId: string) =>
-      ipcRenderer.invoke(IpcChannels.projectMemory.deleteMirror, serverId)
-  },
-
-  echoMemory: {
-    list: (limit?: number) => ipcRenderer.invoke(IpcChannels.echoMemory.list, limit)
-  },
-
   agentPermission: {
     onRequest: (handler: (req: PermissionRequest) => void) => {
       const listener = (_e: Electron.IpcRendererEvent, req: PermissionRequest): void => handler(req)
@@ -240,18 +212,6 @@ const api: BridgeApi = {
     },
     respond: (res: PermissionResponse) =>
       ipcRenderer.invoke(IpcChannels.agentPermission.respond, res)
-  },
-
-  agentMemory: {
-    list: (opts: { limit: number; offset: number }) =>
-      ipcRenderer.invoke(IpcChannels.agentMemory.list, opts),
-    search: (opts: { query: string; topK?: number }) =>
-      ipcRenderer.invoke(IpcChannels.agentMemory.search, opts),
-    get: (id: number) => ipcRenderer.invoke(IpcChannels.agentMemory.get, { id }),
-    update: (id: number, patch: Record<string, unknown>) =>
-      ipcRenderer.invoke(IpcChannels.agentMemory.update, { id, patch }),
-    delete: (id: number) => ipcRenderer.invoke(IpcChannels.agentMemory.delete, { id }),
-    stats: () => ipcRenderer.invoke(IpcChannels.agentMemory.stats)
   },
 
   sessions: {
@@ -277,17 +237,6 @@ const api: BridgeApi = {
     import: (data: ProfileImportData) => ipcRenderer.invoke(IpcChannels.profiles.import, data)
   },
 
-  schedules: {
-    list: () => ipcRenderer.invoke(IpcChannels.schedules.list),
-    get: (id: string) => ipcRenderer.invoke(IpcChannels.schedules.get, id),
-    add: (request: ScheduleAddRequest) => ipcRenderer.invoke(IpcChannels.schedules.add, request),
-    update: (request: ScheduleUpdateRequest) => ipcRenderer.invoke(IpcChannels.schedules.update, request),
-    delete: (id: string) => ipcRenderer.invoke(IpcChannels.schedules.delete, id),
-    toggle: (id: string) => ipcRenderer.invoke(IpcChannels.schedules.toggle, id),
-    listLogs: (scheduleId: string) => ipcRenderer.invoke(IpcChannels.schedules.listLogs, scheduleId),
-    addLog: (log: Omit<ScheduleExecutionLog, 'id'>) => ipcRenderer.invoke(IpcChannels.schedules.addLog, log)
-  },
-
   backup: {
     list: () => ipcRenderer.invoke(IpcChannels.backup.list),
     create: (request: { name: string; description?: string }) =>
@@ -309,54 +258,29 @@ const api: BridgeApi = {
     clear: () => ipcRenderer.invoke(IpcChannels.logs.clear)
   },
 
-  gateway: {
-    listPlatforms: () => ipcRenderer.invoke(IpcChannels.gateway.listPlatforms),
-    listConfigs: () => ipcRenderer.invoke(IpcChannels.gateway.listConfigs),
-    addConfig: (request) => ipcRenderer.invoke(IpcChannels.gateway.addConfig, request),
-    updateConfig: (request) => ipcRenderer.invoke(IpcChannels.gateway.updateConfig, request),
-    removeConfig: (id) => ipcRenderer.invoke(IpcChannels.gateway.removeConfig, id),
-    getStatus: (platformId) => ipcRenderer.invoke(IpcChannels.gateway.getStatus, platformId),
-    testConnection: (request) => ipcRenderer.invoke(IpcChannels.gateway.testConnection, request)
-  },
-
-  kanban: {
-    listTasks: () => ipcRenderer.invoke(IpcChannels.kanban.listTasks),
-    getTask: (id) => ipcRenderer.invoke(IpcChannels.kanban.getTask, id),
-    addTask: (request) => ipcRenderer.invoke(IpcChannels.kanban.addTask, request),
-    updateTask: (request) => ipcRenderer.invoke(IpcChannels.kanban.updateTask, request),
-    deleteTask: (id) => ipcRenderer.invoke(IpcChannels.kanban.deleteTask, id),
-    moveTask: (request) => ipcRenderer.invoke(IpcChannels.kanban.moveTask, request),
-    listBoards: () => ipcRenderer.invoke(IpcChannels.kanban.listBoards),
-    getBoard: (id) => ipcRenderer.invoke(IpcChannels.kanban.getBoard, id),
-    addBoard: (request) => ipcRenderer.invoke(IpcChannels.kanban.addBoard, request),
-    updateBoard: (request) => ipcRenderer.invoke(IpcChannels.kanban.updateBoard, request),
-    deleteBoard: (id) => ipcRenderer.invoke(IpcChannels.kanban.deleteBoard, id)
-  },
-
-  soul: {
-    list: () => ipcRenderer.invoke(IpcChannels.soul.list),
-    get: (id) => ipcRenderer.invoke(IpcChannels.soul.get, id),
-    add: (request) => ipcRenderer.invoke(IpcChannels.soul.add, request),
-    update: (request) => ipcRenderer.invoke(IpcChannels.soul.update, request),
-    delete: (id) => ipcRenderer.invoke(IpcChannels.soul.delete, id),
-    setActive: (id) => ipcRenderer.invoke(IpcChannels.soul.setActive, id),
-    addTemplate: (request) => ipcRenderer.invoke(IpcChannels.soul.addTemplate, request),
-    updateTemplate: (request) => ipcRenderer.invoke(IpcChannels.soul.updateTemplate, request),
-    deleteTemplate: (id) => ipcRenderer.invoke(IpcChannels.soul.deleteTemplate, id)
-  },
-
   org: {
     status: () => ipcRenderer.invoke(IpcChannels.org.status),
+    modelConfig: () => ipcRenderer.invoke(IpcChannels.org.modelConfig),
     setServer: (url) => ipcRenderer.invoke(IpcChannels.org.setServer, url),
     login: (username, password) =>
       ipcRenderer.invoke(IpcChannels.org.login, username, password),
     logout: () => ipcRenderer.invoke(IpcChannels.org.logout),
     sync: () => ipcRenderer.invoke(IpcChannels.org.sync),
     retrieve: (query, opts) => ipcRenderer.invoke(IpcChannels.org.retrieve, query, opts),
+    listMemories: (params) => ipcRenderer.invoke(IpcChannels.org.listMemories, params),
     listDocs: (params) => ipcRenderer.invoke(IpcChannels.org.listDocs, params),
+    docContent: (id, page) => ipcRenderer.invoke(IpcChannels.org.docContent, id, page),
+    docRaw: (id) => ipcRenderer.invoke(IpcChannels.org.docRaw, id),
+    openDoc: (id) => ipcRenderer.invoke(IpcChannels.org.openDoc, id),
     scopes: () => ipcRenderer.invoke(IpcChannels.org.scopes),
     promote: (req) => ipcRenderer.invoke(IpcChannels.org.promote, req),
     myPromotions: () => ipcRenderer.invoke(IpcChannels.org.myPromotions),
+    adminListUsers: () => ipcRenderer.invoke(IpcChannels.org.adminListUsers),
+    adminCreateUser: (input) => ipcRenderer.invoke(IpcChannels.org.adminCreateUser, input),
+    adminUpdateUser: (id, patch) =>
+      ipcRenderer.invoke(IpcChannels.org.adminUpdateUser, id, patch),
+    adminListGroups: () => ipcRenderer.invoke(IpcChannels.org.adminListGroups),
+    adminCreateGroup: (name) => ipcRenderer.invoke(IpcChannels.org.adminCreateGroup, name),
     reportQa: (body) => ipcRenderer.invoke(IpcChannels.org.reportQa, body),
     onStatusChanged: (callback) => {
       const listener = (_e: Electron.IpcRendererEvent, status: OrgStatus): void =>
@@ -364,27 +288,6 @@ const api: BridgeApi = {
       ipcRenderer.on(IpcChannels.org.onStatusChanged, listener)
       return () => ipcRenderer.removeListener(IpcChannels.org.onStatusChanged, listener)
     }
-  },
-
-  /**
-   * 统一身份入口(2026-08 P1-2):渲染层只通过 window.api.identity 访问,
-   * 严禁直接调 org.logout 或改 safeStorage。
-   */
-  identity: {
-    current: (): Promise<{
-      userId: string
-      displayName: string
-      source: 'local' | 'org'
-      token?: string
-      role?: 'admin' | 'member'
-      groups?: Array<{ id: string; name: string }>
-    }> => ipcRenderer.invoke(IpcChannels.identity.current),
-    isOrgSignedIn: (): Promise<boolean> =>
-      ipcRenderer.invoke(IpcChannels.identity.isOrgSignedIn),
-    signOut: (): Promise<{ ok: boolean }> =>
-      ipcRenderer.invoke(IpcChannels.identity.signOut),
-    isSecureStoreAvailable: (): Promise<boolean> =>
-      ipcRenderer.invoke(IpcChannels.identity.isSecureStoreAvailable)
   },
 
   platform: {

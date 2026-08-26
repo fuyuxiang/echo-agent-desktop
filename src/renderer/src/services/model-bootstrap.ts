@@ -1,4 +1,3 @@
-import { fetchModelConfig, type ModelConfigDTO } from './server'
 import { storage } from '@/utils'
 import {
   LOCAL_CONFIG_KEY,
@@ -9,14 +8,12 @@ import {
 } from './model-config'
 import { logger } from '@/utils/logger'
 import { useAgentStore } from '@/stores/agentStore'
-import { useUserStore } from '@/stores/userStore'
 
 /**
- * 配置来源(2026-08 P0-7 合规修复):
- * - 真实 apiKey 始终走 safeStorage(API_KEY_STORE_KEY = 'openai-api-key')
- * - 写入 echo-agent.yaml 时:apiKey 字段是占位符 `ref:<storeKey>`
- * - 主进程 applyModelConfig 收到 `ref:` 前缀的 apiKey 时,从 safeStorage 取真实值注入到 yaml
- * - 切勿把真实 apiKey 写入 LOCAL_CONFIG_KEY 或随 apply 透传
+ * 配置来源:
+ * - Ollama:本机直连,不需要真实密钥;
+ * - 企业模型:只取脱敏元数据,推理经主进程认证代理转发,密钥不下发客户端;
+ * - 本地手动模型:只把 safeStorage 引用交给主进程,渲染层不读取密钥。
  */
 
 export async function applyServerModelConfigAndStart(): Promise<{
@@ -36,7 +33,8 @@ export async function applyServerModelConfigAndStart(): Promise<{
         await window.api.echoConfig.apply({
           baseUrl: toOllamaOpenAIBase(localModel.baseUrl),
           apiKey: OLLAMA_PLACEHOLDER_API_KEY,
-          model: localModel.modelName
+          model: localModel.modelName,
+          source: 'ollama'
         })
         agent.setConfigured(true)
         logger.info('[model-bootstrap] Ollama 本地模型已装配')
@@ -48,28 +46,29 @@ export async function applyServerModelConfigAndStart(): Promise<{
       }
     }
 
-    // ② 已登录:从服务器拉取配置(apiKey 是引用,不存明文)
+    // ② 已登录:只拉脱敏元数据。真实密钥始终留在服务器。
     let serverFetchFailed = false
-    if (useUserStore.getState().isAuthed) {
-      let cfg: ModelConfigDTO | null = null
+    const orgStatus = await window.api.org.status()
+    if (orgStatus.loggedIn) {
+      let cfg: Awaited<ReturnType<typeof window.api.org.modelConfig>> | null = null
       try {
-        cfg = await fetchModelConfig()
+        cfg = await window.api.org.modelConfig()
       } catch (e) {
         serverFetchFailed = true
         logger.warn('[model-bootstrap] 服务器配置拉取失败,尝试本地兜底:', e)
       }
 
-      if (cfg?.baseUrl && cfg?.modelName) {
+      if (cfg?.configured && cfg.chatModel && cfg.proxied) {
         agent.setReady(true)
         try {
           await window.api.echoConfig.apply({
-            baseUrl: cfg.baseUrl,
-            // 服务器下发的 apiKey 仅作为临时引用,主进程收到后通过 secureGet 取真值
-            apiKey: `ref:server-provided:${cfg.modelName}`,
-            model: cfg.modelName
+            baseUrl: '',
+            apiKey: '',
+            model: cfg.chatModel,
+            source: 'enterprise'
           })
           agent.setConfigured(true)
-          logger.info(`[model-bootstrap] 服务器配置已装配 model=${cfg.modelName}`)
+          logger.info(`[model-bootstrap] 企业模型代理已装配 model=${cfg.chatModel}`)
           return { ok: true, configured: true, retryable: false }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e)
@@ -93,7 +92,8 @@ export async function applyServerModelConfigAndStart(): Promise<{
         await window.api.echoConfig.apply({
           baseUrl: localCfg.baseUrl,
           apiKey: localCfg.apiKeyRef ? `ref:${localCfg.apiKeyRef}` : '',
-          model: localCfg.modelName
+          model: localCfg.modelName,
+          source: 'local'
         })
         agent.setConfigured(true)
         logger.info(`[model-bootstrap] 本地手动配置已装配 model=${localCfg.modelName}`)
@@ -107,13 +107,12 @@ export async function applyServerModelConfigAndStart(): Promise<{
 
     // ④ 无任何可用配置:UI 就绪但 runtime 未装配,用户需去设置页配置
     agent.setReady(true)
-    const isAuthed = useUserStore.getState().isAuthed
     if (serverFetchFailed) {
       // 已登录但服务器配置拉取因网络/超时失败,且无本地兜底:标记可重试,网络恢复后自愈重装配
       logger.info('[model-bootstrap] 服务器配置拉取失败且无本地兜底,等待网络恢复重试')
       return { ok: true, configured: false, retryable: true }
     }
-    if (isAuthed) {
+    if (orgStatus.loggedIn) {
       logger.info('[model-bootstrap] 已登录但服务器/本地均无配置,等待用户配置')
     } else {
       logger.info('[model-bootstrap] 未登录且无本地配置,等待用户配置')

@@ -72,41 +72,42 @@ export function registerSystemHandlers(): void {
     return result.canceled ? null : (result.filePath ?? null)
   })
 
-  // 通用 HTTP 代理(P6 从 agent 段迁出): 渲染层经主进程发起请求, 绕过 CORS
-  // 安全防护: 仅 http/https; 拒绝嵌入凭据; 支持超时中断(默认 30s)
+  // 受限 Ollama 代理。禁止渲染层传任意 URL，避免页面注入后把主进程变成
+  // 内网 SSRF/凭证转发器。
   ipcMain.handle(
-    IpcChannels.system.httpProxy,
+    IpcChannels.system.ollamaRequest,
     async (
       _e,
       opts: {
-        url: string
-        method?: string
-        headers?: Record<string, string>
-        body?: string
-        timeoutMs?: number
+        baseUrl: string
+        path: '/api/version' | '/api/tags' | '/api/pull'
+        method?: 'GET' | 'POST'
+        body?: unknown
       }
     ) => {
       let parsed: URL
       try {
-        parsed = new URL(opts.url)
+        parsed = new URL(opts.baseUrl)
       } catch {
-        return { ok: false, status: 0, body: `非法 URL: ${opts.url}` }
+        return { ok: false, status: 0, body: 'Ollama 地址无效' }
       }
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        return { ok: false, status: 0, body: `不支持的协议: ${parsed.protocol}` }
+      const allowedHost = ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)
+      const allowedPath = ['/api/version', '/api/tags', '/api/pull'].includes(opts.path)
+      if (!allowedHost || !allowedPath || parsed.username || parsed.password) {
+        return { ok: false, status: 0, body: '仅允许访问本机 Ollama 固定接口' }
       }
-      if (parsed.username || parsed.password) {
-        return { ok: false, status: 0, body: 'URL 不允许包含嵌入凭据' }
-      }
-      const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 30_000
+      parsed.pathname = opts.path
+      parsed.search = ''
+      parsed.hash = ''
+      const timeoutMs = opts.path === '/api/pull' ? 30 * 60_000 : 10_000
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), timeoutMs)
       try {
         const { net } = await import('electron')
         const resp = await net.fetch(parsed.toString(), {
           method: opts.method || 'GET',
-          headers: opts.headers,
-          body: opts.body,
+          headers: opts.body === undefined ? undefined : { 'content-type': 'application/json' },
+          body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
           signal: controller.signal
         })
         const text = await resp.text()

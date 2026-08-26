@@ -31,10 +31,6 @@ export const IpcChannels = {
 
   /** 本地数据库(better-sqlite3) */
   db: {
-    exampleList: 'db:example:list',
-    exampleAdd: 'db:example:add',
-    exampleRemove: 'db:example:remove',
-    exampleClear: 'db:example:clear',
     sessionList: 'db:session:list',
     sessionUpsert: 'db:session:upsert',
     sessionDelete: 'db:session:delete',
@@ -76,8 +72,8 @@ export const IpcChannels = {
     showItemInFolder: 'system:show-item-in-folder',
     showOpenDialog: 'system:show-open-dialog',
     showSaveDialog: 'system:show-save-dialog',
-    /** 通用 HTTP 代理(P6: 从 agent 段迁出,Python 移除后仍给 CORS 受限场景用) */
-    httpProxy: 'system:http-proxy'
+    /** 仅允许本机 Ollama 固定 API 的受限代理。 */
+    ollamaRequest: 'system:ollama-request'
   },
 
   /** 渲染层日志汇入主进程 */
@@ -99,7 +95,7 @@ export const IpcChannels = {
     respond: 'agent:permission:respond'
   },
 
-  /** 云端 ASR(2026-08 重构:本地 sherpa-onnx 改为云端切片上传;默认 baseUrl/model/apiKey 硬编码,不暴露配置入口) */
+  /** 云端 ASR(凭证保存在 safeStorage,主进程串行切片上传) */
   asr: {
     start: 'asr:start',
     feed: 'asr:feed',
@@ -123,16 +119,6 @@ export const IpcChannels = {
     markSource: 'meeting:mark-source',
     /** 抽取可沉淀为组织知识的候选条目(企业版) */
     extractCandidates: 'meeting:extract-candidates'
-  },
-
-  /** 认知记忆系统(P3) */
-  agentMemory: {
-    list: 'agent:memory:list',
-    search: 'agent:memory:search',
-    get: 'agent:memory:get',
-    update: 'agent:memory:update',
-    delete: 'agent:memory:delete',
-    stats: 'agent:memory:stats'
   },
 
   /** 原生 agent 对话主链路(P5) */
@@ -161,6 +147,7 @@ export const IpcChannels = {
     update: 'echo:agent:update',
     /** 获取当前 gateway endpoint(baseUrl/apiPrefix/wsPath) */
     getEndpoint: 'echo:agent:get-endpoint',
+    managementRequest: 'echo:agent:management-request',
     /** 主进程 -> 渲染层:进程状态变化 */
     statusChanged: 'echo:agent:status-changed'
   },
@@ -168,18 +155,6 @@ export const IpcChannels = {
   /** echo-agent 模型配置下发 */
   echoConfig: {
     apply: 'echo:config:apply'
-  },
-
-  /** 项目记忆本地镜像 CRUD */
-  projectMemory: {
-    listMirror: 'project-memory:list-mirror',
-    upsertMirror: 'project-memory:upsert-mirror',
-    deleteMirror: 'project-memory:delete-mirror'
-  },
-
-  /** 只读 echo-agent 认知记忆 */
-  echoMemory: {
-    list: 'echo-memory:list'
   },
 
   /** 会话管理 CRUD + 搜索/导入导出 */
@@ -204,59 +179,6 @@ export const IpcChannels = {
     setActive: 'profiles:set-active',
     export: 'profiles:export',
     import: 'profiles:import'
-  },
-
-  /** 定时任务管理 CRUD + 执行日志 */
-  schedules: {
-    list: 'schedules:list',
-    get: 'schedules:get',
-    add: 'schedules:add',
-    update: 'schedules:update',
-    delete: 'schedules:delete',
-    toggle: 'schedules:toggle',
-    listLogs: 'schedules:list-logs',
-    addLog: 'schedules:add-log'
-  },
-
-  /** 消息网关管理 CRUD + 连接测试/消息发送 */
-  gateway: {
-    listPlatforms: 'gateway:list-platforms',
-    listConfigs: 'gateway:list-configs',
-    addConfig: 'gateway:add-config',
-    updateConfig: 'gateway:update-config',
-    removeConfig: 'gateway:remove-config',
-    getStatus: 'gateway:get-status',
-    testConnection: 'gateway:test-connection',
-    sendMessage: 'gateway:send-message',
-    listMessages: 'gateway:list-messages'
-  },
-
-  /** 看板任务管理 CRUD + 移动/看板管理 */
-  kanban: {
-    listTasks: 'kanban:list-tasks',
-    getTask: 'kanban:get-task',
-    addTask: 'kanban:add-task',
-    updateTask: 'kanban:update-task',
-    deleteTask: 'kanban:delete-task',
-    moveTask: 'kanban:move-task',
-    listBoards: 'kanban:list-boards',
-    getBoard: 'kanban:get-board',
-    addBoard: 'kanban:add-board',
-    updateBoard: 'kanban:update-board',
-    deleteBoard: 'kanban:delete-board'
-  },
-
-  /** 灵魂配置管理 CRUD + 激活/模板管理 */
-  soul: {
-    list: 'soul:list',
-    get: 'soul:get',
-    add: 'soul:add',
-    update: 'soul:update',
-    delete: 'soul:delete',
-    setActive: 'soul:set-active',
-    addTemplate: 'soul:add-template',
-    updateTemplate: 'soul:update-template',
-    deleteTemplate: 'soul:delete-template'
   },
 
   /** 备份管理 CRUD */
@@ -291,34 +213,27 @@ export const IpcChannels = {
    */
   org: {
     status: 'org:status',
+    modelConfig: 'org:model-config',
     login: 'org:login',
     logout: 'org:logout',
     setServer: 'org:set-server',
     sync: 'org:sync',
     retrieve: 'org:retrieve',
+    listMemories: 'org:list-memories',
     listDocs: 'org:list-docs',
+    docContent: 'org:doc-content',
+    docRaw: 'org:doc-raw',
+    openDoc: 'org:open-doc',
     scopes: 'org:scopes',
     promote: 'org:promote',
     myPromotions: 'org:my-promotions',
     reportQa: 'org:report-qa',
+    adminListUsers: 'org:admin-list-users',
+    adminCreateUser: 'org:admin-create-user',
+    adminUpdateUser: 'org:admin-update-user',
+    adminListGroups: 'org:admin-list-groups',
+    adminCreateGroup: 'org:admin-create-group',
     /** 主进程 -> 渲染层:登录态或可达性变化 */
     onStatusChanged: 'org:status-changed'
-  },
-
-  /**
-   * 统一身份入口(2026-08 P1-2 修复)
-   *
-   * 渲染端一律通过 window.api.identity.* 访问;严禁直接调用 org.logout 或
-   * 修改 safeStorage,以避免"退出登录只清一半"的串台 bug。
-   */
-  identity: {
-    /** 获取当前活跃身份快照(org 优先,本地兜底) */
-    current: 'identity:current',
-    /** 当前是否登录了企业账号 */
-    isOrgSignedIn: 'identity:is-org-signed-in',
-    /** 统一登出:清空所有 provider 的 token / 缓存 / 用户数据 */
-    signOut: 'identity:sign-out',
-    /** 当前 safeStorage 是否可用 */
-    isSecureStoreAvailable: 'identity:is-secure-store-available'
   }
 } as const

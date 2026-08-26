@@ -15,6 +15,24 @@ interface TaskFormProps {
   onCancel: () => void
 }
 
+const EDITABLE_STATUS: Record<KanbanStatus, KanbanStatus[]> = {
+  triage: ['triage', 'ready', 'archived'],
+  todo: ['todo', 'ready', 'archived'],
+  ready: ['ready', 'archived'],
+  running: ['running', 'review', 'blocked', 'scheduled', 'archived'],
+  blocked: ['blocked', 'ready', 'archived'],
+  review: ['review', 'done', 'ready'],
+  scheduled: ['scheduled', 'ready', 'archived'],
+  done: ['done'],
+  archived: ['archived']
+}
+
+const STATUS_KEY: Record<KanbanStatus, string> = {
+  triage: 'kanban.triage', todo: 'kanban.todo', scheduled: 'kanban.scheduled',
+  ready: 'kanban.ready', running: 'kanban.running', blocked: 'kanban.blocked',
+  review: 'kanban.review', done: 'kanban.done', archived: 'kanban.archived'
+}
+
 export default function TaskForm({
   task,
   onSubmit,
@@ -28,6 +46,7 @@ export default function TaskForm({
     priority: task?.priority || 'medium' as KanbanPriority,
     assignee: task?.assignee || ''
   })
+  const availableStatuses = task ? EDITABLE_STATUS[task.status] : ['todo', 'ready'] as KanbanStatus[]
 
   const handleSubmit = (e: React.FormEvent): void => {
     e.preventDefault()
@@ -66,15 +85,9 @@ export default function TaskForm({
             setFormData({ ...formData, status: e.target.value as KanbanStatus })
           }
         >
-          <option value="triage">{t('kanban.triage')}</option>
-          <option value="todo">{t('kanban.todo')}</option>
-          <option value="scheduled">{t('kanban.scheduled')}</option>
-          <option value="ready">{t('kanban.ready')}</option>
-          <option value="running">{t('kanban.running')}</option>
-          <option value="blocked">{t('kanban.blocked')}</option>
-          <option value="review">{t('kanban.review')}</option>
-          <option value="done">{t('kanban.done')}</option>
-          <option value="archived">{t('kanban.archived')}</option>
+          {availableStatuses.map((status) => (
+            <option key={status} value={status}>{t(STATUS_KEY[status])}</option>
+          ))}
         </select>
       </div>
       <div className={styles.field}>

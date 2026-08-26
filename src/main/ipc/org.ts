@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain, shell } from 'electron'
 import log from 'electron-log/main'
 import { IpcChannels } from '@shared/ipc-channels'
 import type { PromoteRequest } from '@shared/types/org'
@@ -9,8 +9,11 @@ import { getDb } from '../db'
 import { storeGet, storeSet, storeDelete, secureGet, secureSet, secureDelete } from '../store'
 import {
   applyOrgPluginConfig,
-  setOrgServerUrlProvider
+  setOrgServerUrlProvider,
+  setEchoAgentUser
 } from '../echo-agent'
+import { openOrgDoc } from '../org/open-doc'
+import { setEnterpriseModelChat } from '../echo-agent/model-broker'
 
 /**
  * 企业知识库 IPC。
@@ -63,6 +66,7 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
     },
     clearTokens: async () => {
       secureDelete(TOKEN_KEY)
+      setEchoAgentUser(getServerUrl(), null)
       await manager?.clearLocalSession()
     }
   })
@@ -89,6 +93,10 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
       warn: (m) => log.warn(`[org] ${m}`)
     }
   })
+  setEnterpriseModelChat((body, signal) => {
+    if (!manager) throw new Error('enterprise client is not initialized')
+    return manager.openAiChat(body, signal)
+  })
 
   const notify = async (): Promise<void> => {
     const win = getWindow()
@@ -97,6 +105,7 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
   }
 
   ipcMain.handle(IpcChannels.org.status, () => manager!.status())
+  ipcMain.handle(IpcChannels.org.modelConfig, () => manager!.modelConfig())
 
   ipcMain.handle(IpcChannels.org.setServer, async (_e, url: string) => {
     const trimmed = String(url ?? '').trim().replace(/\/$/, '')
@@ -105,6 +114,7 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
       // 换服务器意味着换了一套组织与权限,旧凭证和缓存都不再适用。
       secureDelete(TOKEN_KEY)
       await manager!.clearLocalSession()
+      setEchoAgentUser(trimmed, null)
     }
     if (trimmed) storeSet(ORG_SERVER_KEY, trimmed)
     else storeDelete(ORG_SERVER_KEY)
@@ -117,6 +127,7 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
     IpcChannels.org.login,
     async (_e, username: string, password: string) => {
       const res = await manager!.login(username, password)
+      if (res.ok && res.user) setEchoAgentUser(getServerUrl(), res.user.id)
       await notify()
       return res
     }
@@ -124,6 +135,7 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
 
   ipcMain.handle(IpcChannels.org.logout, async () => {
     await manager!.logout()
+    setEchoAgentUser(getServerUrl(), null)
     await notify()
   })
 
@@ -171,11 +183,38 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
     }
   )
 
+  ipcMain.handle(
+    IpcChannels.org.listMemories,
+    (_e, params?: { q?: string; kind?: string; scope?: string }) =>
+      manager!.listMemories(params ?? {})
+  )
+
   ipcMain.handle(IpcChannels.org.scopes, () => manager!.scopes())
+  ipcMain.handle(IpcChannels.org.docContent, (_e, id: string, page?: number) =>
+    manager!.docContent(id, page)
+  )
+  ipcMain.handle(IpcChannels.org.docRaw, (_e, id: string) => manager!.docRaw(id))
+  ipcMain.handle(IpcChannels.org.openDoc, (_e, id: string) => openOrgDoc(id, {
+    docContent: (docId) => manager!.docContent(docId),
+    docRaw: (docId) => manager!.docRaw(docId),
+    tempRoot: app.getPath('temp'),
+    openPath: (file) => shell.openPath(file),
+    randomId: () => crypto.randomUUID()
+  }))
 
   ipcMain.handle(IpcChannels.org.promote, (_e, req: PromoteRequest) => manager!.promote(req))
 
   ipcMain.handle(IpcChannels.org.myPromotions, () => manager!.myPromotions())
+
+  ipcMain.handle(IpcChannels.org.adminListUsers, () => manager!.adminListUsers())
+  ipcMain.handle(IpcChannels.org.adminCreateUser, (_e, input) => manager!.adminCreateUser(input))
+  ipcMain.handle(IpcChannels.org.adminUpdateUser, (_e, id: string, patch) =>
+    manager!.adminUpdateUser(id, patch)
+  )
+  ipcMain.handle(IpcChannels.org.adminListGroups, () => manager!.adminListGroups())
+  ipcMain.handle(IpcChannels.org.adminCreateGroup, (_e, name: string) =>
+    manager!.adminCreateGroup(name)
+  )
 
   ipcMain.handle(
     IpcChannels.org.reportQa,
@@ -187,6 +226,7 @@ export function registerOrgIpc(getWindow: () => Electron.BrowserWindow | null): 
     .restore()
     .then(async (user) => {
       if (user) {
+        setEchoAgentUser(getServerUrl(), user.id)
         log.info(`[org] 已恢复企业会话: ${user.displayName}`)
         await manager!.flushPending()
         void manager!.sync()

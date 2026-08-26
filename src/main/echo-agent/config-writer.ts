@@ -6,6 +6,9 @@ export interface ModelConfigInput {
   baseUrl: string
   apiKey: string
   model: string
+  source?: 'local' | 'enterprise' | 'ollama'
+  /** Environment variable read by echo-agent; its value is injected at spawn. */
+  apiKeyEnv?: string
 }
 
 // Desktop 内置企业组织知识库插件的受管配置。Desktop 正常启动始终传入;
@@ -46,7 +49,7 @@ function buildManagedChannels(): Record<string, unknown> {
 // 桌面端作为 echo-agent 的部署宿主,负责写齐"以 gateway 模式服务于本地单用户桌面"
 // 所需的全部受管配置段。这三段每次都被改写为桌面部署所需的值;其余字段(用户或
 // echo-agent setup 写过的)原样保留。
-//   - models:   模型与凭据(来源:服务器下发 / 设置页手填)
+//   - models:   模型地址与密钥环境变量名;真实凭据绝不写入 YAML
 //   - gateway:  强制开启 + 绑 loopback + port=0(OS 分配,实际端口经 stdout 信号回报)
 //               + auth.mode=open(loopback 下 echo-agent 放行,无需 token)
 //   - channels: 见 buildManagedChannels
@@ -59,7 +62,13 @@ export function mergeManagedConfig(
   doc.models = {
     default_model: cfg.model,
     providers: [
-      { name: 'desktop', apiKey: cfg.apiKey, apiBase: cfg.baseUrl, models: [cfg.model] }
+      {
+        name: 'desktop',
+        apiKey: cfg.source === 'ollama' ? (cfg.apiKey || 'ollama') : '',
+        ...(cfg.apiKeyEnv ? { apiKeyEnv: cfg.apiKeyEnv } : {}),
+        apiBase: cfg.baseUrl,
+        models: [cfg.model]
+      }
     ]
   }
   doc.gateway = {

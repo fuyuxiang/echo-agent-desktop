@@ -31,12 +31,6 @@ function installApi(): BridgeApi {
       secureDelete: vi.fn(async () => undefined)
     },
     db: {
-      example: {
-        list: vi.fn(async () => []),
-        add: vi.fn(async (content: string) => ({ id: 1, content, createdAt: 10 })),
-        remove: vi.fn(async () => undefined),
-        clear: vi.fn(async () => undefined)
-      },
       session: {
         list: vi.fn(async () => []),
         upsert: vi.fn(async () => undefined),
@@ -69,7 +63,7 @@ function installApi(): BridgeApi {
       showItemInFolder: vi.fn(async () => undefined),
       showOpenDialog: vi.fn(async () => ['/tmp/a']),
       showSaveDialog: vi.fn(async () => '/tmp/out'),
-      httpProxy: vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
+      ollamaRequest: vi.fn(async () => ({ ok: true, status: 200, body: '{}' }))
     },
     log: {
       write: vi.fn()
@@ -108,22 +102,6 @@ function installApi(): BridgeApi {
     agentPermission: {
       onRequest: vi.fn(() => vi.fn()),
       respond: vi.fn(async () => ({ ok: true }))
-    },
-    agentMemory: {
-      list: vi.fn(async () => []),
-      search: vi.fn(async () => []),
-      get: vi.fn(async () => null),
-      update: vi.fn(async () => ({ success: true })),
-      delete: vi.fn(async () => ({ success: true })),
-      stats: vi.fn(async () => ({
-        total: 0,
-        byTier: { semantic: 0, procedural: 0, archival: 0 },
-        byType: { user: 0, environment: 0, procedural: 0 },
-        avgConfidence: 0,
-        linkCount: 0,
-        episodeCount: 0,
-        unconsolidatedCount: 0
-      }))
     },
     platform: {
       isMac: false,
@@ -200,17 +178,12 @@ describe('utils facades', () => {
     expect(api.store.set).toHaveBeenCalledWith('k', 1)
     expect(api.store.secureSet).toHaveBeenCalledWith('token', 'secret')
 
-    await db.example.list()
-    await db.example.add('row')
-    await db.example.remove(1)
-    await db.example.clear()
     await db.session.upsert({ chatId: 'c1' })
     await db.session.getMessages('c1')
     await db.session.appendMessage({ chatId: 'c1', role: 'user', content: 'hi' })
     await db.session.deleteLastAssistantMessage('c1')
     await db.session.updateTitle('c1', 'title')
     await db.session.delete('c1')
-    expect(api.db.example.add).toHaveBeenCalledWith('row')
     expect(api.db.session.updateTitle).toHaveBeenCalledWith('c1', 'title')
 
     await permission.check('microphone')

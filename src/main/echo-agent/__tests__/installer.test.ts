@@ -1,5 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
-import { ensureInstalled, updateEchoAgent, ensurePythonExtracted, DEFAULT_PIP_INDEX, type InstallerDeps } from '../installer'
+import {
+  BUNDLED_CORE_VERSION,
+  BUNDLED_ORG_VERSION,
+  DEFAULT_PIP_INDEX,
+  ensureInstalled,
+  ensurePythonExtracted,
+  updateEchoAgent,
+  type InstallerDeps
+} from '../installer'
 import type { CommandRunner, CommandResult } from '../types'
 import { InstallationAbortedError } from '../types'
 
@@ -7,6 +15,8 @@ function fakeRunner(opts: {
   result?: Partial<CommandResult>
   coreInstalled?: boolean
   orgInstalled?: boolean
+  coreVersion?: string
+  orgVersion?: string
 } = {}): { runner: CommandRunner; calls: string[][] } {
   const calls: string[][] = []
   const runner: CommandRunner = {
@@ -16,8 +26,11 @@ function fakeRunner(opts: {
       if (isPipShow) {
         const name = args[args.indexOf('show') + 1]
         const installed = name === 'echo-agent' ? opts.coreInstalled : opts.orgInstalled
+        const version = name === 'echo-agent'
+          ? (opts.coreVersion ?? BUNDLED_CORE_VERSION)
+          : (opts.orgVersion ?? BUNDLED_ORG_VERSION)
         return installed
-          ? { code: 0, stdout: `Name: ${name}\nVersion: 1.0.0`, stderr: '' }
+          ? { code: 0, stdout: `Name: ${name}\nVersion: ${version}`, stderr: '' }
           : { code: 1, stdout: '', stderr: 'Package not found' }
       }
       return { code: 0, stdout: '', stderr: '', ...opts.result }
@@ -33,15 +46,17 @@ function baseDeps(over: Partial<InstallerDeps> = {}): InstallerDeps {
     homeDir: '/h',
     platform: 'darwin',
     pythonArchive: '/res/python-standalone-mac-arm64.tar.gz',
+    corePackagePath: '/res/echo-agent-core',
     orgPluginPath: '/res/echo-agent-org',
-    pathExists: (p: string) => p.includes('python-standalone') || p.includes('echo-agent-org'),
+    pathExists: (p: string) =>
+      p.includes('python-standalone') || p.includes('echo-agent-core') || p.includes('echo-agent-org'),
     ensureDir: () => {},
     ...over
   }
 }
 
 describe('installer', () => {
-  it('extracts bundled python, creates venv, then pip installs echo-agent[all] (latest, no version pin)', async () => {
+  it('extracts Python, creates venv, then installs the bundled echo-agent core', async () => {
     const { runner, calls } = fakeRunner()
     const dirs: string[] = []
     await ensureInstalled(baseDeps({ runner, ensureDir: (p) => dirs.push(p) }))
@@ -56,11 +71,11 @@ describe('installer', () => {
     const venv = calls.find((c) => c.includes('venv'))
     expect(venv![0]).toBe('/h/.echo-agent/python/bin/python3')
     expect(venv).toContain('/h/.echo-agent/runtime')
-    // 3) pip 用 venv python 装 echo-agent[all](latest,不带 ==),带默认清华源
+    // 3) pip 用 venv python 从随包源码快照安装核心，并只从索引获取依赖
     const pip = calls.find((c) => c.includes('install') && c.some((a) => a.includes('echo-agent')))
     expect(pip![0]).toBe('/h/.echo-agent/runtime/bin/python')
-    expect(pip).toContain('echo-agent[all]')
-    expect(pip!.join(' ')).not.toMatch(/echo-agent\[all\]==/)
+    expect(pip).toContain('/res/echo-agent-core[all]')
+    expect(pip).toContain('--upgrade')
     expect(pip).toContain('-i')
     expect(pip).toContain(DEFAULT_PIP_INDEX)
   })
@@ -75,6 +90,30 @@ describe('installer', () => {
     const pipShows = calls.filter((c) => c.includes('show'))
     expect(pipShows).toHaveLength(2)
     expect(pipShows[0][0]).toBe('/h/.echo-agent/runtime/bin/python')
+  })
+
+  it('replaces an installed but incompatible core version', async () => {
+    const { runner, calls } = fakeRunner({
+      coreInstalled: true,
+      orgInstalled: true,
+      coreVersion: '0.3.7'
+    })
+    await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
+    const installs = calls.filter((c) => c.includes('pip') && c.includes('install'))
+    expect(installs).toHaveLength(1)
+    expect(installs[0]).toContain('/res/echo-agent-core[all]')
+  })
+
+  it('replaces an installed but incompatible plugin version', async () => {
+    const { runner, calls } = fakeRunner({
+      coreInstalled: true,
+      orgInstalled: true,
+      orgVersion: '1.0.0'
+    })
+    await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
+    const installs = calls.filter((c) => c.includes('pip') && c.includes('install'))
+    expect(installs).toHaveLength(1)
+    expect(installs[0]).toContain('/res/echo-agent-org')
   })
 
   it('skips extraction when python already extracted', async () => {
@@ -139,18 +178,17 @@ describe('installer', () => {
     expect(pip).toContain('https://my/simple')
   })
 
-  it('update runs pip install -U echo-agent[all] (latest, no version pin)', async () => {
+  it('update reinstalls the bundled compatible core rather than PyPI latest', async () => {
     const { runner, calls } = fakeRunner()
     await updateEchoAgent(baseDeps({ runner, pathExists: () => true }))
-    const upd = calls.find((c) => c.includes('-U'))
-    expect(upd).toContain('echo-agent[all]')
-    expect(upd!.join(' ')).not.toMatch(/echo-agent\[all\]==/)
+    const upd = calls.find((c) => c.includes('--upgrade'))
+    expect(upd).toContain('/res/echo-agent-core[all]')
   })
 
   it('update also refreshes the bundled org plugin', async () => {
     const { runner, calls } = fakeRunner()
     await updateEchoAgent(baseDeps({ runner, pathExists: () => true }))
-    const updates = calls.filter((c) => c.includes('-U'))
+    const updates = calls.filter((c) => c.includes('--upgrade'))
     expect(updates).toHaveLength(2)
     expect(updates[1]).toContain('/res/echo-agent-org')
   })
@@ -207,13 +245,12 @@ describe('installer abort behavior', () => {
 })
 
 describe('installer bundled org plugin', () => {
-  it('installs latest core and bundled plugin on first launch', async () => {
+  it('installs bundled core and plugin on first launch', async () => {
     const { runner, calls } = fakeRunner()
     await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
     const installs = calls.filter((c) => c.includes('pip') && c.includes('install'))
     expect(installs).toHaveLength(2)
-    expect(installs[0]).toContain('echo-agent[all]')
-    expect(installs[0].join(' ')).not.toMatch(/echo-agent\[all\]==/)
+    expect(installs[0]).toContain('/res/echo-agent-core[all]')
     expect(installs[1]).toContain('/res/echo-agent-org')
   })
 
@@ -223,7 +260,7 @@ describe('installer bundled org plugin', () => {
     const installs = calls.filter((c) => c.includes('pip') && c.includes('install'))
     expect(installs).toHaveLength(1)
     expect(installs[0]).toContain('/res/echo-agent-org')
-    expect(installs[0]).not.toContain('echo-agent[all]')
+    expect(installs[0]).not.toContain('/res/echo-agent-core[all]')
   })
 
   it('installs a missing core without reinstalling an existing plugin', async () => {
@@ -231,7 +268,7 @@ describe('installer bundled org plugin', () => {
     await ensureInstalled(baseDeps({ runner, pathExists: () => true }))
     const installs = calls.filter((c) => c.includes('pip') && c.includes('install'))
     expect(installs).toHaveLength(1)
-    expect(installs[0]).toContain('echo-agent[all]')
+    expect(installs[0]).toContain('/res/echo-agent-core[all]')
   })
 
   it('fails clearly when the bundled plugin resource is absent', async () => {
@@ -239,5 +276,12 @@ describe('installer bundled org plugin', () => {
     await expect(
       ensureInstalled(baseDeps({ runner, pathExists: (p) => !p.includes('echo-agent-org') }))
     ).rejects.toThrow(/内置企业插件缺失/)
+  })
+
+  it('fails clearly when the bundled core resource is absent', async () => {
+    const { runner } = fakeRunner({ coreInstalled: false, orgInstalled: true })
+    await expect(
+      ensureInstalled(baseDeps({ runner, pathExists: (p) => !p.includes('echo-agent-core') }))
+    ).rejects.toThrow(/内置 echo-agent 核心缺失/)
   })
 })

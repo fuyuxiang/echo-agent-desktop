@@ -13,7 +13,8 @@ vi.mock('../../echo-agent/meeting-summary', () => ({
 }))
 const getEchoAgentEndpoint = vi.fn((..._a: unknown[]) => ({ baseUrl: 'http://127.0.0.1:1', token: 't' }))
 vi.mock('../../echo-agent', () => ({
-  getEchoAgentEndpoint: (...a: unknown[]) => getEchoAgentEndpoint(...a)
+  getEchoAgentEndpoint: (...a: unknown[]) => getEchoAgentEndpoint(...a),
+  getEchoAgentUserId: () => 'org-user-1'
 }))
 const notifyMeeting = vi.fn()
 vi.mock('../../echo-agent/adapters', () => ({
@@ -50,7 +51,12 @@ describe('meeting:summarize ipc', () => {
     registerMeetingHandlers()
     const r = await handlers.get(IpcChannels.meeting.summarize)!({}, 'm1', '评审会', [{ text: 'x' }])
     expect(r).toEqual({ summary: 's', keyPoints: ['k'], actionItems: [] })
-    expect(notifyMeeting).toHaveBeenCalledWith({ baseUrl: 'http://127.0.0.1:1', token: 't' }, 'NOTIFY')
+    expect(notifyMeeting).toHaveBeenCalledWith(
+      { baseUrl: 'http://127.0.0.1:1', token: 't' },
+      'NOTIFY',
+      expect.any(String),
+      'org-user-1'
+    )
   })
 
   it('returns null and skips notify when summary fails', async () => {

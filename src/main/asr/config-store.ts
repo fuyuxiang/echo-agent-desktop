@@ -1,13 +1,4 @@
-/**
- * ASR 默认配置(2026-08 ASR 云端化重构 v2)
- *
- * 2026-08-22 决策修正:不再在设置页暴露 ASR 配置,直接硬编码默认,
- * 开箱即用。后续如需可换,改 DEFAULT_BASE_URL / DEFAULT_MODEL 即可。
- *
- * SECURITY 注意:DEFAULT_API_KEY 是用户主动提供的开发/测试凭证,
- * 仅适用于内部团队使用。生产部署前必须替换为受控凭证源(企业密钥管理、
- * 短期 token 服务等),并配合打包签名与发布流程。
- */
+import { secureGet, storeGet } from '../store'
 
 export interface ASRConfigResolved {
   baseUrl: string
@@ -15,22 +6,40 @@ export interface ASRConfigResolved {
   apiKey: string
 }
 
-/** 硬编码默认:硅基流动 TeleSpeechASR */
+export const ASR_API_KEY_STORE_KEY = 'asr-api-key'
+export const ASR_BASE_URL_STORE_KEY = 'asr.baseUrl'
+export const ASR_MODEL_STORE_KEY = 'asr.model'
+
 const DEFAULT_BASE_URL = 'https://api.siliconflow.cn/v1/audio/transcriptions'
 const DEFAULT_MODEL = 'TeleAI/TeleSpeechASR'
-const DEFAULT_API_KEY = 'sk-perpdxeyiwcymvnnpvwnjbhavppnchxohcpwydulfkdwpvp'
 
 /**
- * 返回 ASR 客户端可用的完整配置。当前为硬编码默认,同步返回,无失败路径。
- *
- * 保留此函数形态(而非直接 export 常量)是为了:
- * - 未来切换为"用户配置优先,默认兜底"时无需改 asr/index.ts 调用方
- * - 未来切换为"运行时按企业服务器拉配置"时只需替换实现
+ * Resolve ASR credentials without shipping a secret in the application.
+ * Managed deployments can inject a short-lived credential via environment;
+ * interactive users store it with the operating-system keychain.
  */
 export function resolveASRConfig(): ASRConfigResolved {
-  return {
-    baseUrl: DEFAULT_BASE_URL,
-    model: DEFAULT_MODEL,
-    apiKey: DEFAULT_API_KEY
+  const baseUrl =
+    process.env.ECHO_ASR_BASE_URL?.trim() ||
+    storeGet<string>(ASR_BASE_URL_STORE_KEY)?.trim() ||
+    DEFAULT_BASE_URL
+  const model =
+    process.env.ECHO_ASR_MODEL?.trim() ||
+    storeGet<string>(ASR_MODEL_STORE_KEY)?.trim() ||
+    DEFAULT_MODEL
+  const apiKey =
+    process.env.ECHO_ASR_API_KEY?.trim() || secureGet(ASR_API_KEY_STORE_KEY)?.trim() || ''
+
+  if (!apiKey) throw new Error('ASR 尚未配置 API Key，请在设置中配置后重试')
+
+  let parsed: URL
+  try {
+    parsed = new URL(baseUrl)
+  } catch {
+    throw new Error('ASR 接口地址无效')
   }
+  if (parsed.protocol !== 'https:' && !['localhost', '127.0.0.1', '::1'].includes(parsed.hostname)) {
+    throw new Error('ASR 接口必须使用 HTTPS（本机回环地址除外）')
+  }
+  return { baseUrl: parsed.toString(), model, apiKey }
 }

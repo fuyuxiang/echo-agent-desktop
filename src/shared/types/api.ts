@@ -2,7 +2,6 @@ import type {
   AgentScopeConfig,
   ChatMessageRecord,
   ChatSessionRecord,
-  ExampleRecord,
   LogLevel,
   MediaPermissionType,
   NotifyOptions,
@@ -15,12 +14,8 @@ import type {
 import type { MeetingDTO, SegmentDTO, SummaryDTO, MeetingSummaryInput } from './meeting'
 import type { SessionConfig, SessionListResponse, SessionSearchRequest, SessionSearchResponse, SessionExportData, SessionImportData, SessionUpdateRequest } from '../session-types'
 import type { ProfileConfig, ProfileListResponse, ProfileAddRequest, ProfileUpdateRequest, ProfileExportData, ProfileImportData } from '../profile-types'
-import type { ScheduleConfig, ScheduleListResponse, ScheduleAddRequest, ScheduleUpdateRequest, ScheduleExecutionLog, ScheduleExecutionLogResponse } from '../schedule-types'
 import type { BackupConfig, BackupListResponse, BackupCreateRequest, BackupRestoreRequest, SettingsConfig, SettingsUpdateRequest, LogListResponse, LogQueryRequest } from '../settings-types'
-import type { GatewayPlatform, GatewayConfig, GatewayStatus, GatewayListResponse, GatewayConfigAddRequest, GatewayConfigUpdateRequest, GatewayTestResult } from '../gateway-types'
-import type { OrgStatus, OrgLoginResult, SyncResult, RetrieveResult, OrgDocListResult, OrgScope, PromoteRequest, PromoteResult, MyPromotion, KnowledgeCandidate } from './org'
-import type { KanbanTask, KanbanBoard, KanbanListResponse, KanbanAddRequest, KanbanUpdateRequest, KanbanMoveRequest } from '../kanban-types'
-import type { SoulConfig, SoulTemplate, SoulListResponse, SoulAddRequest, SoulUpdateRequest } from '../soul-types'
+import type { OrgStatus, OrgLoginResult, OrgModelConfig, OrgAdminUser, OrgAdminGroup, OrgDocContent, OrgMemory, SyncResult, RetrieveResult, OrgDocListResult, OrgScope, PromoteRequest, PromoteResult, MyPromotion, KnowledgeCandidate } from './org'
 
 /**
  * echo-agent 进程状态(与 main 端 echo-agent/types.ts 字段一致;shared 不依赖 main)
@@ -48,29 +43,12 @@ export interface ModelConfigInput {
   baseUrl: string
   apiKey: string
   model: string
+  source?: 'local' | 'enterprise' | 'ollama'
 }
 
 /**
  * 项目记忆本地镜像行(与 echo-agent 项目记忆双向同步的本地副本)
  */
-export interface ProjectMemoryMirrorRow {
-  serverId: string
-  content: string
-  tags: string[]
-  version: number
-  updatedAt: number
-}
-
-/**
- * 只读 echo-agent 认知记忆条目
- */
-export interface EchoCognitiveEntry {
-  id: string
-  content: string
-  tags: string[]
-  importance: number
-}
-
 /**
  * preload 通过 contextBridge 暴露给渲染层的 API 形状(window.api)
  *
@@ -114,16 +92,6 @@ export interface BridgeApi {
 
   /** 本地数据库(better-sqlite3,DAO 形式暴露) */
   db: {
-    example: {
-      /** 查询全部示例记录(按创建时间倒序) */
-      list: () => Promise<ExampleRecord[]>
-      /** 新增一条示例记录,返回完整记录 */
-      add: (content: string) => Promise<ExampleRecord>
-      /** 删除指定记录 */
-      remove: (id: number) => Promise<void>
-      /** 清空示例表 */
-      clear: () => Promise<void>
-    }
     session: {
       /** 会话列表(按最近活动倒序) */
       list: () => Promise<ChatSessionRecord[]>
@@ -197,14 +165,12 @@ export interface BridgeApi {
     showOpenDialog: (options: OpenDialogOptions) => Promise<string[]>
     /** 打开文件保存对话框,返回保存路径(取消返回 null) */
     showSaveDialog: (options: SaveDialogOptions) => Promise<string | null>
-    /** 通用 HTTP 代理(绕过 CORS,P6 从 agent 段迁入) */
-    httpProxy: (opts: {
-      url: string
-      method?: string
-      headers?: Record<string, string>
-      body?: string
-      /** 单次请求超时(ms),默认 30000 */
-      timeoutMs?: number
+    /** 仅访问回环地址上 Ollama 的 version/tags/pull。 */
+    ollamaRequest: (opts: {
+      baseUrl: string
+      path: '/api/version' | '/api/tags' | '/api/pull'
+      method?: 'GET' | 'POST'
+      body?: unknown
     }) => Promise<{ ok: boolean; status: number; body: string }>
   }
 
@@ -253,28 +219,6 @@ export interface BridgeApi {
      * 条目 —— 带类型、依据与时间戳锚点。
      */
     extractCandidates(segments: SegmentDTO[]): Promise<KnowledgeCandidate[]>
-  }
-
-  /**
-   * 统一身份入口(2026-08 P1-2):渲染层只通过 window.api.identity 访问,
-   * 严禁直接调 org.logout 或改 safeStorage。
-   */
-  identity: {
-    /** 获取当前活跃身份快照(org 优先,本地兜底) */
-    current: () => Promise<{
-      userId: string
-      displayName: string
-      source: 'local' | 'org'
-      token?: string
-      role?: 'admin' | 'member'
-      groups?: Array<{ id: string; name: string }>
-    }>
-    /** 当前是否登录了企业账号 */
-    isOrgSignedIn: () => Promise<boolean>
-    /** 统一登出:清空所有 provider 的 token / 缓存 / 用户数据 */
-    signOut: () => Promise<{ ok: boolean }>
-    /** 当前 safeStorage 是否可用 */
-    isSecureStoreAvailable: () => Promise<boolean>
   }
 
   /** 原生 agent 对话主链路(P5) */
@@ -326,27 +270,6 @@ export interface BridgeApi {
     respond(res: PermissionResponse): Promise<{ ok: boolean }>
   }
 
-  /** 认知记忆 IPC(P3) */
-  agentMemory: {
-    list(opts: { limit: number; offset: number }): Promise<Array<Record<string, unknown>>>
-    search(opts: { query: string; topK?: number }): Promise<Array<Record<string, unknown>>>
-    get(id: number): Promise<{ record: Record<string, unknown>; provenance: Record<string, unknown> | null } | null>
-    update(
-      id: number,
-      patch: { content?: string; importance?: number; keywords?: string[]; tags?: string[]; contextDesc?: string }
-    ): Promise<{ success: boolean }>
-    delete(id: number): Promise<{ success: boolean }>
-    stats(): Promise<{
-      total: number
-      byTier: Record<string, number>
-      byType: Record<string, number>
-      avgConfidence: number
-      linkCount: number
-      episodeCount: number
-      unconsolidatedCount: number
-    }>
-  }
-
   /** agent:skill IPC(P6 删除 agentSkill.*,走 agentChat.sendSkill* 异步配对) */
 
   /** 平台信息(同步常量,preload 注入) */
@@ -387,72 +310,6 @@ export interface BridgeApi {
     clear: () => Promise<void>
   }
 
-  /** 消息网关管理 */
-  gateway: {
-    /** 查询支持的网关平台 */
-    listPlatforms: () => Promise<GatewayPlatform[]>
-    /** 查询全部网关配置(含状态) */
-    listConfigs: () => Promise<GatewayListResponse>
-    /** 新增网关配置 */
-    addConfig: (request: GatewayConfigAddRequest) => Promise<GatewayConfig>
-    /** 更新网关配置 */
-    updateConfig: (request: GatewayConfigUpdateRequest) => Promise<GatewayConfig>
-    /** 删除网关配置 */
-    removeConfig: (id: string) => Promise<void>
-    /** 查询连接状态 */
-    getStatus: (platformId: string) => Promise<GatewayStatus>
-    /** 测试网关连接 */
-    testConnection: (request: { platformId: string }) => Promise<GatewayTestResult>
-  }
-
-  /** 看板任务管理 */
-  kanban: {
-    /** 查询全部任务 */
-    listTasks: () => Promise<KanbanListResponse>
-    /** 查询单个任务 */
-    getTask: (id: string) => Promise<KanbanTask>
-    /** 新增任务 */
-    addTask: (request: KanbanAddRequest) => Promise<KanbanTask>
-    /** 更新任务 */
-    updateTask: (request: KanbanUpdateRequest) => Promise<KanbanTask>
-    /** 删除任务 */
-    deleteTask: (id: string) => Promise<void>
-    /** 移动任务到新状态 */
-    moveTask: (request: KanbanMoveRequest) => Promise<KanbanTask>
-    /** 查询全部看板 */
-    listBoards: () => Promise<KanbanBoard[]>
-    /** 查询单个看板 */
-    getBoard: (id: string) => Promise<KanbanBoard>
-    /** 新增看板 */
-    addBoard: (request: { name: string; metadata?: Record<string, unknown> }) => Promise<KanbanBoard>
-    /** 更新看板 */
-    updateBoard: (request: { id: string; name?: string; metadata?: Record<string, unknown> }) => Promise<KanbanBoard>
-    /** 删除看板 */
-    deleteBoard: (id: string) => Promise<void>
-  }
-
-  /** 灵魂配置管理 */
-  soul: {
-    /** 查询全部灵魂配置(含模板) */
-    list: () => Promise<SoulListResponse>
-    /** 查询单个灵魂配置 */
-    get: (id: string) => Promise<SoulConfig>
-    /** 新增灵魂配置 */
-    add: (request: SoulAddRequest) => Promise<SoulConfig>
-    /** 更新灵魂配置 */
-    update: (request: SoulUpdateRequest) => Promise<SoulConfig>
-    /** 删除灵魂配置 */
-    delete: (id: string) => Promise<void>
-    /** 设置活跃灵魂 */
-    setActive: (id: string) => Promise<SoulConfig>
-    /** 新增模板 */
-    addTemplate: (request: { name: string; content: string; category: string; description?: string }) => Promise<SoulTemplate>
-    /** 更新模板 */
-    updateTemplate: (request: { id: string; name?: string; content?: string; category?: string; description?: string }) => Promise<SoulTemplate>
-    /** 删除模板 */
-    deleteTemplate: (id: string) => Promise<void>
-  }
-
   /** echo-agent 进程生命周期 */
   echoAgent: {
     /** 读取当前进程状态 */
@@ -463,6 +320,13 @@ export interface BridgeApi {
     update: () => Promise<void>
     /** 获取当前 gateway endpoint(baseUrl/apiPrefix/wsPath),未就绪时返回 null */
     getEndpoint: () => Promise<EchoAgentEndpoint | null>
+    /** 受主进程路径白名单保护的 Agent 管理 API。 */
+    managementRequest: <T = unknown>(request: {
+      method: 'GET' | 'POST' | 'PUT' | 'DELETE'
+      path: string
+      body?: unknown
+      file?: { name: string; mimeType: string; data: Uint8Array }
+    }) => Promise<T>
     /** 监听状态变化,返回取消监听函数 */
     onStatusChanged: (cb: (s: EchoAgentStatus) => void) => () => void
   }
@@ -471,22 +335,6 @@ export interface BridgeApi {
   echoConfig: {
     /** 下发模型配置(baseUrl/apiKey/model) */
     apply: (cfg: ModelConfigInput) => Promise<void>
-  }
-
-  /** 项目记忆本地镜像 CRUD(与 echo-agent 双向同步) */
-  projectMemory: {
-    /** 读取全部本地镜像行 */
-    listMirror: () => Promise<ProjectMemoryMirrorRow[]>
-    /** 新增或更新一条镜像行 */
-    upsertMirror: (row: ProjectMemoryMirrorRow) => Promise<void>
-    /** 删除指定镜像行 */
-    deleteMirror: (serverId: string) => Promise<void>
-  }
-
-  /** 只读 echo-agent 认知记忆 */
-  echoMemory: {
-    /** 读取认知记忆条目(可选条数上限) */
-    list: (limit?: number) => Promise<EchoCognitiveEntry[]>
   }
 
   /** 会话管理 CRUD + 搜索/导入导出 */
@@ -529,26 +377,6 @@ export interface BridgeApi {
     import: (data: ProfileImportData) => Promise<ProfileConfig>
   }
 
-  /** 定时任务管理 CRUD + 执行日志 */
-  schedules: {
-    /** 查询全部定时任务 */
-    list: () => Promise<ScheduleListResponse>
-    /** 查询单个定时任务 */
-    get: (id: string) => Promise<ScheduleConfig | null>
-    /** 新增定时任务 */
-    add: (request: ScheduleAddRequest) => Promise<ScheduleConfig>
-    /** 更新定时任务 */
-    update: (request: ScheduleUpdateRequest) => Promise<ScheduleConfig>
-    /** 删除定时任务 */
-    delete: (id: string) => Promise<void>
-    /** 切换定时任务启用状态 */
-    toggle: (id: string) => Promise<ScheduleConfig>
-    /** 查询执行日志 */
-    listLogs: (scheduleId: string) => Promise<ScheduleExecutionLogResponse>
-    /** 添加执行日志 */
-    addLog: (log: Omit<ScheduleExecutionLog, 'id'>) => Promise<ScheduleExecutionLog>
-  }
-
   /**
    * 企业组织知识库
    *
@@ -558,6 +386,8 @@ export interface BridgeApi {
   org: {
     /** 当前接入状态(是否配置、是否登录、缓存量、服务器可达性) */
     status: () => Promise<OrgStatus>
+    /** 获取脱敏后的企业模型元数据；真实密钥只在服务端使用。 */
+    modelConfig: () => Promise<OrgModelConfig>
     /** 配置服务器地址。切换地址会清掉旧凭证与缓存 */
     setServer: (url: string) => Promise<OrgStatus>
     login: (username: string, password: string) => Promise<OrgLoginResult>
@@ -569,18 +399,37 @@ export interface BridgeApi {
       query: string,
       opts?: { limit?: number; multi_hop?: boolean; scopes?: Array<'org' | 'team'> }
     ) => Promise<RetrieveResult>
+    /** 列出当前账号可见的组织/团队记忆 */
+    listMemories: (params?: { q?: string; kind?: string; scope?: string }) => Promise<OrgMemory[]>
     listDocs: (params: {
       scope_id?: string
       q?: string
       page?: number
       size?: number
     }) => Promise<OrgDocListResult>
+    docContent: (id: string, page?: number) => Promise<OrgDocContent>
+    docRaw: (id: string) => Promise<Uint8Array>
+    /** 鉴权下载到权限受限的临时目录，并用系统默认应用打开。 */
+    openDoc: (id: string) => Promise<void>
     /** 可写入的可见范围列表 */
     scopes: () => Promise<OrgScope[]>
     /** 提交候选知识。离线时入本地队列,联网后自动补提 */
     promote: (req: PromoteRequest) => Promise<PromoteResult>
     /** 我提交的(含本地未提交的) */
     myPromotions: () => Promise<MyPromotion[]>
+    adminListUsers: () => Promise<OrgAdminUser[]>
+    adminCreateUser: (input: {
+      username: string
+      password: string
+      role: 'admin' | 'curator' | 'member'
+      groupIds?: string[]
+    }) => Promise<OrgAdminUser>
+    adminUpdateUser: (
+      id: string,
+      patch: { role?: 'admin' | 'curator' | 'member'; status?: 'active' | 'disabled'; groupIds?: string[] }
+    ) => Promise<OrgAdminUser>
+    adminListGroups: () => Promise<OrgAdminGroup[]>
+    adminCreateGroup: (name: string) => Promise<OrgAdminGroup>
     /** 上报问答质量,用于服务端质量看板 */
     reportQa: (body: {
       question: string

@@ -22,6 +22,15 @@ describe('gateway spawn assembly', () => {
     expect(env.ECHO_AGENT_API_TOKEN).toBeUndefined()
   })
 
+  it('通过嵌套环境变量注入每进程 Gateway/模型令牌', () => {
+    const env = buildGatewayEnv(
+      { PATH: '/bin' },
+      { gatewayToken: 'gateway-secret', modelToken: 'model-secret' }
+    )
+    expect(env.ECHO_AGENT_GATEWAY__AUTH__ADMIN_TOKENS).toBe('["gateway-secret"]')
+    expect(env.ECHO_DESKTOP_MODEL_TOKEN).toBe('model-secret')
+  })
+
   it('buildGatewayEnv 禁用运行时 lazy install 并剥离代理变量', () => {
     const env = buildGatewayEnv({ PATH: '/bin', HTTP_PROXY: 'http://p', https_proxy: 'http://p', NO_PROXY: 'x' })
     expect(env.ECHO_AGENT_DISABLE_LAZY_INSTALLS).toBe('1')

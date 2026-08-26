@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { AccountMenu } from '../AccountMenu'
-import { useUserStore } from '@/stores/userStore'
+import { useOrgStore } from '@/stores/orgStore'
 
 const navigate = vi.fn()
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }))
@@ -14,10 +14,16 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }
 describe('AccountMenu', () => {
   beforeEach(() => {
     navigate.mockClear()
-    useUserStore.setState({
-      user: { id: 'u1', username: '付玉祥', role: 'admin', groupId: 'g1' },
-      isAuthed: true,
-      signOut: vi.fn()
+    useOrgStore.setState({
+      status: {
+        configured: true, serverUrl: 'https://org.example', loggedIn: true,
+        user: {
+          id: 'u1', username: 'alice', displayName: '付玉祥', role: 'admin',
+          clearance: 0, groups: [{ id: 'g1', name: '团队' }], scopes: []
+        },
+        reachable: true, lastSyncAt: null, cachedDocs: 0, cachedChunks: 0
+      },
+      logout: vi.fn()
     })
   })
   afterEach(() => cleanup())
@@ -38,7 +44,7 @@ describe('AccountMenu', () => {
 
   it('点退出登录调用 signOut', () => {
     const signOut = vi.fn()
-    useUserStore.setState({ signOut })
+    useOrgStore.setState({ logout: signOut })
     render(<AccountMenu />)
     fireEvent.click(screen.getByText('付玉祥'))
     fireEvent.click(screen.getByText('common.logout'))
@@ -46,7 +52,7 @@ describe('AccountMenu', () => {
   })
 
   it('未登录态展开菜单显示登录按钮', () => {
-    useUserStore.setState({ user: null, isAuthed: false })
+    useOrgStore.setState({ status: null })
     render(<AccountMenu />)
     expect(screen.getByText('account.guest')).toBeTruthy()
     fireEvent.click(screen.getByText('account.guest'))

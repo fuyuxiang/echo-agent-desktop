@@ -4,7 +4,10 @@ import type {
   OrgDocListResult,
   PromoteRequest,
   MyPromotion,
-  OrgScope
+  OrgScope,
+  OrgAdminUser,
+  OrgAdminGroup,
+  OrgMemory
 } from '@shared/types/org'
 
 /**
@@ -74,9 +77,9 @@ export class OrgClient {
    */
   private async raw(
     path: string,
-    init: RequestInit & { skipAuth?: boolean } = {}
+    init: RequestInit & { skipAuth?: boolean; timeoutMs?: number } = {}
   ): Promise<Response> {
-    const { skipAuth, ...rest } = init
+    const { skipAuth, timeoutMs, signal: callerSignal, ...rest } = init
     const headers = new Headers(rest.headers)
     if (!headers.has('content-type') && rest.body && !(rest.body instanceof FormData)) {
       headers.set('content-type', 'application/json')
@@ -90,8 +93,10 @@ export class OrgClient {
     const ctrl = new AbortController()
     const timer = setTimeout(
       () => ctrl.abort(),
-      this.deps.readTimeoutMs ?? DEFAULT_TIMEOUT
+      timeoutMs ?? this.deps.readTimeoutMs ?? DEFAULT_TIMEOUT
     )
+    const abortFromCaller = (): void => ctrl.abort()
+    callerSignal?.addEventListener('abort', abortFromCaller, { once: true })
     try {
       return await this.fetch(this.url(path), { ...rest, headers, signal: ctrl.signal })
     } catch (e) {
@@ -99,7 +104,34 @@ export class OrgClient {
       throw new OrgUnavailableError(`${(e as Error).name}: ${(e as Error).message}`)
     } finally {
       clearTimeout(timer)
+      callerSignal?.removeEventListener('abort', abortFromCaller)
     }
+  }
+
+  /** Raw authenticated request with one refresh/retry, used by streaming proxies. */
+  private async authenticatedRaw(
+    path: string,
+    init: RequestInit & { timeoutMs?: number } = {}
+  ): Promise<Response> {
+    let res = await this.raw(path, init)
+    if (res.status !== 401) return res
+
+    this.refreshing =
+      this.refreshing ??
+      this.doRefresh().finally(() => {
+        this.refreshing = null
+      })
+    const refreshed = await this.refreshing
+    if (!refreshed) {
+      await this.deps.clearTokens()
+      throw new OrgAuthError()
+    }
+    res = await this.raw(path, init)
+    if (res.status === 401) {
+      await this.deps.clearTokens()
+      throw new OrgAuthError()
+    }
+    return res
   }
 
   /**
@@ -110,25 +142,7 @@ export class OrgClient {
    * 会让第二个请求拿着已作废的 token,反而把本可救回的会话弄丢。
    */
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    let res = await this.raw(path, init)
-
-    if (res.status === 401) {
-      this.refreshing =
-        this.refreshing ??
-        this.doRefresh().finally(() => {
-          this.refreshing = null
-        })
-      const ok = await this.refreshing
-      if (!ok) {
-        await this.deps.clearTokens()
-        throw new OrgAuthError()
-      }
-      res = await this.raw(path, init)
-      if (res.status === 401) {
-        await this.deps.clearTokens()
-        throw new OrgAuthError()
-      }
-    }
+    const res = await this.authenticatedRaw(path, init)
 
     if (res.status === 403) throw new OrgAuthError('无权访问')
     if (res.status >= 500) throw new OrgUnavailableError(`服务器错误 ${res.status}`)
@@ -204,6 +218,67 @@ export class OrgClient {
     return this.request('/api/v1/me')
   }
 
+  modelConfig(): Promise<{
+    configured: boolean
+    chatProvider: string | null
+    chatModel: string | null
+    chatBaseUrl?: string | null
+    hasCredential: boolean
+    proxied: boolean
+  }> {
+    return this.request('/api/v1/model-config')
+  }
+
+  adminListUsers(): Promise<OrgAdminUser[]> {
+    return this.request('/api/v1/admin/users')
+  }
+
+  adminCreateUser(input: {
+    username: string
+    password: string
+    role: 'admin' | 'curator' | 'member'
+    groupIds?: string[]
+  }): Promise<OrgAdminUser> {
+    return this.request('/api/v1/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    })
+  }
+
+  adminUpdateUser(
+    id: string,
+    patch: { role?: 'admin' | 'curator' | 'member'; status?: 'active' | 'disabled'; groupIds?: string[] }
+  ): Promise<OrgAdminUser> {
+    return this.request(`/api/v1/admin/users/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch)
+    })
+  }
+
+  adminListGroups(): Promise<OrgAdminGroup[]> {
+    return this.request('/api/v1/admin/groups')
+  }
+
+  adminCreateGroup(name: string): Promise<OrgAdminGroup> {
+    return this.request('/api/v1/admin/groups', {
+      method: 'POST',
+      body: JSON.stringify({ name })
+    })
+  }
+
+  /**
+   * Raw OpenAI-compatible response. Body/SSE is intentionally not decoded here;
+   * the Desktop model broker forwards it byte-for-byte to echo-agent.
+   */
+  openAiChat(body: string, signal?: AbortSignal): Promise<Response> {
+    return this.authenticatedRaw('/api/v1/llm/v1/chat/completions', {
+      method: 'POST',
+      body,
+      signal,
+      timeoutMs: 120_000
+    })
+  }
+
   health(): Promise<{ ok: boolean }> {
     return this.raw('/api/v1/health', { method: 'GET', skipAuth: true })
       .then(async (res) => {
@@ -228,6 +303,15 @@ export class OrgClient {
     return this.request('/api/v1/retrieve', { method: 'POST', body: JSON.stringify(body) })
   }
 
+  listMemories(params: { q?: string; kind?: string; scope?: string } = {}): Promise<OrgMemory[]> {
+    const qs = new URLSearchParams()
+    if (params.q) qs.set('q', params.q)
+    if (params.kind) qs.set('kind', params.kind)
+    if (params.scope) qs.set('scope', params.scope)
+    const query = qs.toString()
+    return this.request(`/api/v1/memories${query ? `?${query}` : ''}`)
+  }
+
   // ── 文档 ────────────────────────────────────────────────────────────────
   listDocs(params: {
     scope_id?: string
@@ -241,6 +325,17 @@ export class OrgClient {
     qs.set('page', String(params.page ?? 1))
     qs.set('size', String(params.size ?? 20))
     return this.request(`/api/v1/docs?${qs.toString()}`)
+  }
+
+  docContent(id: string, page?: number): Promise<import('@shared/types/org').OrgDocContent> {
+    const query = page ? `?page=${page}` : ''
+    return this.request(`/api/v1/docs/${encodeURIComponent(id)}/content${query}`)
+  }
+
+  async docRaw(id: string): Promise<Uint8Array> {
+    const res = await this.authenticatedRaw(`/api/v1/docs/${encodeURIComponent(id)}/raw`)
+    if (!res.ok) throw new OrgUnavailableError(`原始文档读取失败 ${res.status}`)
+    return new Uint8Array(await res.arrayBuffer())
   }
 
   scopes(): Promise<OrgScope[]> {
@@ -279,8 +374,8 @@ export class OrgClient {
   }
 
   // ── 同步 ────────────────────────────────────────────────────────────────
-  sync(cursor: number, deviceId: string): Promise<{
-    nextCursor: number
+  sync(cursor: string | number, deviceId: string): Promise<{
+    nextCursor: string
     docs: {
       docId: string
       title: string
