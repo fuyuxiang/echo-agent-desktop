@@ -80,7 +80,7 @@ describe('profile IPC handlers', () => {
       total: 1,
       activeProfileId: 'p1'
     }
-    profileService.listProfiles.mockResolvedValueOnce(fakeResponse as any)
+    profileService.listProfiles.mockResolvedValueOnce(fakeResponse as never)
     const result = await invoke(IpcChannels.profiles.list)
     expect(profileService.listProfiles).toHaveBeenCalled()
     expect(result).toEqual(fakeResponse)
@@ -88,7 +88,7 @@ describe('profile IPC handlers', () => {
 
   it('profiles:get passes id to getProfile', async () => {
     const fakeProfile = { id: 'p1', name: 'Test Profile', color: '#000', isActive: true, createdAt: '', updatedAt: '' }
-    profileService.getProfile.mockResolvedValueOnce(fakeProfile as any)
+    profileService.getProfile.mockResolvedValueOnce(fakeProfile as never)
     const result = await invoke(IpcChannels.profiles.get, 'p1')
     expect(profileService.getProfile).toHaveBeenCalledWith('p1')
     expect(result).toEqual(fakeProfile)

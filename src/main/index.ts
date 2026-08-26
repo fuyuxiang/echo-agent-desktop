@@ -13,11 +13,11 @@ import { findRecordingMeetings, updateMeetingStatus } from './db/dao/meeting'
 import { reapOrphans } from './meeting/orphan'
 import { registerAllIpcHandlers } from './ipc'
 import {
-  startEchoAgent,
   stopEchoAgent,
   syncOrgPluginConfig,
   syncManagedChannels
 } from './echo-agent'
+import { stopModelBroker } from './echo-agent/model-broker'
 // P6: agent-process 已物理删除,Python agent 运行时下线
 
 /**
@@ -95,8 +95,8 @@ if (!gotTheLock) {
     } catch (e) {
       log.error('[main] channels 配置同步失败:', e)
     }
-    // echo-agent 进程接管:异步启动,不阻塞窗口。状态经 echoAgent:status-changed 推给渲染层。
-    void startEchoAgent().catch((e) => log.error('[main] echo-agent 启动失败:', e))
+    // Agent 由 applyModelConfig 在模型来源确定后启动。提前启动会读取旧 YAML，
+    // 既可能使用过期企业端点，也可能让历史版本残留的明文 key 短暂生效。
 
     // mac: 点击 Dock 图标且无窗口时重建窗口
     app.on('activate', () => {
@@ -154,6 +154,8 @@ if (!gotTheLock) {
     Promise.resolve()
       .then(() => stopEchoAgent())
       .catch((e) => log.error('[main] echo-agent 停止失败:', e))
+      .then(() => stopModelBroker())
+      .catch((e) => log.error('[main] model broker 停止失败:', e))
       .finally(() => {
         closeDatabase()
         cleanupDone = true

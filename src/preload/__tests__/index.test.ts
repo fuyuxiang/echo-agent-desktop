@@ -52,7 +52,6 @@ describe('preload bridge', () => {
     expect(Object.keys(api).sort()).toEqual([
       'agent',
       'agentChat',
-      'agentMemory',
       'agentPermission',
       'app',
       'asr',
@@ -60,10 +59,6 @@ describe('preload bridge', () => {
       'db',
       'echoAgent',
       'echoConfig',
-      'echoMemory',
-      'gateway',
-      'identity',
-      'kanban',
       'log',
       'logs',
       'meeting',
@@ -71,11 +66,8 @@ describe('preload bridge', () => {
       'permission',
       'platform',
       'profiles',
-      'projectMemory',
-      'schedules',
       'sessions',
       'settings',
-      'soul',
       'store',
       'system',
       'window'
@@ -83,8 +75,6 @@ describe('preload bridge', () => {
     expect(api.platform.platform).toBe(process.platform)
     expect(api.platform.isMac).toBe(process.platform === 'darwin')
     expect(api.platform.isWin).toBe(process.platform === 'win32')
-    expect(typeof (api as any).projectMemory.listMirror).toBe('function')
-    expect(typeof (api as any).echoMemory.list).toBe('function')
   })
 
   it('window/app/log 桥接到 send/invoke 并正确解绑事件', async () => {
@@ -162,10 +152,6 @@ describe('preload bridge', () => {
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.store.secureSet, 'token', 'secret')
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.store.secureDelete, 'token')
 
-    await api.db.example.list()
-    await api.db.example.add('row')
-    await api.db.example.remove(1)
-    await api.db.example.clear()
     await api.db.session.list()
     await api.db.session.upsert({ chatId: 'c1' })
     await api.db.session.delete('c1')
@@ -174,7 +160,6 @@ describe('preload bridge', () => {
     await api.db.session.deleteLastAssistantMessage('c1')
     await api.db.session.updateTitle('c1', 'title')
     await api.db.session.setPinned('c1', true)
-    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.db.exampleAdd, 'row')
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.db.sessionAppendMessage, {
       chatId: 'c1',
       role: 'user',
@@ -199,9 +184,9 @@ describe('preload bridge', () => {
     await api.system.showItemInFolder('/tmp/a')
     await api.system.showOpenDialog({ properties: ['openFile'] })
     await api.system.showSaveDialog({ defaultPath: 'a.txt' })
-    await api.system.httpProxy({ url: 'https://example.com' })
-    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.system.httpProxy, {
-      url: 'https://example.com'
+    await api.system.ollamaRequest({ baseUrl: 'http://localhost:11434', path: '/api/tags' })
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.system.ollamaRequest, {
+      baseUrl: 'http://localhost:11434', path: '/api/tags'
     })
 
     await api.agent.getScope()
@@ -237,7 +222,7 @@ describe('preload bridge', () => {
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.meeting.summarize, 'm1', 'title', [])
   })
 
-  it('agentChat/agentPermission/agentMemory 桥接请求与事件', async () => {
+  it('agentChat/agentPermission 桥接请求与事件', async () => {
     const api = await loadApi()
 
     await api.agentChat.send('c1', 'hello', [{ id: 'a1', name: 'a.txt' }])
@@ -286,15 +271,11 @@ describe('preload bridge', () => {
       choice: 'allow_once'
     })
 
-    await api.agentMemory.list({ limit: 10, offset: 0 })
-    await api.agentMemory.search({ query: 'q', topK: 3 })
-    await api.agentMemory.get(1)
-    await api.agentMemory.update(1, { content: 'new' })
-    await api.agentMemory.delete(1)
-    await api.agentMemory.stats()
-    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.agentMemory.update, {
-      id: 1,
-      patch: { content: 'new' }
-    })
+  })
+
+  it('组织文档打开桥接只传文档 ID', async () => {
+    const api = await loadApi()
+    await api.org.openDoc('doc-1')
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(IpcChannels.org.openDoc, 'doc-1')
   })
 })

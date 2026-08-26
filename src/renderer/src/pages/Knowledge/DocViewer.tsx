@@ -9,12 +9,6 @@ import * as pdfjsLib from 'pdfjs-dist'
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import styles from './DocViewer.module.scss'
 
-// pdfjsLib 类型在 CommonJS 形态下被推为 namespace;这里强制断言成 default。
-// pdfjs-dist 的 default export 在 ESM build 下导出 getDocument。
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const pdfjs: any = (pdfjsLib as unknown as { default?: any }).default ?? pdfjsLib
-;(pdfjs.GlobalWorkerOptions as { workerSrc: string }).workerSrc = workerSrc
-
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc
 
 /**
@@ -49,67 +43,48 @@ export default function DocViewer(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // 拉取文档详情 + 文本段
-  // 2026-08 P1-3 修复:不再直接 fetch /api/v1/... (绕开统一鉴权),
-  // 改走 window.api.system.httpProxy,由主进程代理,自动注入 org-token。
+  // 拉取文档详情 + 原始二进制。主进程使用企业 refresh/access token，
+  // 渲染层只拿到已授权结果，不接受任意 URL 代理。
   useEffect(() => {
     if (!id) return
+    let cancelled = false
+    let objectUrl: string | null = null
     queueMicrotask(() => {
       setBusy(true)
       setError(null)
     })
-    const qs = pageFromUrl > 0 ? `?page=${pageFromUrl}` : ''
-    void window.api.system
-      .httpProxy({
-        url: `/api/v1/docs/${encodeURIComponent(id)}/content${qs}`,
-        method: 'GET',
-        timeoutMs: 15000
-      })
-      .then((r) => {
-        if (!r.ok) return Promise.reject(new Error(`HTTP ${r.status}`))
-        try {
-          return JSON.parse(r.body) as { data?: Record<string, unknown> }
-        } catch (err) {
-          return Promise.reject(new Error(`JSON 解析失败: ${(err as Error).message}`))
-        }
-      })
-      .then((j) => {
-        const d = (j.data ?? {}) as {
-          title?: string
-          sourceType?: string
-          text?: string
-          chunks?: unknown
-          note?: string
-          rawUrl?: string
-        }
+    void (async () => {
+      try {
+        const d = await window.api.org.docContent(id, pageFromUrl > 0 ? pageFromUrl : undefined)
+        if (cancelled) return
         setMeta({
-          title: d.title ?? '未命名文档',
-          sourceType: d.sourceType ?? 'unknown',
+          title: d.title,
+          sourceType: d.sourceType,
           text: d.text ?? '',
-          chunks: (d.chunks as Array<Record<string, unknown>>) ?? [],
+          chunks: d.chunks ?? [],
           note: d.note
         })
-        // 二进制类型:拉 /raw 拼 blob url,给 pdfjs / <img> 用
         const isBinary = ['pdf', 'docx', 'pptx', 'xlsx', 'image', 'audio', 'video'].includes(
-          d.sourceType ?? ''
+          d.sourceType
         )
         if (isBinary && d.rawUrl) {
-          void window.api.system
-            .httpProxy({ url: d.rawUrl, method: 'GET', timeoutMs: 30000 })
-            .then((r) => {
-              if (!r.ok) return Promise.reject(new Error(`raw ${r.status}`))
-              // 把代理拿到的 base64 文本转成 Blob 再 createObjectURL
-              const bytes = Uint8Array.from(atob(r.body), (c) => c.charCodeAt(0))
-              return new Blob([bytes])
-            })
-            .then((b) => setPdfUrl(URL.createObjectURL(b)))
-            .catch((e: Error) =>
-              setError(t('docViewer.rawFetchFailed', { message: e.message }))
-            )
+          const bytes = await window.api.org.docRaw(id)
+          if (cancelled) return
+          const owned = new Uint8Array(bytes.byteLength)
+          owned.set(bytes)
+          objectUrl = URL.createObjectURL(new Blob([owned.buffer]))
+          setPdfUrl(objectUrl)
         }
-      })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setBusy(false))
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        if (!cancelled) setBusy(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
   }, [id, pageFromUrl])
 
   // PDF 渲染:加载 PDF 文档后渲染指定页到 canvas
@@ -119,7 +94,7 @@ export default function DocViewer(): React.JSX.Element {
     if (!meta || meta.sourceType !== 'pdf') return
     void (async (): Promise<void> => {
       try {
-        const doc = await pdfjs.getDocument({ url: pdfUrl }).promise
+        const doc = await pdfjsLib.getDocument({ url: pdfUrl }).promise
         const target = pageFromUrl > 0 ? pageFromUrl : 1
         const page = await doc.getPage(target)
         const viewport = page.getViewport({ scale: 1.2 })
@@ -242,38 +217,27 @@ export default function DocViewer(): React.JSX.Element {
         </article>
       )}
 
-      {/* 媒体类型:引导到外部播放器;此处只显示链接 */}
-      {meta && (meta.sourceType === 'audio' || meta.sourceType === 'video') && (
+      {meta?.sourceType === 'audio' && pdfUrl && (
         <div className={styles.docViewerMedia}>
-          <p>{t('docViewer.mediaNotReady')}</p>
-          <button
-            type="button"
-            onClick={() => {
-              // 2026-08 P1-3 修复:openExternal 不适合走 /api/v1/* (需要 token)。
-              // 这里改用 showItemInFolder 提示用户在资源管理器中找到原始文件。
-              // 真正"打开原始文件"留给 echo-agent-server 端提供 signed URL。
-              void window.api.system.showItemInFolder('/api/v1/docs/...')
-            }}
-          >
-            在文件管理器中查看
-          </button>
+          <audio controls src={pdfUrl} />
+        </div>
+      )}
+      {meta?.sourceType === 'video' && pdfUrl && (
+        <div className={styles.docViewerMedia}>
+          <video controls src={pdfUrl} style={{ maxWidth: '100%' }} />
         </div>
       )}
 
-      {/* 通用"打开原始文件"按钮(PDF/图片/媒体都显示):走系统默认应用 */}
-      {meta && (meta.sourceType === 'pdf' || meta.sourceType === 'image' ||
-                meta.sourceType === 'audio' || meta.sourceType === 'video') && (
+      {/* 主进程按文档 ID 鉴权下载；渲染层不能把任意路径交给 shell。 */}
+      {meta && ['pdf', 'docx', 'pptx', 'xlsx', 'image', 'audio', 'video'].includes(meta.sourceType) && (
         <div className={styles.docViewerActions}>
           <button
             type="button"
-            onClick={() => {
-              // 通过 deep link 让 echo-agent 主进程解析原始文件路径并打开
-              void window.api.system.openExternal(
-                `echo-agent://open-doc?id=${encodeURIComponent(id)}`
-              )
-            }}
+            onClick={() => void window.api.org.openDoc(id).catch((e: unknown) => {
+              setError(e instanceof Error ? e.message : String(e))
+            })}
           >
-            用默认应用打开
+            {t('docViewer.openWithDefault')}
           </button>
         </div>
       )}

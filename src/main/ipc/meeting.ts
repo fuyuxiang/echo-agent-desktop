@@ -29,7 +29,8 @@ import {
 } from '../asr'
 import { summarizeMeeting, buildNotifyMessage } from '../echo-agent/meeting-summary'
 import { extractCandidates } from '../meeting/candidates'
-import { getEchoAgentEndpoint } from '../echo-agent'
+import { getEchoAgentEndpoint, getEchoAgentUserId } from '../echo-agent'
+import { gatewayAdminToken } from '../echo-agent/security-tokens'
 import { notifyMeeting } from '../echo-agent/adapters'
 
 function meetingsDir(): string {
@@ -124,7 +125,14 @@ export function registerMeetingHandlers(): void {
       // 也不复用聊天 WS(避免重绑用户当前聊天会话)
       try {
         const endpoint = getEchoAgentEndpoint()
-        if (endpoint) await notifyMeeting(endpoint, buildNotifyMessage(title, parsed))
+        if (endpoint) {
+          await notifyMeeting(
+            endpoint,
+            buildNotifyMessage(title, parsed),
+            gatewayAdminToken,
+            getEchoAgentUserId()
+          )
+        }
       } catch (e) {
         log.warn('[meeting] 告知 echo-agent 失败:', e)
       }

@@ -12,6 +12,13 @@ vi.mock('electron', () => ({
   }
 }))
 
+// Agent 工作区也属于备份范围。必须把 homedir 隔离到测试临时目录，绝不
+// 读取或恢复开发机真实的 ~/.echo-agent。
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>()
+  return { ...actual, homedir: () => tmpDir }
+})
+
 vi.mock('../logger', () => ({
   log: {
     info: vi.fn(),
@@ -100,11 +107,42 @@ describe('Backup Management Service', () => {
     await expect(restoreBackup({ id: created.id })).resolves.not.toThrow()
   })
 
+  it('backs up and restores Agent knowledge while excluding runtime and credentials', async () => {
+    const workspace = path.join(tmpDir, '.echo-agent')
+    fs.mkdirSync(path.join(workspace, 'memory'), { recursive: true })
+    fs.mkdirSync(path.join(workspace, 'runtime'), { recursive: true })
+    fs.mkdirSync(path.join(workspace, 'plugins', 'org'), { recursive: true })
+    fs.writeFileSync(path.join(workspace, 'memory', 'facts.jsonl'), 'before')
+    fs.writeFileSync(path.join(workspace, 'echo-agent.yaml'), 'memory: {}')
+    fs.writeFileSync(path.join(workspace, 'runtime', 'python'), 'large-runtime')
+    fs.writeFileSync(path.join(workspace, 'plugins', 'org', 'credentials.json'), 'secret-token')
+
+    const { createBackup, restoreBackup } = await import('../backup')
+    const created = await createBackup({ name: 'Agent workspace' })
+    const snapshot = path.join(tmpDir, 'backups', created.id, 'agent-workspace')
+    expect(fs.readFileSync(path.join(snapshot, 'memory', 'facts.jsonl'), 'utf8')).toBe('before')
+    expect(fs.existsSync(path.join(snapshot, 'runtime'))).toBe(false)
+    expect(fs.existsSync(path.join(snapshot, 'plugins', 'org', 'credentials.json'))).toBe(false)
+
+    fs.writeFileSync(path.join(workspace, 'memory', 'facts.jsonl'), 'after')
+    await restoreBackup({ id: created.id })
+    expect(fs.readFileSync(path.join(workspace, 'memory', 'facts.jsonl'), 'utf8')).toBe('before')
+    // 当前登录凭证不属于备份，也不能被旧快照覆盖。
+    expect(fs.readFileSync(path.join(workspace, 'plugins', 'org', 'credentials.json'), 'utf8'))
+      .toBe('secret-token')
+  })
+
   it('should throw when restoring non-existent backup', async () => {
     const { restoreBackup } = await import('../backup')
     await expect(
       restoreBackup({ id: 'non-existent-id' })
     ).rejects.toThrow()
+  })
+
+  it('rejects path traversal in backup ids', async () => {
+    const { restoreBackup, deleteBackup } = await import('../backup')
+    await expect(restoreBackup({ id: '../config' })).rejects.toThrow(/无效的备份 ID/)
+    await expect(deleteBackup('../../outside')).rejects.toThrow(/无效的备份 ID/)
   })
 
   it('should delete a backup', async () => {

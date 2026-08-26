@@ -179,14 +179,14 @@ describe('任务完成沉淀提示', () => {
   }
 
   it('首次进入 done 时弹出沉淀对话框', async () => {
-    const s = await moveTo('done', 'running')
+    const s = await moveTo('done', 'review')
     expect(mockMoveTask).toHaveBeenCalledWith('t1', 'done')
     // i18n mock:t(key) = key,PromoteDialog 标题对应 promote.title
     expect(await s.findByText('promote.title')).toBeTruthy()
   })
 
   it('预填任务标题与说明', async () => {
-    const s = await moveTo('done', 'running')
+    const s = await moveTo('done', 'review')
     await s.findByText('promote.title')
     const area = s.getAllByRole('textbox')[0] as HTMLTextAreaElement
     expect(area.value).toContain('修复导入乱码')

@@ -33,16 +33,6 @@ export type PermissionStatus = 'granted' | 'denied' | 'not-determined' | 'restri
 /** 日志级别 */
 export type LogLevel = 'info' | 'warn' | 'error' | 'debug'
 
-/** 数据库示例记录(pages/Example 演示用) */
-export interface ExampleRecord {
-  /** 自增主键 */
-  id: number
-  /** 记录内容 */
-  content: string
-  /** 创建时间(毫秒时间戳) */
-  createdAt: number
-}
-
 /** 本地会话记录 */
 export interface ChatSessionRecord {
   chatId: string

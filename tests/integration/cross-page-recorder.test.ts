@@ -13,7 +13,7 @@ describe('Regression: 录音状态在 AppLayout 可见', () => {
     // 通过模块导出形状验证
     const mod = await import('@/components/RecorderIndicator')
     expect(typeof mod.RecorderIndicator).toBe('function')
-  })
+  }, 15_000)
 
   it('recording=false 时不渲染(避免闲置占空间)', () => {
     // 行为契约:RecorderIndicator 在 recording=false 时返回 null

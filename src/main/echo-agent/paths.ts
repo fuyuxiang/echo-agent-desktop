@@ -38,6 +38,11 @@ export function bundledPythonArchive(resourcesPath: string, platform: NodeJS.Pla
 export function bundledOrgPluginPath(resourcesPath: string): string {
   return join(resourcesPath, 'echo-agent-org')
 }
+// 与 Desktop 一同发布、经过集成测试的 echo-agent 核心源码快照。
+// 安装器只从这里安装核心，避免每次首启从 PyPI 获取不可预测的最新版。
+export function bundledEchoAgentCorePath(resourcesPath: string): string {
+  return join(resourcesPath, 'echo-agent-core')
+}
 // 解压目标目录:~/.echo-agent/python(用户数据区,可写;打包资源区只读不能就地解压/建 venv)。
 export function extractedPythonDir(homeDir: string): string {
   return join(echoHome(homeDir), 'python')

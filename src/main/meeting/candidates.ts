@@ -143,7 +143,11 @@ export async function extractCandidates(
   const signal = AbortSignal.timeout(120_000)
   try {
     let out = ''
-    for await (const delta of provider.chat(
+    // Await first as well as iterating:the declared provider contract returns an
+    // AsyncIterable, but a defensive adapter may return a rejected Promise.
+    // Evaluating that Promise directly in `for await` leaves its rejection
+    // unhandled; awaiting here keeps every provider failure inside this guard.
+    const stream = await provider.chat(
       {
         model: getLLMConfig()?.model ?? '',
         messages: [{ role: 'user', content: buildCandidatePrompt(segments) }],
@@ -151,7 +155,8 @@ export async function extractCandidates(
         temperature: 0.1
       },
       signal
-    )) {
+    )
+    for await (const delta of stream) {
       if (delta.type === 'text') out += delta.text
       else if (delta.type === 'error') {
         log.warn('[meeting-candidates] 抽取失败(provider error):', delta.message)

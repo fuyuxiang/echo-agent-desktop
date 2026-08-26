@@ -4,7 +4,7 @@ import type { ToolCall } from '../../agent/providers'
 /**
  * 会话与消息 DAO(本地 SQLite,展示层唯一可信来源)
  *
- * 范式见 dao/example.ts 顶部注释。所有方法同步,渲染层经 IPC -> 此处。
+ * 所有方法同步，渲染层经 IPC -> 此处。
  */
 
 export interface SessionRow {

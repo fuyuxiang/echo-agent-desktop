@@ -1,9 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { translateFrame, GatewayClient, type WsLike, type Frame } from '../gateway-client'
 
-// importing ../index pulls in electron-log/main, which is not usable in tests
-vi.mock('electron-log/main', () => ({ default: { info() {}, warn() {}, error() {} } }))
-import { buildWsUrl } from '../index'
+import { buildWsUrl } from '../runtime-utils'
 
 function fakeWs(): WsLike & { fire: (ev: string, arg?: unknown) => void; sent: string[] } {
   const handlers: Record<string, (arg?: unknown) => void> = {}
@@ -327,11 +325,12 @@ describe('GatewayClient', () => {
     ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
     c.send('hello', undefined, 'rid-done')
     // send() creates an active request keyed by requestId
-    expect((c as any).activeRequests.has('rid-done')).toBe(true)
+    const internals = c as unknown as { activeRequests: Map<string, unknown> }
+    expect(internals.activeRequests.has('rid-done')).toBe(true)
     ws.fire('message', JSON.stringify({ type: 'accepted', event_id: 'evt-done' }))
     ws.fire('message', JSON.stringify({ type: 'message', text: 'done', is_final: true, message_kind: 'final', metadata: { _inbound_event_id: 'evt-done' } }))
     // After done event, activeRequests should be cleaned up
-    expect((c as any).activeRequests.has('rid-done')).toBe(false)
+    expect(internals.activeRequests.has('rid-done')).toBe(false)
   })
 
   it('activeRequests is cleaned up after error event', () => {
@@ -342,10 +341,11 @@ describe('GatewayClient', () => {
     ws.fire('open')
     ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
     c.send('hello', undefined, 'rid-err')
-    expect((c as any).activeRequests.has('rid-err')).toBe(true)
+    const internals = c as unknown as { activeRequests: Map<string, unknown> }
+    expect(internals.activeRequests.has('rid-err')).toBe(true)
     ws.fire('message', JSON.stringify({ type: 'accepted', event_id: 'evt-err' }))
     ws.fire('message', JSON.stringify({ type: 'error', error: 'something went wrong', request_id: 'rid-err' }))
-    expect((c as any).activeRequests.has('rid-err')).toBe(false)
+    expect(internals.activeRequests.has('rid-err')).toBe(false)
   })
 
   it('abort suppresses subsequent events for the aborted request', () => {
@@ -385,9 +385,10 @@ describe('GatewayClient', () => {
     ws.fire('open')
     ws.fire('message', JSON.stringify({ type: 'auth_ok', session_key: 'k' }))
     c.send('hello')
-    expect((c as any).activeRequests.size).toBeGreaterThan(0)
+    const internals = c as unknown as { activeRequests: Map<string, unknown> }
+    expect(internals.activeRequests.size).toBeGreaterThan(0)
     c.disconnect()
-    expect((c as any).activeRequests.size).toBe(0)
+    expect(internals.activeRequests.size).toBe(0)
   })
 })
 

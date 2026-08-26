@@ -22,8 +22,6 @@ files:
 extraResources:
   - from: resources/trayTemplate.png
     to: trayTemplate.png
-  - from: resources/models/asr
-    to: models/asr
   - from: resources/models/diarization
     to: models/diarization
   - from: resources/echo-agent-org
@@ -32,6 +30,22 @@ extraResources:
       - pyproject.toml
       - README.md
       - echo_agent_org/**
+  # 核心与 Desktop 必须作为一个经过验证的版本集合发布。运行时不再从
+  # PyPI 猜测“最新版”，而是从此源码快照构建并安装精确版本。
+  - from: ../echo-agent
+    to: echo-agent-core
+    filter:
+      - pyproject.toml
+      - hatch_build.py
+      - README.md
+      - LICENSE
+      - echo_agent/**
+      - skills/**
+      # hatch_build.py requires the built Dashboard for a distributable wheel.
+      # The desktop installer builds this bundled source snapshot on first run,
+      # so omitting web/dist makes a production installation fail even though
+      # the Python sources themselves are present.
+      - web/dist/**
 
 # 原生模块(better-sqlite3)自动按 Electron ABI rebuild
 npmRebuild: true

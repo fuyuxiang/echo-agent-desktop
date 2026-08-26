@@ -190,9 +190,9 @@ describe('权限收回', () => {
 describe('同步状态', () => {
   it('记录游标与同步时间', () => {
     const cache = makeCache()
-    expect(cache.getCursor()).toBe(0)
+    expect(cache.getCursor()).toBe('0')
     cache.applySync(payload({ docs: [doc('d1', 'T', '正文内容。')] }), 12345)
-    expect(cache.getCursor()).toBe(12345)
+    expect(cache.getCursor()).toBe('12345')
     expect(cache.stats().lastSyncAt).toBeGreaterThan(0)
   })
 
@@ -211,7 +211,7 @@ describe('同步状态', () => {
     const cache = makeCache()
     cache.applySync(payload({ docs: [doc('d1', 'A', '内容。')] }), 500)
     cache.clearAll()
-    expect(cache.getCursor()).toBe(0)
+    expect(cache.getCursor()).toBe('0')
   })
 })
 

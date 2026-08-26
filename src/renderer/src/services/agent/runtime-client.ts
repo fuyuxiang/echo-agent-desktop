@@ -220,9 +220,6 @@ class RuntimeClient {
     }
     // 兼容旧 'final' 裸事件名(summarize 同时监听了 'final')
     if (type === 'final') this.emit('final', ev)
-    // 项目记忆候选下行:agent 推送 type='memory-candidate' 的事件后,
-    // 这里把它转成 'memory-candidate' 通道供 ChatPage 触发 ShareMemoryDialog。
-    if (type === 'memory-candidate') this.emit('memory-candidate', ev)
   }
 
   private emit(event: string, payload: Record<string, unknown>): void {

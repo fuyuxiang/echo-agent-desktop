@@ -157,6 +157,38 @@ export class OrgManager {
     }
   }
 
+  modelConfig(): ReturnType<OrgClient['modelConfig']> {
+    return this.deps.client.modelConfig()
+  }
+
+  openAiChat(body: string, signal?: AbortSignal): Promise<Response> {
+    return this.deps.client.openAiChat(body, signal)
+  }
+
+  listMemories(params: Parameters<OrgClient['listMemories']>[0] = {}): ReturnType<OrgClient['listMemories']> {
+    return this.deps.client.listMemories(params)
+  }
+
+  adminListUsers(): ReturnType<OrgClient['adminListUsers']> {
+    return this.deps.client.adminListUsers()
+  }
+
+  adminCreateUser(input: Parameters<OrgClient['adminCreateUser']>[0]): ReturnType<OrgClient['adminCreateUser']> {
+    return this.deps.client.adminCreateUser(input)
+  }
+
+  adminUpdateUser(id: string, patch: Parameters<OrgClient['adminUpdateUser']>[1]): ReturnType<OrgClient['adminUpdateUser']> {
+    return this.deps.client.adminUpdateUser(id, patch)
+  }
+
+  adminListGroups(): ReturnType<OrgClient['adminListGroups']> {
+    return this.deps.client.adminListGroups()
+  }
+
+  adminCreateGroup(name: string): ReturnType<OrgClient['adminCreateGroup']> {
+    return this.deps.client.adminCreateGroup(name)
+  }
+
   /**
    * 检索。在线优先,失败降级到缓存。
    *
@@ -309,7 +341,7 @@ export class OrgManager {
         memories += page.memories.length
         revoked += page.revokedDocs.length + (page.revokedMemories?.length ?? 0)
         if (!page.hasMore) break
-        if (page.nextCursor <= cursor) break
+        if (page.nextCursor === cursor) break
       }
       this.reachable = true
       void this.flushPending().catch(() => {})
@@ -343,5 +375,13 @@ export class OrgManager {
 
   listDocs(params: { scope_id?: string; q?: string; page?: number; size?: number }) {
     return this.deps.client.listDocs(params)
+  }
+
+  docContent(id: string, page?: number): ReturnType<OrgClient['docContent']> {
+    return this.deps.client.docContent(id, page)
+  }
+
+  docRaw(id: string): ReturnType<OrgClient['docRaw']> {
+    return this.deps.client.docRaw(id)
   }
 }

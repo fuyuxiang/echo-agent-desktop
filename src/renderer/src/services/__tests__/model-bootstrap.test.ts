@@ -1,57 +1,33 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const storage = vi.hoisted(() => ({
-  get: vi.fn()
-}))
-
-const logger = vi.hoisted(() => ({
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn()
-}))
-
-const server = vi.hoisted(() => ({
-  fetchModelConfig: vi.fn()
-}))
-
-const agentStore = vi.hoisted(() => ({
+const storage = vi.hoisted(() => ({ get: vi.fn() }))
+const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+const agent = vi.hoisted(() => ({
   setReady: vi.fn(),
   setConfigured: vi.fn(),
-  getState: vi.fn(() => ({ setReady: agentStore.setReady, setConfigured: agentStore.setConfigured }))
-}))
-
-const userStore = vi.hoisted(() => ({
-  isAuthed: false,
-  getState: vi.fn(() => ({ isAuthed: userStore.isAuthed }))
+  getState: vi.fn()
 }))
 
 vi.mock('@/utils', () => ({ storage }))
 vi.mock('@/utils/logger', () => ({ logger }))
-vi.mock('../server', () => server)
-vi.mock('@/stores/agentStore', () => ({ useAgentStore: agentStore }))
-vi.mock('@/stores/userStore', () => ({ useUserStore: userStore }))
+vi.mock('@/stores/agentStore', () => ({ useAgentStore: agent }))
 
 beforeEach(() => {
   vi.resetModules()
   vi.clearAllMocks()
-  userStore.isAuthed = false
+  agent.getState.mockReturnValue({ setReady: agent.setReady, setConfigured: agent.setConfigured })
   window.api = {
-    agentChat: {
-      init: vi.fn(async () => ({ success: true }))
+    org: {
+      status: vi.fn(async () => ({ loggedIn: false })),
+      modelConfig: vi.fn()
     },
-    echoConfig: {
-      apply: vi.fn(async () => undefined)
-    }
+    echoConfig: { apply: vi.fn(async () => undefined) }
   } as never
-  agentStore.getState.mockReturnValue({
-    setReady: agentStore.setReady,
-    setConfigured: agentStore.setConfigured
-  })
 })
 
 describe('applyServerModelConfigAndStart', () => {
-  it('本地 Ollama 开启时优先装配本地 OpenAI 兼容端点', async () => {
+  it('本地 Ollama 优先，并显式标记 source', async () => {
     storage.get.mockResolvedValueOnce({
       enabled: true,
       baseUrl: 'http://127.0.0.1:11434/',
@@ -59,138 +35,59 @@ describe('applyServerModelConfigAndStart', () => {
     })
     const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
 
-    await expect(applyServerModelConfigAndStart()).resolves.toEqual({
-      ok: true,
-      configured: true,
-      retryable: false
-    })
+    await expect(applyServerModelConfigAndStart()).resolves.toMatchObject({ ok: true, configured: true })
     expect(window.api.echoConfig.apply).toHaveBeenCalledWith({
       baseUrl: 'http://127.0.0.1:11434/v1',
       apiKey: 'ollama',
-      model: 'qwen'
+      model: 'qwen',
+      source: 'ollama'
     })
-    expect(server.fetchModelConfig).not.toHaveBeenCalled()
-    expect(agentStore.setReady).toHaveBeenCalledWith(true)
-    expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
   })
 
-  it('没有本地模型时使用服务器模型配置装配 runtime', async () => {
-    userStore.isAuthed = true
+  it('企业模型只传脱敏元数据，不传服务端密钥', async () => {
     storage.get.mockResolvedValueOnce(null)
-    server.fetchModelConfig.mockResolvedValueOnce({
-      baseUrl: 'https://api.example.com/v1',
-      modelName: 'gpt-4o',
-      allowLocalOverride: false,
-      hasCredential: true
+    vi.mocked(window.api.org.status).mockResolvedValueOnce({ loggedIn: true } as never)
+    vi.mocked(window.api.org.modelConfig).mockResolvedValueOnce({
+      configured: true,
+      chatProvider: 'openai',
+      chatModel: 'gpt-4o',
+      hasCredential: true,
+      proxied: true
     })
     const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
 
-    await expect(applyServerModelConfigAndStart()).resolves.toEqual({
-      ok: true,
-      configured: true,
-      retryable: false
-    })
+    await expect(applyServerModelConfigAndStart()).resolves.toMatchObject({ ok: true, configured: true })
     expect(window.api.echoConfig.apply).toHaveBeenCalledWith({
-      baseUrl: 'https://api.example.com/v1',
-      apiKey: expect.any(String),
-      model: 'gpt-4o'
+      baseUrl: '', apiKey: '', model: 'gpt-4o', source: 'enterprise'
     })
-    expect(agentStore.setReady).toHaveBeenCalledWith(true)
-    expect(agentStore.setConfigured).toHaveBeenCalledWith(true)
   })
 
-  it('Regression: 服务器下发的 apiKey 不再以明文随 apply 透传,改用引用', async () => {
-    userStore.isAuthed = true
-    storage.get.mockResolvedValueOnce(null)
-    server.fetchModelConfig.mockResolvedValueOnce({
-      baseUrl: 'https://api.example.com/v1',
-      modelName: 'gpt-4o',
-      apiKey: 'sk-secret',
-      allowLocalOverride: false,
-      hasCredential: true
-    })
-    const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
-
-    await expect(applyServerModelConfigAndStart()).resolves.toEqual({
-      ok: true,
-      configured: true,
-      retryable: false
-    })
-    const applyCall = (window.api.echoConfig.apply as ReturnType<typeof vi.fn>).mock.calls[0][0]
-    expect(applyCall.baseUrl).toBe('https://api.example.com/v1')
-    expect(applyCall.model).toBe('gpt-4o')
-    // 关键断言:apply 入参中的 apiKey 必须是引用,绝不包含明文
-    expect(applyCall.apiKey).not.toBe('sk-secret')
-    expect(applyCall.apiKey).toMatch(/^ref:/)
-  })
-
-  it('Regression: 本地手动配置的 apiKey 引用而非明文', async () => {
-    userStore.isAuthed = false
+  it('本地手工模型只将 safeStorage 引用交给主进程', async () => {
     storage.get
-      .mockResolvedValueOnce(null) // Ollama config
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({
-        baseUrl: 'https://api.example.com/v1',
-        modelName: 'gpt-4o',
-        apiKeyRef: 'openai-api-key'
+        baseUrl: 'https://api.example.com/v1', modelName: 'gpt-4o', apiKeyRef: 'openai-api-key'
       })
     const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
 
-    await expect(applyServerModelConfigAndStart()).resolves.toEqual({
-      ok: true,
-      configured: true,
-      retryable: false
+    await expect(applyServerModelConfigAndStart()).resolves.toMatchObject({ ok: true, configured: true })
+    expect(window.api.echoConfig.apply).toHaveBeenCalledWith({
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'ref:openai-api-key',
+      model: 'gpt-4o',
+      source: 'local'
     })
-    const applyCall = (window.api.echoConfig.apply as ReturnType<typeof vi.fn>).mock.calls[0][0]
-    expect(applyCall.apiKey).toBe('ref:openai-api-key')
   })
 
-  it('服务器未配置模型时降级为可用但未装配(终态,不重试)', async () => {
-    userStore.isAuthed = true
-    storage.get.mockResolvedValueOnce(null)
-    server.fetchModelConfig.mockResolvedValueOnce({
-      baseUrl: '',
-      modelName: '',
-      allowLocalOverride: false,
-      hasCredential: false
-    })
+  it('已登录但服务器不可达且无本地兜底时可重试', async () => {
+    storage.get.mockResolvedValue(null)
+    vi.mocked(window.api.org.status).mockResolvedValueOnce({ loggedIn: true } as never)
+    vi.mocked(window.api.org.modelConfig).mockRejectedValueOnce(new Error('offline'))
     const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
 
     await expect(applyServerModelConfigAndStart()).resolves.toEqual({
-      ok: true,
-      configured: false,
-      retryable: false
+      ok: true, configured: false, retryable: true
     })
     expect(window.api.echoConfig.apply).not.toHaveBeenCalled()
-    expect(agentStore.setReady).toHaveBeenCalledWith(true)
-    expect(agentStore.setConfigured).not.toHaveBeenCalled()
-  })
-
-  it('拉取服务器配置失败(网络/超时)时降级为可用、标记可重试', async () => {
-    userStore.isAuthed = true
-    storage.get.mockResolvedValueOnce(null)
-    server.fetchModelConfig.mockRejectedValueOnce(new Error('fetch failed'))
-    const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
-
-    await expect(applyServerModelConfigAndStart()).resolves.toEqual({
-      ok: true,
-      configured: false,
-      retryable: true
-    })
-    expect(window.api.echoConfig.apply).not.toHaveBeenCalled()
-    expect(agentStore.setReady).toHaveBeenCalledWith(true)
-    expect(agentStore.setConfigured).not.toHaveBeenCalled()
-  })
-
-  it('装配异常时记录错误并返回可重试', async () => {
-    storage.get.mockRejectedValueOnce(new Error('storage down'))
-    const { applyServerModelConfigAndStart } = await import('../model-bootstrap')
-
-    await expect(applyServerModelConfigAndStart()).resolves.toEqual({
-      ok: false,
-      configured: false,
-      retryable: true,
-      error: 'storage down'
-    })
-    expect(logger.error).toHaveBeenCalledWith('[model-bootstrap] 装配失败:', 'storage down')
   })
 })

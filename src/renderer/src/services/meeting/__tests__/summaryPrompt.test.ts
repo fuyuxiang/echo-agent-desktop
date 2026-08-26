@@ -3,7 +3,7 @@ import type { SegmentDTO } from '@shared/types/meeting'
 
 describe('generateSummary', () => {
   beforeEach(() => {
-    ;(globalThis as any).window = {
+    ;(globalThis as unknown as { window: unknown }).window = {
       api: {
         meeting: {
           summarize: vi.fn(async () => ({ summary: 's', keyPoints: ['k'], actionItems: [] })),
@@ -26,7 +26,7 @@ describe('generateSummary', () => {
   })
 
   it('throws when summarize returns null (caller surfaces failure)', async () => {
-    ;(window.api.meeting.summarize as any).mockResolvedValueOnce(null)
+    vi.mocked(window.api.meeting.summarize).mockResolvedValueOnce(null)
     const { generateSummary } = await import('../summarize')
     await expect(generateSummary('m1', [], 't')).rejects.toThrow()
   })

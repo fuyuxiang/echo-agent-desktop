@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createStatusBus } from '../index'
+import { createStatusBus } from '../runtime-utils'
 
 describe('status bus', () => {
   it('broadcasts to subscribers and supports unsubscribe', () => {

@@ -1,4 +1,5 @@
 import { homedir } from 'node:os'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { app } from 'electron'
@@ -7,6 +8,7 @@ import type { EchoAgentEndpoint, EchoAgentStatus } from './types'
 import { EchoAgentManager } from './manager'
 import { ensureInstalled, updateEchoAgent as pipUpdate } from './installer'
 import {
+  bundledEchoAgentCorePath,
   bundledOrgPluginPath,
   bundledPythonArchive,
   configPath,
@@ -25,38 +27,43 @@ import {
 import WebSocket from 'ws'
 import { GatewayClient, type Frame, type WsLike } from './gateway-client'
 import { setLLMConfig } from './llm'
+import { gatewayAdminToken, modelBrokerToken } from './security-tokens'
+import { MODEL_BROKER_TOKEN_ENV } from './security-tokens'
+import { configureModelBroker } from './model-broker'
+import { buildWsUrl, createStatusBus } from './runtime-utils'
+import { secureGet } from '../store'
 
 /**
- * 安装策略:
- *   - echo-agent 始终 `pip install echo-agent[all]` latest,不锁版本;
- *   - 企业插件随 Desktop 分发并默认安装;
- *   - 启动时两者都已安装则只做 pip show,不重复访问索引;
- *   - About 页面的"升级"按钮才执行 pip install -U。
+ * 安装策略:核心与企业插件都随 Desktop 分发并锁定兼容版本；启动时仅在
+ * 缺失或版本不匹配时安装。About 页面的“更新”实际执行随包运行时修复，
+ * 不会绕过 Desktop 的兼容性验证去追踪 PyPI 最新版。
  */
-
-export interface StatusBus {
-  subscribe: (cb: (s: EchoAgentStatus) => void) => () => void
-  emit: (s: EchoAgentStatus) => void
-  last: () => EchoAgentStatus
-}
-
-export function createStatusBus(): StatusBus {
-  const subs = new Set<(s: EchoAgentStatus) => void>()
-  let lastStatus: EchoAgentStatus = { phase: 'idle' }
-  return {
-    subscribe(cb) { subs.add(cb); return () => subs.delete(cb) },
-    emit(s) { lastStatus = s; for (const cb of subs) cb(s) },
-    last() { return lastStatus }
-  }
-}
 
 const bus = createStatusBus()
 let manager: EchoAgentManager | null = null
 let orgServerUrlProvider: () => string = () => ''
+let agentUserId = 'desktop-user'
 
 /** 由企业 IPC 在主进程启动时注入,避免 echo-agent 基础模块反向依赖 Store。 */
 export function setOrgServerUrlProvider(provider: () => string): void {
   orgServerUrlProvider = provider
+}
+
+/**
+ * 为 Agent 对话设置当前企业主体。服务器地址只用于生成不可逆命名空间，
+ * 避免两套部署恰好使用相同 user id 时串权限。
+ */
+export function setEchoAgentUser(serverUrl: string, userId: string | null): void {
+  const next = userId
+    ? `org-${createHash('sha256').update(serverUrl).digest('hex').slice(0, 12)}-${userId}`
+    : 'desktop-user'
+  if (next === agentUserId) return
+  agentUserId = next
+  resetGatewayClient()
+}
+
+export function getEchoAgentUserId(): string {
+  return agentUserId
 }
 
 function getManagedOrgConfig() {
@@ -81,22 +88,32 @@ export function getEchoAgentManager(): EchoAgentManager {
   const resourcesRoot = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources')
   const pythonArchive = bundledPythonArchive(resourcesRoot, platform, arch)
   const orgPluginPath = bundledOrgPluginPath(resourcesRoot)
+  const corePackagePath = app.isPackaged
+    ? bundledEchoAgentCorePath(resourcesRoot)
+    : join(app.getAppPath(), '..', 'echo-agent')
   manager = new EchoAgentManager({
     ensureInstalled: (onProgress, signal) =>
       ensureInstalled({
-        runner: nodeCommandRunner, homeDir, platform, pythonArchive, orgPluginPath,
+        runner: nodeCommandRunner, homeDir, platform, pythonArchive, corePackagePath, orgPluginPath,
         pathExists: (p) => existsSync(p), ensureDir: (p) => { mkdirSync(p, { recursive: true }) }, onProgress,
         abortSignal: signal
       }),
     update: (onProgress, signal) =>
       pipUpdate({
-        runner: nodeCommandRunner, homeDir, platform, pythonArchive, orgPluginPath,
+        runner: nodeCommandRunner, homeDir, platform, pythonArchive, corePackagePath, orgPluginPath,
         pathExists: (p) => existsSync(p), ensureDir: (p) => { mkdirSync(p, { recursive: true }) }, onProgress,
         abortSignal: signal
       }),
     spawnGateway: () =>
-      spawnGateway({ configPath: configPath(homeDir), workspace: echoHome(homeDir), homeDir, platform }),
-    shutdown: shutdownGateway,
+      spawnGateway({
+        configPath: configPath(homeDir),
+        workspace: echoHome(homeDir),
+        homeDir,
+        platform,
+        gatewayToken: gatewayAdminToken,
+        modelToken: modelBrokerToken
+      }),
+    shutdown: (endpoint) => shutdownGateway(endpoint, gatewayAdminToken),
     readyTimeoutMs: 120_000,
     onStatus: (s) => { log.info('[echo-agent] status:', s.phase, s.message ?? ''); bus.emit(s) }
   })
@@ -147,29 +164,58 @@ const SECURE_REF_PREFIX = 'ref:'
  * - 其它(ollama 占位/纯字符串) → 视为业务值,直接返回
  *
  * 真实 apiKey 永不写入 yaml 中的明文字段:yaml 里只保留 `ref:` 引用或占位符。
- * 本函数在写入 yaml 前一刻完成解析,解析后的明文只在写入瞬间存在于内存。
+ * 本函数在配置本机模型 Broker 前完成解析；明文只存在于主进程内存中，
+ * 不会传给 Agent，也不会写入 YAML。
  */
 async function resolveApiKey(apiKey: string): Promise<string> {
   if (!apiKey.startsWith(SECURE_REF_PREFIX)) return apiKey
   const storeKey = apiKey.slice(SECURE_REF_PREFIX.length)
   if (!storeKey) throw new Error('无效的 apiKey 引用:缺少 storeKey')
-  // 动态 import 避免循环依赖
-  const { secureGet } = await import('../store')
   const real = await secureGet(storeKey)
   if (!real) throw new Error(`安全存储中无 key: ${storeKey}`)
   return real
 }
 
 export async function applyModelConfig(cfg: ModelConfigInput): Promise<void> {
-  // 解析 apiKey:ref: → 从 safeStorage 取真值(写入 yaml 的瞬间即被回收,不长期驻留)
-  const realApiKey = await resolveApiKey(cfg.apiKey)
+  const source = cfg.source ?? 'local'
+  const realApiKey =
+    source === 'local'
+      ? await resolveApiKey(cfg.apiKey)
+      : source === 'ollama'
+        ? (cfg.apiKey || 'ollama')
+        : ''
+
+  let agentBaseUrl = cfg.baseUrl
+  let agentApiKey = realApiKey
+  let apiKeyEnv: string | undefined
+  if (source !== 'ollama') {
+    const broker = await configureModelBroker(
+      source === 'enterprise'
+        ? { kind: 'enterprise' }
+        : { kind: 'direct', baseUrl: cfg.baseUrl, apiKey: realApiKey }
+    )
+    agentBaseUrl = `${broker.baseUrl}/v1`
+    agentApiKey = ''
+    apiKeyEnv = MODEL_BROKER_TOKEN_ENV
+  }
   writeManagedConfig(
     buildConfigWriterDeps(),
-    { ...cfg, apiKey: realApiKey },
+    {
+      ...cfg,
+      source,
+      baseUrl: agentBaseUrl,
+      apiKey: agentApiKey,
+      apiKeyEnv
+    },
     getManagedOrgConfig()
   )
-  // stash 同源配置供桌面直连 LLM 生成会话标题(独立于 TS AgentRuntime)
-  setLLMConfig({ baseUrl: cfg.baseUrl, apiKey: realApiKey, model: cfg.model })
+  // Auxiliary title/meeting helpers use the same broker. Long-lived provider
+  // credentials remain confined to the Electron main process.
+  setLLMConfig({
+    baseUrl: agentBaseUrl,
+    apiKey: source === 'ollama' ? realApiKey : modelBrokerToken,
+    model: cfg.model
+  })
   await getEchoAgentManager().restart()
   // restart 换了端口/路径,旧 gateway 单例仍连旧 endpoint;丢弃它,
   // 下次 send 时用新 endpoint 重建 client。
@@ -204,10 +250,6 @@ export async function restartEchoAgent(): Promise<void> {
   await getEchoAgentManager().restart()
 }
 
-export function buildWsUrl(baseUrl: string, wsPath = '/ws'): string {
-  return baseUrl.replace(/^http/, 'ws') + wsPath
-}
-
 let gatewayClient: GatewayClient | null = null
 
 export function getGatewayClient(emit: (e: Frame) => void): GatewayClient | null {
@@ -217,6 +259,8 @@ export function getGatewayClient(emit: (e: Frame) => void): GatewayClient | null
   gatewayClient = new GatewayClient({
     // WS 路径来自 ready 信号(endpoint.wsPath),不再硬编码 /ws
     wsUrl: buildWsUrl(endpoint.baseUrl, endpoint.wsPath),
+    token: gatewayAdminToken,
+    userId: agentUserId,
     createWs: (url) => new WebSocket(url) as unknown as WsLike,
     emit
   })

@@ -21,6 +21,18 @@ const KANBAN_COLUMNS: { status: KanbanStatus; label: string }[] = [
   { status: 'archived', label: 'kanban.archived' }
 ]
 
+const NEXT_STATUS: Record<KanbanStatus, KanbanStatus[]> = {
+  triage: ['ready', 'archived'],
+  todo: ['ready', 'archived'],
+  ready: ['archived'],
+  running: ['review', 'blocked', 'scheduled', 'archived'],
+  blocked: ['ready', 'archived'],
+  review: ['done', 'ready'],
+  scheduled: ['ready', 'archived'],
+  done: [],
+  archived: []
+}
+
 export default function TaskList({
   tasks,
   onEdit,
@@ -74,18 +86,23 @@ export default function TaskList({
                     >
                       {t('kanban.edit')}
                     </button>
-                    <button
-                      onClick={() => onDelete(task.id)}
-                      className={styles.deleteButton}
-                    >
-                      {t('kanban.delete')}
-                    </button>
+                    {!['done', 'archived'].includes(task.status) && (
+                      <button
+                        onClick={() => onDelete(task.id)}
+                        className={styles.deleteButton}
+                      >
+                        {t('kanban.delete')}
+                      </button>
+                    )}
                     <select
                       value={task.status}
                       onChange={(e) => onMove(task.id, e.target.value as KanbanStatus)}
                       className={styles.statusSelect}
+                      disabled={NEXT_STATUS[task.status].length === 0}
                     >
-                      {KANBAN_COLUMNS.map((col) => (
+                      {KANBAN_COLUMNS.filter(
+                        (col) => col.status === task.status || NEXT_STATUS[task.status].includes(col.status)
+                      ).map((col) => (
                         <option key={col.status} value={col.status}>
                           {t(col.label)}
                         </option>

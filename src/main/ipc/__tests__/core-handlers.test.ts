@@ -89,13 +89,6 @@ const asr = vi.hoisted(() => ({
   }))
 }))
 
-const exampleDao = vi.hoisted(() => ({
-  addExampleRecord: vi.fn((content: string) => ({ id: 1, content, createdAt: 10 })),
-  clearExampleRecords: vi.fn(),
-  listExampleRecords: vi.fn(() => [{ id: 1, content: 'a', createdAt: 10 }]),
-  removeExampleRecord: vi.fn()
-}))
-
 const sessionDao = vi.hoisted(() => ({
   appendChatMessage: vi.fn((input: Record<string, unknown>) => ({ id: 1, ...input, createdAt: 10 })),
   deleteChatSession: vi.fn(),
@@ -190,7 +183,6 @@ const mainWindow = vi.hoisted(() => ({
 vi.mock('electron', () => electron)
 vi.mock('../../updater', () => updater)
 vi.mock('../../asr', () => asr)
-vi.mock('../../db/dao/example', () => exampleDao)
 vi.mock('../../db/dao/session', () => sessionDao)
 vi.mock('../../db/dao/meeting', () => meetingDao)
 vi.mock('../../meeting/recorder', () => recorder)
@@ -261,16 +253,9 @@ describe('基础 IPC handlers', () => {
     await expect(invoke(IpcChannels.asr.stop, 'stream-1')).resolves.toBe('stopped text')
   })
 
-  it('db handlers 透传 example 与 session DAO', async () => {
+  it('db handlers 透传 session DAO', async () => {
     const { registerDbHandlers } = await import('../db')
     registerDbHandlers()
-
-    expect(invoke(IpcChannels.db.exampleList)).toEqual([{ id: 1, content: 'a', createdAt: 10 }])
-    expect(invoke(IpcChannels.db.exampleAdd, 'new')).toMatchObject({ content: 'new' })
-    invoke(IpcChannels.db.exampleRemove, 1)
-    invoke(IpcChannels.db.exampleClear)
-    expect(exampleDao.removeExampleRecord).toHaveBeenCalledWith(1)
-    expect(exampleDao.clearExampleRecords).toHaveBeenCalledTimes(1)
 
     const input = { chatId: 'c1', title: 't', platform: 'desktop' }
     invoke(IpcChannels.db.sessionUpsert, input)
@@ -395,42 +380,41 @@ describe('system IPC handlers', () => {
     expect(await invoke<Promise<string | null>>(IpcChannels.system.showSaveDialog, {})).toBeNull()
   })
 
-  it('httpProxy 校验 URL 并通过 electron.net.fetch 返回响应', async () => {
+  it('ollamaRequest 只允许本机 Ollama 固定端点', async () => {
     const { registerSystemHandlers } = await import('../system')
     registerSystemHandlers()
 
-    await expect(invoke<Promise<unknown>>(IpcChannels.system.httpProxy, { url: 'not a url' })).resolves.toMatchObject({
+    await expect(invoke<Promise<unknown>>(IpcChannels.system.ollamaRequest, {
+      baseUrl: 'not a url', path: '/api/version'
+    })).resolves.toMatchObject({
       ok: false,
       status: 0
     })
-    await expect(invoke<Promise<unknown>>(IpcChannels.system.httpProxy, { url: 'ftp://example.com' })).resolves.toMatchObject({
-      ok: false,
-      body: '不支持的协议: ftp:'
-    })
     await expect(
-      invoke<Promise<unknown>>(IpcChannels.system.httpProxy, { url: 'https://u:p@example.com' })
+      invoke<Promise<unknown>>(IpcChannels.system.ollamaRequest, {
+        baseUrl: 'https://example.com', path: '/api/tags'
+      })
     ).resolves.toMatchObject({
       ok: false,
-      body: 'URL 不允许包含嵌入凭据'
+      body: '仅允许访问本机 Ollama 固定接口'
     })
 
     const result = await invoke<Promise<{ ok: boolean; status: number; body: string }>>(
-      IpcChannels.system.httpProxy,
+      IpcChannels.system.ollamaRequest,
       {
-        url: 'https://example.com/api',
+        baseUrl: 'http://127.0.0.1:11434',
+        path: '/api/pull',
         method: 'POST',
-        headers: { 'X-Test': '1' },
-        body: '{"a":1}',
-        timeoutMs: 1000
+        body: { name: 'qwen3' }
       }
     )
     expect(result).toEqual({ ok: true, status: 201, body: 'proxy-ok' })
     expect(electron.net.fetch).toHaveBeenCalledWith(
-      'https://example.com/api',
+      'http://127.0.0.1:11434/api/pull',
       expect.objectContaining({
         method: 'POST',
-        headers: { 'X-Test': '1' },
-        body: '{"a":1}'
+        headers: { 'content-type': 'application/json' },
+        body: '{"name":"qwen3"}'
       })
     )
   })
@@ -536,7 +520,6 @@ describe('IPC 注册中心', () => {
     vi.doMock('../agent', () => ({ registerAgentIpcHandlers: mockRegister('agent') }))
     vi.doMock('../asr', () => ({ registerAsrHandlers: mockRegister('asr') }))
     vi.doMock('../meeting', () => ({ registerMeetingHandlers: mockRegister('meeting') }))
-    vi.doMock('../agent-memory', () => ({ registerAgentMemoryIpc: mockRegister('agent-memory') }))
     vi.doMock('../agent-chat', () => ({ registerAgentChatIpc: mockRegister('agent-chat') }))
     vi.doMock('../../agent/permission/approval-bridge', () => ({
       registerApprovalBridge: mockRegister('approval-bridge')
@@ -557,7 +540,6 @@ describe('IPC 注册中心', () => {
       'agent',
       'asr',
       'meeting',
-      'agent-memory',
       'agent-chat',
       'approval-bridge',
       'echo-agent'

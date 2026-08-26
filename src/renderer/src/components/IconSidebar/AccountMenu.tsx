@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import clsx from 'clsx'
 import { ROUTES } from '@/constants'
-import { useUserStore } from '@/stores/userStore'
+import { useOrgStore } from '@/stores/orgStore'
 import styles from './account-menu.module.scss'
 
 /** 取展示首字母:中文取首字,英文取首字母大写 */
@@ -17,9 +17,10 @@ const ROLE_LABEL: Record<string, string> = { admin: 'accountMenu.admin', member:
 export function AccountMenu(): React.JSX.Element {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const user = useUserStore((s) => s.user)
-  const isAuthed = useUserStore((s) => s.isAuthed)
-  const signOut = useUserStore((s) => s.signOut)
+  const status = useOrgStore((s) => s.status)
+  const signOut = useOrgStore((s) => s.logout)
+  const user = status?.user ?? null
+  const isAuthed = !!status?.loggedIn
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -40,10 +41,10 @@ export function AccountMenu(): React.JSX.Element {
   }, [open])
 
   const authed = isAuthed && user
-  const displayName = authed ? user.username : t('account.guest', '未登录')
-  const initial = authed ? initialOf(user.username) : '?'
+  const displayName = authed ? user.displayName : t('account.guest', '未登录')
+  const initial = authed ? initialOf(user.displayName) : '?'
   const meta = authed
-    ? [t(ROLE_LABEL[user.role] ?? user.role), user.groupId ?? undefined].filter(Boolean).join(' · ')
+    ? [t(ROLE_LABEL[user.role] ?? user.role), user.groups.map((g) => g.name).join(', ') || undefined].filter(Boolean).join(' · ')
     : t('account.guestHint', '点击登录或配置')
 
   return (
@@ -86,7 +87,7 @@ export function AccountMenu(): React.JSX.Element {
                 role="menuitem"
                 onClick={() => {
                   setOpen(false)
-                  signOut()
+                  void signOut()
                 }}
               >
                 {t('common.logout')}

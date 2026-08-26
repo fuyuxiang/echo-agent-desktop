@@ -15,6 +15,7 @@ cache must not break a conversation.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from pathlib import Path
 
@@ -31,9 +32,10 @@ def cache_path(cfg: dict | None = None) -> Path:
 
 
 def to_bigrams(text: str) -> str:
-    """Bigram-ise CJK runs so FTS5 unicode61 can match multi-char terms."""
+    """Match Desktop's tokenizer: CJK bigrams, intact ASCII identifier runs."""
     out: list[str] = []
     run: list[str] = []
+    ascii_run: list[str] = []
 
     def flush() -> None:
         if not run:
@@ -45,15 +47,47 @@ def to_bigrams(text: str) -> str:
             out.extend(s[i : i + 2] for i in range(len(s) - 1))
         run.clear()
 
+    def flush_ascii() -> None:
+        if ascii_run:
+            out.append("".join(ascii_run))
+            ascii_run.clear()
+
     for ch in text or "":
-        if "一" <= ch <= "鿿":
+        if ("一" <= ch <= "鿿") or ("㐀" <= ch <= "䶿"):
+            flush_ascii()
             run.append(ch)
+        elif ch.isascii() and (ch.isalnum() or ch == "_"):
+            flush()
+            ascii_run.append(ch)
         else:
             flush()
-            if not ch.isspace():
-                out.append(ch)
+            flush_ascii()
     flush()
+    flush_ascii()
     return " ".join(out)
+
+
+def build_match(query: str) -> str:
+    """Build the exact same safe FTS5 expression as Desktop OrgCache."""
+    cleaned = re.sub(r'["*():^\-]', " ", query or "").strip()
+    if not cleaned:
+        return ""
+    tokens: list[str] = []
+    seen: set[str] = set()
+
+    def add(token: str) -> None:
+        token = token.lower()
+        if token and token not in seen:
+            seen.add(token)
+            tokens.append(token)
+
+    for token in re.findall(r"[A-Za-z0-9_]+", cleaned):
+        if len(token) >= 2:
+            add(token)
+    for token in to_bigrams(cleaned).split():
+        if any(("一" <= ch <= "鿿") or ("㐀" <= ch <= "䶿") for ch in token):
+            add(token)
+    return " OR ".join(f'"{token}"' for token in tokens)
 
 
 class OrgCache:
@@ -82,7 +116,7 @@ class OrgCache:
         if conn is None:
             return RetrieveResult(from_cache=True)
 
-        match = to_bigrams(query)
+        match = build_match(query)
         if not match.strip():
             conn.close()
             return RetrieveResult(from_cache=True)

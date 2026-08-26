@@ -10,7 +10,7 @@
 //
 // 旧 spec 假设的字段(status / dependencies)已被专家修订,不再存在。
 
-import { agentWs } from './runtime-client'
+import { agentManagement } from './management'
 
 export interface Skill {
   id: string
@@ -47,24 +47,23 @@ function fromEchoAgent(raw: Record<string, unknown>): Skill {
 
 export const skillsAPI = {
   list: (): Promise<{ skills: Skill[] }> =>
-    agentWs.sendSkillList().then((rows) => ({ skills: rows.map(fromEchoAgent) })),
+    agentManagement<{ skills: Record<string, unknown>[] }>({ method: 'GET', path: '/skills' })
+      .then((r) => ({ skills: r.skills.map(fromEchoAgent) })),
 
-  get: (_id: string): Promise<SkillDetail> => {
-    // 详情暂未对接 echo-agent,返回空骨架
-    return Promise.resolve({ content: '', files: [] })
-  },
+  get: (id: string): Promise<SkillDetail> =>
+    agentManagement<SkillDetail>({ method: 'GET', path: `/skills/${encodeURIComponent(id)}` }),
 
   /** 激活态改为全局,chatId 参数保留以兼容旧签名但忽略。 */
   activate: (_chatId: string, skillId: string): Promise<{ success: boolean }> =>
-    agentWs.sendSkillEnable(skillId).then(() => ({ success: true })),
+    agentManagement({ method: 'POST', path: `/skills/${encodeURIComponent(skillId)}/toggle` }),
 
   deactivate: (_chatId: string, skillId: string): Promise<{ success: boolean }> =>
-    agentWs.sendSkillDisable(skillId).then(() => ({ success: true })),
+    agentManagement({ method: 'POST', path: `/skills/${encodeURIComponent(skillId)}/toggle` }),
 
   /** 旧方法已下线,保留以避免编译错误,但永远返回失败提示。 */
-  importFromPath: (_path: string): Promise<{ success: boolean; error?: string }> =>
-    Promise.resolve({ success: false, error: 'imported skills 已下线,请编辑 ~/.echo-agent/skills/' }),
+  importFromPath: (path: string): Promise<{ success: boolean; error?: string }> =>
+    agentManagement({ method: 'POST', path: '/skills/import', body: { path } }),
 
-  remove: (_name: string): Promise<{ success: boolean; error?: string }> =>
-    Promise.resolve({ success: false, error: '删除 skill 请在 echo-agent 端操作' })
+  remove: (name: string): Promise<{ success: boolean; error?: string }> =>
+    agentManagement({ method: 'DELETE', path: `/skills/${encodeURIComponent(name)}` })
 }

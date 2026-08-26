@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from echo_agent_org.cache import OrgCache, to_bigrams  # noqa: E402
+from echo_agent_org.cache import OrgCache, build_match, to_bigrams  # noqa: E402
 
 
 def test_bigrams_split_cjk():
@@ -19,8 +19,13 @@ def test_bigrams_split_cjk():
 
 def test_bigrams_keep_ascii_tokens():
     out = to_bigrams("XR2000 报销")
-    assert "XR2000" in out or "X" in out
+    assert out == "XR2000 报销"
     assert "报销" in out
+
+
+def test_build_match_matches_desktop_contract():
+    assert build_match('XR2000 报销审批') == '"xr2000" OR "报销" OR "销审" OR "审批"'
+    assert build_match('"*():^-') == ""
 
 
 def test_bigrams_empty():

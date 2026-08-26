@@ -19,18 +19,11 @@ const agentState = vi.hoisted(() => ({
   configured: false
 }))
 
-const userState = vi.hoisted(() => ({
-  isAuthed: false
-}))
-
 const applyServerModelConfigAndStart = vi.hoisted(() => vi.fn(async () => ({
   ok: true as const,
   configured: false as const,
   retryable: false as const
 })))
-
-const startProjectMemorySync = vi.hoisted(() => vi.fn(() => () => undefined))
-const stopProjectMemorySync = vi.hoisted(() => vi.fn())
 
 const orgStoreState = vi.hoisted(() => ({
   status: null as unknown,
@@ -46,10 +39,6 @@ vi.mock('@/stores/agentStore', () => ({
   )
 }))
 
-vi.mock('@/stores/userStore', () => ({
-  useUserStore: (selector: (s: typeof userState) => unknown) => selector(userState)
-}))
-
 vi.mock('@/stores/orgStore', () => ({
   useOrgStore: (selector: (s: typeof orgStoreState) => unknown) =>
     selector(orgStoreState),
@@ -58,11 +47,6 @@ vi.mock('@/stores/orgStore', () => ({
 
 vi.mock('@/services/model-bootstrap', () => ({
   applyServerModelConfigAndStart
-}))
-
-vi.mock('@/services/project-memory', () => ({
-  startProjectMemorySync,
-  stopProjectMemorySync
 }))
 
 vi.mock('@/layouts/TitleBar', () => ({ TitleBar: () => <div>TitleBar</div> }))
@@ -94,7 +78,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   agentState.ready = false
   agentState.configured = false
-  userState.isAuthed = false
   orgStoreState.status = null
   ;(window as unknown as { api: unknown }).api = {
     store: {
@@ -106,10 +89,7 @@ beforeEach(() => {
 })
 
 describe('AppLayout 启动期 ready 行为', () => {
-  it('Regression:持久化 configured=true 启动时,ready 仍必须被置 true(不依赖 model-bootstrap)', async () => {
-    // 模拟重启场景:上次 model-bootstrap 成功 → configured=true 被持久化
-    // → AppLayout 守卫 `if (configured || bootingRef.current) return` 短路
-    // model-bootstrap 调用 → 修复前 ready 永远为 false
+  it('冷启动总是重置持久化模型状态，但立即解锁 UI', async () => {
     agentState.configured = true
     applyServerModelConfigAndStart.mockClear()
     setReady.mockClear()
@@ -117,14 +97,15 @@ describe('AppLayout 启动期 ready 行为', () => {
     const { AppLayout } = await import('../index')
     render(<AppLayout />)
 
-    // 组件挂载后:ready 必须立即为 true(UI 可用门)
     await waitFor(() => expect(setReady).toHaveBeenCalledWith(true))
-    // model-bootstrap 不应被调用(沿用 configured 守卫,避免二次启动重跑)
+    expect(setConfigured).toHaveBeenCalledWith(false)
+    // org 状态尚未恢复时不抢跑模型装配。
     expect(applyServerModelConfigAndStart).not.toHaveBeenCalled()
   })
 
   it('首次启动 configured=false 时,AppLayout 装配且 ready 被置 true', async () => {
     agentState.configured = false
+    orgStoreState.status = { loggedIn: false, serverUrl: '' }
     applyServerModelConfigAndStart.mockClear()
     setReady.mockClear()
 
@@ -137,6 +118,7 @@ describe('AppLayout 启动期 ready 行为', () => {
 
   it('model-bootstrap 装配异常时,ready 仍必须为 true(失败兜底后均置 true)', async () => {
     agentState.configured = false
+    orgStoreState.status = { loggedIn: false, serverUrl: '' }
     applyServerModelConfigAndStart.mockRejectedValueOnce(new Error('boom'))
     setReady.mockClear()
 

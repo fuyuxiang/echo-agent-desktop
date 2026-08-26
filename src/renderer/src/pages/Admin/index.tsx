@@ -4,15 +4,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { toast } from '@/components/Toast'
-import {
-  adminListUsers,
-  adminListGroups,
-  adminCreateGroup,
-  adminCreateUser,
-  adminUpdateUser,
-  type ServerUser,
-  type ServerGroup
-} from '@/services/server'
+import type { OrgAdminUser, OrgAdminGroup } from '@shared/types/org'
 import styles from './admin.module.scss'
 
 /**
@@ -26,8 +18,8 @@ import styles from './admin.module.scss'
 export default function AdminPage(): React.JSX.Element {
   const { t } = useTranslation()
 
-  const groupsReq = useRequest(adminListGroups)
-  const usersReq = useRequest(adminListUsers)
+  const groupsReq = useRequest(() => window.api.org.adminListGroups())
+  const usersReq = useRequest(() => window.api.org.adminListUsers())
   const groups = groupsReq.data ?? []
   const users = usersReq.data ?? []
 
@@ -59,7 +51,7 @@ export default function AdminPage(): React.JSX.Element {
 // ===== 用户组区:列表 + 建组表单 =====
 
 interface GroupSectionProps {
-  groups: ServerGroup[]
+  groups: OrgAdminGroup[]
   loading: boolean
   onCreated: () => void
 }
@@ -76,7 +68,7 @@ function GroupSection({ groups, loading, onCreated }: GroupSectionProps): React.
   } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { name: '' } })
 
   const onSubmit = handleSubmit(async (values) => {
-    await adminCreateGroup(values.name)
+    await window.api.org.adminCreateGroup(values.name)
     toast.success(t('admin.groupCreated'))
     reset()
     onCreated()
@@ -118,8 +110,8 @@ function GroupSection({ groups, loading, onCreated }: GroupSectionProps): React.
 // ===== 用户区:列表(含改组/启用禁用) + 建用户表单 =====
 
 interface UserSectionProps {
-  users: ServerUser[]
-  groups: ServerGroup[]
+  users: OrgAdminUser[]
+  groups: OrgAdminGroup[]
   loading: boolean
   onChanged: () => void
 }
@@ -144,26 +136,28 @@ function UserSection({ users, groups, loading, onChanged }: UserSectionProps): R
   })
 
   const onSubmit = handleSubmit(async (values) => {
-    await adminCreateUser({
+    await window.api.org.adminCreateUser({
       username: values.username,
       password: values.password,
       role: values.role,
-      groupId: values.groupId || null
+      groupIds: values.groupId ? [values.groupId] : []
     })
     toast.success(t('admin.userCreated'))
     reset()
     onChanged()
   })
 
-  const handleGroupChange = async (user: ServerUser, groupId: string): Promise<void> => {
-    if (!groupId || groupId === user.groupId) return
-    await adminUpdateUser(user.id, { groupId })
+  const handleGroupChange = async (user: OrgAdminUser, groupId: string): Promise<void> => {
+    if (groupId === (user.groups[0]?.id ?? '')) return
+    await window.api.org.adminUpdateUser(user.id, { groupIds: groupId ? [groupId] : [] })
     toast.success(t('admin.userUpdated'))
     onChanged()
   }
 
-  const handleToggleDisabled = async (user: ServerUser): Promise<void> => {
-    await adminUpdateUser(user.id, { disabled: !user.disabled })
+  const handleToggleDisabled = async (user: OrgAdminUser): Promise<void> => {
+    await window.api.org.adminUpdateUser(user.id, {
+      status: user.status === 'disabled' ? 'active' : 'disabled'
+    })
     toast.success(t('admin.userUpdated'))
     onChanged()
   }
@@ -236,13 +230,13 @@ function UserSection({ users, groups, loading, onChanged }: UserSectionProps): R
               </tr>
             )}
             {users.map((u) => (
-              <tr key={u.id} className={u.disabled ? styles.rowDisabled : undefined}>
+              <tr key={u.id} className={u.status === 'disabled' ? styles.rowDisabled : undefined}>
                 <td>{u.username}</td>
                 <td>{u.role === 'admin' ? t('admin.roleAdmin') : t('admin.roleMember')}</td>
                 <td>
                   <select
                     className={styles.selectSm}
-                    value={u.groupId ?? ''}
+                    value={u.groups[0]?.id ?? ''}
                     onChange={(e) => handleGroupChange(u, e.target.value)}
                   >
                     <option value="">{t('admin.noGroup')}</option>
@@ -254,13 +248,13 @@ function UserSection({ users, groups, loading, onChanged }: UserSectionProps): R
                   </select>
                 </td>
                 <td>
-                  <span className={u.disabled ? styles.badgeOff : styles.badgeOn}>
-                    {u.disabled ? t('admin.disabled') : t('admin.enabled')}
+                  <span className={u.status === 'disabled' ? styles.badgeOff : styles.badgeOn}>
+                    {u.status === 'disabled' ? t('admin.disabled') : t('admin.enabled')}
                   </span>
                 </td>
                 <td>
                   <button className={styles.ghostBtn} onClick={() => handleToggleDisabled(u)}>
-                    {u.disabled ? t('admin.enable') : t('admin.disable')}
+                    {u.status === 'disabled' ? t('admin.enable') : t('admin.disable')}
                   </button>
                 </td>
               </tr>

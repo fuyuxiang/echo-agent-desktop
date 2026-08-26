@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import { ROUTES } from '@/constants'
 import { SessionList } from '@/components/SessionList'
 import { useSessionActions } from '@/hooks/useSessionManager'
-import { useUserStore } from '@/stores/userStore'
 import { useOrgStore } from '@/stores/orgStore'
 import { AccountMenu } from './AccountMenu'
 import styles from './sidebar.module.scss'
@@ -17,6 +16,9 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { icon: <KnowledgeIcon />, route: ROUTES.knowledge, labelKey: 'sidebar.knowledge' },
+  { icon: <TasksIcon />, route: ROUTES.kanban, labelKey: 'sidebar.tasks' },
+  { icon: <ScheduleIcon />, route: ROUTES.schedules, labelKey: 'sidebar.schedules' },
+  { icon: <ChannelsIcon />, route: ROUTES.channels, labelKey: 'sidebar.channels' },
   { icon: <MeetingNavIcon />, route: ROUTES.meeting, labelKey: 'sidebar.meeting' }
 ]
 
@@ -34,7 +36,7 @@ export function IconSidebar(): React.JSX.Element {
   const location = useLocation()
   const navigate = useNavigate()
   const { handleNewSession } = useSessionActions()
-  const role = useUserStore((s) => s.user?.role)
+  const role = useOrgStore((s) => s.status?.user?.role)
 
   // 记忆区与技能库已并入设置页,侧边栏只保留我的文档入口
   // 企业入口按接入状态动态出现,配置了服务器地址即显示(未登录时页面内引导登录)
@@ -140,6 +142,33 @@ function MeetingNavIcon(): React.JSX.Element {
       <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
       <path d="M12 19v4" />
       <path d="M8 23h8" />
+    </svg>
+  )
+}
+
+function TasksIcon(): React.JSX.Element {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M9 6h11M9 12h11M9 18h11" />
+      <path d="m3 6 1 1 2-2M3 12h3M3 18h3" />
+    </svg>
+  )
+}
+
+function ScheduleIcon(): React.JSX.Element {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  )
+}
+
+function ChannelsIcon(): React.JSX.Element {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0" />
+      <circle cx="12" cy="16" r="1" />
     </svg>
   )
 }
