@@ -40,7 +40,7 @@ pub struct SkillItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when_to_use: Option<String>,
     /// Absolute directory containing the SKILL.md (feed to
-    /// `skills_catalog_read_skill` / grok's skill-add).
+    /// `skills_catalog_read_skill` / EchoAgent's skill-add).
     pub source_dir: String,
     /// "connector" (from a connector package) | "builtin" (workbuddy built-in).
     pub origin: String,
@@ -845,11 +845,17 @@ mod tests {
             catalog.skills.iter().any(|s| s.icon_local.is_some()),
             "expected at least one connector skill with an icon"
         );
-        // Built-in skills should be flagged featured.
-        assert!(
-            catalog.skills.iter().any(|s| s.featured),
-            "expected at least one featured (builtin) skill"
-        );
+        // Built-in skills are optional on developer machines. When that
+        // separate directory exists, its entries must be flagged featured.
+        if candidate_builtin_roots()
+            .iter()
+            .any(|root| builtin_root_valid(root))
+        {
+            assert!(
+                catalog.skills.iter().any(|s| s.featured),
+                "expected at least one featured (builtin) skill"
+            );
+        }
         // Categories must be non-empty (the fixed catalogue).
         assert!(!catalog.categories.is_empty());
         eprintln!(

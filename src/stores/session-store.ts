@@ -58,7 +58,7 @@ interface Usage {
  *
  * `suppressReplay` is set when we switch back to a session we already have a
  * cached transcript for: the cache IS the truth, so the history replay that
- * `grokLoadSession` re-streams must be ignored for the message-streaming
+ * `agentLoadSession` re-streams must be ignored for the message-streaming
  * cases (otherwise turns merge and historical usage overwrites the live one).
  */
 export interface SessionTranscript {
@@ -79,7 +79,7 @@ interface SessionState {
 
   // --- mirrors of transcripts[sessionId] (read by the UI) ---
   messages: ChatMessage[];
-  /** True between `grok_send` and `grok://complete` for the focused session. */
+  /** True between `agent_send` and `agent://complete` for the focused session. */
   streaming: boolean;
   /** Last assistant message id being streamed in the focused session. */
   streamingMessageId: string | null;
@@ -87,7 +87,7 @@ interface SessionState {
   plan: Plan | null;
 
   error: string | null;
-  /** Plan mode on/off — toggled by user or by grok via notification. */
+  /** Plan mode on/off — toggled by user or by EchoAgent via notification. */
   planMode: boolean;
 
   // --- lifecycle ---
@@ -98,12 +98,12 @@ interface SessionState {
   setError: (e: string | null) => void;
   /** Stop the focused session's stream locally (cancel button): keep any
    *  text already streamed, mark the in-flight message complete, clear the
-   *  streaming flag. Does NOT talk to the backend (caller does grokCancel). */
+   *  streaming flag. Does NOT talk to the backend (caller does agentCancel). */
   stopStreaming: () => void;
   /** Drop a session's cached transcript so the next focus reloads it from
-   *  grok (used after a rewind that rewrites backend history). */
+   *  EchoAgent (used after a rewind that rewrites backend history). */
   dropSessionCache: (id: string) => void;
-  /** Re-enable replay ingestion for a session once its grokLoadSession call
+  /** Re-enable replay ingestion for a session once its agentLoadSession call
    *  has finished (so a *new* turn's updates aren't suppressed). */
   clearReplaySuppression: (id?: string) => void;
 
@@ -120,7 +120,7 @@ interface SessionState {
   setMessages: (msgs: ChatMessage[]) => void;
   /** Replace the focused session's plan. */
   setPlan: (plan: Plan | null) => void;
-  /** Toggle plan mode (user-initiated or grok notification). */
+  /** Toggle plan mode (user-initiated or EchoAgent notification). */
   setPlanMode: (enabled: boolean) => void;
 }
 
@@ -136,7 +136,7 @@ const EMPTY_TRANSCRIPT: SessionTranscript = {
 };
 
 // Side-channel update listeners: keyed by session id. The inspiration panel
-// registers one to accumulate grok's streamed JSON output for a side session.
+// registers one to accumulate EchoAgent's streamed JSON output for a side session.
 // When present, applyUpdate forwards matching updates to the listener IN
 // ADDITION to (not instead of) routing them into that session's transcript —
 // but the inspiration session is never focused, so the transcript stays inert.
@@ -188,7 +188,7 @@ function normalizeToolCallContent(raw: unknown): ToolCallContent[] {
       if (inner?.type === "text") {
         return { type: "text" as const, text: (inner.text as string) ?? "" };
       }
-      // grok's read_file returns ImageContent for image/PDF files
+      // EchoAgent's read_file returns ImageContent for image/PDF files
       // (acp_conversion.rs): base64 `data` + `mimeType` (+ optional `uri`).
       if (inner?.type === "image") {
         return {
@@ -341,7 +341,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       set((s) => {
         // Switching focus never destroys transcripts. If we have a cached
         // transcript for the target, it's the truth: arm replay suppression
-        // so grokLoadSession's re-streamed history can't merge/overwrite it,
+        // so agentLoadSession's re-streamed history can't merge/overwrite it,
         // and mirror it (streaming stays true if it was mid-stream). If we
         // don't (first open / after restart), seed an empty, non-suppressed
         // transcript that the upcoming replay will fill.
@@ -467,7 +467,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
         const transcripts = { ...s.transcripts };
         delete transcripts[id];
         // If we just dropped the focused session, refresh the mirror to empty
-        // (a subsequent setSession+load will refill it from grok).
+        // (a subsequent setSession+load will refill it from EchoAgent).
         if (id === s.sessionId) {
           return { transcripts, ...mirrorOf(undefined) };
         }
@@ -535,7 +535,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
         (u as { type?: string }).type) as string;
 
       // Replay-suppression gate: when we refocused a cached transcript, the
-      // history grok re-streams must NOT touch the message stream (it would
+      // history EchoAgent re-streams must NOT touch the message stream (it would
       // merge turns / overwrite usage). Usage/plan are also part of the cache,
       // so suppress them too during replay.
       const REPLAY_SUPPRESSED = new Set([

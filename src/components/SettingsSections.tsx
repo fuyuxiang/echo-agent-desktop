@@ -6,11 +6,11 @@
  *  - personalize: 主题（接 ThemeProvider）+ 字号
  *  - shortcuts: 快捷键说明（纯展示 + localStorage 自定义）
  *  - memory: 资料库入口（接 memory_list + memory_rewrite）
- *  - help: 帮助 + 反馈入口（含 grok 内核信息）
+ *  - help: 帮助 + 反馈入口（含 EchoAgent 内核信息）
  *  - security: 安全中心（权限规则入口 + folder trust 说明）
- *  - data: 数据管理（清理会话/缓存 + 打开 grok 目录）
- *  - general: 系统设置（cwd/工作目录 + 重启 grok）
- *  - account: 账户（grok auth 状态）
+ *  - data: 数据管理（清理会话/缓存 + 打开 EchoAgent 目录）
+ *  - general: 系统设置（cwd/工作目录 + 重启 EchoAgent）
+ *  - account: 账户（EchoAgent auth 状态）
  *  - agent-settings / assistant: 引导到对应面板
  */
 import { useCallback, useEffect, useState } from "react";
@@ -37,7 +37,7 @@ import {
   agentsDefaultsSave,
   agentsList,
   commandsList,
-  grokAuthStatus,
+  agentAuthStatus,
   internalReload,
   mcpList,
   memoryFlush,
@@ -56,7 +56,7 @@ import {
   webSearchConfigSave,
   type AuthStatus,
   type ModelOptionRow,
-} from "@/lib/grok-client";
+} from "@/lib/agent-client";
 import type {
   AgentDefaults,
   AgentEntry,
@@ -212,7 +212,7 @@ export function MemorySettingsPanel() {
   const [msg, setMsg] = useState<string | null>(null);
 
   const handleRewrite = async () => {
-    if (!confirm("让 grok 用 LLM 重写所有记忆？")) return;
+    if (!confirm("让 EchoAgent 用 LLM 重写所有记忆？")) return;
     setBusy(true);
     try {
       await memoryRewrite();
@@ -239,10 +239,10 @@ export function MemorySettingsPanel() {
   return (
     <SectionShell
       title="记忆"
-      desc="grok 跨会话记忆的维护。记忆文件存在 ~/.grok/memory/。"
+      desc="EchoAgent 跨会话记忆的维护。记忆文件存在 ~/.echo-agent/memory/。"
     >
       <p className="settings-hint">
-        grok 在对话中自动学习并写入 <code>MEMORY.md</code>。
+        EchoAgent 在对话中自动学习并写入 <code>MEMORY.md</code>。
         在侧栏「更多 / 资料库」可以查看和编辑具体内容。
       </p>
       <div className="settings-actions">
@@ -283,17 +283,15 @@ export function HelpSettingsPanel() {
         </li>
         <li>
           <ExternalLink size={14} />
-          <span>
-            grok 内核路径：<code>vendor/grok-build</code>（submodule）
-          </span>
+          <span>运行时：EchoAgent Runtime（内置）</span>
         </li>
       </ul>
       <p className="settings-hint">
         遇到问题？请检查：
         <br />
-        1. <code>~/.grok/auth.json</code> 是否存在（运行过 <code>grok login</code>）
+        1. 「模型」tab 是否配置了至少一个 Provider / API Key
         <br />
-        2. 「模型」tab 是否配置了至少一个 provider
+        2. <code>~/.echo-agent/config.toml</code> 是否可读写
         <br />
         3. 重启 EchoAgent 后再试
       </p>
@@ -340,8 +338,8 @@ export function SecuritySettingsPanel() {
         </ul>
       )}
       <p className="settings-hint">
-        grok 评估顺序：<code>deny</code> &gt; <code>ask</code> &gt; <code>allow</code>。
-        修改需重启 grok 生效。
+        EchoAgent 评估顺序：<code>deny</code> &gt; <code>ask</code> &gt; <code>allow</code>。
+        修改需重启 EchoAgent 生效。
       </p>
     </SectionShell>
   );
@@ -350,17 +348,17 @@ export function SecuritySettingsPanel() {
 // ---------- 数据管理 ----------
 
 export function DataSettingsPanel() {
-  const [grokHome, setGrokHome] = useState("");
+  const [agentHome, setAgentHome] = useState("");
 
   useEffect(() => {
-    // 从环境推断 grok home 路径（前端无直接 API，给提示用）
-    setGrokHome("~/.grok");
+    // 从环境推断 EchoAgent home 路径（前端无直接 API，给提示用）
+    setAgentHome("~/.echo-agent");
   }, []);
 
   const handleClearSessions = () => {
     if (
       !confirm(
-        "确定清理本地会话缓存？这只影响侧栏列表的显示，grok 的 ~/.grok/sessions/ 历史不会被删除。",
+        "确定清理本地会话缓存？这只影响侧栏列表的显示，EchoAgent 的 ~/.echo-agent/sessions/ 历史不会被删除。",
       )
     ) {
       return;
@@ -370,14 +368,14 @@ export function DataSettingsPanel() {
   };
 
   return (
-    <SectionShell title="数据管理" desc="本地缓存和 grok 数据目录。">
+    <SectionShell title="数据管理" desc="本地缓存和 EchoAgent 数据目录。">
       <div className="settings-row">
         <div className="settings-row__label">
           <Folder size={16} />
-          <span>grok 数据目录</span>
+          <span>EchoAgent 数据目录</span>
         </div>
         <div className="settings-row__control">
-          <code>{grokHome}</code>
+          <code>{agentHome}</code>
         </div>
       </div>
       <div className="settings-actions">
@@ -416,7 +414,7 @@ export function GeneralSettingsPanel() {
   return (
     <SectionShell
       title="系统设置"
-      desc="热重载 grok 的配置视图。修改 config.toml 后无需重启整个应用。"
+      desc="热重载 EchoAgent 的配置视图。修改 config.toml 后无需重启整个应用。"
     >
       <div className="settings-actions">
         <button className="settings-btn" onClick={() => handleReload("mcp_all")} disabled={busy}>
@@ -451,7 +449,7 @@ export function AccountSettingsPanel() {
     setLoading(true);
     try {
       const [a, k] = await Promise.all([
-        grokAuthStatus().catch(() => null),
+        agentAuthStatus().catch(() => null),
         accountGetApiKey().catch(() => null),
       ]);
       setAuth(a);
@@ -597,7 +595,7 @@ export function AccountSettingsPanel() {
               </div>
             )}
             <p className="settings-hint">
-              API Key 存在 <code>~/.grok/config</code>，并设置
+              API Key 存在 <code>~/.echo-agent/config</code>，并设置
               <code>XAI_API_KEY</code> 环境变量。BYOK 模型在「模型」tab 配置。
             </p>
           </div>
@@ -623,7 +621,7 @@ function maskKey(key: string): string {
 // ---------- 智能体设置 ----------
 
 /** AgentSettingsPanel — 汇总显示当前智能体配置（skills + MCP + slash 命令）。
- *  数据来自 grok 的 x.ai/skills/config、x.ai/mcp/list、x.ai/commands/list，
+ *  数据来自 EchoAgent 的 x.ai/skills/config、x.ai/mcp/list、x.ai/commands/list，
  *  与「专家·技能·连接器」面板的数据源相同，但这里是设置视图：只读 + 刷新 +
  *  跳转到对应管理面板。 */
 export function AgentSettingsPanel() {
@@ -725,7 +723,7 @@ export function AgentSettingsPanel() {
   return (
     <SectionShell
       title="智能体设置"
-      desc="当前 grok 智能体的配置概览：已加载的技能、MCP 连接器和 slash 命令。数据来自 grok 的 x.ai/skills/config、x.ai/mcp/list、x.ai/commands/list。"
+      desc="当前 EchoAgent 智能体的配置概览：已加载的技能、MCP 连接器和 slash 命令。数据来自 EchoAgent 的 x.ai/skills/config、x.ai/mcp/list、x.ai/commands/list。"
     >
       <div className="settings-actions">
         <button className="settings-btn" onClick={reload} disabled={loading}>
@@ -801,7 +799,7 @@ export function AgentSettingsPanel() {
         <div className="agent-section__body">
           {servers.length === 0 ? (
             <p className="settings-hint">
-              暂无连接器。编辑 <code>~/.grok/config.toml</code> 的 <code>[mcp_servers.*]</code> 段。
+              暂无连接器。编辑 <code>~/.echo-agent/config.toml</code> 的 <code>[mcp_servers.*]</code> 段。
             </p>
           ) : (
             <ul className="agent-list">
@@ -948,7 +946,7 @@ export function AgentSettingsPanel() {
 // ---------- 助理设置 ----------
 
 const PERMISSION_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "grok 默认（每次询问）" },
+  { value: "", label: "EchoAgent 默认（每次询问）" },
   { value: "allow_once", label: "允许一次" },
   { value: "always_allow_this_session", label: "本会话始终允许" },
   { value: "always_allow_all_sessions", label: "所有会话始终允许" },
@@ -957,7 +955,7 @@ const PERMISSION_OPTIONS: { value: string; label: string }[] = [
 ];
 
 /** AssistantSettingsPanel — 助理角色列表 + 新会话默认模型/权限偏好。
- *  agents 来自 ~/.grok/agents/*.md；默认值写入 config.toml 的
+ *  agents 来自 ~/.echo-agent/agents/*.md；默认值写入 config.toml 的
  *  [models].default 和 [ui].default_selected_permission。 */
 export function AssistantSettingsPanel() {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
@@ -1008,7 +1006,7 @@ export function AssistantSettingsPanel() {
       await agentsDefaultsSave(draft);
       setDefaults(draft);
       setDirty(false);
-      setMsg("已保存（重启 grok 后生效）");
+      setMsg("已保存（重启 EchoAgent 后生效）");
     } catch (e) {
       setMsg(`保存失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
@@ -1026,7 +1024,7 @@ export function AssistantSettingsPanel() {
   return (
     <SectionShell
       title="助理设置"
-      desc="管理助理角色（~/.grok/agents/*.md）和新建会话的默认模型/权限偏好。偏好写入 config.toml 的 [models].default 和 [ui].default_selected_permission。"
+      desc="管理助理角色（~/.echo-agent/agents/*.md）和新建会话的默认模型/权限偏好。偏好写入 config.toml 的 [models].default 和 [ui].default_selected_permission。"
     >
       {loading ? (
         <p className="settings-hint">加载中…</p>
@@ -1041,7 +1039,7 @@ export function AssistantSettingsPanel() {
               {agents.length === 0 ? (
                 <p className="settings-hint">
                   暂无助理。在主界面「助理」面板从模板创建，或把 .md 文件放到
-                  <code>~/.grok/agents/</code>。
+                  <code>~/.echo-agent/agents/</code>。
                 </p>
               ) : (
                 <ul className="agent-list">
@@ -1072,7 +1070,7 @@ export function AssistantSettingsPanel() {
                 value={draft.defaultModel}
                 onChange={(e) => update({ defaultModel: e.target.value })}
               >
-                <option value="">grok 内置默认</option>
+                <option value="">EchoAgent 内置默认</option>
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.label}（{p.id}）
@@ -1082,7 +1080,7 @@ export function AssistantSettingsPanel() {
             </div>
           </div>
           <p className="settings-hint">
-            对应 <code>[models] default</code>。空 = grok 用内置默认（通常是 grok-build）。
+            对应 <code>[models] default</code>。空 = EchoAgent 用内置默认（通常是 grok-build）。
           </p>
 
           {/* 默认权限选择 */}
@@ -1128,7 +1126,7 @@ export function AssistantSettingsPanel() {
                   })
                 }
               >
-                <option value="">grok 默认</option>
+                <option value="">EchoAgent 默认</option>
                 <option value="true">显示</option>
                 <option value="false">隐藏</option>
               </select>
@@ -1156,8 +1154,8 @@ export function AssistantSettingsPanel() {
           {msg && <p className="settings-msg">{msg}</p>}
 
           <p className="settings-hint">
-            助理定义在 <code>~/.grok/agents/*.md</code>（含 frontmatter + system prompt）。
-            grok 没有 session 级「切换 agent」的 ACP 方法，EchoAgent 通过预设 prompt 引导。
+            助理定义在 <code>~/.echo-agent/agents/*.md</code>（含 frontmatter + system prompt）。
+            EchoAgent 没有 session 级「切换 agent」的 ACP 方法，EchoAgent 通过预设 prompt 引导。
           </p>
         </>
       )}
@@ -1203,12 +1201,12 @@ const KIND_FILTERS: { key: string; label: string }[] = [
 
 /** AgentMailSettingsPanel — 智能体邮箱（重新定义为会话通知中心）。
  *
- *  WorkBuddy 的 agentMail 是腾讯邮箱集成（无 grok 对应）。EchoAgent 把它
- *  重新定义为 grok 事件的通知收件箱：权限请求、文件夹信任、任务更新、
+ *  WorkBuddy 的 agentMail 是腾讯邮箱集成（无 EchoAgent 对应）。EchoAgent 把它
+ *  重新定义为 EchoAgent 事件的通知收件箱：权限请求、文件夹信任、任务更新、
  *  plan 模式切换、MCP 状态、模型更新、会话完成等所有事件都会记到这里。
  *  用户可浏览/筛选/标记已读/清空。
  *
- *  数据存在 ~/.grok/echoagent-notifications.json（最多 200 条 FIFO）。
+ *  数据存在 ~/.echo-agent/echoagent-notifications.json（最多 200 条 FIFO）。
  *  写入由 App.tsx 的事件订阅回调触发（notificationAppend）。 */
 export function AgentMailSettingsPanel() {
   const [entries, setEntries] = useState<NotificationEntry[]>([]);
@@ -1257,7 +1255,7 @@ export function AgentMailSettingsPanel() {
   return (
     <SectionShell
       title="智能体邮箱（通知中心）"
-      desc="EchoAgent 收到的所有 grok 事件通知：权限请求、文件夹信任、任务更新、计划模式、MCP 状态、会话完成等。数据存在 ~/.grok/echoagent-notifications.json。"
+      desc="EchoAgent 收到的所有 EchoAgent 事件通知：权限请求、文件夹信任、任务更新、计划模式、MCP 状态、会话完成等。数据存在 ~/.echo-agent/echoagent-notifications.json。"
     >
       <div className="settings-actions">
         <button className="settings-btn" onClick={reload} disabled={loading}>
@@ -1310,7 +1308,7 @@ export function AgentMailSettingsPanel() {
         {filtered.length === 0 && !loading && (
           <div className="notification-empty">
             <Mail size={32} color="var(--wb-text-tertiary)" />
-            <p>暂无通知。当 grok 产生事件时（权限请求、任务完成等）会记录到这里。</p>
+            <p>暂无通知。当 EchoAgent 产生事件时（权限请求、任务完成等）会记录到这里。</p>
           </div>
         )}
         {filtered.map((entry) => (

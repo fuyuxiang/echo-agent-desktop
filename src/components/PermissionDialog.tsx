@@ -1,5 +1,5 @@
 import { usePermissionStore, selectPermissionForSession } from "@/stores/permission-store";
-import { grokResolvePermission } from "@/lib/grok-client";
+import { agentResolvePermission } from "@/lib/agent-client";
 
 /**
  * Inline permission card rendered inside the ChatView message stream.
@@ -16,7 +16,7 @@ export function PermissionInlineCard({ sessionId }: { sessionId: string | null }
     const id = head.requestId;
     dismiss(id, head.sessionId);
     try {
-      await grokResolvePermission(id, { optionId, cancelled });
+      await agentResolvePermission(id, { optionId, cancelled });
     } catch (e) {
       console.error("resolve permission failed", e);
     }
@@ -29,7 +29,7 @@ export function PermissionInlineCard({ sessionId }: { sessionId: string | null }
         <span className="perm-inline__title">{head.title}</span>
       </div>
       <div className="perm-inline__body">
-        <p>grok 想要执行以下操作，是否允许？</p>
+        <p>EchoAgent 想要执行以下操作，是否允许？</p>
         {head.rawInput != null && (
           <pre className="perm-inline__raw">
             {JSON.stringify(head.rawInput, null, 2)}

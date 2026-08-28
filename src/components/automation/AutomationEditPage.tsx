@@ -28,7 +28,7 @@ import type {
   AutomationSchedule,
 } from "@/lib/types";
 import type { AgentEntry, SkillInfo } from "@/lib/types";
-import type { WorkspaceInfo } from "@/lib/grok-client";
+import type { WorkspaceInfo } from "@/lib/agent-client";
 import {
   CustomSelect,
   IntervalDayChips,

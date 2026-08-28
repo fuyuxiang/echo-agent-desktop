@@ -6,7 +6,7 @@ import {
 } from "@/foundation/components/Icon/icons";
 import {
   agentsDelete, agentsList, expertsDefaultRoot, expertsLoad, expertsReadAgentPrompt, expertsLinkAgents,
-} from "@/lib/grok-client";
+} from "@/lib/agent-client";
 import type { AgentEntry, ExpertCatalog, ExpertItem, FeaturedScene } from "@/lib/types";
 import { FEATURED_SCENES } from "../data/featured-scenes";
 import { Chip, SegmentTabs } from "../shared/ui";
@@ -172,7 +172,7 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
   }, [root, loadCatalog, onToast, error]);
 
   const handleCreate = () =>
-    onToast?.("在 ~/.grok/agents/ 新建 .md 文件即可创建专家（后续将接入创建向导）");
+    onToast?.("在 ~/.echo-agent/agents/ 新建 .md 文件即可创建专家（后续将接入创建向导）");
 
   const handleDeleteLocal = useCallback(async (a: AgentEntry) => {
     if (!confirm(`确定删除专家「${a.name}」？`)) return;
@@ -211,9 +211,9 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
       } catch { /* fallback: empty prompt */ }
     }
 
-    // For team experts: link member agents into ~/.grok/agents/ so grok's
+    // For team experts: link member agents into ~/.echo-agent/agents/ so EchoAgent's
     // Task tool can spawn them by bare name during multi-agent orchestration.
-    // MUST be awaited — grok scans ~/.grok/agents/ at session start, so if the
+    // MUST be awaited — EchoAgent scans ~/.echo-agent/agents/ at session start, so if the
     // copy hasn't finished when the user sends their first message, the member
     // agents won't be discoverable.
     if (expert.type === "team" && expert.plugin && root) {
@@ -274,7 +274,7 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
           <div className="ec-empty">
             <FolderOpenIcon size="xl" className="ec-empty-icon" />
             <p>未找到专家数据目录</p>
-            <p className="ec-empty-hint">请选择包含 <code>_meta/_expert_center.json</code> 的 WorkBuddy 数据目录（如 <code>E:\Grok\agents</code>）</p>
+            <p className="ec-empty-hint">请选择包含 <code>_meta/_expert_center.json</code> 的 WorkBuddy 数据目录（如 <code>E:\EchoAgent\agents</code>）</p>
             <button type="button" className="um-btn um-btn--primary" onClick={chooseDir}>
               <FolderOpenIcon size="sm" /><span>选择来源目录</span>
             </button>

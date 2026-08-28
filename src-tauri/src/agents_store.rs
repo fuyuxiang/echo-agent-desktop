@@ -1,20 +1,20 @@
-//! Experts / Assistants — read & write grok's agent definition files.
+//! Experts / Assistants — read & write EchoAgent's agent definition files.
 //!
-//! grok discovers "agents" (subagent definitions — see
+//! EchoAgent discovers "agents" (subagent definitions — see
 //! `xai-grok-agent/src/discovery.rs`) by scanning:
-//!   - project: `<cwd>/.grok/agents/*.md` and `<cwd>/.claude/agents/*.md`
+//!   - project: `<cwd>/.echo-agent/agents/*.md` and `<cwd>/.claude/agents/*.md`
 //!     (walking up to the git worktree root)
-//!   - user: `~/.grok/agents/*.md`
+//!   - user: `~/.echo-agent/agents/*.md`
 //!
 //! Each file is markdown with YAML frontmatter (the `AgentDefinition` fields
 //! from `xai-grok-agent/src/config.rs:714`) plus a body used as the system
-//! prompt. grok does NOT expose an `x.ai/agents/*` ACP method, so we read and
+//! prompt. EchoAgent does NOT expose an `x.ai/agents/*` ACP method, so we read and
 //! write these files directly — there's no in-memory state to race with
-//! (grok's file watcher picks up changes on its own).
+//! (EchoAgent's file watcher picks up changes on its own).
 //!
 //! EchoAgent cannot switch the active session's agent (ACP has no such call),
 //! but the user can launch a new session guided by an agent's prompt, or
-//! spawn the agent via grok's `spawn_subagent` tool from within a chat.
+//! spawn the agent via EchoAgent's `spawn_subagent` tool from within a chat.
 
 use std::path::{Path, PathBuf};
 
@@ -29,8 +29,8 @@ pub struct AgentEntry {
     /// Short description (frontmatter `description`).
     #[serde(default)]
     pub description: Option<String>,
-    /// Where the file lives: "user" (`~/.grok/agents/`) or "project"
-    /// (`<cwd>/.grok/agents/`).
+    /// Where the file lives: "user" (`~/.echo-agent/agents/`) or "project"
+    /// (`<cwd>/.echo-agent/agents/`).
     pub scope: String,
     /// Absolute path to the `.md` file.
     pub path: String,
@@ -62,30 +62,21 @@ struct AgentFrontmatter {
     model_tags: Vec<String>,
 }
 
-fn grok_home() -> PathBuf {
-    if let Ok(custom) = std::env::var("GROK_HOME") {
-        return PathBuf::from(custom);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".grok")
-}
-
 fn user_agents_dir() -> PathBuf {
-    grok_home().join("agents")
+    crate::paths::echo_agent_home_dir().join("agents")
 }
 
 /// Public accessor for the user-scope agents directory (used by experts.rs
-/// to link team member agents for grok discovery).
+/// to link team member agents for EchoAgent discovery).
 pub fn user_agents_dir_pub() -> PathBuf {
     user_agents_dir()
 }
 
-/// Project-level agents dir for a cwd: `<cwd>/.grok/agents/`. (We don't walk
+/// Project-level agents dir for a cwd: `<cwd>/.echo-agent/agents/`. (We don't walk
 /// up to the git root to keep the scan cheap; users can put agents in
-/// `~/.grok/agents/` for cross-project access.)
+/// `~/.echo-agent/agents/` for cross-project access.)
 fn project_agents_dir(cwd: &str) -> PathBuf {
-    PathBuf::from(cwd).join(".grok").join("agents")
+    PathBuf::from(cwd).join(".echo-agent").join("agents")
 }
 
 /// Scan one directory for `*.md` agent files. Best-effort: unreadable entries
@@ -199,7 +190,7 @@ pub fn agents_list(cwd: Option<String>) -> Vec<AgentEntry> {
     if let Some(cwd) = cwd {
         out.extend(scan_dir(&project_agents_dir(&cwd), "project"));
     }
-    // De-dup by name (user scope wins, matching grok's scope precedence).
+    // De-dup by name (user scope wins, matching EchoAgent's scope precedence).
     let mut seen = std::collections::HashSet::new();
     out.retain(|a| seen.insert(a.name.clone()));
     out
@@ -212,7 +203,7 @@ pub fn agents_get(path: String) -> Result<String, String> {
 }
 
 /// Save an agent file (create or overwrite). Writes to the user-scope
-/// directory (`~/.grok/agents/<name>.md`) so it's available across projects.
+/// directory (`~/.echo-agent/agents/<name>.md`) so it's available across projects.
 /// The caller supplies the full markdown body (frontmatter + prompt).
 #[tauri::command]
 pub fn agents_save(name: String, raw: String) -> Result<AgentEntry, String> {
@@ -274,7 +265,7 @@ pub fn agents_template(
     Ok(fm)
 }
 
-/// Normalize an agent name for use as a filename. grok's `normalize_skill_name`
+/// Normalize an agent name for use as a filename. EchoAgent's `normalize_skill_name`
 /// lowercases and allows `[a-z0-9-]`; we apply the same rule to agent names.
 fn sanitize_name(name: &str) -> String {
     name.trim()

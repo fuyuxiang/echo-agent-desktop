@@ -9,9 +9,9 @@ describe("Composer", () => {
     const onSend = vi.fn();
     render(<Composer {...base} onSend={onSend} />);
     const input = screen.getByRole("textbox");
-    fireEvent.change(input, { target: { value: "你好 grok" } });
+    fireEvent.change(input, { target: { value: "你好 EchoAgent" } });
     fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
-    expect(onSend).toHaveBeenCalledWith("你好 grok");
+    expect(onSend).toHaveBeenCalledWith("你好 EchoAgent");
   });
 
   it("apiReady=false 时输入禁用并显示配置提示,点击触发 onOpenSettings", () => {
@@ -23,7 +23,7 @@ describe("Composer", () => {
   });
 
   it("showMeta 时渲染权限模式选择器（PermissionPicker）", () => {
-    // PermissionPicker 对应 grok 的 [ui] permission_mode,
+    // PermissionPicker 对应 EchoAgent 的 [ui] permission_mode,
     // 默认 ask → 触发器显示"审批模式"。
     render(<Composer {...base} showMeta onPlaceholder={vi.fn()} />);
     expect(screen.getByText(/审批模式/)).toBeInTheDocument();

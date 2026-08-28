@@ -3,7 +3,7 @@ import { PauseIcon } from "@/foundation/components/Icon/icons";
 import { useSessionStore, type ToolCallView } from "@/stores/session-store";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { createMarkdownHostConfig } from "@/lib/markdown-host";
-import { rewindExecute, rewindPoints } from "@/lib/grok-client";
+import { rewindExecute, rewindPoints } from "@/lib/agent-client";
 import {
   collectSessionArtifacts,
   findToolCall,
@@ -25,7 +25,7 @@ import { QueuePanel } from "./QueuePanel";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { useMessageQueueStore } from "@/stores/message-queue-store";
 import { buildTimeline } from "@/lib/timeline-utils";
-import { formatGrokError } from "@/lib/error-format";
+import { formatAgentError } from "@/lib/error-format";
 import { useSubagentStore } from "@/stores/subagent-store";
 import {
   requestYield,
@@ -37,7 +37,7 @@ import {
 import type { ModelOption } from "./ModelSelector";
 import type { HomeModeId } from "./home-scenes";
 import type { AgentEntry } from "@/lib/types";
-import type { WorkspaceInfo } from "@/lib/grok-client";
+import type { WorkspaceInfo } from "@/lib/agent-client";
 
 /** Center chat column: scrollable message list + composer pinned at bottom. */
 export function ChatView({
@@ -95,7 +95,7 @@ export function ChatView({
   const handlePause = useCallback(() => {
     if (!sessionId || !streaming) return;
     setYieldStore((s) => requestYield(s, sessionId));
-    // grok 无原生 yield,用 cancel 软停止(保留会话);yield 状态在 complete 后确认。
+    // EchoAgent 无原生 yield,用 cancel 软停止(保留会话);yield 状态在 complete 后确认。
     onCancel();
   }, [sessionId, streaming, onCancel]);
   const handleResume = useCallback(() => {
@@ -281,7 +281,7 @@ export function ChatView({
         {error && (
           <div className="chatview__error-banner" role="alert">
             <span className="chatview__error-text" style={{ whiteSpace: "pre-wrap" }}>
-              {formatGrokError(error) ?? error}
+              {formatAgentError(error) ?? error}
             </span>
             <button
               className="chatview__error-close"

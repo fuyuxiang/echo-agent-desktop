@@ -6,6 +6,11 @@ release
 .DS_Store
 *.log
 
+# EchoAgent project-local runtime state (memory, agents, skills, sessions)
+/.echo-agent/
+# Legacy runtime state may still exist during migration; never commit it.
+/.grok/
+
 # Rust / Tauri 构建产物与自动生成的 schema
 /src-tauri/target/
 /src-tauri/gen/schemas/

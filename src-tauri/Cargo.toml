@@ -1,7 +1,7 @@
 [package]
 name = "echoagent"
 version = "0.15.0"
-description = "EchoAgent — a WorkBuddy-style desktop shell for the grok agent"
+description = "EchoAgent — an open-source desktop agent workspace built on Tauri"
 authors = ["EchoAgent"]
 edition = "2021"
 rust-version = "1.92.0"
@@ -22,7 +22,8 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # In-process team MCP server (team_mcp.rs) — streamable-http JSON-RPC.
-# Already in Cargo.lock as a transitive dep of grok-build (axum 0.8); minimal
+# Already in Cargo.lock as a transitive dependency of the embedded upstream
+# runtime (axum 0.8); minimal
 # features: HTTP/1.1 + JSON body extraction + tokio IO.
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 tokio = { version = "1", features = ["full"] }
@@ -31,11 +32,11 @@ uuid = { version = "1", features = ["v7"] }
 # statusMatch patterns in connector cli.json files (CLI connector auth).
 regex = "1"
 
-# grok in-process integration. grok-build is pinned as a git submodule at
-# <repo>/vendor/grok-build (see .gitmodules); these are relative path deps
-# into it. Cargo resolves their `.workspace = true` fields against
-# grok-build's root Cargo.toml automatically. We do NOT join the grok
-# workspace (see the explicit [workspace] table below).
+# EchoAgent's in-process runtime adapter. The Apache-2.0 upstream component is
+# pinned at <repo>/vendor/grok-build (see .gitmodules and THIRD_PARTY_NOTICES.md);
+# these are relative path dependencies into it. Cargo resolves their
+# `.workspace = true` fields against the upstream root Cargo.toml. We do not
+# join that workspace (see the explicit [workspace] table below).
 xai-acp-lib = { path = "../vendor/grok-build/crates/codegen/xai-acp-lib" }
 xai-grok-shell = { path = "../vendor/grok-build/crates/codegen/xai-grok-shell" }
 xai-grok-tools = { path = "../vendor/grok-build/crates/codegen/xai-grok-tools" }
@@ -74,13 +75,13 @@ incremental = true
 codegen-units = 16
 
 # Declare an explicit, self-contained workspace so Cargo does NOT pull this
-# crate into grok-build's workspace (which would inherit its profile/lint
-# settings and the 80 workspace members). The grok path deps above still
-# resolve their `.workspace = true` fields against grok-build's root.
+# crate into the upstream workspace (which would inherit its profile/lint
+# settings and the 80 workspace members). The path dependencies above still
+# resolve their `.workspace = true` fields against that root.
 [workspace]
 members = ["."]
 
-# Mirror grok-build's `[patch.crates-io]` (vendor/Cargo.toml line ~3). Patch
+# Mirror the upstream runtime's `[patch.crates-io]` table. Patch
 # tables do NOT cross workspace boundaries, so since EchoAgent keeps its own
 # workspace we must redeclare the async-openai fork here. The fork (pinned rev
 # below) carries the `ReasoningEffort::Max` variant that vendor now depends on;

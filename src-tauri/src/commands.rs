@@ -1,7 +1,7 @@
 //! Tauri command table — the frontend↔Rust contract.
 //!
 //! Commands are declared with `#[tauri::command]` and registered in lib.rs.
-//! They drive the in-process grok agent (see grok.rs) and bridge streamed
+//! They drive the in-process EchoAgent runtime (see agent_runtime.rs) and bridge streamed
 //! events back via Tauri events (see bridge.rs).
 
 use std::path::PathBuf;
@@ -10,15 +10,15 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{Emitter, State};
 
+use crate::agent_runtime::{self, AgentHandle, InitOutcome};
 use crate::bridge::{PermissionOutcome, Permissions, QuestionOutcome, Questions};
-use crate::grok::{self, GrokHandle, InitOutcome};
 use crate::sessions::{self, SessionSummary, WorkspaceInfo};
 
 /// State held across commands. The agent channel endpoints live here once
-/// `grok_init` has spawned the agent.
+/// `agent_init` has spawned the agent.
 #[derive(Default)]
 pub struct AppState {
-    pub handle: Mutex<Option<GrokHandle>>,
+    pub handle: Mutex<Option<AgentHandle>>,
     /// Once the dispatcher owns the rx half, only the tx is reachable. We
     /// stash a clone of the tx sender here for commands to use.
     pub tx: Mutex<Option<xai_acp_lib::AcpAgentTx>>,
@@ -31,8 +31,8 @@ pub struct AuthStatus {
     pub ready: bool,
     pub has_auth_file: bool,
     pub reason: Option<String>,
-    /// Model ids configured in `~/.grok/config.toml` (BYOK providers). When
-    /// non-empty the app is usable without grok OAuth — grok routes prompts
+    /// Model ids configured in `~/.echo-agent/config.toml` (BYOK providers). When
+    /// non-empty the app is usable without EchoAgent OAuth — EchoAgent routes prompts
     /// to the matching `[model.*]` backend.
     pub providers: Vec<String>,
 }
@@ -52,20 +52,15 @@ fn default_cwd() -> PathBuf {
 }
 
 fn has_auth_file() -> bool {
-    let home = if let Ok(custom) = std::env::var("GROK_HOME") {
-        PathBuf::from(custom)
-    } else {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".grok")
-    };
-    home.join("auth.json").exists()
+    crate::paths::echo_agent_home_dir()
+        .join("auth.json")
+        .exists()
 }
 
-/// Initialize the in-process grok agent. Spawns the agent thread, runs
+/// Initialize the in-process EchoAgent runtime. Spawns the agent thread, runs
 /// `initialize` + `authenticate`, and starts the dispatcher.
 #[tauri::command]
-pub async fn grok_init(
+pub async fn agent_init(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     permissions: State<'_, Permissions>,
@@ -77,19 +72,19 @@ pub async fn grok_init(
 
     let auth_ok = has_auth_file();
 
-    // Spawn the agent off the async runtime. `spawn_grok` does blocking I/O
-    // (config load, first-run bundled extract under ~/.grok). Running it
+    // Spawn the agent off the async runtime. `spawn_agent_runtime` does blocking I/O
+    // (config load, first-run bundled extract under ~/.echo-agent). Running it
     // inline would stall Tauri's tokio workers and freeze the UI.
     let spawn_cwd = cwd.clone();
-    let grok::GrokHandle {
+    let agent_runtime::AgentHandle {
         tx,
         rx,
         cancel,
         thread,
-    } = tokio::task::spawn_blocking(move || grok::spawn_grok(spawn_cwd))
+    } = tokio::task::spawn_blocking(move || agent_runtime::spawn_agent_runtime(spawn_cwd))
         .await
-        .map_err(|e| format!("spawn grok task: {e}"))?
-        .map_err(|e| format!("spawn grok: {e}"))?;
+        .map_err(|e| format!("spawn EchoAgent task: {e}"))?
+        .map_err(|e| format!("spawn EchoAgent runtime: {e}"))?;
 
     // Stash tx for later commands; move rx into the dispatcher.
     *state.tx.lock().unwrap() = Some(tx.clone());
@@ -114,8 +109,11 @@ pub async fn grok_init(
                 Ok(Err(e)) => format!("agent error: {e}"),
                 Err(_) => "agent thread panicked".to_string(),
             };
-            tracing::error!(reason = %reason, "grok agent thread died");
-            let _ = monitor_app.emit("grok://agent-died", serde_json::json!({ "reason": reason }));
+            tracing::error!(reason = %reason, "EchoAgent runtime thread died");
+            let _ = monitor_app.emit(
+                "agent://agent-died",
+                serde_json::json!({ "reason": reason }),
+            );
         });
     }
 
@@ -123,7 +121,7 @@ pub async fn grok_init(
     // (The rx half is now owned by the dispatcher; we hold only tx + cancel.)
     let (_placeholder_tx, placeholder_rx) =
         tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
-    *state.handle.lock().unwrap() = Some(GrokHandle {
+    *state.handle.lock().unwrap() = Some(AgentHandle {
         tx,
         // Unused placeholder rx — the real rx lives in the dispatcher.
         rx: placeholder_rx,
@@ -139,7 +137,7 @@ pub async fn grok_init(
         .clone()
         .ok_or("agent channel not ready")?;
 
-    let init_outcome: InitOutcome = grok::initialize(&tx)
+    let init_outcome: InitOutcome = agent_runtime::initialize(&tx)
         .await
         .map_err(|e| format!("initialize: {e}"))?;
 
@@ -155,18 +153,18 @@ pub async fn grok_init(
         .iter()
         .find(|m| m == &XAI_API_KEY_METHOD_ID)
     {
-        let _ = grok::authenticate(&tx, method).await;
+        let _ = agent_runtime::authenticate(&tx, method).await;
     }
 
     let list = crate::providers::providers_list();
     let model_ids: Vec<String> = list.models.iter().map(|m| m.model_id.clone()).collect();
-    // Usable if EITHER grok OAuth is set up OR at least one BYOK provider
+    // Usable if EITHER engine authentication is set up OR at least one BYOK provider
     // is configured. The OAuth-only path requires `auth.json`; the BYOK path
     // only needs `[model.*]` entries in config.toml.
     let ready = auth_ok || !model_ids.is_empty();
 
     // Start the automations scheduler now that the agent channel is up.
-    // Idempotent — safe if grok_init is somehow called twice.
+    // Idempotent — safe if agent_init is somehow called twice.
     if let (Some(tx), Some(cwd)) = (
         state.tx.lock().unwrap().clone(),
         state.cwd.lock().unwrap().clone(),
@@ -197,7 +195,7 @@ pub async fn grok_init(
 }
 
 #[tauri::command]
-pub fn grok_auth_status(_state: State<'_, AppState>) -> AuthStatus {
+pub fn agent_auth_status(_state: State<'_, AppState>) -> AuthStatus {
     let has = has_auth_file();
     let list = crate::providers::providers_list();
     let model_ids: Vec<String> = list.models.iter().map(|m| m.model_id.clone()).collect();
@@ -215,7 +213,7 @@ pub fn grok_auth_status(_state: State<'_, AppState>) -> AuthStatus {
 }
 
 #[tauri::command]
-pub async fn grok_new_session(
+pub async fn agent_new_session(
     state: State<'_, AppState>,
     cwd: String,
     model_id: Option<String>,
@@ -226,7 +224,7 @@ pub async fn grok_new_session(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let session_id = grok::new_session(&tx, &PathBuf::from(cwd), model_id.as_deref())
+    let session_id = agent_runtime::new_session(&tx, &PathBuf::from(cwd), model_id.as_deref())
         .await
         .map_err(|e| e.to_string())?;
     // Team MCP server 已随 new_session 参数注入本会话；这里再异步持久化到
@@ -236,7 +234,7 @@ pub async fn grok_new_session(
 }
 
 #[tauri::command]
-pub async fn grok_load_session(
+pub async fn agent_load_session(
     state: State<'_, AppState>,
     session_id: String,
     cwd: String,
@@ -247,22 +245,22 @@ pub async fn grok_load_session(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    grok::load_session(&tx, &session_id, &PathBuf::from(cwd))
+    agent_runtime::load_session(&tx, &session_id, &PathBuf::from(cwd))
         .await
         .map_err(|e| e.to_string())?;
     // 恢复的会话从 config.toml 读 MCP 列表 —— 若端口较上次运行漂移，这里
-    // 的 upsert 会用当前 URL 刷新并 live 重连（grok 的 toggle 路径）。
+    // 的 upsert 会用当前 URL 刷新并 live 重连（EchoAgent 的 toggle 路径）。
     crate::team_mcp::persist_registration(&tx, &session_id);
     Ok(())
 }
 
 #[tauri::command]
-pub fn grok_list_sessions(cwd: String) -> Vec<SessionSummary> {
+pub fn agent_list_sessions(cwd: String) -> Vec<SessionSummary> {
     sessions::list_sessions(&cwd)
 }
 
 #[tauri::command]
-pub async fn grok_send(
+pub async fn agent_send(
     state: State<'_, AppState>,
     session_id: String,
     text: String,
@@ -273,40 +271,40 @@ pub async fn grok_send(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    grok::prompt(&tx, &session_id, &text)
+    agent_runtime::prompt(&tx, &session_id, &text)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn grok_cancel(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+pub async fn agent_cancel(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    grok::cancel(&tx, &session_id)
+    agent_runtime::cancel(&tx, &session_id)
         .await
         .map_err(|e| e.to_string())
 }
 
 /// Cleanly shut down the agent (cancel token + clear state) so the frontend
-/// can call `grok_init` again to restart. Used after `grok://agent-died`.
+/// can call `agent_init` again to restart. Used after `agent://agent-died`.
 #[tauri::command]
-pub async fn grok_shutdown(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn agent_shutdown(state: State<'_, AppState>) -> Result<(), String> {
     // Trigger the cancel token so the agent thread's `cancelled().await` resolves.
     if let Some(handle) = state.handle.lock().unwrap().take() {
         handle.cancel.cancel();
     }
     state.tx.lock().unwrap().take();
-    tracing::info!("grok agent shut down (ready for re-init)");
+    tracing::info!("EchoAgent agent shut down (ready for re-init)");
     Ok(())
 }
 
 /// Resolve a pending permission request from the frontend.
 #[tauri::command]
-pub async fn grok_resolve_permission(
+pub async fn agent_resolve_permission(
     permissions: State<'_, Permissions>,
     request_id: String,
     option_id: Option<String>,
@@ -322,7 +320,7 @@ pub async fn grok_resolve_permission(
 
 /// Resolve a pending question request from the frontend.
 ///
-/// Wire contract for grok's `AskUserQuestionExtResponse`:
+/// Wire contract for EchoAgent's `AskUserQuestionExtResponse`:
 /// - `cancelled: true` → `{ "outcome": "cancelled" }`
 /// - otherwise → `{ "outcome": "accepted", "answers": {...}, "annotations"?: {...} }`
 ///
@@ -330,7 +328,7 @@ pub async fn grok_resolve_permission(
 /// be a string or a list of strings (multi-select). Freeform answers use
 /// label `"Other"` with the typed text in `annotations[question].notes`.
 #[tauri::command]
-pub async fn grok_resolve_question(
+pub async fn agent_resolve_question(
     questions: State<'_, Questions>,
     request_id: String,
     answers: Option<std::collections::HashMap<String, serde_json::Value>>,
@@ -391,12 +389,12 @@ pub struct QuestionAnnotationDto {
     pub notes: Option<String>,
 }
 
-/// Switch the model used by an existing session. Maps to grok's
+/// Switch the model used by an existing session. Maps to EchoAgent's
 /// `session/set_model`. May reject with `MODEL_SWITCH_INCOMPATIBLE_AGENT`
 /// if the session has turns and the new model needs a different harness —
 /// the error string is forwarded verbatim so the UI can prompt accordingly.
 #[tauri::command]
-pub async fn grok_set_model(
+pub async fn agent_set_model(
     state: State<'_, AppState>,
     session_id: String,
     model_id: String,
@@ -407,25 +405,25 @@ pub async fn grok_set_model(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    grok::set_session_model(&tx, &session_id, &model_id)
+    agent_runtime::set_session_model(&tx, &session_id, &model_id)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// List every working directory grok has seen (deduplicated), with a session
+/// List every working directory EchoAgent has seen (deduplicated), with a session
 /// count per cwd. Used to populate the Composer's workspace picker.
 #[tauri::command]
-pub fn grok_list_workspaces() -> Vec<WorkspaceInfo> {
+pub fn agent_list_workspaces() -> Vec<WorkspaceInfo> {
     sessions::list_workspaces()
 }
 
-/// Rename a session via grok's `x.ai/session/rename` extension method. On
-/// success grok also broadcasts `SessionSummaryGenerated`, which our bridge
-/// forwards as the `grok://summary` event — so the frontend will receive the
+/// Rename a session via EchoAgent's `x.ai/session/rename` extension method. On
+/// success EchoAgent also broadcasts `SessionSummaryGenerated`, which our bridge
+/// forwards as the `agent://summary` event — so the frontend will receive the
 /// new title twice (once from this return, once from the event). That's fine:
 /// both arrive at the same store `upsert` and are idempotent.
 #[tauri::command]
-pub async fn grok_rename_session(
+pub async fn agent_rename_session(
     state: State<'_, AppState>,
     session_id: String,
     title: String,
@@ -437,16 +435,16 @@ pub async fn grok_rename_session(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    grok::rename_session(&tx, &session_id, &title, cwd.as_deref())
+    agent_runtime::rename_session(&tx, &session_id, &title, cwd.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Delete a session's persisted history via grok's `x.ai/session/delete`.
+/// Delete a session's persisted history via EchoAgent's `x.ai/session/delete`.
 /// Removes the on-disk session directory; the frontend drops its sidebar
 /// entry on success.
 #[tauri::command]
-pub async fn grok_delete_session(
+pub async fn agent_delete_session(
     state: State<'_, AppState>,
     session_id: String,
     cwd: Option<String>,
@@ -457,16 +455,16 @@ pub async fn grok_delete_session(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    grok::delete_session(&tx, &session_id, cwd.as_deref())
+    agent_runtime::delete_session(&tx, &session_id, cwd.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Pin or unpin a session. grok's `Summary` has no `pinned` field, so this is
-/// EchoAgent-only state stored in `~/.grok/echoagent-state.json`. Returns the
+/// Pin or unpin a session. EchoAgent's `Summary` has no `pinned` field, so this is
+/// EchoAgent-only state stored in `~/.echo-agent/echoagent-state.json`. Returns the
 /// new pinned value so the frontend can update without a re-fetch.
 #[tauri::command]
-pub fn grok_set_session_pinned(session_id: String, pinned: bool) -> Result<bool, String> {
+pub fn agent_set_session_pinned(session_id: String, pinned: bool) -> Result<bool, String> {
     crate::meta::set_pinned(&session_id, pinned)
 }
 
@@ -475,7 +473,7 @@ pub fn grok_set_session_pinned(session_id: String, pinned: bool) -> Result<bool,
 /// in the agent (e.g. an old session never loaded this launch) — the
 /// frontend treats that as "no data" and hides the pill.
 #[tauri::command]
-pub async fn grok_session_info(
+pub async fn agent_session_info(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<serde_json::Value, String> {
@@ -485,7 +483,7 @@ pub async fn grok_session_info(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    grok::session_info(&tx, &session_id)
+    agent_runtime::session_info(&tx, &session_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -493,7 +491,7 @@ pub async fn grok_session_info(
 /// Fetch the session's cumulative token usage (`x.ai/session/usage`) — used
 /// by the context-usage popover for the average cache hit rate.
 #[tauri::command]
-pub async fn grok_session_usage(
+pub async fn agent_session_usage(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<serde_json::Value, String> {
@@ -503,23 +501,23 @@ pub async fn grok_session_usage(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    grok::session_usage(&tx, &session_id)
+    agent_runtime::session_usage(&tx, &session_id)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Archive or unarchive a session. grok's `Summary` has no `archived` field,
-/// so this is EchoAgent-only state stored in `~/.grok/echoagent-state.json`.
+/// Archive or unarchive a session. EchoAgent's `Summary` has no `archived` field,
+/// so this is EchoAgent-only state stored in `~/.echo-agent/echoagent-state.json`.
 /// Archived sessions are filtered out of `list_sessions`. Returns the new
 /// archived value so the frontend can update without a re-fetch.
 #[tauri::command]
-pub fn grok_set_session_archived(session_id: String, archived: bool) -> Result<bool, String> {
+pub fn agent_set_session_archived(session_id: String, archived: bool) -> Result<bool, String> {
     crate::meta::set_archived(&session_id, archived)
 }
 
 /// Bind an expert to a session (EchoAgent-only state). Returns `true` on success.
 #[tauri::command]
-pub fn grok_set_session_expert(
+pub fn agent_set_session_expert(
     session_id: String,
     expert_id: String,
     expert_name: String,
@@ -539,6 +537,6 @@ pub fn grok_set_session_expert(
 
 /// Remove the expert binding from a session. Returns `true` if a binding was removed.
 #[tauri::command]
-pub fn grok_clear_session_expert(session_id: String) -> Result<bool, String> {
+pub fn agent_clear_session_expert(session_id: String) -> Result<bool, String> {
     crate::meta::clear_expert(&session_id)
 }

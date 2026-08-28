@@ -2212,7 +2212,7 @@
   opacity: 0.75;
   border-left: 3px solid var(--wb-brand);
 }
-/* 工具输出的图片（read_file 读图片/PDF 时 grok 返回 ImageContent） */
+/* 工具输出的图片（read_file 读图片/PDF 时 runtime 返回 ImageContent） */
 .toolcall__images {
   display: flex;
   flex-direction: column;
@@ -12176,7 +12176,7 @@ button.diff__path {
 
 /* ======================================================================
  * ContextUsagePill — Composer 上下文用量胶囊 + 分类占比弹层
- * (WorkBuddy 图1 pill / 图2 popover;数据来自 grok x.ai/session/info+usage)
+ * (WorkBuddy 图1 pill / 图2 popover;数据来自 runtime x.ai/session/info+usage)
  * ====================================================================== */
 .context-usage {
   position: relative;

@@ -10,7 +10,7 @@ import {
   RefreshCwIcon,
 } from "@/foundation/components/Icon/icons";
 import { FileText, FileSpreadsheet, FileImage, FileCode, Film, Music, Globe, File, FolderOpen } from "lucide-react";
-import { memoryList } from "@/lib/grok-client";
+import { memoryList } from "@/lib/agent-client";
 import type { MemoryEntry } from "@/lib/types";
 import { formatFileSize, inferFileTypeFromExt, relativeTime, type FileType, type LocalFileItem } from "@/lib/file-utils";
 
