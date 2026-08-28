@@ -11,7 +11,7 @@ describe("Composer", () => {
     const input = screen.getByRole("textbox");
     fireEvent.change(input, { target: { value: "你好 EchoAgent" } });
     fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
-    expect(onSend).toHaveBeenCalledWith("你好 EchoAgent");
+    expect(onSend).toHaveBeenCalledWith("你好 EchoAgent", []);
   });
 
   it("apiReady=false 时输入禁用并显示配置提示,点击触发 onOpenSettings", () => {
@@ -149,7 +149,7 @@ describe("Composer", () => {
     // 发送一条。
     fireEvent.change(input, { target: { value: "第一条" } });
     fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
-    expect(onSend).toHaveBeenCalledWith("第一条");
+    expect(onSend).toHaveBeenCalledWith("第一条", []);
     // 输入框已清空;按 ↑ 召回「第一条」。
     fireEvent.keyDown(input, { key: "ArrowUp" });
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("第一条");

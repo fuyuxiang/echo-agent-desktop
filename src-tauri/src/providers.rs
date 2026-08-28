@@ -174,16 +174,8 @@ pub(crate) fn read_config() -> Value {
 /// write if rename fails (e.g. antivirus interference) so we still make progress.
 pub(crate) fn write_config(v: &Value) -> Result<(), String> {
     let path = config_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
-    }
     let body = toml::to_string_pretty(v).map_err(|e| format!("serialize config: {e}"))?;
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, &body).map_err(|e| format!("write config tmp: {e}"))?;
-    if std::fs::rename(&tmp, &path).is_err() {
-        std::fs::write(&path, &body).map_err(|e| format!("write config: {e}"))?;
-    }
-    Ok(())
+    crate::paths::write_private_file(&path, body.as_bytes())
 }
 
 // ---------------------------------------------------------------------------

@@ -21,8 +21,9 @@
 //!
 //! The scheduler runs in-process (tokio task), polling every minute.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, Weekday};
 use serde::{Deserialize, Serialize};
@@ -201,16 +202,24 @@ fn records_path() -> PathBuf {
     crate::paths::echo_agent_home_dir().join("echoagent-automation-records.json")
 }
 
+static STORE_ACCESS: OnceLock<Mutex<()>> = OnceLock::new();
+static RECORD_ACCESS: OnceLock<Mutex<()>> = OnceLock::new();
+static FULL_ACCESS_SESSIONS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn store_access() -> &'static Mutex<()> {
+    STORE_ACCESS.get_or_init(|| Mutex::new(()))
+}
+
+fn record_access() -> &'static Mutex<()> {
+    RECORD_ACCESS.get_or_init(|| Mutex::new(()))
+}
+
+fn full_access_sessions() -> &'static Mutex<HashSet<String>> {
+    FULL_ACCESS_SESSIONS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
 fn write_json(path: &PathBuf, body: &str) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body).map_err(|e| format!("write tmp: {e}"))?;
-    if std::fs::rename(&tmp, path).is_err() {
-        std::fs::write(path, body).map_err(|e| format!("write store: {e}"))?;
-    }
-    Ok(())
+    crate::paths::write_private_file(path, body.as_bytes())
 }
 
 /// Read the automation store. Missing/corrupt → empty (never block on this).
@@ -376,6 +385,7 @@ fn write_records(store: &mut RunRecordStore) -> Result<(), String> {
 
 /// Append a "running" record and return its id.
 fn record_run_started(automation: &Automation, started_at: &str) -> String {
+    let _guard = record_access().lock().unwrap();
     let mut records = read_records();
     let id = uuid::Uuid::now_v7().to_string();
     records.records.push(AutomationRunRecord {
@@ -392,8 +402,21 @@ fn record_run_started(automation: &Automation, started_at: &str) -> String {
     id
 }
 
-/// Finalize a record as success/failed with the linked session.
+/// Link the newly-created session while the automation is still running.
+fn record_run_session(record_id: &str, session_id: &str) {
+    let _guard = record_access().lock().unwrap();
+    let mut records = read_records();
+    for r in &mut records.records {
+        if r.id == record_id {
+            r.session_id = Some(session_id.into());
+        }
+    }
+    let _ = write_records(&mut records);
+}
+
+/// Finalize a record as success/failed. The session was linked at dispatch time.
 fn record_run_finished(record_id: &str, ok: bool, session_id: Option<&str>) {
+    let _guard = record_access().lock().unwrap();
     let mut records = read_records();
     let now = Local::now().to_rfc3339();
     for r in &mut records.records {
@@ -410,6 +433,65 @@ fn record_run_finished(record_id: &str, ok: bool, session_id: Option<&str>) {
         }
     }
     let _ = write_records(&mut records);
+}
+
+/// Finalize an automation run when the bridge receives prompt_complete.
+/// Returns the automation's external-notification preference when the session
+/// belonged to an automation.
+pub fn complete_run_for_session(session_id: &str, ok: bool) -> Option<bool> {
+    let automation_id = {
+        let _guard = record_access().lock().unwrap();
+        let mut records = read_records();
+        let mut automation_id = None;
+        let now = Local::now().to_rfc3339();
+        for r in &mut records.records {
+            if r.status == "running" && r.session_id.as_deref() == Some(session_id) {
+                r.status = if ok { "success" } else { "failed" }.into();
+                r.finished_at = Some(now.clone());
+                automation_id = Some(r.automation_id.clone());
+            }
+        }
+        if automation_id.is_some() {
+            let _ = write_records(&mut records);
+        }
+        automation_id
+    };
+    full_access_sessions().lock().unwrap().remove(session_id);
+    automation_id.map(|id| {
+        let _guard = store_access().lock().unwrap();
+        read_store()
+            .automations
+            .into_iter()
+            .find(|a| a.id == id)
+            .is_some_and(|a| a.push_to_we_chat)
+    })
+}
+
+/// Whether permission requests for this automation session may be approved
+/// without changing the user's global permission mode.
+pub fn is_full_access_session(session_id: &str) -> bool {
+    full_access_sessions().lock().unwrap().contains(session_id)
+}
+
+pub fn clear_runtime_sessions() {
+    full_access_sessions().lock().unwrap().clear();
+}
+
+fn fail_stale_running_records() {
+    let _guard = record_access().lock().unwrap();
+    let mut records = read_records();
+    let now = Local::now().to_rfc3339();
+    let mut changed = false;
+    for record in &mut records.records {
+        if record.status == "running" {
+            record.status = "failed".into();
+            record.finished_at = Some(now.clone());
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = write_records(&mut records);
+    }
 }
 
 // ---------- scheduling ----------
@@ -597,6 +679,48 @@ fn refresh_next_runs(store: &mut AutomationStore) {
     }
 }
 
+/// Initialize only schedules that do not have a persisted next run. It is
+/// essential not to recompute an already-due timestamp before the scheduler
+/// gets a chance to claim it.
+fn ensure_next_runs(store: &mut AutomationStore, now: DateTime<Local>) {
+    for a in &mut store.automations {
+        if a.next_run_at.is_none() && a.status == "ACTIVE" {
+            a.next_run_at = compute_next_run(a, now);
+        }
+    }
+}
+
+/// Claim all persisted due tasks using a fire-once misfire policy. The next
+/// timestamp (or PAUSED for a one-shot task) is persisted before dispatch, so
+/// a second tick cannot execute the same occurrence twice.
+fn claim_due(store: &mut AutomationStore, now: DateTime<Local>) -> Vec<Automation> {
+    ensure_next_runs(store, now);
+    let mut due = Vec::new();
+    for a in &mut store.automations {
+        if a.status != "ACTIVE" {
+            continue;
+        }
+        let is_due = a
+            .next_run_at
+            .as_ref()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.with_timezone(&Local) <= now)
+            .unwrap_or(false);
+        if !is_due {
+            continue;
+        }
+        due.push(a.clone());
+        a.last_run_at = Some(now.to_rfc3339());
+        if a.schedule_type == "once" {
+            a.status = "PAUSED".into();
+            a.next_run_at = None;
+        } else {
+            a.next_run_at = compute_next_run(a, now);
+        }
+    }
+    due
+}
+
 fn first_cwd(a: &Automation) -> Option<String> {
     a.cwds
         .split(',')
@@ -610,13 +734,22 @@ fn first_cwd(a: &Automation) -> Option<String> {
 /// Full snapshot: automations (with recomputed next runs) + run records.
 #[tauri::command]
 pub fn automations_snapshot() -> AutomationSnapshot {
-    let mut store = read_store();
-    refresh_next_runs(&mut store);
-    let _ = write_store(&store);
-    let records = read_records();
+    // Never hold both file-store locks: prompt completion acquires records
+    // before looking up its automation, so nested locking here could deadlock.
+    let automations = {
+        let _guard = store_access().lock().unwrap();
+        let mut store = read_store();
+        ensure_next_runs(&mut store, now_local());
+        let _ = write_store(&store);
+        store.automations
+    };
+    let records = {
+        let _guard = record_access().lock().unwrap();
+        read_records().records
+    };
     AutomationSnapshot {
-        automations: store.automations,
-        records: records.records,
+        automations,
+        records,
     }
 }
 
@@ -629,6 +762,11 @@ fn blank_to_none(value: &mut Option<String>) {
 
 #[tauri::command]
 pub fn automations_save(automation: Automation) -> Result<Automation, String> {
+    crate::policy::require_feature("automations")?;
+    if let Some(model_id) = automation.model_id.as_deref() {
+        crate::policy::require_model(model_id)?;
+    }
+    let _guard = store_access().lock().unwrap();
     let mut store = read_store();
     if automation.name.trim().is_empty() {
         return Err("name must not be empty".into());
@@ -669,6 +807,7 @@ pub fn automations_save(automation: Automation) -> Result<Automation, String> {
 
 #[tauri::command]
 pub fn automations_delete(id: String) -> Result<(), String> {
+    let _guard = store_access().lock().unwrap();
     let mut store = read_store();
     store.automations.retain(|a| a.id != id);
     write_store(&store)
@@ -676,6 +815,7 @@ pub fn automations_delete(id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn automations_set_status(id: String, status: String) -> Result<(), String> {
+    let _guard = store_access().lock().unwrap();
     let normalized = match status.to_uppercase().as_str() {
         "ACTIVE" => "ACTIVE",
         _ => "PAUSED",
@@ -695,12 +835,15 @@ pub fn automations_set_status(id: String, status: String) -> Result<(), String> 
 /// run record is written for the 运行记录 tab.
 #[tauri::command]
 pub async fn automations_run(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let store = read_store();
-    let automation = store
-        .automations
-        .into_iter()
-        .find(|a| a.id == id)
-        .ok_or_else(|| format!("automation {id} not found"))?;
+    crate::policy::require_feature("automations")?;
+    let automation = {
+        let _guard = store_access().lock().unwrap();
+        read_store()
+            .automations
+            .into_iter()
+            .find(|a| a.id == id)
+            .ok_or_else(|| format!("automation {id} not found"))?
+    };
     let cwd = first_cwd(&automation).unwrap_or_else(|| {
         state
             .cwd
@@ -719,22 +862,23 @@ pub async fn automations_run(state: State<'_, AppState>, id: String) -> Result<(
 
     let started = now_local().to_rfc3339();
     let record_id = record_run_started(&automation, &started);
-    let result = run_automation_once(&tx, &automation, &PathBuf::from(&cwd)).await;
-    record_run_finished(
-        &record_id,
-        result.is_ok(),
-        result.as_ref().ok().map(|s| s.as_str()),
-    );
+    let result = run_automation_once(&tx, &automation, &PathBuf::from(&cwd), &record_id).await;
+    if result.is_err() {
+        record_run_finished(&record_id, false, None);
+    }
     result?;
 
     // Mark last-run.
-    let mut store = read_store();
-    for a in &mut store.automations {
-        if a.id == id {
-            a.last_run_at = Some(started.clone());
+    {
+        let _guard = store_access().lock().unwrap();
+        let mut store = read_store();
+        for a in &mut store.automations {
+            if a.id == id {
+                a.last_run_at = Some(started.clone());
+            }
         }
+        write_store(&store)?;
     }
-    write_store(&store)?;
     Ok(())
 }
 
@@ -744,18 +888,74 @@ async fn run_automation_once(
     tx: &xai_acp_lib::AcpAgentTx,
     automation: &Automation,
     cwd: &PathBuf,
+    record_id: &str,
 ) -> Result<String, String> {
+    crate::policy::require_feature("automations")?;
+    if let Some(model_id) = automation.model_id.as_deref() {
+        crate::policy::require_model(model_id)?;
+    }
     let session_id = crate::agent_runtime::new_session(tx, cwd, automation.model_id.as_deref())
         .await
         .map_err(|e| e.to_string())?;
-    crate::agent_runtime::prompt(tx, &session_id, &automation.prompt)
+    record_run_session(record_id, &session_id);
+    if automation.permission_mode == "fullAccess" {
+        full_access_sessions()
+            .lock()
+            .unwrap()
+            .insert(session_id.clone());
+    }
+    if let (Some(expert_id), Some(expert_name)) = (&automation.expert_id, &automation.expert_name) {
+        let _ = crate::meta::set_expert(
+            &session_id,
+            crate::meta::ExpertBinding {
+                expert_id: expert_id.clone(),
+                expert_name: expert_name.clone(),
+                source: "automation".into(),
+                avatar_local: None,
+            },
+        );
+    }
+    let prompt = automation_prompt(automation);
+    crate::agent_runtime::prompt(tx, &session_id, &prompt)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            full_access_sessions().lock().unwrap().remove(&session_id);
+            e.to_string()
+        })?;
     Ok(session_id)
+}
+
+fn automation_prompt(automation: &Automation) -> String {
+    let mut context = Vec::new();
+    if !automation.skills.is_empty() {
+        context.push(format!(
+            "优先使用这些技能：{}。",
+            automation.skills.join("、")
+        ));
+    }
+    if let Some(name) = automation.expert_name.as_deref() {
+        context.push(format!("以专家“{name}”的职责和方法执行。"));
+    }
+    if !automation.connector_ids.is_empty() {
+        context.push(format!(
+            "需要外部能力时优先使用这些已配置连接器：{}。",
+            automation.connector_ids.join("、")
+        ));
+    }
+    if context.is_empty() {
+        automation.prompt.clone()
+    } else {
+        format!(
+            "[自动化执行上下文]\n{}\n\n{}",
+            context.join("\n"),
+            automation.prompt
+        )
+    }
 }
 
 #[tauri::command]
 pub fn automation_records_archive(id: String, archived: bool) -> Result<(), String> {
+    let _guard = record_access().lock().unwrap();
     let mut records = read_records();
     for r in &mut records.records {
         if r.id == id {
@@ -767,6 +967,7 @@ pub fn automation_records_archive(id: String, archived: bool) -> Result<(), Stri
 
 #[tauri::command]
 pub fn automation_records_delete(id: String) -> Result<(), String> {
+    let _guard = record_access().lock().unwrap();
     let mut records = read_records();
     records.records.retain(|r| r.id != id);
     write_records(&mut records)
@@ -776,60 +977,37 @@ pub fn automation_records_delete(id: String) -> Result<(), String> {
 
 /// Scheduler tick. Fires any automation whose `next_run_at` has passed.
 pub async fn scheduler_tick(tx: &xai_acp_lib::AcpAgentTx, default_cwd: &PathBuf) {
-    let mut store = read_store();
-    refresh_next_runs(&mut store);
     let now = now_local();
-    let due: Vec<Automation> = store
-        .automations
-        .iter()
-        .filter(|a| a.status == "ACTIVE")
-        .filter(|a| {
-            a.next_run_at
-                .as_ref()
-                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
-                .map(|t| t.with_timezone(&Local) <= now)
-                .unwrap_or(false)
-        })
-        .cloned()
-        .collect();
-    if due.is_empty() {
+    let due = {
+        let _guard = store_access().lock().unwrap();
+        let mut store = read_store();
+        let due = claim_due(&mut store, now);
         let _ = write_store(&store);
-        return;
-    }
+        due
+    };
     for automation in &due {
         let cwd = first_cwd(automation)
             .map(PathBuf::from)
             .unwrap_or_else(|| default_cwd.clone());
         let started = now.to_rfc3339();
         let record_id = record_run_started(automation, &started);
-        match run_automation_once(tx, automation, &cwd).await {
-            Ok(session_id) => {
-                record_run_finished(&record_id, true, Some(&session_id));
-            }
+        match run_automation_once(tx, automation, &cwd, &record_id).await {
+            Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error = ?e, id = %automation.id, "automation fire failed");
                 record_run_finished(&record_id, false, None);
             }
         }
-        for a in &mut store.automations {
-            if a.id == automation.id {
-                a.last_run_at = Some(started.clone());
-            }
-        }
-        // Re-read-free recompute for this automation.
-        refresh_next_runs(&mut store);
-        let _ = write_store(&store);
     }
 }
 
-/// Hold a global OnceLock so the scheduler doesn't start twice.
-static SCHEDULER_STARTED: OnceLock<()> = OnceLock::new();
-
-/// Start the background scheduler (idempotent — safe to call multiple times).
-pub fn start_scheduler(tx: xai_acp_lib::AcpAgentTx, default_cwd: PathBuf) {
-    if SCHEDULER_STARTED.set(()).is_err() {
-        return; // Already started.
-    }
+/// Start a scheduler bound to one runtime. The caller owns and replaces the
+/// returned handle when the runtime restarts.
+pub fn start_scheduler(
+    tx: xai_acp_lib::AcpAgentTx,
+    default_cwd: PathBuf,
+) -> tokio::task::JoinHandle<()> {
+    fail_stale_running_records();
     tokio::spawn(async move {
         // Tick every 60s. The first tick is immediate so newly-due tasks fire
         // quickly after app start.
@@ -837,7 +1015,7 @@ pub fn start_scheduler(tx: xai_acp_lib::AcpAgentTx, default_cwd: PathBuf) {
             scheduler_tick(&tx, &default_cwd).await;
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         }
-    });
+    })
 }
 
 // ---------- unit tests ----------
@@ -1138,6 +1316,68 @@ mod tests {
         };
         // from is after valid_until
         assert!(compute_next_run(&a, local(2026, 7, 6, 10, 0)).is_none());
+    }
+
+    #[test]
+    fn claim_due_preserves_future_and_advances_due_recurring() {
+        let now = local(2026, 7, 6, 10, 0);
+        let mut due = Automation {
+            id: "due".into(),
+            name: "due".into(),
+            prompt: "run".into(),
+            next_run_at: Some(local(2026, 7, 6, 9, 0).to_rfc3339()),
+            schedule: AutomationSchedule {
+                freq: ScheduleFreq::DAILY,
+                byhour: 9,
+                byminute: 0,
+                ..Default::default()
+            },
+            created_at: local(2026, 1, 1, 9, 0).to_rfc3339(),
+            ..test_automation()
+        };
+        let future = Automation {
+            id: "future".into(),
+            name: "future".into(),
+            prompt: "later".into(),
+            next_run_at: Some(local(2026, 7, 6, 11, 0).to_rfc3339()),
+            created_at: local(2026, 1, 1, 9, 0).to_rfc3339(),
+            ..test_automation()
+        };
+        let mut store = AutomationStore {
+            automations: vec![due.clone(), future],
+        };
+        let claimed = claim_due(&mut store, now);
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].id, "due");
+        due.next_run_at = Some(local(2026, 7, 7, 9, 0).to_rfc3339());
+        assert_eq!(store.automations[0].next_run_at, due.next_run_at);
+        assert_eq!(
+            store.automations[1].next_run_at,
+            Some(local(2026, 7, 6, 11, 0).to_rfc3339())
+        );
+    }
+
+    #[test]
+    fn claim_due_pauses_once_task_and_cannot_claim_twice() {
+        let now = local(2026, 7, 6, 10, 0);
+        let once = Automation {
+            id: "once".into(),
+            name: "once".into(),
+            prompt: "run".into(),
+            schedule_type: "once".into(),
+            scheduled_date: Some("2026-07-06".into()),
+            scheduled_time: Some("09:00".into()),
+            next_run_at: Some(local(2026, 7, 6, 9, 0).to_rfc3339()),
+            created_at: local(2026, 1, 1, 9, 0).to_rfc3339(),
+            ..test_automation()
+        };
+        let mut store = AutomationStore {
+            automations: vec![once],
+        };
+        assert_eq!(claim_due(&mut store, now).len(), 1);
+        assert_eq!(store.automations[0].status, "PAUSED");
+        assert!(store.automations[0].next_run_at.is_none());
+        assert!(claim_due(&mut store, now + Duration::minutes(1)).is_empty());
     }
 
     // --- first_cwd ---

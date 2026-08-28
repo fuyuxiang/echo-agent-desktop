@@ -130,6 +130,22 @@ fn capitalize_tool(tool: &str) -> String {
 /// compact form (deny/allow/ask) and drop any structured `rules` array to
 /// avoid ambiguity — EchoAgent accepts both, but mixing them is confusing.
 pub fn write_rules(rules: Vec<PermissionRule>) -> Result<(), String> {
+    for rule in &rules {
+        if !["allow", "deny", "ask"].contains(&rule.action.as_str()) {
+            return Err(format!("invalid permission action: {}", rule.action));
+        }
+        if !["bash", "read", "edit", "grep", "mcp", "webfetch", "any"].contains(&rule.tool.as_str())
+        {
+            return Err(format!("invalid permission tool: {}", rule.tool));
+        }
+        if rule
+            .pattern
+            .as_deref()
+            .is_some_and(|p| p.contains(['\n', '\r']))
+        {
+            return Err("permission pattern must be a single line".into());
+        }
+    }
     let mut config = crate::providers::read_config();
     let table = config.as_table_mut().ok_or("config root is not a table")?;
     // Reset the [permission] block: drop it entirely so we rewrite from scratch.
@@ -314,6 +330,9 @@ pub const PERMISSION_MODES: [&str; 3] = ["ask", "auto", "always-approve"];
 /// Read the configured permission mode. Mirrors EchoAgent's precedence:
 /// `permission_mode` > legacy `approval_mode` > legacy `yolo`; default "ask".
 pub fn read_permission_mode() -> String {
+    if let Some(mode) = crate::policy::locked_permission_mode() {
+        return mode;
+    }
     let config = crate::providers::read_config();
     let Some(ui) = config.get("ui").and_then(Value::as_table) else {
         return "ask".into();
@@ -370,6 +389,11 @@ pub fn permission_mode_get(_state: State<'_, AppState>) -> String {
 /// best-effort — if the agent isn't up yet, the config write alone suffices.
 #[tauri::command]
 pub async fn permission_mode_set(state: State<'_, AppState>, mode: String) -> Result<(), String> {
+    if let Some(locked) = crate::policy::locked_permission_mode() {
+        if locked != mode {
+            return Err(format!("权限模式已被策略锁定为 {locked}"));
+        }
+    }
     write_permission_mode(&mode)?;
 
     let tx = state.tx.lock().unwrap().clone();

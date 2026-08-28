@@ -10,11 +10,11 @@ import {
   isModelAllowed,
   canUploadSkill,
   getLockedPermissionMode,
-  serializePolicySet,
   deserializePolicySet,
   type PolicyRule,
   type PolicySet,
 } from "@/lib/policy-engine";
+import { policyGet, policySave } from "@/lib/agent-client";
 import { CheckIcon, XCloseIcon } from "@/foundation/components/Icon/icons";
 
 const POLICY_KEY = "echoagent.policy";
@@ -30,27 +30,39 @@ function loadPolicy(): PolicySet {
   }
 }
 
-function savePolicy(set: PolicySet): void {
-  try {
-    window.localStorage.setItem(POLICY_KEY, serializePolicySet(set));
-  } catch {
-    /* noop */
-  }
-}
-
-export function PolicySettingsPanel({ onToast: _onToast }: { onToast?: (msg: string) => void }) {
+export function PolicySettingsPanel({ onToast }: { onToast?: (msg: string) => void }) {
   const [policy, setPolicy] = useState<PolicySet>({ rules: [] });
   const [modelInput, setModelInput] = useState("");
   const [featureInput, setFeatureInput] = useState("");
 
   useEffect(() => {
-    setPolicy(loadPolicy());
+    let cancelled = false;
+    void policyGet<PolicySet>()
+      .then(async (backend) => {
+        let resolved = backend;
+        const legacy = loadPolicy();
+        if (backend.rules.length === 0 && legacy.rules.length > 0) {
+          resolved = await policySave<PolicySet>(legacy);
+          window.localStorage.removeItem(POLICY_KEY);
+        }
+        if (!cancelled) setPolicy(resolved);
+      })
+      .catch(() => {
+        if (!cancelled) setPolicy(loadPolicy());
+      });
+    return () => { cancelled = true; };
   }, []);
 
   const update = (rules: PolicyRule[]) => {
+    const previous = policy;
     const merged = mergeRules(rules);
-    savePolicy(merged);
     setPolicy(merged);
+    void policySave<PolicySet>(merged)
+      .then(setPolicy)
+      .catch((error) => {
+        setPolicy(previous);
+        onToast?.(`策略保存失败：${String(error).replace(/^Error:\s*/, "")}`);
+      });
   };
 
   const whitelist = getPolicyValue<string[]>(policy, "model-whitelist") ?? [];

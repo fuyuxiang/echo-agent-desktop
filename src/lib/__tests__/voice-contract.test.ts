@@ -104,6 +104,14 @@ describe("createWebSpeechAsrProvider", () => {
     expect(onInterim).toHaveBeenCalledWith("你");
     expect(onFinal).toHaveBeenCalledWith("你好");
 
+    // Later result events report only their newly-finalized segment. This is
+    // what lets the Composer append without duplicating the earlier text.
+    fakeRec.onresult!({
+      resultIndex: 0,
+      results: [{ isFinal: true, 0: { transcript: "世界" } }],
+    });
+    expect(onFinal).toHaveBeenLastCalledWith("世界");
+
     fakeRec.onend!();
     expect(onEnd).toHaveBeenCalled();
 
