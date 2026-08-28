@@ -19,6 +19,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # In-process team MCP server (team_mcp.rs) — streamable-http JSON-RPC.
@@ -39,6 +40,7 @@ regex = "1"
 # join that workspace (see the explicit [workspace] table below).
 xai-acp-lib = { path = "../vendor/grok-build/crates/codegen/xai-acp-lib" }
 xai-grok-shell = { path = "../vendor/grok-build/crates/codegen/xai-grok-shell" }
+xai-grok-voice = { path = "../vendor/grok-build/crates/codegen/xai-grok-voice" }
 xai-grok-tools = { path = "../vendor/grok-build/crates/codegen/xai-grok-tools" }
 xai-tool-runtime = { path = "../vendor/grok-build/crates/common/xai-tool-runtime" }
 xai-tool-protocol = { path = "../vendor/grok-build/crates/common/xai-tool-protocol" }
@@ -59,7 +61,10 @@ base64 = "0.22"
 open = "5"
 # Fetch available models from a provider's /models endpoint (multi-model setup).
 # rustls-tls avoids a native OpenSSL dependency on Windows.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+quick-xml = "0.38"
+url = "2.5"
+urlencoding = "2.1"
 
 [dev-dependencies]
 tempfile = "3"

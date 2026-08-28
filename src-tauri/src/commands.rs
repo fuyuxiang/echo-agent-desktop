@@ -23,6 +23,10 @@ pub struct AppState {
     /// stash a clone of the tx sender here for commands to use.
     pub tx: Mutex<Option<xai_acp_lib::AcpAgentTx>>,
     pub cwd: Mutex<Option<PathBuf>>,
+    /// Background automation scheduler bound to the current agent runtime.
+    /// Replacing/aborting it on restart prevents a stale task from retaining a
+    /// closed ACP sender forever.
+    pub automation_scheduler: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,6 +71,18 @@ pub async fn agent_init(
     questions: State<'_, Questions>,
     cwd: Option<String>,
 ) -> Result<InitResult, String> {
+    // A retry/re-init must retire the prior runtime and its scheduler before a
+    // replacement is spawned; dropping the handle alone does not cancel it.
+    if let Some(scheduler) = state.automation_scheduler.lock().unwrap().take() {
+        scheduler.abort();
+    }
+    if let Some(previous) = state.handle.lock().unwrap().take() {
+        previous.cancel.cancel();
+    }
+    state.tx.lock().unwrap().take();
+    crate::automations::clear_runtime_sessions();
+    crate::voice::shutdown();
+
     let cwd = cwd.map(PathBuf::from).unwrap_or_else(default_cwd);
     *state.cwd.lock().unwrap() = Some(cwd.clone());
 
@@ -169,7 +185,15 @@ pub async fn agent_init(
         state.tx.lock().unwrap().clone(),
         state.cwd.lock().unwrap().clone(),
     ) {
-        crate::automations::start_scheduler(tx, cwd);
+        let scheduler = crate::automations::start_scheduler(tx, cwd);
+        if let Some(previous) = state
+            .automation_scheduler
+            .lock()
+            .unwrap()
+            .replace(scheduler)
+        {
+            previous.abort();
+        }
     }
 
     Ok(InitResult {
@@ -218,6 +242,10 @@ pub async fn agent_new_session(
     cwd: String,
     model_id: Option<String>,
 ) -> Result<String, String> {
+    crate::policy::require_feature("sessions")?;
+    if let Some(model_id) = model_id.as_deref() {
+        crate::policy::require_model(model_id)?;
+    }
     let tx = state
         .tx
         .lock()
@@ -264,6 +292,7 @@ pub async fn agent_send(
     state: State<'_, AppState>,
     session_id: String,
     text: String,
+    attachments: Option<Vec<String>>,
 ) -> Result<(), String> {
     let tx = state
         .tx
@@ -271,9 +300,14 @@ pub async fn agent_send(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    agent_runtime::prompt(&tx, &session_id, &text)
-        .await
-        .map_err(|e| e.to_string())
+    agent_runtime::prompt_with_attachments(
+        &tx,
+        &session_id,
+        &text,
+        attachments.as_deref().unwrap_or(&[]),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -298,6 +332,11 @@ pub async fn agent_shutdown(state: State<'_, AppState>) -> Result<(), String> {
         handle.cancel.cancel();
     }
     state.tx.lock().unwrap().take();
+    if let Some(scheduler) = state.automation_scheduler.lock().unwrap().take() {
+        scheduler.abort();
+    }
+    crate::automations::clear_runtime_sessions();
+    crate::voice::shutdown();
     tracing::info!("EchoAgent agent shut down (ready for re-init)");
     Ok(())
 }
@@ -399,6 +438,7 @@ pub async fn agent_set_model(
     session_id: String,
     model_id: String,
 ) -> Result<(), String> {
+    crate::policy::require_model(&model_id)?;
     let tx = state
         .tx
         .lock()

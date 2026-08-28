@@ -98,7 +98,7 @@ describe("Composer drop-zone", () => {
     expect(screen.getAllByText("a.ts")).toHaveLength(1);
   });
 
-  it("附件随发送清空(onSend 收到含文件清单的正文)", async () => {
+  it("附件作为独立参数发送，不污染正文", async () => {
     const onSend = vi.fn();
     render(<Composer {...base} onSend={onSend} />);
     await waitFor(() => expect(dragState.handler).not.toBeNull());
@@ -111,10 +111,7 @@ describe("Composer drop-zone", () => {
       target: { value: "看一下" },
     });
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
-    expect(onSend).toHaveBeenCalled();
-    const body = onSend.mock.calls[0][0] as string;
-    expect(body).toContain("看一下");
-    expect(body).toContain("a.ts");
+    expect(onSend).toHaveBeenCalledWith("看一下", ["C:\\proj\\a.ts"]);
   });
 
   it("卸载时解绑监听", async () => {

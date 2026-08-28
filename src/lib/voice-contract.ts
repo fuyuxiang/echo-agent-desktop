@@ -126,16 +126,18 @@ export function createWebSpeechAsrProvider(deps: {
     isAvailable: deps.isAvailable,
     listen(lang, handlers) {
       const rec = deps.createRecognition(lang);
-      let finalText = "";
       rec.onresult = (event) => {
         let interim = "";
+        let finalDelta = "";
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const r = event.results[i];
-          if (r.isFinal) finalText += r[0].transcript;
+          if (r.isFinal) finalDelta += r[0].transcript;
           else interim += r[0].transcript;
         }
         if (interim) handlers.onInterim?.(interim);
-        if (finalText) handlers.onFinal?.(finalText);
+        // Report only newly-finalized text. Returning the cumulative transcript
+        // makes consumers append old words again on every result event.
+        if (finalDelta) handlers.onFinal?.(finalDelta);
       };
       rec.onerror = (e) => handlers.onError?.(e.error);
       rec.onend = () => handlers.onEnd?.();

@@ -106,6 +106,8 @@ pub async fn skills_add(
     path: String,
     cwd: Option<String>,
 ) -> Result<(), String> {
+    crate::policy::require_feature("skills")?;
+    crate::policy::require_skill_upload()?;
     let tx = state
         .tx
         .lock()

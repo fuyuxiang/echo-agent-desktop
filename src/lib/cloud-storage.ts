@@ -7,6 +7,7 @@
  *
  * 纯函数核心(路径操作 + 文件元信息 + provider 注册表),HTTP 依赖注入便于单测。
  */
+import { invoke } from "@tauri-apps/api/core";
 
 /** 文件/目录元信息。 */
 export interface StorageEntry {
@@ -51,6 +52,58 @@ export interface WebDavConfig {
   username?: string;
   /** 密码/应用令牌。 */
   password?: string;
+}
+
+export interface StorageProviderConfig extends WebDavConfig {
+  id: string;
+  label: string;
+  kind: "webdav";
+  enabled: boolean;
+}
+
+export async function loadStorageProviderConfigs(): Promise<StorageProviderConfig[]> {
+  return invoke<StorageProviderConfig[]>("storage_providers_list");
+}
+
+export async function saveStorageProviderConfig(config: StorageProviderConfig): Promise<void> {
+  await invoke<void>("storage_provider_upsert", { config });
+}
+
+export async function removeStorageProviderConfig(id: string): Promise<void> {
+  await invoke<void>("storage_provider_remove", { id });
+}
+
+export async function testStorageProviderConfig(id: string): Promise<void> {
+  await invoke<void>("storage_provider_test", { id });
+}
+
+/** Construct a real provider backed by Rust reqwest/WebDAV commands. */
+export function createTauriWebDavProvider(config: StorageProviderConfig): StorageProvider {
+  return {
+    id: config.id,
+    label: config.label,
+    isEnabled: () => config.enabled,
+    list: (path) => invoke<StorageEntry[]>("storage_list", { id: config.id, path }),
+    readText: (path) => invoke<string>("storage_read_text", { id: config.id, path }),
+    writeText: async (path, content) => {
+      await invoke<void>("storage_write_text", { id: config.id, path, content });
+      return true;
+    },
+    delete: async (path) => {
+      await invoke<void>("storage_delete", { id: config.id, path });
+      return true;
+    },
+    makeDir: async (path) => {
+      await invoke<void>("storage_make_dir", { id: config.id, path });
+      return true;
+    },
+  };
+}
+
+export async function hydrateStorageProviders(): Promise<StorageProviderConfig[]> {
+  const configs = await loadStorageProviderConfigs();
+  for (const config of configs) registerStorageProvider(createTauriWebDavProvider(config));
+  return configs;
 }
 
 /** HTTP 客户端(注入)。 */
@@ -133,8 +186,9 @@ const providers: StorageProvider[] = [];
 
 /** 注册云存储 provider(去重 by id)。 */
 export function registerStorageProvider(p: StorageProvider): void {
-  if (providers.some((x) => x.id === p.id)) return;
-  providers.push(p);
+  const index = providers.findIndex((x) => x.id === p.id);
+  if (index >= 0) providers[index] = p;
+  else providers.push(p);
 }
 
 /** 注销。 */

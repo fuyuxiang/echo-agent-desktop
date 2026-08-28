@@ -20,12 +20,15 @@ mod meta;
 mod notifications;
 mod paths;
 mod permission_config;
+mod policy;
 mod providers;
 mod sessions;
 mod shell_fs;
 mod skills;
 mod skills_catalog;
+mod storage;
 mod team_mcp;
+mod voice;
 
 use bridge::{Permissions, Questions};
 use commands::AppState;
@@ -45,6 +48,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .manage(Permissions::new())
         .manage(Questions::new())
@@ -90,6 +94,9 @@ pub fn run() {
             // agent/assistant defaults (~/.echo-agent/config.toml [models].default + [ui].default_selected_permission)
             permission_config::agents_defaults_get,
             permission_config::agents_defaults_save,
+            // authoritative local policy store
+            policy::policy_get,
+            policy::policy_save,
             // subagents config (~/.echo-agent/config.toml [subagents].max_depth)
             agent_config::subagents_config_get,
             agent_config::subagents_config_save,
@@ -173,6 +180,11 @@ pub fn run() {
             notifications::notification_mark_read,
             notifications::notification_mark_all_read,
             notifications::notification_clear,
+            notifications::notify_channels_list,
+            notifications::notify_channel_upsert,
+            notifications::notify_channel_remove,
+            notifications::notify_channel_set_enabled,
+            notifications::notify_channel_test,
             // automations (local scheduler)
             automations::automations_snapshot,
             automations::automations_save,
@@ -192,6 +204,20 @@ pub fn run() {
             shell_fs::export_text_file,
             shell_fs::list_dir,
             shell_fs::browse_directory,
+            // persisted WebDAV cloud storage
+            storage::storage_providers_list,
+            storage::storage_provider_upsert,
+            storage::storage_provider_remove,
+            storage::storage_provider_test,
+            storage::storage_list,
+            storage::storage_read_text,
+            storage::storage_write_text,
+            storage::storage_delete,
+            storage::storage_make_dir,
+            // native microphone + streaming speech-to-text fallback
+            voice::voice_native_available,
+            voice::voice_native_start,
+            voice::voice_native_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running EchoAgent");

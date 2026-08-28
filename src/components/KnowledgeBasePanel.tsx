@@ -6,9 +6,9 @@
  */
 import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { searchKb, listKbProvidersWithStats, registerKbProvider, unregisterKbProvider, rebuildAllKbProviders, type KbEntry, type KbIndexStats } from "@/lib/knowledge-base";
-import { createLocalKbProvider } from "@/lib/local-kb-provider";
-import { createTauriDirectoryReader, isTauriAvailable } from "@/lib/tauri-kb-reader";
+import { searchKb, listKbProvidersWithStats, rebuildAllKbProviders, type KbEntry, type KbIndexStats } from "@/lib/knowledge-base";
+import { isTauriAvailable } from "@/lib/tauri-kb-reader";
+import { addLocalKnowledgeSource, hydrateKnowledgeSources, removeKnowledgeSource } from "@/lib/kb-source-storage";
 
 interface KnowledgeBasePanelProps {
   /** 打开条目回调(可选)。 */
@@ -19,11 +19,21 @@ interface KnowledgeBasePanelProps {
 
 export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps) {
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [results, setResults] = useState<KbEntry[]>([]);
   const [searching, setSearching] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [sources, setSources] = useState<Array<{ id: string; label: string; stats: KbIndexStats }>>([]);
-  const q = query.trim();
+  const q = debouncedQuery.trim();
+  useEffect(() => {
+    hydrateKnowledgeSources();
+    setRefreshKey((key) => key + 1);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query), 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
   // 每当 refreshKey 变化(添加/移除/重建/搜索)重新拉取含索引状态的源列表。
   useEffect(() => {
     let cancelled = false;
@@ -44,9 +54,9 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
     try {
       const dir = await openDialog({ directory: true, multiple: false });
       if (!dir || Array.isArray(dir)) return;
-      registerKbProvider(createLocalKbProvider(dir as string, createTauriDirectoryReader()));
+      const { added } = addLocalKnowledgeSource(dir as string);
       setRefreshKey((k) => k + 1);
-      onToast?.("已添加本地知识源");
+      onToast?.(added ? "已添加本地知识源" : "该知识源已存在");
     } catch (e) {
       onToast?.(`添加失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
@@ -54,7 +64,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
 
   /** 移除一个已注册知识源(by id)。 */
   const removeSource = (id: string) => {
-    if (unregisterKbProvider(id)) {
+    if (removeKnowledgeSource(id)) {
       setRefreshKey((k) => k + 1);
       onToast?.("已移除知识源");
     }

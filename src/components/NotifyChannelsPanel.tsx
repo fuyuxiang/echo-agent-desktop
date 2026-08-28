@@ -1,14 +1,15 @@
 /**
  * 通知渠道管理面板 —— IM 渠道替代的 UI。
  *
- * 列出已注册通知渠道(Slack/Discord/webhook/email/desktop),支持添加/移除/测试发送。
+ * 列出已注册通知渠道(Slack/Discord/webhook/desktop),支持添加/移除/测试发送。
  */
 import { useEffect, useState } from "react";
 import {
-  listAllNotifyChannels,
-  registerNotifyChannel,
-  unregisterNotifyChannel,
-  dispatchNotification,
+  loadNotifyChannels,
+  saveNotifyChannel,
+  removeNotifyChannel,
+  setNotifyChannelEnabled,
+  testNotifyChannel,
   type NotifyChannel,
   type ChannelKind,
 } from "@/lib/notify-channels";
@@ -17,64 +18,89 @@ const KIND_LABELS: Record<ChannelKind, string> = {
   "slack-webhook": "Slack",
   "discord-webhook": "Discord",
   "generic-webhook": "Webhook",
-  email: "邮件",
+  email: "邮件（旧配置，已停用）",
   desktop: "桌面通知",
 };
 
+const ADDABLE_KINDS: ChannelKind[] = [
+  "slack-webhook",
+  "discord-webhook",
+  "generic-webhook",
+  "desktop",
+];
+
 export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => void }) {
   const [channels, setChannels] = useState<NotifyChannel[]>([]);
-  const [refreshKey, setRefreshKey] = useState(0);
   // 新渠道表单。
   const [newKind, setNewKind] = useState<ChannelKind>("slack-webhook");
   const [newLabel, setNewLabel] = useState("");
   const [newEndpoint, setNewEndpoint] = useState("");
 
   useEffect(() => {
-    setChannels(listAllNotifyChannels());
-  }, [refreshKey]);
+    let cancelled = false;
+    void loadNotifyChannels()
+      .then((items) => { if (!cancelled) setChannels(items); })
+      .catch((error) => onToast?.(`读取通知渠道失败：${String(error).replace(/^Error:\s*/, "")}`));
+    return () => { cancelled = true; };
+  }, [onToast]);
 
-  const add = () => {
+  const add = async () => {
     const id = `ch_${Date.now()}`;
     const label = newLabel.trim() || KIND_LABELS[newKind];
-    registerNotifyChannel({
+    const channel: NotifyChannel = {
       id,
       label,
       kind: newKind,
       endpoint: newEndpoint.trim() || undefined,
       enabled: true,
-    });
+    };
+    try {
+      await saveNotifyChannel(channel);
+      setChannels((items) => [...items.filter((item) => item.id !== id), channel]);
+    } catch (error) {
+      onToast?.(`添加失败：${String(error).replace(/^Error:\s*/, "")}`);
+      return;
+    }
     setNewLabel("");
     setNewEndpoint("");
-    setRefreshKey((k) => k + 1);
     onToast?.(`已添加渠道 ${label}`);
   };
 
-  const remove = (id: string) => {
-    unregisterNotifyChannel(id);
-    setRefreshKey((k) => k + 1);
-    onToast?.("已移除渠道");
+  const remove = async (id: string) => {
+    try {
+      await removeNotifyChannel(id);
+      setChannels((items) => items.filter((item) => item.id !== id));
+      onToast?.("已移除渠道");
+    } catch (error) {
+      onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
   };
 
-  const toggle = (id: string) => {
-    // 注销再重新注册(toggle enabled)。
+  const toggle = async (id: string) => {
     const ch = channels.find((c) => c.id === id);
     if (!ch) return;
-    unregisterNotifyChannel(id);
-    registerNotifyChannel({ ...ch, enabled: !ch.enabled });
-    setRefreshKey((k) => k + 1);
+    try {
+      await setNotifyChannelEnabled(id, !ch.enabled);
+      setChannels((items) => items.map((item) => item.id === id ? { ...item, enabled: !item.enabled } : item));
+    } catch (error) {
+      onToast?.(`修改失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
   };
 
   const testSend = async (id: string) => {
-    const res = await dispatchNotification({ title: "测试通知", body: "来自 EchoAgent 的测试消息", level: "info" });
-    const hit = res.find((r) => r.id === id);
-    onToast?.(hit?.ok ? "测试通知已发送" : "发送失败(检查 endpoint)");
+    try {
+      const result = await testNotifyChannel(id);
+      onToast?.(result.ok ? "测试通知已发送" : `发送失败：${result.error ?? "检查 endpoint"}`);
+    } catch (error) {
+      onToast?.(`发送失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
   };
 
   return (
     <div className="notify-panel" role="region" aria-label="通知渠道">
       <div className="notify-panel__head">
         <span className="notify-panel__title">通知渠道</span>
-        <span className="notify-panel__hint">推送 agent 通知到外部渠道(Slack/Discord/Webhook/邮件/桌面)</span>
+        <span className="notify-panel__hint">推送 agent 通知到 Slack、Discord、Webhook 或系统桌面通知</span>
       </div>
 
       {/* 已注册渠道列表 */}
@@ -86,13 +112,13 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
               <span className="notify-panel__row-label">{ch.label}</span>
               {ch.endpoint && <span className="notify-panel__row-endpoint" title={ch.endpoint}>{ch.endpoint.slice(0, 40)}{ch.endpoint.length > 40 ? "…" : ""}</span>}
               <div className="notify-panel__row-actions">
-                <button type="button" className="notify-panel__btn" onClick={() => toggle(ch.id)} title={ch.enabled ? "禁用" : "启用"}>
+                <button type="button" className="notify-panel__btn" onClick={() => void toggle(ch.id)} title={ch.enabled ? "禁用" : "启用"}>
                   <span className={ch.enabled ? "notify-dot notify-dot--on" : "notify-dot"} />
                 </button>
                 <button type="button" className="notify-panel__btn" onClick={() => void testSend(ch.id)} disabled={!ch.enabled} title="测试发送">
                   测试
                 </button>
-                <button type="button" className="notify-panel__btn notify-panel__btn--danger" onClick={() => remove(ch.id)} title="移除">
+                <button type="button" className="notify-panel__btn notify-panel__btn--danger" onClick={() => void remove(ch.id)} title="移除">
                   ×
                 </button>
               </div>
@@ -106,8 +132,8 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
       {/* 添加新渠道 */}
       <div className="notify-panel__add">
         <select value={newKind} onChange={(e) => setNewKind(e.target.value as ChannelKind)}>
-          {Object.entries(KIND_LABELS).map(([k, label]) => (
-            <option key={k} value={k}>{label}</option>
+          {ADDABLE_KINDS.map((kind) => (
+            <option key={kind} value={kind}>{KIND_LABELS[kind]}</option>
           ))}
         </select>
         <input
@@ -118,12 +144,12 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
         />
         <input
           type="text"
-          placeholder={newKind === "email" ? "邮箱地址" : newKind === "desktop" ? "(桌面通知无需 endpoint)" : "Webhook URL"}
+          placeholder={newKind === "desktop" ? "(桌面通知无需 endpoint)" : "Webhook URL"}
           value={newEndpoint}
           onChange={(e) => setNewEndpoint(e.target.value)}
           disabled={newKind === "desktop"}
         />
-        <button type="button" className="notify-panel__add-btn" onClick={add}>
+        <button type="button" className="notify-panel__add-btn" onClick={() => void add()}>
           + 添加
         </button>
       </div>

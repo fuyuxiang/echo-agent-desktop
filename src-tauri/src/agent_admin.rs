@@ -935,8 +935,8 @@ pub struct InspirationStarted {
 // `agent_init` 的认证选择逻辑。
 // ========================================================================
 
-/// Get the current xAI API key via `x.ai/getApiKey`. The key is returned
-/// raw (unmasked) — the frontend decides whether to mask on display.
+/// Return only whether an xAI API key is configured. Secret material must not
+/// cross the Tauri IPC boundary into WebView memory.
 #[tauri::command]
 pub async fn account_get_api_key(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let tx = state
@@ -949,7 +949,10 @@ pub async fn account_get_api_key(state: State<'_, AppState>) -> Result<Option<St
     let v: serde_json::Value = call_ext(&tx, "x.ai/getApiKey", params)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(v.get("key").and_then(|k| k.as_str()).map(String::from))
+    Ok(v.get("key")
+        .and_then(|k| k.as_str())
+        .filter(|key| !key.is_empty())
+        .map(|_| "••••••••".to_string()))
 }
 
 /// Set or clear the xAI API key via `x.ai/setApiKey`. Pass an empty string
@@ -969,6 +972,10 @@ pub async fn account_set_api_key(
     let _: serde_json::Value = call_ext(&tx, "x.ai/setApiKey", params)
         .await
         .map_err(|e| e.to_string())?;
+    let config = crate::paths::echo_agent_home_dir().join("config.toml");
+    if config.exists() {
+        crate::paths::harden_private_file(&config)?;
+    }
     Ok(())
 }
 

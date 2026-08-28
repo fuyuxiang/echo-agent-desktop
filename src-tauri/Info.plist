@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>EchoAgent 使用麦克风将你的语音转换为输入文字。</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>EchoAgent 使用系统语音识别服务将语音转换为输入文字。</string>
+</dict>
+</plist>

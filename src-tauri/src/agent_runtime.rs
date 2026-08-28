@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use agent_client_protocol as acp;
 use anyhow::{anyhow, Result};
+use base64::Engine;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -293,6 +294,57 @@ pub async fn load_session(tx: &AcpAgentTx, session_id: &str, cwd: &Path) -> Resu
 /// (30s → 60s, max 2 retries) so transient TPM/RPM limits don't immediately
 /// surface as hard errors.
 pub async fn prompt(tx: &AcpAgentTx, session_id: &str, text: &str) -> Result<()> {
+    prompt_with_attachments(tx, session_id, text, &[]).await
+}
+
+fn image_mime(path: &Path) -> Option<&'static str> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Send a typed ACP prompt. Supported images are carried as real ImageContent;
+/// other files are explicit @path references so the runtime's read_file tool
+/// can load them on demand.
+pub async fn prompt_with_attachments(
+    tx: &AcpAgentTx,
+    session_id: &str,
+    text: &str,
+    attachments: &[String],
+) -> Result<()> {
+    let mut referenced = Vec::new();
+    let mut images = Vec::new();
+    for raw in attachments {
+        let path = PathBuf::from(raw);
+        if let Some(mime) = image_mime(&path) {
+            let metadata = std::fs::metadata(&path)
+                .map_err(|e| anyhow!("attachment {}: {e}", path.display()))?;
+            if metadata.len() > 20 * 1024 * 1024 {
+                return Err(anyhow!("image attachment exceeds 20MB: {}", path.display()));
+            }
+            let bytes = std::fs::read(&path)
+                .map_err(|e| anyhow!("read attachment {}: {e}", path.display()))?;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+            images.push(acp::ContentBlock::Image(
+                acp::ImageContent::new(encoded, mime).uri(Some(raw.clone())),
+            ));
+        }
+        referenced.push(format!("- @{raw}"));
+    }
+    let prompt_text = if referenced.is_empty() {
+        text.to_string()
+    } else {
+        format!(
+            "{text}\n\n附件（图片已作为多模态内容附加；其他文件请使用 read_file 读取）：\n{}",
+            referenced.join("\n")
+        )
+    };
+    let mut blocks = vec![acp::ContentBlock::from(prompt_text.as_str())];
+    blocks.extend(images);
     let max_retries = 2;
     let mut delay_secs = 30u64;
     for attempt in 0..=max_retries {
@@ -302,8 +354,7 @@ pub async fn prompt(tx: &AcpAgentTx, session_id: &str, text: &str) -> Result<()>
             attempt,
             "echoagent: prompt send"
         );
-        let req =
-            acp::PromptRequest::new(session_id.to_string(), vec![acp::ContentBlock::from(text)]);
+        let req = acp::PromptRequest::new(session_id.to_string(), blocks.clone());
         match acp_send(req, tx).await {
             Ok(resp) => {
                 let _ = resp;

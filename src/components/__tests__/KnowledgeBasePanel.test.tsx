@@ -17,7 +17,11 @@ import { KnowledgeBasePanel } from "../KnowledgeBasePanel";
 import { registerKbProvider, resetKbRegistry, listKbProviders, unregisterKbProvider } from "@/lib/knowledge-base";
 
 describe("KnowledgeBasePanel", () => {
-  beforeEach(resetKbRegistry);
+  beforeEach(() => {
+    resetKbRegistry();
+    localStorage.removeItem("echoagent.knowledge-sources.v1");
+    openDialog.mockReset();
+  });
 
   it("无 provider 显示未配置", () => {
     render(<KnowledgeBasePanel />);
@@ -89,13 +93,15 @@ describe("KnowledgeBasePanel", () => {
     expect(onOpen).toHaveBeenCalledWith("9", "https://x/9");
   });
 
-  it("「添加本地文件夹」弹出目录选择并注册 local provider", async () => {
+  it("「添加本地文件夹」弹出目录选择并注册稳定 provider", async () => {
     openDialog.mockResolvedValue("/my/notes");
     const before = listKbProviders().length;
     render(<KnowledgeBasePanel onToast={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /添加本地文件夹/ }));
     await waitFor(() => expect(listKbProviders().length).toBe(before + 1));
-    expect(listKbProviders().some((s) => s.id === "local")).toBe(true);
+    expect(listKbProviders()).toEqual([
+      expect.objectContaining({ id: expect.stringMatching(/^local-/), label: "本地：notes" }),
+    ]);
     expect(openDialog).toHaveBeenCalledWith({ directory: true, multiple: false });
   });
 

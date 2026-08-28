@@ -47,7 +47,6 @@ import { useProjectsStore, type ProjectMeta } from "./stores/projects-store";
 import { useMessageQueueStore, hasActiveItems } from "./stores/message-queue-store";
 import { useSubagentStore } from "./stores/subagent-store";
 import { recordUsage, loadUsage, loadQuotaConfig } from "./lib/usage-quota";
-import { dispatchNotification } from "./lib/notify-channels";
 import {
   registerTelemetryProvider,
   createConsoleTelemetryProvider,
@@ -57,6 +56,8 @@ import {
 import { exportEventsBatch, type OtlpConfig } from "./lib/otlp-exporter";
 import { IS_MACOS } from "./lib/platform";
 import { friendlyError } from "./lib/error-format";
+import { hydrateKnowledgeSources } from "./lib/kb-source-storage";
+import { permissionModeFromEvent, usePermissionModeStore } from "./stores/permission-mode-store";
 
 /** Hidden markers wrapping the expert persona in the text sent to the runtime.
  *  The UI strips these (and everything between them) from user messages. */
@@ -124,6 +125,10 @@ function Shell() {
   const sessionsStore = useSessionsStore;
   const permissionStore = usePermissionStore;
   const questionStore = useQuestionStore;
+
+  useEffect(() => {
+    hydrateKnowledgeSources();
+  }, []);
 
   /** Re-fetch providers + auth readiness after Settings add/edit/delete.
    *
@@ -216,6 +221,23 @@ function Shell() {
               "warn",
             );
           },
+          onPermissionMode: (payload) => {
+            const mode = permissionModeFromEvent(payload);
+            if (mode) usePermissionModeStore.getState().setMode(mode);
+          },
+          onGitHead: () => {
+            void agentListWorkspaces().then(setWorkspaces).catch(() => {});
+            const cwd = cwdRef.current;
+            if (cwd) {
+              void agentListSessions(cwd).then((list) => {
+                if (cwd === sessionsStore.getState().homeCwd) {
+                  sessionsStore.getState().setIndependent(list);
+                } else {
+                  sessionsStore.getState().setWorkspaceSessions(cwd, list);
+                }
+              }).catch(() => {});
+            }
+          },
           onComplete: (p) => {
             console.log('[EchoAgent] Received agent://complete:', p);
             reportEvent("session_complete", "info", { sessionId: p.sessionId, stopReason: p.stopReason });
@@ -238,20 +260,8 @@ function Shell() {
               }, loadQuotaConfig() ?? undefined);
             }
             // Refresh the composer context-usage pill after each turn.
-            void notificationAppend(
-              "session_complete",
-              `会话完成（${p.stopReason ?? "end_turn"}）`,
-              undefined,
-              p.sessionId,
-              "info",
-            );
-            // Dispatch to external notification channels (IM alternative: Slack/Discord/webhook/email).
-            void dispatchNotification({
-              title: "EchoAgent 会话完成",
-              body: `会话 ${p.sessionId.slice(0, 8)} 已完成（${p.stopReason ?? "end_turn"}）`,
-              level: "info",
-              sessionId: p.sessionId,
-            }).catch(() => { /* notification dispatch failure is non-fatal */ });
+            // Internal/external notifications are dispatched by the Rust bridge
+            // for every session (including background automation sessions).
             // 消息队列自动续发(对齐 WorkBuddy message-queue):该会话若有 active
             // 队列项,取下一条继续发送,实现「回完一条自动发下一条」。
             const q = useMessageQueueStore.getState().getQueue(p.sessionId);
@@ -487,7 +497,7 @@ function Shell() {
     handleNavigate("项目");
   };
 
-  const handleSendNew = async (text: string) => {
+  const handleSendNew = async (text: string, attachments: string[] = []) => {
     console.log('[EchoAgent] handleSendNew called with:', text);
     try {
       const cwd = cwdRef.current;
@@ -517,7 +527,7 @@ function Shell() {
       sessionStore.getState().pushUser(text);
       sessionStore.getState().startStreaming();
       console.log('[EchoAgent] Sending prompt to runtime...');
-      await agentSend(sessionId, textForAgent);
+      await agentSend(sessionId, textForAgent, attachments);
       console.log('[EchoAgent] Prompt sent successfully, waiting for events...');
     } catch (e) {
       console.error('[EchoAgent] handleSendNew error:', e);
@@ -527,8 +537,8 @@ function Shell() {
     }
   };
 
-  const handleSendCurrent = async (text: string) => {
-    if (!currentSessionId) return handleSendNew(text);
+  const handleSendCurrent = async (text: string, attachments: string[] = []) => {
+    if (!currentSessionId) return handleSendNew(text, attachments);
     // Guard against double-send / send-during-streaming. Composer also guards
     // via its `streaming` prop, but that value can be stale within the same
     // render tick; the store flag is the source of truth. A second pushUser +
@@ -538,7 +548,7 @@ function Shell() {
       sessionsStore.getState().upsert({ sessionId: currentSessionId, status: "working" });
       sessionStore.getState().pushUser(text);
       sessionStore.getState().startStreaming();
-      await agentSend(currentSessionId, text);
+      await agentSend(currentSessionId, text, attachments);
     } catch (e) {
       sessionStore.getState().setError(friendlyError(e));
       sessionsStore.getState().upsert({ sessionId: currentSessionId, status: "failed" });
