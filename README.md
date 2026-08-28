@@ -1,288 +1,286 @@
 <p align="center">
-  <img src="app-icon.png" width="140" height="140" alt="EchoAgent" />
+  <img src="app-icon.png" width="112" height="112" alt="EchoAgent logo" />
 </p>
 
 <h1 align="center">EchoAgent</h1>
 
 <p align="center">
-  <strong>WorkBuddy, rewritten in Rust.</strong><br/>
-  An open-source, cross-platform desktop agent workspace.
+  <strong>An open-source desktop workspace for autonomous AI agents.</strong>
+  <br />
+  Bring your own model, connect MCP tools, and run agent workflows from a fast native shell.
 </p>
 
 <p align="center">
   <a href="README.zh-CN.md">简体中文</a>
-  &nbsp;·&nbsp;
-  <a href="#why-echoagent">Why</a> ·
-  <a href="#-features">Features</a> ·
-  <a href="#-echoagent-vs-workbuddy">Compare</a> ·
-  <a href="#-quick-start">Quick Start</a> ·
-  <a href="#-architecture">Architecture</a> ·
-  <a href="#-roadmap">Roadmap</a>
+  · <a href="#overview">Overview</a>
+  · <a href="#features">Features</a>
+  · <a href="#quick-start">Quick start</a>
+  · <a href="#architecture">Architecture</a>
+  · <a href="#development">Development</a>
+  · <a href="#roadmap">Roadmap</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/opensymph/EchoAgent/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/opensymph/EchoAgent?style=flat-square&logo=github&color=blue"></a>
-  <a href="https://github.com/opensymph/EchoAgent/actions"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/opensymph/EchoAgent/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white"></a>
-  <a href="https://github.com/opensymph/EchoAgent/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/opensymph/EchoAgent?style=flat-square&logo=starship&logoColor=white&color=yellow"></a>
-  <a href="https://github.com/opensymph/EchoAgent/network/members"><img alt="Forks" src="https://img.shields.io/github/forks/opensymph/EchoAgent?style=flat-square&logo=forgejo&logoColor=white&color=orange"></a>
-  <br/>
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue?style=flat-square&logo=windows10&logoColor=white">
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
-  <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-orange?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-red?style=flat-square&logo=tauri&logoColor=white">
-  <img alt="React" src="https://img.shields.io/badge/React-18-61dafb?style=flat-square&logo=react&logoColor=white">
+  <a href="https://github.com/fuyuxiang/echo-agent-desktop/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/fuyuxiang/echo-agent-desktop/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status" /></a>
+  <a href="https://github.com/fuyuxiang/echo-agent-desktop/stargazers"><img src="https://img.shields.io/github/stars/fuyuxiang/echo-agent-desktop?style=flat-square" alt="GitHub stars" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square" alt="MIT license" /></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-2563eb?style=flat-square" alt="Windows and macOS" />
+  <img src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
+  <img src="https://img.shields.io/badge/Rust-1.92%2B-dea584?style=flat-square&logo=rust&logoColor=white" alt="Rust 1.92 or newer" />
 </p>
-
----
-
-## Why EchoAgent?
-
-[**Tencent WorkBuddy**](https://workbuddy.tencent.com/) showed the world what a great desktop AI agent workspace should feel like — the polished UI, plan mode, skills, MCP connectors. It's a genuinely capable product. But it's **closed-source and its data path runs through Tencent's backend.**
-
-**EchoAgent is the open answer** — the same shape of experience, rebuilt on Rust + Tauri:
-
-- 🔓 **Open source** — MIT application code with clearly documented third-party components; no telemetry black box or vendor lock-in.
-- 🦀 **Built on Rust + Tauri** — small binary, fast cold-start, real cross-platform.
-- 🪶 **~14× smaller installer** — EchoAgent's Windows installer is **~34 MB**, vs **~483 MB** for WorkBuddy. Same shape of product, a fraction of the bytes.
-- 💨 **~19× less RAM at runtime** — **~20 MB** vs **~374 MB** for WorkBuddy on the same machine. Leaves your actual work room to breathe.
-- ⚙️ **EchoAgent Runtime, in-process** — no subprocess spawning or WebSocket relay. The agent runs on a dedicated OS thread inside the binary you double-click.
-- 🌐 **Truly cross-platform** — one codebase, Windows **and** macOS.
-- 🔑 **Bring Your Own Key** — point at any model provider via `~/.echo-agent/config.toml`. The file is owner-only on Unix; because it contains secrets, **never commit it to version control**.
-
-> *"If WorkBuddy is the polished product, EchoAgent is the one you can actually read, fork, and own."*
-
-### 🌟 Star this repo
-
-If this project matters to you, please give it a ⭐ — it helps others discover it and keeps development moving.
 
 <p align="center">
-  <img src="https://img.shields.io/github/stars/opensymph/EchoAgent?style=social" alt="stars">
+  <img src="src/assets/landing-hero.png" alt="EchoAgent — people and an AI agent working together" width="100%" />
 </p>
 
----
+## Overview
 
-## ✨ Features
+EchoAgent turns model APIs into a practical desktop agent workspace. It combines conversations, files, tools, permissions, plans, sub-agents, and scheduled work in one application—without requiring an EchoAgent cloud account.
 
-<table>
-<tr>
-<td width="50%" valign="top">
+The core agent runtime is embedded directly in the Tauri process and communicates with the React interface through [Agent Client Protocol (ACP)](https://agentclientprotocol.com/). Streaming output, tool calls, approval requests, plan changes, and task lifecycle events therefore share one typed execution path.
 
-**🎨 Pixel-close WorkBuddy UI**
-Ported `--wb-*` design tokens, the full 207-icon foundation set (all implemented, no stubs), and brand assets. It *looks* like WorkBuddy, because the same atoms make it up.
+> [!IMPORTANT]
+> EchoAgent is pre-1.0 software under active development. Windows and macOS source builds are supported; packaged builds are currently unsigned. Review every permission request before allowing an agent to execute commands or modify files.
 
-**⚙️ EchoAgent Runtime, in-process**
-The embedded runtime is linked as Rust path dependencies. The agent runs on its own OS thread, driven by a current-thread tokio runtime + `LocalSet`. No `child_process.spawn`.
+### Design principles
 
-**🔌 ACP is the contract**
-Streaming `SessionUpdate`s, tool calls, plan updates, permission requests — all flow over typed `mpsc` channels, surfaced as `agent://update` / `agent://permission` / `agent://complete` Tauri events.
+| Principle | What it means in EchoAgent |
+| --- | --- |
+| **Provider-independent** | Use OpenAI, Anthropic, xAI, DeepSeek, Qwen, or a compatible custom endpoint with your own credentials. |
+| **Workspace-native** | Sessions are attached to real directories, with file context, changes, artifacts, and searchable local history. |
+| **Extensible by default** | Add capabilities through MCP servers, skills, reusable assistants, and sub-agent teams. |
+| **Explicitly controlled** | Folder trust, permission modes, allow/ask/deny rules, and visible tool calls keep execution inspectable. |
+| **Native and efficient** | Tauri, Rust, and the system webview provide a lightweight desktop shell around an in-process runtime. |
 
-**🖼️ Native input and multimodal attachments**
-Native microphone capture streams speech to text on macOS/Windows (with a safe Web Speech fallback). PNG/JPEG/GIF/WebP attachments are sent as ACP image blocks; other files remain explicit local path references for agent tools.
+## Features
 
-</td>
-<td width="50%" valign="top">
+| Area | Capabilities |
+| --- | --- |
+| **Agent workflows** | Streaming conversations, editable plans, rewind and fork, prompt history, slash commands, live sub-agent tasks, cancellation, and team status. |
+| **Models** | Multiple provider profiles, multiple models per provider, context-window configuration, model discovery, and custom OpenAI- or Anthropic-compatible endpoints. |
+| **Tools and extensions** | MCP over stdio or HTTP, MCP OAuth flows, skills, plugins, reusable assistants, and local catalogs. |
+| **Workspace** | Directory-scoped sessions, pinning and archiving, full-text session search, file tree, previews, change tracking, and unified diffs. |
+| **Rich content** | Image attachments, drag and drop, native voice input, syntax highlighting, GitHub Flavored Markdown, KaTeX, Mermaid, and tool-result images. |
+| **Knowledge and memory** | Persisted memory management, local-folder knowledge sources, reusable project context, and assistant definitions. |
+| **Automation** | One-time and recurring local schedules, execution history, connector selection, and per-automation permission modes. |
+| **Integrations** | WebDAV storage plus desktop, Slack, Discord, and generic webhook notifications. |
+| **Safety and policy** | Inline approvals, folder trust, permission rules, configurable execution modes, and policy controls for models and features. |
 
-**🔑 BYOK, multi-provider**
-Bring your own keys. Configure any number of model providers in `~/.echo-agent/config.toml`.
+## Quick start
 
-**🧩 Extensible agent surface**
-- **Skills** — `x.ai/skills/*`
-- **MCP connectors** — `x.ai/mcp/*`
-- **Experts / Assistants** — `~/.echo-agent/agents/*.md`
+### Packaged builds
 
-**🚀 Advanced workflows**
-Plan mode (toggle & view) · Rewind (rewind & fork) · sub-agent Tasks (observe & cancel) · Slash Commands · durable local Automations scheduler.
+When a packaged build is available, download it from [GitHub Releases](https://github.com/fuyuxiang/echo-agent-desktop/releases). EchoAgent can produce a Windows NSIS installer and a macOS DMG.
 
-**🗂️ Persisted integrations**
-Local-folder knowledge sources survive restarts. WebDAV storage supports browse/read/write/create/delete. Agent completion and permission events can reach Slack, Discord, generic webhooks, and native desktop notifications.
+> [!WARNING]
+> Current packages are not code-signed or notarized. Only install artifacts from a release you trust and verify the release notes before running them.
 
-**📦 Cross-platform installers**
-Windows (NSIS `.exe` + MSI) and macOS (`.dmg`). CI-built releases via GitHub Actions.
+### Build from source
 
-</td>
-</tr>
-</table>
+#### Prerequisites
 
----
+| Dependency | Requirement |
+| --- | --- |
+| Rust | Stable toolchain, Rust 1.92 or newer. `rust-toolchain.toml` installs `rustfmt` and `clippy`. |
+| Node.js | Node.js 20 or newer; CI uses Node.js 22. |
+| pnpm | pnpm 10. The repository pins the expected package-manager version in `package.json`. |
+| Protocol Buffers | A native `protoc` executable available on `PATH`, or through the `PROTOC` environment variable. |
+| Platform toolchain | macOS: Xcode Command Line Tools. Windows: Visual Studio 2022 Build Tools with **Desktop development with C++** and a Windows SDK. |
 
-## ⚔️ EchoAgent vs WorkBuddy
+The embedded runtime is included as a pinned Git submodule. Clone recursively and run the setup script so the expected revision and compatibility patches are applied.
 
-Only rows we can actually back up are listed. WorkBuddy's internals aren't public, so we don't speculate about them.
-
-|  | **EchoAgent** | WorkBuddy |
-|---|:---:|:---:|
-| **License** | ✅ MIT application code; third parties separately licensed | ❌ Closed source |
-| **Cost** | Free forever | Free (Tencent-hosted) |
-| **Installer size** | ✅ **~34 MB** (NSIS, measured) | ⚠️ ~483 MB |
-| **Runtime memory** | ✅ **~20 MB** (measured) | ⚠️ ~374 MB |
-| **BYOK / any provider** | ✅ | ✅ |
-| **Provider config** | ✅ Scriptable `~/.echo-agent/config.toml` (owner-only; never commit secrets) | ⚠️ GUI-only |
-| **MCP connectors** | ✅ | ✅ |
-| **Skills** | ✅ | ✅ (20+ built-in) |
-| **Plan / Rewind** | ✅ | ✅ |
-| **Windows** | ✅ | ✅ |
-| **macOS** | ✅ | ✅ |
-| **Linux** | 🔜 Roadmap | 🔜 |
-| **Self-host / fork** | ✅ Build it yourself | ❌ |
-| **Local data / offline-friendly** | ✅ Your `~/.echo-agent/`, your disk | ⚠️ Tencent-hosted backend |
-
-> WorkBuddy is a polished, genuinely capable product — this isn't a hit piece. The point is simply: if you want the same shape of experience but **open, forkable, and provider-agnostic**, EchoAgent is the path.
-
----
-
-## 📸 Screenshots
-
-> Screenshots coming in the first stable release. Want to help? See [Contributing](#-contributing).
-
-<!-- TODO: drop screenshots/GIFs here once captured. A hero demo GIF is the single highest-impact asset for stars. -->
-
----
-
-## 🚀 Quick Start
-
-### Option A — Download a prebuilt binary
-
-Grab the latest installer from the **[Releases](https://github.com/opensymph/EchoAgent/releases)** page (Windows `.exe`/`.msi`, macOS `.dmg`), then:
-
-1. Launch EchoAgent.
-2. Open **Settings → Models** and configure a Provider/API key. Done.
-
-### Option B — Build from source
+**macOS**
 
 ```bash
-git clone --recurse-submodules https://github.com/opensymph/EchoAgent.git
-cd EchoAgent
+git clone --recurse-submodules https://github.com/fuyuxiang/echo-agent-desktop.git
+cd echo-agent-desktop
 
-# If you forgot --recurse-submodules:
-bash scripts/setup.sh           # macOS / Linux
-powershell -File scripts/setup.ps1   # Windows
-
-pnpm install
+pnpm setup:mac
+pnpm install --frozen-lockfile
 pnpm tauri dev
 ```
 
+**Windows (PowerShell)**
+
+```powershell
+git clone --recurse-submodules https://github.com/fuyuxiang/echo-agent-desktop.git
+cd echo-agent-desktop
+
+pnpm setup:win
+pnpm install --frozen-lockfile
+.\dev.bat
+```
+
+The first build compiles the complete embedded Rust runtime and may take several minutes and substantial disk space. Incremental builds are considerably faster. See [Windows build notes](docs/WINDOWS_BUILD_NOTES.md) for MSVC, `protoc`, and environment troubleshooting.
+
+### Configure your first model
+
+1. Start EchoAgent and open **Settings → Models**.
+2. Add a provider and enter its API key and endpoint.
+3. Add at least one model under that provider.
+4. Select the model in the composer and start a task.
+
+Built-in presets are available for Anthropic, OpenAI, xAI, DeepSeek, and Qwen. Custom OpenAI-compatible and Anthropic-compatible endpoints are also supported.
+
 <details>
-<summary><b>📋 Prerequisites</b></summary>
+<summary><strong>Manual configuration</strong></summary>
 
-1. **Rust 1.92+**. `rust-toolchain.toml` selects stable Rust with each platform's native host toolchain.
-2. **Node 20+** and **pnpm**.
-3. **protoc** on `PATH` **and** the `PROTOC` env var pointing at it (an embedded upstream build script needs it; its bundled `bin/protoc` is a DotSlash script that doesn't run on Windows).
-   - Windows: `choco install protoc`, then `setx PROTOC "C:\ProgramData\chocolatey\bin\protoc.exe"`.
+The UI writes provider configuration to `~/.echo-agent/config.toml`. A minimal OpenAI-compatible configuration looks like this:
 
-> The first build compiles the full embedded runtime dependency tree (rusqlite/git2 bundled C, prost/protobuf, axum, reqwest, …) — expect **5–10 minutes**. Incremental builds are fast thereafter.
+```toml
+[models]
+default = "gpt-4o"
 
-For Windows-specific gotchas (MSVC workload, mirrors, patches), see **[docs/WINDOWS_BUILD_NOTES.md](docs/WINDOWS_BUILD_NOTES.md)**.
+[model_providers.openai]
+base_url = "https://api.openai.com/v1"
+api_key = "YOUR_API_KEY"
+api_backend = "chat_completions"
+auth_scheme = "bearer"
+context_window = 128000
+
+[model.gpt-4o]
+model_provider = "openai"
+name = "GPT-4o"
+```
+
+Restart EchoAgent after editing the file by hand. The settings UI is recommended because it validates provider fields and preserves unrelated configuration.
+
+</details>
+
+## Data and security
+
+EchoAgent keeps its application state under `~/.echo-agent/` by default. Set `ECHO_AGENT_HOME` before launch to use a different directory.
+
+| Data | Default location |
+| --- | --- |
+| Providers, permissions, UI defaults, MCP configuration | `~/.echo-agent/config.toml` and `~/.echo-agent/mcp.json` |
+| Conversations and workspace history | `~/.echo-agent/sessions/` |
+| Reusable assistants | `~/.echo-agent/agents/` |
+| Memory and runtime state | `~/.echo-agent/memory/` and EchoAgent-owned JSON files |
+
+- API keys and endpoint credentials are stored locally in plaintext. On Unix, EchoAgent applies owner-only permissions to secret-bearing files and directories; on Windows, access depends on the current user's filesystem ACLs.
+- Model, MCP, WebDAV, and notification traffic is sent only to services you configure. No hosted EchoAgent account is required.
+- Tool execution may read files, modify files, or run commands. Use permission rules and restricted modes for repositories or data you do not fully trust.
+- Never commit `~/.echo-agent/config.toml`, copied credentials, or runtime state to version control.
+
+## Architecture
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ React 18 interface                                          │
+│ components · Zustand stores · Markdown · workspace views    │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ Tauri commands and events
+┌──────────────────────▼──────────────────────────────────────┐
+│ Tauri 2 / Rust application layer                            │
+│ commands · bridge · sessions · providers · policy · storage │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ typed ACP messages over mpsc channels
+┌──────────────────────▼──────────────────────────────────────┐
+│ In-process agent runtime                                    │
+│ session lifecycle · tools · plans · permissions · sub-agents│
+└──────────────┬──────────────────┬───────────────────────────┘
+               │                  │
+       Model providers        MCP servers / local tools
+```
+
+The runtime runs on a dedicated OS thread with a current-thread Tokio runtime and `LocalSet`. The Rust bridge translates ACP updates into Tauri events such as `agent://update`, `agent://permission`, and `agent://complete`; the frontend stores apply those events to the active session.
+
+### Repository layout
+
+```text
+src/
+├── components/             React views and feature panels
+├── foundation/             Shared icons and UI primitives
+├── lib/                    ACP client, domain logic, and utilities
+├── stores/                 Zustand application stores
+└── styles/                 Design tokens and application styles
+
+src-tauri/
+├── src/agent_runtime.rs     Embedded runtime lifecycle
+├── src/bridge.rs            ACP-to-Tauri event bridge
+├── src/commands.rs          Session command surface
+├── src/lib.rs               Tauri setup and command registration
+└── src/*.rs                 Providers, MCP, skills, policy, storage, and more
+
+vendor/grok-build/           Pinned Apache-2.0 runtime submodule
+patches/grok-build/          Maintained compatibility patches
+scripts/                     Setup and packaging scripts
+docs/                        Platform-specific documentation
+.github/workflows/           Continuous integration
+```
+
+## Development
+
+### Commands
+
+| Command | Purpose |
+| --- | --- |
+| `pnpm tauri dev` | Run the complete desktop application in development mode. |
+| `pnpm dev` | Run the Vite frontend only. Tauri APIs are unavailable in a normal browser. |
+| `pnpm test` | Run the Vitest frontend test suite. |
+| `pnpm build` | Type-check TypeScript and create the production frontend bundle. |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | Run Rust unit tests. |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored spawn_smoke` | Run the opt-in embedded-runtime smoke test. |
+| `pnpm dist:mac` | Build an unsigned DMG on macOS. |
+| `pnpm dist:win` | Build an unsigned NSIS installer on Windows. |
+
+CI currently runs TypeScript type-checking, frontend unit tests, and the production frontend build on every pull request. Rust changes should also be verified locally with the relevant Cargo tests.
+
+### Contributing
+
+Contributions are welcome, from focused fixes to new runtime capabilities.
+
+1. Fork the repository and clone it with submodules.
+2. Create a branch from `main`.
+3. Add tests for behavioral changes and run the relevant checks above.
+4. Keep changes scoped and update documentation when behavior changes.
+5. Open a pull request with the motivation, implementation notes, and verification results.
+
+For substantial features or architecture changes, open an issue first so the design and compatibility impact can be discussed before implementation.
+
+## Roadmap
+
+- Linux development support and distributable packages
+- Signed and notarized Windows/macOS releases
+- Automated release publishing and artifact checksums
+- A first-party connector and skill catalog
+- End-to-end desktop tests and visual-regression coverage
+- Expanded user documentation and interface localization
+
+Roadmap items are directional rather than release commitments. Follow the [issue tracker](https://github.com/fuyuxiang/echo-agent-desktop/issues) for current priorities.
+
+## FAQ
+
+<details>
+<summary><strong>Can I use a local model?</strong></summary>
+
+Yes, when the local server exposes a compatible OpenAI or Anthropic API. Add it as a custom provider and point `base_url` at the local endpoint. Tool-calling and multimodal behavior depend on the model and server implementation.
 
 </details>
 
 <details>
-<summary><b>🏗️ Build installers</b></summary>
+<summary><strong>Does EchoAgent work on Linux?</strong></summary>
 
-```bash
-pnpm dist:win    # Windows: NSIS .exe + MSI (requires MSVC link.exe + Windows SDK)
-pnpm dist:mac    # macOS: .dmg (host arch; unsigned / unnotarized)
-```
-
-The Apache-2.0 upstream runtime is vendored as a pinned git submodule at `vendor/grok-build`. The setup scripts initialize it; `pnpm dist:*` verifies it before building. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Linux packages are not currently maintained. The frontend and much of the Rust code are portable, but desktop integration and packaging still need platform-specific work.
 
 </details>
 
----
+<details>
+<summary><strong>Where are my API keys stored?</strong></summary>
 
-## 🧱 Architecture
+Provider keys are stored in `~/.echo-agent/config.toml`. They are not placed in the repository, but they are plaintext secrets on your local disk. Protect that file and never include it in bug reports or commits.
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  Tauri window (webview)                                   │
-│  React UI (Topbar / Sidebar / ChatView / Composer / ...)  │
-│    └── Zustand stores  ←── Tauri events ──┐               │
-└───────────────────────────────────────────┼──────────────┘
-                                            │ invoke() / events
-┌───────────────────────────────────────────┼──────────────┐
-│  Tauri Rust backend (src-tauri/src)       │              │
-│   commands.rs  ← Tauri commands ──────────┘              │
-│   agent_runtime.rs ← in-process runtime + ACP lifecycle           │
-│   bridge.rs    ← ACP → Tauri event dispatcher            │
-│   sessions.rs  ← ~/.echo-agent/sessions history listing        │
-└───────────────────────┬──────────────────────────────────┘
-                        │ typed ACP mpsc channels
-┌───────────────────────┴──────────────────────────────────┐
-│  EchoAgent runtime thread (MvpAgent, !Send, LocalSet)     │
-│  Embedded ACP runtime (Rust path dependencies)            │
-└──────────────────────────────────────────────────────────┘
-```
+</details>
 
-### Project layout
+## Acknowledgements
 
-```
-src/                     # React frontend
-  styles/                # tokens.css / global.css / app.css
-  foundation/components/Icon/   # ported from WorkBuddy (207 icons, all implemented)
-  lib/                   # agent-client.ts (Tauri command wrappers) + types.ts (ACP TS mirror)
-  stores/                # Zustand: session / sessions / permission / ...
-  components/            # Topbar, Sidebar, HomePage, ChatView, Composer, ...
+- [xai-org/grok-build](https://github.com/xai-org/grok-build) provides the Apache-2.0 runtime components embedded through pinned Rust path dependencies.
+- [Tauri](https://tauri.app/), [React](https://react.dev/), and [Vite](https://vite.dev/) provide the core application stack.
+- [Tencent WorkBuddy](https://workbuddy.tencent.com/) inspired parts of the product interaction model and visual direction.
 
-src-tauri/               # Rust backend
-  src/
-    lib.rs               # Tauri entry + state + command registration
-    agent_runtime.rs     # runtime lifecycle + authenticate/session/prompt/cancel
-    bridge.rs            # ACP→Tauri event dispatcher + permission registry
-    commands.rs          # #[tauri::command] table (agent_*)
-    sessions.rs          # list ~/.echo-agent/sessions for the sidebar
-
-scripts/                 # build.ps1 (Windows) / build.sh (macOS)
-docs/                    # WINDOWS_BUILD_NOTES.md — Windows build gotchas
-```
-
----
-
-## 🗺️ Roadmap
-
-- [x] Core layout: Sidebar / HomePage / ChatView / Composer
-- [x] In-process EchoAgent Runtime over ACP
-- [x] WorkBuddy design tokens & 207-icon foundation (all implemented, zero stubs)
-- [x] BYOK multi-provider config
-- [x] Skills / MCP / Experts surfaces
-- [x] Plan mode · Rewind · Tasks · Slash Commands · Automations
-- [x] Windows (NSIS + MSI) & macOS (DMG) installers
-- [x] CI release workflow (GitHub Actions)
-- [x] SceneTabs
-- [ ] Skill recommendation bar
-- [x] Pinned sessions & workspace grouping
-- [x] Permission request, mode and rule management
-- [x] Search across sessions
-- [x] Persisted knowledge sources & WebDAV cloud storage
-- [x] Outbound notification channels & native voice input
-- [ ] Linux builds
-- [ ] Code signing & notarization
-
-See the roadmap above and the GitHub issue tracker for planned work. **PRs welcome** — see below.
-
----
-
-## 🤝 Contributing
-
-EchoAgent is early and moving fast — contributions of every size are welcome.
-
-1. Fork & clone with submodules (`git clone --recurse-submodules`).
-2. Pick an existing issue or open a new one to discuss.
-3. Run `pnpm tauri dev` to hack.
-4. Open a PR against `main`.
-
-Areas that especially need help right now: **Linux packaging**, **UI polish / screenshots**, **docs & i18n**, and **CI for macOS signing**.
-
----
-
-## 🙏 Acknowledgements
-
-- **[Tencent WorkBuddy](https://workbuddy.tencent.com/)** — the design north star. EchoAgent reuses WorkBuddy's `--wb-*` design tokens, 207-icon foundation (all implemented), and brand atoms for a pixel-close visual experience.
-- **[xai-org/grok-build](https://github.com/xai-org/grok-build)** — the Apache-2.0 upstream runtime component consumed as Rust path dependencies. See [Third-Party Notices](THIRD_PARTY_NOTICES.md).
-- **[Tauri](https://tauri.app/)**, **[React](https://react.dev/)**, **[Vite](https://vitejs.dev/)** — the stack that makes a 10 MB shell feel instant.
-
-This project is an independent, community-driven open-source effort and is not affiliated with, endorsed by, or sponsored by Tencent or xAI.
-
----
+EchoAgent is an independent community project. It is not affiliated with, endorsed by, or sponsored by Tencent or xAI.
 
 ## License
 
-MIT © EchoAgent contributors. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+EchoAgent application code is available under the [MIT License](LICENSE). Vendored and third-party components retain their original licenses; see [Third-Party Notices](THIRD_PARTY_NOTICES.md).
