@@ -40,7 +40,7 @@ mocks.setPlan = setPlan as unknown as typeof mocks.setPlan;
 mocks.togglePlanMode = togglePlanMode as unknown as typeof mocks.togglePlanMode;
 const capturedPlan = () => mocks.capturedPlan;
 
-describe("PlanPanel 编辑器(对齐 WorkBuddy plan-editor)", () => {
+describe("PlanPanel 编辑器(对齐 EchoAgent plan-editor)", () => {
   beforeEach(() => {
     setPlan.mockClear();
     mocks.capturedPlan = null;

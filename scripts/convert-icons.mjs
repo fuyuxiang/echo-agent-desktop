@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Convert WorkBuddy decompiled Icon components to clean TypeScript/React.
+ * Convert EchoAgent decompiled Icon components to clean TypeScript/React.
  *
  * Four shapes are produced by the decompiler:
  *

@@ -1,9 +1,9 @@
 /**
- * Skill detail view — shown when clicking a skill card, mirrors WorkBuddy's
+ * Skill detail view — shown when clicking a skill card, mirrors EchoAgent's
  * SkillDetailView: a header (icon + name + description + install/try buttons),
  * a preview/source toggle, and the rendered SKILL.md markdown body.
  *
- * Unlike WorkBuddy (which inlines the view), we use a full-screen overlay so
+ * Unlike EchoAgent (which inlines the view), we use a full-screen overlay so
  * the back button returns to the skill grid without disturbing the grid state.
  */
 import { useEffect, useMemo, useState } from "react";

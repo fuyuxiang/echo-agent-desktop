@@ -1,5 +1,5 @@
 /**
- * 本地文件预览(Context Viewer 可移植部分)—— 对齐 WorkBuddy
+ * 本地文件预览(Context Viewer 可移植部分)—— 对齐 EchoAgent
  * `context-viewer-components/media-preview`。
  *
  * 轻量、无重型依赖:对 markdown/image/code/text 本地直接渲染;pdf/audio/video/
@@ -44,7 +44,7 @@ interface FilePreviewProps {
   /** 复制回调(可选)。 */
   onCopyText?: (text: string) => void;
   /**
-   * 文档预览解压器(对齐 WorkBuddy docx/pptx/sheet 预览):对 OOXML 文件,
+   * 文档预览解压器(对齐 EchoAgent docx/pptx/sheet 预览):对 OOXML 文件,
    * 调用方提供 ZipReader(任意 zip 实现/后端解压),FilePreview 用纯函数提取文本。
    * 未提供时 docx/pptx/sheet 降级为占位。
    */
@@ -91,7 +91,7 @@ export function FilePreview({ filename, content, onCopyText, docExtractor }: Fil
     );
   }
 
-  // 音频/视频:零依赖 HTML5 原生 <audio>/<video> 预览(对齐 WorkBuddy media-preview)。
+  // 音频/视频:零依赖 HTML5 原生 <audio>/<video> 预览(对齐 EchoAgent media-preview)。
   if (kind === "audio") {
     return (
       <div className="file-preview file-preview--audio">
@@ -126,7 +126,7 @@ export function FilePreview({ filename, content, onCopyText, docExtractor }: Fil
     );
   }
 
-  // docx/pptx/sheet:OOXML 文本提取(对齐 WorkBuddy media-preview)。
+  // docx/pptx/sheet:OOXML 文本提取(对齐 EchoAgent media-preview)。
   // 默认用内置 zip-reader(纯 JS DEFLATE)从 content(data: URL/base64)解压;
   // 调用方也可注入自定义 docExtractor 覆盖。
   if (kind === "docx" || kind === "pptx" || kind === "sheet") {
@@ -221,7 +221,7 @@ function CodePreview({
 }
 
 /**
- * 文档预览(docx/pptx/sheet)—— 对齐 WorkBuddy media-preview。
+ * 文档预览(docx/pptx/sheet)—— 对齐 EchoAgent media-preview。
  * 有提取文本则渲染(段落/幻灯片/表格);无解压器则显示降级占位。
  */
 function DocPreview({

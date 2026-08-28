@@ -10,9 +10,9 @@ interface Props {
   onToast?: (message: string) => void;
 }
 
-/** 专家·技能·连接器 — WorkBuddy-style unified market page.
+/** 专家·技能·连接器 — EchoAgent-style unified market page.
  *  The pill group is rendered once here and passed into each tab's topbar
- *  left slot, mirroring WorkBuddy's `headerLeft` pattern. */
+ *  left slot, mirroring EchoAgent's `headerLeft` pattern. */
 export function ExpertsPanel({ onGoHome, onToast }: Props) {
   const [tab, setTab] = useState<MarketTab>("experts");
 

@@ -1,7 +1,7 @@
 /**
  * ConnectorSelector — 连接器多选（勾选即授权该连接器在任务中免确认使用）。
  *
- * 复刻 WorkBuddy connector-selector.tsx：触发框 + 复选下拉 +
+ * 复刻 EchoAgent connector-selector.tsx：触发框 + 复选下拉 +
  * 「管理连接器」底部入口。数据源为 EchoAgent 的 MCP 连接器（mcp_list）。
  */
 import { useCallback, useEffect, useRef, useState } from "react";

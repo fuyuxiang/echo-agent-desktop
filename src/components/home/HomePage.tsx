@@ -19,15 +19,15 @@ export function HomePage() {
   };
 
   return (
-    <div className="wb-home-page">
+    <div className="echo-home-page">
       <HomeHeader />
 
-      {/* === SceneTabs - 精确对齐 WorkBuddy === */}
+      {/* === SceneTabs - 精确对齐 EchoAgent === */}
       <SceneTabs activeMode={activeMode} onChange={setActiveMode} />
 
       <HomeComposer onSend={handleSend} />
 
-      {/* === PracticeCases - 精确对齐 WorkBuddy === */}
+      {/* === PracticeCases - 精确对齐 EchoAgent === */}
       <PracticeCases
         activeMode={activeMode}
         onSelectTemplate={handleSelectTemplate}

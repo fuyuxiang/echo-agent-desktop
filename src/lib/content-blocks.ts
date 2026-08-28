@@ -1,5 +1,5 @@
 /**
- * Composer 多块提示组装 —— 对齐 WorkBuddy `cb-chat-ui/chat-input/use-content-blocks`
+ * Composer 多块提示组装 —— 对齐 EchoAgent `echo-chat-ui/chat-input/use-content-blocks`
  * + `mentions`(多块提示:文本 / @skill / @expert 引用)。
  *
  * 一个 prompt 由有序的「块」组成:
@@ -79,7 +79,7 @@ export function isSubmittable(list: ContentBlock[]): boolean {
  *  - text:原样拼接
  *  - file:聚合成「相关文件」清单附在末尾
  *
- * 顺序保持用户排列顺序;file 统一后置(对齐 WorkBuddy 附件行为)。
+ * 顺序保持用户排列顺序;file 统一后置(对齐 EchoAgent 附件行为)。
  */
 export function assemblePrompt(list: ContentBlock[]): string {
   const segs: string[] = [];

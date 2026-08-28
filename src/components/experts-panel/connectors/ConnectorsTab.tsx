@@ -60,7 +60,7 @@ function nameMatches(name: string, c: ConnectorItem): boolean {
 }
 
 /** 连接器 tab — a live directory of MCP-type connectors loaded from the
- *  WorkBuddy connectors marketplace. Cards open a detail modal; connect goes
+ *  EchoAgent connectors marketplace. Cards open a detail modal; connect goes
  *  through per-kind auth flows (token form / EchoAgent browser OAuth / CLI QR). */
 export function ConnectorsTab({ pills, onToast }: Props) {
   const [root, setRoot] = useState<string>(() => {
@@ -181,7 +181,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
     onConnectorCliAuthUrl((e) => {
       const cur = authPhaseRef.current;
       if (cur?.kind === "cli" && cur.connector.source === e.source) {
-        // Non-QR connectors go straight to the system browser (workbuddy's
+        // Non-QR connectors go straight to the system browser (echo-agent's
         // default `openExternalUrl`), unless the CLI suppresses it.
         if (!e.qrModal && !e.suppressBrowser && cur.url !== e.url) {
           openUrl(e.url).catch(() => {});
@@ -322,7 +322,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
   }, [root, onToast]);
 
   /** "配置连接" entry point — dispatch by connector kind + authMode (mirrors
-   *  workbuddy's DesktopConnectorManager.connect authMode switch). */
+   *  echo-agent's DesktopConnectorManager.connect authMode switch). */
   const handleConnect = useCallback(async (c: ConnectorItem) => {
     if (connectingRef.current) return;
     connectingRef.current = true;
@@ -338,7 +338,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
 
       // token mode with a schema → collect API keys first.
       if (mode === "token" && c.tokenSchema && c.tokenSchema.fields.length > 0) {
-        // Prefill values saved from a previous install (mirrors workbuddy's
+        // Prefill values saved from a previous install (mirrors echo-agent's
         // "已保存，留空保持不变", except we can show the real values).
         let prefill: Record<string, string> = {};
         try {
@@ -467,7 +467,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
           <div className="ec-empty">
             <FolderOpenIcon size="xl" className="ec-empty-icon" />
             <p>未找到连接器数据目录</p>
-            <p className="ec-empty-hint">请选择包含 <code>.codebuddy-connector/connectors.json</code> 的连接器市场目录</p>
+            <p className="ec-empty-hint">请选择包含 <code>.echo-agent-connector/connectors.json</code> 的连接器市场目录</p>
             <button type="button" className="um-btn um-btn--primary" onClick={chooseDir}>
               <FolderOpenIcon size="sm" /><span>选择来源目录</span>
             </button>

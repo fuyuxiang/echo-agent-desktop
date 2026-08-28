@@ -1,7 +1,7 @@
 /**
  * OIDC / OAuth 通用鉴权抽象 —— OneID(腾讯 OAuth)的本地可移植替代。
  *
- * WorkBuddy 用腾讯 OneID OAuth 鉴权;EchoAgent 是 BYOK(API Key 认证),但某些场景
+ * EchoAgent 用腾讯 OneID OAuth 鉴权;EchoAgent 是 BYOK(API Key 认证),但某些场景
  * (如连接企业 IdP、SSO)需要通用 OAuth。这里抽象成 provider-agnostic 的 OIDC 客户端:
  * 任意 IdP(Keycloak/Auth0/Okta/自托管)都可用。纯函数核心(授权 URL 构造 + token 交换 +
  * PKCE),HTTP 依赖注入便于单测。

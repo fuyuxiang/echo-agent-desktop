@@ -1,5 +1,5 @@
 /**
- * 工具渲染器分类 —— 对齐 WorkBuddy `agent-ui/components/tools/renderers`
+ * 工具渲染器分类 —— 对齐 EchoAgent `agent-ui/components/tools/renderers`
  * (execute-command / defer-execute / send-message / image-gen / visualizer /
  * team-create / team-delete / agent-mail)。
  *

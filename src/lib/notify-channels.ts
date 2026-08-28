@@ -1,7 +1,7 @@
 /**
- * 通知渠道抽象 —— WorkBuddy IM 渠道(微信/企微/QQ/钉钉/Slack/元宝)的本地可移植替代。
+ * 通知渠道抽象 —— EchoAgent IM 渠道(微信/企微/QQ/钉钉/Slack/元宝)的本地可移植替代。
  *
- * WorkBuddy 的 IM 渠道本质是「把 agent 通知/会话结果推送到某个 IM」。这些绑定腾讯/各 IM
+ * EchoAgent 的 IM 渠道本质是「把 agent 通知/会话结果推送到某个 IM」。这些绑定腾讯/各 IM
  * 专有 SDK,不可移植。EchoAgent 用「通知渠道 provider」抽象替代:任意实现 webhook/邮件/
  * 桌面通知,provider-agnostic。纯函数核心(载荷构造 + 渠道分发 + 注册表),便于单测。
  */

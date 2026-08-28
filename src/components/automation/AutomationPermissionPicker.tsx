@@ -1,7 +1,7 @@
 /**
  * AutomationPermissionPicker — 执行权限选择（完全访问权限 / 默认权限）。
  *
- * 复刻 WorkBuddy automation-permission-picker.tsx：
+ * 复刻 EchoAgent automation-permission-picker.tsx：
  * 提示词工具条上的 chip 触发器（警告/盾牌图标 + 文案 + ⇕），
  * 下拉项带勾选列 + 图标 + 标题/描述。
  */

@@ -1,5 +1,5 @@
 //! Higher-level EchoAgent admin extensions — bridges the upstream `x.ai/*` methods that
-//! drive WorkBuddy-equivalent features:
+//! drive EchoAgent-equivalent features:
 //!
 //! - **Memory** (资料库): read/rewrite `~/.echo-agent/memory/MEMORY.md` + per-cwd
 //!   workspace memory. `x.ai/memory/{flush,rewrite}` + `compact_conversation`.
@@ -773,7 +773,7 @@ fn _task_registry_placeholder() -> HashMap<String, RunningTask> {
 // ========================================================================
 
 /// Request body for `inspiration_generate`. The category selects the topic
-/// domain (mirrors WorkBuddy's i18n keys: ai_models / product_design / ...).
+/// domain (mirrors EchoAgent's i18n keys: ai_models / product_design / ...).
 /// We pass the user's recent memory + prompt history as context so EchoAgent can
 /// personalize the output.
 #[derive(Debug, Deserialize)]

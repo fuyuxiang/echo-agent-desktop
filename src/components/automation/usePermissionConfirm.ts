@@ -1,5 +1,5 @@
 /**
- * usePermissionConfirm — 复刻 WorkBuddy use-permission-confirm.ts。
+ * usePermissionConfirm — 复刻 EchoAgent use-permission-confirm.ts。
  *
  * 当即将以 fullAccess 创建（或从 default 升级为 fullAccess）时，
  * 拦截提交动作并弹出风险确认弹窗；支持 requestAction 包裹任意异步操作

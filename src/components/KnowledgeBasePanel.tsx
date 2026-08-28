@@ -1,5 +1,5 @@
 /**
- * 知识库面板 —— 对齐 WorkBuddy `knowledge-base-panel`(可插拔知识源)。
+ * 知识库面板 —— 对齐 EchoAgent `knowledge-base-panel`(可插拔知识源)。
  *
  * EchoAgent 的知识源 provider-agnostic(本地文件夹/网盘/文档库均可注册,见
  * lib/knowledge-base)。本面板提供搜索框 + 跨源结果列表。无 provider 时显示空态。

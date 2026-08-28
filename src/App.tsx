@@ -14,8 +14,13 @@ import { FolderTrustDialog } from "./components/FolderTrustDialog";
 import { TasksPanel } from "./components/TasksPanel";
 import { SecondarySidebar } from "./components/SecondarySidebar";
 import { TopbarActions } from "./components/TopbarActions";
-import { SidebarToggleIcon, WbNewTaskIcon } from "./foundation/components/Icon/icons";
+import { SidebarToggleIcon, EchoNewTaskIcon } from "./foundation/components/Icon/icons";
 import type { ModelOption } from "./components/ModelSelector";
+import {
+  isConfiguredModelId,
+  resolveConfiguredModelId,
+  resolveSessionModelId,
+} from "./lib/model-selection";
 import { useSessionStore } from "./stores/session-store";
 import { useSessionsStore } from "./stores/sessions-store";
 import { usePermissionStore } from "./stores/permission-store";
@@ -42,7 +47,7 @@ import {
   type InitResult,
   type WorkspaceInfo,
 } from "./lib/agent-client";
-import type { AgentEntry } from "./lib/types";
+import type { AgentEntry, SessionSummary } from "./lib/types";
 import { useProjectsStore, type ProjectMeta } from "./stores/projects-store";
 import { useMessageQueueStore, hasActiveItems } from "./stores/message-queue-store";
 import { useSubagentStore } from "./stores/subagent-store";
@@ -96,6 +101,15 @@ function extractMarkdownBody(raw: string): string {
   return rest.slice(closeIdx + 1).replace(/^\n---\s*/, "").trim();
 }
 
+/** Find a session in either sidebar group without depending on a render. */
+function findSessionSummary(sessionId: string): SessionSummary | undefined {
+  const state = useSessionsStore.getState();
+  return state.independent.find((entry) => entry.sessionId === sessionId)
+    ?? Object.values(state.workspaceSessions)
+      .flat()
+      .find((entry) => entry.sessionId === sessionId);
+}
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -117,9 +131,12 @@ function Shell() {
   const [toast, setToast] = useState<string | null>(null);
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(undefined);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [modelSwitching, setModelSwitching] = useState(false);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cwdRef = useRef<string>("");
+  const modelsRef = useRef<ModelOption[]>([]);
+  const authReadyRef = useRef(false);
 
   const sessionStore = useSessionStore;
   const sessionsStore = useSessionsStore;
@@ -129,6 +146,14 @@ function Shell() {
   useEffect(() => {
     hydrateKnowledgeSources();
   }, []);
+
+  useEffect(() => {
+    modelsRef.current = models;
+  }, [models]);
+
+  useEffect(() => {
+    authReadyRef.current = !!init?.auth.ready;
+  }, [init?.auth.ready]);
 
   /** Re-fetch providers + auth readiness after Settings add/edit/delete.
    *
@@ -142,20 +167,28 @@ function Shell() {
       const [list, auth] = await Promise.all([providersList(), agentAuthStatus()]);
       const options = flattenModels(list);
       setModels(options);
+      modelsRef.current = options;
 
-      // Keep the current selection if it still exists; otherwise pick the first
-      // configured provider (or clear when the list becomes empty).
+      // Never fall back an active session to a different model in the UI. The
+      // backend session keeps its persisted model until set_model succeeds.
       setCurrentModelId((prev) => {
-        if (prev && options.some((o) => o.id === prev)) return prev;
-        return options[0]?.id;
+        const activeId = sessionsStore.getState().currentSessionId;
+        if (activeId) {
+          return resolveSessionModelId(
+            options,
+            findSessionSummary(activeId)?.currentModelId,
+          );
+        }
+        return resolveConfiguredModelId(options, prev);
       });
 
       // Unlock the home Composer as soon as a BYOK provider exists (or OAuth).
       setInit((prev) => (prev ? { ...prev, auth } : prev));
+      authReadyRef.current = auth.ready;
     } catch {
       // Non-fatal — the picker keeps its previous list.
     }
-  }, []);
+  }, [sessionsStore]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -202,7 +235,7 @@ function Shell() {
         cwdRef.current = result.cwd;
         sessionsStore.getState().setHomeCwd(result.cwd);
         setInit(result);
-        setCurrentModelId(result.defaultModelId);
+        authReadyRef.current = result.auth.ready;
 
         unlisten = await subscribeAgentEvents({
           onUpdate: (u) => {
@@ -262,10 +295,21 @@ function Shell() {
             // Refresh the composer context-usage pill after each turn.
             // Internal/external notifications are dispatched by the Rust bridge
             // for every session (including background automation sessions).
-            // 消息队列自动续发(对齐 WorkBuddy message-queue):该会话若有 active
+            // 消息队列自动续发(对齐 EchoAgent message-queue):该会话若有 active
             // 队列项,取下一条继续发送,实现「回完一条自动发下一条」。
             const q = useMessageQueueStore.getState().getQueue(p.sessionId);
             if (hasActiveItems(q)) {
+              const queuedModelId = resolveSessionModelId(
+                modelsRef.current,
+                findSessionSummary(p.sessionId)?.currentModelId,
+              );
+              if (!authReadyRef.current || !queuedModelId) {
+                sessionStore.getState().setError(
+                  "⚠️ 已暂停自动续发：当前会话的模型未配置，请重新选择模型。",
+                );
+                sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "failed" });
+                return;
+              }
               const next = useMessageQueueStore.getState().shiftNext(p.sessionId);
               if (next) {
                 // 标记为工作中 + 推入用户气泡 + 启动流式 + 发送。
@@ -393,7 +437,7 @@ function Shell() {
               e.kind === "rate_limit"
                 ? "⚠️ API 速率限制已触发（执行工具期间）。请等待 1-2 分钟后重试，或缩短对话上下文（新建会话）。"
                 : e.detail
-                  ? `⚠️ 本轮执行出错：${e.detail}`
+                  ? friendlyError(e.detail)
                   : "⚠️ 本轮执行出错，请重试。";
             sessionStore.getState().setError(msg);
             reportEvent("turn_error", "error", { sessionId: e.sessionId, kind: e.kind });
@@ -416,29 +460,23 @@ function Shell() {
         const providers = await providersList();
         const providerOptions = flattenModels(providers);
         setModels(providerOptions);
+        modelsRef.current = providerOptions;
 
-        // IMPORTANT: EchoAgent's initialize response reports `currentModelId` from
-        // its internal catalog, which defaults to `grok-build` (the built-in
-        // bundled model) when the user's configured custom model (e.g. glm-5
-        // via a BYOK [model.*] entry) isn't recognized as a catalog entry.
-        // If we trust EchoAgent's default blindly, every prompt goes out with
-        // modelId="grok-build" and gets rejected by the user's provider
-        // (which only knows their custom model id). So: when the user has
-        // configured at least one BYOK provider, prefer the first one over
-        // EchoAgent's reported default. This matches the "set [models] default"
-        // intent and makes the out-of-box BYOK experience work.
-        if (providerOptions.length > 0) {
-          const agentDefault = result.defaultModelId;
-          const agentDefaultIsKnownProvider = providerOptions.some(
-            (p) => p.id === agentDefault,
-          );
-          if (!agentDefaultIsKnownProvider) {
-            // EchoAgent's default (likely "grok-build") isn't in our provider list —
-            // fall back to the first configured provider so prompts actually
-            // reach the user's endpoint.
-            setCurrentModelId(providerOptions[0].id);
-          }
-        }
+        // The runtime reports an internal default even when the user has not
+        // configured any provider. Only expose that id if it also exists in the
+        // user's [model.*] catalog; otherwise select the first configured model
+        // or leave the selection empty.
+        const activeId = sessionsStore.getState().currentSessionId;
+        setCurrentModelId(activeId
+          ? resolveSessionModelId(
+              providerOptions,
+              findSessionSummary(activeId)?.currentModelId,
+            )
+          : resolveConfiguredModelId(
+              providerOptions,
+              undefined,
+              result.defaultModelId,
+            ));
       } catch (e) {
         setInitError(String(e));
       }
@@ -451,7 +489,7 @@ function Shell() {
   const currentSessionId = sessionsStore((s) => s.currentSessionId);
   // The active session's sidebar entry (title + cwd), looked up across the
   // 任务 + 空间 groups — drives the topbar title on the conversation page and
-  // the cwd scoping of a manual rename (mirrors WorkBuddy's topbar).
+  // the cwd scoping of a manual rename (mirrors EchoAgent's topbar).
   const currentEntry = sessionsStore((s) => {
     const id = s.currentSessionId;
     if (!id) return undefined;
@@ -465,11 +503,36 @@ function Shell() {
   });
   const currentTitle = currentEntry?.title || "";
   const streaming = sessionStore((s) => s.streaming);
+  const newSessionModelId = resolveConfiguredModelId(models, currentModelId);
+  const activeSessionModelId = resolveSessionModelId(models, currentModelId);
+  const modelConfigured = currentSessionId
+    ? activeSessionModelId !== undefined
+    : newSessionModelId !== undefined;
+  const chatReady = !!init?.auth.ready && !!activeSessionModelId && !modelSwitching;
+  const chatSetupHint = modelSwitching
+    ? "正在切换模型…"
+    : models.length === 0
+      ? "请先在「设置 → 模型」配置模型"
+      : !activeSessionModelId
+        ? "此会话的模型未配置，请在右下角重新选择模型"
+        : "请先在「设置 → 模型」配置 API Key";
 
   const showToast = (message: string) => {
     setToast(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 2000);
+  };
+
+  const requireConfiguredModel = (): string | undefined => {
+    if (!init?.auth.ready) {
+      showToast("请先在「设置 → 模型」配置 API Key");
+      setSettingsOpen(true);
+      return undefined;
+    }
+    if (newSessionModelId) return newSessionModelId;
+    showToast("请先在「设置 → 模型」配置模型");
+    setSettingsOpen(true);
+    return undefined;
   };
   const handlePlaceholder = (label: string) => {
     // Route a few sidebar shortcut buttons to real panels instead of toasts.
@@ -489,6 +552,7 @@ function Shell() {
     setPlaceholderView(label);
     sessionsStore.getState().setCurrent(null);
     sessionStore.getState().reset();
+    setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
   };
 
   // Sidebar project node click → open the Projects panel with that project selected.
@@ -499,14 +563,23 @@ function Shell() {
 
   const handleSendNew = async (text: string, attachments: string[] = []) => {
     console.log('[EchoAgent] handleSendNew called with:', text);
+    const modelId = requireConfiguredModel();
+    if (!modelId) return;
     try {
       const cwd = cwdRef.current;
-      console.log('[EchoAgent] Creating new session with cwd:', cwd, 'modelId:', currentModelId);
-      const sessionId = await agentNewSession(cwd, currentModelId);
+      console.log('[EchoAgent] Creating new session with cwd:', cwd, 'modelId:', modelId);
+      const sessionId = await agentNewSession(cwd, modelId);
       console.log('[EchoAgent] New session created:', sessionId);
+      setCurrentModelId(modelId);
       sessionsStore.getState().setCurrent(sessionId);
       setPlaceholderView(null);
-      sessionsStore.getState().upsert({ sessionId, title: deriveTitle(text), cwd, status: "working" });
+      sessionsStore.getState().upsert({
+        sessionId,
+        title: deriveTitle(text),
+        cwd,
+        status: "working",
+        currentModelId: modelId,
+      });
       sessionStore.getState().setSession(sessionId);
 
       // Check for pending expert — inject persona invisibly.
@@ -544,6 +617,19 @@ function Shell() {
     // render tick; the store flag is the source of truth. A second pushUser +
     // startStreaming would orphan an empty placeholder that never completes.
     if (sessionStore.getState().streaming) return;
+    if (modelSwitching) {
+      showToast("正在切换模型，请稍候");
+      return;
+    }
+    if (!init?.auth.ready) {
+      showToast("请先在「设置 → 模型」配置 API Key");
+      setSettingsOpen(true);
+      return;
+    }
+    if (!activeSessionModelId) {
+      showToast("当前会话的模型未配置，请先在输入框右下角重新选择模型");
+      return;
+    }
     try {
       sessionsStore.getState().upsert({ sessionId: currentSessionId, status: "working" });
       sessionStore.getState().pushUser(text);
@@ -592,17 +678,38 @@ function Shell() {
   // If there's no session yet, we just remember the choice and apply it in
   // handleSendNew when the session is created.
   const handleModelChange = async (modelId: string) => {
-    setCurrentModelId(modelId);
-    if (!currentSessionId) return;
+    if (!isConfiguredModelId(models, modelId)) {
+      showToast("该模型已不在配置列表中");
+      return;
+    }
+    if (!currentSessionId) {
+      setCurrentModelId(modelId);
+      return;
+    }
+    if (modelSwitching) return;
+
+    const sessionId = currentSessionId;
+    const commit = () => {
+      sessionsStore.getState().upsert({
+        sessionId,
+        currentModelId: modelId,
+      });
+      if (sessionsStore.getState().currentSessionId === sessionId) {
+        setCurrentModelId(modelId);
+        sessionStore.getState().setError(null);
+      }
+    };
+    setModelSwitching(true);
     // EchoAgent only knows about sessions it has *loaded* into memory. A session
     // picked from the sidebar (agent_list_sessions) isn't loaded until
     // agentLoadSession runs, and after an agent restart even a freshly-used
     // session can be gone. set_session_model then fails with
     // "unknown session id". Recover transparently: load the session into the
     // agent (replaying its history) and retry the switch once.
-    const trySet = () => agentSetModel(currentSessionId, modelId);
+    const trySet = () => agentSetModel(sessionId, modelId);
     try {
       await trySet();
+      commit();
     } catch (e) {
       const msg = String(e);
       // Incompatible harness is a hard error — loading won't help.
@@ -614,8 +721,12 @@ function Shell() {
       // retry. currentEntry carries the cwd the session belongs to.
       if (/unknown session/i.test(msg)) {
         try {
-          await agentLoadSession(currentSessionId, currentEntry?.cwd ?? cwdRef.current);
+          await agentLoadSession(
+            sessionId,
+            findSessionSummary(sessionId)?.cwd ?? cwdRef.current,
+          );
           await trySet();
+          commit();
           return;
         } catch (e2) {
           showToast(`模型切换失败：${String(e2).replace(/^Error:\s*/, "")}`);
@@ -623,6 +734,8 @@ function Shell() {
         }
       }
       showToast(`模型切换失败：${msg.replace(/^Error:\s*/, "")}`);
+    } finally {
+      setModelSwitching(false);
     }
   };
 
@@ -663,12 +776,14 @@ function Shell() {
     setPlaceholderView(null);
     sessionsStore.getState().setCurrent(null);
     sessionStore.getState().reset();
+    setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
   };
 
   /** Navigate to home page without resetting session state (used after expert summon). */
   const handleGoHome = () => {
     setPlaceholderView(null);
     sessionsStore.getState().setCurrent(null);
+    setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
   };
 
   // 空间节点展开/折叠: 记录展开态, 首次展开时懒加载该 cwd 的子会话。
@@ -685,8 +800,15 @@ function Shell() {
   };
 
   const handleSelectSession = async (sessionId: string, sessionCwd?: string) => {
+    const entry = findSessionSummary(sessionId);
+    const persistedModelId = entry?.currentModelId;
+    const selectedModelId = resolveSessionModelId(models, persistedModelId);
     setPlaceholderView(null);
     sessionsStore.getState().setCurrent(sessionId);
+    // Reflect the model actually persisted by this session. Do not fall back to
+    // the first configured model: that would only change the picker, not the
+    // backend session, and could route the next prompt to stale Grok settings.
+    setCurrentModelId(selectedModelId);
     // setSession no longer wipes the transcript — it just moves focus. If we
     // already have a cached transcript for this session it arms replay
     // suppression so EchoAgent's history re-stream can't duplicate/merge it; if we
@@ -697,6 +819,13 @@ function Shell() {
       // Load with the session's OWN cwd (independent sessions have cwd="").
       // Viewing a 空间 child must NOT re-aim the new-session target directory.
       await agentLoadSession(sessionId, sessionCwd ?? "");
+      if (!selectedModelId) {
+        sessionStore.getState().setError(
+          persistedModelId
+            ? `⚠️ 此会话绑定的模型「${persistedModelId}」尚未配置。请在输入框右下角选择已配置模型后再发送。`
+            : "⚠️ 无法确定此会话的模型。请在输入框右下角重新选择模型后再发送。",
+        );
+      }
       // Populate the context-usage pill for the freshly loaded session.
     } catch (e) {
       sessionStore.getState().setError(friendlyError(e));
@@ -723,9 +852,15 @@ function Shell() {
   // branch they just created (and it appears in the sidebar).
   const handleForked = (newId: string) => {
     const cwd = cwdRef.current;
+    const modelId = resolveSessionModelId(models, currentModelId);
     setPlaceholderView(null);
     sessionsStore.getState().setCurrent(newId);
-    sessionsStore.getState().upsert({ sessionId: newId, title: "分叉会话", cwd });
+    sessionsStore.getState().upsert({
+      sessionId: newId,
+      title: "分叉会话",
+      cwd,
+      currentModelId: modelId,
+    });
     sessionStore.getState().setSession(newId);
     void agentLoadSession(newId, cwd).catch((e) =>
       sessionStore.getState().setError(friendlyError(e))
@@ -756,16 +891,20 @@ function Shell() {
   // agent is chosen, prepend its full persona as a preamble (same pattern as
   // handleStartWithExpert). Closes the placeholder view so the chat shows.
   const handleLaunchDiscover = async (prompt: string, agent?: AgentEntry) => {
+    const modelId = requireConfiguredModel();
+    if (!modelId) return;
     setPlaceholderView(null);
     try {
       const cwd = cwdRef.current;
-      const sessionId = await agentNewSession(cwd, currentModelId);
+      const sessionId = await agentNewSession(cwd, modelId);
+      setCurrentModelId(modelId);
       sessionsStore.getState().setCurrent(sessionId);
       sessionsStore.getState().upsert({
         sessionId,
         title: agent ? agent.name : deriveTitle(prompt),
         cwd,
         status: "working",
+        currentModelId: modelId,
       });
       sessionStore.getState().setSession(sessionId);
       let body: string;
@@ -801,15 +940,24 @@ function Shell() {
   // 进入本地项目：把种子会话瞄到项目关联目录（使其归入对应空间节点），
   // 新建会话并注入项目说明作为种子消息。
   const handleStartProject = async (project: ProjectMeta) => {
+    const modelId = requireConfiguredModel();
+    if (!modelId) return;
     try {
       if (project.cwd) {
         cwdRef.current = project.cwd;
       }
       setPlaceholderView(null);
       const cwd = cwdRef.current;
-      const sessionId = await agentNewSession(cwd, currentModelId);
+      const sessionId = await agentNewSession(cwd, modelId);
+      setCurrentModelId(modelId);
       sessionsStore.getState().setCurrent(sessionId);
-      sessionsStore.getState().upsert({ sessionId, title: project.name, cwd, status: "working" });
+      sessionsStore.getState().upsert({
+        sessionId,
+        title: project.name,
+        cwd,
+        status: "working",
+        currentModelId: modelId,
+      });
       sessionStore.getState().setSession(sessionId);
       // Register the session as a project conversation.
       useProjectsStore.getState().addConversation(project.id, {
@@ -836,9 +984,11 @@ function Shell() {
   const handleStartProjectConversation = async (projectId: string, message?: string) => {
     const project = useProjectsStore.getState().projects.find((p) => p.id === projectId);
     if (!project) return;
+    const modelId = requireConfiguredModel();
+    if (!modelId) return;
     try {
       const cwd = project.cwd || cwdRef.current;
-      const sessionId = await agentNewSession(cwd, currentModelId);
+      const sessionId = await agentNewSession(cwd, modelId);
 
       const title = message ? deriveTitle(message) : `${project.name} 对话`;
 
@@ -851,8 +1001,15 @@ function Shell() {
 
       // Navigate to chat view.
       setPlaceholderView(null);
+      setCurrentModelId(modelId);
       sessionsStore.getState().setCurrent(sessionId);
-      sessionsStore.getState().upsert({ sessionId, title, cwd, status: message ? "working" : "pending" });
+      sessionsStore.getState().upsert({
+        sessionId,
+        title,
+        cwd,
+        status: message ? "working" : "pending",
+        currentModelId: modelId,
+      });
       sessionStore.getState().setSession(sessionId);
 
       if (message) {
@@ -924,7 +1081,7 @@ function Shell() {
                       data-tip="新建任务"
                       onClick={handleNewSession}
                     >
-                      <WbNewTaskIcon size="md" />
+                      <EchoNewTaskIcon size="md" />
                     </button>
                   </>
                 )}
@@ -965,7 +1122,7 @@ function Shell() {
                   data-tip="新建任务"
                   onClick={handleNewSession}
                 >
-                  <WbNewTaskIcon size="md" />
+                  <EchoNewTaskIcon size="md" />
                 </button>
               </div>
             )
@@ -998,7 +1155,7 @@ function Shell() {
               onLaunch={handleLaunchDiscover}
               onSend={handleSendNew}
               streaming={streaming}
-              apiReady={init.auth.ready}
+              apiReady={init.auth.ready && modelConfigured}
               onOpenSettings={() => setSettingsOpen(true)}
               modelId={currentModelId}
               models={models}
@@ -1010,6 +1167,9 @@ function Shell() {
             <ChatView
               onSend={handleSendCurrent}
               onCancel={handleCancel}
+              apiReady={chatReady}
+              setupHint={chatSetupHint}
+              onOpenSettings={() => setSettingsOpen(true)}
               modelId={currentModelId}
               models={models}
               onModelChange={handleModelChange}
@@ -1026,7 +1186,7 @@ function Shell() {
             <HomePage
               onSend={handleSendNew}
               streaming={streaming}
-              apiReady={init.auth.ready}
+              apiReady={init.auth.ready && modelConfigured}
               onOpenSettings={() => setSettingsOpen(true)}
               onPlaceholder={handlePlaceholder}
               modelId={currentModelId}

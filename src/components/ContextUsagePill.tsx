@@ -44,7 +44,7 @@ function buildRows(ctx: ContextInfo): CategoryRow[] {
   if (mcp && mcp.tokens > 0) {
     rows.push({ key: "mcp", label: "MCP", tokens: mcp.tokens, detail: mcp.detail });
   }
-  // 守恒收敛(参照 WorkBuddy distributeWithConservation):EchoAgent 的各项是独立
+  // 守恒收敛(参照 EchoAgent distributeWithConservation):EchoAgent 的各项是独立
   // 估算,口径与 used 不完全一致(可能重叠),总和可能超过 used。超过时按比例
   // 缩放到 used,保证各项占比之和恒为 100%;不足时差额归入「其他」。
   const known = rows.reduce((s, r) => s + r.tokens, 0);

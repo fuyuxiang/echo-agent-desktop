@@ -224,7 +224,7 @@ export function InputAddMenu({
               className="iam-sub-item"
               onClick={handleSelectConnector}
             >
-              <span className="iam-sub-avatar" style={{ background: c.color || "var(--wb-text-tertiary)" }}>
+              <span className="iam-sub-avatar" style={{ background: c.color || "var(--echo-text-tertiary)" }}>
                 {c.name[0]}
               </span>
               <span className="iam-sub-name">{c.name}</span>
@@ -253,7 +253,7 @@ export function InputAddMenu({
   return (
     <div className="iam-wrap" ref={containerRef}>
       <button
-        className="wb-composer__add"
+        className="echo-composer__add"
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         aria-label="添加"
         title="添加文件、模式、专家、技能、连接器"

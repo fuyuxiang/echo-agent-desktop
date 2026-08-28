@@ -1,5 +1,5 @@
 /**
- * 文档预览纯函数层 —— 对齐 WorkBuddy `context-viewer-components/media-preview`
+ * 文档预览纯函数层 —— 对齐 EchoAgent `context-viewer-components/media-preview`
  * 的 docx/pptx/sheet 预览。
  *
  * OOXML(docx/pptx/xlsx)本质是 zip,内含 XML。为避免引入重型依赖,这里把「解压」

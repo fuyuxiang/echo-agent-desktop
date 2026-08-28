@@ -1,12 +1,12 @@
 /**
- * 统一标签页系统 —— 对齐 WorkBuddy `agent-sidebar-ui/hooks/use-unified-tabs`。
+ * 统一标签页系统 —— 对齐 EchoAgent `agent-sidebar-ui/hooks/use-unified-tabs`。
  *
  * 核心思想：右侧栏跨视图共享一组「标签」。每当某个视图的 selection 变化
  * （选中产物 / 文件 / 网址 / 变更），就派生出一个「本应激活的标签」并自动
  * 打开（去重）。标签可关闭、可拖拽排序，并按会话(resetKey)在内存缓存中
  * 持久化，切回该会话时恢复。
  *
- * 与 WorkBuddy 的差异：echoagent 本期只支持 4 个 kind ——
+ * 与 EchoAgent 的差异：echoagent 本期只支持 4 个 kind ——
  *   artifact | file | preview | changes
  * （去掉 mcpApp / expert / fileChange，其中 fileChange 合并到 changes）。
  */
@@ -507,7 +507,7 @@ export function useUnifiedTabs(
         const isActive = activeTabId === id;
         const opts = optionsRef.current;
 
-        // 关闭 preview 标签时，联动关闭同源的 artifact 标签（对齐 WorkBuddy）。
+        // 关闭 preview 标签时，联动关闭同源的 artifact 标签（对齐 EchoAgent）。
         const linkedArtifactTabIds: string[] = [];
         if (closingTab.kind === "preview" && opts.selectedArtifactId) {
           for (const t of prev) {

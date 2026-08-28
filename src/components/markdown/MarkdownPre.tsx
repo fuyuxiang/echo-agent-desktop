@@ -166,7 +166,7 @@ export const MarkdownPre = memo(function MarkdownPre({
           const html = mod.default.renderToString(code, {
             displayMode: true,
             throwOnError: false,
-            errorColor: "var(--wb-status-error, #e74856)",
+            errorColor: "var(--echo-status-error, #e74856)",
             strict: false,
             trust: false,
           });

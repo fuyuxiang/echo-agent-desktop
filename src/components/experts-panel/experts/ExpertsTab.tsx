@@ -274,7 +274,7 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
           <div className="ec-empty">
             <FolderOpenIcon size="xl" className="ec-empty-icon" />
             <p>未找到专家数据目录</p>
-            <p className="ec-empty-hint">请选择包含 <code>_meta/_expert_center.json</code> 的 WorkBuddy 数据目录（如 <code>E:\EchoAgent\agents</code>）</p>
+            <p className="ec-empty-hint">请选择包含 <code>_meta/_expert_center.json</code> 的 EchoAgent 数据目录（如 <code>E:\EchoAgent\agents</code>）</p>
             <button type="button" className="um-btn um-btn--primary" onClick={chooseDir}>
               <FolderOpenIcon size="sm" /><span>选择来源目录</span>
             </button>

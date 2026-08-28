@@ -1,5 +1,5 @@
 /**
- * 消息时间线分组纯函数 —— 对齐 WorkBuddy `cb-chat-ui/message-timeline`
+ * 消息时间线分组纯函数 —— 对齐 EchoAgent `echo-chat-ui/message-timeline`
  * (grouped messages / model-switch dividers / continue-cards / date separators)。
  *
  * EchoAgent 的 ChatMessage 当前不带 model/timestamp,这里用可选字段做前向兼容:

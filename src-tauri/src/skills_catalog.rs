@@ -1,4 +1,4 @@
-//! Skill catalog — scanned LIVE from the local WorkBuddy data directories.
+//! Skill catalog — scanned LIVE from the local EchoAgent data directories.
 //!
 //! Unlike the expert catalog (which reads a pre-built manifest), skills are
 //! discovered by scanning for `SKILL.md` files at runtime and parsing each
@@ -42,7 +42,7 @@ pub struct SkillItem {
     /// Absolute directory containing the SKILL.md (feed to
     /// `skills_catalog_read_skill` / EchoAgent's skill-add).
     pub source_dir: String,
-    /// "connector" (from a connector package) | "builtin" (workbuddy built-in).
+    /// "connector" (from a connector package) | "builtin" (echo-agent built-in).
     pub origin: String,
     /// Owning connector source name (connector origin only).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -290,13 +290,13 @@ fn candidate_connector_roots() -> Vec<PathBuf> {
         }
     }
     if let Some(h) = dirs::home_dir() {
-        out.push(h.join(".workbuddy").join("connectors-marketplace"));
+        out.push(h.join(".echo-agent").join("connectors-marketplace"));
     }
     out
 }
 
 fn connector_root_valid(root: &Path) -> bool {
-    root.join(".codebuddy-connector")
+    root.join(".echo-agent-connector")
         .join("connectors.json")
         .is_file()
 }
@@ -311,7 +311,7 @@ fn candidate_builtin_roots() -> Vec<PathBuf> {
     }
     if let Some(h) = dirs::home_dir() {
         out.push(
-            h.join(".workbuddy")
+            h.join(".echo-agent")
                 .join("resources")
                 .join("builtin-skills"),
         );
@@ -807,9 +807,9 @@ mod tests {
     fn marketplace_available() -> bool {
         if let Some(home) = dirs::home_dir() {
             return home
-                .join(".workbuddy")
+                .join(".echo-agent")
                 .join("connectors-marketplace")
-                .join(".codebuddy-connector")
+                .join(".echo-agent-connector")
                 .join("connectors.json")
                 .is_file();
         }

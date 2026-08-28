@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-/** Stable 10-color palette (WorkBuddy-style) used for letter fallbacks. */
+/** Stable 10-color palette (EchoAgent-style) used for letter fallbacks. */
 const PALETTE = [
   "#6366f1", "#8b5cf6", "#ec4899", "#f97316", "#14b8a6",
   "#3b82f6", "#10b981", "#f43f5e", "#06b6d4", "#a855f7",
@@ -34,7 +34,7 @@ interface LetterAvatarProps {
 }
 
 /** Rounded avatar: renders `src` when available, otherwise a colored letter
- *  tile (the same fallback WorkBuddy uses when a COS avatar 404s). */
+ *  tile (the same fallback EchoAgent uses when a COS avatar 404s). */
 export function LetterAvatar({
   name, src, size = 40, color, shape = "circle", className,
 }: LetterAvatarProps) {
@@ -47,7 +47,7 @@ export function LetterAvatar({
     width: size,
     height: size,
     borderRadius: radius,
-    background: showImg ? "var(--wb-bg-tertiary)" : bg,
+    background: showImg ? "var(--echo-bg-tertiary)" : bg,
     color: "#fff",
     fontSize: Math.round(size * 0.42),
     flex: "0 0 auto",

@@ -1227,7 +1227,7 @@ const KIND_FILTERS: { key: string; label: string }[] = [
 
 /** AgentMailSettingsPanel — 智能体邮箱（重新定义为会话通知中心）。
  *
- *  WorkBuddy 的 agentMail 是腾讯邮箱集成（无 EchoAgent 对应）。EchoAgent 把它
+ *  EchoAgent 的 agentMail 是腾讯邮箱集成（无 EchoAgent 对应）。EchoAgent 把它
  *  重新定义为 EchoAgent 事件的通知收件箱：权限请求、文件夹信任、任务更新、
  *  plan 模式切换、MCP 状态、模型更新、会话完成等所有事件都会记到这里。
  *  用户可浏览/筛选/标记已读/清空。
@@ -1333,7 +1333,7 @@ export function AgentMailSettingsPanel() {
       <div className="notification-list">
         {filtered.length === 0 && !loading && (
           <div className="notification-empty">
-            <Mail size={32} color="var(--wb-text-tertiary)" />
+            <Mail size={32} color="var(--echo-text-tertiary)" />
             <p>暂无通知。当 EchoAgent 产生事件时（权限请求、任务完成等）会记录到这里。</p>
           </div>
         )}

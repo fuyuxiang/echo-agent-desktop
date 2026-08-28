@@ -1,5 +1,5 @@
 /**
- * 消息反馈完整评分弹窗 —— 对齐 WorkBuddy `cb-chat-ui/message-feedback`
+ * 消息反馈完整评分弹窗 —— 对齐 EchoAgent `echo-chat-ui/message-feedback`
  * 的 rating bar + 反馈弹窗(thumbs 选向 → 1–5 星评分 + 文字备注)。
  *
  * 由 MessageItem 的 👍/👎 触发:点击后弹出此弹窗,用户可选 1–5 星 + 写备注,

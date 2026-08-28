@@ -1,5 +1,5 @@
 /**
- * 浏览器预览 —— 对齐 WorkBuddy `context-viewer-components/browser-preview`
+ * 浏览器预览 —— 对齐 EchoAgent `context-viewer-components/browser-preview`
  * (嵌入式网页预览框)。
  *
  * 纯函数:URL 安全校验 + iframe sandbox 策略。EchoAgent 是本地桌面应用,在 WebView 内

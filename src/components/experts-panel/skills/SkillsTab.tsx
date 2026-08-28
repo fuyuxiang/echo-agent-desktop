@@ -22,7 +22,7 @@ interface Props {
   onToast?: (m: string) => void;
 }
 
-/** 技能 tab — a live catalog scanned from the agents tree + workbuddy
+/** 技能 tab — a live catalog scanned from the agents tree + echo-agent
  *  built-ins, plus the existing "我安装的" (runtime-managed) view. */
 export function SkillsTab({ pills, onToast }: Props) {
   // ---- catalog (market) state ----

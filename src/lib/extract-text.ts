@@ -1,5 +1,5 @@
 /**
- * 从消息提取纯文本 / 关键词高亮分词 —— 对齐 WorkBuddy `cb-chat-ui/chat-search`
+ * 从消息提取纯文本 / 关键词高亮分词 —— 对齐 EchoAgent `echo-chat-ui/chat-search`
  * (extract-plain-text + highlight-text-nodes)。
  *
  * 用于「会话内搜索」与「消息反馈」等需要把一条结构化消息当成可检索字符串的场景。

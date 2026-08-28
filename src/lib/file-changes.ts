@@ -1,5 +1,5 @@
 /**
- * 文件变更聚合纯函数 —— 对齐 WorkBuddy `cb-chat-ui/file-changes-panel`
+ * 文件变更聚合纯函数 —— 对齐 EchoAgent `echo-chat-ui/file-changes-panel`
  * (按文件聚合 tool_call 的 diff,统计增删行,带 vscode 风格文件类型图标映射)。
  *
  * 从会话消息的 tool_call content 里提取所有 diff,按 path 聚合成「每个文件的净变更」。

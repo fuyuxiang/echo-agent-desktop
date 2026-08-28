@@ -1,8 +1,8 @@
 /**
- * 遥测 provider-agnostic 契约 —— 对齐 WorkBuddy `telemetry:*` /
+ * 遥测 provider-agnostic 契约 —— 对齐 EchoAgent `telemetry:*` /
  * `perf:*` / `feedback:*` RPC 的抽象层。
  *
- * WorkBuddy 的遥测 sink 是腾讯 Aegis(不可移植),但「遥测抽象」本身 provider 无关。
+ * EchoAgent 的遥测 sink 是腾讯 Aegis(不可移植),但「遥测抽象」本身 provider 无关。
  * EchoAgent 是 BYOK 桌面应用,默认用 console 作为内建 provider,同时允许注册外部
  * provider(自托管 OTLP / 自建后端)。本模块是纯注册表 + 级别过滤 + 事件/指标抽象,
  * 无副作用核心逻辑可单测(注册/过滤/采样)。

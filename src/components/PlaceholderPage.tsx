@@ -56,7 +56,7 @@ interface PlaceholderPageProps {
   onStartProjectConversation?: (projectId: string, message: string) => void;
 }
 
-/** WorkBuddy 独有功能面板（助理/专家·技能·连接器/项目/自动化/资料库/插件·市场/发现）。 */
+/** EchoAgent 独有功能面板（助理/专家·技能·连接器/项目/自动化/资料库/插件·市场/发现）。 */
 export function PlaceholderPage({
   label,
   onPlaceholder,
@@ -143,7 +143,7 @@ export function PlaceholderPage({
     return <MyFilesPanel cwd={cwd} onToast={onToast} />;
   }
 
-  // 知识库(可插拔源,对齐 WorkBuddy knowledge-base-panel)。
+  // 知识库(可插拔源,对齐 EchoAgent knowledge-base-panel)。
   if (label === "知识库") {
     return (
       <div className="placeholder-page placeholder-page--panel">
@@ -155,7 +155,7 @@ export function PlaceholderPage({
     );
   }
 
-  // 网页预览(对齐 WorkBuddy browser-preview)。
+  // 网页预览(对齐 EchoAgent browser-preview)。
   if (label === "网页预览") {
     return (
       <div className="placeholder-page placeholder-page--panel">
@@ -164,7 +164,7 @@ export function PlaceholderPage({
     );
   }
 
-  // 用量配额(对齐 WorkBuddy credit-usage)。
+  // 用量配额(对齐 EchoAgent credit-usage)。
   if (label === "用量统计") {
     return (
       <div className="placeholder-page placeholder-page--panel">
@@ -173,7 +173,7 @@ export function PlaceholderPage({
     );
   }
 
-  // 通知渠道(对齐 WorkBuddy IM 渠道)。
+  // 通知渠道(对齐 EchoAgent IM 渠道)。
   if (label === "通知渠道") {
     return (
       <div className="placeholder-page placeholder-page--panel">
@@ -182,7 +182,7 @@ export function PlaceholderPage({
     );
   }
 
-  // 策略设置(对齐 WorkBuddy 企业策略)。
+  // 策略设置(对齐 EchoAgent 企业策略)。
   if (label === "策略设置") {
     return (
       <div className="placeholder-page placeholder-page--panel">
@@ -191,7 +191,7 @@ export function PlaceholderPage({
     );
   }
 
-  // 云存储(对齐 WorkBuddy 腾讯 Drive)。
+  // 云存储(对齐 EchoAgent 腾讯 Drive)。
   if (label === "云存储") {
     return (
       <div className="placeholder-page placeholder-page--panel">
@@ -203,7 +203,7 @@ export function PlaceholderPage({
   // 其他功能显示占位页面
   return (
     <div className="placeholder-page">
-      <AgentToolIcon size="xl" color="var(--wb-text-tertiary)" />
+      <AgentToolIcon size="xl" color="var(--echo-text-tertiary)" />
       <h2 className="placeholder-page__title">{label}</h2>
       <p className="placeholder-page__desc">该功能即将上线,敬请期待</p>
     </div>

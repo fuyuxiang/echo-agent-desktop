@@ -1,5 +1,5 @@
 /**
- * 视图选择器（下拉 pill）—— 对齐 WorkBuddy `view-selector-pill`。
+ * 视图选择器（下拉 pill）—— 对齐 EchoAgent `view-selector-pill`。
  *
  * 显示当前视图图标 + 名称，点击展开菜单切换。水平 pill 形态（非垂直图标栏）。
  * 可用视图按条件过滤（如「变更」仅在有 diff 时显示）。

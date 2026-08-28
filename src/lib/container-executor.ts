@@ -1,7 +1,7 @@
 /**
- * 容器执行器抽象 —— WorkBuddy E2B 云沙箱 + cloud-agent 的本地可移植替代。
+ * 容器执行器抽象 —— EchoAgent E2B 云沙箱 + cloud-agent 的本地可移植替代。
  *
- * WorkBuddy 用 E2B(e2b.dev)做远程代码执行(云端沙箱);EchoAgent 是 BYOK 桌面应用,
+ * EchoAgent 用 E2B(e2b.dev)做远程代码执行(云端沙箱);EchoAgent 是 BYOK 桌面应用,
  * 用本地 Docker 容器替代:在隔离的容器内执行命令/脚本,文件系统与宿主隔离。
  *
  * 纯函数核心(容器配置 + 命令构造 + 结果归一),ShellRunner 依赖注入便于单测。

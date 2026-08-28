@@ -4,7 +4,7 @@ import type { ModelOption } from "./ModelSelector";
 import { useSessionsStore, ASSISTANT_DRAFT_KEY } from "@/stores/sessions-store";
 
 /**
- * 本地助理页 — 1:1 对齐 WorkBuddy「本地助理」tab（claw-local-tab = 聊天壳）。
+ * 本地助理页 — 1:1 对齐 EchoAgent「本地助理」tab（claw-local-tab = 聊天壳）。
  *
  * 视觉结构（对照目标截图）:
  *  - 顶部 header: 标题「本地助理」+「已连接：」+ 微信小程序 chip + 齿轮按钮
@@ -64,6 +64,11 @@ export function LocalAssistantView({
           onSend={onSend}
           onCancel={() => {}}
           apiReady={apiReady}
+          setupHint={
+            models?.length
+              ? undefined
+              : "请先在「设置 → 模型」配置模型"
+          }
           onOpenSettings={onOpenSettings}
           onPlaceholder={onPlaceholder}
           modelId={modelId}

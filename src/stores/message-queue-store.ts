@@ -1,5 +1,5 @@
 /**
- * 消息队列 store —— 对齐 WorkBuddy `session:enqueueMessage/getMessageQueue/...`。
+ * 消息队列 store —— 对齐 EchoAgent `session:enqueueMessage/getMessageQueue/...`。
  *
  * agent 工作时仍可继续排队多条 prompt:编辑/重排/暂停/恢复/取消/立即发送。
  * 每条队列为「按会话隔离」的有序列表;完成一轮对话后由调用方(App)取下一条

@@ -261,7 +261,7 @@ export interface PromptComplete {
 
 // ---------- session metadata ----------
 
-/** Lifecycle status for sidebar filtering, aligned with WorkBuddy's task filter.
+/** Lifecycle status for sidebar filtering, aligned with EchoAgent's task filter.
  *  - "working": actively streaming a response
  *  - "completed": finished normally
  *  - "failed": errored during send/stream
@@ -422,7 +422,7 @@ export interface AgentEntry {
   path: string;
   /** Full file contents (frontmatter + body), for the editor view. */
   raw: string;
-  /** Avatar preset index 1-20 (WorkBuddy-style). Undefined = name-initial fallback. */
+  /** Avatar preset index 1-20 (EchoAgent-style). Undefined = name-initial fallback. */
   avatar?: number;
   /** Model capability tags: subset of ["default", "multimodal", "reasoning"]. */
   modelTags?: string[];
@@ -536,7 +536,7 @@ export interface TurnErrorEvent {
   detail?: string;
 }
 
-// ---------- automations (local scheduler, WorkBuddy 1:1) ----------
+// ---------- automations (local scheduler, EchoAgent 1:1) ----------
 
 export type ScheduleFreq = "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY" | "HOURLY";
 
@@ -837,7 +837,7 @@ export interface SkillCatalog {
 
 /** A browsable skill in the static 技能 marketplace (截图 3). The actual install
  *  path for echoagent is local (import a SKILL.md / folder); these entries just
- *  reproduce the WorkBuddy catalog UI. */
+ *  reproduce the EchoAgent catalog UI. */
 export interface SkillCatalogItem {
   id: string;
   name: string;

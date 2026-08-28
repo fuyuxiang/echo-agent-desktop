@@ -1,5 +1,5 @@
 /**
- * 自动化任务模版 — 1:1 复刻 WorkBuddy template-config.ts + zh-cn 文案。
+ * 自动化任务模版 — 1:1 复刻 EchoAgent template-config.ts + zh-cn 文案。
  *
  * 每个模板包含：中文标题/描述、预填 prompt、调度配置与图标。
  * 点击模板即以这些初始值进入「添加自动化任务」表单。

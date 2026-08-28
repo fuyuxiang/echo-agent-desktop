@@ -1,5 +1,5 @@
 /**
- * 会话内查找条 —— 对齐 WorkBuddy `cb-chat-ui/chat-search`(extract-plain-text + 跳转高亮)。
+ * 会话内查找条 —— 对齐 EchoAgent `echo-chat-ui/chat-search`(extract-plain-text + 跳转高亮)。
  *
  * 在当前对话的消息列表中查找关键词(大小写不敏感),基于 `extractPlainText` 索引命中,
  * 提供上一个/下一个/关闭与计数。命中消息的容器高亮由调用方按 `hitIds` / `currentId`

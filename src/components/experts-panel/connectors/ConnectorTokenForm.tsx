@@ -4,7 +4,7 @@
  * `token-schema.json` fields; on submit the collected values are injected as
  * env vars into the connector's MCP servers.
  *
- * Mirrors workbuddy's `ConnectorTokenDialog` / detail-panel token form.
+ * Mirrors echo-agent's `ConnectorTokenDialog` / detail-panel token form.
  */
 import { useEffect, useRef, useState } from "react";
 import type { ConnectorItem } from "@/lib/types";

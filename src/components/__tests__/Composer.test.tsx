@@ -22,6 +22,18 @@ describe("Composer", () => {
     expect(onOpenSettings).toHaveBeenCalled();
   });
 
+  it("支持在未配置模型时显示定制引导", () => {
+    render(
+      <Composer
+        {...base}
+        apiReady={false}
+        setupHint="请先在「设置 → 模型」配置模型"
+      />,
+    );
+    expect(screen.getByText("请先在「设置 → 模型」配置模型")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toBeDisabled();
+  });
+
   it("showMeta 时渲染权限模式选择器（PermissionPicker）", () => {
     // PermissionPicker 对应 EchoAgent 的 [ui] permission_mode,
     // 默认 ask → 触发器显示"审批模式"。

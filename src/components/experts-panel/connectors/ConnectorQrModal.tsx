@@ -1,5 +1,5 @@
 /**
- * CLI-connector authorization modal — mirrors workbuddy's
+ * CLI-connector authorization modal — mirrors echo-agent's
  * `ConnectorQrModalHost`. While `connectors_cli_auth` runs, the backend
  * streams the auth URL it scraped from the CLI's stdout; we render it as a
  * QR code (when the connector sets `authQrModal`, e.g. 企业微信) or as a

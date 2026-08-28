@@ -1,5 +1,5 @@
 /**
- * 会话 pause / yield 状态机 —— 对齐 WorkBuddy `session:requestYield` /
+ * 会话 pause / yield 状态机 —— 对齐 EchoAgent `session:requestYield` /
  * `session:pauseQueue`。yield 是「软暂停」:停止当前生成,但保留会话上下文
  * (区别于 cancel 终止;区别于 queue-pause 只暂停排队)。
  *

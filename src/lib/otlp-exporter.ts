@@ -1,7 +1,7 @@
 /**
  * OTLP 遥测导出器 —— Aegis 监控 sink 的本地可移植替代。
  *
- * WorkBuddy 用腾讯 Aegis 做应用监控/错误上报(专有 sink);EchoAgent 用 OTLP
+ * EchoAgent 用腾讯 Aegis 做应用监控/错误上报(专有 sink);EchoAgent 用 OTLP
  * (OpenTelemetry Protocol)替代:事件/指标导出到任意自托管 OTLP collector
  * (Jaeger/Tempo/Grafana Alloy 等)。这是 `telemetry-contract.ts` 的一个 provider。
  *

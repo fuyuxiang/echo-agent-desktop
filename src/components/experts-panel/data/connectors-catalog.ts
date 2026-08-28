@@ -33,7 +33,7 @@ export const CONNECTOR_LIST: ConnectorCatalogItem[] = [
   { id: "weiyun", name: "微云", color: "#1296db",
     desc: "查看、下载、删除微云文件，并且提供上传文件到微云、生成分享链接能力，帮你管理微云文件" },
   { id: "fubangshou", name: "福帮手", color: "#0ea5e9",
-    desc: "福帮手人机协同连接器：面向 WorkBuddy 的身份识别、场景包查询、首值与继续使用记录、乐包状态确认和超级合伙人交接。" },
+    desc: "福帮手人机协同连接器：面向 EchoAgent 的身份识别、场景包查询、首值与继续使用记录、乐包状态确认和超级合伙人交接。" },
   { id: "wps", name: "金山文档", color: "#2f80ed",
     desc: "创建、搜索和管理金山文档（WPS 云文档）。支持新建多种文档类型（Word/Excel/PDF/PPT/智能表格/多维表格/智能文档）、读取与搜索文档内容、编辑更新、分享、移动重命名整理、标签收藏管理、知识库空间操作…" },
 ];

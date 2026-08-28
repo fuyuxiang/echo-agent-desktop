@@ -1,14 +1,14 @@
 /**
- * 发现面板（一键启动器）- 对标 WorkBuddy discover-panel 的 launch wizard
+ * 发现面板（一键启动器）- 对标 EchoAgent discover-panel 的 launch wizard
  *
  * 工作流：
- *  1. 选一个「场景」（代码/文档/图片/表格/幻灯片 等，对应 WorkBuddy browseByScene）
+ *  1. 选一个「场景」（代码/文档/图片/表格/幻灯片 等，对应 EchoAgent browseByScene）
  *  2. 展示该场景需要的能力（依赖哪些 skills / MCP / agents）
  *  3. 检查依赖是否已就绪（接 skillsList / mcpList / agentsList）
  *  4. 缺失的依赖可一键安装（接 marketplace install / 或引导到对应面板）
  *  5. 输入 prompt → 在新会话中运行（接 agentNewSession + agentSend）
  *
- * 与 WorkBuddy discover 的"1-click demo launcher"语义一致：
+ * 与 EchoAgent discover 的"1-click demo launcher"语义一致：
  * provision MCP + skill + expert，然后 run prompt。
  */
 import { useCallback, useEffect, useState } from "react";
@@ -18,7 +18,7 @@ import {
   FileTextIcon,
   ImageToolIcon,
   DatabaseToolIcon,
-  WbFileSlideIcon,
+  EchoFileSlideIcon,
   SparklesIcon,
   CheckIcon,
   RefreshCwIcon, WarningOutlineIcon } from "@/foundation/components/Icon/icons";
@@ -29,7 +29,7 @@ import {
 } from "@/lib/agent-client";
 import type { AgentEntry, McpServerEntry, SkillInfo } from "@/lib/types";
 
-// 内置场景（对应 WorkBuddy browseByScene: 代码/文档/图片/表格/幻灯片/其他/官方）
+// 内置场景（对应 EchoAgent browseByScene: 代码/文档/图片/表格/幻灯片/其他/官方）
 // 每个场景声明它推荐的能力，UI 检查这些是否已就绪。
 interface Scene {
   key: string;
@@ -93,7 +93,7 @@ const SCENES: Scene[] = [
   {
     key: "slides",
     label: "幻灯片",
-    icon: WbFileSlideIcon,
+    icon: EchoFileSlideIcon,
     description: "生成 PPT、演示文稿",
     recommendedSkills: [],
     recommendedMcpKeywords: [],

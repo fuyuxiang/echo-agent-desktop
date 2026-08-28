@@ -48,6 +48,28 @@ function rustDebugToJson(s: string): string {
     ;
 }
 
+function dataFromDebugValue(content: string): AgentErrorData | undefined {
+  const converted = rustDebugToJson(content);
+  try {
+    const value: unknown = JSON.parse(converted);
+    if (typeof value === "string") return { message: value };
+    if (value && typeof value === "object") return value as AgentErrorData;
+  } catch {
+    // Some debug payloads have an object surrounded by another wrapper.
+  }
+
+  const braceStart = converted.indexOf("{");
+  const braceEnd = converted.lastIndexOf("}");
+  if (braceStart >= 0 && braceEnd > braceStart) {
+    try {
+      return JSON.parse(converted.slice(braceStart, braceEnd + 1));
+    } catch {
+      // Unrecognized debug payload.
+    }
+  }
+  return undefined;
+}
+
 function tryParseAgentError(raw: string): {
   code?: number;
   message?: string;
@@ -84,20 +106,13 @@ function tryParseAgentError(raw: string): {
         if (depth === 0) {
           const content = raw.slice(start + 1, i);
           try {
-            data = JSON.parse(content);
+            const value: unknown = JSON.parse(content);
+            data = typeof value === "string"
+              ? { message: value }
+              : value as AgentErrorData;
           } catch {
-            // Rust Debug format: convert String(...)/Number(...)/Object wrappers
-            const converted = rustDebugToJson(content);
-            // Try extracting the inner object { ... }
-            const braceStart = converted.indexOf("{");
-            const braceEnd = converted.lastIndexOf("}");
-            if (braceStart >= 0 && braceEnd > braceStart) {
-              try {
-                data = JSON.parse(converted.slice(braceStart, braceEnd + 1));
-              } catch {
-                // give up
-              }
-            }
+            // Rust Debug format: String("...") or Object {...} wrappers.
+            data = dataFromDebugValue(content);
           }
           break;
         }
@@ -141,7 +156,7 @@ export function formatAgentError(raw: string): string | null {
   if (!parsed) {
     const lower = raw.toLowerCase();
     if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("invalid api key")) {
-      return "⚠️ API 认证失败。请检查 Settings 中的 API Key 配置是否正确。";
+      return "⚠️ API 认证失败。请检查当前会话的模型与「设置 → 模型」中的 API Key 是否匹配。";
     }
     if (lower.includes("connection") || lower.includes("timeout") || lower.includes("econnrefused")) {
       return "⚠️ 网络连接失败。请检查网络/代理设置，确认 API endpoint 可达。";
@@ -189,7 +204,7 @@ export function formatAgentError(raw: string): string | null {
 
   // Auth errors
   if (innerMsg.includes("401") || innerMsg.includes("Unauthorized") || innerMsg.includes("auth")) {
-    return "⚠️ API 认证失败。请检查 Settings 中的 API Key 配置是否正确。";
+    return "⚠️ API 认证失败。请检查当前会话的模型与「设置 → 模型」中的 API Key 是否匹配。";
   }
 
   // Connection errors

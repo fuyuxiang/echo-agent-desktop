@@ -1,9 +1,9 @@
-//! Connector marketplace — read LIVE from a local WorkBuddy connector
-//! marketplace directory (default `~/.workbuddy/connectors-marketplace`,
+//! Connector marketplace — read LIVE from a local EchoAgent connector
+//! marketplace directory (default `~/.echo-agent/connectors-marketplace`,
 //! overridable via the UI).
 //!
 //! Layout we consume:
-//!   <root>/.codebuddy-connector/connectors.json   — marketplace manifest
+//!   <root>/.echo-agent-connector/connectors.json   — marketplace manifest
 //!        (top-level `connectors[]` array; each entry has id/name/description/
 //!         source/type/auth_mode/examples_zh/examples_en)
 //!   <root>/icons/<source>.svg | .png              — connector icons
@@ -78,7 +78,7 @@ pub struct TokenField {
     pub description: Option<String>,
 }
 
-/// The `token-schema.json` payload (mirrors workbuddy's `readTokenSchema`).
+/// The `token-schema.json` payload (mirrors echo-agent's `readTokenSchema`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenSchema {
@@ -146,7 +146,7 @@ fn find_icon(root: &Path, source: &str) -> Option<String> {
 
 /// Read `<root>/connectors/<source>/token-schema.json` (present only for
 /// `auth_mode: "token"` connectors). Returns None on missing file, parse
-/// error, or a schema with no fields (mirrors workbuddy's `readTokenSchema`).
+/// error, or a schema with no fields (mirrors echo-agent's `readTokenSchema`).
 fn read_token_schema(root: &Path, source: &str) -> Option<TokenSchema> {
     let p = root
         .join("connectors")
@@ -241,7 +241,7 @@ fn categories() -> Vec<ConnectorCategory> {
 // ---------- root discovery ----------
 
 /// Candidate roots probed when the user hasn't picked one. The first whose
-/// `.codebuddy-connector/connectors.json` exists wins.
+/// `.echo-agent-connector/connectors.json` exists wins.
 /// `ECHOAGENT_CONNECTORS_DIR` overrides all.
 fn candidate_roots() -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -251,13 +251,13 @@ fn candidate_roots() -> Vec<PathBuf> {
         }
     }
     if let Some(h) = dirs::home_dir() {
-        out.push(h.join(".workbuddy").join("connectors-marketplace"));
+        out.push(h.join(".echo-agent").join("connectors-marketplace"));
     }
     out
 }
 
 fn root_has_manifest(root: &Path) -> bool {
-    root.join(".codebuddy-connector")
+    root.join(".echo-agent-connector")
         .join("connectors.json")
         .is_file()
 }
@@ -295,7 +295,7 @@ pub async fn connectors_list_roots(root: String) -> Result<Vec<String>, String> 
 
 // ---------- load ----------
 
-/// Parse the manifest at `<root>/.codebuddy-connector/connectors.json` and
+/// Parse the manifest at `<root>/.echo-agent-connector/connectors.json` and
 /// build the connector list, resolving each icon to a local path.
 #[tauri::command]
 pub async fn connectors_load(root: Option<String>) -> Result<ConnectorCatalog, String> {
@@ -310,12 +310,12 @@ pub async fn connectors_load(root: Option<String>) -> Result<ConnectorCatalog, S
                 }
             }
             if found.as_os_str().is_empty() {
-                return Err("未找到连接器数据目录（.codebuddy-connector/connectors.json）".into());
+                return Err("未找到连接器数据目录（.echo-agent-connector/connectors.json）".into());
             }
             found
         }
     };
-    let manifest_path = root.join(".codebuddy-connector").join("connectors.json");
+    let manifest_path = root.join(".echo-agent-connector").join("connectors.json");
     let bytes = std::fs::read(&manifest_path).map_err(|e| format!("读取 manifest 失败：{e}"))?;
     let manifest: Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("解析 manifest 失败：{e}"))?;
@@ -475,14 +475,14 @@ mod tests {
         assert_eq!(loc(&serde_json::Value::Null), "");
     }
 
-    // ---- integration tests against the real workbuddy marketplace dir ----
+    // ---- integration tests against the real echo-agent marketplace dir ----
 
     fn marketplace_available() -> bool {
         if let Some(home) = dirs::home_dir() {
             return home
-                .join(".workbuddy")
+                .join(".echo-agent")
                 .join("connectors-marketplace")
-                .join(".codebuddy-connector")
+                .join(".echo-agent-connector")
                 .join("connectors.json")
                 .is_file();
         }
@@ -492,7 +492,7 @@ mod tests {
     #[tokio::test]
     async fn load_returns_real_connectors() {
         if !marketplace_available() {
-            eprintln!("[skip] ~/.workbuddy/connectors-marketplace not present");
+            eprintln!("[skip] ~/.echo-agent/connectors-marketplace not present");
             return;
         }
         let catalog = connectors_load(None).await.expect("load should succeed");

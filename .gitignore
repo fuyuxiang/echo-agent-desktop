@@ -40,7 +40,7 @@ docs/E2E-CHECKLIST.md
 /scripts/_get-rect.ps1
 /scripts/_record-echoagent.bat
 /TODO.md
-/WORKBUDDY_UI_REFERENCE.md
+/ECHOAGENT_UI_REFERENCE.md
 /patches/grok-build/obsolete/
 
 # 内嵌 Python 运行时由 scripts/fetch-python.mjs 构建前拉取, 不入库 (体积大)

@@ -1,7 +1,7 @@
 /**
  * 资料库面板 - 对接 EchoAgent memory (~/.echo-agent/memory/)
  *
- * 这是 WorkBuddy "更多/资料库·灵感" 的资料库部分。
+ * 这是 EchoAgent "更多/资料库·灵感" 的资料库部分。
  * EchoAgent 把跨会话记忆写到 ~/.echo-agent/memory/MEMORY.md（global）和
  * <cwd>/.echo-agent/memory/（workspace），每条 markdown 文件一条记忆。
  *
@@ -197,7 +197,7 @@ export function ResourcesPanel({ cwd, onToast }: ResourcesPanelProps) {
       <div className="resources-panel__list">
         {filtered.length === 0 && !loading && (
           <div className="resources-panel__empty">
-            <BookIcon size="xl" color="var(--wb-text-tertiary)" />
+            <BookIcon size="xl" color="var(--echo-text-tertiary)" />
             <p>
               暂无记忆。EchoAgent 会在对话中自动学习并写入
               <code>~/.echo-agent/memory/MEMORY.md</code>。

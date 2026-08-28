@@ -10,12 +10,12 @@ import {
 } from "@/lib/agent-client";
 import type { SessionSummary, SessionStatus } from "@/lib/types";
 import {
-  WbNewTaskIcon,
-  WbAssistantNavIcon,
-  WbProjectNavIcon,
-  WbExpertNavIcon,
-  WbAutomationNavIcon,
-  WbMoreNavIcon,
+  EchoNewTaskIcon,
+  EchoAssistantNavIcon,
+  EchoProjectNavIcon,
+  EchoExpertNavIcon,
+  EchoAutomationNavIcon,
+  EchoMoreNavIcon,
   SearchIcon,
   FilterIcon,
   SidebarToggleIcon,
@@ -28,8 +28,8 @@ import {
   EditToolIcon,
   MoreDotsIcon,
   ArchiveIcon,
-  WbPinIcon,
-  WbUnpinIcon,
+  EchoPinIcon,
+  EchoUnpinIcon,
   AddIcon,
   MyFilesIconV2,
   MoreMenuImaKnowledgeIcon,
@@ -40,10 +40,10 @@ import {
 import { APP_VERSION } from "@/lib/app-version";
 
 const NAV = [
-  { label: "助理", icon: WbAssistantNavIcon },
-  { label: "项目", icon: WbProjectNavIcon },
-  { label: "专家·技能·连接器", icon: WbExpertNavIcon },
-  { label: "自动化", icon: WbAutomationNavIcon },
+  { label: "助理", icon: EchoAssistantNavIcon },
+  { label: "项目", icon: EchoProjectNavIcon },
+  { label: "专家·技能·连接器", icon: EchoExpertNavIcon },
+  { label: "自动化", icon: EchoAutomationNavIcon },
 ];
 
 /** Last path segment of a working directory, used as a 空间 node label. */
@@ -99,7 +99,7 @@ function ProjectNodeIcon() {
   );
 }
 
-// ---------- Task filter (对齐 WorkBuddy TaskFilterMenu) ----------
+// ---------- Task filter (对齐 EchoAgent TaskFilterMenu) ----------
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -317,7 +317,7 @@ function SessionContextMenu({ x, y, sessionId, sessionTitle, isPinned, onClose, 
 }
 
 /**
- * "更多" 侧栏按钮的弹出菜单 — 对齐 WorkBuddy：
+ * "更多" 侧栏按钮的弹出菜单 — 对齐 EchoAgent：
  * - hover 打开，向右浮出（不向下盖住会话列表）
  * - 菜单项：我的文件 / 腾讯文档 / ima知识库 / 乐享知识库 / 灵感
  *
@@ -499,7 +499,7 @@ function MoreDropdown({
         onClick={() => setOpen((o) => !o)}
         onFocus={openMenu}
       >
-        <WbMoreNavIcon size="md" />
+        <EchoMoreNavIcon size="md" />
         <span>更多</span>
         <span className="sidebar__nav-sub">资料库·灵感</span>
       </button>
@@ -527,7 +527,7 @@ function MoreDropdown({
 }
 
 /**
- * WorkBuddy 风格侧栏:品牌行 / 导航 / 双分组(任务 + 空间) / 底部用户区。
+ * EchoAgent 风格侧栏:品牌行 / 导航 / 双分组(任务 + 空间) / 底部用户区。
  *
  * 任务分组列「独立会话」(cwd 为空);空间分组列本地工作目录节点,每个节点可
  * 展开懒加载其下的会话。详见 sessions-store 的双分组模型。
@@ -692,7 +692,7 @@ export function Sidebar({
   }, []);
 
   // One session row, shared by the 任务 group and 空间 node children.
-  // No leading icon (WorkBuddy parity); hover reveals 更多/归档/置顶 actions
+  // No leading icon (EchoAgent parity); hover reveals 更多/归档/置顶 actions
   // in place of the relative-time tail.
   const renderConv = (s: SessionSummary) => (
     <button
@@ -735,7 +735,7 @@ export function Sidebar({
           data-tip={s.pinned ? "取消置顶" : "置顶"}
           onClick={() => handlePin(s.sessionId, !s.pinned)}
         >
-          {s.pinned ? <WbUnpinIcon size="sm" /> : <WbPinIcon size="sm" />}
+          {s.pinned ? <EchoUnpinIcon size="sm" /> : <EchoPinIcon size="sm" />}
         </span>
       </span>
     </button>
@@ -806,7 +806,7 @@ export function Sidebar({
           }
           onClick={onNewSession}
         >
-          <WbNewTaskIcon size="md" />
+          <EchoNewTaskIcon size="md" />
           <span>新建任务</span>
         </button>
         {NAV.map(({ label, icon: Icon }) => (
@@ -927,7 +927,7 @@ export function Sidebar({
                     onClick={() => onToggleWorkspace(ws.cwd, !open)}
                     title={ws.cwd}
                   >
-                    <WbExpertNavIcon size="sm" />
+                    <EchoExpertNavIcon size="sm" />
                     <span className="sidebar__node-name">{basename(ws.cwd)}</span>
                     <ChevronDownIcon
                       size="sm"

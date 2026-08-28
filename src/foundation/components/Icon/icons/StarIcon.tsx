@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 import { createIcon } from "../Icon";
 
-// 来自 lucide-react Star 图标，strokeWidth 1.5 对齐 WorkBuddy 风格
+// 来自 lucide-react Star 图标，strokeWidth 1.5 对齐 EchoAgent 风格
 const StarIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
   <svg
     ref={ref}

@@ -1,5 +1,5 @@
 /**
- * 文件类型识别 —— 对齐 WorkBuddy `context-viewer-components` 的 media-preview
+ * 文件类型识别 —— 对齐 EchoAgent `context-viewer-components` 的 media-preview
  * 类型分发(pdf/docx/pptx/sheet/audio/video/image/markdown/code/browser)。
  *
  * 纯函数:按扩展名/MIME 判定预览类型,供 Context Viewer 选择渲染器。可单测。

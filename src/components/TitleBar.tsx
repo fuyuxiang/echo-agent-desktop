@@ -41,7 +41,7 @@ const MaximizeIcon = ({ isMaximized }: { isMaximized: boolean }) => {
     return (
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
         <rect x="3" y="1" width="8" height="8" stroke="currentColor" strokeWidth="1" fill="none" />
-        <rect x="1" y="3" width="8" height="8" stroke="currentColor" strokeWidth="1" fill="var(--wb-bg-primary)" />
+        <rect x="1" y="3" width="8" height="8" stroke="currentColor" strokeWidth="1" fill="var(--echo-bg-primary)" />
       </svg>
     );
   }

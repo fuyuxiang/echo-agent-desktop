@@ -1,7 +1,7 @@
 /**
- * controls — 自动化面板的基础控件，1:1 复刻 WorkBuddy automation-panel 的
+ * controls — 自动化面板的基础控件，1:1 复刻 EchoAgent automation-panel 的
  * DOM 结构与 class 命名（atm-tabs / atm-custom-select / atm-time-picker /
- * atm-validity-picker / atm-weekday-picker / atm-monthday-picker / wb-switch）。
+ * atm-validity-picker / atm-weekday-picker / atm-monthday-picker / echo-switch）。
  *
  * 所有下拉都通过 fixed 定位 + body portal 渲染（atm-floating-layer），
  * 避免被编辑页滚动容器裁剪。
@@ -192,10 +192,10 @@ export function Switch({
       role="switch"
       aria-checked={checked}
       disabled={disabled}
-      className={`wb-switch${checked ? " wb-switch--checked" : ""}${disabled ? " wb-switch--disabled" : ""} ${className}`}
+      className={`echo-switch${checked ? " echo-switch--checked" : ""}${disabled ? " echo-switch--disabled" : ""} ${className}`}
       onClick={() => onChange(!checked)}
     >
-      <span className="wb-switch-thumb" />
+      <span className="echo-switch-thumb" />
     </button>
   );
 }
@@ -218,22 +218,22 @@ export function Checkbox({
   className?: string;
 }) {
   return (
-    <label className={`wb-checkbox${checked ? " wb-checkbox--checked" : ""}${disabled ? " wb-checkbox--disabled" : ""} ${className}`}>
+    <label className={`echo-checkbox${checked ? " echo-checkbox--checked" : ""}${disabled ? " echo-checkbox--disabled" : ""} ${className}`}>
       <input
         type="checkbox"
-        className="wb-checkbox-input"
+        className="echo-checkbox-input"
         checked={checked}
         disabled={disabled}
         onChange={(e) => onChange?.(e.target.checked)}
       />
-      <span className="wb-checkbox-box">
+      <span className="echo-checkbox-box">
         {checked && (
           <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
             <path d="M2 6.5L4.8 9L10 3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         )}
       </span>
-      {label != null && <span className="wb-checkbox-label">{label}</span>}
+      {label != null && <span className="echo-checkbox-label">{label}</span>}
     </label>
   );
 }

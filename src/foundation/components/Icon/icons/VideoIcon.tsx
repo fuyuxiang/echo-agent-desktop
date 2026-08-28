@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 import { createIcon } from "../Icon";
 
-// 来自 WorkBuddy WbFileVideoIcon - 视频文件图标
+// 来自 EchoAgent EchoFileVideoIcon - 视频文件图标
 const VideoIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
   <svg
     ref={ref}

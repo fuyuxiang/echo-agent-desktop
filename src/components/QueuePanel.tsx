@@ -1,5 +1,5 @@
 /**
- * 消息队列面板 —— 对齐 WorkBuddy `cb-chat-ui/message-queue-panel`。
+ * 消息队列面板 —— 对齐 EchoAgent `echo-chat-ui/message-queue-panel`。
  *
  * agent 流式工作时,用户仍可继续排队 prompt。本面板渲染某会话的队列条目,
  * 支持编辑/删除/上移下移/暂停/恢复/立即发送。流式结束后由 App 自动续发

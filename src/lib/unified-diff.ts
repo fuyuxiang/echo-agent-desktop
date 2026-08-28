@@ -1,7 +1,7 @@
 /**
  * Unified diff 算法 — 基于 Myers diff 的行级 diff。
  *
- * 替代 ToolCallCard 中的朴素逐行对比。对齐 WorkBuddy 的
+ * 替代 ToolCallCard 中的朴素逐行对比。对齐 EchoAgent 的
  * `multi-edit-diff-viewer.tsx` 和 `diff-viewer.tsx`。
  *
  * 纯函数,无副作用,便于单测。

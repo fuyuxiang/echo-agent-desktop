@@ -19,7 +19,7 @@ export const SKILL_CATEGORIES: SkillCategory[] = [
 ];
 
 /** Built-in marketplace catalog (推荐 / SkillHub / 套件). Items flagged
- *  `featured` also appear in the 精选技能 row. This reproduces the WorkBuddy
+ *  `featured` also appear in the 精选技能 row. This reproduces the EchoAgent
  *  catalog UI; install itself is local (import a SKILL.md / folder). */
 export const SKILL_LIST: SkillCatalogItem[] = [
   // ---- 精选技能 (featured row) ----

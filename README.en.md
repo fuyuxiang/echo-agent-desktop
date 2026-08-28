@@ -277,9 +277,8 @@ Provider keys are stored in `~/.echo-agent/config.toml`. They are not placed in 
 
 - [xai-org/grok-build](https://github.com/xai-org/grok-build) provides the Apache-2.0 runtime components embedded through pinned Rust path dependencies.
 - [Tauri](https://tauri.app/), [React](https://react.dev/), and [Vite](https://vite.dev/) provide the core application stack.
-- [Tencent WorkBuddy](https://workbuddy.tencent.com/) inspired parts of the product interaction model and visual direction.
 
-EchoAgent is an independent community project. It is not affiliated with, endorsed by, or sponsored by Tencent or xAI.
+EchoAgent is an independent community project. It is not affiliated with, endorsed by, or sponsored by xAI.
 
 ## License
 

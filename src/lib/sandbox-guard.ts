@@ -1,7 +1,7 @@
 /**
- * 本地命令沙箱守卫 —— WorkBuddy tsbx 本地沙箱 DLL + security-center 的可移植替代。
+ * 本地命令沙箱守卫 —— EchoAgent tsbx 本地沙箱 DLL + security-center 的可移植替代。
  *
- * WorkBuddy 的 tsbx 是 Rust 进程隔离沙箱(文件系统保护 + white_process + 网络策略),
+ * EchoAgent 的 tsbx 是 Rust 进程隔离沙箱(文件系统保护 + white_process + 网络策略),
  * 绑定专有 DLL,不可移植。EchoAgent 用「纯逻辑路径规则 + 命令预检」替代:在执行命令/
  * 访问文件前,按规则集判定 allow/deny/ask,而非 OS 级隔离。这与既有的 command-risk(危险
  * 命令检测)互补:command-risk 判危险等级,sandbox-guard 判路径访问策略。
@@ -169,7 +169,7 @@ export function deserializeRules(json: string, fallback = DEFAULT_SANDBOX_RULES)
 // ========================================================================
 // OS 级沙箱执行器适配层 —— @anthropic-ai/sandbox-runtime 的可插拔接入点
 //
-// WorkBuddy 用 tsbx(Rust DLL)做进程隔离;其开源等价物是 Anthropic 的
+// EchoAgent 用 tsbx(Rust DLL)做进程隔离;其开源等价物是 Anthropic 的
 // @anthropic-ai/sandbox-runtime(CLI: srt),Claude Code 也用它。它不需 Docker,
 // 在 OS 级别施加文件系统 + 网络限制。
 //

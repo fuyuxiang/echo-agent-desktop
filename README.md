@@ -277,9 +277,8 @@ Provider Key 保存在 `~/.echo-agent/config.toml`。它不会写入项目仓库
 
 - [xai-org/grok-build](https://github.com/xai-org/grok-build) 提供以固定 Rust Path Dependency 嵌入的 Apache-2.0 Runtime 组件。
 - [Tauri](https://tauri.app/)、[React](https://react.dev/) 和 [Vite](https://vite.dev/) 构成项目的核心应用技术栈。
-- [腾讯 WorkBuddy](https://workbuddy.tencent.com/) 为部分产品交互与视觉方向提供了启发。
 
-EchoAgent 是独立的社区开源项目，与腾讯或 xAI 不存在隶属、背书或赞助关系。
+EchoAgent 是独立的社区开源项目，与 xAI 不存在隶属、背书或赞助关系。
 
 ## 许可证
 

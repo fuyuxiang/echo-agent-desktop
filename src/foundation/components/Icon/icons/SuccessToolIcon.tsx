@@ -9,8 +9,8 @@ const SuccessToolIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
       fill="none"
       {...props}
     >
-      <circle cx="8" cy="8" r="6" stroke="var(--wb-status-success)" strokeWidth="1.2" />
-      <path d="M5 8l2 2 4-4" stroke="var(--wb-status-success)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="8" cy="8" r="6" stroke="var(--echo-status-success)" strokeWidth="1.2" />
+      <path d="M5 8l2 2 4-4" stroke="var(--echo-status-success)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
 ));
 SuccessToolIconRaw.displayName = "SuccessToolIconRaw";

@@ -1,7 +1,7 @@
 /**
  * 本地用量统计与配额 —— weixinpay 计费的本地可移植替代。
  *
- * WorkBuddy 用 weixinpay 做计费(依赖腾讯支付后端);EchoAgent 是 BYOK(用户自带 API Key,
+ * EchoAgent 用 weixinpay 做计费(依赖腾讯支付后端);EchoAgent 是 BYOK(用户自带 API Key,
  * 无计费通道)。这里用「本地用量统计 + 配额面板」替代:记录每次 API 调用的 token 消耗,
  * 提供日/周/月统计 + 可选配额告警(接近上限时提醒)。纯函数 + localStorage 持久化。
  */

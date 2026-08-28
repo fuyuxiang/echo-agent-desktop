@@ -228,7 +228,7 @@ pub struct SummaryEvent {
 /// `x.ai/session_notification` extension notifications addressed to the
 /// parent session. We forward the relevant fields so the frontend can show
 /// live subagent progress (turns, tokens, duration, status) — aligning with
-/// WorkBuddy's team-runtime panel.
+/// EchoAgent's team-runtime panel.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentEvent {
@@ -573,9 +573,9 @@ async fn handle_client_message(
             let params: Value = serde_json::from_str(raw_str).unwrap_or(Value::Null);
 
             if method == "x.ai/question"
-                || method == "_codebuddy.ai/question"
+                || method == "_echo-agent.ai/question"
                 || method == "x.ai/ask_user_question"
-                || method == "_codebuddy.ai/ask_user_question"
+                || method == "_echo-agent.ai/ask_user_question"
             {
                 let tool_call_id = params
                     .get("toolCallId")

@@ -1,5 +1,5 @@
 /**
- * 子 agent / 团队运行时面板 —— 对齐 WorkBuddy `team-runtime` /
+ * 子 agent / 团队运行时面板 —— 对齐 EchoAgent `team-runtime` /
  * `session:getSubagentList`。
  *
  * 主数据源: `subagent-store`(实时 `agent://subagent` 事件——turns/tokens/duration/进度)。

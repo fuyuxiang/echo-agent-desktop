@@ -1,5 +1,5 @@
 /**
- * Icon — clean port of WorkBuddy's foundation/components/Icon/Icon.tsx.
+ * Icon — clean port of EchoAgent's foundation/components/Icon/Icon.tsx.
  *
  * `createIcon(asset, defaults?)` turns an icon asset into a named React
  * component. The asset may be:
@@ -10,7 +10,7 @@
  *   const FooRaw = forwardRef((props, ref) => <svg ref={ref} {...props}>...</svg>);
  *   export const Foo = createIcon(FooRaw);
  *
- * Then: <Foo size="md" color="var(--wb-text-strong)" />
+ * Then: <Foo size="md" color="var(--echo-text-strong)" />
  */
 import {
   forwardRef,
@@ -82,14 +82,14 @@ export const Icon = forwardRef<SVGSVGElement, IconComponentProps>(function Icon(
     ...style,
   };
 
-  const cls = ["wb-icon", spin ? "wb-icon--spin" : "", className]
+  const cls = ["echo-icon", spin ? "echo-icon--spin" : "", className]
     .filter(Boolean)
     .join(" ");
 
   // Asset form: { url, themable, alt } -> render as <img/>.
   if (component && typeof component === "object" && "url" in component) {
     const { url, themable, alt } = component;
-    const imgClass = [cls, themable ? "wb-icon--themable" : ""]
+    const imgClass = [cls, themable ? "echo-icon--themable" : ""]
       .filter(Boolean)
       .join(" ");
     return (

@@ -14,7 +14,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      // Mirror WorkBuddy's `@` alias so ported components resolve unchanged.
+      // Mirror EchoAgent's `@` alias so ported components resolve unchanged.
       "@": path.resolve(__dirname, "src"),
     },
   },

@@ -16,7 +16,7 @@ function initialTheme(): Theme {
   if (typeof window === "undefined") return "light";
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved === "light" || saved === "dark") return saved;
-  // Default to light, matching WorkBuddy.
+  // Default to light, matching EchoAgent.
   return "light";
 }
 

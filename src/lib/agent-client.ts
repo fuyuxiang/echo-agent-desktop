@@ -835,7 +835,7 @@ export async function policySave<T>(policy: T): Promise<T> {
   return invoke<T>("policy_save", { policy });
 }
 
-// ---------- automations (local scheduler, WorkBuddy 1:1) ----------
+// ---------- automations (local scheduler, EchoAgent 1:1) ----------
 
 /** Full snapshot: automations (next runs recomputed) + run records. */
 export async function automationsSnapshot(): Promise<AutomationSnapshot> {

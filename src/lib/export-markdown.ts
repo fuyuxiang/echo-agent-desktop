@@ -2,7 +2,7 @@
  * 会话导出为 Markdown — 从 session-store 的 messages 构建一份可读的
  * Markdown 文档（用户问题 / 助手回答 / 思考过程 / 工具调用摘要）。
  *
- * 对齐 WorkBuddy 的"导出对话"功能。
+ * 对齐 EchoAgent 的"导出对话"功能。
  */
 import type { ChatMessage } from "@/stores/session-store";
 
@@ -50,7 +50,7 @@ export function buildSessionMarkdown(
 
       if (textParts.length === 0 && thoughtParts.length === 0 && toolCalls.length === 0) continue;
 
-      lines.push("## 🤖 Buddy");
+      lines.push("## 🤖 EchoAgent");
       lines.push("");
 
       for (const t of thoughtParts) {

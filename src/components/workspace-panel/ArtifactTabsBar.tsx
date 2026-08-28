@@ -1,5 +1,5 @@
 /**
- * 统一标签栏 —— 对齐 WorkBuddy `agent-sidebar-ui/ArtifactTabsBar`。
+ * 统一标签栏 —— 对齐 EchoAgent `agent-sidebar-ui/ArtifactTabsBar`。
  *
  * 特性：
  *  - 按标签 kind 显示图标（file → 文件 emoji，preview → 🌐，artifact/changes → 文件 emoji）

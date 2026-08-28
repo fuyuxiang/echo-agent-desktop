@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
- * 复刻 WorkBuddy 的 `use-horizontal-scroll`:为一条横向可滚动的 chip 行提供
+ * 复刻 EchoAgent 的 `use-horizontal-scroll`:为一条横向可滚动的 chip 行提供
  * 左右箭头按钮 + 边缘渐隐 + 鼠标拖拽滚动 + 垂直滚轮转横向滚动。
  *
  * 返回的 `bind` 需要展开到滚动容器上;`canScrollLeft/Right` 用来控制左右

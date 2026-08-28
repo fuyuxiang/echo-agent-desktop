@@ -1,5 +1,5 @@
 /**
- * Subagent live runtime store — 对齐 WorkBuddy `team-runtime` / `getSubagentList`。
+ * Subagent live runtime store — 对齐 EchoAgent `team-runtime` / `getSubagentList`。
  *
  * Receives `agent://subagent` events forwarded by bridge.rs from EchoAgent's
  * `x.ai/session_notification` (subagent_spawned / subagent_progress /
