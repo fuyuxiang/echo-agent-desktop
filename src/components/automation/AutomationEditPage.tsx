@@ -861,10 +861,10 @@ export function AutomationEditPage({
             </>
           )}
 
-          {/* 推送到微信小程序 */}
+          {/* 推送到已配置通知渠道 */}
           <div className="atm-schedule-push-toggle">
             <div className="atm-push-toggle-left">
-              <span className="atm-toggle-text">推送到微信小程序</span>
+              <span className="atm-toggle-text">完成后推送到通知渠道</span>
               <span
                 className="atm-push-info-icon"
                 title="开启后，推送会通过安全链路把文件同步到云端，以方便在小程序端能接收到数据。"

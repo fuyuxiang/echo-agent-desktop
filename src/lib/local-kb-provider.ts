@@ -217,9 +217,11 @@ export async function collectKnowledgeFiles(
 export function createLocalKbProvider(
   root: string,
   reader: DirectoryReader,
-  options: { maxDepth?: number; maxFiles?: number } = {},
+  options: { maxDepth?: number; maxFiles?: number; id?: string; label?: string } = {},
 ): KbProvider {
+  const providerId = options.id ?? "local";
   let cache: Array<{ name: string; path: string }> | null = null;
+  const contentCache = new Map<string, string | null>();
   let lastScannedAt: number | undefined;
   const scanOnce = async () => {
     cache = await collectKnowledgeFiles(root, reader, options);
@@ -231,8 +233,8 @@ export function createLocalKbProvider(
     return scanOnce();
   };
   return {
-    id: "local",
-    label: "本地文件夹",
+    id: providerId,
+    label: options.label ?? "本地文件夹",
     isEnabled: () => !!root,
     async list(query) {
       if (!root) return [];
@@ -244,19 +246,30 @@ export function createLocalKbProvider(
         if (query) {
           if (isOfficeFile(f.name)) {
             // OOXML(docx/pptx/xlsx):读字节 → zip-reader + doc-preview 提取文本。
-            const bytes = reader.readBytes ? await reader.readBytes(f.path).catch(() => null) : null;
-            content = bytes ? extractOfficeText(bytes, f.name) : null;
+            if (contentCache.has(f.path)) {
+              content = contentCache.get(f.path) ?? null;
+            } else {
+              const bytes = reader.readBytes ? await reader.readBytes(f.path).catch(() => null) : null;
+              content = bytes ? extractOfficeText(bytes, f.name) : null;
+              contentCache.set(f.path, content);
+            }
           } else {
-            content = await reader.readText(f.path).catch(() => null);
+            if (contentCache.has(f.path)) {
+              content = contentCache.get(f.path) ?? null;
+            } else {
+              content = await reader.readText(f.path).catch(() => null);
+              contentCache.set(f.path, content);
+            }
           }
         }
         const entry = fileToEntry(f, content, query);
-        if (entry) out.push(entry);
+        if (entry) out.push({ ...entry, source: providerId });
       }
       return out;
     },
     /** 重建索引:清缓存并重新扫描目录(本地文件夹内容变化后手动刷新)。返回新条目数。 */
     async rebuild() {
+      contentCache.clear();
       await scanOnce();
       return cache!.length;
     },

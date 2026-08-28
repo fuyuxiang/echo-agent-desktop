@@ -47,7 +47,7 @@
 - 💨 **~19× less RAM at runtime** — **~20 MB** vs **~374 MB** for WorkBuddy on the same machine. Leaves your actual work room to breathe.
 - ⚙️ **EchoAgent Runtime, in-process** — no subprocess spawning or WebSocket relay. The agent runs on a dedicated OS thread inside the binary you double-click.
 - 🌐 **Truly cross-platform** — one codebase, Windows **and** macOS.
-- 🔑 **Bring Your Own Key** — point at any model provider via `~/.echo-agent/config.toml`, stored as plain text you can diff and version-control.
+- 🔑 **Bring Your Own Key** — point at any model provider via `~/.echo-agent/config.toml`. The file is owner-only on Unix; because it contains secrets, **never commit it to version control**.
 
 > *"If WorkBuddy is the polished product, EchoAgent is the one you can actually read, fork, and own."*
 
@@ -76,6 +76,9 @@ The embedded runtime is linked as Rust path dependencies. The agent runs on its 
 **🔌 ACP is the contract**
 Streaming `SessionUpdate`s, tool calls, plan updates, permission requests — all flow over typed `mpsc` channels, surfaced as `agent://update` / `agent://permission` / `agent://complete` Tauri events.
 
+**🖼️ Native input and multimodal attachments**
+Native microphone capture streams speech to text on macOS/Windows (with a safe Web Speech fallback). PNG/JPEG/GIF/WebP attachments are sent as ACP image blocks; other files remain explicit local path references for agent tools.
+
 </td>
 <td width="50%" valign="top">
 
@@ -88,7 +91,10 @@ Bring your own keys. Configure any number of model providers in `~/.echo-agent/c
 - **Experts / Assistants** — `~/.echo-agent/agents/*.md`
 
 **🚀 Advanced workflows**
-Plan mode (toggle & view) · Rewind (rewind & fork) · sub-agent Tasks (observe & cancel) · Slash Commands · local Automations scheduler · notification center.
+Plan mode (toggle & view) · Rewind (rewind & fork) · sub-agent Tasks (observe & cancel) · Slash Commands · durable local Automations scheduler.
+
+**🗂️ Persisted integrations**
+Local-folder knowledge sources survive restarts. WebDAV storage supports browse/read/write/create/delete. Agent completion and permission events can reach Slack, Discord, generic webhooks, and native desktop notifications.
 
 **📦 Cross-platform installers**
 Windows (NSIS `.exe` + MSI) and macOS (`.dmg`). CI-built releases via GitHub Actions.
@@ -110,7 +116,7 @@ Only rows we can actually back up are listed. WorkBuddy's internals aren't publi
 | **Installer size** | ✅ **~34 MB** (NSIS, measured) | ⚠️ ~483 MB |
 | **Runtime memory** | ✅ **~20 MB** (measured) | ⚠️ ~374 MB |
 | **BYOK / any provider** | ✅ | ✅ |
-| **Provider config** | ✅ Plain `~/.echo-agent/config.toml` — diffable, scriptable, version-controllable | ⚠️ GUI-only |
+| **Provider config** | ✅ Scriptable `~/.echo-agent/config.toml` (owner-only; never commit secrets) | ⚠️ GUI-only |
 | **MCP connectors** | ✅ | ✅ |
 | **Skills** | ✅ | ✅ (20+ built-in) |
 | **Plan / Rewind** | ✅ | ✅ |
@@ -240,10 +246,13 @@ docs/                    # WINDOWS_BUILD_NOTES.md — Windows build gotchas
 - [x] Plan mode · Rewind · Tasks · Slash Commands · Automations
 - [x] Windows (NSIS + MSI) & macOS (DMG) installers
 - [x] CI release workflow (GitHub Actions)
-- [ ] SceneTabs & skill recommendation bar
-- [ ] Pinned sessions & workspace grouping
-- [ ] Permission management panel
-- [ ] Search across sessions
+- [x] SceneTabs
+- [ ] Skill recommendation bar
+- [x] Pinned sessions & workspace grouping
+- [x] Permission request, mode and rule management
+- [x] Search across sessions
+- [x] Persisted knowledge sources & WebDAV cloud storage
+- [x] Outbound notification channels & native voice input
 - [ ] Linux builds
 - [ ] Code signing & notarization
 

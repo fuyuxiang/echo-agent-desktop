@@ -5,6 +5,7 @@
  * 专有 SDK,不可移植。EchoAgent 用「通知渠道 provider」抽象替代:任意实现 webhook/邮件/
  * 桌面通知,provider-agnostic。纯函数核心(载荷构造 + 渠道分发 + 注册表),便于单测。
  */
+import { invoke } from "@tauri-apps/api/core";
 
 /** 通知级别。 */
 export type NotifyLevel = "info" | "warn" | "error";
@@ -41,6 +42,34 @@ export interface NotifyChannel {
   endpoint?: string;
   /** 是否启用。 */
   enabled: boolean;
+}
+
+export interface DeliveryResult {
+  id: string;
+  ok: boolean;
+  error?: string;
+}
+
+/** Persisted backend channel operations. Webhooks are sent by Rust so WebView
+ * CORS and background-session filtering cannot silently drop notifications. */
+export async function loadNotifyChannels(): Promise<NotifyChannel[]> {
+  return invoke<NotifyChannel[]>("notify_channels_list");
+}
+
+export async function saveNotifyChannel(channel: NotifyChannel): Promise<void> {
+  await invoke<void>("notify_channel_upsert", { channel });
+}
+
+export async function removeNotifyChannel(id: string): Promise<void> {
+  await invoke<void>("notify_channel_remove", { id });
+}
+
+export async function setNotifyChannelEnabled(id: string, enabled: boolean): Promise<void> {
+  await invoke<void>("notify_channel_set_enabled", { id, enabled });
+}
+
+export async function testNotifyChannel(id: string): Promise<DeliveryResult> {
+  return invoke<DeliveryResult>("notify_channel_test", { id });
 }
 
 /** 通知渠道 provider 接口(任意实现)。 */

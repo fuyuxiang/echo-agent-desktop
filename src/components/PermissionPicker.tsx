@@ -17,6 +17,7 @@ import {
 } from "@/foundation/components/Icon/icons";
 import { permissionModeGet, permissionModeSet } from "@/lib/agent-client";
 import type { PermissionMode } from "@/lib/agent-client";
+import { usePermissionModeStore } from "@/stores/permission-mode-store";
 
 const MODES: { id: PermissionMode; label: string; desc: string }[] = [
   { id: "ask", label: "审批模式", desc: "每次工具调用都需要确认" },
@@ -33,7 +34,8 @@ export function PermissionPicker({
   triggerLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<PermissionMode>("ask");
+  const mode = usePermissionModeStore((state) => state.mode);
+  const setMode = usePermissionModeStore((state) => state.setMode);
   const [busy, setBusy] = useState(false);
   const popRef = useRef<HTMLDivElement>(null);
 
@@ -43,7 +45,7 @@ export function PermissionPicker({
       .catch(() => {
         /* 读不到就用默认 ask */
       });
-  }, []);
+  }, [setMode]);
 
   // Close on outside click.
   useEffect(() => {

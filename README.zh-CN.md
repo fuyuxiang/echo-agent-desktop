@@ -47,7 +47,7 @@
 - 💨 **运行内存小约 19 倍** —— **~20 MB** vs WorkBuddy 同机 **~374 MB**。把内存还给真正在干的活。
 - ⚙️ **EchoAgent Runtime 进程内运行** —— 无子进程、无 WebSocket 中转。Agent 跑在应用二进制内的独立 OS 线程上。
 - 🌐 **原生跨平台** —— 一套代码,Windows **和** macOS。
-- 🔑 **自带 Key (BYOK)** —— 通过 `~/.echo-agent/config.toml` 接入任意模型供应商,纯文本存储,可 diff、可纳入版本管理。
+- 🔑 **自带 Key (BYOK)** —— 通过 `~/.echo-agent/config.toml` 接入任意模型供应商；Unix 下文件仅所有者可读写。配置包含密钥，**严禁提交到版本管理**。
 
 > *"WorkBuddy 是成品,EchoAgent 是你能读懂、能 fork、真正拥有的那一个。"*
 
@@ -76,6 +76,9 @@
 **🔌 ACP 作为前后端契约**
 流式 `SessionUpdate`、工具调用、Plan 更新、权限请求 —— 全部走类型化 `mpsc` 通道,序列化为 `agent://update` / `agent://permission` / `agent://complete` Tauri 事件。
 
+**🖼️ 原生输入与多模态附件**
+macOS/Windows 优先使用原生麦克风采集和流式语音转写，Web Speech 作为安全降级。PNG/JPEG/GIF/WebP 以 ACP 图像块发送，其他文件作为本地路径供 Agent 工具读取。
+
 </td>
 <td width="50%" valign="top">
 
@@ -88,7 +91,10 @@
 - **Experts / Assistants** —— `~/.echo-agent/agents/*.md`
 
 **🚀 进阶工作流**
-Plan 模式(切换 & 查看)· Rewind(回溯 & 分叉)· 子智能体 Tasks(观察 & 取消)· Slash Commands · 本地 Automations 调度器 · 通知中心。
+Plan 模式(切换 & 查看)· Rewind(回溯 & 分叉)· 子智能体 Tasks(观察 & 取消)· Slash Commands · 可持久化的本地 Automations 调度器。
+
+**🗂️ 可持久化集成**
+本地文件夹知识源在重启后自动恢复；WebDAV 支持浏览、读写、建目录和删除；Agent 完成与权限事件可投递至 Slack、Discord、通用 Webhook 和系统桌面通知。
 
 **📦 跨平台安装包**
 Windows(NSIS `.exe` + MSI)与 macOS(`.dmg`)。GitHub Actions CI 自动出包。
@@ -110,7 +116,7 @@ Windows(NSIS `.exe` + MSI)与 macOS(`.dmg`)。GitHub Actions CI 自动出包。
 | **安装包体积** | ✅ **~34 MB**(NSIS,实测) | ⚠️ 约 483 MB |
 | **运行内存** | ✅ **~20 MB**(实测) | ⚠️ 约 374 MB |
 | **BYOK / 任意供应商** | ✅ | ✅ |
-| **Provider 配置方式** | ✅ 纯文本 `~/.echo-agent/config.toml`——可 diff、可脚本、可纳入版本管理 | ⚠️ 仅 GUI |
+| **Provider 配置方式** | ✅ 可脚本化的 `~/.echo-agent/config.toml`（仅所有者可读写，严禁提交密钥） | ⚠️ 仅 GUI |
 | **MCP 连接器** | ✅ | ✅ |
 | **Skills** | ✅ | ✅(内置 20+) |
 | **Plan / Rewind** | ✅ | ✅ |
@@ -240,10 +246,13 @@ docs/                    # WINDOWS_BUILD_NOTES.md —— Windows 构建踩坑笔
 - [x] Plan 模式 · Rewind · Tasks · Slash Commands · Automations
 - [x] Windows(NSIS + MSI)& macOS(DMG)安装包
 - [x] CI 发布工作流(GitHub Actions)
-- [ ] SceneTabs 与技能推荐栏
-- [ ] 置顶会话 & 工作空间分组
-- [ ] 权限管理面板
-- [ ] 跨会话搜索
+- [x] SceneTabs
+- [ ] 技能推荐栏
+- [x] 置顶会话 & 工作空间分组
+- [x] 权限请求、模式与规则管理
+- [x] 跨会话搜索
+- [x] 知识源持久化 & WebDAV 云存储
+- [x] 外部通知渠道 & 原生语音输入
 - [ ] Linux 构建
 - [ ] 代码签名 & 公证
 

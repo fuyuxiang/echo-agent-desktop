@@ -75,6 +75,7 @@ const base = {
 describe("知识库端到端冒烟", () => {
   beforeEach(() => {
     resetKbRegistry();
+    localStorage.removeItem("echoagent.knowledge-sources.v1");
     openDialog.mockReset();
     mockReader.listDir.mockReset();
     mockReader.readText.mockReset();
@@ -147,7 +148,7 @@ describe("知识库端到端冒烟", () => {
     fireEvent.click(screen.getByRole("button", { name: /添加本地文件夹/ }));
     await waitFor(() => expect(screen.getByText(/1 个源/)).toBeInTheDocument());
     // 点击移除按钮。
-    fireEvent.click(screen.getByRole("button", { name: "移除知识源 本地文件夹" }));
+    fireEvent.click(screen.getByRole("button", { name: "移除知识源 本地：notes" }));
     await waitFor(() => expect(screen.getByText("未配置知识源")).toBeInTheDocument());
     expect(listKbProviders().length).toBe(0);
   });

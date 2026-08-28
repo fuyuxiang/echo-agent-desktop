@@ -56,7 +56,7 @@ export function ChatView({
   onSelectExpert,
   onNavigateConnectors,
 }: {
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments?: string[]) => void;
   onCancel: () => void;
   modelId?: string;
   models?: ModelOption[];

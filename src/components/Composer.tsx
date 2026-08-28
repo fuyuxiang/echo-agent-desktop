@@ -33,6 +33,12 @@ import {
   getActiveAsr,
   createWebSpeechAsrProvider,
 } from "@/lib/voice-contract";
+import {
+  nativeVoiceAvailable,
+  startNativeVoice,
+  stopNativeVoice,
+  subscribeNativeVoice,
+} from "@/lib/native-voice";
 import type { HomeModeId } from "./home-scenes";
 import type { AgentEntry } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
@@ -95,7 +101,7 @@ export function Composer({
 }: {
   streaming: boolean;
   disabled?: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments?: string[]) => void;
   onCancel: () => void;
   placeholder?: string;
   apiReady?: boolean;
@@ -183,17 +189,52 @@ export function Composer({
   const hasRefs = blockList.length > 0;
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<VoiceRecognition | null>(null);
+  const nativeVoiceActiveRef = useRef(false);
+  const nativeVoiceBaseRef = useRef("");
+  const onDraftChangeRef = useRef(onDraftChange);
+  const onToastRef = useRef(onToast);
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    onDraftChangeRef.current = onDraftChange;
+    onToastRef.current = onToast;
+  }, [onDraftChange, onToast]);
 
   // 统一更新入口:每次写入输入框内容时同步把草稿推给父组件(若启用持久化)。
   // 回填(draftKey 变化)时不走这里,避免把"恢复出来的字"再当成用户输入回写。
   const updateText = (next: string | ((prev: string) => string)) => {
     setText((prev) => {
       const value = typeof next === "function" ? (next as (p: string) => string)(prev) : next;
-      onDraftChange?.(value);
+      onDraftChangeRef.current?.(value);
       return value;
     });
   };
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void subscribeNativeVoice((event) => {
+      if (!nativeVoiceActiveRef.current) return;
+      if (event.kind === "error") {
+        nativeVoiceActiveRef.current = false;
+        setListening(false);
+        onToastRef.current?.([event.message, event.hint].filter(Boolean).join("；") || "语音识别失败");
+        return;
+      }
+      if (!event.text) return;
+      const base = nativeVoiceBaseRef.current;
+      const separator = base && !/\s$/.test(base) ? " " : "";
+      updateText(`${base}${separator}${event.text}`);
+      if (event.kind === "final") {
+        nativeVoiceBaseRef.current = `${base}${separator}${event.text}`;
+      }
+    })
+      .then((stop) => { unlisten = stop; })
+      .catch(() => { /* ordinary browser/test environment */ });
+    return () => unlisten?.();
+    // The event subscription is tied to this Composer instance; mutable refs
+    // above keep session-specific callbacks current without re-subscribing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const el = ref.current;
@@ -237,44 +278,77 @@ export function Composer({
   // 每敲一个字都会被这个 effect 重置光标。
   useEffect(() => {
     if (draftKey === undefined) return;
+    const recognition = recognitionRef.current;
+    if (recognition?.abort) recognition.abort();
+    else recognition?.stop();
+    recognitionRef.current = null;
+    if (nativeVoiceActiveRef.current) {
+      nativeVoiceActiveRef.current = false;
+      setListening(false);
+      void stopNativeVoice().catch(() => {});
+    }
     const next = draft ?? "";
     setText(next);
     setCursorPos(next.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey]);
 
-  // Voice input: use the browser's SpeechRecognition API (Tauri's WebView2/
-  // WKWebView support it on most systems). On languages where the API isn't
-  // exposed (older webviews, no microphone permission), we surface a toast.
-  // EchoAgent has a voice crate but doesn't expose it over ACP, so this is the
-  // lightest path that works today.
-  const toggleVoice = () => {
+  // Voice input prefers the Rust-native microphone + streaming STT pipeline.
+  // Web Speech remains a safe fallback for browsers or an unavailable native
+  // backend. macOS bundle usage descriptions live in src-tauri/Info.plist.
+  const toggleVoice = async () => {
     if (listening) {
-      recognitionRef.current?.stop();
+      if (nativeVoiceActiveRef.current) {
+        setListening(false);
+        try {
+          await stopNativeVoice();
+        } catch (error) {
+          nativeVoiceActiveRef.current = false;
+          onToast?.(`停止语音识别失败：${String(error).replace(/^Error:\s*/, "")}`);
+        }
+      } else {
+        recognitionRef.current?.stop();
+      }
       return;
     }
+    let nativeError: unknown;
+    try {
+      if (await nativeVoiceAvailable()) {
+        nativeVoiceBaseRef.current = text;
+        nativeVoiceActiveRef.current = true;
+        await startNativeVoice("zh-CN");
+        setListening(true);
+        return;
+      }
+    } catch (error) {
+      nativeVoiceActiveRef.current = false;
+      nativeError = error;
+    }
     // 优先走 provider-agnostic 注册表(对齐 WorkBuddy asr:* 契约):外部 provider
-    // 注册后优先级更高,否则回落到内建 Web Speech。
+    // 注册后优先级更高；非桌面环境回落到内建 Web Speech。
     ensureWebSpeechAsrRegistered();
     const provider = getActiveAsr();
     if (provider) {
-      let finalText = "";
+      const baseText = text;
+      const separator = baseText && !/\s$/.test(baseText) ? " " : "";
+      let committedText = "";
       const stop = provider.listen("zh-CN", {
         onInterim: (interim) => {
-          updateText((prev) => {
-            const base = finalText || prev;
-            return interim ? base + interim : base;
-          });
+          updateText(`${baseText}${separator}${committedText}${interim}`);
         },
-        onFinal: (text) => {
-          finalText += text;
-          updateText((prev) => (finalText ? finalText : prev));
+        onFinal: (finalDelta) => {
+          committedText += finalDelta;
+          updateText(`${baseText}${separator}${committedText}`);
         },
         onError: (reason) => {
           setListening(false);
-          const msg = reason === "not-allowed"
-            ? "未授予麦克风权限"
-            : `语音识别错误：${reason}`;
+          const msg = reason === "not-allowed" || reason === "service-not-allowed"
+            ? "未授予麦克风或语音识别权限"
+            : reason === "audio-capture"
+              ? "未检测到可用麦克风"
+              : reason === "no-speech"
+                ? "没有检测到语音，请重试"
+                : `语音识别错误：${reason}`;
           onToast?.(msg);
         },
         onEnd: () => setListening(false),
@@ -292,7 +366,9 @@ export function Composer({
     }
     const Ctor = getSpeechRecognitionCtor();
     if (!Ctor) {
-      onToast?.("当前环境不支持语音输入（需要 WebView2/WKWebView）");
+      onToast?.(nativeError
+        ? `原生语音不可用：${String(nativeError).replace(/^Error:\s*/, "")}`
+        : "当前环境不支持语音输入");
       onPlaceholder?.("语音输入");
       return;
     }
@@ -300,20 +376,19 @@ export function Composer({
     rec.lang = "zh-CN";
     rec.interimResults = true;
     rec.continuous = false;
-    let finalText = "";
+    const baseText = text;
+    const separator = baseText && !/\s$/.test(baseText) ? " " : "";
+    let committedText = "";
     rec.onresult = (event: SpeechRecognitionEventLike) => {
       let interim = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const r = event.results[i];
-        if (r.isFinal) finalText += r[0].transcript;
+        if (r.isFinal) committedText += r[0].transcript;
         else interim += r[0].transcript;
       }
-      updateText((prev) => {
-        // Replace the trailing interim segment each time so the user sees
-        // live transcription without duplicating finalized text.
-        const base = finalText || prev;
-        return interim ? base + interim : base;
-      });
+      // Replace the trailing interim segment on every update; finalized text
+      // is accumulated separately and therefore cannot be duplicated.
+      updateText(`${baseText}${separator}${committedText}${interim}`);
     };
     rec.onerror = (e: SpeechRecognitionErrorEventLike) => {
       setListening(false);
@@ -334,7 +409,10 @@ export function Composer({
 
   useEffect(() => {
     return () => {
-      recognitionRef.current?.abort?.();
+      const recognition = recognitionRef.current;
+      if (recognition?.abort) recognition.abort();
+      else recognition?.stop();
+      if (nativeVoiceActiveRef.current) void stopNativeVoice().catch(() => {});
     };
   }, []);
 
@@ -345,22 +423,13 @@ export function Composer({
       console.log('Send blocked:', { streaming, disabled, apiReady });
       return;
     }
-    // Append attachment paths to the prompt text so EchoAgent's read_file tool can
-    // pick them up (ACP image/audio needs agent-declared capabilities we
-    // don't model yet; ResourceLink behavior is unverified — text is safest).
     let body = t;
-    if (attachments.length > 0) {
-      const fileList = attachments.map((p) => `- ${p}`).join("\n");
-      body = body
-        ? `${body}\n\n相关文件:\n${fileList}`
-        : `请查看以下文件:\n${fileList}`;
-    }
     // 把"操作类型"标签作为上下文前缀一并发出(后端正文仍是可运行的 prompt)。
     if (sceneTag) {
       body = body ? `【${sceneTag.label}】${body}` : `【${sceneTag.label}】`;
     }
     console.log('Sending:', body || '(empty message)');
-    onSend(body || "你好");
+    onSend(body || "请分析附件。", attachments);
     // 记入输入历史(arrow-key recall)。
     if (body && body.trim()) {
       histRef.current = pushHistory(histRef.current, body);
@@ -722,7 +791,7 @@ export function Composer({
             }
             onClick={(e) => {
               e.stopPropagation();
-              toggleVoice();
+              void toggleVoice();
             }}
             aria-label="语音输入"
             title={listening ? "正在聆听…点击停止" : "语音输入"}

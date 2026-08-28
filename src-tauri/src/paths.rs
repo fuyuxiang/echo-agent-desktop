@@ -5,8 +5,11 @@
 //! variable at the EchoAgent directory after migrating any legacy data.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 const HOME_ENV: &str = "ECHO_AGENT_HOME";
 const UPSTREAM_HOME_ENV: &str = "GROK_HOME";
@@ -52,6 +55,7 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
 
     fs::create_dir_all(&target)
         .map_err(|e| format!("create EchoAgent home {}: {e}", target.display()))?;
+    harden_private_dir(&target)?;
 
     let marker = target.join(MIGRATION_MARKER);
     if legacy != target && legacy.is_dir() && !marker.exists() {
@@ -63,7 +67,80 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
         .map_err(|e| format!("write migration marker {}: {e}", marker.display()))?;
     }
 
+    // Migration may have copied a world-readable legacy file. Harden it on
+    // every startup so existing installations are repaired without requiring
+    // the user to save provider settings again.
+    let config = target.join("config.toml");
+    if config.exists() {
+        harden_private_file(&config)?;
+    }
+
     Ok(target)
+}
+
+/// Write a secret-bearing file atomically with owner-only permissions on Unix.
+/// This is shared by config.toml and persisted endpoint credentials.
+pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("private file has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    harden_private_dir(parent)?;
+    let tmp = path.with_extension(format!(
+        "{}.tmp",
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("private")
+    ));
+
+    let write_to = |target: &Path| -> Result<(), String> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options
+            .open(target)
+            .map_err(|e| format!("open {}: {e}", target.display()))?;
+        file.write_all(contents)
+            .map_err(|e| format!("write {}: {e}", target.display()))?;
+        file.sync_all()
+            .map_err(|e| format!("sync {}: {e}", target.display()))?;
+        harden_private_file(target)
+    };
+
+    write_to(&tmp)?;
+    if let Err(rename_error) = fs::rename(&tmp, path) {
+        write_to(path).map_err(|fallback| {
+            format!(
+                "replace {}: {rename_error}; fallback: {fallback}",
+                path.display()
+            )
+        })?;
+        let _ = fs::remove_file(&tmp);
+    }
+    harden_private_file(path)?;
+    if let Ok(dir) = fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+pub(crate) fn harden_private_file(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("chmod 0600 {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn harden_private_dir(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("chmod 0700 {}: {e}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn merge_missing(source: &Path, target: &Path) -> io::Result<()> {
@@ -118,7 +195,7 @@ fn copy_file_if_missing(source: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_missing;
+    use super::{merge_missing, write_private_file};
     use std::fs;
 
     #[test]
@@ -161,6 +238,25 @@ mod tests {
         assert_eq!(
             fs::read_to_string(target.path().join("memory")).unwrap(),
             "keep this file"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_write_creates_and_repairs_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let target = tempfile::tempdir().unwrap();
+        let path = target.path().join("secret.json");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_private_file(&path, b"new").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
         );
     }
 }

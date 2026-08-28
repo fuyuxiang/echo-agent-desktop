@@ -61,7 +61,7 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
     expect(screen.getByText("按间隔")).toBeInTheDocument();
     expect(screen.getByText("单次")).toBeInTheDocument();
     expect(screen.getByText(/生效日期区间/)).toBeInTheDocument();
-    expect(screen.getByText(/推送到微信小程序/)).toBeInTheDocument();
+    expect(screen.getByText(/完成后推送到通知渠道/)).toBeInTheDocument();
     expect(screen.getByText("取消")).toBeInTheDocument();
     expect(screen.getByText("保存")).toBeInTheDocument();
     // 提示词工具条 chips

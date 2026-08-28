@@ -47,6 +47,7 @@ import {
   notificationMarkAllRead,
   notificationMarkRead,
   permissionList,
+  permissionSave,
   providersList,
   flattenModels,
   skillsList,
@@ -304,6 +305,9 @@ export function HelpSettingsPanel() {
 export function SecuritySettingsPanel() {
   const [rules, setRules] = useState<PermissionRule[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState<PermissionRule>({ action: "ask", tool: "bash", pattern: "" });
+  const [feedback, setFeedback] = useState("");
 
   useEffect(() => {
     permissionList()
@@ -312,10 +316,33 @@ export function SecuritySettingsPanel() {
       .finally(() => setLoading(false));
   }, []);
 
+  const addRule = () => {
+    if (!draft.tool.trim()) return;
+    setRules((items) => [...items, {
+      action: draft.action,
+      tool: draft.tool.trim().toLowerCase(),
+      pattern: draft.pattern?.trim() || undefined,
+    }]);
+    setDraft({ action: "ask", tool: "bash", pattern: "" });
+  };
+
+  const saveRules = async () => {
+    setSaving(true);
+    setFeedback("");
+    try {
+      await permissionSave(rules);
+      setFeedback("规则已保存；重启 Agent 后对既有会话生效。");
+    } catch (error) {
+      setFeedback(`保存失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <SectionShell
       title="安全中心"
-      desc="工具执行权限规则。在 Composer 底部的「默认权限」可以编辑。"
+      desc="编辑工具执行的 allow / ask / deny 规则。"
     >
       <div className="settings-row">
         <div className="settings-row__label">
@@ -333,10 +360,25 @@ export function SecuritySettingsPanel() {
               <span className="rules-list__action">{r.action}</span>
               <span className="rules-list__tool">{r.tool}</span>
               {r.pattern && <span className="rules-list__pattern">{r.pattern}</span>}
+              <button type="button" onClick={() => setRules((items) => items.filter((_, index) => index !== i))} aria-label={`删除规则 ${i + 1}`}>×</button>
             </li>
           ))}
         </ul>
       )}
+      <div className="settings-row">
+        <select value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value })} aria-label="规则动作">
+          <option value="deny">deny</option>
+          <option value="ask">ask</option>
+          <option value="allow">allow</option>
+        </select>
+        <select value={draft.tool} onChange={(e) => setDraft({ ...draft, tool: e.target.value })} aria-label="工具类型">
+          {['bash', 'read', 'edit', 'grep', 'mcp', 'webfetch', 'any'].map((tool) => <option key={tool} value={tool}>{tool}</option>)}
+        </select>
+        <input value={draft.pattern ?? ""} onChange={(e) => setDraft({ ...draft, pattern: e.target.value })} placeholder="匹配模式，如 git *（可选）" />
+        <button type="button" onClick={addRule}>添加规则</button>
+        <button type="button" onClick={() => void saveRules()} disabled={saving}>{saving ? "保存中…" : "保存规则"}</button>
+      </div>
+      {feedback && <p className="settings-hint" role="status">{feedback}</p>}
       <p className="settings-hint">
         EchoAgent 评估顺序：<code>deny</code> &gt; <code>ask</code> &gt; <code>allow</code>。
         修改需重启 EchoAgent 生效。
@@ -443,7 +485,6 @@ export function AccountSettingsPanel() {
   // API key editor state.
   const [editingKey, setEditingKey] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
-  const [showKey, setShowKey] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -492,8 +533,6 @@ export function AccountSettingsPanel() {
     }
   };
 
-  const maskedKey = apiKey ? maskKey(apiKey) : null;
-
   return (
     <SectionShell
       title="API Key 管理"
@@ -525,18 +564,10 @@ export function AccountSettingsPanel() {
                   <span>当前 Key</span>
                 </div>
                 <div className="settings-row__control">
-                  {maskedKey ? (
-                    <code>{showKey ? apiKey : maskedKey}</code>
+                  {apiKey ? (
+                    <code>••••••••（已安全配置）</code>
                   ) : (
                     <span className="settings-warn">未设置</span>
-                  )}
-                  {maskedKey && (
-                    <button
-                      className="settings-reset"
-                      onClick={() => setShowKey((v) => !v)}
-                    >
-                      {showKey ? "隐藏" : "显示"}
-                    </button>
                   )}
                 </div>
               </div>
@@ -576,7 +607,7 @@ export function AccountSettingsPanel() {
                 <button
                   className="settings-btn"
                   onClick={() => {
-                    setKeyDraft(apiKey ?? "");
+                    setKeyDraft("");
                     setEditingKey(true);
                   }}
                   disabled={busy}
@@ -611,11 +642,6 @@ export function AccountSettingsPanel() {
       )}
     </SectionShell>
   );
-}
-
-function maskKey(key: string): string {
-  if (key.length <= 8) return "••••";
-  return key.slice(0, 4) + "••••" + key.slice(-4);
 }
 
 // ---------- 智能体设置 ----------

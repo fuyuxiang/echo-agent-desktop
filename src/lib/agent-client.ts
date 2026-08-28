@@ -138,8 +138,8 @@ export async function agentSetModel(sessionId: string, modelId: string): Promise
 }
 
 /** Send a user prompt; streamed updates arrive via the events below. */
-export async function agentSend(sessionId: string, text: string): Promise<void> {
-  await invoke<void>("agent_send", { sessionId, text });
+export async function agentSend(sessionId: string, text: string, attachments: string[] = []): Promise<void> {
+  await invoke<void>("agent_send", { sessionId, text, attachments });
 }
 
 export async function agentCancel(sessionId: string): Promise<void> {
@@ -825,6 +825,16 @@ export async function internalReload(kind: "mcp_all" | "mcp_project" | "skills" 
   await invoke<void>("internal_reload", { kind });
 }
 
+// ---------- authoritative local policy ----------
+
+export async function policyGet<T>(): Promise<T> {
+  return invoke<T>("policy_get");
+}
+
+export async function policySave<T>(policy: T): Promise<T> {
+  return invoke<T>("policy_save", { policy });
+}
+
 // ---------- automations (local scheduler, WorkBuddy 1:1) ----------
 
 /** Full snapshot: automations (next runs recomputed) + run records. */
@@ -883,7 +893,7 @@ export async function inspirationGenerate(
 // accountGetAuthUrl/accountCancelAuth）已随 OAuth 功能移除。EchoAgent 仅保留
 // xAI API Key（BYOK）认证路径。
 
-/** Get the raw xAI API key (from XAI_API_KEY env / ~/.echo-agent/config). */
+/** Return a masked marker when an xAI API key is configured. */
 export async function accountGetApiKey(): Promise<string | null> {
   return invoke<string | null>("account_get_api_key");
 }
@@ -1084,6 +1094,8 @@ export async function subscribeAgentEvents(handlers: {
   onPlanMode?: (p: unknown) => void;
   /** Fired when the permission mode (auto/yolo) changes. */
   onPermissionMode?: (p: unknown) => void;
+  /** Fired when the current repository HEAD changes. */
+  onGitHead?: (p: unknown) => void;
   /** Fired when the model list updates. */
   onModelsUpdate?: (p: unknown) => void;
   /** Fired on background task lifecycle (`task_backgrounded`/`task_completed`). */
@@ -1125,6 +1137,7 @@ export async function subscribeAgentEvents(handlers: {
   await wire("agent://folder-trust", handlers.onFolderTrust);
   await wire("agent://plan-mode", handlers.onPlanMode);
   await wire("agent://permission-mode", handlers.onPermissionMode);
+  await wire("agent://git-head", handlers.onGitHead);
   await wire("agent://models-update", handlers.onModelsUpdate);
   await wire("agent://task-update", handlers.onTaskUpdate);
   await wire<QuestionRequest>("agent://question", handlers.onQuestion);

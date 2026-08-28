@@ -332,7 +332,9 @@ async fn handle_client_message(
             // Auto-approve: if the permission mode is "always-approve", pick the
             // first allow/allow_always option and respond immediately.
             let perm_mode = crate::permission_config::read_permission_mode();
-            if perm_mode == "always-approve" {
+            if perm_mode == "always-approve"
+                || crate::automations::is_full_access_session(&session_id_str)
+            {
                 let auto_option = options
                     .iter()
                     .find(|o| o.kind == "allow" || o.kind == "allow_always");
@@ -379,7 +381,7 @@ async fn handle_client_message(
 
             let frontend = PermissionFrontend {
                 request_id: id,
-                session_id: session_id_str,
+                session_id: session_id_str.clone(),
                 tool_call_id,
                 tool_kind,
                 title,
@@ -387,6 +389,21 @@ async fn handle_client_message(
                 options,
             };
             let _ = app.emit("agent://permission", frontend);
+            let notify_app = app.clone();
+            let notify_session = session_id_str.clone();
+            tokio::spawn(async move {
+                let _ = crate::notifications::dispatch_external(
+                    &notify_app,
+                    crate::notifications::NotifyMessage {
+                        title: "EchoAgent 权限请求".into(),
+                        body: Some("有工具等待你的授权".into()),
+                        level: "warn".into(),
+                        session_id: Some(notify_session),
+                    },
+                    None,
+                )
+                .await;
+            });
 
             // Wait for the frontend's decision, then answer the agent.
             let outcome = rx.await.unwrap_or(PermissionOutcome::Cancelled);
@@ -445,6 +462,60 @@ async fn handle_client_message(
                             detail,
                         },
                     );
+                }
+                let automation_notification = crate::automations::complete_run_for_session(
+                    &session_id,
+                    stop_reason != "rate_limit" && stop_reason != "error",
+                );
+                crate::notifications::append(
+                    if stop_reason == "rate_limit" || stop_reason == "error" {
+                        crate::notifications::NotificationKind::Error
+                    } else {
+                        crate::notifications::NotificationKind::SessionComplete
+                    },
+                    if stop_reason == "rate_limit" || stop_reason == "error" {
+                        "会话执行失败"
+                    } else {
+                        "会话完成"
+                    },
+                    Some(&stop_reason),
+                    Some(&session_id),
+                    if stop_reason == "rate_limit" || stop_reason == "error" {
+                        "error"
+                    } else {
+                        "info"
+                    },
+                );
+                if automation_notification.unwrap_or(true) {
+                    let notify_app = app.clone();
+                    let notify_session = session_id.clone();
+                    let notify_reason = stop_reason.clone();
+                    tokio::spawn(async move {
+                        let failed = notify_reason == "rate_limit" || notify_reason == "error";
+                        let _ = crate::notifications::dispatch_external(
+                            &notify_app,
+                            crate::notifications::NotifyMessage {
+                                title: if failed {
+                                    "EchoAgent 会话失败".into()
+                                } else {
+                                    "EchoAgent 会话完成".into()
+                                },
+                                body: Some(format!(
+                                    "会话 {}（{}）",
+                                    &notify_session[..notify_session.len().min(8)],
+                                    notify_reason
+                                )),
+                                level: if failed {
+                                    "error".into()
+                                } else {
+                                    "info".into()
+                                },
+                                session_id: Some(notify_session),
+                            },
+                            None,
+                        )
+                        .await;
+                    });
                 }
                 let _ = app.emit(
                     "agent://complete",
