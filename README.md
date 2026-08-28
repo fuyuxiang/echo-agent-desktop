@@ -1,93 +1,93 @@
 <p align="center">
-  <img src="app-icon.png" width="112" height="112" alt="EchoAgent logo" />
+  <img src="app-icon.png" width="112" height="112" alt="EchoAgent Logo" />
 </p>
 
 <h1 align="center">EchoAgent</h1>
 
 <p align="center">
-  <strong>An open-source desktop workspace for autonomous AI agents.</strong>
+  <strong>面向自主 AI Agent 的开源桌面工作台。</strong>
   <br />
-  Bring your own model, connect MCP tools, and run agent workflows from a fast native shell.
+  自带模型、连接 MCP 工具，在轻量原生应用中规划、执行与自动化复杂任务。
 </p>
 
 <p align="center">
-  <a href="README.zh-CN.md">简体中文</a>
-  · <a href="#overview">Overview</a>
-  · <a href="#features">Features</a>
-  · <a href="#quick-start">Quick start</a>
-  · <a href="#architecture">Architecture</a>
-  · <a href="#development">Development</a>
-  · <a href="#roadmap">Roadmap</a>
+  <a href="README.en.md">English</a>
+  · <a href="#项目概览">项目概览</a>
+  · <a href="#核心能力">核心能力</a>
+  · <a href="#快速开始">快速开始</a>
+  · <a href="#技术架构">技术架构</a>
+  · <a href="#开发指南">开发指南</a>
+  · <a href="#路线图">路线图</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/fuyuxiang/echo-agent-desktop/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/fuyuxiang/echo-agent-desktop/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status" /></a>
-  <a href="https://github.com/fuyuxiang/echo-agent-desktop/stargazers"><img src="https://img.shields.io/github/stars/fuyuxiang/echo-agent-desktop?style=flat-square" alt="GitHub stars" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square" alt="MIT license" /></a>
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-2563eb?style=flat-square" alt="Windows and macOS" />
+  <a href="https://github.com/fuyuxiang/echo-agent-desktop/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/fuyuxiang/echo-agent-desktop/ci.yml?branch=main&style=flat-square&label=CI" alt="CI 状态" /></a>
+  <a href="https://github.com/fuyuxiang/echo-agent-desktop/stargazers"><img src="https://img.shields.io/github/stars/fuyuxiang/echo-agent-desktop?style=flat-square" alt="GitHub Stars" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square" alt="MIT 协议" /></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-2563eb?style=flat-square" alt="支持 Windows 和 macOS" />
   <img src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" />
-  <img src="https://img.shields.io/badge/Rust-1.92%2B-dea584?style=flat-square&logo=rust&logoColor=white" alt="Rust 1.92 or newer" />
+  <img src="https://img.shields.io/badge/Rust-1.92%2B-dea584?style=flat-square&logo=rust&logoColor=white" alt="Rust 1.92 或更高版本" />
 </p>
 
 <p align="center">
-  <img src="src/assets/landing-hero.png" alt="EchoAgent — people and an AI agent working together" width="100%" />
+  <img src="src/assets/landing-hero.png" alt="EchoAgent——人与 AI Agent 协同工作" width="100%" />
 </p>
 
-## Overview
+## 项目概览
 
-EchoAgent turns model APIs into a practical desktop agent workspace. It combines conversations, files, tools, permissions, plans, sub-agents, and scheduled work in one application—without requiring an EchoAgent cloud account.
+EchoAgent 将模型 API 转化为真正可落地的桌面 Agent 工作环境。它把对话、文件、工具、权限、计划、子 Agent 与定时任务整合在同一个应用中，无需注册或依赖 EchoAgent 云端账户。
 
-The core agent runtime is embedded directly in the Tauri process and communicates with the React interface through [Agent Client Protocol (ACP)](https://agentclientprotocol.com/). Streaming output, tool calls, approval requests, plan changes, and task lifecycle events therefore share one typed execution path.
+核心 Agent Runtime 直接嵌入 Tauri 进程，并通过 [Agent Client Protocol（ACP）](https://agentclientprotocol.com/)与 React 界面通信。流式输出、工具调用、权限审批、计划更新和任务生命周期因此共享同一条类型安全的执行链路。
 
 > [!IMPORTANT]
-> EchoAgent is pre-1.0 software under active development. Windows and macOS source builds are supported; packaged builds are currently unsigned. Review every permission request before allowing an agent to execute commands or modify files.
+> EchoAgent 目前仍处于 1.0 之前的快速迭代阶段。项目支持在 Windows 与 macOS 上从源码构建，现阶段安装包尚未进行代码签名或公证。允许 Agent 执行命令或修改文件前，请认真核对每一项权限请求。
 
-### Design principles
+### 设计原则
 
-| Principle | What it means in EchoAgent |
+| 原则 | EchoAgent 的实现方式 |
 | --- | --- |
-| **Provider-independent** | Use OpenAI, Anthropic, xAI, DeepSeek, Qwen, or a compatible custom endpoint with your own credentials. |
-| **Workspace-native** | Sessions are attached to real directories, with file context, changes, artifacts, and searchable local history. |
-| **Extensible by default** | Add capabilities through MCP servers, skills, reusable assistants, and sub-agent teams. |
-| **Explicitly controlled** | Folder trust, permission modes, allow/ask/deny rules, and visible tool calls keep execution inspectable. |
-| **Native and efficient** | Tauri, Rust, and the system webview provide a lightweight desktop shell around an in-process runtime. |
+| **供应商无关** | 使用自己的凭证接入 OpenAI、Anthropic、xAI、DeepSeek、通义千问或兼容的自定义服务。 |
+| **以工作空间为核心** | 会话绑定真实目录，并提供文件上下文、变更、产物与可搜索的本地历史。 |
+| **默认可扩展** | 通过 MCP Server、Skills、可复用助理和子 Agent 团队扩展能力。 |
+| **控制边界清晰** | 文件夹信任、权限模式、允许/询问/拒绝规则和可见的工具调用让执行过程可检查。 |
+| **原生且轻量** | 以 Tauri、Rust 和系统 WebView 构建桌面外壳，并在进程内运行 Agent Runtime。 |
 
-## Features
+## 核心能力
 
-| Area | Capabilities |
+| 领域 | 能力 |
 | --- | --- |
-| **Agent workflows** | Streaming conversations, editable plans, rewind and fork, prompt history, slash commands, live sub-agent tasks, cancellation, and team status. |
-| **Models** | Multiple provider profiles, multiple models per provider, context-window configuration, model discovery, and custom OpenAI- or Anthropic-compatible endpoints. |
-| **Tools and extensions** | MCP over stdio or HTTP, MCP OAuth flows, skills, plugins, reusable assistants, and local catalogs. |
-| **Workspace** | Directory-scoped sessions, pinning and archiving, full-text session search, file tree, previews, change tracking, and unified diffs. |
-| **Rich content** | Image attachments, drag and drop, native voice input, syntax highlighting, GitHub Flavored Markdown, KaTeX, Mermaid, and tool-result images. |
-| **Knowledge and memory** | Persisted memory management, local-folder knowledge sources, reusable project context, and assistant definitions. |
-| **Automation** | One-time and recurring local schedules, execution history, connector selection, and per-automation permission modes. |
-| **Integrations** | WebDAV storage plus desktop, Slack, Discord, and generic webhook notifications. |
-| **Safety and policy** | Inline approvals, folder trust, permission rules, configurable execution modes, and policy controls for models and features. |
+| **Agent 工作流** | 流式会话、可编辑计划、回溯与分叉、Prompt 历史、斜杠命令、子 Agent 实时任务、取消执行和团队状态。 |
+| **模型接入** | 多 Provider、多模型、上下文窗口配置、模型列表发现，以及兼容 OpenAI 或 Anthropic 协议的自定义 Endpoint。 |
+| **工具与扩展** | 基于 stdio 或 HTTP 的 MCP、MCP OAuth、Skills、Plugins、可复用助理和本地能力目录。 |
+| **工作空间** | 按目录组织会话、置顶与归档、全文检索、文件树、文件预览、变更跟踪和 Unified Diff。 |
+| **富内容交互** | 图片附件、拖拽输入、原生语音输入、代码高亮、GFM、KaTeX、Mermaid 和工具结果图片。 |
+| **知识与记忆** | 持久化记忆管理、本地文件夹知识源、可复用项目上下文和助理定义。 |
+| **自动化** | 单次或周期性本地调度、执行记录、连接器选择，以及自动化任务级权限模式。 |
+| **外部集成** | WebDAV 存储，以及系统桌面、Slack、Discord 和通用 Webhook 通知。 |
+| **安全与策略** | 行内权限审批、文件夹信任、权限规则、可配置执行模式，以及模型和功能策略控制。 |
 
-## Quick start
+## 快速开始
 
-### Packaged builds
+### 使用安装包
 
-When a packaged build is available, download it from [GitHub Releases](https://github.com/fuyuxiang/echo-agent-desktop/releases). EchoAgent can produce a Windows NSIS installer and a macOS DMG.
+项目发布安装包后，可从 [GitHub Releases](https://github.com/fuyuxiang/echo-agent-desktop/releases) 下载。EchoAgent 支持生成 Windows NSIS 安装程序和 macOS DMG。
 
 > [!WARNING]
-> Current packages are not code-signed or notarized. Only install artifacts from a release you trust and verify the release notes before running them.
+> 当前安装包尚未进行代码签名或公证。请仅安装来自可信 Release 的产物，并在运行前核对对应的发布说明。
 
-### Build from source
+### 从源码构建
 
-#### Prerequisites
+#### 环境要求
 
-| Dependency | Requirement |
+| 依赖 | 要求 |
 | --- | --- |
-| Rust | Stable toolchain, Rust 1.92 or newer. `rust-toolchain.toml` installs `rustfmt` and `clippy`. |
-| Node.js | Node.js 20 or newer; CI uses Node.js 22. |
-| pnpm | pnpm 10. The repository pins the expected package-manager version in `package.json`. |
-| Protocol Buffers | A native `protoc` executable available on `PATH`, or through the `PROTOC` environment variable. |
-| Platform toolchain | macOS: Xcode Command Line Tools. Windows: Visual Studio 2022 Build Tools with **Desktop development with C++** and a Windows SDK. |
+| Rust | Stable 工具链，Rust 1.92 或更高版本。`rust-toolchain.toml` 会安装 `rustfmt` 和 `clippy`。 |
+| Node.js | Node.js 20 或更高版本；CI 使用 Node.js 22。 |
+| pnpm | pnpm 10。项目在 `package.json` 中固定了期望的包管理器版本。 |
+| Protocol Buffers | 系统 `PATH` 中可用的原生 `protoc`，或通过 `PROTOC` 环境变量指定。 |
+| 平台工具链 | macOS：Xcode Command Line Tools。Windows：Visual Studio 2022 Build Tools，并安装 **Desktop development with C++** 工作负载和 Windows SDK。 |
 
-The embedded runtime is included as a pinned Git submodule. Clone recursively and run the setup script so the expected revision and compatibility patches are applied.
+内嵌 Runtime 以固定版本的 Git Submodule 引入。请递归克隆仓库并执行 Setup 脚本，以确保使用正确的上游版本并应用兼容性补丁。
 
 **macOS**
 
@@ -100,7 +100,7 @@ pnpm install --frozen-lockfile
 pnpm tauri dev
 ```
 
-**Windows (PowerShell)**
+**Windows（PowerShell）**
 
 ```powershell
 git clone --recurse-submodules https://github.com/fuyuxiang/echo-agent-desktop.git
@@ -111,21 +111,21 @@ pnpm install --frozen-lockfile
 .\dev.bat
 ```
 
-The first build compiles the complete embedded Rust runtime and may take several minutes and substantial disk space. Incremental builds are considerably faster. See [Windows build notes](docs/WINDOWS_BUILD_NOTES.md) for MSVC, `protoc`, and environment troubleshooting.
+首次构建需要编译完整的内嵌 Rust Runtime，可能耗时数分钟并占用较多磁盘空间，后续增量构建会明显更快。MSVC、`protoc` 和环境配置问题请参阅 [Windows 构建说明](docs/WINDOWS_BUILD_NOTES.md)。
 
-### Configure your first model
+### 配置第一个模型
 
-1. Start EchoAgent and open **Settings → Models**.
-2. Add a provider and enter its API key and endpoint.
-3. Add at least one model under that provider.
-4. Select the model in the composer and start a task.
+1. 启动 EchoAgent，打开「设置 → 模型」。
+2. 添加 Provider，填写 API Key 和 Endpoint。
+3. 在该 Provider 下至少添加一个模型。
+4. 在输入区选择模型并开始任务。
 
-Built-in presets are available for Anthropic, OpenAI, xAI, DeepSeek, and Qwen. Custom OpenAI-compatible and Anthropic-compatible endpoints are also supported.
+项目内置 Anthropic、OpenAI、xAI、DeepSeek 和通义千问配置预设，同时支持兼容 OpenAI 或 Anthropic 协议的自定义服务。
 
 <details>
-<summary><strong>Manual configuration</strong></summary>
+<summary><strong>手动配置</strong></summary>
 
-The UI writes provider configuration to `~/.echo-agent/config.toml`. A minimal OpenAI-compatible configuration looks like this:
+界面会将 Provider 配置写入 `~/.echo-agent/config.toml`。以下是一个最小的 OpenAI 兼容配置：
 
 ```toml
 [models]
@@ -143,144 +143,144 @@ model_provider = "openai"
 name = "GPT-4o"
 ```
 
-Restart EchoAgent after editing the file by hand. The settings UI is recommended because it validates provider fields and preserves unrelated configuration.
+手动编辑后请重启 EchoAgent。建议优先使用设置界面，因为它会校验 Provider 字段，并在更新时保留无关配置。
 
 </details>
 
-## Data and security
+## 数据与安全
 
-EchoAgent keeps its application state under `~/.echo-agent/` by default. Set `ECHO_AGENT_HOME` before launch to use a different directory.
+EchoAgent 默认将应用状态保存在 `~/.echo-agent/`。如需修改数据目录，请在启动前设置 `ECHO_AGENT_HOME`。
 
-| Data | Default location |
+| 数据 | 默认位置 |
 | --- | --- |
-| Providers, permissions, UI defaults, MCP configuration | `~/.echo-agent/config.toml` and `~/.echo-agent/mcp.json` |
-| Conversations and workspace history | `~/.echo-agent/sessions/` |
-| Reusable assistants | `~/.echo-agent/agents/` |
-| Memory and runtime state | `~/.echo-agent/memory/` and EchoAgent-owned JSON files |
+| Provider、权限、界面默认值和 MCP 配置 | `~/.echo-agent/config.toml` 与 `~/.echo-agent/mcp.json` |
+| 会话与工作空间历史 | `~/.echo-agent/sessions/` |
+| 可复用助理 | `~/.echo-agent/agents/` |
+| 记忆与 Runtime 状态 | `~/.echo-agent/memory/` 及 EchoAgent 自有 JSON 文件 |
 
-- API keys and endpoint credentials are stored locally in plaintext. On Unix, EchoAgent applies owner-only permissions to secret-bearing files and directories; on Windows, access depends on the current user's filesystem ACLs.
-- Model, MCP, WebDAV, and notification traffic is sent only to services you configure. No hosted EchoAgent account is required.
-- Tool execution may read files, modify files, or run commands. Use permission rules and restricted modes for repositories or data you do not fully trust.
-- Never commit `~/.echo-agent/config.toml`, copied credentials, or runtime state to version control.
+- API Key 和 Endpoint 凭证以明文形式保存在本机。Unix 系统下，EchoAgent 会为包含密钥的文件和目录设置仅所有者可访问的权限；Windows 下的访问边界取决于当前用户的文件系统 ACL。
+- 模型、MCP、WebDAV 和通知流量只会发往你主动配置的服务，使用项目无需 EchoAgent 托管账户。
+- 工具执行可能读取文件、修改文件或运行命令。处理不完全可信的仓库或数据时，请使用权限规则和受限模式。
+- 不要将 `~/.echo-agent/config.toml`、复制出的凭证或 Runtime 状态提交到版本控制。
 
-## Architecture
+## 技术架构
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ React 18 interface                                          │
-│ components · Zustand stores · Markdown · workspace views    │
+│ React 18 界面                                               │
+│ Components · Zustand Stores · Markdown · Workspace Views    │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ Tauri commands and events
+                       │ Tauri Commands 与 Events
 ┌──────────────────────▼──────────────────────────────────────┐
-│ Tauri 2 / Rust application layer                            │
-│ commands · bridge · sessions · providers · policy · storage │
+│ Tauri 2 / Rust 应用层                                       │
+│ Commands · Bridge · Sessions · Providers · Policy · Storage │
 └──────────────────────┬──────────────────────────────────────┘
-                       │ typed ACP messages over mpsc channels
+                       │ 基于 mpsc Channel 的类型化 ACP 消息
 ┌──────────────────────▼──────────────────────────────────────┐
-│ In-process agent runtime                                    │
-│ session lifecycle · tools · plans · permissions · sub-agents│
+│ 进程内 Agent Runtime                                        │
+│ 会话生命周期 · 工具 · 计划 · 权限 · 子 Agent                │
 └──────────────┬──────────────────┬───────────────────────────┘
                │                  │
-       Model providers        MCP servers / local tools
+          模型 Provider       MCP Server / 本地工具
 ```
 
-The runtime runs on a dedicated OS thread with a current-thread Tokio runtime and `LocalSet`. The Rust bridge translates ACP updates into Tauri events such as `agent://update`, `agent://permission`, and `agent://complete`; the frontend stores apply those events to the active session.
+Runtime 运行在独立 OS 线程上，由 current-thread Tokio Runtime 和 `LocalSet` 驱动。Rust Bridge 将 ACP 更新转换为 `agent://update`、`agent://permission`、`agent://complete` 等 Tauri Event，前端 Store 再将事件应用到对应会话。
 
-### Repository layout
+### 目录结构
 
 ```text
 src/
-├── components/             React views and feature panels
-├── foundation/             Shared icons and UI primitives
-├── lib/                    ACP client, domain logic, and utilities
-├── stores/                 Zustand application stores
-└── styles/                 Design tokens and application styles
+├── components/             React 视图与功能面板
+├── foundation/             通用图标与 UI 基础组件
+├── lib/                    ACP Client、领域逻辑与工具函数
+├── stores/                 Zustand 应用状态
+└── styles/                 Design Tokens 与应用样式
 
 src-tauri/
-├── src/agent_runtime.rs     Embedded runtime lifecycle
-├── src/bridge.rs            ACP-to-Tauri event bridge
-├── src/commands.rs          Session command surface
-├── src/lib.rs               Tauri setup and command registration
-└── src/*.rs                 Providers, MCP, skills, policy, storage, and more
+├── src/agent_runtime.rs     内嵌 Runtime 生命周期
+├── src/bridge.rs            ACP 到 Tauri 的事件桥接
+├── src/commands.rs          会话命令入口
+├── src/lib.rs               Tauri 初始化与命令注册
+└── src/*.rs                 Provider、MCP、Skills、Policy、Storage 等模块
 
-vendor/grok-build/           Pinned Apache-2.0 runtime submodule
-patches/grok-build/          Maintained compatibility patches
-scripts/                     Setup and packaging scripts
-docs/                        Platform-specific documentation
-.github/workflows/           Continuous integration
+vendor/grok-build/           固定版本的 Apache-2.0 Runtime Submodule
+patches/grok-build/          项目维护的兼容性补丁
+scripts/                     初始化与打包脚本
+docs/                        平台专项文档
+.github/workflows/           持续集成配置
 ```
 
-## Development
+## 开发指南
 
-### Commands
+### 常用命令
 
-| Command | Purpose |
+| 命令 | 用途 |
 | --- | --- |
-| `pnpm tauri dev` | Run the complete desktop application in development mode. |
-| `pnpm dev` | Run the Vite frontend only. Tauri APIs are unavailable in a normal browser. |
-| `pnpm test` | Run the Vitest frontend test suite. |
-| `pnpm build` | Type-check TypeScript and create the production frontend bundle. |
-| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | Run Rust unit tests. |
-| `cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored spawn_smoke` | Run the opt-in embedded-runtime smoke test. |
-| `pnpm dist:mac` | Build an unsigned DMG on macOS. |
-| `pnpm dist:win` | Build an unsigned NSIS installer on Windows. |
+| `pnpm tauri dev` | 以开发模式运行完整桌面应用。 |
+| `pnpm dev` | 仅运行 Vite 前端；普通浏览器环境无法使用 Tauri API。 |
+| `pnpm test` | 运行 Vitest 前端测试。 |
+| `pnpm build` | 执行 TypeScript 类型检查并生成生产环境前端产物。 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | 运行 Rust 单元测试。 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored spawn_smoke` | 运行需主动启用的内嵌 Runtime 冒烟测试。 |
+| `pnpm dist:mac` | 在 macOS 上构建未签名 DMG。 |
+| `pnpm dist:win` | 在 Windows 上构建未签名 NSIS 安装程序。 |
 
-CI currently runs TypeScript type-checking, frontend unit tests, and the production frontend build on every pull request. Rust changes should also be verified locally with the relevant Cargo tests.
+CI 会在每个 Pull Request 上执行 TypeScript 类型检查、前端单元测试和生产环境前端构建。涉及 Rust 的变更还应在本地运行对应的 Cargo 测试。
 
-### Contributing
+### 参与贡献
 
-Contributions are welcome, from focused fixes to new runtime capabilities.
+欢迎从小范围修复到 Runtime 新能力等各种形式的贡献。
 
-1. Fork the repository and clone it with submodules.
-2. Create a branch from `main`.
-3. Add tests for behavioral changes and run the relevant checks above.
-4. Keep changes scoped and update documentation when behavior changes.
-5. Open a pull request with the motivation, implementation notes, and verification results.
+1. Fork 仓库，并带 Submodule 克隆到本地。
+2. 从 `main` 创建独立分支。
+3. 为行为变更补充测试，并运行上方对应检查。
+4. 保持变更范围清晰；行为发生变化时同步更新文档。
+5. 创建 Pull Request，说明变更动机、实现要点和验证结果。
 
-For substantial features or architecture changes, open an issue first so the design and compatibility impact can be discussed before implementation.
+对于影响较大的功能或架构调整，请先创建 Issue，以便在编码前讨论设计方案与兼容性影响。
 
-## Roadmap
+## 路线图
 
-- Linux development support and distributable packages
-- Signed and notarized Windows/macOS releases
-- Automated release publishing and artifact checksums
-- A first-party connector and skill catalog
-- End-to-end desktop tests and visual-regression coverage
-- Expanded user documentation and interface localization
+- Linux 开发支持与可分发安装包
+- 已签名并完成公证的 Windows/macOS Release
+- 自动化发布流程与产物校验和
+- 官方维护的 Connector 与 Skill 目录
+- 桌面端端到端测试与视觉回归测试
+- 更完整的用户文档与界面国际化
 
-Roadmap items are directional rather than release commitments. Follow the [issue tracker](https://github.com/fuyuxiang/echo-agent-desktop/issues) for current priorities.
+路线图代表方向，不构成版本承诺。当前优先级请以 [Issue Tracker](https://github.com/fuyuxiang/echo-agent-desktop/issues) 为准。
 
-## FAQ
+## 常见问题
 
 <details>
-<summary><strong>Can I use a local model?</strong></summary>
+<summary><strong>是否支持本地模型？</strong></summary>
 
-Yes, when the local server exposes a compatible OpenAI or Anthropic API. Add it as a custom provider and point `base_url` at the local endpoint. Tool-calling and multimodal behavior depend on the model and server implementation.
+支持，但本地服务需要提供兼容 OpenAI 或 Anthropic 的 API。将其添加为自定义 Provider，并把 `base_url` 指向本地 Endpoint 即可。工具调用和多模态能力取决于具体模型与服务实现。
 
 </details>
 
 <details>
-<summary><strong>Does EchoAgent work on Linux?</strong></summary>
+<summary><strong>是否支持 Linux？</strong></summary>
 
-Linux packages are not currently maintained. The frontend and much of the Rust code are portable, but desktop integration and packaging still need platform-specific work.
+项目目前尚未维护 Linux 安装包。前端和大部分 Rust 代码具备可移植性，但桌面集成与打包仍需要针对 Linux 完成适配和验证。
 
 </details>
 
 <details>
-<summary><strong>Where are my API keys stored?</strong></summary>
+<summary><strong>API Key 保存在什么位置？</strong></summary>
 
-Provider keys are stored in `~/.echo-agent/config.toml`. They are not placed in the repository, but they are plaintext secrets on your local disk. Protect that file and never include it in bug reports or commits.
+Provider Key 保存在 `~/.echo-agent/config.toml`。它不会写入项目仓库，但仍属于本机磁盘上的明文密钥。请妥善保护该文件，且不要将其附在 Issue、日志或 Commit 中。
 
 </details>
 
-## Acknowledgements
+## 致谢
 
-- [xai-org/grok-build](https://github.com/xai-org/grok-build) provides the Apache-2.0 runtime components embedded through pinned Rust path dependencies.
-- [Tauri](https://tauri.app/), [React](https://react.dev/), and [Vite](https://vite.dev/) provide the core application stack.
-- [Tencent WorkBuddy](https://workbuddy.tencent.com/) inspired parts of the product interaction model and visual direction.
+- [xai-org/grok-build](https://github.com/xai-org/grok-build) 提供以固定 Rust Path Dependency 嵌入的 Apache-2.0 Runtime 组件。
+- [Tauri](https://tauri.app/)、[React](https://react.dev/) 和 [Vite](https://vite.dev/) 构成项目的核心应用技术栈。
+- [腾讯 WorkBuddy](https://workbuddy.tencent.com/) 为部分产品交互与视觉方向提供了启发。
 
-EchoAgent is an independent community project. It is not affiliated with, endorsed by, or sponsored by Tencent or xAI.
+EchoAgent 是独立的社区开源项目，与腾讯或 xAI 不存在隶属、背书或赞助关系。
 
-## License
+## 许可证
 
-EchoAgent application code is available under the [MIT License](LICENSE). Vendored and third-party components retain their original licenses; see [Third-Party Notices](THIRD_PARTY_NOTICES.md).
+EchoAgent 应用代码基于 [MIT License](LICENSE) 开源。Vendored 组件与其他第三方依赖继续遵循各自原始许可证，详见 [第三方许可说明](THIRD_PARTY_NOTICES.md)。
