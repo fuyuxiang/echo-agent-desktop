@@ -6,6 +6,22 @@ release
 .DS_Store
 *.log
 
+# Rust / Tauri 构建产物与自动生成的 schema
+/src-tauri/target/
+/src-tauri/gen/schemas/
+
+# 本机环境与 Cargo 工具路径
+.env
+.env.*
+!.env.example
+/src-tauri/.cargo/config.toml
+
+# 测试、覆盖率与编辑器缓存
+.pytest_cache/
+coverage/
+.idea/
+.vscode/
+
 # 规划与设计文档、SDD 工作文件不入库
 .superpowers/
 docs/superpowers/
@@ -13,6 +29,14 @@ docs/superpowers/
 
 # 人工验收清单为本地工作文件, 不入库
 docs/E2E-CHECKLIST.md
+
+# 本机辅助脚本与内部工作文档
+/scripts/_enum-windows.ps1
+/scripts/_get-rect.ps1
+/scripts/_record-echoagent.bat
+/TODO.md
+/WORKBUDDY_UI_REFERENCE.md
+/patches/grok-build/obsolete/
 
 # 内嵌 Python 运行时由 scripts/fetch-python.mjs 构建前拉取, 不入库 (体积大)
 resources/python-standalone-*.tar.gz
