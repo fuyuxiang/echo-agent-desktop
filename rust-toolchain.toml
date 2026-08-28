@@ -1,0 +1,6 @@
+# Use the current stable compiler and let rustup select the native host triple
+# on Windows, macOS, and Linux. Cargo.toml enforces the minimum Rust version.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
