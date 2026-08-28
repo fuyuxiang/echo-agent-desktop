@@ -5,7 +5,7 @@ Studio 2022 Build Tools with the **Desktop development with C++** workload and
 a recent Windows SDK, then launch development through `dev.bat` or from an
 x64 Native Tools terminal.
 
-The embedded grok crates also require a native `protoc` executable. Install
+The embedded runtime crates also require a native `protoc` executable. Install
 Protocol Buffers, ensure `protoc` is on `PATH`, and set `PROTOC` when it is not
 discoverable automatically:
 
@@ -13,7 +13,7 @@ discoverable automatically:
 setx PROTOC "C:\path\to\protoc.exe"
 ```
 
-After cloning, initialize the pinned grok-build submodule and apply the
+After cloning, initialize the pinned upstream runtime submodule and apply the
 repository-maintained compatibility patches:
 
 ```powershell

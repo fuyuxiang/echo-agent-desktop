@@ -7,7 +7,7 @@ import {
 import {
   skillsList, skillsRemove, skillsToggle,
   skillsCatalogDefaultRoot, skillsCatalogLoad,
-} from "@/lib/grok-client";
+} from "@/lib/agent-client";
 import type { SkillCatalog, SkillItem, SkillInfo } from "@/lib/types";
 import { Chip } from "../shared/ui";
 import { SkillCatalogCard } from "./SkillCatalogCard";
@@ -23,7 +23,7 @@ interface Props {
 }
 
 /** 技能 tab — a live catalog scanned from the agents tree + workbuddy
- *  built-ins, plus the existing "我安装的" (grok-managed) view. */
+ *  built-ins, plus the existing "我安装的" (runtime-managed) view. */
 export function SkillsTab({ pills, onToast }: Props) {
   // ---- catalog (market) state ----
   const [root, setRoot] = useState<string>(() => {
@@ -40,7 +40,7 @@ export function SkillsTab({ pills, onToast }: Props) {
   const [modalSkill, setModalSkill] = useState<SkillItem | null>(null);
   const [importOpen, setImportOpen] = useState(false);
 
-  // ---- installed (grok) state ----
+  // ---- installed (EchoAgent) state ----
   const [locals, setLocals] = useState<SkillInfo[]>([]);
   const [localsLoading, setLocalsLoading] = useState(false);
 
@@ -83,14 +83,14 @@ export function SkillsTab({ pills, onToast }: Props) {
     setLocalsLoading(true);
     try { setLocals(await skillsList()); }
     catch (e) {
-      // On the catalog page a failed grok skill list is non-fatal (the local
+      // On the catalog page a failed EchoAgent skill list is non-fatal (the local
       // installed badges just stay empty) — don't spam a toast. Only surface
       // the error when the user explicitly opened the "我安装的" view.
       if (!silent) onToast?.(`加载技能失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
     finally { setLocalsLoading(false); }
   }, [onToast]);
-  // Mount: load silently so the catalog page never shows a grok error toast.
+  // Mount: load silently so the catalog page never shows a EchoAgent error toast.
   useEffect(() => { reloadLocals(true); }, [reloadLocals]);
   // Entering the installed view: reload with feedback.
   useEffect(() => { if (view === "installed") reloadLocals(false); }, [view, reloadLocals]);

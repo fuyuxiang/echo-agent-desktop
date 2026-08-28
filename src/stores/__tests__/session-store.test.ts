@@ -217,7 +217,7 @@ describe("tool_call content 归一化 (normalizeToolCallContent)", () => {
     return part.toolCall.content;
   };
 
-  it("ACP image content(grok read_file 读图片/PDF)→ 前端 image 块", () => {
+  it("ACP image content(EchoAgent read_file 读图片/PDF)→ 前端 image 块", () => {
     const out = applyToolCall([
       {
         type: "content",

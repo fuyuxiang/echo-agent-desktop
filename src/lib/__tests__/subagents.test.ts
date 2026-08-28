@@ -48,7 +48,7 @@ describe("parseSubagentName", () => {
     expect(parseSubagentName("")).toBe("(subagent)");
   });
   it("task 工具标题 + raw_input.subagent_type 提取类型", () => {
-    // grok 的 task 工具把派生目标放在 raw_input.subagent_type
+    // EchoAgent 的 task 工具把派生目标放在 raw_input.subagent_type
     expect(
       parseSubagentName("Task: review the code", {
         subagent_type: "general-purpose",
@@ -70,7 +70,7 @@ describe("isSubagentTool", () => {
     expect(isSubagentTool({ kind: "Subagent", status: "completed", title: "", toolCallId: "", content: [] })).toBe(true);
     expect(isSubagentTool({ kind: "spawn", status: "completed", title: "", toolCallId: "", content: [] })).toBe(true);
   });
-  it("grok 原生 task 工具 (kind=task) 命中", () => {
+  it("EchoAgent 原生 task 工具 (kind=task) 命中", () => {
     expect(isSubagentTool({ kind: "task", status: "completed", title: "Task: do x", toolCallId: "toolu_1", content: [] })).toBe(true);
   });
   it("kind 缺省但 title 以 Task: 开头也命中（kind 序列化为 other）", () => {
@@ -95,7 +95,7 @@ describe("deriveSubagents", () => {
     expect(list[0].isSpawn).toBe(true);
     expect(list[0].status).toBe("completed");
   });
-  it("从 grok task 工具调用派生（kind=task + subagent_type）", () => {
+  it("从 EchoAgent task 工具调用派生（kind=task + subagent_type）", () => {
     const list = deriveSubagents([
       tcMsg("t1", "Task: review code", "task", "in_progress", {
         subagent_type: "general-purpose",

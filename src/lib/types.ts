@@ -3,12 +3,12 @@
  * of `agent-client-protocol` messages EchoAgent's Rust backend forwards to
  * the frontend as Tauri events.
  *
- * Source of truth: the `agent-client-protocol` 0.10.4 crate (used by grok)
+ * Source of truth: the `agent-client-protocol` 0.10.4 crate (used by EchoAgent)
  * and the x.ai extensions documented in
  *   grok-build/crates/codegen/xai-grok-shell/src/extensions/notification.rs
  *
  * The Rust backend serializes these with serde and emits them as the `payload`
- * of `grok://update` / `grok://permission` / `grok://complete` events.
+ * of `agent://update` / `agent://permission` / `agent://complete` events.
  */
 
 // ---------- content blocks ----------
@@ -43,7 +43,7 @@ export interface CommandOutputContent {
   exitCode?: number | null;
 }
 
-/** An image produced by a tool (read_file on an image/PDF in grok).
+/** An image produced by a tool (read_file on an image/PDF in EchoAgent).
  *  Mirrors ACP `ContentBlock::Image` after unwrapping the outer
  *  `{ type: "content", content: … }` envelope (see normalizeToolCallContent). */
 export interface ImageToolContent {
@@ -65,7 +65,7 @@ export type ToolCallContent =
 
 export type ToolCallStatus = "in_progress" | "completed" | "failed";
 
-// Known grok tool kinds (from xai-grok-tools). The wire format allows unknown
+// Known EchoAgent tool kinds (from xai-grok-tools). The wire format allows unknown
 // kinds too — render them generically.
 export type ToolKind =
   | "read_file"
@@ -115,7 +115,7 @@ export interface PlanUpdate {
   plan: Plan;
 }
 
-/** A grok execution plan (ACP `Plan`). Each update replaces the whole plan. */
+/** A EchoAgent execution plan (ACP `Plan`). Each update replaces the whole plan. */
 export interface Plan {
   entries: PlanEntry[];
 }
@@ -149,7 +149,7 @@ export interface ExtensionSessionUpdate {
 
 // ---------- context usage (x.ai/session/info + x.ai/session/usage) ----------
 
-/** One itemized context-cost row from grok (skills listing, MCP servers). */
+/** One itemized context-cost row from EchoAgent (skills listing, MCP servers). */
 export interface TokenUsageCategory {
   /** Display label, e.g. "Skills" or "MCP servers". */
   label: string;
@@ -159,7 +159,7 @@ export interface TokenUsageCategory {
 }
 
 /**
- * Context-window snapshot from grok's `x.ai/session/info`
+ * Context-window snapshot from EchoAgent's `x.ai/session/info`
  * (`ContextInfo` in xai-grok-shell, camelCase on the wire).
  * Note: skills/MCP category estimates overlap `messageTokens` (they're
  * injected as system-reminders in messages), so category percentages are
@@ -226,7 +226,7 @@ export interface PermissionOption {
 }
 
 export interface PermissionRequest {
-  /** Echoed back in `grok_resolve_permission`. */
+  /** Echoed back in `agent_resolve_permission`. */
   requestId: string;
   sessionId: string;
   toolCallId: string;
@@ -271,7 +271,7 @@ export type SessionStatus = "working" | "completed" | "failed" | "pending" | "pl
 
 export interface SessionSummary {
   sessionId: string;
-  /** Human-readable title. Display priority matches grok's `display_title`:
+  /** Human-readable title. Display priority matches EchoAgent's `display_title`:
    * `generated_title` (LLM-generated or manual /rename) > `session_summary`
    * (user's first prompt text). */
   title: string;
@@ -282,12 +282,12 @@ export interface SessionSummary {
   /** True if it's a git repo (inferred from `git_root_dir` in summary.json). */
   isGitRepo?: boolean;
   /** True if the session is pinned to the top of the list.
-   *  EchoAgent-only state (grok has no pinned field); stored in
-   *  `~/.grok/echoagent-state.json`. */
+   *  EchoAgent-only state (EchoAgent has no pinned field); stored in
+   *  `~/.echo-agent/echoagent-state.json`. */
   pinned?: boolean;
   /** True if the session is archived (hidden from the sidebar).
-   *  EchoAgent-only state (grok has no archived field); stored in
-   *  `~/.grok/echoagent-state.json`. */
+   *  EchoAgent-only state (EchoAgent has no archived field); stored in
+   *  `~/.echo-agent/echoagent-state.json`. */
   archived?: boolean;
   /** Model id bound to this session, if recorded in summary.json. */
   currentModelId?: string;
@@ -301,8 +301,8 @@ export interface SessionSummary {
   status?: SessionStatus;
 }
 
-/** Payload of the `grok://summary` event — a freshly generated or renamed
- *  session title pushed by grok via `x.ai/session_notification`
+/** Payload of the `agent://summary` event — a freshly generated or renamed
+ *  session title pushed by EchoAgent via `x.ai/session_notification`
  *  (`SessionSummaryGenerated` variant). */
 export interface SessionSummaryEvent {
   sessionId: string;
@@ -311,7 +311,7 @@ export interface SessionSummaryEvent {
 
 // ---------- skills (x.ai/skills/*) ----------
 
-/** One discovered skill. Mirrors grok's `SkillInfo`. */
+/** One discovered skill. Mirrors EchoAgent's `SkillInfo`. */
 export interface SkillInfo {
   name: string;
   displayName?: string;
@@ -353,14 +353,14 @@ export interface McpUpsertRequest {
   enabled?: boolean;
 }
 
-/** Result of `mcp_auth_trigger` (browser OAuth flow driven by grok). */
+/** Result of `mcp_auth_trigger` (browser OAuth flow driven by EchoAgent). */
 export interface McpAuthTriggerResult {
   /** "authenticated" | "failed" | "setup_required". */
   status: string;
   error?: string;
 }
 
-/** One entry of `mcp_auth_status` — a server grok flagged as needing auth. */
+/** One entry of `mcp_auth_status` — a server EchoAgent flagged as needing auth. */
 export interface McpAuthStatusEntry {
   serverName: string;
   status: string;
@@ -410,7 +410,7 @@ export interface ConnectorCliAuthDoneEvent {
   error?: string;
 }
 
-// ---------- experts / assistants (~/.grok/agents/*.md) ----------
+// ---------- experts / assistants (~/.echo-agent/agents/*.md) ----------
 
 /** One agent definition (subagent template). */
 export interface AgentEntry {
@@ -428,7 +428,7 @@ export interface AgentEntry {
   modelTags?: string[];
 }
 
-// ---------- permission rules (~/.grok/config.toml [permission]) ----------
+// ---------- permission rules (~/.echo-agent/config.toml [permission]) ----------
 
 /** One permission rule. `action` ∈ allow|deny|ask; `tool` ∈ bash|read|edit|grep|mcp|any. */
 export interface PermissionRule {
@@ -437,7 +437,7 @@ export interface PermissionRule {
   pattern?: string;
 }
 
-// ---------- memory (资料库 — ~/.grok/memory/) ----------
+// ---------- memory (资料库 — ~/.echo-agent/memory/) ----------
 
 export interface MemoryEntry {
   /** "global" | "workspace". */
@@ -494,9 +494,9 @@ export interface RunningTask {
   sessionId?: string;
 }
 
-// ---------- subagent live events (grok://subagent) ----------
+// ---------- subagent live events (agent://subagent) ----------
 
-/** A live subagent lifecycle event forwarded from grok's `x.ai/session_notification`. */
+/** A live subagent lifecycle event forwarded from EchoAgent's `x.ai/session_notification`. */
 export interface SubagentLiveEvent {
   /** Parent session that owns the subagent. */
   sessionId: string;
@@ -521,17 +521,17 @@ export interface SubagentLiveEvent {
 }
 
 /**
- * A turn that ended abnormally. grok reports mid-stream failures (e.g. a 429
+ * A turn that ended abnormally. EchoAgent reports mid-stream failures (e.g. a 429
  * rate limit hit while a tool was executing) via `prompt_complete` with
  * `stopReason: "rate_limit" | "error"` rather than as a thrown error. The
- * backend forwards these as `grok://turn-error` so the UI can surface a
+ * backend forwards these as `agent://turn-error` so the UI can surface a
  * friendly explanation instead of silently marking the turn complete.
  */
 export interface TurnErrorEvent {
   sessionId: string;
-  /** "rate_limit" | "error" (mirrors grok's `stop_reason_for_turn_error`). */
+  /** "rate_limit" | "error" (mirrors EchoAgent's `stop_reason_for_turn_error`). */
   kind: "rate_limit" | "error";
-  /** Server-provided detail (absent for rate_limit — grok omits it so the
+  /** Server-provided detail (absent for rate_limit — EchoAgent omits it so the
    *  client shows its own message). */
   detail?: string;
 }
@@ -561,14 +561,14 @@ export type AutomationStatus = "ACTIVE" | "PAUSED";
 
 // ---------- inspiration (灵感面板) ----------
 
-/** Basic card returned by grok's inspiration generator. */
+/** Basic card returned by EchoAgent's inspiration generator. */
 export interface InspirationCard {
   title: string;
   summary: string;
   takeaway: string;
 }
 
-/** Rich card used by the InspirationPanel UI (extends grok output). */
+/** Rich card used by the InspirationPanel UI (extends EchoAgent output). */
 export interface InspirationRichCard {
   cardId: string;
   title: string;
@@ -590,13 +590,13 @@ export interface InspirationStarted {
 }
 
 // ---------- xAI API Key 管理 ----------
-// grok OAuth 账户类型（AccountInfo/SubscriptionStatus/LogoutResult）已随
+// EchoAgent OAuth 账户类型（AccountInfo/SubscriptionStatus/LogoutResult）已随
 // OAuth 功能一并移除；EchoAgent 现仅保留 xAI API Key（BYOK）认证。
 
-// ---------- agent / assistant defaults (~/.grok/config.toml) ----------
+// ---------- agent / assistant defaults (~/.echo-agent/config.toml) ----------
 
 export interface AgentDefaults {
-  /** Model id for new sessions (`[models] default`). Empty = grok's built-in. */
+  /** Model id for new sessions (`[models] default`). Empty = EchoAgent's built-in. */
   defaultModel: string;
   /** Default permission selection (`[ui] default_selected_permission`). */
   defaultPermission: string;
@@ -606,7 +606,7 @@ export interface AgentDefaults {
 
 // ---------- plugins + marketplace (x.ai/plugins/*, x.ai/marketplace/*) ----------
 
-/** One installed plugin (subset of grok's PluginInfo). */
+/** One installed plugin (subset of EchoAgent's PluginInfo). */
 export interface PluginEntry {
   name: string;
   id?: string;

@@ -3,11 +3,11 @@ import { useSessionsStore, selectHasFilter } from "@/stores/sessions-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { IS_MACOS } from "@/lib/platform";
 import {
-  grokRenameSession,
-  grokDeleteSession,
-  grokSetSessionPinned,
-  grokSetSessionArchived,
-} from "@/lib/grok-client";
+  agentRenameSession,
+  agentDeleteSession,
+  agentSetSessionPinned,
+  agentSetSessionArchived,
+} from "@/lib/agent-client";
 import type { SessionSummary, SessionStatus } from "@/lib/types";
 import {
   WbNewTaskIcon,
@@ -633,39 +633,39 @@ export function Sidebar({
     setContextMenu({ x: e.clientX, y: e.clientY, sessionId, sessionTitle, isPinned });
   }, []);
 
-  // Rename via grok's `x.ai/session/rename`. grok broadcasts
-  // SessionSummaryGenerated on success (grok://summary → store upsert); we also
+  // Rename via EchoAgent's `x.ai/session/rename`. EchoAgent broadcasts
+  // SessionSummaryGenerated on success (agent://summary → store upsert); we also
   // update optimistically to avoid flicker.
   const handleRename = useCallback(async (sessionId: string, newTitle: string) => {
     const session = allSessions.find(s => s.sessionId === sessionId);
     if (!session) return;
     try {
-      await grokRenameSession(sessionId, newTitle, session.cwd);
+      await agentRenameSession(sessionId, newTitle, session.cwd);
       upsertSession({ ...session, title: newTitle });
     } catch (e) {
       onToast?.(`重命名失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
   }, [allSessions, upsertSession, onToast]);
 
-  // Delete via grok's `x.ai/session/delete` — removes the on-disk session
+  // Delete via EchoAgent's `x.ai/session/delete` — removes the on-disk session
   // directory. Only drop the sidebar entry once the backend confirms.
   const handleDelete = useCallback(async (sessionId: string) => {
     const session = allSessions.find(s => s.sessionId === sessionId);
     const cwd = session?.cwd;
     try {
-      await grokDeleteSession(sessionId, cwd);
+      await agentDeleteSession(sessionId, cwd);
       removeSession(sessionId);
     } catch (e) {
       onToast?.(`删除失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
   }, [allSessions, removeSession, onToast]);
 
-  // Pin/unpin — EchoAgent-only state (~/.grok/echoagent-state.json).
+  // Pin/unpin — EchoAgent-only state (~/.echo-agent/echoagent-state.json).
   const handlePin = useCallback(async (sessionId: string, pinned: boolean) => {
     const session = allSessions.find(s => s.sessionId === sessionId);
     if (!session) return;
     try {
-      await grokSetSessionPinned(sessionId, pinned);
+      await agentSetSessionPinned(sessionId, pinned);
       upsertSession({ ...session, pinned });
     } catch (e) {
       onToast?.(`置顶失败：${String(e).replace(/^Error:\s*/, "")}`);
@@ -676,7 +676,7 @@ export function Sidebar({
   // list_sessions, so drop the sidebar entry immediately on success.
   const handleArchive = useCallback(async (sessionId: string) => {
     try {
-      await grokSetSessionArchived(sessionId, true);
+      await agentSetSessionArchived(sessionId, true);
       removeSession(sessionId);
     } catch (e) {
       onToast?.(`归档失败：${String(e).replace(/^Error:\s*/, "")}`);

@@ -1,18 +1,15 @@
 /**
- * 关于 EchoAgent 对话框 - 显示版本/内核/认证信息。
+ * 关于 EchoAgent 对话框 - 显示版本、运行时和认证信息。
  *
- * 从 grokInit() 的 InitResult 取 agentVersion，从 grokAuthStatus() 取认证状态，
- * 内核路径指向项目内 vendor/grok-build submodule。
+ * 从 agentInit() 的 InitResult 取 agentVersion，从 agentAuthStatus() 取认证状态，
  */
 import { useEffect, useState } from "react";
 import { XCloseIcon, CheckIcon } from "@/foundation/components/Icon/icons";
-import { grokAuthStatus } from "@/lib/grok-client";
-import type { InitResult } from "@/lib/grok-client";
+import { agentAuthStatus } from "@/lib/agent-client";
+import type { InitResult } from "@/lib/agent-client";
 import { APP_VERSION } from "@/lib/app-version";
 import logoUrl from "@/assets/echoagent-logo.svg";
-// grok-build 是 EchoAgent 的进程内内核，作为 git submodule 内置于 vendor/grok-build，
-// 通过 Cargo 相对路径依赖引入。
-const GROK_BUILD_PATH = "vendor/grok-build (submodule)";
+const RUNTIME_LABEL = "EchoAgent Runtime（内置）";
 
 interface AboutDialogProps {
   open: boolean;
@@ -26,7 +23,7 @@ export function AboutDialog({ open, onClose, init }: AboutDialogProps) {
 
   useEffect(() => {
     if (!open) return;
-    grokAuthStatus()
+    agentAuthStatus()
       .then((s) => {
         setAuthReady(s.ready);
         setProviders(s.providers);
@@ -58,7 +55,7 @@ export function AboutDialog({ open, onClose, init }: AboutDialogProps) {
           <div>
             <h2 className="about-dialog__title">EchoAgent</h2>
             <p className="about-dialog__subtitle">
-              WorkBuddy 风格的 grok 桌面外壳
+              开源桌面 Agent 工作台
             </p>
           </div>
         </div>
@@ -68,7 +65,7 @@ export function AboutDialog({ open, onClose, init }: AboutDialogProps) {
             <dd>v{APP_VERSION}</dd>
           </div>
           <div className="about-dialog__row">
-            <dt>grok agent</dt>
+            <dt>Agent 运行时</dt>
             <dd>{init?.agentVersion ?? "未知"}</dd>
           </div>
           <div className="about-dialog__row">
@@ -80,10 +77,8 @@ export function AboutDialog({ open, onClose, init }: AboutDialogProps) {
             <dd title={init?.cwd}>{init?.cwd ?? "—"}</dd>
           </div>
           <div className="about-dialog__row">
-            <dt>内核路径</dt>
-            <dd title={GROK_BUILD_PATH}>
-              <code>{GROK_BUILD_PATH}</code>
-            </dd>
+            <dt>运行时</dt>
+            <dd>{RUNTIME_LABEL}</dd>
           </div>
           <div className="about-dialog__row">
             <dt>认证状态</dt>
@@ -107,8 +102,8 @@ export function AboutDialog({ open, onClose, init }: AboutDialogProps) {
           )}
         </dl>
         <p className="about-dialog__footer">
-          基于 <code>Tauri 2</code> + <code>React</code> +{" "}
-          <code>xai-grok-shell</code> 内置。
+          基于 <code>Tauri 2</code> + <code>React</code>。第三方组件及许可详见{" "}
+          <code>THIRD_PARTY_NOTICES</code>。
         </p>
       </div>
     </div>

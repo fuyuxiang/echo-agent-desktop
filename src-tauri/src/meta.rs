@@ -1,10 +1,10 @@
 //! EchoAgent's own metadata sidecar.
 //!
-//! grok's `summary.json` (and the in-memory `Summary` it serializes) does NOT
+//! EchoAgent's `summary.json` (and the in-memory `Summary` it serializes) does NOT
 //! support a `pinned` field — it only knows its own schema, and writing an
-//! unknown key would be clobbered the next time grok flushes. So we keep
+//! unknown key would be clobbered the next time EchoAgent flushes. So we keep
 //! EchoAgent-only state (currently: pinned + archived sessions) in a separate file:
-//! `~/.grok/echoagent-state.json`.
+//! `~/.echo-agent/echoagent-state.json`.
 //!
 //! Read on every `list_sessions` call and merged into the per-session
 //! `SessionSummary`. The shape is intentionally a small versioned object so
@@ -78,18 +78,8 @@ impl EchoAgentState {
     }
 }
 
-/// Resolve `~/.grok` (or `$GROK_HOME`). Matches `sessions.rs` / `providers.rs`.
-fn grok_home() -> PathBuf {
-    if let Ok(custom) = std::env::var("GROK_HOME") {
-        return PathBuf::from(custom);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".grok")
-}
-
 fn state_path() -> PathBuf {
-    grok_home().join("echoagent-state.json")
+    crate::paths::echo_agent_home_dir().join("echoagent-state.json")
 }
 
 /// Read EchoAgent state. Missing/corrupt → default (we never block startup on
@@ -256,15 +246,15 @@ mod tests {
         assert!(state.archived_sessions.is_empty());
     }
 
-    // --- set_pinned / set_archived with GROK_HOME redirect ---
-    // NOTE: These tests share the GROK_HOME env var, so they MUST run in a
+    // --- set_pinned / set_archived with ECHO_AGENT_HOME redirect ---
+    // NOTE: These tests share the ECHO_AGENT_HOME env var, so they MUST run in a
     // single test function to avoid race conditions (cargo test runs tests
     // in parallel threads within the same process).
 
     #[test]
     fn set_pinned_and_archived_lifecycle() {
         let tmp = tempfile::tempdir().unwrap();
-        std::env::set_var("GROK_HOME", tmp.path());
+        std::env::set_var("ECHO_AGENT_HOME", tmp.path());
 
         // --- pinned lifecycle ---
         // Pin
@@ -322,6 +312,6 @@ mod tests {
         let state = read_state();
         assert!(!state.archived_sessions.contains(&"session-2".to_string()));
 
-        std::env::remove_var("GROK_HOME");
+        std::env::remove_var("ECHO_AGENT_HOME");
     }
 }

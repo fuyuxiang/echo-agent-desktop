@@ -26,7 +26,7 @@ interface ProjectsPanelProps {
   onSelectWorkspace?: (cwd: string) => void;
   onToast?: (msg: string) => void;
   onStartProject?: (project: ProjectMeta) => void;
-  /** Start a new conversation within a project (creates a real grok session). */
+  /** Start a new conversation within a project (creates a real EchoAgent session). */
   onStartProjectConversation?: (projectId: string, message: string) => void;
 }
 

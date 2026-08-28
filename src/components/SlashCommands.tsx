@@ -1,11 +1,11 @@
 /**
  * Slash 命令补全菜单 - Composer 输入 / 时弹出
  *
- * 数据来自 grok 的 `x.ai/commands/list`（builtin + skills + plugins 注入的命令）。
+ * 数据来自 EchoAgent 的 `x.ai/commands/list`（builtin + skills + plugins 注入的命令）。
  * 用户选中后会把命令名插入到 Composer 输入框。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { commandsList } from "@/lib/grok-client";
+import { commandsList } from "@/lib/agent-client";
 import type { SlashCommand } from "@/lib/types";
 
 interface SlashCommandsProps {
@@ -66,7 +66,7 @@ export function SlashCommands({ text, cursor, onPick }: SlashCommandsProps) {
 
   return (
     <div className="slash-commands" role="listbox">
-      <div className="slash-commands__header">命令（来自 grok 内置/技能/插件）</div>
+      <div className="slash-commands__header">命令（来自 EchoAgent 内置/技能/插件）</div>
       <ul className="slash-commands__list">
         {matches.slice(0, 12).map((cmd, idx) => (
           <li key={cmd.name}>

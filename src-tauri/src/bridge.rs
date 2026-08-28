@@ -1,11 +1,11 @@
 //! ACP → Tauri bridge.
 //!
-//! A long-lived task drains `GrokHandle.rx` (the agent→client channel) and:
-//!  - `SessionNotification` → serialize the SessionUpdate, emit `grok://update`,
+//! A long-lived task drains `AgentHandle.rx` (the agent→client channel) and:
+//!  - `SessionNotification` → serialize the SessionUpdate, emit `agent://update`,
 //!    then ack the oneshot (agent future hangs otherwise);
 //!  - `RequestPermission` → register a pending permission in `Permissions`,
-//!    emit `grok://permission` (the frontend resolves via a command);
-//!  - `ExtNotification("x.ai/session/prompt_complete")` → emit `grok://complete`;
+//!    emit `agent://permission` (the frontend resolves via a command);
+//!  - `ExtNotification("x.ai/session/prompt_complete")` → emit `agent://complete`;
 //!  - fs/terminal requests → never arrive (we advertised no capability); if
 //!    they do, we deny so the agent future still completes.
 
@@ -22,7 +22,7 @@ use uuid::Uuid;
 use xai_acp_lib::AcpClientMessage;
 
 /// Registry of permissions awaiting a user decision. The frontend calls the
-/// `grok_resolve_permission` command, which looks up the entry by id and
+/// `agent_resolve_permission` command, which looks up the entry by id and
 /// fulfills the oneshot the agent is waiting on.
 #[derive(Default, Clone)]
 pub struct Permissions {
@@ -30,7 +30,7 @@ pub struct Permissions {
 }
 
 /// Registry of questions awaiting a user answer. The frontend calls the
-/// `grok_resolve_question` command, which looks up the entry by id and
+/// `agent_resolve_question` command, which looks up the entry by id and
 /// fulfills the oneshot the agent is waiting on.
 #[derive(Default, Clone)]
 pub struct Questions {
@@ -58,7 +58,7 @@ pub struct QuestionItem {
 
 /// Frontend → bridge outcome for an `ask_user_question` reverse-request.
 ///
-/// The wire format sent back to grok must match
+/// The wire format sent back to EchoAgent must match
 /// `AskUserQuestionExtResponse` (internally tagged on `"outcome"`,
 /// snake_case variants): e.g. `{"outcome":"accepted","answers":{...}}`.
 pub enum QuestionOutcome {
@@ -130,7 +130,7 @@ impl Permissions {
         (id, rx)
     }
 
-    /// Called by the `grok_resolve_permission` command.
+    /// Called by the `agent_resolve_permission` command.
     pub async fn resolve(&self, id: &str, outcome: PermissionOutcome) -> bool {
         let mut map = self.inner.lock().await;
         if let Some(tx) = map.remove(id) {
@@ -171,14 +171,14 @@ impl Questions {
     }
 }
 
-/// Payload emitted on the `grok://update` event — the raw SessionUpdate JSON,
+/// Payload emitted on the `agent://update` event — the raw SessionUpdate JSON,
 /// plus the session id it belongs to (so the frontend can route updates for
 /// side-channel sessions like inspiration generation away from the main
 /// transcript store).
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateEvent {
-    /// Session id this update belongs to. `None` only if grok omitted it
+    /// Session id this update belongs to. `None` only if EchoAgent omitted it
     /// (shouldn't happen for SessionNotification). When present, the frontend
     /// checks it against the current session before applying.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -187,7 +187,7 @@ pub struct UpdateEvent {
     pub update: Value,
 }
 
-/// Payload emitted on `grok://complete`.
+/// Payload emitted on `agent://complete`.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompleteEvent {
@@ -195,8 +195,8 @@ pub struct CompleteEvent {
     pub stop_reason: String,
 }
 
-/// Payload emitted on `grok://turn-error` — a turn that ended abnormally
-/// (`stopReason: "rate_limit" | "error"`). grok reports mid-stream failures
+/// Payload emitted on `agent://turn-error` — a turn that ended abnormally
+/// (`stopReason: "rate_limit" | "error"`). EchoAgent reports mid-stream failures
 /// (e.g. a 429 hit while a tool was running) via `prompt_complete` with these
 /// stop reasons rather than as a thrown error, so without this event the
 /// frontend would silently mark the turn "complete" and the user would see no
@@ -205,16 +205,16 @@ pub struct CompleteEvent {
 #[serde(rename_all = "camelCase")]
 pub struct TurnErrorEvent {
     pub session_id: String,
-    /// "rate_limit" | "error" (mirrors grok's `stop_reason_for_turn_error`).
+    /// "rate_limit" | "error" (mirrors EchoAgent's `stop_reason_for_turn_error`).
     pub kind: String,
-    /// Server-provided detail string (null for rate_limit — grok deliberately
+    /// Server-provided detail string (null for rate_limit — EchoAgent deliberately
     /// omits it so the client shows its own message). We forward it verbatim
     /// when present; the frontend decides how to render.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
 
-/// Payload emitted on `grok://summary` — a freshly generated (or manually
+/// Payload emitted on `agent://summary` — a freshly generated (or manually
 /// renamed) session title. The frontend updates the sidebar entry in place.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -223,8 +223,8 @@ pub struct SummaryEvent {
     pub title: String,
 }
 
-/// Payload emitted on `grok://subagent` — a live subagent lifecycle event
-/// (spawned / progress / finished). grok sends these as
+/// Payload emitted on `agent://subagent` — a live subagent lifecycle event
+/// (spawned / progress / finished). EchoAgent sends these as
 /// `x.ai/session_notification` extension notifications addressed to the
 /// parent session. We forward the relevant fields so the frontend can show
 /// live subagent progress (turns, tokens, duration, status) — aligning with
@@ -290,7 +290,7 @@ pub fn spawn_dispatcher(
         while let Some(msg) = rx.recv().await {
             handle_client_message(&app, msg, &permissions, &questions).await;
         }
-        tracing::info!("grok agent channel closed");
+        tracing::info!("EchoAgent agent channel closed");
     });
 }
 
@@ -304,9 +304,9 @@ async fn handle_client_message(
         AcpClientMessage::SessionNotification(b) => {
             let update = serialize_session_update(&b.request.update);
             let sid = b.request.session_id.0.as_ref().to_string();
-            tracing::debug!(session_id = %sid, update = %update, "grok://update");
+            tracing::debug!(session_id = %sid, update = %update, "agent://update");
             let _ = app.emit(
-                "grok://update",
+                "agent://update",
                 UpdateEvent {
                     session_id: Some(sid),
                     update,
@@ -386,7 +386,7 @@ async fn handle_client_message(
                 raw_input,
                 options,
             };
-            let _ = app.emit("grok://permission", frontend);
+            let _ = app.emit("agent://permission", frontend);
 
             // Wait for the frontend's decision, then answer the agent.
             let outcome = rx.await.unwrap_or(PermissionOutcome::Cancelled);
@@ -419,12 +419,12 @@ async fn handle_client_message(
                     .and_then(|v| v.as_str())
                     .unwrap_or("end_turn")
                     .to_string();
-                // grok reports mid-turn failures (429 hit while a tool was
+                // EchoAgent reports mid-turn failures (429 hit while a tool was
                 // running, connection reset, etc.) via prompt_complete with
                 // stopReason "rate_limit" or "error" — NOT as a thrown error.
                 // The `agent_result` field carries the server detail for
                 // generic errors (null/absent for rate_limit). Forward both as
-                // a dedicated `grok://turn-error` so the UI can surface a
+                // a dedicated `agent://turn-error` so the UI can surface a
                 // friendly message instead of silently marking the turn done.
                 if stop_reason == "rate_limit" || stop_reason == "error" {
                     let detail = params
@@ -435,10 +435,10 @@ async fn handle_client_message(
                         session_id = %session_id,
                         stop_reason = %stop_reason,
                         detail,
-                        "turn ended abnormally — emitting grok://turn-error"
+                        "turn ended abnormally — emitting agent://turn-error"
                     );
                     let _ = app.emit(
-                        "grok://turn-error",
+                        "agent://turn-error",
                         TurnErrorEvent {
                             session_id: session_id.clone(),
                             kind: stop_reason.clone(),
@@ -447,14 +447,14 @@ async fn handle_client_message(
                     );
                 }
                 let _ = app.emit(
-                    "grok://complete",
+                    "agent://complete",
                     CompleteEvent {
                         session_id,
                         stop_reason,
                     },
                 );
             } else if method == "x.ai/session_notification" {
-                // Session-scoped notification: grok uses this to push
+                // Session-scoped notification: EchoAgent uses this to push
                 // `SessionSummaryGenerated` after the first user prompt (the
                 // LLM-generated title). The update is a tagged enum with the
                 // wire field name `sessionUpdate` (see notification.rs:359).
@@ -466,26 +466,26 @@ async fn handle_client_message(
             } else if method == "x.ai/mcp/server_status" || method == "x.ai/mcp/init_progress" {
                 // MCP connector status / startup progress — surface to the
                 // connectors panel for live state updates.
-                let _ = app.emit("grok://mcp-status", &params);
+                let _ = app.emit("agent://mcp-status", &params);
             } else if method == "x.ai/folder_trust/request" {
-                // grok is asking us to trust a folder before running tools in
+                // EchoAgent is asking us to trust a folder before running tools in
                 // it. Surface to the frontend as a trust dialog.
-                let _ = app.emit("grok://folder-trust", &params);
+                let _ = app.emit("agent://folder-trust", &params);
             } else if method == "x.ai/toggle_plan_mode" {
-                // Plan mode toggled (either by us or by grok). Mirror to frontend.
-                let _ = app.emit("grok://plan-mode", &params);
+                // Plan mode toggled (either by us or by EchoAgent). Mirror to frontend.
+                let _ = app.emit("agent://plan-mode", &params);
             } else if method == "x.ai/yolo_mode_changed" {
                 // Permission mode (auto/yolo) changed.
-                let _ = app.emit("grok://permission-mode", &params);
+                let _ = app.emit("agent://permission-mode", &params);
             } else if method == "x.ai/models/update" {
                 // Model list updated (e.g. after config reload).
-                let _ = app.emit("grok://models-update", &params);
+                let _ = app.emit("agent://models-update", &params);
             } else if method == "x.ai/task_backgrounded" || method == "x.ai/task_completed" {
                 // Background task lifecycle — refresh the tasks panel.
-                let _ = app.emit("grok://task-update", &params);
+                let _ = app.emit("agent://task-update", &params);
             } else if method == "x.ai/git_head_changed" || method == "x.ai/gitHeadChanged" {
                 // git HEAD moved — useful for status bar / worktree UI.
-                let _ = app.emit("grok://git-head", &params);
+                let _ = app.emit("agent://git-head", &params);
             }
             let _ = b.response_tx.send(Ok(()));
         }
@@ -587,8 +587,8 @@ async fn handle_client_message(
                     questions: items,
                     timeout,
                 };
-                tracing::info!(request_id = %frontend.request_id, "emitting grok://question");
-                let _ = app.emit("grok://question", frontend);
+                tracing::info!(request_id = %frontend.request_id, "emitting agent://question");
+                let _ = app.emit("agent://question", frontend);
 
                 // Timeout / drop → Cancelled (same model text as user cancel).
                 let outcome = rx.await.unwrap_or(QuestionOutcome::Cancelled);
@@ -635,11 +635,11 @@ async fn handle_client_message(
 }
 
 /// Parse an `x.ai/session_notification` payload and, if it carries a freshly
-/// generated session title (`SessionSummaryGenerated`), emit `grok://summary`
+/// generated session title (`SessionSummaryGenerated`), emit `agent://summary`
 /// so the frontend can update the sidebar entry. Unknown update variants are
 /// ignored (we ACK regardless, in `handle_client_message`).
 ///
-/// The wire shape (snake_case tag AND fields — grok's `SessionUpdate` uses
+/// The wire shape (snake_case tag AND fields — EchoAgent's `SessionUpdate` uses
 /// `rename_all = "snake_case"` on the enum, which renames only the tag; the
 /// struct-variant fields keep their Rust snake_case names):
 /// ```json
@@ -671,9 +671,9 @@ fn handle_session_notification(app: &AppHandle, params: &Value) {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if !title.is_empty() {
-                tracing::info!(session_id, title, "emitting grok://summary");
+                tracing::info!(session_id, title, "emitting agent://summary");
                 let _ = app.emit(
-                    "grok://summary",
+                    "agent://summary",
                     SummaryEvent {
                         session_id: session_id.to_string(),
                         title: title.to_string(),
@@ -696,8 +696,8 @@ fn handle_session_notification(app: &AppHandle, params: &Value) {
     }
 }
 
-/// Forward subagent lifecycle events to the frontend as `grok://subagent`.
-/// grok emits `subagent_spawned` (before child starts), `subagent_progress`
+/// Forward subagent lifecycle events to the frontend as `agent://subagent`.
+/// EchoAgent emits `subagent_spawned` (before child starts), `subagent_progress`
 /// (every ~2s while running), and `subagent_finished` (on completion).
 fn emit_subagent_event(app: &AppHandle, parent_session_id: &str, kind: &str, update: &Value) {
     let subagent_id = update
@@ -775,9 +775,9 @@ fn emit_subagent_event(app: &AppHandle, parent_session_id: &str, kind: &str, upd
         session_id = %evt.session_id,
         phase = %evt.phase,
         subagent_id = %evt.subagent_id,
-        "emitting grok://subagent"
+        "emitting agent://subagent"
     );
-    let _ = app.emit("grok://subagent", evt);
+    let _ = app.emit("agent://subagent", evt);
 }
 
 /// Send a MethodNotFound error on a fs/terminal response channel. We advertised

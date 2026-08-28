@@ -9,7 +9,7 @@ import {
   connectorsCliStatus, connectorsCliUnauth,
   mcpAuthStatus, mcpAuthTrigger, mcpConfigRead, mcpConfigSave,
   onConnectorCliAuthUrl, onConnectorCliAuthLog, openUrl, skillsAdd,
-} from "@/lib/grok-client";
+} from "@/lib/agent-client";
 import { ensureSession } from "@/lib/ensure-session";
 import { useSessionStore } from "@/stores/session-store";
 import type { ConnectorCatalog, ConnectorCliStatus, ConnectorItem } from "@/lib/types";
@@ -36,7 +36,7 @@ type AuthPhase =
   | { kind: "oauth"; connector: ConnectorItem; error?: string }
   | { kind: "cli"; connector: ConnectorItem; url?: string; qrModal: boolean; logs: string[] };
 
-/** authMode values that go through grok's browser OAuth after install. */
+/** authMode values that go through EchoAgent's browser OAuth after install. */
 const OAUTH_MODES = new Set(["server-side", "oneid-token", "gateway", "mcp"]);
 
 /** Substitute `${VAR}` placeholders recursively with collected token values. */
@@ -61,7 +61,7 @@ function nameMatches(name: string, c: ConnectorItem): boolean {
 
 /** 连接器 tab — a live directory of MCP-type connectors loaded from the
  *  WorkBuddy connectors marketplace. Cards open a detail modal; connect goes
- *  through per-kind auth flows (token form / grok browser OAuth / CLI QR). */
+ *  through per-kind auth flows (token form / EchoAgent browser OAuth / CLI QR). */
 export function ConnectorsTab({ pills, onToast }: Props) {
   const [root, setRoot] = useState<string>(() => {
     try { return localStorage.getItem(LS_ROOT) || ""; } catch { return ""; }
@@ -80,9 +80,9 @@ export function ConnectorsTab({ pills, onToast }: Props) {
   const [mcpEditing, setMcpEditing] = useState(false);
 
   // ---- authorization state ----
-  /** Server names present in ~/.grok/mcp.json (install heuristic). */
+  /** Server names present in ~/.echo-agent/mcp.json (install heuristic). */
   const [installedServers, setInstalledServers] = useState<Set<string>>(new Set());
-  /** Server names grok flagged as needing OAuth. */
+  /** Server names EchoAgent flagged as needing OAuth. */
   const [needsAuth, setNeedsAuth] = useState<Set<string>>(new Set());
   /** CLI connector probe results, keyed by source (lazy + background). */
   const [cliStatus, setCliStatus] = useState<Record<string, ConnectorCliStatus>>({});
@@ -131,7 +131,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** Refresh installed-server + needs-auth state (mcp.json + grok auth_status). */
+  /** Refresh installed-server + needs-auth state (mcp.json + EchoAgent auth_status). */
   const refreshState = useCallback(async () => {
     try {
       const file = await mcpConfigRead();
@@ -223,7 +223,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
   const [tokenFormConnector, setTokenFormConnector] = useState<ConnectorItem | null>(null);
 
   /** Read the connector's mcp.json, optionally inject token values, merge into
-   *  `~/.grok/mcp.json`, and save (syncs live into grok when a session is
+   *  `~/.echo-agent/mcp.json`, and save (syncs live into EchoAgent when a session is
    *  given). Returns the installed server names. */
   const installConnector = useCallback(async (
     c: ConnectorItem,
@@ -265,7 +265,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
     return Object.keys(incomingServers);
   }, [root]);
 
-  /** grok browser-OAuth flow for one or more installed servers. */
+  /** EchoAgent browser-OAuth flow for one or more installed servers. */
   const startOauthFlow = useCallback(async (
     c: ConnectorItem,
     sessionId: string,
@@ -357,7 +357,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
         return;
       }
 
-      // Everything else needs the config live in grok → session required.
+      // Everything else needs the config live in EchoAgent → session required.
       const sessionId = await ensureSession();
       const names = await installConnector(c, sessionId);
       await refreshState();
@@ -371,7 +371,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
         return;
       }
 
-      // OAuth-ish connectors always trigger; others only when grok flags them.
+      // OAuth-ish connectors always trigger; others only when EchoAgent flags them.
       if (OAUTH_MODES.has(mode)) {
         await startOauthFlow(c, sessionId, names);
         return;

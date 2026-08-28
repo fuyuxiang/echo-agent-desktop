@@ -40,6 +40,12 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../LICENSE": "LICENSE",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../vendor/grok-build/LICENSE": "licenses/grok-build-LICENSE",
+      "../vendor/grok-build/third_party/NOTICE": "licenses/grok-build-THIRD-PARTY-NOTICE"
+    }
   }
 }
