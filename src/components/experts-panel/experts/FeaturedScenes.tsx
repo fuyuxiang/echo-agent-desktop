@@ -50,7 +50,7 @@ export function FeaturedScenes({
           if (members.length === 0) return null;
           const gradient = scene.from && scene.to
             ? `linear-gradient(150deg, ${scene.from}, ${scene.to})`
-            : "var(--wb-bg-tertiary)";
+            : "var(--echo-bg-tertiary)";
           return (
             <article key={scene.id} className="ec-scene-card" style={{ background: gradient }}>
               <SceneBanner local={scene.imageLocal} remote={scene.image} />

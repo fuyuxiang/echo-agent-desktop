@@ -279,7 +279,7 @@ export function InspirationPanel({ cwd, onToast, onLaunch }: InspirationPanelPro
         {!loading && filteredCards.length === 0 && (
           <div className="inspiration-state-message">
             <div className="inspiration-state-icon">
-              <LightbulbIcon size="xl" color="var(--wb-text-tertiary)" />
+              <LightbulbIcon size="xl" color="var(--echo-text-tertiary)" />
             </div>
             <div className="inspiration-state-text">暂无灵感内容</div>
             <div className="inspiration-state-sub">

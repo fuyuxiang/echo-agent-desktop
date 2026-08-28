@@ -55,6 +55,9 @@ export function ChatView({
   onSelectMode,
   onSelectExpert,
   onNavigateConnectors,
+  apiReady = true,
+  setupHint,
+  onOpenSettings,
 }: {
   onSend: (text: string, attachments?: string[]) => void;
   onCancel: () => void;
@@ -73,6 +76,10 @@ export function ChatView({
   onSelectMode?: (modeId: HomeModeId) => void;
   onSelectExpert?: (agent: AgentEntry) => void;
   onNavigateConnectors?: () => void;
+  /** False when this session has no configured model or usable credential. */
+  apiReady?: boolean;
+  setupHint?: string;
+  onOpenSettings?: () => void;
 }) {
   const messages = useSessionStore((s) => s.messages);
   const streaming = useSessionStore((s) => s.streaming);
@@ -80,16 +87,16 @@ export function ChatView({
   const error = useSessionStore((s) => s.error);
   const plan = useSessionStore((s) => s.plan);
   const sessionId = useSessionStore((s) => s.sessionId);
-  // 会话内查找(对齐 WorkBuddy chat-search)。
+  // 会话内查找(对齐 EchoAgent chat-search)。
   const [findOpen, setFindOpen] = useState(false);
   const [findHits, setFindHits] = useState<string[]>([]);
   const [findCurrent, setFindCurrent] = useState<string | null>(null);
-  // 文件变更聚合面板(对齐 WorkBuddy file-changes-panel)。
+  // 文件变更聚合面板(对齐 EchoAgent file-changes-panel)。
   const [fileChangesOpen, setFileChangesOpen] = useState(false);
-  // 子代理运行时面板(对齐 WorkBuddy team-runtime)。
+  // 子代理运行时面板(对齐 EchoAgent team-runtime)。
   const [subagentsOpen, setSubagentsOpen] = useState(false);
   const [teamsOpen, setTeamsOpen] = useState(false);
-  // pause/yield(对齐 WorkBuddy session:requestYield):软暂停,保留会话上下文。
+  // pause/yield(对齐 EchoAgent session:requestYield):软暂停,保留会话上下文。
   const [yieldStore, setYieldStore] = useState<Record<string, ReturnType<typeof createYieldStore>>["k"]>(() => createYieldStore());
   const yielded = sessionId ? isYielded(yieldStore, sessionId) : false;
   const handlePause = useCallback(() => {
@@ -292,7 +299,7 @@ export function ChatView({
             </button>
           </div>
         )}
-        {/* Workspace indicator / switcher (对齐 WorkBuddy 顶栏工作目录切换)。 */}
+        {/* Workspace indicator / switcher (对齐 EchoAgent 顶栏工作目录切换)。 */}
         {cwd && workspaces && onSelectWorkspace && (
           <div className="chatview__workspace-bar">
             <WorkspacePicker
@@ -348,7 +355,7 @@ export function ChatView({
           </button>
         )}
 
-        {/* 会话内查找入口 + 查找条(对齐 WorkBuddy chat-search)。 */}
+        {/* 会话内查找入口 + 查找条(对齐 EchoAgent chat-search)。 */}
         {messages.length > 0 && (
           <button
             type="button"
@@ -374,7 +381,7 @@ export function ChatView({
           onActiveChange={setFindCurrent}
         />
 
-        {/* 文件变更聚合入口(对齐 WorkBuddy file-changes-panel)。 */}
+        {/* 文件变更聚合入口(对齐 EchoAgent file-changes-panel)。 */}
         {messages.length > 0 && (
           <button
             type="button"
@@ -388,7 +395,7 @@ export function ChatView({
             变更
           </button>
         )}
-        {/* 子代理运行时入口(对齐 WorkBuddy team-runtime)。 */}
+        {/* 子代理运行时入口(对齐 EchoAgent team-runtime)。 */}
         {messages.length > 0 && (
           <button
             type="button"
@@ -416,7 +423,7 @@ export function ChatView({
             团队
           </button>
         )}
-        {/* 文件树入口(对齐 WorkBuddy fileTree 视图)：打开工作区面板的文件树视图。 */}
+        {/* 文件树入口(对齐 EchoAgent fileTree 视图)：打开工作区面板的文件树视图。 */}
         {cwd && (
           <button
             type="button"
@@ -439,7 +446,7 @@ export function ChatView({
             文件树
           </button>
         )}
-        {/* 浏览器预览入口(对齐 WorkBuddy preview 视图)：打开工作区面板的浏览器视图。 */}
+        {/* 浏览器预览入口(对齐 EchoAgent preview 视图)：打开工作区面板的浏览器视图。 */}
         <button
           type="button"
           className={
@@ -460,7 +467,7 @@ export function ChatView({
         >
           浏览器
         </button>
-        {/* 分享 / 导出本会话(对齐 WorkBuddy share:*)。 */}
+        {/* 分享 / 导出本会话(对齐 EchoAgent share:*)。 */}
         {messages.length > 0 && (
           <ShareMenu messages={messages} onDone={onToast} />
         )}
@@ -477,7 +484,7 @@ export function ChatView({
               <TeamStatusView messages={messages} />
             )}
             {buildTimeline(messages).map((node) => {
-              // 时间线分隔符(对齐 WorkBuddy message-timeline):日期/模型切换分隔。
+              // 时间线分隔符(对齐 EchoAgent message-timeline):日期/模型切换分隔。
               // 当前 ChatMessage 无 modelId/createdAt,无分隔符时仅渲染消息节点。
               if (node.kind === "date-divider") {
                 return (
@@ -530,7 +537,7 @@ export function ChatView({
           {/* Inline permission / question cards: session-scoped, never block sidebar. */}
           <PermissionInlineCard sessionId={sessionId} />
           <QuestionInlineCard sessionId={sessionId} />
-          {/* pause/yield:已暂停横幅 + 恢复按钮(对齐 WorkBuddy session:requestYield)。 */}
+          {/* pause/yield:已暂停横幅 + 恢复按钮(对齐 EchoAgent session:requestYield)。 */}
           {yielded && (
             <div className="yield-banner" role="status">
               <span>已暂停(会话上下文已保留)</span>
@@ -575,13 +582,16 @@ export function ChatView({
               onToast={onToast}
             />
           )}
-          {/* 消息队列(对齐 WorkBuddy message-queue):流式时可继续排队 prompt。
+          {/* 消息队列(对齐 EchoAgent message-queue):流式时可继续排队 prompt。
               非流式时面板为空(QueuePanel 内部 queue.length===0 直接 return null)。 */}
           {sessionId && (
             <QueuePanel sessionId={sessionId} onSendNow={(t) => onSend(t)} />
           )}
           <Composer
             streaming={streaming}
+            apiReady={apiReady}
+            setupHint={setupHint}
+            onOpenSettings={onOpenSettings}
             onSend={onSend}
             onEnqueue={
               sessionId

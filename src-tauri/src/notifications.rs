@@ -1,6 +1,6 @@
 //! EchoAgent notification log — a local inbox for EchoAgent events.
 //!
-//! WorkBuddy's "智能体邮箱" (agent mailbox) is a Tencent email integration
+//! EchoAgent's "智能体邮箱" (agent mailbox) is a Tencent email integration
 //! (send/receive mail, turn emails into tasks). EchoAgent has no email backend,
 //! so EchoAgent redefines this tab as a **session notification center**:
 //! every interesting EchoAgent event (permission request, folder-trust prompt,

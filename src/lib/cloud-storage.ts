@@ -1,7 +1,7 @@
 /**
  * 云存储抽象 —— 腾讯文档/乐享/Drive/IMA 的本地可移植替代。
  *
- * WorkBuddy 用腾讯 Drive(@tencent/drive-sdk)、腾讯文档(@tencent/docs-engine)、
+ * EchoAgent 用腾讯 Drive(@tencent/drive-sdk)、腾讯文档(@tencent/docs-engine)、
  * 乐享(IMA)做云文件管理;这些绑定腾讯专有 SDK。EchoAgent 用「云存储 provider 抽象」
  * 替代:任意实现(WebDAV/S3/本地文件夹/Google Drive)都可注册。
  *

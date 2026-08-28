@@ -18,7 +18,7 @@ type ToolCallCardProps = {
 };
 
 /**
- * Compact inline tool-call row (Phase 1 — WorkBuddy `unknown-tool-compact`).
+ * Compact inline tool-call row (Phase 1 — EchoAgent `unknown-tool-compact`).
  *
  * Always one line in the transcript: kind + short title + status.
  * Details (command/diff/output) open in the side drawer via `onOpen`.
@@ -47,7 +47,7 @@ export function ToolCallCard({ tc, onOpen }: ToolCallCardProps) {
 
   const shortTitle = shortenTitle(tc.title, tc.kind);
 
-  // 专用渲染器(对齐 WorkBuddy tools/renderers):非 default/unknown 时用图标 +
+  // 专用渲染器(对齐 EchoAgent tools/renderers):非 default/unknown 时用图标 +
   // 渲染器标签 + 摘要替代通用 kind 文案。
   const renderer = detectToolRenderer(tc.kind);
   const specialized =
@@ -186,9 +186,9 @@ export function ToolCallDetailBody({
 }
 
 /**
- * 命令风险徽章 —— 对齐 WorkBuddy `command-risk`。
+ * 命令风险徽章 —— 对齐 EchoAgent `command-risk`。
  *
- * 仅在 medium / high 时显示(对齐 WorkBuddy 标注而非拦截);low 不渲染任何东西。
+ * 仅在 medium / high 时显示(对齐 EchoAgent 标注而非拦截);low 不渲染任何东西。
  * `reasons` 通过 title 悬浮提示展示命中原因。
  */
 function CommandRiskBadge({ command }: { command: string }) {

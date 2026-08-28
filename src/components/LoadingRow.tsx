@@ -3,15 +3,15 @@ import { LOADING_TIPS } from "@/lib/loading-tips";
 
 /**
  * 助手消息的「等待中」行：头像/名字由 MessageItem 的 header 渲染，本组件
- * 只负责 body 里的 loading 行，视觉对齐 WorkBuddy：
+ * 只负责 body 里的 loading 行，视觉对齐 EchoAgent：
  *
  *   [扫光主文案]  ·  [轮播小贴士]
  *
  * - 主文案走 progress phase 的两段式：先发请求前的「准备中」，随后切到
- *   「等待模型响应」，并套用 `ob-shining-text` 扫光（一道亮带在文字上扫过，
- *   即「文字在 loading」的观感，移植自 cb-chat-ui 的 shining-text mixin）。
+ *   「等待模型响应」，并套用 `echo-shining-text` 扫光（一道亮带在文字上扫过，
+ *   即「文字在 loading」的观感，移植自 echo-chat-ui 的 shining-text mixin）。
  * - 右侧小贴士在挂载 `initialDelay` 后开始，每隔 `interval` 随机换一条
- *   （不与上一条重复），切换时淡入 —— 与 WorkBuddy 的 LoadingTip 同构。
+ *   （不与上一条重复），切换时淡入 —— 与 EchoAgent 的 LoadingTip 同构。
  */
 
 const PREPARING_TEXT = "准备中";
@@ -79,7 +79,7 @@ export function LoadingRow() {
 
   return (
     <div className="msg__loading">
-      <span className="msg__loading-main ob-shining-text">{phase}</span>
+      <span className="msg__loading-main echo-shining-text">{phase}</span>
       {tip && (
         <span className="msg__loading-tip">
           <span className="msg__loading-sep" aria-hidden="true">

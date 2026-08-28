@@ -24,8 +24,3 @@ export const FEATURED_SCENES: FeaturedScene[] = [
   { id: "eng", zh: "工程开发", from: "#dcefe6", to: "#e6f1ff",
     expertIds: ["SeniorDeveloper", "SoftwareCompany", "WeChatMiniProgramDeveloper"] },
 ];
-
-/** Remote `featuredScenes.json` (photographic banners). Loaded best-effort; on
- *  any failure the gradient `FEATURED_SCENES` above are used. */
-export const FEATURED_SCENES_URL =
-  "https://acc-1258344699.cos.accelerate.myqcloud.com/workbuddy/expert-marketplace/featuredScenes.json";

@@ -1,5 +1,5 @@
 /**
- * 文件变更聚合面板 —— 对齐 WorkBuddy `cb-chat-ui/file-changes-panel`。
+ * 文件变更聚合面板 —— 对齐 EchoAgent `echo-chat-ui/file-changes-panel`。
  *
  * 从会话消息的 tool_call diff 聚合出「每个文件的净变更」,展示文件类型图标、
  * 路径、增删行(+绿/-红)、编辑次数。空(无 diff)时不渲染。

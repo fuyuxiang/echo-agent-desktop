@@ -1,7 +1,7 @@
 /**
  * AutomationEditPage — 添加 / 编辑自动化任务（全页表单，截图 2 复刻）。
  *
- * 对应 WorkBuddy automation-panel/index.tsx 的 EditModal：
+ * 对应 EchoAgent automation-panel/index.tsx 的 EditModal：
  *  - 头部：闹钟图标面包屑「自动化 / 添加自动化任务」+ 取消 / 保存（黑）
  *  - 名称、工作空间(可选)、提示词（底部工具条：模型/技能/召唤专家/权限）
  *  - 连接器、执行频率（周期/按间隔/单次）、生效日期区间、推送到微信小程序
@@ -312,7 +312,7 @@ function RunStatusIcon({ status }: { status: string }) {
       </span>
     );
   }
-  if (status === "success") return <CheckBoldIcon size={16} color="var(--wb-color-text-disabled, #000)" />;
+  if (status === "success") return <CheckBoldIcon size={16} color="var(--echo-color-text-disabled, #000)" />;
   if (status === "failed") return <ErrorCircleIcon size={16} />;
   return <CheckIcon size={16} />;
 }
@@ -402,7 +402,7 @@ function RunHistory({
                 </span>
                 <span className={`atm-run-history-item-status ${item.status}`}>
                   {item.archived ? (
-                    <ArchiveIcon size={16} color="var(--wb-color-text-disabled, #000)" />
+                    <ArchiveIcon size={16} color="var(--echo-color-text-disabled, #000)" />
                   ) : (
                     <RunStatusIcon status={item.status} />
                   )}

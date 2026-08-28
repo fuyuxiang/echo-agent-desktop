@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 import { createIcon } from "../Icon";
 
-const WbNewTaskIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
+const EchoNewTaskIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
   <svg
     ref={ref}
     viewBox="0 0 14.4531 14.6597"
@@ -13,5 +13,5 @@ const WbNewTaskIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
     <path transform="matrix(1 0 0 1 4.52539 3.5943)" d="M3.2959 2.0967L5.3994 2.0967L5.3994 3.2959L3.2959 3.2959L3.2959 5.4023L2.0967 5.4023L2.0967 3.2959L0 3.2959L0 2.0967L2.0967 2.0967L2.0967 0L3.2959 0L3.2959 2.0967Z" />
   </svg>
 ));
-WbNewTaskIconRaw.displayName = "WbNewTaskIconRaw";
-export const WbNewTaskIcon = createIcon(WbNewTaskIconRaw);
+EchoNewTaskIconRaw.displayName = "EchoNewTaskIconRaw";
+export const EchoNewTaskIcon = createIcon(EchoNewTaskIconRaw);

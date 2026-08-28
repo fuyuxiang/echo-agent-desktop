@@ -2,7 +2,7 @@
  * Pending-expert store — tracks an expert that has been "summoned" from the
  * marketplace but whose conversation hasn't started yet (user hasn't hit send).
  *
- * Mirrors WorkBuddy's `pendingExpertActivation` / `setPendingExpert` pattern:
+ * Mirrors EchoAgent's `pendingExpertActivation` / `setPendingExpert` pattern:
  * summon → set pending → navigate home → composer shows badge + pre-fills
  * quickPrompt → user sends → session created with hidden persona → cleared.
  */

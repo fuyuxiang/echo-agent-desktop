@@ -1,8 +1,8 @@
 /**
- * 语音能力 provider-agnostic 契约 —— 对齐 WorkBuddy `tts:*` / `asr:*` RPC
+ * 语音能力 provider-agnostic 契约 —— 对齐 EchoAgent `tts:*` / `asr:*` RPC
  * (`tts:startTts` / `tts:stopTts` / `tts:event` / `asr:speechToText`)。
  *
- * WorkBuddy 的 TTS/ASR 契约本身 provider 无关(可绑定任意 STT/TTS 厂商);
+ * EchoAgent 的 TTS/ASR 契约本身 provider 无关(可绑定任意 STT/TTS 厂商);
  * EchoAgent 是 BYOK 桌面应用,默认用浏览器 Web Speech API 作为内建 provider,
  * 同时允许注册外部 provider(例如对接云端 STT/TTS)。本模块是纯注册表 + 状态机,
  * 无 DOM/网络副作用,便于单测。

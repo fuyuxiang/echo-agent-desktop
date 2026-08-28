@@ -1,9 +1,9 @@
-//! Expert marketplace data — read LIVE from a local WorkBuddy data directory
+//! Expert marketplace data — read LIVE from a local EchoAgent data directory
 //! (default `E:\EchoAgent\agents`, overridable from the UI).
 //!
 //! Layout we consume:
 //!   <root>/_meta/_expert_center.json      — categories + experts (rich fields)
-//!   <root>/<plugin>/.aily-plugin/plugin.json   (or `.codebuddy-plugin/`)
+//!   <root>/<plugin>/.aily-plugin/plugin.json   (or `.echo-agent-plugin/`)
 //!        — the *local* avatar path (`avatars/expert.png` / `avatars/team.png`)
 //!
 //! The manifest carries everything the cards need (author, `operationalTag` =
@@ -17,11 +17,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-/// COS base used to rebuild the manifest's flat avatar paths as a *fallback* URL
-/// (only used when the local file is somehow missing).
-const AVATAR_COS_BASE: &str =
-    "https://acc-1258344699.cos.accelerate.myqcloud.com/workbuddy/expert-marketplace";
 
 // ---------- output types ----------
 
@@ -129,7 +124,7 @@ fn loc_trimmed(value: &Value) -> Option<String> {
 }
 
 fn read_plugin_json(root: &Path, plugin: &str) -> Option<Value> {
-    for sub in [".aily-plugin", ".codebuddy-plugin"] {
+    for sub in [".aily-plugin", ".echo-agent-plugin"] {
         let p = root.join(plugin).join(sub).join("plugin.json");
         if let Ok(bytes) = std::fs::read(&p) {
             if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
@@ -140,16 +135,17 @@ fn read_plugin_json(root: &Path, plugin: &str) -> Option<Value> {
     None
 }
 
-fn resolve_cos_avatar(avatar: &str) -> Option<String> {
-    let t = avatar.trim();
+fn resolve_remote_asset(asset: &str) -> Option<String> {
+    let t = asset.trim();
     if t.is_empty() {
         return None;
     }
     if t.starts_with("http://") || t.starts_with("https://") || t.starts_with("data:") {
         return Some(t.to_string());
     }
-    let trimmed = t.trim_start_matches('/');
-    Some(format!("{AVATAR_COS_BASE}/{trimmed}"))
+    // Relative assets are expected to be available in the selected local
+    // catalog. Do not bind EchoAgent to a third-party branded CDN path.
+    None
 }
 
 // ---------- root discovery ----------
@@ -319,7 +315,7 @@ fn load_featured_scenes(root: &Path) -> Vec<FeaturedSceneOut> {
             let image_url = if image.is_empty() {
                 None
             } else {
-                resolve_cos_avatar(image)
+                resolve_remote_asset(image)
             };
             Some(FeaturedSceneOut {
                 id,
@@ -353,7 +349,7 @@ fn build_expert(root: &Path, e: &Value) -> Option<ExpertItem> {
     let avatar_url = e
         .get("avatar")
         .and_then(|v| v.as_str())
-        .and_then(resolve_cos_avatar);
+        .and_then(resolve_remote_asset);
     let kind = if e.get("expertType").and_then(|v| v.as_str()) == Some("team") {
         "team".to_string()
     } else {
@@ -594,7 +590,7 @@ pub async fn experts_read_agent_prompt(
 /// calls the Task tool. Returns the number of files linked.
 ///
 /// This is needed because EchoAgent only scans `~/.echo-agent/agents/` and
-/// `<cwd>/.echo-agent/agents/` — it doesn't know about the WorkBuddy expert root.
+/// `<cwd>/.echo-agent/agents/` — it doesn't know about the EchoAgent expert root.
 /// By copying the member definitions, the lead agent's orchestration
 /// instructions (e.g. "spawn macro-strategist") resolve correctly.
 #[tauri::command]

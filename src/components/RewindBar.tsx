@@ -6,7 +6,7 @@
  *    支持 mode: conversation（仅回退对话）/ files（仅文件）/ all（全量，含对话+文件+记忆）。
  *  - Fork（分叉）：调 `x.ai/session/fork`，复制会话到新 id 探索不同方向。
  *
- * 增强点（对齐 WorkBuddy）：
+ * 增强点（对齐 EchoAgent）：
  *  - 时间线视图：每个回溯点显示时间、prompt 预览、assistant 回复预览、工具调用徽章。
  *  - 文件/记忆变更徽章：标记哪些步骤产生了文件改动或记忆写入。
  *  - 三种模式按钮：仅对话 / 仅文件 / 全量。

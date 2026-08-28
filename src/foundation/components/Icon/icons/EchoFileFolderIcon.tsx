@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 import { createIcon } from "../Icon";
 
-const WbFileFolderIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
+const EchoFileFolderIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
   <svg
       ref={ref}
       xmlns="http://www.w3.org/2000/svg"
@@ -13,6 +13,6 @@ const WbFileFolderIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
       <path fill="#5FB4FF" transform="matrix(1 0 0 1 1 4)" d="M10.8 0C11.9215 0 12.4822 0 12.9087 0.2179C13.2838 0.4095 13.5905 0.7162 13.7821 1.0913C14 1.5178 14 2.0785 14 3.2L14 7.1333C14 8.2548 14 8.8156 13.7821 9.242C13.5905 9.6172 13.2838 9.9238 12.9087 10.1155C12.4822 10.3333 11.9215 10.3333 10.8 10.3333L3.2 10.3333C2.0785 10.3333 1.5178 10.3333 1.0913 10.1155C0.7162 9.9238 0.4095 9.6172 0.2179 9.242C0 8.8156 0 8.2548 0 7.1333L0 0L10.8 0Z" />
     </svg>
 ));
-WbFileFolderIconRaw.displayName = "WbFileFolderIconRaw";
+EchoFileFolderIconRaw.displayName = "EchoFileFolderIconRaw";
 
-export const WbFileFolderIcon = createIcon(WbFileFolderIconRaw);
+export const EchoFileFolderIcon = createIcon(EchoFileFolderIconRaw);

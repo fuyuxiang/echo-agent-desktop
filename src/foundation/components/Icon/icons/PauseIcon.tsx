@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 import { createIcon } from "../Icon";
 
-// 来自 WorkBuddy CirclePauseIcon - 圆形暂停图标
+// 来自 EchoAgent CirclePauseIcon - 圆形暂停图标
 const PauseIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
   <svg
     ref={ref}

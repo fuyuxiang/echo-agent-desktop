@@ -1,7 +1,7 @@
 /**
  * AutomationPermissionConfirmDialog — 完全访问权限的风险确认弹窗。
  *
- * 复刻 WorkBuddy automation-permission-confirm-dialog.tsx：
+ * 复刻 EchoAgent automation-permission-confirm-dialog.tsx：
  * 以完全访问权限创建（或从默认权限升级为完全访问）前必须勾选
  * 「我已了解风险…」才能确认创建；也可一键「改为「默认权限」运行 →」。
  */

@@ -17,7 +17,7 @@ import {
   type HomeTemplate,
 } from "./home-scenes";
 
-/** 模板 chip 右侧的 ↘ 斜箭头(复刻 WorkBuddy 的 quick-actions-sub 箭头)。 */
+/** 模板 chip 右侧的 ↘ 斜箭头(复刻 EchoAgent 的 quick-actions-sub 箭头)。 */
 function ArrowRightSubIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -34,9 +34,9 @@ function ArrowRightSubIcon() {
 }
 
 /**
- * WorkBuddy 风格首页:双行大标题 + 场景 tab + 能力 chip 行 + Composer。
+ * EchoAgent 风格首页:双行大标题 + 场景 tab + 能力 chip 行 + Composer。
  *
- * 复刻 WorkBuddy 的三级交互:
+ * 复刻 EchoAgent 的三级交互:
  *  1. 顶部场景 tab(日常办公/代码开发/设计创意)切换下方能力 chip 列表;
  *  2. 点击能力 chip → 该分类被选中,能力行隐藏并替换为推荐模板行(↘),
  *     同时在输入框内插入一个不可编辑的黑色"操作类型"标签(× 可删);
@@ -135,7 +135,7 @@ export function HomePage({
     }
     setSelectedCategoryId(cat.id);
     setSceneTag({ label: cat.label, icon: cat.icon });
-    fillComposer(""); // 选中分类时清空旧输入,只留标签(匹配 WorkBuddy)
+    fillComposer(""); // 选中分类时清空旧输入,只留标签(匹配 EchoAgent)
   };
 
   // 点击模板 chip:把 prompt 填入输入框(保留操作类型标签)。
@@ -308,6 +308,11 @@ export function HomePage({
             onSend={onSend}
             onCancel={() => {}}
             apiReady={apiReady}
+            setupHint={
+              models?.length
+                ? undefined
+                : "请先在「设置 → 模型」配置模型"
+            }
             onOpenSettings={onOpenSettings}
             onPlaceholder={onPlaceholder}
             sceneTag={sceneTag}

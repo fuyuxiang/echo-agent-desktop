@@ -36,7 +36,7 @@ pub struct AgentEntry {
     pub path: String,
     /// Full file contents (frontmatter + body), for the editor view.
     pub raw: String,
-    /// Avatar preset index (1-20). Mirrors WorkBuddy's CreateColleagueDialog
+    /// Avatar preset index (1-20). Mirrors EchoAgent's CreateColleagueDialog
     /// avatar presets. Stored in frontmatter as `avatar: <n>`. 0/None = use
     /// the name-initial fallback.
     #[serde(default)]

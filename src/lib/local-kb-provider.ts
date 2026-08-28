@@ -1,7 +1,7 @@
 /**
  * 本地文件夹知识源 —— 让 KnowledgeBasePanel 运行时真正可搜索。
  *
- * 对齐 WorkBuddy `knowledge-base-panel` 的「本地知识源」概念,但用本地文件夹扫描
+ * 对齐 EchoAgent `knowledge-base-panel` 的「本地知识源」概念,但用本地文件夹扫描
  * 替代腾讯 Drive。扫描指定目录下的文本文件(.md/.txt/.markdown/.mdx/.rst/.log)
  * 以及 OOXML 文档(.docx/.pptx/.xlsx,经 zip-reader + doc-preview 提取文本),
  * 构建可搜索的知识条目。

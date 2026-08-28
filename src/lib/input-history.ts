@@ -1,5 +1,5 @@
 /**
- * 输入历史 —— 对齐 WorkBuddy `cb-chat-ui/chat-input/use-input-history.ts`
+ * 输入历史 —— 对齐 EchoAgent `echo-chat-ui/chat-input/use-input-history.ts`
  * (arrow-key recall:↑/↓ 在输入框回溯历史 prompt)。
  *
  * 核心是纯函数历史管理(去重、上限、导航游标),便于单测;附带一个 React hook

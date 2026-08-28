@@ -1,8 +1,8 @@
 import type { ExpertItem } from "@/lib/types";
 import { ThumbImg } from "../shared/ThumbImg";
 
-/** Subtitle line, mirroring WorkBuddy's `expertUsageText`: teams prefer the
- *  author (e.g. "CodeBuddy Teams"), agents use the display name; whichever is
+/** Subtitle line, mirroring EchoAgent's `expertUsageText`: teams prefer the
+ *  author (e.g. "EchoAgent Teams"), agents use the display name; whichever is
  *  non-empty and differs from the title and the description. */
 function subtitle(e: ExpertItem): string {
   const title = (e.title || e.name || "").trim();

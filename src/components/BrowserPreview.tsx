@@ -1,10 +1,10 @@
 /**
- * 嵌入式网页预览 —— 对齐 WorkBuddy `context-viewer-components/browser-preview`。
+ * 嵌入式网页预览 —— 对齐 EchoAgent `context-viewer-components/browser-preview`。
  *
  * 输入 URL,经安全校验后在 sandbox iframe 中预览。无效/不安全 URL 显示提示。
  * 纯展示组件,核心校验逻辑在 lib/browser-preview(已测)。
  *
- * 增强(对齐 WorkBuddy Toolbar)：后退/前进/刷新 + URL 历史 + 外部浏览器打开。
+ * 增强(对齐 EchoAgent Toolbar)：后退/前进/刷新 + URL 历史 + 外部浏览器打开。
  * 由于浏览器 iframe 无法直接拦截目标页导航,这里维护一个「已访问 URL 栈」,
  * 回退/前进在栈内移动,刷新用 key 强制 iframe 重载。
  */

@@ -1,6 +1,6 @@
 /**
  * Expert detail modal — shown when clicking an expert card.
- * Mirrors WorkBuddy's TeamDetailModal: avatar, name, profession, category,
+ * Mirrors EchoAgent's TeamDetailModal: avatar, name, profession, category,
  * usage info, ability intro, skill tags, "试试这样问我" quick prompts,
  * and a "召唤 XXX" button at the bottom.
  */

@@ -54,12 +54,12 @@ import {
 } from "./SettingsSections";
 
 /**
- * WorkBuddy-style Settings dialog.
+ * EchoAgent-style Settings dialog.
  *
  * Full-screen overlay → centered `.settings-modal` (1040×720) with a fixed
- * 12-item left navigation (mirrors WorkBuddy) and a right panel that swaps
+ * 12-item left navigation (mirrors EchoAgent) and a right panel that swaps
  * per section. Only "模型" has a real implementation; the other 11 render a
- * "即将上线" placeholder so the visual matches WorkBuddy today and can be
+ * "即将上线" placeholder so the visual matches EchoAgent today and can be
  * filled in later.
  *
  * The 模型 section lists configured providers from ~/.echo-agent/config.toml and
@@ -215,7 +215,7 @@ export function SettingsPanel({
       aria-modal="true"
       aria-label="设置"
       onClick={(e) => {
-        // 仅当点击遮罩本身(而非弹窗内容)时关闭,与 WorkBuddy 一致。
+        // 仅当点击遮罩本身(而非弹窗内容)时关闭,与 EchoAgent 一致。
         if (e.target === e.currentTarget) onClose();
       }}
     >
@@ -483,10 +483,10 @@ function ModelsSettingsPanel({ onModelsChanged }: { onModelsChanged?: () => void
         <div className="models-settings-panel__section-head">
           <h3 className="models-settings-panel__section-title">厂商与模型</h3>
           <button
-            className="cb-button cb-button--secondary cb-button--small"
+            className="echo-button echo-button--secondary echo-button--small"
             onClick={() => setEditingProvider({ draft: { ...newProviderDraft } })}
           >
-            <span className="cb-button__content">
+            <span className="echo-button__content">
               <Plus size={13} strokeWidth={2} style={{ marginRight: 4 }} />
               添加厂商
             </span>
@@ -546,7 +546,7 @@ function ModelsSettingsPanel({ onModelsChanged }: { onModelsChanged?: () => void
                   </div>
                   <div className="models-settings-panel__provider-detail-actions">
                     <button
-                      className="cb-button cb-button--ghost cb-button--small cb-button--icon-only"
+                      className="echo-button echo-button--ghost echo-button--small echo-button--icon-only"
                       onClick={() =>
                         setEditingProvider({
                           original: selectedProvider,
@@ -568,7 +568,7 @@ function ModelsSettingsPanel({ onModelsChanged }: { onModelsChanged?: () => void
                       <Pencil size={14} strokeWidth={1.75} />
                     </button>
                     <button
-                      className="cb-button cb-button--ghost cb-button--small cb-button--icon-only"
+                      className="echo-button echo-button--ghost echo-button--small echo-button--icon-only"
                       onClick={() => handleDeleteProvider(selectedProvider)}
                       aria-label="删除厂商"
                       title="删除厂商"
@@ -605,7 +605,7 @@ function ModelsSettingsPanel({ onModelsChanged }: { onModelsChanged?: () => void
                   <span className="models-settings-panel__models-head-title">模型</span>
                   <div className="models-settings-panel__models-head-actions">
                     <button
-                      className="cb-button cb-button--ghost cb-button--small"
+                      className="echo-button echo-button--ghost echo-button--small"
                       onClick={() =>
                         setEditingModel({
                           providerId: selectedProvider.id,
@@ -614,13 +614,13 @@ function ModelsSettingsPanel({ onModelsChanged }: { onModelsChanged?: () => void
                         })
                       }
                     >
-                      <span className="cb-button__content">
+                      <span className="echo-button__content">
                         <Plus size={13} strokeWidth={2} style={{ marginRight: 4 }} />
                         手动添加
                       </span>
                     </button>
                     <button
-                      className="cb-button cb-button--secondary cb-button--small"
+                      className="echo-button echo-button--secondary echo-button--small"
                       onClick={() =>
                         setImporting((prev) =>
                           prev && prev.providerId === selectedProvider.id
@@ -629,7 +629,7 @@ function ModelsSettingsPanel({ onModelsChanged }: { onModelsChanged?: () => void
                         )
                       }
                     >
-                      <span className="cb-button__content">
+                      <span className="echo-button__content">
                         <RefreshCw size={13} strokeWidth={2} style={{ marginRight: 4 }} />
                         拉取模型
                       </span>
@@ -660,7 +660,7 @@ function ModelsSettingsPanel({ onModelsChanged }: { onModelsChanged?: () => void
                         </div>
                         <div className="models-settings-panel__model-actions">
                           <button
-                            className="cb-button cb-button--ghost cb-button--small cb-button--icon-only"
+                            className="echo-button echo-button--ghost echo-button--small echo-button--icon-only"
                             onClick={() =>
                               setEditingModel({
                                 providerId: selectedProvider.id,
@@ -675,7 +675,7 @@ function ModelsSettingsPanel({ onModelsChanged }: { onModelsChanged?: () => void
                             <Pencil size={14} strokeWidth={1.75} />
                           </button>
                           <button
-                            className="cb-button cb-button--ghost cb-button--small cb-button--icon-only"
+                            className="echo-button echo-button--ghost echo-button--small echo-button--icon-only"
                             onClick={() => handleDeleteModel(m)}
                             aria-label="删除模型"
                             title="删除模型"
@@ -814,7 +814,7 @@ function ProviderEditor({
             </div>
           </div>
           <button
-            className="cb-button cb-button--ghost cb-button--small cb-button--icon-only"
+            className="echo-button echo-button--ghost echo-button--small echo-button--icon-only"
             onClick={onCancel}
             aria-label="关闭"
           >
@@ -862,7 +862,7 @@ function ProviderEditor({
                 placeholder={original ? "已保存（重新输入以替换，留空保持不变）" : preset.placeholderKey}
               />
               <button
-                className="cb-button cb-button--ghost cb-button--small cb-button--icon-only models-settings-panel__input-toggle"
+                className="echo-button echo-button--ghost echo-button--small echo-button--icon-only models-settings-panel__input-toggle"
                 onClick={() => setShowKey((s) => !s)}
                 aria-label={showKey ? "隐藏" : "显示"}
                 type="button"
@@ -961,17 +961,17 @@ function ProviderEditor({
 
         <footer className="models-settings-panel__editor-footer">
           <button
-            className="cb-button cb-button--secondary cb-button--medium models-settings-panel__editor-cancel"
+            className="echo-button echo-button--secondary echo-button--medium models-settings-panel__editor-cancel"
             onClick={onCancel}
           >
-            <span className="cb-button__content">取消</span>
+            <span className="echo-button__content">取消</span>
           </button>
           <button
-            className="cb-button cb-button--primary cb-button--medium models-settings-panel__editor-save"
+            className="echo-button echo-button--primary echo-button--medium models-settings-panel__editor-save"
             onClick={handleSaveClick}
             disabled={!canSave}
           >
-            <span className="cb-button__content">保存</span>
+            <span className="echo-button__content">保存</span>
           </button>
         </footer>
       </div>
@@ -1028,7 +1028,7 @@ function ModelEditor({
             <div className="models-settings-panel__editor-note">所属厂商：{providerId}</div>
           </div>
           <button
-            className="cb-button cb-button--ghost cb-button--small cb-button--icon-only"
+            className="echo-button echo-button--ghost echo-button--small echo-button--icon-only"
             onClick={onCancel}
             aria-label="关闭"
           >
@@ -1080,17 +1080,17 @@ function ModelEditor({
 
         <footer className="models-settings-panel__editor-footer">
           <button
-            className="cb-button cb-button--secondary cb-button--medium models-settings-panel__editor-cancel"
+            className="echo-button echo-button--secondary echo-button--medium models-settings-panel__editor-cancel"
             onClick={onCancel}
           >
-            <span className="cb-button__content">取消</span>
+            <span className="echo-button__content">取消</span>
           </button>
           <button
-            className="cb-button cb-button--primary cb-button--medium models-settings-panel__editor-save"
+            className="echo-button echo-button--primary echo-button--medium models-settings-panel__editor-save"
             onClick={handleSaveClick}
             disabled={!canSave}
           >
-            <span className="cb-button__content">保存</span>
+            <span className="echo-button__content">保存</span>
           </button>
         </footer>
       </div>
@@ -1168,12 +1168,12 @@ function ImportModelsInline({
           placeholder="API Key（仅用于本次拉取，不会保存）"
         />
         <button
-          className="cb-button cb-button--secondary cb-button--small"
+          className="echo-button echo-button--secondary echo-button--small"
           onClick={handleFetch}
           disabled={fetching}
           type="button"
         >
-          <span className="cb-button__content">
+          <span className="echo-button__content">
             {fetching ? (
               <Loader2 size={13} strokeWidth={2} className="models-settings-panel__spin" />
             ) : (
@@ -1183,7 +1183,7 @@ function ImportModelsInline({
           </span>
         </button>
         <button
-          className="cb-button cb-button--ghost cb-button--small cb-button--icon-only"
+          className="echo-button echo-button--ghost echo-button--small echo-button--icon-only"
           onClick={onClose}
           aria-label="关闭"
           type="button"
@@ -1202,7 +1202,7 @@ function ImportModelsInline({
               {selected.size > 0 && ` · 已选 ${selected.size}`}
             </span>
             <button
-              className="cb-button cb-button--ghost cb-button--small models-settings-panel__fetch-select-all"
+              className="echo-button echo-button--ghost echo-button--small models-settings-panel__fetch-select-all"
               onClick={toggleAll}
               type="button"
             >
@@ -1231,12 +1231,12 @@ function ImportModelsInline({
           </ul>
           <div className="models-settings-panel__import-footer">
             <button
-              className="cb-button cb-button--primary cb-button--small"
+              className="echo-button echo-button--primary echo-button--small"
               disabled={selected.size === 0}
               onClick={() => onImport([...selected])}
               type="button"
             >
-              <span className="cb-button__content">导入 {selected.size > 0 ? selected.size : ""} 个模型</span>
+              <span className="echo-button__content">导入 {selected.size > 0 ? selected.size : ""} 个模型</span>
             </button>
           </div>
         </div>

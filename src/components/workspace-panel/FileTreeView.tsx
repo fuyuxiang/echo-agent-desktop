@@ -1,5 +1,5 @@
 /**
- * 文件树视图 —— 对齐 WorkBuddy `context-viewer-components/DetailPanel/FileTree`。
+ * 文件树视图 —— 对齐 EchoAgent `context-viewer-components/DetailPanel/FileTree`。
  *
  * 左列：可展开/折叠的目录树（懒加载 `listDir`，展开时按需拉取子目录）。
  * 选中文件由父组件通过 onFileSelect 回调驱动主区域预览。

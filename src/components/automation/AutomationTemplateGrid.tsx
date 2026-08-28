@@ -1,7 +1,7 @@
 /**
  * AutomationTemplateGrid — 自动化任务模版网格（compact 变体）。
  *
- * 复刻 WorkBuddy automation-template-grid.tsx 的 compact 分支：
+ * 复刻 EchoAgent automation-template-grid.tsx 的 compact 分支：
  * 图标方块 + 标题 + 单行截断描述，点击即以模板预填进入创建表单。
  */
 import type { AutomationTemplate } from "./template-config";

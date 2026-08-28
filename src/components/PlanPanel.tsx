@@ -1,7 +1,7 @@
 /**
  * 计划面板 — 显示 EchoAgent 的 ACP Plan（任务列表）+ 审批/编辑/执行控制。
  *
- * 增强点（对齐 WorkBuddy）：
+ * 增强点（对齐 EchoAgent）：
  *  - Plan 审批流程：planMode 开启时显示 Approve / Reject / Edit 按钮
  *  - Plan 编辑：修改 entry 文本、优先级、删除
  *  - 任务执行控制：跳过 / 重试单个任务
@@ -142,7 +142,7 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
     [plan, setPlan, onToast],
   );
 
-  // 计划编辑器(对齐 WorkBuddy plan-editor):上移/下移/状态循环/新增步骤。
+  // 计划编辑器(对齐 EchoAgent plan-editor):上移/下移/状态循环/新增步骤。
   const handleMove = useCallback(
     (idx: number, dir: -1 | 1) => {
       if (!plan) return;
@@ -198,7 +198,7 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
   if (planMode && (!plan || plan.entries.length === 0)) {
     return (
       <div className="plan-panel plan-panel--empty">
-        <TaskListIcon size="xl" color="var(--wb-text-tertiary)" />
+        <TaskListIcon size="xl" color="var(--echo-text-tertiary)" />
         <p>计划模式已开启</p>
         <p className="plan-panel__hint">
           发送一个任务，EchoAgent 会先制定计划再执行。
@@ -213,7 +213,7 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
   if (!plan || plan.entries.length === 0) {
     return (
       <div className="plan-panel plan-panel--empty">
-        <TaskListIcon size="xl" color="var(--wb-text-tertiary)" />
+        <TaskListIcon size="xl" color="var(--echo-text-tertiary)" />
         <p>暂无任务计划</p>
         <p className="plan-panel__hint">
           EchoAgent 在处理复杂任务时会自动制定计划。
@@ -312,7 +312,7 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
         ))}
       </ul>
 
-      {/* 新增步骤(对齐 WorkBuddy plan-editor) */}
+      {/* 新增步骤(对齐 EchoAgent plan-editor) */}
       <div className="plan-panel__add">
         <input
           className="plan-panel__add-input"

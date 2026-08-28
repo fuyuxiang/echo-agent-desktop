@@ -1,5 +1,5 @@
 /**
- * 拖拽文件工具 —— 对齐 WorkBuddy `cb-chat-ui/chat-input/drop-zone` +
+ * 拖拽文件工具 —— 对齐 EchoAgent `echo-chat-ui/chat-input/drop-zone` +
  * `drop-zone-filename-utils`。
  *
  * 把 Tauri 的 `DragDropEvent`(native 文件拖拽,带真实绝对路径)归一化为
