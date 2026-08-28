@@ -1,23 +1,23 @@
 //! Multi-provider API key configuration.
 //!
-//! grok's config in `~/.grok/config.toml` natively supports two separate
+//! The runtime config in `~/.echo-agent/config.toml` supports two separate
 //! concepts that together model "one provider, many models":
 //!
 //!   - `[model_providers.<id>]` — a connection/auth profile (base_url,
 //!     api_key, api_backend, auth_scheme, context_window, extra_headers).
 //!   - `[model.<id>]` — a single model catalog entry that may reference a
 //!     provider via `model_provider = "<id>"`, inheriting its connection
-//!     config. grok merges the provider defaults into each model in
+//!     config. The runtime merges the provider defaults into each model in
 //!     `resolve_model_list` (see vendor/.../config.rs).
 //!
-//! This is grok's recommended shape for BYOK: one key/url stored once per
+//! This is the runtime's preferred shape for BYOK: one key/url stored once per
 //! provider, shared by every model that points at it. We expose a typed façade
 //! over that file so the frontend can list/save without learning TOML or
-//! grok's schema.
+//! the underlying schema.
 //!
 //! Storage rules:
-//!   - Keys live in plaintext on disk — same trust level as grok's own
-//!     `auth.json`. `api_key` is grok's highest-priority credential source.
+//!   - Keys live in plaintext on disk — the same trust level as `auth.json`.
+//!     `api_key` is the runtime's highest-priority credential source.
 //!   - We **merge** rather than overwrite: any keys we don't recognize are
 //!     preserved, so a user who hand-edits config.toml doesn't lose tweaks.
 //!   - **Lazy migration**: legacy `[model.*]` tables that still carry their
@@ -137,23 +137,13 @@ fn validate_auth_scheme(v: &str) -> Result<(), String> {
 // Config I/O (shared with sibling modules).
 // ---------------------------------------------------------------------------
 
-/// Resolve `~/.grok` (or `$GROK_HOME`). Matches `sessions.rs` / `commands.rs`.
-fn grok_home() -> PathBuf {
-    if let Ok(custom) = std::env::var("GROK_HOME") {
-        return PathBuf::from(custom);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".grok")
-}
-
 fn config_path() -> PathBuf {
-    grok_home().join("config.toml")
+    crate::paths::echo_agent_home_dir().join("config.toml")
 }
 
 /// Read config.toml as a TOML value, or an empty table if missing/corrupt.
 /// (Corrupt → back up to `config.toml.corrupt.<millis>` so we don't silently
-/// clobber the user's file — mirrors grok's own auth.json handling.)
+/// clobber the user's file — mirrors the runtime's auth.json handling.)
 ///
 /// Exposed `pub(crate)` so sibling modules (permission_config) can reuse the
 /// same atomic read-modify-write pattern without each re-implementing it.
@@ -223,7 +213,7 @@ pub struct ModelProviderEntry {
     pub api_backend: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_scheme: Option<String>,
-    /// Max context window in tokens. grok accepts this at the provider level
+    /// Max context window in tokens. The runtime accepts this at the provider level
     /// (shared by all referencing models) — see ModelProviderConfig.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
@@ -238,7 +228,7 @@ pub struct ModelEntry {
     pub model_id: String,
     /// References `[model_providers.<id>]`.
     pub provider_id: String,
-    /// Human-readable display name (grok's `name` field, used in selectors).
+    /// Human-readable display name (the runtime's `name` field, used in selectors).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Per-model context-window override (wins over the provider's value).
@@ -514,7 +504,7 @@ fn model_to_table(m: &ModelEntry, existing: Option<&Value>) -> Value {
         None => Map::new(),
     };
 
-    // The model slug grok will request. Defaults to the table key when absent.
+    // The model slug the runtime will request. Defaults to the table key when absent.
     table.insert("model".into(), Value::String(m.model_id.clone()));
     // Reference the provider for connection/auth config.
     table.insert(

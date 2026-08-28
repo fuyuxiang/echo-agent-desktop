@@ -1,20 +1,20 @@
 //! EchoAgent 内嵌 MCP server —— 团队工具的非侵入式实现。
 //!
-//! 之前 `create_team` / `team_status` / `team_delete` 通过 grok 补丁
-//! (`patches/grok-build/02-team-tools-enabled-set.patch`) 注入 grok 的默认
+//! 之前 `create_team` / `team_status` / `team_delete` 通过 EchoAgent 补丁
+//! (`patches/grok-build/02-team-tools-enabled-set.patch`) 注入 EchoAgent 的默认
 //! 启用集。本模块改为**标准 MCP streamable-http server**（仅监听
-//! 127.0.0.1），grok 作为 MCP client 连接，工具以 `echoagent__create_team`
-//! 等名字出现 —— 对 grok 零侵入，升级 grok-build 不再需要运行时补丁。
+//! 127.0.0.1），EchoAgent 作为 MCP client 连接，工具以 `echoagent__create_team`
+//! 等名字出现 —— 对 EchoAgent 零侵入，升级上游运行时不再需要运行时补丁。
 //!
 //! 注册路径（双保险）：
-//!  1. `grok::new_session` 时通过 ACP `mcp_servers` 参数传入 —— 会话立即可用
-//!     （merge 层中 client 层优先级最高，见 grok `managed_mcp.rs`）。
-//!  2. 首个会话建立后调用 `x.ai/mcp/upsert` 持久化到 config.toml（grok 自己
-//!     写盘）—— `load_session` 恢复的会话也能用（grok 会话启动时从
+//!  1. `agent_runtime::new_session` 时通过 ACP `mcp_servers` 参数传入 —— 会话立即可用
+//!     （merge 层中 client 层优先级最高，见 EchoAgent `managed_mcp.rs`）。
+//!  2. 首个会话建立后调用 `x.ai/mcp/upsert` 持久化到 config.toml（EchoAgent 自己
+//!     写盘）—— `load_session` 恢复的会话也能用（EchoAgent 会话启动时从
 //!     config.toml 加载 MCP server 列表）。
 //!
-//! 状态：团队数据持久化到 `~/.grok/echoagent-teams.json`，应用/agent 重启
-//! 不丢（旧实现里 TEAMS 在 grok 进程内存中，agent 崩溃重启即丢）。
+//! 状态：团队数据持久化到 `~/.echo-agent/echoagent-teams.json`，应用/agent 重启
+//! 不丢（旧实现里 TEAMS 在 EchoAgent 进程内存中，agent 崩溃重启即丢）。
 //!
 //! MCP 协议子集（streamable HTTP, MCP 2025-03-26 / 2025-06-18 兼容）：
 //!   POST /mcp  — JSON-RPC: initialize / ping / tools/list / tools/call；
@@ -56,9 +56,9 @@ static TEAMS: LazyLock<Mutex<HashMap<String, TeamInfo>>> = LazyLock::new(|| {
     Mutex::new(teams)
 });
 
-/// `~/.grok/echoagent-teams.json` —— 与 grok 配置同目录，方便用户备份。
+/// `~/.echo-agent/echoagent-teams.json` —— 与 EchoAgent 配置同目录，方便用户备份。
 fn teams_file() -> std::path::PathBuf {
-    crate::grok::grok_home_dir().join("echoagent-teams.json")
+    crate::agent_runtime::echo_agent_home_dir().join("echoagent-teams.json")
 }
 
 fn load_teams_from_disk() -> Option<HashMap<String, TeamInfo>> {
@@ -95,11 +95,11 @@ pub const MCP_SERVER_NAME: &str = "echoagent";
 
 static BOUND_PORT: OnceLock<u16> = OnceLock::new();
 
-/// grok 的 MCP client 是否已完成 initialize 握手（诊断/测试用）。
+/// EchoAgent 的 MCP client 是否已完成 initialize 握手（诊断/测试用）。
 static CLIENT_INITIALIZED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// 诊断：grok（或测试）是否已连上并完成 MCP initialize。
+/// 诊断：EchoAgent（或测试）是否已连上并完成 MCP initialize。
 pub fn client_connected() -> bool {
     CLIENT_INITIALIZED.load(std::sync::atomic::Ordering::SeqCst)
 }
@@ -267,7 +267,7 @@ fn tool_def(name: &str, description: &str, schema: serde_json::Value) -> serde_j
     serde_json::json!({ "name": name, "description": description, "inputSchema": schema })
 }
 
-const CREATE_TEAM_DESC: &str = "Create an expert team. Each member's agent .md must already exist in ~/.grok/agents/. After creation, call the task tool with subagent_type set to a member name (exact, case-sensitive).";
+const CREATE_TEAM_DESC: &str = "Create an expert team. Each member's agent .md must already exist in ~/.echo-agent/agents/. After creation, call the task tool with subagent_type set to a member name (exact, case-sensitive).";
 const TEAM_STATUS_DESC: &str =
     "Check the status of agent teams. Returns registered team members and their agent file paths.";
 const TEAM_DELETE_DESC: &str =
@@ -302,7 +302,7 @@ pub struct CreateTeamInput {
     #[schemars(description = "Unique team identifier (e.g. 'trading-team')")]
     pub team_id: String,
     #[schemars(
-        description = "Team members. Each member's agent .md must already exist in ~/.grok/agents/."
+        description = "Team members. Each member's agent .md must already exist in ~/.echo-agent/agents/."
     )]
     pub members: Vec<CreateTeamMember>,
     #[schemars(description = "Optional team description")]
@@ -312,7 +312,7 @@ pub struct CreateTeamInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CreateTeamMember {
     #[schemars(
-        description = "Agent name; must match an existing ~/.grok/agents/<name>.md (case-sensitive)"
+        description = "Agent name; must match an existing ~/.echo-agent/agents/<name>.md (case-sensitive)"
     )]
     pub name: String,
     #[schemars(description = "Member role, e.g. 'code reviewer'")]
@@ -458,7 +458,7 @@ fn create_team(input: CreateTeamInput) -> Result<CreateTeamOutput, String> {
         save_teams_to_disk(&teams);
     }
     // 成功消息里强调：成员名必须与 task 工具的 subagent_type 完全一致，
-    // 否则 grok 会返回 "Unknown subagent type"。
+    // 否则 EchoAgent 会返回 "Unknown subagent type"。
     Ok(CreateTeamOutput {
         team_id: input.team_id.clone(),
         message: format!(
@@ -537,16 +537,16 @@ fn list_available_agents(agents_dir: &std::path::Path) -> Vec<String> {
     names
 }
 
-// ---------- 持久化注册（config.toml，经 grok 的 x.ai/mcp/upsert）----------
+// ---------- 持久化注册（config.toml，经 EchoAgent 的 x.ai/mcp/upsert）----------
 
 /// 进程级守卫：upsert 幂等且便宜，但每次会话都发一遍 ACP 往返没
 /// 必要 —— config.toml 里的条目跨重启存在，端口通常也稳定。失败时复位，
 /// 下个会话可重试（比如 upsert 时会话恰好刚关闭）。
 static PERSISTED: Mutex<bool> = Mutex::new(false);
 
-/// 把 echoagent MCP server 写进 grok 的 config.toml（经 `x.ai/mcp/upsert`，
-/// grok 自己持久化 —— 避免我们直接改写用户 config.toml 丢注释/格式）。
-/// 需要一个**已存在**的会话（grok 的 upsert handler 要求 session live）。
+/// 把 echoagent MCP server 写进 EchoAgent 的 config.toml（经 `x.ai/mcp/upsert`，
+/// EchoAgent 自己持久化 —— 避免我们直接改写用户 config.toml 丢注释/格式）。
+/// 需要一个**已存在**的会话（EchoAgent 的 upsert handler 要求 session live）。
 /// 失败只 warn：new_session 传参路径仍然生效，只是 load_session 的旧会话
 /// 拿不到工具。
 pub fn persist_registration(tx: &xai_acp_lib::AcpAgentTx, session_id: &str) {
@@ -620,11 +620,11 @@ mod tests {
         }
     }
 
-    /// 端到端（无 grok）：真起一个 server，用 reqwest 走完 MCP 握手 +
-    /// tools/list + tools/call。这是 MCP 协议层的回归防线 —— grok 的
+    /// 端到端（无 EchoAgent）：真起一个 server，用 reqwest 走完 MCP 握手 +
+    /// tools/list + tools/call。这是 MCP 协议层的回归防线 —— EchoAgent 的
     /// rmcp client 若连不上/解析失败，会表现为工具静默消失。
-    /// 端到端（无 grok）：真起一个 server，用 reqwest 走完 MCP 握手 +
-    /// tools/list + tools/call。这是 MCP 协议层的回归防线 —— grok 的
+    /// 端到端（无 EchoAgent）：真起一个 server，用 reqwest 走完 MCP 握手 +
+    /// tools/list + tools/call。这是 MCP 协议层的回归防线 —— EchoAgent 的
     /// rmcp client 若连不上/解析失败，会表现为工具静默消失。
     /// （顺带守住 `from_std` 忘设 non-blocking 的坑 —— 那会让 accept 永远
     /// 不完成，表现为 TCP 能连但无响应。）

@@ -1,4 +1,4 @@
-//! In-process grok agent bridge.
+//! In-process EchoAgent runtime bridge.
 //!
 //! The agent (`MvpAgent` from `xai-grok-shell`) is `!Send` (all fields are
 //! `Rc`/`RefCell`), so it must live on one OS thread driven by a
@@ -32,14 +32,14 @@ use xai_grok_shell::agent::mvp_agent::MvpAgent;
 use xai_grok_shell::auth::AuthManager;
 use xai_grok_shell::util::config::load_effective_config;
 
-// Re-aliased to mirror grok's own internal import style.
+// Re-aliased to mirror EchoAgent's own internal import style.
 use xai_grok_shell::agent::config::{Config as AgentConfig, RuntimeResolutionContext};
 
 /// One end of the ACP channel pair that lives on the Tauri (multi-thread) side.
 /// The client sends requests to the agent via `tx` (`AcpAgentTx`) and receives
 /// responses/notifications from the agent via `rx` (`AcpClientRx`). The agent
 /// thread holds the other end.
-pub struct GrokHandle {
+pub struct AgentHandle {
     pub tx: AcpAgentTx,
     pub rx: AcpClientRx,
     pub cancel: CancellationToken,
@@ -48,24 +48,24 @@ pub struct GrokHandle {
     pub thread: Option<std::thread::JoinHandle<Result<()>>>,
 }
 
-/// Spawn the grok agent in-process on a dedicated thread.
+/// Spawn the EchoAgent runtime in-process on a dedicated thread.
 ///
 /// `cwd` is the working directory the agent binds sessions to (typically the
-/// user's home or a chosen project). Auth is read from `~/.grok/auth.json`
+/// user's home or a chosen project). Auth is read from `~/.echo-agent/auth.json`
 /// — no re-login if it already exists.
 ///
-/// EchoAgent intentionally skips grok's startup remote-settings/models
+/// EchoAgent intentionally skips the upstream startup remote-settings/models
 /// prefetch (the synchronous `start_early_prefetch` join inside `bootstrap`).
 /// That call hits xAI backends and can block first launch for tens of seconds
 /// on slow networks; BYOK users only need local `config.toml` models. We seed
 /// an empty `RemoteSettings` so bootstrap treats remote config as already
 /// supplied and never opens the network path.
-pub fn spawn_grok(_cwd: PathBuf) -> Result<GrokHandle> {
+pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
     // Team tools 已迁移到内嵌 MCP server（team_mcp.rs，lib.rs 启动时 serve）。
-    // 这里不再需要注册 —— new_session 会把 MCP server 传给 grok，grok 以
-    // client 身份连接（工具名 echoagent__create_team 等）。对 grok 零补丁。
+    // 这里不再需要注册 —— new_session 会把 MCP server 传给 EchoAgent，EchoAgent 以
+    // client 身份连接（工具名 echoagent__create_team 等）。对 EchoAgent 零补丁。
 
-    // 1. Load + resolve config (~/.grok/config.toml; defaults if absent).
+    // 1. Load + resolve config (~/.echo-agent/config.toml; defaults if absent).
     let raw = load_effective_config().map_err(|e| anyhow!("load config: {e}"))?;
     let mut cfg = AgentConfig::new_from_toml_cfg(&raw).map_err(|e| anyhow!("parse config: {e}"))?;
     // Empty remote settings: local defaults only. Must be set both here (runtime
@@ -90,11 +90,10 @@ pub fn spawn_grok(_cwd: PathBuf) -> Result<GrokHandle> {
     cfg.remote_settings = Some(local_remote_settings);
 
     // BYOK model isolation: if the user has any [model.*] with a custom
-    // base_url, set endpoints.models_base_url so grok's `has_custom_endpoint()`
+    // base_url, set endpoints.models_base_url so the runtime's `has_custom_endpoint()`
     // returns true → skips loading built-in default models (gpt-5.6-terra,
-    // Claude, Kimi, etc.). Those built-ins route through grok's internal proxy
-    // (cli-chat-proxy.grok.com) which requires grok auth — a BYOK user has no
-    // grok credentials, so selecting one yields a 401 Unauthorized error.
+    // Claude, Kimi, etc.). Those built-ins route through an upstream proxy that
+    // requires upstream credentials, so selecting one in a BYOK-only setup yields 401.
     if cfg.endpoints.models_base_url.is_none() {
         if let Some(first_byok_url) = cfg
             .config_models
@@ -110,9 +109,9 @@ pub fn spawn_grok(_cwd: PathBuf) -> Result<GrokHandle> {
         }
     }
 
-    // 2. Auth: reuse ~/.grok/auth.json.
-    let grok_home = grok_home_dir();
-    let auth_manager = Arc::new(AuthManager::new(&grok_home, cfg.grok_com_config.clone()));
+    // 2. Auth: reuse ~/.echo-agent/auth.json.
+    let agent_home = echo_agent_home_dir();
+    let auth_manager = Arc::new(AuthManager::new(&agent_home, cfg.grok_com_config.clone()));
     auth_manager.configure_refresher(cfg.grok_com_config.auth_provider_command.clone(), None);
 
     // 3. Bootstrap: telemetry, bundled files, ModelsManager.
@@ -127,7 +126,7 @@ pub fn spawn_grok(_cwd: PathBuf) -> Result<GrokHandle> {
     // 5. Agent thread (!Send → own OS thread + current_thread runtime + LocalSet).
     let cancel_for_thread = cancel.clone();
     let thread_handle = std::thread::Builder::new()
-        .name("grok-agent".into())
+        .name("echo-agent-runtime".into())
         .spawn(move || -> Result<()> {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -157,7 +156,7 @@ pub fn spawn_grok(_cwd: PathBuf) -> Result<GrokHandle> {
             })
         })?;
 
-    Ok(GrokHandle {
+    Ok(AgentHandle {
         tx: acp_client.tx,
         rx: acp_client.rx,
         cancel,
@@ -165,19 +164,10 @@ pub fn spawn_grok(_cwd: PathBuf) -> Result<GrokHandle> {
     })
 }
 
-/// Resolve `~/.grok` in a way that avoids the `\\?\` verbatim prefix on
-/// Windows (which breaks downstream git/tools). Delegates to grok's own
-/// helper when available; falls back to `dirs` otherwise.
-pub(crate) fn grok_home_dir() -> PathBuf {
-    // grok's grok_home() is in xai-grok-config (not a direct dep here). Use
-    // the same logic: $GROK_HOME or ~/.grok, canonicalized via dunce.
-    if let Ok(custom) = std::env::var("GROK_HOME") {
-        let p = PathBuf::from(custom);
-        let _ = std::fs::create_dir_all(&p);
-        return p;
-    }
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let p = home.join(".grok");
+/// Resolve EchoAgent's runtime home. Startup also forwards this path through
+/// the embedded engine's compatibility environment variable.
+pub(crate) fn echo_agent_home_dir() -> PathBuf {
+    let p = crate::paths::echo_agent_home_dir();
     let _ = std::fs::create_dir_all(&p);
     p
 }
@@ -221,7 +211,7 @@ pub async fn initialize(tx: &AcpAgentTx) -> Result<InitOutcome> {
     Ok(InitOutcome {
         ok: true,
         auth_methods,
-        // grok's modelState uses `currentModelId` (not `defaultModelId`) for
+        // EchoAgent's modelState uses `currentModelId` (not `defaultModelId`) for
         // the active model. Try both keys defensively in case of version skew.
         default_model_id: resp
             .meta
@@ -240,7 +230,7 @@ pub async fn initialize(tx: &AcpAgentTx) -> Result<InitOutcome> {
 }
 
 /// Authenticate using the agent's first advertised method. With
-/// `~/.grok/auth.json` present and valid this succeeds without interaction.
+/// `~/.echo-agent/auth.json` present and valid this succeeds without interaction.
 pub async fn authenticate(tx: &AcpAgentTx, method_id: &str) -> Result<()> {
     let req = acp::AuthenticateRequest::new(acp::AuthMethodId::new(method_id.to_string()));
     let _: acp::AuthenticateResponse = acp_send(req, tx)
@@ -251,14 +241,14 @@ pub async fn authenticate(tx: &AcpAgentTx, method_id: &str) -> Result<()> {
 
 /// Create a new session bound to `cwd`. Returns the new session id.
 ///
-/// If `model_id` is supplied, it is passed as `_meta.modelId` so grok binds
+/// If `model_id` is supplied, it is passed as `_meta.modelId` so EchoAgent binds
 /// the session to that model from the very start. This avoids the
 /// new_session → set_session_model two-step, which could leave the session's
-/// sampling config pinned to grok's default model (`grok-build`, which has
+/// sampling config pinned to EchoAgent's default model (`grok-build`, which has
 /// no key in a BYOK-only setup) before the switch lands.
 ///
 /// The in-process team MCP server (team_mcp.rs) rides along as a client-side
-/// `mcp_servers` entry — grok's merge gives the client layer top priority,
+/// `mcp_servers` entry — EchoAgent's merge gives the client layer top priority,
 /// so the team tools (`echoagent__create_team` etc.) are live from this
 /// session's first turn. Persistent registration to config.toml happens
 /// separately after the session exists (team_mcp::persist_registration).
@@ -358,13 +348,13 @@ pub async fn prompt(tx: &AcpAgentTx, session_id: &str, text: &str) -> Result<()>
     unreachable!()
 }
 
-/// Switch the model used by an existing session. Maps to grok's
-/// `session/set_model` ACP method (`SetSessionModelRequest`). grok will
+/// Switch the model used by an existing session. Maps to EchoAgent's
+/// `session/set_model` ACP method (`SetSessionModelRequest`). EchoAgent will
 /// re-derive sampling config, sync the API key, and broadcast a
 /// `ModelChanged` notification.
 ///
 /// Caveat: if the session has existing turns and the new model requires a
-/// different agent harness, grok rejects this with
+/// different agent harness, EchoAgent rejects this with
 /// `MODEL_SWITCH_INCOMPATIBLE_AGENT` — surface that error to the caller so
 /// the UI can prompt for a new session.
 pub async fn set_session_model(tx: &AcpAgentTx, session_id: &str, model_id: &str) -> Result<()> {
@@ -399,7 +389,7 @@ pub async fn cancel(tx: &AcpAgentTx, session_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Rename a session by calling grok's `x.ai/session/rename` extension method.
+/// Rename a session by calling EchoAgent's `x.ai/session/rename` extension method.
 ///
 /// This is the canonical path (see `xai-grok-shell/src/extensions/session_admin.rs:60`):
 /// it writes `summary.json`'s `generated_title` with `title_is_manual=true`,
@@ -407,7 +397,7 @@ pub async fn cancel(tx: &AcpAgentTx, session_id: &str) -> Result<()> {
 /// **Do not** edit `summary.json` directly — the agent holds the Summary in
 /// memory and flushes periodically, so a direct write would be clobbered.
 ///
-/// `cwd` is optional but recommended: grok uses it to narrow the summary scan
+/// `cwd` is optional but recommended: EchoAgent uses it to narrow the summary scan
 /// when locating the session on disk.
 pub async fn rename_session(
     tx: &AcpAgentTx,
@@ -418,14 +408,14 @@ pub async fn rename_session(
     let params = crate::ext::raw_params(&serde_json::json!({
         "sessionId": session_id,
         "title": title,
-        // `cwd` null is fine — grok treats it as "search all sessions".
+        // `cwd` null is fine — EchoAgent treats it as "search all sessions".
         "cwd": cwd,
     }));
     let _: acp::ExtResponse = crate::ext::call_ext_value(tx, "x.ai/session/rename", params).await?;
     Ok(())
 }
 
-/// Delete a session's persisted history by calling grok's
+/// Delete a session's persisted history by calling EchoAgent's
 /// `x.ai/session/delete` extension method (session_admin.rs:230).
 ///
 /// Removes the on-disk session directory, drops it from the FTS index, and
@@ -440,12 +430,12 @@ pub async fn delete_session(tx: &AcpAgentTx, session_id: &str, cwd: Option<&str>
     Ok(())
 }
 
-/// Fetch a session's context-window snapshot via grok's `x.ai/session/info`
+/// Fetch a session's context-window snapshot via EchoAgent's `x.ai/session/info`
 /// extension method (session/handlers/session.rs). The response is the
 /// camelCase `SessionInfoResponse` — its `context` field carries
 /// used/total/usagePct plus the token breakdown (system prompt, tool
 /// definitions, messages, skills/MCP categories) shown by the composer pill.
-/// Returned as raw JSON: the wire shape is owned by grok, so we pass it
+/// Returned as raw JSON: the wire shape is owned by EchoAgent, so we pass it
 /// through rather than mirroring the struct in Rust.
 pub async fn session_info(tx: &AcpAgentTx, session_id: &str) -> Result<serde_json::Value> {
     let params = crate::ext::raw_params(&serde_json::json!({
@@ -462,7 +452,7 @@ pub async fn session_info(tx: &AcpAgentTx, session_id: &str) -> Result<serde_jso
     Ok(resp)
 }
 
-/// Fetch a session's cumulative token usage via grok's `x.ai/session/usage`
+/// Fetch a session's cumulative token usage via EchoAgent's `x.ai/session/usage`
 /// extension method (extensions/usage.rs). The response's `usage` field is a
 /// `PromptUsage` whose totals include `inputTokens` and `cachedReadTokens` —
 /// the frontend derives the average cache hit rate from those two.
@@ -475,23 +465,23 @@ pub async fn session_usage(tx: &AcpAgentTx, session_id: &str) -> Result<serde_js
 
 #[cfg(test)]
 mod tests {
-    //! End-to-end smoke test for the embedded grok runtime (no model call):
+    //! End-to-end smoke test for the embedded EchoAgent runtime (no model call):
     //! spawn the agent thread, run the ACP `initialize` handshake, create a
-    //! session, and verify grok connects to the team MCP server. `new_session`
+    //! session, and verify EchoAgent connects to the team MCP server. `new_session`
     //! exercises the full `AgentBuilder::build` path — including the client
     //! side MCP merge (team_mcp.rs) — so a grok-build upgrade that breaks
     //! toolset assembly or the MCP handshake fails here rather than at first
     //! chat in the GUI. Marked `#[ignore]`: it spawns a real agent thread
-    //! against the user's `~/.grok` config (~10s). Run with
+    //! against the user's `~/.echo-agent` config (~10s). Run with
     //! `cargo test --lib -- --ignored spawn_smoke`.
     use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[ignore = "spawns a real agent thread against ~/.grok (~10s)"]
+    #[ignore = "spawns a real agent thread against ~/.echo-agent (~10s)"]
     async fn spawn_smoke_spawn_initialize_new_session() {
         let cwd = std::env::temp_dir();
 
-        // 0. 先起 team MCP server —— new_session 会把它注入 grok（这是去
+        // 0. 先起 team MCP server —— new_session 会把它注入 EchoAgent（这是去
         //    补丁化后的工具注入路径，替代原 patch 02）。
         crate::team_mcp::serve();
 
@@ -501,13 +491,13 @@ mod tests {
             std::time::Duration::from_secs(60),
             tokio::task::spawn_blocking({
                 let cwd = cwd.clone();
-                move || spawn_grok(cwd)
+                move || spawn_agent_runtime(cwd)
             }),
         )
         .await
-        .expect("spawn_grok timed out (60s)")
+        .expect("spawn_agent_runtime timed out (60s)")
         .expect("spawn task join failed")
-        .expect("spawn_grok failed");
+        .expect("spawn_agent_runtime failed");
 
         // 2. ACP initialize handshake: protocol version + auth methods.
         let init = tokio::time::timeout(std::time::Duration::from_secs(30), initialize(&handle.tx))
@@ -528,8 +518,8 @@ mod tests {
         .expect("new_session failed");
         assert!(!session_id.is_empty(), "empty session id");
 
-        // 4. grok 的 MCP client 必须真的连上 team MCP server（initialize
-        //    握手完成）。轮询最多 10s —— grok 异步启动 server 连接。
+        // 4. EchoAgent 的 MCP client 必须真的连上 team MCP server（initialize
+        //    握手完成）。轮询最多 10s —— EchoAgent 异步启动 server 连接。
         let mut connected = false;
         for _ in 0..100 {
             if crate::team_mcp::client_connected() {
@@ -540,7 +530,7 @@ mod tests {
         }
         assert!(
             connected,
-            "grok never connected to the team MCP server — tools would be missing"
+            "EchoAgent never connected to the team MCP server — tools would be missing"
         );
 
         // 5. Clean shutdown: cancel the agent thread and join it.

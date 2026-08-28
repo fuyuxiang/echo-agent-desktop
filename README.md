@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>WorkBuddy, rewritten in Rust.</strong><br/>
-  The open-source, cross-platform, in-process grok desktop client.
+  An open-source, cross-platform desktop agent workspace.
 </p>
 
 <p align="center">
@@ -41,13 +41,13 @@
 
 **EchoAgent is the open answer** — the same shape of experience, rebuilt on Rust + Tauri:
 
-- 🔓 **100% open source (MIT)** — no telemetry black box, no vendor lock-in.
+- 🔓 **Open source** — MIT application code with clearly documented third-party components; no telemetry black box or vendor lock-in.
 - 🦀 **Built on Rust + Tauri** — small binary, fast cold-start, real cross-platform.
 - 🪶 **~14× smaller installer** — EchoAgent's Windows installer is **~34 MB**, vs **~483 MB** for WorkBuddy. Same shape of product, a fraction of the bytes.
 - 💨 **~19× less RAM at runtime** — **~20 MB** vs **~374 MB** for WorkBuddy on the same machine. Leaves your actual work room to breathe.
-- ⚙️ **grok as an in-process library** — no subprocess spawning, no WebSocket relay. The agent runs on a dedicated OS thread inside the very binary you double-click.
+- ⚙️ **EchoAgent Runtime, in-process** — no subprocess spawning or WebSocket relay. The agent runs on a dedicated OS thread inside the binary you double-click.
 - 🌐 **Truly cross-platform** — one codebase, Windows **and** macOS.
-- 🔑 **Bring Your Own Key** — point at any model provider via `~/.grok/config.toml`, stored as plain text you can diff and version-control.
+- 🔑 **Bring Your Own Key** — point at any model provider via `~/.echo-agent/config.toml`, stored as plain text you can diff and version-control.
 
 > *"If WorkBuddy is the polished product, EchoAgent is the one you can actually read, fork, and own."*
 
@@ -70,22 +70,22 @@ If this project matters to you, please give it a ⭐ — it helps others discove
 **🎨 Pixel-close WorkBuddy UI**
 Ported `--wb-*` design tokens, the full 207-icon foundation set (all implemented, no stubs), and brand assets. It *looks* like WorkBuddy, because the same atoms make it up.
 
-**⚙️ grok, in-process**
-`xai-grok-shell` + `xai-acp-lib` are path dependencies. The agent runs on its own OS thread, driven by a current-thread tokio runtime + `LocalSet`. No `child_process.spawn`.
+**⚙️ EchoAgent Runtime, in-process**
+The embedded runtime is linked as Rust path dependencies. The agent runs on its own OS thread, driven by a current-thread tokio runtime + `LocalSet`. No `child_process.spawn`.
 
 **🔌 ACP is the contract**
-Streaming `SessionUpdate`s, tool calls, plan updates, permission requests — all flow over typed `mpsc` channels, surfaced as `grok://update` / `grok://permission` / `grok://complete` Tauri events.
+Streaming `SessionUpdate`s, tool calls, plan updates, permission requests — all flow over typed `mpsc` channels, surfaced as `agent://update` / `agent://permission` / `agent://complete` Tauri events.
 
 </td>
 <td width="50%" valign="top">
 
 **🔑 BYOK, multi-provider**
-Bring your own keys. Configure any number of model providers in `~/.grok/config.toml`.
+Bring your own keys. Configure any number of model providers in `~/.echo-agent/config.toml`.
 
 **🧩 Extensible agent surface**
 - **Skills** — `x.ai/skills/*`
 - **MCP connectors** — `x.ai/mcp/*`
-- **Experts / Assistants** — `~/.grok/agents/*.md`
+- **Experts / Assistants** — `~/.echo-agent/agents/*.md`
 
 **🚀 Advanced workflows**
 Plan mode (toggle & view) · Rewind (rewind & fork) · sub-agent Tasks (observe & cancel) · Slash Commands · local Automations scheduler · notification center.
@@ -105,12 +105,12 @@ Only rows we can actually back up are listed. WorkBuddy's internals aren't publi
 
 |  | **EchoAgent** | WorkBuddy |
 |---|:---:|:---:|
-| **License** | ✅ MIT, source available | ❌ Closed source |
+| **License** | ✅ MIT application code; third parties separately licensed | ❌ Closed source |
 | **Cost** | Free forever | Free (Tencent-hosted) |
 | **Installer size** | ✅ **~34 MB** (NSIS, measured) | ⚠️ ~483 MB |
 | **Runtime memory** | ✅ **~20 MB** (measured) | ⚠️ ~374 MB |
 | **BYOK / any provider** | ✅ | ✅ |
-| **Provider config** | ✅ Plain `~/.grok/config.toml` — diffable, scriptable, version-controllable | ⚠️ GUI-only |
+| **Provider config** | ✅ Plain `~/.echo-agent/config.toml` — diffable, scriptable, version-controllable | ⚠️ GUI-only |
 | **MCP connectors** | ✅ | ✅ |
 | **Skills** | ✅ | ✅ (20+ built-in) |
 | **Plan / Rewind** | ✅ | ✅ |
@@ -118,7 +118,7 @@ Only rows we can actually back up are listed. WorkBuddy's internals aren't publi
 | **macOS** | ✅ | ✅ |
 | **Linux** | 🔜 Roadmap | 🔜 |
 | **Self-host / fork** | ✅ Build it yourself | ❌ |
-| **Local data / offline-friendly** | ✅ Your `~/.grok/`, your disk | ⚠️ Tencent-hosted backend |
+| **Local data / offline-friendly** | ✅ Your `~/.echo-agent/`, your disk | ⚠️ Tencent-hosted backend |
 
 > WorkBuddy is a polished, genuinely capable product — this isn't a hit piece. The point is simply: if you want the same shape of experience but **open, forkable, and provider-agnostic**, EchoAgent is the path.
 
@@ -138,8 +138,8 @@ Only rows we can actually back up are listed. WorkBuddy's internals aren't publi
 
 Grab the latest installer from the **[Releases](https://github.com/opensymph/EchoAgent/releases)** page (Windows `.exe`/`.msi`, macOS `.dmg`), then:
 
-1. Install grok once: `grok login` (the app reuses `~/.grok/auth.json`).
-2. Launch EchoAgent. Done.
+1. Launch EchoAgent.
+2. Open **Settings → Models** and configure a Provider/API key. Done.
 
 ### Option B — Build from source
 
@@ -160,11 +160,10 @@ pnpm tauri dev
 
 1. **Rust 1.92+**. `rust-toolchain.toml` selects stable Rust with each platform's native host toolchain.
 2. **Node 20+** and **pnpm**.
-3. **grok** installed and logged in (`grok login` once). The app reuses `~/.grok/auth.json`.
-4. **protoc** on `PATH` **and** the `PROTOC` env var pointing at it (grok's `xai-grok-tools-api` build script needs it; its bundled `bin/protoc` is a DotSlash script that doesn't run on Windows).
+3. **protoc** on `PATH` **and** the `PROTOC` env var pointing at it (an embedded upstream build script needs it; its bundled `bin/protoc` is a DotSlash script that doesn't run on Windows).
    - Windows: `choco install protoc`, then `setx PROTOC "C:\ProgramData\chocolatey\bin\protoc.exe"`.
 
-> The first build compiles the full grok dependency tree (rusqlite/git2 bundled C, prost/protobuf, axum, reqwest, …) — expect **5–10 minutes**. Incremental builds are fast thereafter.
+> The first build compiles the full embedded runtime dependency tree (rusqlite/git2 bundled C, prost/protobuf, axum, reqwest, …) — expect **5–10 minutes**. Incremental builds are fast thereafter.
 
 For Windows-specific gotchas (MSVC workload, mirrors, patches), see **[docs/WINDOWS_BUILD_NOTES.md](docs/WINDOWS_BUILD_NOTES.md)**.
 
@@ -178,7 +177,7 @@ pnpm dist:win    # Windows: NSIS .exe + MSI (requires MSVC link.exe + Windows SD
 pnpm dist:mac    # macOS: .dmg (host arch; unsigned / unnotarized)
 ```
 
-`grok-build` is vendored as a git submodule at `vendor/grok-build` (pinned to a verified revision). The setup scripts initialize it; `pnpm dist:*` verifies it's present before building.
+The Apache-2.0 upstream runtime is vendored as a pinned git submodule at `vendor/grok-build`. The setup scripts initialize it; `pnpm dist:*` verifies it before building. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 </details>
 
@@ -196,14 +195,14 @@ pnpm dist:mac    # macOS: .dmg (host arch; unsigned / unnotarized)
 ┌───────────────────────────────────────────┼──────────────┐
 │  Tauri Rust backend (src-tauri/src)       │              │
 │   commands.rs  ← Tauri commands ──────────┘              │
-│   grok.rs      ← spawn_grok() + ACP lifecycle            │
+│   agent_runtime.rs ← in-process runtime + ACP lifecycle           │
 │   bridge.rs    ← ACP → Tauri event dispatcher            │
-│   sessions.rs  ← ~/.grok/sessions history listing        │
+│   sessions.rs  ← ~/.echo-agent/sessions history listing        │
 └───────────────────────┬──────────────────────────────────┘
                         │ typed ACP mpsc channels
 ┌───────────────────────┴──────────────────────────────────┐
-│  grok agent thread (MvpAgent, !Send, LocalSet)            │
-│  xai-grok-shell + xai-acp-lib (path deps into grok-build) │
+│  EchoAgent runtime thread (MvpAgent, !Send, LocalSet)     │
+│  Embedded ACP runtime (Rust path dependencies)            │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -213,17 +212,17 @@ pnpm dist:mac    # macOS: .dmg (host arch; unsigned / unnotarized)
 src/                     # React frontend
   styles/                # tokens.css / global.css / app.css
   foundation/components/Icon/   # ported from WorkBuddy (207 icons, all implemented)
-  lib/                   # grok-client.ts (Tauri command wrappers) + types.ts (ACP TS mirror)
+  lib/                   # agent-client.ts (Tauri command wrappers) + types.ts (ACP TS mirror)
   stores/                # Zustand: session / sessions / permission / ...
   components/            # Topbar, Sidebar, HomePage, ChatView, Composer, ...
 
 src-tauri/               # Rust backend
   src/
     lib.rs               # Tauri entry + state + command registration
-    grok.rs              # spawn_grok() + authenticate/new_session/prompt/cancel
+    agent_runtime.rs     # runtime lifecycle + authenticate/session/prompt/cancel
     bridge.rs            # ACP→Tauri event dispatcher + permission registry
-    commands.rs          # #[tauri::command] table (grok_*)
-    sessions.rs          # list ~/.grok/sessions for the sidebar
+    commands.rs          # #[tauri::command] table (agent_*)
+    sessions.rs          # list ~/.echo-agent/sessions for the sidebar
 
 scripts/                 # build.ps1 (Windows) / build.sh (macOS)
 docs/                    # WINDOWS_BUILD_NOTES.md — Windows build gotchas
@@ -234,7 +233,7 @@ docs/                    # WINDOWS_BUILD_NOTES.md — Windows build gotchas
 ## 🗺️ Roadmap
 
 - [x] Core layout: Sidebar / HomePage / ChatView / Composer
-- [x] In-process grok agent over ACP
+- [x] In-process EchoAgent Runtime over ACP
 - [x] WorkBuddy design tokens & 207-icon foundation (all implemented, zero stubs)
 - [x] BYOK multi-provider config
 - [x] Skills / MCP / Experts surfaces
@@ -268,7 +267,7 @@ Areas that especially need help right now: **Linux packaging**, **UI polish / sc
 ## 🙏 Acknowledgements
 
 - **[Tencent WorkBuddy](https://workbuddy.tencent.com/)** — the design north star. EchoAgent reuses WorkBuddy's `--wb-*` design tokens, 207-icon foundation (all implemented), and brand atoms for a pixel-close visual experience.
-- **[xai-org/grok-build](https://github.com/xai-org/grok-build)** — the embedded grok agent (`xai-grok-shell` + `xai-acp-lib`), consumed as path dependencies.
+- **[xai-org/grok-build](https://github.com/xai-org/grok-build)** — the Apache-2.0 upstream runtime component consumed as Rust path dependencies. See [Third-Party Notices](THIRD_PARTY_NOTICES.md).
 - **[Tauri](https://tauri.app/)**, **[React](https://react.dev/)**, **[Vite](https://vitejs.dev/)** — the stack that makes a 10 MB shell feel instant.
 
 This project is an independent, community-driven open-source effort and is not affiliated with, endorsed by, or sponsored by Tencent or xAI.
@@ -277,4 +276,4 @@ This project is an independent, community-driven open-source effort and is not a
 
 ## License
 
-MIT © EchoAgent contributors. See [LICENSE](LICENSE).
+MIT © EchoAgent contributors. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

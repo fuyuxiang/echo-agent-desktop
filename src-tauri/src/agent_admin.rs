@@ -1,9 +1,9 @@
-//! Higher-level grok admin extensions — bridges the `x.ai/*` methods that
+//! Higher-level EchoAgent admin extensions — bridges the upstream `x.ai/*` methods that
 //! drive WorkBuddy-equivalent features:
 //!
-//! - **Memory** (资料库): read/rewrite `~/.grok/memory/MEMORY.md` + per-cwd
+//! - **Memory** (资料库): read/rewrite `~/.echo-agent/memory/MEMORY.md` + per-cwd
 //!   workspace memory. `x.ai/memory/{flush,rewrite}` + `compact_conversation`.
-//! - **Session search** (历史检索): `x.ai/session/search` over grok's FTS5.
+//! - **Session search** (历史检索): `x.ai/session/search` over EchoAgent's FTS5.
 //! - **Rewind** (回溯): `x.ai/rewind/{execute,points}`.
 //! - **Prompt history** (命令面板): `x.ai/prompt_history`.
 //! - **Slash commands** ("/ 调用技能与指令"): `x.ai/commands/list`.
@@ -13,7 +13,7 @@
 //! - **Subagent / task observation**: `x.ai/{subagent,task}/*`.
 //!
 //! All ACP calls go through `ext::call_ext` / `call_ext_value`. File-backed
-//! reads (memory markdown) go through direct fs (grok doesn't expose list).
+//! reads (memory markdown) go through direct fs (EchoAgent doesn't expose list).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,12 +28,12 @@ use crate::ext::{call_ext, raw_params};
 // Memory (资料库)
 // ========================================================================
 
-/// One memory note. grok stores memories as markdown chunks; we surface the
+/// One memory note. EchoAgent stores memories as markdown chunks; we surface the
 /// raw text plus which scope it came from.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryEntry {
-    /// "global" (~/.grok/memory/) or "workspace" (<cwd>/.grok/memory/).
+    /// "global" (~/.echo-agent/memory/) or "workspace" (<cwd>/.echo-agent/memory/).
     pub scope: String,
     /// Relative path under the memory root (e.g. "MEMORY.md" or "facts/rust.md").
     pub path: String,
@@ -43,21 +43,12 @@ pub struct MemoryEntry {
     pub size: u64,
 }
 
-fn grok_home() -> PathBuf {
-    if let Ok(custom) = std::env::var("GROK_HOME") {
-        return PathBuf::from(custom);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".grok")
-}
-
 fn global_memory_dir() -> PathBuf {
-    grok_home().join("memory")
+    crate::paths::echo_agent_home_dir().join("memory")
 }
 
 fn workspace_memory_dir(cwd: &str) -> PathBuf {
-    PathBuf::from(cwd).join(".grok").join("memory")
+    PathBuf::from(cwd).join(".echo-agent").join("memory")
 }
 
 /// Recursively scan a memory dir for `*.md` files. Best-effort.
@@ -104,8 +95,8 @@ fn scan_memory_dir(dir: &std::path::Path, scope: &str) -> Vec<MemoryEntry> {
     out
 }
 
-/// List memory notes from both global (`~/.grok/memory/`) and the current
-/// workspace (`<cwd>/.grok/memory/`). grok auto-writes these as it learns
+/// List memory notes from both global (`~/.echo-agent/memory/`) and the current
+/// workspace (`<cwd>/.echo-agent/memory/`). EchoAgent auto-writes these as it learns
 /// facts across sessions.
 #[tauri::command]
 pub fn memory_list(cwd: Option<String>) -> Vec<MemoryEntry> {
@@ -183,7 +174,7 @@ pub fn memory_delete(scope: String, path: String, cwd: Option<String>) -> Result
     std::fs::remove_file(&full).map_err(|e| format!("delete: {e}"))
 }
 
-/// Trigger grok to rewrite memories into structured markdown via an LLM pass.
+/// Trigger EchoAgent to rewrite memories into structured markdown via an LLM pass.
 /// Maps to `x.ai/memory/rewrite`. Optional — the user can also just edit the
 /// raw MEMORY.md themselves.
 #[tauri::command]
@@ -234,7 +225,7 @@ pub struct SearchHit {
     pub updated_at: Option<String>,
 }
 
-/// `x.ai/session/search` response shape (defensive — varies by grok version).
+/// `x.ai/session/search` response shape (defensive — varies by EchoAgent version).
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum SearchResponse {
@@ -261,7 +252,7 @@ struct RawSearchHit {
     updated_at: Option<String>,
 }
 
-/// Full-text search across all sessions (grok's SQLite FTS5 index).
+/// Full-text search across all sessions (EchoAgent's SQLite FTS5 index).
 /// `cwd` optionally narrows to one workspace.
 #[tauri::command]
 pub async fn session_search(
@@ -486,7 +477,7 @@ pub struct SlashCommand {
     pub source: Option<String>,
 }
 
-/// List slash commands grok knows (builtin + skills + plugins). Powers the
+/// List slash commands EchoAgent knows (builtin + skills + plugins). Powers the
 /// Composer's "/" autocomplete.
 #[tauri::command]
 pub async fn commands_list(state: State<'_, AppState>) -> Result<Vec<SlashCommand>, String> {
@@ -595,7 +586,7 @@ pub async fn tasks_list(state: State<'_, AppState>) -> Result<Vec<RunningTask>, 
         .clone()
         .ok_or("agent not initialized")?;
     let params = raw_params(&serde_json::json!({}));
-    // Try task/list first; some grok builds only expose subagent/list_running.
+    // Try task/list first; some EchoAgent builds only expose subagent/list_running.
     let v: serde_json::Value = match call_ext(&tx, "x.ai/task/list", params.clone()).await {
         Ok(v) => v,
         Err(_) => call_ext(&tx, "x.ai/subagent/list_running", params)
@@ -666,8 +657,8 @@ pub async fn task_kill(state: State<'_, AppState>, task_id: String) -> Result<()
 // Folder trust
 // ========================================================================
 
-/// When grok sends `x.ai/folder_trust/request`, the frontend shows a dialog.
-/// The user's decision is sent back via this command, which calls the grok
+/// When EchoAgent sends `x.ai/folder_trust/request`, the frontend shows a dialog.
+/// The user's decision is sent back via this command, which calls the EchoAgent
 /// ext method `x.ai/folder_trust/respond` (or the ACP-standard permission
 /// resolution path). The request itself is registered by bridge.rs.
 #[tauri::command]
@@ -697,7 +688,7 @@ pub async fn folder_trust_respond(
 // Plan mode
 // ========================================================================
 
-/// Toggle plan mode for the current session. In plan mode grok plans but
+/// Toggle plan mode for the current session. In plan mode EchoAgent plans but
 /// doesn't execute tools until the user approves. Maps to the
 /// `x.ai/toggle_plan_mode` notification (sent client→agent).
 #[tauri::command]
@@ -742,7 +733,7 @@ fn acp_ext_notification(
 // Internal reload (hot-reload config after edits)
 // ========================================================================
 
-/// Hot-reload grok's view of MCP servers / skills / models / config without
+/// Hot-reload EchoAgent's view of MCP servers / skills / models / config without
 /// restarting the app. Maps to `x.ai/internal/reload_*` notifications.
 /// `kind` ∈ "mcp_all" | "mcp_project" | "skills" | "models".
 #[tauri::command]
@@ -783,7 +774,7 @@ fn _task_registry_placeholder() -> HashMap<String, RunningTask> {
 
 /// Request body for `inspiration_generate`. The category selects the topic
 /// domain (mirrors WorkBuddy's i18n keys: ai_models / product_design / ...).
-/// We pass the user's recent memory + prompt history as context so grok can
+/// We pass the user's recent memory + prompt history as context so EchoAgent can
 /// personalize the output.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -798,10 +789,10 @@ pub struct InspirationRequest {
     pub count: Option<u32>,
 }
 
-/// Build the grok prompt for a given inspiration category. The prompt asks
+/// Build the EchoAgent prompt for a given inspiration category. The prompt asks
 /// for structured JSON so the frontend can render cards (title + summary +
 /// why-it-matters). We embed a snippet of the user's memory + recent prompts
-/// so grok can tailor the inspiration to their actual interests.
+/// so EchoAgent can tailor the inspiration to their actual interests.
 fn prompt_for_category(category: &str, count: u32, context: &str) -> String {
     let topic = match category {
         "ai_models" => "AI 大模型 / LLM 前沿（新模型、能力突破、应用案例）",
@@ -831,7 +822,7 @@ fn prompt_for_category(category: &str, count: u32, context: &str) -> String {
 }
 
 /// Build a short context block from the user's memory + recent prompts.
-/// This lets grok personalize inspiration. Best-effort — empty on failure.
+/// This lets EchoAgent personalize inspiration. Best-effort — empty on failure.
 fn build_user_context(cwd: Option<&str>) -> String {
     let mut parts: Vec<String> = Vec::new();
     // Recent memory entries (global + workspace).
@@ -853,7 +844,7 @@ fn build_user_context(cwd: Option<&str>) -> String {
         String::new()
     } else {
         format!(
-            "参考用户的兴趣画像（来自 grok 资料库）：\n{}\n\n",
+            "参考用户的兴趣画像（来自 EchoAgent 资料库）：\n{}\n\n",
             parts.join("\n\n")
         )
     }
@@ -871,12 +862,12 @@ fn read_memory_entries(cwd: Option<&str>) -> Vec<MemoryEntry> {
     out
 }
 
-/// Generate inspiration cards by spinning up a side-channel grok session.
+/// Generate inspiration cards by spinning up a side-channel EchoAgent session.
 ///
 /// The session id is prefixed with `__ob_side__` so bridge.rs routes its
-/// streamed updates to `grok://side-update` instead of `grok://update` —
+/// streamed updates to `agent://side-update` instead of `agent://update` —
 /// this keeps the main transcript store clean. The frontend subscribes to
-/// `grok://side-update`, accumulates text chunks until `grok://complete`
+/// `agent://side-update`, accumulates text chunks until `agent://complete`
 /// for that session, then parses the JSON.
 ///
 /// Returns the side-channel session id (so the frontend knows what to listen
@@ -902,21 +893,21 @@ pub async fn inspiration_generate(
     let context = build_user_context(Some(&cwd.to_string_lossy()));
     let prompt = prompt_for_category(&request.category, count, &context);
 
-    // Create a side-channel session. We can't force grok to use a specific
+    // Create a side-channel session. We can't force EchoAgent to use a specific
     // session id, so we create a normal one and tag our routing by checking
     // a prefix we add to the prompt's _meta. Simpler: we just remember the
     // returned id and tell the frontend to filter on it. But bridge.rs routes
-    // by prefix `__ob_side__` — grok won't produce that prefix naturally.
+    // by prefix `__ob_side__` — EchoAgent won't produce that prefix naturally.
     //
     // Resolution: we accept that inspiration updates WILL flow into the main
     // transcript store unless the user happens to be on a different session.
     // To avoid that, the frontend immediately calls setSession(null) before
     // starting generation so there's no "current" transcript to pollute, then
     // restores it after. This is documented in InspirationTab.
-    let session_id = crate::grok::new_session(&tx, &cwd, None)
+    let session_id = crate::agent_runtime::new_session(&tx, &cwd, None)
         .await
         .map_err(|e| e.to_string())?;
-    crate::grok::prompt(&tx, &session_id, &prompt)
+    crate::agent_runtime::prompt(&tx, &session_id, &prompt)
         .await
         .map_err(|e| e.to_string())?;
     Ok(InspirationStarted {
@@ -935,13 +926,13 @@ pub struct InspirationStarted {
 }
 
 // ========================================================================
-// xAI API Key 管理 — grok 的 `x.ai/getApiKey` / `x.ai/setApiKey`
+// xAI API Key 管理 — EchoAgent 的 `x.ai/getApiKey` / `x.ai/setApiKey`
 //
 // EchoAgent 只支持 BYOK 认证（xAI API Key / config.toml 里的 [model.*]
-// api_key/env_key）。grok OAuth 登录（x.ai/auth/info、check_subscription、
+// api_key/env_key）。EchoAgent OAuth 登录（x.ai/auth/info、check_subscription、
 // logout、get_url、cancel）相关的 command 已移除，以避免内核在空配置时
 // fallthrough 到 OIDC 并打开浏览器跳转 x.ai。详见 commands.rs 里
-// `grok_init` 的认证选择逻辑。
+// `agent_init` 的认证选择逻辑。
 // ========================================================================
 
 /// Get the current xAI API key via `x.ai/getApiKey`. The key is returned
@@ -986,7 +977,7 @@ pub async fn account_set_api_key(
 // ========================================================================
 
 /// List installed plugins via `x.ai/plugins/list`. `session_id` is optional —
-/// grok answers from the session's registry when given, otherwise from the
+/// EchoAgent answers from the session's registry when given, otherwise from the
 /// shared snapshot. Returns the raw `PluginsListResponse` JSON so the frontend
 /// can render the full shape (skill/agent/hook/mcp counts etc.).
 #[tauri::command]
@@ -1000,7 +991,7 @@ pub async fn plugins_list(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    // grok requires a session_id; pass an empty string if none — it falls back
+    // EchoAgent requires a session_id; pass an empty string if none — it falls back
     // to the shared snapshot.
     let sid = session_id.unwrap_or_default();
     let params = raw_params(&serde_json::json!({ "sessionId": sid }));
@@ -1010,7 +1001,7 @@ pub async fn plugins_list(
 }
 
 /// Execute a plugin action via `x.ai/plugins/action`. The frontend supplies
-/// the action object verbatim (shape matches grok's `PluginsActionRequest`).
+/// the action object verbatim (shape matches EchoAgent's `PluginsActionRequest`).
 /// Returns the action's outcome.
 #[tauri::command]
 pub async fn plugins_action(
@@ -1052,7 +1043,7 @@ pub async fn marketplace_list(
 }
 
 /// Execute a marketplace action (install/uninstall/refresh/update/add_source/
-/// remove_source). `action` shape matches grok's `MarketplaceAction` enum.
+/// remove_source). `action` shape matches EchoAgent's `MarketplaceAction` enum.
 #[tauri::command]
 pub async fn marketplace_action(
     state: State<'_, AppState>,

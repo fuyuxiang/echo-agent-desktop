@@ -1,5 +1,5 @@
 //! Expert marketplace data — read LIVE from a local WorkBuddy data directory
-//! (default `E:\Grok\agents`, overridable from the UI).
+//! (default `E:\EchoAgent\agents`, overridable from the UI).
 //!
 //! Layout we consume:
 //!   <root>/_meta/_expert_center.json      — categories + experts (rich fields)
@@ -164,7 +164,7 @@ fn candidate_roots() -> Vec<PathBuf> {
         }
     }
     if let Some(h) = dirs::home_dir() {
-        out.push(h.join("Grok").join("agents"));
+        out.push(h.join("EchoAgent").join("agents"));
         out.push(h.join("agents"));
     }
     out
@@ -442,10 +442,7 @@ const THUMB_SIZE: u32 = 96;
 const THUMB_QUALITY: u8 = 82;
 
 fn thumb_cache_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".grok")
-        .join("expert-thumbs")
+    crate::paths::echo_agent_home_dir().join("expert-thumbs")
 }
 
 /// A stable cache filename derived from the source path + mtime (so editing the
@@ -592,12 +589,12 @@ pub async fn experts_read_agent_prompt(
 
 // ---------- team agent linking ----------
 
-/// Copy a team expert's `agents/*.md` files into `~/.grok/agents/` so that
-/// grok's sub-agent discovery can find them by bare name when the lead agent
+/// Copy a team expert's `agents/*.md` files into `~/.echo-agent/agents/` so that
+/// EchoAgent's sub-agent discovery can find them by bare name when the lead agent
 /// calls the Task tool. Returns the number of files linked.
 ///
-/// This is needed because grok only scans `~/.grok/agents/` and
-/// `<cwd>/.grok/agents/` — it doesn't know about the WorkBuddy expert root.
+/// This is needed because EchoAgent only scans `~/.echo-agent/agents/` and
+/// `<cwd>/.echo-agent/agents/` — it doesn't know about the WorkBuddy expert root.
 /// By copying the member definitions, the lead agent's orchestration
 /// instructions (e.g. "spawn macro-strategist") resolve correctly.
 #[tauri::command]
@@ -608,7 +605,7 @@ pub async fn experts_link_agents(root: String, plugin: String) -> Result<u32, St
         return Err(format!("agents 目录不存在：{}/agents", plugin));
     }
 
-    // Target: ~/.grok/agents/
+    // Target: ~/.echo-agent/agents/
     let target_dir = crate::agents_store::user_agents_dir_pub();
     std::fs::create_dir_all(&target_dir).map_err(|e| format!("创建 agents 目录失败：{e}"))?;
 

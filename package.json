@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.15.0",
   "type": "module",
-  "description": "EchoAgent — a WorkBuddy-style desktop shell for the grok agent, built on Tauri.",
+  "description": "EchoAgent — an open-source desktop agent workspace built on Tauri.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

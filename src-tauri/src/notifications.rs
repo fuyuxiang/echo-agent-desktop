@@ -1,13 +1,13 @@
-//! EchoAgent notification log — a local inbox for grok events.
+//! EchoAgent notification log — a local inbox for EchoAgent events.
 //!
 //! WorkBuddy's "智能体邮箱" (agent mailbox) is a Tencent email integration
-//! (send/receive mail, turn emails into tasks). grok has no email backend,
+//! (send/receive mail, turn emails into tasks). EchoAgent has no email backend,
 //! so EchoAgent redefines this tab as a **session notification center**:
-//! every interesting grok event (permission request, folder-trust prompt,
+//! every interesting EchoAgent event (permission request, folder-trust prompt,
 //! task completion, plan-mode toggle, MCP status change, session summary) is
 //! appended here as a notification the user can browse, filter, and act on.
 //!
-//! Storage: `~/.grok/echoagent-notifications.json` (capped at 200 entries;
+//! Storage: `~/.echo-agent/echoagent-notifications.json` (capped at 200 entries;
 //! older entries drop off FIFO).
 
 use std::path::PathBuf;
@@ -17,7 +17,7 @@ use tauri::State;
 
 use crate::commands::AppState;
 
-/// Notification kind. Mirrors the grok event channels we already subscribe to.
+/// Notification kind. Mirrors the EchoAgent event channels we already subscribe to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum NotificationKind {
@@ -86,17 +86,8 @@ pub struct NotificationStore {
 
 const MAX_ENTRIES: usize = 200;
 
-fn grok_home() -> PathBuf {
-    if let Ok(custom) = std::env::var("GROK_HOME") {
-        return PathBuf::from(custom);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".grok")
-}
-
 fn store_path() -> PathBuf {
-    grok_home().join("echoagent-notifications.json")
+    crate::paths::echo_agent_home_dir().join("echoagent-notifications.json")
 }
 
 /// Read the notification log. Missing/corrupt → empty.
@@ -124,7 +115,7 @@ fn write_store(store: &NotificationStore) -> Result<(), String> {
 }
 
 /// Append a notification. Called by the frontend (via command) when it
-/// receives a grok event it wants logged. Caps the log at MAX_ENTRIES.
+/// receives a EchoAgent event it wants logged. Caps the log at MAX_ENTRIES.
 pub fn append(
     kind: NotificationKind,
     title: &str,
@@ -160,7 +151,7 @@ pub fn append(
 
 // ---------- Tauri commands ----------
 
-/// Append a notification (frontend calls this when it receives a grok event).
+/// Append a notification (frontend calls this when it receives a EchoAgent event).
 #[tauri::command]
 pub fn notification_append(
     _state: State<'_, AppState>,

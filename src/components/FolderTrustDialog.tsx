@@ -1,14 +1,14 @@
 /**
- * 文件夹信任对话框 - 当 grok 要求信任一个目录时弹出
+ * 文件夹信任对话框 - 当 EchoAgent 要求信任一个目录时弹出
  *
- * grok 在首次对某 cwd 执行工具前会发 `x.ai/folder_trust/request`。
- * 用户选择"信任"或"拒绝"，结果通过 `folderTrustRespond` 回传给 grok。
+ * EchoAgent 在首次对某 cwd 执行工具前会发 `x.ai/folder_trust/request`。
+ * 用户选择"信任"或"拒绝"，结果通过 `folderTrustRespond` 回传给 EchoAgent。
  *
- * 信任的目录会写入 grok 的 trust 配置，之后该目录的工具调用不再询问。
+ * 信任的目录会写入 EchoAgent 的 trust 配置，之后该目录的工具调用不再询问。
  */
 import { useEffect, useState } from "react";
 import { ShieldCheckIcon, ShieldAlertIcon } from "@/foundation/components/Icon/icons";
-import { folderTrustRespond } from "@/lib/grok-client";
+import { folderTrustRespond } from "@/lib/agent-client";
 
 interface TrustRequest {
   cwd?: string;
@@ -54,7 +54,7 @@ export function FolderTrustDialog({ request, onResolve, onToast }: FolderTrustDi
         </div>
         <h2 className="trust-dialog__title">信任此工作目录？</h2>
         <p className="trust-dialog__desc">
-          grok 即将在此目录中执行操作（读写文件、运行命令等）。
+          EchoAgent 即将在此目录中执行操作（读写文件、运行命令等）。
           请确认你信任此目录的内容。
         </p>
         <div className="trust-dialog__path" title={cwd}>

@@ -1,8 +1,8 @@
 //! Session history discovery.
 //!
-//! grok persists sessions under `~/.grok/sessions/<encoded-cwd>/<session-id>/`
+//! EchoAgent persists sessions under `~/.echo-agent/sessions/<encoded-cwd>/<session-id>/`
 //! with a `summary.json` in each. We list them (best-effort) for the sidebar.
-//! The encoding of <encoded-cwd> is grok's `encode_cwd_dirname` (with a blake3
+//! The encoding of <encoded-cwd> is EchoAgent's `encode_cwd_dirname` (with a blake3
 //! hash fallback for long paths); rather than reproduce that exactly we scan
 //! ALL session directories and filter by the matching cwd inside summary.json.
 
@@ -20,10 +20,10 @@ pub struct SessionSummary {
     pub cwd: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_git_repo: Option<bool>,
-    /// Pinned-to-top flag (EchoAgent-only state, NOT a grok field).
+    /// Pinned-to-top flag (EchoAgent-only state, NOT a EchoAgent field).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pinned: Option<bool>,
-    /// Archived (hidden from sidebar) flag (EchoAgent-only state, NOT a grok field).
+    /// Archived (hidden from sidebar) flag (EchoAgent-only state, NOT a EchoAgent field).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
     /// Model id bound to this session, if recorded in summary.json.
@@ -40,10 +40,10 @@ pub struct SessionSummary {
     pub expert_avatar: Option<String>,
 }
 
-/// Subset of grok's `Summary` struct (see `xai-grok-shell/src/session/persistence.rs:790`).
+/// Subset of EchoAgent's `Summary` struct (see `xai-grok-shell/src/session/persistence.rs:790`).
 /// We only deserialize the fields we care about; unknown fields are ignored.
 ///
-/// Display priority for `title` matches grok's own `display_title`:
+/// Display priority for `title` matches EchoAgent's own `display_title`:
 /// `generated_title` (LLM-generated or manual /rename) > `session_summary`
 /// (user's first message text).
 #[derive(Debug, Deserialize)]
@@ -64,14 +64,14 @@ struct SummaryFile {
     cwd: Option<String>,
     #[serde(default)]
     updated_at: Option<String>,
-    /// grok bumps this on any activity; preferred when `updated_at` is stale.
+    /// EchoAgent bumps this on any activity; preferred when `updated_at` is stale.
     #[serde(default)]
     last_active_at: Option<String>,
     #[serde(default)]
     current_model_id: Option<String>,
     #[serde(default)]
     git_root_dir: Option<String>,
-    /// Nested `info.id` / `info.cwd` shape (grok's Summary wraps these in Info).
+    /// Nested `info.id` / `info.cwd` shape (EchoAgent's Summary wraps these in Info).
     #[serde(default)]
     info: Option<SummaryInfo>,
     #[serde(default)]
@@ -87,10 +87,10 @@ struct SummaryInfo {
     cwd: Option<String>,
 }
 
-/// List sessions for a given cwd. Reads `~/.grok/sessions/**/*.json` and
+/// List sessions for a given cwd. Reads `~/.echo-agent/sessions/**/*.json` and
 /// filters by cwd. Best-effort: missing/invalid entries are skipped.
 pub fn list_sessions(cwd: &str) -> Vec<SessionSummary> {
-    let sessions_root = grok_sessions_root();
+    let sessions_root = agent_sessions_root();
     let mut out = Vec::new();
 
     let Ok(cwd_dirs) = std::fs::read_dir(&sessions_root) else {
@@ -138,7 +138,7 @@ pub fn list_sessions(cwd: &str) -> Vec<SessionSummary> {
                 continue;
             }
             // Title: generated_title wins over legacy `summary`. This matches
-            // grok's display_title precedence (persistence.rs:961-968).
+            // EchoAgent's display_title precedence (persistence.rs:961-968).
             let title = s
                 .generated_title
                 .clone()
@@ -165,7 +165,7 @@ pub fn list_sessions(cwd: &str) -> Vec<SessionSummary> {
             });
         }
     }
-    // Merge EchoAgent-only pinned/archived state (sidecar file, since grok's
+    // Merge EchoAgent-only pinned/archived state (sidecar file, since EchoAgent's
     // Summary has no such fields and would clobber any we tried to add).
     let state = crate::meta::read_state();
     let pinned = state.pinned_set();
@@ -197,7 +197,7 @@ pub fn list_sessions(cwd: &str) -> Vec<SessionSummary> {
     out
 }
 
-/// A discovered workspace (working directory grok has run sessions in).
+/// A discovered workspace (working directory EchoAgent has run sessions in).
 /// Used to populate the Composer's "选择工作空间" dropdown.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -211,12 +211,12 @@ pub struct WorkspaceInfo {
     pub last_title: Option<String>,
 }
 
-/// Scan `~/.grok/sessions/**/summary.json` and collapse the results by cwd.
+/// Scan `~/.echo-agent/sessions/**/summary.json` and collapse the results by cwd.
 /// Unlike `list_sessions` (which filters to one cwd), this returns every cwd
-/// grok has ever seen, deduplicated, with a session count per cwd. Used to
+/// EchoAgent has ever seen, deduplicated, with a session count per cwd. Used to
 /// populate the workspace picker. Best-effort: malformed entries are skipped.
 pub fn list_workspaces() -> Vec<WorkspaceInfo> {
-    let sessions_root = grok_sessions_root();
+    let sessions_root = agent_sessions_root();
     // cwd -> (count, last_title)
     let mut map: std::collections::HashMap<String, (usize, Option<String>)> =
         std::collections::HashMap::new();
@@ -272,10 +272,6 @@ pub fn list_workspaces() -> Vec<WorkspaceInfo> {
     out
 }
 
-fn grok_sessions_root() -> PathBuf {
-    if let Ok(custom) = std::env::var("GROK_HOME") {
-        return PathBuf::from(custom).join("sessions");
-    }
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".grok").join("sessions")
+fn agent_sessions_root() -> PathBuf {
+    crate::paths::echo_agent_home_dir().join("sessions")
 }

@@ -8,7 +8,7 @@ import { EditToolIcon } from "@/foundation/components/Icon/icons";
  *   - click pencil → the title swaps to an <input> with the text selected;
  *   - Enter / blur commits (empty or unchanged = no-op), Esc cancels.
  *
- * `onRename` should persist the title (grok's x.ai/session/rename) and update
+ * `onRename` should persist the title (EchoAgent's x.ai/session/rename) and update
  * the sessions store; on rejection the draft reverts to the current title.
  */
 export function TopbarTitle({
@@ -22,8 +22,8 @@ export function TopbarTitle({
   const [value, setValue] = useState(title);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Track external title updates (e.g. grok's LLM-generated summary arriving
-  // via grok://summary) while we're not editing.
+  // Track external title updates (e.g. EchoAgent's LLM-generated summary arriving
+  // via agent://summary) while we're not editing.
   useEffect(() => {
     if (!editing) setValue(title);
   }, [title, editing]);

@@ -1,5 +1,5 @@
 /**
- * 计划面板 — 显示 grok 的 ACP Plan（任务列表）+ 审批/编辑/执行控制。
+ * 计划面板 — 显示 EchoAgent 的 ACP Plan（任务列表）+ 审批/编辑/执行控制。
  *
  * 增强点（对齐 WorkBuddy）：
  *  - Plan 审批流程：planMode 开启时显示 Approve / Reject / Edit 按钮
@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
-import { togglePlanMode } from "@/lib/grok-client";
+import { togglePlanMode } from "@/lib/agent-client";
 import type { PlanEntry, PlanEntryPriority, PlanEntryStatus } from "@/lib/types";
 import {
   reorderPlan,
@@ -201,7 +201,7 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
         <TaskListIcon size="xl" color="var(--wb-text-tertiary)" />
         <p>计划模式已开启</p>
         <p className="plan-panel__hint">
-          发送一个任务，grok 会先制定计划再执行。
+          发送一个任务，EchoAgent 会先制定计划再执行。
         </p>
         <button className="plan-panel__mode-btn" onClick={handleTogglePlanMode}>
           退出计划模式
@@ -216,7 +216,7 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
         <TaskListIcon size="xl" color="var(--wb-text-tertiary)" />
         <p>暂无任务计划</p>
         <p className="plan-panel__hint">
-          grok 在处理复杂任务时会自动制定计划。
+          EchoAgent 在处理复杂任务时会自动制定计划。
         </p>
       </div>
     );

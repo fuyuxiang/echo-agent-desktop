@@ -1,11 +1,11 @@
-//! Connectors panel — drives grok's `x.ai/mcp/*` extension methods.
+//! Connectors panel — drives EchoAgent's `x.ai/mcp/*` extension methods.
 //!
-//! MCP server configs live in `~/.grok/config.toml` as `[mcp_servers.<name>]`
-//! tables (see `xai-grok-config-types/src/mcp.rs` for the full schema). grok
+//! MCP server configs live in `~/.echo-agent/config.toml` as `[mcp_servers.<name>]`
+//! tables (see `xai-grok-config-types/src/mcp.rs` for the full schema). EchoAgent
 //! owns the canonical state and exposes full CRUD over ACP, so we go through
 //! `x.ai/mcp/list|upsert|delete|toggle` rather than editing the TOML directly
-//! — grok will validate, start/stop the server, and broadcast status updates
-//! via `x.ai/mcp/server_status` (which bridge.rs forwards as `grok://mcp-status`).
+//! — EchoAgent will validate, start/stop the server, and broadcast status updates
+//! via `x.ai/mcp/server_status` (which bridge.rs forwards as `agent://mcp-status`).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,14 +17,14 @@ use tauri::State;
 use crate::commands::AppState;
 use crate::ext::{call_ext, call_ext_value, raw_params};
 
-/// One MCP server entry surfaced to the UI. Mirrors the fields of grok's
+/// One MCP server entry surfaced to the UI. Mirrors the fields of EchoAgent's
 /// `McpServerEntry` (`xai-grok-shell/src/inspect/mod.rs:227`) plus the live
 /// status that arrives via `x.ai/mcp/server_status` notifications.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerEntry {
     pub name: String,
-    /// Transport kind: "stdio" | "streamable_http" (grok also has "sse" as a
+    /// Transport kind: "stdio" | "streamable_http" (EchoAgent also has "sse" as a
     /// sub-variant of streamable_http; we normalize to the transport name).
     #[serde(default)]
     pub transport: Option<String>,
@@ -36,7 +36,7 @@ pub struct McpServerEntry {
     /// Where the config came from: "user" | "project" | "bundled" | ...
     #[serde(default)]
     pub source: Option<String>,
-    /// Reason the server is disabled (if any) — surfaced by grok inspect.
+    /// Reason the server is disabled (if any) — surfaced by EchoAgent inspect.
     #[serde(default)]
     pub disabled_reason: Option<String>,
     /// Vendor/plugin that contributed this server, if any.
@@ -45,7 +45,7 @@ pub struct McpServerEntry {
 }
 
 /// The list endpoint returns either a bare array or `{ servers: [...] }`,
-/// depending on the grok build. Accept both.
+/// depending on the EchoAgent build. Accept both.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum McpListResponse {
@@ -86,7 +86,7 @@ pub struct McpUpsertRequest {
     pub enabled: Option<bool>,
 }
 
-/// List configured MCP servers. `session_id` is optional — grok's
+/// List configured MCP servers. `session_id` is optional — EchoAgent's
 /// `McpListRequest` accepts it (camelCase `sessionId`) to enrich entries with
 /// live session state; without it the agent-level catalog is returned.
 #[tauri::command]
@@ -108,7 +108,7 @@ pub async fn mcp_list(
 }
 
 /// Add or update an MCP server. Translates the frontend payload into the
-/// `[mcp_servers.<name>]` shape grok expects (see McpServerTransportConfig).
+/// `[mcp_servers.<name>]` shape EchoAgent expects (see McpServerTransportConfig).
 #[tauri::command]
 pub async fn mcp_upsert(
     state: State<'_, AppState>,
@@ -177,9 +177,9 @@ pub async fn mcp_toggle(
     Ok(())
 }
 
-/// Translate the frontend payload to the JSON grok's `x.ai/mcp/upsert` expects.
+/// Translate the frontend payload to the JSON EchoAgent's `x.ai/mcp/upsert` expects.
 ///
-/// grok's `McpUpsertRequest` (`xai-grok-shell/src/extensions/mcp.rs`) is:
+/// EchoAgent's `McpUpsertRequest` (`xai-grok-shell/src/extensions/mcp.rs`) is:
 /// ```json
 /// { "session_id": "...", "server_name": "...", <flattened McpServerConfig> }
 /// ```
@@ -192,7 +192,7 @@ pub async fn mcp_toggle(
 /// [mcp_servers.linear]                # streamable_http
 /// url = "https://mcp.linear.app/mcp"
 /// ```
-/// NOTE: the wire keys are snake_case (`session_id` / `server_name`) — grok's
+/// NOTE: the wire keys are snake_case (`session_id` / `server_name`) — EchoAgent's
 /// request struct has no `rename_all`, unlike `mcp/list` which takes
 /// camelCase `sessionId`.
 fn build_upsert_payload(
@@ -248,9 +248,9 @@ fn build_upsert_payload(
 // ---------- standalone mcp.json editor (截图 6 / 7) ----------
 //
 // WorkBuddy's "MCP 服务管理" modal edits a raw `mcp.json` file (`{ "mcpServers":
-// { ... } }`) in a Monaco-style editor. grok itself stores MCP config in
-// `config.toml`, so we keep a *parallel* `~/.grok/mcp.json` as the editor's
-// source of truth and, on save, best-effort mirror each server into grok over
+// { ... } }`) in a Monaco-style editor. EchoAgent itself stores MCP config in
+// `config.toml`, so we keep a *parallel* `~/.echo-agent/mcp.json` as the editor's
+// source of truth and, on save, best-effort mirror each server into EchoAgent over
 // ACP so the entries actually connect. The file path is returned to the UI so
 // the "配置文件路径" line matches reality.
 
@@ -265,12 +265,9 @@ pub struct McpConfigFile {
     pub content: String,
 }
 
-/// Absolute path of the standalone MCP config file: `~/.grok/mcp.json`.
+/// Absolute path of the standalone MCP config file: `~/.echo-agent/mcp.json`.
 fn mcp_json_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".grok")
-        .join("mcp.json")
+    crate::paths::echo_agent_home_dir().join("mcp.json")
 }
 
 /// Return the resolved config-file path (shown in the editor header).
@@ -297,10 +294,10 @@ pub async fn mcp_config_read() -> Result<McpConfigFile, String> {
 }
 
 /// Validate + write the config file, then best-effort mirror each server into
-/// grok so the saved entries connect. Validation failure (invalid JSON / not an
+/// EchoAgent so the saved entries connect. Validation failure (invalid JSON / not an
 /// object) aborts *before* writing. Sync failures are logged, not fatal — the
 /// file is the editor's source of truth. `session_id` is required for the live
-/// sync (grok's upsert is session-scoped); without it we only write the file.
+/// sync (EchoAgent's upsert is session-scoped); without it we only write the file.
 #[tauri::command]
 pub async fn mcp_config_save(
     state: State<'_, AppState>,
@@ -339,8 +336,8 @@ pub async fn mcp_config_save(
         format!("保存 mcp.json 失败：{e}")
     })?;
 
-    // Best-effort sync into grok (only if the agent is up and we have a live
-    // session — grok's `x.ai/mcp/upsert` is session-scoped). Failures are
+    // Best-effort sync into EchoAgent (only if the agent is up and we have a live
+    // session — EchoAgent's `x.ai/mcp/upsert` is session-scoped). Failures are
     // non-fatal: the file is saved either way and the list view can still
     // toggle/delete individual servers. The lock guard is dropped *before* the
     // await (clone into a local first) so the returned future stays `Send`.
@@ -373,7 +370,7 @@ pub async fn mcp_config_save(
 }
 
 /// Map one standard `mcpServers.<name>` value (the shape editors like WorkBuddy
-/// / Claude Desktop use) onto our `McpUpsertRequest` so we can reuse the grok
+/// / Claude Desktop use) onto our `McpUpsertRequest` so we can reuse the EchoAgent
 /// upsert path. Recognizes stdio (`command`) and http/sse (`url`) entries.
 fn json_to_upsert(name: &str, cfg: &serde_json::Value) -> Result<McpUpsertRequest, String> {
     let obj = cfg
@@ -451,10 +448,10 @@ fn json_to_upsert(name: &str, cfg: &serde_json::Value) -> Result<McpUpsertReques
 
 // ---------- MCP OAuth authorization (x.ai/mcp/auth_*) ----------
 //
-// grok implements the full MCP OAuth flow itself (RFC 9728/8414 discovery,
+// EchoAgent implements the full MCP OAuth flow itself (RFC 9728/8414 discovery,
 // DCR, PKCE, system-browser redirect + loopback callback; tokens persist to
-// `~/.grok/mcp_credentials.json`). We only need to *trigger* it: the browser
-// opens from inside the grok process, and the call resolves when the flow
+// `~/.echo-agent/mcp_credentials.json`). We only need to *trigger* it: the browser
+// opens from inside the EchoAgent process, and the call resolves when the flow
 // completes — mirroring workbuddy's "跳浏览器授权 + 轮询状态" UX.
 
 /// Result of `x.ai/mcp/auth_trigger`, surfaced to the UI.
@@ -463,7 +460,7 @@ fn json_to_upsert(name: &str, cfg: &serde_json::Value) -> Result<McpUpsertReques
 pub struct McpAuthTriggerResult {
     /// "authenticated" | "failed" | "setup_required".
     pub status: String,
-    /// Failure detail from grok (present when status == "failed").
+    /// Failure detail from EchoAgent (present when status == "failed").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -476,7 +473,7 @@ struct McpAuthTriggerWire {
 }
 
 /// Kick off the browser OAuth flow for one server. Long-running: resolves
-/// when the user finishes (or abandons) the browser flow. grok opens the
+/// when the user finishes (or abandons) the browser flow. EchoAgent opens the
 /// system browser itself (`webbrowser::open` in xai-grok-mcp).
 #[tauri::command]
 pub async fn mcp_auth_trigger(
@@ -503,12 +500,12 @@ pub async fn mcp_auth_trigger(
     })
 }
 
-/// One entry of `x.ai/mcp/auth_status` — a server grok has flagged as
+/// One entry of `x.ai/mcp/auth_status` — a server EchoAgent has flagged as
 /// requiring authorization (status is currently always "needs_auth").
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpAuthStatusEntry {
-    /// grok's wire format is snake_case (`server_name`); the frontend gets
+    /// EchoAgent's wire format is snake_case (`server_name`); the frontend gets
     /// camelCase (`serverName`). Accept both on decode.
     #[serde(alias = "server_name")]
     pub server_name: String,
@@ -521,7 +518,7 @@ struct McpAuthStatusWire {
     servers: Vec<McpAuthStatusEntry>,
 }
 
-/// List servers that grok has marked `needs_auth` for this session.
+/// List servers that EchoAgent has marked `needs_auth` for this session.
 #[tauri::command]
 pub async fn mcp_auth_status(
     state: State<'_, AppState>,

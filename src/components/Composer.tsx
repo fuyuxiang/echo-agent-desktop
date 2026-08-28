@@ -35,7 +35,7 @@ import {
 } from "@/lib/voice-contract";
 import type { HomeModeId } from "./home-scenes";
 import type { AgentEntry } from "@/lib/types";
-import type { WorkspaceInfo } from "@/lib/grok-client";
+import type { WorkspaceInfo } from "@/lib/agent-client";
 
 /**
  * WorkBuddy 风格输入卡片(圆角16):左下 +,右下 Auto 下拉/麦克风/发送;
@@ -246,7 +246,7 @@ export function Composer({
   // Voice input: use the browser's SpeechRecognition API (Tauri's WebView2/
   // WKWebView support it on most systems). On languages where the API isn't
   // exposed (older webviews, no microphone permission), we surface a toast.
-  // grok has a voice crate but doesn't expose it over ACP, so this is the
+  // EchoAgent has a voice crate but doesn't expose it over ACP, so this is the
   // lightest path that works today.
   const toggleVoice = () => {
     if (listening) {
@@ -345,7 +345,7 @@ export function Composer({
       console.log('Send blocked:', { streaming, disabled, apiReady });
       return;
     }
-    // Append attachment paths to the prompt text so grok's read_file tool can
+    // Append attachment paths to the prompt text so EchoAgent's read_file tool can
     // pick them up (ACP image/audio needs agent-declared capabilities we
     // don't model yet; ResourceLink behavior is unverified — text is safest).
     let body = t;

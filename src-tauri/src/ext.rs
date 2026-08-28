@@ -1,6 +1,6 @@
-//! Generic helper for calling grok `x.ai/*` ACP extension methods.
+//! Generic helper for calling EchoAgent `x.ai/*` ACP extension methods.
 //!
-//! grok exposes Skills, MCP, and session-admin operations as extension
+//! EchoAgent exposes Skills, MCP, and session-admin operations as extension
 //! methods (see `xai-grok-shell/src/extensions/`). All of them go through the
 //! same wire shape — `acp::ExtRequest { method, params: RawValue }` →
 //! `acp::ExtResponse(Arc<RawValue>)`. This module centralizes the send/parse
@@ -25,7 +25,7 @@ pub fn raw_params<T: serde::Serialize>(value: &T) -> Arc<RawValue> {
         .into()
 }
 
-/// Call a grok extension method (e.g. `x.ai/skills/list`) and return the
+/// Call a EchoAgent extension method (e.g. `x.ai/skills/list`) and return the
 /// parsed response. Errors from the agent (method_not_found, invalid_request,
 /// …) surface as `Err(anyhow!(...))` — callers decide whether to treat that
 /// as fatal or fall back to an empty default.

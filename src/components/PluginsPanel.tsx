@@ -1,10 +1,10 @@
 /**
- * 插件面板 - 对接 grok 的 x.ai/plugins/list + x.ai/plugins/action
+ * 插件面板 - 对接 EchoAgent 的 x.ai/plugins/list + x.ai/plugins/action
  *
- * 显示已安装的 grok 插件（含 skills/agents/hooks/mcp 计数），支持启用/禁用。
+ * 显示已安装的 EchoAgent 插件（含 skills/agents/hooks/mcp 计数），支持启用/禁用。
  * 对应 WorkBuddy 的 plugins-panel。
  *
- * 插件来源：~/.grok/plugins/、项目 .grok/plugins/、marketplace 安装。
+ * 插件来源：~/.echo-agent/plugins/、项目 .echo-agent/plugins/、marketplace 安装。
  */
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -15,7 +15,7 @@ import {
   AgentToolIcon,
   McpIcon,
 } from "@/foundation/components/Icon/icons";
-import { pluginsAction, pluginsList } from "@/lib/grok-client";
+import { pluginsAction, pluginsList } from "@/lib/agent-client";
 import type { PluginEntry } from "@/lib/types";
 
 interface PluginsPanelProps {
@@ -101,7 +101,7 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
             <PuzzlePieceIcon size="xl" color="var(--wb-text-tertiary)" />
             <p>暂无插件。</p>
             <p className="plugins-panel__hint">
-              在「市场」tab 安装插件，或把插件放到 <code>~/.grok/plugins/</code>。
+              在「市场」tab 安装插件，或把插件放到 <code>~/.echo-agent/plugins/</code>。
             </p>
           </div>
         )}

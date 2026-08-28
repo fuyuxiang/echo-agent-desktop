@@ -1,7 +1,7 @@
 /**
- * Parse grok agent errors into user-friendly Chinese messages.
+ * Parse EchoAgent agent errors into user-friendly Chinese messages.
  *
- * grok returns errors as Rust `Error` structs serialized to JSON, which
+ * EchoAgent returns errors as Rust `Error` structs serialized to JSON, which
  * produce ugly `Error { code: ..., message: ..., data: ... }` strings when
  * passed through `String(e)`. This utility extracts the human-readable
  * message and, for common cases like 429 rate-limiting, formats a friendly
@@ -20,13 +20,13 @@ interface PromptUsage {
   modelUsage?: Record<string, unknown>;
 }
 
-interface GrokErrorData {
+interface AgentErrorData {
   message?: string;
   promptUsage?: PromptUsage;
   [key: string]: unknown;
 }
 
-/** Try to parse a grok error string into structured data. */
+/** Try to parse a EchoAgent error string into structured data. */
 /**
  * Convert Rust Debug-style value wrappers to JSON.
  * Handles: String("...") → "...", Number(123) → 123,
@@ -48,10 +48,10 @@ function rustDebugToJson(s: string): string {
     ;
 }
 
-function tryParseGrokError(raw: string): {
+function tryParseAgentError(raw: string): {
   code?: number;
   message?: string;
-  data?: GrokErrorData;
+  data?: AgentErrorData;
 } | null {
   // Pattern 1: Rust-style "Error { code: -32003: ..., message: "...", data: Some({...}) }"
   // Pattern 2: JSON stringified Error object
@@ -71,7 +71,7 @@ function tryParseGrokError(raw: string): {
   if (!codeMatch && !msgMatch) return null;
 
   // Extract data object (the Some({...}) part)
-  let data: GrokErrorData | undefined;
+  let data: AgentErrorData | undefined;
   const dataStart = raw.indexOf("data: Some(");
   if (dataStart >= 0) {
     // Find the matching closing paren — count parens
@@ -131,11 +131,11 @@ function fmtDuration(ms?: number): string {
 }
 
 /**
- * Format a grok error into a user-friendly Chinese string.
+ * Format a EchoAgent error into a user-friendly Chinese string.
  * Returns null if the error can't be parsed (caller should fall back to raw).
  */
-export function formatGrokError(raw: string): string | null {
-  const parsed = tryParseGrokError(raw);
+export function formatAgentError(raw: string): string | null {
+  const parsed = tryParseAgentError(raw);
 
   // If structured parsing failed, check raw string for known patterns.
   if (!parsed) {
@@ -218,10 +218,10 @@ export function formatGrokError(raw: string): string | null {
 }
 
 /**
- * Wrap an error value (string or Error) with formatGrokError.
+ * Wrap an error value (string or Error) with formatAgentError.
  * Falls back to String(e) if the error can't be parsed.
  */
 export function friendlyError(e: unknown): string {
   const raw = String(e);
-  return formatGrokError(raw) ?? raw;
+  return formatAgentError(raw) ?? raw;
 }

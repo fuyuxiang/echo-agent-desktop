@@ -1,14 +1,14 @@
 /**
- * 资料库面板 - 对接 grok memory (~/.grok/memory/)
+ * 资料库面板 - 对接 EchoAgent memory (~/.echo-agent/memory/)
  *
  * 这是 WorkBuddy "更多/资料库·灵感" 的资料库部分。
- * grok 把跨会话记忆写到 ~/.grok/memory/MEMORY.md（global）和
- * <cwd>/.grok/memory/（workspace），每条 markdown 文件一条记忆。
+ * EchoAgent 把跨会话记忆写到 ~/.echo-agent/memory/MEMORY.md（global）和
+ * <cwd>/.echo-agent/memory/（workspace），每条 markdown 文件一条记忆。
  *
  * 用户可以：
  *  - 浏览/搜索所有 memory 文件
- *  - 新建/编辑/删除 memory（直接改文件，grok 会热重载）
- *  - 触发 "重写"（让 grok 用 LLM 把原始笔记结构化）
+ *  - 新建/编辑/删除 memory（直接改文件，EchoAgent 会热重载）
+ *  - 触发 "重写"（让 EchoAgent 用 LLM 把原始笔记结构化）
  *  - 触发 "落盘"（强制 flush 未写 memory）
  */
 import { useCallback, useEffect, useState } from "react";
@@ -27,7 +27,7 @@ import {
   memoryList,
   memoryRewrite,
   memorySave,
-} from "@/lib/grok-client";
+} from "@/lib/agent-client";
 import type { MemoryEntry } from "@/lib/types";
 
 interface ResourcesPanelProps {
@@ -97,7 +97,7 @@ export function ResourcesPanel({ cwd, onToast }: ResourcesPanelProps) {
   );
 
   const handleRewrite = useCallback(async () => {
-    if (!confirm("让 grok 用 LLM 重写所有记忆？这会重新组织资料库内容。")) return;
+    if (!confirm("让 EchoAgent 用 LLM 重写所有记忆？这会重新组织资料库内容。")) return;
     setBusy(true);
     try {
       await memoryRewrite();
@@ -141,7 +141,7 @@ export function ResourcesPanel({ cwd, onToast }: ResourcesPanelProps) {
               className="resources-panel__action-btn"
               onClick={handleFlush}
               disabled={busy}
-              title="强制把 grok 未写的记忆落盘"
+              title="强制把 EchoAgent 未写的记忆落盘"
             >
               落盘
             </button>
@@ -199,8 +199,8 @@ export function ResourcesPanel({ cwd, onToast }: ResourcesPanelProps) {
           <div className="resources-panel__empty">
             <BookIcon size="xl" color="var(--wb-text-tertiary)" />
             <p>
-              暂无记忆。grok 会在对话中自动学习并写入
-              <code>~/.grok/memory/MEMORY.md</code>。
+              暂无记忆。EchoAgent 会在对话中自动学习并写入
+              <code>~/.echo-agent/memory/MEMORY.md</code>。
             </p>
           </div>
         )}
@@ -301,8 +301,8 @@ function MemoryEditor({
           <label>
             范围
             <select value={scope} onChange={(e) => setScope(e.target.value)}>
-              <option value="global">全局（~/.grok/memory/）</option>
-              {cwd && <option value="workspace">工作区（&lt;cwd&gt;/.grok/memory/）</option>}
+              <option value="global">全局（~/.echo-agent/memory/）</option>
+              {cwd && <option value="workspace">工作区（&lt;cwd&gt;/.echo-agent/memory/）</option>}
             </select>
           </label>
           <label>

@@ -52,7 +52,7 @@ interface PlaceholderPageProps {
   onModelChange?: (id: string) => void;
   /** 项目页：进入项目（新建会话并注入说明）。 */
   onStartProject?: (project: ProjectMeta) => void;
-  /** 项目页：在项目中新建对话（创建真实 grok 会话）。 */
+  /** 项目页：在项目中新建对话（创建真实 EchoAgent 会话）。 */
   onStartProjectConversation?: (projectId: string, message: string) => void;
 }
 

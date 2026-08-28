@@ -39,13 +39,13 @@ import {
   automationsSave,
   automationsSetStatus,
   automationsSnapshot,
-  grokListWorkspaces,
+  agentListWorkspaces,
   mcpList,
   providersList,
   flattenModels,
   skillsList,
   type WorkspaceInfo,
-} from "@/lib/grok-client";
+} from "@/lib/agent-client";
 import type {
   AgentEntry,
   Automation,
@@ -200,7 +200,7 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
   }, [refresh]);
 
   useEffect(() => {
-    grokListWorkspaces().then(setWorkspaces).catch(() => setWorkspaces([]));
+    agentListWorkspaces().then(setWorkspaces).catch(() => setWorkspaces([]));
     providersList()
       .then((list) => setModels(flattenModels(list)))
       .catch(() => setModels([]));

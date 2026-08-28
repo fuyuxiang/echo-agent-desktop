@@ -6,7 +6,7 @@
  *  2. 展示该场景需要的能力（依赖哪些 skills / MCP / agents）
  *  3. 检查依赖是否已就绪（接 skillsList / mcpList / agentsList）
  *  4. 缺失的依赖可一键安装（接 marketplace install / 或引导到对应面板）
- *  5. 输入 prompt → 在新会话中运行（接 grokNewSession + grokSend）
+ *  5. 输入 prompt → 在新会话中运行（接 agentNewSession + agentSend）
  *
  * 与 WorkBuddy discover 的"1-click demo launcher"语义一致：
  * provision MCP + skill + expert，然后 run prompt。
@@ -26,7 +26,7 @@ import {
   agentsList,
   mcpList,
   skillsList,
-} from "@/lib/grok-client";
+} from "@/lib/agent-client";
 import type { AgentEntry, McpServerEntry, SkillInfo } from "@/lib/types";
 
 // 内置场景（对应 WorkBuddy browseByScene: 代码/文档/图片/表格/幻灯片/其他/官方）
@@ -284,7 +284,7 @@ export function DiscoverPanel({ onLaunch, onToast }: DiscoverPanelProps) {
               {!allSatisfied && (
                 <p className="discover-launcher__deps-hint">
                   缺失项可在「专家·技能·连接器」面板安装，或忽略直接启动
-                  （grok 会用内置能力尝试）。
+                  （EchoAgent 会用内置能力尝试）。
                 </p>
               )}
             </div>
@@ -321,7 +321,7 @@ export function DiscoverPanel({ onLaunch, onToast }: DiscoverPanelProps) {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               rows={6}
-              placeholder="描述你想让 grok 做的事…"
+              placeholder="描述你想让 EchoAgent 做的事…"
             />
           </div>
 

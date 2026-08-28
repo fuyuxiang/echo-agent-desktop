@@ -5,6 +5,14 @@
 > 步骤）。新版本 = 在顶部加一节 `## vX.Y.Z（日期）`，用中文写面向用户的
 > 变更摘要；技术细节留在 commit message。
 
+## 未发布
+
+### ✨ EchoAgent 运行时命名与数据目录
+- 面向应用的命令、事件、模块和界面统一使用 EchoAgent / Agent Runtime 命名。
+- 用户配置、会话、记忆、Agents、Skills 等数据统一存放到 `~/.echo-agent/`。
+- 首次启动会从旧目录安全导入缺失文件：保留 `.echo-agent` 中已有内容、不删除旧目录，便于回滚。
+- 补充第三方许可说明，并在安装包中携带相关许可证文件。
+
 ## v0.15.0（2026-08-25）
 
 ### 🔧 内核升级
@@ -40,7 +48,7 @@
 - `create_team` / `team_status` / `team_delete` 从「修改 grok 源码注入」迁移到**内嵌 MCP 服务器**
   （标准协议、监听本机 127.0.0.1），对 grok 内核**零侵入** —— 以后升级 grok 不再需要运行时补丁
 - 工具名称变为 `echoagent__create_team` 等（旧会话历史仍正常显示）
-- **团队数据持久化**到 `~/.grok/echoagent-teams.json`：agent 崩溃重启、应用重启后团队不再丢失
+- **团队数据持久化**到 `~/.echo-agent/echoagent-teams.json`：agent 崩溃重启、应用重启后团队不再丢失
 - 修复一个隐蔽的 Windows 网络问题（socket 未设非阻塞导致连接无响应）
 
 ### 🍎 macOS 修复

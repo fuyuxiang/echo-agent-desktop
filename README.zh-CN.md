@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>用 Rust 完美复刻的开源版腾讯 WorkBuddy</strong><br/>
-  开源 · 跨平台 · 进程内 grok · 自带 Key 多 Provider
+  开源 · 跨平台 · 进程内 Agent Runtime · 自带 Key 多 Provider
 </p>
 
 <p align="center">
@@ -41,13 +41,13 @@
 
 **EchoAgent 是开源的答案** —— 同样形态的体验,用 Rust + Tauri 重写:
 
-- 🔓 **完全开源 (MIT)** —— 没有黑箱遥测,没有供应商锁定。
+- 🔓 **开源透明** —— 应用代码采用 MIT，第三方组件单独列明许可；没有黑箱遥测或供应商锁定。
 - 🦀 **基于 Rust + Tauri 构建** —— 二进制小、冷启动快、真·跨平台。
 - 🪶 **安装包小约 14 倍** —— EchoAgent 的 Windows 安装包 **~34 MB**,而 WorkBuddy 约 **483 MB**。同样形态的产品,体积只有对方的零头。
 - 💨 **运行内存小约 19 倍** —— **~20 MB** vs WorkBuddy 同机 **~374 MB**。把内存还给真正在干的活。
-- ⚙️ **grok 作为进程内库运行** —— 无子进程、无 WebSocket 中转。Agent 跑在你双击的那个二进制文件内的独立 OS 线程上。
+- ⚙️ **EchoAgent Runtime 进程内运行** —— 无子进程、无 WebSocket 中转。Agent 跑在应用二进制内的独立 OS 线程上。
 - 🌐 **原生跨平台** —— 一套代码,Windows **和** macOS。
-- 🔑 **自带 Key (BYOK)** —— 通过 `~/.grok/config.toml` 接入任意模型供应商,纯文本存储,可 diff、可纳入版本管理。
+- 🔑 **自带 Key (BYOK)** —— 通过 `~/.echo-agent/config.toml` 接入任意模型供应商,纯文本存储,可 diff、可纳入版本管理。
 
 > *"WorkBuddy 是成品,EchoAgent 是你能读懂、能 fork、真正拥有的那一个。"*
 
@@ -70,22 +70,22 @@
 **🎨 像素级接近的 WorkBuddy UI**
 移植了 `--wb-*` 设计令牌、190 图标基础集和品牌资源。它*看起来*就像 WorkBuddy,因为用的是同一套原子。
 
-**⚙️ 进程内 grok**
-`xai-grok-shell` + `xai-acp-lib` 以路径依赖引入。Agent 跑在独立 OS 线程上,由 current-thread tokio runtime + `LocalSet` 驱动。没有 `child_process.spawn`。
+**⚙️ 进程内 EchoAgent Runtime**
+内嵌运行时以 Rust 路径依赖链接。Agent 跑在独立 OS 线程上,由 current-thread tokio runtime + `LocalSet` 驱动。没有 `child_process.spawn`。
 
 **🔌 ACP 作为前后端契约**
-流式 `SessionUpdate`、工具调用、Plan 更新、权限请求 —— 全部走类型化 `mpsc` 通道,序列化为 `grok://update` / `grok://permission` / `grok://complete` Tauri 事件。
+流式 `SessionUpdate`、工具调用、Plan 更新、权限请求 —— 全部走类型化 `mpsc` 通道,序列化为 `agent://update` / `agent://permission` / `agent://complete` Tauri 事件。
 
 </td>
 <td width="50%" valign="top">
 
 **🔑 BYOK 多 Provider**
-自带 Key。在 `~/.grok/config.toml` 里配置任意数量的模型供应商。
+自带 Key。在 `~/.echo-agent/config.toml` 里配置任意数量的模型供应商。
 
 **🧩 可扩展的 Agent 面**
 - **Skills** —— `x.ai/skills/*`
 - **MCP 连接器** —— `x.ai/mcp/*`
-- **Experts / Assistants** —— `~/.grok/agents/*.md`
+- **Experts / Assistants** —— `~/.echo-agent/agents/*.md`
 
 **🚀 进阶工作流**
 Plan 模式(切换 & 查看)· Rewind(回溯 & 分叉)· 子智能体 Tasks(观察 & 取消)· Slash Commands · 本地 Automations 调度器 · 通知中心。
@@ -105,12 +105,12 @@ Windows(NSIS `.exe` + MSI)与 macOS(`.dmg`)。GitHub Actions CI 自动出包。
 
 |  | **EchoAgent** | WorkBuddy |
 |---|:---:|:---:|
-| **协议** | ✅ MIT,源码开放 | ❌ 闭源 |
+| **协议** | ✅ 应用代码 MIT；第三方组件单独许可 | ❌ 闭源 |
 | **费用** | 永久免费 | 免费(腾讯托管) |
 | **安装包体积** | ✅ **~34 MB**(NSIS,实测) | ⚠️ 约 483 MB |
 | **运行内存** | ✅ **~20 MB**(实测) | ⚠️ 约 374 MB |
 | **BYOK / 任意供应商** | ✅ | ✅ |
-| **Provider 配置方式** | ✅ 纯文本 `~/.grok/config.toml`——可 diff、可脚本、可纳入版本管理 | ⚠️ 仅 GUI |
+| **Provider 配置方式** | ✅ 纯文本 `~/.echo-agent/config.toml`——可 diff、可脚本、可纳入版本管理 | ⚠️ 仅 GUI |
 | **MCP 连接器** | ✅ | ✅ |
 | **Skills** | ✅ | ✅(内置 20+) |
 | **Plan / Rewind** | ✅ | ✅ |
@@ -118,7 +118,7 @@ Windows(NSIS `.exe` + MSI)与 macOS(`.dmg`)。GitHub Actions CI 自动出包。
 | **macOS** | ✅ | ✅ |
 | **Linux** | 🔜 路线图 | 🔜 |
 | **自托管 / fork** | ✅ 自己编译 | ❌ |
-| **本地数据 / 离线友好** | ✅ 你的 `~/.grok/`、你的磁盘 | ⚠️ 腾讯托管后端 |
+| **本地数据 / 离线友好** | ✅ 你的 `~/.echo-agent/`、你的磁盘 | ⚠️ 腾讯托管后端 |
 
 > WorkBuddy 是一个精致、真正能打的产品——本文不是来踩它的。想说的只是一句话:如果你想要**同样形态的体验,但开源、可 fork、不绑供应商**,EchoAgent 就是那条路。
 
@@ -138,8 +138,8 @@ Windows(NSIS `.exe` + MSI)与 macOS(`.dmg`)。GitHub Actions CI 自动出包。
 
 前往 **[Releases](https://github.com/opensymph/EchoAgent/releases)** 页面下载最新安装包(Windows `.exe`/`.msi`、macOS `.dmg`),然后:
 
-1. 安装并登录 grok 一次:`grok login`(应用复用 `~/.grok/auth.json`)。
-2. 启动 EchoAgent,完成。
+1. 启动 EchoAgent。
+2. 打开「设置 → 模型」并配置 Provider/API Key，完成。
 
 ### 方式 B —— 源码编译
 
@@ -160,13 +160,12 @@ pnpm tauri dev
 
 1. **Rust 1.92+**。`rust-toolchain.toml` 选择 stable Rust，各平台自动使用原生主机工具链。
 2. **Node 20+** 与 **pnpm**。
-3. 已安装并登录 **grok**(执行一次 `grok login`)。应用复用 `~/.grok/auth.json`。
-4. **protoc** 在 `PATH` 中**且** `PROTOC` 环境变量指向它(grok 的 `xai-grok-tools-api` 构建脚本需要;它自带的 `bin/protoc` 是 DotSlash 脚本,在 Windows 上跑不起来)。
+3. **protoc** 在 `PATH` 中**且** `PROTOC` 环境变量指向它（内嵌上游组件的构建脚本需要；它自带的 `bin/protoc` 是 DotSlash 脚本，在 Windows 上跑不起来）。
    - Windows:`choco install protoc`,然后 `setx PROTOC "C:\ProgramData\chocolatey\bin\protoc.exe"`。
 
-> 首次构建会编译整个 grok 依赖树(rusqlite/git2 内联 C、prost/protobuf、axum、reqwest ……),预计 **5–10 分钟**。之后的增量编译很快。
+> 首次构建会编译完整的内嵌运行时依赖树（rusqlite/git2 内联 C、prost/protobuf、axum、reqwest ……），预计 **5–10 分钟**。之后的增量编译很快。
 
-Windows 专属坑(MSVC 工作负载、网络镜像、grok 源码补丁)见 **[docs/WINDOWS_BUILD_NOTES.md](docs/WINDOWS_BUILD_NOTES.md)**。
+Windows 专属问题（MSVC 工作负载、网络镜像、上游源码补丁）见 **[docs/WINDOWS_BUILD_NOTES.md](docs/WINDOWS_BUILD_NOTES.md)**。
 
 </details>
 
@@ -178,7 +177,7 @@ pnpm dist:win    # Windows:NSIS .exe + MSI(需 MSVC link.exe + Windows SDK)
 pnpm dist:mac    # macOS:.dmg(按宿主架构构建;未签名 / 未公证)
 ```
 
-`grok-build` 作为 git submodule 内置于 `vendor/grok-build`(pin 在已验证的 revision)。setup 脚本负责初始化,`pnpm dist:*` 在构建前会校验其存在。
+Apache-2.0 上游运行时以固定 revision 的 git submodule 内置于 `vendor/grok-build`。setup 脚本负责初始化，`pnpm dist:*` 在构建前会校验。详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 </details>
 
@@ -196,14 +195,14 @@ pnpm dist:mac    # macOS:.dmg(按宿主架构构建;未签名 / 未公证)
 ┌───────────────────────────────────────────┼──────────────┐
 │  Tauri Rust 后端 (src-tauri/src)          │              │
 │   commands.rs  ← Tauri 命令 ──────────────┘              │
-│   grok.rs      ← spawn_grok() + ACP 生命周期             │
+│   agent_runtime.rs ← 进程内运行时 + ACP 生命周期                 │
 │   bridge.rs    ← ACP → Tauri 事件分发器                  │
-│   sessions.rs  ← ~/.grok/sessions 历史列表               │
+│   sessions.rs  ← ~/.echo-agent/sessions 历史列表               │
 └───────────────────────┬──────────────────────────────────┘
                         │ 类型化 ACP mpsc 通道
 ┌───────────────────────┴──────────────────────────────────┐
-│  grok agent 线程 (MvpAgent, !Send, LocalSet)              │
-│  xai-grok-shell + xai-acp-lib (指向 grok-build 的路径依赖)│
+│  EchoAgent Runtime 线程 (MvpAgent, !Send, LocalSet)       │
+│  内嵌 ACP Runtime（Rust 路径依赖）                        │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -213,17 +212,17 @@ pnpm dist:mac    # macOS:.dmg(按宿主架构构建;未签名 / 未公证)
 src/                     # React 前端
   styles/                # tokens.css / global.css / app.css
   foundation/components/Icon/   # 从 WorkBuddy 移植(190 图标)
-  lib/                   # grok-client.ts(Tauri 命令封装)+ types.ts(ACP TS 镜像)
+  lib/                   # agent-client.ts(Tauri 命令封装)+ types.ts(ACP TS 镜像)
   stores/                # Zustand:session / sessions / permission / ...
   components/            # Topbar, Sidebar, HomePage, ChatView, Composer, ...
 
 src-tauri/               # Rust 后端
   src/
     lib.rs               # Tauri 入口 + 状态 + 命令注册
-    grok.rs              # spawn_grok() + authenticate/new_session/prompt/cancel
+    agent_runtime.rs     # 运行时生命周期 + authenticate/session/prompt/cancel
     bridge.rs            # ACP→Tauri 事件分发器 + 权限注册表
-    commands.rs          # #[tauri::command] 表(grok_*)
-    sessions.rs          # 列出 ~/.grok/sessions 供侧边栏使用
+    commands.rs          # #[tauri::command] 表(agent_*)
+    sessions.rs          # 列出 ~/.echo-agent/sessions 供侧边栏使用
 
 scripts/                 # build.ps1(Windows)/ build.sh(macOS)
 docs/                    # WINDOWS_BUILD_NOTES.md —— Windows 构建踩坑笔记
@@ -234,7 +233,7 @@ docs/                    # WINDOWS_BUILD_NOTES.md —— Windows 构建踩坑笔
 ## 🗺️ 路线图
 
 - [x] 核心布局:Sidebar / HomePage / ChatView / Composer
-- [x] 进程内 grok agent over ACP
+- [x] 进程内 EchoAgent Runtime over ACP
 - [x] WorkBuddy 设计令牌 & 207 图标基础集
 - [x] BYOK 多 Provider 配置
 - [x] Skills / MCP / Experts 面
@@ -268,7 +267,7 @@ docs/                    # WINDOWS_BUILD_NOTES.md —— Windows 构建踩坑笔
 ## 🙏 致谢
 
 - **[腾讯 WorkBuddy](https://workbuddy.tencent.com/)** —— 设计北极星。EchoAgent 沿用了 WorkBuddy 的 `--wb-*` 设计令牌、207 图标基础集和品牌原子,实现像素级接近。
-- **[xai-org/grok-build](https://github.com/xai-org/grok-build)** —— 进程内嵌入的 grok agent(`xai-grok-shell` + `xai-acp-lib`),以路径依赖方式引入。
+- **[xai-org/grok-build](https://github.com/xai-org/grok-build)** —— 以 Rust 路径依赖引入的 Apache-2.0 上游运行时组件。详见[第三方许可说明](THIRD_PARTY_NOTICES.md)。
 - **[Tauri](https://tauri.app/)** / **[React](https://react.dev/)** / **[Vite](https://vitejs.dev/)** —— 让一个 10 MB 壳秒开的底层栈。
 
 本项目是独立的、社区驱动的开源项目,与腾讯或 xAI 不存在隶属、背书或赞助关系。
@@ -277,4 +276,4 @@ docs/                    # WINDOWS_BUILD_NOTES.md —— Windows 构建踩坑笔
 
 ## 协议
 
-MIT © EchoAgent contributors。详见 [LICENSE](LICENSE)。
+MIT © EchoAgent contributors。详见 [LICENSE](LICENSE) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

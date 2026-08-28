@@ -1,8 +1,8 @@
-//! Agent-level runtime config — reads/writes grok's `[subagents]` and
+//! Agent-level runtime config — reads/writes the embedded runtime's `[subagents]` and
 //! `[models] web_search` config blocks.
 //!
 //! These are knobs that affect how the agent builds its toolset at startup,
-//! so (like permission rules) a grok restart is required for changes to take
+//! so (like permission rules) an EchoAgent restart is required for changes to take
 //! effect. We reuse `providers.rs`'s atomic `read_config`/`write_config`.
 //!
 //! ```toml
@@ -24,11 +24,11 @@ use toml::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentsConfig {
-    /// Maximum subagent nesting depth (≥1). grok's default is 1.
+    /// Maximum subagent nesting depth (≥1). The runtime default is 1.
     pub max_depth: i64,
 }
 
-/// Read `[subagents].max_depth` from config.toml. Returns 1 (grok's default)
+/// Read `[subagents].max_depth` from config.toml. Returns the default value 1
 /// when the key is absent.
 #[tauri::command]
 pub fn subagents_config_get() -> SubagentsConfig {
@@ -43,7 +43,7 @@ pub fn subagents_config_get() -> SubagentsConfig {
 }
 
 /// Write `[subagents].max_depth`. Clamped to ≥1. Returns the clamped value.
-/// Requires a grok restart to take effect.
+/// Requires an EchoAgent restart to take effect.
 #[tauri::command]
 pub fn subagents_config_save(max_depth: i64) -> Result<i64, String> {
     let clamped = if max_depth < 1 { 1 } else { max_depth };
@@ -95,7 +95,7 @@ pub fn web_search_config_get() -> WebSearchConfig {
 /// Enable/disable web search by setting/clearing `[models].web_search`.
 ///
 /// When enabling, `model` must be a non-empty model id (it will be stored
-/// verbatim). When disabling, the key is removed. Requires a grok restart.
+/// verbatim). When disabling, the key is removed. Requires an EchoAgent restart.
 #[tauri::command]
 pub fn web_search_config_save(enable: bool, model: Option<String>) -> Result<bool, String> {
     let mut config = crate::providers::read_config();

@@ -6,7 +6,7 @@ import {
   SkillTabIcon,
   ConnectorTabIcon,
 } from "@/foundation/components/Icon/icons";
-import { skillsList, agentsList } from "@/lib/grok-client";
+import { skillsList, agentsList } from "@/lib/agent-client";
 import { HOME_MODES, type HomeModeId } from "./home-scenes";
 import { CONNECTOR_LIST } from "./experts-panel/data/connectors-catalog";
 import type { AgentEntry, SkillInfo } from "@/lib/types";

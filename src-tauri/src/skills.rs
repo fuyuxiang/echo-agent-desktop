@@ -1,12 +1,12 @@
-//! Skills panel — drives grok's `x.ai/skills/*` extension methods.
+//! Skills panel — drives EchoAgent's `x.ai/skills/*` extension methods.
 //!
-//! grok discovers skills by recursively scanning `~/.grok/skills/`,
-//! `<cwd>/.grok/skills/`, and a few bundled/plugin dirs (see
+//! EchoAgent discovers skills by recursively scanning `~/.echo-agent/skills/`,
+//! `<cwd>/.echo-agent/skills/`, and a few bundled/plugin dirs (see
 //! `xai-grok-tools/src/implementations/skills/discovery.rs`). Each skill is a
-//! directory containing a `SKILL.md` with YAML frontmatter. grok exposes the
+//! directory containing a `SKILL.md` with YAML frontmatter. EchoAgent exposes the
 //! full CRUD surface over ACP — we call those methods here rather than reading
-//! the filesystem ourselves, because grok holds the canonical enabled/disabled
-//! state in `~/.grok/config.toml` (`[skills] disabled`, `[skills] paths`) and
+//! the filesystem ourselves, because EchoAgent holds the canonical enabled/disabled
+//! state in `~/.echo-agent/config.toml` (`[skills] disabled`, `[skills] paths`) and
 //! reloads on file changes.
 
 use agent_client_protocol as acp;
@@ -18,9 +18,9 @@ use tauri::State;
 use crate::commands::AppState;
 use crate::ext::{call_ext, call_ext_value, raw_params};
 
-/// One discovered skill. Mirrors the relevant fields of grok's `SkillInfo`
+/// One discovered skill. Mirrors the relevant fields of EchoAgent's `SkillInfo`
 /// (`xai-grok-tools/src/implementations/skills/types.rs:40`). Unknown/missing
-/// fields fall back to defaults — the shape is stable across grok versions but
+/// fields fall back to defaults — the shape is stable across EchoAgent versions but
 /// we stay defensive.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,7 +44,7 @@ pub struct SkillInfo {
 }
 
 /// Generic list shape returned by `x.ai/skills/list` and `x.ai/skills/config`:
-/// grok returns either a bare array or `{ skills: [...] }`. We accept both.
+/// EchoAgent returns either a bare array or `{ skills: [...] }`. We accept both.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum SkillsListResponse {
@@ -61,7 +61,7 @@ impl SkillsListResponse {
     }
 }
 
-/// List all skills grok has discovered. `cwd` is optional (used by grok to
+/// List all skills EchoAgent has discovered. `cwd` is optional (used by EchoAgent to
 /// resolve project-scoped skills).
 #[tauri::command]
 pub async fn skills_list(
@@ -74,9 +74,9 @@ pub async fn skills_list(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    // grok's `x.ai/skills/list` schema requires `cwd` to be a *string* when
+    // EchoAgent's `x.ai/skills/list` schema requires `cwd` to be a *string* when
     // present (it rejects `null` with -32602). Omit the key entirely when the
-    // caller has no cwd so grok falls back to its own default.
+    // caller has no cwd so EchoAgent falls back to its own default.
     let mut params_obj = serde_json::Map::new();
     if let Some(c) = &cwd {
         params_obj.insert("cwd".into(), serde_json::Value::String(c.clone()));
@@ -84,7 +84,7 @@ pub async fn skills_list(
     let params: Arc<RawValue> = raw_params(&serde_json::Value::Object(params_obj));
     // Prefer `x.ai/skills/config` (richer: includes paths/ignore config), but
     // fall back to `x.ai/skills/list` if the method is unavailable on this
-    // grok build.
+    // EchoAgent build.
     let res: Result<SkillsListResponse, _> =
         call_ext(&tx, "x.ai/skills/config", params.clone()).await;
     let skills = match res {

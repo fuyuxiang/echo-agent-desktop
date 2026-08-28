@@ -1,10 +1,10 @@
 //! Automations (定时任务) — EchoAgent-managed local scheduler.
 //!
-//! grok only exposes `x.ai/scheduler/delete` (deleting tasks it created itself
+//! EchoAgent only exposes `x.ai/scheduler/delete` (deleting tasks it created itself
 //! via tool calls). It does NOT let a client create new scheduled tasks.
 //! WorkBuddy's automation panel needs create/update/list, so EchoAgent keeps
-//! its own automation table in `~/.grok/echoagent-automations.json` and a run
-//! record table in `~/.grok/echoagent-automation-records.json`.
+//! its own automation table in `~/.echo-agent/echoagent-automations.json` and a run
+//! record table in `~/.echo-agent/echoagent-automation-records.json`.
 //!
 //! Data model mirrors WorkBuddy's automation panel 1:1:
 //!  - scheduleType: "recurring" | "once"
@@ -15,7 +15,7 @@
 //!  - validity window: validFromDate / validUntilDate (recurring only)
 //!  - extras: skills, expert, connectorIds, permissionMode, pushToWeChat
 //!
-//! At fire time the scheduler opens a fresh grok session in the automation's
+//! At fire time the scheduler opens a fresh EchoAgent session in the automation's
 //! cwd and sends the prompt; a run record (running → success/failed) is
 //! written so the 运行记录 tab can render history.
 //!
@@ -194,20 +194,11 @@ pub struct AutomationSnapshot {
 
 // ---------- persistence ----------
 
-fn grok_home() -> PathBuf {
-    if let Ok(custom) = std::env::var("GROK_HOME") {
-        return PathBuf::from(custom);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".grok")
-}
-
 fn store_path() -> PathBuf {
-    grok_home().join("echoagent-automations.json")
+    crate::paths::echo_agent_home_dir().join("echoagent-automations.json")
 }
 fn records_path() -> PathBuf {
-    grok_home().join("echoagent-automation-records.json")
+    crate::paths::echo_agent_home_dir().join("echoagent-automation-records.json")
 }
 
 fn write_json(path: &PathBuf, body: &str) -> Result<(), String> {
@@ -699,7 +690,7 @@ pub fn automations_set_status(id: String, status: String) -> Result<(), String> 
     write_store(&store)
 }
 
-/// Manually fire an automation now (test run). Opens a new grok session and
+/// Manually fire an automation now (test run). Opens a new EchoAgent session and
 /// sends the prompt — the result appears in the sidebar like any chat, and a
 /// run record is written for the 运行记录 tab.
 #[tauri::command]
@@ -747,17 +738,17 @@ pub async fn automations_run(state: State<'_, AppState>, id: String) -> Result<(
     Ok(())
 }
 
-/// Open a fresh grok session and send the automation prompt.
+/// Open a fresh EchoAgent session and send the automation prompt.
 /// Returns the new session id on success.
 async fn run_automation_once(
     tx: &xai_acp_lib::AcpAgentTx,
     automation: &Automation,
     cwd: &PathBuf,
 ) -> Result<String, String> {
-    let session_id = crate::grok::new_session(tx, cwd, automation.model_id.as_deref())
+    let session_id = crate::agent_runtime::new_session(tx, cwd, automation.model_id.as_deref())
         .await
         .map_err(|e| e.to_string())?;
-    crate::grok::prompt(tx, &session_id, &automation.prompt)
+    crate::agent_runtime::prompt(tx, &session_id, &automation.prompt)
         .await
         .map_err(|e| e.to_string())?;
     Ok(session_id)

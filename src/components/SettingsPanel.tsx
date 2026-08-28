@@ -38,7 +38,7 @@ import {
   type ProviderListModel,
   type ProviderKind,
   type FetchedModel,
-} from "@/lib/grok-client";
+} from "@/lib/agent-client";
 import {
   AccountSettingsPanel,
   AgentMailSettingsPanel,
@@ -62,9 +62,9 @@ import {
  * "即将上线" placeholder so the visual matches WorkBuddy today and can be
  * filled in later.
  *
- * The 模型 section lists configured providers from ~/.grok/config.toml and
+ * The 模型 section lists configured providers from ~/.echo-agent/config.toml and
  * opens a nested "添加模型" editor dialog (560×318) when adding/editing.
- * That editor writes back through providers_save → grok's [model.*] tables.
+ * That editor writes back through providers_save → EchoAgent's [model.*] tables.
  */
 
 type SectionId =
@@ -304,7 +304,7 @@ function PlaceholderSection({ label }: { label: string }) {
 // ---------------------------------------------------------------------------
 // 模型 section: provider-grouped view (one provider → many models).
 //
-// grok's native config shape is [model_providers.<id>] (one key/url/context_window)
+// EchoAgent's native config shape is [model_providers.<id>] (one key/url/context_window)
 // + [model.<id>] with a `model_provider = "<id>"` reference. The UI mirrors
 // that: a left list of providers, a right detail showing that provider's
 // models + a connection editor. Legacy per-model entries (old shape) are
@@ -494,7 +494,7 @@ function ModelsSettingsPanel({ onModelsChanged }: { onModelsChanged?: () => void
         </div>
         <div className="models-settings-panel__card-desc models-settings-panel__grouped-note">
           一个厂商保存一份 API Key / Base URL / 上下文窗口，可挂载多个模型。配置写入{" "}
-          <code className="models-settings-panel__card-link">~/.grok/config.toml</code>。
+          <code className="models-settings-panel__card-link">~/.echo-agent/config.toml</code>。
         </div>
 
         {loading ? (

@@ -1,6 +1,6 @@
-//! Default-permission rules — reads/writes grok's `[permission]` config block.
+//! Default-permission rules — reads/writes EchoAgent's `[permission]` config block.
 //!
-//! grok evaluates tool-call permission against rules in `~/.grok/config.toml`:
+//! EchoAgent evaluates tool-call permission against rules in `~/.echo-agent/config.toml`:
 //!
 //! ```toml
 //! [permission]
@@ -15,9 +15,9 @@
 //!
 //! We read BOTH forms and expose a unified `Vec<PermissionRule>`; writes always
 //! go to the compact string-array form (`deny = [...]` / `allow = [...]`) so
-//! we don't fight grok's own structured editor. Reuses `providers.rs`'s
-//! atomic `read_config`/`write_config` pattern. NOTE: changes require a grok
-//! restart to take effect (grok loads config once at agent init).
+//! we don't fight EchoAgent's own structured editor. Reuses `providers.rs`'s
+//! atomic `read_config`/`write_config` pattern. NOTE: changes require a EchoAgent
+//! restart to take effect (EchoAgent loads config once at agent init).
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -38,7 +38,7 @@ pub struct PermissionRule {
     pub pattern: Option<String>,
 }
 
-/// grok stores compact-form rules as `Tool(pattern)` strings. Parse one into
+/// EchoAgent stores compact-form rules as `Tool(pattern)` strings. Parse one into
 /// our structured form. Examples: `"Bash(git *)"`, `"Read"`, `"Edit(/tmp/**)"`.
 fn parse_compact_rule(s: &str, action: &str) -> PermissionRule {
     let s = s.trim();
@@ -108,7 +108,7 @@ pub fn read_rules() -> Vec<PermissionRule> {
     out
 }
 
-/// Render a rule back to grok's compact `Tool(pattern)` form.
+/// Render a rule back to EchoAgent's compact `Tool(pattern)` form.
 fn rule_to_compact(rule: &PermissionRule) -> String {
     let tool = rule.tool.to_lowercase();
     let cap = capitalize_tool(&tool);
@@ -128,7 +128,7 @@ fn capitalize_tool(tool: &str) -> String {
 
 /// Replace the `[permission]` block's compact-form arrays. We always write the
 /// compact form (deny/allow/ask) and drop any structured `rules` array to
-/// avoid ambiguity — grok accepts both, but mixing them is confusing.
+/// avoid ambiguity — EchoAgent accepts both, but mixing them is confusing.
 pub fn write_rules(rules: Vec<PermissionRule>) -> Result<(), String> {
     let mut config = crate::providers::read_config();
     let table = config.as_table_mut().ok_or("config root is not a table")?;
@@ -172,7 +172,7 @@ pub fn permission_list(_state: State<'_, AppState>) -> Vec<PermissionRule> {
 }
 
 /// Replace all permission rules with the supplied list. Atomic write to
-/// config.toml; requires a grok restart to take effect.
+/// config.toml; requires a EchoAgent restart to take effect.
 #[tauri::command]
 pub fn permission_save(
     _state: State<'_, AppState>,
@@ -186,12 +186,12 @@ pub fn permission_save(
 // ========================================================================
 
 /// The current "new session" defaults that affect every agent/assistant.
-/// Mirrors grok's `[models] default` and `[ui] default_selected_permission`
+/// Mirrors EchoAgent's `[models] default` and `[ui] default_selected_permission`
 /// config keys (see user-guide/05-configuration.md).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDefaults {
-    /// Model id used for new sessions (`[models] default`). Empty = grok
+    /// Model id used for new sessions (`[models] default`). Empty = EchoAgent
     /// falls back to its built-in default (`grok-build`).
     #[serde(default)]
     pub default_model: String,
@@ -199,7 +199,7 @@ pub struct AgentDefaults {
     /// (`[ui] default_selected_permission`). One of:
     /// "always_allow_all_sessions" | "always_allow_this_session" |
     /// "allow_once" | "always_deny_all_sessions" | "deny_once".
-    /// Empty = grok's built-in default (no preselection).
+    /// Empty = EchoAgent's built-in default (no preselection).
     #[serde(default)]
     pub default_permission: String,
     /// Whether to show "Always allow" options on permission prompts
@@ -307,11 +307,11 @@ pub fn agents_defaults_save(
 // Permission mode — `[ui] permission_mode` ("ask" | "auto" | "always-approve")
 // ========================================================================
 
-/// Canonical permission modes grok accepts (see grok-build
+/// Canonical permission modes EchoAgent accepts (see grok-build
 /// `util/config/permissions.rs::parse_permission_mode_canonical`).
 pub const PERMISSION_MODES: [&str; 3] = ["ask", "auto", "always-approve"];
 
-/// Read the configured permission mode. Mirrors grok's precedence:
+/// Read the configured permission mode. Mirrors EchoAgent's precedence:
 /// `permission_mode` > legacy `approval_mode` > legacy `yolo`; default "ask".
 pub fn read_permission_mode() -> String {
     let config = crate::providers::read_config();
@@ -322,7 +322,7 @@ pub fn read_permission_mode() -> String {
         return match m {
             "always-approve" => "always-approve".into(),
             "auto" => "auto".into(),
-            // "ask" / "default" / unknown → ask (grok fails safe the same way)
+            // "ask" / "default" / unknown → ask (EchoAgent fails safe the same way)
             _ => "ask".into(),
         };
     }
@@ -365,7 +365,7 @@ pub fn permission_mode_get(_state: State<'_, AppState>) -> String {
 }
 
 /// Set the permission mode: persist to config.toml (for future launches) AND
-/// notify the running agent via grok's `x.ai/yolo_mode_changed` extension
+/// notify the running agent via EchoAgent's `x.ai/yolo_mode_changed` extension
 /// notification so existing sessions switch immediately. The notification is
 /// best-effort — if the agent isn't up yet, the config write alone suffices.
 #[tauri::command]

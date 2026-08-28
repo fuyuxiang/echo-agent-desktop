@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, X, Clock, FileText } from "lucide-react";
 import { useSessionsStore } from "@/stores/sessions-store";
-import { sessionSearch } from "@/lib/grok-client";
+import { sessionSearch } from "@/lib/agent-client";
 import type { SearchHit, SessionSummary } from "@/lib/types";
 
 /**
- * Session search overlay — now powered by grok's FTS5 full-text index.
+ * Session search overlay — now powered by EchoAgent's FTS5 full-text index.
  *
  * Two modes:
  *  - Empty / short query: filter the current workspace's session list by
  *    title (instant, local).
- *  - Query ≥ 2 chars: fire `x.ai/session/search` against grok's full-text
+ *  - Query ≥ 2 chars: fire `x.ai/session/search` against EchoAgent's full-text
  *    index (cross-workspace, matches message content + titles). Results show
  *    a snippet of the matched content.
  *
@@ -30,7 +30,7 @@ export function SearchOverlay({
   // Two-section model: there is no single flat list anymore. For local title
   // matching we flatten whatever the sidebar currently holds (independent +
   // any expanded 空间 node caches). Cross-cwd content search still goes via
-  // grok FTS below, so unexpanded nodes remain searchable by content/title.
+  // EchoAgent FTS below, so unexpanded nodes remain searchable by content/title.
   const independent = useSessionsStore((s) => s.independent);
   const workspaceSessions = useSessionsStore((s) => s.workspaceSessions);
   const sessions = useMemo<SessionSummary[]>(
@@ -73,7 +73,7 @@ export function SearchOverlay({
       const hits = await sessionSearch(q.trim(), undefined, 30);
       setRemoteHits(hits);
     } catch {
-      // grok FTS not available / index empty — fall back to local-only.
+      // EchoAgent FTS not available / index empty — fall back to local-only.
       setRemoteHits([]);
     } finally {
       setSearching(false);
@@ -198,7 +198,7 @@ export function SearchOverlay({
                         {h.snippet && (
                           <div
                             className="conversation-search-modal__item-snippet"
-                            // grok FTS5 returns plain-text snippets; safe to render.
+                            // EchoAgent FTS5 returns plain-text snippets; safe to render.
                             dangerouslySetInnerHTML={{ __html: escapeHtml(h.snippet) }}
                           />
                         )}
@@ -228,7 +228,7 @@ export function SearchOverlay({
             remoteOnly.length === 0 &&
             query.trim().length === 0 && (
               <div className="conversation-search-modal__count">
-                输入关键词搜索会话内容（grok FTS5 全文索引）
+                输入关键词搜索会话内容（EchoAgent FTS5 全文索引）
               </div>
             )}
         </div>

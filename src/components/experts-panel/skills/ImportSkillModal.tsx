@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { XCloseIcon, FolderOpenIcon } from "@/foundation/components/Icon/icons";
-import { skillsAdd } from "@/lib/grok-client";
+import { skillsAdd } from "@/lib/agent-client";
 
 /** "导入技能" modal (截图 5): drag/click drop zone + 非高风险自动安装 checkbox +
  *  file requirements. echoagent has no cloud install / security scanner, so the
- *  checkbox is UI-only and install = register a local path via grok's
+ *  checkbox is UI-only and install = register a local path via EchoAgent's
  *  `skills_add` (a SKILL.md or a folder containing one; .zip must be unpacked). */
 export function ImportSkillModal({
   onClose, onToast, onInstalled,
