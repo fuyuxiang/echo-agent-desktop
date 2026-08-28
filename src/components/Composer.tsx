@@ -44,7 +44,7 @@ import type { AgentEntry } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 
 /**
- * WorkBuddy 风格输入卡片(圆角16):左下 +,右下 Auto 下拉/麦克风/发送;
+ * EchoAgent 风格输入卡片(圆角16):左下 +,右下 Auto 下拉/麦克风/发送;
  * showMeta 时卡片内部底部显示"选择工作空间/默认权限"。
  * showDisclaimer 时卡片下方渲染免责声明行。
  * apiReady=false 时输入禁用,点击卡片引导打开设置。
@@ -56,6 +56,7 @@ export function Composer({
   onCancel,
   placeholder,
   apiReady = true,
+  setupHint = "请先配置 API Key 开始使用",
   onOpenSettings,
   onPlaceholder,
   onToast,
@@ -88,7 +89,7 @@ export function Composer({
   onSelectExpert,
   onSelectSkill,
   onNavigateConnectors,
-  /** 流式时把「发送」改为「加入待发送队列」(对齐 WorkBuddy message-queue)。
+  /** 流式时把「发送」改为「加入待发送队列」(对齐 EchoAgent message-queue)。
    *  传入后:流式且文本非空时,在停止按钮左侧显示「入队」按钮。 */
   onEnqueue,
   /** Name of the expert currently bound to this session (shown as badge in footer). */
@@ -105,6 +106,8 @@ export function Composer({
   onCancel: () => void;
   placeholder?: string;
   apiReady?: boolean;
+  /** Message shown when the composer is unavailable. */
+  setupHint?: string;
   onOpenSettings?: () => void;
   onPlaceholder?: (label: string) => void;
   /** Surface transient feedback (permission rule save errors, etc.). */
@@ -112,7 +115,7 @@ export function Composer({
   showMeta?: boolean;
   /** Show "内容由 AI 生成" disclaimer below card (chat page). */
   showDisclaimer?: boolean;
-  /** 把权限选择器放进卡片内 footer（+ 之后），匹配 WorkBuddy 本地助理页；为 true 时不再渲染卡片外 meta 行。 */
+  /** 把权限选择器放进卡片内 footer（+ 之后），匹配 EchoAgent 本地助理页；为 true 时不再渲染卡片外 meta 行。 */
   permissionInline?: boolean;
   /** Currently selected model id (shown on the model trigger). */
   modelId?: string;
@@ -127,7 +130,7 @@ export function Composer({
   initialText?: string;
   onInitialTextConsumed?: () => void;
   /**
-   * 首页"操作类型"标签(复刻 WorkBuddy 的 scene tag):选中能力分类后插入
+   * 首页"操作类型"标签(复刻 EchoAgent 的 scene tag):选中能力分类后插入
    * 到输入框内首行的黑色标签,带图标与 × 删除按钮。发送时作为上下文前缀。
    */
   sceneTag?: { label: string; icon: LucideIcon } | null;
@@ -154,7 +157,7 @@ export function Composer({
   onSelectSkill?: (skillName: string) => void;
   /** 加号菜单:跳转到连接器管理面板。 */
   onNavigateConnectors?: () => void;
-  /** 流式时把「发送」改为「加入待发送队列」(对齐 WorkBuddy message-queue)。 */
+  /** 流式时把「发送」改为「加入待发送队列」(对齐 EchoAgent message-queue)。 */
   onEnqueue?: (text: string) => void;
   /** Name of the expert currently bound to this session (shown as badge in footer). */
   activeExpertName?: string;
@@ -167,16 +170,16 @@ export function Composer({
 }) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
-  // 发送前成本预估(对齐 WorkBuddy credit-estimate):纯本地 token 估算。
+  // 发送前成本预估(对齐 EchoAgent credit-estimate):纯本地 token 估算。
   // ctxUsed/ctxTotal 由 ContextUsagePill 异步获取,这里不耦合;徽章在占比未知时
   // 仍显示 +N(新增 token),有占比信息时叠加(此处保守不取,避免与 pill 抢请求)。
   const cost = useMemo(() => estimateSendCost(text), [text]);
-  // 输入历史(arrow-key recall,对齐 WorkBuddy use-input-history):内存中按发送追加,
+  // 输入历史(arrow-key recall,对齐 EchoAgent use-input-history):内存中按发送追加,
   // ↑/↓ 在输入框回溯。draftRef 暂存「回到输入框」时恢复的草稿。
   const histRef = useRef<InputHistory>(createInputHistory(50));
   const histCursorRef = useRef<number>(0);
   const draftRef = useRef<string>("");
-  // 多块提示预览(对齐 WorkBuddy content-blocks):把当前引用(expert/attachments/
+  // 多块提示预览(对齐 EchoAgent content-blocks):把当前引用(expert/attachments/
   // sceneTag)组装成块,显示为 chip 行 + 组装后的预览(便于用户确认最终发送内容)。
   const blockList = useMemo(() => {
     const list = [];
@@ -324,7 +327,7 @@ export function Composer({
       nativeVoiceActiveRef.current = false;
       nativeError = error;
     }
-    // 优先走 provider-agnostic 注册表(对齐 WorkBuddy asr:* 契约):外部 provider
+    // 优先走 provider-agnostic 注册表(对齐 EchoAgent asr:* 契约):外部 provider
     // 注册后优先级更高；非桌面环境回落到内建 Web Speech。
     ensureWebSpeechAsrRegistered();
     const provider = getActiveAsr();
@@ -441,7 +444,7 @@ export function Composer({
     onClearSceneTag?.();
   };
 
-  /** 流式时入队(对齐 WorkBuddy message-queue):文本非空才入队。 */
+  /** 流式时入队(对齐 EchoAgent message-queue):文本非空才入队。 */
   const enqueue = () => {
     const t = text.trim();
     if (!t || disabled || !apiReady) return;
@@ -468,7 +471,7 @@ export function Composer({
     }
   };
 
-  // ---------- 拖拽文件附件(对齐 WorkBuddy drop-zone)----------
+  // ---------- 拖拽文件附件(对齐 EchoAgent drop-zone)----------
   // Tauri webview 的 DOM onDrop 拿不到本地文件绝对路径(只给 File blob),
   // 必须用原生 drag-drop 事件。enter/over 显示遮罩;drop 收集路径并入附件;
   // leave 隐藏遮罩。非 Tauri 环境(vitest)getCurrentWebview 会抛错,安全降级。
@@ -558,15 +561,15 @@ export function Composer({
   const showWorkspacePicker = !!onSelectWorkspace && !!workspaces;
 
   const composerCls = [
-    "wb-composer",
-    !apiReady && "wb-composer--disabled",
-    showMeta && "wb-composer--home",
+    "echo-composer",
+    !apiReady && "echo-composer--disabled",
+    showMeta && "echo-composer--home",
   ].filter(Boolean).join(" ");
 
   return (
     <div
       className={
-        "wb-composer-wrap" + (showMeta ? " wb-composer-wrap--home" : "")
+        "echo-composer-wrap" + (showMeta ? " echo-composer-wrap--home" : "")
       }
     >
       <section
@@ -576,19 +579,19 @@ export function Composer({
         }}
       >
         {!apiReady && (
-          <div className="wb-composer__setup-hint" role="button" tabIndex={0}>
-            请先配置 API Key 开始使用
+          <div className="echo-composer__setup-hint" role="button" tabIndex={0}>
+            {setupHint}
           </div>
         )}
 
-        {/* 拖拽文件落区遮罩(对齐 WorkBuddy drop-zone) */}
+        {/* 拖拽文件落区遮罩(对齐 EchoAgent drop-zone) */}
         {dragActive && (
-          <div className="wb-composer__dropzone" role="status" aria-live="polite">
-            <span className="wb-composer__dropzone-text">松开以添加文件到对话</span>
+          <div className="echo-composer__dropzone" role="status" aria-live="polite">
+            <span className="echo-composer__dropzone-text">松开以添加文件到对话</span>
           </div>
         )}
 
-        {/* 多块提示预览(对齐 WorkBuddy content-blocks):引用块 chip 行 */}
+        {/* 多块提示预览(对齐 EchoAgent content-blocks):引用块 chip 行 */}
         {hasRefs && (
           <div className="composer-blocks" title={assemblePrompt(blockList)}>
             {blockList.map((b) => (
@@ -625,14 +628,14 @@ export function Composer({
 
         {/* "操作类型"黑色标签(首页选中能力分类后插入,× 可删除) */}
         {sceneTag && (
-          <div className="wb-composer__scene-tag" role="group" aria-label={`操作类型 ${sceneTag.label}`}>
-            <span className="wb-composer__scene-tag-icon" aria-hidden="true">
+          <div className="echo-composer__scene-tag" role="group" aria-label={`操作类型 ${sceneTag.label}`}>
+            <span className="echo-composer__scene-tag-icon" aria-hidden="true">
               <sceneTag.icon size={14} />
             </span>
-            <span className="wb-composer__scene-tag-text">{sceneTag.label}</span>
+            <span className="echo-composer__scene-tag-text">{sceneTag.label}</span>
             <button
               type="button"
-              className="wb-composer__scene-tag-remove"
+              className="echo-composer__scene-tag-remove"
               aria-label={`移除 ${sceneTag.label}`}
               onClick={(e) => {
                 e.stopPropagation();
@@ -646,16 +649,16 @@ export function Composer({
 
         <textarea
           ref={ref}
-          className="wb-composer__input"
+          className="echo-composer__input"
           rows={1}
           value={text}
           disabled={!apiReady}
           placeholder={
             apiReady
               ? sceneTag
-                ? "" // 有操作类型标签时不显示占位文案(匹配 WorkBuddy)
+                ? "" // 有操作类型标签时不显示占位文案(匹配 EchoAgent)
                 : placeholder ?? "今天帮你做些什么? @ 引用对话文件,/ 调用技能与指令"
-              : "请先配置 API Key 开始使用"
+              : setupHint
           }
           onChange={(e) => {
             updateText(e.target.value);
@@ -681,7 +684,7 @@ export function Composer({
               send();
               return;
             }
-            // 输入历史 arrow-key recall(对齐 WorkBuddy use-input-history)。
+            // 输入历史 arrow-key recall(对齐 EchoAgent use-input-history)。
             // 仅在未组合输入(中文输入法)且非 slash 菜单可见时响应。
             if (!slashVisible && !e.nativeEvent.isComposing) {
               const el = e.target as HTMLTextAreaElement;
@@ -728,7 +731,7 @@ export function Composer({
           cursor={cursorPos}
           onPick={handleSlashPick}
         />
-        <div className="wb-composer__footer">
+        <div className="echo-composer__footer">
           <InputAddMenu
             onPickFiles={pickFiles}
             onSelectMode={onSelectMode}
@@ -746,7 +749,7 @@ export function Composer({
             onNavigateConnectors={onNavigateConnectors}
           />
           {activeExpertName && (
-            <span className="wb-composer__expert-badge" title={`当前专家：${activeExpertName}`}>
+            <span className="echo-composer__expert-badge" title={`当前专家：${activeExpertName}`}>
               <ThumbImg name={activeExpertName} local={activeExpertAvatar} size={18} shape="circle" />
               {activeExpertName}
             </span>
@@ -754,12 +757,12 @@ export function Composer({
           {permissionInline && (
             <PermissionPicker onToast={onToast} />
           )}
-          <div className="wb-composer__spacer" />
-          {/* 发送前成本预估徽章(对齐 WorkBuddy credit-estimate):纯本地 token 估算,
+          <div className="echo-composer__spacer" />
+          {/* 发送前成本预估徽章(对齐 EchoAgent credit-estimate):纯本地 token 估算,
               仅在文本非空时显示。不依赖计费后端(BYOK 无计费通道)。 */}
           {text.trim() && (
             <span
-              className={"wb-composer__cost wb-composer__cost--" + cost.severity}
+              className={"echo-composer__cost echo-composer__cost--" + cost.severity}
               title={`预计新增约 ${cost.newTokens} token${
                 cost.projectedPct > 0 ? ` · 占上下文 ${cost.projectedPct}%` : ""
               }`}
@@ -776,7 +779,7 @@ export function Composer({
             />
           ) : (
             <button
-              className="wb-composer__model"
+              className="echo-composer__model"
               onClick={(e) => {
                 e.stopPropagation();
                 ph("模型选择");
@@ -787,7 +790,7 @@ export function Composer({
           )}
           <button
             className={
-              "wb-composer__tool" + (listening ? " wb-composer__tool--active" : "")
+              "echo-composer__tool" + (listening ? " echo-composer__tool--active" : "")
             }
             onClick={(e) => {
               e.stopPropagation();
@@ -800,10 +803,10 @@ export function Composer({
           </button>
           {streaming ? (
             <>
-              {/* 流式时可加入待发送队列(对齐 WorkBuddy message-queue)。 */}
+              {/* 流式时可加入待发送队列(对齐 EchoAgent message-queue)。 */}
               {onEnqueue && text.trim() !== "" && (
                 <button
-                  className="wb-composer__send wb-composer__send--enqueue"
+                  className="echo-composer__send echo-composer__send--enqueue"
                   onClick={(e) => {
                     e.stopPropagation();
                     enqueue();
@@ -816,7 +819,7 @@ export function Composer({
                 </button>
               )}
               <button
-                className="wb-composer__send wb-composer__send--stop"
+                className="echo-composer__send echo-composer__send--stop"
                 onClick={(e) => {
                   e.stopPropagation();
                   onCancel();
@@ -829,9 +832,9 @@ export function Composer({
           ) : (
             <button
               className={
-                "wb-composer__send" +
+                "echo-composer__send" +
                 (text.trim() === "" && attachments.length === 0
-                  ? " wb-composer__send--empty"
+                  ? " echo-composer__send--empty"
                   : "")
               }
               onClick={(e) => {
@@ -840,16 +843,16 @@ export function Composer({
               }}
               disabled={disabled || !apiReady}
               aria-label="发送"
-              title={!apiReady ? "请先配置 API Key" : "发送消息"}
+              title={!apiReady ? setupHint : "发送消息"}
             >
               <SendPlaneIcon size="md" />
             </button>
           )}
         </div>
       </section>
-      {/* WB: meta 行在白卡外下方,透明背景,与卡片间距4px(仅首页) */}
+      {/* EchoAgent: meta 行在白卡外下方,透明背景,与卡片间距4px(仅首页) */}
       {showMeta && !permissionInline && (
-        <div className="wb-composer-meta">
+        <div className="echo-composer-meta">
           {showWorkspacePicker ? (
             <WorkspacePicker
               cwd={cwd}
@@ -857,7 +860,7 @@ export function Composer({
               onSelectWorkspace={onSelectWorkspace!}
             />
           ) : (
-            <button className="wb-composer-meta__btn" onClick={() => ph("选择工作空间")}>
+            <button className="echo-composer-meta__btn" onClick={() => ph("选择工作空间")}>
               选择工作空间 <ChevronDownIcon size="sm" />
             </button>
           )}
@@ -865,7 +868,7 @@ export function Composer({
         </div>
       )}
       {showDisclaimer && (
-        <div className="wb-composer__disclaimer">
+        <div className="echo-composer__disclaimer">
           内容由 AI 生成，请核实重要信息
         </div>
       )}
@@ -912,7 +915,7 @@ function getSpeechRecognitionCtor(): VoiceRecognitionCtor | null {
 
 /**
  * 注册内建 Web Speech ASR provider 到 voice-contract 注册表(provider-agnostic,
- * 对齐 WorkBuddy `asr:*` 契约)。外部 provider(如云端 STT)注册后会因其更高
+ * 对齐 EchoAgent `asr:*` 契约)。外部 provider(如云端 STT)注册后会因其更高
  * 优先级而被优先使用。仅在首次调用时注册一次。
  */
 let webSpeechAsrRegistered = false;

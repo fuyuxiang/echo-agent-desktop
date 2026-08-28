@@ -1,6 +1,6 @@
 /**
  * Public entry for chat markdown rendering.
- * Implementation lives under ./markdown/ (WorkBuddy-aligned pipeline).
+ * Implementation lives under ./markdown/ (EchoAgent-aligned pipeline).
  * Note: must import via "./markdown/index" — on Windows "./markdown"
  * collides with this file's casing.
  */

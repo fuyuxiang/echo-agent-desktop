@@ -1,5 +1,5 @@
 /**
- * 计划编辑器纯函数 —— 对齐 WorkBuddy `cb-chat-ui/plan-editor` 的可编辑能力
+ * 计划编辑器纯函数 —— 对齐 EchoAgent `echo-chat-ui/plan-editor` 的可编辑能力
  * (reorder / add / remove / set status / set priority)。
  *
  * 全部以不可变方式返回新 plan,便于单测与 React 状态更新。EchoAgent 的 ACP Plan

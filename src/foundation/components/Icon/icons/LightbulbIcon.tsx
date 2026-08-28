@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 import { createIcon } from "../Icon";
 
-// 来自 WorkBuddy InspirationIcon - 使用 lucide-react Sparkle 图标
+// 来自 EchoAgent InspirationIcon - 使用 lucide-react Sparkle 图标
 const LightbulbIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
   <svg
     ref={ref}

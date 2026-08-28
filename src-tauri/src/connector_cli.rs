@@ -1,6 +1,6 @@
 //! CLI-type connector authorization engine (企业微信 / 飞书 / 钉钉 …).
 //!
-//! Mirrors workbuddy's `ConnectorService.connectCli`: each CLI connector ships
+//! Mirrors echo-agent's `ConnectorService.connectCli`: each CLI connector ships
 //! a `cli.json` describing how to install (`init`), version-check, authorize
 //! (`auth` — one or more steps whose stdout contains an auth URL), and verify
 //! (`status` + `statusMatch`/`statusMatchJson`). We run those commands as
@@ -117,7 +117,7 @@ pub struct CliStatusResult {
     pub cli_version: Option<String>,
     /// status command output matches the authed pattern.
     pub authed: bool,
-    /// UI hint: show the auth URL as a QR code (workbuddy `authQrModal`).
+    /// UI hint: show the auth URL as a QR code (echo-agent `authQrModal`).
     pub qr_modal: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

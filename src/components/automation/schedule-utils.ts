@@ -1,10 +1,10 @@
 /**
  * schedule-utils — 自动化调度模型的构建 / 描述 / 校验。
  *
- * 与 WorkBuddy automation-panel/index.tsx 中的逻辑一一对应：
+ * 与 EchoAgent automation-panel/index.tsx 中的逻辑一一对应：
  *  - scheduleMode: periodic(周期) | interval(按间隔) | once(单次)
  *  - periodicMode: day(每天) | week(每周) | biweek(双周) | month(每月) | year(每年)
- *  - 文案取自 WorkBuddy zh-cn（automation.schedule.* / automation.validity.*）
+ *  - 文案取自 EchoAgent zh-cn（automation.schedule.* / automation.validity.*）
  */
 import type {
   Automation,

@@ -2,7 +2,7 @@
  * 插件面板 - 对接 EchoAgent 的 x.ai/plugins/list + x.ai/plugins/action
  *
  * 显示已安装的 EchoAgent 插件（含 skills/agents/hooks/mcp 计数），支持启用/禁用。
- * 对应 WorkBuddy 的 plugins-panel。
+ * 对应 EchoAgent 的 plugins-panel。
  *
  * 插件来源：~/.echo-agent/plugins/、项目 .echo-agent/plugins/、marketplace 安装。
  */
@@ -98,7 +98,7 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
       <div className="plugins-panel__list">
         {plugins.length === 0 && !loading && (
           <div className="plugins-panel__empty">
-            <PuzzlePieceIcon size="xl" color="var(--wb-text-tertiary)" />
+            <PuzzlePieceIcon size="xl" color="var(--echo-text-tertiary)" />
             <p>暂无插件。</p>
             <p className="plugins-panel__hint">
               在「市场」tab 安装插件，或把插件放到 <code>~/.echo-agent/plugins/</code>。

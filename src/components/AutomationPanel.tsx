@@ -1,5 +1,5 @@
 /**
- * 自动化面板 — 1:1 复刻 WorkBuddy automation-panel/index.tsx。
+ * 自动化面板 — 1:1 复刻 EchoAgent automation-panel/index.tsx。
  *
  * 三态（对应截图 1-3）：
  *  1. 定时任务：顶部 Segmented 页签；空态 hero（闹钟图标 + 「开启你的第一个自动化任务吧」
@@ -106,12 +106,12 @@ function RecordStatusIcon({ item }: { item: AutomationRunRecord }) {
       </span>
     );
   }
-  if (item.status === "success") return <CheckBoldIcon size={16} color="var(--wb-color-text-disabled, #000)" />;
+  if (item.status === "success") return <CheckBoldIcon size={16} color="var(--echo-color-text-disabled, #000)" />;
   if (item.status === "failed") return <ErrorCircleIcon size={16} />;
   return <CheckIcon size={16} />;
 }
 
-/** 通用确认弹窗（替代 WB 的 Modal.confirm）。 */
+/** 通用确认弹窗（替代 EchoAgent 的 Modal.confirm）。 */
 function ConfirmDialog({
   title,
   content,
@@ -533,7 +533,7 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
   // ============================================================
   if ((editingAutomation || isCreating) && draft) {
     return (
-      <div className="automation-panel code-buddy-automation">
+      <div className="automation-panel echo-agent-automation">
         <AutomationEditPage
           mode={isCreating ? "create" : "edit"}
           draft={draft}
@@ -586,7 +586,7 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
   // 列表态渲染（截图 1 / 3）
   // ============================================================
   return (
-    <div className="automation-panel code-buddy-automation">
+    <div className="automation-panel echo-agent-automation">
       {/* ---------- 工具栏(顶部拖拽条,Tauri 2 需 data-tauri-drag-region) ---------- */}
       {showTemplatePage ? (
         <div className="atm-toolbar atm-toolbar--breadcrumb" data-tauri-drag-region>
@@ -660,7 +660,7 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
                       className={`atm-filter-btn${filterStatus !== "all" ? " atm-filter-btn--active" : ""}`}
                       onClick={() => setFilterOpen((v) => !v)}
                     >
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" style={{ color: "var(--wb-palette-black-70)" }}>
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" style={{ color: "var(--echo-palette-black-70)" }}>
                         <path d="M2 4h12M4.5 8h7M6.5 12h3" />
                       </svg>
                       {filterStatus !== "all" && <span className="atm-filter-dot" />}
@@ -880,7 +880,7 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
 }
 
 // ============================================================
-// AutomationRow — 任务行（复刻 WB AutomationRow）
+// AutomationRow — 任务行（复刻 EchoAgent AutomationRow）
 // ============================================================
 
 function AutomationRow({
@@ -1025,7 +1025,7 @@ function AutomationRow({
 }
 
 // ============================================================
-// InboxRow — 运行记录行（复刻 WB InboxRow）
+// InboxRow — 运行记录行（复刻 EchoAgent InboxRow）
 // ============================================================
 
 function InboxRow({
@@ -1060,7 +1060,7 @@ function InboxRow({
         <span className="atm-row-right-text">
           <span className="atm-row-time">{archived ? dateTime : time}</span>
           {archived ? (
-            <ArchiveIcon size={16} color="var(--wb-color-text-disabled, #000)" />
+            <ArchiveIcon size={16} color="var(--echo-color-text-disabled, #000)" />
           ) : (
             <RecordStatusIcon item={item} />
           )}

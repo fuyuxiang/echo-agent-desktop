@@ -2,11 +2,11 @@
 //!
 //! EchoAgent only exposes `x.ai/scheduler/delete` (deleting tasks it created itself
 //! via tool calls). It does NOT let a client create new scheduled tasks.
-//! WorkBuddy's automation panel needs create/update/list, so EchoAgent keeps
+//! EchoAgent's automation panel needs create/update/list, so EchoAgent keeps
 //! its own automation table in `~/.echo-agent/echoagent-automations.json` and a run
 //! record table in `~/.echo-agent/echoagent-automation-records.json`.
 //!
-//! Data model mirrors WorkBuddy's automation panel 1:1:
+//! Data model mirrors EchoAgent's automation panel 1:1:
 //!  - scheduleType: "recurring" | "once"
 //!  - recurring schedule: freq DAILY/WEEKLY/MONTHLY/YEARLY/HOURLY + interval
 //!    (双周 = WEEKLY interval 2; 按间隔 = HOURLY + intervalHours) + byday /

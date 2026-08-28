@@ -39,14 +39,22 @@ export function ModelSelector({
   }, [open]);
 
   const current = models.find((m) => m.id === modelId);
-  const triggerLabel = current?.label || current?.id || modelId || "Auto";
+  const hasModels = models.length > 0;
+  const triggerLabel = hasModels
+    ? current?.label || current?.id || "请选择模型"
+    : "未配置模型";
 
   return (
     <div className="model-selector" ref={ref}>
       <button
         className="model-selector__trigger"
-        onClick={() => setOpen((o) => !o)}
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((o) => !o);
+        }}
         type="button"
+        disabled={!hasModels}
+        title={!hasModels ? "请先在设置中配置模型" : undefined}
       >
         <span className="model-selector__label">{triggerLabel}</span>
         <ChevronDown size={14} strokeWidth={1.75} className="model-selector__arrow" />
@@ -64,7 +72,8 @@ export function ModelSelector({
                   "model-selector__item" +
                   (m.id === modelId ? " model-selector__item--active" : "")
                 }
-                onClick={() => {
+                onClick={(event) => {
+                  event.stopPropagation();
                   onModelChange(m.id);
                   setOpen(false);
                 }}

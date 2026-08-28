@@ -1,5 +1,5 @@
 /**
- * 命令风险检测 — 对齐 WorkBuddy `cb-chat-ui/chat-input/command-risk.ts`。
+ * 命令风险检测 — 对齐 EchoAgent `echo-chat-ui/chat-input/command-risk.ts`。
  *
  * 在工具调用渲染终端命令(run_terminal_command / bash)前,解析命令文本并标注风险等级
  * (high / medium / low)。纯函数、无副作用,便于单测。
@@ -12,7 +12,7 @@
  *  - 非 rm 命令走正则集合:`dd of=/dev/`、`mkfs`、`chmod 777 /`、`git reset --hard` 等为 high;
  *    `git branch -D`、`kill`/`killall` 等为 medium。
  *
- * 仅用于「显示警示徽章」,不拦截执行 —— 与 WorkBuddy 的标注行为一致。
+ * 仅用于「显示警示徽章」,不拦截执行 —— 与 EchoAgent 的标注行为一致。
  */
 
 export type RiskLevel = "low" | "medium" | "high";

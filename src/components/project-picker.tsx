@@ -1,7 +1,7 @@
 /**
  * 项目「连接器 / 专家 / 技能」本地占位拾取器 + 模板选项 + 配置行。
  *
- * WorkBuddy 的 +添加 走云端注册表/市场（connector registry、expert/skill picker），
+ * EchoAgent 的 +添加 走云端注册表/市场（connector registry、expert/skill picker），
  * EchoAgent 没有这些后端，故这里用本地预设候选列表做多选演示；模板下拉与列表页
  * 「从模版创建」共用 TEMPLATE_OPTIONS，保证两处一致。
  */

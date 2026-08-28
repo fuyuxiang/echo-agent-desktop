@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 import { createIcon } from "../Icon";
 
-// 来自 WorkBuddy ConnectorTabIcon - 连接器标签图标
+// 来自 EchoAgent ConnectorTabIcon - 连接器标签图标
 const PlugIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
   <svg
     ref={ref}

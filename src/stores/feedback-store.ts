@@ -1,11 +1,11 @@
 /**
- * 消息反馈 store —— 对齐 WorkBuddy `cb-chat-ui/message-feedback`。
+ * 消息反馈 store —— 对齐 EchoAgent `echo-chat-ui/message-feedback`。
  *
  * 按 `sessionId:messageId` 存反馈:thumbs up/down + 可选 1–5 星评分 + 文字备注,
  * 持久化到 localStorage(`echoagent.feedback`),使反馈跨刷新保留。纯本地、无后端
  * 上报(EchoAgent 是 BYOK,没有可上报的计费后端)。
  *
- * WorkBuddy 的 thumbs up/down 会弹出评分条 + 反馈弹窗(rating bar + 反馈文本);
+ * EchoAgent 的 thumbs up/down 会弹出评分条 + 反馈弹窗(rating bar + 反馈文本);
  * 这里用 `stars`(1–5) + `note` 复刻该完整评分能力。
  */
 import { create } from "zustand";

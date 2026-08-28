@@ -9,9 +9,9 @@ const WarnToolIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
       fill="none"
       {...props}
     >
-      <path d="M8 2L1.5 13h13L8 2z" stroke="var(--wb-status-warning)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M8 6.5v3" stroke="var(--wb-status-warning)" strokeWidth="1.2" strokeLinecap="round" />
-      <circle cx="8" cy="11" r="0.5" fill="var(--wb-status-warning)" />
+      <path d="M8 2L1.5 13h13L8 2z" stroke="var(--echo-status-warning)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 6.5v3" stroke="var(--echo-status-warning)" strokeWidth="1.2" strokeLinecap="round" />
+      <circle cx="8" cy="11" r="0.5" fill="var(--echo-status-warning)" />
     </svg>
 ));
 WarnToolIconRaw.displayName = "WarnToolIconRaw";

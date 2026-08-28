@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { EditToolIcon } from "@/foundation/components/Icon/icons";
 
 /**
- * Editable conversation title for the main topbar — mirrors WorkBuddy's
- * `workbuddy-topbar` title interaction:
+ * Editable conversation title for the main topbar — mirrors EchoAgent's
+ * `echo-agent-topbar` title interaction:
  *   - default: plain title text; a pencil button fades in on hover;
  *   - click pencil → the title swaps to an <input> with the text selected;
  *   - Enter / blur commits (empty or unchanged = no-op), Esc cancels.

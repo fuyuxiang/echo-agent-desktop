@@ -1,5 +1,5 @@
 /**
- * 右侧统一工作区面板 —— 对齐 WorkBuddy `SidebarNext / DetailPanel`。
+ * 右侧统一工作区面板 —— 对齐 EchoAgent `SidebarNext / DetailPanel`。
  *
  * 在原 3 模式（tool/artifacts/preview）基础上升级为统一工作区：
  *  - ViewSelector 下拉切换视图：产物 / 文件树 / 浏览器 / 变更
@@ -30,8 +30,8 @@ import { ArtifactTabsBar } from "./workspace-panel/ArtifactTabsBar";
 import { FileTreeView } from "./workspace-panel/FileTreeView";
 import { BrowserPreview } from "./BrowserPreview";
 import {
-  WbPinIcon,
-  WbUnpinIcon,
+  EchoPinIcon,
+  EchoUnpinIcon,
   MaximizeIcon,
   RestoreIcon,
   CloseIcon,
@@ -244,7 +244,7 @@ export function ToolSidePanel({
             aria-label={pinned ? "取消钉住" : "钉住左列"}
             aria-pressed={pinned}
           >
-            {pinned ? <WbUnpinIcon size="sm" /> : <WbPinIcon size="sm" />}
+            {pinned ? <EchoUnpinIcon size="sm" /> : <EchoPinIcon size="sm" />}
           </button>
           {!pinned && (
             <button

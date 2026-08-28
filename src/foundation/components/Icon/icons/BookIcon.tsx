@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 import { createIcon } from "../Icon";
 
-// 来自 WorkBuddy LibraryIcon - 使用 lucide-react BookOpen 图标
+// 来自 EchoAgent LibraryIcon - 使用 lucide-react BookOpen 图标
 const BookIconRaw = forwardRef<SVGSVGElement>((props, ref) => (
   <svg
     ref={ref}

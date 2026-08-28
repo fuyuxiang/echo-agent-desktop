@@ -12,7 +12,7 @@ export const HOME_DRAFT_KEY = "__home__";
 export const ASSISTANT_DRAFT_KEY = "__assistant__";
 
 /**
- * Sidebar session list — WorkBuddy-style two-section model.
+ * Sidebar session list — EchoAgent-style two-section model.
  *
  * The sidebar no longer shows a single cwd's sessions flat under one "默认空间".
  * Instead it renders two collapsible groups:

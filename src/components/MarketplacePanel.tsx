@@ -3,7 +3,7 @@
  *
  * 显示 EchoAgent 配置的所有插件市场源（marketplace sources）及其插件，
  * 支持安装/卸载/更新/刷新源 + 添加/移除源。
- * 对应 WorkBuddy 的 UnifiedMarketPage。
+ * 对应 EchoAgent 的 UnifiedMarketPage。
  *
  * 市场源配置在 ~/.echo-agent/config.toml 的 [[marketplace.sources]] 段。
  */
@@ -288,7 +288,7 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
 
       {sources.length === 0 && !loading && (
         <div className="marketplace-panel__empty">
-          <Store size={48} color="var(--wb-text-tertiary)" />
+          <Store size={48} color="var(--echo-text-tertiary)" />
           <p>暂无市场源。</p>
           <p className="marketplace-panel__hint">
             点「添加源」输入 git URL，或在 config.toml 配置 <code>[[marketplace.sources]]</code>。

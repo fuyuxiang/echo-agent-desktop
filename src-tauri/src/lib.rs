@@ -130,7 +130,7 @@ pub fn run() {
             agents_store::agents_save,
             agents_store::agents_delete,
             agents_store::agents_template,
-            // expert marketplace (live from a local WorkBuddy data dir)
+            // expert marketplace (live from a local EchoAgent data dir)
             experts::experts_default_root,
             experts::experts_list_roots,
             experts::experts_load,
@@ -138,7 +138,7 @@ pub fn run() {
             experts::experts_image_bytes,
             experts::experts_read_agent_prompt,
             experts::experts_link_agents,
-            // connector marketplace (live from a local WorkBuddy marketplace dir)
+            // connector marketplace (live from a local EchoAgent marketplace dir)
             connectors_catalog::connectors_default_root,
             connectors_catalog::connectors_list_roots,
             connectors_catalog::connectors_load,

@@ -1,5 +1,5 @@
 /**
- * 本地 token 估算 —— 对齐 WorkBuddy `credit-prediction` / `credit-estimate`
+ * 本地 token 估算 —— 对齐 EchoAgent `credit-prediction` / `credit-estimate`
  * 的「发送前成本预估」意图,但不依赖计费后端(EchoAgent 是 BYOK,无计费通道)。
  *
  * 用启发式近似计 token(不调用分词器):

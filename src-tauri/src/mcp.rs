@@ -247,7 +247,7 @@ fn build_upsert_payload(
 
 // ---------- standalone mcp.json editor (截图 6 / 7) ----------
 //
-// WorkBuddy's "MCP 服务管理" modal edits a raw `mcp.json` file (`{ "mcpServers":
+// EchoAgent's "MCP 服务管理" modal edits a raw `mcp.json` file (`{ "mcpServers":
 // { ... } }`) in a Monaco-style editor. EchoAgent itself stores MCP config in
 // `config.toml`, so we keep a *parallel* `~/.echo-agent/mcp.json` as the editor's
 // source of truth and, on save, best-effort mirror each server into EchoAgent over
@@ -369,7 +369,7 @@ pub async fn mcp_config_save(
     Ok(())
 }
 
-/// Map one standard `mcpServers.<name>` value (the shape editors like WorkBuddy
+/// Map one standard `mcpServers.<name>` value (the shape editors like EchoAgent
 /// / Claude Desktop use) onto our `McpUpsertRequest` so we can reuse the EchoAgent
 /// upsert path. Recognizes stdio (`command`) and http/sse (`url`) entries.
 fn json_to_upsert(name: &str, cfg: &serde_json::Value) -> Result<McpUpsertRequest, String> {
@@ -386,7 +386,7 @@ fn json_to_upsert(name: &str, cfg: &serde_json::Value) -> Result<McpUpsertReques
             }
             _ => "http".to_string(),
         };
-        // WorkBuddy connector manifests use `staticHeaders` (e.g. kdocs);
+        // EchoAgent connector manifests use `staticHeaders` (e.g. kdocs);
         // standard mcp.json uses `headers`. Merge both, `headers` winning.
         let mut headers = obj
             .get("staticHeaders")
@@ -452,7 +452,7 @@ fn json_to_upsert(name: &str, cfg: &serde_json::Value) -> Result<McpUpsertReques
 // DCR, PKCE, system-browser redirect + loopback callback; tokens persist to
 // `~/.echo-agent/mcp_credentials.json`). We only need to *trigger* it: the browser
 // opens from inside the EchoAgent process, and the call resolves when the flow
-// completes — mirroring workbuddy's "跳浏览器授权 + 轮询状态" UX.
+// completes — mirroring echo-agent's "跳浏览器授权 + 轮询状态" UX.
 
 /// Result of `x.ai/mcp/auth_trigger`, surfaced to the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]

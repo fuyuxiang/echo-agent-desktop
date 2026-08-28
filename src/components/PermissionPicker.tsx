@@ -85,7 +85,7 @@ export function PermissionPicker({
     <div className="permission-picker" ref={popRef}>
       <button
         type="button"
-        className="wb-composer-meta__btn"
+        className="echo-composer-meta__btn"
         onClick={() => setOpen((v) => !v)}
         title={`权限模式 · ${current.desc}`}
       >

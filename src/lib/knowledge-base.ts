@@ -1,5 +1,5 @@
 /**
- * 知识库可插拔源注册表 —— 对齐 WorkBuddy `knowledge-base-panel` 的「可插拔知识源」
+ * 知识库可插拔源注册表 —— 对齐 EchoAgent `knowledge-base-panel` 的「可插拔知识源」
  * 概念(原实现绑定腾讯 Drive/文档/乐享,不可移植;这里抽象成 provider 注册表,任意
  * 知识源(本地文件夹/网盘/文档库)都可注册)。纯函数,便于单测。
  */

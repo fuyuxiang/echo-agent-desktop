@@ -1,5 +1,5 @@
 /**
- * 拖拽文件落区集成测试 —— 对齐 WorkBuddy drop-zone。
+ * 拖拽文件落区集成测试 —— 对齐 EchoAgent drop-zone。
  *
  * Tauri 的 `getCurrentWebview().onDragDropEvent` 在 vitest 下不存在,这里用一个
  * mock:捕获注册的 handler,测试代码手动派发 enter/drop/leave 事件,验证 Composer

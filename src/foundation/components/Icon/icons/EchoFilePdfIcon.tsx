@@ -1,4 +1,4 @@
 import { FileText } from "lucide-react";
 import { createIcon } from "../Icon";
 
-export const WbFileTxtIcon = createIcon(FileText, { strokeWidth: 1.5 });
+export const EchoFilePdfIcon = createIcon(FileText, { strokeWidth: 1.5 });

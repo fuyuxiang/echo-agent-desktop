@@ -38,6 +38,13 @@ describe("formatAgentError", () => {
     expect(result).toContain("认证失败");
   });
 
+  it("parses ACP internal errors whose Rust data is a String", () => {
+    const raw = `Error { code: -32603: Internal error, message: "Internal error", data: Some(String("API request failed with status 401 Unauthorized: missing credentials for grok-4.6")) }`;
+    const result = formatAgentError(raw);
+    expect(result).toContain("认证失败");
+    expect(result).not.toContain("Internal error");
+  });
+
   it("handles connection error", () => {
     const raw = JSON.stringify({
       data: { message: "connection refused: ECONNREFUSED" },

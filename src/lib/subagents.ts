@@ -1,5 +1,5 @@
 /**
- * Subagent / Team runtime 派生纯函数 —— 对齐 WorkBuddy
+ * Subagent / Team runtime 派生纯函数 —— 对齐 EchoAgent
  * `session:getSubagentList` / `getTeamRuntime` / `team-runtime`。
  *
  * EchoAgent 的 EchoAgent 内核通过 `spawn_subagent` 工具调用派生子 agent。这里从会话消息的

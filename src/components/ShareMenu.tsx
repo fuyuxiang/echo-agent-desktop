@@ -1,5 +1,5 @@
 /**
- * 分享 / 导出菜单 —— 对齐 WorkBuddy `share:*`(导出对话 / 分享链接)。
+ * 分享 / 导出菜单 —— 对齐 EchoAgent `share:*`(导出对话 / 分享链接)。
  *
  * EchoAgent 本地导出(markdown/html/text 下载 + mailto 分享意图),不上传云端。
  * 由 ChatView 顶栏「分享」按钮触发。

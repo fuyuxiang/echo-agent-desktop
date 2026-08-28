@@ -1,7 +1,7 @@
 /**
- * 助理面板 — 1:1 复刻 WorkBuddy colleagues-panel
+ * 助理面板 — 1:1 复刻 EchoAgent colleagues-panel
  *
- * UI 结构对齐 WorkBuddy:
+ * UI 结构对齐 EchoAgent:
  *  - dashboard 模式: 顶部 section-header + 卡片网格
  *  - colleague-card: 头像(带状态指示灯) + 名称 + 角色标签 + 描述 + 对话按钮
  *  - 右键/三点菜单: 编辑 / 删除
@@ -464,7 +464,7 @@ function ColleagueProfile({
 }
 
 // ============================================================
-// Create Colleague Dialog (对齐 WB CreateColleagueDialog)
+// Create Colleague Dialog (对齐 EchoAgent CreateColleagueDialog)
 // ============================================================
 
 interface EditorDraft {

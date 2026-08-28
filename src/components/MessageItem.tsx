@@ -24,7 +24,7 @@ function stripPersona(text: string): string {
  * Renders one chat message. Assistant messages are left-aligned with avatar +
  * name row; user messages are right-aligned bubbles with no avatar / name.
  *
- * Hover action bar (对齐 WorkBuddy):
+ * Hover action bar (对齐 EchoAgent):
  *  - user: 复制 / 编辑重发
  *  - assistant: 复制 / 复制 Markdown
  */
@@ -125,8 +125,8 @@ export function MessageItem({
     <div className="msg msg--assistant">
       <div>
         <div className="msg__header">
-          <span className="msg__avatar">B</span>
-          <span className="msg__name">Buddy</span>
+          <span className="msg__avatar">E</span>
+          <span className="msg__name">EchoAgent</span>
           {/* Hover actions — inline in header for assistant messages */}
           {message.complete && (
             <div className="msg__actions msg__actions--inline">
@@ -166,7 +166,7 @@ export function MessageItem({
           {/* Placeholder state: the assistant message exists but no content
               has streamed in yet. Render the avatar (header above) + the
               shimmering "preparing / waiting for model" loading row with a
-              rotating tip — mirrors WorkBuddy's pending-assistant view. */}
+              rotating tip — mirrors EchoAgent's pending-assistant view. */}
           {message.parts.length === 0 && !message.complete && <LoadingRow />}
           {message.parts.map((p, i) => {
             if (p.kind === "text") {
@@ -219,7 +219,7 @@ export function MessageItem({
 }
 
 /**
- * 反馈按钮(👍/👎)—— 对齐 WorkBuddy message-feedback。
+ * 反馈按钮(👍/👎)—— 对齐 EchoAgent message-feedback。
  *
  * 本地持久化(toggle:再点同向取消)。无后端上报(EchoAgent 是 BYOK,无可上报通道)。
  * 选中的方向高亮(填充),未选中保持描边。
@@ -236,7 +236,7 @@ function FeedbackButtons({
   );
   const setRating = useFeedbackStore((s) => s.setRating);
   const current = entry?.rating ?? null;
-  // 点赞/踩:记录方向并打开完整评分弹窗(对齐 WorkBuddy rating bar + 弹窗)。
+  // 点赞/踩:记录方向并打开完整评分弹窗(对齐 EchoAgent rating bar + 弹窗)。
   const [dialogOpen, setDialogOpen] = useState<FeedbackRating | null>(null);
   const click = (r: FeedbackRating) => {
     // 再点已选中方向 → 取消(不弹窗)。

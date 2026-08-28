@@ -1,5 +1,5 @@
 /**
- * 辅助侧边栏（Secondary Sidebar）— 对齐 WorkBuddy 的 peek-assistant 面板。
+ * 辅助侧边栏（Secondary Sidebar）— 对齐 EchoAgent 的 peek-assistant 面板。
  *
  * 功能：
  *  - 右侧垂直触发条（收起态），hover 浮出助理列表
@@ -12,9 +12,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentsList } from "@/lib/agent-client";
 import type { AgentEntry } from "@/lib/types";
-import { WbAssistantNavIcon, ChevronRightIcon } from "@/foundation/components/Icon/icons";
+import { EchoAssistantNavIcon, ChevronRightIcon } from "@/foundation/components/Icon/icons";
 
-// ---- hover-peek timing (mirrors WorkBuddy use-hover-peek) ----
+// ---- hover-peek timing (mirrors EchoAgent use-hover-peek) ----
 const ENTER_DELAY_MS = 100;
 const TRIGGER_LEAVE_DELAY_MS = 300;
 const FLOATING_LEAVE_DELAY_MS = 300;
@@ -160,7 +160,7 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
       {/* Trigger rail — always visible on the right edge */}
       <div className="secondary-sidebar__trigger" {...triggerBindings}>
         <div className="secondary-sidebar__trigger-icon">
-          <WbAssistantNavIcon size="md" />
+          <EchoAssistantNavIcon size="md" />
         </div>
         <div className="secondary-sidebar__trigger-label">助理</div>
         <ChevronRightIcon size="sm" className="secondary-sidebar__trigger-chevron" />

@@ -1,10 +1,10 @@
 /**
- * 分享 / 导出链接模式 —— 对齐 WorkBuddy `share:*`(share a conversation/artifact
+ * 分享 / 导出链接模式 —— 对齐 EchoAgent `share:*`(share a conversation/artifact
  * via link or downloadable file)。可移植部分:生成可分享的载荷(markdown / 自包含
  * HTML)、构造下载用 blob: URL、构造 mailto / Web Share 意图 URL。
  *
  * EchoAgent 是本地桌面应用,没有云端 share 后端,因此只做「本地导出 + 系统分享意图」,
- * 不上传任何内容(对应 WorkBuddy `share:uploadFile/createLink` 的云上传部分不移植)。
+ * 不上传任何内容(对应 EchoAgent `share:uploadFile/createLink` 的云上传部分不移植)。
  * 纯函数 + 依赖注入(URL / navigator),便于单测。
  */
 import { buildSessionMarkdown, sanitizeFilename } from "./export-markdown";

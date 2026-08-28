@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { WbPinIcon } from "@/foundation/components/Icon/icons";
+import { EchoPinIcon } from "@/foundation/components/Icon/icons";
 
 export function PinnedSection() {
   const [pinnedSessions, setPinnedSessions] = useState([
@@ -29,7 +29,7 @@ export function PinnedSection() {
               onClick={() => handleUnpin(session.id)}
               title="取消置顶"
             >
-              <WbPinIcon size={14} />
+              <EchoPinIcon size={14} />
             </button>
           </div>
         ))}
