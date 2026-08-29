@@ -42,6 +42,7 @@ import { APP_VERSION } from "@/lib/app-version";
 const NAV = [
   { label: "助理", icon: EchoAssistantNavIcon },
   { label: "项目", icon: EchoProjectNavIcon },
+  { label: "组织记忆", icon: MoreMenuImaKnowledgeIcon },
   { label: "专家·技能·连接器", icon: EchoExpertNavIcon },
   { label: "自动化", icon: EchoAutomationNavIcon },
 ];

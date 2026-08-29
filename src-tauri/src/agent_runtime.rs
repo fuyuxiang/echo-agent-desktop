@@ -262,6 +262,13 @@ pub async fn new_session(tx: &AcpAgentTx, cwd: &Path, model_id: Option<&str>) ->
             url,
         )));
     }
+    if let Some((url, token)) = crate::org_mcp::server_config() {
+        servers.push(acp::McpServer::Http(
+            acp::McpServerHttp::new(crate::org_mcp::MCP_SERVER_NAME, url).headers(vec![
+                acp::HttpHeader::new(crate::org_mcp::AUTH_HEADER, token),
+            ]),
+        ));
+    }
     let mut req = acp::NewSessionRequest::new(cwd.to_path_buf()).mcp_servers(servers);
     if let Some(mid) = model_id.filter(|s| !s.is_empty()) {
         let meta = serde_json::json!({ "modelId": mid });

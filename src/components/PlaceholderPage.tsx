@@ -15,6 +15,7 @@ import { UsageQuotaPanel } from "./UsageQuotaPanel";
 import { NotifyChannelsPanel } from "./NotifyChannelsPanel";
 import { PolicySettingsPanel } from "./PolicySettingsPanel";
 import { CloudStoragePanel } from "./CloudStoragePanel";
+import { OrganizationMemoryPanel } from "./OrganizationMemoryPanel";
 import type { AgentEntry } from "@/lib/types";
 import type { ModelOption } from "./ModelSelector";
 import type { ProjectMeta } from "@/stores/projects-store";
@@ -102,6 +103,10 @@ export function PlaceholderPage({
         onStartProjectConversation={onStartProjectConversation}
       />
     );
+  }
+
+  if (label === "组织记忆") {
+    return <OrganizationMemoryPanel onToast={onToast} />;
   }
 
   if (label === "专家·技能·连接器") {

@@ -258,6 +258,7 @@ pub async fn agent_new_session(
     // Team MCP server 已随 new_session 参数注入本会话；这里再异步持久化到
     // config.toml（一次即可），让 load_session 恢复的会话也能用。
     crate::team_mcp::persist_registration(&tx, &session_id);
+    crate::org_mcp::persist_registration(&tx, &session_id);
     Ok(session_id)
 }
 
@@ -279,6 +280,7 @@ pub async fn agent_load_session(
     // 恢复的会话从 config.toml 读 MCP 列表 —— 若端口较上次运行漂移，这里
     // 的 upsert 会用当前 URL 刷新并 live 重连（EchoAgent 的 toggle 路径）。
     crate::team_mcp::persist_registration(&tx, &session_id);
+    crate::org_mcp::persist_registration(&tx, &session_id);
     Ok(())
 }
 
