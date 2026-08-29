@@ -61,10 +61,14 @@ base64 = "0.22"
 open = "5"
 # Fetch available models from a provider's /models endpoint (multi-model setup).
 # rustls-tls avoids a native OpenSSL dependency on Windows.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "multipart"] }
 quick-xml = "0.38"
 url = "2.5"
 urlencoding = "2.1"
+# Enterprise Skill sync: package digest/signature verification and safe ZIP extraction.
+sha2 = "0.10"
+ed25519-dalek = "2.2"
+zip = { version = "3", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"

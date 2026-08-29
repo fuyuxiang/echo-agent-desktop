@@ -18,6 +18,8 @@ mod ext;
 mod mcp;
 mod meta;
 mod notifications;
+mod org;
+mod org_mcp;
 mod paths;
 mod permission_config;
 mod policy;
@@ -41,10 +43,14 @@ pub fn run() {
     if let Err(error) = paths::initialize_runtime_home() {
         tracing::error!(%error, "failed to initialize EchoAgent runtime home");
     }
+    // 离线租约过期时在 Agent Runtime 启动前移除受管 Skill 注入，
+    // 避免已撤权的长期离线客户继续加载企业能力。
+    org::enforce_skill_lease();
 
     // Team MCP server（127.0.0.1 streamable-http）：同步 bind 后台 accept。
     // 必须在任何 new_session 之前 —— 端口即刻写入 BOUND_PORT 供传参。
     team_mcp::serve();
+    org_mcp::serve();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -52,6 +58,7 @@ pub fn run() {
         .manage(AppState::default())
         .manage(Permissions::new())
         .manage(Questions::new())
+        .manage(org::shared_state())
         .invoke_handler(tauri::generate_handler![
             // session lifecycle
             commands::agent_init,
@@ -108,6 +115,23 @@ pub fn run() {
             skills::skills_add,
             skills::skills_remove,
             skills::skills_toggle,
+            // organization server connection, RAG, documents, and managed Skills
+            org::org_login,
+            org::org_logout,
+            org::org_session,
+            org::org_bootstrap,
+            org::org_list_scopes,
+            org::org_submit_document,
+            org::org_document_submissions_mine,
+            org::org_list_documents,
+            org::org_document_status,
+            org::org_fetch_document,
+            org::org_list_skills,
+            org::org_submit_skill,
+            org::org_skill_submissions_mine,
+            org::org_sync_skills,
+            org::org_ask_start,
+            org::org_ask_cancel,
             // connectors / MCP (x.ai/mcp/*)
             mcp::mcp_list,
             mcp::mcp_upsert,
