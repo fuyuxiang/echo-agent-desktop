@@ -2641,6 +2641,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
+ "ed25519-dalek",
  "futures",
  "image",
  "open",
@@ -2650,6 +2651,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -2670,6 +2672,7 @@ dependencies = [
  "xai-tool-protocol",
  "xai-tool-runtime",
  "xai-tool-types",
+ "zip 3.0.0",
 ]
 
 [[package]]
@@ -14659,6 +14662,7 @@ dependencies = [
  "flate2",
  "indexmap 2.14.0",
  "memchr",
+ "zopfli",
 ]
 
 [[package]]
