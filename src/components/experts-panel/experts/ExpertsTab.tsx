@@ -8,7 +8,6 @@ import {
   expertsDefaultRoot, expertsLoad, expertsReadAgentPrompt, expertsLinkAgents,
 } from "@/lib/agent-client";
 import type { AgentEntry, ExpertCatalog, ExpertItem, FeaturedScene } from "@/lib/types";
-import { FEATURED_SCENES } from "../data/featured-scenes";
 import { Chip, SegmentTabs } from "../shared/ui";
 import { ExpertCard } from "./ExpertCard";
 import { ExpertDetailModal } from "./ExpertDetailModal";
@@ -90,18 +89,15 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
     [catalog],
   );
 
-  // Scenes: prefer the catalog's local featuredScenes.json; fall back to the
-  // curated gradient scenes. Drop any scene with no resolvable expert.
+  // 仅展示专家目录中真实存在的 featuredScenes.json 数据。
   const scenes = useMemo<FeaturedScene[]>(() => {
-    const fromCatalog = (catalog?.featuredScenes ?? []).map((s) => ({
+    return (catalog?.featuredScenes ?? []).map((s) => ({
       id: s.id,
       zh: s.zh,
       expertIds: s.expertIds,
       imageLocal: s.imageLocal,
       image: s.imageUrl,
-    } as FeaturedScene));
-    const pool = fromCatalog.length > 0 ? fromCatalog : FEATURED_SCENES;
-    return pool.filter((s) => s.expertIds.some((id) => expertById.has(id)));
+    } as FeaturedScene)).filter((s) => s.expertIds.some((id) => expertById.has(id)));
   }, [catalog, expertById]);
 
   const byType = useMemo(

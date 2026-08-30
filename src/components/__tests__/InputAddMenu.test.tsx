@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/agent-client", () => ({
@@ -13,6 +13,15 @@ vi.mock("@/lib/agent-client", () => ({
 import { InputAddMenu } from "../InputAddMenu";
 
 describe("InputAddMenu", () => {
+  it("不展示内置模式入口", async () => {
+    render(<InputAddMenu onPickFiles={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    });
+    expect(screen.queryByText("模式")).toBeNull();
+  });
+
   it("连接器子菜单只展示后端实际启用的 MCP 服务", async () => {
     const onNavigateConnectors = vi.fn();
     render(

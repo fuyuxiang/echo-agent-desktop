@@ -39,7 +39,6 @@ import {
   stopNativeVoice,
   subscribeNativeVoice,
 } from "@/lib/native-voice";
-import type { HomeModeId } from "./home-scenes";
 import type { AgentEntry } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 
@@ -84,7 +83,6 @@ export function Composer({
   draft,
   draftKey,
   onDraftChange,
-  onSelectMode,
   onSelectExpert,
   onSelectSkill,
   onNavigateConnectors,
@@ -148,8 +146,6 @@ export function Composer({
   draftKey?: string | number;
   /** 用户输入时回调,父组件据此把草稿写回 store。 */
   onDraftChange?: (text: string) => void;
-  /** 加号菜单:选择模式(日常办公/代码开发/设计创意)。 */
-  onSelectMode?: (modeId: HomeModeId) => void;
   /** 加号菜单:选择专家。 */
   onSelectExpert?: (agent: AgentEntry) => void;
   /** 加号菜单:选择技能(插入 /skillName)。 */
@@ -757,7 +753,6 @@ export function Composer({
         <div className="echo-composer__footer">
           <InputAddMenu
             onPickFiles={pickFiles}
-            onSelectMode={onSelectMode}
             onSelectExpert={onSelectExpert}
             onSelectSkill={(name) => {
               onSelectSkill?.(name);
