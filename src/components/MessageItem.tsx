@@ -7,7 +7,7 @@ import { useTheme } from "./ThemeProvider";
 import { useFeedbackStore, type FeedbackRating } from "@/stores/feedback-store";
 import type { ChatMessage, ToolCallView } from "@/stores/session-store";
 import { EXPERT_PERSONA_BEGIN, EXPERT_PERSONA_END } from "@/App";
-import logoMarkUrl from "@/assets/logo-mark.svg";
+const logoMarkUrl = "/app-icon.png";
 import {
   createWebSpeechTtsProvider,
   getActiveTts,

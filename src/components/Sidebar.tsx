@@ -38,7 +38,7 @@ import {
   CloudToolIcon,
   PluginsIcon,
 } from "@/foundation/components/Icon/icons";
-import logoMarkUrl from "@/assets/logo-mark.svg";
+const logoMarkUrl = "/app-icon.png";
 
 const NAV = [
   { label: "项目", icon: EchoProjectNavIcon },
