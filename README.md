@@ -64,6 +64,7 @@ EchoAgent 将模型 API 转化为真正可落地的桌面 Agent 工作环境。�
 | **知识与记忆** | 持久化记忆管理、本地文件夹知识源、可复用项目上下文和助理定义。 |
 | **自动化** | 单次或周期性本地调度、执行记录、连接器选择，以及自动化任务级权限模式。 |
 | **外部集成** | WebDAV 存储，以及系统桌面、Slack、Discord 和通用 Webhook 通知。 |
+| **通知中心** | 智能体邮箱聚合权限请求、文件夹信任、任务更新、计划模式、MCP 状态、会话完成等所有事件，支持浏览、筛选、标记已读与清空。 |
 | **安全与策略** | 行内权限审批、文件夹信任、权限规则、可配置执行模式，以及模型和功能策略控制。 |
 
 ## 快速开始
@@ -87,7 +88,7 @@ EchoAgent 将模型 API 转化为真正可落地的桌面 Agent 工作环境。�
 | Protocol Buffers | 系统 `PATH` 中可用的原生 `protoc`，或通过 `PROTOC` 环境变量指定。 |
 | 平台工具链 | macOS：Xcode Command Line Tools。Windows：Visual Studio 2022 Build Tools，并安装 **Desktop development with C++** 工作负载和 Windows SDK。 |
 
-内嵌 Runtime 以固定版本的 Git Submodule 引入。请递归克隆仓库并执行 Setup 脚本，以确保使用正确的上游版本并应用兼容性补丁。
+内嵌 Runtime 以固定版本的 Git Submodule 引入。请递归克隆仓库并执行 Setup 脚本，以确保使用正确的上游版本并应用兼容性补丁。Setup 脚本会同步子模块到 `patches/grok-build/` 中记录的修订，并 `git apply` 项目维护的 patch；如果跳过 Setup 直接编译，会因为补丁未应用而出现构建错误。
 
 **macOS**
 
@@ -162,6 +163,12 @@ EchoAgent 默认将应用状态保存在 `~/.echo-agent/`。如需修改数据�
 - 模型、MCP、WebDAV 和通知流量只会发往你主动配置的服务，使用项目无需 EchoAgent 托管账户。
 - 工具执行可能读取文件、修改文件或运行命令。处理不完全可信的仓库或数据时，请使用权限规则和受限模式。
 - 不要将 `~/.echo-agent/config.toml`、复制出的凭证或 Runtime 状态提交到版本控制。
+
+### 数据迁移
+
+首次启动时，EchoAgent 会一次性从旧版数据目录 `~/.grok/` 把缺失的文件和目录复制到 `~/.echo-agent/`，再写入 `.legacy-data-migrated` 标记避免重复执行。整个过程只会复制新位置还没有的文件，**绝不会覆盖** `~/.echo-agent/` 中已有的内容，旧目录也保持原样，便于回滚。
+
+如果同时设置了 `ECHO_AGENT_HOME` 和 `GROK_HOME`，迁移源会指向 `GROK_HOME` 指向的目录；嵌入式 Runtime 启动时也会被改写为使用 `ECHO_AGENT_HOME` 对应的路径，避免后续写入落到旧位置。
 
 ## 技术架构
 
@@ -262,7 +269,7 @@ CI 会在每个 Pull Request 上执行 TypeScript 类型检查、前端单元测
 <details>
 <summary><strong>是否支持 Linux？</strong></summary>
 
-项目目前尚未维护 Linux 安装包。前端和大部分 Rust 代码具备可移植性，但桌面集成与打包仍需要针对 Linux 完成适配和验证。
+项目目前尚未维护 Linux 安装包。前端和大部分 Rust 代码已具备可移植性 —— `tauri-plugin-autostart` 等核心依赖在 macOS、Windows、Linux 三个目标上同时启用，构建脚本与配置层也已对 Linux 做好准备。但文件对话框、系统通知与打包流水线仍需要针对 Linux 完成适配和验证，欢迎在具备环境后提交补丁。
 
 </details>
 
