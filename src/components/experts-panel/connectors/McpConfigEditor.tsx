@@ -64,9 +64,12 @@ export function McpConfigEditor({
     try {
       // Pass the live session (when any) so EchoAgent applies the entries now;
       // without one the file is still saved for the next sync.
-      await mcpConfigSave(content, useSessionStore.getState().sessionId ?? undefined);
+      const result = await mcpConfigSave(content, useSessionStore.getState().sessionId ?? undefined);
       setOriginal(content);
-      onToast?.("已保存，正在同步到 MCP 服务…");
+      const summary = result.appliedLive
+        ? `已保存并热加载 ${result.serverCount} 个 MCP 服务`
+        : `已保存 ${result.serverCount} 个 MCP 服务`;
+      onToast?.(result.warnings.length > 0 ? `${summary}；${result.warnings[0]}` : summary);
       onSaved?.();
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));

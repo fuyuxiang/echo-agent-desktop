@@ -28,6 +28,7 @@ mod providers;
 mod session_title;
 mod sessions;
 mod shell_fs;
+mod skill_installer;
 mod skills;
 mod skills_catalog;
 mod storage;
@@ -177,6 +178,9 @@ pub fn run() {
             skills::skills_add,
             skills::skills_remove,
             skills::skills_toggle,
+            skill_installer::skills_inspect_package,
+            skill_installer::skills_install_package,
+            skill_installer::skills_uninstall_package,
             // organization server connection, RAG, documents, and managed Skills
             org::org_login,
             org::org_logout,
@@ -208,6 +212,8 @@ pub fn run() {
             mcp::mcp_upsert,
             mcp::mcp_delete,
             mcp::mcp_toggle,
+            mcp::mcp_setup,
+            mcp::mcp_toggle_tool,
             mcp::mcp_config_path,
             mcp::mcp_config_read,
             mcp::mcp_config_save,

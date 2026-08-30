@@ -25,6 +25,8 @@ import type {
   McpAuthStatusEntry,
   McpAuthTriggerResult,
   McpConfigFile,
+  McpConfigSaveResult,
+  McpMutationResult,
   McpServerEntry,
   McpUpsertRequest,
   MemoryEntry,
@@ -41,6 +43,8 @@ import type {
   SessionUsage,
   SkillCatalog,
   SkillInfo,
+  SkillInstallResult,
+  SkillPackageInspection,
   SlashCommand,
   SubagentLiveEvent,
   TurnErrorEvent,
@@ -401,28 +405,72 @@ export async function skillsToggle(name: string, enabled: boolean): Promise<void
   await invoke<void>("skills_toggle", { name, enabled });
 }
 
+/** Validate a folder, Markdown file, or ZIP without installing it. */
+export async function skillsInspectPackage(path: string): Promise<SkillPackageInspection> {
+  return invoke<SkillPackageInspection>("skills_inspect_package", { path });
+}
+
+/** Safely copy and atomically install/update a package under ~/.echo-agent/skills. */
+export async function skillsInstallPackage(
+  path: string,
+  approveHighRisk = false,
+): Promise<SkillInstallResult> {
+  return invoke<SkillInstallResult>("skills_install_package", { path, approveHighRisk });
+}
+
+/** Remove an EchoAgent-managed package. External/project skills are never deleted. */
+export async function skillsUninstallPackage(path: string): Promise<void> {
+  await invoke<void>("skills_uninstall_package", { path });
+}
+
 // ---------- connectors / MCP (x.ai/mcp/*) ----------
 
 /** List configured MCP servers. Pass the live sessionId to enrich entries
  *  with session state (EchoAgent's list accepts it optionally). */
-export async function mcpList(sessionId?: string): Promise<McpServerEntry[]> {
-  return invoke<McpServerEntry[]>("mcp_list", { sessionId: sessionId ?? null });
+export async function mcpList(sessionId?: string, refresh = false): Promise<McpServerEntry[]> {
+  return invoke<McpServerEntry[]>("mcp_list", { sessionId: sessionId ?? null, refresh });
 }
 
-/** Add or update an MCP server. EchoAgent's upsert is session-scoped — a live
- *  sessionId is required. */
-export async function mcpUpsert(sessionId: string, server: McpUpsertRequest): Promise<void> {
-  await invoke<void>("mcp_upsert", { sessionId, server });
+/** Add or update an MCP server. Without a session it is persisted for the next
+ *  session; with one it is also hot-applied. */
+export async function mcpUpsert(
+  sessionId: string | undefined,
+  server: McpUpsertRequest,
+): Promise<McpMutationResult> {
+  return invoke<McpMutationResult>("mcp_upsert", { sessionId: sessionId ?? null, server });
 }
 
 /** Delete an MCP server by name. */
-export async function mcpDelete(sessionId: string, name: string): Promise<void> {
-  await invoke<void>("mcp_delete", { sessionId, name });
+export async function mcpDelete(sessionId: string | undefined, name: string): Promise<McpMutationResult> {
+  return invoke<McpMutationResult>("mcp_delete", { sessionId: sessionId ?? null, name });
 }
 
 /** Enable or disable an MCP server at runtime. */
-export async function mcpToggle(sessionId: string, name: string, enabled: boolean): Promise<void> {
-  await invoke<void>("mcp_toggle", { sessionId, name, enabled });
+export async function mcpToggle(
+  sessionId: string | undefined,
+  name: string,
+  enabled: boolean,
+): Promise<McpMutationResult> {
+  return invoke<McpMutationResult>("mcp_toggle", { sessionId: sessionId ?? null, name, enabled });
+}
+
+/** Complete a Runtime-provided connector setup schema in a live session. */
+export async function mcpSetup(
+  sessionId: string,
+  name: string,
+  values: Record<string, string>,
+): Promise<void> {
+  await invoke<void>("mcp_setup", { sessionId, name, values });
+}
+
+/** Enable or disable one MCP tool in the active session. */
+export async function mcpToggleTool(
+  sessionId: string,
+  serverName: string,
+  toolName: string,
+  enabled: boolean,
+): Promise<void> {
+  await invoke<void>("mcp_toggle_tool", { sessionId, serverName, toolName, enabled });
 }
 
 /** Resolved absolute path of the standalone mcp.json (for the editor header). */
@@ -437,8 +485,8 @@ export async function mcpConfigRead(): Promise<McpConfigFile> {
 
 /** Validate + write the standalone mcp.json. When a sessionId is given each
  *  server is also synced live into EchoAgent (its upsert is session-scoped). */
-export async function mcpConfigSave(content: string, sessionId?: string): Promise<void> {
-  await invoke<void>("mcp_config_save", { content, sessionId: sessionId ?? null });
+export async function mcpConfigSave(content: string, sessionId?: string): Promise<McpConfigSaveResult> {
+  return invoke<McpConfigSaveResult>("mcp_config_save", { content, sessionId: sessionId ?? null });
 }
 
 // ---------- MCP OAuth authorization (x.ai/mcp/auth_*) ----------
@@ -456,6 +504,11 @@ export async function mcpAuthTrigger(
 /** List servers EchoAgent has flagged `needs_auth` for this session. */
 export async function mcpAuthStatus(sessionId: string): Promise<McpAuthStatusEntry[]> {
   return invoke<McpAuthStatusEntry[]>("mcp_auth_status", { sessionId });
+}
+
+/** Subscribe to Runtime MCP handshake/health changes. */
+export function onMcpStatusEvent(cb: (payload: unknown) => void): Promise<UnlistenFn> {
+  return listen<unknown>("agent://mcp-status", (event) => cb(event.payload));
 }
 
 // ---------- CLI-type connector authorization (cli.json driven) ----------
