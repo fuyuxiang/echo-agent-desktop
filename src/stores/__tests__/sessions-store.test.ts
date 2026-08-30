@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   useSessionsStore,
   HOME_DRAFT_KEY,
-  ASSISTANT_DRAFT_KEY,
 } from "../sessions-store";
 
 /**
@@ -72,13 +71,9 @@ describe("sessions-store drafts", () => {
     expect(useSessionsStore.getState().drafts.s1).toBeUndefined();
   });
 
-  it("哨兵 key (__home__ / __assistant__) 与普通 key 行为一致", () => {
+  it("首页哨兵 key (__home__) 与普通 key 行为一致", () => {
     useSessionsStore.getState().setDraft(HOME_DRAFT_KEY, "首页草稿");
-    useSessionsStore.getState().setDraft(ASSISTANT_DRAFT_KEY, "助理草稿");
     expect(useSessionsStore.getState().drafts[HOME_DRAFT_KEY]).toBe("首页草稿");
-    expect(useSessionsStore.getState().drafts[ASSISTANT_DRAFT_KEY]).toBe(
-      "助理草稿",
-    );
     useSessionsStore.getState().clearDraft(HOME_DRAFT_KEY);
     expect(useSessionsStore.getState().drafts[HOME_DRAFT_KEY]).toBeUndefined();
   });

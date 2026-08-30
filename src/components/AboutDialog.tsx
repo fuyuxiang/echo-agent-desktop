@@ -8,8 +8,7 @@ import { XCloseIcon, CheckIcon } from "@/foundation/components/Icon/icons";
 import { agentAuthStatus } from "@/lib/agent-client";
 import type { InitResult } from "@/lib/agent-client";
 import { APP_VERSION } from "@/lib/app-version";
-
-const LOGO_URL = "/app-icon.png";
+import logoMarkUrl from "@/assets/logo-mark.svg";
 const RUNTIME_LABEL = "EchoAgent Runtime（内置）";
 
 interface AboutDialogProps {
@@ -47,7 +46,7 @@ export function AboutDialog({ open, onClose, init }: AboutDialogProps) {
         </button>
         <div className="about-dialog__header">
           <img
-            src={LOGO_URL}
+            src={logoMarkUrl}
             alt="EchoAgent"
             className="about-dialog__logo"
             width={48}

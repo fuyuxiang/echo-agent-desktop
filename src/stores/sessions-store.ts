@@ -4,12 +4,9 @@ import type { WorkspaceInfo } from "@/lib/agent-client";
 
 /**
  * Sentinel draft keys for sessions that don't have a real sessionId yet.
- * Used when the user is typing on HomePage ("新建任务") or LocalAssistantView
- * before any session has been created. Kept here so callers don't hardcode
- * magic strings.
+ * Used when the user is typing on HomePage before a session has been created.
  */
 export const HOME_DRAFT_KEY = "__home__";
-export const ASSISTANT_DRAFT_KEY = "__assistant__";
 
 /**
  * Sidebar session list — EchoAgent-style two-section model.
@@ -57,9 +54,7 @@ interface SessionsState {
    * Per-session Composer drafts (unsent textarea text), keyed by sessionId.
    * UI-only state: EchoAgent has no concept of "user hasn't pressed send yet", so
    * we keep it here the same way we keep pinned/archived (see meta.rs).
-   * Two sentinel keys cover sessions that don't have an id yet:
-   *   - `__home__`      HomePage ("新建任务") input
-   *   - `__assistant__` LocalAssistantView input
+   * The `__home__` sentinel covers the HomePage ("新建任务") input.
    */
   drafts: Record<string, string>;
 

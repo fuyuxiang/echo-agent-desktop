@@ -20,8 +20,12 @@ import { ConnectorTokenForm } from "./ConnectorTokenForm";
 import { ConnectorAuthModal } from "./ConnectorAuthModal";
 import { ConnectorQrModal } from "./ConnectorQrModal";
 import { McpModal } from "./McpModal";
-
-const LS_ROOT = "connectorsRoot";
+import {
+  clearCatalogRoot,
+  isLegacyWorkBuddyPath,
+  readCatalogRoot,
+  writeCatalogRoot,
+} from "@/lib/catalog-root-storage";
 
 interface Props {
   pills: React.ReactNode;
@@ -63,9 +67,7 @@ function nameMatches(name: string, c: ConnectorItem): boolean {
  *  EchoAgent connectors marketplace. Cards open a detail modal; connect goes
  *  through per-kind auth flows (token form / EchoAgent browser OAuth / CLI QR). */
 export function ConnectorsTab({ pills, onToast }: Props) {
-  const [root, setRoot] = useState<string>(() => {
-    try { return localStorage.getItem(LS_ROOT) || ""; } catch { return ""; }
-  });
+  const [root, setRoot] = useState<string>(() => readCatalogRoot("connectors"));
   const [catalog, setCatalog] = useState<ConnectorCatalog | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -96,15 +98,20 @@ export function ConnectorsTab({ pills, onToast }: Props) {
    *  success toast when the dangling promise eventually resolves). */
   const oauthDismissedRef = useRef(false);
 
-  const persist = (r: string) => { try { localStorage.setItem(LS_ROOT, r); } catch { /* ignore */ } };
-
   const loadCatalog = useCallback(async (r: string): Promise<boolean> => {
+    if (isLegacyWorkBuddyPath(r)) {
+      clearCatalogRoot("connectors");
+      setRoot("");
+      setCatalog(null);
+      setError("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
+      return false;
+    }
     setLoading(true); setError(""); setNeedPick(false);
     try {
       const c = await connectorsLoad(r);
       setCatalog(c);
       setRoot(c.root || r);
-      persist(c.root || r);
+      writeCatalogRoot("connectors", c.root || r);
       return true;
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
@@ -119,12 +126,21 @@ export function ConnectorsTab({ pills, onToast }: Props) {
   useEffect(() => {
     let disposed = false;
     (async () => {
-      if (root) { loadCatalog(root); return; }
+      if (root) {
+        const loaded = await loadCatalog(root);
+        if (disposed || loaded) return;
+        clearCatalogRoot("connectors");
+        setRoot("");
+      }
       try {
         const d = await connectorsDefaultRoot();
         if (disposed) return;
-        if (d) loadCatalog(d);
-        else setNeedPick(true);
+        if (d && !isLegacyWorkBuddyPath(d)) {
+          const loaded = await loadCatalog(d);
+          if (!disposed && !loaded) setNeedPick(true);
+        } else {
+          setNeedPick(true);
+        }
       } catch {
         if (!disposed) setNeedPick(true);
       }
@@ -213,6 +229,10 @@ export function ConnectorsTab({ pills, onToast }: Props) {
       });
       const pick = Array.isArray(sel) ? sel[0] : sel;
       if (!pick) return;
+      if (isLegacyWorkBuddyPath(pick)) {
+        onToast?.("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
+        return;
+      }
       if (await loadCatalog(pick)) onToast?.(`已切换连接器数据目录：${pick}`);
     } catch { /* cancelled */ }
   }, [root, loadCatalog, onToast]);

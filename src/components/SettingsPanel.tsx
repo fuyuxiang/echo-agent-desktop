@@ -7,7 +7,6 @@ import {
   Keyboard,
   Brain,
   Cpu,
-  Bot,
   Palette,
   Database,
   Shield,
@@ -41,13 +40,12 @@ import {
 } from "@/lib/agent-client";
 import {
   AccountSettingsPanel,
-  AgentMailSettingsPanel,
   AgentSettingsPanel,
-  AssistantSettingsPanel,
   DataSettingsPanel,
   GeneralSettingsPanel,
   HelpSettingsPanel,
   MemorySettingsPanel,
+  NotificationCenterSettingsPanel,
   PersonalizeSettingsPanel,
   SecuritySettingsPanel,
   ShortcutsSettingsPanel,
@@ -57,7 +55,7 @@ import {
  * EchoAgent-style Settings dialog.
  *
  * Full-screen overlay → centered `.settings-modal` (1040×720) with a fixed
- * 12-item left navigation and a right panel backed by real runtime, config,
+ * 11-item left navigation and a right panel backed by real runtime, config,
  * notification, memory, security, data and appearance settings.
  *
  * The 模型 section lists configured providers from ~/.echo-agent/config.toml and
@@ -73,7 +71,6 @@ type SectionId =
   | "shortcuts"
   | "memory"
   | "model"
-  | "assistant"
   | "personalize"
   | "data"
   | "security"
@@ -87,13 +84,12 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { id: "account", label: "账户管理", icon: User },
-  { id: "agent-mail", label: "智能体邮箱", icon: Mail },
+  { id: "agent-mail", label: "通知中心", icon: Mail },
   { id: "general", label: "系统设置", icon: SettingsIcon },
   { id: "agent-settings", label: "智能体设置", icon: SlidersHorizontal },
   { id: "shortcuts", label: "快捷键", icon: Keyboard },
   { id: "memory", label: "记忆", icon: Brain },
   { id: "model", label: "模型", icon: Cpu },
-  { id: "assistant", label: "助理设置", icon: Bot },
   { id: "personalize", label: "个性化", icon: Palette },
   { id: "data", label: "数据管理", icon: Database },
   { id: "security", label: "安全中心", icon: Shield },
@@ -272,10 +268,8 @@ export function SettingsPanel({
               <AccountSettingsPanel />
             ) : active === "agent-settings" ? (
               <AgentSettingsPanel />
-            ) : active === "assistant" ? (
-              <AssistantSettingsPanel />
             ) : active === "agent-mail" ? (
-              <AgentMailSettingsPanel />
+              <NotificationCenterSettingsPanel />
             ) : null}
           </div>
         </div>

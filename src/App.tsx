@@ -65,6 +65,7 @@ import { friendlyError } from "./lib/error-format";
 import { hydrateKnowledgeSources } from "./lib/kb-source-storage";
 import { permissionModeFromEvent, usePermissionModeStore } from "./stores/permission-mode-store";
 import { buildProjectPrompt } from "./lib/project-context";
+import { migrateCatalogRootStorage } from "./lib/catalog-root-storage";
 
 /** Hidden markers wrapping the expert persona in the text sent to the runtime.
  *  The UI strips these (and everything between them) from user messages. */
@@ -146,6 +147,7 @@ function Shell() {
   const questionStore = useQuestionStore;
 
   useEffect(() => {
+    migrateCatalogRootStorage();
     void hydrateKnowledgeSources().catch((error) => {
       console.error("[EchoAgent] Failed to hydrate knowledge sources:", error);
       setToast("知识源后端数据读取失败");
@@ -568,7 +570,7 @@ function Shell() {
       return;
     }
     if (label === "通知") {
-      // Open the settings → 智能体邮箱（会话通知中心）tab where all EchoAgent
+      // Open the settings → 通知中心 tab where all EchoAgent
       // events are logged.
       setSettingsOpen(true);
       return;
@@ -941,56 +943,6 @@ function Shell() {
     handleGoHome();
   };
 
-  // Discover launcher: open a new session and send the wizard's prompt. If an
-  // agent is chosen, prepend its full persona as a preamble (same pattern as
-  // handleStartWithExpert). Closes the placeholder view so the chat shows.
-  const handleLaunchDiscover = async (prompt: string, agent?: AgentEntry) => {
-    const modelId = requireConfiguredModel();
-    if (!modelId) return;
-    setPlaceholderView(null);
-    try {
-      const cwd = cwdRef.current;
-      const sessionId = await agentNewSession(cwd, modelId);
-      setCurrentModelId(modelId);
-      sessionsStore.getState().setCurrent(sessionId);
-      sessionsStore.getState().upsert({
-        sessionId,
-        title: agent ? agent.name : deriveTitle(prompt),
-        cwd,
-        status: "working",
-        currentModelId: modelId,
-      });
-      sessionStore.getState().setSession(sessionId);
-      let body: string;
-      if (agent) {
-        const promptBody = agent.raw
-          ? extractMarkdownBody(agent.raw)
-          : agent.description ?? "";
-        body = [
-          `【角色设定 — ${agent.name}】`,
-          `从现在开始，你将以下述专家身份进行本次对话。请严格遵循角色定义。`,
-          ``,
-          promptBody,
-          ``,
-          `---`,
-          `用户的第一个问题：`,
-          ``,
-          prompt,
-        ].join("\n");
-      } else {
-        body = prompt;
-      }
-      sessionStore.getState().pushUser(body);
-      sessionStore.getState().startStreaming();
-      await agentSend(sessionId, body);
-    } catch (e) {
-      sessionStore.getState().setError(friendlyError(e));
-      const sid = sessionStore.getState().sessionId;
-      if (sid) sessionsStore.getState().upsert({ sessionId: sid, status: "failed" });
-      showToast(`启动失败：${String(e).replace(/^Error:\s*/, "")}`);
-    }
-  };
-
   // 进入本地项目：把种子会话瞄到项目关联目录（使其归入对应空间节点），
   // 新建会话并注入项目说明作为种子消息。
   const handleStartProject = async (project: ProjectMeta) => {
@@ -1106,7 +1058,7 @@ function Shell() {
         />
         <main className="app__main">
           {/* 全局 topbar 仅对话页需要：会话标题 +（侧栏折叠时）展开/新建。
-              首页、助理、自动化等其它页面不占 48px，各自顶栏贴顶即可。
+              首页、项目、自动化等其它页面不占 48px，各自顶栏贴顶即可。
               侧栏折叠且非对话页时，用悬浮按钮提供展开入口。
               注:Tauri 2 只认 data-tauri-drag-region(CSS 的 -webkit-app-region
               不生效);按钮等子元素不是拖拽目标,不影响点击。 */}
@@ -1192,23 +1144,13 @@ function Shell() {
           ) : placeholderView ? (
             <PlaceholderPage
               label={placeholderView}
-              onPlaceholder={handlePlaceholder}
               onNavigate={handleNavigate}
               onOpenSession={handleSelectSession}
               onGoHome={handleGoHome}
-              onStartWithExpert={handleStartWithExpert}
               onToast={showToast}
               cwd={cwdRef.current}
               onSelectWorkspace={handleSelectWorkspace}
               sessionId={currentSessionId ?? undefined}
-              onLaunch={handleLaunchDiscover}
-              onSend={handleSendNew}
-              streaming={streaming}
-              apiReady={init.auth.ready && modelConfigured}
-              onOpenSettings={() => setSettingsOpen(true)}
-              modelId={currentModelId}
-              models={models}
-              onModelChange={handleModelChange}
               onStartProject={handleStartProject}
               onStartProjectConversation={handleStartProjectConversation}
             />

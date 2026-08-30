@@ -67,7 +67,7 @@ vi.mock("@/lib/agent-client", async () => {
     "mcpToggle", "mcpConfigPath", "mcpConfigRead", "mcpConfigSave", "mcpAuthTrigger",
     "mcpAuthStatus", "togglePlanMode", "internalReload", "automationsSnapshot",
     "automationsSave", "automationsDelete", "automationsSetStatus", "automationsRun",
-    "automationRecordsArchive", "automationRecordsDelete", "inspirationGenerate",
+    "automationRecordsArchive", "automationRecordsDelete",
     "accountGetApiKey", "accountSetApiKey", "agentsDefaultsGet", "agentsDefaultsSave",
     "pluginsList", "pluginsAction", "marketplaceList", "marketplaceAction",
     "notificationList", "notificationMarkRead", "notificationMarkAllRead",
@@ -139,6 +139,15 @@ describe("ChatView pause/yield/resume 闭环", () => {
     baseProps.onSend.mockClear();
     baseProps.onCancel.mockClear();
     baseProps.onToast.mockClear();
+  });
+
+  it("会话工具入口统一位于响应式工具栏内", () => {
+    const { container } = renderChat();
+    const toolbar = container.querySelector(".chatview__utility-actions");
+    expect(toolbar).not.toBeNull();
+    for (const label of ["查找", "变更", "子代理", "团队", "浏览器", "分享"]) {
+      expect(toolbar).toContainElement(screen.getByRole("button", { name: label }));
+    }
   });
 
   it("流式时显示「暂停」按钮,点击触发 onCancel", () => {

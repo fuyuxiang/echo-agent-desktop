@@ -21,7 +21,6 @@ import type {
   ConnectorCliAuthResult,
   ConnectorCliAuthUrlEvent,
   ConnectorCliStatus,
-  InspirationStarted,
   McpAuthStatusEntry,
   McpAuthTriggerResult,
   McpConfigFile,
@@ -925,21 +924,6 @@ export async function automationRecordsDelete(id: string): Promise<void> {
   await invoke<void>("automation_records_delete", { id });
 }
 
-// ---------- inspiration (灵感面板) ----------
-
-/** Prepare an inspiration session. The caller must register event listeners
- *  before sending the returned prompt with `agentSend`, otherwise a fast
- *  response could complete before the listeners are active. */
-export async function inspirationGenerate(
-  category: string,
-  cwd?: string,
-  count?: number,
-): Promise<InspirationStarted> {
-  return invoke<InspirationStarted>("inspiration_generate", {
-    request: { category, cwd: cwd ?? null, count: count ?? null },
-  });
-}
-
 // ---------- xAI API Key 管理 (x.ai/getApiKey / x.ai/setApiKey) ----------
 // EchoAgent OAuth 账户命令（accountInfo/accountCheckSubscription/accountLogout/
 // accountGetAuthUrl/accountCancelAuth）已随 OAuth 功能移除。EchoAgent 仅保留
@@ -1042,7 +1026,7 @@ export async function marketplaceAction(
   return invoke("marketplace_action", { sessionId, action });
 }
 
-// ---------- notification log (智能体邮箱) ----------
+// ---------- notification center ----------
 
 import type { NotificationEntry, NotificationKind } from "./types";
 

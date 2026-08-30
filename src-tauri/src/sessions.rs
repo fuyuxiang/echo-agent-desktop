@@ -296,7 +296,7 @@ fn agent_sessions_root() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{SummaryFile, display_title};
+    use super::{display_title, SummaryFile};
 
     fn summary(json: &str) -> SummaryFile {
         serde_json::from_str(json).expect("valid summary fixture")
@@ -317,7 +317,10 @@ mod tests {
                 "title_is_manual":false
             }"#,
         );
-        assert_eq!(display_title(&parsed).as_deref(), Some("Professional title"));
+        assert_eq!(
+            display_title(&parsed).as_deref(),
+            Some("Professional title")
+        );
     }
 
     #[test]

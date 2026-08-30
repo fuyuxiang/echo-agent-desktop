@@ -39,6 +39,92 @@ use bridge::{Permissions, Questions};
 use commands::AppState;
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+const DESKTOP_MIN_WIDTH: f64 = 1024.0;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+const DESKTOP_MIN_HEIGHT: f64 = 680.0;
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct DesktopWindowState {
+    width: f64,
+    height: f64,
+    maximized: bool,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn desktop_window_state_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("window-state.json"))
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn save_desktop_window_state(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    let Ok(maximized) = window.is_maximized() else {
+        return;
+    };
+    let Ok(scale_factor) = window.scale_factor() else {
+        return;
+    };
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    let logical = size.to_logical::<f64>(scale_factor);
+    if logical.width < DESKTOP_MIN_WIDTH || logical.height < DESKTOP_MIN_HEIGHT {
+        return;
+    }
+    let Some(path) = desktop_window_state_path(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let state = DesktopWindowState {
+        width: logical.width,
+        height: logical.height,
+        maximized,
+    };
+    if let Ok(payload) = serde_json::to_vec(&state) {
+        let _ = std::fs::write(path, payload);
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn restore_desktop_window_state(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    use tauri::{LogicalSize, Size};
+
+    let Some(path) = desktop_window_state_path(app) else {
+        return;
+    };
+    let Ok(payload) = std::fs::read(path) else {
+        return;
+    };
+    let Ok(state) = serde_json::from_slice::<DesktopWindowState>(&payload) else {
+        return;
+    };
+
+    let mut max_width = 4096.0;
+    let mut max_height = 2160.0;
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        if let Ok(scale_factor) = window.scale_factor() {
+            let screen = monitor.size().to_logical::<f64>(scale_factor);
+            max_width = (screen.width * 0.92).max(DESKTOP_MIN_WIDTH);
+            max_height = (screen.height * 0.92).max(DESKTOP_MIN_HEIGHT);
+        }
+    }
+
+    let width = state.width.clamp(DESKTOP_MIN_WIDTH, max_width);
+    let height = state.height.clamp(DESKTOP_MIN_HEIGHT, max_height);
+    let _ = window.set_size(Size::Logical(LogicalSize::new(width, height)));
+    let _ = window.center();
+    if state.maximized {
+        let _ = window.maximize();
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::{
         menu::{Menu, MenuItem},
@@ -76,14 +162,21 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
     tray.build(app)?;
 
     if let Some(window) = app.get_webview_window("main") {
+        restore_desktop_window_state(app.handle(), &window);
+        let app_handle = app.handle().clone();
         let close_window = window.clone();
-        window.on_window_event(move |event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+        window.on_window_event(move |event| match event {
+            WindowEvent::Resized(_) => {
+                save_desktop_window_state(&app_handle, &close_window);
+            }
+            WindowEvent::CloseRequested { api, .. } => {
+                save_desktop_window_state(&app_handle, &close_window);
                 if automations::should_keep_app_alive() {
                     api.prevent_close();
                     let _ = close_window.hide();
                 }
             }
+            _ => {}
         });
         if std::env::args().any(|arg| arg == "--background") {
             let _ = window.hide();
@@ -268,14 +361,13 @@ pub fn run() {
             agent_admin::folder_trust_respond,
             agent_admin::toggle_plan_mode,
             agent_admin::internal_reload,
-            agent_admin::inspiration_generate,
             agent_admin::account_get_api_key,
             agent_admin::account_set_api_key,
             agent_admin::plugins_list,
             agent_admin::plugins_action,
             agent_admin::marketplace_list,
             agent_admin::marketplace_action,
-            // notification log (智能体邮箱 → 会话通知中心)
+            // notification center
             notifications::notification_append,
             notifications::notification_list,
             notifications::notification_mark_read,

@@ -13,8 +13,13 @@ import { Chip } from "../shared/ui";
 import { SkillCatalogCard } from "./SkillCatalogCard";
 import { SkillDetailModal } from "./SkillDetailModal";
 import { ImportSkillModal } from "./ImportSkillModal";
+import {
+  clearCatalogRoot,
+  isLegacyWorkBuddyPath,
+  readCatalogRoot,
+  writeCatalogRoot,
+} from "@/lib/catalog-root-storage";
 
-const LS_ROOT = "skillsCatalogRoot";
 const FEATURED_WINDOW = 8;
 
 interface Props {
@@ -26,9 +31,7 @@ interface Props {
  *  built-ins, plus the existing "我安装的" (runtime-managed) view. */
 export function SkillsTab({ pills, onToast }: Props) {
   // ---- catalog (market) state ----
-  const [root, setRoot] = useState<string>(() => {
-    try { return localStorage.getItem(LS_ROOT) || ""; } catch { return ""; }
-  });
+  const [root, setRoot] = useState<string>(() => readCatalogRoot("skills"));
   const [catalog, setCatalog] = useState<SkillCatalog | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -44,15 +47,20 @@ export function SkillsTab({ pills, onToast }: Props) {
   const [locals, setLocals] = useState<SkillInfo[]>([]);
   const [localsLoading, setLocalsLoading] = useState(false);
 
-  const persist = (r: string) => { try { localStorage.setItem(LS_ROOT, r); } catch { /* ignore */ } };
-
   const loadCatalog = useCallback(async (r: string): Promise<boolean> => {
+    if (isLegacyWorkBuddyPath(r)) {
+      clearCatalogRoot("skills");
+      setRoot("");
+      setCatalog(null);
+      setError("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
+      return false;
+    }
     setLoading(true); setError(""); setNeedPick(false);
     try {
       const c = await skillsCatalogLoad(r);
       setCatalog(c);
       setRoot(c.root || r);
-      persist(c.root || r);
+      writeCatalogRoot("skills", c.root || r);
       return true;
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
@@ -67,12 +75,21 @@ export function SkillsTab({ pills, onToast }: Props) {
   useEffect(() => {
     let disposed = false;
     (async () => {
-      if (root) { loadCatalog(root); return; }
+      if (root) {
+        const loaded = await loadCatalog(root);
+        if (disposed || loaded) return;
+        clearCatalogRoot("skills");
+        setRoot("");
+      }
       try {
         const d = await skillsCatalogDefaultRoot();
         if (disposed) return;
-        if (d) loadCatalog(d);
-        else setNeedPick(true);
+        if (d && !isLegacyWorkBuddyPath(d)) {
+          const loaded = await loadCatalog(d);
+          if (!disposed && !loaded) setNeedPick(true);
+        } else {
+          setNeedPick(true);
+        }
       } catch {
         if (!disposed) setNeedPick(true);
       }
@@ -137,6 +154,10 @@ export function SkillsTab({ pills, onToast }: Props) {
       });
       const pick = Array.isArray(sel) ? sel[0] : sel;
       if (!pick) return;
+      if (isLegacyWorkBuddyPath(pick)) {
+        onToast?.("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
+        return;
+      }
       if (await loadCatalog(pick)) onToast?.(`已切换技能数据目录：${pick}`);
     } catch { /* cancelled */ }
   }, [root, loadCatalog, onToast]);

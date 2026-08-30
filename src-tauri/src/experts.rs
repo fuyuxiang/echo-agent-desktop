@@ -174,7 +174,7 @@ fn root_has_manifest(root: &Path) -> bool {
 #[tauri::command]
 pub async fn experts_default_root() -> Result<String, String> {
     for r in candidate_roots() {
-        if root_has_manifest(&r) {
+        if crate::paths::reject_legacy_workbuddy_path(&r).is_ok() && root_has_manifest(&r) {
             return Ok(r.to_string_lossy().into_owned());
         }
     }
@@ -186,6 +186,7 @@ pub async fn experts_default_root() -> Result<String, String> {
 #[tauri::command]
 pub async fn experts_list_roots(root: String) -> Result<Vec<String>, String> {
     let base = PathBuf::from(&root);
+    crate::paths::reject_legacy_workbuddy_path(&base)?;
     let mut hits = Vec::new();
     if root_has_manifest(&base) {
         hits.push(base.to_string_lossy().into_owned());
@@ -212,7 +213,7 @@ pub async fn experts_load(root: Option<String>) -> Result<ExpertCatalog, String>
         _ => {
             let mut found = PathBuf::new();
             for r in candidate_roots() {
-                if root_has_manifest(&r) {
+                if crate::paths::reject_legacy_workbuddy_path(&r).is_ok() && root_has_manifest(&r) {
                     found = r;
                     break;
                 }
@@ -223,6 +224,7 @@ pub async fn experts_load(root: Option<String>) -> Result<ExpertCatalog, String>
             found
         }
     };
+    crate::paths::reject_legacy_workbuddy_path(&root)?;
     let manifest_path = root.join("_meta").join("_expert_center.json");
     let bytes = std::fs::read(&manifest_path).map_err(|e| format!("读取 manifest 失败：{e}"))?;
     let manifest: Value =
@@ -500,6 +502,7 @@ fn b64(bytes: &[u8]) -> String {
 #[tauri::command]
 pub async fn experts_thumbnail(path: String) -> Result<String, String> {
     let src = PathBuf::from(&path);
+    crate::paths::reject_legacy_workbuddy_path(&src)?;
     if !src.is_file() {
         return Err("头像文件不存在".into());
     }
@@ -512,6 +515,7 @@ pub async fn experts_thumbnail(path: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn experts_image_bytes(path: String) -> Result<String, String> {
     let src = PathBuf::from(&path);
+    crate::paths::reject_legacy_workbuddy_path(&src)?;
     if !src.is_file() {
         return Err("图片文件不存在".into());
     }
@@ -553,6 +557,7 @@ pub async fn experts_read_agent_prompt(
 ) -> Result<String, String> {
     let root = PathBuf::from(&root);
     let agents_dir = root.join(&plugin).join("agents");
+    crate::paths::reject_legacy_workbuddy_path(&agents_dir)?;
 
     // Primary: exact match.
     let primary = agents_dir.join(format!("{agent_name}.md"));
@@ -597,6 +602,7 @@ pub async fn experts_read_agent_prompt(
 pub async fn experts_link_agents(root: String, plugin: String) -> Result<u32, String> {
     let root = PathBuf::from(&root);
     let agents_dir = root.join(&plugin).join("agents");
+    crate::paths::reject_legacy_workbuddy_path(&agents_dir)?;
     if !agents_dir.is_dir() {
         return Err(format!("agents 目录不存在：{}/agents", plugin));
     }

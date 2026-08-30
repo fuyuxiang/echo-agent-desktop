@@ -211,6 +211,7 @@ fn spec_path(root: &str, source: &str) -> PathBuf {
 
 fn read_spec(root: &str, source: &str) -> Result<Option<CliSpec>, String> {
     let path = spec_path(root, source);
+    crate::paths::reject_legacy_workbuddy_path(&path)?;
     let raw = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -752,6 +753,7 @@ pub async fn connectors_cli_skills_dir(
         .join("connectors")
         .join(&source)
         .join("skills");
+    crate::paths::reject_legacy_workbuddy_path(&dir)?;
     Ok(if dir.is_dir() {
         Some(dir.to_string_lossy().into_owned())
     } else {
