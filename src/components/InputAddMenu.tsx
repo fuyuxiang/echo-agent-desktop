@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Paperclip, ChevronRight, Wand2 } from "lucide-react";
+import { Paperclip, ChevronRight } from "lucide-react";
 import {
   AddIcon,
   ExpertTabIcon,
@@ -7,18 +7,16 @@ import {
   ConnectorTabIcon,
 } from "@/foundation/components/Icon/icons";
 import { skillsList, agentsList, mcpList } from "@/lib/agent-client";
-import { HOME_MODES, type HomeModeId } from "./home-scenes";
 import type { AgentEntry, McpServerEntry, SkillInfo } from "@/lib/types";
 
 interface InputAddMenuProps {
   onPickFiles: () => void;
-  onSelectMode?: (modeId: HomeModeId) => void;
   onSelectExpert?: (agent: AgentEntry) => void;
   onSelectSkill?: (skillName: string) => void;
   onNavigateConnectors?: () => void;
 }
 
-type MenuItemId = "add-files" | "mode" | "experts" | "skills" | "connectors";
+type MenuItemId = "add-files" | "experts" | "skills" | "connectors";
 
 interface MenuItem {
   id: MenuItemId;
@@ -31,7 +29,6 @@ const MENU_GROUPS: MenuItem[][] = [
     { id: "add-files", label: "添加文件", icon: <Paperclip size={16} /> },
   ],
   [
-    { id: "mode", label: "模式", icon: <Wand2 size={16} /> },
     { id: "experts", label: "专家", icon: <ExpertTabIcon size="md" /> },
     { id: "skills", label: "技能", icon: <SkillTabIcon size="md" /> },
     { id: "connectors", label: "连接器", icon: <ConnectorTabIcon size="md" /> },
@@ -40,7 +37,6 @@ const MENU_GROUPS: MenuItem[][] = [
 
 export function InputAddMenu({
   onPickFiles,
-  onSelectMode,
   onSelectExpert,
   onSelectSkill,
   onNavigateConnectors,
@@ -128,11 +124,6 @@ export function InputAddMenu({
     if (id === "add-files") { close(); onPickFiles(); }
   };
 
-  const handleSelectMode = (modeId: HomeModeId) => {
-    close();
-    onSelectMode?.(modeId);
-  };
-
   const handleSelectExpert = (agent: AgentEntry) => {
     close();
     onSelectExpert?.(agent);
@@ -152,20 +143,6 @@ export function InputAddMenu({
     if (!hoveredItem) return null;
 
     let items: React.ReactNode = null;
-
-    if (hoveredItem === "mode") {
-      items = HOME_MODES.map((m) => (
-        <button
-          key={m.id}
-          type="button"
-          className="iam-sub-item"
-          onClick={() => handleSelectMode(m.id)}
-        >
-          <m.icon size={14} />
-          <span>{m.label}</span>
-        </button>
-      ));
-    }
 
     if (hoveredItem === "experts") {
       items = experts.length > 0 ? (
@@ -254,7 +231,7 @@ export function InputAddMenu({
         className="echo-composer__add"
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         aria-label="添加"
-        title="添加文件、模式、专家、技能、连接器"
+        title="添加文件、专家、技能、连接器"
       >
         <AddIcon size="md" />
       </button>
