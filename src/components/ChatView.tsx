@@ -35,7 +35,6 @@ import {
   createYieldStore,
 } from "@/lib/yield-state";
 import type { ModelOption } from "./ModelSelector";
-import type { HomeModeId } from "./home-scenes";
 import type { AgentEntry } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 
@@ -52,7 +51,6 @@ export function ChatView({
   onRewound,
   onForked,
   onToast,
-  onSelectMode,
   onSelectExpert,
   onNavigateConnectors,
   apiReady = true,
@@ -73,7 +71,6 @@ export function ChatView({
   onForked?: (newSessionId: string) => void;
   /** Surface transient feedback from the rewind/fork toolbar. */
   onToast?: (msg: string) => void;
-  onSelectMode?: (modeId: HomeModeId) => void;
   onSelectExpert?: (agent: AgentEntry) => void;
   onNavigateConnectors?: () => void;
   /** False when this session has no configured model or usable credential. */
@@ -618,7 +615,6 @@ export function ChatView({
             }
             externalText={resendText}
             externalTextNonce={resendNonce}
-            onSelectMode={onSelectMode}
             onSelectExpert={onSelectExpert}
             onNavigateConnectors={onNavigateConnectors}
             activeExpertName={activeExpertName}
