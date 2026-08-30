@@ -95,6 +95,15 @@ fn validate(config: &StorageProviderConfig) -> Result<(), String> {
     if url.scheme() != "http" && url.scheme() != "https" {
         return Err("WebDAV URL 必须使用 http 或 https".into());
     }
+    let loopback = url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    });
+    if url.scheme() != "https" && !loopback {
+        return Err("WebDAV 凭据只能通过 HTTPS 传输（本机 localhost/回环地址除外）".into());
+    }
     Ok(())
 }
 
@@ -452,5 +461,33 @@ mod tests {
     fn normalizes_traversal_out_of_relative_paths() {
         assert_eq!(normalize_path("/a/../b"), "/a/b");
         assert_eq!(normalize_path(""), "/");
+    }
+
+    #[test]
+    fn rejects_plain_http_for_remote_webdav_credentials() {
+        let config = StorageProviderConfig {
+            id: "remote".into(),
+            label: "remote".into(),
+            kind: "webdav".into(),
+            base_url: "http://dav.example.com/files".into(),
+            username: Some("user".into()),
+            password: Some("secret".into()),
+            enabled: true,
+        };
+        assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn allows_plain_http_for_loopback_development_server() {
+        let config = StorageProviderConfig {
+            id: "local".into(),
+            label: "local".into(),
+            kind: "webdav".into(),
+            base_url: "http://127.0.0.1:1900/dav".into(),
+            username: None,
+            password: None,
+            enabled: true,
+        };
+        assert!(validate(&config).is_ok());
     }
 }

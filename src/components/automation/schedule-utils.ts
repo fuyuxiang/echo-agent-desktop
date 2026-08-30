@@ -115,7 +115,7 @@ export function buildDraft(template?: AutomationTemplate, initialCwd = ""): Auto
     expertId: undefined,
     expertName: undefined,
     connectorIds: [],
-    permissionMode: "fullAccess",
+    permissionMode: "default",
     scheduleType: template?.scheduleType ?? "recurring",
     schedule: template ? { ...template.schedule, byday: [...template.schedule.byday] } : defaultSchedule(),
     scheduledDate: template?.scheduledDate ?? todayDateInput(),
@@ -139,7 +139,7 @@ export function draftFromAutomation(a: Automation): AutomationDraft {
     expertId: a.expertId,
     expertName: a.expertName,
     connectorIds: [...(a.connectorIds ?? [])],
-    permissionMode: a.permissionMode ?? "fullAccess",
+    permissionMode: a.permissionMode ?? "default",
     scheduleType: a.scheduleType ?? "recurring",
     schedule: {
       ...a.schedule,
@@ -221,12 +221,10 @@ export function startsInLabel(nextRunAt?: string): string | null {
   if (!nextRunAt) return null;
   const ms = Date.parse(nextRunAt) - Date.now();
   if (!Number.isFinite(ms) || ms <= 0) return null;
-  const minutes = Math.floor(ms / 60000);
-  if (minutes < 1) return "即将执行";
-  if (minutes < 60) return `${minutes}分钟后执行`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}小时后执行`;
-  return `${Math.floor(hours / 24)}天后执行`;
+  if (ms < 60_000) return "即将执行";
+  if (ms < 3_600_000) return `${Math.ceil(ms / 60_000)}分钟后执行`;
+  if (ms < 86_400_000) return `${Math.ceil(ms / 3_600_000)}小时后执行`;
+  return `${Math.ceil(ms / 86_400_000)}天后执行`;
 }
 
 /** 运行记录时间戳 → "MM-DD HH:MM"。 */

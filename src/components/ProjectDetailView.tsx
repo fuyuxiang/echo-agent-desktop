@@ -3,8 +3,8 @@
  *
  *  布局: 顶部面包屑(📁 项目 / 名) + 右上「邀请」 + tab 栏(动态/计划/任务/资产)
  *        + 右侧「项目配置」栏(指令/连接器/专家/技能/自动化) + 底部项目级 Composer。
- *  数据全部读自 useProjectsStore（本地持久）；动态/资产为本地模拟，配置/看板/任务可交互。
- *  无云端成员/授权后端：邀请=本地 popover 模拟复制链接，连接器/专家/技能 +添加=本地占位 picker。
+ *  项目元数据由 Rust 数据文件持久；计划/任务可编辑，资产是已复制
+ *  到项目私有目录的真实文件，专家/技能/MCP 选项来自当前运行时。
  */
 import { useState } from "react";
 import {
@@ -15,13 +15,10 @@ import {
 import {
   ConfigRow,
   RefPickerDialog,
-  PICKER_OPTIONS,
+  type ProjectPickerOptions,
 } from "./project-picker";
 import { ActivityTab, PlanTab, TaskTab, AssetsTab } from "./project-tabs";
-import {
-  FolderIcon,
-  ChevronDownIcon,
-} from "@/foundation/components/Icon/icons";
+import { FolderIcon } from "@/foundation/components/Icon/icons";
 
 type TabKey = "activity" | "plan" | "task" | "asset";
 type DrawerKey = "instruction" | "connectors" | "experts" | "skills" | "automation";
@@ -46,12 +43,16 @@ export function ProjectDetailView({
   onBack,
   onToast,
   onStartConversation,
+  picker,
+  onOpenAutomation,
 }: {
   project: ProjectMeta;
   onBack: () => void;
   onToast?: (msg: string) => void;
   /** Start a new conversation within this project (creates a real EchoAgent session). */
   onStartConversation?: (projectId: string, message: string) => void;
+  picker: { options: ProjectPickerOptions; loading: boolean; error: string | null };
+  onOpenAutomation?: () => void;
 }) {
   // 读最新（交互后 store 更新，父传入的快照可能过期）。
   const live = useProjectsStore((s) => s.projects.find((p) => p.id === project.id)) ?? project;
@@ -72,10 +73,10 @@ export function ProjectDetailView({
   };
 
   const invite = () => {
-    const name = window.prompt("邀请成员（输入名称或邮箱，本地演示）");
+    const name = window.prompt("添加参与者备注（姓名或角色）");
     if (name && name.trim()) {
       addMember(live.id, name.trim());
-      onToast?.(`已邀请 ${name.trim()}（本地演示）`);
+      onToast?.(`已添加参与者备注：${name.trim()}`);
       setMembersOpen(false);
     }
   };
@@ -86,7 +87,7 @@ export function ProjectDetailView({
     } else {
       const preview = text.slice(0, 20);
       const suffix = text.length > 20 ? "…" : "";
-      onToast?.(`已发送：${preview}${suffix}（本地演示）`);
+      onToast?.(`无法启动项目会话：${preview}${suffix}`);
     }
   };
 
@@ -100,10 +101,10 @@ export function ProjectDetailView({
           <span className="pd-crumb__name">{live.name}</span>
         </div>
         <div className="pd-topbar__right">
-          <button className="pd-invite" onClick={() => setMembersOpen((v) => !v)}>邀请</button>
+          <button className="pd-invite" onClick={() => setMembersOpen((v) => !v)}>参与者</button>
           {membersOpen && (
             <div className="pd-members-pop">
-              <div className="pd-members-pop__head">项目成员</div>
+              <div className="pd-members-pop__head">项目参与者（本机备注）</div>
               {live.members.length === 0 ? (
                 <div className="pd-members-pop__empty">暂无成员</div>
               ) : (
@@ -111,7 +112,7 @@ export function ProjectDetailView({
                   <div className="pd-members-pop__item" key={m}>{m}</div>
                 ))
               )}
-              <button className="pd-members-pop__add" onClick={invite}>+ 邀请成员</button>
+              <button className="pd-members-pop__add" onClick={invite}>+ 添加参与者</button>
             </div>
           )}
         </div>
@@ -131,17 +132,16 @@ export function ProjectDetailView({
                 </button>
               ))}
             </nav>
-            <button className="pd-config-toggle" title="筛选" onClick={() => onToast?.("筛选（占位）")}>⇄</button>
           </div>
 
           <div className="pd-tab-content">
-            {tab === "activity" && <ActivityTab />}
+            {tab === "activity" && <ActivityTab projectId={live.id} />}
             {tab === "plan" && <PlanTab projectId={live.id} />}
             {tab === "task" && <TaskTab projectId={live.id} />}
-            {tab === "asset" && <AssetsTab projectId={live.id} />}
+            {tab === "asset" && <AssetsTab projectId={live.id} onToast={onToast} />}
           </div>
 
-          <ProjectComposer onSend={handleComposerSend} />
+          <ProjectComposer project={live} onSend={handleComposerSend} />
         </div>
 
         <aside className="pd-side">
@@ -164,14 +164,15 @@ export function ProjectDetailView({
           project={live}
           onClose={() => setDrawer(null)}
           onOpenPicker={(k) => setPickerFor(k)}
-          onToast={onToast}
+          onOpenAutomation={onOpenAutomation}
         />
       )}
 
       {pickerFor && (
         <RefPickerDialog
           title={pickerFor === "connectors" ? "连接器" : pickerFor === "experts" ? "专家" : "技能"}
-          options={PICKER_OPTIONS[pickerFor]}
+          options={picker.options[pickerFor]}
+          emptyHint={picker.loading ? "正在读取运行时能力…" : picker.error ? `读取失败：${picker.error}` : "当前没有已启用的可选项"}
           selected={pickerFor === "connectors" ? live.connectors : pickerFor === "experts" ? live.experts : live.skills}
           onCancel={() => setPickerFor(null)}
           onConfirm={(items) => setPicked(pickerFor, items)}
@@ -186,13 +187,13 @@ export function ProjectDetailView({
 // ============================================================
 
 function ConfigDrawer({
-  drawer, project, onClose, onOpenPicker, onToast,
+  drawer, project, onClose, onOpenPicker, onOpenAutomation,
 }: {
   drawer: DrawerKey;
   project: ProjectMeta;
   onClose: () => void;
   onOpenPicker: (k: "connectors" | "experts" | "skills") => void;
-  onToast?: (msg: string) => void;
+  onOpenAutomation?: () => void;
 }) {
   const updateConfig = useProjectsStore((s) => s.updateConfig);
   const card = CONFIG_CARDS.find((c) => c.key === drawer)!;
@@ -226,8 +227,8 @@ function ConfigDrawer({
           )}
           {drawer === "automation" && (
             <div className="proj-drawer-empty">
-              <p>暂无自动化规则。</p>
-              <button className="btn btn--ghost" onClick={() => onToast?.("新建自动化（本地演示占位）")}>+ 新建自动化</button>
+              <p>自动化在统一调度中心配置，可选择本项目目录作为运行工作区。</p>
+              <button className="btn btn--ghost" onClick={() => { onClose(); onOpenAutomation?.(); }}>打开自动化中心</button>
             </div>
           )}
         </div>
@@ -243,7 +244,7 @@ function ConfigDrawer({
 // 项目级 Composer 薄壳（左 Craft/Auto/技能/连接器 + 右 +/发送）
 // ============================================================
 
-function ProjectComposer({ onSend }: { onSend: (text: string) => void }) {
+function ProjectComposer({ project, onSend }: { project: ProjectMeta; onSend: (text: string) => void }) {
   const [text, setText] = useState("");
   const send = () => {
     const t = text.trim();
@@ -267,12 +268,13 @@ function ProjectComposer({ onSend }: { onSend: (text: string) => void }) {
         }}
       />
       <div className="pd-composer__footer">
-        <button className="pd-composer__chip">✎ Craft <ChevronDownIcon size="sm" /></button>
-        <button className="pd-composer__chip">Ⓐ Auto <ChevronDownIcon size="sm" /></button>
-        <button className="pd-composer__chip">⚡ 技能</button>
-        <button className="pd-composer__chip">🔗 连接器 <ChevronDownIcon size="sm" /></button>
+        <span className="pd-composer__context" title="项目指令和所选运行时能力将注入新会话">
+          项目上下文已启用
+          {project.experts.length > 0 ? ` · ${project.experts.length} Agent` : ""}
+          {project.skills.length > 0 ? ` · ${project.skills.length} Skill` : ""}
+          {project.connectors.length > 0 ? ` · ${project.connectors.length} MCP` : ""}
+        </span>
         <span className="pd-composer__spacer" />
-        <button className="pd-composer__add" aria-label="更多">+</button>
         <button className="pd-composer__send" onClick={send} aria-label="发送" disabled={!text.trim()}>➤</button>
       </div>
     </div>

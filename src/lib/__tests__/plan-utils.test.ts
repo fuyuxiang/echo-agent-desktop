@@ -9,6 +9,7 @@ import {
   setEntryContent,
   cycleEntryStatus,
   planStats,
+  planRevisionPrompt,
 } from "../plan-utils";
 
 const plan: Plan = {
@@ -131,5 +132,18 @@ describe("planStats", () => {
       ],
     });
     expect(s.progressPct).toBe(100);
+  });
+});
+
+describe("planRevisionPrompt", () => {
+  it("把完整修订计划、状态和优先级同步给运行时", () => {
+    const prompt = planRevisionPrompt(plan, false);
+    expect(prompt).toContain("1. [已完成][优先级:高] a");
+    expect(prompt).toContain("2. [进行中][优先级:中] b");
+    expect(prompt).toContain("暂不要开始新步骤");
+  });
+
+  it("审批时明确要求执行修订后的计划", () => {
+    expect(planRevisionPrompt(plan, true)).toContain("立即严格按此计划继续执行");
   });
 });

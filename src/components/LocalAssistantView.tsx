@@ -23,7 +23,7 @@ export function LocalAssistantView({
   models,
   onModelChange,
 }: {
-  onSend: (text: string) => void;
+  onSend: (text: string) => boolean | void | Promise<boolean | void>;
   streaming: boolean;
   apiReady: boolean;
   onOpenSettings?: () => void;
@@ -40,17 +40,20 @@ export function LocalAssistantView({
     <div className="local-assistant">
       <header className="local-assistant__header" data-tauri-drag-region>
         <h1 className="local-assistant__title">本地助理</h1>
-        <span className="local-assistant__conn-label">已连接：</span>
-        <span className="local-assistant__conn-chip">
-          <WechatGlyph />
-          <span>微信小程序</span>
+        <span className="local-assistant__conn-label">运行状态：</span>
+        <span className="local-assistant__conn-chip" role="status">
+          <span
+            className={`local-assistant__status-dot ${apiReady ? "is-ready" : ""}`}
+            aria-hidden="true"
+          />
+          <span>{apiReady ? "本地 Agent 已就绪" : "待配置模型"}</span>
         </span>
         <button
           type="button"
           className="local-assistant__settings"
-          onClick={() => onPlaceholder?.("本地助理设置")}
-          aria-label="本地助理设置"
-          title="本地助理设置"
+          onClick={onOpenSettings}
+          aria-label="打开助理设置"
+          title="打开助理设置"
         >
           <SettingsIcon size="sm" />
         </button>
@@ -83,26 +86,5 @@ export function LocalAssistantView({
         />
       </div>
     </div>
-  );
-}
-
-/** 微信小程序图标（图标库无内置微信图标，内联 SVG 还原目标截图绿底白色气泡）。 */
-function WechatGlyph() {
-  return (
-    <svg
-      className="local-assistant__wechat"
-      viewBox="0 0 24 24"
-      width="18"
-      height="18"
-      aria-hidden="true"
-    >
-      <rect width="24" height="24" rx="6" fill="#07C160" />
-      <ellipse cx="9.4" cy="9.6" rx="4.6" ry="3.8" fill="#fff" />
-      <ellipse cx="15.2" cy="14.4" rx="4" ry="3.3" fill="#fff" />
-      <circle cx="7.7" cy="9.2" r="0.85" fill="#07C160" />
-      <circle cx="11.1" cy="9.2" r="0.85" fill="#07C160" />
-      <circle cx="13.8" cy="14" r="0.7" fill="#07C160" />
-      <circle cx="16.6" cy="14" r="0.7" fill="#07C160" />
-    </svg>
   );
 }

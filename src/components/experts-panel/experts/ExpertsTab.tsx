@@ -1,21 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
-  SearchIcon, MyExpertIcon, ChevronLeftIcon, DeleteIcon, SparklesIcon,
+  SearchIcon, MyExpertIcon, ChevronLeftIcon, SparklesIcon,
   FolderOpenIcon, RefreshCwIcon,
 } from "@/foundation/components/Icon/icons";
 import {
-  agentsDelete, agentsList, expertsDefaultRoot, expertsLoad, expertsReadAgentPrompt, expertsLinkAgents,
+  expertsDefaultRoot, expertsLoad, expertsReadAgentPrompt, expertsLinkAgents,
 } from "@/lib/agent-client";
 import type { AgentEntry, ExpertCatalog, ExpertItem, FeaturedScene } from "@/lib/types";
 import { FEATURED_SCENES } from "../data/featured-scenes";
 import { Chip, SegmentTabs } from "../shared/ui";
-import { ThumbImg } from "../shared/ThumbImg";
 import { ExpertCard } from "./ExpertCard";
 import { ExpertDetailModal } from "./ExpertDetailModal";
 import { FeaturedScenes } from "./FeaturedScenes";
-import { MyExpertsEmpty } from "./MyExpertsEmpty";
 import { usePendingExpertStore } from "@/stores/pending-expert-store";
+import { AssistantsPanel } from "../../AssistantsPanel";
 
 type ListTab = "expert" | "team";
 type Sort = "popular" | "newest";
@@ -49,21 +48,20 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
   const [error, setError] = useState("");
   const [needPick, setNeedPick] = useState(false);
 
-  const [locals, setLocals] = useState<AgentEntry[]>([]);
-  const [localsLoading, setLocalsLoading] = useState(false);
-
   const persist = (r: string) => { try { localStorage.setItem(LS_ROOT, r); } catch { /* ignore */ } };
 
-  const loadCatalog = useCallback(async (r: string) => {
+  const loadCatalog = useCallback(async (r: string): Promise<boolean> => {
     setLoading(true); setError(""); setNeedPick(false);
     try {
       const c = await expertsLoad(r);
       setCatalog(c);
       setRoot(c.root || r);
       persist(c.root || r);
+      return true;
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
       setCatalog(null);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -86,14 +84,6 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
     return () => { disposed = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const reloadLocals = useCallback(async () => {
-    setLocalsLoading(true);
-    try { setLocals(await agentsList()); }
-    catch (e) { onToast?.(`加载我的专家失败：${String(e).replace(/^Error:\s*/, "")}`); }
-    finally { setLocalsLoading(false); }
-  }, [onToast]);
-  useEffect(() => { if (view === "my") reloadLocals(); }, [view, reloadLocals]);
 
   const expertById = useMemo(
     () => new Map((catalog?.experts ?? []).map((e) => [e.id, e])),
@@ -166,19 +156,9 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
       });
       const pick = Array.isArray(sel) ? sel[0] : sel;
       if (!pick) return;
-      await loadCatalog(pick);
-      if (!error) onToast?.(`已切换专家数据目录：${pick}`);
+      if (await loadCatalog(pick)) onToast?.(`已切换专家数据目录：${pick}`);
     } catch { /* cancelled */ }
-  }, [root, loadCatalog, onToast, error]);
-
-  const handleCreate = () =>
-    onToast?.("在 ~/.echo-agent/agents/ 新建 .md 文件即可创建专家（后续将接入创建向导）");
-
-  const handleDeleteLocal = useCallback(async (a: AgentEntry) => {
-    if (!confirm(`确定删除专家「${a.name}」？`)) return;
-    try { await agentsDelete(a.path); onToast?.("已删除"); reloadLocals(); }
-    catch (e) { onToast?.(`删除失败：${String(e).replace(/^Error:\s*/, "")}`); }
-  }, [onToast, reloadLocals]);
+  }, [root, loadCatalog, onToast]);
 
   /** Read the full prompt, set pending expert, navigate home. */
   const handleSummonFromModal = useCallback(async (expert: ExpertItem, promptOverride?: string) => {
@@ -296,35 +276,7 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
           </div>
         </header>
         <div className="um-scroll">
-          {localsLoading ? (
-            <div className="ec-loading">加载中…</div>
-          ) : locals.length === 0 ? (
-            <MyExpertsEmpty onCreate={handleCreate} />
-          ) : (
-            <div className="ec-my-grid">
-              {locals.map((a) => (
-                <article key={a.path} className="ec-my-card">
-                  <div className="ec-card-head">
-                    <ThumbImg name={a.name} size={44} shape="square" />
-                    <div className="ec-card-titles">
-                      <div className="ec-card-title">{a.name}</div>
-                      <div className="ec-card-sub">{a.scope === "user" ? "用户级" : "项目级"}</div>
-                    </div>
-                  </div>
-                  <p className="ec-card-desc">{a.description || "（无描述）"}</p>
-                  <div className="ec-my-card-foot">
-                    <button type="button" className="ec-card-tag ec-card-tag--btn"
-                      onClick={() => handleUseLocal(a)}>使用</button>
-                    <button type="button" className="ec-my-del" title="删除"
-                      onClick={() => handleDeleteLocal(a)}><DeleteIcon size="sm" /></button>
-                  </div>
-                </article>
-              ))}
-              <button type="button" className="ec-create-tile" onClick={handleCreate}>
-                <span className="ec-create-plus">+</span><span>创建专家</span>
-              </button>
-            </div>
-          )}
+          <AssistantsPanel onUseAssistant={handleUseLocal} onToast={onToast} />
         </div>
       </div>
     );

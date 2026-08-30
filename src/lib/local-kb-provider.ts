@@ -27,7 +27,7 @@ export const KB_SHEET_EXTS = [".xlsx"];
 /** 全部 OOXML 扩展(docx/pptx/xlsx)。 */
 export const KB_OFFICE_EXTS = [...KB_DOCX_EXTS, ...KB_PPTX_EXTS, ...KB_SHEET_EXTS];
 
-/** 目录读取注入接口(运行时用 Tauri browse_directory 实现;测试用内存 mock)。 */
+/** 目录读取注入接口(运行时用 Tauri list_dir 实现;测试用内存 mock)。 */
 export interface DirectoryReader {
   /** 列出某目录的直接子项(文件 + 子目录);不存在/失败返回空数组。 */
   listDir(path: string): Promise<Array<{ name: string; path: string; isDir: boolean }>>;

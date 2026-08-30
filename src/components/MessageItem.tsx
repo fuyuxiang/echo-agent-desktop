@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Markdown, type MarkdownConfig } from "./markdown/index";
 import { ToolCallCard } from "./ToolCallCard";
 import { LoadingRow } from "./LoadingRow";
@@ -7,6 +7,42 @@ import { useTheme } from "./ThemeProvider";
 import { useFeedbackStore, type FeedbackRating } from "@/stores/feedback-store";
 import type { ChatMessage, ToolCallView } from "@/stores/session-store";
 import { EXPERT_PERSONA_BEGIN, EXPERT_PERSONA_END } from "@/App";
+import {
+  createWebSpeechTtsProvider,
+  getActiveTts,
+  registerTtsProvider,
+} from "@/lib/voice-contract";
+
+let webSpeechTtsRegistered = false;
+
+function ensureWebSpeechTtsRegistered(): void {
+  if (webSpeechTtsRegistered || typeof window === "undefined") return;
+  webSpeechTtsRegistered = true;
+  if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") return;
+  registerTtsProvider(createWebSpeechTtsProvider({
+    isAvailable: () => "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined",
+    synth: window.speechSynthesis as never,
+    createUtterance: (text, lang, opts) => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = lang;
+      utterance.rate = opts?.rate ?? 1;
+      utterance.pitch = opts?.pitch ?? 1;
+      utterance.onend = () => opts?.onEnd?.();
+      utterance.onerror = () => opts?.onError?.();
+      return utterance as never;
+    },
+  }));
+}
+
+function speechText(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?```/g, "代码块已省略。")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/[#>*_`~-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 /** Strip the hidden expert persona block from text (used on history replay). */
 function stripPersona(text: string): string {
@@ -55,6 +91,10 @@ export function MessageItem({
   onRetry?: () => void;
 }) {
   const { theme } = useTheme();
+  const [speaking, setSpeaking] = useState(false);
+  const stopSpeakingRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => stopSpeakingRef.current?.(), []);
 
   const copyText = useCallback(
     (text: string, label: string) => {
@@ -85,6 +125,34 @@ export function MessageItem({
     })
     .filter(Boolean)
     .join("\n\n");
+
+  const toggleSpeak = useCallback(() => {
+    if (speaking) {
+      stopSpeakingRef.current?.();
+      stopSpeakingRef.current = null;
+      setSpeaking(false);
+      return;
+    }
+    ensureWebSpeechTtsRegistered();
+    const provider = getActiveTts();
+    const text = speechText(plainText);
+    if (!provider || !text) {
+      onToast?.(provider ? "该回复没有可朗读文本" : "当前系统不支持语音朗读");
+      return;
+    }
+    setSpeaking(true);
+    stopSpeakingRef.current = provider.speak(text, "zh-CN", {
+      onEnd: () => {
+        stopSpeakingRef.current = null;
+        setSpeaking(false);
+      },
+      onError: () => {
+        stopSpeakingRef.current = null;
+        setSpeaking(false);
+        onToast?.("语音朗读失败");
+      },
+    });
+  }, [onToast, plainText, speaking]);
 
   if (message.role === "user") {
     return (
@@ -145,6 +213,15 @@ export function MessageItem({
                 title="复制 Markdown 源码"
               >
                 MD
+              </button>
+              <button
+                type="button"
+                className="msg__action-btn"
+                onClick={toggleSpeak}
+                title={speaking ? "停止朗读" : "朗读回复"}
+                aria-pressed={speaking}
+              >
+                {speaking ? "停止" : "朗读"}
               </button>
               {onRetry && (
                 <button

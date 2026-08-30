@@ -4,7 +4,14 @@
  * 数据来自 EchoAgent 的 `x.ai/commands/list`（builtin + skills + plugins 注入的命令）。
  * 用户选中后会把命令名插入到 Composer 输入框。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { commandsList } from "@/lib/agent-client";
 import type { SlashCommand } from "@/lib/types";
 
@@ -17,19 +24,29 @@ interface SlashCommandsProps {
   onPick: (command: string) => void;
 }
 
-export function SlashCommands({ text, cursor, onPick }: SlashCommandsProps) {
+export interface SlashCommandsHandle {
+  handleKeyDown: (event: Pick<KeyboardEvent, "key" | "preventDefault">) => boolean;
+}
+
+export const SlashCommands = forwardRef<SlashCommandsHandle, SlashCommandsProps>(function SlashCommands(
+  { text, cursor, onPick },
+  ref,
+) {
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [activeIdx, setActiveIdx] = useState(0);
   const loadedRef = useRef(false);
 
-  // Load commands once on mount.
+  const token = text.slice(0, cursor).match(/\/[^\s/]*$/)?.[0] ?? "";
+
+  // Commands are only needed after the user starts a slash token. This avoids
+  // a backend round-trip for every Composer mounted on screen.
   useEffect(() => {
-    if (loadedRef.current) return;
+    if (!token.startsWith("/") || loadedRef.current) return;
     loadedRef.current = true;
     commandsList()
       .then(setCommands)
       .catch(() => setCommands([]));
-  }, []);
+  }, [token]);
 
   // Detect if the user just typed "/xxx" at the start of a token.
   const { visible, query, matches } = useMemo(() => {
@@ -57,10 +74,18 @@ export function SlashCommands({ text, cursor, onPick }: SlashCommandsProps) {
     setActiveIdx(0);
   }, [query]);
 
-  // Keyboard nav is handled by the parent Composer via onPick — we only
-  // render; the Composer calls our handlers through refs below if needed.
-  // Simpler approach: expose up/down/enter via window event the Composer can
-  // dispatch. For now, click-only.
+  useImperativeHandle(ref, () => ({
+    handleKeyDown: (event) => slashCommandsKeyHandler(
+      event,
+      visible ? matches.length : 0,
+      activeIdx,
+      setActiveIdx,
+      () => {
+        const command = matches[activeIdx];
+        if (command) onPick(`/${command.name}`);
+      },
+    ),
+  }), [activeIdx, matches, onPick, visible]);
 
   if (!visible) return null;
 
@@ -89,12 +114,12 @@ export function SlashCommands({ text, cursor, onPick }: SlashCommandsProps) {
       </ul>
     </div>
   );
-}
+});
 
 /** Expose a keyboard handler so the Composer can route ↑↓Enter to the menu.
  *  Returns true if the key was consumed. */
 export function slashCommandsKeyHandler(
-  e: KeyboardEvent,
+  e: Pick<KeyboardEvent, "key" | "preventDefault">,
   matchCount: number,
   activeIdx: number,
   setActiveIdx: (n: number) => void,

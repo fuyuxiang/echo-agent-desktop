@@ -34,8 +34,6 @@ import {
   MyFilesIconV2,
   MoreMenuImaKnowledgeIcon,
   MoreMenuInspirationIcon,
-  MoreMenuTencentDocsIcon,
-  MoreMenuTencentLexiangIcon,
 } from "@/foundation/components/Icon/icons";
 import { APP_VERSION } from "@/lib/app-version";
 
@@ -320,17 +318,14 @@ function SessionContextMenu({ x, y, sessionId, sessionTitle, isPinned, onClose, 
 /**
  * "更多" 侧栏按钮的弹出菜单 — 对齐 EchoAgent：
  * - hover 打开，向右浮出（不向下盖住会话列表）
- * - 菜单项：我的文件 / 腾讯文档 / ima知识库 / 乐享知识库 / 灵感
- *
- * 腾讯系三项在 EchoAgent 暂无完整对接，点击给 toast；可导航项走 onNavigate。
+ * - 只展示已经接通的本地文件、知识库、网页预览、灵感、
+ *   用量、通知、策略与云存储入口。
  */
 function MoreDropdown({
   onNavigate,
-  onToast,
   activeNav,
 }: {
   onNavigate: (label: string) => void;
-  onToast?: (message: string) => void;
   activeNav: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -379,10 +374,7 @@ function MoreDropdown({
     activeNav === "更多" ||
     activeNav === "资料库" ||
     activeNav === "灵感" ||
-    activeNav === "我的文件" ||
-    activeNav === "腾讯文档" ||
-    activeNav === "ima知识库" ||
-    activeNav === "乐享知识库";
+    activeNav === "我的文件";
 
   const ITEMS: {
     id: string;
@@ -400,30 +392,12 @@ function MoreDropdown({
       },
     },
     {
-      id: "tencent_docs",
-      label: "腾讯文档",
-      icon: <MoreMenuTencentDocsIcon size="md" />,
-      action: () => {
-        setOpen(false);
-        onToast?.("腾讯文档：企业版功能，需腾讯内网环境");
-      },
-    },
-    {
       id: "knowledge_base",
       label: "知识库",
       icon: <MoreMenuImaKnowledgeIcon size="md" />,
       action: () => {
         setOpen(false);
         onNavigate("知识库");
-      },
-    },
-    {
-      id: "lexiang_kb",
-      label: "乐享知识库",
-      icon: <MoreMenuTencentLexiangIcon size="md" />,
-      action: () => {
-        setOpen(false);
-        onToast?.("乐享知识库：企业版功能，需腾讯内网环境");
       },
     },
     {
@@ -823,7 +797,7 @@ export function Sidebar({
             <span>{label}</span>
           </button>
         ))}
-        <MoreDropdown onNavigate={onNavigate} onToast={onToast} activeNav={activeNav} />
+        <MoreDropdown onNavigate={onNavigate} activeNav={activeNav} />
       </nav>
 
       <div className="sidebar__content">

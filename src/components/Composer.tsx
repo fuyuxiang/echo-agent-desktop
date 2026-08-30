@@ -20,7 +20,7 @@ import {
 } from "@/lib/input-history";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { PermissionPicker } from "./PermissionPicker";
-import { SlashCommands } from "./SlashCommands";
+import { SlashCommands, type SlashCommandsHandle } from "./SlashCommands";
 import { InputAddMenu } from "./InputAddMenu";
 import {
   collectDroppedPaths,
@@ -58,7 +58,6 @@ export function Composer({
   apiReady = true,
   setupHint = "请先配置 API Key 开始使用",
   onOpenSettings,
-  onPlaceholder,
   onToast,
   showMeta = false,
   showDisclaimer = false,
@@ -102,7 +101,7 @@ export function Composer({
 }: {
   streaming: boolean;
   disabled?: boolean;
-  onSend: (text: string, attachments?: string[]) => void;
+  onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onCancel: () => void;
   placeholder?: string;
   apiReady?: boolean;
@@ -194,9 +193,15 @@ export function Composer({
   const recognitionRef = useRef<VoiceRecognition | null>(null);
   const nativeVoiceActiveRef = useRef(false);
   const nativeVoiceBaseRef = useRef("");
+  const mountedRef = useRef(true);
   const onDraftChangeRef = useRef(onDraftChange);
   const onToastRef = useRef(onToast);
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     onDraftChangeRef.current = onDraftChange;
@@ -372,7 +377,6 @@ export function Composer({
       onToast?.(nativeError
         ? `原生语音不可用：${String(nativeError).replace(/^Error:\s*/, "")}`
         : "当前环境不支持语音输入");
-      onPlaceholder?.("语音输入");
       return;
     }
     const rec = new Ctor();
@@ -419,28 +423,44 @@ export function Composer({
     };
   }, []);
 
-  const send = () => {
+  const [sending, setSending] = useState(false);
+
+  const send = async () => {
     const t = text.trim();
     // 允许空消息发送，或者需要有附件
-    if (streaming || disabled || !apiReady) {
-      console.log('Send blocked:', { streaming, disabled, apiReady });
-      return;
-    }
+    if (streaming || sending || disabled || !apiReady) return;
     let body = t;
     // 把"操作类型"标签作为上下文前缀一并发出(后端正文仍是可运行的 prompt)。
     if (sceneTag) {
       body = body ? `【${sceneTag.label}】${body}` : `【${sceneTag.label}】`;
     }
-    console.log('Sending:', body || '(empty message)');
-    onSend(body || "请分析附件。", attachments);
+    setSending(true);
+    try {
+      const result = onSend(body || "请分析附件。", attachments);
+      const accepted = result && typeof (result as PromiseLike<boolean | void>).then === "function"
+        ? await result
+        : result;
+      if (accepted === false) return;
+    } catch (error) {
+      onToast?.(`发送失败：${String(error).replace(/^Error:\s*/, "")}`);
+      return;
+    } finally {
+      if (mountedRef.current) setSending(false);
+    }
     // 记入输入历史(arrow-key recall)。
     if (body && body.trim()) {
       histRef.current = pushHistory(histRef.current, body);
       histCursorRef.current = histRef.current.items.length;
       draftRef.current = "";
     }
-    updateText(""); // 发送后清空输入框,同时把草稿也清掉(否则切回还会带回来)。
-    setAttachments([]);
+    if (mountedRef.current) {
+      updateText(""); // 后端接受后才清空输入框与草稿。
+      setAttachments([]);
+    } else {
+      // 新建会话会在 agent_send 确认前切换页面；即使组件已卸载，
+      // 也要清除已成功发送的持久化首页草稿。
+      onDraftChangeRef.current?.("");
+    }
     onClearSceneTag?.();
   };
 
@@ -527,10 +547,9 @@ export function Composer({
     };
   }, []);
 
-  const ph = (label: string) => onPlaceholder?.(label);
-
   // Cursor tracking for slash-command autocomplete.
   const [cursorPos, setCursorPos] = useState(0);
+  const slashCommandsRef = useRef<SlashCommandsHandle>(null);
   // Is the user currently typing a "/xxx" command? Drives SlashCommands menu.
   const wordBeforeCursor = (() => {
     const before = text.slice(0, cursorPos);
@@ -676,12 +695,15 @@ export function Composer({
             setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? cursorPos)
           }
           onKeyDown={(e) => {
+            if (
+              !e.nativeEvent.isComposing
+              && slashCommandsRef.current?.handleKeyDown(e)
+            ) {
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              if (slashVisible) {
-                return;
-              }
               e.preventDefault();
-              send();
+              void send();
               return;
             }
             // 输入历史 arrow-key recall(对齐 EchoAgent use-input-history)。
@@ -727,6 +749,7 @@ export function Composer({
         />
         {/* Slash-command autocomplete */}
         <SlashCommands
+          ref={slashCommandsRef}
           text={text}
           cursor={cursorPos}
           onPick={handleSlashPick}
@@ -782,7 +805,7 @@ export function Composer({
               className="echo-composer__model"
               onClick={(e) => {
                 e.stopPropagation();
-                ph("模型选择");
+                onOpenSettings?.();
               }}
             >
               Auto <ChevronDownIcon size="sm" />
@@ -841,9 +864,9 @@ export function Composer({
                 e.stopPropagation();
                 send();
               }}
-              disabled={disabled || !apiReady}
+              disabled={disabled || !apiReady || sending}
               aria-label="发送"
-              title={!apiReady ? setupHint : "发送消息"}
+              title={!apiReady ? setupHint : sending ? "正在发送" : "发送消息"}
             >
               <SendPlaneIcon size="md" />
             </button>
@@ -859,11 +882,7 @@ export function Composer({
               workspaces={workspaces!}
               onSelectWorkspace={onSelectWorkspace!}
             />
-          ) : (
-            <button className="echo-composer-meta__btn" onClick={() => ph("选择工作空间")}>
-              选择工作空间 <ChevronDownIcon size="sm" />
-            </button>
-          )}
+          ) : null}
           <PermissionPicker onToast={onToast} />
         </div>
       )}

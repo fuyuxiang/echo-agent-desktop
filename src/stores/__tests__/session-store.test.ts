@@ -126,6 +126,30 @@ describe("session-store transcripts", () => {
     expect(textOf(1)).toBe("so far more");
   });
 
+  it("agent_send 拒绝时回滚未提交的用户消息和空助手占位", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.pushUser("请不要丢失");
+    s.startStreaming();
+    expect(useSessionStore.getState().messages).toHaveLength(2);
+
+    s.rollbackPendingTurn();
+    expect(useSessionStore.getState().messages).toEqual([]);
+    expect(useSessionStore.getState().streaming).toBe(false);
+  });
+
+  it("已有流式内容时不回滚已开始的 turn", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.pushUser("q");
+    s.startStreaming();
+    s.applyUpdate(chunk("partial", "A"));
+
+    s.rollbackPendingTurn();
+    expect(useSessionStore.getState().messages).toHaveLength(2);
+    expect(textOf(1)).toBe("partial");
+  });
+
   it("foreign update 无监听也不污染当前会话(路由到各自 transcript)", () => {
     const s = useSessionStore.getState();
     s.setSession("B");

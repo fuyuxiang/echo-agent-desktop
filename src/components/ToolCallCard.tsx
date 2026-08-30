@@ -193,7 +193,8 @@ export function ToolCallDetailBody({
  */
 function CommandRiskBadge({ command }: { command: string }) {
   const risk = checkCommandRisk(command);
-  // Sandbox path guard (tsbx alternative): check if command accesses protected paths.
+  // Renderer-side policy precheck. This is a warning only; actual execution
+  // authorization is enforced by EchoAgent's backend permission rules.
   const sandboxCheck = precheckCommand(command);
   const hasRisk = risk.level !== "low";
   const hasSandboxDeny = sandboxCheck.action === "deny";
@@ -213,8 +214,8 @@ function CommandRiskBadge({ command }: { command: string }) {
   if (hasSandboxDeny) {
     badges.push(
       <span key="sandbox" className="cmd-risk cmd-risk--high" role="status"
-        title={`🛡️ 路径受保护:${sandboxCheck.reason} (${sandboxCheck.target})`}>
-        🛡️ 受保护路径
+        title={`策略预检警告：${sandboxCheck.reason} (${sandboxCheck.target})。最终是否执行由后端权限规则决定。`}>
+        ⚠️ 敏感路径
       </span>,
     );
   }

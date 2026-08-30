@@ -88,3 +88,29 @@ export function planStats(plan: Plan): {
   const progressPct = total > 0 ? Math.round((completed / total) * 100) : 0;
   return { total, completed, inProgress, pending, progressPct };
 }
+
+/** Serialize an edited ACP plan into an explicit runtime instruction. */
+export function planRevisionPrompt(plan: Plan, execute: boolean): string {
+  const statusLabel: Record<PlanEntryStatus, string> = {
+    pending: "待执行",
+    in_progress: "进行中",
+    completed: "已完成",
+  };
+  const priorityLabel: Record<PlanEntryPriority, string> = {
+    high: "高",
+    medium: "中",
+    low: "低",
+  };
+  const entries = plan.entries.map((entry, index) =>
+    `${index + 1}. [${statusLabel[entry.status]}][优先级:${priorityLabel[entry.priority]}] ${entry.content}`,
+  );
+  return [
+    `请用以下用户确认的修订版替换当前执行计划：`,
+    "",
+    ...entries,
+    "",
+    execute
+      ? "立即严格按此计划继续执行，并通过计划更新回报真实进度。"
+      : "请确认已采用该计划，但暂不要开始新步骤。",
+  ].join("\n");
+}

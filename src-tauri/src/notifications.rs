@@ -298,8 +298,18 @@ fn validate_channel(channel: &NotifyChannel) -> Result<(), String> {
     match channel.kind {
         ChannelKind::SlackWebhook | ChannelKind::DiscordWebhook | ChannelKind::GenericWebhook => {
             let endpoint = channel.endpoint.as_deref().unwrap_or_default();
-            if !(endpoint.starts_with("https://") || endpoint.starts_with("http://")) {
-                return Err("Webhook endpoint 必须是 http:// 或 https:// URL".into());
+            let url = reqwest::Url::parse(endpoint)
+                .map_err(|error| format!("Webhook endpoint URL 无效：{error}"))?;
+            let loopback = url.host_str().is_some_and(|host| {
+                host.eq_ignore_ascii_case("localhost")
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|address| address.is_loopback())
+            });
+            if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+                return Err(
+                    "Webhook endpoint 必须使用 HTTPS（本机 localhost/回环地址除外）".into(),
+                );
             }
         }
         ChannelKind::Email => return Err("邮件自动投递需要 SMTP 凭据，当前版本未开放该渠道".into()),
@@ -703,9 +713,21 @@ mod tests {
         assert!(validate_channel(&NotifyChannel {
             kind: ChannelKind::GenericWebhook,
             endpoint: Some("file:///tmp/not-a-webhook".into()),
-            ..webhook
+            ..webhook.clone()
         })
         .is_err());
+        assert!(validate_channel(&NotifyChannel {
+            kind: ChannelKind::GenericWebhook,
+            endpoint: Some("http://hooks.example.test/insecure".into()),
+            ..webhook.clone()
+        })
+        .is_err());
+        assert!(validate_channel(&NotifyChannel {
+            kind: ChannelKind::GenericWebhook,
+            endpoint: Some("http://127.0.0.1:8080/hook".into()),
+            ..webhook
+        })
+        .is_ok());
     }
 
     #[test]

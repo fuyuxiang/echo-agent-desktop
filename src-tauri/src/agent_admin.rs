@@ -15,7 +15,6 @@
 //! All ACP calls go through `ext::call_ext` / `call_ext_value`. File-backed
 //! reads (memory markdown) go through direct fs (EchoAgent doesn't expose list).
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -762,12 +761,6 @@ pub async fn internal_reload(state: State<'_, AppState>, kind: String) -> Result
     Ok(())
 }
 
-/// Track running tasks by id (placeholder for future use; keeps HashMap import meaningful).
-#[allow(dead_code)]
-fn _task_registry_placeholder() -> HashMap<String, RunningTask> {
-    HashMap::new()
-}
-
 // ========================================================================
 // Inspiration generation (灵感面板)
 // ========================================================================
@@ -797,15 +790,20 @@ fn prompt_for_category(category: &str, count: u32, context: &str) -> String {
     let topic = match category {
         "ai_models" => "AI 大模型 / LLM 前沿（新模型、能力突破、应用案例）",
         "product_design" => "产品设计（交互、用户体验、设计系统趋势）",
-        "office" => "办公协作（效率工具、工作流自动化、团队协作）",
+        "office_collaboration" => "办公协作（效率工具、工作流自动化、团队协作）",
+        "project_management" => "项目管理（计划、风险、协作与交付）",
+        "workplace_skills" => "职场技能（沟通、写作、决策与领导力）",
+        "lifestyle" => "生活方式（时间管理、习惯与生活品质）",
+        "health_wellness" => "健康养生（久坐、用眼、运动、饮食）",
+        "home_organization" => "家居收纳（空间规划、整理方法与物品管理）",
+        "cooking" => "美食烹饪（菜谱、营养搭配与备餐）",
+        "finance" => "理财消费（预算、消费决策与风险意识）",
         "learning" => "学习提升（技术学习路径、好书推荐、认知方法）",
-        "health" => "健康养生（久坐、用眼、运动、饮食）",
         "data_analysis" => "数据分析（可视化、洞察方法、工具）",
         "travel" => "旅行出行",
         "career" => "职业发展 / 职场技能",
-        "industry" => "行业趋势",
-        "efficiency" => "效率工具",
-        "pm" => "项目管理",
+        "industry_trends" => "行业趋势",
+        "efficiency_tools" => "效率工具",
         _ => "综合（你可以自由选择最相关的话题）",
     };
     format!(
@@ -862,16 +860,12 @@ fn read_memory_entries(cwd: Option<&str>) -> Vec<MemoryEntry> {
     out
 }
 
-/// Generate inspiration cards by spinning up a side-channel EchoAgent session.
+/// Prepare an inspiration generation session.
 ///
-/// The session id is prefixed with `__ob_side__` so bridge.rs routes its
-/// streamed updates to `agent://side-update` instead of `agent://update` —
-/// this keeps the main transcript store clean. The frontend subscribes to
-/// `agent://side-update`, accumulates text chunks until `agent://complete`
-/// for that session, then parses the JSON.
-///
-/// Returns the side-channel session id (so the frontend knows what to listen
-/// for) plus the prompt that was sent (for display).
+/// This command intentionally does not send the prompt. The renderer must
+/// first register update/completion listeners and then call `agent_send` with
+/// the returned prompt. Keeping that order prevents fast responses from being
+/// lost between this command returning and the event listeners becoming live.
 #[tauri::command]
 pub async fn inspiration_generate(
     state: State<'_, AppState>,
@@ -893,27 +887,18 @@ pub async fn inspiration_generate(
     let context = build_user_context(Some(&cwd.to_string_lossy()));
     let prompt = prompt_for_category(&request.category, count, &context);
 
-    // Create a side-channel session. We can't force EchoAgent to use a specific
-    // session id, so we create a normal one and tag our routing by checking
-    // a prefix we add to the prompt's _meta. Simpler: we just remember the
-    // returned id and tell the frontend to filter on it. But bridge.rs routes
-    // by prefix `__ob_side__` — EchoAgent won't produce that prefix naturally.
-    //
-    // Resolution: we accept that inspiration updates WILL flow into the main
-    // transcript store unless the user happens to be on a different session.
-    // To avoid that, the frontend immediately calls setSession(null) before
-    // starting generation so there's no "current" transcript to pollute, then
-    // restores it after. This is documented in InspirationTab.
+    // A normal background session is safe here: the transcript store routes
+    // every event by session id, while the inspiration panel installs a
+    // foreign listener for this exact id. The session is never focused or
+    // inserted into the user's sidebar.
     let session_id = crate::agent_runtime::new_session(&tx, &cwd, None)
-        .await
-        .map_err(|e| e.to_string())?;
-    crate::agent_runtime::prompt(&tx, &session_id, &prompt)
         .await
         .map_err(|e| e.to_string())?;
     Ok(InspirationStarted {
         session_id,
         category: request.category,
         count,
+        prompt,
     })
 }
 
@@ -923,6 +908,22 @@ pub struct InspirationStarted {
     pub session_id: String,
     pub category: String,
     pub count: u32,
+    pub prompt: String,
+}
+
+#[cfg(test)]
+mod inspiration_tests {
+    use super::prompt_for_category;
+
+    #[test]
+    fn frontend_category_keys_map_to_specific_topics() {
+        let office = prompt_for_category("office_collaboration", 3, "");
+        let project = prompt_for_category("project_management", 3, "");
+        let health = prompt_for_category("health_wellness", 3, "");
+        assert!(office.contains("办公协作"));
+        assert!(project.contains("项目管理"));
+        assert!(health.contains("健康养生"));
+    }
 }
 
 // ========================================================================

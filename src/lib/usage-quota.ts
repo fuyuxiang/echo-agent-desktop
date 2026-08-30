@@ -20,6 +20,8 @@ export interface UsageRecord {
   cost?: number;
   /** 时间戳(ms)。 */
   ts: number;
+  /** 会话 id；新记录用于去重与追踪，旧数据可能没有。 */
+  sessionId?: string;
 }
 
 /** 用量统计汇总。 */
@@ -52,6 +54,14 @@ export interface QuotaConfig {
 
 const STORAGE_KEY = "echoagent.usage";
 const QUOTA_KEY = "echoagent.quota";
+const SNAPSHOT_KEY = "echoagent.usage-snapshots.v1";
+
+interface CumulativeSnapshot {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+type CumulativeSnapshots = Record<string, CumulativeSnapshot>;
 
 /** 取今日 ISO 日期。 */
 export function todayKey(): string {
@@ -91,7 +101,7 @@ export function loadUsage(): UsageRecord[] {
 /** 追加一条用量记录(自动算费用)。 */
 export function recordUsage(
   records: UsageRecord[],
-  entry: { modelId: string; promptTokens: number; completionTokens: number },
+  entry: { modelId: string; promptTokens: number; completionTokens: number; sessionId?: string },
   config?: QuotaConfig,
 ): UsageRecord[] {
   const cost = estimateCost(entry.modelId, entry.promptTokens, entry.completionTokens, config?.rates);
@@ -102,10 +112,72 @@ export function recordUsage(
     completionTokens: entry.completionTokens,
     cost,
     ts: Date.now(),
+    sessionId: entry.sessionId,
   };
   const next = [...records, record];
   saveUsage(next);
   return next;
+}
+
+/**
+ * EchoAgent 的 `x.ai/session/usage` 返回会话累计值，不是单轮增量。
+ * 这里按会话保存上一个累计快照，只记录差值，避免每轮把历史 token
+ * 重复计入配额。引擎重启导致计数器回退时，将当前值视为新起点。
+ */
+export function recordCumulativeUsage(
+  records: UsageRecord[],
+  entry: {
+    sessionId: string;
+    modelId: string;
+    inputTokens: number;
+    outputTokens: number;
+  },
+  config?: QuotaConfig,
+): UsageRecord[] {
+  const snapshots = loadCumulativeSnapshots();
+  const previous = snapshots[entry.sessionId];
+  const countersReset = !!previous && (
+    entry.inputTokens < previous.inputTokens || entry.outputTokens < previous.outputTokens
+  );
+  const baseInput = previous && !countersReset ? previous.inputTokens : 0;
+  const baseOutput = previous && !countersReset ? previous.outputTokens : 0;
+  const promptTokens = Math.max(0, entry.inputTokens - baseInput);
+  const completionTokens = Math.max(0, entry.outputTokens - baseOutput);
+
+  snapshots[entry.sessionId] = {
+    inputTokens: Math.max(0, entry.inputTokens),
+    outputTokens: Math.max(0, entry.outputTokens),
+  };
+  saveCumulativeSnapshots(snapshots);
+
+  if (promptTokens === 0 && completionTokens === 0) return records;
+  return recordUsage(records, {
+    sessionId: entry.sessionId,
+    modelId: entry.modelId,
+    promptTokens,
+    completionTokens,
+  }, config);
+}
+
+function loadCumulativeSnapshots(): CumulativeSnapshots {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(SNAPSHOT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed as CumulativeSnapshots : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCumulativeSnapshots(snapshots: CumulativeSnapshots): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshots));
+  } catch {
+    /* quota / 隐私模式 —— 静默降级 */
+  }
 }
 
 /** 持久化。 */
@@ -121,6 +193,13 @@ function saveUsage(records: UsageRecord[]): void {
 /** 清空用量(测试/重置用)。 */
 export function clearUsage(): UsageRecord[] {
   saveUsage([]);
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.removeItem(SNAPSHOT_KEY);
+    } catch {
+      /* noop */
+    }
+  }
   return [];
 }
 

@@ -17,9 +17,11 @@ import {
   ConfigRow,
   RefPickerDialog,
   useOutsideClose,
-  PICKER_OPTIONS,
+  useProjectPickerOptions,
+  type ProjectPickerOptions,
 } from "./project-picker";
 import { ProjectDetailView } from "./ProjectDetailView";
+import { projectAssetsRemoveAll } from "@/lib/agent-client";
 
 interface ProjectsPanelProps {
   cwd?: string;
@@ -28,12 +30,16 @@ interface ProjectsPanelProps {
   onStartProject?: (project: ProjectMeta) => void;
   /** Start a new conversation within a project (creates a real EchoAgent session). */
   onStartProjectConversation?: (projectId: string, message: string) => void;
+  onOpenAutomation?: () => void;
 }
 
 const FROM_TEMPLATES = TEMPLATE_OPTIONS.filter((t) => t.id !== "custom");
 
-export function ProjectsPanel({ onToast, onStartProjectConversation }: ProjectsPanelProps) {
+export function ProjectsPanel({ cwd, onToast, onStartProjectConversation, onOpenAutomation }: ProjectsPanelProps) {
   const projects = useProjectsStore((s) => s.projects);
+  const persisting = useProjectsStore((s) => s.persisting);
+  const persistError = useProjectsStore((s) => s.persistError);
+  const retryPersist = useProjectsStore((s) => s.retryPersist);
   const rename = useProjectsStore((s) => s.rename);
   const remove = useProjectsStore((s) => s.remove);
   const activeProjectId = useProjectsStore((s) => s.activeProjectId);
@@ -41,6 +47,7 @@ export function ProjectsPanel({ onToast, onStartProjectConversation }: ProjectsP
   const [query, setQuery] = useState("");
   const [create, setCreate] = useState<CreatePreset | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const picker = useProjectPickerOptions(cwd);
 
   // Auto-open a project when navigated from the sidebar.
   useEffect(() => {
@@ -62,6 +69,8 @@ export function ProjectsPanel({ onToast, onStartProjectConversation }: ProjectsP
         onBack={() => setOpenId(null)}
         onToast={onToast}
         onStartConversation={onStartProjectConversation}
+        picker={picker}
+        onOpenAutomation={onOpenAutomation}
       />
     );
   }
@@ -70,8 +79,17 @@ export function ProjectsPanel({ onToast, onStartProjectConversation }: ProjectsP
     const next = window.prompt("重命名项目", p.name);
     if (next && next.trim() && next.trim() !== p.name) rename(p.id, next.trim());
   };
-  const handleDelete = (p: ProjectMeta) => {
-    if (window.confirm(`确定删除项目「${p.name}」？`)) {
+  const handleDelete = async (p: ProjectMeta) => {
+    const detail = p.assets.length > 0
+      ? `\n项目中的 ${p.assets.length} 项资产副本也会删除。`
+      : "";
+    if (window.confirm(`确定删除项目「${p.name}」？${detail}\n原始文件和历史会话不会被删除。`)) {
+      try {
+        await projectAssetsRemoveAll(p.id);
+      } catch (error) {
+        onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`);
+        return;
+      }
       remove(p.id);
       onToast?.("已删除项目");
     }
@@ -79,16 +97,24 @@ export function ProjectsPanel({ onToast, onStartProjectConversation }: ProjectsP
 
   return (
     <div className="project-page">
+      {persistError && (
+        <div className="project-persist-alert" role="alert">
+          <span>项目已保存在本机缓存，但后端落盘失败：{persistError}</span>
+          <button type="button" onClick={retryPersist} disabled={persisting}>
+            {persisting ? "重试中…" : "重试"}
+          </button>
+        </div>
+      )}
       <section className="project-hero">
         <div className="project-hero__text">
           <h1 className="project-hero__title">项目</h1>
-          <p className="project-hero__subtitle">多人协同，打造超级团队</p>
+          <p className="project-hero__subtitle">围绕目标组织上下文、对话与交付资产</p>
           <button type="button" className="project-hero__create" onClick={() => setCreate({})}>
             <AddIcon size="sm" />
             <span>新建项目</span>
           </button>
         </div>
-        <img className="project-hero__art" src={heroImg} alt="多人协同插画" draggable={false} />
+        <img className="project-hero__art" src={heroImg} alt="项目工作台插画" draggable={false} />
       </section>
 
       <section className="project-section">
@@ -119,7 +145,7 @@ export function ProjectsPanel({ onToast, onStartProjectConversation }: ProjectsP
                 project={p}
                 onEnter={() => setOpenId(p.id)}
                 onRename={() => handleRename(p)}
-                onDelete={() => handleDelete(p)}
+                onDelete={() => void handleDelete(p)}
               />
             ))}
           </div>
@@ -158,6 +184,8 @@ export function ProjectsPanel({ onToast, onStartProjectConversation }: ProjectsP
             setCreate(null);
             setOpenId(saved.id);
           }}
+          cwd={cwd}
+          picker={picker}
         />
       )}
     </div>
@@ -225,11 +253,13 @@ function ProjectCard({
 interface CreatePreset { templateId?: string }
 
 function CreateProjectDialog({
-  preset, onCancel, onConfirm,
+  preset, onCancel, onConfirm, cwd, picker,
 }: {
   preset: CreatePreset;
   onCancel: () => void;
   onConfirm: (saved: ProjectMeta) => void;
+  cwd?: string;
+  picker: { options: ProjectPickerOptions; loading: boolean; error: string | null };
 }) {
   const add = useProjectsStore((s) => s.add);
   const initial = preset.templateId ? getTemplate(preset.templateId) : undefined;
@@ -266,6 +296,7 @@ function CreateProjectDialog({
     if (!name.trim()) return;
     const saved = add({
       name: name.trim(),
+      cwd,
       templateId,
       instructions: instructions.trim() || undefined,
       connectors, experts, skills,
@@ -343,7 +374,8 @@ function CreateProjectDialog({
       {pickerFor && (
         <RefPickerDialog
           title={pickerFor === "connectors" ? "连接器" : pickerFor === "experts" ? "专家" : "技能"}
-          options={PICKER_OPTIONS[pickerFor]}
+          options={picker.options[pickerFor]}
+          emptyHint={picker.loading ? "正在读取运行时能力…" : picker.error ? `读取失败：${picker.error}` : `当前没有已启用的${pickerFor === "connectors" ? "连接器" : pickerFor === "experts" ? "Agent" : "Skill"}`}
           selected={pickerFor === "connectors" ? connectors : pickerFor === "experts" ? experts : skills}
           onCancel={() => setPickerFor(null)}
           onConfirm={(items) => setPicked(pickerFor, items)}

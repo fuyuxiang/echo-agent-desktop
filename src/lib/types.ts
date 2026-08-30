@@ -587,6 +587,8 @@ export interface InspirationStarted {
   sessionId: string;
   category: string;
   count: number;
+  /** Generated backend prompt. Send only after stream listeners are live. */
+  prompt: string;
 }
 
 // ---------- xAI API Key 管理 ----------
@@ -832,43 +834,6 @@ export interface SkillCatalog {
   builtinRoot: string;
   categories: SkillCategory[];
   skills: SkillItem[];
-}
-
-// ---------- unified market catalogs (built-in static data) ----------
-
-/** A browsable skill in the static 技能 marketplace (截图 3). The actual install
- *  path for echoagent is local (import a SKILL.md / folder); these entries just
- *  reproduce the EchoAgent catalog UI. */
-export interface SkillCatalogItem {
-  id: string;
-  name: string;
-  desc: string;
-  /** Segment the card belongs to: 推荐 / SkillHub / 套件. */
-  seg: "recommend" | "skillhub" | "plugin";
-  /** Category id within the segment's filter row ("" = uncategorized). */
-  cat: string;
-  /** Shows in the 精选技能 row at the top. */
-  featured?: boolean;
-  /** Optional recommendation label on a featured card. */
-  reason?: string;
-  /** Brand color hint for the letter-avatar icon (e.g. "#1d6f42"). */
-  color?: string;
-}
-
-/** A skill category chip label (截图 3 filter row). */
-export interface SkillCategory {
-  id: string;
-  zh: string;
-}
-
-/** A browsable connector in the static 连接器 list (截图 4). These are MCP-type
- *  connectors; "+" opens the MCP 服务管理 modal rather than one-click install. */
-export interface ConnectorCatalogItem {
-  id: string;
-  name: string;
-  desc: string;
-  /** Brand color hint for the letter-avatar icon. */
-  color?: string;
 }
 
 /** Raw mcp.json file content returned by the `mcp_config_read` command. */
