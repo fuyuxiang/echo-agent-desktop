@@ -15,7 +15,11 @@ use axum::{
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
@@ -188,6 +192,18 @@ fn tools_list_result() -> Value {
             }
         },
         {
+            "name": "knowledge_fetch_doc",
+            "description": "Fetch authorized parsed document text by id. This is the canonical alias used by the organization-memory contract.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                    "doc_id": { "type": "string", "minLength": 1 },
+                    "page": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["doc_id"]
+            }
+        },
+        {
             "name": "knowledge_list_documents",
             "description": "List documents visible to the signed-in user, optionally limited to a scope or title query.",
             "inputSchema": {
@@ -196,6 +212,61 @@ fn tools_list_result() -> Value {
                     "scope_id": { "type": "string" },
                     "query": { "type": "string" }
                 }
+            }
+        },
+        {
+            "name": "knowledge_list_docs",
+            "description": "List documents visible to the signed-in user. Canonical alias of knowledge_list_documents.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                    "scope_id": { "type": "string" },
+                    "query": { "type": "string" }
+                }
+            }
+        },
+        {
+            "name": "knowledge_who_knows",
+            "description": "Find maintainers of authorized documents related to a topic.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": false,
+                "properties": { "topic": { "type": "string", "minLength": 1 } },
+                "required": ["topic"]
+            }
+        },
+        {
+            "name": "knowledge_submit",
+            "description": "Submit a candidate memory to an authorized team or organization review queue. It never publishes directly.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                    "kind": { "type": "string", "enum": ["fact", "decision", "convention", "pitfall", "howto"] },
+                    "content": { "type": "string", "minLength": 1, "maxLength": 2000 },
+                    "rationale": { "type": "string", "maxLength": 2000 },
+                    "target_scope": { "type": "string", "minLength": 1 }
+                },
+                "required": ["kind", "content", "target_scope"]
+            }
+        },
+        {
+            "name": "local_knowledge_search",
+            "description": "Search user-configured on-device knowledge folders. Content remains local and is available only when signed enterprise policy allows local knowledge.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                    "query": { "type": "string", "minLength": 1 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 20, "default": 8 }
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "local_knowledge_fetch",
+            "description": "Fetch a local knowledge file returned by local_knowledge_search. Paths outside configured roots and symbolic-link escapes are rejected.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": false,
+                "properties": { "path": { "type": "string", "minLength": 1 } },
+                "required": ["path"]
             }
         }
     ] })
@@ -237,16 +308,13 @@ async fn tools_call(params: &Value) -> Result<Value, String> {
             }
             crate::org::mcp_json(Method::POST, "/api/v1/retrieve", Some(input)).await?
         }
-        "knowledge_fetch_document" => {
+        "knowledge_fetch_document" | "knowledge_fetch_doc" => {
             let doc_id = required_string(&arguments, "doc_id")?;
-            crate::org::mcp_json(
-                Method::POST,
-                "/api/v1/docs/fetch",
-                Some(json!({ "docId": doc_id })),
-            )
-            .await?
+            let mut input = json!({ "docId": doc_id });
+            copy_non_null(&arguments, "page", &mut input, "page");
+            crate::org::mcp_json(Method::POST, "/api/v1/docs/fetch", Some(input)).await?
         }
-        "knowledge_list_documents" => {
+        "knowledge_list_documents" | "knowledge_list_docs" => {
             let mut url = url::Url::parse("http://local/api/v1/docs").expect("static URL");
             {
                 let mut query = url.query_pairs_mut();
@@ -264,9 +332,277 @@ async fn tools_call(params: &Value) -> Result<Value, String> {
             );
             crate::org::mcp_json(Method::GET, &path, None).await?
         }
+        "knowledge_who_knows" => {
+            let topic = required_string(&arguments, "topic")?;
+            let result = crate::org::mcp_json(
+                Method::POST,
+                "/api/v1/retrieve",
+                Some(json!({ "query": topic, "limit": 20, "multi_hop": false })),
+            )
+            .await?;
+            let mut owners: HashMap<String, (String, usize, Vec<String>)> = HashMap::new();
+            for chunk in result
+                .get("chunks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let Some(owner) = chunk.get("owner") else {
+                    continue;
+                };
+                let Some(id) = owner.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let name = owner
+                    .get("displayName")
+                    .and_then(Value::as_str)
+                    .unwrap_or(id)
+                    .to_string();
+                let title = chunk
+                    .get("docTitle")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let entry = owners
+                    .entry(id.to_string())
+                    .or_insert((name, 0, Vec::new()));
+                entry.1 += 1;
+                if !title.is_empty() && !entry.2.contains(&title) {
+                    entry.2.push(title);
+                }
+            }
+            let mut people = owners
+                .into_iter()
+                .map(|(id, (name, hits, titles))| json!({
+                    "userId": id,
+                    "displayName": name,
+                    "hits": hits,
+                    "reason": format!("维护相关文档：{}", titles.into_iter().take(2).collect::<Vec<_>>().join("、"))
+                }))
+                .collect::<Vec<_>>();
+            people.sort_by_key(|person| {
+                std::cmp::Reverse(person.get("hits").and_then(Value::as_u64).unwrap_or(0))
+            });
+            json!({ "people": people.into_iter().take(5).collect::<Vec<_>>() })
+        }
+        "knowledge_submit" => {
+            let kind = required_string(&arguments, "kind")?;
+            let content = required_string(&arguments, "content")?;
+            let target_scope = required_string(&arguments, "target_scope")?;
+            let mut payload = json!({ "kind": kind, "content": content });
+            copy_non_null(&arguments, "rationale", &mut payload, "rationale");
+            crate::org::mcp_json(
+                Method::POST,
+                "/api/v1/promotions",
+                Some(json!({
+                    "payloadType": "memory",
+                    "payload": payload,
+                    "source": "manual",
+                    "targetScope": target_scope
+                })),
+            )
+            .await?
+        }
+        "local_knowledge_search" => {
+            if !crate::org::local_knowledge_allowed().await {
+                return Err("signed organization policy disables local knowledge".into());
+            }
+            let query = required_string(&arguments, "query")?;
+            let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(8) as usize;
+            json!({ "items": search_local_knowledge(query, limit)? })
+        }
+        "local_knowledge_fetch" => {
+            if !crate::org::local_knowledge_allowed().await {
+                return Err("signed organization policy disables local knowledge".into());
+            }
+            let path = required_string(&arguments, "path")?;
+            let canonical = authorized_local_path(path)?;
+            let text = read_local_knowledge(&canonical)?;
+            json!({ "path": canonical, "text": text })
+        }
         _ => return Err(format!("unknown organization-memory tool: {name}")),
     };
     Ok(tool_result(data, false))
+}
+
+#[derive(Deserialize)]
+struct LocalSource {
+    root: String,
+    #[serde(default = "enabled_by_default")]
+    enabled: bool,
+}
+
+fn enabled_by_default() -> bool {
+    true
+}
+
+fn local_roots() -> Vec<PathBuf> {
+    let Ok(bytes) = std::fs::read(crate::org::local_kb_sources_path()) else {
+        return Vec::new();
+    };
+    let Ok(sources) = serde_json::from_slice::<Vec<LocalSource>>(&bytes) else {
+        return Vec::new();
+    };
+    sources
+        .into_iter()
+        .filter(|source| source.enabled)
+        .filter_map(|source| std::fs::canonicalize(source.root).ok())
+        .filter(|root| root.is_dir())
+        .take(50)
+        .collect()
+}
+
+fn supported_local_file(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("md" | "markdown" | "mdx" | "txt" | "rst" | "log" | "docx" | "pptx" | "xlsx")
+    )
+}
+
+fn local_files() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for root in local_roots() {
+        let mut queue = VecDeque::from([(root, 0usize)]);
+        while let Some((directory, depth)) = queue.pop_front() {
+            if depth > 5 || out.len() >= 500 {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_symlink() {
+                    continue;
+                }
+                let path = entry.path();
+                if kind.is_dir() && depth < 5 {
+                    queue.push_back((path, depth + 1));
+                } else if kind.is_file() && supported_local_file(&path) {
+                    out.push(path);
+                    if out.len() >= 500 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn xml_text(xml: &str) -> String {
+    let mut reader = quick_xml::Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut out = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Text(text)) => {
+                if let Ok(value) = text.decode() {
+                    let value = value.trim();
+                    if !value.is_empty() {
+                        out.push(value.to_string())
+                    }
+                }
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    out.join(" ")
+}
+
+fn read_local_knowledge(path: &Path) -> Result<String, String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("read local knowledge metadata: {error}"))?;
+    if metadata.len() > 5 * 1024 * 1024 {
+        return Err("local knowledge file exceeds 5MB".into());
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "docx" | "pptx" | "xlsx") {
+        let file = std::fs::File::open(path)
+            .map_err(|error| format!("open local Office file: {error}"))?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|error| format!("open local Office ZIP: {error}"))?;
+        let mut parts = Vec::new();
+        for index in 0..archive.len().min(500) {
+            let mut entry = archive
+                .by_index(index)
+                .map_err(|error| format!("read local Office entry: {error}"))?;
+            let name = entry.name().to_string();
+            let selected = match extension.as_str() {
+                "docx" => name == "word/document.xml",
+                "pptx" => name.starts_with("ppt/slides/slide") && name.ends_with(".xml"),
+                "xlsx" => {
+                    (name == "xl/sharedStrings.xml" || name.starts_with("xl/worksheets/sheet"))
+                        && name.ends_with(".xml")
+                }
+                _ => false,
+            };
+            if !selected || entry.size() > 2 * 1024 * 1024 {
+                continue;
+            }
+            let mut xml = String::new();
+            if entry.read_to_string(&mut xml).is_ok() {
+                parts.push(xml_text(&xml))
+            }
+        }
+        return Ok(parts.join("\n"));
+    }
+    std::fs::read_to_string(path).map_err(|error| format!("read local knowledge: {error}"))
+}
+
+fn authorized_local_path(raw: &str) -> Result<PathBuf, String> {
+    let path = std::fs::canonicalize(raw).map_err(|_| "local knowledge file does not exist")?;
+    if !path.is_file() || !supported_local_file(&path) {
+        return Err("unsupported local knowledge file".into());
+    }
+    if !local_roots().iter().any(|root| path.starts_with(root)) {
+        return Err("local knowledge path is outside configured roots".into());
+    }
+    Ok(path)
+}
+
+fn search_local_knowledge(query: &str, limit: usize) -> Result<Vec<Value>, String> {
+    let query_lower = query.to_lowercase();
+    let mut items = Vec::new();
+    for path in local_files() {
+        let title = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        let title_hit = title.to_lowercase().contains(&query_lower);
+        let text = read_local_knowledge(&path).unwrap_or_default();
+        let lower = text.to_lowercase();
+        let Some(position) = lower.find(&query_lower).or_else(|| title_hit.then_some(0)) else {
+            continue;
+        };
+        let start = position.saturating_sub(80);
+        let snippet = text
+            .get(start..text.len().min(start + 320))
+            .unwrap_or(&text)
+            .to_string();
+        items.push(json!({
+            "path": path,
+            "title": title,
+            "snippet": snippet,
+            "source": "local",
+            "openUrl": format!("file://{}", path.to_string_lossy())
+        }));
+        if items.len() >= limit.min(20) {
+            break;
+        }
+    }
+    Ok(items)
 }
 
 fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -386,6 +722,6 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 4);
+        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 10);
     }
 }

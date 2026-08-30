@@ -8,6 +8,10 @@ import {
   LockKeyhole,
   LogOut,
   RefreshCw,
+  Archive,
+  History,
+  ThumbsDown,
+  ThumbsUp,
   Send,
   Upload,
   UserRound,
@@ -21,6 +25,7 @@ import {
   orgAskCancel,
   orgAskStart,
   orgDocumentSubmissionsMine,
+  orgArchiveDocument,
   orgFetchDocument,
   orgListDocuments,
   orgListScopes,
@@ -30,6 +35,11 @@ import {
   orgSession,
   orgSkillSubmissionsMine,
   orgSubmitDocument,
+  orgNewDocumentVersion,
+  orgPublishDocument,
+  orgPublishSkill,
+  orgQaFeedback,
+  orgSetSkillPreference,
   orgSubmitSkill,
   orgSyncSkills,
   type AskCitation,
@@ -51,6 +61,9 @@ const stateLabel = (state: string) => ({
   approved: "已通过",
   rejected: "已拒绝",
   withdrawn: "已撤回",
+  queued: "排队中",
+  scanning: "扫描中",
+  passed: "通过",
   processing: "解析中",
   parsing: "解析中",
   chunking: "切分中",
@@ -83,6 +96,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
   const [tab, setTab] = useState<Tab>("ask");
   const [scopes, setScopes] = useState<OrgScope[]>([]);
   const [selectedScope, setSelectedScope] = useState("");
+  const [publishScope, setPublishScope] = useState("");
   const [documents, setDocuments] = useState<OrgDocument[]>([]);
   const [documentSubmissions, setDocumentSubmissions] = useState<Submission[]>([]);
   const [skills, setSkills] = useState<OrgSkill[]>([]);
@@ -94,6 +108,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
   const [streamingCitations, setStreamingCitations] = useState<AskCitation[]>([]);
   const [askStatus, setAskStatus] = useState("");
   const [asking, setAsking] = useState(false);
+  const [feedbackSent, setFeedbackSent] = useState(false);
   const activeRequest = useRef<string | null>(null);
   const ignoredRequests = useRef(new Set<string>());
 
@@ -113,6 +128,9 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     setSelectedScope((current) => nextScopes.some((scope) => scope.id === current)
       ? current
       : nextScopes.find((scope) => scope.kind === "personal")?.id || nextScopes[0]?.id || "");
+    setPublishScope((current) => nextScopes.some((scope) => scope.id === current && scope.kind !== "personal")
+      ? current
+      : nextScopes.find((scope) => scope.kind === "team")?.id || nextScopes.find((scope) => scope.kind === "org")?.id || "");
   }, []);
 
   useEffect(() => {
@@ -129,6 +147,15 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
   }, [loadWorkspace]);
+
+  useEffect(() => {
+    if (!session?.loggedIn) return;
+    const active = documentSubmissions.some((item) => item.scanStatus === "queued" || item.scanStatus === "scanning")
+      || documents.some((item) => ["pending", "parsing", "chunking", "embedding"].includes(item.status));
+    if (!active) return;
+    const timer = window.setInterval(() => { void loadWorkspace(); }, 3000);
+    return () => window.clearInterval(timer);
+  }, [session?.loggedIn, documentSubmissions, documents, loadWorkspace]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -175,6 +202,9 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     () => scopes.find((scope) => scope.id === selectedScope),
     [scopes, selectedScope],
   );
+  const allowSkillSubmission = session?.bootstrap?.policy.allowSkillSubmission !== false;
+  const allowDocumentUpload = uploadScope?.kind !== "personal"
+    || session?.bootstrap?.policy.allowPersonalCloud !== false;
   const visibleDocuments = useMemo(
     () => selectedScope ? documents.filter((document) => document.scopeId === selectedScope) : documents,
     [documents, selectedScope],
@@ -227,11 +257,13 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     setSession({ loggedIn: false });
     setScopes([]);
     setSelectedScope("");
+    setPublishScope("");
     setDocuments([]);
     setDocumentSubmissions([]);
     setSkills([]);
     setSkillSubmissions([]);
     setAnswer(null);
+    setFeedbackSent(false);
     setStreamingAnswer("");
     setStreamingCitations([]);
     setAskStatus("");
@@ -331,6 +363,65 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     }
   };
 
+  const uploadNewVersion = async (document: OrgDocument) => {
+    const extensions = document.sourceType === "image" ? ["png", "jpg", "jpeg"] : [document.sourceType];
+    const path = await open({ multiple: false, directory: false, filters: [{ name: "同类型新版本", extensions }] });
+    if (typeof path !== "string") return;
+    setBusy(true);
+    try {
+      await orgNewDocumentVersion(document.id, path);
+      onToast?.("新版本已上传；索引完成前旧版本继续生效");
+      await loadWorkspace();
+    } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
+  };
+
+  const archiveDocument = async (document: OrgDocument) => {
+    setBusy(true);
+    try {
+      await orgArchiveDocument(document.id);
+      onToast?.("文档已归档并从检索中移除");
+      await loadWorkspace();
+    } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
+  };
+
+  const publishDocument = async (document: OrgDocument) => {
+    if (!publishScope) return;
+    setBusy(true);
+    try {
+      const result = await orgPublishDocument(document.id, publishScope);
+      onToast?.(result.state === "pending" ? "已生成不可变副本并提交审核" : "文档副本已发布");
+      await loadWorkspace();
+    } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
+  };
+
+  const toggleSkill = async (skill: OrgSkill) => {
+    setBusy(true);
+    try {
+      await orgSetSkillPreference(skill.skillId, !skill.enabled);
+      onToast?.(skill.enabled ? "Skill 已停用并从 Runtime 移除" : "Skill 已启用并完成安全同步");
+      await loadWorkspace();
+    } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
+  };
+
+  const publishSkill = async (skill: OrgSkill) => {
+    if (!publishScope) return;
+    setBusy(true);
+    try {
+      const result = await orgPublishSkill(skill.skillId, publishScope);
+      onToast?.(result.state === "pending" ? "Skill 副本已提交目标范围审核" : "Skill 副本已发布");
+      await loadWorkspace();
+    } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
+  };
+
+  const sendFeedback = async (feedback: "helpful" | "not_helpful" | "wrong") => {
+    if (!answer?.qaEventId) return;
+    try {
+      await orgQaFeedback(answer.qaEventId, feedback);
+      setFeedbackSent(true);
+      onToast?.("感谢反馈");
+    } catch (reason) { setError(String(reason)); }
+  };
+
   const syncSkills = async () => {
     setBusy(true);
     setError(null);
@@ -428,6 +519,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
               <div className="org-answer__meta"><span>{answer.mode === "deep" ? "深度综合" : "快速检索"}</span><span>置信度 {Math.round(answer.confidence * 100)}%</span><span>{answer.verification}</span></div>
               {answer.insufficient ? <div className="org-answer__empty">授权范围内没有足够证据回答这个问题。</div> : <Markdown>{answer.answer}</Markdown>}
               {answer.citations.length > 0 && <CitationList citations={answer.citations} />}
+              {answer.qaEventId && <div className="org-library__actions">{feedbackSent ? <span>已记录反馈</span> : <><button onClick={() => void sendFeedback("helpful")}><ThumbsUp size={13} />有帮助</button><button onClick={() => void sendFeedback("not_helpful")}><ThumbsDown size={13} />没帮助</button><button onClick={() => void sendFeedback("wrong")}>引用有误</button></>}</div>}
             </article>
           )}
         </section>
@@ -437,17 +529,18 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
         <section className="org-library">
           <div className="org-library__toolbar">
             <div><h2>共享文档</h2><p>个人范围自动发布；团队/组织范围由成员提交、知识管理员审核后才进入检索。</p></div>
-            <button className="org-memory__primary" onClick={() => void pickAndUploadDocument()} disabled={busy || !uploadScope}><Upload size={15} />上传到当前范围</button>
+            <div className="org-library__actions">{uploadScope?.kind === "personal" && <select value={publishScope} onChange={(event) => setPublishScope(event.target.value)}><option value="">选择副本发布目标</option>{scopes.filter((scope) => scope.kind !== "personal").map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select>}<button className="org-memory__primary" onClick={() => void pickAndUploadDocument()} disabled={busy || !uploadScope || !allowDocumentUpload}><Upload size={15} />上传到当前范围</button></div>
           </div>
           <div className="org-library__list">
             {visibleDocuments.length === 0 && <div className="org-library__empty">当前授权范围还没有已发布文档</div>}
-            {visibleDocuments.map((document) => (
-              <div className="org-library__row" key={document.id}>
+            {visibleDocuments.map((document) => {
+              const mayManage = document.scopeKind === "personal" || session.user?.role !== "member";
+              return <div className="org-library__row" key={document.id}>
                 <div className="org-library__icon"><FileText size={18} /></div>
                 <div className="org-library__main"><strong>{document.title}</strong><span>{document.scopeName} · {document.sourceType.toUpperCase()} · {readableBytes(document.byteSize)} · {document.chunkCount} 个知识片段</span>{document.failReason && <em>{document.failReason}</em>}</div>
-                <span className={`org-state org-state--${document.status}`}>{stateLabel(document.status)}</span>
+                <div className="org-library__actions">{document.scopeKind === "personal" && <button onClick={() => void publishDocument(document)} disabled={busy || !publishScope}>发布副本</button>}{mayManage && <><button onClick={() => void uploadNewVersion(document)} disabled={busy}><History size={13} />新版本</button><button onClick={() => void archiveDocument(document)} disabled={busy}><Archive size={13} />归档</button></>}<span className={`org-state org-state--${document.status}`}>{stateLabel(document.status)}</span></div>
               </div>
-            ))}
+            })}
           </div>
           <SubmissionList title="我的文档提交" submissions={visibleDocumentSubmissions} />
         </section>
@@ -457,7 +550,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
         <section className="org-library">
           <div className="org-library__toolbar">
             <div><h2>组织 Skills</h2><p>服务端审核、签名并分发；客户端验签后安装到只读版本目录，由 Agent 新会话加载。</p></div>
-            <div className="org-library__actions"><button onClick={() => void syncSkills()} disabled={busy}><RefreshCw size={15} />安全同步</button><button className="org-memory__primary" onClick={() => void pickAndUploadSkill()} disabled={busy || !uploadScope}><Upload size={15} />上传 ZIP</button></div>
+            <div className="org-library__actions"><button onClick={() => void syncSkills()} disabled={busy}><RefreshCw size={15} />安全同步</button><button className="org-memory__primary" onClick={() => void pickAndUploadSkill()} disabled={busy || !uploadScope || !allowSkillSubmission}><Upload size={15} />上传 ZIP</button></div>
           </div>
           <div className="org-skill-grid">
             {visibleSkills.length === 0 && <div className="org-library__empty">当前授权范围还没有已发布 Skills</div>}
@@ -465,7 +558,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
               <article className="org-skill-card" key={skill.skillId}>
                 <div><strong>{skill.name}</strong><span>v{skill.version}</span></div>
                 <p>{skill.description}</p>
-                <footer><span className={`org-scope-badge org-scope-badge--${skill.scopeKind}`}><ScopeIcon kind={skill.scopeKind} />{skill.scopeName}</span>{skill.mandatory && <span className="org-state org-state--ready">组织强制</span>}</footer>
+                <footer><span className={`org-scope-badge org-scope-badge--${skill.scopeKind}`}><ScopeIcon kind={skill.scopeKind} />{skill.scopeName}</span>{skill.scopeKind === "personal" && <button onClick={() => void publishSkill(skill)} disabled={busy || !publishScope}>发布副本</button>}{skill.mandatory ? <span className="org-state org-state--ready">组织强制</span> : <button onClick={() => void toggleSkill(skill)} disabled={busy}>{skill.enabled ? "停用" : "启用"}</button>}</footer>
               </article>
             ))}
           </div>
@@ -474,6 +567,19 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
       )}
     </div>
   );
+}
+
+export function parseEchoDocumentUrl(value: string): { docId: string; page?: number } {
+  const url = new URL(value);
+  if (url.protocol !== "echo:" || url.hostname !== "doc") throw new Error("引用链接协议无效");
+  const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const docId = parts[0];
+  if (!docId) throw new Error("引用缺少文档 ID");
+  const pageFromPath = parts[1] === "page" ? Number(parts[2]) : undefined;
+  const pageFromQuery = url.searchParams.has("page") ? Number(url.searchParams.get("page")) : undefined;
+  const page = pageFromPath ?? pageFromQuery;
+  if (page !== undefined && (!Number.isInteger(page) || page < 1)) throw new Error("引用页码无效");
+  return { docId, ...(page !== undefined ? { page } : {}) };
 }
 
 function CitationList({ citations }: { citations: AskCitation[] }) {
@@ -485,7 +591,9 @@ function CitationList({ citations }: { citations: AskCitation[] }) {
     setLoadingId(citation.id);
     setError(null);
     try {
-      const document = await orgFetchDocument(citation.docId, citation.page);
+      const target = parseEchoDocumentUrl(citation.openUrl);
+      if (target.docId !== citation.docId) throw new Error("引用文档 ID 与签名结果不一致");
+      const document = await orgFetchDocument(target.docId, target.page ?? citation.page);
       setPreview({ id: citation.id, text: document.text });
     } catch (reason) {
       setError(String(reason));
@@ -498,5 +606,5 @@ function CitationList({ citations }: { citations: AskCitation[] }) {
 
 function SubmissionList({ title, submissions }: { title: string; submissions: Submission[] }) {
   if (submissions.length === 0) return null;
-  return <div className="org-submissions"><h3>{title}</h3>{submissions.slice(0, 8).map((submission) => <div key={submission.id ?? submission.submissionId}><span>{submission.title ?? submission.name} {submission.version ? `v${submission.version}` : ""}</span><small>{submission.scopeName}</small><span className={`org-state org-state--${submission.state}`}>{stateLabel(submission.state)}</span>{submission.reviewNote && <em>{submission.reviewNote}</em>}</div>)}</div>;
+  return <div className="org-submissions"><h3>{title}</h3>{submissions.slice(0, 8).map((submission) => <div key={submission.id ?? submission.submissionId}><span>{submission.title ?? submission.name} {submission.version ? `v${submission.version}` : ""}</span><small>{submission.scopeName}</small>{submission.scanStatus && <span className={`org-state org-state--${submission.scanStatus}`}>扫描：{stateLabel(submission.scanStatus)}</span>}<span className={`org-state org-state--${submission.state}`}>{stateLabel(submission.state)}</span>{submission.reviewNote && <em>{submission.reviewNote}</em>}{submission.scanReport?.findings.filter((item) => item.severity !== "info").map((item) => <em key={`${item.code}-${item.path ?? ""}`}>{item.code}：{item.message}{item.path ? ` (${item.path})` : ""}</em>)}</div>)}</div>;
 }

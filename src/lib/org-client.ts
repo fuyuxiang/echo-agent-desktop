@@ -68,6 +68,11 @@ export interface Submission {
   scopeName: string;
   scopeKind: OrgScopeKind;
   reviewNote?: string | null;
+  scanStatus?: "queued" | "scanning" | "passed" | "failed";
+  scanReport?: {
+    status: "passed" | "failed";
+    findings: Array<{ code: string; severity: string; message: string; path?: string }>;
+  } | null;
   resultDocumentId?: string | null;
   createdAt: number;
 }
@@ -83,6 +88,7 @@ export interface OrgSkill {
   scopeName: string;
   mandatory: boolean;
   allowPersonalOverride: boolean;
+  enabled: boolean;
   updatedAt: number;
 }
 
@@ -118,6 +124,7 @@ export interface AskFinal {
   confidence: number;
   insufficient: boolean;
   traceId: string;
+  qaEventId?: string;
   mode: "fast" | "deep";
   verification: string;
 }
@@ -147,7 +154,18 @@ export const orgFetchDocument = (docId: string, page?: number | null) =>
     "org_fetch_document",
     { docId, page: page ?? null },
   );
+export const orgArchiveDocument = (docId: string) =>
+  invoke<{ archived: boolean }>("org_archive_document", { docId });
+export const orgNewDocumentVersion = (docId: string, filePath: string) =>
+  invoke<{ docId: string; version: number; status: string }>("org_new_document_version", { docId, filePath });
+export const orgPublishDocument = (docId: string, targetScopeId: string) =>
+  invoke<{ submissionId?: string | null; docId?: string | null; state: string }>("org_publish_document", { docId, targetScopeId });
 export const orgListSkills = () => invoke<OrgSkill[]>("org_list_skills");
+export const orgSkillDetail = (skillId: string) => invoke<Record<string, unknown>>("org_skill_detail", { skillId });
+export const orgSetSkillPreference = (skillId: string, enabled: boolean) =>
+  invoke<{ skillId: string; enabled: boolean }>("org_set_skill_preference", { skillId, enabled });
+export const orgPublishSkill = (skillId: string, targetScopeId: string) =>
+  invoke<{ submissionId: string; skillId: string; version: string; state: string }>("org_publish_skill", { skillId, targetScopeId });
 export const orgSubmitSkill = (filePath: string, scopeId: string, version?: string) =>
   invoke<{ submissionId: string; skillId: string; version: string; state: string }>(
     "org_submit_skill",
@@ -164,5 +182,7 @@ export const orgAskStart = (question: string, mode: string, scopeIds?: string[])
   });
 export const orgAskCancel = (requestId: string) =>
   invoke<boolean>("org_ask_cancel", { requestId });
+export const orgQaFeedback = (qaEventId: string, feedback: "helpful" | "not_helpful" | "wrong") =>
+  invoke<unknown>("org_qa_feedback", { qaEventId, feedback });
 export const listenOrgAsk = (handler: (event: OrgAskEvent) => void): Promise<UnlistenFn> =>
   listen<OrgAskEvent>("org://ask-event", ({ payload }) => handler(payload));

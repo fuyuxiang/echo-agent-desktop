@@ -51,6 +51,7 @@ pub fn run() {
     // 必须在任何 new_session 之前 —— 端口即刻写入 BOUND_PORT 供传参。
     team_mcp::serve();
     org_mcp::serve();
+    org::start_background_sync();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -126,12 +127,20 @@ pub fn run() {
             org::org_list_documents,
             org::org_document_status,
             org::org_fetch_document,
+            org::org_archive_document,
+            org::org_new_document_version,
+            org::org_publish_document,
             org::org_list_skills,
+            org::org_skill_detail,
+            org::org_set_skill_preference,
+            org::org_publish_skill,
             org::org_submit_skill,
             org::org_skill_submissions_mine,
             org::org_sync_skills,
             org::org_ask_start,
             org::org_ask_cancel,
+            org::org_qa_feedback,
+            org::org_local_kb_sources_set,
             // connectors / MCP (x.ai/mcp/*)
             mcp::mcp_list,
             mcp::mcp_upsert,
