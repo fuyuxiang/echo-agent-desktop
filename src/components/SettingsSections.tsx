@@ -267,10 +267,13 @@ export function HelpSettingsPanel() {
       <ul className="help-list">
         <li>
           <ExternalLink size={14} />
-          <a href="#" onClick={(e) => e.preventDefault()}>
+          <a
+            href="https://fuyuxiang.github.io/echo-agent/"
+            target="_blank"
+            rel="noreferrer"
+          >
             EchoAgent 文档
           </a>
-          <span className="help-list__hint">（即将上线）</span>
         </li>
         <li>
           <ExternalLink size={14} />

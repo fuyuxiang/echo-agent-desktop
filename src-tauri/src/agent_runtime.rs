@@ -254,6 +254,18 @@ pub async fn authenticate(tx: &AcpAgentTx, method_id: &str) -> Result<()> {
 /// session's first turn. Persistent registration to config.toml happens
 /// separately after the session exists (team_mcp::persist_registration).
 pub async fn new_session(tx: &AcpAgentTx, cwd: &Path, model_id: Option<&str>) -> Result<String> {
+    new_session_with_options(tx, cwd, model_id, None).await
+}
+
+/// Create a session with optional per-session reasoning effort. Automations
+/// persist the legacy `modelIsThinking` switch; mapping it to `high` makes that
+/// switch affect the actual runtime instead of being dead metadata.
+pub async fn new_session_with_options(
+    tx: &AcpAgentTx,
+    cwd: &Path,
+    model_id: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Result<String> {
     tracing::info!(cwd = %cwd.display(), model_id, "echoagent: new_session send");
     let mut servers = Vec::new();
     if let Some(url) = crate::team_mcp::server_url() {
@@ -270,9 +282,18 @@ pub async fn new_session(tx: &AcpAgentTx, cwd: &Path, model_id: Option<&str>) ->
         ));
     }
     let mut req = acp::NewSessionRequest::new(cwd.to_path_buf()).mcp_servers(servers);
+    let mut meta = serde_json::Map::new();
     if let Some(mid) = model_id.filter(|s| !s.is_empty()) {
-        let meta = serde_json::json!({ "modelId": mid });
-        req = req.meta(meta.as_object().cloned());
+        meta.insert("modelId".into(), serde_json::Value::String(mid.into()));
+    }
+    if let Some(effort) = reasoning_effort.filter(|s| !s.is_empty()) {
+        meta.insert(
+            "reasoningEffort".into(),
+            serde_json::Value::String(effort.into()),
+        );
+    }
+    if !meta.is_empty() {
+        req = req.meta(Some(meta));
     }
     let resp: acp::NewSessionResponse = acp_send(req, tx).await.map_err(|e| {
         tracing::error!(error = ?e, "echoagent: new_session FAILED");

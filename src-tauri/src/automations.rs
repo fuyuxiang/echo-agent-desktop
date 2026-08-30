@@ -27,7 +27,10 @@ use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, Weekday};
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, State};
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+use tauri_plugin_autostart::ManagerExt;
 
 use crate::commands::AppState;
 
@@ -170,6 +173,9 @@ pub struct AutomationRunRecord {
     pub finished_at: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Human-readable dispatch/runtime failure reason.
+    #[serde(default)]
+    pub error: Option<String>,
     #[serde(default)]
     pub archived: bool,
 }
@@ -216,6 +222,46 @@ fn record_access() -> &'static Mutex<()> {
 
 fn full_access_sessions() -> &'static Mutex<HashSet<String>> {
     FULL_ACCESS_SESSIONS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+pub fn has_active_automations() -> bool {
+    let _guard = store_access().lock().unwrap();
+    read_store()
+        .automations
+        .iter()
+        .any(|automation| automation.status == "ACTIVE")
+}
+
+pub fn should_keep_app_alive() -> bool {
+    if has_active_automations() {
+        return true;
+    }
+    let _guard = record_access().lock().unwrap();
+    read_records()
+        .records
+        .iter()
+        .any(|record| record.status == "running")
+}
+
+fn sync_autostart_enabled(app: &AppHandle, enabled: bool) {
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    {
+        let manager = app.autolaunch();
+        let result = if enabled {
+            manager.enable()
+        } else {
+            manager.disable()
+        };
+        if let Err(error) = result {
+            tracing::warn!(%error, enabled, "failed to synchronize automation autostart");
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let _ = (app, enabled);
+}
+
+pub fn sync_autostart_state(app: &AppHandle) {
+    sync_autostart_enabled(app, has_active_automations());
 }
 
 fn write_json(path: &PathBuf, body: &str) -> Result<(), String> {
@@ -396,6 +442,7 @@ fn record_run_started(automation: &Automation, started_at: &str) -> String {
         started_at: started_at.into(),
         finished_at: None,
         session_id: None,
+        error: None,
         archived: false,
     });
     let _ = write_records(&mut records);
@@ -415,7 +462,7 @@ fn record_run_session(record_id: &str, session_id: &str) {
 }
 
 /// Finalize a record as success/failed. The session was linked at dispatch time.
-fn record_run_finished(record_id: &str, ok: bool, session_id: Option<&str>) {
+fn record_run_finished(record_id: &str, ok: bool, session_id: Option<&str>, error: Option<&str>) {
     let _guard = record_access().lock().unwrap();
     let mut records = read_records();
     let now = Local::now().to_rfc3339();
@@ -427,6 +474,7 @@ fn record_run_finished(record_id: &str, ok: bool, session_id: Option<&str>) {
                 "failed".into()
             };
             r.finished_at = Some(now.clone());
+            r.error = (!ok).then(|| error.unwrap_or("自动化执行失败").to_string());
             if let Some(sid) = session_id {
                 r.session_id = Some(sid.into());
             }
@@ -435,35 +483,52 @@ fn record_run_finished(record_id: &str, ok: bool, session_id: Option<&str>) {
     let _ = write_records(&mut records);
 }
 
+#[derive(Debug, Clone)]
+pub struct AutomationCompletion {
+    pub push: bool,
+    pub automation_name: String,
+}
+
 /// Finalize an automation run when the bridge receives prompt_complete.
-/// Returns the automation's external-notification preference when the session
-/// belonged to an automation.
-pub fn complete_run_for_session(session_id: &str, ok: bool) -> Option<bool> {
-    let automation_id = {
+/// Returns notification metadata when the session belonged to an automation.
+pub fn complete_run_for_session(
+    session_id: &str,
+    ok: bool,
+    error: Option<&str>,
+) -> Option<AutomationCompletion> {
+    let automation_identity = {
         let _guard = record_access().lock().unwrap();
         let mut records = read_records();
-        let mut automation_id = None;
+        let mut automation_identity = None;
         let now = Local::now().to_rfc3339();
         for r in &mut records.records {
             if r.status == "running" && r.session_id.as_deref() == Some(session_id) {
                 r.status = if ok { "success" } else { "failed" }.into();
                 r.finished_at = Some(now.clone());
-                automation_id = Some(r.automation_id.clone());
+                r.error = (!ok).then(|| error.unwrap_or("Agent 执行失败").to_string());
+                automation_identity = Some((r.automation_id.clone(), r.automation_name.clone()));
             }
         }
-        if automation_id.is_some() {
+        if automation_identity.is_some() {
             let _ = write_records(&mut records);
         }
-        automation_id
+        automation_identity
     };
     full_access_sessions().lock().unwrap().remove(session_id);
-    automation_id.map(|id| {
+    automation_identity.map(|(id, recorded_name)| {
         let _guard = store_access().lock().unwrap();
         read_store()
             .automations
             .into_iter()
             .find(|a| a.id == id)
-            .is_some_and(|a| a.push_to_we_chat)
+            .map(|a| AutomationCompletion {
+                push: a.push_to_we_chat,
+                automation_name: a.name,
+            })
+            .unwrap_or(AutomationCompletion {
+                push: false,
+                automation_name: recorded_name,
+            })
     })
 }
 
@@ -486,6 +551,7 @@ fn fail_stale_running_records() {
         if record.status == "running" {
             record.status = "failed".into();
             record.finished_at = Some(now.clone());
+            record.error = Some("应用或 Agent 在任务完成前退出".into());
             changed = true;
         }
     }
@@ -504,7 +570,7 @@ fn parse_hhmm(s: &str) -> Option<(u32, u32)> {
     let mut parts = s.split(':');
     let h: u32 = parts.next()?.parse().ok()?;
     let m: u32 = parts.next()?.parse().ok()?;
-    if h > 23 || m > 59 {
+    if parts.next().is_some() || h > 23 || m > 59 {
         return None;
     }
     Some((h, m))
@@ -596,9 +662,13 @@ fn recurring_next(
         ScheduleFreq::YEARLY => {
             let month = *sched.bymonth.first()?;
             let day = *sched.bymonthday.first()?;
-            for year_offset in 0..2 {
+            // Search far enough to cover leap-day schedules. An invalid date in
+            // one year (for example 02-29 in 2027) must not abort the search.
+            for year_offset in 0..=8 {
                 let year = from.year() + year_offset;
-                let date = NaiveDate::from_ymd_opt(year, month, day)?;
+                let Some(date) = NaiveDate::from_ymd_opt(year, month, day) else {
+                    continue;
+                };
                 if let Some(candidate) = at_local(date, h, m) {
                     if candidate > from {
                         return Some(candidate);
@@ -608,7 +678,9 @@ fn recurring_next(
             None
         }
         ScheduleFreq::HOURLY => {
-            // 按间隔: fire at 00:00 + k*intervalHours on selected weekdays.
+            // 按间隔: fire at the configured start time + k*intervalHours on
+            // selected weekdays. The old midnight anchor silently ignored the
+            // time selected in the editor.
             let step = sched.interval_hours.clamp(1, 24);
             let byday = if sched.byday.is_empty() {
                 ALL_DAYS.iter().map(|s| s.to_string()).collect::<Vec<_>>()
@@ -620,9 +692,9 @@ fn recurring_next(
                 if !byday.iter().any(|d| d == weekday_code(date)) {
                     continue;
                 }
-                let mut hour = 0;
+                let mut hour = h;
                 while hour < 24 {
-                    if let Some(candidate) = at_local(date, hour, 0) {
+                    if let Some(candidate) = at_local(date, hour, m) {
                         if candidate > from {
                             return Some(candidate);
                         }
@@ -686,6 +758,24 @@ fn ensure_next_runs(store: &mut AutomationStore, now: DateTime<Local>) {
     for a in &mut store.automations {
         if a.next_run_at.is_none() && a.status == "ACTIVE" {
             a.next_run_at = compute_next_run(a, now);
+            let schedule_finished = if a.schedule_type == "once" {
+                a.scheduled_date
+                    .as_deref()
+                    .and_then(parse_date)
+                    .and_then(|date| {
+                        let (hour, minute) = parse_hhmm(a.scheduled_time.as_deref()?)?;
+                        at_local(date, hour, minute)
+                    })
+                    .is_some_and(|scheduled_at| scheduled_at <= now)
+            } else {
+                a.valid_until_date
+                    .as_deref()
+                    .and_then(parse_date)
+                    .is_some_and(|until| until < now.date_naive())
+            };
+            if a.next_run_at.is_none() && schedule_finished {
+                a.status = "PAUSED".into();
+            }
         }
     }
 }
@@ -716,6 +806,14 @@ fn claim_due(store: &mut AutomationStore, now: DateTime<Local>) -> Vec<Automatio
             a.next_run_at = None;
         } else {
             a.next_run_at = compute_next_run(a, now);
+            if a.next_run_at.is_none()
+                && a.valid_until_date
+                    .as_deref()
+                    .and_then(parse_date)
+                    .is_some_and(|until| until < now.date_naive())
+            {
+                a.status = "PAUSED".into();
+            }
         }
     }
     due
@@ -729,11 +827,117 @@ fn first_cwd(a: &Automation) -> Option<String> {
         .map(|c| c.to_string())
 }
 
+fn validate_weekdays(days: &[String]) -> Result<(), String> {
+    if days.is_empty() {
+        return Err("请至少选择一个星期".into());
+    }
+    if days.iter().any(|d| !ALL_DAYS.contains(&d.as_str())) {
+        return Err("执行星期包含无效值".into());
+    }
+    Ok(())
+}
+
+/// Validate the persisted contract at the backend boundary. Frontend
+/// validation is useful feedback, but direct IPC calls and migrated files must
+/// not be able to create an ACTIVE task that can never produce a next run.
+fn validate_automation_at(a: &Automation, now: DateTime<Local>) -> Result<(), String> {
+    if a.name.trim().is_empty() {
+        return Err("请填写自动化任务名称".into());
+    }
+    if a.prompt.trim().is_empty() {
+        return Err("请填写提示词".into());
+    }
+    if !matches!(a.status.as_str(), "ACTIVE" | "PAUSED") {
+        return Err("自动化任务状态无效".into());
+    }
+    if !matches!(a.permission_mode.as_str(), "default" | "fullAccess") {
+        return Err("自动化权限模式无效".into());
+    }
+    if !matches!(a.schedule_type.as_str(), "recurring" | "once") {
+        return Err("自动化调度类型无效".into());
+    }
+
+    if a.schedule_type == "once" {
+        let date = a
+            .scheduled_date
+            .as_deref()
+            .and_then(parse_date)
+            .ok_or("请选择有效的单次执行日期")?;
+        let (hour, minute) = a
+            .scheduled_time
+            .as_deref()
+            .and_then(parse_hhmm)
+            .ok_or("请选择有效的单次执行时间")?;
+        let candidate = at_local(date, hour, minute).ok_or("单次执行时间在当前时区无效")?;
+        if a.status == "ACTIVE" && candidate <= now {
+            return Err("单次执行时间必须晚于当前时间".into());
+        }
+        return Ok(());
+    }
+
+    if a.schedule.byhour > 23 || a.schedule.byminute > 59 {
+        return Err("执行时间无效".into());
+    }
+    match a.schedule.freq {
+        ScheduleFreq::DAILY => {}
+        ScheduleFreq::WEEKLY => {
+            validate_weekdays(&a.schedule.byday)?;
+            if !(1..=2).contains(&a.schedule.interval) {
+                return Err("每周执行间隔只能是 1 或 2 周".into());
+            }
+        }
+        ScheduleFreq::MONTHLY => {
+            if a.schedule.bymonthday.is_empty()
+                || a.schedule.bymonthday.iter().any(|d| !(1..=31).contains(d))
+            {
+                return Err("请选择有效的每月执行日期".into());
+            }
+        }
+        ScheduleFreq::YEARLY => {
+            if a.schedule.bymonth.len() != 1
+                || a.schedule.bymonthday.len() != 1
+                || !(1..=12).contains(&a.schedule.bymonth[0])
+                || !(1..=31).contains(&a.schedule.bymonthday[0])
+                || !(2000..=2007).any(|year| {
+                    NaiveDate::from_ymd_opt(year, a.schedule.bymonth[0], a.schedule.bymonthday[0])
+                        .is_some()
+                })
+            {
+                return Err("请选择有效的年度执行日期".into());
+            }
+        }
+        ScheduleFreq::HOURLY => {
+            validate_weekdays(&a.schedule.byday)?;
+            if !(1..=24).contains(&a.schedule.interval_hours) {
+                return Err("按间隔执行需设置为 1 至 24 小时".into());
+            }
+        }
+    }
+
+    let valid_from = match a.valid_from_date.as_deref() {
+        Some(raw) => Some(parse_date(raw).ok_or("生效开始日期无效")?),
+        None => None,
+    };
+    let valid_until = match a.valid_until_date.as_deref() {
+        Some(raw) => Some(parse_date(raw).ok_or("生效结束日期无效")?),
+        None => None,
+    };
+    if let (Some(from), Some(until)) = (valid_from, valid_until) {
+        if from > until {
+            return Err("生效开始日期不能晚于结束日期".into());
+        }
+    }
+    if a.status == "ACTIVE" && valid_until.is_some_and(|until| until < now.date_naive()) {
+        return Err("生效日期区间已过期，请更新结束日期".into());
+    }
+    Ok(())
+}
+
 // ---------- Tauri commands ----------
 
 /// Full snapshot: automations (with recomputed next runs) + run records.
 #[tauri::command]
-pub fn automations_snapshot() -> AutomationSnapshot {
+pub fn automations_snapshot(app: AppHandle) -> AutomationSnapshot {
     // Never hold both file-store locks: prompt completion acquires records
     // before looking up its automation, so nested locking here could deadlock.
     let automations = {
@@ -747,6 +951,12 @@ pub fn automations_snapshot() -> AutomationSnapshot {
         let _guard = record_access().lock().unwrap();
         read_records().records
     };
+    sync_autostart_enabled(
+        &app,
+        automations
+            .iter()
+            .any(|automation| automation.status == "ACTIVE"),
+    );
     AutomationSnapshot {
         automations,
         records,
@@ -761,19 +971,13 @@ fn blank_to_none(value: &mut Option<String>) {
 }
 
 #[tauri::command]
-pub fn automations_save(automation: Automation) -> Result<Automation, String> {
+pub fn automations_save(app: AppHandle, automation: Automation) -> Result<Automation, String> {
     crate::policy::require_feature("automations")?;
     if let Some(model_id) = automation.model_id.as_deref() {
         crate::policy::require_model(model_id)?;
     }
     let _guard = store_access().lock().unwrap();
     let mut store = read_store();
-    if automation.name.trim().is_empty() {
-        return Err("name must not be empty".into());
-    }
-    if automation.prompt.trim().is_empty() {
-        return Err("prompt must not be empty".into());
-    }
     let id = if automation.id.is_empty() {
         uuid::Uuid::now_v7().to_string()
     } else {
@@ -794,6 +998,13 @@ pub fn automations_save(automation: Automation) -> Result<Automation, String> {
     blank_to_none(&mut final_automation.scheduled_time);
     blank_to_none(&mut final_automation.valid_from_date);
     blank_to_none(&mut final_automation.valid_until_date);
+    final_automation.name = final_automation.name.trim().to_string();
+    final_automation.prompt = final_automation.prompt.trim().to_string();
+    final_automation.skills.sort();
+    final_automation.skills.dedup();
+    final_automation.connector_ids.sort();
+    final_automation.connector_ids.dedup();
+    validate_automation_at(&final_automation, now_local())?;
     final_automation.next_run_at = compute_next_run(&final_automation, now_local());
 
     if let Some(existing) = store.automations.iter_mut().find(|a| a.id == id) {
@@ -802,39 +1013,78 @@ pub fn automations_save(automation: Automation) -> Result<Automation, String> {
         store.automations.push(final_automation.clone());
     }
     write_store(&store)?;
+    let has_active = store
+        .automations
+        .iter()
+        .any(|automation| automation.status == "ACTIVE");
+    drop(_guard);
+    sync_autostart_enabled(&app, has_active);
     Ok(final_automation)
 }
 
 #[tauri::command]
-pub fn automations_delete(id: String) -> Result<(), String> {
+pub fn automations_delete(app: AppHandle, id: String) -> Result<(), String> {
+    crate::policy::require_feature("automations")?;
     let _guard = store_access().lock().unwrap();
     let mut store = read_store();
+    if !store
+        .automations
+        .iter()
+        .any(|automation| automation.id == id)
+    {
+        return Err(format!("automation {id} not found"));
+    }
     store.automations.retain(|a| a.id != id);
-    write_store(&store)
+    write_store(&store)?;
+    let has_active = store
+        .automations
+        .iter()
+        .any(|automation| automation.status == "ACTIVE");
+    drop(_guard);
+    sync_autostart_enabled(&app, has_active);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn automations_set_status(id: String, status: String) -> Result<(), String> {
+pub fn automations_set_status(app: AppHandle, id: String, status: String) -> Result<(), String> {
+    crate::policy::require_feature("automations")?;
     let _guard = store_access().lock().unwrap();
-    let normalized = match status.to_uppercase().as_str() {
+    let normalized_status = status.to_uppercase();
+    let normalized = match normalized_status.as_str() {
         "ACTIVE" => "ACTIVE",
-        _ => "PAUSED",
+        "PAUSED" => "PAUSED",
+        _ => return Err("自动化任务状态无效".into()),
     };
     let mut store = read_store();
-    for a in &mut store.automations {
-        if a.id == id {
-            a.status = normalized.into();
-        }
+    let automation = store
+        .automations
+        .iter_mut()
+        .find(|a| a.id == id)
+        .ok_or_else(|| format!("automation {id} not found"))?;
+    automation.status = normalized.into();
+    if normalized == "ACTIVE" {
+        validate_automation_at(automation, now_local())?;
     }
     refresh_next_runs(&mut store);
-    write_store(&store)
+    write_store(&store)?;
+    let has_active = store
+        .automations
+        .iter()
+        .any(|automation| automation.status == "ACTIVE");
+    drop(_guard);
+    sync_autostart_enabled(&app, has_active);
+    Ok(())
 }
 
 /// Manually fire an automation now (test run). Opens a new EchoAgent session and
 /// sends the prompt — the result appears in the sidebar like any chat, and a
 /// run record is written for the 运行记录 tab.
 #[tauri::command]
-pub async fn automations_run(state: State<'_, AppState>, id: String) -> Result<(), String> {
+pub async fn automations_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
     crate::policy::require_feature("automations")?;
     let automation = {
         let _guard = store_access().lock().unwrap();
@@ -863,8 +1113,9 @@ pub async fn automations_run(state: State<'_, AppState>, id: String) -> Result<(
     let started = now_local().to_rfc3339();
     let record_id = record_run_started(&automation, &started);
     let result = run_automation_once(&tx, &automation, &PathBuf::from(&cwd), &record_id).await;
-    if result.is_err() {
-        record_run_finished(&record_id, false, None);
+    if let Err(error) = &result {
+        record_run_finished(&record_id, false, None, Some(error));
+        notify_run_failure(&app, &automation, error).await;
     }
     result?;
 
@@ -882,6 +1133,29 @@ pub async fn automations_run(state: State<'_, AppState>, id: String) -> Result<(
     Ok(())
 }
 
+async fn notify_run_failure(app: &AppHandle, automation: &Automation, error: &str) {
+    let body = format!("{}：{}", automation.name, error);
+    crate::notifications::append(
+        crate::notifications::NotificationKind::Error,
+        "自动化任务执行失败",
+        Some(&body),
+        None,
+        "error",
+    );
+    if automation.push_to_we_chat {
+        let _ = crate::notifications::dispatch_automation(
+            app,
+            crate::notifications::NotifyMessage {
+                title: format!("自动化失败：{}", automation.name),
+                body: Some(error.to_string()),
+                level: "error".into(),
+                session_id: None,
+            },
+        )
+        .await;
+    }
+}
+
 /// Open a fresh EchoAgent session and send the automation prompt.
 /// Returns the new session id on success.
 async fn run_automation_once(
@@ -894,9 +1168,19 @@ async fn run_automation_once(
     if let Some(model_id) = automation.model_id.as_deref() {
         crate::policy::require_model(model_id)?;
     }
-    let session_id = crate::agent_runtime::new_session(tx, cwd, automation.model_id.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
+    if !cwd.is_dir() {
+        return Err(format!("自动化工作空间不存在：{}", cwd.display()));
+    }
+    let context = resolve_execution_context(tx, automation, cwd).await?;
+    let reasoning_effort = automation.model_is_thinking.then_some("high");
+    let session_id = crate::agent_runtime::new_session_with_options(
+        tx,
+        cwd,
+        automation.model_id.as_deref(),
+        reasoning_effort,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     record_run_session(record_id, &session_id);
     if automation.permission_mode == "fullAccess" {
         full_access_sessions()
@@ -915,7 +1199,7 @@ async fn run_automation_once(
             },
         );
     }
-    let prompt = automation_prompt(automation);
+    let prompt = automation_prompt(automation, &context);
     crate::agent_runtime::prompt(tx, &session_id, &prompt)
         .await
         .map_err(|e| {
@@ -925,28 +1209,113 @@ async fn run_automation_once(
     Ok(session_id)
 }
 
-fn automation_prompt(automation: &Automation) -> String {
-    let mut context = Vec::new();
+#[derive(Debug, Default)]
+struct AutomationExecutionContext {
+    expert_prompt: Option<String>,
+    skills: Vec<(String, String, String)>,
+    connectors: Vec<String>,
+}
+
+async fn resolve_execution_context(
+    tx: &xai_acp_lib::AcpAgentTx,
+    automation: &Automation,
+    cwd: &PathBuf,
+) -> Result<AutomationExecutionContext, String> {
+    let mut context = AutomationExecutionContext::default();
+
+    if let Some(expert_name) = automation
+        .expert_name
+        .as_deref()
+        .or(automation.expert_id.as_deref())
+    {
+        context.expert_prompt = Some(
+            crate::agents_store::resolve_agent_prompt(
+                expert_name,
+                Some(cwd.to_string_lossy().into_owned()),
+            )
+            .ok_or_else(|| format!("所选专家不存在或没有有效角色定义：{expert_name}"))?,
+        );
+    }
+
     if !automation.skills.is_empty() {
+        let catalog =
+            crate::skills::skills_list_with_tx(tx, Some(cwd.to_string_lossy().into_owned()))
+                .await?;
+        for selected in &automation.skills {
+            let skill = catalog
+                .iter()
+                .find(|skill| skill.name == *selected)
+                .ok_or_else(|| format!("所选技能不存在：{selected}"))?;
+            if !skill.enabled {
+                return Err(format!("所选技能未启用：{selected}"));
+            }
+            let configured_path = skill
+                .path
+                .as_deref()
+                .ok_or_else(|| format!("所选技能缺少本地指令路径：{selected}"))?;
+            let mut skill_path = PathBuf::from(configured_path);
+            if skill_path.is_dir() {
+                skill_path = skill_path.join("SKILL.md");
+            }
+            let raw = std::fs::read_to_string(&skill_path).map_err(|e| {
+                format!(
+                    "读取技能 {selected} 的指令失败（{}）：{e}",
+                    skill_path.display()
+                )
+            })?;
+            let body = crate::agents_store::markdown_body(&raw);
+            if body.is_empty() {
+                return Err(format!("所选技能没有可执行指令：{selected}"));
+            }
+            context.skills.push((
+                selected.clone(),
+                skill_path.to_string_lossy().into_owned(),
+                body,
+            ));
+        }
+    }
+
+    if !automation.connector_ids.is_empty() {
+        let connectors = crate::mcp::mcp_list_with_tx(tx, None).await?;
+        for selected in &automation.connector_ids {
+            let connector = connectors
+                .iter()
+                .find(|connector| connector.name == *selected)
+                .ok_or_else(|| format!("所选连接器未配置：{selected}"))?;
+            if !connector.enabled {
+                return Err(format!("所选连接器未启用：{selected}"));
+            }
+            context.connectors.push(connector.name.clone());
+        }
+    }
+
+    Ok(context)
+}
+
+fn automation_prompt(automation: &Automation, resolved: &AutomationExecutionContext) -> String {
+    let mut context = Vec::new();
+    if let Some(expert_prompt) = &resolved.expert_prompt {
+        let expert_name = automation.expert_name.as_deref().unwrap_or("所选专家");
         context.push(format!(
-            "优先使用这些技能：{}。",
-            automation.skills.join("、")
+            "<automation-expert name=\"{expert_name}\">\n{expert_prompt}\n</automation-expert>\n必须严格按照以上专家角色定义执行。"
         ));
     }
-    if let Some(name) = automation.expert_name.as_deref() {
-        context.push(format!("以专家“{name}”的职责和方法执行。"));
-    }
-    if !automation.connector_ids.is_empty() {
+    for (name, path, body) in &resolved.skills {
         context.push(format!(
-            "需要外部能力时优先使用这些已配置连接器：{}。",
-            automation.connector_ids.join("、")
+            "<automation-skill name=\"{name}\" path=\"{path}\">\n{body}\n</automation-skill>\n这是用户明确选择的技能，必须遵循其中的执行流程。"
+        ));
+    }
+    if !resolved.connectors.is_empty() {
+        context.push(format!(
+            "以下 MCP 连接器已经过运行前检查并处于启用状态；需要外部能力时优先使用：{}。",
+            resolved.connectors.join("、")
         ));
     }
     if context.is_empty() {
         automation.prompt.clone()
     } else {
         format!(
-            "[自动化执行上下文]\n{}\n\n{}",
+            "[自动化执行上下文]\n{}\n\n[自动化任务]\n{}",
             context.join("\n"),
             automation.prompt
         )
@@ -955,20 +1324,26 @@ fn automation_prompt(automation: &Automation) -> String {
 
 #[tauri::command]
 pub fn automation_records_archive(id: String, archived: bool) -> Result<(), String> {
+    crate::policy::require_feature("automations")?;
     let _guard = record_access().lock().unwrap();
     let mut records = read_records();
-    for r in &mut records.records {
-        if r.id == id {
-            r.archived = archived;
-        }
-    }
+    let record = records
+        .records
+        .iter_mut()
+        .find(|record| record.id == id)
+        .ok_or_else(|| format!("automation record {id} not found"))?;
+    record.archived = archived;
     write_records(&mut records)
 }
 
 #[tauri::command]
 pub fn automation_records_delete(id: String) -> Result<(), String> {
+    crate::policy::require_feature("automations")?;
     let _guard = record_access().lock().unwrap();
     let mut records = read_records();
+    if !records.records.iter().any(|record| record.id == id) {
+        return Err(format!("automation record {id} not found"));
+    }
     records.records.retain(|r| r.id != id);
     write_records(&mut records)
 }
@@ -976,15 +1351,26 @@ pub fn automation_records_delete(id: String) -> Result<(), String> {
 // ---------- background scheduler ----------
 
 /// Scheduler tick. Fires any automation whose `next_run_at` has passed.
-pub async fn scheduler_tick(tx: &xai_acp_lib::AcpAgentTx, default_cwd: &PathBuf) {
+pub async fn scheduler_tick(app: &AppHandle, tx: &xai_acp_lib::AcpAgentTx, default_cwd: &PathBuf) {
     let now = now_local();
-    let due = {
+    let (due, active_state_changed, has_active) = {
         let _guard = store_access().lock().unwrap();
         let mut store = read_store();
+        let had_active = store
+            .automations
+            .iter()
+            .any(|automation| automation.status == "ACTIVE");
         let due = claim_due(&mut store, now);
         let _ = write_store(&store);
-        due
+        let has_active = store
+            .automations
+            .iter()
+            .any(|automation| automation.status == "ACTIVE");
+        (due, had_active != has_active, has_active)
     };
+    if active_state_changed {
+        sync_autostart_enabled(app, has_active);
+    }
     for automation in &due {
         let cwd = first_cwd(automation)
             .map(PathBuf::from)
@@ -995,7 +1381,8 @@ pub async fn scheduler_tick(tx: &xai_acp_lib::AcpAgentTx, default_cwd: &PathBuf)
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error = ?e, id = %automation.id, "automation fire failed");
-                record_run_finished(&record_id, false, None);
+                record_run_finished(&record_id, false, None, Some(&e));
+                notify_run_failure(app, automation, &e).await;
             }
         }
     }
@@ -1004,6 +1391,7 @@ pub async fn scheduler_tick(tx: &xai_acp_lib::AcpAgentTx, default_cwd: &PathBuf)
 /// Start a scheduler bound to one runtime. The caller owns and replaces the
 /// returned handle when the runtime restarts.
 pub fn start_scheduler(
+    app: AppHandle,
     tx: xai_acp_lib::AcpAgentTx,
     default_cwd: PathBuf,
 ) -> tokio::task::JoinHandle<()> {
@@ -1012,7 +1400,7 @@ pub fn start_scheduler(
         // Tick every 60s. The first tick is immediate so newly-due tasks fire
         // quickly after app start.
         loop {
-            scheduler_tick(&tx, &default_cwd).await;
+            scheduler_tick(&app, &tx, &default_cwd).await;
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         }
     })
@@ -1050,6 +1438,7 @@ mod tests {
     fn parse_hhmm_invalid() {
         assert_eq!(parse_hhmm("24:00"), None);
         assert_eq!(parse_hhmm("12:60"), None);
+        assert_eq!(parse_hhmm("12:30:00"), None);
         assert_eq!(parse_hhmm("abc"), None);
         assert_eq!(parse_hhmm(""), None);
         assert_eq!(parse_hhmm("12"), None);
@@ -1242,6 +1631,22 @@ mod tests {
         assert_eq!(next, local(2027, 3, 1, 9, 0));
     }
 
+    #[test]
+    fn yearly_leap_day_skips_non_leap_years() {
+        let sched = AutomationSchedule {
+            freq: ScheduleFreq::YEARLY,
+            bymonth: vec![2],
+            bymonthday: vec![29],
+            byhour: 8,
+            byminute: 15,
+            ..Default::default()
+        };
+        let anchor = local(2026, 1, 1, 9, 0);
+        let from = local(2027, 3, 1, 12, 0);
+        let next = recurring_next(&sched, &anchor, from).unwrap();
+        assert_eq!(next, local(2028, 2, 29, 8, 15));
+    }
+
     // --- recurring_next: HOURLY ---
 
     #[test]
@@ -1256,6 +1661,22 @@ mod tests {
         let from = local(2026, 7, 6, 7, 30); // between 06:00 and 09:00
         let next = recurring_next(&sched, &anchor, from).unwrap();
         assert_eq!(next, local(2026, 7, 6, 9, 0));
+    }
+
+    #[test]
+    fn hourly_respects_configured_start_and_minute() {
+        let sched = AutomationSchedule {
+            freq: ScheduleFreq::HOURLY,
+            interval_hours: 3,
+            byday: ALL_DAYS.iter().map(|s| s.to_string()).collect(),
+            byhour: 9,
+            byminute: 30,
+            ..Default::default()
+        };
+        let anchor = local(2026, 7, 6, 0, 0);
+        let from = local(2026, 7, 6, 10, 0);
+        let next = recurring_next(&sched, &anchor, from).unwrap();
+        assert_eq!(next, local(2026, 7, 6, 12, 30));
     }
 
     // --- compute_next_run ---
@@ -1380,6 +1801,39 @@ mod tests {
         assert!(claim_due(&mut store, now + Duration::minutes(1)).is_empty());
     }
 
+    #[test]
+    fn ensure_next_runs_pauses_finished_active_schedules() {
+        let now = local(2026, 7, 6, 10, 0);
+        let expired_recurring = Automation {
+            id: "expired".into(),
+            name: "expired".into(),
+            prompt: "run".into(),
+            valid_until_date: Some("2026-06-30".into()),
+            next_run_at: None,
+            ..test_automation()
+        };
+        let missed_once = Automation {
+            id: "once".into(),
+            name: "once".into(),
+            prompt: "run".into(),
+            schedule_type: "once".into(),
+            scheduled_date: Some("2026-07-05".into()),
+            scheduled_time: Some("09:00".into()),
+            next_run_at: None,
+            ..test_automation()
+        };
+        let mut store = AutomationStore {
+            automations: vec![expired_recurring, missed_once],
+        };
+
+        ensure_next_runs(&mut store, now);
+
+        assert!(store
+            .automations
+            .iter()
+            .all(|automation| automation.status == "PAUSED"));
+    }
+
     // --- first_cwd ---
 
     #[test]
@@ -1415,6 +1869,50 @@ mod tests {
         let mut v3: Option<String> = None;
         blank_to_none(&mut v3);
         assert_eq!(v3, None);
+    }
+
+    #[test]
+    fn validation_rejects_expired_active_window() {
+        let automation = Automation {
+            name: "expired".into(),
+            prompt: "run".into(),
+            valid_until_date: Some("2026-06-30".into()),
+            ..test_automation()
+        };
+        assert_eq!(
+            validate_automation_at(&automation, local(2026, 7, 6, 10, 0)),
+            Err("生效日期区间已过期，请更新结束日期".into())
+        );
+    }
+
+    #[test]
+    fn validation_allows_editing_finished_paused_once_task() {
+        let automation = Automation {
+            name: "finished".into(),
+            prompt: "run".into(),
+            status: "PAUSED".into(),
+            schedule_type: "once".into(),
+            scheduled_date: Some("2026-07-05".into()),
+            scheduled_time: Some("09:00".into()),
+            ..test_automation()
+        };
+        assert!(validate_automation_at(&automation, local(2026, 7, 6, 10, 0)).is_ok());
+    }
+
+    #[test]
+    fn validation_accepts_valid_leap_day_schedule() {
+        let automation = Automation {
+            name: "leap".into(),
+            prompt: "run".into(),
+            schedule: AutomationSchedule {
+                freq: ScheduleFreq::YEARLY,
+                bymonth: vec![2],
+                bymonthday: vec![29],
+                ..Default::default()
+            },
+            ..test_automation()
+        };
+        assert!(validate_automation_at(&automation, local(2026, 7, 6, 10, 0)).is_ok());
     }
 
     // --- migrate_legacy_json ---

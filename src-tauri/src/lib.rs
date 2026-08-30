@@ -35,6 +35,60 @@ mod voice;
 use bridge::{Permissions, Questions};
 use commands::AppState;
 
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::{
+        menu::{Menu, MenuItem},
+        tray::TrayIconBuilder,
+        Manager, WindowEvent,
+    };
+    use tauri_plugin_autostart::MacosLauncher;
+
+    app.handle().plugin(tauri_plugin_autostart::init(
+        MacosLauncher::LaunchAgent,
+        Some(vec!["--background"]),
+    ))?;
+    automations::sync_autostart_state(app.handle());
+
+    let show = MenuItem::with_id(app, "show", "打开 EchoAgent", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 EchoAgent", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let mut tray = TrayIconBuilder::new()
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+
+    if let Some(window) = app.get_webview_window("main") {
+        let close_window = window.clone();
+        window.on_window_event(move |event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if automations::should_keep_app_alive() {
+                    api.prevent_close();
+                    let _ = close_window.hide();
+                }
+            }
+        });
+        if std::env::args().any(|arg| arg == "--background") {
+            let _ = window.hide();
+        }
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logging for debugging
@@ -54,6 +108,11 @@ pub fn run() {
     org::start_background_sync();
 
     tauri::Builder::default()
+        .setup(|app| {
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            setup_desktop_lifecycle(app)?;
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())

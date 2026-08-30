@@ -42,6 +42,8 @@ export interface AutomationTemplate {
   scheduledTime?: string;
   validFromDate?: string;
   validUntilDate?: string;
+  /** Reminder-style templates should proactively notify when they finish. */
+  pushToChannels?: boolean;
   Icon: TemplateIcon;
 }
 
@@ -58,7 +60,25 @@ function daily(byhour: number, byminute = 0): AutomationSchedule {
   };
 }
 
-export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
+function localDateAfter(now: Date, days: number): string {
+  const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + days);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Build templates relative to the day they are shown. Reminder templates used
+ * to contain fixed 2026 dates and silently expired in later releases.
+ */
+export function createAutomationTemplates(now = new Date()): AutomationTemplate[] {
+  const today = localDateAfter(now, 0);
+  const tomorrow = localDateAfter(now, 1);
+  const nextWeek = localDateAfter(now, 7);
+  const inThirtyDays = localDateAfter(now, 30);
+
+  return [
   {
     id: "daily-ai-news",
     title: "每日 AI 新闻推送",
@@ -67,6 +87,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
       "关注当天 AI 领域的重要动态，侧重 AI coding 与具身智能方向。筛选 3-5 条有价值的信息，简要说明事件内容及值得关注的原因。",
     scheduleType: "recurring",
     schedule: daily(9, 0),
+    pushToChannels: true,
     Icon: TemplateNewsIcon,
   },
   {
@@ -154,19 +175,19 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
       byminute: 0,
       intervalHours: 1,
     },
-    validFromDate: "2026-03-18",
-    validUntilDate: "2026-06-30",
+    pushToChannels: true,
     Icon: TemplateAlarmClockIcon,
   },
   {
     id: "health-checkup-appointment-reminder",
     title: "体检预约提醒",
-    content: "在 2026/04/08 07:00 提醒你确认体检时间、准备证件，并注意空腹与其他事项。",
-    prompt: "4月8号七点提醒我确认体检时间、准备证件，提前空腹并留意注意事项。",
+    content: "一周后的 07:00 提醒你确认体检时间、准备证件，并注意空腹与其他事项。",
+    prompt: "提醒我确认体检时间、准备证件，提前空腹并留意注意事项。",
     scheduleType: "once",
     schedule: daily(7, 0),
-    scheduledDate: "2026-04-08",
+    scheduledDate: nextWeek,
     scheduledTime: "07:00",
+    pushToChannels: true,
     Icon: TemplateHospitalIcon,
   },
   {
@@ -185,8 +206,9 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
       byminute: 0,
       intervalHours: 2,
     },
-    validFromDate: "2026-03-18",
-    validUntilDate: "2026-04-30",
+    validFromDate: today,
+    validUntilDate: inThirtyDays,
+    pushToChannels: true,
     Icon: TemplateMessagesSquareIcon,
   },
   {
@@ -196,8 +218,9 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     prompt: "在会议开始前，提醒我整理议题、目标、需要确认的问题，以及要同步的关键结论。",
     scheduleType: "once",
     schedule: daily(14, 30),
-    scheduledDate: "2026-03-22",
+    scheduledDate: tomorrow,
     scheduledTime: "14:30",
+    pushToChannels: true,
     Icon: TemplateListTodoIcon,
   },
   {
@@ -220,4 +243,7 @@ export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
     schedule: daily(21, 0),
     Icon: TemplateImageIcon,
   },
-];
+  ];
+}
+
+export const AUTOMATION_TEMPLATES: AutomationTemplate[] = createAutomationTemplates();

@@ -1146,6 +1146,7 @@ function Shell() {
               label={placeholderView}
               onPlaceholder={handlePlaceholder}
               onNavigate={handleNavigate}
+              onOpenSession={handleSelectSession}
               onGoHome={handleGoHome}
               onStartWithExpert={handleStartWithExpert}
               onToast={showToast}

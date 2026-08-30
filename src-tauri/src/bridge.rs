@@ -466,6 +466,8 @@ async fn handle_client_message(
                 let automation_notification = crate::automations::complete_run_for_session(
                     &session_id,
                     stop_reason != "rate_limit" && stop_reason != "error",
+                    (stop_reason == "rate_limit" || stop_reason == "error")
+                        .then_some(stop_reason.as_str()),
                 );
                 crate::notifications::append(
                     if stop_reason == "rate_limit" || stop_reason == "error" {
@@ -486,35 +488,50 @@ async fn handle_client_message(
                         "info"
                     },
                 );
-                if automation_notification.unwrap_or(true) {
+                if automation_notification
+                    .as_ref()
+                    .map_or(true, |completion| completion.push)
+                {
                     let notify_app = app.clone();
                     let notify_session = session_id.clone();
                     let notify_reason = stop_reason.clone();
+                    let automation_name =
+                        automation_notification.map(|completion| completion.automation_name);
                     tokio::spawn(async move {
                         let failed = notify_reason == "rate_limit" || notify_reason == "error";
-                        let _ = crate::notifications::dispatch_external(
-                            &notify_app,
-                            crate::notifications::NotifyMessage {
-                                title: if failed {
-                                    "EchoAgent 会话失败".into()
+                        let is_automation = automation_name.is_some();
+                        let message = crate::notifications::NotifyMessage {
+                            title: if let Some(name) = &automation_name {
+                                if failed {
+                                    format!("自动化失败：{name}")
                                 } else {
-                                    "EchoAgent 会话完成".into()
-                                },
-                                body: Some(format!(
-                                    "会话 {}（{}）",
-                                    &notify_session[..notify_session.len().min(8)],
-                                    notify_reason
-                                )),
-                                level: if failed {
-                                    "error".into()
-                                } else {
-                                    "info".into()
-                                },
-                                session_id: Some(notify_session),
+                                    format!("自动化完成：{name}")
+                                }
+                            } else if failed {
+                                "EchoAgent 会话失败".into()
+                            } else {
+                                "EchoAgent 会话完成".into()
                             },
-                            None,
-                        )
-                        .await;
+                            body: Some(format!(
+                                "会话 {}（{}）",
+                                &notify_session[..notify_session.len().min(8)],
+                                notify_reason
+                            )),
+                            level: if failed {
+                                "error".into()
+                            } else {
+                                "info".into()
+                            },
+                            session_id: Some(notify_session),
+                        };
+                        if is_automation {
+                            let _ = crate::notifications::dispatch_automation(&notify_app, message)
+                                .await;
+                        } else {
+                            let _ =
+                                crate::notifications::dispatch_external(&notify_app, message, None)
+                                    .await;
+                        }
                     });
                 }
                 let _ = app.emit(

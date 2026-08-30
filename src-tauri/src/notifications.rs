@@ -482,6 +482,54 @@ pub async fn dispatch_external(
     results
 }
 
+/// Deliver an opted-in automation result. A desktop notification is available
+/// out of the box; adding an explicit desktop channel replaces this fallback,
+/// while Slack/Discord/Webhook channels continue to receive the same message.
+pub async fn dispatch_automation(app: &AppHandle, message: NotifyMessage) -> Vec<DeliveryResult> {
+    if crate::policy::require_feature("notifications").is_err() {
+        return Vec::new();
+    }
+    let desktop_configured = {
+        let _guard = channel_access().lock().unwrap();
+        read_channels()
+            .channels
+            .iter()
+            .any(|channel| channel.kind == ChannelKind::Desktop)
+    };
+    let mut results = dispatch_external(app, message.clone(), None).await;
+    if !desktop_configured {
+        match app
+            .notification()
+            .builder()
+            .title(&message.title)
+            .body(message.body.as_deref().unwrap_or_default())
+            .show()
+        {
+            Ok(()) => results.push(DeliveryResult {
+                id: "builtin-desktop".into(),
+                ok: true,
+                error: None,
+            }),
+            Err(error) => {
+                let error = format!("system notification: {error}");
+                append(
+                    NotificationKind::Error,
+                    "通知投递失败",
+                    Some(&error),
+                    message.session_id.as_deref(),
+                    "error",
+                );
+                results.push(DeliveryResult {
+                    id: "builtin-desktop".into(),
+                    ok: false,
+                    error: Some(error),
+                });
+            }
+        }
+    }
+    results
+}
+
 #[tauri::command]
 pub async fn notify_channel_test(app: AppHandle, id: String) -> Result<DeliveryResult, String> {
     let results = dispatch_external(

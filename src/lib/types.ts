@@ -727,6 +727,7 @@ export interface AutomationRunRecord {
   startedAt: string;
   finishedAt?: string;
   sessionId?: string;
+  error?: string;
   archived: boolean;
 }
 

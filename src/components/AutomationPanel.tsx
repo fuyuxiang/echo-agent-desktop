@@ -7,7 +7,7 @@
  *  2. 添加/编辑：全页表单（AutomationEditPage）。
  *  3. 运行记录：空态（暂无运行记录）/ 按 今天·昨天·周X 分组的记录列表 + 状态筛选。
  *
- * 数据：automations_snapshot（本地 JSON 存储 + 进程内调度器）。
+ * 数据：automations_snapshot（本地 JSON 存储 + 桌面端后台调度器）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -78,6 +78,8 @@ import type { ConnectorOption } from "./automation/ConnectorSelector";
 interface AutomationPanelProps {
   onToast?: (msg: string) => void;
   onNavigate?: (label: string) => void;
+  onOpenSession?: (sessionId: string) => void;
+  cwd?: string;
 }
 
 type TabKey = "tasks" | "records";
@@ -145,7 +147,7 @@ function ConfirmDialog({
   );
 }
 
-export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
+export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: AutomationPanelProps) {
   // ---------- 数据 ----------
   const [snapshot, setSnapshot] = useState<AutomationSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -204,8 +206,10 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
     providersList()
       .then((list) => setModels(flattenModels(list)))
       .catch(() => setModels([]));
-    skillsList().then(setSkills).catch(() => setSkills([]));
-    agentsList().then(setExperts).catch(() => setExperts([]));
+    skillsList(cwd)
+      .then((list) => setSkills(list.filter((skill) => skill.enabled)))
+      .catch(() => setSkills([]));
+    agentsList(cwd).then(setExperts).catch(() => setExperts([]));
     mcpList()
       .then((list) =>
         setConnectors(
@@ -213,7 +217,7 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
         ),
       )
       .catch(() => setConnectors([]));
-  }, []);
+  }, [cwd]);
 
   useEffect(() => {
     if (!filterOpen) return;
@@ -228,9 +232,9 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
   const handleCreate = useCallback((template?: AutomationTemplate) => {
     setIsCreating(true);
     setEditingAutomation(null);
-    setDraft(buildDraft(template));
+    setDraft(buildDraft(template, cwd ?? ""));
     setShowTemplatePage(false);
-  }, []);
+  }, [cwd]);
 
   const handleEdit = useCallback((automation: Automation) => {
     setIsCreating(false);
@@ -557,6 +561,7 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
           onOpenConnectorSettings={() => onNavigate?.("专家·技能·连接器")}
           onArchiveRecord={handleArchiveRecord}
           onDeleteRecord={handleDeleteRecord}
+          onOpenSession={onOpenSession}
         />
         <AutomationPermissionConfirmDialog
           open={showPermissionConfirm}
@@ -748,6 +753,11 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
         ) : (
           /* 任务列表：当前 / 已暂停 */
           <div className="atm-task-list">
+            {scheduledAutomations.length > 0 && (
+              <div className="atm-background-notice" role="status">
+                自动化正在后台调度。关闭窗口后会驻留系统托盘，并在开机登录时自动启动；从托盘选择“退出 EchoAgent”会停止本次运行。
+              </div>
+            )}
             {filteredScheduled.length > 0 && <div className="atm-task-group-label">当前</div>}
             {filteredScheduled.map((automation) => (
               <AutomationRow
@@ -837,6 +847,7 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
                       item={item}
                       onArchive={handleArchiveRecord}
                       onDelete={handleDeleteRecord}
+                      onOpenSession={onOpenSession}
                     />
                   ))}
               </div>
@@ -854,7 +865,14 @@ export function AutomationPanel({ onToast, onNavigate }: AutomationPanelProps) {
               </div>
               {archivedGroupOpen &&
                 archivedRecords.map((item) => (
-                  <InboxRow key={item.id} item={item} archived onArchive={handleArchiveRecord} onDelete={handleDeleteRecord} />
+                  <InboxRow
+                    key={item.id}
+                    item={item}
+                    archived
+                    onArchive={handleArchiveRecord}
+                    onDelete={handleDeleteRecord}
+                    onOpenSession={onOpenSession}
+                  />
                 ))}
             </div>
           )}
@@ -1033,11 +1051,13 @@ function InboxRow({
   archived = false,
   onArchive,
   onDelete,
+  onOpenSession,
 }: {
   item: AutomationRunRecord;
   archived?: boolean;
   onArchive: (id: string) => void;
   onDelete: (id: string) => void;
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const isRunning = item.status === "running";
   const date = new Date(item.finishedAt || item.startedAt);
@@ -1045,14 +1065,27 @@ function InboxRow({
   const dateTime = `${formatRunTime(item.finishedAt || item.startedAt)}`;
 
   return (
-    <div className={`atm-row atm-inbox-row${archived ? " atm-archived" : ""}${isRunning ? " atm-inbox-row--running" : ""}`}>
+    <div
+      className={`atm-row atm-inbox-row${archived ? " atm-archived" : ""}${isRunning ? " atm-inbox-row--running" : ""}${item.sessionId ? " atm-inbox-row--openable" : ""}`}
+      title={item.error || (item.sessionId ? "打开本次自动化会话" : undefined)}
+      role={item.sessionId ? "button" : undefined}
+      tabIndex={item.sessionId ? 0 : undefined}
+      onClick={() => item.sessionId && onOpenSession?.(item.sessionId)}
+      onKeyDown={(event) => {
+        if (item.sessionId && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          onOpenSession?.(item.sessionId);
+        }
+      }}
+    >
       <div className="atm-row-left">
         <div className="atm-row-content">
           <div className="atm-row-main atm-row-main-inbox">
             <span className="atm-row-name">{item.automationName}</span>
           </div>
-          <span className="atm-row-result-label" title={recordStatusLabel(item)}>
+          <span className="atm-row-result-label" title={item.error || recordStatusLabel(item)}>
             {recordStatusLabel(item)}
+            {item.error ? ` · ${item.error}` : ""}
           </span>
         </div>
       </div>

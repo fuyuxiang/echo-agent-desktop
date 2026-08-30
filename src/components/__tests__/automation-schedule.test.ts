@@ -10,7 +10,7 @@ import {
   startsInLabel,
   validateDraft,
 } from "../automation/schedule-utils";
-import { AUTOMATION_TEMPLATES } from "../automation/template-config";
+import { AUTOMATION_TEMPLATES, createAutomationTemplates } from "../automation/template-config";
 import type { AutomationSchedule } from "@/lib/types";
 
 function schedule(patch: Partial<AutomationSchedule>): AutomationSchedule {
@@ -71,7 +71,7 @@ describe("schedule-utils", () => {
     ).toBe("每年 6月1日 · 10:00");
     expect(
       describeSchedule({ scheduleType: "recurring", schedule: schedule({ freq: "HOURLY", intervalHours: 2 }) }),
-    ).toBe("每 2 小时");
+    ).toBe("每 2 小时（每天从 09:00 起）");
     expect(
       describeSchedule({ scheduleType: "once", schedule: defaultSchedule(), scheduledDate: "2026-04-08", scheduledTime: "07:00" }),
     ).toBe("单次 · 04/08 07:00");
@@ -108,6 +108,14 @@ describe("schedule-utils", () => {
     expect(validateDraft(draft, { isCreating: true })).toBe("请选择月份");
     draft.schedule = schedule({ freq: "YEARLY", bymonth: [6], bymonthday: [] });
     expect(validateDraft(draft, { isCreating: true })).toBe("请选择日期");
+  });
+
+  it("validateDraft: 按间隔执行限制为 1 至 24 小时", () => {
+    const draft = buildDraft();
+    draft.name = "按间隔";
+    draft.prompt = "run";
+    draft.schedule = schedule({ freq: "HOURLY", intervalHours: 25 });
+    expect(validateDraft(draft, { isCreating: true })).toBe("按间隔执行需设置为 1 至 24 小时");
   });
 
   it("validateDraft: 单次必须选择日期且晚于当前时间", () => {
@@ -148,6 +156,31 @@ describe("schedule-utils", () => {
     expect(AUTOMATION_TEMPLATES.map((t) => t.title)).toContain("可爱萌宠手机壁纸");
   });
 
+  it("提醒模板按当前日期生成，不会随版本过期", () => {
+    const templates = createAutomationTemplates(new Date(2030, 0, 15, 12, 0));
+    const health = templates.find((item) => item.id === "health-checkup-appointment-reminder")!;
+    const meeting = templates.find((item) => item.id === "pre-meeting-preparation")!;
+    const interview = templates.find((item) => item.id === "interview-preparation-reminder")!;
+    const parent = templates.find((item) => item.id === "parent-contact-reminder")!;
+    expect(health.scheduledDate).toBe("2030-01-22");
+    expect(meeting.scheduledDate).toBe("2030-01-16");
+    expect(interview.validFromDate).toBe("2030-01-15");
+    expect(interview.validUntilDate).toBe("2030-02-14");
+    expect(parent.validUntilDate).toBeUndefined();
+  });
+
+  it("validateDraft: 拒绝倒置或已过期的生效区间", () => {
+    const draft = buildDraft();
+    draft.name = "任务";
+    draft.prompt = "执行";
+    draft.validFromDate = "2030-02-01";
+    draft.validUntilDate = "2030-01-01";
+    expect(validateDraft(draft, { isCreating: true })).toBe("生效开始日期不能晚于结束日期");
+    draft.validFromDate = "";
+    draft.validUntilDate = "2000-01-01";
+    expect(validateDraft(draft, { isCreating: true })).toBe("生效日期区间已过期，请更新结束日期");
+  });
+
   it("buildDraft(template) 预填名称/提示词/调度", () => {
     const tpl = AUTOMATION_TEMPLATES.find((t) => t.id === "daily-ai-news")!;
     const draft = buildDraft(tpl);
@@ -156,5 +189,6 @@ describe("schedule-utils", () => {
     expect(draft.schedule.byhour).toBe(9);
     expect(draft.permissionMode).toBe("fullAccess");
     expect(draft.scheduleType).toBe("recurring");
+    expect(draft.pushToWeChat).toBe(true);
   });
 });

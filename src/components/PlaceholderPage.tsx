@@ -25,6 +25,8 @@ interface PlaceholderPageProps {
   onPlaceholder?: (label: string) => void;
   /** Navigate to another sidebar view (e.g. 自动化 → 管理连接器 → 专家·技能·连接器). */
   onNavigate?: (label: string) => void;
+  /** Open a session produced by an automation run record. */
+  onOpenSession?: (sessionId: string) => void;
   /** Navigate to the home page (used after expert summon). */
   onGoHome?: () => void;
   /** Start a new chat guided by an expert/assistant definition. */
@@ -62,6 +64,7 @@ export function PlaceholderPage({
   label,
   onPlaceholder,
   onNavigate,
+  onOpenSession,
   onGoHome,
   onToast,
   cwd,
@@ -114,7 +117,7 @@ export function PlaceholderPage({
   }
 
   if (label === "自动化") {
-    return <AutomationPanel onToast={onToast} onNavigate={onNavigate} />;
+    return <AutomationPanel onToast={onToast} onNavigate={onNavigate} onOpenSession={onOpenSession} cwd={cwd} />;
   }
 
   if (label === "发现") {

@@ -156,4 +156,28 @@ describe("AutomationPanel（有任务/有记录）", () => {
     expect(screen.getByText("每日 AI 新闻推送")).toBeInTheDocument();
     expect(screen.getByText("成功")).toBeInTheDocument();
   });
+
+  it("运行记录：点击可打开对应 Agent 会话", async () => {
+    const onOpenSession = vi.fn();
+    snapshot = {
+      automations: [baseAutomation],
+      records: [
+        {
+          id: "r-session",
+          automationId: "a1",
+          automationName: "可查看结果的任务",
+          status: "success",
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          sessionId: "session-123",
+          archived: false,
+        },
+      ],
+    };
+    render(<AutomationPanel onOpenSession={onOpenSession} />);
+    fireEvent.click(screen.getByText("运行记录"));
+    const row = await screen.findByRole("button", { name: /可查看结果的任务/ });
+    fireEvent.click(row);
+    expect(onOpenSession).toHaveBeenCalledWith("session-123");
+  });
 });

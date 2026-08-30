@@ -64,7 +64,7 @@ export function AutomationPermissionConfirmDialog({
         </p>
         <ul className="automation-permission-confirm__list">
           <li>写入 / 修改 / 删除工作空间内文件</li>
-          <li>调用已勾选连接器（不再二次提示）</li>
+          <li>自动批准运行过程中工具和连接器发起的可允许请求</li>
           <li>执行 Bash 命令、网络请求等敏感操作</li>
         </ul>
         <Checkbox

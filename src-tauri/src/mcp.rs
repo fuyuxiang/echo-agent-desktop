@@ -100,8 +100,17 @@ pub async fn mcp_list(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
+    mcp_list_with_tx(&tx, session_id).await
+}
+
+/// Internal form used by automations to ensure every selected connector is
+/// configured and enabled before a background run is dispatched.
+pub async fn mcp_list_with_tx(
+    tx: &xai_acp_lib::AcpAgentTx,
+    session_id: Option<String>,
+) -> Result<Vec<McpServerEntry>, String> {
     let params = raw_params(&serde_json::json!({ "sessionId": session_id }));
-    let v: McpListResponse = call_ext(&tx, "x.ai/mcp/list", params)
+    let v: McpListResponse = call_ext(tx, "x.ai/mcp/list", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(v.into_servers())
