@@ -28,6 +28,7 @@ const CREDENTIAL_SERVICE: &str = "com.echoagent.organization";
 const PROFILE_FILE: &str = "organization-profile.json";
 const SKILL_STATE_FILE: &str = "organization-skills.json";
 const LOCAL_KB_SOURCES_FILE: &str = "local-knowledge-sources.json";
+const ORGANIZATION_CA_PEM: &[u8] = include_bytes!("../certs/echo-agent-server-ca.pem");
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,11 +65,17 @@ impl Default for OrgState {
         let refresh_token = profile
             .as_ref()
             .and_then(|p| credential_read(&credential_account(p)).ok().flatten());
+        // This private CA only augments the organization HTTP client. Model
+        // providers, MCP servers, and every other outbound client keep their
+        // existing public-root trust policy.
+        let organization_ca = reqwest::Certificate::from_pem(ORGANIZATION_CA_PEM)
+            .expect("embedded organization CA certificate must be valid PEM");
         Self {
             inner: Arc::new(OrgInner {
                 client: reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(120))
                     .user_agent(format!("EchoAgent/{}", env!("CARGO_PKG_VERSION")))
+                    .add_root_certificate(organization_ca)
                     .build()
                     .expect("build organization HTTP client"),
                 session: AsyncMutex::new(OrgSession {
@@ -1968,6 +1975,7 @@ mod tests {
     #[test]
     fn server_url_requires_tls_except_loopback() {
         assert!(normalize_server_url("https://memory.example.com/").is_ok());
+        assert!(normalize_server_url("https://10.132.19.82:8787/").is_ok());
         assert!(normalize_server_url("http://127.0.0.1:8787").is_ok());
         assert!(normalize_server_url("http://memory.example.com").is_err());
         assert!(normalize_server_url("https://u:p@memory.example.com").is_err());
