@@ -5,7 +5,7 @@ import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { AgentEntry } from "@/lib/types";
 import { useSessionsStore, HOME_DRAFT_KEY } from "@/stores/sessions-store";
 import { usePendingExpertStore } from "@/stores/pending-expert-store";
-import logoMarkUrl from "@/assets/logo-mark.svg";
+const logoMarkUrl = "/app-icon.png";
 
 /** EchoAgent 首页：品牌区与 Composer。 */
 export function HomePage({

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { XCloseIcon } from "@/foundation/components/Icon/icons";
-import logoMarkUrl from "@/assets/logo-mark.svg";
+const logoMarkUrl = "/app-icon.png";
 
 interface MenuItem {
   label: string;
