@@ -753,22 +753,35 @@ fn handle_session_notification(app: &AppHandle, params: &Value) {
             // Accept the camelCase variant too, defensively — reading only
             // `sessionSummary` silently drops every generated title (the event
             // never fires and the sidebar/topbar keeps the placeholder).
-            let title = update
+            let raw_title = update
                 .get("session_summary")
                 .or_else(|| update.get("sessionSummary"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            if !title.is_empty() {
+            let is_manual = params
+                .get("_meta")
+                .and_then(|meta| meta.get("x.ai/titleIsManual"))
+                .and_then(Value::as_bool)
+                == Some(true);
+            let title = if is_manual {
+                (!raw_title.trim().is_empty()).then(|| raw_title.trim().to_string())
+            } else {
+                crate::session_title::clean_auto_title(raw_title)
+            };
+            if let Some(title) = title {
                 tracing::info!(session_id, title, "emitting agent://summary");
                 let _ = app.emit(
                     "agent://summary",
                     SummaryEvent {
                         session_id: session_id.to_string(),
-                        title: title.to_string(),
+                        title,
                     },
                 );
             } else {
-                tracing::warn!(session_id, "session_summary_generated but title is empty");
+                tracing::warn!(
+                    session_id,
+                    "session_summary_generated contained no safe display title"
+                );
             }
         }
         "subagent_spawned" | "subagent_progress" | "subagent_finished" => {

@@ -49,13 +49,12 @@ pub struct SessionSummary {
 #[derive(Debug, Deserialize)]
 struct SummaryFile {
     /// User's first prompt text (legacy title field).
-    #[serde(default)]
+    #[serde(default, rename = "session_summary", alias = "summary")]
     summary: Option<String>,
     /// LLM-generated or manually-set title. Preferred over `summary`.
     #[serde(default)]
     generated_title: Option<String>,
     #[serde(default)]
-    #[allow(dead_code)]
     title_is_manual: Option<bool>,
     /// May live at the top level OR inside `info.id` — we read both.
     #[serde(default)]
@@ -85,6 +84,30 @@ struct SummaryInfo {
     id: Option<String>,
     #[serde(default)]
     cwd: Option<String>,
+}
+
+fn display_title(summary: &SummaryFile) -> Option<String> {
+    let generated = summary
+        .generated_title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty());
+
+    // A manual rename is user-authored, so preserve it verbatim. Automatic
+    // titles must pass the reasoning-markup filter, including legacy titles
+    // already persisted before that filter existed.
+    if summary.title_is_manual == Some(true) {
+        if let Some(title) = generated {
+            return Some(title.to_string());
+        }
+    } else if let Some(title) = generated.and_then(crate::session_title::clean_auto_title) {
+        return Some(title);
+    }
+
+    summary
+        .summary
+        .as_deref()
+        .and_then(crate::session_title::clean_auto_title)
 }
 
 /// List sessions for a given cwd. Reads `~/.echo-agent/sessions/**/*.json` and
@@ -139,11 +162,7 @@ pub fn list_sessions(cwd: &str) -> Vec<SessionSummary> {
             }
             // Title: generated_title wins over legacy `summary`. This matches
             // EchoAgent's display_title precedence (persistence.rs:961-968).
-            let title = s
-                .generated_title
-                .clone()
-                .or_else(|| s.summary.clone())
-                .unwrap_or_else(|| "未命名会话".into());
+            let title = display_title(&s).unwrap_or_else(|| "未命名会话".into());
             let updated_at = s.updated_at.clone().or_else(|| s.last_active_at.clone());
             let is_git_repo = s.git_root_dir.as_ref().map(|p| !p.is_empty());
             out.push(SessionSummary {
@@ -240,6 +259,7 @@ pub fn list_workspaces() -> Vec<WorkspaceInfo> {
             let Ok(s) = serde_json::from_str::<SummaryFile>(&content) else {
                 continue;
             };
+            let title = display_title(&s);
             let entry_cwd = s.cwd.unwrap_or_default();
             if entry_cwd.is_empty() {
                 continue;
@@ -247,10 +267,8 @@ pub fn list_workspaces() -> Vec<WorkspaceInfo> {
             let entry = map.entry(entry_cwd).or_insert((0, None));
             entry.0 += 1;
             // Keep the last non-empty summary as the display title.
-            if let Some(sum) = s.summary {
-                if !sum.is_empty() {
-                    entry.1 = Some(sum);
-                }
+            if let Some(title) = title {
+                entry.1 = Some(title);
             }
         }
     }
@@ -274,4 +292,57 @@ pub fn list_workspaces() -> Vec<WorkspaceInfo> {
 
 fn agent_sessions_root() -> PathBuf {
     crate::paths::echo_agent_home_dir().join("sessions")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SummaryFile, display_title};
+
+    fn summary(json: &str) -> SummaryFile {
+        serde_json::from_str(json).expect("valid summary fixture")
+    }
+
+    #[test]
+    fn reads_upstream_session_summary_field() {
+        let parsed = summary(r#"{"session_summary":"First prompt"}"#);
+        assert_eq!(display_title(&parsed).as_deref(), Some("First prompt"));
+    }
+
+    #[test]
+    fn historical_auto_title_drops_reasoning_and_keeps_final_title() {
+        let parsed = summary(
+            r#"{
+                "session_summary":"<think>private reasoning</think>Professional title",
+                "generated_title":"<think>private reasoning</think>Professional title",
+                "title_is_manual":false
+            }"#,
+        );
+        assert_eq!(display_title(&parsed).as_deref(), Some("Professional title"));
+    }
+
+    #[test]
+    fn historical_unclosed_reasoning_title_is_hidden() {
+        let parsed = summary(
+            r#"{
+                "session_summary":"<think>The user only said hello twice",
+                "generated_title":"<think>The user only said hello twice"
+            }"#,
+        );
+        assert_eq!(display_title(&parsed), None);
+    }
+
+    #[test]
+    fn manual_title_is_not_interpreted_as_model_reasoning() {
+        let parsed = summary(
+            r#"{
+                "session_summary":"fallback",
+                "generated_title":"Document <think> XML tag",
+                "title_is_manual":true
+            }"#,
+        );
+        assert_eq!(
+            display_title(&parsed).as_deref(),
+            Some("Document <think> XML tag")
+        );
+    }
 }
