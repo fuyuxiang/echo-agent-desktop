@@ -1,7 +1,7 @@
 /**
  * 云存储浏览面板 —— 腾讯 Drive/文档 替代的 UI。
  *
- * 列出已注册 StorageProvider,浏览/读取/删除文件。provider-agnostic(WebDAV/S3/本地)。
+ * 列出已注册的 WebDAV 存储源，并提供浏览、读取、写入与删除操作。
  */
 import { useEffect, useState } from "react";
 import {
@@ -223,12 +223,12 @@ export function CloudStoragePanel({ onToast }: { onToast?: (msg: string) => void
               {!e.isDir && e.size != null && (
                 <span className="storage-panel__entry-size">{formatSize(e.size)}</span>
               )}
-              {!e.isDir && (
-                <div className="storage-panel__entry-actions">
+              <div className="storage-panel__entry-actions">
+                {!e.isDir && (
                   <button type="button" onClick={() => void readFile(e)} title="读取">👁</button>
-                  <button type="button" onClick={() => void deleteEntry(e)} title="删除" className="danger">🗑</button>
-                </div>
-              )}
+                )}
+                <button type="button" onClick={() => void deleteEntry(e)} title="删除" className="danger">🗑</button>
+              </div>
             </li>
           ))}
         </ul>

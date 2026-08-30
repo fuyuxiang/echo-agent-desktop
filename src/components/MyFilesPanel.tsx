@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { ChevronDownIcon } from "@/foundation/components/Icon/icons";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   SearchIcon,
-  AddIcon,
   FolderOpenIcon,
   MyFilesIconV2,
   BookIcon,
   RefreshCwIcon,
 } from "@/foundation/components/Icon/icons";
 import { FileText, FileSpreadsheet, FileImage, FileCode, Film, Music, Globe, File, FolderOpen } from "lucide-react";
-import { memoryList } from "@/lib/agent-client";
+import { listDir, memoryList, openLocalPath } from "@/lib/agent-client";
 import type { MemoryEntry } from "@/lib/types";
 import { formatFileSize, inferFileTypeFromExt, relativeTime, type FileType, type LocalFileItem } from "@/lib/file-utils";
 
@@ -235,21 +233,14 @@ function LocalFilesTab({
     if (!dir) return;
     setLoading(true);
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const entries: Array<{
-        name: string;
-        path: string;
-        is_dir: boolean;
-        size: number;
-        modified_at: number;
-      }> = await invoke("browse_directory", { path: dir });
+      const entries = await listDir(dir, cwd, 2000);
       const items: LocalFileItem[] = entries.map((e) => ({
         name: e.name,
         path: e.path,
-        isDir: e.is_dir,
+        isDir: e.kind === "directory",
         size: e.size,
-        modifiedAt: e.modified_at,
-        type: inferFileTypeFromExt(e.name, e.is_dir),
+        modifiedAt: e.modifiedAt,
+        type: inferFileTypeFromExt(e.name, e.kind === "directory"),
       }));
       items.sort((a, b) => {
         if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
@@ -258,7 +249,7 @@ function LocalFilesTab({
       setFiles(items);
     } catch {
       setFiles([]);
-      onToast?.("该功能需要 browse_directory Tauri 命令支持");
+      onToast?.("读取目录失败，请检查目录是否存在且可读");
     } finally {
       setLoading(false);
     }
@@ -276,14 +267,12 @@ function LocalFilesTab({
     setBreadcrumb((prev) => prev.slice(0, index + 1));
   };
 
-  const handlePickFiles = async () => {
+  const handleOpenCurrentDir = async () => {
+    if (!currentDir) return;
     try {
-      const selected = await openDialog({ multiple: true });
-      if (!selected) return;
-      const paths = Array.isArray(selected) ? selected : [selected];
-      onToast?.(`已选择 ${paths.length} 个文件`);
-    } catch {
-      onToast?.("文件选择不可用");
+      await openLocalPath(currentDir, cwd);
+    } catch (error) {
+      onToast?.(`打开目录失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
   };
 
@@ -300,8 +289,8 @@ function LocalFilesTab({
   return (
     <div className="myfiles-local">
       <div className="myfiles-local-toolbar">
-        <button className="myfiles-action-btn" onClick={handlePickFiles}>
-          <AddIcon size="sm" /> 上传文件
+        <button className="myfiles-action-btn" onClick={() => void handleOpenCurrentDir()} disabled={!currentDir}>
+          <FolderOpenIcon size="sm" /> 在系统中打开当前目录
         </button>
         <button className="myfiles-action-btn" onClick={() => loadDir(currentDir)}>
           <RefreshCwIcon size="sm" /> 刷新
@@ -361,7 +350,12 @@ function LocalFilesTab({
             <div
               key={file.path}
               className={`myfiles-row ${file.isDir ? "myfiles-row--folder" : ""}`}
-              onClick={() => file.isDir && handleEnterFolder(file.path)}
+              onClick={() => {
+                if (file.isDir) handleEnterFolder(file.path);
+                else void openLocalPath(file.path, cwd).catch((error) => {
+                  onToast?.(`打开文件失败：${String(error).replace(/^Error:\s*/, "")}`);
+                });
+              }}
             >
               <span className="myfiles-col-name">
                 <FileTypeIcon type={file.type} size={18} />

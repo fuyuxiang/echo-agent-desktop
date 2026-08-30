@@ -288,8 +288,8 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
     handleCancel: handlePermissionCancel,
     handleFallbackToDefault: handlePermissionFallback,
   } = usePermissionConfirm({
-    currentMode: draft?.permissionMode ?? "fullAccess",
-    initialMode: editingAutomation?.permissionMode ?? (editingAutomation ? "fullAccess" : undefined),
+    currentMode: draft?.permissionMode ?? "default",
+    initialMode: editingAutomation?.permissionMode ?? (editingAutomation ? "default" : undefined),
     onConfirmedSubmit: handleSave,
     onFallbackToDefault: handleFallbackToDefault,
   });

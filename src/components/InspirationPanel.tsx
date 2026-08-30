@@ -6,9 +6,10 @@ import {
   LightbulbIcon,
   SparklesIcon,
 } from "@/foundation/components/Icon/icons";
-import { inspirationGenerate } from "@/lib/agent-client";
+import { agentCancel, agentSend, inspirationGenerate } from "@/lib/agent-client";
 import { registerForeignUpdateListener } from "@/stores/session-store";
-import type { InspirationRichCard, PromptComplete } from "@/lib/types";
+import type { InspirationRichCard, PromptComplete, SessionUpdate } from "@/lib/types";
+import { parseInspirationCards } from "@/lib/inspiration";
 
 const INTEREST_TAGS = [
   { id: "all", label: "全部" },
@@ -56,11 +57,11 @@ function hashStr(s: string): number {
   return h;
 }
 
-function getDemoCards(): InspirationRichCard[] {
+function getStarterCards(): InspirationRichCard[] {
   const now = new Date().toISOString();
   return [
     {
-      cardId: "demo-001",
+      cardId: "starter-001",
       title: "今天你最需要关注的变化，灵感已经先替你筛好了",
       summary: "一条灵感不会只给你一段资讯摘要，而会把重点变化、为什么值得看，以及下一步能做什么整理成更适合行动的研究结果。",
       detail: "每天最费神的一步，常常发生在真正开始之前：你得先判断，今天该把注意力放在哪里。\n\n灵感把这段前置动作提前放到了前面：先收拢，先排序，再把值得留神的变化摆出来。",
@@ -70,7 +71,7 @@ function getDemoCards(): InspirationRichCard[] {
       createdAt: now,
     },
     {
-      cardId: "demo-002",
+      cardId: "starter-002",
       title: "一个模糊想法，怎么一步步变成可交付结果",
       summary: "从一句模糊需求开始，逐步补成结构化方向，再推进成原型、文档或其他交付物。",
       detail: "很多想法卡住，往往是因为它一直停在\u201C感觉不错\u201D这一步。\n\n先把问题压清楚，再把交付物收窄，把背景补到够用，把顺序排出来。做到这里，事情就已经从\u201C我有一个念头\u201D走到了\u201C我们有一版可以继续推进的东西\u201D。",
@@ -80,7 +81,7 @@ function getDemoCards(): InspirationRichCard[] {
       createdAt: now,
     },
     {
-      cardId: "demo-003",
+      cardId: "starter-003",
       title: "第一次接触新课题，怎么在 10 分钟内摸清背景",
       summary: "面对一个全新的主题，怎样在短时间内先建立方向感，再决定后面要往哪里深入。",
       detail: "先把背景地图搭出来：定义、时间点、角色、路径、连接点，这五个锚点一旦站住，陌生感会明显下降。\n\n对新课题来说，前10分钟先把地图拿到手，后面的半小时才更值得投入。",
@@ -100,74 +101,125 @@ interface InspirationPanelProps {
 
 export function InspirationPanel({ cwd, onToast, onLaunch }: InspirationPanelProps) {
   const [activeTag, setActiveTag] = useState("all");
-  const [cards, setCards] = useState<InspirationRichCard[]>(getDemoCards);
+  const [cards, setCards] = useState<InspirationRichCard[]>(getStarterCards);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [drawerCard, setDrawerCard] = useState<InspirationRichCard | null>(null);
   const mountedRef = useRef(true);
+  const generationSeqRef = useRef(0);
+  const activeSessionRef = useRef<string | null>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+      generationSeqRef.current += 1;
+      cleanupRef.current?.();
+      cleanupRef.current = null;
+      const sessionId = activeSessionRef.current;
+      activeSessionRef.current = null;
+      if (sessionId) void agentCancel(sessionId).catch(() => {});
+    };
   }, []);
 
   const handleGenerate = useCallback(async (category: string) => {
+    generationSeqRef.current += 1;
+    const seq = generationSeqRef.current;
+    cleanupRef.current?.();
+    cleanupRef.current = null;
+    const previousSession = activeSessionRef.current;
+    activeSessionRef.current = null;
+    if (previousSession) void agentCancel(previousSession).catch(() => {});
     setLoading(true);
+
+    let sessionId: string | null = null;
+    let unsubscribeUpdates: () => void = () => {};
+    let unlistenComplete: () => void = () => {};
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+    const cleanup = () => {
+      unsubscribeUpdates();
+      unlistenComplete();
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      if (cleanupRef.current === cleanup) cleanupRef.current = null;
+    };
+
     try {
       const cat = category === "all" ? "general" : category;
       const started = await inspirationGenerate(cat, cwd, 6);
+      sessionId = started.sessionId;
+      if (!mountedRef.current || generationSeqRef.current !== seq) {
+        void agentCancel(started.sessionId).catch(() => {});
+        return;
+      }
+      activeSessionRef.current = started.sessionId;
       let acc = "";
-      const unsubscribe = registerForeignUpdateListener(started.sessionId, (u) => {
-        const chunk = u as unknown as { content?: { text?: string }[] };
-        const delta = Array.isArray(chunk.content)
-          ? chunk.content.map((c: { text?: string }) => c.text ?? "").join("")
-          : ((chunk.content as unknown as { text?: string })?.text ?? "");
-        if (delta) acc += delta;
+      unsubscribeUpdates = registerForeignUpdateListener(started.sessionId, (update: SessionUpdate) => {
+        if (update.type !== "agent_message_chunk") return;
+        const content = (update as { content?: unknown }).content;
+        if (!Array.isArray(content)) return;
+        acc += content
+          .map((item: unknown) => {
+            if (!item || typeof item !== "object") return "";
+            const text = (item as { text?: unknown }).text;
+            return typeof text === "string" ? text : "";
+          })
+          .join("");
       });
-      const completeUnlisten = await listen<PromptComplete>("agent://complete", (e) => {
-        if (e.payload.sessionId === started.sessionId) {
-          const cleaned = acc.trim()
-            .replace(/^```(?:json)?\s*/i, "")
-            .replace(/\s*```$/i, "")
-            .trim();
-          try {
-            const parsed = JSON.parse(cleaned);
-            const arr: InspirationRichCard[] = (Array.isArray(parsed) ? parsed : []).map(
-              (item: Record<string, unknown>, i: number) => ({
-                cardId: `gen-${Date.now()}-${i}`,
-                title: String(item.title ?? ""),
-                summary: String(item.summary ?? ""),
-                detail: String(item.takeaway ?? item.detail ?? ""),
-                category: cat,
-                prompt: String(item.prompt ?? item.title ?? ""),
-                createdAt: new Date().toISOString(),
-              })
-            );
-            if (mountedRef.current && arr.length > 0) {
-              setCards(arr);
-            }
-          } catch {
-            onToast?.("无法解析生成结果，请重试");
-          }
-          if (mountedRef.current) setLoading(false);
-          unsubscribe();
-          completeUnlisten();
+      unlistenComplete = await listen<PromptComplete>("agent://complete", (event) => {
+        if (
+          event.payload.sessionId !== started.sessionId
+          || generationSeqRef.current !== seq
+          || settled
+        ) return;
+
+        settled = true;
+        cleanup();
+        if (activeSessionRef.current === started.sessionId) activeSessionRef.current = null;
+        if (!mountedRef.current) return;
+        setLoading(false);
+
+        if (["error", "rate_limit", "rate_limited", "cancelled"].includes(event.payload.stopReason)) {
+          onToast?.(`生成未完成：${event.payload.stopReason}`);
+          return;
+        }
+
+        try {
+          const arr = parseInspirationCards(acc, cat);
+          if (arr.length === 0) throw new Error("empty inspiration result");
+          setCards(arr);
+        } catch {
+          onToast?.("生成结果格式不完整，请重试");
         }
       });
-      setTimeout(() => {
-        if (mountedRef.current && loading) {
-          setLoading(false);
-          onToast?.("生成超时，请重试");
-          unsubscribe();
-          completeUnlisten();
-        }
+      if (!mountedRef.current || generationSeqRef.current !== seq) {
+        cleanup();
+        void agentCancel(started.sessionId).catch(() => {});
+        return;
+      }
+      cleanupRef.current = cleanup;
+      timeoutId = setTimeout(() => {
+        if (!mountedRef.current || generationSeqRef.current !== seq || settled) return;
+        settled = true;
+        cleanup();
+        if (activeSessionRef.current === started.sessionId) activeSessionRef.current = null;
+        setLoading(false);
+        onToast?.("生成超时，已停止本次任务");
+        void agentCancel(started.sessionId).catch(() => {});
       }, 90_000);
+      await agentSend(started.sessionId, started.prompt);
     } catch (e) {
-      onToast?.(`生成失败：${String(e).replace(/^Error:\s*/, "")}`);
-      if (mountedRef.current) setLoading(false);
+      cleanup();
+      if (sessionId && activeSessionRef.current === sessionId) activeSessionRef.current = null;
+      if (sessionId) void agentCancel(sessionId).catch(() => {});
+      if (mountedRef.current && generationSeqRef.current === seq) {
+        onToast?.(`生成失败：${String(e).replace(/^Error:\s*/, "")}`);
+        setLoading(false);
+      }
     }
-  }, [cwd, onToast, loading]);
+  }, [cwd, onToast]);
 
   const handleTagClick = useCallback((tagId: string) => {
     setActiveTag(tagId);
@@ -217,7 +269,7 @@ export function InspirationPanel({ cwd, onToast, onLaunch }: InspirationPanelPro
           </div>
         </div>
         <p className="insp-subtitle">
-          想要工作在云端完成交叉并用价值观去打动人
+          基于你的本地记忆与兴趣，生成可直接发起任务的行动建议
         </p>
         {searchOpen && (
           <div className="insp-search-bar">
@@ -301,6 +353,12 @@ export function InspirationPanel({ cwd, onToast, onLaunch }: InspirationPanelPro
                 key={card.cardId}
                 className="inspiration-card"
                 onClick={() => handleCardClick(card)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    handleCardClick(card);
+                  }
+                }}
                 role="button"
                 tabIndex={0}
               >

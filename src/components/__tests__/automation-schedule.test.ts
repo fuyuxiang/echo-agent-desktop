@@ -187,7 +187,7 @@ describe("schedule-utils", () => {
     expect(draft.name).toBe("每日 AI 新闻推送");
     expect(draft.prompt).toContain("AI coding");
     expect(draft.schedule.byhour).toBe(9);
-    expect(draft.permissionMode).toBe("fullAccess");
+    expect(draft.permissionMode).toBe("default");
     expect(draft.scheduleType).toBe("recurring");
     expect(draft.pushToWeChat).toBe(true);
   });

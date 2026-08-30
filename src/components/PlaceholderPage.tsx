@@ -19,6 +19,7 @@ import { OrganizationMemoryPanel } from "./OrganizationMemoryPanel";
 import type { AgentEntry } from "@/lib/types";
 import type { ModelOption } from "./ModelSelector";
 import type { ProjectMeta } from "@/stores/projects-store";
+import { openExternalUrl, openLocalPath } from "@/lib/agent-client";
 
 interface PlaceholderPageProps {
   label: string;
@@ -42,7 +43,7 @@ interface PlaceholderPageProps {
   /** Discover launcher: open a new session + send prompt (optionally with agent). */
   onLaunch?: (prompt: string, agent?: AgentEntry) => void;
   /** 本地助理页：发送消息（新建会话）。 */
-  onSend?: (text: string) => void;
+  onSend?: (text: string) => boolean | void | Promise<boolean | void>;
   /** 本地助理页：是否流式中。 */
   streaming?: boolean;
   /** 本地助理页：API 是否就绪。 */
@@ -104,6 +105,7 @@ export function PlaceholderPage({
         onToast={onToast}
         onStartProject={onStartProject}
         onStartProjectConversation={onStartProjectConversation}
+        onOpenAutomation={() => onNavigate?.("自动化")}
       />
     );
   }
@@ -156,7 +158,13 @@ export function PlaceholderPage({
     return (
       <div className="placeholder-page placeholder-page--panel">
         <KnowledgeBasePanel
-          onOpen={(id) => onToast?.(`打开知识条目 ${id}`)}
+          onOpen={(id, url) => {
+            const target = url ?? id;
+            const open = /^https?:\/\//i.test(target)
+              ? openExternalUrl(target)
+              : openLocalPath(target, cwd);
+            void open.catch((error) => onToast?.(`打开知识条目失败：${String(error).replace(/^Error:\s*/, "")}`));
+          }}
           onToast={onToast}
         />
       </div>
@@ -208,12 +216,13 @@ export function PlaceholderPage({
     );
   }
 
-  // 其他功能显示占位页面
+  // 未注册的路由应该只会由损坏的持久化状态或新旧版本不兼容触发。
   return (
     <div className="placeholder-page">
       <AgentToolIcon size="xl" color="var(--echo-text-tertiary)" />
-      <h2 className="placeholder-page__title">{label}</h2>
-      <p className="placeholder-page__desc">该功能即将上线,敬请期待</p>
+      <h2 className="placeholder-page__title">无法打开「{label}」</h2>
+      <p className="placeholder-page__desc">当前版本未注册该功能路由，请返回首页重试。</p>
+      {onGoHome && <button type="button" className="btn btn--primary" onClick={onGoHome}>返回首页</button>}
     </div>
   );
 }

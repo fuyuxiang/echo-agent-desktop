@@ -106,11 +106,10 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
       };
     }),
   shiftNext: (sessionId) => {
-    const q = queueOf(get().queues, sessionId);
+    const q = [...queueOf(get().queues, sessionId)];
     const idx = q.findIndex((it) => it.status === "queued");
     if (idx === -1) return null;
     const [item] = q.splice(idx, 1);
-    // 直接 mutate 一份新引用写回。
     const queues = { ...get().queues };
     if (q.length === 0) delete queues[sessionId];
     else queues[sessionId] = q;

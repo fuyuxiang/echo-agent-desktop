@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueuePanel } from "../QueuePanel";
 import { useMessageQueueStore } from "@/stores/message-queue-store";
 
@@ -67,14 +67,37 @@ describe("QueuePanel", () => {
     ).toEqual(["b", "a"]);
   });
 
-  it("立即发送:移除条目并回调 onSendNow", () => {
+  it("立即发送:运行时接受后才移除条目", async () => {
     const s = useMessageQueueStore.getState();
     s.enqueue("s1", "马上发");
     const onSendNow = vi.fn();
     render(<QueuePanel sessionId="s1" onSendNow={onSendNow} />);
     fireEvent.click(screen.getByRole("button", { name: "立即发送" }));
     expect(onSendNow).toHaveBeenCalledWith("马上发");
-    expect(useMessageQueueStore.getState().getQueue("s1")).toHaveLength(0);
+    await waitFor(() => {
+      expect(useMessageQueueStore.getState().getQueue("s1")).toHaveLength(0);
+    });
+  });
+
+  it("运行时拒绝或发送失败时保留队列项", async () => {
+    const s = useMessageQueueStore.getState();
+    s.enqueue("s1", "不能丢");
+    render(<QueuePanel sessionId="s1" onSendNow={() => Promise.resolve(false)} />);
+    fireEvent.click(screen.getByRole("button", { name: "立即发送" }));
+    await waitFor(() => {
+      expect(useMessageQueueStore.getState().getQueue("s1")).toHaveLength(1);
+    });
+  });
+
+  it("流式回复时发送操作改为置顶，不删除消息", () => {
+    const s = useMessageQueueStore.getState();
+    s.enqueue("s1", "a");
+    s.enqueue("s1", "b");
+    const onSendNow = vi.fn();
+    render(<QueuePanel sessionId="s1" streaming onSendNow={onSendNow} />);
+    fireEvent.click(screen.getByRole("button", { name: "设为下一条自动发送" }));
+    expect(onSendNow).not.toHaveBeenCalled();
+    expect(useMessageQueueStore.getState().getQueue("s1").map((item) => item.text)).toEqual(["b", "a"]);
   });
 
   it("paused 条目的立即发送按钮禁用", () => {

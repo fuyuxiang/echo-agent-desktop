@@ -60,7 +60,7 @@ export function AutomationPermissionConfirmDialog({
           <h3 className="automation-permission-confirm__title">这条自动化任务将以完全访问权限运行</h3>
         </div>
         <p className="automation-permission-confirm__desc">
-          为了能在你离开电脑时无人值守地完成，自动化任务默认拥有完全访问权限，这意味着 AI 可以直接：
+          你手动选择了完全访问权限。这不是默认选项，它意味着 AI 可以在无人值守时直接：
         </p>
         <ul className="automation-permission-confirm__list">
           <li>写入 / 修改 / 删除工作空间内文件</li>

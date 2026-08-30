@@ -17,16 +17,19 @@ import {
 
 interface QueuePanelProps {
   sessionId: string;
-  /** 手动「立即发送」一条:调用方负责 agentSend。 */
-  onSendNow?: (text: string) => void;
+  /** agent 正在回复时，「发送」改为安全的「置顶」，不会丢失队列项。 */
+  streaming?: boolean;
+  /** 手动发送一条；返回 false 表示未接受，队列项必须保留。 */
+  onSendNow?: (text: string) => boolean | void | Promise<boolean | void>;
 }
 
-export function QueuePanel({ sessionId, onSendNow }: QueuePanelProps) {
+export function QueuePanel({ sessionId, streaming = false, onSendNow }: QueuePanelProps) {
   const queue = useMessageQueueStore((s) => s.queues[sessionId] ?? []);
   const remove = useMessageQueueStore((s) => s.remove);
   const reorder = useMessageQueueStore((s) => s.reorder);
   const setStatus = useMessageQueueStore((s) => s.setStatus);
   const update = useMessageQueueStore((s) => s.update);
+  const [sendingId, setSendingId] = useState<string | null>(null);
 
   if (queue.length === 0) return null;
 
@@ -50,9 +53,24 @@ export function QueuePanel({ sessionId, onSendNow }: QueuePanelProps) {
             setStatus(sessionId, item.id, item.status === "paused" ? "queued" : "paused")
           }
           onCommitEdit={(text) => update(sessionId, item.id, text)}
-          onSendNow={() => {
-            remove(sessionId, item.id);
-            onSendNow?.(item.text);
+          sendLabel={streaming ? (idx === 0 ? "已置顶" : "置顶") : (sendingId === item.id ? "发送中" : "发送")}
+          sendTitle={streaming ? (idx === 0 ? "已是下一条" : "设为下一条自动发送") : "立即发送"}
+          sendDisabled={item.status === "paused" || sendingId !== null || (streaming && idx === 0) || (!streaming && !onSendNow)}
+          onSendNow={async () => {
+            if (streaming) {
+              reorder(sessionId, idx, 0);
+              return;
+            }
+            if (!onSendNow || sendingId !== null) return;
+            setSendingId(item.id);
+            try {
+              const accepted = await onSendNow(item.text);
+              if (accepted !== false) remove(sessionId, item.id);
+            } catch {
+              // Sending failed: retain the item so the user can retry or edit it.
+            } finally {
+              setSendingId(null);
+            }
           }}
         />
       ))}
@@ -70,7 +88,10 @@ interface QueueRowProps {
   onDown: () => void;
   onTogglePause: () => void;
   onCommitEdit: (text: string) => void;
-  onSendNow: () => void;
+  onSendNow: () => void | Promise<void>;
+  sendLabel: string;
+  sendTitle: string;
+  sendDisabled: boolean;
 }
 
 function QueueRow({
@@ -83,6 +104,9 @@ function QueueRow({
   onTogglePause,
   onCommitEdit,
   onSendNow,
+  sendLabel,
+  sendTitle,
+  sendDisabled,
 }: QueueRowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.text);
@@ -165,11 +189,11 @@ function QueueRow({
           type="button"
           className="queue-row__btn queue-row__btn--send"
           onClick={onSendNow}
-          disabled={paused}
-          title="立即发送"
-          aria-label="立即发送"
+          disabled={sendDisabled}
+          title={sendTitle}
+          aria-label={sendTitle}
         >
-          发送
+          {sendLabel}
         </button>
         <button
           type="button"

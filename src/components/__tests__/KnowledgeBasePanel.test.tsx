@@ -124,7 +124,7 @@ describe("KnowledgeBasePanel", () => {
     render(<KnowledgeBasePanel onToast={vi.fn()} />);
     await waitFor(() => expect(screen.getByText("本地文件夹")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "移除知识源 本地文件夹" }));
-    expect(listKbProviders().some((s) => s.id === "local")).toBe(false);
+    await waitFor(() => expect(listKbProviders().some((s) => s.id === "local")).toBe(false));
     // 直接确认 registry 也已移除。
     expect(unregisterKbProvider("local")).toBe(false); // 已移除 → 再移除返回 false
   });

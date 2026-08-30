@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  XCloseIcon, SearchIcon, ConfigureIcon, McpIcon, OpenExternalIcon, DeleteIcon,
+  XCloseIcon, SearchIcon, ConfigureIcon, McpIcon, DeleteIcon,
 } from "@/foundation/components/Icon/icons";
 import { mcpDelete, mcpList, mcpToggle } from "@/lib/agent-client";
 import { ensureSession } from "@/lib/ensure-session";
@@ -79,10 +79,6 @@ export function McpModal({
                   <input className="um-search-input" value={search} placeholder="搜索服务器..."
                     onChange={(e) => setSearch(e.target.value)} />
                 </div>
-                <button type="button" className="um-btn um-btn--grey"
-                  onClick={() => onToast?.("MCP Hub 暂未接入，请点击「配置 MCP」手动添加服务器")}>
-                  <OpenExternalIcon size="sm" /><span>MCP Hub</span>
-                </button>
               </div>
 
               {loading ? (

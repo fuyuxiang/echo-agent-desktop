@@ -59,7 +59,7 @@ export function ChatView({
   setupHint,
   onOpenSettings,
 }: {
-  onSend: (text: string, attachments?: string[]) => void;
+  onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onCancel: () => void;
   modelId?: string;
   models?: ModelOption[];
@@ -585,7 +585,7 @@ export function ChatView({
           {/* 消息队列(对齐 EchoAgent message-queue):流式时可继续排队 prompt。
               非流式时面板为空(QueuePanel 内部 queue.length===0 直接 return null)。 */}
           {sessionId && (
-            <QueuePanel sessionId={sessionId} onSendNow={(t) => onSend(t)} />
+            <QueuePanel sessionId={sessionId} streaming={streaming} onSendNow={(t) => onSend(t)} />
           )}
           <Composer
             streaming={streaming}

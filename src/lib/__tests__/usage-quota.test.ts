@@ -4,6 +4,7 @@ import {
   monthKey,
   estimateCost,
   recordUsage,
+  recordCumulativeUsage,
   summarizeUsage,
   checkQuota,
   loadQuotaConfig,
@@ -30,6 +31,7 @@ describe("recordUsage", () => {
   beforeEach(() => {
     window.localStorage.removeItem("echoagent.usage");
     window.localStorage.removeItem("echoagent.quota");
+    window.localStorage.removeItem("echoagent.usage-snapshots.v1");
   });
 
   it("追加记录并持久化", () => {
@@ -47,6 +49,36 @@ describe("recordUsage", () => {
   it("无 config → cost 为 undefined", () => {
     const records = recordUsage([], { modelId: "x", promptTokens: 10, completionTokens: 5 });
     expect(records[0].cost).toBeUndefined();
+  });
+});
+
+describe("recordCumulativeUsage", () => {
+  beforeEach(() => {
+    window.localStorage.removeItem("echoagent.usage");
+    window.localStorage.removeItem("echoagent.usage-snapshots.v1");
+  });
+
+  it("对会话累计值只记录每轮增量", () => {
+    const first = recordCumulativeUsage([], {
+      sessionId: "s1", modelId: "gpt-4", inputTokens: 100, outputTokens: 20,
+    });
+    const second = recordCumulativeUsage(first, {
+      sessionId: "s1", modelId: "gpt-4", inputTokens: 160, outputTokens: 35,
+    });
+    expect(second).toHaveLength(2);
+    expect(second[1]).toMatchObject({
+      sessionId: "s1", modelId: "gpt-4", promptTokens: 60, completionTokens: 15,
+    });
+  });
+
+  it("同一累计快照重复上报时不重复记账", () => {
+    const first = recordCumulativeUsage([], {
+      sessionId: "s1", modelId: "gpt-4", inputTokens: 100, outputTokens: 20,
+    });
+    const second = recordCumulativeUsage(first, {
+      sessionId: "s1", modelId: "gpt-4", inputTokens: 100, outputTokens: 20,
+    });
+    expect(second).toHaveLength(1);
   });
 });
 

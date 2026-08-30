@@ -3,11 +3,9 @@ import { render, screen } from "@testing-library/react";
 import { PlaceholderPage } from "../PlaceholderPage";
 
 describe("PlaceholderPage", () => {
-  it("未实现的功能显示占位文案", () => {
-    // 助理/项目/专家·技能·连接器/自动化/更多 都已接入真实面板，不再走占位。
-    // 用一个未映射的 label 触发兜底分支。
+  it("未注册路由显示明确错误，不伪装成待上线功能", () => {
     render(<PlaceholderPage label="某个未实现功能" />);
-    expect(screen.getByText("某个未实现功能")).toBeInTheDocument();
-    expect(screen.getByText(/即将上线/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "无法打开「某个未实现功能」" })).toBeInTheDocument();
+    expect(screen.getByText(/未注册该功能路由/)).toBeInTheDocument();
   });
 });

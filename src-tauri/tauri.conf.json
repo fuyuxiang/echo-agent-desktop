@@ -24,11 +24,11 @@
         "transparent": true,
         "shadow": true,
         "center": true,
-        "devtools": true
+        "devtools": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http: https: ws: wss:; img-src 'self' asset: https://asset.localhost data: blob: http: https:; media-src 'self' data: blob: http: https:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; frame-src http: https:"
     }
   },
   "bundle": {
