@@ -5,7 +5,7 @@ import {
   PuzzlePieceIcon, DeleteIcon, FolderOpenIcon, ChevronLeftIcon, SparklesIcon,
 } from "@/foundation/components/Icon/icons";
 import {
-  skillsList, skillsRemove, skillsToggle,
+  skillsList, skillsRemove, skillsToggle, skillsUninstallPackage,
   skillsCatalogDefaultRoot, skillsCatalogLoad,
 } from "@/lib/agent-client";
 import type { SkillCatalog, SkillItem, SkillInfo } from "@/lib/types";
@@ -149,11 +149,22 @@ export function SkillsTab({ pills, onToast }: Props) {
   }, [onToast, reloadLocals]);
 
   const handleRemove = useCallback(async (s: SkillInfo) => {
-    if (!s.path) { onToast?.("内置技能无法移除"); return; }
-    if (!confirm(`确定移除技能「${s.displayName || s.name}」？`)) return;
-    try { await skillsRemove(s.path); onToast?.("已移除"); reloadLocals(); }
+    const removablePath = s.managed ? s.path : s.configuredPath;
+    if (!removablePath) { onToast?.("该技能由项目、内置包或插件管理，请在对应来源中修改"); return; }
+    const action = s.managed ? "卸载" : "从配置中移除";
+    const shared = !s.managed
+      ? locals.filter((candidate) => candidate.configuredPath === removablePath).length
+      : 1;
+    const impact = shared > 1 ? `\n\n该路径共提供 ${shared} 个技能，移除后它们都将不再加载。` : "";
+    if (!confirm(`确定${action}技能「${s.displayName || s.name}」？${impact}`)) return;
+    try {
+      if (s.managed) await skillsUninstallPackage(removablePath);
+      else await skillsRemove(removablePath);
+      onToast?.(s.managed ? "已安全卸载" : "已从技能路径中移除");
+      reloadLocals();
+    }
     catch (e) { onToast?.(`移除失败：${String(e).replace(/^Error:\s*/, "")}`); }
-  }, [onToast, reloadLocals]);
+  }, [locals, onToast, reloadLocals]);
 
   // ---- no data dir yet ----
   if (needPick && !catalog && view === "center") {
@@ -208,6 +219,11 @@ export function SkillsTab({ pills, onToast }: Props) {
                     <div className="sk-inst-info">
                       <div className="sk-card-name">{s.displayName || s.name}</div>
                       <p className="sk-card-desc">{s.description || "（无描述）"}</p>
+                      <div className="sk-inst-meta">
+                        <span>{s.managed ? "EchoAgent 管理" : s.scope || "本地来源"}</span>
+                        {s.version && <span>v{s.version}</span>}
+                        {s.compatibility && <span title={s.compatibility}>{s.compatibility}</span>}
+                      </div>
                     </div>
                   </div>
                   <label className="sk-toggle" title={s.enabled ? "已启用" : "已禁用"}>
@@ -215,7 +231,7 @@ export function SkillsTab({ pills, onToast }: Props) {
                       onChange={() => handleToggle(s, !s.enabled)} />
                     <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
                   </label>
-                  {s.path && (
+                  {(s.managed ? s.path : s.configuredPath) && (
                     <button type="button" className="sk-inst-del" title="移除"
                       onClick={() => handleRemove(s)}><DeleteIcon size="sm" /></button>
                   )}

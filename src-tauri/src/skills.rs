@@ -26,7 +26,9 @@ use crate::ext::{call_ext, call_ext_value, raw_params};
 #[serde(rename_all = "camelCase")]
 pub struct SkillInfo {
     pub name: String,
-    #[serde(default)]
+    // Runtime SkillInfo itself uses snake_case even though the extension
+    // response wrapper uses camelCase. Accept both wire generations.
+    #[serde(default, alias = "display_name")]
     pub display_name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
@@ -36,11 +38,30 @@ pub struct SkillInfo {
     pub scope: Option<String>,
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
+    #[serde(default, alias = "user_invocable")]
     pub user_invocable: Option<bool>,
     /// Filesystem path to the skill directory (when available).
     #[serde(default)]
     pub path: Option<String>,
+    /// True for packages copied into and owned by EchoAgent's local installer.
+    #[serde(default)]
+    pub managed: bool,
+    /// Installed package version when declared by its install manifest.
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub license: Option<String>,
+    #[serde(default)]
+    pub compatibility: Option<String>,
+    #[serde(default, alias = "when_to_use")]
+    pub when_to_use: Option<String>,
+    /// The exact `[skills].paths` entry that owns this skill, when any.
+    /// Removing a discovered SKILL.md path directly would not remove its parent
+    /// registration, so the UI must use this field.
+    #[serde(default)]
+    pub configured_path: Option<String>,
 }
 
 /// Generic list shape returned by `x.ai/skills/list` and `x.ai/skills/config`:
@@ -49,14 +70,18 @@ pub struct SkillInfo {
 #[serde(untagged)]
 enum SkillsListResponse {
     Array(Vec<SkillInfo>),
-    Wrapped { skills: Vec<SkillInfo> },
+    Wrapped {
+        skills: Vec<SkillInfo>,
+        #[serde(default)]
+        paths: Vec<String>,
+    },
 }
 
 impl SkillsListResponse {
-    fn into_skills(self) -> Vec<SkillInfo> {
+    fn into_parts(self) -> (Vec<SkillInfo>, Vec<String>) {
         match self {
-            SkillsListResponse::Array(v) => v,
-            SkillsListResponse::Wrapped { skills } => skills,
+            SkillsListResponse::Array(v) => (v, Vec::new()),
+            SkillsListResponse::Wrapped { skills, paths } => (skills, paths),
         }
     }
 }
@@ -95,16 +120,34 @@ pub async fn skills_list_with_tx(
     // EchoAgent build.
     let res: Result<SkillsListResponse, _> =
         call_ext(tx, "x.ai/skills/config", params.clone()).await;
-    let skills = match res {
-        Ok(v) => v.into_skills(),
+    let (skills, configured_paths) = match res {
+        Ok(v) => v.into_parts(),
         Err(_) => {
             let v: SkillsListResponse = call_ext(tx, "x.ai/skills/list", params)
                 .await
                 .map_err(|e| e.to_string())?;
-            v.into_skills()
+            v.into_parts()
         }
     };
-    Ok(skills)
+    Ok(skills
+        .into_iter()
+        .map(|mut skill| {
+            if let Some(path) = skill.path.clone() {
+                skill.managed = crate::skill_installer::is_managed_skill(&path);
+                if skill.managed {
+                    skill.version = crate::skill_installer::managed_skill_version(&path);
+                    skill.path = crate::skill_installer::managed_skill_directory(&path);
+                } else {
+                    skill.configured_path = configured_paths
+                        .iter()
+                        .filter(|configured| path.starts_with(configured.as_str()))
+                        .max_by_key(|configured| configured.len())
+                        .cloned();
+                }
+            }
+            skill
+        })
+        .collect())
 }
 
 /// Add a skill path (directory or file) to `[skills].paths` and rescan.
@@ -116,6 +159,7 @@ pub async fn skills_add(
 ) -> Result<(), String> {
     crate::policy::require_feature("skills")?;
     crate::policy::require_skill_upload()?;
+    crate::skill_installer::validate_registered_source(&path)?;
     let tx = state
         .tx
         .lock()
@@ -167,4 +211,35 @@ pub async fn skills_toggle(
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_snake_case_skill_metadata_is_preserved() {
+        let response: SkillsListResponse = serde_json::from_value(serde_json::json!({
+            "paths": ["/tmp/skills"],
+            "skills": [{
+                "name": "deploy",
+                "display_name": "Deploy Service",
+                "description": "Deploy safely",
+                "scope": "user",
+                "enabled": true,
+                "user_invocable": false,
+                "path": "/tmp/skills/deploy/SKILL.md",
+                "author": "team",
+                "license": "Apache-2.0",
+                "compatibility": "Requires git",
+                "when_to_use": "release requests"
+            }]
+        }))
+        .unwrap();
+        let (skills, paths) = response.into_parts();
+        assert_eq!(paths, vec!["/tmp/skills"]);
+        assert_eq!(skills[0].display_name.as_deref(), Some("Deploy Service"));
+        assert_eq!(skills[0].user_invocable, Some(false));
+        assert_eq!(skills[0].when_to_use.as_deref(), Some("release requests"));
+    }
 }
