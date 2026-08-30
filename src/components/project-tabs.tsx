@@ -1,28 +1,43 @@
 /**
  * 项目详情页四个 tab 面板 — 对齐目标截图，数据来自本地 store。
  *
- *  - 动态: 与我相关 / 成员动态 切换 + 空态（无云端活动流，仅壳）
- *  - 计划: 看板 4 列（待开始/进行中/暂停/完成）+ 新建待办/流转/删除（本地交互）
- *  - 任务: 列表 + 筛选下拉(占位) + 新建/删除（本地交互）+ 空态
- *  - 资产: 工具栏 + 配额(本地估算) + 文件表格 + 新建文件夹/上传(本地) + 删除
+ *  - 动态: 真实项目会话与资源统计
+ *  - 计划/任务: 持久化看板与列表，支持新建、流转和删除
+ *  - 资产: 从用户选择的文件复制到项目私有目录，支持打开、新建目录和删除
  */
 import { useMemo, useState } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useProjectsStore, PLAN_COLUMNS, type PlanStatus, type AssetItem } from "@/stores/projects-store";
-import { ChevronDownIcon, SearchIcon } from "@/foundation/components/Icon/icons";
+import { openLocalPath, projectAssetMakeDir, projectAssetRemove, projectAssetsImport } from "@/lib/agent-client";
+import { formatFileSize } from "@/lib/file-utils";
 
 // ============================================================
 // 动态
 // ============================================================
 
-export function ActivityTab() {
-  const [sub, setSub] = useState<"personal" | "member">("personal");
+export function ActivityTab({ projectId }: { projectId: string }) {
+  const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
+  const conversations = project?.conversations ?? [];
   return (
     <div className="pd-tab">
-      <div className="pd-activity-switch">
-        <button className={`pd-pill${sub === "personal" ? " pd-pill--on" : ""}`} onClick={() => setSub("personal")}>与我相关</button>
-        <button className={`pd-pill${sub === "member" ? " pd-pill--on" : ""}`} onClick={() => setSub("member")}>成员动态</button>
+      <div className="pd-activity-switch" aria-label="项目概览">
+        <span className="pd-pill pd-pill--on">{conversations.length} 个对话</span>
+        <span className="pd-pill">{project?.plans.length ?? 0} 项计划</span>
+        <span className="pd-pill">{project?.tasks.length ?? 0} 项任务</span>
+        <span className="pd-pill">{project?.assets.length ?? 0} 个资产</span>
       </div>
-      <div className="pd-empty">{sub === "personal" ? "暂无与我有关的动态" : "暂无成员动态"}</div>
+      {conversations.length === 0 ? (
+        <div className="pd-empty">暂无真实运行记录，从下方输入框启动第一个项目对话。</div>
+      ) : (
+        <ul className="pd-task-list" aria-label="最近项目对话">
+          {conversations.slice(0, 20).map((conversation) => (
+            <li className="pd-task-item" key={conversation.sessionId}>
+              <span className="pd-task-item__title">{conversation.title}</span>
+              <span className="pd-task-item__meta">对话 · {relTime(conversation.createdAt)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -54,13 +69,6 @@ export function PlanTab({ projectId }: { projectId: string }) {
       <div className="pd-toolbar">
         <div className="pd-toolbar__left">
           <button className="pd-btn pd-btn--primary" onClick={newTodo}>+ 新建待办</button>
-          <button className="pd-btn" onClick={() => window.alert("添加数据源（本地演示占位）")}>+ 添加数据源</button>
-        </div>
-        <div className="pd-toolbar__right">
-          <button className="pd-btn">全部归属 <ChevronDownIcon size="sm" style={{ verticalAlign: "text-bottom" }} /></button>
-          <button className="pd-btn">全部来源 <ChevronDownIcon size="sm" style={{ verticalAlign: "text-bottom" }} /></button>
-          <button className="pd-btn">批量操作</button>
-          <button className="pd-btn pd-btn--icon" aria-label="搜索"><SearchIcon size="sm" /></button>
         </div>
       </div>
 
@@ -139,9 +147,7 @@ export function TaskTab({ projectId }: { projectId: string }) {
     <div className="pd-tab">
       <div className="pd-toolbar">
         <div className="pd-toolbar__left">
-          <button className="pd-btn">全部任务 <ChevronDownIcon size="sm" style={{ verticalAlign: "text-bottom" }} /></button>
-          <button className="pd-btn">全部来源 <ChevronDownIcon size="sm" style={{ verticalAlign: "text-bottom" }} /></button>
-          <span className="pd-toolbar__hint">你的任务是私密的，除非你共享它们</span>
+          <span className="pd-toolbar__hint">项目任务保存在本机 EchoAgent 私有数据目录</span>
         </div>
         <div className="pd-toolbar__right">
           <input className="pd-search-inline" placeholder="搜索任务标题" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -170,35 +176,50 @@ export function TaskTab({ projectId }: { projectId: string }) {
 // 资产
 // ============================================================
 
-const QUOTA_TOTAL_MB = 5 * 1024; // 5.00 GB
-
-function fmtSize(mb: number): string {
-  return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(2)} MB`;
+function usedBytes(assets: AssetItem[]): number {
+  return assets.reduce((sum, asset) => sum + (asset.sizeBytes ?? 0), 0);
 }
 
-function estimateUsed(assets: AssetItem[]): number {
-  // 本地演示：按文件数粗估（无真实字节）。
-  const files = assets.filter((a) => a.kind === "file").length;
-  return 9.02 + files * 0.1; // 基线对齐截图 9.02 MB
-}
-
-export function AssetsTab({ projectId }: { projectId: string }) {
+export function AssetsTab({ projectId, onToast }: { projectId: string; onToast?: (message: string) => void }) {
   const assets = useProjectsStore((s) => s.projects.find((p) => p.id === projectId)?.assets ?? []);
   const addAsset = useProjectsStore((s) => s.addAsset);
   const removeAsset = useProjectsStore((s) => s.removeAsset);
   const [q, setQ] = useState("");
 
-  const used = useMemo(() => estimateUsed(assets), [assets]);
+  const used = useMemo(() => usedBytes(assets), [assets]);
 
-  const newFolder = () => {
+  const newFolder = async () => {
     const name = window.prompt("文件夹名称");
-    if (name && name.trim()) addAsset(projectId, { name: name.trim(), kind: "folder" });
+    if (!name?.trim()) return;
+    try {
+      const asset = await projectAssetMakeDir(projectId, name.trim());
+      addAsset(projectId, asset);
+      onToast?.("文件夹已创建");
+    } catch (error) {
+      onToast?.(`创建失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
   };
-  const upload = () => {
-    const name = window.prompt("上传文件名（本地演示，仅记录名称）", "新文件.pdf");
-    if (name && name.trim()) {
-      const ext = name.includes(".") ? name.split(".").pop()?.toUpperCase() : undefined;
-      addAsset(projectId, { name: name.trim(), kind: "file", ext, sizeLabel: "— KB" });
+  const upload = async () => {
+    try {
+      const selected = await openDialog({ multiple: true, directory: false });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      const imported = await projectAssetsImport(projectId, paths);
+      imported.forEach((asset) => addAsset(projectId, asset));
+      onToast?.(`已导入 ${imported.length} 个文件（原文件未修改）`);
+    } catch (error) {
+      onToast?.(`导入失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  };
+
+  const remove = async (asset: AssetItem) => {
+    if (!window.confirm(`确定删除资产「${asset.name}」？`)) return;
+    try {
+      if (asset.path) await projectAssetRemove(projectId, asset.path);
+      removeAsset(projectId, asset.id);
+      onToast?.(asset.path ? "资产副本已删除" : "旧版资产元数据已删除");
+    } catch (error) {
+      onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
   };
 
@@ -209,13 +230,12 @@ export function AssetsTab({ projectId }: { projectId: string }) {
       <div className="pd-toolbar">
         <div className="pd-toolbar__left">
           <button className="pd-btn" onClick={newFolder}>新建文件夹</button>
-          <button className="pd-btn" onClick={upload}>上传文件</button>
+          <button className="pd-btn" onClick={upload}>导入文件副本</button>
           <span className="pd-toolbar__hint">
-            存储空间已用 {fmtSize(used)} / {fmtSize(QUOTA_TOTAL_MB)}
+            本地项目资产已用 {formatFileSize(used)}
           </span>
         </div>
         <div className="pd-toolbar__right">
-          <button className="pd-btn">全部类型 <ChevronDownIcon size="sm" style={{ verticalAlign: "text-bottom" }} /></button>
           <input className="pd-search-inline" placeholder="搜索文件或文件夹…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
       </div>
@@ -240,15 +260,23 @@ export function AssetsTab({ projectId }: { projectId: string }) {
             rows.map((a) => (
               <tr key={a.id}>
                 <td className="pd-asset-table__name">
+                  <button
+                    type="button"
+                    className="pd-asset-open"
+                    disabled={!a.path}
+                    title={a.path ? "用系统默认应用打开" : "旧版元数据没有对应文件"}
+                    onClick={() => a.path && void openLocalPath(a.path).catch((error) => onToast?.(`打开失败：${String(error)}`))}
+                  >
                   <span className="pd-asset-icon">{a.kind === "folder" ? "📁" : "📄"}</span>
                   {a.name}
+                  </button>
                 </td>
                 <td>{a.kind === "folder" ? "文件夹" : a.ext ?? "文件"}</td>
                 <td>{a.updater ?? "-"}</td>
                 <td>{a.updatedAt ? relTime(a.updatedAt) : "-"}</td>
-                <td>{a.kind === "folder" ? "-" : a.sizeLabel ?? "-"}</td>
+                <td>{a.kind === "folder" ? "-" : a.sizeBytes !== undefined ? formatFileSize(a.sizeBytes) : a.sizeLabel ?? "-"}</td>
                 <td>
-                  <button className="pd-asset-del" aria-label="删除" onClick={() => removeAsset(projectId, a.id)}>×</button>
+                  <button className="pd-asset-del" aria-label="删除" onClick={() => void remove(a)}>×</button>
                 </td>
               </tr>
             ))

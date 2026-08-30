@@ -57,10 +57,8 @@ import {
  * EchoAgent-style Settings dialog.
  *
  * Full-screen overlay → centered `.settings-modal` (1040×720) with a fixed
- * 12-item left navigation (mirrors EchoAgent) and a right panel that swaps
- * per section. Only "模型" has a real implementation; the other 11 render a
- * "即将上线" placeholder so the visual matches EchoAgent today and can be
- * filled in later.
+ * 12-item left navigation and a right panel backed by real runtime, config,
+ * notification, memory, security, data and appearance settings.
  *
  * The 模型 section lists configured providers from ~/.echo-agent/config.toml and
  * opens a nested "添加模型" editor dialog (560×318) when adding/editing.
@@ -278,25 +276,10 @@ export function SettingsPanel({
               <AssistantSettingsPanel />
             ) : active === "agent-mail" ? (
               <AgentMailSettingsPanel />
-            ) : (
-              <PlaceholderSection label={NAV.find((n) => n.id === active)?.label ?? ""} />
-            )}
+            ) : null}
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Placeholder for the 11 not-yet-implemented sections.
-// ---------------------------------------------------------------------------
-
-function PlaceholderSection({ label }: { label: string }) {
-  return (
-    <div className="settings-placeholder">
-      <h2 className="settings-placeholder__title">{label}</h2>
-      <p className="settings-placeholder__desc">该分区即将上线，敬请期待。</p>
     </div>
   );
 }

@@ -110,6 +110,9 @@ interface SessionState {
   // --- transcript ops ---
   /** Append a user message (sent optimistically before the round-trip). */
   pushUser: (text: string) => void;
+  /** Remove the most recent optimistic user message and its empty assistant
+   *  placeholder when `agent_send` rejects before the turn starts. */
+  rollbackPendingTurn: () => void;
   /** Append an assistant message (for preview mode simulation). */
   pushAssistant: (text: string) => void;
   /** Apply a streamed session/update from the backend. The update is routed
@@ -399,6 +402,24 @@ export const useSessionStore = create<SessionState>((set, get) => {
       });
       // Local error banner doesn't belong to the transcript; clear it globally.
       set({ error: null });
+    },
+
+    rollbackPendingTurn: () => {
+      const sid = get().sessionId;
+      if (!sid) return;
+      applyToTranscript(sid, (t) => {
+        const placeholderIndex = t.messages.findIndex(
+          (message) => message.id === t.streamingMessageId,
+        );
+        if (placeholderIndex < 0) return t;
+        const placeholder = t.messages[placeholderIndex];
+        if (placeholder.parts.length > 0) return t;
+        const messages = [...t.messages];
+        messages.splice(placeholderIndex, 1);
+        const previous = messages[placeholderIndex - 1];
+        if (previous?.role === "user") messages.splice(placeholderIndex - 1, 1);
+        return { ...t, messages, streamingMessageId: null };
+      });
     },
 
     markComplete: (p) => {

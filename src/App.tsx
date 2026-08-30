@@ -39,6 +39,7 @@ import {
   agentRenameSession,
   agentSetModel,
   agentSetSessionExpert,
+  agentSessionUsage,
   agentAuthStatus,
   providersList,
   flattenModels,
@@ -48,21 +49,22 @@ import {
   type WorkspaceInfo,
 } from "./lib/agent-client";
 import type { AgentEntry, SessionSummary } from "./lib/types";
-import { useProjectsStore, type ProjectMeta } from "./stores/projects-store";
+import { hydrateProjectsFromBackend, useProjectsStore, type ProjectMeta } from "./stores/projects-store";
 import { useMessageQueueStore, hasActiveItems } from "./stores/message-queue-store";
 import { useSubagentStore } from "./stores/subagent-store";
-import { recordUsage, loadUsage, loadQuotaConfig } from "./lib/usage-quota";
+import { recordCumulativeUsage, recordUsage, loadUsage, loadQuotaConfig } from "./lib/usage-quota";
 import {
   registerTelemetryProvider,
   createConsoleTelemetryProvider,
   reportEvent,
   type TelemetryProvider,
 } from "./lib/telemetry-contract";
-import { exportEventsBatch, type OtlpConfig } from "./lib/otlp-exporter";
+import { defaultHttpSender, exportEventsBatch, type OtlpConfig } from "./lib/otlp-exporter";
 import { IS_MACOS } from "./lib/platform";
 import { friendlyError } from "./lib/error-format";
 import { hydrateKnowledgeSources } from "./lib/kb-source-storage";
 import { permissionModeFromEvent, usePermissionModeStore } from "./stores/permission-mode-store";
+import { buildProjectPrompt } from "./lib/project-context";
 
 /** Hidden markers wrapping the expert persona in the text sent to the runtime.
  *  The UI strips these (and everything between them) from user messages. */
@@ -144,7 +146,14 @@ function Shell() {
   const questionStore = useQuestionStore;
 
   useEffect(() => {
-    hydrateKnowledgeSources();
+    void hydrateKnowledgeSources().catch((error) => {
+      console.error("[EchoAgent] Failed to hydrate knowledge sources:", error);
+      setToast("知识源后端数据读取失败");
+    });
+    void hydrateProjectsFromBackend().catch((error) => {
+      console.error("[EchoAgent] Failed to hydrate projects:", error);
+      setToast("项目后端数据读取失败，已使用本地缓存");
+    });
   }, []);
 
   useEffect(() => {
@@ -193,12 +202,15 @@ function Shell() {
   useEffect(() => {
     let unlisten: (() => void) | null = null;
 
-    // 注册遥测 console provider(Aegis 替代),启动时一次。
-    registerTelemetryProvider(
-      createConsoleTelemetryProvider({
-        sink: (e) => console.debug(`[telemetry] ${e.level.toUpperCase()} ${e.name}`, e.props ?? ""),
-      }),
-    );
+    // 开发环境保留最小化控制台遥测；生产环境不把事件属性写进 DevTools。
+    const devMode = (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV === true;
+    if (devMode) {
+      registerTelemetryProvider(
+        createConsoleTelemetryProvider({
+          sink: (e) => console.debug(`[telemetry] ${e.level.toUpperCase()} ${e.name}`),
+        }),
+      );
+    }
     // 若用户配置了 OTLP endpoint,额外注册 OTLP 导出 provider(自托管监控)。
     const otlpEndpoint = typeof localStorage !== "undefined" ? localStorage.getItem("echoagent.otlp.endpoint") : null;
     if (otlpEndpoint) {
@@ -206,23 +218,16 @@ function Shell() {
       const otlpProvider: TelemetryProvider = {
         id: "otlp",
         isEnabled: () => true,
-        reportEvent: (e) => { void exportEventsBatch([e], otlpConfig, { post: async () => ({ ok: true, status: 200 }) }); },
+        reportEvent: (e) => {
+          void exportEventsBatch([e], otlpConfig, defaultHttpSender).then((result) => {
+            if (!result.ok) console.warn(`[telemetry] OTLP export failed: HTTP ${result.status}`);
+          }).catch((error) => console.warn("[telemetry] OTLP export failed:", error));
+        },
         reportMetric: () => {},
       };
       registerTelemetryProvider(otlpProvider);
     }
     reportEvent("app_started", "info");
-
-    // 尝试自动激活 @anthropic-ai/sandbox-runtime(装好包后零改动生效)。
-    // 非阻塞:失败(包未安装)静默降级为纯逻辑守卫。
-    void import("@/lib/sandbox-init")
-      .then((m) => m.tryActivateSandbox())
-      .then((status) => {
-        if (status.activated) {
-          console.log(`[EchoAgent] OS 级沙箱已激活 (@anthropic-ai/sandbox-runtime${status.version ? ` v${status.version}` : ""})`);
-        }
-      })
-      .catch(() => {/* 静默 */});
 
     (async () => {
       try {
@@ -239,11 +244,9 @@ function Shell() {
 
         unlisten = await subscribeAgentEvents({
           onUpdate: (u) => {
-            console.log('[EchoAgent] Received agent://update:', u);
             sessionStore.getState().applyUpdate(u);
           },
           onPermission: (p) => {
-            console.log('[EchoAgent] Received agent://permission:', p);
             reportEvent("permission_request", "warn", { sessionId: p.sessionId });
             permissionStore.getState().request(p);
             void notificationAppend(
@@ -272,26 +275,47 @@ function Shell() {
             }
           },
           onComplete: (p) => {
-            console.log('[EchoAgent] Received agent://complete:', p);
             reportEvent("session_complete", "info", { sessionId: p.sessionId, stopReason: p.stopReason });
-            // Ignore completes for side-channel sessions (inspiration generation)
-            // — they're handled by their own listeners, not the main transcript.
-            const currentSessionId = sessionStore.getState().sessionId;
-            if (currentSessionId && p.sessionId && p.sessionId !== currentSessionId) {
-              return;
-            }
+            const summary = findSessionSummary(p.sessionId);
+            const abnormal = ["rate_limit", "rate_limited", "error"].includes(p.stopReason);
+            // Completion is routed by session id in the transcript store. This
+            // also finalizes a background conversation after the user switches
+            // away; side-channel sessions are not added to the sidebar because
+            // they have no SessionSummary entry.
             sessionStore.getState().markComplete(p);
-            // Update sidebar status so the task filter reflects the completion.
-            sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "completed" });
-            // Record token usage for the quota dashboard (weixinpay alternative).
-            if (p.usage && (p.usage.promptTokens || p.usage.completionTokens)) {
-              const currentModel = sessionStore.getState().sessionId;
-              recordUsage(loadUsage(), {
-                modelId: currentModel ?? "unknown",
-                promptTokens: p.usage.promptTokens ?? 0,
-                completionTokens: p.usage.completionTokens ?? 0,
-              }, loadQuotaConfig() ?? undefined);
+            if (summary) {
+              sessionsStore.getState().upsert({
+                sessionId: p.sessionId,
+                status: abnormal ? "failed" : "completed",
+              });
+
+              // PromptComplete currently contains no usage in the Rust bridge.
+              // Query EchoAgent's real cumulative counters and persist only the
+              // per-session delta. If a future bridge supplies per-turn usage,
+              // retain it as a compatibility fallback.
+              const modelId = summary.currentModelId ?? "unknown";
+              void agentSessionUsage(p.sessionId).then((usage) => {
+                recordCumulativeUsage(loadUsage(), {
+                  sessionId: p.sessionId,
+                  modelId,
+                  inputTokens: usage.inputTokens ?? 0,
+                  outputTokens: usage.outputTokens ?? 0,
+                }, loadQuotaConfig() ?? undefined);
+              }).catch(() => {
+                if (p.usage && (p.usage.promptTokens || p.usage.completionTokens)) {
+                  recordUsage(loadUsage(), {
+                    sessionId: p.sessionId,
+                    modelId,
+                    promptTokens: p.usage.promptTokens ?? 0,
+                    completionTokens: p.usage.completionTokens ?? 0,
+                  }, loadQuotaConfig() ?? undefined);
+                }
+              });
             }
+
+            // Unknown side-channel sessions and failed turns must never start a
+            // queued follow-up automatically.
+            if (!summary || abnormal) return;
             // Refresh the composer context-usage pill after each turn.
             // Internal/external notifications are dispatched by the Rust bridge
             // for every session (including background automation sessions).
@@ -310,13 +334,16 @@ function Shell() {
                 sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "failed" });
                 return;
               }
-              const next = useMessageQueueStore.getState().shiftNext(p.sessionId);
+              const next = q.find((item) => item.status === "queued");
               if (next) {
-                // 标记为工作中 + 推入用户气泡 + 启动流式 + 发送。
+                // Keep the queue item until agentSend acknowledges the request;
+                // a rejected invoke therefore cannot silently lose user input.
                 sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "working" });
                 sessionStore.getState().pushUser(next.text);
                 sessionStore.getState().startStreaming();
-                agentSend(p.sessionId, next.text).catch((e) => {
+                agentSend(p.sessionId, next.text).then(() => {
+                  useMessageQueueStore.getState().remove(p.sessionId, next.id);
+                }).catch((e) => {
                   sessionStore.getState().setError(friendlyError(e));
                   sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "failed" });
                 });
@@ -328,7 +355,6 @@ function Shell() {
             // sidebar entry in place. This overrides the "新会话" placeholder
             // set optimistically in handleSendNew. Stamp updatedAt so the
             // sidebar can re-sort the freshly-active session to the top.
-            console.log('[EchoAgent] Received agent://summary:', { sessionId, title });
             sessionsStore.getState().upsert({
               sessionId,
               title,
@@ -408,7 +434,6 @@ function Shell() {
             );
           },
           onQuestion: (q) => {
-            console.log('[EchoAgent] Received agent://question:', q);
             questionStore.getState().request(q);
           },
           onAgentDied: ({ reason }) => {
@@ -418,7 +443,6 @@ function Shell() {
             reportEvent("agent_died", "error", { reason });
           },
           onSubagent: (e) => {
-            console.log('[EchoAgent] Received agent://subagent:', e);
             useSubagentStore.getState().applyEvent(e);
           },
           onTurnError: (e) => {
@@ -427,6 +451,9 @@ function Shell() {
             // "rate_limit"/"error". Surface a friendly message instead of
             // silently marking the turn complete.
             console.warn('[EchoAgent] Turn ended abnormally:', e);
+            if (findSessionSummary(e.sessionId)) {
+              sessionsStore.getState().upsert({ sessionId: e.sessionId, status: "failed" });
+            }
             // Only surface for the focused session — background sessions
             // finalizing after a switch shouldn't hijack the error banner.
             const currentSessionId = sessionStore.getState().sessionId;
@@ -561,15 +588,12 @@ function Shell() {
     handleNavigate("项目");
   };
 
-  const handleSendNew = async (text: string, attachments: string[] = []) => {
-    console.log('[EchoAgent] handleSendNew called with:', text);
+  const handleSendNew = async (text: string, attachments: string[] = []): Promise<boolean> => {
     const modelId = requireConfiguredModel();
-    if (!modelId) return;
+    if (!modelId) return false;
     try {
       const cwd = cwdRef.current;
-      console.log('[EchoAgent] Creating new session with cwd:', cwd, 'modelId:', modelId);
       const sessionId = await agentNewSession(cwd, modelId);
-      console.log('[EchoAgent] New session created:', sessionId);
       setCurrentModelId(modelId);
       sessionsStore.getState().setCurrent(sessionId);
       setPlaceholderView(null);
@@ -599,45 +623,49 @@ function Shell() {
       // UI shows only the user's visible text.
       sessionStore.getState().pushUser(text);
       sessionStore.getState().startStreaming();
-      console.log('[EchoAgent] Sending prompt to runtime...');
       await agentSend(sessionId, textForAgent, attachments);
-      console.log('[EchoAgent] Prompt sent successfully, waiting for events...');
+      return true;
     } catch (e) {
       console.error('[EchoAgent] handleSendNew error:', e);
+      sessionStore.getState().rollbackPendingTurn();
       sessionStore.getState().setError(friendlyError(e));
       const sid = sessionStore.getState().sessionId;
       if (sid) sessionsStore.getState().upsert({ sessionId: sid, status: "failed" });
+      return false;
     }
   };
 
-  const handleSendCurrent = async (text: string, attachments: string[] = []) => {
+  const handleSendCurrent = async (text: string, attachments: string[] = []): Promise<boolean> => {
     if (!currentSessionId) return handleSendNew(text, attachments);
     // Guard against double-send / send-during-streaming. Composer also guards
     // via its `streaming` prop, but that value can be stale within the same
     // render tick; the store flag is the source of truth. A second pushUser +
     // startStreaming would orphan an empty placeholder that never completes.
-    if (sessionStore.getState().streaming) return;
+    if (sessionStore.getState().streaming) return false;
     if (modelSwitching) {
       showToast("正在切换模型，请稍候");
-      return;
+      return false;
     }
     if (!init?.auth.ready) {
       showToast("请先在「设置 → 模型」配置 API Key");
       setSettingsOpen(true);
-      return;
+      return false;
     }
     if (!activeSessionModelId) {
       showToast("当前会话的模型未配置，请先在输入框右下角重新选择模型");
-      return;
+      return false;
     }
     try {
       sessionsStore.getState().upsert({ sessionId: currentSessionId, status: "working" });
       sessionStore.getState().pushUser(text);
       sessionStore.getState().startStreaming();
       await agentSend(currentSessionId, text, attachments);
+      return true;
     } catch (e) {
+      sessionStore.getState().rollbackPendingTurn();
       sessionStore.getState().setError(friendlyError(e));
       sessionsStore.getState().upsert({ sessionId: currentSessionId, status: "failed" });
+      return false;
     }
   };
 
@@ -785,6 +813,32 @@ function Shell() {
     sessionsStore.getState().setCurrent(null);
     setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
   };
+
+  // Application-level shortcuts shown in Settings. Composer-specific Enter,
+  // Shift+Enter, slash and @ behavior stays scoped to the input component.
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return;
+      const key = event.key.toLowerCase();
+      if (key === "n") {
+        event.preventDefault();
+        setSettingsOpen(false);
+        setSearchOpen(false);
+        handleNewSession();
+      } else if (key === "k") {
+        event.preventDefault();
+        setSearchOpen(true);
+      } else if (event.key === ",") {
+        event.preventDefault();
+        setSettingsOpen(true);
+      } else if (key === "b") {
+        event.preventDefault();
+        setSidebarCollapsed((value) => !value);
+      }
+    };
+    window.addEventListener("keydown", onShortcut);
+    return () => window.removeEventListener("keydown", onShortcut);
+  }, [models]);
 
   // 空间节点展开/折叠: 记录展开态, 首次展开时懒加载该 cwd 的子会话。
   const handleToggleWorkspace = async (cwd: string, next: boolean) => {
@@ -965,12 +1019,10 @@ function Shell() {
         title: project.name,
         createdAt: new Date().toISOString(),
       });
-      const seed = project.instructions?.trim()
-        ? project.instructions
-        : `你好，我们开始「${project.name}」项目吧。`;
+      const seed = `开始「${project.name}」项目，请先根据项目配置确认目标、约束和下一步。`;
       sessionStore.getState().pushUser(seed);
       sessionStore.getState().startStreaming();
-      await agentSend(sessionId, seed);
+      await agentSend(sessionId, buildProjectPrompt(project, seed));
     } catch (e) {
       sessionStore.getState().setError(friendlyError(e));
       const sid = sessionStore.getState().sessionId;
@@ -1013,13 +1065,9 @@ function Shell() {
       sessionStore.getState().setSession(sessionId);
 
       if (message) {
-        // For the first conversation in a project, prepend project instructions
-        // as context so EchoAgent understands the project's background and rules.
-        const isFirst = project.conversations.length === 0;
-        const hasInstructions = !!project.instructions?.trim();
-        const prompt = isFirst && hasInstructions
-          ? `[项目「${project.name}」背景与规范]\n${project.instructions!.trim()}\n\n[用户消息]\n${message}`
-          : message;
+        // Every new runtime session needs the project contract; previous
+        // project conversations do not share an ACP context window.
+        const prompt = buildProjectPrompt(project, message);
         sessionStore.getState().pushUser(message);
         sessionStore.getState().startStreaming();
         await agentSend(sessionId, prompt);

@@ -2,6 +2,7 @@
 //! open URL, open path, reveal in folder, path_stat, safe write under workspace.
 
 use std::path::{Component, Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 
@@ -17,40 +18,41 @@ fn resolve_path(path: &str, cwd: Option<&str>) -> PathBuf {
     }
 }
 
-/// Ensure `candidate` is inside `root` after canonicalize (best-effort).
-/// Returns the canonical candidate path on success.
+/// Ensure `candidate` is inside `root` after canonicalizing its nearest
+/// existing ancestor. Validation is read-only: rejected paths never create
+/// directories outside the workspace.
 fn ensure_under_workspace(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
-    // Reject `..` components in the relative sense before canonicalize.
-    for c in candidate.components() {
-        if matches!(c, Component::ParentDir) {
-            // Still allow if after normalize it stays under root — canonicalize handles this.
-        }
+    if candidate
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("拒绝包含 .. 的写入路径".into());
     }
 
     let root_canon = root
         .canonicalize()
         .map_err(|e| format!("无法解析工作区路径：{e}"))?;
 
-    // If parent doesn't exist yet (new file), canonicalize parent + keep filename.
+    // If the path doesn't exist yet, resolve the nearest existing ancestor and
+    // append the still-missing suffix without touching the filesystem.
     let candidate_canon = if candidate.exists() {
         candidate
             .canonicalize()
             .map_err(|e| format!("无法解析目标路径：{e}"))?
     } else {
-        let parent = candidate
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        if !parent.exists() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+        let mut ancestor = candidate;
+        while !ancestor.exists() {
+            ancestor = ancestor
+                .parent()
+                .ok_or_else(|| "目标路径没有可解析的父目录".to_string())?;
         }
-        let parent_canon = parent
+        let ancestor_canon = ancestor
             .canonicalize()
             .map_err(|e| format!("无法解析目标目录：{e}"))?;
-        let name = candidate
-            .file_name()
-            .ok_or_else(|| "目标路径缺少文件名".to_string())?;
-        parent_canon.join(name)
+        let suffix = candidate
+            .strip_prefix(ancestor)
+            .map_err(|_| "无法解析目标路径后缀".to_string())?;
+        ancestor_canon.join(suffix)
     };
 
     if !candidate_canon.starts_with(&root_canon) {
@@ -284,6 +286,8 @@ pub struct DirEntry {
     pub kind: String,
     /// File size in bytes (directories report 0).
     pub size: u64,
+    /// Last modified time in Unix milliseconds (0 when unavailable).
+    pub modified_at: u64,
 }
 
 /// Directory names that are skipped by [`list_dir`] to keep the file tree
@@ -357,16 +361,23 @@ pub async fn list_dir(
         } else {
             "other"
         };
+        let metadata = entry.metadata().ok();
         let size = if is_dir {
             0
         } else {
-            entry.metadata().map(|m| m.len()).unwrap_or(0)
+            metadata.as_ref().map(|m| m.len()).unwrap_or(0)
         };
+        let modified_at = metadata
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis().min(u64::MAX as u128) as u64)
+            .unwrap_or(0);
         entries.push(DirEntry {
             name,
             path: entry.path().to_string_lossy().to_string(),
             kind: kind.into(),
             size,
+            modified_at,
         });
         if entries.len() >= limit {
             break;
@@ -395,6 +406,22 @@ pub async fn browse_directory(path: String) -> Result<(), String> {
         p.parent().map(|x| x.to_path_buf()).unwrap_or(p)
     };
     open::that(target).map_err(|e| format!("打开目录失败：{e}"))
+}
+
+/// Return the actual EchoAgent data directory (respects ECHO_AGENT_HOME).
+#[tauri::command]
+pub fn echo_agent_data_dir() -> Result<String, String> {
+    let path = crate::paths::echo_agent_home_dir();
+    std::fs::create_dir_all(&path).map_err(|e| format!("创建数据目录失败：{e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Open EchoAgent's private data directory in the system file manager.
+#[tauri::command]
+pub fn open_echo_agent_data_dir() -> Result<(), String> {
+    let path = crate::paths::echo_agent_home_dir();
+    std::fs::create_dir_all(&path).map_err(|e| format!("创建数据目录失败：{e}"))?;
+    open::that(&path).map_err(|e| format!("打开数据目录失败：{e}"))
 }
 
 // ---------- unit tests ----------
@@ -474,6 +501,30 @@ mod tests {
         // File doesn't exist yet, but parent (root) does.
         let result = ensure_under_workspace(root, &new_file);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn ensure_under_workspace_does_not_create_rejected_parent_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let outside_parent = tmp.path().join("outside").join("nested");
+        let candidate = outside_parent.join("file.txt");
+
+        assert!(ensure_under_workspace(&root, &candidate).is_err());
+        assert!(!outside_parent.exists());
+    }
+
+    #[test]
+    fn ensure_under_workspace_allows_new_nested_directory_without_creating_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let parent = root.join("new").join("nested");
+        let candidate = parent.join("file.txt");
+
+        let safe = ensure_under_workspace(root, &candidate).unwrap();
+        assert!(safe.starts_with(root.canonicalize().unwrap()));
+        assert!(!parent.exists());
     }
 
     // --- list_dir (logic check via direct std::fs + IGNORED_DIRS semantics) ---

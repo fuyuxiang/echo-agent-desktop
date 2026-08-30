@@ -98,16 +98,18 @@ export function ConnectorsTab({ pills, onToast }: Props) {
 
   const persist = (r: string) => { try { localStorage.setItem(LS_ROOT, r); } catch { /* ignore */ } };
 
-  const loadCatalog = useCallback(async (r: string) => {
+  const loadCatalog = useCallback(async (r: string): Promise<boolean> => {
     setLoading(true); setError(""); setNeedPick(false);
     try {
       const c = await connectorsLoad(r);
       setCatalog(c);
       setRoot(c.root || r);
       persist(c.root || r);
+      return true;
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
       setCatalog(null);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -211,10 +213,9 @@ export function ConnectorsTab({ pills, onToast }: Props) {
       });
       const pick = Array.isArray(sel) ? sel[0] : sel;
       if (!pick) return;
-      await loadCatalog(pick);
-      if (!error) onToast?.(`已切换连接器数据目录：${pick}`);
+      if (await loadCatalog(pick)) onToast?.(`已切换连接器数据目录：${pick}`);
     } catch { /* cancelled */ }
-  }, [root, loadCatalog, onToast, error]);
+  }, [root, loadCatalog, onToast]);
 
   const openEditor = () => { setMcpEditing(true); setMcpOpen(true); };
   const openMcpList = () => { setMcpEditing(false); setMcpOpen(true); };

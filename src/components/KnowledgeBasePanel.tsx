@@ -26,9 +26,12 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   const [sources, setSources] = useState<Array<{ id: string; label: string; stats: KbIndexStats }>>([]);
   const q = debouncedQuery.trim();
   useEffect(() => {
-    hydrateKnowledgeSources();
-    setRefreshKey((key) => key + 1);
-  }, []);
+    let cancelled = false;
+    void hydrateKnowledgeSources()
+      .then(() => { if (!cancelled) setRefreshKey((key) => key + 1); })
+      .catch((error) => onToast?.(`读取知识源失败：${String(error).replace(/^Error:\s*/, "")}`));
+    return () => { cancelled = true; };
+  }, [onToast]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query), 300);
@@ -54,7 +57,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
     try {
       const dir = await openDialog({ directory: true, multiple: false });
       if (!dir || Array.isArray(dir)) return;
-      const { added } = addLocalKnowledgeSource(dir as string);
+      const { added } = await addLocalKnowledgeSource(dir as string);
       setRefreshKey((k) => k + 1);
       onToast?.(added ? "已添加本地知识源" : "该知识源已存在");
     } catch (e) {
@@ -63,10 +66,14 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   };
 
   /** 移除一个已注册知识源(by id)。 */
-  const removeSource = (id: string) => {
-    if (removeKnowledgeSource(id)) {
-      setRefreshKey((k) => k + 1);
-      onToast?.("已移除知识源");
+  const removeSource = async (id: string) => {
+    try {
+      if (await removeKnowledgeSource(id)) {
+        setRefreshKey((k) => k + 1);
+        onToast?.("已移除知识源");
+      }
+    } catch (error) {
+      onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
   };
 
@@ -143,7 +150,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
               <button
                 type="button"
                 className="kb-panel__source-chip-remove"
-                onClick={() => removeSource(s.id)}
+                onClick={() => void removeSource(s.id)}
                 aria-label={`移除知识源 ${s.label}`}
                 title="移除此知识源"
               >

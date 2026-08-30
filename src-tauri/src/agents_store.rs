@@ -66,6 +66,23 @@ fn user_agents_dir() -> PathBuf {
     crate::paths::echo_agent_home_dir().join("agents")
 }
 
+fn resolve_user_agent_path(path: &str) -> Result<PathBuf, String> {
+    let root = user_agents_dir();
+    std::fs::create_dir_all(&root).map_err(|e| format!("create agents dir: {e}"))?;
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("resolve agents dir: {e}"))?;
+    let candidate = PathBuf::from(path)
+        .canonicalize()
+        .map_err(|e| format!("resolve agent path: {e}"))?;
+    if candidate.parent() != Some(root.as_path())
+        || candidate.extension().and_then(|value| value.to_str()) != Some("md")
+    {
+        return Err("拒绝访问用户 Agent 目录之外的路径".into());
+    }
+    Ok(candidate)
+}
+
 /// Public accessor for the user-scope agents directory (used by experts.rs
 /// to link team member agents for EchoAgent discovery).
 pub fn user_agents_dir_pub() -> PathBuf {
@@ -229,7 +246,8 @@ pub fn resolve_agent_prompt(name: &str, cwd: Option<String>) -> Option<String> {
 /// Fetch a single agent file's full contents.
 #[tauri::command]
 pub fn agents_get(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))
+    let safe = resolve_user_agent_path(&path)?;
+    std::fs::read_to_string(&safe).map_err(|e| format!("read {}: {e}", safe.display()))
 }
 
 /// Save an agent file (create or overwrite). Writes to the user-scope
@@ -241,10 +259,14 @@ pub fn agents_save(name: String, raw: String) -> Result<AgentEntry, String> {
     if safe_name.is_empty() {
         return Err("agent name must not be empty".into());
     }
+    if raw.len() > 1024 * 1024 {
+        return Err("Agent 定义不能超过 1 MB".into());
+    }
     let dir = user_agents_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create agents dir: {e}"))?;
     let path = dir.join(format!("{safe_name}.md"));
     std::fs::write(&path, &raw).map_err(|e| format!("write agent: {e}"))?;
+    crate::paths::harden_private_file(&path)?;
     let fm = parse_frontmatter(&raw);
     Ok(AgentEntry {
         name: fm.name.unwrap_or(safe_name),
@@ -260,7 +282,8 @@ pub fn agents_save(name: String, raw: String) -> Result<AgentEntry, String> {
 /// Delete an agent file by path.
 #[tauri::command]
 pub fn agents_delete(path: String) -> Result<(), String> {
-    std::fs::remove_file(&path).map_err(|e| format!("delete {path}: {e}"))
+    let safe = resolve_user_agent_path(&path)?;
+    std::fs::remove_file(&safe).map_err(|e| format!("delete {}: {e}", safe.display()))
 }
 
 /// Build a starter agent markdown body from a name/description/system prompt.

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { Composer } from "../Composer";
 
 const base = { streaming: false, onSend: vi.fn(), onCancel: vi.fn() };
@@ -41,13 +41,27 @@ describe("Composer", () => {
     expect(screen.getByText(/审批模式/)).toBeInTheDocument();
   });
 
-  it("未传 workspaces 时选择工作空间 fallback 触发 onPlaceholder", () => {
-    // When workspaces/onSelectWorkspace are absent, the workspace button falls
-    // back to onPlaceholder("选择工作空间").
-    const onPlaceholder = vi.fn();
-    render(<Composer {...base} showMeta onPlaceholder={onPlaceholder} />);
-    fireEvent.click(screen.getByText("选择工作空间"));
-    expect(onPlaceholder).toHaveBeenCalledWith("选择工作空间");
+  it("未传入工作空间数据时不展示无效入口", () => {
+    render(<Composer {...base} showMeta />);
+    expect(screen.queryByText("选择工作空间")).toBeNull();
+  });
+
+  it("后端拒绝发送时保留输入与草稿", async () => {
+    const onDraftChange = vi.fn();
+    const onSend = vi.fn().mockResolvedValue(false);
+    render(
+      <Composer
+        {...base}
+        onSend={onSend}
+        draft="不能丢失"
+        draftKey="s1"
+        onDraftChange={onDraftChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("不能丢失");
+    expect(onDraftChange).not.toHaveBeenCalledWith("");
   });
 
   it("streaming 时显示停止按钮", () => {

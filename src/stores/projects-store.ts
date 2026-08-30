@@ -1,11 +1,9 @@
 import { create } from "zustand";
+import { projectsLoad, projectsSave } from "@/lib/agent-client";
 
 /**
- * 本地「项目」实体存储 — 对齐 EchoAgent 项目列表 + 项目详情页的产品语义，落地为纯前端持久化。
- *
- * EchoAgent 的项目/计划/任务/资产/成员/配置全由云端 facade 驱动；EchoAgent 没有该后端，
- * 故这里把项目元数据 + 详情页内部数据（指令/连接器/专家/技能/看板/任务/资产/成员）
- * 一并存进 localStorage，使详情页的本地交互（增删改、看板流转）可跨刷新保留。
+ * 本地「项目」实体存储。Rust 后端私有数据目录是权威副本，
+ * localStorage 只作冷启动缓存与旧版数据迁移来源。每次变更都会原子写回后端。
  */
 
 export interface RefItem {
@@ -46,6 +44,9 @@ export interface AssetItem {
   sizeLabel?: string;
   updater?: string;
   updatedAt?: string;
+  /** Canonical file copied into the project's private backend asset dir. */
+  path?: string;
+  sizeBytes?: number;
 }
 
 export interface ProjectMeta {
@@ -76,6 +77,9 @@ export const PLAN_COLUMNS: { status: PlanStatus; label: string }[] = [
 ];
 
 const STORAGE_KEY = "echoagent.projects";
+const DIRTY_KEY = "echoagent.projects.pending-backend-sync";
+let persistChain: Promise<void> = Promise.resolve();
+let persistRevision = 0;
 
 /** 旧数据/外部数据补齐缺省详情字段，保证组件可直接读数组。 */
 function normalize(x: unknown): ProjectMeta | null {
@@ -112,7 +116,7 @@ function load(): ProjectMeta[] {
   }
 }
 
-function save(list: ProjectMeta[]) {
+function saveLocal(list: ProjectMeta[]) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
@@ -121,10 +125,35 @@ function save(list: ProjectMeta[]) {
   }
 }
 
+function persist(list: ProjectMeta[]): void {
+  saveLocal(list);
+  try { window.localStorage.setItem(DIRTY_KEY, "1"); } catch { /* cache unavailable */ }
+  const revision = ++persistRevision;
+  useProjectsStore.setState({ persisting: true });
+  // Serialize snapshots so a slower old write can never overwrite a newer one.
+  persistChain = persistChain
+    .catch(() => {})
+    .then(() => projectsSave(list));
+  void persistChain.then(() => {
+    if (revision !== persistRevision) return;
+    try { window.localStorage.removeItem(DIRTY_KEY); } catch { /* cache unavailable */ }
+    useProjectsStore.setState({ persisting: false, persistError: null });
+  }).catch((error) => {
+    if (revision !== persistRevision) return;
+    useProjectsStore.setState({
+      persisting: false,
+      persistError: String(error).replace(/^Error:\s*/, ""),
+    });
+  });
+}
+
 const uid = (p: string) => `${p}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 interface ProjectsState {
   projects: ProjectMeta[];
+  persisting: boolean;
+  persistError: string | null;
+  retryPersist: () => void;
   /** Sidebar → ProjectsPanel communication: when set, the panel auto-opens this project. */
   activeProjectId: string | null;
   setActiveProjectId: (id: string | null) => void;
@@ -160,10 +189,13 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
   const patch = (id: string, fn: (p: ProjectMeta) => ProjectMeta) => {
     const next = get().projects.map((p) => (p.id === id ? fn(p) : p));
     set({ projects: next });
-    save(next);
+    persist(next);
   };
   return {
     projects: load(),
+    persisting: false,
+    persistError: null,
+    retryPersist: () => persist(get().projects),
     activeProjectId: null,
     setActiveProjectId: (id) => set({ activeProjectId: id }),
     add: (p) => {
@@ -185,14 +217,14 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       };
       const next = [item, ...get().projects];
       set({ projects: next });
-      save(next);
+      persist(next);
       return item;
     },
     rename: (id, name) => patch(id, (p) => ({ ...p, name })),
     remove: (id) => {
       const next = get().projects.filter((p) => p.id !== id);
       set({ projects: next });
-      save(next);
+      persist(next);
     },
     updateConfig: (id, cfg) => patch(id, (p) => ({ ...p, ...cfg })),
     addPlan: (id, title, status = "pending") =>
@@ -227,6 +259,8 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
             sizeLabel: a.sizeLabel,
             updater: a.updater ?? "-",
             updatedAt: a.updatedAt ?? new Date().toISOString(),
+            path: a.path,
+            sizeBytes: a.sizeBytes,
           },
         ],
       })),
@@ -255,3 +289,27 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       })),
   };
 });
+
+/**
+ * Reconcile renderer cache with the canonical Rust store once Tauri is ready.
+ * A missing backend file triggers a one-time migration from localStorage.
+ */
+export async function hydrateProjectsFromBackend(): Promise<void> {
+  const cached = useProjectsStore.getState().projects;
+  let hasPendingSync = false;
+  try { hasPendingSync = window.localStorage.getItem(DIRTY_KEY) === "1"; } catch { /* cache unavailable */ }
+  if (hasPendingSync) {
+    await projectsSave(cached);
+    try { window.localStorage.removeItem(DIRTY_KEY); } catch { /* cache unavailable */ }
+    useProjectsStore.setState({ persisting: false, persistError: null });
+    return;
+  }
+  const backend = await projectsLoad<ProjectMeta>();
+  if (backend.length === 0 && cached.length > 0) {
+    await projectsSave(cached);
+    return;
+  }
+  const normalized = backend.map(normalize).filter(Boolean) as ProjectMeta[];
+  useProjectsStore.setState({ projects: normalized });
+  saveLocal(normalized);
+}

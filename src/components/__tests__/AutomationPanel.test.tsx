@@ -68,7 +68,7 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
     expect(screen.getByText("Auto")).toBeInTheDocument();
     expect(screen.getByText(/技能/)).toBeInTheDocument();
     expect(screen.getByText("召唤专家")).toBeInTheDocument();
-    expect(screen.getByText("完全访问权限")).toBeInTheDocument();
+    expect(screen.getByText("默认权限")).toBeInTheDocument();
   });
 
   it("点击模板卡片预填进入创建表单", async () => {

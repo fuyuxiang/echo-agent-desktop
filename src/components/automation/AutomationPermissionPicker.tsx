@@ -72,7 +72,6 @@ export function AutomationPermissionPicker({
             <div className="automation-permission-picker__option">
               <span className="automation-permission-picker__option-title">
                 完全访问权限
-                <span className="automation-permission-picker__option-recommend">（推荐）</span>
               </span>
               <span className="automation-permission-picker__option-desc">
                 允许 AI 在无人值守任务中自动执行操作，可能涉及敏感数据或文件修改，仅在信任任务时使用，用户可随时恢复默认权限。
@@ -90,9 +89,12 @@ export function AutomationPermissionPicker({
               <ShieldCheckIcon size="md" />
             </span>
             <div className="automation-permission-picker__option">
-              <span className="automation-permission-picker__option-title">默认权限</span>
+              <span className="automation-permission-picker__option-title">
+                默认权限
+                <span className="automation-permission-picker__option-recommend">（推荐）</span>
+              </span>
               <span className="automation-permission-picker__option-desc">
-                敏感操作需用户确认。如果你离开屏幕，任务会停在等待状态。仅推荐在本地调试/手动监管时使用。
+                敏感操作需用户确认；无人值守时任务会安全地停在等待状态，适合绝大多数任务。
               </span>
             </div>
           </div>

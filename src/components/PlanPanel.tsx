@@ -16,6 +16,7 @@ import {
   reorderPlan,
   addPlanEntry,
   cycleEntryStatus,
+  planRevisionPrompt,
 } from "@/lib/plan-utils";
 import {
   CheckIcon,
@@ -45,7 +46,7 @@ const PRIORITY_CYCLE: PlanEntryPriority[] = ["high", "medium", "low"];
 
 interface PlanPanelProps {
   sessionId?: string;
-  onSend?: (text: string) => void;
+  onSend?: (text: string) => boolean | void | Promise<boolean | void>;
   onToast?: (msg: string) => void;
 }
 
@@ -57,6 +58,7 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
 
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
+  const [dirty, setDirty] = useState(false);
   const [elapsed, setElapsed] = useState<Record<number, number>>({});
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Track when each task started (for elapsed time display).
@@ -108,11 +110,29 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
     }
   }, [sessionId, planMode, setPlanMode, onToast]);
 
+  const syncPlan = useCallback(async (execute: boolean) => {
+    if (!onSend || !plan) return;
+    try {
+      const accepted = await onSend(planRevisionPrompt(plan, execute));
+      if (accepted === false) {
+        onToast?.("当前会话正在工作，修订计划尚未同步");
+        return;
+      }
+      setDirty(false);
+      onToast?.(execute ? "修订计划已同步，开始执行" : "修订计划已同步到 Agent");
+    } catch (error) {
+      onToast?.(`同步失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  }, [onSend, onToast, plan]);
+
+  const updateLocalPlan = useCallback((next: NonNullable<typeof plan>) => {
+    setPlan(next);
+    setDirty(true);
+  }, [setPlan]);
+
   const handleApprove = useCallback(() => {
-    if (!onSend) return;
-    onSend("请执行以上计划。");
-    onToast?.("已批准计划，开始执行");
-  }, [onSend, onToast]);
+    void syncPlan(true);
+  }, [syncPlan]);
 
   const handleReject = useCallback(() => {
     if (!onSend) return;
@@ -126,44 +146,44 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
       const entries = plan.entries.map((e, i) =>
         i === idx ? { ...e, status: "completed" as PlanEntryStatus } : e
       );
-      setPlan({ ...plan, entries });
+      updateLocalPlan({ ...plan, entries });
       onToast?.(`已跳过 #${idx + 1}`);
     },
-    [plan, setPlan, onToast],
+    [plan, updateLocalPlan, onToast],
   );
 
   const handleDeleteEntry = useCallback(
     (idx: number) => {
       if (!plan) return;
       const entries = plan.entries.filter((_, i) => i !== idx);
-      setPlan({ ...plan, entries });
+      updateLocalPlan({ ...plan, entries });
       onToast?.(`已删除 #${idx + 1}`);
     },
-    [plan, setPlan, onToast],
+    [plan, updateLocalPlan, onToast],
   );
 
   // 计划编辑器(对齐 EchoAgent plan-editor):上移/下移/状态循环/新增步骤。
   const handleMove = useCallback(
     (idx: number, dir: -1 | 1) => {
       if (!plan) return;
-      setPlan(reorderPlan(plan, idx, idx + dir));
+      updateLocalPlan(reorderPlan(plan, idx, idx + dir));
     },
-    [plan, setPlan],
+    [plan, updateLocalPlan],
   );
   const handleCycleStatus = useCallback(
     (idx: number) => {
       if (!plan) return;
-      setPlan(cycleEntryStatus(plan, idx));
+      updateLocalPlan(cycleEntryStatus(plan, idx));
     },
-    [plan, setPlan],
+    [plan, updateLocalPlan],
   );
   const [newStep, setNewStep] = useState("");
   const handleAddStep = useCallback(() => {
     if (!plan || !newStep.trim()) return;
-    setPlan(addPlanEntry(plan, newStep));
+    updateLocalPlan(addPlanEntry(plan, newStep));
     setNewStep("");
     onToast?.("已新增步骤");
-  }, [plan, newStep, setPlan, onToast]);
+  }, [plan, newStep, updateLocalPlan, onToast]);
 
   const handleCyclePriority = useCallback(
     (idx: number) => {
@@ -174,9 +194,9 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
         const next = PRIORITY_CYCLE[(cur + 1) % PRIORITY_CYCLE.length];
         return { ...e, priority: next };
       });
-      setPlan({ ...plan, entries });
+      updateLocalPlan({ ...plan, entries });
     },
-    [plan, setPlan],
+    [plan, updateLocalPlan],
   );
 
   const handleSaveEdit = useCallback(
@@ -188,10 +208,10 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
       const entries = plan.entries.map((e, i) =>
         i === idx ? { ...e, content: editText.trim() } : e
       );
-      setPlan({ ...plan, entries });
+      updateLocalPlan({ ...plan, entries });
       setEditingIdx(null);
     },
-    [plan, editText, setPlan],
+    [plan, editText, updateLocalPlan],
   );
 
   // Empty states
@@ -237,6 +257,15 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
           <TaskListIcon size="sm" /> 执行计划
         </h3>
         <div className="plan-panel__header-actions">
+          {dirty && (
+            <button
+              className="plan-panel__sync-btn"
+              onClick={() => void syncPlan(false)}
+              title="将当前编辑后的计划发送给 Agent"
+            >
+              同步修订
+            </button>
+          )}
           <span className="plan-panel__progress-text">
             {completed}/{total}
           </span>

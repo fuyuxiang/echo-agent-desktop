@@ -18,7 +18,12 @@ export type AsrStatus = "idle" | "listening" | "error";
 export interface TtsProvider {
   id: string;
   /** 开始朗读;text 非空才会调用。返回一个 stop 函数。 */
-  speak(text: string, lang: string, opts?: { rate?: number; pitch?: number }): () => void;
+  speak(text: string, lang: string, opts?: {
+    rate?: number;
+    pitch?: number;
+    onEnd?: () => void;
+    onError?: () => void;
+  }): () => void;
   /** 是否可用(env 不支持时返回 false)。 */
   isAvailable(): boolean;
 }
@@ -162,7 +167,12 @@ export function createWebSpeechAsrProvider(deps: {
  */
 export function createWebSpeechTtsProvider(deps: {
   isAvailable: () => boolean;
-  createUtterance: (text: string, lang: string, opts?: { rate?: number; pitch?: number }) => {
+  createUtterance: (text: string, lang: string, opts?: {
+    rate?: number;
+    pitch?: number;
+    onEnd?: () => void;
+    onError?: () => void;
+  }) => {
     rate?: number;
     pitch?: number;
     lang?: string;

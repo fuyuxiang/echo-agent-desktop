@@ -1,36 +1,54 @@
 /**
- * 项目「连接器 / 专家 / 技能」本地占位拾取器 + 模板选项 + 配置行。
- *
- * EchoAgent 的 +添加 走云端注册表/市场（connector registry、expert/skill picker），
- * EchoAgent 没有这些后端，故这里用本地预设候选列表做多选演示；模板下拉与列表页
- * 「从模版创建」共用 TEMPLATE_OPTIONS，保证两处一致。
+ * 项目「连接器 / Agent / Skill」拾取器 + 模板选项 + 配置行。
+ * 候选数据直接来自当前 EchoAgent 运行时，不展示尚未安装或未启用的占位集成。
  */
 import { useEffect, useRef, useState } from "react";
 import type { RefItem } from "@/stores/projects-store";
 import { CheckIcon } from "@/foundation/components/Icon/icons";
+import { agentsList, mcpList, skillsList } from "@/lib/agent-client";
 
-/** 本地占位候选（演示用，非云端数据）。 */
-export const PICKER_OPTIONS: Record<"connectors" | "experts" | "skills", RefItem[]> = {
-  connectors: [
-    { id: "tdocs", name: "腾讯文档" },
-    { id: "notion", name: "Notion" },
-    { id: "github", name: "GitHub" },
-    { id: "tapd", name: "TAPD" },
-    { id: "wecom", name: "企业微信" },
-  ],
-  experts: [
-    { id: "ex_code_review", name: "代码审查专家" },
-    { id: "ex_product", name: "产品分析师" },
-    { id: "ex_research", name: "调研员" },
-    { id: "ex_doc", name: "文档专家" },
-  ],
-  skills: [
-    { id: "sk_research", name: "Deep Research" },
-    { id: "sk_xlsx", name: "Excel 处理" },
-    { id: "sk_pptx", name: "PPT 生成" },
-    { id: "sk_search", name: "网页搜索" },
-  ],
-};
+export type ProjectPickerOptions = Record<"connectors" | "experts" | "skills", RefItem[]>;
+
+const EMPTY_OPTIONS: ProjectPickerOptions = { connectors: [], experts: [], skills: [] };
+
+/** Load only capabilities actually discovered by the live runtime. */
+export function useProjectPickerOptions(cwd?: string): {
+  options: ProjectPickerOptions;
+  loading: boolean;
+  error: string | null;
+} {
+  const [options, setOptions] = useState<ProjectPickerOptions>(EMPTY_OPTIONS);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    Promise.all([mcpList(), agentsList(cwd), skillsList(cwd)])
+      .then(([connectors, experts, skills]) => {
+        if (cancelled) return;
+        setOptions({
+          connectors: connectors
+            .filter((item) => item.enabled)
+            .map((item) => ({ id: item.name, name: item.name })),
+          experts: experts.map((item) => ({ id: item.path, name: item.name })),
+          skills: skills
+            .filter((item) => item.enabled)
+            .map((item) => ({ id: item.path ?? item.name, name: item.displayName ?? item.name })),
+        });
+        setError(null);
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(String(reason).replace(/^Error:\s*/, ""));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [cwd]);
+
+  return { options, loading, error };
+}
 
 export interface ProjectTemplate {
   id: string;
@@ -41,11 +59,6 @@ export interface ProjectTemplate {
   experts: RefItem[];
   skills: RefItem[];
 }
-
-const r = (kind: keyof typeof PICKER_OPTIONS, id: string): RefItem => {
-  const hit = PICKER_OPTIONS[kind].find((o) => o.id === id);
-  return hit ?? { id, name: id };
-};
 
 /** 模板选项（自定义空白 + 5 业务模板，文案取自目标截图）。 */
 export const TEMPLATE_OPTIONS: ProjectTemplate[] = [
@@ -64,9 +77,9 @@ export const TEMPLATE_OPTIONS: ProjectTemplate[] = [
     desc: "从需求规划、PRD 到研发测试验收",
     instructions:
       "你是一名产品负责人助理。请覆盖需求收集、PRD 撰写、研发排期与测试验收全流程，输出结构化文档与待办清单。",
-    connectors: [r("connectors", "tapd"), r("connectors", "tdocs")],
-    experts: [r("experts", "ex_product")],
-    skills: [r("skills", "sk_research")],
+    connectors: [],
+    experts: [],
+    skills: [],
   },
   {
     id: "market-research",
@@ -74,9 +87,9 @@ export const TEMPLATE_OPTIONS: ProjectTemplate[] = [
     desc: "深度调研、竞品拆解、报告评审",
     instructions:
       "你是一名市场研究分析师。请进行深度调研与竞品拆解，并产出结构清晰、可评审的调研报告。",
-    connectors: [r("connectors", "tdocs")],
-    experts: [r("experts", "ex_research")],
-    skills: [r("skills", "sk_research"), r("skills", "sk_search")],
+    connectors: [],
+    experts: [],
+    skills: [],
   },
   {
     id: "team-knowledge-base",
@@ -84,8 +97,8 @@ export const TEMPLATE_OPTIONS: ProjectTemplate[] = [
     desc: "持续沉淀 SOP、经验和 FAQ",
     instructions:
       "你是一名知识管理助理。请帮助沉淀 SOP、经验与 FAQ，维护并结构化团队知识库。",
-    connectors: [r("connectors", "notion"), r("connectors", "tdocs")],
-    experts: [r("experts", "ex_doc")],
+    connectors: [],
+    experts: [],
     skills: [],
   },
   {
@@ -94,9 +107,9 @@ export const TEMPLATE_OPTIONS: ProjectTemplate[] = [
     desc: "管理客户需求、计划、风险和周报",
     instructions:
       "你是一名项目交付经理。请管理客户需求、计划、风险与周报，推动项目按期高质量交付。",
-    connectors: [r("connectors", "tdocs")],
-    experts: [r("experts", "ex_product")],
-    skills: [r("skills", "sk_pptx"), r("skills", "sk_xlsx")],
+    connectors: [],
+    experts: [],
+    skills: [],
   },
   {
     id: "bug-tracking-qa",
@@ -104,9 +117,9 @@ export const TEMPLATE_OPTIONS: ProjectTemplate[] = [
     desc: "持续跟踪Bug、统一测试用例和验收结论",
     instructions:
       "你是一名 QA 助理。请持续跟踪 Bug、统一测试用例，并给出明确的验收结论。",
-    connectors: [r("connectors", "github")],
-    experts: [r("experts", "ex_code_review")],
-    skills: [r("skills", "sk_search")],
+    connectors: [],
+    experts: [],
+    skills: [],
   },
 ];
 
@@ -157,15 +170,16 @@ export function ConfigRow({
   );
 }
 
-/** 通用本地占位多选弹窗。 */
+/** 通用运行时资源多选弹窗。 */
 export function RefPickerDialog({
-  title,
+  title, emptyHint,
   options,
   selected,
   onCancel,
   onConfirm,
 }: {
   title: string;
+  emptyHint?: string;
   options: RefItem[];
   selected: RefItem[];
   onCancel: () => void;
@@ -187,6 +201,9 @@ export function RefPickerDialog({
           </button>
         </div>
         <div className="create-colleague-body proj-picker-body">
+          {options.length === 0 && (
+            <div className="proj-picker-empty">{emptyHint ?? `当前没有可用的${title}`}</div>
+          )}
           {options.map((o) => {
             const on = picked.some((p) => p.id === o.id);
             return (

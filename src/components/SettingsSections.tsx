@@ -1,10 +1,10 @@
 /**
  * Settings 面板的各个真实分区。
  *
- * 这些是 SettingsPanel.tsx 里除了"模型"以外的真实实现，替代之前的
- * "该分区即将上线"占位。每个分区对接 EchoAgent 已有的能力：
+ * 这些是 SettingsPanel.tsx 里除了"模型"以外的运行时设置分区。
+ * 每个分区对接 EchoAgent 已有的能力：
  *  - personalize: 主题（接 ThemeProvider）+ 字号
- *  - shortcuts: 快捷键说明（纯展示 + localStorage 自定义）
+ *  - shortcuts: 当前版本真实生效的快捷键说明
  *  - memory: 资料库入口（接 memory_list + memory_rewrite）
  *  - help: 帮助 + 反馈入口（含 EchoAgent 内核信息）
  *  - security: 安全中心（权限规则入口 + folder trust 说明）
@@ -55,6 +55,8 @@ import {
   subagentsConfigSave,
   webSearchConfigGet,
   webSearchConfigSave,
+  echoAgentDataDir,
+  openEchoAgentDataDir,
   type AuthStatus,
   type ModelOptionRow,
 } from "@/lib/agent-client";
@@ -70,16 +72,15 @@ import type {
 } from "@/lib/types";
 
 const FONT_KEY = "echoagent.fontSize";
-const SHORTCUTS_KEY = "echoagent.shortcuts";
-
 const DEFAULT_SHORTCUTS: { key: string; action: string }[] = [
   { key: "Ctrl/Cmd + N", action: "新建任务" },
   { key: "Ctrl/Cmd + K", action: "搜索会话" },
   { key: "Ctrl/Cmd + ,", action: "打开设置" },
   { key: "Ctrl/Cmd + B", action: "切换侧栏" },
-  { key: "Ctrl/Cmd + Enter", action: "发送消息" },
+  { key: "Enter", action: "发送消息" },
   { key: "Shift + Enter", action: "换行" },
-  { key: "Esc", action: "停止生成 / 关闭对话框" },
+  { key: "Ctrl/Cmd + F", action: "查找当前会话" },
+  { key: "Esc", action: "关闭当前弹窗" },
   { key: "/ ", action: "触发技能/命令补全" },
   { key: "@ ", action: "引用对话文件" },
 ];
@@ -169,39 +170,19 @@ export function PersonalizeSettingsPanel() {
 // ---------- 快捷键 ----------
 
 export function ShortcutsSettingsPanel() {
-  const [shortcuts, setShortcuts] = useState<{ key: string; action: string }[]>(() => {
-    try {
-      const saved = localStorage.getItem(SHORTCUTS_KEY);
-      if (saved) return JSON.parse(saved);
-    } catch {
-      /* ignore */
-    }
-    return DEFAULT_SHORTCUTS;
-  });
-
-  useEffect(() => {
-    localStorage.setItem(SHORTCUTS_KEY, JSON.stringify(shortcuts));
-  }, [shortcuts]);
-
   return (
     <SectionShell
       title="快捷键"
-      desc="EchoAgent 内置的快捷键。这些值保存在本地，重装会恢复默认。"
+      desc="以下是当前版本已实际生效的快捷键。"
     >
       <ul className="shortcuts-list">
-        {shortcuts.map((s, i) => (
+        {DEFAULT_SHORTCUTS.map((s, i) => (
           <li key={i} className="shortcuts-list__row">
             <span className="shortcuts-list__action">{s.action}</span>
             <kbd className="shortcuts-list__key">{s.key}</kbd>
           </li>
         ))}
       </ul>
-      <button
-        className="settings-reset"
-        onClick={() => setShortcuts(DEFAULT_SHORTCUTS)}
-      >
-        重置为默认
-      </button>
     </SectionShell>
   );
 }
@@ -311,6 +292,9 @@ export function SecuritySettingsPanel() {
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<PermissionRule>({ action: "ask", tool: "bash", pattern: "" });
   const [feedback, setFeedback] = useState("");
+  const [otlpEndpoint, setOtlpEndpoint] = useState(() => {
+    try { return localStorage.getItem("echoagent.otlp.endpoint") ?? ""; } catch { return ""; }
+  });
 
   useEffect(() => {
     permissionList()
@@ -340,6 +324,23 @@ export function SecuritySettingsPanel() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const saveOtlp = () => {
+    const endpoint = otlpEndpoint.trim();
+    if (endpoint) {
+      try {
+        const parsed = new URL(endpoint);
+        if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error("仅支持 HTTP/HTTPS");
+        localStorage.setItem("echoagent.otlp.endpoint", endpoint);
+      } catch (error) {
+        setFeedback(`OTLP 地址无效：${String(error).replace(/^Error:\s*/, "")}`);
+        return;
+      }
+    } else {
+      localStorage.removeItem("echoagent.otlp.endpoint");
+    }
+    setFeedback(endpoint ? "OTLP 已启用，重启应用后生效。" : "OTLP 已关闭，重启应用后生效。");
   };
 
   return (
@@ -386,6 +387,22 @@ export function SecuritySettingsPanel() {
         EchoAgent 评估顺序：<code>deny</code> &gt; <code>ask</code> &gt; <code>allow</code>。
         修改需重启 EchoAgent 生效。
       </p>
+      <div className="settings-row">
+        <div className="settings-row__label">
+          <Shield size={16} />
+          <span>OTLP 遥测端点（可选）</span>
+        </div>
+        <div className="settings-row__control">
+          <input
+            className="settings-input"
+            value={otlpEndpoint}
+            onChange={(event) => setOtlpEndpoint(event.target.value)}
+            placeholder="http://127.0.0.1:4318/v1/logs"
+          />
+          <button type="button" className="settings-btn" onClick={saveOtlp}>保存</button>
+        </div>
+      </div>
+      <p className="settings-hint">仅上报运行事件名、级别和技术属性，不上报对话正文。留空表示关闭。</p>
     </SectionShell>
   );
 }
@@ -394,23 +411,13 @@ export function SecuritySettingsPanel() {
 
 export function DataSettingsPanel() {
   const [agentHome, setAgentHome] = useState("");
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
-    // 从环境推断 EchoAgent home 路径（前端无直接 API，给提示用）
-    setAgentHome("~/.echo-agent");
+    void echoAgentDataDir()
+      .then(setAgentHome)
+      .catch((error) => setMessage(`读取数据目录失败：${String(error).replace(/^Error:\s*/, "")}`));
   }, []);
-
-  const handleClearSessions = () => {
-    if (
-      !confirm(
-        "确定清理本地会话缓存？这只影响侧栏列表的显示，EchoAgent 的 ~/.echo-agent/sessions/ 历史不会被删除。",
-      )
-    ) {
-      return;
-    }
-    localStorage.removeItem("echoagent-state.json");
-    alert("已清理。下次刷新会重新加载会话列表。");
-  };
 
   return (
     <SectionShell title="数据管理" desc="本地缓存和 EchoAgent 数据目录。">
@@ -424,15 +431,15 @@ export function DataSettingsPanel() {
         </div>
       </div>
       <div className="settings-actions">
-        <button
-          className="settings-btn settings-btn--danger"
-          onClick={handleClearSessions}
-        >
-          <Trash2 size={14} /> 清理本地会话缓存
+        <button className="settings-btn" onClick={() => {
+          void openEchoAgentDataDir().catch((error) => setMessage(`打开失败：${String(error).replace(/^Error:\s*/, "")}`));
+        }}>
+          <Folder size={14} /> 在系统中打开
         </button>
       </div>
+      {message && <p className="settings-msg">{message}</p>}
       <p className="settings-hint">
-        完全删除历史会话请在侧栏右键单个会话选「删除」。
+        会话、项目、自动化、通知和配置均持久化在此目录。删除会话请在侧栏对单个会话操作，避免误删其他产品数据。
       </p>
     </SectionShell>
   );

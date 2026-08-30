@@ -1,5 +1,5 @@
 /**
- * Tauri 目录读取适配器 —— 把 EchoAgent 的 `browse_directory` + `read_text_file`
+ * Tauri 目录读取适配器 —— 把 EchoAgent 的 `list_dir` + `read_text_file`
  * 命令适配为 local-kb-provider 的 DirectoryReader 接口。
  *
  * 仅运行时使用(依赖 @tauri-apps/api 的 invoke);非 Tauri 环境(如 vitest)会抛错,
@@ -15,7 +15,7 @@ export function isTauriAvailable(): boolean {
 
 /**
  * 构造一个基于 Tauri 命令的 DirectoryReader。
- *  - listDir:调用 browse_directory(返回 {name,path,is_dir,size,modified_at})。
+ *  - listDir:调用 list_dir(返回 {name,path,kind,size,modifiedAt})。
  *  - readText:调用 read_text_file(返回文件字符串,上限 256KB)。
  *  - readBytes:调用 read_file_base64(若后端提供;返回 base64 字符串),解码为字节。
  *    用于 docx 等 OOXML 文档的 zip 解压。命令不存在时返回 null(自动降级:docx 不提取)。
@@ -23,11 +23,15 @@ export function isTauriAvailable(): boolean {
 export function createTauriDirectoryReader(): DirectoryReader {
   return {
     async listDir(path) {
-      const entries: Array<{ name: string; path: string; is_dir: boolean }> = await invoke(
-        "browse_directory",
-        { path },
+      const entries: Array<{ name: string; path: string; kind: string }> = await invoke(
+        "list_dir",
+        { path, cwd: null, maxEntries: 2000 },
       );
-      return entries.map((e) => ({ name: e.name, path: e.path, isDir: e.is_dir }));
+      return entries.map((e) => ({
+        name: e.name,
+        path: e.path,
+        isDir: e.kind === "directory",
+      }));
     },
     async readText(path) {
       try {

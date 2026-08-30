@@ -6,10 +6,9 @@ import {
   SkillTabIcon,
   ConnectorTabIcon,
 } from "@/foundation/components/Icon/icons";
-import { skillsList, agentsList } from "@/lib/agent-client";
+import { skillsList, agentsList, mcpList } from "@/lib/agent-client";
 import { HOME_MODES, type HomeModeId } from "./home-scenes";
-import { CONNECTOR_LIST } from "./experts-panel/data/connectors-catalog";
-import type { AgentEntry, SkillInfo } from "@/lib/types";
+import type { AgentEntry, McpServerEntry, SkillInfo } from "@/lib/types";
 
 interface InputAddMenuProps {
   onPickFiles: () => void;
@@ -54,26 +53,22 @@ export function InputAddMenu({
 
   const [experts, setExperts] = useState<AgentEntry[]>([]);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [dataLoaded, setDataLoaded] = useState(false);
+  const [connectors, setConnectors] = useState<McpServerEntry[]>([]);
 
   const loadData = useCallback(async () => {
-    if (dataLoaded) return;
-    setDataLoaded(true);
-    try {
-      const [e, s] = await Promise.all([
-        agentsList().catch(() => [] as AgentEntry[]),
-        skillsList().catch(() => [] as SkillInfo[]),
-      ]);
-      setExperts(e);
-      setSkills(s.filter((sk) => sk.enabled));
-    } catch {
-      /* best-effort */
-    }
-  }, [dataLoaded]);
+    const [e, s, m] = await Promise.all([
+      agentsList().catch(() => [] as AgentEntry[]),
+      skillsList().catch(() => [] as SkillInfo[]),
+      mcpList().catch(() => [] as McpServerEntry[]),
+    ]);
+    setExperts(e);
+    setSkills(s.filter((sk) => sk.enabled));
+    setConnectors(m.filter((server) => server.enabled));
+  }, []);
 
   useEffect(() => {
-    if (open && !dataLoaded) loadData();
-  }, [open, dataLoaded, loadData]);
+    if (open) void loadData();
+  }, [open, loadData]);
 
   // Close on outside click
   useEffect(() => {
@@ -217,22 +212,25 @@ export function InputAddMenu({
     if (hoveredItem === "connectors") {
       items = (
         <>
-          {CONNECTOR_LIST.slice(0, 8).map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              className="iam-sub-item"
-              onClick={handleSelectConnector}
-            >
-              <span className="iam-sub-avatar" style={{ background: c.color || "var(--echo-text-tertiary)" }}>
-                {c.name[0]}
-              </span>
-              <span className="iam-sub-name">{c.name}</span>
-            </button>
-          ))}
-          <div className="iam-sub-footer" onClick={handleSelectConnector}>
+          {connectors.length > 0 ? connectors.slice(0, 8).map((server) => (
+              <button
+                key={server.name}
+                type="button"
+                className="iam-sub-item"
+                onClick={handleSelectConnector}
+              >
+                <ConnectorTabIcon size="sm" />
+                <span className="iam-sub-text">
+                  <span className="iam-sub-name">{server.name}</span>
+                  {server.target && <span className="iam-sub-desc">{server.target}</span>}
+                </span>
+              </button>
+            )) : (
+              <div className="iam-sub-empty">暂无已启用连接器</div>
+            )}
+          <button type="button" className="iam-sub-footer" onClick={handleSelectConnector}>
             管理连接器 →
-          </div>
+          </button>
         </>
       );
     }

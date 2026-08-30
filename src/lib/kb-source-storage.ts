@@ -4,6 +4,7 @@ import { createTauriDirectoryReader, isTauriAvailable } from "./tauri-kb-reader"
 import { invoke } from "@tauri-apps/api/core";
 
 const STORAGE_KEY = "echoagent.knowledge-sources.v1";
+let hydrationPromise: Promise<KnowledgeSourceDescriptor[]> | null = null;
 
 export interface KnowledgeSourceDescriptor {
   id: string;
@@ -39,25 +40,48 @@ export function localKnowledgeSourceDescriptor(root: string): KnowledgeSourceDes
   };
 }
 
+function parseDescriptors(value: unknown): KnowledgeSourceDescriptor[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const source = item as Partial<KnowledgeSourceDescriptor>;
+    if (
+      typeof source.id !== "string"
+      || typeof source.root !== "string"
+      || !source.root.trim()
+      || (source.kind !== undefined && source.kind !== "local-folder")
+    ) return [];
+    return [{
+      id: source.id,
+      kind: "local-folder" as const,
+      root: normalizedRoot(source.root),
+      label: typeof source.label === "string" && source.label.trim()
+        ? source.label.trim()
+        : `本地：${source.root.split(/[\\/]/).filter(Boolean).pop() ?? source.root}`,
+      enabled: source.enabled !== false,
+    }];
+  });
+}
+
 export function loadKnowledgeSourceDescriptors(): KnowledgeSourceDescriptor[] {
   if (typeof localStorage === "undefined") return [];
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]") as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is KnowledgeSourceDescriptor => {
-      const value = item as Partial<KnowledgeSourceDescriptor>;
-      return value.kind === "local-folder" && typeof value.id === "string" && typeof value.root === "string";
-    });
+    return parseDescriptors(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]"));
   } catch {
     return [];
   }
 }
 
-function saveKnowledgeSourceDescriptors(items: KnowledgeSourceDescriptor[]): void {
+function cacheKnowledgeSourceDescriptors(items: KnowledgeSourceDescriptor[]): void {
+  if (typeof localStorage === "undefined") return;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+}
+
+async function saveKnowledgeSourceDescriptors(items: KnowledgeSourceDescriptor[]): Promise<void> {
   if (isTauriAvailable()) {
-    void Promise.resolve(invoke("org_local_kb_sources_set", { sources: items })).catch(() => undefined);
+    await invoke<void>("org_local_kb_sources_set", { sources: items });
   }
+  cacheKnowledgeSourceDescriptors(items);
 }
 
 function registerDescriptor(descriptor: KnowledgeSourceDescriptor): void {
@@ -69,32 +93,50 @@ function registerDescriptor(descriptor: KnowledgeSourceDescriptor): void {
   ));
 }
 
-export function hydrateKnowledgeSources(): void {
-  const descriptors = loadKnowledgeSourceDescriptors();
-  if (isTauriAvailable()) {
-    void Promise.resolve(invoke("org_local_kb_sources_set", { sources: descriptors })).catch(() => undefined);
-  }
-  const registered = new Set(listKbProviders().map((source) => source.id));
-  for (const descriptor of descriptors) {
-    if (!registered.has(descriptor.id)) registerDescriptor(descriptor);
-  }
+export function hydrateKnowledgeSources(): Promise<KnowledgeSourceDescriptor[]> {
+  if (hydrationPromise) return hydrationPromise;
+  hydrationPromise = (async () => {
+    const cached = loadKnowledgeSourceDescriptors();
+    let descriptors = cached;
+    if (isTauriAvailable()) {
+      const stored = parseDescriptors(await invoke<unknown>("org_local_kb_sources_get"));
+      if (stored.length > 0 || cached.length === 0) {
+        descriptors = stored;
+      } else {
+        // One-time migration from releases that used renderer storage only.
+        await invoke<void>("org_local_kb_sources_set", { sources: cached });
+      }
+      cacheKnowledgeSourceDescriptors(descriptors);
+    }
+    const registered = new Set(listKbProviders().map((source) => source.id));
+    for (const descriptor of descriptors) {
+      if (!registered.has(descriptor.id)) registerDescriptor(descriptor);
+    }
+    return descriptors;
+  })().catch((error) => {
+    hydrationPromise = null;
+    throw error;
+  });
+  return hydrationPromise;
 }
 
-export function addLocalKnowledgeSource(root: string): { descriptor: KnowledgeSourceDescriptor; added: boolean } {
+export async function addLocalKnowledgeSource(root: string): Promise<{ descriptor: KnowledgeSourceDescriptor; added: boolean }> {
+  await hydrateKnowledgeSources();
   const descriptor = localKnowledgeSourceDescriptor(root);
   const items = loadKnowledgeSourceDescriptors();
   if (items.some((item) => item.id === descriptor.id)) {
     registerDescriptor(descriptor);
     return { descriptor, added: false };
   }
-  saveKnowledgeSourceDescriptors([...items, descriptor]);
+  await saveKnowledgeSourceDescriptors([...items, descriptor]);
   registerDescriptor(descriptor);
   return { descriptor, added: true };
 }
 
-export function removeKnowledgeSource(id: string): boolean {
+export async function removeKnowledgeSource(id: string): Promise<boolean> {
+  await hydrateKnowledgeSources();
   const items = loadKnowledgeSourceDescriptors();
   const next = items.filter((item) => item.id !== id);
-  if (next.length !== items.length) saveKnowledgeSourceDescriptors(next);
+  if (next.length !== items.length) await saveKnowledgeSourceDescriptors(next);
   return unregisterKbProvider(id) || next.length !== items.length;
 }

@@ -153,7 +153,7 @@ fn default_status() -> String {
     "ACTIVE".into()
 }
 fn default_permission_mode() -> String {
-    "fullAccess".into()
+    "default".into()
 }
 fn default_schedule_type() -> String {
     "recurring".into()

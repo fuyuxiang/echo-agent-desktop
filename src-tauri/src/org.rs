@@ -110,6 +110,19 @@ pub(crate) fn local_kb_sources_path() -> PathBuf {
 }
 
 #[tauri::command]
+pub fn org_local_kb_sources_get() -> Result<Value, String> {
+    let path = local_kb_sources_path();
+    if !path.exists() {
+        return Ok(Value::Array(Vec::new()));
+    }
+    let value: Value = read_json(&path)?;
+    if !value.is_array() {
+        return Err("local knowledge sources store must be an array".into());
+    }
+    Ok(value)
+}
+
+#[tauri::command]
 pub fn org_local_kb_sources_set(sources: Value) -> Result<(), String> {
     let items = sources
         .as_array()
@@ -131,6 +144,7 @@ pub fn org_local_kb_sources_set(sources: Value) -> Result<(), String> {
         }
         normalized.push(json!({
             "id": item.get("id").and_then(Value::as_str).unwrap_or("local"),
+            "kind": "local-folder",
             "label": item.get("label").and_then(Value::as_str).unwrap_or("local"),
             "root": path.to_string_lossy(),
             "enabled": item.get("enabled").and_then(Value::as_bool).unwrap_or(true)

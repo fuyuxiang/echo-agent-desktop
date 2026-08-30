@@ -23,6 +23,7 @@ mod org_mcp;
 mod paths;
 mod permission_config;
 mod policy;
+mod projects;
 mod providers;
 mod session_title;
 mod sessions;
@@ -200,6 +201,7 @@ pub fn run() {
             org::org_ask_start,
             org::org_ask_cancel,
             org::org_qa_feedback,
+            org::org_local_kb_sources_get,
             org::org_local_kb_sources_set,
             // connectors / MCP (x.ai/mcp/*)
             mcp::mcp_list,
@@ -297,6 +299,15 @@ pub fn run() {
             shell_fs::export_text_file,
             shell_fs::list_dir,
             shell_fs::browse_directory,
+            shell_fs::echo_agent_data_dir,
+            shell_fs::open_echo_agent_data_dir,
+            // durable local project metadata (renderer localStorage is only a cache)
+            projects::projects_load,
+            projects::projects_save,
+            projects::project_assets_import,
+            projects::project_asset_make_dir,
+            projects::project_asset_remove,
+            projects::project_assets_remove_all,
             // persisted WebDAV cloud storage
             storage::storage_providers_list,
             storage::storage_provider_upsert,

@@ -874,10 +874,9 @@ export async function automationRecordsDelete(id: string): Promise<void> {
 
 // ---------- inspiration (灵感面板) ----------
 
-/** Start inspiration generation. Opens a side-channel EchoAgent session that
- *  streams its response via the normal `agent://update` event (tagged with
- *  the returned sessionId). The frontend registers a foreign-update listener
- *  to accumulate the JSON output. */
+/** Prepare an inspiration session. The caller must register event listeners
+ *  before sending the returned prompt with `agentSend`, otherwise a fast
+ *  response could complete before the listeners are active. */
 export async function inspirationGenerate(
   category: string,
   cwd?: string,
@@ -1053,6 +1052,8 @@ export interface DirEntry {
   kind: string;
   /** File size in bytes (directories report 0). */
   size: number;
+  /** Last modified time in Unix milliseconds (0 when unavailable). */
+  modifiedAt: number;
 }
 
 /**
@@ -1070,6 +1071,65 @@ export async function listDir(
     cwd: cwd ?? null,
     maxEntries: maxEntries ?? null,
   });
+}
+
+// ---------- projects (durable backend state) ----------
+
+/** Load the canonical project collection from EchoAgent's private data dir. */
+export async function projectsLoad<T>(): Promise<T[]> {
+  return invoke<T[]>("projects_load");
+}
+
+/** Atomically replace the canonical project collection. */
+export async function projectsSave(projects: unknown[]): Promise<void> {
+  await invoke<void>("projects_save", { projects });
+}
+
+export interface ImportedProjectAsset {
+  name: string;
+  path: string;
+  kind: "file" | "folder";
+  ext?: string;
+  sizeBytes: number;
+  updatedAt: string;
+}
+
+export async function projectAssetsImport(
+  projectId: string,
+  sources: string[],
+): Promise<ImportedProjectAsset[]> {
+  return invoke<ImportedProjectAsset[]>("project_assets_import", { projectId, sources });
+}
+
+export async function projectAssetMakeDir(
+  projectId: string,
+  name: string,
+): Promise<ImportedProjectAsset> {
+  return invoke<ImportedProjectAsset>("project_asset_make_dir", { projectId, name });
+}
+
+export async function projectAssetRemove(projectId: string, path: string): Promise<void> {
+  await invoke<void>("project_asset_remove", { projectId, path });
+}
+
+export async function projectAssetsRemoveAll(projectId: string): Promise<void> {
+  await invoke<void>("project_assets_remove_all", { projectId });
+}
+
+export async function openLocalPath(path: string, cwd?: string): Promise<void> {
+  await invoke<void>("open_path", { path, cwd: cwd ?? null });
+}
+
+export async function openExternalUrl(url: string): Promise<void> {
+  await invoke<void>("open_url", { url });
+}
+
+export async function echoAgentDataDir(): Promise<string> {
+  return invoke<string>("echo_agent_data_dir");
+}
+
+export async function openEchoAgentDataDir(): Promise<void> {
+  await invoke<void>("open_echo_agent_data_dir");
 }
 
 // ---------- event subscription ----------

@@ -1495,6 +1495,56 @@
   color: var(--echo-brand);
   font-weight: 600;
 }
+
+.plan-panel__sync-btn {
+  border: 1px solid color-mix(in srgb, var(--echo-brand) 45%, var(--echo-border-default));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--echo-brand) 8%, transparent);
+  color: var(--echo-brand);
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.plan-panel__sync-btn:hover {
+  background: color-mix(in srgb, var(--echo-brand) 14%, transparent);
+}
+
+.pd-asset-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pd-asset-open:hover:not(:disabled) {
+  color: var(--echo-brand);
+  text-decoration: underline;
+}
+
+.pd-asset-open:disabled {
+  cursor: default;
+}
+
+.pd-composer__context {
+  color: var(--echo-text-tertiary);
+  font-size: 12px;
+}
+
+.proj-picker-empty {
+  padding: 28px 16px;
+  color: var(--echo-text-tertiary);
+  text-align: center;
+  line-height: 1.6;
+}
 /* Composer 流式时的入队按钮 */
 .echo-composer__send--enqueue {
   background: var(--echo-brand);
@@ -3337,28 +3387,7 @@ button.diff__path {
   min-height: 0;
 }
 
-/* ---- placeholder for not-yet-implemented sections ---- */
-.settings-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  height: 100%;
-  color: var(--echo-text-medium);
-}
-.settings-placeholder__title {
-  font-size: 20px;
-  font-weight: 650;
-  color: var(--echo-text-strong);
-  margin: 0;
-}
-.settings-placeholder__desc {
-  font-size: 13px;
-  margin: 0;
-}
-
-/* ---- models-settings-panel (the only real section today) ---- */
+/* ---- models-settings-panel ---- */
 .models-settings-panel {
   display: flex;
   flex-direction: column;
@@ -4561,11 +4590,15 @@ button.diff__path {
   text-align: center;
 }
 .iam-sub-footer {
+  width: 100%;
   padding: 8px 12px;
   font-size: 12px;
+  font-family: inherit;
   color: var(--echo-brand);
   cursor: pointer;
+  border: none;
   border-top: 1px solid var(--echo-border-default);
+  background: none;
   margin-top: 4px;
   text-align: center;
 }
@@ -4716,11 +4749,16 @@ button.diff__path {
   font-size: 13px;
   color: var(--echo-text-medium);
 }
-.local-assistant__wechat {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  flex-shrink: 0;
+.local-assistant__status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--echo-text-tertiary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--echo-text-tertiary) 12%, transparent);
+}
+.local-assistant__status-dot.is-ready {
+  background: var(--echo-success, #22a06b);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--echo-success, #22a06b) 14%, transparent);
 }
 .local-assistant__settings {
   margin-left: 4px;
@@ -4762,6 +4800,32 @@ button.diff__path {
   padding: 28px 48px 48px;
   box-sizing: border-box;
   background: transparent;
+}
+.project-persist-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--echo-danger, #d14343) 40%, var(--echo-border-default));
+  border-radius: 10px;
+  color: var(--echo-danger, #b42318);
+  background: color-mix(in srgb, var(--echo-danger, #d14343) 7%, var(--echo-bg-primary));
+  font-size: 12px;
+}
+.project-persist-alert button {
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  padding: 5px 10px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.project-persist-alert button:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 .project-hero {
   display: flex;
