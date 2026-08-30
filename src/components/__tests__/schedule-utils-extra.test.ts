@@ -167,7 +167,8 @@ describe("draftFromAutomation / automationFromDraft round-trip", () => {
   });
 
   it("automationFromDraft 无 existing 时 createdAt 为空", () => {
-    const draft = buildDraft();
+    const draft = buildDraft(undefined, "/workspace/project");
+    expect(draft.cwds).toBe("/workspace/project");
     draft.name = "新任务";
     const result = automationFromDraft(draft);
     expect(result.createdAt).toBe("");

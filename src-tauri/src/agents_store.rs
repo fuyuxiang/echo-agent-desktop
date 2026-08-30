@@ -196,6 +196,36 @@ pub fn agents_list(cwd: Option<String>) -> Vec<AgentEntry> {
     out
 }
 
+pub fn markdown_body(raw: &str) -> String {
+    let trimmed = raw.trim_start();
+    if !trimmed.starts_with("---") {
+        return raw.trim().to_string();
+    }
+    let Some(after_open) = trimmed.find('\n') else {
+        return raw.trim().to_string();
+    };
+    let rest = &trimmed[after_open + 1..];
+    let Some(close_start) = rest.find("\n---\n").or_else(|| rest.find("\r\n---\r\n")) else {
+        return raw.trim().to_string();
+    };
+    let marker_len = if rest[close_start..].starts_with("\r\n---\r\n") {
+        7
+    } else {
+        5
+    };
+    rest[close_start + marker_len..].trim().to_string()
+}
+
+/// Resolve a selected automation expert to its real prompt body. The lookup
+/// follows the same user-before-project precedence as the editor.
+pub fn resolve_agent_prompt(name: &str, cwd: Option<String>) -> Option<String> {
+    agents_list(cwd)
+        .into_iter()
+        .find(|agent| agent.name == name)
+        .map(|agent| markdown_body(&agent.raw))
+        .filter(|body| !body.is_empty())
+}
+
 /// Fetch a single agent file's full contents.
 #[tauri::command]
 pub fn agents_get(path: String) -> Result<String, String> {

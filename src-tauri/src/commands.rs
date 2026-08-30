@@ -185,7 +185,7 @@ pub async fn agent_init(
         state.tx.lock().unwrap().clone(),
         state.cwd.lock().unwrap().clone(),
     ) {
-        let scheduler = crate::automations::start_scheduler(tx, cwd);
+        let scheduler = crate::automations::start_scheduler(app.clone(), tx, cwd);
         if let Some(previous) = state
             .automation_scheduler
             .lock()

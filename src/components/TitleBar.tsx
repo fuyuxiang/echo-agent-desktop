@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { XCloseIcon } from "@/foundation/components/Icon/icons";
-import logoMarkUrl from "@/assets/echoagent-logo.svg";
+
+const LOGO_URL = "/app-icon.png";
 
 interface MenuItem {
   label: string;
@@ -168,7 +169,7 @@ export function TitleBar({
           title="关于 EchoAgent"
         >
           <img
-            src={logoMarkUrl}
+            src={LOGO_URL}
             alt=""
             width={18}
             height={18}

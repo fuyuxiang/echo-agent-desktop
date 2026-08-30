@@ -102,12 +102,12 @@ export function defaultSchedule(): AutomationSchedule {
   };
 }
 
-export function buildDraft(template?: AutomationTemplate): AutomationDraft {
+export function buildDraft(template?: AutomationTemplate, initialCwd = ""): AutomationDraft {
   return {
     id: "",
     name: template?.title ?? "",
     prompt: template?.prompt ?? "",
-    cwds: "",
+    cwds: initialCwd,
     status: "ACTIVE",
     modelId: undefined,
     modelIsThinking: false,
@@ -122,7 +122,7 @@ export function buildDraft(template?: AutomationTemplate): AutomationDraft {
     scheduledTime: template?.scheduledTime ?? "09:00",
     validFromDate: template?.validFromDate ?? "",
     validUntilDate: template?.validUntilDate ?? "",
-    pushToWeChat: false,
+    pushToWeChat: template?.pushToChannels ?? false,
   };
 }
 
@@ -202,7 +202,7 @@ export function describeSchedule(a: Pick<Automation, "scheduleType" | "schedule"
     case "YEARLY":
       return `每年 ${s.bymonth[0] ?? 1}月${s.bymonthday[0] ?? 1}日 · ${t}`;
     case "HOURLY":
-      return `每 ${Math.max(1, s.intervalHours)} 小时`;
+      return `每 ${Math.max(1, s.intervalHours)} 小时（每天从 ${t} 起）`;
   }
 }
 
@@ -254,6 +254,9 @@ export function scheduledAtIso(draft: Pick<AutomationDraft, "scheduledDate" | "s
 export function validateDraft(draft: AutomationDraft, opts: ValidateOptions): string | null {
   if (!draft.name.trim()) return "请填写自动化任务名称";
   if (!draft.prompt.trim()) return "请填写提示词";
+  if (draft.schedule.byhour < 0 || draft.schedule.byhour > 23 || draft.schedule.byminute < 0 || draft.schedule.byminute > 59) {
+    return "请选择有效的执行时间";
+  }
 
   const mode = scheduleModeOf(draft);
   if (mode === "periodic") {
@@ -261,16 +264,25 @@ export function validateDraft(draft: AutomationDraft, opts: ValidateOptions): st
     if ((periodic === "week" || periodic === "biweek") && draft.schedule.byday.length === 0) {
       return "请至少选择一个星期";
     }
+    if ((periodic === "week" || periodic === "biweek") && ![1, 2].includes(draft.schedule.interval)) {
+      return "每周执行间隔只能是 1 或 2 周";
+    }
     if (periodic === "month" && draft.schedule.bymonthday.length === 0) {
       return "请至少选择一个日期";
     }
     if (periodic === "year") {
       if (draft.schedule.bymonth.length === 0) return "请选择月份";
       if (draft.schedule.bymonthday.length === 0) return "请选择日期";
+      const month = draft.schedule.bymonth[0];
+      const day = draft.schedule.bymonthday[0];
+      const candidate = new Date(2000, month - 1, day);
+      if (candidate.getMonth() !== month - 1 || candidate.getDate() !== day) return "请选择有效的年度执行日期";
     }
   }
   if (mode === "interval") {
-    if (draft.schedule.intervalHours < 1) return "按间隔执行需至少每 1 小时";
+    if (draft.schedule.intervalHours < 1 || draft.schedule.intervalHours > 24) {
+      return "按间隔执行需设置为 1 至 24 小时";
+    }
     if (draft.schedule.byday.length === 0) return "请至少选择一个星期";
   }
   if (mode === "once") {
@@ -280,6 +292,16 @@ export function validateDraft(draft: AutomationDraft, opts: ValidateOptions): st
     const changed = opts.existingScheduledAt !== next;
     if ((opts.isCreating || changed) && Date.parse(next) <= Date.now()) {
       return "单次执行时间必须晚于当前时间";
+    }
+  }
+  if (mode !== "once") {
+    const start = draft.validFromDate ? new Date(`${draft.validFromDate}T00:00:00`) : undefined;
+    const end = draft.validUntilDate ? new Date(`${draft.validUntilDate}T23:59:59`) : undefined;
+    if (start && Number.isNaN(start.getTime())) return "生效开始日期无效";
+    if (end && Number.isNaN(end.getTime())) return "生效结束日期无效";
+    if (start && end && start > end) return "生效开始日期不能晚于结束日期";
+    if (draft.status === "ACTIVE" && end && end.getTime() < Date.now()) {
+      return "生效日期区间已过期，请更新结束日期";
     }
   }
   return null;
