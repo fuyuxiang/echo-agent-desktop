@@ -27,6 +27,7 @@ use uuid::Uuid;
 const CREDENTIAL_SERVICE: &str = "com.echoagent.organization";
 const PROFILE_FILE: &str = "organization-profile.json";
 const SKILL_STATE_FILE: &str = "organization-skills.json";
+const LOCAL_KB_SOURCES_FILE: &str = "local-knowledge-sources.json";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +105,55 @@ fn skill_state_path() -> PathBuf {
     crate::paths::echo_agent_home_dir().join(SKILL_STATE_FILE)
 }
 
+pub(crate) fn local_kb_sources_path() -> PathBuf {
+    crate::paths::echo_agent_home_dir().join(LOCAL_KB_SOURCES_FILE)
+}
+
+#[tauri::command]
+pub fn org_local_kb_sources_set(sources: Value) -> Result<(), String> {
+    let items = sources
+        .as_array()
+        .ok_or("local knowledge sources must be an array")?;
+    if items.len() > 50 {
+        return Err("too many local knowledge sources".into());
+    }
+    let mut normalized = Vec::new();
+    for item in items {
+        let root = item
+            .get("root")
+            .and_then(Value::as_str)
+            .ok_or("local knowledge source missing root")?;
+        let path = PathBuf::from(root);
+        if !path.is_absolute() || !path.is_dir() {
+            return Err(format!(
+                "local knowledge source is not an existing absolute directory: {root}"
+            ));
+        }
+        normalized.push(json!({
+            "id": item.get("id").and_then(Value::as_str).unwrap_or("local"),
+            "label": item.get("label").and_then(Value::as_str).unwrap_or("local"),
+            "root": path.to_string_lossy(),
+            "enabled": item.get("enabled").and_then(Value::as_bool).unwrap_or(true)
+        }));
+    }
+    write_json_private(&local_kb_sources_path(), &normalized)
+}
+
+pub(crate) async fn local_knowledge_allowed() -> bool {
+    let state = shared_state();
+    if state.inner.session.lock().await.profile.is_none() {
+        return true;
+    }
+    match update_bootstrap(&state.inner).await {
+        Ok(bootstrap) => bootstrap
+            .get("policy")
+            .and_then(|policy| policy.get("allowLocalKnowledge"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn fallback_credentials_path() -> PathBuf {
     crate::paths::echo_agent_home_dir().join("organization-credentials.json")
@@ -125,6 +175,10 @@ fn credential_account(profile: &OrgProfile) -> String {
     digest.update(b"\0");
     digest.update(profile.user_id.as_bytes());
     format!("echoagent-org-{:x}", digest.finalize())
+}
+
+fn signing_key_account(profile: &OrgProfile) -> String {
+    format!("{}-signing-key", credential_account(profile))
 }
 
 #[cfg(target_os = "macos")]
@@ -302,6 +356,9 @@ fn clear_local_session(
     let mut errors = Vec::new();
     if let Some(profile) = profile {
         if let Err(error) = credential_delete(&credential_account(profile)) {
+            errors.push(error);
+        }
+        if let Err(error) = credential_delete(&signing_key_account(profile)) {
             errors.push(error);
         }
     }
@@ -496,11 +553,11 @@ pub(crate) async fn mcp_ask(input: Value) -> Result<Value, String> {
 
 async fn update_bootstrap(inner: &Arc<OrgInner>) -> Result<Value, String> {
     let data = authenticated_json(inner, Method::GET, "/api/v1/client/bootstrap", None).await?;
-    let key = decode_public_key(
-        data.get("signingPublicKey")
-            .and_then(Value::as_str)
-            .ok_or("bootstrap missing signing public key")?,
-    )?;
+    let key_text = data
+        .get("signingPublicKey")
+        .and_then(Value::as_str)
+        .ok_or("bootstrap missing signing public key")?;
+    let key = decode_public_key(key_text)?;
     let payload = data
         .get("policyPayload")
         .and_then(Value::as_str)
@@ -515,10 +572,68 @@ async fn update_bootstrap(inner: &Arc<OrgInner>) -> Result<Value, String> {
     if data.get("policy") != Some(&signed_policy) {
         return Err("organization policy payload does not match its signature".into());
     }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let issued_at = signed_policy
+        .get("issuedAt")
+        .and_then(Value::as_u64)
+        .ok_or("organization policy missing issuedAt")?;
+    let expires_at = signed_policy
+        .get("expiresAt")
+        .and_then(Value::as_u64)
+        .ok_or("organization policy missing expiresAt")?;
+    if expires_at <= now || issued_at > now.saturating_add(5 * 60_000) || expires_at <= issued_at {
+        return Err("organization policy is expired or has an invalid validity window".into());
+    }
+    let next_version = signed_policy
+        .get("version")
+        .and_then(Value::as_u64)
+        .ok_or("organization policy missing version")?;
     let mut session = inner.session.lock().await;
+    let profile = session
+        .profile
+        .as_ref()
+        .ok_or("organization profile missing")?;
+    let key_account = signing_key_account(profile);
+    match credential_read(&key_account)? {
+        Some(pinned) if pinned != key_text => {
+            return Err(
+                "organization signing key changed; explicit administrator migration is required"
+                    .into(),
+            )
+        }
+        None => credential_write(&key_account, key_text)?,
+        Some(_) => {}
+    }
+    let prior_version = session
+        .bootstrap
+        .as_ref()
+        .and_then(|value| value.get("policy"))
+        .and_then(|value| value.get("version"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if next_version < prior_version {
+        return Err("organization policy rollback was rejected".into());
+    }
     session.user = data.get("user").cloned();
     session.bootstrap = Some(data.clone());
     Ok(data)
+}
+
+async fn require_policy(inner: &Arc<OrgInner>, key: &str) -> Result<(), String> {
+    let bootstrap = update_bootstrap(inner).await?;
+    if bootstrap
+        .get("policy")
+        .and_then(|policy| policy.get(key))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        Ok(())
+    } else {
+        Err(format!("organization policy disables {key}"))
+    }
 }
 
 fn session_view(session: &OrgSession) -> OrgSessionView {
@@ -538,6 +653,9 @@ pub async fn org_login(
     password: String,
 ) -> Result<OrgSessionView, String> {
     cancel_pending_requests(&state.inner);
+    // 账号切换时先从 Runtime 移除上一账号的受管 Skill，
+    // 新账号同步失败也不得继续使用旧权限。
+    deactivate_managed_skills()?;
     let server_url = normalize_server_url(&server_url)?;
     let device_id = Uuid::now_v7().to_string();
     let response = state
@@ -602,6 +720,11 @@ pub async fn org_login(
             Err(cleanup_error) => format!("{error}; local session cleanup: {cleanup_error}"),
         });
     }
+    // 登录即同步。失败不退出账号，但受管 Skill 保持已停用，
+    // 避免网络短暂抖动迫使用户重新输入密码。
+    if let Err(error) = sync_skills(&state.inner).await {
+        tracing::warn!(%error, "initial managed Skill sync failed");
+    }
     let session = state.inner.session.lock().await;
     Ok(session_view(&session))
 }
@@ -637,7 +760,11 @@ pub async fn org_logout(state: State<'_, OrgState>) -> Result<(), String> {
 #[tauri::command]
 pub async fn org_session(state: State<'_, OrgState>) -> Result<OrgSessionView, String> {
     if state.inner.session.lock().await.profile.is_some() {
-        let _ = update_bootstrap(&state.inner).await;
+        if update_bootstrap(&state.inner).await.is_ok() {
+            let _ = sync_skills(&state.inner).await;
+        } else {
+            enforce_skill_lease();
+        }
     }
     let session = state.inner.session.lock().await;
     Ok(session_view(&session))
@@ -710,6 +837,60 @@ pub async fn org_fetch_document(
     .await
 }
 
+#[tauri::command]
+pub async fn org_archive_document(
+    state: State<'_, OrgState>,
+    doc_id: String,
+) -> Result<Value, String> {
+    authenticated_json(
+        &state.inner,
+        Method::DELETE,
+        &format!("/api/v1/docs/{}", urlencoding::encode(&doc_id)),
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn org_new_document_version(
+    state: State<'_, OrgState>,
+    doc_id: String,
+    file_path: String,
+) -> Result<Value, String> {
+    let path = PathBuf::from(file_path);
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("invalid file name")?
+        .to_string();
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    authenticated_multipart(
+        &state.inner,
+        &format!("/api/v1/docs/{}/new-version", urlencoding::encode(&doc_id)),
+        &[],
+        &name,
+        &bytes,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn org_publish_document(
+    state: State<'_, OrgState>,
+    doc_id: String,
+    target_scope_id: String,
+) -> Result<Value, String> {
+    authenticated_json(
+        &state.inner,
+        Method::POST,
+        &format!("/api/v1/docs/{}/publish", urlencoding::encode(&doc_id)),
+        Some(json!({ "targetScopeId": target_scope_id })),
+    )
+    .await
+}
+
 async fn authenticated_multipart(
     inner: &Arc<OrgInner>,
     path: &str,
@@ -756,6 +937,25 @@ pub async fn org_submit_document(
     title: Option<String>,
     tags: Option<Vec<String>>,
 ) -> Result<Value, String> {
+    let bootstrap = update_bootstrap(&state.inner).await?;
+    let is_personal = bootstrap
+        .get("scopes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|scope| {
+            scope.get("id").and_then(Value::as_str) == Some(scope_id.as_str())
+                && scope.get("kind").and_then(Value::as_str) == Some("personal")
+        });
+    if is_personal
+        && !bootstrap
+            .get("policy")
+            .and_then(|policy| policy.get("allowPersonalCloud"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        return Err("organization policy disables personal cloud knowledge".into());
+    }
     let path = PathBuf::from(file_path);
     let name = path
         .file_name()
@@ -799,12 +999,81 @@ pub async fn org_list_skills(state: State<'_, OrgState>) -> Result<Value, String
 }
 
 #[tauri::command]
+pub async fn org_skill_detail(
+    state: State<'_, OrgState>,
+    skill_id: String,
+) -> Result<Value, String> {
+    authenticated_json(
+        &state.inner,
+        Method::GET,
+        &format!("/api/v1/skills/{}", urlencoding::encode(&skill_id)),
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn org_set_skill_preference(
+    state: State<'_, OrgState>,
+    skill_id: String,
+    enabled: bool,
+) -> Result<Value, String> {
+    let result = authenticated_json(
+        &state.inner,
+        Method::PUT,
+        &format!(
+            "/api/v1/skills/{}/preference",
+            urlencoding::encode(&skill_id)
+        ),
+        Some(json!({ "enabled": enabled })),
+    )
+    .await?;
+    sync_skills(&state.inner).await?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn org_publish_skill(
+    state: State<'_, OrgState>,
+    skill_id: String,
+    target_scope_id: String,
+) -> Result<Value, String> {
+    require_policy(&state.inner, "allowSkillSubmission").await?;
+    authenticated_json(
+        &state.inner,
+        Method::POST,
+        &format!("/api/v1/skills/{}/publish", urlencoding::encode(&skill_id)),
+        Some(json!({ "targetScopeId": target_scope_id })),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn org_qa_feedback(
+    state: State<'_, OrgState>,
+    qa_event_id: String,
+    feedback: String,
+) -> Result<Value, String> {
+    authenticated_json(
+        &state.inner,
+        Method::POST,
+        &format!(
+            "/api/v1/qa-events/{}/feedback",
+            urlencoding::encode(&qa_event_id)
+        ),
+        Some(json!({ "feedback": feedback })),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn org_submit_skill(
     state: State<'_, OrgState>,
     file_path: String,
     scope_id: String,
     version: Option<String>,
 ) -> Result<Value, String> {
+    require_policy(&state.inner, "allowSkillSubmission").await?;
     let path = PathBuf::from(file_path);
     let name = path
         .file_name()
@@ -845,8 +1114,13 @@ pub async fn org_skill_submissions_mine(state: State<'_, OrgState>) -> Result<Va
 struct InstalledSkill {
     skill_id: String,
     version_id: String,
+    version: String,
     name: String,
     path: String,
+    package_path: String,
+    hash: String,
+    signature_payload: String,
+    signature: String,
     scope_kind: String,
     mandatory: bool,
     allow_personal_override: bool,
@@ -911,7 +1185,164 @@ fn verify_skill_package(
         .get("signature")
         .and_then(Value::as_str)
         .ok_or("skill sync item missing signature")?;
-    verify_signed_payload(public_key, payload, signature_text, "Skill package")
+    verify_signed_payload(public_key, payload, signature_text, "Skill package")?;
+    let signed: Value = serde_json::from_str(payload)
+        .map_err(|error| format!("decode signed Skill manifest: {error}"))?;
+    let checks = [
+        ("skillId", item.get("skillId")),
+        ("versionId", item.get("versionId")),
+        ("version", item.get("version")),
+        ("hash", item.get("hash")),
+        ("scopeKind", item.get("scopeKind")),
+        ("mandatory", item.get("mandatory")),
+        ("allowPersonalOverride", item.get("allowPersonalOverride")),
+    ];
+    if signed.get("schema").and_then(Value::as_str) != Some("echo-managed-skill/v2") {
+        return Err("unsupported signed Skill manifest schema".into());
+    }
+    for (key, expected) in checks {
+        if signed.get(key) != expected {
+            return Err(format!(
+                "signed Skill field does not match sync item: {key}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn verify_installed_skill(public_key: &VerifyingKey, item: &InstalledSkill) -> Result<(), String> {
+    verify_signed_payload(
+        public_key,
+        &item.signature_payload,
+        &item.signature,
+        "installed Skill",
+    )?;
+    let signed: Value = serde_json::from_str(&item.signature_payload)
+        .map_err(|error| format!("decode installed Skill manifest: {error}"))?;
+    let expected = json!({
+        "schema": "echo-managed-skill/v2",
+        "skillId": item.skill_id,
+        "versionId": item.version_id,
+        "version": item.version,
+        "hash": item.hash,
+        "scopeKind": item.scope_kind,
+        "mandatory": item.mandatory,
+        "allowPersonalOverride": item.allow_personal_override
+    });
+    if signed != expected {
+        return Err("installed Skill sidecar differs from its signed manifest".into());
+    }
+    let canonical = crate::paths::echo_agent_home_dir()
+        .join("server-skills")
+        .join(&item.skill_id)
+        .join(&item.version_id);
+    if item.path != canonical.to_string_lossy() || !canonical.join("SKILL.md").is_file() {
+        return Err("installed Skill path is not canonical or its entry is missing".into());
+    }
+    let canonical_package = crate::paths::echo_agent_home_dir()
+        .join("server-skills")
+        .join(".packages")
+        .join(&item.skill_id)
+        .join(format!("{}.zip", item.version_id));
+    if item.package_path != canonical_package.to_string_lossy() {
+        return Err("installed Skill package cache path is not canonical".into());
+    }
+    let package = std::fs::read(&canonical_package)
+        .map_err(|error| format!("read installed Skill package cache: {error}"))?;
+    if format!("{:x}", Sha256::digest(&package)) != item.hash {
+        return Err("installed Skill package cache hash mismatch".into());
+    }
+    verify_extracted_skill(&package, &canonical)?;
+    Ok(())
+}
+
+fn collect_installed_files(
+    root: &Path,
+    directory: &Path,
+    files: &mut HashSet<PathBuf>,
+) -> Result<(), String> {
+    for entry in std::fs::read_dir(directory)
+        .map_err(|error| format!("read installed Skill directory: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("read installed Skill entry: {error}"))?;
+        let kind = entry
+            .file_type()
+            .map_err(|error| format!("read installed Skill file type: {error}"))?;
+        if kind.is_symlink() {
+            return Err("installed Skill contains a symbolic link".into());
+        }
+        if kind.is_dir() {
+            collect_installed_files(root, &entry.path(), files)?;
+        } else if kind.is_file() {
+            let entry_path = entry.path();
+            let relative = entry_path
+                .strip_prefix(root)
+                .map_err(|_| "installed Skill file escaped its root")?
+                .to_path_buf();
+            files.insert(relative);
+        } else {
+            return Err("installed Skill contains an unsupported filesystem entry".into());
+        }
+    }
+    Ok(())
+}
+
+/// File permissions are not a security boundary for the desktop user. Compare
+/// every extracted byte and the complete file set with the immutable signed ZIP
+/// before injecting the package into the Agent Runtime.
+fn verify_extracted_skill(bytes: &[u8], root: &Path) -> Result<(), String> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|error| format!("open cached Skill ZIP: {error}"))?;
+    let mut expected = HashSet::new();
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("read cached Skill ZIP: {error}"))?;
+        if entry.is_dir() {
+            continue;
+        }
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err("cached Skill ZIP contains a symbolic link".into());
+        }
+        let relative = entry
+            .enclosed_name()
+            .ok_or("unsafe path in cached Skill ZIP")?
+            .to_path_buf();
+        let installed = std::fs::read(root.join(&relative)).map_err(|error| {
+            format!("read installed Skill file {}: {error}", relative.display())
+        })?;
+        let mut packaged = Vec::with_capacity(entry.size() as usize);
+        std::io::Read::read_to_end(&mut entry, &mut packaged)
+            .map_err(|error| format!("read cached Skill file {}: {error}", relative.display()))?;
+        if installed != packaged {
+            return Err(format!(
+                "installed Skill file was modified: {}",
+                relative.display()
+            ));
+        }
+        expected.insert(relative);
+    }
+    let mut actual = HashSet::new();
+    collect_installed_files(root, root, &mut actual)?;
+    if actual != expected {
+        return Err("installed Skill file set differs from its signed package".into());
+    }
+    Ok(())
+}
+
+fn cache_skill_package(bytes: &[u8], skill_id: &str, version_id: &str) -> Result<PathBuf, String> {
+    Uuid::parse_str(skill_id).map_err(|_| "invalid Skill id from organization server")?;
+    Uuid::parse_str(version_id).map_err(|_| "invalid Skill version id from organization server")?;
+    let path = crate::paths::echo_agent_home_dir()
+        .join("server-skills")
+        .join(".packages")
+        .join(skill_id)
+        .join(format!("{version_id}.zip"));
+    crate::paths::write_private_file(&path, bytes)?;
+    Ok(path)
 }
 
 fn extract_skill_package(
@@ -926,6 +1357,7 @@ fn extract_skill_package(
         .join(skill_id);
     let final_dir = root.join(version_id);
     if final_dir.join("SKILL.md").is_file() {
+        verify_extracted_skill(bytes, &final_dir)?;
         return Ok(final_dir);
     }
     std::fs::create_dir_all(&root).map_err(|e| format!("create Skill root: {e}"))?;
@@ -1004,7 +1436,28 @@ fn extract_skill_package(
     result.map(|_| final_dir)
 }
 
+fn pinned_signing_key() -> Result<VerifyingKey, String> {
+    let profile = read_json::<OrgProfile>(&profile_path())?;
+    let text = credential_read(&signing_key_account(&profile))?
+        .ok_or("organization signing key is not pinned")?;
+    decode_public_key(&text)
+}
+
+fn validate_skill_state(state: &SkillSyncState) -> Result<(), String> {
+    if state.installed.is_empty() {
+        return Ok(());
+    }
+    let key = pinned_signing_key()?;
+    for item in state.installed.values() {
+        verify_installed_skill(&key, item)?;
+    }
+    Ok(())
+}
+
 fn write_runtime_skill_config(state: &SkillSyncState) -> Result<(), String> {
+    // Sidecar 和 config.toml 都属于用户可编辑文件。每次注入 Runtime
+    // 前重新验证服务端签名，不信任 sidecar 里的 mandatory/覆盖值。
+    validate_skill_state(state)?;
     let mut config = crate::providers::read_config();
     let root = config.as_table_mut().ok_or("config root is not a table")?;
     let skills = root
@@ -1086,25 +1539,32 @@ fn deactivate_managed_skills() -> Result<(), String> {
 }
 
 pub fn enforce_skill_lease() {
-    let Ok(mut state) = read_json::<SkillSyncState>(&skill_state_path()) else {
-        return;
-    };
+    let mut state = read_json::<SkillSyncState>(&skill_state_path()).unwrap_or_default();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    if state.lease_until > 0 && state.lease_until < now {
+    if validate_skill_state(&state).is_err() {
+        tracing::error!(
+            "managed Skill sidecar signature validation failed; disabling managed Skills"
+        );
+        state.installed.clear();
+        state.cursor.clear();
+        state.lease_until = 0;
+    } else if state.lease_until > 0 && state.lease_until < now {
         state.installed.clear();
         // 租约过期后下次联网必须全量同步。保留旧 cursor 会让服务端
         // 返回空增量，导致已暂停的 Skill 永远无法恢复。
         state.cursor.clear();
         state.lease_until = 0;
-        if let Err(error) = write_runtime_skill_config(&state) {
-            tracing::warn!(%error, "failed to enforce expired enterprise Skill lease");
-        }
-        if let Err(error) = write_json_private(&skill_state_path(), &state) {
-            tracing::warn!(%error, "failed to persist expired enterprise Skill lease");
-        }
+    }
+    // 即使租约未过期也覆写 config.toml，这会在每次 Agent 会话
+    // 前恢复签名策略，本地手工删除强制项不能持续生效。
+    if let Err(error) = write_runtime_skill_config(&state) {
+        tracing::warn!(%error, "failed to enforce managed Skill runtime config");
+    }
+    if let Err(error) = write_json_private(&skill_state_path(), &state) {
+        tracing::warn!(%error, "failed to persist managed Skill lease state");
     }
 }
 
@@ -1141,17 +1601,32 @@ fn remove_installed_package(item: &InstalledSkill) {
         }
     }
     let _ = std::fs::remove_dir(&family_dir);
+    let cached = crate::paths::echo_agent_home_dir()
+        .join("server-skills")
+        .join(".packages")
+        .join(&item.skill_id)
+        .join(format!("{}.zip", item.version_id));
+    if let Err(error) = std::fs::remove_file(&cached) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(%error, path = %cached.display(), "failed to remove revoked managed Skill cache");
+        }
+    }
 }
 
-#[tauri::command]
-pub async fn org_sync_skills(state: State<'_, OrgState>) -> Result<Value, String> {
+async fn sync_skills(inner: &Arc<OrgInner>) -> Result<Value, String> {
     let mut local = read_json::<SkillSyncState>(&skill_state_path()).unwrap_or_default();
+    if validate_skill_state(&local).is_err() {
+        tracing::warn!("discarding invalid managed Skill sidecar and forcing a full sync");
+        local = SkillSyncState::default();
+        write_runtime_skill_config(&local)?;
+        write_json_private(&skill_state_path(), &local)?;
+    }
     let path = format!(
         "/api/v1/skills/sync?cursor={}",
         urlencoding::encode(&local.cursor)
     );
-    let data = authenticated_json(&state.inner, Method::GET, &path, None).await?;
-    let bootstrap = update_bootstrap(&state.inner).await?;
+    let data = authenticated_json(inner, Method::GET, &path, None).await?;
+    let bootstrap = update_bootstrap(inner).await?;
     let key_text = bootstrap
         .get("signingPublicKey")
         .and_then(Value::as_str)
@@ -1168,7 +1643,7 @@ pub async fn org_sync_skills(state: State<'_, OrgState>) -> Result<Value, String
             .get("packageUrl")
             .and_then(Value::as_str)
             .ok_or("Skill item missing package URL")?;
-        let response = authenticated_response(&state.inner, Method::GET, package_url, None).await?;
+        let response = authenticated_response(inner, Method::GET, package_url, None).await?;
         if !response.status().is_success() {
             return Err(format!("download Skill: HTTP {}", response.status()));
         }
@@ -1185,16 +1660,38 @@ pub async fn org_sync_skills(state: State<'_, OrgState>) -> Result<Value, String
             .get("versionId")
             .and_then(Value::as_str)
             .ok_or("Skill item missing version id")?;
+        let package_path = cache_skill_package(&bytes, skill_id, version_id)?;
         let install_path = extract_skill_package(&bytes, skill_id, version_id)?;
         let installed = InstalledSkill {
             skill_id: skill_id.to_string(),
             version_id: version_id.to_string(),
+            version: item
+                .get("version")
+                .and_then(Value::as_str)
+                .ok_or("Skill item missing version")?
+                .to_string(),
             name: item
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or(skill_id)
                 .to_string(),
             path: install_path.to_string_lossy().into_owned(),
+            package_path: package_path.to_string_lossy().into_owned(),
+            hash: item
+                .get("hash")
+                .and_then(Value::as_str)
+                .ok_or("Skill item missing hash")?
+                .to_string(),
+            signature_payload: item
+                .get("signaturePayload")
+                .and_then(Value::as_str)
+                .ok_or("Skill item missing signature payload")?
+                .to_string(),
+            signature: item
+                .get("signature")
+                .and_then(Value::as_str)
+                .ok_or("Skill item missing signature")?
+                .to_string(),
             scope_kind: item
                 .get("scopeKind")
                 .and_then(Value::as_str)
@@ -1251,6 +1748,36 @@ pub async fn org_sync_skills(state: State<'_, OrgState>) -> Result<Value, String
         "leaseUntil": local.lease_until,
         "installed": local.installed.values().collect::<Vec<_>>()
     }))
+}
+
+#[tauri::command]
+pub async fn org_sync_skills(state: State<'_, OrgState>) -> Result<Value, String> {
+    sync_skills(&state.inner).await
+}
+
+/// 应用启动后立即尝试恢复会话并同步，之后定时轮询。
+/// 无登录/离线是正常状态，只记录 debug；租约到期由独立门禁处理。
+pub fn start_background_sync() {
+    let state = shared_state();
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
+        loop {
+            interval.tick().await;
+            let has_profile = state.inner.session.lock().await.profile.is_some();
+            if !has_profile {
+                continue;
+            }
+            if let Err(error) = update_bootstrap(&state.inner).await {
+                tracing::debug!(%error, "organization bootstrap refresh skipped");
+                enforce_skill_lease();
+                continue;
+            }
+            if let Err(error) = sync_skills(&state.inner).await {
+                tracing::warn!(%error, "periodic managed Skill sync failed");
+                enforce_skill_lease();
+            }
+        }
+    });
 }
 
 async fn run_ask_stream(
@@ -1485,6 +2012,7 @@ mod tests {
             scope_kind: scope.into(),
             mandatory: false,
             allow_personal_override: !protected,
+            ..Default::default()
         }
     }
 
@@ -1512,5 +2040,44 @@ mod tests {
         assert!(!state.installed.contains_key("revoked"));
         assert_eq!(removed.len(), 1);
         assert_eq!(removed[0].skill_id, "revoked");
+    }
+
+    #[test]
+    fn extracted_managed_skill_must_exactly_match_signed_zip() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("SKILL.md", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer
+            .write_all(b"---\nname: verified\nversion: 1.0.0\n---\n")
+            .unwrap();
+        writer
+            .start_file(
+                "references/policy.md",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        writer.write_all(b"approved policy").unwrap();
+        let package = writer.finish().unwrap().into_inner();
+
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("references")).unwrap();
+        std::fs::write(
+            temp.path().join("SKILL.md"),
+            b"---\nname: verified\nversion: 1.0.0\n---\n",
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("references/policy.md"), b"approved policy").unwrap();
+        assert!(verify_extracted_skill(&package, temp.path()).is_ok());
+
+        std::fs::write(temp.path().join("SKILL.md"), b"tampered instructions").unwrap();
+        assert!(verify_extracted_skill(&package, temp.path()).is_err());
+        std::fs::write(
+            temp.path().join("SKILL.md"),
+            b"---\nname: verified\nversion: 1.0.0\n---\n",
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("hidden.sh"), b"echo hidden").unwrap();
+        assert!(verify_extracted_skill(&package, temp.path()).is_err());
     }
 }

@@ -1,6 +1,7 @@
 import { listKbProviders, registerKbProvider, unregisterKbProvider } from "./knowledge-base";
 import { createLocalKbProvider } from "./local-kb-provider";
 import { createTauriDirectoryReader, isTauriAvailable } from "./tauri-kb-reader";
+import { invoke } from "@tauri-apps/api/core";
 
 const STORAGE_KEY = "echoagent.knowledge-sources.v1";
 
@@ -54,6 +55,9 @@ export function loadKnowledgeSourceDescriptors(): KnowledgeSourceDescriptor[] {
 
 function saveKnowledgeSourceDescriptors(items: KnowledgeSourceDescriptor[]): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  if (isTauriAvailable()) {
+    void Promise.resolve(invoke("org_local_kb_sources_set", { sources: items })).catch(() => undefined);
+  }
 }
 
 function registerDescriptor(descriptor: KnowledgeSourceDescriptor): void {
@@ -66,8 +70,12 @@ function registerDescriptor(descriptor: KnowledgeSourceDescriptor): void {
 }
 
 export function hydrateKnowledgeSources(): void {
+  const descriptors = loadKnowledgeSourceDescriptors();
+  if (isTauriAvailable()) {
+    void Promise.resolve(invoke("org_local_kb_sources_set", { sources: descriptors })).catch(() => undefined);
+  }
   const registered = new Set(listKbProviders().map((source) => source.id));
-  for (const descriptor of loadKnowledgeSourceDescriptors()) {
+  for (const descriptor of descriptors) {
     if (!registered.has(descriptor.id)) registerDescriptor(descriptor);
   }
 }

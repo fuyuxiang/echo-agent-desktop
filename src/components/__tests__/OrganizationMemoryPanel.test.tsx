@@ -15,6 +15,12 @@ const api = vi.hoisted(() => ({
   orgAskCancel: vi.fn(),
   orgFetchDocument: vi.fn(),
   orgSubmitDocument: vi.fn(),
+  orgArchiveDocument: vi.fn(),
+  orgNewDocumentVersion: vi.fn(),
+  orgPublishDocument: vi.fn(),
+  orgQaFeedback: vi.fn(),
+  orgSetSkillPreference: vi.fn(),
+  orgPublishSkill: vi.fn(),
   orgSubmitSkill: vi.fn(),
   orgSyncSkills: vi.fn(),
   listenOrgAsk: vi.fn(),
@@ -99,6 +105,8 @@ describe("OrganizationMemoryPanel", () => {
     fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: teamScope.id } });
     expect(screen.getByText("团队文档")).toBeInTheDocument();
     expect(screen.queryByText("个人文档")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新版本" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "归档" })).not.toBeInTheDocument();
   });
 
   it("刷新后若当前 Scope 已撤权则回退到仍可用的个人范围", async () => {

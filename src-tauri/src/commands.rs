@@ -243,6 +243,7 @@ pub async fn agent_new_session(
     model_id: Option<String>,
 ) -> Result<String, String> {
     crate::policy::require_feature("sessions")?;
+    crate::org::enforce_skill_lease();
     if let Some(model_id) = model_id.as_deref() {
         crate::policy::require_model(model_id)?;
     }
@@ -268,6 +269,7 @@ pub async fn agent_load_session(
     session_id: String,
     cwd: String,
 ) -> Result<(), String> {
+    crate::org::enforce_skill_lease();
     let tx = state
         .tx
         .lock()
