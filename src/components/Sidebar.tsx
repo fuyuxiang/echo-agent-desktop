@@ -36,6 +36,7 @@ import {
   MoreMenuInspirationIcon,
 } from "@/foundation/components/Icon/icons";
 import { APP_VERSION } from "@/lib/app-version";
+import logoMarkUrl from "@/assets/logo-mark.svg";
 
 const NAV = [
   { label: "助理", icon: EchoAssistantNavIcon },
@@ -731,6 +732,13 @@ export function Sidebar({
       {/* macOS Overlay 标题栏:红绿灯悬浮在 logo 行左上,整行作为拖拽区
           (Windows 的窗口拖拽由自绘 TitleBar 负责,故仅在 mac 加属性)。 */}
       <div className="sidebar__logo-row" {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})}>
+        <img
+          className="sidebar__brand-mark"
+          src={logoMarkUrl}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+        />
         <div className="sidebar__logo-col" {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})}>
           <span className="sidebar__logo">EchoAgent</span>
           <span className="sidebar__version">v{APP_VERSION}</span>
