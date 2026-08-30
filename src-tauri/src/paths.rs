@@ -17,6 +17,27 @@ const HOME_DIR_NAME: &str = ".echo-agent";
 const LEGACY_HOME_DIR_NAME: &str = ".grok";
 const MIGRATION_MARKER: &str = ".legacy-data-migrated";
 
+/// Reject data roots owned by the retired WorkBuddy integration.
+///
+/// String normalization is intentional: a Windows path can reach a Unix test
+/// build through persisted WebView storage, and vice versa.
+pub(crate) fn reject_legacy_workbuddy_path(path: &Path) -> Result<(), String> {
+    let contains_legacy_component =
+        path.to_string_lossy()
+            .replace('\\', "/")
+            .split('/')
+            .any(|component| {
+                component.eq_ignore_ascii_case(".workbuddy")
+                    || component.eq_ignore_ascii_case("workbuddy")
+            });
+
+    if contains_legacy_component {
+        Err("已阻止读取 WorkBuddy 数据目录，请选择 EchoAgent 数据目录".into())
+    } else {
+        Ok(())
+    }
+}
+
 /// Resolve EchoAgent's user data directory.
 pub fn echo_agent_home_dir() -> PathBuf {
     std::env::var_os(HOME_ENV)
@@ -195,8 +216,33 @@ fn copy_file_if_missing(source: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_missing, write_private_file};
+    use super::{merge_missing, reject_legacy_workbuddy_path, write_private_file};
     use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn rejects_legacy_workbuddy_paths_on_both_platforms() {
+        assert!(reject_legacy_workbuddy_path(Path::new(
+            "/Users/demo/.workbuddy/connectors-marketplace"
+        ))
+        .is_err());
+        assert!(reject_legacy_workbuddy_path(Path::new(
+            r"C:\Users\demo\WorkBuddy\connectors-marketplace"
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn allows_similarly_named_non_legacy_paths() {
+        assert!(reject_legacy_workbuddy_path(Path::new(
+            "/Users/demo/workbuddy-notes/connectors-marketplace"
+        ))
+        .is_ok());
+        assert!(reject_legacy_workbuddy_path(Path::new(
+            "/Users/demo/.echo-agent/connectors-marketplace"
+        ))
+        .is_ok());
+    }
 
     #[test]
     fn migration_copies_nested_files_without_overwriting() {

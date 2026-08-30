@@ -11,7 +11,7 @@
  *  - data: 数据管理（清理会话/缓存 + 打开 EchoAgent 目录）
  *  - general: 系统设置（cwd/工作目录 + 重启 EchoAgent）
  *  - account: 账户（EchoAgent auth 状态）
- *  - agent-settings / assistant: 引导到对应面板
+ *  - agent-settings: 展示当前智能体运行时配置
  */
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -33,9 +33,6 @@ import { useTheme } from "./ThemeProvider";
 import {
   accountGetApiKey,
   accountSetApiKey,
-  agentsDefaultsGet,
-  agentsDefaultsSave,
-  agentsList,
   commandsList,
   agentAuthStatus,
   internalReload,
@@ -48,8 +45,6 @@ import {
   notificationMarkRead,
   permissionList,
   permissionSave,
-  providersList,
-  flattenModels,
   skillsList,
   subagentsConfigGet,
   subagentsConfigSave,
@@ -58,11 +53,8 @@ import {
   echoAgentDataDir,
   openEchoAgentDataDir,
   type AuthStatus,
-  type ModelOptionRow,
 } from "@/lib/agent-client";
 import type {
-  AgentDefaults,
-  AgentEntry,
   McpServerEntry,
   NotificationEntry,
   NotificationKind,
@@ -979,226 +971,6 @@ export function AgentSettingsPanel() {
   );
 }
 
-// ---------- 助理设置 ----------
-
-const PERMISSION_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "EchoAgent 默认（每次询问）" },
-  { value: "allow_once", label: "允许一次" },
-  { value: "always_allow_this_session", label: "本会话始终允许" },
-  { value: "always_allow_all_sessions", label: "所有会话始终允许" },
-  { value: "deny_once", label: "拒绝一次" },
-  { value: "always_deny_all_sessions", label: "所有会话始终拒绝" },
-];
-
-/** AssistantSettingsPanel — 助理角色列表 + 新会话默认模型/权限偏好。
- *  agents 来自 ~/.echo-agent/agents/*.md；默认值写入 config.toml 的
- *  [models].default 和 [ui].default_selected_permission。 */
-export function AssistantSettingsPanel() {
-  const [agents, setAgents] = useState<AgentEntry[]>([]);
-  const [providers, setProviders] = useState<ModelOptionRow[]>([]);
-  const [defaults, setDefaults] = useState<AgentDefaults | null>(null);
-  const [draft, setDraft] = useState<AgentDefaults>({
-    defaultModel: "",
-    defaultPermission: "",
-    rememberToolApprovals: undefined,
-  });
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [dirty, setDirty] = useState(false);
-
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [ag, prov, def] = await Promise.all([
-        agentsList().catch(() => [] as AgentEntry[]),
-        providersList()
-          .then(flattenModels)
-          .catch(() => [] as ModelOptionRow[]),
-        agentsDefaultsGet(),
-      ]);
-      setAgents(ag);
-      setProviders(prov);
-      setDefaults(def);
-      setDraft(def);
-      setDirty(false);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    reload();
-  }, [reload]);
-
-  const update = (patch: Partial<AgentDefaults>) => {
-    setDraft((d) => ({ ...d, ...patch }));
-    setDirty(true);
-  };
-
-  const handleSave = async () => {
-    setBusy(true);
-    try {
-      await agentsDefaultsSave(draft);
-      setDefaults(draft);
-      setDirty(false);
-      setMsg("已保存（重启 EchoAgent 后生效）");
-    } catch (e) {
-      setMsg(`保存失败：${String(e).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleReset = () => {
-    if (defaults) {
-      setDraft(defaults);
-      setDirty(false);
-    }
-  };
-
-  return (
-    <SectionShell
-      title="助理设置"
-      desc="管理助理角色（~/.echo-agent/agents/*.md）和新建会话的默认模型/权限偏好。偏好写入 config.toml 的 [models].default 和 [ui].default_selected_permission。"
-    >
-      {loading ? (
-        <p className="settings-hint">加载中…</p>
-      ) : (
-        <>
-          {/* 助理列表 */}
-          <details className="agent-section" open>
-            <summary className="agent-section__title">
-              已配置助理（{agents.length}）
-            </summary>
-            <div className="agent-section__body">
-              {agents.length === 0 ? (
-                <p className="settings-hint">
-                  暂无助理。在主界面「助理」面板从模板创建，或把 .md 文件放到
-                  <code>~/.echo-agent/agents/</code>。
-                </p>
-              ) : (
-                <ul className="agent-list">
-                  {agents.map((a) => (
-                    <li key={a.path} className="agent-list__item">
-                      <span className="agent-list__name">{a.name}</span>
-                      <span className="agent-list__badge">
-                        {a.scope === "user" ? "用户级" : "项目级"}
-                      </span>
-                      {a.description && (
-                        <span className="agent-list__desc">{a.description}</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </details>
-
-          {/* 默认模型 */}
-          <div className="settings-row">
-            <div className="settings-row__label">
-              <span>新建会话默认模型</span>
-            </div>
-            <div className="settings-row__control">
-              <select
-                className="agent-select"
-                value={draft.defaultModel}
-                onChange={(e) => update({ defaultModel: e.target.value })}
-              >
-                <option value="">EchoAgent 内置默认</option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}（{p.id}）
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <p className="settings-hint">
-            对应 <code>[models] default</code>。空 = EchoAgent 用内置默认（通常是 grok-build）。
-          </p>
-
-          {/* 默认权限选择 */}
-          <div className="settings-row">
-            <div className="settings-row__label">
-              <Shield size={16} />
-              <span>首次权限提示默认选择</span>
-            </div>
-            <div className="settings-row__control">
-              <select
-                className="agent-select"
-                value={draft.defaultPermission}
-                onChange={(e) => update({ defaultPermission: e.target.value })}
-              >
-                {PERMISSION_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* 记住工具授权 */}
-          <div className="settings-row">
-            <div className="settings-row__label">
-              <span>显示「始终允许」选项</span>
-            </div>
-            <div className="settings-row__control">
-              <select
-                className="agent-select"
-                value={
-                  draft.rememberToolApprovals === undefined
-                    ? ""
-                    : draft.rememberToolApprovals
-                      ? "true"
-                      : "false"
-                }
-                onChange={(e) =>
-                  update({
-                    rememberToolApprovals:
-                      e.target.value === "" ? undefined : e.target.value === "true",
-                  })
-                }
-              >
-                <option value="">EchoAgent 默认</option>
-                <option value="true">显示</option>
-                <option value="false">隐藏</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="settings-actions">
-            <button
-              className="settings-btn"
-              onClick={handleSave}
-              disabled={busy || !dirty}
-            >
-              {busy ? "保存中…" : "保存偏好"}
-            </button>
-            {dirty && (
-              <button className="settings-btn" onClick={handleReset} disabled={busy}>
-                放弃
-              </button>
-            )}
-            <button className="settings-btn" onClick={reload} disabled={busy}>
-              <RefreshCw size={14} /> 重新加载
-            </button>
-          </div>
-
-          {msg && <p className="settings-msg">{msg}</p>}
-
-          <p className="settings-hint">
-            助理定义在 <code>~/.echo-agent/agents/*.md</code>（含 frontmatter + system prompt）。
-            EchoAgent 没有 session 级「切换 agent」的 ACP 方法，EchoAgent 通过预设 prompt 引导。
-          </p>
-        </>
-      )}
-    </SectionShell>
-  );
-}
-
 function scopeLabel(scope: string): string {
   switch (scope) {
     case "user":
@@ -1220,7 +992,7 @@ function scopeLabel(scope: string): string {
   }
 }
 
-// ---------- 智能体邮箱（会话通知中心）----------
+// ---------- 通知中心 ----------
 
 const KIND_FILTERS: { key: string; label: string }[] = [
   { key: "all", label: "全部" },
@@ -1235,7 +1007,7 @@ const KIND_FILTERS: { key: string; label: string }[] = [
   { key: "error", label: "错误" },
 ];
 
-/** AgentMailSettingsPanel — 智能体邮箱（重新定义为会话通知中心）。
+/** NotificationCenterSettingsPanel — EchoAgent 事件通知中心。
  *
  *  EchoAgent 的 agentMail 是腾讯邮箱集成（无 EchoAgent 对应）。EchoAgent 把它
  *  重新定义为 EchoAgent 事件的通知收件箱：权限请求、文件夹信任、任务更新、
@@ -1244,7 +1016,7 @@ const KIND_FILTERS: { key: string; label: string }[] = [
  *
  *  数据存在 ~/.echo-agent/echoagent-notifications.json（最多 200 条 FIFO）。
  *  写入由 App.tsx 的事件订阅回调触发（notificationAppend）。 */
-export function AgentMailSettingsPanel() {
+export function NotificationCenterSettingsPanel() {
   const [entries, setEntries] = useState<NotificationEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
@@ -1290,7 +1062,7 @@ export function AgentMailSettingsPanel() {
 
   return (
     <SectionShell
-      title="智能体邮箱（通知中心）"
+      title="通知中心"
       desc="EchoAgent 收到的所有 EchoAgent 事件通知：权限请求、文件夹信任、任务更新、计划模式、MCP 状态、会话完成等。数据存在 ~/.echo-agent/echoagent-notifications.json。"
     >
       <div className="settings-actions">

@@ -13,7 +13,7 @@ const base = {
 describe("HomePage", () => {
   it("渲染品牌区和输入框", () => {
     render(<HomePage {...base} />);
-    expect(screen.getByText("EchoAgent")).toBeInTheDocument();
+    expect(screen.getByText(/EchoAgent · 本地 Agent 工作台/)).toBeInTheDocument();
     expect(screen.getByRole("textbox")).toBeInTheDocument();
   });
 

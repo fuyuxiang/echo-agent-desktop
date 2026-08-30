@@ -338,7 +338,7 @@ fn builtin_root_valid(root: &Path) -> bool {
 #[tauri::command]
 pub async fn skills_catalog_default_root() -> Result<String, String> {
     for r in candidate_connector_roots() {
-        if connector_root_valid(&r) {
+        if crate::paths::reject_legacy_workbuddy_path(&r).is_ok() && connector_root_valid(&r) {
             return Ok(r.to_string_lossy().into_owned());
         }
     }
@@ -349,6 +349,7 @@ pub async fn skills_catalog_default_root() -> Result<String, String> {
 #[tauri::command]
 pub async fn skills_catalog_list_roots(root: String) -> Result<Vec<String>, String> {
     let base = PathBuf::from(&root);
+    crate::paths::reject_legacy_workbuddy_path(&base)?;
     let mut hits = Vec::new();
     if connector_root_valid(&base) {
         hits.push(base.to_string_lossy().into_owned());
@@ -620,7 +621,9 @@ pub async fn skills_catalog_load(
         Some(r) if !r.is_empty() => PathBuf::from(r),
         _ => candidate_connector_roots()
             .into_iter()
-            .find(|r| connector_root_valid(r))
+            .find(|r| {
+                crate::paths::reject_legacy_workbuddy_path(r).is_ok() && connector_root_valid(r)
+            })
             .unwrap_or_default(),
     };
     // Resolve the built-in root.
@@ -628,9 +631,17 @@ pub async fn skills_catalog_load(
         Some(r) if !r.is_empty() => PathBuf::from(r),
         _ => candidate_builtin_roots()
             .into_iter()
-            .find(|r| builtin_root_valid(r))
+            .find(|r| {
+                crate::paths::reject_legacy_workbuddy_path(r).is_ok() && builtin_root_valid(r)
+            })
             .unwrap_or_default(),
     };
+    if !conn_root.as_os_str().is_empty() {
+        crate::paths::reject_legacy_workbuddy_path(&conn_root)?;
+    }
+    if !builtin_root.as_os_str().is_empty() {
+        crate::paths::reject_legacy_workbuddy_path(&builtin_root)?;
+    }
 
     let conn_root_clone = conn_root.clone();
     let builtin_root_clone = builtin_root.clone();
@@ -706,6 +717,7 @@ pub async fn skills_catalog_load(
 #[tauri::command]
 pub async fn skills_catalog_read_skill(dir: String) -> Result<String, String> {
     let p = PathBuf::from(&dir).join("SKILL.md");
+    crate::paths::reject_legacy_workbuddy_path(&p)?;
     if !p.is_file() {
         return Err(format!("未找到 SKILL.md：{dir}"));
     }

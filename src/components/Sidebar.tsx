@@ -11,7 +11,6 @@ import {
 import type { SessionSummary, SessionStatus } from "@/lib/types";
 import {
   EchoNewTaskIcon,
-  EchoAssistantNavIcon,
   EchoProjectNavIcon,
   EchoExpertNavIcon,
   EchoAutomationNavIcon,
@@ -33,13 +32,15 @@ import {
   AddIcon,
   MyFilesIconV2,
   MoreMenuImaKnowledgeIcon,
-  MoreMenuInspirationIcon,
+  MemoryIcon,
+  ClockIconV2,
+  AgentMailIcon,
+  CloudToolIcon,
+  PluginsIcon,
 } from "@/foundation/components/Icon/icons";
-import { APP_VERSION } from "@/lib/app-version";
 import logoMarkUrl from "@/assets/logo-mark.svg";
 
 const NAV = [
-  { label: "助理", icon: EchoAssistantNavIcon },
   { label: "项目", icon: EchoProjectNavIcon },
   { label: "组织记忆", icon: MoreMenuImaKnowledgeIcon },
   { label: "专家·技能·连接器", icon: EchoExpertNavIcon },
@@ -319,8 +320,8 @@ function SessionContextMenu({ x, y, sessionId, sessionTitle, isPinned, onClose, 
 /**
  * "更多" 侧栏按钮的弹出菜单 — 对齐 EchoAgent：
  * - hover 打开，向右浮出（不向下盖住会话列表）
- * - 只展示已经接通的本地文件、知识库、网页预览、灵感、
- *   用量、通知、策略与云存储入口。
+ * - 只展示保留的本地文件、个人记忆、知识库、插件市场、
+ *   用量、通知与云存储入口。
  */
 function MoreDropdown({
   onNavigate,
@@ -371,21 +372,17 @@ function MoreDropdown({
 
   useEffect(() => () => clearCloseTimer(), []);
 
-  const isActive =
-    activeNav === "更多" ||
-    activeNav === "资料库" ||
-    activeNav === "灵感" ||
-    activeNav === "我的文件";
-
   const ITEMS: {
     id: string;
     label: string;
+    group: "内容" | "工具" | "系统";
     icon: React.ReactNode;
     action: () => void;
   }[] = [
     {
       id: "my_files",
       label: "我的文件",
+      group: "内容",
       icon: <MyFilesIconV2 size="md" />,
       action: () => {
         setOpen(false);
@@ -393,8 +390,19 @@ function MoreDropdown({
       },
     },
     {
+      id: "personal_memory",
+      label: "个人记忆",
+      group: "内容",
+      icon: <MemoryIcon size="md" />,
+      action: () => {
+        setOpen(false);
+        onNavigate("个人记忆");
+      },
+    },
+    {
       id: "knowledge_base",
       label: "知识库",
+      group: "内容",
       icon: <MoreMenuImaKnowledgeIcon size="md" />,
       action: () => {
         setOpen(false);
@@ -402,27 +410,20 @@ function MoreDropdown({
       },
     },
     {
-      id: "browser_preview",
-      label: "网页预览",
-      icon: <MoreMenuInspirationIcon size="md" />,
+      id: "plugins",
+      label: "插件市场",
+      group: "工具",
+      icon: <PluginsIcon size="md" />,
       action: () => {
         setOpen(false);
-        onNavigate("网页预览");
-      },
-    },
-    {
-      id: "inspiration",
-      label: "灵感",
-      icon: <MoreMenuInspirationIcon size="md" />,
-      action: () => {
-        setOpen(false);
-        onNavigate("灵感");
+        onNavigate("插件·市场");
       },
     },
     {
       id: "usage_quota",
       label: "用量统计",
-      icon: <MoreMenuInspirationIcon size="md" />,
+      group: "系统",
+      icon: <ClockIconV2 size="md" />,
       action: () => {
         setOpen(false);
         onNavigate("用量统计");
@@ -431,31 +432,29 @@ function MoreDropdown({
     {
       id: "notify_channels",
       label: "通知渠道",
-      icon: <MoreMenuInspirationIcon size="md" />,
+      group: "系统",
+      icon: <AgentMailIcon size="md" />,
       action: () => {
         setOpen(false);
         onNavigate("通知渠道");
       },
     },
     {
-      id: "policy_settings",
-      label: "策略设置",
-      icon: <MoreMenuInspirationIcon size="md" />,
-      action: () => {
-        setOpen(false);
-        onNavigate("策略设置");
-      },
-    },
-    {
       id: "cloud_storage",
       label: "云存储",
-      icon: <MoreMenuInspirationIcon size="md" />,
+      group: "系统",
+      icon: <CloudToolIcon size="md" />,
       action: () => {
         setOpen(false);
         onNavigate("云存储");
       },
     },
   ];
+  const activeMoreLabel = activeNav === "资料库" ? "个人记忆" : activeNav;
+  const isActive =
+    activeNav === "更多" ||
+    ITEMS.some((item) => item.label === activeMoreLabel) ||
+    activeNav === "插件·市场";
 
   return (
     <div
@@ -477,24 +476,32 @@ function MoreDropdown({
       >
         <EchoMoreNavIcon size="md" />
         <span>更多</span>
-        <span className="sidebar__nav-sub">资料库·灵感</span>
+        <span className="sidebar__nav-sub">常用工具</span>
       </button>
       {open && (
         <div className="sidebar__more-popover" role="menu">
-          {ITEMS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={
-                "sidebar__more-item" +
-                (activeNav === item.label ? " sidebar__more-item--active" : "")
-              }
-              role="menuitem"
-              onClick={item.action}
-            >
-              <span className="sidebar__more-item-icon">{item.icon}</span>
-              <span className="sidebar__more-item-label">{item.label}</span>
-            </button>
+          {(["内容", "工具", "系统"] as const).map((group) => (
+            <div className="sidebar__more-group" key={group}>
+              <div className="sidebar__more-group-title">{group}</div>
+              {ITEMS.filter((item) => item.group === group).map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={
+                    "sidebar__more-item" +
+                    (activeMoreLabel === item.label ||
+                    (item.id === "plugins" && activeNav === "插件·市场")
+                      ? " sidebar__more-item--active"
+                      : "")
+                  }
+                  role="menuitem"
+                  onClick={item.action}
+                >
+                  <span className="sidebar__more-item-icon">{item.icon}</span>
+                  <span className="sidebar__more-item-label">{item.label}</span>
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       )}
@@ -741,7 +748,6 @@ export function Sidebar({
         />
         <div className="sidebar__logo-col" {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})}>
           <span className="sidebar__logo">EchoAgent</span>
-          <span className="sidebar__version">v{APP_VERSION}</span>
         </div>
         <div className="sidebar__logo-spacer" {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})} />
         <button
@@ -755,30 +761,6 @@ export function Sidebar({
         <button className="sidebar__icon-btn" aria-label="搜索" onClick={onOpenSearch}>
           <SearchIcon size="md" />
         </button>
-        <div className="task-filter-wrap" ref={filterRef}>
-          <button
-            className={"sidebar__icon-btn task-filter-trigger" + (hasFilter ? " task-filter-trigger--active" : "")}
-            aria-label="筛选"
-            aria-haspopup="menu"
-            aria-expanded={filterOpen}
-            onClick={() => setFilterOpen((v) => !v)}
-          >
-            <FilterIcon size="md" />
-            {hasFilter && <span className="task-filter-trigger__dot" />}
-          </button>
-          {filterOpen && (
-            <div className="task-filter-popover" role="menu">
-              <TaskFilterMenu
-                filterStatus={filterStatus}
-                filterDate={filterDate}
-                hasFilter={hasFilter}
-                onSelectStatus={setFilterStatus}
-                onSelectDate={setFilterDate}
-                onClear={clearFilters}
-              />
-            </div>
-          )}
-        </div>
       </div>
 
       <nav className="sidebar__nav">
@@ -810,13 +792,39 @@ export function Sidebar({
 
       <div className="sidebar__content">
         {/* 任务分组: 收件箱(初始目录)下的会话 */}
-        <button className="sidebar__section-label" onClick={() => setTasksOpen(!tasksOpen)}>
-          <span>任务 ({hasFilter ? `${filteredIndependent.length}/${independent.length}` : independent.length})</span>
-          <ChevronDownIcon
-            size="sm"
-            className={"sidebar__chevron" + (tasksOpen ? "" : " sidebar__chevron--collapsed")}
-          />
-        </button>
+        <div className="sidebar__section-head">
+          <button className="sidebar__section-label" onClick={() => setTasksOpen(!tasksOpen)}>
+            <span>任务 ({hasFilter ? `${filteredIndependent.length}/${independent.length}` : independent.length})</span>
+            <ChevronDownIcon
+              size="sm"
+              className={"sidebar__chevron" + (tasksOpen ? "" : " sidebar__chevron--collapsed")}
+            />
+          </button>
+          <div className="task-filter-wrap" ref={filterRef}>
+            <button
+              className={"sidebar__section-action task-filter-trigger" + (hasFilter ? " task-filter-trigger--active" : "")}
+              aria-label="筛选任务"
+              aria-haspopup="menu"
+              aria-expanded={filterOpen}
+              onClick={() => setFilterOpen((v) => !v)}
+            >
+              <FilterIcon size="sm" />
+              {hasFilter && <span className="task-filter-trigger__dot" />}
+            </button>
+            {filterOpen && (
+              <div className="task-filter-popover" role="menu">
+                <TaskFilterMenu
+                  filterStatus={filterStatus}
+                  filterDate={filterDate}
+                  hasFilter={hasFilter}
+                  onSelectStatus={setFilterStatus}
+                  onSelectDate={setFilterDate}
+                  onClear={clearFilters}
+                />
+              </div>
+            )}
+          </div>
+        </div>
         {tasksOpen && (
           <div className="sidebar__group">
             {filteredIndependent.length === 0 && independent.length > 0 && (
@@ -932,11 +940,14 @@ export function Sidebar({
       </div>
 
       <div className="sidebar__footer">
-        <button className="sidebar__user" onClick={() => onPlaceholder("用户中心")}>
+        <button
+          className="sidebar__user"
+          aria-label="本地用户"
+          onClick={() => onPlaceholder("用户中心")}
+        >
           <UserIcon size="md" />
-          <span>本地用户</span>
+          <span className="sidebar__user-label">本地用户</span>
         </button>
-        <div className="sidebar__logo-spacer" />
         <button className="sidebar__icon-btn" aria-label="通知" onClick={() => onOpenSettings()}>
           <BellIcon size="md" />
         </button>

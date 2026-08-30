@@ -3,10 +3,21 @@
   "app": {
     "windows": [
       {
+        "label": "main",
+        "title": "EchoAgent",
+        "url": "/",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 680,
+        "resizable": true,
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "transparent": false
+        "transparent": false,
+        "shadow": true,
+        "center": true,
+        "devtools": false
       }
     ]
   }
