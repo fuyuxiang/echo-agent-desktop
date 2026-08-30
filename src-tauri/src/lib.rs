@@ -24,6 +24,7 @@ mod paths;
 mod permission_config;
 mod policy;
 mod providers;
+mod session_title;
 mod sessions;
 mod shell_fs;
 mod skills;
