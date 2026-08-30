@@ -322,6 +322,45 @@ export interface SkillInfo {
   userInvocable?: boolean;
   /** Filesystem path to the skill directory (when available). */
   path?: string;
+  /** Package is copied into and owned by EchoAgent's managed local installer. */
+  managed?: boolean;
+  version?: string;
+  author?: string;
+  license?: string;
+  compatibility?: string;
+  whenToUse?: string;
+  /** Exact custom `[skills].paths` registration that can be removed safely. */
+  configuredPath?: string;
+}
+
+export type SkillRiskLevel = "low" | "medium" | "high";
+
+export interface SkillRiskFinding {
+  level: SkillRiskLevel;
+  code: string;
+  message: string;
+  path?: string;
+}
+
+export interface SkillPackageInspection {
+  sourcePath: string;
+  name: string;
+  description: string;
+  version?: string;
+  fileCount: number;
+  totalBytes: number;
+  riskLevel: SkillRiskLevel;
+  findings: SkillRiskFinding[];
+  warnings: string[];
+  sourceHash: string;
+  alreadyInstalled: boolean;
+  installedPath?: string;
+}
+
+export interface SkillInstallResult {
+  installedPath: string;
+  updated: boolean;
+  inspection: SkillPackageInspection;
 }
 
 // ---------- connectors / MCP (x.ai/mcp/*) ----------
@@ -329,6 +368,7 @@ export interface SkillInfo {
 /** One MCP server config entry surfaced to the UI. */
 export interface McpServerEntry {
   name: string;
+  displayName?: string;
   /** "stdio" | "streamable_http". */
   transport?: string;
   /** For stdio: command. For http: URL. */
@@ -338,6 +378,38 @@ export interface McpServerEntry {
   source?: string;
   disabledReason?: string;
   vendor?: string;
+  /** Live health reported by the current session. */
+  status?: "ready" | "initializing" | "setuprequired" | "unavailable" | string;
+  live: boolean;
+  authRequired: boolean;
+  setupRequired: boolean;
+  setup?: McpSetupConfig;
+  setupValues: Record<string, string>;
+  tools: McpToolEntry[];
+  args: string[];
+  env: Record<string, string>;
+  editable: boolean;
+}
+
+export interface McpSetupConfig {
+  fields: McpSetupField[];
+  variables: Record<string, unknown>;
+}
+
+export interface McpSetupField {
+  id: string;
+  label: string;
+  type: "select";
+  required: boolean;
+  default?: string;
+  options: Array<{ label: string; value: string }>;
+}
+
+export interface McpToolEntry {
+  name: string;
+  displayName?: string;
+  description?: string;
+  enabled: boolean;
 }
 
 /** Frontend payload for creating/updating an MCP server. */
@@ -351,6 +423,38 @@ export interface McpUpsertRequest {
   env?: Record<string, string>;
   headers?: Record<string, string>;
   enabled?: boolean;
+  cwd?: string;
+  bearerTokenEnvVar?: string;
+  oauthClientId?: string;
+  oauthClientSecretEnvVar?: string;
+  oauthScopes?: string[];
+  startupTimeoutSec?: number;
+  toolTimeoutSec?: number;
+  oauth?: {
+    clientId?: string;
+    clientSecretEnvVar?: string;
+    scopes?: string[];
+    callbackPort?: number;
+  };
+  setup?: {
+    fields?: Array<Record<string, unknown>>;
+    variables?: Record<string, unknown>;
+  };
+  toolTimeouts?: Record<string, number>;
+  exposeImageBase64?: boolean;
+}
+
+export interface McpMutationResult {
+  persisted: boolean;
+  appliedLive: boolean;
+  warnings: string[];
+}
+
+export interface McpConfigSaveResult {
+  serverCount: number;
+  removedCount: number;
+  appliedLive: boolean;
+  warnings: string[];
 }
 
 /** Result of `mcp_auth_trigger` (browser OAuth flow driven by EchoAgent). */

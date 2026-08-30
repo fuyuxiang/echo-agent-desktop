@@ -228,7 +228,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
    *  given). Returns the installed server names. */
   const installConnector = useCallback(async (
     c: ConnectorItem,
-    sessionId: string,
+    sessionId?: string,
     tokenEnv?: Record<string, string>,
   ): Promise<string[]> => {
     if (!root || !c.source) return [];
@@ -358,8 +358,12 @@ export function ConnectorsTab({ pills, onToast }: Props) {
         return;
       }
 
-      // Everything else needs the config live in EchoAgent → session required.
-      const sessionId = await ensureSession();
+      // Configuration itself is session-independent. OAuth still needs a live
+      // Runtime session; token/no-auth connectors can be installed before the
+      // user has configured a model and will activate with the next session.
+      const sessionId = OAUTH_MODES.has(mode)
+        ? await ensureSession()
+        : useSessionStore.getState().sessionId ?? undefined;
       const names = await installConnector(c, sessionId);
       await refreshState();
       if (names.length === 0) {
@@ -368,13 +372,19 @@ export function ConnectorsTab({ pills, onToast }: Props) {
         return;
       }
       if (mode === "token") {
-        onToast?.(`已连接「${c.name}」（${names.length} 个服务）`);
+        onToast?.(sessionId
+          ? `已连接「${c.name}」（${names.length} 个服务）`
+          : `已配置「${c.name}」，将在下次会话启动`);
         return;
       }
 
       // OAuth-ish connectors always trigger; others only when EchoAgent flags them.
       if (OAUTH_MODES.has(mode)) {
-        await startOauthFlow(c, sessionId, names);
+        await startOauthFlow(c, sessionId!, names);
+        return;
+      }
+      if (!sessionId) {
+        onToast?.(`已配置「${c.name}」，将在下次会话启动`);
         return;
       }
       let flagged: string[] = [];
@@ -400,11 +410,13 @@ export function ConnectorsTab({ pills, onToast }: Props) {
     connectingRef.current = true;
     setTokenFormConnector(null);
     try {
-      const sessionId = await ensureSession();
+      const sessionId = useSessionStore.getState().sessionId ?? undefined;
       const names = await installConnector(c, sessionId, values);
       await refreshState();
       onToast?.(names.length > 0
-        ? `已连接「${c.name}」（${names.length} 个服务）`
+        ? sessionId
+          ? `已连接「${c.name}」（${names.length} 个服务）`
+          : `已配置「${c.name}」，将在下次会话启动`
         : `「${c.name}」无 MCP 配置`);
     } catch (e) {
       onToast?.(`连接失败：${String(e).replace(/^Error:\s*/, "")}`);

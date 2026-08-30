@@ -8,7 +8,11 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import type { SkillItem, SkillInfo } from "@/lib/types";
-import { skillsCatalogReadSkill, skillsAdd } from "@/lib/agent-client";
+import {
+  skillsCatalogReadSkill,
+  skillsInspectPackage,
+  skillsInstallPackage,
+} from "@/lib/agent-client";
 import { Markdown } from "@/components/markdown/Markdown";
 import { ConnectorIcon } from "../shared/ConnectorIcon";
 import { LetterAvatar } from "../shared/LetterAvatar";
@@ -51,13 +55,24 @@ export function SkillDetailModal({ skill, installed = [], onClose, onInstalled, 
       || s.name.toLowerCase() === skill.id.toLowerCase()),
     [installed, skill.name, skill.id],
   );
+  const canUpdate = Boolean(installedEntry && skill.version && installedEntry.version !== skill.version);
 
   const handleInstall = async () => {
-    if (installing || installedEntry) return;
+    if (installing || (installedEntry && !canUpdate)) return;
     setInstalling(true);
     try {
-      await skillsAdd(skill.sourceDir);
-      onToast?.(`已导入技能「${skill.name}」`);
+      const report = await skillsInspectPackage(skill.sourceDir);
+      let approved = false;
+      if (report.riskLevel === "high") {
+        const details = report.findings.slice(0, 5).map((finding) => `• ${finding.message}`).join("\n");
+        approved = confirm(`技能「${skill.name}」被标记为高风险：\n\n${details}\n\n确定仍要安装？`);
+        if (!approved) return;
+      } else if (report.riskLevel === "medium") {
+        const details = report.findings.slice(0, 5).map((finding) => `• ${finding.message}`).join("\n");
+        if (!confirm(`技能「${skill.name}」包含需要关注的操作：\n\n${details}\n\n检查源码后确认安装？`)) return;
+      }
+      const result = await skillsInstallPackage(skill.sourceDir, approved);
+      onToast?.(`${result.updated ? "已更新" : "已安装"}技能「${skill.name}」`);
       onInstalled?.();
     } catch (e) {
       onToast?.(`导入失败：${String(e).replace(/^Error:\s*/, "")}`);
@@ -91,7 +106,7 @@ export function SkillDetailModal({ skill, installed = [], onClose, onInstalled, 
               <h2 className="sk-detail-title">{displayName}</h2>
               {description && <p className="sk-detail-sub">{description}</p>}
               <div className="sk-detail-actions">
-                {installedEntry ? (
+                {installedEntry && !canUpdate ? (
                   <>
                     <span className="sk-detail-installed">
                       <CheckIcon size="sm" /><span>已安装</span>
@@ -103,7 +118,7 @@ export function SkillDetailModal({ skill, installed = [], onClose, onInstalled, 
                   </>
                 ) : (
                   <button type="button" className="sk-detail-install-btn" onClick={handleInstall} disabled={installing}>
-                    <AddIcon size="sm" /><span>{installing ? "导入中…" : "导入技能"}</span>
+                    <AddIcon size="sm" /><span>{installing ? "安装中…" : canUpdate ? "更新技能" : "安装技能"}</span>
                   </button>
                 )}
                 {meta.version && <span className="sk-detail-ver">v{meta.version}</span>}
