@@ -64,6 +64,7 @@ The core agent runtime is embedded directly in the Tauri process and communicate
 | **Knowledge and memory** | Persisted memory management, local-folder knowledge sources, reusable project context, and assistant definitions. |
 | **Automation** | One-time and recurring local schedules, execution history, connector selection, and per-automation permission modes. |
 | **Integrations** | WebDAV storage plus desktop, Slack, Discord, and generic webhook notifications. |
+| **Notification inbox** | The agent mail panel aggregates permission requests, folder-trust prompts, task updates, plan-mode switches, MCP status, session completion, and other lifecycle events; entries can be browsed, filtered, marked read, or cleared. |
 | **Safety and policy** | Inline approvals, folder trust, permission rules, configurable execution modes, and policy controls for models and features. |
 
 ## Quick start
@@ -87,7 +88,7 @@ When a packaged build is available, download it from [GitHub Releases](https://g
 | Protocol Buffers | A native `protoc` executable available on `PATH`, or through the `PROTOC` environment variable. |
 | Platform toolchain | macOS: Xcode Command Line Tools. Windows: Visual Studio 2022 Build Tools with **Desktop development with C++** and a Windows SDK. |
 
-The embedded runtime is included as a pinned Git submodule. Clone recursively and run the setup script so the expected revision and compatibility patches are applied.
+The embedded runtime is included as a pinned Git submodule. Clone recursively and run the setup script so the expected revision and compatibility patches are applied. The setup script checks the submodule out at the revision recorded in `patches/grok-build/` and then `git apply`s the maintained patches; building without running setup will fail because the patches have not been applied.
 
 **macOS**
 
@@ -162,6 +163,12 @@ EchoAgent keeps its application state under `~/.echo-agent/` by default. Set `EC
 - Model, MCP, WebDAV, and notification traffic is sent only to services you configure. No hosted EchoAgent account is required.
 - Tool execution may read files, modify files, or run commands. Use permission rules and restricted modes for repositories or data you do not fully trust.
 - Never commit `~/.echo-agent/config.toml`, copied credentials, or runtime state to version control.
+
+### Data migration
+
+On first launch, EchoAgent performs a one-time import from the legacy `~/.grok/` data directory: any files or subdirectories that are missing under `~/.echo-agent/` are copied over, and a `.legacy-data-migrated` marker is written so the import never runs again. Existing files in `~/.echo-agent/` always win — the migration never overwrites them — and the legacy directory is left in place for rollback.
+
+When both `ECHO_AGENT_HOME` and `GROK_HOME` are set, the migration source follows `GROK_HOME`; the embedded runtime is also rewired at startup to use the `ECHO_AGENT_HOME` path so subsequent writes never land in the legacy location.
 
 ## Architecture
 
@@ -262,7 +269,7 @@ Yes, when the local server exposes a compatible OpenAI or Anthropic API. Add it 
 <details>
 <summary><strong>Does EchoAgent work on Linux?</strong></summary>
 
-Linux packages are not currently maintained. The frontend and much of the Rust code are portable, but desktop integration and packaging still need platform-specific work.
+Linux packages are not currently maintained. The frontend and most of the Rust code are already portable — `tauri-plugin-autostart` and other core dependencies are enabled on macOS, Windows, and Linux simultaneously, and the build scripts and configuration layer are written with Linux in mind. File dialogs, system notifications, and the packaging pipeline still need platform-specific work, however; contributions from anyone with a Linux environment are welcome.
 
 </details>
 
