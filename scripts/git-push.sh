@@ -4,7 +4,7 @@
 # Usage:
 #   bash scripts/git-push.sh
 #   bash scripts/git-push.sh --remote upstream
-#   bash scripts/git-push.sh v0.15.0
+#   bash scripts/git-push.sh v0.3.8
 #   bash scripts/git-push.sh --tags --force-with-lease
 
 set -euo pipefail
