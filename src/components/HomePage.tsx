@@ -8,6 +8,7 @@ import { MoreIcon } from "@/foundation/components/Icon/icons";
 import { useHorizontalScroll } from "./use-horizontal-scroll";
 import { useSessionsStore, HOME_DRAFT_KEY } from "@/stores/sessions-store";
 import { usePendingExpertStore } from "@/stores/pending-expert-store";
+import logoMarkUrl from "@/assets/logo-mark.svg";
 import {
   COLLAPSED_VISIBLE_COUNT,
   HOME_MODES,
@@ -175,6 +176,16 @@ export function HomePage({
     <div className="home">
       <div className="home__inner">
         <header className="home__header">
+          <div className="home__eyebrow">
+            <img
+              className="home__brand-mark"
+              src={logoMarkUrl}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+            />
+            <span>AI Agent Workspace</span>
+          </div>
           <h1 className="home__title">EchoAgent</h1>
           <p className="home__subtitle">{mode.subtitle}</p>
         </header>

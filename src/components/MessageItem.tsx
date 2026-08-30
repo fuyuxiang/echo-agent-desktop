@@ -7,6 +7,7 @@ import { useTheme } from "./ThemeProvider";
 import { useFeedbackStore, type FeedbackRating } from "@/stores/feedback-store";
 import type { ChatMessage, ToolCallView } from "@/stores/session-store";
 import { EXPERT_PERSONA_BEGIN, EXPERT_PERSONA_END } from "@/App";
+import logoMarkUrl from "@/assets/logo-mark.svg";
 import {
   createWebSpeechTtsProvider,
   getActiveTts,
@@ -193,7 +194,9 @@ export function MessageItem({
     <div className="msg msg--assistant">
       <div>
         <div className="msg__header">
-          <span className="msg__avatar">E</span>
+          <span className="msg__avatar">
+            <img src={logoMarkUrl} alt="" aria-hidden="true" draggable={false} />
+          </span>
           <span className="msg__name">EchoAgent</span>
           {/* Hover actions — inline in header for assistant messages */}
           {message.complete && (
