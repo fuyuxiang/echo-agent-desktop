@@ -4,7 +4,7 @@
  * 对应 EchoAgent automation-panel/index.tsx 的 EditModal：
  *  - 头部：闹钟图标面包屑「自动化 / 添加自动化任务」+ 取消 / 保存（黑）
  *  - 名称、工作空间(可选)、提示词（底部工具条：模型/技能/召唤专家/权限）
- *  - 连接器、执行频率（周期/按间隔/单次）、生效日期区间、推送到微信小程序
+ *  - 连接器、执行频率（周期/按间隔/单次）、生效日期区间、完成通知
  *  - 编辑态：创建时间 + 运行历史
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -321,10 +321,12 @@ function RunHistory({
   records,
   onArchive,
   onDelete,
+  onOpenSession,
 }: {
   records: AutomationRunRecord[];
   onArchive: (id: string) => void;
   onDelete: (id: string) => void;
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const [filter, setFilter] = useState<HistoryFilter>("all");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -393,9 +395,22 @@ function RunHistory({
           return (
             <div
               key={item.id}
-              className={`atm-run-history-item${canArchive ? " atm-run-history-item--archivable" : ""}${item.archived ? " atm-run-history-item--archived" : ""}`}
+              className={`atm-run-history-item${canArchive ? " atm-run-history-item--archivable" : ""}${item.archived ? " atm-run-history-item--archived" : ""}${item.sessionId ? " atm-run-history-item--openable" : ""}`}
+              title={item.error || (item.sessionId ? "打开本次自动化会话" : undefined)}
+              role={item.sessionId ? "button" : undefined}
+              tabIndex={item.sessionId ? 0 : undefined}
+              onClick={() => item.sessionId && onOpenSession?.(item.sessionId)}
+              onKeyDown={(event) => {
+                if (item.sessionId && (event.key === "Enter" || event.key === " ")) {
+                  event.preventDefault();
+                  onOpenSession?.(item.sessionId);
+                }
+              }}
             >
-              <span className="atm-run-history-item-name">{item.automationName}</span>
+              <span className="atm-run-history-item-name">
+                {item.automationName}
+                {item.error && <span className="atm-run-history-item-error"> · {item.error}</span>}
+              </span>
               <div className="atm-run-history-item-right">
                 <span className="atm-run-history-item-time">
                   {new Date(item.finishedAt || item.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -473,6 +488,7 @@ export function AutomationEditPage({
   onOpenConnectorSettings,
   onArchiveRecord,
   onDeleteRecord,
+  onOpenSession,
 }: {
   mode: "create" | "edit";
   draft: AutomationDraft;
@@ -492,6 +508,7 @@ export function AutomationEditPage({
   onOpenConnectorSettings?: () => void;
   onArchiveRecord: (id: string) => void;
   onDeleteRecord: (id: string) => void;
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const isEditMode = mode === "edit";
   const set = (patch: Partial<AutomationDraft>) => setDraft({ ...draft, ...patch });
@@ -807,10 +824,11 @@ export function AutomationEditPage({
                 type="number"
                 className="atm-modal-input atm-schedule-interval-input"
                 min={1}
+                max={24}
                 value={String(draft.schedule.intervalHours)}
                 disabled={saving}
                 onChange={(e) => {
-                  const intervalHours = Math.max(1, Number(e.target.value) || 1);
+                  const intervalHours = Math.min(24, Math.max(1, Number(e.target.value) || 1));
                   setSchedule({
                     freq: "HOURLY",
                     interval: intervalHours,
@@ -820,6 +838,16 @@ export function AutomationEditPage({
                 }}
               />
               <span className="atm-schedule-interval-unit">小时</span>
+              <span className="atm-schedule-interval-unit">每天从</span>
+              <TimePicker
+                value={`${pad2(draft.schedule.byhour)}:${pad2(draft.schedule.byminute)}`}
+                disabled={saving}
+                onChange={(next) => {
+                  const { hour, minute } = parseTimeValue(next);
+                  setSchedule({ byhour: hour, byminute: minute });
+                }}
+              />
+              <span className="atm-schedule-interval-unit">起</span>
               <IntervalDayChips
                 values={draft.schedule.byday}
                 disabled={saving}
@@ -867,7 +895,7 @@ export function AutomationEditPage({
               <span className="atm-toggle-text">完成后推送到通知渠道</span>
               <span
                 className="atm-push-info-icon"
-                title="开启后，推送会通过安全链路把文件同步到云端，以方便在小程序端能接收到数据。"
+                title="开启后，会发送系统桌面通知，并同步到「通知渠道」中已启用的 Slack、Discord 或 Webhook 渠道。"
               >
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
                   <path
@@ -901,7 +929,12 @@ export function AutomationEditPage({
 
         {/* 运行历史（编辑态） */}
         {isEditMode && (
-          <RunHistory records={records} onArchive={onArchiveRecord} onDelete={onDeleteRecord} />
+          <RunHistory
+            records={records}
+            onArchive={onArchiveRecord}
+            onDelete={onDeleteRecord}
+            onOpenSession={onOpenSession}
+          />
         )}
       </div>
     </div>

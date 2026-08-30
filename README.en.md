@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app-icon.png" width="112" height="112" alt="EchoAgent logo" />
+  <img src="app-icon.png" width="112" alt="EchoAgent logo" />
 </p>
 
 <h1 align="center">EchoAgent</h1>

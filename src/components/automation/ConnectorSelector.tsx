@@ -1,5 +1,5 @@
 /**
- * ConnectorSelector — 连接器多选（勾选即授权该连接器在任务中免确认使用）。
+ * ConnectorSelector — 连接器多选（运行前校验并作为首选外部能力）。
  *
  * 复刻 EchoAgent connector-selector.tsx：触发框 + 复选下拉 +
  * 「管理连接器」底部入口。数据源为 EchoAgent 的 MCP 连接器（mcp_list）。
@@ -66,7 +66,7 @@ export function ConnectorSelector({
     <div className="connector-selector-field" ref={containerRef}>
       <label className="atm-modal-label">
         连接器
-        <span className="atm-modal-hint atm-modal-hint-inline">(勾选即授权该连接器在任务中免确认使用)</span>
+        <span className="atm-modal-hint atm-modal-hint-inline">(运行前会确认所选连接器已启用)</span>
       </label>
       <button
         type="button"

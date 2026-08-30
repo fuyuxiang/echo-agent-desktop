@@ -74,6 +74,14 @@ pub async fn skills_list(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
+    skills_list_with_tx(&tx, cwd).await
+}
+
+/// Internal form used by automations for execution-time capability checks.
+pub async fn skills_list_with_tx(
+    tx: &xai_acp_lib::AcpAgentTx,
+    cwd: Option<String>,
+) -> Result<Vec<SkillInfo>, String> {
     // EchoAgent's `x.ai/skills/list` schema requires `cwd` to be a *string* when
     // present (it rejects `null` with -32602). Omit the key entirely when the
     // caller has no cwd so EchoAgent falls back to its own default.
@@ -86,11 +94,11 @@ pub async fn skills_list(
     // fall back to `x.ai/skills/list` if the method is unavailable on this
     // EchoAgent build.
     let res: Result<SkillsListResponse, _> =
-        call_ext(&tx, "x.ai/skills/config", params.clone()).await;
+        call_ext(tx, "x.ai/skills/config", params.clone()).await;
     let skills = match res {
         Ok(v) => v.into_skills(),
         Err(_) => {
-            let v: SkillsListResponse = call_ext(&tx, "x.ai/skills/list", params)
+            let v: SkillsListResponse = call_ext(tx, "x.ai/skills/list", params)
                 .await
                 .map_err(|e| e.to_string())?;
             v.into_skills()

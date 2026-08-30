@@ -520,6 +520,17 @@
   overflow: auto;
   padding: 0 12px 20px;
 }
+.atm-background-notice {
+  flex-shrink: 0;
+  margin: 4px 8px 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--echo-color-primary, #126bff) 20%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--echo-color-primary, #126bff) 6%, transparent);
+  color: var(--atm-text-secondary);
+  font-size: 12px;
+  line-height: 20px;
+}
 .atm-task-group-label {
   flex-shrink: 0;
   height: 26px;
@@ -743,6 +754,13 @@
 .atm-records-group-chevron--collapsed { transform: rotate(-90deg); }
 .atm-inbox-row:hover .atm-row-right-text { display: none; }
 .atm-inbox-row:hover .atm-row-hover-actions { display: flex; }
+.atm-inbox-row--openable,
+.atm-run-history-item--openable { cursor: pointer; }
+.atm-inbox-row--openable:focus-visible,
+.atm-run-history-item--openable:focus-visible {
+  outline: 2px solid var(--echo-color-primary, #126bff);
+  outline-offset: -2px;
+}
 .atm-archived { opacity: 1; }
 
 /* ---------- 详情页（截图 2：添加 / 编辑自动化任务） ---------- */
@@ -1590,6 +1608,7 @@
   font-size: 14px;
   line-height: 22px;
 }
+.atm-run-history-item-error { color: var(--atm-result-failed-text); }
 .atm-run-history-item-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .atm-run-history-item-time { color: var(--echo-color-text-tertiary, rgba(0, 0, 0, 0.5)); font-size: 14px; line-height: 22px; }
 .atm-run-history-item-status { width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; }
