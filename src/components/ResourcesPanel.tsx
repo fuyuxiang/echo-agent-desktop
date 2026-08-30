@@ -1,7 +1,7 @@
 /**
  * 资料库面板 - 对接 EchoAgent memory (~/.echo-agent/memory/)
  *
- * 这是 EchoAgent "更多/资料库·灵感" 的资料库部分。
+ * 这是 EchoAgent「更多 / 个人记忆」中的记忆管理页面。
  * EchoAgent 把跨会话记忆写到 ~/.echo-agent/memory/MEMORY.md（global）和
  * <cwd>/.echo-agent/memory/（workspace），每条 markdown 文件一条记忆。
  *
@@ -33,7 +33,6 @@ import type { MemoryEntry } from "@/lib/types";
 interface ResourcesPanelProps {
   cwd?: string;
   onToast?: (msg: string) => void;
-  initialTab?: "library" | "inspiration";
 }
 export function ResourcesPanel({ cwd, onToast }: ResourcesPanelProps) {
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
@@ -135,7 +134,10 @@ export function ResourcesPanel({ cwd, onToast }: ResourcesPanelProps) {
   return (
     <div className="resources-panel">
       <div className="resources-panel__header">
-        <h2 className="resources-panel__title">资料库</h2>
+        <div>
+          <h2 className="resources-panel__title">个人记忆</h2>
+          <p className="resources-panel__subtitle">管理 EchoAgent 长期保留的偏好、事实与工作上下文</p>
+        </div>
           <div className="resources-panel__header-actions">
             <button
               className="resources-panel__action-btn"

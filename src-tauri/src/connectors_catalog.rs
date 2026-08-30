@@ -266,7 +266,7 @@ fn root_has_manifest(root: &Path) -> bool {
 #[tauri::command]
 pub async fn connectors_default_root() -> Result<String, String> {
     for r in candidate_roots() {
-        if root_has_manifest(&r) {
+        if crate::paths::reject_legacy_workbuddy_path(&r).is_ok() && root_has_manifest(&r) {
             return Ok(r.to_string_lossy().into_owned());
         }
     }
@@ -278,6 +278,7 @@ pub async fn connectors_default_root() -> Result<String, String> {
 #[tauri::command]
 pub async fn connectors_list_roots(root: String) -> Result<Vec<String>, String> {
     let base = PathBuf::from(&root);
+    crate::paths::reject_legacy_workbuddy_path(&base)?;
     let mut hits = Vec::new();
     if root_has_manifest(&base) {
         hits.push(base.to_string_lossy().into_owned());
@@ -304,7 +305,7 @@ pub async fn connectors_load(root: Option<String>) -> Result<ConnectorCatalog, S
         _ => {
             let mut found = PathBuf::new();
             for r in candidate_roots() {
-                if root_has_manifest(&r) {
+                if crate::paths::reject_legacy_workbuddy_path(&r).is_ok() && root_has_manifest(&r) {
                     found = r;
                     break;
                 }
@@ -315,6 +316,7 @@ pub async fn connectors_load(root: Option<String>) -> Result<ConnectorCatalog, S
             found
         }
     };
+    crate::paths::reject_legacy_workbuddy_path(&root)?;
     let manifest_path = root.join(".echo-agent-connector").join("connectors.json");
     let bytes = std::fs::read(&manifest_path).map_err(|e| format!("读取 manifest 失败：{e}"))?;
     let manifest: Value =
@@ -405,6 +407,7 @@ fn b64(bytes: &[u8]) -> String {
 #[tauri::command]
 pub async fn connectors_icon(path: String) -> Result<String, String> {
     let src = PathBuf::from(&path);
+    crate::paths::reject_legacy_workbuddy_path(&src)?;
     if !src.is_file() {
         return Err("图标文件不存在".into());
     }
@@ -438,6 +441,7 @@ pub async fn connectors_read_mcp_config(root: String, source: String) -> Result<
         .join("connectors")
         .join(&source)
         .join("mcp.json");
+    crate::paths::reject_legacy_workbuddy_path(&p)?;
     if !p.is_file() {
         return Ok(String::new());
     }

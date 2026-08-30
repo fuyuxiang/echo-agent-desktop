@@ -296,19 +296,21 @@ export function ChatView({
             </button>
           </div>
         )}
-        {/* Workspace indicator / switcher (对齐 EchoAgent 顶栏工作目录切换)。 */}
-        {cwd && workspaces && onSelectWorkspace && (
-          <div className="chatview__workspace-bar">
-            <WorkspacePicker
-              cwd={cwd}
-              workspaces={workspaces}
-              onSelectWorkspace={onSelectWorkspace}
-            />
+        {/* Context and session tools share one responsive utility bar. */}
+        <div className="chatview__utility-bar">
+          <div className="chatview__utility-context">
+            {cwd && workspaces && onSelectWorkspace && (
+              <div className="chatview__workspace-bar">
+                <WorkspacePicker
+                  cwd={cwd}
+                  workspaces={workspaces}
+                  onSelectWorkspace={onSelectWorkspace}
+                />
+              </div>
+            )}
           </div>
-        )}
-        {/* Plan toggle: floating button on the right when there's a plan. */}
-        {plan && plan.entries.length > 0 && (
-          <>
+          <div className="chatview__utility-actions">
+            {plan && plan.entries.length > 0 && (
             <button
               className={`chatview__plan-toggle ${planOpen ? "chatview__plan-toggle--active" : ""}`}
               onClick={() => setPlanOpen((v) => !v)}
@@ -317,55 +319,146 @@ export function ChatView({
               计划 {plan.entries.filter((e) => e.status === "completed").length}/
               {plan.entries.length}
             </button>
-            {planOpen && (
-              <div className="chatview__plan-panel">
-                <PlanPanel
-                  sessionId={sessionId ?? undefined}
-                  onSend={onSend}
-                  onToast={onToast}
-                />
-              </div>
             )}
-          </>
-        )}
 
-        {/* Artifacts entry — always available when there are outputs. */}
-        {artifacts.length > 0 && (
-          <button
-            type="button"
-            className={
-              "chatview__artifacts-toggle" +
-              (panelOpen && panelMode === "artifacts"
-                ? " chatview__artifacts-toggle--active"
-                : "")
-            }
-            onClick={() => {
-              if (panelOpen && panelMode === "artifacts") {
-                setPanelOpen(false);
-              } else {
-                handleOpenArtifacts();
+            {artifacts.length > 0 && (
+              <button
+                type="button"
+                className={
+                  "chatview__artifacts-toggle" +
+                  (panelOpen && panelMode === "artifacts"
+                    ? " chatview__artifacts-toggle--active"
+                    : "")
+                }
+                onClick={() => {
+                  if (panelOpen && panelMode === "artifacts") {
+                    setPanelOpen(false);
+                  } else {
+                    handleOpenArtifacts();
+                  }
+                }}
+                title="本会话产物"
+              >
+                产物 {artifacts.length}
+              </button>
+            )}
+
+            {messages.length > 0 && (
+              <button
+                type="button"
+                className={
+                  "chatview__artifacts-toggle" +
+                  (findOpen ? " chatview__artifacts-toggle--active" : "")
+                }
+                onClick={() => setFindOpen((v) => !v)}
+                title="在当前对话中查找 (Ctrl/Cmd+F)"
+              >
+                查找
+              </button>
+            )}
+
+            {messages.length > 0 && (
+              <button
+                type="button"
+                className={
+                  "chatview__artifacts-toggle" +
+                  (fileChangesOpen ? " chatview__artifacts-toggle--active" : "")
+                }
+                onClick={() => setFileChangesOpen((v) => !v)}
+                title="本会话文件变更"
+              >
+                变更
+              </button>
+            )}
+
+            {messages.length > 0 && (
+              <button
+                type="button"
+                className={
+                  "chatview__artifacts-toggle" +
+                  (subagentsOpen ? " chatview__artifacts-toggle--active" : "")
+                }
+                onClick={() => setSubagentsOpen((v) => !v)}
+                title="子代理运行时"
+              >
+                子代理
+              </button>
+            )}
+
+            {messages.length > 0 && (
+              <button
+                type="button"
+                className={
+                  "chatview__artifacts-toggle" +
+                  (teamsOpen ? " chatview__artifacts-toggle--active" : "")
+                }
+                onClick={() => setTeamsOpen((v) => !v)}
+                title="团队状态"
+              >
+                团队
+              </button>
+            )}
+
+            {cwd && (
+              <button
+                type="button"
+                className={
+                  "chatview__artifacts-toggle" +
+                  (panelOpen && panelMode === "fileTree"
+                    ? " chatview__artifacts-toggle--active"
+                    : "")
+                }
+                onClick={() => {
+                  if (panelOpen && panelMode === "fileTree") {
+                    setPanelOpen(false);
+                  } else {
+                    setPanelMode("fileTree");
+                    setPanelOpen(true);
+                  }
+                }}
+                title="工作区文件树"
+              >
+                文件树
+              </button>
+            )}
+
+            <button
+              type="button"
+              className={
+                "chatview__artifacts-toggle" +
+                (panelOpen && panelMode === "browser"
+                  ? " chatview__artifacts-toggle--active"
+                  : "")
               }
-            }}
-            title="本会话产物"
-          >
-            产物 {artifacts.length}
-          </button>
+              onClick={() => {
+                if (panelOpen && panelMode === "browser") {
+                  setPanelOpen(false);
+                } else {
+                  setPanelMode("browser");
+                  setPanelOpen(true);
+                }
+              }}
+              title="网页预览"
+            >
+              浏览器
+            </button>
+
+            {messages.length > 0 && (
+              <ShareMenu messages={messages} onDone={onToast} />
+            )}
+          </div>
+        </div>
+
+        {plan && plan.entries.length > 0 && planOpen && (
+          <div className="chatview__plan-panel">
+            <PlanPanel
+              sessionId={sessionId ?? undefined}
+              onSend={onSend}
+              onToast={onToast}
+            />
+          </div>
         )}
 
-        {/* 会话内查找入口 + 查找条(对齐 EchoAgent chat-search)。 */}
-        {messages.length > 0 && (
-          <button
-            type="button"
-            className={
-              "chatview__artifacts-toggle" +
-              (findOpen ? " chatview__artifacts-toggle--active" : "")
-            }
-            onClick={() => setFindOpen((v) => !v)}
-            title="在当前对话中查找 (Ctrl/Cmd+F)"
-          >
-            查找
-          </button>
-        )}
         <FindBar
           messages={messages}
           open={findOpen}
@@ -377,97 +470,6 @@ export function ChatView({
           onHitsChange={setFindHits}
           onActiveChange={setFindCurrent}
         />
-
-        {/* 文件变更聚合入口(对齐 EchoAgent file-changes-panel)。 */}
-        {messages.length > 0 && (
-          <button
-            type="button"
-            className={
-              "chatview__artifacts-toggle" +
-              (fileChangesOpen ? " chatview__artifacts-toggle--active" : "")
-            }
-            onClick={() => setFileChangesOpen((v) => !v)}
-            title="本会话文件变更"
-          >
-            变更
-          </button>
-        )}
-        {/* 子代理运行时入口(对齐 EchoAgent team-runtime)。 */}
-        {messages.length > 0 && (
-          <button
-            type="button"
-            className={
-              "chatview__artifacts-toggle" +
-              (subagentsOpen ? " chatview__artifacts-toggle--active" : "")
-            }
-            onClick={() => setSubagentsOpen((v) => !v)}
-            title="子代理运行时"
-          >
-            子代理
-          </button>
-        )}
-        {/* 团队状态入口：展示已创建的专家团（create_team 工具结果）。 */}
-        {messages.length > 0 && (
-          <button
-            type="button"
-            className={
-              "chatview__artifacts-toggle" +
-              (teamsOpen ? " chatview__artifacts-toggle--active" : "")
-            }
-            onClick={() => setTeamsOpen((v) => !v)}
-            title="团队状态"
-          >
-            团队
-          </button>
-        )}
-        {/* 文件树入口(对齐 EchoAgent fileTree 视图)：打开工作区面板的文件树视图。 */}
-        {cwd && (
-          <button
-            type="button"
-            className={
-              "chatview__artifacts-toggle" +
-              (panelOpen && panelMode === "fileTree"
-                ? " chatview__artifacts-toggle--active"
-                : "")
-            }
-            onClick={() => {
-              if (panelOpen && panelMode === "fileTree") {
-                setPanelOpen(false);
-              } else {
-                setPanelMode("fileTree");
-                setPanelOpen(true);
-              }
-            }}
-            title="工作区文件树"
-          >
-            文件树
-          </button>
-        )}
-        {/* 浏览器预览入口(对齐 EchoAgent preview 视图)：打开工作区面板的浏览器视图。 */}
-        <button
-          type="button"
-          className={
-            "chatview__artifacts-toggle" +
-            (panelOpen && panelMode === "browser"
-              ? " chatview__artifacts-toggle--active"
-              : "")
-          }
-          onClick={() => {
-            if (panelOpen && panelMode === "browser") {
-              setPanelOpen(false);
-            } else {
-              setPanelMode("browser");
-              setPanelOpen(true);
-            }
-          }}
-          title="网页预览"
-        >
-          浏览器
-        </button>
-        {/* 分享 / 导出本会话(对齐 EchoAgent share:*)。 */}
-        {messages.length > 0 && (
-          <ShareMenu messages={messages} onDone={onToast} />
-        )}
 
         <div className="chatview__scroll" ref={scrollRef}>
           <div className="chatview__inner">

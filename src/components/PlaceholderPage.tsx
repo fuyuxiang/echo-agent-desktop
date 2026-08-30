@@ -1,37 +1,27 @@
 import { AgentToolIcon } from "@/foundation/components/Icon/icons";
-import { LocalAssistantView } from "./LocalAssistantView";
 import { ProjectsPanel } from "./ProjectsPanel";
 import { ExpertsPanel } from "./experts-panel";
 import { AutomationPanel } from "./AutomationPanel";
 import { ResourcesPanel } from "./ResourcesPanel";
-import { InspirationPanel } from "./InspirationPanel";
 import { MyFilesPanel } from "./MyFilesPanel";
 import { PluginsPanel } from "./PluginsPanel";
 import { MarketplacePanel } from "./MarketplacePanel";
-import { DiscoverPanel } from "./DiscoverPanel";
 import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
-import { BrowserPreview } from "./BrowserPreview";
 import { UsageQuotaPanel } from "./UsageQuotaPanel";
 import { NotifyChannelsPanel } from "./NotifyChannelsPanel";
-import { PolicySettingsPanel } from "./PolicySettingsPanel";
 import { CloudStoragePanel } from "./CloudStoragePanel";
 import { OrganizationMemoryPanel } from "./OrganizationMemoryPanel";
-import type { AgentEntry } from "@/lib/types";
-import type { ModelOption } from "./ModelSelector";
 import type { ProjectMeta } from "@/stores/projects-store";
 import { openExternalUrl, openLocalPath } from "@/lib/agent-client";
 
 interface PlaceholderPageProps {
   label: string;
-  onPlaceholder?: (label: string) => void;
   /** Navigate to another sidebar view (e.g. 自动化 → 管理连接器 → 专家·技能·连接器). */
   onNavigate?: (label: string) => void;
   /** Open a session produced by an automation run record. */
   onOpenSession?: (sessionId: string) => void;
   /** Navigate to the home page (used after expert summon). */
   onGoHome?: () => void;
-  /** Start a new chat guided by an expert/assistant definition. */
-  onStartWithExpert?: (agent: AgentEntry, meta?: { expertId?: string; source?: string }) => void;
   /** Surface transient feedback (errors, success toasts). */
   onToast?: (message: string) => void;
   /** Current cwd (for memory workspace scope, projects panel). */
@@ -40,30 +30,15 @@ interface PlaceholderPageProps {
   onSelectWorkspace?: (cwd: string) => void;
   /** Current session id (for plugins/marketplace actions that need a session). */
   sessionId?: string;
-  /** Discover launcher: open a new session + send prompt (optionally with agent). */
-  onLaunch?: (prompt: string, agent?: AgentEntry) => void;
-  /** 本地助理页：发送消息（新建会话）。 */
-  onSend?: (text: string) => boolean | void | Promise<boolean | void>;
-  /** 本地助理页：是否流式中。 */
-  streaming?: boolean;
-  /** 本地助理页：API 是否就绪。 */
-  apiReady?: boolean;
-  /** 本地助理页：打开设置。 */
-  onOpenSettings?: () => void;
-  /** 本地助理页：模型选择器（与聊天页一致）。 */
-  modelId?: string;
-  models?: ModelOption[];
-  onModelChange?: (id: string) => void;
   /** 项目页：进入项目（新建会话并注入说明）。 */
   onStartProject?: (project: ProjectMeta) => void;
   /** 项目页：在项目中新建对话（创建真实 EchoAgent 会话）。 */
   onStartProjectConversation?: (projectId: string, message: string) => void;
 }
 
-/** EchoAgent 独有功能面板（助理/专家·技能·连接器/项目/自动化/资料库/插件·市场/发现）。 */
+/** EchoAgent 功能面板（项目/组织记忆/专家能力/自动化/个人记忆/插件市场）。 */
 export function PlaceholderPage({
   label,
-  onPlaceholder,
   onNavigate,
   onOpenSession,
   onGoHome,
@@ -71,32 +46,9 @@ export function PlaceholderPage({
   cwd,
   onSelectWorkspace,
   sessionId,
-  onLaunch,
-  onSend,
-  streaming,
-  apiReady,
-  onOpenSettings,
-  modelId,
-  models,
-  onModelChange,
   onStartProject,
   onStartProjectConversation,
 }: PlaceholderPageProps) {
-  if (label === "助理") {
-    return (
-      <LocalAssistantView
-        onSend={onSend ?? (() => {})}
-        streaming={streaming ?? false}
-        apiReady={apiReady ?? true}
-        onOpenSettings={onOpenSettings}
-        onPlaceholder={onPlaceholder}
-        modelId={modelId}
-        models={models}
-        onModelChange={onModelChange}
-      />
-    );
-  }
-
   if (label === "项目") {
     return (
       <ProjectsPanel
@@ -122,16 +74,6 @@ export function PlaceholderPage({
     return <AutomationPanel onToast={onToast} onNavigate={onNavigate} onOpenSession={onOpenSession} cwd={cwd} />;
   }
 
-  if (label === "发现") {
-    return (
-      <DiscoverPanel
-        sessionId={sessionId}
-        onLaunch={onLaunch}
-        onToast={onToast}
-      />
-    );
-  }
-
   if (label === "插件·市场") {
     return (
       <PluginsMarketTabs
@@ -141,12 +83,8 @@ export function PlaceholderPage({
     );
   }
 
-  if (label === "更多" || label === "资料库") {
-    return <ResourcesPanel cwd={cwd} onToast={onToast} initialTab="library" />;
-  }
-
-  if (label === "灵感") {
-    return <InspirationPanel cwd={cwd} onToast={onToast} onLaunch={onLaunch ? (p: string) => onLaunch(p) : undefined} />;
+  if (label === "更多" || label === "资料库" || label === "个人记忆") {
+    return <ResourcesPanel cwd={cwd} onToast={onToast} />;
   }
 
   if (label === "我的文件") {
@@ -171,15 +109,6 @@ export function PlaceholderPage({
     );
   }
 
-  // 网页预览(对齐 EchoAgent browser-preview)。
-  if (label === "网页预览") {
-    return (
-      <div className="placeholder-page placeholder-page--panel">
-        <BrowserPreview url="" />
-      </div>
-    );
-  }
-
   // 用量配额(对齐 EchoAgent credit-usage)。
   if (label === "用量统计") {
     return (
@@ -194,15 +123,6 @@ export function PlaceholderPage({
     return (
       <div className="placeholder-page placeholder-page--panel">
         <NotifyChannelsPanel onToast={onToast} />
-      </div>
-    );
-  }
-
-  // 策略设置(对齐 EchoAgent 企业策略)。
-  if (label === "策略设置") {
-    return (
-      <div className="placeholder-page placeholder-page--panel">
-        <PolicySettingsPanel onToast={onToast} />
       </div>
     );
   }

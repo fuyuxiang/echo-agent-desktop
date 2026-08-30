@@ -14,11 +14,16 @@ import { ExpertDetailModal } from "./ExpertDetailModal";
 import { FeaturedScenes } from "./FeaturedScenes";
 import { usePendingExpertStore } from "@/stores/pending-expert-store";
 import { AssistantsPanel } from "../../AssistantsPanel";
+import {
+  clearCatalogRoot,
+  isLegacyWorkBuddyPath,
+  readCatalogRoot,
+  writeCatalogRoot,
+} from "@/lib/catalog-root-storage";
 
 type ListTab = "expert" | "team";
 type Sort = "popular" | "newest";
 const OPC_ID = "00-OPC";
-const LS_ROOT = "expertsRoot";
 /** Manifest label overrides to match the target UI exactly. */
 const LABEL_OVERRIDE: Record<string, string> = { "13-TencentZone": "腾讯专家" };
 
@@ -39,23 +44,26 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
   const [modalExpert, setModalExpert] = useState<ExpertItem | null>(null);
   const setPendingExpert = usePendingExpertStore((s) => s.set);
 
-  const [root, setRoot] = useState<string>(() => {
-    try { return localStorage.getItem(LS_ROOT) || ""; } catch { return ""; }
-  });
+  const [root, setRoot] = useState<string>(() => readCatalogRoot("experts"));
   const [catalog, setCatalog] = useState<ExpertCatalog | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [needPick, setNeedPick] = useState(false);
 
-  const persist = (r: string) => { try { localStorage.setItem(LS_ROOT, r); } catch { /* ignore */ } };
-
   const loadCatalog = useCallback(async (r: string): Promise<boolean> => {
+    if (isLegacyWorkBuddyPath(r)) {
+      clearCatalogRoot("experts");
+      setRoot("");
+      setCatalog(null);
+      setError("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
+      return false;
+    }
     setLoading(true); setError(""); setNeedPick(false);
     try {
       const c = await expertsLoad(r);
       setCatalog(c);
       setRoot(c.root || r);
-      persist(c.root || r);
+      writeCatalogRoot("experts", c.root || r);
       return true;
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
@@ -70,12 +78,21 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
   useEffect(() => {
     let disposed = false;
     (async () => {
-      if (root) { loadCatalog(root); return; }
+      if (root) {
+        const loaded = await loadCatalog(root);
+        if (disposed || loaded) return;
+        clearCatalogRoot("experts");
+        setRoot("");
+      }
       try {
         const d = await expertsDefaultRoot();
         if (disposed) return;
-        if (d) loadCatalog(d);
-        else setNeedPick(true);
+        if (d && !isLegacyWorkBuddyPath(d)) {
+          const loaded = await loadCatalog(d);
+          if (!disposed && !loaded) setNeedPick(true);
+        } else {
+          setNeedPick(true);
+        }
       } catch {
         if (!disposed) setNeedPick(true);
       }
@@ -152,6 +169,10 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
       });
       const pick = Array.isArray(sel) ? sel[0] : sel;
       if (!pick) return;
+      if (isLegacyWorkBuddyPath(pick)) {
+        onToast?.("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
+        return;
+      }
       if (await loadCatalog(pick)) onToast?.(`已切换专家数据目录：${pick}`);
     } catch { /* cancelled */ }
   }, [root, loadCatalog, onToast]);

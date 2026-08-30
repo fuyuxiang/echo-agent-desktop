@@ -663,38 +663,6 @@ export type AutomationScheduleType = "recurring" | "once";
 export type AutomationPermissionMode = "fullAccess" | "default";
 export type AutomationStatus = "ACTIVE" | "PAUSED";
 
-// ---------- inspiration (灵感面板) ----------
-
-/** Basic card returned by EchoAgent's inspiration generator. */
-export interface InspirationCard {
-  title: string;
-  summary: string;
-  takeaway: string;
-}
-
-/** Rich card used by the InspirationPanel UI (extends EchoAgent output). */
-export interface InspirationRichCard {
-  cardId: string;
-  title: string;
-  summary: string;
-  detail?: string;
-  category: string;
-  cover?: string;
-  prompt?: string;
-  actions?: { label: string; type: string; payload: string }[];
-  read?: boolean;
-  saved?: boolean;
-  createdAt?: string;
-}
-
-export interface InspirationStarted {
-  sessionId: string;
-  category: string;
-  count: number;
-  /** Generated backend prompt. Send only after stream listeners are live. */
-  prompt: string;
-}
-
 // ---------- xAI API Key 管理 ----------
 // EchoAgent OAuth 账户类型（AccountInfo/SubscriptionStatus/LogoutResult）已随
 // OAuth 功能一并移除；EchoAgent 现仅保留 xAI API Key（BYOK）认证。
@@ -770,7 +738,7 @@ export interface MarketplaceListResponse {
   sources: MarketplaceScanResult[];
 }
 
-// ---------- notification log (智能体邮箱 → 会话通知中心) ----------
+// ---------- notification center ----------
 
 export type NotificationKind =
   | "permission"

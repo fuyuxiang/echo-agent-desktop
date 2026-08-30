@@ -78,9 +78,12 @@ export function HomePage({
               aria-hidden="true"
               draggable={false}
             />
-            <span>AI Agent Workspace</span>
+            <span>EchoAgent · 本地 Agent 工作台</span>
           </div>
-          <h1 className="home__title">EchoAgent</h1>
+          <h1 className="home__title">从一个清晰的目标开始</h1>
+          <p className="home__subtitle">
+            描述你想完成的工作，EchoAgent 会结合当前工作区、模型和工具制定并执行计划。
+          </p>
         </header>
 
         <section className="home__composer-area">
