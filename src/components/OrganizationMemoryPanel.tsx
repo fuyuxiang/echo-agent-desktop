@@ -453,7 +453,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
       <div className="org-memory org-memory--login">
         <div className="org-login-card">
           <div className="org-login-card__mark"><Building2 size={28} /></div>
-          <h1>连接组织记忆</h1>
+          <h1>连接组织</h1>
           <p>登录企业服务器后，可在授权范围内共享文档、Skills，并基于组织知识进行可追溯问答。</p>
           <form onSubmit={handleLogin}>
             <label>服务器地址<input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://memory.company.com" required /></label>
@@ -473,7 +473,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
       <header className="org-memory__header">
         <div>
           <div className="org-memory__eyebrow">ENTERPRISE MEMORY</div>
-          <h1>组织记忆</h1>
+          <h1>组织</h1>
           <p>{session.user?.displayName ?? session.user?.username} · {session.serverUrl}</p>
         </div>
         <div className="org-memory__header-actions">

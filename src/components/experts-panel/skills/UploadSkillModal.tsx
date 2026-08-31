@@ -35,7 +35,7 @@ export function UploadSkillModal({
     (async () => {
       try {
         const session = await orgSession();
-        if (!session.loggedIn) throw new Error("请先在「组织记忆」中登录组织账号");
+        if (!session.loggedIn) throw new Error("请先在「组织」中登录组织账号");
         if (session.bootstrap?.policy.allowSkillSubmission === false) {
           throw new Error("当前组织策略不允许上传 Skill");
         }
