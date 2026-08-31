@@ -58,5 +58,86 @@ pub async fn call_ext_value(
 /// plain `anyhow::Error` rather than panicking.
 pub fn parse_ext_response<T: DeserializeOwned>(resp: &acp::ExtResponse) -> Result<T> {
     let raw_str = resp.0.get();
-    serde_json::from_str(raw_str).map_err(|e| anyhow!("decode ext response: {e}"))
+    let value: serde_json::Value =
+        serde_json::from_str(raw_str).map_err(|e| anyhow!("decode ext response JSON: {e}"))?;
+
+    // Current EchoAgent extension methods use ExtMethodResult's wire envelope:
+    // `{ "result": T | null, "error"?: string | object }`. Older builds and
+    // a few raw extension endpoints return T directly, so preserve that shape
+    // as a fallback. Envelope detection must happen before decoding T: loose
+    // response types with defaulted fields can otherwise accept the envelope
+    // object and silently produce an empty result (MCP used to do exactly that).
+    if let Some(object) = value.as_object() {
+        if let Some(result) = object.get("result") {
+            let error = object.get("error").filter(|error| !error.is_null());
+            if result.is_null() {
+                if let Some(error) = error {
+                    return Err(anyhow!(
+                        "extension returned error: {}",
+                        format_ext_error(error)
+                    ));
+                }
+            }
+            return serde_json::from_value(result.clone())
+                .map_err(|e| anyhow!("decode ext response result: {e}"));
+        }
+    }
+
+    serde_json::from_value(value).map_err(|e| anyhow!("decode ext response: {e}"))
+}
+
+fn format_ext_error(error: &serde_json::Value) -> String {
+    if let Some(message) = error.as_str() {
+        return message.to_string();
+    }
+    if let Some(message) = error.get("message").and_then(serde_json::Value::as_str) {
+        return message.to_string();
+    }
+    error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct ListPayload {
+        items: Vec<String>,
+    }
+
+    fn response(value: serde_json::Value) -> acp::ExtResponse {
+        acp::ExtResponse::new(raw_params(&value))
+    }
+
+    #[test]
+    fn parses_current_result_envelope() {
+        let parsed: ListPayload = parse_ext_response(&response(serde_json::json!({
+            "result": { "items": ["one", "two"] }
+        })))
+        .unwrap();
+
+        assert_eq!(parsed.items, vec!["one", "two"]);
+    }
+
+    #[test]
+    fn preserves_legacy_raw_response_compatibility() {
+        let parsed: ListPayload = parse_ext_response(&response(serde_json::json!({
+            "items": ["legacy"]
+        })))
+        .unwrap();
+
+        assert_eq!(parsed.items, vec!["legacy"]);
+    }
+
+    #[test]
+    fn surfaces_enveloped_extension_error() {
+        let error = parse_ext_response::<ListPayload>(&response(serde_json::json!({
+            "result": null,
+            "error": { "code": "invalid", "message": "bad request" }
+        })))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("bad request"));
+    }
 }
