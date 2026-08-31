@@ -179,12 +179,12 @@ function Shell() {
   }, []);
 
   // Organization hydration may race the native agent startup. Once the agent
-  // channel is ready, re-advertise the final server-managed Skill set so both
-  // newly restored and already resident sessions observe the same catalog.
+  // channel is ready, re-advertise the final server-managed Skills and the
+  // downloaded organization model so both catalogs observe the restored state.
   useEffect(() => {
     if (!init?.ok) return;
     void useOrgSessionStore.getState().hydrate()
-      .then(() => internalReload("skills"))
+      .then(() => Promise.all([internalReload("skills"), internalReload("models")]))
       .catch(() => {});
   }, [init?.ok]);
 

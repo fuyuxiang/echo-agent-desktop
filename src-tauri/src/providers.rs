@@ -32,6 +32,11 @@ use tauri::State;
 use toml::map::Map;
 use toml::Value;
 
+const ORGANIZATION_PROVIDER_ID: &str = "echoagent-organization";
+const ORGANIZATION_MODEL_PREFIX: &str = "organization/";
+const MANAGED_BY_KEY: &str = "echoagent_managed_by";
+const MANAGED_BY_ORGANIZATION: &str = "organization";
+
 // ---------------------------------------------------------------------------
 // Built-in presets (endpoint + wire protocol per provider_kind).
 // ---------------------------------------------------------------------------
@@ -227,6 +232,18 @@ pub struct ModelEntry {
 pub struct ProviderListModel {
     pub providers: Vec<ModelProviderEntry>,
     pub models: Vec<ModelEntry>,
+}
+
+/// Complete chat configuration downloaded after organization sign-in.
+///
+/// It is intentionally written through the same config.toml schema as a
+/// provider/model created in Settings, so the embedded Runtime needs no
+/// organization-specific sampling path.
+pub(crate) struct OrganizationModelConfig {
+    pub provider: String,
+    pub model: String,
+    pub base_url: String,
+    pub api_key: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -542,6 +559,114 @@ fn ensure_table<'a>(
     root.get_mut(key)
         .and_then(Value::as_table_mut)
         .ok_or_else(|| format!("config.{key} not a table"))
+}
+
+fn is_organization_managed(value: &Value) -> bool {
+    value
+        .as_table()
+        .and_then(|table| table.get(MANAGED_BY_KEY))
+        .and_then(Value::as_str)
+        == Some(MANAGED_BY_ORGANIZATION)
+}
+
+/// Apply a downloaded organization model to an in-memory config document.
+/// Existing personal providers/models are preserved. A namespaced local model
+/// id prevents a server model such as `gpt-4o` from replacing a user's own
+/// entry; the nested `model` value remains the exact upstream model slug.
+fn apply_organization_model_config(
+    config: &mut Value,
+    downloaded: &OrganizationModelConfig,
+) -> Result<String, String> {
+    let provider = downloaded.provider.trim();
+    let model = downloaded.model.trim();
+    let base_url = downloaded.base_url.trim().trim_end_matches('/');
+    let api_key = downloaded.api_key.trim();
+    if provider.is_empty() || model.is_empty() || base_url.is_empty() || api_key.is_empty() {
+        return Err("organization model config is incomplete".into());
+    }
+    let parsed = url::Url::parse(base_url)
+        .map_err(|error| format!("invalid organization model Base URL: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("organization model Base URL must use HTTP or HTTPS".into());
+    }
+
+    let provider_kind = if provider.eq_ignore_ascii_case("openai") {
+        "openai"
+    } else {
+        "custom"
+    };
+    let entry = ModelProviderEntry {
+        id: ORGANIZATION_PROVIDER_ID.into(),
+        provider_kind: provider_kind.into(),
+        label: None,
+        api_key: Some(api_key.into()),
+        base_url: Some(base_url.into()),
+        api_backend: Some("chat_completions".into()),
+        auth_scheme: Some("bearer".into()),
+        context_window: None,
+    };
+    {
+        let providers = ensure_table(config, "model_providers")?;
+        let existing = providers.get(ORGANIZATION_PROVIDER_ID);
+        let mut rendered = provider_to_table(&entry, existing)?;
+        let table = rendered
+            .as_table_mut()
+            .ok_or("organization provider config is not a table")?;
+        table.insert(
+            MANAGED_BY_KEY.into(),
+            Value::String(MANAGED_BY_ORGANIZATION.into()),
+        );
+        table.insert(
+            "organization_provider".into(),
+            Value::String(provider.into()),
+        );
+        providers.insert(ORGANIZATION_PROVIDER_ID.into(), rendered);
+    }
+
+    let model_id = format!("{ORGANIZATION_MODEL_PREFIX}{model}");
+    {
+        let models = ensure_table(config, "model")?;
+        let stale: Vec<String> = models
+            .iter()
+            .filter_map(|(id, value)| is_organization_managed(value).then(|| id.clone()))
+            .collect();
+        for id in stale {
+            models.remove(&id);
+        }
+
+        let mut rendered = model_to_table(
+            &ModelEntry {
+                model_id: model_id.clone(),
+                provider_id: ORGANIZATION_PROVIDER_ID.into(),
+                name: Some(model.into()),
+                context_window: None,
+            },
+            models.get(&model_id),
+        );
+        let table = rendered
+            .as_table_mut()
+            .ok_or("organization model config is not a table")?;
+        // The table key is namespaced locally, while requests must use the
+        // exact model slug configured by the organization administrator.
+        table.insert("model".into(), Value::String(model.into()));
+        table.insert(
+            MANAGED_BY_KEY.into(),
+            Value::String(MANAGED_BY_ORGANIZATION.into()),
+        );
+        models.insert(model_id.clone(), rendered);
+    }
+
+    Ok(model_id)
+}
+
+/// Persist a downloaded organization model alongside the user's own models.
+pub(crate) fn save_organization_model_config(
+    downloaded: OrganizationModelConfig,
+) -> Result<String, String> {
+    let mut config = read_config();
+    let model_id = apply_organization_model_config(&mut config, &downloaded)?;
+    write_config(&config)?;
+    Ok(model_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -1037,6 +1162,95 @@ mod tests {
         };
         let table = model_to_table(&m, None).as_table().unwrap().clone();
         assert_eq!(table["context_window"].as_integer().unwrap(), 128_000);
+    }
+
+    #[test]
+    fn organization_model_config_preserves_personal_entries_and_uses_exact_model_slug() {
+        let mut root = Map::new();
+        let mut personal_provider = Map::new();
+        personal_provider.insert(
+            "base_url".into(),
+            Value::String("https://personal.example/v1".into()),
+        );
+        personal_provider.insert("api_key".into(), Value::String("sk-personal".into()));
+        let mut providers = Map::new();
+        providers.insert("personal".into(), Value::Table(personal_provider));
+        root.insert("model_providers".into(), Value::Table(providers));
+
+        let mut personal_model = Map::new();
+        personal_model.insert("model".into(), Value::String("glm-5".into()));
+        personal_model.insert("model_provider".into(), Value::String("personal".into()));
+        let mut models = Map::new();
+        models.insert("glm-5".into(), Value::Table(personal_model));
+        root.insert("model".into(), Value::Table(models));
+
+        let mut config = Value::Table(root);
+        let local_id = apply_organization_model_config(
+            &mut config,
+            &OrganizationModelConfig {
+                provider: "openai-compatible".into(),
+                model: "glm-5".into(),
+                base_url: "https://organization.example/v1/".into(),
+                api_key: "sk-organization".into(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(local_id, "organization/glm-5");
+        let root = config.as_table().unwrap();
+        let providers = root["model_providers"].as_table().unwrap();
+        assert_eq!(
+            providers["personal"]["api_key"].as_str(),
+            Some("sk-personal")
+        );
+        let organization = providers[ORGANIZATION_PROVIDER_ID].as_table().unwrap();
+        assert_eq!(
+            organization["base_url"].as_str(),
+            Some("https://organization.example/v1")
+        );
+        assert_eq!(organization["api_key"].as_str(), Some("sk-organization"));
+        assert_eq!(
+            organization["api_backend"].as_str(),
+            Some("chat_completions")
+        );
+        assert_eq!(organization["auth_scheme"].as_str(), Some("bearer"));
+
+        let models = root["model"].as_table().unwrap();
+        assert!(models.contains_key("glm-5"));
+        let organization_model = models["organization/glm-5"].as_table().unwrap();
+        assert_eq!(organization_model["model"].as_str(), Some("glm-5"));
+        assert_eq!(
+            organization_model["model_provider"].as_str(),
+            Some(ORGANIZATION_PROVIDER_ID)
+        );
+    }
+
+    #[test]
+    fn organization_model_config_replaces_only_the_previous_downloaded_model() {
+        let mut config = Value::Table(Map::new());
+        for model in ["old-model", "new-model"] {
+            apply_organization_model_config(
+                &mut config,
+                &OrganizationModelConfig {
+                    provider: "openai".into(),
+                    model: model.into(),
+                    base_url: "https://api.openai.com/v1".into(),
+                    api_key: format!("sk-{model}"),
+                },
+            )
+            .unwrap();
+        }
+
+        let models = config.get("model").and_then(Value::as_table).unwrap();
+        assert!(!models.contains_key("organization/old-model"));
+        assert!(models.contains_key("organization/new-model"));
+        let provider = config
+            .get("model_providers")
+            .and_then(Value::as_table)
+            .and_then(|providers| providers.get(ORGANIZATION_PROVIDER_ID))
+            .and_then(Value::as_table)
+            .unwrap();
+        assert_eq!(provider["api_key"].as_str(), Some("sk-new-model"));
     }
 
     // --- group_legacy_models (lazy migration, display only) ---
