@@ -10,6 +10,8 @@ interface MenuItem {
   edit?: "undo" | "redo" | "cut" | "copy" | "paste" | "selectAll";
   /** Opens the About dialog. */
   about?: boolean;
+  /** Opens the signed application updater. */
+  update?: boolean;
 }
 const MENUS: Record<string, MenuItem[]> = {
   编辑: [
@@ -25,7 +27,10 @@ const MENUS: Record<string, MenuItem[]> = {
     { label: "最大化", action: "maximize" },
     { label: "关闭", action: "close" },
   ],
-  帮助: [{ label: "关于 EchoAgent", about: true }],
+  帮助: [
+    { label: "检查更新…", update: true },
+    { label: "关于 EchoAgent", about: true },
+  ],
 };
 
 // 最小化图标
@@ -98,9 +103,11 @@ function insertTextAtFocus(text: string) {
 export function TitleBar({
   onPlaceholder,
   onShowAbout,
+  onCheckForUpdates,
 }: {
   onPlaceholder: (label: string) => void;
   onShowAbout?: () => void;
+  onCheckForUpdates?: () => void;
 }) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -153,6 +160,10 @@ export function TitleBar({
     }
     if (item.about) {
       onShowAbout?.();
+      return;
+    }
+    if (item.update) {
+      onCheckForUpdates?.();
       return;
     }
     onPlaceholder(item.label);

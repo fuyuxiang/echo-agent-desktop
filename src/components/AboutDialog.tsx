@@ -15,9 +15,10 @@ interface AboutDialogProps {
   open: boolean;
   onClose: () => void;
   init?: InitResult | null;
+  onCheckForUpdates?: () => void;
 }
 
-export function AboutDialog({ open, onClose, init }: AboutDialogProps) {
+export function AboutDialog({ open, onClose, init, onCheckForUpdates }: AboutDialogProps) {
   const [authReady, setAuthReady] = useState<boolean | null>(null);
   const [providers, setProviders] = useState<string[]>([]);
 
@@ -105,6 +106,17 @@ export function AboutDialog({ open, onClose, init }: AboutDialogProps) {
           基于 <code>Tauri 2</code> + <code>React</code>。第三方组件及许可详见{" "}
           <code>THIRD_PARTY_NOTICES</code>。
         </p>
+        {onCheckForUpdates && (
+          <button
+            className="settings-btn about-dialog__update"
+            onClick={() => {
+              onClose();
+              onCheckForUpdates();
+            }}
+          >
+            检查更新…
+          </button>
+        )}
       </div>
     </div>
   );
