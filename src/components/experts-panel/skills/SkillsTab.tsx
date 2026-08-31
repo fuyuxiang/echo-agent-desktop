@@ -229,7 +229,7 @@ export function SkillsTab({ pills, onToast }: Props) {
           <div className="ec-empty">
             <PuzzlePieceIcon size="xl" className="ec-empty-icon" />
             <p>全局目录中还没有技能</p>
-            <p className="ec-empty-hint">点击右上角「添加技能」，或从组织记忆安装共享 Skill</p>
+            <p className="ec-empty-hint">点击右上角「添加技能」，或从组织安装共享 Skill</p>
           </div>
         ) : visible.length === 0 ? (
           <div className="ec-empty">
