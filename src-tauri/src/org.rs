@@ -843,6 +843,14 @@ pub async fn org_document_status(
     .await
 }
 
+fn document_fetch_body(doc_id: String, page: Option<u32>) -> Value {
+    let mut body = json!({ "docId": doc_id });
+    if let Some(page) = page {
+        body["page"] = json!(page);
+    }
+    body
+}
+
 #[tauri::command]
 pub async fn org_fetch_document(
     state: State<'_, OrgState>,
@@ -853,7 +861,7 @@ pub async fn org_fetch_document(
         &state.inner,
         Method::POST,
         "/api/v1/docs/fetch",
-        Some(json!({ "docId": doc_id, "page": page })),
+        Some(document_fetch_body(doc_id, page)),
     )
     .await
 }
@@ -1979,6 +1987,18 @@ mod tests {
         assert!(normalize_server_url("http://127.0.0.1:8787").is_ok());
         assert!(normalize_server_url("http://memory.example.com").is_err());
         assert!(normalize_server_url("https://u:p@memory.example.com").is_err());
+    }
+
+    #[test]
+    fn document_fetch_body_omits_missing_page() {
+        assert_eq!(
+            document_fetch_body("doc-1".into(), None),
+            json!({ "docId": "doc-1" })
+        );
+        assert_eq!(
+            document_fetch_body("doc-1".into(), Some(3)),
+            json!({ "docId": "doc-1", "page": 3 })
+        );
     }
 
     #[test]

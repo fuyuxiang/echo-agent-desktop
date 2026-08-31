@@ -180,6 +180,48 @@ describe("OrganizationMemoryPanel", () => {
     expect(screen.getByRole("button", { name: "提问" })).toBeInTheDocument();
   });
 
+  it("无页码引用也能查看整篇原文", async () => {
+    api.orgFetchDocument.mockResolvedValue({ docId: "d2", text: "完整制度原文", chunks: [] });
+    render(<OrganizationMemoryPanel />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.change(screen.getByPlaceholderText("例如：公司的差旅住宿标准是什么？"), {
+      target: { value: "制度是什么？" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "提问" }));
+    await waitFor(() => expect(api.orgAskStart).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      askListener?.({
+        requestId: "request-1",
+        event: "final",
+        data: {
+          answer: "最终答案",
+          citations: [{
+            id: "cit-1",
+            docId: "d2",
+            chunkId: "c1",
+            title: "团队制度",
+            scopeKind: "team",
+            page: null,
+            heading: "",
+            quote: "制度原文",
+            openUrl: "echo://doc/d2",
+            stale: false,
+          }],
+          confidence: 0.82,
+          insufficient: false,
+          traceId: "trace-1",
+          mode: "fast",
+          verification: "supported",
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "查看原文" }));
+    await waitFor(() => expect(api.orgFetchDocument).toHaveBeenCalledWith("d2", undefined));
+    expect(screen.getByText("完整制度原文")).toBeInTheDocument();
+  });
+
   it("停止后忽略迟到的最终事件", async () => {
     render(<OrganizationMemoryPanel />);
     await screen.findByText("Alice · https://memory.example.com");
