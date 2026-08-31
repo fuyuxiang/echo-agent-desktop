@@ -10,7 +10,6 @@
  *  - security: 安全中心（权限规则入口 + folder trust 说明）
  *  - data: 数据管理（清理会话/缓存 + 打开 EchoAgent 目录）
  *  - general: 系统设置（cwd/工作目录 + 重启 EchoAgent）
- *  - account: 账户（EchoAgent auth 状态）
  *  - agent-settings: 展示当前智能体运行时配置
  */
 import { useCallback, useEffect, useState } from "react";
@@ -24,17 +23,13 @@ import {
   RefreshCw,
   Shield,
   Database,
-  Key,
   Mail,
   CheckCheck,
   Filter,
 } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import {
-  accountGetApiKey,
-  accountSetApiKey,
   commandsList,
-  agentAuthStatus,
   internalReload,
   mcpList,
   memoryFlush,
@@ -52,7 +47,6 @@ import {
   webSearchConfigSave,
   echoAgentDataDir,
   openEchoAgentDataDir,
-  type AuthStatus,
 } from "@/lib/agent-client";
 import type {
   McpServerEntry,
@@ -573,187 +567,10 @@ export function GeneralSettingsPanel() {
   );
 }
 
-// ---------- 账户 ----------
-
-export function AccountSettingsPanel() {
-  const [auth, setAuth] = useState<AuthStatus | null>(null);
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  // API key editor state.
-  const [editingKey, setEditingKey] = useState(false);
-  const [keyDraft, setKeyDraft] = useState("");
-
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [a, k] = await Promise.all([
-        agentAuthStatus().catch(() => null),
-        accountGetApiKey().catch(() => null),
-      ]);
-      setAuth(a);
-      setApiKey(k);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    reload();
-  }, [reload]);
-
-  const handleSaveKey = async () => {
-    setBusy(true);
-    try {
-      await accountSetApiKey(keyDraft.trim() || null);
-      setMsg(keyDraft.trim() ? "API Key 已保存" : "API Key 已清除");
-      setEditingKey(false);
-      setKeyDraft("");
-      reload();
-    } catch (e) {
-      setMsg(`保存失败：${String(e).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleClearKey = async () => {
-    if (!confirm("确定清除 xAI API Key？")) return;
-    setBusy(true);
-    try {
-      await accountSetApiKey(null);
-      setMsg("API Key 已清除");
-      reload();
-    } catch (e) {
-      setMsg(`清除失败：${String(e).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <SectionShell
-      title="账户管理"
-      desc="管理本机使用的身份凭据和 BYOK 模型授权。凭据只保存在本地配置中。"
-    >
-      {loading ? (
-        <div className="settings-loading-state">正在读取账户状态…</div>
-      ) : (
-        <>
-          <SettingsGroup
-            title="认证状态"
-            desc="EchoAgent 会优先使用已配置厂商的 BYOK 凭据。"
-            meta={(
-              <span className={`settings-status-badge ${auth?.ready ? "settings-status-badge--ok" : "settings-status-badge--warn"}`}>
-                {auth?.ready ? "已就绪" : "待配置"}
-              </span>
-            )}
-          >
-            <div className="settings-row settings-row--comfortable">
-              <div className="settings-row__label settings-row__label--stacked">
-                <span className="settings-row__name">BYOK 厂商</span>
-                <span className="settings-row__description">已由模型配置提供访问凭据的厂商</span>
-              </div>
-              <div className="settings-row__control">
-                {auth && auth.providers.length > 0
-                  ? <code>{auth.providers.join(", ")}</code>
-                  : <span className="settings-row__empty-value">尚未配置</span>}
-              </div>
-            </div>
-          </SettingsGroup>
-
-          <SettingsGroup
-            title="xAI API Key"
-            desc="适用于直接调用 xAI 模型；其他厂商请在“模型”页面管理。"
-            meta={<span className={`settings-status-badge ${apiKey ? "settings-status-badge--ok" : "settings-status-badge--warn"}`}>{apiKey ? "已配置" : "未设置"}</span>}
-          >
-            {!editingKey ? (
-              <div className="settings-row settings-row--comfortable">
-                <div className="settings-row__label settings-row__label--stacked">
-                  <span className="settings-row__name"><Key size={17} />当前凭据</span>
-                  <span className="settings-row__description">保存后会同步设置 XAI_API_KEY 环境变量</span>
-                </div>
-                <div className="settings-row__control">
-                  {apiKey ? (
-                    <code>••••••••</code>
-                  ) : (
-                    <span className="settings-warn">未设置</span>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="account-key-editor settings-form-block">
-                <label htmlFor="settings-xai-key">新的 API Key</label>
-                <input
-                  id="settings-xai-key"
-                  type="password"
-                  className="account-key-editor__input"
-                  placeholder="xai-..."
-                  value={keyDraft}
-                  onChange={(e) => setKeyDraft(e.target.value)}
-                  autoFocus
-                />
-                <div className="account-key-editor__actions">
-                  <button
-                    className="settings-btn"
-                    onClick={() => {
-                      setEditingKey(false);
-                      setKeyDraft("");
-                    }}
-                    disabled={busy}
-                  >
-                    取消
-                  </button>
-                  <button
-                    className="settings-btn settings-btn--primary"
-                    onClick={handleSaveKey}
-                    disabled={busy}
-                  >
-                    保存
-                  </button>
-                </div>
-              </div>
-            )}
-            {!editingKey && (
-              <div className="settings-group__footer">
-                <button
-                  className="settings-btn settings-btn--primary"
-                  onClick={() => {
-                    setKeyDraft("");
-                    setEditingKey(true);
-                  }}
-                  disabled={busy}
-                >
-                  {apiKey ? "更换" : "设置"} API Key
-                </button>
-                {apiKey && (
-                  <button
-                    className="settings-btn settings-btn--danger"
-                    onClick={handleClearKey}
-                    disabled={busy}
-                  >
-                    清除
-                  </button>
-                )}
-              </div>
-            )}
-            <p className="settings-group__note">
-              保存位置：<code>~/.echo-agent/config</code>。API Key 不会显示在界面或通知中。
-            </p>
-          </SettingsGroup>
-
-          {msg && <p className="settings-msg">{msg}</p>}
-        </>
-      )}
-    </SectionShell>
-  );
-}
-
 // ---------- 智能体设置 ----------
 
 /** AgentSettingsPanel — 汇总显示当前智能体配置（skills + MCP + slash 命令）。
- *  数据来自 EchoAgent 的 x.ai/skills/config、x.ai/mcp/list、x.ai/commands/list，
+ *  数据来自 EchoAgent 的 echo.agent/skills/config、echo.agent/mcp/list、echo.agent/commands/list，
  *  与「专家·技能·连接器」面板的数据源相同，但这里是设置视图：只读 + 刷新 +
  *  跳转到对应管理面板。 */
 export function AgentSettingsPanel() {
@@ -1037,7 +854,7 @@ export function AgentSettingsPanel() {
               <input
                 type="text"
                 className="settings-input"
-                placeholder="搜索模型 ID，如 grok-3"
+                placeholder="搜索模型 ID，如 search-model"
                 value={webSearchDraftModel}
                 onChange={(e) => setWebSearchDraftModel(e.target.value)}
                 disabled={savingRuntime}

@@ -2,7 +2,7 @@
  * ensureSession — return the live sessionId, creating a session lazily when
  * none exists yet.
  *
- * Several EchoAgent extension methods (`x.ai/mcp/upsert`, `x.ai/mcp/auth_trigger`,
+ * Several EchoAgent extension methods (`echo.agent/mcp/upsert`, `echo.agent/mcp/auth_trigger`,
  * …) are session-scoped, but sessions are normally only created when the
  * user sends their first prompt. Connector authorization needs one earlier,
  * so we create it on demand — same pattern as App.tsx `handleSendNew`.

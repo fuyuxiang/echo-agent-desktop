@@ -4,7 +4,7 @@ import type { ContextInfo, SessionUsage } from "@/lib/types";
 
 /**
  * Context-usage ring + popover for the Composer footer.
- * Self-contained: fetches EchoAgent x.ai/session/info+usage on mount and after
+ * Self-contained: fetches EchoAgent echo.agent/session/info+usage on mount and after
  * each refresh cycle. No external store needed — avoids selector/key
  * synchronization issues.
  */

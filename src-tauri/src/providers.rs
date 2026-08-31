@@ -16,8 +16,8 @@
 //! the underlying schema.
 //!
 //! Storage rules:
-//!   - Keys live in plaintext on disk — the same trust level as `auth.json`.
-//!     `api_key` is the runtime's highest-priority credential source.
+//!   - Keys live in owner-only `config.toml`; `api_key` is the runtime's
+//!     highest-priority credential source.
 //!   - We **merge** rather than overwrite: any keys we don't recognize are
 //!     preserved, so a user who hand-edits config.toml doesn't lose tweaks.
 //!   - **Lazy migration**: legacy `[model.*]` tables that still carry their
@@ -57,11 +57,6 @@ fn preset(kind: &str) -> Option<ProviderPreset> {
             api_backend: "chat_completions",
             auth_scheme: "bearer",
         }),
-        "grok" => Some(ProviderPreset {
-            base_url: Some("https://api.x.ai/v1"),
-            api_backend: "chat_completions",
-            auth_scheme: "bearer",
-        }),
         "deepseek" => Some(ProviderPreset {
             base_url: Some("https://api.deepseek.com"),
             api_backend: "chat_completions",
@@ -97,9 +92,7 @@ fn infer_provider_kind(table: &Map<String, Value>) -> String {
     match backend {
         "messages" => "anthropic".into(),
         "chat_completions" | "responses" => {
-            if base.contains("api.x.ai") {
-                "grok".into()
-            } else if base.contains("api.openai.com") {
+            if base.contains("api.openai.com") {
                 "openai".into()
             } else if base.contains("api.deepseek.com") {
                 "deepseek".into()
@@ -143,7 +136,7 @@ fn config_path() -> PathBuf {
 
 /// Read config.toml as a TOML value, or an empty table if missing/corrupt.
 /// (Corrupt → back up to `config.toml.corrupt.<millis>` so we don't silently
-/// clobber the user's file — mirrors the runtime's auth.json handling.)
+/// clobber the user's file.)
 ///
 /// Exposed `pub(crate)` so sibling modules (permission_config) can reuse the
 /// same atomic read-modify-write pattern without each re-implementing it.
@@ -191,7 +184,7 @@ pub struct ModelProviderEntry {
     /// The `[model_providers.<id>]` key; models reference it via
     /// `model_provider = "<id>"`. Stable id derived from provider_kind.
     pub id: String,
-    /// `anthropic` | `openai` | `grok` | `deepseek` | `qwen` | `custom`.
+    /// `anthropic` | `openai` | `deepseek` | `qwen` | `custom`.
     pub provider_kind: String,
     /// Optional display label for the UI (not persisted to TOML; derived).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -873,20 +866,6 @@ mod tests {
             Value::String("https://api.anthropic.com/v1".into()),
         );
         assert_eq!(infer_provider_kind(&table), "anthropic");
-    }
-
-    #[test]
-    fn infer_grok_from_xai_url() {
-        let mut table = Map::new();
-        table.insert(
-            "api_backend".into(),
-            Value::String("chat_completions".into()),
-        );
-        table.insert(
-            "base_url".into(),
-            Value::String("https://api.x.ai/v1".into()),
-        );
-        assert_eq!(infer_provider_kind(&table), "grok");
     }
 
     #[test]

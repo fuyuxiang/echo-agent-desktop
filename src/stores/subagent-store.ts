@@ -2,7 +2,7 @@
  * Subagent live runtime store — 对齐 EchoAgent `team-runtime` / `getSubagentList`。
  *
  * Receives `agent://subagent` events forwarded by bridge.rs from EchoAgent's
- * `x.ai/session_notification` (subagent_spawned / subagent_progress /
+ * `echo.agent/session_notification` (subagent_spawned / subagent_progress /
  * subagent_finished). Maintains a per-parent-session map of active and
  * completed subagents with live progress (turns, tokens, duration, status).
  */

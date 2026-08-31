@@ -46,7 +46,7 @@ EchoAgent 将模型 API 转化为真正可落地的桌面 Agent 工作环境。�
 
 | 原则 | EchoAgent 的实现方式 |
 | --- | --- |
-| **供应商无关** | 使用自己的凭证接入 OpenAI、Anthropic、xAI、DeepSeek、通义千问或兼容的自定义服务。 |
+| **供应商无关** | 使用自己的凭证接入 OpenAI、Anthropic、DeepSeek、通义千问或兼容的自定义服务。 |
 | **以工作空间为核心** | 会话绑定真实目录，并提供文件上下文、变更、产物与可搜索的本地历史。 |
 | **默认可扩展** | 通过 MCP Server、Skills、可复用助理和子 Agent 团队扩展能力。 |
 | **控制边界清晰** | 文件夹信任、权限模式、允许/询问/拒绝规则和可见的工具调用让执行过程可检查。 |
@@ -121,7 +121,7 @@ pnpm install --frozen-lockfile
 3. 在该 Provider 下至少添加一个模型。
 4. 在输入区选择模型并开始任务。
 
-项目内置 Anthropic、OpenAI、xAI、DeepSeek 和通义千问配置预设，同时支持兼容 OpenAI 或 Anthropic 协议的自定义服务。
+项目内置 Anthropic、OpenAI、DeepSeek 和通义千问配置预设，同时支持兼容 OpenAI 或 Anthropic 协议的自定义服务。
 
 <details>
 <summary><strong>手动配置</strong></summary>
@@ -157,7 +157,13 @@ EchoAgent 默认将应用状态保存在 `~/.echo-agent/`。如需修改数据�
 | Provider、权限、界面默认值和 MCP 配置 | `~/.echo-agent/config.toml` 与 `~/.echo-agent/mcp.json` |
 | 会话与工作空间历史 | `~/.echo-agent/sessions/` |
 | 可复用助理 | `~/.echo-agent/agents/` |
+| 已安装技能 | `~/.echo-agent/skills/` |
+| 专家市场 | `~/.echo-agent/experts-marketplace/` |
+| 连接器市场及其技能 | `~/.echo-agent/connectors-marketplace/` |
+| 内置技能资源 | `~/.echo-agent/resources/builtin-skills/` |
 | 记忆与 Runtime 状态 | `~/.echo-agent/memory/` 及 EchoAgent 自有 JSON 文件 |
+
+上表所有路径都以 `ECHO_AGENT_HOME` 为根；表中使用 `~/.echo-agent` 只是未设置该变量时的默认值。专家、技能和连接器面板只会持久化用户手动选择的来源；自动发现的默认来源会始终跟随当前数据根。
 
 - API Key 和 Endpoint 凭证以明文形式保存在本机。Unix 系统下，EchoAgent 会为包含密钥的文件和目录设置仅所有者可访问的权限；Windows 下的访问边界取决于当前用户的文件系统 ACL。
 - 模型、MCP、WebDAV 和通知流量只会发往你主动配置的服务，使用项目无需 EchoAgent 托管账户。
@@ -166,7 +172,7 @@ EchoAgent 默认将应用状态保存在 `~/.echo-agent/`。如需修改数据�
 
 ### 数据迁移
 
-首次启动时，EchoAgent 会一次性从旧版数据目录 `~/.grok/` 把缺失的文件和目录复制到 `~/.echo-agent/`，再写入 `.legacy-data-migrated` 标记避免重复执行。整个过程只会复制新位置还没有的文件，**绝不会覆盖** `~/.echo-agent/` 中已有的内容，旧目录也保持原样，便于回滚。
+首次启动时，EchoAgent 会一次性从旧版数据目录 `~/.grok/` 把缺失的文件和目录（已废弃的 `auth.json` 除外）复制到 `~/.echo-agent/`，再写入 `.legacy-data-migrated` 标记避免重复执行。整个过程只会复制新位置还没有的文件，**绝不会覆盖** `~/.echo-agent/` 中已有的内容，旧目录也保持原样，便于回滚。
 
 如果同时设置了 `ECHO_AGENT_HOME` 和 `GROK_HOME`，迁移源会指向 `GROK_HOME` 指向的目录；嵌入式 Runtime 启动时也会被改写为使用 `ECHO_AGENT_HOME` 对应的路径，避免后续写入落到旧位置。
 

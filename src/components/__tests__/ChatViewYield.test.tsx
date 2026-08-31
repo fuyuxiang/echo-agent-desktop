@@ -68,7 +68,7 @@ vi.mock("@/lib/agent-client", async () => {
     "mcpAuthStatus", "togglePlanMode", "internalReload", "automationsSnapshot",
     "automationsSave", "automationsDelete", "automationsSetStatus", "automationsRun",
     "automationRecordsArchive", "automationRecordsDelete",
-    "accountGetApiKey", "accountSetApiKey", "agentsDefaultsGet", "agentsDefaultsSave",
+    "agentsDefaultsGet", "agentsDefaultsSave",
     "pluginsList", "pluginsAction", "marketplaceList", "marketplaceAction",
     "notificationList", "notificationMarkRead", "notificationMarkAllRead",
     "notificationClear", "exportTextFile", "openUrl", "folderTrustRespond",
@@ -91,7 +91,7 @@ vi.mock("@/lib/agent-client", async () => {
   mod.rewindPoints = asyncArr;
   mod.providersList = async () => ({ providers: [], models: [] });
   mod.flattenModels = () => [];
-  mod.agentAuthStatus = async () => ({ ready: true, hasAuthFile: true, providers: [] });
+  mod.agentAuthStatus = async () => ({ ready: true, providers: [] });
   mod.subscribeAgentEvents = async () => () => {};
   mod.permissionModeGet = async () => "ask";
   mod.notificationList = asyncArr;

@@ -1,11 +1,11 @@
-//! Connectors panel — drives EchoAgent's `x.ai/mcp/*` extension methods.
+//! Connectors panel — drives EchoAgent's `echo.agent/mcp/*` extension methods.
 //!
 //! MCP server configs live in `~/.echo-agent/config.toml` as `[mcp_servers.<name>]`
 //! tables (see `xai-grok-config-types/src/mcp.rs` for the full schema). EchoAgent
 //! owns the canonical state. With an active session we use its ACP CRUD methods
 //! for hot start/stop; without a session we persist through the Runtime's public
 //! config helpers so connector setup remains fully usable offline. Health changes
-//! arrive via `x.ai/mcp/server_status` (forwarded as `agent://mcp-status`).
+//! arrive via `echo.agent/mcp/server_status` (forwarded as `agent://mcp-status`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -19,7 +19,7 @@ use crate::ext::{call_ext, call_ext_value, raw_params};
 
 /// One MCP server entry surfaced to the UI. Mirrors the fields of EchoAgent's
 /// `McpServerEntry` (`xai-grok-shell/src/inspect/mod.rs:227`) plus the live
-/// status that arrives via `x.ai/mcp/server_status` notifications.
+/// status that arrives via `echo.agent/mcp/server_status` notifications.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerEntry {
@@ -246,7 +246,7 @@ async fn mcp_list_with_tx_cache(
         "sessionId": session_id,
         "cache": cache,
     }));
-    let v: McpListResponse = call_ext(tx, "x.ai/mcp/list", params)
+    let v: McpListResponse = call_ext(tx, "echo.agent/mcp/list", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(v.into_servers().into_iter().map(map_wire_entry).collect())
@@ -364,7 +364,7 @@ pub async fn mcp_setup(
         "serverName": name,
         "values": values,
     }));
-    let _: acp::ExtResponse = call_ext_value(&tx, "x.ai/mcp/setup", params)
+    let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/mcp/setup", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -395,7 +395,7 @@ pub async fn mcp_toggle_tool(
         "tool_name": tool_name,
         "enabled": enabled,
     }));
-    let _: acp::ExtResponse = call_ext_value(&tx, "x.ai/mcp/toggle_tool", params)
+    let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/mcp/toggle_tool", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -422,7 +422,7 @@ async fn apply_upsert(
                 "enabled": false,
             }));
             let live: Result<acp::ExtResponse, _> =
-                call_ext_value(tx, "x.ai/mcp/toggle", params).await;
+                call_ext_value(tx, "echo.agent/mcp/toggle", params).await;
             match live {
                 Ok(_) => result.applied_live = true,
                 Err(error) => result
@@ -443,7 +443,8 @@ async fn apply_upsert(
     if let (Some(session_id), Some(tx)) = (session_id.filter(|value| !value.is_empty()), tx) {
         let payload = build_upsert_payload(session_id, server)?;
         let params = raw_params(&payload);
-        let live: Result<acp::ExtResponse, _> = call_ext_value(tx, "x.ai/mcp/upsert", params).await;
+        let live: Result<acp::ExtResponse, _> =
+            call_ext_value(tx, "echo.agent/mcp/upsert", params).await;
         return match live {
             Ok(_) => {
                 mirror_single_server(server, false)?;
@@ -494,7 +495,8 @@ async fn apply_delete(
             "session_id": session_id,
             "server_name": name,
         }));
-        let live: Result<acp::ExtResponse, _> = call_ext_value(tx, "x.ai/mcp/delete", params).await;
+        let live: Result<acp::ExtResponse, _> =
+            call_ext_value(tx, "echo.agent/mcp/delete", params).await;
         match live {
             Ok(_) => applied_live = true,
             Err(error) => warnings.push(format!("当前会话热卸载失败：{error}")),
@@ -536,7 +538,8 @@ async fn apply_toggle(
             "server_name": name,
             "enabled": enabled,
         }));
-        let live: Result<acp::ExtResponse, _> = call_ext_value(tx, "x.ai/mcp/toggle", params).await;
+        let live: Result<acp::ExtResponse, _> =
+            call_ext_value(tx, "echo.agent/mcp/toggle", params).await;
         match live {
             Ok(_) => applied_live = true,
             Err(error) => warnings.push(format!("当前会话热切换失败：{error}")),
@@ -559,7 +562,7 @@ async fn apply_toggle(
     })
 }
 
-/// Translate the frontend payload to the JSON EchoAgent's `x.ai/mcp/upsert` expects.
+/// Translate the frontend payload to the JSON EchoAgent's `echo.agent/mcp/upsert` expects.
 ///
 /// EchoAgent's `McpUpsertRequest` (`xai-grok-shell/src/extensions/mcp.rs`) is:
 /// ```json
@@ -1045,7 +1048,7 @@ pub async fn mcp_config_save(
                 "server_name": name,
             }));
             let result: Result<acp::ExtResponse, _> =
-                call_ext_value(tx, "x.ai/mcp/delete", params).await;
+                call_ext_value(tx, "echo.agent/mcp/delete", params).await;
             if let Err(error) = result {
                 applied_live = false;
                 warnings.push(format!("服务「{name}」热卸载失败：{error}"));
@@ -1059,7 +1062,7 @@ pub async fn mcp_config_save(
                     "enabled": false,
                 }));
                 let result: Result<acp::ExtResponse, _> =
-                    call_ext_value(tx, "x.ai/mcp/toggle", params).await;
+                    call_ext_value(tx, "echo.agent/mcp/toggle", params).await;
                 if let Err(error) = result {
                     applied_live = false;
                     warnings.push(format!("服务「{}」热停用失败：{error}", request.name));
@@ -1069,7 +1072,7 @@ pub async fn mcp_config_save(
             let payload = build_upsert_payload(session_id, request)?;
             let params = raw_params(&payload);
             let result: Result<acp::ExtResponse, _> =
-                call_ext_value(tx, "x.ai/mcp/upsert", params).await;
+                call_ext_value(tx, "echo.agent/mcp/upsert", params).await;
             if let Err(error) = result {
                 applied_live = false;
                 warnings.push(format!("服务「{}」热加载失败：{error}", request.name));
@@ -1517,7 +1520,7 @@ fn restore_config_snapshot(path: &std::path::Path, snapshot: Option<&[u8]>) -> R
     }
 }
 
-// ---------- MCP OAuth authorization (x.ai/mcp/auth_*) ----------
+// ---------- MCP OAuth authorization (echo.agent/mcp/auth_*) ----------
 //
 // EchoAgent implements the full MCP OAuth flow itself (RFC 9728/8414 discovery,
 // DCR, PKCE, system-browser redirect + loopback callback; tokens persist to
@@ -1525,7 +1528,7 @@ fn restore_config_snapshot(path: &std::path::Path, snapshot: Option<&[u8]>) -> R
 // opens from inside the EchoAgent process, and the call resolves when the flow
 // completes — mirroring echo-agent's "跳浏览器授权 + 轮询状态" UX.
 
-/// Result of `x.ai/mcp/auth_trigger`, surfaced to the UI.
+/// Result of `echo.agent/mcp/auth_trigger`, surfaced to the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpAuthTriggerResult {
@@ -1562,7 +1565,7 @@ pub async fn mcp_auth_trigger(
         "session_id": session_id,
         "server_name": server_name,
     }));
-    let wire: McpAuthTriggerWire = call_ext(&tx, "x.ai/mcp/auth_trigger", params)
+    let wire: McpAuthTriggerWire = call_ext(&tx, "echo.agent/mcp/auth_trigger", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(McpAuthTriggerResult {
@@ -1571,7 +1574,7 @@ pub async fn mcp_auth_trigger(
     })
 }
 
-/// One entry of `x.ai/mcp/auth_status` — a server EchoAgent has flagged as
+/// One entry of `echo.agent/mcp/auth_status` — a server EchoAgent has flagged as
 /// requiring authorization (status is currently always "needs_auth").
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1602,7 +1605,7 @@ pub async fn mcp_auth_status(
         .clone()
         .ok_or("agent not initialized")?;
     let params = raw_params(&serde_json::json!({ "session_id": session_id }));
-    let wire: McpAuthStatusWire = call_ext(&tx, "x.ai/mcp/auth_status", params)
+    let wire: McpAuthStatusWire = call_ext(&tx, "echo.agent/mcp/auth_status", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(wire.servers)

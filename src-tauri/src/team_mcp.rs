@@ -9,7 +9,7 @@
 //! 注册路径（双保险）：
 //!  1. `agent_runtime::new_session` 时通过 ACP `mcp_servers` 参数传入 —— 会话立即可用
 //!     （merge 层中 client 层优先级最高，见 EchoAgent `managed_mcp.rs`）。
-//!  2. 首个会话建立后调用 `x.ai/mcp/upsert` 持久化到 config.toml（EchoAgent 自己
+//!  2. 首个会话建立后调用 `echo.agent/mcp/upsert` 持久化到 config.toml（EchoAgent 自己
 //!     写盘）—— `load_session` 恢复的会话也能用（EchoAgent 会话启动时从
 //!     config.toml 加载 MCP server 列表）。
 //!
@@ -58,7 +58,7 @@ static TEAMS: LazyLock<Mutex<HashMap<String, TeamInfo>>> = LazyLock::new(|| {
 
 /// `~/.echo-agent/echoagent-teams.json` —— 与 EchoAgent 配置同目录，方便用户备份。
 fn teams_file() -> std::path::PathBuf {
-    crate::agent_runtime::echo_agent_home_dir().join("echoagent-teams.json")
+    crate::paths::echo_agent_home_dir().join("echoagent-teams.json")
 }
 
 fn load_teams_from_disk() -> Option<HashMap<String, TeamInfo>> {
@@ -537,14 +537,14 @@ fn list_available_agents(agents_dir: &std::path::Path) -> Vec<String> {
     names
 }
 
-// ---------- 持久化注册（config.toml，经 EchoAgent 的 x.ai/mcp/upsert）----------
+// ---------- 持久化注册（config.toml，经 EchoAgent 的 echo.agent/mcp/upsert）----------
 
 /// 进程级守卫：upsert 幂等且便宜，但每次会话都发一遍 ACP 往返没
 /// 必要 —— config.toml 里的条目跨重启存在，端口通常也稳定。失败时复位，
 /// 下个会话可重试（比如 upsert 时会话恰好刚关闭）。
 static PERSISTED: Mutex<bool> = Mutex::new(false);
 
-/// 把 echoagent MCP server 写进 EchoAgent 的 config.toml（经 `x.ai/mcp/upsert`，
+/// 把 echoagent MCP server 写进 EchoAgent 的 config.toml（经 `echo.agent/mcp/upsert`，
 /// EchoAgent 自己持久化 —— 避免我们直接改写用户 config.toml 丢注释/格式）。
 /// 需要一个**已存在**的会话（EchoAgent 的 upsert handler 要求 session live）。
 /// 失败只 warn：new_session 传参路径仍然生效，只是 load_session 的旧会话
@@ -568,8 +568,12 @@ pub fn persist_registration(tx: &xai_acp_lib::AcpAgentTx, session_id: &str) {
             "url": url,
             "enabled": true,
         });
-        match crate::ext::call_ext_value(&tx, "x.ai/mcp/upsert", crate::ext::raw_params(&payload))
-            .await
+        match crate::ext::call_ext_value(
+            &tx,
+            "echo.agent/mcp/upsert",
+            crate::ext::raw_params(&payload),
+        )
+        .await
         {
             Ok(_) => tracing::info!("team MCP server persisted to config.toml"),
             Err(e) => {

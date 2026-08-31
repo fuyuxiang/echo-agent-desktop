@@ -6,7 +6,7 @@ describe("ModelSelector", () => {
   it("空配置时显示未配置模型，不显示 Runtime 默认 id", () => {
     render(
       <ModelSelector
-        modelId="grok-4.6"
+        modelId="runtime-default"
         models={[]}
         onModelChange={vi.fn()}
       />,
@@ -14,7 +14,7 @@ describe("ModelSelector", () => {
 
     const trigger = screen.getByRole("button", { name: "未配置模型" });
     expect(trigger).toBeDisabled();
-    expect(screen.queryByText("grok-4.6")).toBeNull();
+    expect(screen.queryByText("runtime-default")).toBeNull();
   });
 
   it("有配置时显示并可切换模型", () => {

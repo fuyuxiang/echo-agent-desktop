@@ -70,6 +70,11 @@ if [[ -d "$PATCH_DIR" ]]; then
     done
 fi
 
+# ---------------------------------------------------------------------------
+# 4. Migrate the embedded protocol/extension namespace to EchoAgent.
+# ---------------------------------------------------------------------------
+"$PROJECT_ROOT/scripts/rename-runtime-namespace.sh" "$PROJECT_ROOT/vendor/grok-build"
+
 log_step "Setup complete"
 log_info "Next:"
 log_info "  pnpm install"

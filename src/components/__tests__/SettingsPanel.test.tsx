@@ -5,7 +5,6 @@ import "@testing-library/jest-dom/vitest";
 
 vi.mock("@/lib/agent-client", () => ({
   providersList: vi.fn().mockResolvedValue({ providers: [], models: [] }),
-  accountGetApiKey: vi.fn().mockResolvedValue(null),
   agentAuthStatus: vi.fn().mockResolvedValue({ ready: false, providers: [] }),
   commandsList: vi.fn().mockResolvedValue([]),
   echoAgentDataDir: vi.fn().mockResolvedValue("/tmp/.echo-agent"),
@@ -35,14 +34,27 @@ describe("SettingsPanel", () => {
   it("按使用场景分组全部设置入口，并默认打开模型页", async () => {
     const { container } = renderSettings();
 
-    for (const group of ["账户", "智能体", "应用", "数据与支持"]) {
+    for (const group of ["通知", "智能体", "应用", "数据与支持"]) {
       expect(screen.getByRole("heading", { name: group, level: 2 })).toBeInTheDocument();
     }
 
-    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(11);
+    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(10);
     expect(screen.getByRole("button", { name: "模型" })).toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("heading", { name: "模型", level: 2 })).toBeInTheDocument();
     expect(screen.getByText("管理模型厂商、访问凭据和可用模型。每个厂商可以共享一套连接配置。"))
+      .toBeInTheDocument();
+  });
+
+  it("允许 Slash 命令直接打开指定设置页", async () => {
+    render(
+      <ThemeProvider>
+        <SettingsPanel open initialSection="help" onClose={() => {}} />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "帮助与反馈" }))
+      .toHaveAttribute("aria-current", "page");
+    expect(await screen.findByRole("heading", { name: "帮助与反馈", level: 2 }))
       .toBeInTheDocument();
   });
 
@@ -50,7 +62,6 @@ describe("SettingsPanel", () => {
     renderSettings();
 
     const pages = [
-      "账户管理",
       "通知中心",
       "模型",
       "智能体设置",
@@ -75,6 +86,7 @@ describe("SettingsPanel", () => {
     renderSettings();
 
     expect(screen.queryByRole("button", { name: "助理设置" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "账户管理" })).not.toBeInTheDocument();
     expect(screen.queryByText("智能体邮箱")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "通知中心" }));

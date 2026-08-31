@@ -261,86 +261,30 @@ button,
 .home {
   position: relative;
   isolation: isolate;
-  justify-content: flex-start;
-  max-width: 1040px;
+  justify-content: center;
+  max-width: 840px;
   overflow-x: hidden;
-  padding: clamp(44px, 6vh, 72px) clamp(28px, 4vw, 48px) 56px;
-}
-
-.home::before,
-.home::after {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  border-radius: 999px;
-  filter: blur(4px);
-  pointer-events: none;
-}
-
-.home::before {
-  width: 340px;
-  height: 340px;
-  top: 2%;
-  right: -12%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--echo-brand) 10%, transparent), transparent 68%);
-}
-
-.home::after {
-  width: 280px;
-  height: 280px;
-  bottom: 2%;
-  left: -12%;
-  background: radial-gradient(circle, rgba(245, 188, 67, 0.08), transparent 68%);
+  padding: 40px clamp(24px, 4vw, 40px) 56px;
 }
 
 .home__inner {
-  min-height: auto;
-  justify-content: flex-start;
-  gap: 28px;
+  max-width: 760px;
+  justify-content: center;
+  gap: 18px;
   margin-block: auto;
 }
 
 .home__header {
-  max-width: 760px;
-  gap: 0;
-}
-
-.home__eyebrow {
-  display: inline-flex;
+  width: 100%;
   align-items: center;
-  align-self: flex-start;
-  gap: 10px;
-  margin-bottom: 18px;
-  color: var(--echo-text-medium);
-  font-size: 13px;
-  font-weight: 650;
-  letter-spacing: 0.015em;
-}
-
-.home__brand-mark {
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-  border-radius: 11px;
-  box-shadow: 0 8px 22px color-mix(in srgb, var(--echo-brand) 20%, transparent);
 }
 
 .home__title {
-  max-width: 740px;
-  font-size: clamp(38px, 4vw, 48px);
-  font-weight: 700;
-  line-height: 1.16;
-  letter-spacing: -0.035em;
-}
-
-.home__subtitle {
-  max-width: 720px;
-  margin-top: 14px;
-  color: var(--echo-text-medium);
-  font-size: 16px;
-  font-weight: 400;
-  line-height: 1.7;
-  letter-spacing: -0.005em;
+  font-size: clamp(30px, 3vw, 36px);
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.025em;
+  text-align: center;
 }
 
 .home__composer-area {
@@ -1152,7 +1096,7 @@ button,
   }
 
   .home__title {
-    font-size: clamp(34px, 5.2cqi, 42px);
+    font-size: clamp(29px, 4.5cqi, 34px);
   }
 
   .project-hero {
@@ -1407,7 +1351,7 @@ button,
   }
 
   .home__title {
-    font-size: clamp(30px, 7cqi, 36px);
+    font-size: clamp(28px, 7cqi, 32px);
   }
 
   .project-grid,
@@ -1594,30 +1538,11 @@ button,
   }
 
   .home__inner {
-    gap: 20px;
-  }
-
-  .home__eyebrow {
-    margin-bottom: 12px;
-    font-size: 12.5px;
-  }
-
-  .home__brand-mark {
-    width: 32px;
-    height: 32px;
-    flex-basis: 32px;
-    border-radius: 10px;
+    gap: 16px;
   }
 
   .home__title {
-    font-size: clamp(32px, 4vw, 36px);
-    line-height: 1.2;
-  }
-
-  .home__subtitle {
-    margin-top: 10px;
-    font-size: 15px;
-    line-height: 1.6;
+    font-size: clamp(28px, 4vw, 32px);
   }
 
   .echo-composer--home .echo-composer__input {
@@ -1659,11 +1584,7 @@ button,
   }
 
   .home__title {
-    font-size: 30px;
-  }
-
-  .home__subtitle {
-    font-size: 14px;
+    font-size: 28px;
   }
 
   .um-topbar-right {
@@ -2195,7 +2116,6 @@ button,
 .settings-reset,
 .settings-select,
 .settings-input,
-.account-key-editor__input,
 .theme-toggle__btn {
   min-height: 36px;
   border-radius: 9px;
@@ -2234,7 +2154,6 @@ button,
 .settings-reset:focus-visible,
 .settings-select:focus-visible,
 .settings-input:focus-visible,
-.account-key-editor__input:focus-visible,
 .theme-toggle__btn:focus-visible,
 .notification-filter:focus-visible,
 .settings-navigation__item:focus-visible,
@@ -2245,8 +2164,7 @@ button,
 }
 
 .settings-select,
-.settings-input,
-.account-key-editor__input {
+.settings-input {
   width: 100%;
   padding: 8px 11px;
   border: 1px solid var(--ui-line-strong);
@@ -2486,31 +2404,17 @@ a.help-card:hover {
   border-top: 1px solid var(--ui-line);
 }
 
-.permission-rule-builder__field,
-.settings-form-block {
+.permission-rule-builder__field {
   display: flex;
   flex-direction: column;
   gap: 7px;
   min-width: 0;
 }
 
-.permission-rule-builder__field > span,
-.settings-form-block > label {
+.permission-rule-builder__field > span {
   color: var(--echo-text-medium);
   font-size: 11px;
   font-weight: 600;
-}
-
-.account-key-editor {
-  padding: 16px 12px;
-}
-
-.account-key-editor__input {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-.account-key-editor__actions {
-  margin-top: 4px;
 }
 
 .agent-stats {

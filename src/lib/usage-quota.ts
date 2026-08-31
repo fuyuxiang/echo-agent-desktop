@@ -120,7 +120,7 @@ export function recordUsage(
 }
 
 /**
- * EchoAgent 的 `x.ai/session/usage` 返回会话累计值，不是单轮增量。
+ * EchoAgent 的 `echo.agent/session/usage` 返回会话累计值，不是单轮增量。
  * 这里按会话保存上一个累计快照，只记录差值，避免每轮把历史 token
  * 重复计入配额。引擎重启导致计数器回退时，将当前值视为新起点。
  */

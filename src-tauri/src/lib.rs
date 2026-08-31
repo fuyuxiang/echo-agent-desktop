@@ -33,7 +33,6 @@ mod skills;
 mod skills_catalog;
 mod storage;
 mod team_mcp;
-mod voice;
 
 use bridge::{Permissions, Questions};
 use commands::AppState;
@@ -235,7 +234,7 @@ pub fn run() {
             commands::agent_set_session_archived,
             commands::agent_set_session_expert,
             commands::agent_clear_session_expert,
-            // context usage pill (x.ai/session/info + x.ai/session/usage)
+            // context usage pill (echo.agent/session/info + echo.agent/session/usage)
             commands::agent_session_info,
             commands::agent_session_usage,
             // BYOK providers (~/.echo-agent/config.toml [model.*])
@@ -266,7 +265,7 @@ pub fn run() {
             // web search config (~/.echo-agent/config.toml [models].web_search)
             agent_config::web_search_config_get,
             agent_config::web_search_config_save,
-            // skills (x.ai/skills/*)
+            // skills (echo.agent/skills/*)
             skills::skills_list,
             skills::skills_add,
             skills::skills_remove,
@@ -300,7 +299,7 @@ pub fn run() {
             org::org_qa_feedback,
             org::org_local_kb_sources_get,
             org::org_local_kb_sources_set,
-            // connectors / MCP (x.ai/mcp/*)
+            // connectors / MCP (echo.agent/mcp/*)
             mcp::mcp_list,
             mcp::mcp_upsert,
             mcp::mcp_delete,
@@ -361,8 +360,6 @@ pub fn run() {
             agent_admin::folder_trust_respond,
             agent_admin::toggle_plan_mode,
             agent_admin::internal_reload,
-            agent_admin::account_get_api_key,
-            agent_admin::account_set_api_key,
             agent_admin::plugins_list,
             agent_admin::plugins_action,
             agent_admin::marketplace_list,
@@ -416,10 +413,6 @@ pub fn run() {
             storage::storage_write_text,
             storage::storage_delete,
             storage::storage_make_dir,
-            // native microphone + streaming speech-to-text fallback
-            voice::voice_native_available,
-            voice::voice_native_start,
-            voice::voice_native_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running EchoAgent");

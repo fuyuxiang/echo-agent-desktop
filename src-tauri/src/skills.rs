@@ -1,4 +1,4 @@
-//! Skills panel — drives EchoAgent's `x.ai/skills/*` extension methods.
+//! Skills panel — drives EchoAgent's `echo.agent/skills/*` extension methods.
 //!
 //! EchoAgent discovers skills by recursively scanning `~/.echo-agent/skills/`,
 //! `<cwd>/.echo-agent/skills/`, and a few bundled/plugin dirs (see
@@ -64,7 +64,7 @@ pub struct SkillInfo {
     pub configured_path: Option<String>,
 }
 
-/// Generic list shape returned by `x.ai/skills/list` and `x.ai/skills/config`:
+/// Generic list shape returned by `echo.agent/skills/list` and `echo.agent/skills/config`:
 /// EchoAgent returns either a bare array or `{ skills: [...] }`. We accept both.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -107,7 +107,7 @@ pub async fn skills_list_with_tx(
     tx: &xai_acp_lib::AcpAgentTx,
     cwd: Option<String>,
 ) -> Result<Vec<SkillInfo>, String> {
-    // EchoAgent's `x.ai/skills/list` schema requires `cwd` to be a *string* when
+    // EchoAgent's `echo.agent/skills/list` schema requires `cwd` to be a *string* when
     // present (it rejects `null` with -32602). Omit the key entirely when the
     // caller has no cwd so EchoAgent falls back to its own default.
     let mut params_obj = serde_json::Map::new();
@@ -115,15 +115,15 @@ pub async fn skills_list_with_tx(
         params_obj.insert("cwd".into(), serde_json::Value::String(c.clone()));
     }
     let params: Arc<RawValue> = raw_params(&serde_json::Value::Object(params_obj));
-    // Prefer `x.ai/skills/config` (richer: includes paths/ignore config), but
-    // fall back to `x.ai/skills/list` if the method is unavailable on this
+    // Prefer `echo.agent/skills/config` (richer: includes paths/ignore config), but
+    // fall back to `echo.agent/skills/list` if the method is unavailable on this
     // EchoAgent build.
     let res: Result<SkillsListResponse, _> =
-        call_ext(tx, "x.ai/skills/config", params.clone()).await;
+        call_ext(tx, "echo.agent/skills/config", params.clone()).await;
     let (skills, configured_paths) = match res {
         Ok(v) => v.into_parts(),
         Err(_) => {
-            let v: SkillsListResponse = call_ext(tx, "x.ai/skills/list", params)
+            let v: SkillsListResponse = call_ext(tx, "echo.agent/skills/list", params)
                 .await
                 .map_err(|e| e.to_string())?;
             v.into_parts()
@@ -167,7 +167,7 @@ pub async fn skills_add(
         .clone()
         .ok_or("agent not initialized")?;
     let params = raw_params(&serde_json::json!({ "path": path, "cwd": cwd }));
-    let _: acp::ExtResponse = call_ext_value(&tx, "x.ai/skills/add", params)
+    let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/skills/add", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -187,7 +187,7 @@ pub async fn skills_remove(
         .clone()
         .ok_or("agent not initialized")?;
     let params = raw_params(&serde_json::json!({ "path": path, "cwd": cwd }));
-    let _: acp::ExtResponse = call_ext_value(&tx, "x.ai/skills/remove", params)
+    let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/skills/remove", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -207,7 +207,7 @@ pub async fn skills_toggle(
         .clone()
         .ok_or("agent not initialized")?;
     let params = raw_params(&serde_json::json!({ "name": name, "enabled": enabled }));
-    let _: acp::ExtResponse = call_ext_value(&tx, "x.ai/skills/toggle", params)
+    let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/skills/toggle", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())

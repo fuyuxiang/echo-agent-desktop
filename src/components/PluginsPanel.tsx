@@ -1,5 +1,5 @@
 /**
- * 插件面板 - 对接 EchoAgent 的 x.ai/plugins/list + x.ai/plugins/action
+ * 插件面板 - 对接 EchoAgent 的 echo.agent/plugins/list + echo.agent/plugins/action
  *
  * 显示已安装的 EchoAgent 插件（含 skills/agents/hooks/mcp 计数），支持启用/禁用。
  * 对应 EchoAgent 的 plugins-panel。
