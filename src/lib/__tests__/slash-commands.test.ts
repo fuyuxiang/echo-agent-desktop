@@ -3,6 +3,7 @@ import {
   availableClientSlashCommands,
   isClientSlashCommand,
   mergeSlashCommands,
+  parseRememberArguments,
   parseSlashInvocation,
   replaceSlashToken,
   slashCommandSourceLabel,
@@ -33,6 +34,18 @@ describe("slash command helpers", () => {
     expect(parseSlashInvocation("normal prompt")).toBeNull();
   });
 
+  it("解析 remember 范围并保留多行内容", () => {
+    expect(parseRememberArguments("global 优先中文")).toEqual({
+      scope: "global",
+      content: "优先中文",
+    });
+    expect(parseRememberArguments("第一行\n第二行")).toEqual({
+      scope: "workspace",
+      content: "第一行\n第二行",
+    });
+    expect(parseRememberArguments("workspace")).toBeNull();
+  });
+
   it("merges client and runtime commands case-insensitively with client precedence", () => {
     const merged = mergeSlashCommands(
       [{ name: "help", description: "desktop", source: "client" }],
@@ -51,6 +64,8 @@ describe("slash command helpers", () => {
     expect(availableClientSlashCommands(false).some((c) => c.name === "plan")).toBe(false);
     expect(availableClientSlashCommands(true).some((c) => c.name === "plan")).toBe(true);
     expect(isClientSlashCommand("HELP")).toBe(true);
+    expect(isClientSlashCommand("remember")).toBe(true);
+    expect(availableClientSlashCommands(false).some((c) => c.name === "remember")).toBe(true);
     expect(slashCommandSourceLabel("plugin:acme")).toBe("插件 · acme");
   });
 });

@@ -142,6 +142,13 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Build (frontend build runs automatically via beforeBuildCommand).
 # ---------------------------------------------------------------------------
+if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -z "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
+    log_err "Updater signing key is required for release builds."
+    log_err "Set TAURI_SIGNING_PRIVATE_KEY_PATH (recommended) or TAURI_SIGNING_PRIVATE_KEY."
+    log_err "See docs/desktop-updates.md."
+    exit 1
+fi
+
 log_step "Building .dmg (pnpm tauri build --bundles dmg)"
 BUILD_RC=0
 pnpm tauri build --bundles dmg || BUILD_RC=$?
@@ -157,6 +164,12 @@ if [[ $BUILD_RC -eq 0 && -d "$BUNDLE_DIR" ]]; then
         log_ok "$(basename "$f")  (${size_mb} MB)"
         log_info "$f"
     done < <(find "$BUNDLE_DIR" -name '*.dmg' -print0)
+    UPDATER_DIR="$PROJECT_ROOT/src-tauri/target/release/bundle/macos"
+    while IFS= read -r -d '' f; do
+        size_mb=$(du -m "$f" | cut -f1)
+        log_ok "$(basename "$f")  (${size_mb} MB) [updater]"
+        log_info "$f"
+    done < <(find "$UPDATER_DIR" -maxdepth 1 \( -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \) -print0 2>/dev/null)
 else
     log_err "Build failed (exit $BUILD_RC). See output above."
 fi

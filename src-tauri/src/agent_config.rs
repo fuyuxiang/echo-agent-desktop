@@ -11,6 +11,19 @@
 //!
 //! [models]
 //! web_search = "search-model"  # set to enable web_search tool; remove to disable
+//!
+//! [memory]
+//! enabled = true
+//! [memory.initial_injection]
+//! enabled = true
+//! [memory.session]
+//! save_on_end = true
+//! [memory.watcher]
+//! enabled = true
+//! [memory.dream]
+//! enabled = true
+//! [compaction.memory_flush]
+//! enabled = true
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -118,4 +131,233 @@ pub fn web_search_config_save(enable: bool, model: Option<String>) -> Result<boo
     }
     crate::providers::write_config(&config)?;
     Ok(enable)
+}
+
+// ---------------------------------------------------------------------------
+// Memory
+// ---------------------------------------------------------------------------
+
+/// User-facing controls for the embedded Runtime's local memory system.
+///
+/// EchoAgent intentionally defaults these features on. The upstream Runtime
+/// defaults the top-level `memory.enabled` flag off, so `agent_runtime` passes
+/// our resolved value as an explicit host override during startup.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryConfig {
+    pub enabled: bool,
+    pub initial_injection_enabled: bool,
+    pub save_on_end: bool,
+    pub watcher_enabled: bool,
+    pub auto_flush_enabled: bool,
+    pub dream_enabled: bool,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            initial_injection_enabled: true,
+            save_on_end: true,
+            watcher_enabled: true,
+            auto_flush_enabled: true,
+            dream_enabled: true,
+        }
+    }
+}
+
+fn nested_bool(config: &Value, table: &str, key: &str, default: bool) -> bool {
+    config
+        .get(table)
+        .and_then(Value::as_table)
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_bool)
+        .unwrap_or(default)
+}
+
+fn doubly_nested_bool(config: &Value, table: &str, nested: &str, key: &str, default: bool) -> bool {
+    config
+        .get(table)
+        .and_then(Value::as_table)
+        .and_then(|value| value.get(nested))
+        .and_then(Value::as_table)
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_bool)
+        .unwrap_or(default)
+}
+
+pub(crate) fn resolved_memory_config(config: &Value) -> MemoryConfig {
+    let defaults = MemoryConfig::default();
+    MemoryConfig {
+        enabled: nested_bool(config, "memory", "enabled", defaults.enabled),
+        initial_injection_enabled: doubly_nested_bool(
+            config,
+            "memory",
+            "initial_injection",
+            "enabled",
+            defaults.initial_injection_enabled,
+        ),
+        save_on_end: doubly_nested_bool(
+            config,
+            "memory",
+            "session",
+            "save_on_end",
+            defaults.save_on_end,
+        ),
+        watcher_enabled: doubly_nested_bool(
+            config,
+            "memory",
+            "watcher",
+            "enabled",
+            defaults.watcher_enabled,
+        ),
+        auto_flush_enabled: doubly_nested_bool(
+            config,
+            "compaction",
+            "memory_flush",
+            "enabled",
+            defaults.auto_flush_enabled,
+        ),
+        dream_enabled: doubly_nested_bool(
+            config,
+            "memory",
+            "dream",
+            "enabled",
+            defaults.dream_enabled,
+        ),
+    }
+}
+
+#[tauri::command]
+pub fn memory_config_get() -> MemoryConfig {
+    resolved_memory_config(&crate::providers::read_config())
+}
+
+fn set_nested_bool(
+    root: &mut Value,
+    table: &str,
+    nested: Option<&str>,
+    key: &str,
+    value: bool,
+) -> Result<(), String> {
+    let table = root
+        .as_table_mut()
+        .map(|root| {
+            root.entry(table)
+                .or_insert_with(|| Value::Table(Default::default()))
+        })
+        .and_then(Value::as_table_mut)
+        .ok_or_else(|| "config root is not a table".to_string())?;
+
+    let target = if let Some(nested) = nested {
+        table
+            .entry(nested)
+            .or_insert_with(|| Value::Table(Default::default()))
+            .as_table_mut()
+            .ok_or_else(|| format!("config section {nested} is not a table"))?
+    } else {
+        table
+    };
+    target.insert(key.to_string(), Value::Boolean(value));
+    Ok(())
+}
+
+/// Persist all memory controls in one atomic config write. A running session
+/// keeps its existing memory backend; the new configuration applies after the
+/// Agent Runtime is restarted.
+#[tauri::command]
+pub fn memory_config_save(memory: MemoryConfig) -> Result<MemoryConfig, String> {
+    let mut config = crate::providers::read_config();
+    set_nested_bool(&mut config, "memory", None, "enabled", memory.enabled)?;
+    set_nested_bool(
+        &mut config,
+        "memory",
+        Some("initial_injection"),
+        "enabled",
+        memory.initial_injection_enabled,
+    )?;
+    set_nested_bool(
+        &mut config,
+        "memory",
+        Some("session"),
+        "save_on_end",
+        memory.save_on_end,
+    )?;
+    set_nested_bool(
+        &mut config,
+        "memory",
+        Some("watcher"),
+        "enabled",
+        memory.watcher_enabled,
+    )?;
+    set_nested_bool(
+        &mut config,
+        "memory",
+        Some("dream"),
+        "enabled",
+        memory.dream_enabled,
+    )?;
+    set_nested_bool(
+        &mut config,
+        "compaction",
+        Some("memory_flush"),
+        "enabled",
+        memory.auto_flush_enabled,
+    )?;
+    crate::providers::write_config(&config)?;
+    Ok(memory)
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    #[test]
+    fn memory_defaults_are_enabled_for_echoagent() {
+        let config = Value::Table(Default::default());
+        assert_eq!(resolved_memory_config(&config), MemoryConfig::default());
+    }
+
+    #[test]
+    fn memory_config_resolves_each_nested_setting() {
+        let config: Value = toml::from_str(
+            r#"
+                [memory]
+                enabled = false
+                [memory.initial_injection]
+                enabled = false
+                [memory.session]
+                save_on_end = false
+                [memory.watcher]
+                enabled = false
+                [memory.dream]
+                enabled = false
+                [compaction.memory_flush]
+                enabled = false
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            resolved_memory_config(&config),
+            MemoryConfig {
+                enabled: false,
+                initial_injection_enabled: false,
+                save_on_end: false,
+                watcher_enabled: false,
+                auto_flush_enabled: false,
+                dream_enabled: false,
+            }
+        );
+    }
+
+    #[test]
+    fn set_nested_bool_preserves_unrelated_config() {
+        let mut config: Value = toml::from_str("[models]\ndefault = 'demo'\n").unwrap();
+        set_nested_bool(&mut config, "memory", Some("session"), "save_on_end", true).unwrap();
+        assert_eq!(config["models"]["default"].as_str(), Some("demo"));
+        assert_eq!(
+            config["memory"]["session"]["save_on_end"].as_bool(),
+            Some(true)
+        );
+    }
 }

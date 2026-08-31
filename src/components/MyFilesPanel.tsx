@@ -204,7 +204,11 @@ function ArtifactsTab({
             </span>
             <span className="myfiles-col-type">{ft}</span>
             <span className="myfiles-col-scope">
-              {entry.scope === "global" ? "全局" : "工作区"}
+              {entry.scope === "global"
+                ? "全局"
+                : entry.scope === "workspace"
+                  ? "工作区"
+                  : "会话记录"}
             </span>
           </div>
         );

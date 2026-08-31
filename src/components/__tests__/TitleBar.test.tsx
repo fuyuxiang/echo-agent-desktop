@@ -45,6 +45,19 @@ describe("TitleBar", () => {
     expect(onShowAbout).toHaveBeenCalled();
   });
 
+  it("帮助菜单可手动检查更新", () => {
+    const onCheckForUpdates = vi.fn();
+    render(
+      <TitleBar
+        onPlaceholder={() => {}}
+        onCheckForUpdates={onCheckForUpdates}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "帮助" }));
+    fireEvent.click(screen.getByText("检查更新…"));
+    expect(onCheckForUpdates).toHaveBeenCalledOnce();
+  });
+
   it("窗口菜单的最小化调用窗口 API", () => {
     render(<TitleBar onPlaceholder={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "窗口" }));

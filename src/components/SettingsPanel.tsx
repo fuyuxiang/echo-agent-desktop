@@ -188,6 +188,7 @@ export function SettingsPanel({
   open,
   onClose,
   onModelsChanged,
+  sessionId,
   initialSection = "model",
 }: {
   open: boolean;
@@ -195,6 +196,8 @@ export function SettingsPanel({
   /** Called after a provider is saved/deleted so the app can refresh its
    *  model picker without a restart. */
   onModelsChanged?: () => void;
+  /** Current live session, required by memory flush/consolidation actions. */
+  sessionId?: string;
   /** Section selected whenever the dialog is opened. */
   initialSection?: SettingsSectionId;
 }) {
@@ -278,7 +281,7 @@ export function SettingsPanel({
             ) : active === "shortcuts" ? (
               <ShortcutsSettingsPanel />
             ) : active === "memory" ? (
-              <MemorySettingsPanel />
+              <MemorySettingsPanel sessionId={sessionId} />
             ) : active === "help" ? (
               <HelpSettingsPanel />
             ) : active === "security" ? (

@@ -238,6 +238,13 @@ if (Test-Path $makensis) {
 # ---------------------------------------------------------------------------
 # 6. Build (frontend build runs automatically via beforeBuildCommand).
 # ---------------------------------------------------------------------------
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY -and -not $env:TAURI_SIGNING_PRIVATE_KEY_PATH) {
+    Log-Err "Updater signing key is required for release builds."
+    Log-Err "Set TAURI_SIGNING_PRIVATE_KEY_PATH (recommended) or TAURI_SIGNING_PRIVATE_KEY."
+    Log-Err "See docs\desktop-updates.md."
+    exit 1
+}
+
 Log-Step "Building NSIS installer (pnpm tauri build --bundles nsis)"
 try {
     & pnpm tauri build --bundles nsis
@@ -253,7 +260,9 @@ try {
 $bundleDir = Join-Path $ProjectRoot "src-tauri\target\release\bundle\nsis"
 if ($buildExit -eq 0 -and (Test-Path $bundleDir)) {
     Log-Step "Build succeeded. Artifacts:"
-    Get-ChildItem $bundleDir -Filter *.exe | ForEach-Object {
+    Get-ChildItem $bundleDir -File | Where-Object {
+        $_.Name -like "*.exe" -or $_.Name -like "*.exe.sig"
+    } | ForEach-Object {
         $sizeMb = "{0:N1}" -f ($_.Length / 1MB)
         Log-Ok ("{0,-40} {1} MB" -f $_.Name, $sizeMb)
         Log-Info $_.FullName

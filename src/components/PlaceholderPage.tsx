@@ -87,7 +87,7 @@ export function PlaceholderPage({
   }
 
   if (label === "更多" || label === "资料库" || label === "个人记忆") {
-    return <ResourcesPanel cwd={cwd} onToast={onToast} />;
+    return <ResourcesPanel cwd={cwd} sessionId={sessionId} onToast={onToast} />;
   }
 
   if (label === "我的文件") {

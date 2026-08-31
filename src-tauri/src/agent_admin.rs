@@ -1,8 +1,8 @@
 //! Higher-level EchoAgent admin extensions — bridges the upstream `echo.agent/*` methods that
 //! drive EchoAgent-equivalent features:
 //!
-//! - **Memory** (资料库): read/rewrite `~/.echo-agent/memory/MEMORY.md` + per-cwd
-//!   workspace memory. `echo.agent/memory/{flush,rewrite}` + `compact_conversation`.
+//! - **Memory** (资料库): read/rewrite canonical global + hashed workspace
+//!   memory, flush active sessions and run consolidation.
 //! - **Session search** (历史检索): `echo.agent/session/search` over EchoAgent's FTS5.
 //! - **Rewind** (回溯): `echo.agent/rewind/{execute,points}`.
 //! - **Prompt history** (命令面板): `echo.agent/prompt_history`.
@@ -15,10 +15,14 @@
 //! All ACP calls go through `ext::call_ext` / `call_ext_value`. File-backed
 //! reads (memory markdown) go through direct fs (EchoAgent doesn't expose list).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::State;
+use xai_grok_shell::session::memory::{
+    storage::normalize_memory_content, MemoryScope, MemoryStorage,
+};
 
 use crate::commands::AppState;
 use crate::ext::{call_ext, raw_params};
@@ -27,184 +31,403 @@ use crate::ext::{call_ext, raw_params};
 // Memory (资料库)
 // ========================================================================
 
-/// One memory note. EchoAgent stores memories as markdown chunks; we surface the
-/// raw text plus which scope it came from.
+const MEMORY_FILE: &str = "MEMORY.md";
+const MAX_MEMORY_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// One canonical memory document. Global and workspace `MEMORY.md` files are
+/// editable; per-session logs are visible for auditing but intentionally
+/// read-only because the Runtime owns their lifecycle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryEntry {
-    /// "global" (~/.echo-agent/memory/) or "workspace" (<cwd>/.echo-agent/memory/).
+    /// "global" | "workspace" | "session".
     pub scope: String,
-    /// Relative path under the memory root (e.g. "MEMORY.md" or "facts/rust.md").
+    /// `MEMORY.md` for editable documents; a basename for session logs.
     pub path: String,
-    /// Raw markdown contents.
     pub content: String,
-    /// Byte size (for display).
     pub size: u64,
+    /// SHA-256 of the file contents, used for optimistic concurrency control.
+    pub revision: String,
+    /// Last modified timestamp (RFC 3339), when available.
+    pub modified_at: Option<String>,
+    pub read_only: bool,
 }
 
 fn global_memory_dir() -> PathBuf {
     crate::paths::echo_agent_home_dir().join("memory")
 }
 
-fn workspace_memory_dir(cwd: &str) -> PathBuf {
-    PathBuf::from(cwd).join(".echo-agent").join("memory")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MemoryEntryScope {
+    Global,
+    Workspace,
+    Session,
 }
 
-/// Recursively scan a memory dir for `*.md` files. Best-effort.
-fn scan_memory_dir(dir: &std::path::Path, scope: &str) -> Vec<MemoryEntry> {
-    let mut out = Vec::new();
-    let Ok(stack_root) = dir.canonicalize() else {
-        return out;
-    };
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else {
-            continue;
-        };
-        for entry in entries.flatten() {
+impl MemoryEntryScope {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "global" => Ok(Self::Global),
+            "workspace" => Ok(Self::Workspace),
+            "session" => Ok(Self::Session),
+            _ => Err(format!("unknown memory scope: {value}")),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Workspace => "workspace",
+            Self::Session => "session",
+        }
+    }
+
+    fn writable(self) -> Result<MemoryScope, String> {
+        match self {
+            Self::Global => Ok(MemoryScope::Global),
+            Self::Workspace => Ok(MemoryScope::Workspace),
+            Self::Session => Err("session memory logs are read-only".into()),
+        }
+    }
+}
+
+fn memory_storage(cwd: Option<&str>) -> Result<MemoryStorage, String> {
+    let workspace = cwd
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")));
+    if cwd.is_some() && !workspace.is_absolute() {
+        return Err("cwd must be an absolute path".into());
+    }
+    Ok(MemoryStorage::new(
+        &workspace,
+        Some(global_memory_dir().as_path()),
+    ))
+}
+
+fn normalized_cwd(cwd: Option<&str>) -> Option<&str> {
+    cwd.filter(|value| !value.trim().is_empty())
+}
+
+fn resolve_memory_path(
+    storage: &MemoryStorage,
+    scope: MemoryEntryScope,
+    relative: &str,
+) -> Result<PathBuf, String> {
+    match scope {
+        MemoryEntryScope::Global => {
+            if relative != MEMORY_FILE {
+                return Err("global memory path must be MEMORY.md".into());
+            }
+            Ok(storage.global_memory_file())
+        }
+        MemoryEntryScope::Workspace => {
+            if relative != MEMORY_FILE {
+                return Err("workspace memory path must be MEMORY.md".into());
+            }
+            Ok(storage.workspace_memory_file())
+        }
+        MemoryEntryScope::Session => {
+            let relative = Path::new(relative);
+            if relative.components().count() != 1
+                || relative.extension().and_then(|value| value.to_str()) != Some("md")
+            {
+                return Err("invalid session memory path".into());
+            }
+            Ok(storage.sessions_dir().join(relative))
+        }
+    }
+}
+
+fn file_revision(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn reject_symlink(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "memory path must not be a symlink: {}",
+            path.display()
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("inspect {}: {error}", path.display())),
+    }
+}
+
+fn read_entry(
+    storage: &MemoryStorage,
+    scope: MemoryEntryScope,
+    relative: &str,
+) -> Result<MemoryEntry, String> {
+    let path = resolve_memory_path(storage, scope, relative)?;
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "memory path is not a regular file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > MAX_MEMORY_FILE_BYTES {
+        return Err(format!(
+            "memory file exceeds {} MiB: {}",
+            MAX_MEMORY_FILE_BYTES / 1024 / 1024,
+            path.display()
+        ));
+    }
+    let bytes =
+        std::fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > MAX_MEMORY_FILE_BYTES {
+        return Err(format!(
+            "memory file exceeds {} MiB: {}",
+            MAX_MEMORY_FILE_BYTES / 1024 / 1024,
+            path.display()
+        ));
+    }
+    let content = String::from_utf8(bytes.clone())
+        .map_err(|_| format!("memory file is not valid UTF-8: {}", path.display()))?;
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .map(chrono::DateTime::<chrono::Utc>::from)
+        .map(|time| time.to_rfc3339());
+    Ok(MemoryEntry {
+        scope: scope.as_str().into(),
+        path: relative.into(),
+        content,
+        size: metadata.len(),
+        revision: file_revision(&bytes),
+        modified_at,
+        read_only: scope == MemoryEntryScope::Session,
+    })
+}
+
+fn list_memory(storage: &MemoryStorage, include_workspace: bool) -> Vec<MemoryEntry> {
+    let mut entries = Vec::new();
+    if storage.global_memory_file().exists() {
+        if let Ok(entry) = read_entry(storage, MemoryEntryScope::Global, MEMORY_FILE) {
+            entries.push(entry);
+        }
+    }
+    if !include_workspace {
+        return entries;
+    }
+    if storage.workspace_memory_file().exists() {
+        if let Ok(entry) = read_entry(storage, MemoryEntryScope::Workspace, MEMORY_FILE) {
+            entries.push(entry);
+        }
+    }
+    let mut session_names = std::fs::read_dir(storage.sessions_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
             let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
+            if !file_type.is_file()
+                || path.extension().and_then(|value| value.to_str()) != Some("md")
+            {
+                return None;
             }
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(rel) = path.strip_prefix(&stack_root) else {
-                continue;
-            };
-            let size = content.len() as u64;
-            out.push(MemoryEntry {
-                scope: scope.to_string(),
-                path: rel.to_string_lossy().replace('\\', "/"),
-                content,
-                size,
-            });
-        }
-    }
-    // Stable order: global MEMORY.md first, then alphabetical.
-    out.sort_by(|a, b| {
-        let ag = a.path == "MEMORY.md";
-        let bg = b.path == "MEMORY.md";
-        bg.cmp(&ag).then_with(|| a.path.cmp(&b.path))
-    });
-    out
+            path.file_name()?.to_str().map(str::to_owned)
+        })
+        .collect::<Vec<_>>();
+    session_names.sort_by(|left, right| right.cmp(left));
+    entries.extend(
+        session_names
+            .into_iter()
+            .filter_map(|name| read_entry(storage, MemoryEntryScope::Session, &name).ok()),
+    );
+    entries
 }
 
-/// List memory notes from both global (`~/.echo-agent/memory/`) and the current
-/// workspace (`<cwd>/.echo-agent/memory/`). EchoAgent auto-writes these as it learns
-/// facts across sessions.
 #[tauri::command]
-pub fn memory_list(cwd: Option<String>) -> Vec<MemoryEntry> {
-    let mut out = scan_memory_dir(&global_memory_dir(), "global");
-    if let Some(cwd) = cwd {
-        let ws_dir = workspace_memory_dir(&cwd);
-        if ws_dir.exists() {
-            out.extend(scan_memory_dir(&ws_dir, "workspace"));
-        }
-    }
-    out
+pub fn memory_list(cwd: Option<String>) -> Result<Vec<MemoryEntry>, String> {
+    let cwd = normalized_cwd(cwd.as_deref());
+    let storage = memory_storage(cwd)?;
+    Ok(list_memory(&storage, cwd.is_some()))
 }
 
-/// Read a single memory file. `scope` selects the root; `path` is relative.
 #[tauri::command]
 pub fn memory_get(scope: String, path: String, cwd: Option<String>) -> Result<String, String> {
-    let root = match scope.as_str() {
-        "workspace" => {
-            workspace_memory_dir(cwd.as_deref().ok_or("cwd required for workspace scope")?)
-        }
-        _ => global_memory_dir(),
-    };
-    // Prevent path traversal: reject absolute paths and `..`.
-    if path.starts_with('/') || path.starts_with('\\') || path.contains("..") {
-        return Err("invalid memory path".into());
+    let scope = MemoryEntryScope::parse(&scope)?;
+    let cwd = normalized_cwd(cwd.as_deref());
+    if scope != MemoryEntryScope::Global && cwd.is_none() {
+        return Err("cwd required for workspace memory".into());
     }
-    let full = root.join(&path);
-    std::fs::read_to_string(&full).map_err(|e| format!("read {}: {e}", full.display()))
+    Ok(read_entry(&memory_storage(cwd)?, scope, &path)?.content)
 }
 
-/// Create or overwrite a memory note. Writes to the selected scope's root.
+fn check_expected_revision(path: &Path, expected: Option<&str>) -> Result<(), String> {
+    match (std::fs::read(path), expected) {
+        (Ok(bytes), Some(value)) if file_revision(&bytes) == value => Ok(()),
+        (Ok(_), _) => Err("记忆已被其他会话修改，请刷新后重试".into()),
+        (Err(error), Some("")) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        (Err(error), _) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err("记忆文件已被删除，请刷新后重试".into())
+        }
+        (Err(error), _) => Err(format!("read {}: {error}", path.display())),
+    }
+}
+
 #[tauri::command]
 pub fn memory_save(
     scope: String,
     path: String,
     content: String,
     cwd: Option<String>,
+    expected_revision: Option<String>,
 ) -> Result<MemoryEntry, String> {
-    let root = match scope.as_str() {
-        "workspace" => {
-            workspace_memory_dir(cwd.as_deref().ok_or("cwd required for workspace scope")?)
-        }
-        _ => global_memory_dir(),
-    };
-    if path.starts_with('/') || path.starts_with('\\') || path.contains("..") {
-        return Err("invalid memory path".into());
+    if content.len() as u64 > MAX_MEMORY_FILE_BYTES {
+        return Err(format!(
+            "memory content exceeds {} MiB",
+            MAX_MEMORY_FILE_BYTES / 1024 / 1024
+        ));
     }
-    let full = root.join(&path);
-    if let Some(parent) = full.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
+    let scope = MemoryEntryScope::parse(&scope)?;
+    scope.writable()?;
+    let cwd = normalized_cwd(cwd.as_deref());
+    if scope == MemoryEntryScope::Workspace && cwd.is_none() {
+        return Err("cwd required for workspace memory".into());
     }
-    let size = content.len() as u64;
-    std::fs::write(&full, &content).map_err(|e| format!("write: {e}"))?;
-    Ok(MemoryEntry {
-        scope,
-        path,
-        content,
-        size,
-    })
+    let storage = memory_storage(cwd)?;
+    let target = resolve_memory_path(&storage, scope, &path)?;
+    reject_symlink(&target)?;
+    check_expected_revision(&target, expected_revision.as_deref())?;
+    crate::paths::write_private_file(&target, content.as_bytes())?;
+    read_entry(&storage, scope, &path)
 }
 
-/// Delete a memory note.
+/// Append one normalized note to a canonical memory file. This is the write
+/// primitive used by the editor's "new memory" action and `/remember`.
 #[tauri::command]
-pub fn memory_delete(scope: String, path: String, cwd: Option<String>) -> Result<(), String> {
-    let root = match scope.as_str() {
-        "workspace" => {
-            workspace_memory_dir(cwd.as_deref().ok_or("cwd required for workspace scope")?)
-        }
-        _ => global_memory_dir(),
-    };
-    if path.starts_with('/') || path.starts_with('\\') || path.contains("..") {
-        return Err("invalid memory path".into());
+pub fn memory_append(
+    scope: String,
+    content: String,
+    cwd: Option<String>,
+) -> Result<MemoryEntry, String> {
+    if content.trim().is_empty() {
+        return Err("memory content cannot be empty".into());
     }
-    let full = root.join(&path);
-    std::fs::remove_file(&full).map_err(|e| format!("delete: {e}"))
+    if content.len() as u64 > MAX_MEMORY_FILE_BYTES {
+        return Err(format!(
+            "memory content exceeds {} MiB",
+            MAX_MEMORY_FILE_BYTES / 1024 / 1024
+        ));
+    }
+    let scope = MemoryEntryScope::parse(&scope)?;
+    let runtime_scope = scope.writable()?;
+    let cwd = normalized_cwd(cwd.as_deref());
+    if scope == MemoryEntryScope::Workspace && cwd.is_none() {
+        return Err("cwd required for workspace memory".into());
+    }
+    let storage = memory_storage(cwd)?;
+    let target = resolve_memory_path(&storage, scope, MEMORY_FILE)?;
+    reject_symlink(&target)?;
+    let normalized = normalize_memory_content(&content);
+    let existing_size = std::fs::metadata(&target)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let separator_size = u64::from(existing_size > 0) * 2;
+    if existing_size
+        .saturating_add(separator_size)
+        .saturating_add(normalized.len() as u64)
+        > MAX_MEMORY_FILE_BYTES
+    {
+        return Err(format!(
+            "memory file would exceed {} MiB",
+            MAX_MEMORY_FILE_BYTES / 1024 / 1024
+        ));
+    }
+    storage
+        .append_to_memory(runtime_scope, &normalized)
+        .map_err(|error| format!("append memory: {error}"))?;
+    crate::paths::harden_private_file(&target)?;
+    read_entry(&storage, scope, MEMORY_FILE)
 }
 
-/// Trigger EchoAgent to rewrite memories into structured markdown via an LLM pass.
-/// Maps to `echo.agent/memory/rewrite`. Optional — the user can also just edit the
-/// raw MEMORY.md themselves.
 #[tauri::command]
-pub async fn memory_rewrite(state: State<'_, AppState>) -> Result<(), String> {
+pub fn memory_delete(
+    scope: String,
+    path: String,
+    cwd: Option<String>,
+    expected_revision: Option<String>,
+) -> Result<(), String> {
+    let scope = MemoryEntryScope::parse(&scope)?;
+    scope.writable()?;
+    let cwd = normalized_cwd(cwd.as_deref());
+    if scope == MemoryEntryScope::Workspace && cwd.is_none() {
+        return Err("cwd required for workspace memory".into());
+    }
+    let storage = memory_storage(cwd)?;
+    let target = resolve_memory_path(&storage, scope, &path)?;
+    reject_symlink(&target)?;
+    check_expected_revision(&target, expected_revision.as_deref())?;
+    std::fs::remove_file(&target).map_err(|error| format!("delete {}: {error}", target.display()))
+}
+
+/// Rewrite one editor buffer via the active session's model. The Runtime only
+/// returns rewritten text; the caller explicitly reviews and saves it.
+#[tauri::command]
+pub async fn memory_rewrite(
+    state: State<'_, AppState>,
+    session_id: String,
+    raw_text: String,
+    context_summary: String,
+) -> Result<String, String> {
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let params = raw_params(&serde_json::json!({}));
-    let _: serde_json::Value = call_ext(&tx, "echo.agent/memory/rewrite", params)
+    let params = raw_params(&serde_json::json!({
+        "sessionId": session_id,
+        "rawText": raw_text,
+        "contextSummary": context_summary,
+    }));
+    let value: serde_json::Value = call_ext(&tx, "echo.agent/memory/rewrite", params)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(())
+    value
+        .get("rewritten")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "memory rewrite response missing rewritten text".into())
 }
 
 /// Flush in-flight memory writes to disk (`echo.agent/memory/flush`).
 #[tauri::command]
-pub async fn memory_flush(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn memory_flush(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let params = raw_params(&serde_json::json!({}));
+    // The upstream flush request predates the camelCase rewrite request and
+    // intentionally deserializes this one field as snake_case.
+    let params = raw_params(&serde_json::json!({ "session_id": session_id }));
     let _: serde_json::Value = call_ext(&tx, "echo.agent/memory/flush", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Run the Runtime's `/dream` consolidation for the active session. This
+/// bypasses the periodic time/session gates while preserving Runtime locking,
+/// indexing, notifications and failure handling.
+#[tauri::command]
+pub async fn memory_dream(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let tx = state
+        .tx
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("agent not initialized")?;
+    crate::agent_runtime::prompt(&tx, &session_id, "/dream")
+        .await
+        .map_err(|error| error.to_string())
 }
 
 // ========================================================================
@@ -880,7 +1103,74 @@ pub async fn marketplace_action(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_slash_commands;
+    use super::{
+        check_expected_revision, file_revision, list_memory, parse_slash_commands,
+        resolve_memory_path, MemoryEntryScope, MemoryStorage,
+    };
+
+    #[test]
+    fn memory_list_uses_runtime_layout_and_marks_sessions_read_only() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        let storage = MemoryStorage::new(cwd.path(), Some(root.path()));
+        std::fs::create_dir_all(storage.sessions_dir()).unwrap();
+        std::fs::write(storage.global_memory_file(), "# Global\n").unwrap();
+        std::fs::write(storage.workspace_memory_file(), "# Workspace\n").unwrap();
+        std::fs::write(
+            storage.sessions_dir().join("2026-08-31-test.md"),
+            "# Session\n",
+        )
+        .unwrap();
+
+        let entries = list_memory(&storage, true);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].scope, "global");
+        assert_eq!(entries[1].scope, "workspace");
+        assert_eq!(entries[2].scope, "session");
+        assert!(!entries[0].read_only);
+        assert!(entries[2].read_only);
+        assert_eq!(entries[0].revision, file_revision(b"# Global\n"));
+    }
+
+    #[test]
+    fn memory_paths_reject_arbitrary_and_traversal_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+        let storage = MemoryStorage::new(cwd.path(), Some(root.path()));
+
+        assert!(resolve_memory_path(&storage, MemoryEntryScope::Global, "notes.md").is_err());
+        assert!(resolve_memory_path(&storage, MemoryEntryScope::Session, "../MEMORY.md").is_err());
+        assert!(MemoryEntryScope::parse("unexpected").is_err());
+    }
+
+    #[test]
+    fn memory_revision_check_detects_stale_edits_and_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("MEMORY.md");
+        std::fs::write(&path, "first").unwrap();
+        let revision = file_revision(b"first");
+        assert!(check_expected_revision(&path, Some(&revision)).is_ok());
+        std::fs::write(&path, "second").unwrap();
+        assert!(check_expected_revision(&path, Some(&revision)).is_err());
+
+        let missing = dir.path().join("missing.md");
+        assert!(check_expected_revision(&missing, Some("")).is_ok());
+        assert!(check_expected_revision(&missing, None).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn memory_writes_reject_symlinked_canonical_files() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.md");
+        let link = dir.path().join("MEMORY.md");
+        std::fs::write(&outside, "private").unwrap();
+        symlink(&outside, &link).unwrap();
+
+        assert!(super::reject_symlink(&link).is_err());
+    }
 
     #[test]
     fn parses_current_acp_command_shape_and_sources() {

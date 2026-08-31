@@ -20,6 +20,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
+# Pin the updater minor because `app_updater.rs` injects our private CA through
+# its reqwest 0.12 client hook. Upgrading this plugin must be tested together
+# with the direct reqwest dependency below.
+tauri-plugin-updater = "=2.9.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # In-process team MCP server (team_mcp.rs) — streamable-http JSON-RPC.

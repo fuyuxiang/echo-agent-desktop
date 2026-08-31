@@ -544,12 +544,13 @@ export interface PermissionRule {
 // ---------- memory (资料库 — ~/.echo-agent/memory/) ----------
 
 export interface MemoryEntry {
-  /** "global" | "workspace". */
-  scope: string;
-  /** Relative path (e.g. "MEMORY.md"). */
+  scope: "global" | "workspace" | "session";
   path: string;
   content: string;
   size: number;
+  revision: string;
+  modifiedAt: string | null;
+  readOnly: boolean;
 }
 
 // ---------- session search ----------

@@ -10,6 +10,7 @@ import { ThemeProvider } from "./components/ThemeProvider";
 import { SettingsPanel, type SettingsSectionId } from "./components/SettingsPanel";
 import { SearchOverlay } from "./components/SearchOverlay";
 import { AboutDialog } from "./components/AboutDialog";
+import { UpdateDialog } from "./components/UpdateDialog";
 import { FolderTrustDialog } from "./components/FolderTrustDialog";
 import { TasksPanel } from "./components/TasksPanel";
 import { SecondarySidebar } from "./components/SecondarySidebar";
@@ -46,6 +47,7 @@ import {
   providersList,
   flattenModels,
   notificationAppend,
+  memoryAppend,
   subscribeAgentEvents,
   type InitResult,
   type WorkspaceInfo,
@@ -68,7 +70,8 @@ import { hydrateKnowledgeSources } from "./lib/kb-source-storage";
 import { permissionModeFromEvent, usePermissionModeStore } from "./stores/permission-mode-store";
 import { buildProjectPrompt } from "./lib/project-context";
 import { migrateCatalogRootStorage } from "./lib/catalog-root-storage";
-import type { SlashCommandInvocation } from "./lib/slash-commands";
+import { parseRememberArguments, type SlashCommandInvocation } from "./lib/slash-commands";
+import { useUpdateStore } from "./stores/update-store";
 
 /** Hidden markers wrapping the expert persona in the text sent to the runtime.
  *  The UI strips these (and everything between them) from user messages. */
@@ -131,6 +134,7 @@ function Shell() {
   const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("model");
   const [searchOpen, setSearchOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
   const [trustRequest, setTrustRequest] = useState<{ cwd?: string; reason?: string } | null>(null);
   const [taskRefreshSignal, setTaskRefreshSignal] = useState(0);
   const [commandRefreshKey, setCommandRefreshKey] = useState(0);
@@ -145,11 +149,14 @@ function Shell() {
   const cwdRef = useRef<string>("");
   const modelsRef = useRef<ModelOption[]>([]);
   const authReadyRef = useRef(false);
+  const promptedUpdateVersionRef = useRef<string | null>(null);
 
   const sessionStore = useSessionStore;
   const sessionsStore = useSessionsStore;
   const permissionStore = usePermissionStore;
   const questionStore = useQuestionStore;
+  const updateStatus = useUpdateStore((state) => state.status);
+  const availableUpdateVersion = useUpdateStore((state) => state.update?.version);
 
   const openSettings = useCallback((section: SettingsSectionId = "model") => {
     setSettingsSection(section);
@@ -166,6 +173,28 @@ function Shell() {
       console.error("[EchoAgent] Failed to hydrate projects:", error);
       setToast("项目后端数据读取失败，已使用本地缓存");
     });
+  }, []);
+
+  // Update checks run after the shell is interactive and never block agent
+  // initialization. Offline/VPN failures stay silent until the user opens the
+  // updater manually from Help.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void useUpdateStore.getState().check(false);
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (updateStatus !== "available" || !availableUpdateVersion) return;
+    if (promptedUpdateVersionRef.current === availableUpdateVersion) return;
+    promptedUpdateVersionRef.current = availableUpdateVersion;
+    setUpdateDialogOpen(true);
+  }, [availableUpdateVersion, updateStatus]);
+
+  const handleCheckForUpdates = useCallback(() => {
+    setUpdateDialogOpen(true);
+    void useUpdateStore.getState().check(true);
   }, []);
 
   useEffect(() => {
@@ -260,6 +289,15 @@ function Shell() {
               ?? (u as { type?: string }).type;
             if (updateType === "available_commands_update") {
               setCommandRefreshKey((value) => value + 1);
+            }
+            if (updateType === "memory_flush_completed") {
+              const result = (u as { result?: string }).result;
+              showToast(result ? `记忆已落盘：${result}` : "记忆已落盘");
+            } else if (updateType === "memory_dream_completed") {
+              const result = (u as { result?: string }).result;
+              showToast(result ? `记忆整理完成：${result}` : "记忆整理完成");
+            } else if (updateType === "memory_session_saved") {
+              showToast("已保存会话记忆");
             }
             sessionStore.getState().applyUpdate(u);
           },
@@ -1003,6 +1041,16 @@ function Shell() {
       case "usage":
         handleNavigate("用量统计");
         return true;
+      case "remember": {
+        const remember = parseRememberArguments(args);
+        if (!remember) {
+          showToast("用法：/remember [global|workspace] <内容>");
+          return false;
+        }
+        await memoryAppend(remember.scope, remember.content, cwdRef.current);
+        showToast(remember.scope === "global" ? "已保存到全局记忆" : "已保存到当前工作区记忆");
+        return true;
+      }
       case "plan": {
         const sessionId = sessionsStore.getState().currentSessionId;
         if (!sessionId) {
@@ -1179,7 +1227,11 @@ function Shell() {
       {/* macOS 使用系统原生 Overlay 标题栏(红绿灯 + 原生菜单栏),
           不再渲染自绘 TitleBar;Windows/Linux 保持自绘。 */}
       {!IS_MACOS && (
-        <TitleBar onPlaceholder={handlePlaceholder} onShowAbout={() => setAboutOpen(true)} />
+        <TitleBar
+          onPlaceholder={handlePlaceholder}
+          onShowAbout={() => setAboutOpen(true)}
+          onCheckForUpdates={handleCheckForUpdates}
+        />
       )}
       <div className={"app__body" + (sidebarCollapsed ? " app__body--collapsed" : "")}>
         <Sidebar
@@ -1345,10 +1397,17 @@ function Shell() {
       <SettingsPanel
         open={settingsOpen}
         initialSection={settingsSection}
+        sessionId={currentSessionId ?? undefined}
         onClose={() => setSettingsOpen(false)}
         onModelsChanged={refreshModels}
       />
-      <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} init={init} />
+      <AboutDialog
+        open={aboutOpen}
+        onClose={() => setAboutOpen(false)}
+        init={init}
+        onCheckForUpdates={handleCheckForUpdates}
+      />
+      <UpdateDialog open={updateDialogOpen} onClose={() => setUpdateDialogOpen(false)} />
       <FolderTrustDialog
         request={trustRequest}
         onResolve={() => setTrustRequest(null)}

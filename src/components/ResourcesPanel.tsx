@@ -1,16 +1,4 @@
-/**
- * 资料库面板 - 对接 EchoAgent memory (~/.echo-agent/memory/)
- *
- * 这是 EchoAgent「更多 / 个人记忆」中的记忆管理页面。
- * EchoAgent 把跨会话记忆写到 ~/.echo-agent/memory/MEMORY.md（global）和
- * <cwd>/.echo-agent/memory/（workspace），每条 markdown 文件一条记忆。
- *
- * 用户可以：
- *  - 浏览/搜索所有 memory 文件
- *  - 新建/编辑/删除 memory（直接改文件，EchoAgent 会热重载）
- *  - 触发 "重写"（让 EchoAgent 用 LLM 把原始笔记结构化）
- *  - 触发 "落盘"（强制 flush 未写 memory）
- */
+/** Local memory browser/editor backed by the embedded Runtime's canonical storage. */
 import { useCallback, useEffect, useState } from "react";
 import {
   BookIcon,
@@ -22,7 +10,9 @@ import {
   SparklesIcon,
 } from "@/foundation/components/Icon/icons";
 import {
+  memoryAppend,
   memoryDelete,
+  memoryDream,
   memoryFlush,
   memoryList,
   memoryRewrite,
@@ -32,222 +22,240 @@ import type { MemoryEntry } from "@/lib/types";
 
 interface ResourcesPanelProps {
   cwd?: string;
+  sessionId?: string;
   onToast?: (msg: string) => void;
 }
-export function ResourcesPanel({ cwd, onToast }: ResourcesPanelProps) {
+
+interface EditorState {
+  scope: MemoryEntry["scope"];
+  path: string;
+  content: string;
+  revision: string;
+  isNew: boolean;
+  readOnly: boolean;
+}
+
+function errorText(error: unknown): string {
+  return String(error).replace(/^Error:\s*/, "");
+}
+
+function scopeLabel(scope: MemoryEntry["scope"]): string {
+  if (scope === "global") return "全局";
+  if (scope === "workspace") return "工作区";
+  return "会话记录";
+}
+
+export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps) {
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
-  const [editing, setEditing] = useState<{ scope: string; path: string; content: string; isNew: boolean } | null>(null);
+  const [editing, setEditing] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
       setEntries(await memoryList(cwd));
-    } catch (e) {
-      onToast?.(`加载资料库失败：${String(e).replace(/^Error:\s*/, "")}`);
+    } catch (error) {
+      onToast?.(`加载个人记忆失败：${errorText(error)}`);
     } finally {
       setLoading(false);
     }
   }, [cwd, onToast]);
 
   useEffect(() => {
-    reload();
+    void reload();
   }, [reload]);
 
-  const handleSave = useCallback(
-    async (scope: string, path: string, content: string, isNew: boolean) => {
-      if (!path.trim()) {
-        onToast?.("文件名不能为空");
-        return;
-      }
-      if (!path.endsWith(".md")) {
-        onToast?.("文件名需以 .md 结尾");
-        return;
-      }
-      setBusy(true);
-      try {
-        await memorySave(scope, path, content, cwd);
-        onToast?.(isNew ? "已创建记忆" : "已保存");
-        setEditing(null);
-        reload();
-      } catch (e) {
-        onToast?.(`保存失败：${String(e).replace(/^Error:\s*/, "")}`);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [cwd, onToast, reload],
-  );
-
-  const handleDelete = useCallback(
-    async (entry: MemoryEntry) => {
-      if (!confirm(`确定删除「${entry.path}」？`)) return;
-      try {
-        await memoryDelete(entry.scope, entry.path, cwd);
-        onToast?.("已删除");
-        reload();
-      } catch (e) {
-        onToast?.(`删除失败：${String(e).replace(/^Error:\s*/, "")}`);
-      }
-    },
-    [cwd, onToast, reload],
-  );
-
-  const handleRewrite = useCallback(async () => {
-    if (!confirm("让 EchoAgent 用 LLM 重写所有记忆？这会重新组织资料库内容。")) return;
+  const handleSave = useCallback(async (draft: EditorState) => {
+    if (!draft.content.trim()) {
+      onToast?.("记忆内容不能为空");
+      return;
+    }
+    if (draft.scope === "session") {
+      onToast?.("会话记忆由 Agent 自动生成，只能查看");
+      return;
+    }
     setBusy(true);
     try {
-      await memoryRewrite();
-      onToast?.("已触发重写，稍后刷新查看");
-      setTimeout(reload, 2000);
-    } catch (e) {
-      onToast?.(`重写失败：${String(e).replace(/^Error:\s*/, "")}`);
+      if (draft.isNew) {
+        await memoryAppend(draft.scope, draft.content, cwd);
+        onToast?.("已追加记忆");
+      } else {
+        await memorySave(
+          draft.scope,
+          draft.path,
+          draft.content,
+          cwd,
+          draft.revision,
+        );
+        onToast?.("已保存记忆");
+      }
+      setEditing(null);
+      await reload();
+    } catch (error) {
+      onToast?.(`保存失败：${errorText(error)}`);
     } finally {
       setBusy(false);
     }
-  }, [onToast, reload]);
+  }, [cwd, onToast, reload]);
+
+  const handleDelete = useCallback(async (entry: MemoryEntry) => {
+    if (entry.readOnly) return;
+    if (!confirm(`确定删除${scopeLabel(entry.scope)}记忆文件？此操作无法撤销。`)) return;
+    setBusy(true);
+    try {
+      await memoryDelete(entry.scope, entry.path, cwd, entry.revision);
+      onToast?.("已删除记忆文件");
+      await reload();
+    } catch (error) {
+      onToast?.(`删除失败：${errorText(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [cwd, onToast, reload]);
 
   const handleFlush = useCallback(async () => {
+    if (!sessionId) {
+      onToast?.("立即落盘需要一个已打开的会话");
+      return;
+    }
     setBusy(true);
     try {
-      await memoryFlush();
-      onToast?.("已落盘");
-      reload();
-    } catch (e) {
-      onToast?.(`落盘失败：${String(e).replace(/^Error:\s*/, "")}`);
+      await memoryFlush(sessionId);
+      await reload();
+    } catch (error) {
+      onToast?.(`落盘失败：${errorText(error)}`);
     } finally {
       setBusy(false);
     }
-  }, [onToast, reload]);
+  }, [onToast, reload, sessionId]);
 
-  const filtered = entries.filter(
-    (e) =>
-      e.path.toLowerCase().includes(query.toLowerCase()) ||
-      e.content.toLowerCase().includes(query.toLowerCase()),
+  const handleDream = useCallback(async () => {
+    if (!sessionId) {
+      onToast?.("整理记忆需要一个已打开的会话");
+      return;
+    }
+    if (!confirm("整理会把历史会话记录归纳到长期记忆中，是否继续？")) return;
+    setBusy(true);
+    try {
+      await memoryDream(sessionId);
+      await reload();
+    } catch (error) {
+      onToast?.(`整理失败：${errorText(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [onToast, reload, sessionId]);
+
+  const handleRewriteDraft = useCallback(async (draft: EditorState) => {
+    if (!sessionId) {
+      onToast?.("AI 整理需要一个已打开的会话");
+      return;
+    }
+    setBusy(true);
+    try {
+      const rewritten = await memoryRewrite(
+        sessionId,
+        draft.content,
+        `${scopeLabel(draft.scope)}记忆 ${draft.path}`,
+      );
+      setEditing((current) => current ? { ...current, content: rewritten } : current);
+      onToast?.("已生成整理结果，请检查后保存");
+    } catch (error) {
+      onToast?.(`AI 整理失败：${errorText(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [onToast, sessionId]);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = entries.filter((entry) =>
+    !normalizedQuery
+    || entry.path.toLowerCase().includes(normalizedQuery)
+    || entry.content.toLowerCase().includes(normalizedQuery)
   );
-
-  const globalCount = entries.filter((e) => e.scope === "global").length;
-  const workspaceCount = entries.filter((e) => e.scope === "workspace").length;
+  const globalCount = entries.filter((entry) => entry.scope === "global").length;
+  const workspaceCount = entries.filter((entry) => entry.scope === "workspace").length;
+  const sessionCount = entries.filter((entry) => entry.scope === "session").length;
 
   return (
     <div className="resources-panel">
       <div className="resources-panel__header">
         <div>
           <h2 className="resources-panel__title">个人记忆</h2>
-          <p className="resources-panel__subtitle">管理 EchoAgent 长期保留的偏好、事实与工作上下文</p>
+          <p className="resources-panel__subtitle">管理跨会话偏好、项目上下文和 Agent 自动生成的会话记录</p>
         </div>
-          <div className="resources-panel__header-actions">
-            <button
-              className="resources-panel__action-btn"
-              onClick={handleFlush}
-              disabled={busy}
-              title="强制把 EchoAgent 未写的记忆落盘"
-            >
-              落盘
-            </button>
-            <button
-              className="resources-panel__action-btn"
-              onClick={handleRewrite}
-              disabled={busy}
-              title="用 LLM 重写记忆"
-            >
-              <SparklesIcon size="sm" /> 重写
-            </button>
-            <button
-              className="resources-panel__action-btn"
-              onClick={reload}
-              disabled={loading}
-              title="刷新"
-            >
-              <RefreshCwIcon size="sm" /> 刷新
-            </button>
-          </div>
+        <div className="resources-panel__header-actions">
+          <button className="resources-panel__action-btn" onClick={handleFlush} disabled={busy || !sessionId} title="提取当前会话中的长期信息并立即写入磁盘">
+            落盘
+          </button>
+          <button className="resources-panel__action-btn" onClick={handleDream} disabled={busy || !sessionId} title="把历史会话记录归纳为长期记忆">
+            <SparklesIcon size="sm" /> 整理
+          </button>
+          <button className="resources-panel__action-btn" onClick={() => void reload()} disabled={loading} title="刷新">
+            <RefreshCwIcon size="sm" /> 刷新
+          </button>
+        </div>
       </div>
 
       <div className="resources-panel__search">
         <SearchIcon size="md" className="resources-panel__search-icon" />
-        <input
-          type="text"
-          className="resources-panel__search-input"
-          placeholder="搜索记忆…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <input className="resources-panel__search-input" placeholder="搜索记忆…" value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
 
       <div className="resources-panel__stats">
-        <span>全局记忆 {globalCount} 条</span>
-        {cwd && <span>· 工作区记忆 {workspaceCount} 条</span>}
+        <span>全局 {globalCount}</span>
+        {cwd && <span>· 工作区 {workspaceCount}</span>}
+        {cwd && <span>· 会话记录 {sessionCount}</span>}
       </div>
 
       <button
         className="resources-panel__create-btn"
-        onClick={() =>
-          setEditing({
-            scope: "global",
-            path: "",
-            content: "# 新记忆\n\n",
-            isNew: true,
-          })
-        }
+        onClick={() => setEditing({
+          scope: cwd ? "workspace" : "global",
+          path: "MEMORY.md",
+          content: "",
+          revision: "",
+          isNew: true,
+          readOnly: false,
+        })}
       >
-        <AddIcon size="sm" /> 新建记忆
+        <AddIcon size="sm" /> 添加一条记忆
       </button>
 
       <div className="resources-panel__list">
-        {filtered.length === 0 && !loading && (
+        {!loading && filtered.length === 0 && (
           <div className="resources-panel__empty">
             <BookIcon size="xl" color="var(--echo-text-tertiary)" />
-            <p>
-              暂无记忆。EchoAgent 会在对话中自动学习并写入
-              <code>~/.echo-agent/memory/MEMORY.md</code>。
-            </p>
+            <p>暂无记忆。可手动添加，也可在对话中使用 <code>/remember</code> 保存。</p>
           </div>
         )}
         {filtered.map((entry) => (
-          <div
-            key={`${entry.scope}/${entry.path}`}
-            className="resources-panel__item"
-          >
-            <div className="resources-panel__item-icon">
-              <BookIcon size="md" />
-            </div>
+          <div key={`${entry.scope}/${entry.path}`} className="resources-panel__item">
+            <div className="resources-panel__item-icon"><BookIcon size="md" /></div>
             <div className="resources-panel__item-content">
               <div className="resources-panel__item-name">
                 {entry.path}
-                <span className="resources-panel__item-scope">
-                  {entry.scope === "global" ? "全局" : "工作区"}
-                </span>
+                <span className="resources-panel__item-scope">{scopeLabel(entry.scope)}</span>
               </div>
               <pre className="resources-panel__item-preview">
-                {entry.content.slice(0, 200)}
-                {entry.content.length > 200 ? "…" : ""}
+                {entry.content.slice(0, 200)}{entry.content.length > 200 ? "…" : ""}
               </pre>
             </div>
             <div className="resources-panel__item-actions">
               <button
                 className="resources-panel__icon-btn"
-                onClick={() =>
-                  setEditing({
-                    scope: entry.scope,
-                    path: entry.path,
-                    content: entry.content,
-                    isNew: false,
-                  })
-                }
-                title="编辑"
+                onClick={() => setEditing({ ...entry, isNew: false })}
+                title={entry.readOnly ? "查看" : "编辑"}
               >
                 <EditToolIcon size="sm" />
               </button>
-              <button
-                className="resources-panel__icon-btn resources-panel__icon-btn--danger"
-                onClick={() => handleDelete(entry)}
-                title="删除"
-              >
-                <DeleteIcon size="sm" />
-              </button>
+              {!entry.readOnly && (
+                <button className="resources-panel__icon-btn resources-panel__icon-btn--danger" onClick={() => void handleDelete(entry)} title="删除">
+                  <DeleteIcon size="sm" />
+                </button>
+              )}
             </div>
           </div>
         ))}
@@ -256,13 +264,14 @@ export function ResourcesPanel({ cwd, onToast }: ResourcesPanelProps) {
 
       {editing && (
         <MemoryEditor
-          initial={editing}
+          draft={editing}
           cwd={cwd}
+          canRewrite={Boolean(sessionId) && !editing.readOnly}
           busy={busy}
+          onChange={setEditing}
           onCancel={() => setEditing(null)}
-          onSave={(scope, path, content, isNew) =>
-            handleSave(scope, path, content, isNew)
-          }
+          onRewrite={() => void handleRewriteDraft(editing)}
+          onSave={() => void handleSave(editing)}
         />
       )}
     </div>
@@ -270,71 +279,69 @@ export function ResourcesPanel({ cwd, onToast }: ResourcesPanelProps) {
 }
 
 function MemoryEditor({
-  initial,
+  draft,
   cwd,
+  canRewrite,
   busy,
+  onChange,
   onCancel,
+  onRewrite,
   onSave,
 }: {
-  initial: { scope: string; path: string; content: string; isNew: boolean };
+  draft: EditorState;
   cwd?: string;
+  canRewrite: boolean;
   busy: boolean;
+  onChange: (draft: EditorState) => void;
   onCancel: () => void;
-  onSave: (scope: string, path: string, content: string, isNew: boolean) => void;
+  onRewrite: () => void;
+  onSave: () => void;
 }) {
-  const [scope, setScope] = useState(initial.scope);
-  const [path, setPath] = useState(initial.path);
-  const [content, setContent] = useState(initial.content);
-
   return (
     <div className="modal-overlay memory-editor__overlay" onClick={onCancel}>
-      <div
-        className="memory-editor"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-      >
+      <div className="memory-editor" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
         <div className="memory-editor__header">
-          <h3>{initial.isNew ? "新建记忆" : `编辑 ${initial.path}`}</h3>
-          <button className="memory-editor__close" onClick={onCancel}>
-            ✕
-          </button>
+          <h3>{draft.isNew ? "添加记忆" : `${draft.readOnly ? "查看" : "编辑"} ${draft.path}`}</h3>
+          <button className="memory-editor__close" onClick={onCancel} aria-label="关闭">✕</button>
         </div>
         <div className="memory-editor__meta">
           <label>
             范围
-            <select value={scope} onChange={(e) => setScope(e.target.value)}>
-              <option value="global">全局（~/.echo-agent/memory/）</option>
-              {cwd && <option value="workspace">工作区（&lt;cwd&gt;/.echo-agent/memory/）</option>}
+            <select
+              value={draft.scope}
+              disabled={!draft.isNew}
+              onChange={(event) => onChange({ ...draft, scope: event.target.value as EditorState["scope"] })}
+            >
+              <option value="global">全局记忆</option>
+              {cwd && <option value="workspace">当前工作区</option>}
+              {draft.scope === "session" && <option value="session">会话记录（只读）</option>}
             </select>
           </label>
           <label>
-            文件名
-            <input
-              type="text"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              placeholder="MEMORY.md 或 notes/foo.md"
-              disabled={!initial.isNew}
-            />
+            文件
+            <input type="text" value={draft.path} disabled />
           </label>
         </div>
         <textarea
           className="memory-editor__content"
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
+          value={draft.content}
+          readOnly={draft.readOnly}
+          onChange={(event) => onChange({ ...draft, content: event.target.value })}
+          placeholder={draft.isNew ? "例如：代码示例优先使用 TypeScript，并说明关键设计取舍。" : undefined}
           spellCheck={false}
         />
         <div className="memory-editor__footer">
-          <button className="btn btn--ghost" onClick={onCancel}>
-            取消
-          </button>
-          <button
-            className="btn btn--primary"
-            disabled={busy}
-            onClick={() => onSave(scope, path, content, initial.isNew)}
-          >
-            {busy ? "保存中…" : "保存"}
-          </button>
+          <button className="btn btn--ghost" onClick={onCancel}>{draft.readOnly ? "关闭" : "取消"}</button>
+          {!draft.readOnly && (
+            <>
+              <button className="btn btn--ghost" disabled={busy || !canRewrite || !draft.content.trim()} onClick={onRewrite} title={canRewrite ? "使用当前会话模型整理这份文本" : "需要一个已打开的会话"}>
+                {busy ? "处理中…" : "AI 整理"}
+              </button>
+              <button className="btn btn--primary" disabled={busy || !draft.content.trim()} onClick={onSave}>
+                {busy ? "保存中…" : draft.isNew ? "添加" : "保存"}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -5,7 +5,7 @@
  * 每个分区对接 EchoAgent 已有的能力：
  *  - personalize: 主题（接 ThemeProvider）+ 字号
  *  - shortcuts: 当前版本真实生效的快捷键说明
- *  - memory: 资料库入口（接 memory_list + memory_rewrite）
+ *  - memory: 本地记忆配置、当前会话落盘与整理
  *  - help: 帮助 + 反馈入口（含 EchoAgent 内核信息）
  *  - security: 安全中心（权限规则入口 + folder trust 说明）
  *  - data: 数据管理（清理会话/缓存 + 打开 EchoAgent 目录）
@@ -26,14 +26,20 @@ import {
   Mail,
   CheckCheck,
   Filter,
+  Download,
+  CheckCircle2,
+  AlertTriangle,
+  Loader2,
 } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import {
   commandsList,
   internalReload,
   mcpList,
+  memoryConfigGet,
+  memoryConfigSave,
+  memoryDream,
   memoryFlush,
-  memoryRewrite,
   notificationClear,
   notificationList,
   notificationMarkAllRead,
@@ -47,6 +53,7 @@ import {
   webSearchConfigSave,
   echoAgentDataDir,
   openEchoAgentDataDir,
+  type MemoryConfig,
 } from "@/lib/agent-client";
 import type {
   McpServerEntry,
@@ -56,6 +63,8 @@ import type {
   SkillInfo,
   SlashCommand,
 } from "@/lib/types";
+import { APP_VERSION } from "@/lib/app-version";
+import { useUpdateStore } from "@/stores/update-store";
 
 const FONT_KEY = "echoagent.fontSize";
 const SHORTCUT_GROUPS: Array<{
@@ -242,17 +251,49 @@ export function ShortcutsSettingsPanel() {
 
 // ---------- 记忆 ----------
 
-export function MemorySettingsPanel() {
+const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
+  enabled: true,
+  initialInjectionEnabled: true,
+  saveOnEnd: true,
+  watcherEnabled: true,
+  autoFlushEnabled: true,
+  dreamEnabled: true,
+};
+
+export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [config, setConfig] = useState<MemoryConfig>(DEFAULT_MEMORY_CONFIG);
+  const [loading, setLoading] = useState(true);
 
-  const handleRewrite = async () => {
-    if (!confirm("让 EchoAgent 用 LLM 重写所有记忆？")) return;
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    void memoryConfigGet()
+      .then((value) => {
+        if (!cancelled) setConfig(value);
+      })
+      .catch((error) => {
+        if (!cancelled) setMsg(`读取记忆配置失败：${String(error).replace(/^Error:\s*/, "")}`);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const updateConfig = async (key: keyof MemoryConfig, value: boolean) => {
+    const previous = config;
+    const next = { ...config, [key]: value };
+    setConfig(next);
     setBusy(true);
     try {
-      await memoryRewrite();
-      setMsg("已触发重写，稍后在「更多/资料库」查看");
+      setConfig(await memoryConfigSave(next));
+      setMsg("记忆配置已保存，重启 Agent 后对新会话生效。");
     } catch (e) {
+      setConfig(previous);
       setMsg(`失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
       setBusy(false);
@@ -260,10 +301,14 @@ export function MemorySettingsPanel() {
   };
 
   const handleFlush = async () => {
+    if (!sessionId) {
+      setMsg("立即落盘需要一个已打开的会话。");
+      return;
+    }
     setBusy(true);
     try {
-      await memoryFlush();
-      setMsg("已落盘");
+      await memoryFlush(sessionId);
+      setMsg("当前会话记忆已落盘。");
     } catch (e) {
       setMsg(`失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
@@ -271,37 +316,87 @@ export function MemorySettingsPanel() {
     }
   };
 
+  const handleDream = async () => {
+    if (!sessionId) {
+      setMsg("整理记忆需要一个已打开的会话。");
+      return;
+    }
+    if (!confirm("将历史会话记录归纳到长期记忆，是否继续？")) return;
+    setBusy(true);
+    try {
+      await memoryDream(sessionId);
+      setMsg("长期记忆整理完成。");
+    } catch (e) {
+      setMsg(`失败：${String(e).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggles: Array<{
+    key: keyof MemoryConfig;
+    name: string;
+    description: string;
+  }> = [
+    { key: "enabled", name: "启用本地记忆", description: "为新会话启用记忆检索、写入和整理能力" },
+    { key: "initialInjectionEnabled", name: "会话开始时检索", description: "首轮对话自动注入相关长期记忆" },
+    { key: "saveOnEnd", name: "会话结束时保存", description: "将有效会话的摘要保存为可检索记录" },
+    { key: "watcherEnabled", name: "监听外部修改", description: "手动编辑记忆文件后自动同步索引" },
+    { key: "autoFlushEnabled", name: "自动落盘", description: "空闲或上下文压缩前提取并保存长期信息" },
+    { key: "dreamEnabled", name: "自动整理", description: "定期将会话记录合并为结构化长期记忆" },
+  ];
+
   return (
     <SectionShell
       title="记忆"
-      desc="EchoAgent 跨会话记忆的维护。记忆文件存在 ~/.echo-agent/memory/。"
+      desc="本地、可审阅的跨会话记忆，包括全局偏好、工作区上下文和会话记录。"
     >
-      <SettingsGroup title="记忆存储" desc="对话中学习到的信息会自动写入本地记忆文件。">
+      <SettingsGroup title="记忆能力" desc="修改后会原子写入本地配置，重启 Agent 后对新会话生效。">
+        {toggles.map((toggle) => (
+          <div className="settings-row settings-row--comfortable" key={toggle.key}>
+            <div className="settings-row__label settings-row__label--stacked">
+              <span className="settings-row__name">{toggle.name}</span>
+              <span className="settings-row__description">{toggle.description}</span>
+            </div>
+            <label className="sk-toggle">
+              <input
+                type="checkbox"
+                aria-label={toggle.name}
+                checked={config[toggle.key]}
+                disabled={loading || busy || (toggle.key !== "enabled" && !config.enabled)}
+                onChange={(event) => void updateConfig(toggle.key, event.target.checked)}
+              />
+              <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
+            </label>
+          </div>
+        ))}
+      </SettingsGroup>
+      <SettingsGroup title="存储位置" desc="工作区记忆按项目身份存放在此根目录的独立子目录中。">
         <div className="settings-row settings-row--comfortable">
           <div className="settings-row__label settings-row__label--stacked">
             <span className="settings-row__name"><Database size={17} />本地记忆目录</span>
-            <span className="settings-row__description">可在侧栏“更多 / 资料库”中查看和编辑</span>
+            <span className="settings-row__description">可在侧栏“个人记忆”中查看、编辑和审阅</span>
           </div>
           <code className="settings-path-chip">~/.echo-agent/memory/</code>
         </div>
       </SettingsGroup>
-      <SettingsGroup title="维护操作" desc="通常无需手动执行；仅在需要立即同步或整理记忆时使用。">
+      <SettingsGroup title="当前会话维护" desc={sessionId ? "通常无需手动执行。" : "请先打开一个会话。"}>
         <div className="settings-action-row">
           <div className="settings-action-row__content">
             <strong>立即写入磁盘</strong>
-            <span>将当前尚未持久化的记忆立即保存到本地。</span>
+            <span>从当前会话提取长期信息并立即保存。</span>
           </div>
-          <button className="settings-btn" onClick={handleFlush} disabled={busy}>
+          <button className="settings-btn" onClick={handleFlush} disabled={busy || !sessionId || !config.enabled}>
             <Database size={15} /> 立即落盘
           </button>
         </div>
         <div className="settings-action-row">
           <div className="settings-action-row__content">
-            <strong>整理全部记忆</strong>
-            <span>使用当前模型重新组织记忆内容，可能需要一段时间。</span>
+            <strong>整理长期记忆</strong>
+            <span>将历史会话记录归纳到主题化长期记忆中。</span>
           </div>
-          <button className="settings-btn" onClick={handleRewrite} disabled={busy}>
-            <RefreshCw size={15} /> LLM 重写
+          <button className="settings-btn" onClick={handleDream} disabled={busy || !sessionId || !config.enabled}>
+            <RefreshCw size={15} /> 立即整理
           </button>
         </div>
       </SettingsGroup>
@@ -313,8 +408,65 @@ export function MemorySettingsPanel() {
 // ---------- 帮助与反馈 ----------
 
 export function HelpSettingsPanel() {
+  const updateStatus = useUpdateStore((state) => state.status);
+  const update = useUpdateStore((state) => state.update);
+  const checkedAt = useUpdateStore((state) => state.checkedAt);
+  const updateError = useUpdateStore((state) => state.error);
+  const downloaded = useUpdateStore((state) => state.downloaded);
+  const total = useUpdateStore((state) => state.total);
+  const checkUpdate = useUpdateStore((state) => state.check);
+  const installUpdate = useUpdateStore((state) => state.install);
+  const updateBusy = updateStatus === "checking" || updateStatus === "downloading" || updateStatus === "installing";
+  const updateProgress = total && total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : undefined;
+
   return (
     <SectionShell title="帮助与反馈" desc="查阅使用文档、协议说明和常见问题排查步骤。">
+      <SettingsGroup
+        title="版本升级"
+        desc="启动时会自动检查 EchoAgent 内网上的签名发布版。"
+        meta={<span>v{APP_VERSION}</span>}
+      >
+        <div className="settings-action-row">
+          <div className="settings-action-row__content">
+            <strong>
+              {updateStatus === "checking" && "正在检查更新…"}
+              {updateStatus === "available" && `发现新版本 v${update?.version}`}
+              {updateStatus === "downloading" && `正在下载 v${update?.version}`}
+              {updateStatus === "installing" && "正在安装，完成后将重启"}
+              {updateStatus === "up-to-date" && "当前已是最新版本"}
+              {updateStatus === "error" && "检查更新失败"}
+              {updateStatus === "idle" && "检查 EchoAgent 更新"}
+            </strong>
+            <span>
+              {updateStatus === "available"
+                ? (update?.notes?.trim() || "新版本已准备好，安装前会校验发布签名。")
+                : updateStatus === "error"
+                  ? updateError
+                  : checkedAt
+                    ? `上次检查：${new Date(checkedAt).toLocaleString("zh-CN")}`
+                    : "更新服务仅在内网或 VPN 环境可访问，断网不影响应用启动。"}
+            </span>
+            {(updateStatus === "downloading" || updateStatus === "installing") && (
+              <div className="settings-update-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={updateProgress}>
+                <span style={updateProgress === undefined ? undefined : { width: `${updateProgress}%` }} />
+              </div>
+            )}
+          </div>
+          {updateStatus === "available" ? (
+            <button className="settings-btn settings-btn--primary" onClick={() => void installUpdate()}>
+              <Download size={15} /> 下载并安装
+            </button>
+          ) : (
+            <button className="settings-btn" onClick={() => void checkUpdate(true)} disabled={updateBusy}>
+              {updateStatus === "checking" ? <Loader2 size={15} className="update-dialog__spinner" />
+                : updateStatus === "up-to-date" ? <CheckCircle2 size={15} />
+                  : updateStatus === "error" ? <AlertTriangle size={15} />
+                    : <RefreshCw size={15} />}
+              {updateStatus === "checking" ? "检查中" : "检查更新"}
+            </button>
+          )}
+        </div>
+      </SettingsGroup>
       <SettingsGroup title="帮助资源">
         <div className="help-grid">
           <a className="help-card" href="https://fuyuxiang.github.io/echo-agent/" target="_blank" rel="noreferrer">

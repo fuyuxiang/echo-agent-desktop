@@ -5,7 +5,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { commandsList } from "../agent-client";
+import {
+  commandsList,
+  memoryDelete,
+  memoryFlush,
+  memoryRewrite,
+  memorySave,
+} from "../agent-client";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -30,6 +36,45 @@ describe("commandsList", () => {
     expect(invokeMock).toHaveBeenCalledWith("commands_list", {
       sessionId: null,
       cwd: null,
+    });
+  });
+});
+
+describe("memory command contract", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
+  });
+
+  it("落盘和重写携带 Runtime 必需参数", async () => {
+    invokeMock.mockResolvedValueOnce(undefined).mockResolvedValueOnce("rewritten");
+    await memoryFlush("session-1");
+    await expect(memoryRewrite("session-1", "raw", "global memory")).resolves.toBe("rewritten");
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "memory_flush", { sessionId: "session-1" });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "memory_rewrite", {
+      sessionId: "session-1",
+      rawText: "raw",
+      contextSummary: "global memory",
+    });
+  });
+
+  it("写入和删除传递期望修订号", async () => {
+    await memorySave("global", "MEMORY.md", "body", "/repo", "revision-1");
+    await memoryDelete("global", "MEMORY.md", "/repo", "revision-2");
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "memory_save", {
+      scope: "global",
+      path: "MEMORY.md",
+      content: "body",
+      cwd: "/repo",
+      expectedRevision: "revision-1",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "memory_delete", {
+      scope: "global",
+      path: "MEMORY.md",
+      cwd: "/repo",
+      expectedRevision: "revision-2",
     });
   });
 });

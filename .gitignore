@@ -20,6 +20,9 @@ release
 .env.*
 !.env.example
 /src-tauri/.cargo/config.toml
+# Desktop updater signing keys must never enter source control.
+**/echoagent.key
+**/echoagent.key.pub
 
 # 测试、覆盖率与编辑器缓存
 .pytest_cache/

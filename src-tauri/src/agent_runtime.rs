@@ -69,6 +69,17 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
     // 1. Load + resolve config (~/.echo-agent/config.toml; defaults if absent).
     let raw = load_effective_config().map_err(|e| anyhow!("load config: {e}"))?;
     let mut cfg = AgentConfig::new_from_toml_cfg(&raw).map_err(|e| anyhow!("parse config: {e}"))?;
+    // The embedded Runtime ships memory as an opt-in feature. EchoAgent is a
+    // local Agent workspace, so memory is a first-class feature and defaults
+    // on unless the user explicitly disables `[memory].enabled`.
+    // `raw` is the embedded Runtime's toml 0.9 value while the desktop
+    // settings module intentionally uses its direct toml 0.8 dependency.
+    // Read this host override in-place instead of crossing those crate types.
+    let memory_enabled = raw
+        .get("memory")
+        .and_then(|memory| memory.get("enabled"))
+        .and_then(|enabled| enabled.as_bool())
+        .unwrap_or(true);
     // Empty remote settings: local defaults only. Must be set both here (runtime
     // resolution) and on `cfg.remote_settings` before bootstrap (see below).
     let local_remote_settings = xai_grok_shell::util::config::RemoteSettings::default();
@@ -79,7 +90,7 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
         cli_subagents: Some(false),
         cli_web_search_model: None,
         cli_session_summary_model: None,
-        memory_enabled_override: None,
+        memory_enabled_override: Some(memory_enabled),
         disable_web_search: false,
         todo_gate: false,
         laziness_debug_log: None,

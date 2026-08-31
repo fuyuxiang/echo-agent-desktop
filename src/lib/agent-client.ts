@@ -751,7 +751,24 @@ export async function permissionModeSet(mode: PermissionMode): Promise<void> {
   await invoke<void>("permission_mode_set", { mode });
 }
 
-// ---------- memory (资料库 — ~/.echo-agent/memory/) ----------
+// ---------- memory (资料库 — Runtime canonical storage) ----------
+
+export interface MemoryConfig {
+  enabled: boolean;
+  initialInjectionEnabled: boolean;
+  saveOnEnd: boolean;
+  watcherEnabled: boolean;
+  autoFlushEnabled: boolean;
+  dreamEnabled: boolean;
+}
+
+export async function memoryConfigGet(): Promise<MemoryConfig> {
+  return invoke<MemoryConfig>("memory_config_get");
+}
+
+export async function memoryConfigSave(memory: MemoryConfig): Promise<MemoryConfig> {
+  return invoke<MemoryConfig>("memory_config_save", { memory });
+}
 
 /** List memory notes from global + workspace scope. */
 export async function memoryList(cwd?: string): Promise<MemoryEntry[]> {
@@ -769,23 +786,58 @@ export async function memorySave(
   path: string,
   content: string,
   cwd?: string,
+  expectedRevision?: string,
 ): Promise<MemoryEntry> {
-  return invoke<MemoryEntry>("memory_save", { scope, path, content, cwd: cwd ?? null });
+  return invoke<MemoryEntry>("memory_save", {
+    scope,
+    path,
+    content,
+    cwd: cwd ?? null,
+    expectedRevision: expectedRevision ?? null,
+  });
+}
+
+/** Append one note to the selected canonical MEMORY.md. */
+export async function memoryAppend(
+  scope: "global" | "workspace",
+  content: string,
+  cwd?: string,
+): Promise<MemoryEntry> {
+  return invoke<MemoryEntry>("memory_append", { scope, content, cwd: cwd ?? null });
 }
 
 /** Delete a memory note. */
-export async function memoryDelete(scope: string, path: string, cwd?: string): Promise<void> {
-  await invoke<void>("memory_delete", { scope, path, cwd: cwd ?? null });
+export async function memoryDelete(
+  scope: string,
+  path: string,
+  cwd?: string,
+  expectedRevision?: string,
+): Promise<void> {
+  await invoke<void>("memory_delete", {
+    scope,
+    path,
+    cwd: cwd ?? null,
+    expectedRevision: expectedRevision ?? null,
+  });
 }
 
-/** Trigger EchoAgent to rewrite memories via an LLM pass (`echo.agent/memory/rewrite`). */
-export async function memoryRewrite(): Promise<void> {
-  await invoke<void>("memory_rewrite");
+/** Rewrite an editor buffer using the active session model; does not save it. */
+export async function memoryRewrite(
+  sessionId: string,
+  rawText: string,
+  contextSummary: string,
+): Promise<string> {
+  return invoke<string>("memory_rewrite", { sessionId, rawText, contextSummary });
 }
 
 /** Flush in-flight memory writes to disk (`echo.agent/memory/flush`). */
-export async function memoryFlush(): Promise<void> {
-  await invoke<void>("memory_flush");
+export async function memoryFlush(sessionId: string): Promise<void> {
+  await invoke<void>("memory_flush", { sessionId });
+}
+
+/** Consolidate session logs into long-term memory via the Runtime's `/dream`. */
+export async function memoryDream(sessionId: string): Promise<void> {
+  await invoke<void>("memory_dream", { sessionId });
 }
 
 // ---------- session search (FTS5) ----------
