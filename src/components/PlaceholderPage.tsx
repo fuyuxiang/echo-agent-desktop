@@ -36,7 +36,7 @@ interface PlaceholderPageProps {
   onStartProjectConversation?: (projectId: string, message: string) => void;
 }
 
-/** EchoAgent 功能面板（项目/组织记忆/专家能力/自动化/个人记忆/插件市场）。 */
+/** EchoAgent 功能面板（项目/组织/专家能力/自动化/个人记忆/插件市场）。 */
 export function PlaceholderPage({
   label,
   onNavigate,
@@ -62,7 +62,7 @@ export function PlaceholderPage({
     );
   }
 
-  if (label === "组织记忆") {
+  if (label === "组织") {
     return <OrganizationMemoryPanel onToast={onToast} />;
   }
 

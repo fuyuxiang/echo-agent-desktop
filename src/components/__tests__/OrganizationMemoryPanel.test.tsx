@@ -286,7 +286,7 @@ describe("OrganizationMemoryPanel", () => {
     await screen.findByText("Alice · https://memory.example.com");
     fireEvent.click(screen.getByRole("button", { name: "退出组织" }));
 
-    await screen.findByRole("heading", { name: "连接组织记忆" });
+    await screen.findByRole("heading", { name: "连接组织" });
     expect(screen.queryByText("Alice · https://memory.example.com")).not.toBeInTheDocument();
     expect(screen.getByText(/keychain cleanup failed/)).toBeInTheDocument();
   });
@@ -300,7 +300,7 @@ describe("OrganizationMemoryPanel", () => {
     await screen.findByText("Alice · https://memory.example.com");
     fireEvent.click(screen.getByRole("button", { name: "退出组织" }));
 
-    expect(screen.getByRole("heading", { name: "连接组织记忆" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "连接组织" })).toBeInTheDocument();
     expect(screen.queryByText("Alice · https://memory.example.com")).not.toBeInTheDocument();
     expect(useOrgSessionStore.getState().session?.loggedIn).toBe(false);
     await act(async () => finishLogout?.());
