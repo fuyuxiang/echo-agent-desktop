@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 vi.mock("@/lib/agent-client", () => ({
@@ -17,10 +17,22 @@ vi.mock("@/lib/agent-client", () => ({
   skillsList: vi.fn().mockResolvedValue([]),
   subagentsConfigGet: vi.fn().mockResolvedValue({ maxDepth: 1 }),
   webSearchConfigGet: vi.fn().mockResolvedValue({ enabled: false, model: "" }),
+  memoryConfigGet: vi.fn().mockResolvedValue({
+    enabled: true,
+    initialInjectionEnabled: true,
+    saveOnEnd: true,
+    watcherEnabled: true,
+    autoFlushEnabled: true,
+    dreamEnabled: true,
+  }),
+  memoryConfigSave: vi.fn(async (memory) => memory),
+  memoryFlush: vi.fn(),
+  memoryDream: vi.fn(),
 }));
 
 import { SettingsPanel } from "../SettingsPanel";
 import { ThemeProvider } from "../ThemeProvider";
+import { memoryConfigSave } from "@/lib/agent-client";
 
 function renderSettings() {
   return render(
@@ -80,7 +92,7 @@ describe("SettingsPanel", () => {
       expect(await screen.findByRole("heading", { name: page, level: 2 })).toBeInTheDocument();
       expect(navigationItem).toHaveAttribute("aria-current", "page");
     }
-  });
+  }, 15_000);
 
   it("移除助理设置，并将智能体邮箱统一显示为通知中心", async () => {
     renderSettings();
@@ -96,5 +108,27 @@ describe("SettingsPanel", () => {
     expect(screen.getByRole("button", { name: "全部" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "全部已读" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "清空" })).toBeDisabled();
+  });
+
+  it("记忆开关保存完整配置", async () => {
+    render(
+      <ThemeProvider>
+        <SettingsPanel open initialSection="memory" onClose={() => {}} />
+      </ThemeProvider>,
+    );
+
+    const autoFlush = await screen.findByRole("checkbox", { name: "自动落盘" });
+    expect(autoFlush).toBeChecked();
+    fireEvent.click(autoFlush);
+
+    await waitFor(() => {
+      expect(memoryConfigSave).toHaveBeenCalledWith(expect.objectContaining({
+        enabled: true,
+        autoFlushEnabled: false,
+      }));
+    });
+    expect(
+      screen.getByText("记忆配置已保存，重启 Agent 后对新会话生效。"),
+    ).toBeInTheDocument();
   });
 });

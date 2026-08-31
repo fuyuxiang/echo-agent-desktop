@@ -33,6 +33,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["msi", "nsis"],
     "icon": [
       "icons/32x32.png",
@@ -46,6 +47,17 @@
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
       "../vendor/grok-build/LICENSE": "licenses/grok-build-LICENSE",
       "../vendor/grok-build/third_party/NOTICE": "licenses/grok-build-THIRD-PARTY-NOTICE"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJFRjEzQTM3RTc0OTBERUMKUldUc0RVbm5OenJ4TGhzeHowcWVUUnJGMmREc1lNdlcwNTlESm5Bd05iYmRZZXZGMnFlV291MTUK",
+      "endpoints": [
+        "https://10.132.19.82:8787/desktop-updates/stable/{{target}}-{{arch}}.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

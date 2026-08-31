@@ -7,6 +7,7 @@
 mod agent_admin;
 mod agent_config;
 mod agent_runtime;
+mod app_updater;
 mod agents_store;
 mod automations;
 mod bridge;
@@ -210,6 +211,7 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
         .manage(Permissions::new())
         .manage(Questions::new())
@@ -234,6 +236,9 @@ pub fn run() {
             commands::agent_set_session_archived,
             commands::agent_set_session_expert,
             commands::agent_clear_session_expert,
+            // signed desktop application updates (private organization CA)
+            app_updater::app_update_check,
+            app_updater::app_update_install,
             // context usage pill (echo.agent/session/info + echo.agent/session/usage)
             commands::agent_session_info,
             commands::agent_session_usage,
@@ -265,6 +270,8 @@ pub fn run() {
             // web search config (~/.echo-agent/config.toml [models].web_search)
             agent_config::web_search_config_get,
             agent_config::web_search_config_save,
+            agent_config::memory_config_get,
+            agent_config::memory_config_save,
             // skills (echo.agent/skills/*)
             skills::skills_list,
             skills::skills_add,
@@ -346,9 +353,11 @@ pub fn run() {
             agent_admin::memory_list,
             agent_admin::memory_get,
             agent_admin::memory_save,
+            agent_admin::memory_append,
             agent_admin::memory_delete,
             agent_admin::memory_rewrite,
             agent_admin::memory_flush,
+            agent_admin::memory_dream,
             agent_admin::session_search,
             agent_admin::rewind_points,
             agent_admin::rewind_execute,

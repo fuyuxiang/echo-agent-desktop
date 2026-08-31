@@ -7667,6 +7667,108 @@ button.diff__path {
   padding: 1px 4px;
   border-radius: 3px;
 }
+.about-dialog__update { align-self: flex-end; margin-top: -8px; }
+
+/* ========================================================================
+ * UpdateDialog — 签名版本升级
+ * ===================================================================== */
+.update-dialog__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(3px);
+}
+.update-dialog {
+  position: relative;
+  width: min(520px, calc(100vw - 48px));
+  padding: 26px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 16px;
+  background: var(--echo-bg-primary);
+  box-shadow: var(--echo-shadow-lg, 0 14px 48px rgba(0, 0, 0, 0.24));
+}
+.update-dialog__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--echo-text-weak);
+  cursor: pointer;
+}
+.update-dialog__close:hover:not(:disabled) { background: var(--echo-bg-hover); }
+.update-dialog__close:disabled { cursor: not-allowed; opacity: 0.45; }
+.update-dialog__header { display: flex; align-items: center; gap: 14px; padding-right: 28px; }
+.update-dialog__header h2 { margin: 0; color: var(--echo-text-strong); font-size: 18px; }
+.update-dialog__header p { margin: 4px 0 0; color: var(--echo-text-medium); font-size: 12px; }
+.update-dialog__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  border-radius: 13px;
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-brand);
+}
+.update-dialog__icon--error { color: #d84a4a; }
+.update-dialog__icon--up-to-date { color: #00a884; }
+.update-dialog__spinner { animation: update-spin 0.85s linear infinite; }
+@keyframes update-spin { to { transform: rotate(360deg); } }
+.update-dialog__release,
+.update-dialog__message,
+.update-dialog__error,
+.update-dialog__progress-wrap {
+  margin: 20px 0 0;
+  padding: 15px;
+  border: 1px solid var(--echo-border-subtle);
+  border-radius: 10px;
+  background: var(--echo-bg-secondary);
+  color: var(--echo-text-medium);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.update-dialog__version-row { display: flex; align-items: center; gap: 9px; }
+.update-dialog__version-row strong { color: var(--echo-text-strong); font-size: 15px; }
+.update-dialog__version-row time { margin-left: auto; color: var(--echo-text-weak); font-size: 11px; }
+.update-dialog__required {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(216, 74, 74, 0.12);
+  color: #d84a4a;
+  font-size: 10px;
+  font-weight: 600;
+}
+.update-dialog__notes { margin-top: 11px; color: var(--echo-text-strong); white-space: pre-wrap; }
+.update-dialog__security { margin: 10px 0 0; color: var(--echo-text-weak); font-size: 11px; }
+.update-dialog__error { border-color: rgba(216, 74, 74, 0.32); color: #d84a4a; }
+.update-dialog__progress-label { display: flex; justify-content: space-between; gap: 12px; }
+.update-dialog__progress {
+  position: relative;
+  height: 7px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--echo-bg-tertiary);
+}
+.update-dialog__progress span { display: block; height: 100%; border-radius: inherit; background: var(--echo-brand); transition: width 0.16s ease; }
+.update-dialog__progress--indeterminate span { width: 38%; animation: update-progress 1.1s ease-in-out infinite; }
+@keyframes update-progress { from { transform: translateX(-110%); } to { transform: translateX(290%); } }
+.update-dialog__progress-wrap small { display: block; margin-top: 8px; color: var(--echo-text-weak); }
+.update-dialog__actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 22px; }
+.update-dialog__actions .settings-btn { display: inline-flex; align-items: center; gap: 6px; }
 
 /* ========================================================================
  * PermissionPicker — Composer meta 行的默认权限下拉
