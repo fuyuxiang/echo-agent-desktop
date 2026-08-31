@@ -201,10 +201,10 @@ pub fn run() {
     // 必须在任何 new_session 之前 —— 端口即刻写入 BOUND_PORT 供传参。
     team_mcp::serve();
     org_mcp::serve();
-    org::start_background_sync();
 
     tauri::Builder::default()
         .setup(|app| {
+            org::start_background_sync(app.handle().clone());
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             setup_desktop_lifecycle(app)?;
             Ok(())

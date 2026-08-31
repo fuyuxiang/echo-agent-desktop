@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { Upload } from "lucide-react";
 import {
   SearchIcon, InstalledSkillIcon, AddCircleIcon, RefreshCwIcon,
   PuzzlePieceIcon, DeleteIcon, FolderOpenIcon, ChevronLeftIcon, SparklesIcon,
@@ -14,18 +15,102 @@ import { Chip } from "../shared/ui";
 import { SkillCatalogCard } from "./SkillCatalogCard";
 import { SkillDetailModal } from "./SkillDetailModal";
 import { ImportSkillModal } from "./ImportSkillModal";
+import { UploadSkillModal } from "./UploadSkillModal";
 import {
   clearCatalogRoot,
   isLegacyWorkBuddyPath,
   readCatalogRoot,
   writeCatalogRoot,
 } from "@/lib/catalog-root-storage";
+import { listenOrgSkillsChanged, orgSetSkillPreference } from "@/lib/org-client";
 
 const FEATURED_WINDOW = 8;
 
 interface Props {
   pills: React.ReactNode;
   onToast?: (m: string) => void;
+}
+
+function organizationScopeLabel(scope: SkillInfo["orgScopeKind"]): string {
+  if (scope === "personal") return "个人云 Skill";
+  if (scope === "team") return "团队共享";
+  if (scope === "org") return "全组织共享";
+  return "服务器同步";
+}
+
+function skillSourceLabel(skill: SkillInfo): string {
+  if (skill.orgManaged || skill.scope === "server") {
+    return organizationScopeLabel(skill.orgScopeKind);
+  }
+  if (skill.managed) return "EchoAgent 管理";
+  const labels: Record<string, string> = {
+    local: "当前项目",
+    repo: "代码仓库",
+    user: "本地用户",
+    bundled: "内置技能",
+    plugin: "插件技能",
+  };
+  return skill.scope ? labels[skill.scope] ?? skill.scope : "本地来源";
+}
+
+function RuntimeSkillRow({
+  skill,
+  onToggle,
+  onRemove,
+  onUpload,
+}: {
+  skill: SkillInfo;
+  onToggle: (skill: SkillInfo, enabled: boolean) => void;
+  onRemove?: (skill: SkillInfo) => void;
+  onUpload?: (skill: SkillInfo) => void;
+}) {
+  const name = skill.displayName || skill.name;
+  const organizationManaged = skill.orgManaged || skill.scope === "server";
+  const mandatory = organizationManaged && skill.orgMandatory === true;
+  const removablePath = skill.managed ? skill.path : skill.configuredPath;
+  const toggleAction = organizationManaged
+    ? skill.enabled ? "卸载" : "安装"
+    : skill.enabled ? "停用" : "启用";
+  return (
+    <div className={`sk-inst-row${organizationManaged ? " sk-inst-row--organization" : ""}`}>
+      <div className="sk-card-head" style={{ flex: 1 }}>
+        <PuzzlePieceIcon size="md" className="sk-inst-icon" />
+        <div className="sk-inst-info">
+          <div className="sk-card-name">{name}</div>
+          <p className="sk-card-desc">{skill.description || "（无描述）"}</p>
+          <div className="sk-inst-meta">
+            <span>{skillSourceLabel(skill)}</span>
+            {organizationManaged && <span>组织托管</span>}
+            {mandatory && <span className="sk-inst-meta--mandatory">组织强制</span>}
+            {skill.version && <span>v{skill.version}</span>}
+            {skill.compatibility && <span title={skill.compatibility}>{skill.compatibility}</span>}
+          </div>
+        </div>
+      </div>
+      <label className={`sk-toggle${mandatory ? " sk-toggle--locked" : ""}`}
+        title={mandatory ? "组织强制 Skill 不能卸载" : organizationManaged
+          ? skill.enabled ? "已安装" : "未安装"
+          : skill.enabled ? "已启用" : "已禁用"}>
+        <input
+          type="checkbox"
+          aria-label={`${toggleAction}${name}`}
+          checked={skill.enabled}
+          disabled={mandatory}
+          onChange={() => onToggle(skill, !skill.enabled)}
+        />
+        <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
+      </label>
+      {onUpload && skill.path && !organizationManaged && (
+        <button type="button" className="sk-inst-upload" title="上传到组织"
+          aria-label={`上传${name}到组织`}
+          onClick={() => onUpload(skill)}><Upload size={16} /></button>
+      )}
+      {onRemove && removablePath && !organizationManaged && (
+        <button type="button" className="sk-inst-del" title="移除"
+          onClick={() => onRemove(skill)}><DeleteIcon size="sm" /></button>
+      )}
+    </div>
+  );
 }
 
 /** 技能 tab — a live catalog scanned from the agents tree + echo-agent
@@ -43,6 +128,7 @@ export function SkillsTab({ pills, onToast }: Props) {
   const [search, setSearch] = useState("");
   const [modalSkill, setModalSkill] = useState<SkillItem | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [uploadSkill, setUploadSkill] = useState<SkillInfo | null>(null);
 
   // ---- installed (EchoAgent) state ----
   const [locals, setLocals] = useState<SkillInfo[]>([]);
@@ -117,6 +203,20 @@ export function SkillsTab({ pills, onToast }: Props) {
   useEffect(() => { reloadLocals(true); }, [reloadLocals]);
   // Entering the installed view: reload with feedback.
   useEffect(() => { if (view === "installed") reloadLocals(false); }, [view, reloadLocals]);
+  // Native synchronization can happen from login, logout, a preference
+  // change, lease enforcement, or the five-minute background poll.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listenOrgSkillsChanged(() => { void reloadLocals(true); }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    }).catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [reloadLocals]);
 
   const installedNames = useMemo(
     () => new Set(locals.map((s) => (s.displayName || s.name).toLowerCase())),
@@ -182,7 +282,16 @@ export function SkillsTab({ pills, onToast }: Props) {
   const handleAdd = (skill: SkillItem) => setModalSkill(skill);
 
   const handleToggle = useCallback(async (s: SkillInfo, enabled: boolean) => {
-    try { await skillsToggle(s.name, enabled); reloadLocals(); }
+    if (s.orgMandatory) return;
+    try {
+      if ((s.orgManaged || s.scope === "server") && s.orgSkillId) {
+        await orgSetSkillPreference(s.orgSkillId, enabled);
+        onToast?.(enabled ? "组织 Skill 已安装" : "组织 Skill 已卸载");
+      } else {
+        await skillsToggle(s.name, enabled);
+      }
+      await reloadLocals();
+    }
     catch (e) { onToast?.(`切换失败：${String(e).replace(/^Error:\s*/, "")}`); }
   }, [onToast, reloadLocals]);
 
@@ -208,7 +317,14 @@ export function SkillsTab({ pills, onToast }: Props) {
   if (needPick && !catalog && view === "center") {
     return (
       <div className="um-page">
-        <header className="um-topbar"><div className="um-topbar-left">{pills}</div></header>
+        <header className="um-topbar">
+          <div className="um-topbar-left">{pills}</div>
+          <div className="um-topbar-right">
+            <button type="button" className="um-btn um-btn--grey" onClick={() => setView("installed")}>
+              <InstalledSkillIcon size="sm" /><span>我安装的</span>
+            </button>
+          </div>
+        </header>
         <div className="um-scroll">
           <div className="ec-empty">
             <FolderOpenIcon size="xl" className="ec-empty-icon" />
@@ -251,29 +367,8 @@ export function SkillsTab({ pills, onToast }: Props) {
           ) : (
             <div className="sk-inst-list">
               {locals.map((s) => (
-                <div key={s.name + (s.path ?? "")} className="sk-inst-row">
-                  <div className="sk-card-head" style={{ flex: 1 }}>
-                    <PuzzlePieceIcon size="md" className="sk-inst-icon" />
-                    <div className="sk-inst-info">
-                      <div className="sk-card-name">{s.displayName || s.name}</div>
-                      <p className="sk-card-desc">{s.description || "（无描述）"}</p>
-                      <div className="sk-inst-meta">
-                        <span>{s.managed ? "EchoAgent 管理" : s.scope || "本地来源"}</span>
-                        {s.version && <span>v{s.version}</span>}
-                        {s.compatibility && <span title={s.compatibility}>{s.compatibility}</span>}
-                      </div>
-                    </div>
-                  </div>
-                  <label className="sk-toggle" title={s.enabled ? "已启用" : "已禁用"}>
-                    <input type="checkbox" checked={s.enabled}
-                      onChange={() => handleToggle(s, !s.enabled)} />
-                    <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
-                  </label>
-                  {(s.managed ? s.path : s.configuredPath) && (
-                    <button type="button" className="sk-inst-del" title="移除"
-                      onClick={() => handleRemove(s)}><DeleteIcon size="sm" /></button>
-                  )}
-                </div>
+                <RuntimeSkillRow key={s.name + (s.path ?? "")} skill={s}
+                  onToggle={handleToggle} onRemove={handleRemove} onUpload={setUploadSkill} />
               ))}
             </div>
           )}
@@ -282,6 +377,9 @@ export function SkillsTab({ pills, onToast }: Props) {
         {importOpen && (
           <ImportSkillModal onClose={() => setImportOpen(false)} onToast={onToast}
             onInstalled={reloadLocals} />
+        )}
+        {uploadSkill && (
+          <UploadSkillModal skill={uploadSkill} onClose={() => setUploadSkill(null)} onToast={onToast} />
         )}
       </div>
     );

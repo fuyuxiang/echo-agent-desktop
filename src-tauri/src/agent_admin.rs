@@ -986,6 +986,14 @@ fn acp_ext_notification(
 /// `kind` ∈ "mcp_all" | "mcp_project" | "skills" | "models".
 #[tauri::command]
 pub async fn internal_reload(state: State<'_, AppState>, kind: String) -> Result<(), String> {
+    request_internal_reload(&state, &kind)
+}
+
+/// Send one of the runtime's internal reload notifications without requiring
+/// a frontend round-trip. Organization Skill synchronization uses this to
+/// tighten or expand every resident session immediately after its signed
+/// server directory set changes.
+pub(crate) fn request_internal_reload(state: &AppState, kind: &str) -> Result<(), String> {
     use xai_acp_lib::{AcpAgentMessage, AcpArgs};
     let tx = state
         .tx
@@ -993,7 +1001,7 @@ pub async fn internal_reload(state: State<'_, AppState>, kind: String) -> Result
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let method = match kind.as_str() {
+    let method = match kind {
         "mcp_all" => "echo.agent/internal/reload_all_mcp_servers",
         "mcp_project" => "echo.agent/internal/reload_project_mcp_servers",
         "skills" => "echo.agent/internal/reload_skills",

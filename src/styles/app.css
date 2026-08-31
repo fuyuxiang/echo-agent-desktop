@@ -11595,12 +11595,16 @@ button.diff__path {
 .sk-installed { padding-top: 8px; }
 .sk-inst-list { display: flex; flex-direction: column; gap: 10px; }
 .sk-inst-row { display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: 12px; background: var(--echo-bg-primary); border: 1px solid var(--echo-border-default); }
+.sk-inst-row--organization { border-color: rgba(0,194,154,.28); background: linear-gradient(135deg, rgba(0,194,154,.055), var(--echo-bg-primary) 55%); }
 .sk-inst-icon { color: var(--echo-text-medium); flex: 0 0 auto; }
 .sk-inst-info { flex: 1 1 auto; min-width: 0; }
 .sk-inst-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .sk-inst-meta span { max-width: 280px; padding: 3px 8px; border-radius: 6px; background: var(--echo-bg-tertiary); color: var(--echo-text-weak); font-size: 12px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sk-inst-meta .sk-inst-meta--mandatory { background: rgba(0,194,154,.12); color: var(--echo-brand); }
 .sk-inst-del { border: none; background: transparent; cursor: pointer; color: var(--echo-text-weak); padding: 4px; border-radius: 6px; }
 .sk-inst-del:hover { background: rgba(229,72,77,0.1); color: #e5484d; }
+.sk-inst-upload { border: none; background: transparent; cursor: pointer; color: var(--echo-text-weak); padding: 4px; border-radius: 6px; display: inline-flex; }
+.sk-inst-upload:hover { background: rgba(0,194,154,.1); color: var(--echo-brand); }
 
 /* toggle switch (shared skills/connectors/mcp) */
 .sk-toggle { position: relative; display: inline-block; width: 40px; height: 22px; flex: 0 0 auto; cursor: pointer; }
@@ -11609,6 +11613,7 @@ button.diff__path {
 .sk-toggle-thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.2); transition: transform .15s; }
 .sk-toggle input:checked + .sk-toggle-track { background: var(--echo-brand); }
 .sk-toggle input:checked + .sk-toggle-track .sk-toggle-thumb { transform: translateX(18px); }
+.sk-toggle--locked { cursor: not-allowed; opacity: .68; }
 
 /* import modal (截图 5) */
 .sk-import-overlay { z-index: 1200; }
@@ -11660,6 +11665,13 @@ button.diff__path {
 .sk-high-risk-confirm { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border-radius: 9px; background: rgba(229,72,77,.08); color: var(--echo-text-medium); font-size: 12.5px; line-height: 1.55; cursor: pointer; }
 .sk-high-risk-confirm input { margin-top: 2px; accent-color: #e5484d; }
 .sk-install-submit { align-self: flex-end; }
+.sk-upload { width: 520px; }
+.sk-upload-source { display: flex; flex-direction: column; gap: 5px; padding: 12px 14px; border-radius: 10px; background: var(--echo-bg-secondary); }
+.sk-upload-source strong { color: var(--echo-text-strong); font-size: 14px; }
+.sk-upload-source span { color: var(--echo-text-weak); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sk-upload-field { display: flex; flex-direction: column; gap: 7px; color: var(--echo-text-medium); font-size: 13px; }
+.sk-upload-field select { min-height: 38px; padding: 7px 10px; border: 1px solid var(--echo-border-default); border-radius: 8px; background: var(--echo-bg-primary); color: var(--echo-text-strong); }
+.sk-upload-note { color: var(--echo-text-weak); font-size: 12.5px; line-height: 1.65; }
 
 /* ============================ CONNECTORS ============================ */
 .cn-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding-top: 8px; }

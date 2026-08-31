@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useSessionsStore, selectHasFilter } from "@/stores/sessions-store";
 import { useProjectsStore } from "@/stores/projects-store";
+import { useOrgSessionStore } from "@/stores/org-session-store";
 import { IS_MACOS } from "@/lib/platform";
 import {
   agentRenameSession,
@@ -560,6 +561,12 @@ export function Sidebar({
   const removeSession = useSessionsStore((s) => s.remove);
   const setTasksOpen = useSessionsStore((s) => s.setTasksOpen);
   const setSpacesOpen = useSessionsStore((s) => s.setSpacesOpen);
+  const organizationSession = useOrgSessionStore((s) => s.session);
+  const organizationUserLabel = organizationSession?.loggedIn
+    ? organizationSession.user?.displayName?.trim()
+      || organizationSession.user?.username?.trim()
+      || "组织用户"
+    : "本地用户";
 
   // Task filter state
   const filterStatus = useSessionsStore((s) => s.filterStatus);
@@ -942,11 +949,14 @@ export function Sidebar({
       <div className="sidebar__footer">
         <button
           className="sidebar__user"
-          aria-label="本地用户"
+          aria-label={organizationUserLabel}
+          title={organizationSession?.loggedIn && organizationSession.serverUrl
+            ? `${organizationUserLabel} · ${organizationSession.serverUrl}`
+            : organizationUserLabel}
           onClick={() => onPlaceholder("用户中心")}
         >
           <UserIcon size="md" />
-          <span className="sidebar__user-label">本地用户</span>
+          <span className="sidebar__user-label">{organizationUserLabel}</span>
         </button>
         <button className="sidebar__icon-btn" aria-label="通知" onClick={() => onOpenSettings()}>
           <BellIcon size="md" />

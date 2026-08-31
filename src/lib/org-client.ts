@@ -186,3 +186,7 @@ export const orgQaFeedback = (qaEventId: string, feedback: "helpful" | "not_help
   invoke<unknown>("org_qa_feedback", { qaEventId, feedback });
 export const listenOrgAsk = (handler: (event: OrgAskEvent) => void): Promise<UnlistenFn> =>
   listen<OrgAskEvent>("org://ask-event", ({ payload }) => handler(payload));
+
+/** Fired after native organization Skill activation/deactivation is persisted. */
+export const listenOrgSkillsChanged = (handler: () => void): Promise<UnlistenFn> =>
+  listen("org://skills-changed", handler);
