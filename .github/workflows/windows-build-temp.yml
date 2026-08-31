@@ -57,12 +57,28 @@ jobs:
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate Windows build tools
+        shell: pwsh
+        run: |
+          $rgPath = (Get-Command rg -ErrorAction Stop).Source
+          "RG_PATH=$rgPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $rgPath --version
+          pnpm tauri --version
+
+      - name: Disable updater artifact signing for CI installer
+        shell: pwsh
+        run: |
+          $configPath = "src-tauri\tauri.conf.json"
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+          $config.bundle.createUpdaterArtifacts = $false
+          $config | ConvertTo-Json -Depth 100 | Set-Content $configPath -Encoding utf8
+
       - name: Build unsigned NSIS installer
         shell: pwsh
         run: |
           $env:CARGO_BUILD_JOBS = "2"
-          $env:GROK_SHELL_BUNDLE_RG_PATH = (Get-Command rg.exe).Source
-          pnpm tauri build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          $env:GROK_SHELL_BUNDLE_RG_PATH = $env:RG_PATH
+          pnpm tauri build --bundles nsis
 
       - name: Commit installer to temporary branch
         shell: pwsh
