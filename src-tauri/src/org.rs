@@ -134,6 +134,17 @@ fn notify_skills_changed(app: &AppHandle, reason: &str) {
     }
 }
 
+fn notify_models_changed(app: &AppHandle, reason: &str) {
+    let runtime = app.state::<crate::commands::AppState>();
+    if let Err(error) = crate::agent_admin::request_internal_reload(&runtime, "models") {
+        if error == "agent not initialized" {
+            tracing::debug!(%reason, "organization model synced before agent initialization");
+        } else {
+            tracing::warn!(%error, %reason, "failed to hot-reload organization model");
+        }
+    }
+}
+
 pub(crate) fn local_kb_sources_path() -> PathBuf {
     crate::paths::echo_agent_home_dir().join(LOCAL_KB_SOURCES_FILE)
 }
@@ -556,6 +567,44 @@ async fn authenticated_json(
     response_data(authenticated_response(inner, method, path, body).await?).await
 }
 
+/// Download the organization's complete chat credential and persist it using
+/// the same provider/model schema as models created manually in Settings.
+async fn sync_organization_model_config(inner: &Arc<OrgInner>) -> Result<Option<String>, String> {
+    let data = authenticated_json(inner, Method::GET, "/api/v1/client/model-config", None).await?;
+    if data
+        .get("credentialError")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err("organization model credential cannot be decrypted".into());
+    }
+    if !data
+        .get("configured")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+
+    let required = |key: &str| -> Result<String, String> {
+        data.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| format!("organization model config missing {key}"))
+    };
+    let model_id = crate::providers::save_organization_model_config(
+        crate::providers::OrganizationModelConfig {
+            provider: required("chatProvider")?,
+            model: required("chatModel")?,
+            base_url: required("chatBaseUrl")?,
+            api_key: required("chatKey")?,
+        },
+    )?;
+    Ok(Some(model_id))
+}
+
 pub(crate) async fn mcp_json(
     method: Method,
     path: &str,
@@ -766,6 +815,15 @@ pub async fn org_login(
             Err(cleanup_error) => format!("{error}; local session cleanup: {cleanup_error}"),
         });
     }
+    // 模型凭证优先同步，避免受管 Skill 包下载延迟模型进入 Runtime。
+    match sync_organization_model_config(&state.inner).await {
+        Ok(Some(model_id)) => {
+            tracing::info!(%model_id, "organization model configuration downloaded");
+            notify_models_changed(&app, "login-sync");
+        }
+        Ok(None) => tracing::debug!("organization chat model is not configured"),
+        Err(error) => tracing::warn!(%error, "initial organization model sync failed"),
+    }
     // 登录即同步。失败不退出账号，但受管 Skill 保持已停用，
     // 避免网络短暂抖动迫使用户重新输入密码。
     match sync_skills(&state.inner).await {
@@ -812,6 +870,14 @@ pub async fn org_session(
 ) -> Result<OrgSessionView, String> {
     if state.inner.session.lock().await.profile.is_some() {
         if update_bootstrap(&state.inner).await.is_ok() {
+            match sync_organization_model_config(&state.inner).await {
+                Ok(Some(model_id)) => {
+                    tracing::info!(%model_id, "organization model configuration restored");
+                    notify_models_changed(&app, "session-restore");
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!(%error, "organization model restore failed"),
+            }
             let _ = sync_skills(&state.inner).await;
         } else {
             enforce_skill_lease();
@@ -2111,7 +2177,7 @@ mod tests {
 
     #[test]
     fn sse_parser_preserves_unicode_split_between_network_chunks() {
-        let frame = "event: delta\ndata: {\"text\":\"组织记忆\"}\n\n";
+        let frame = "event: delta\ndata: {\"text\":\"组织\"}\n\n";
         let mut pending = Vec::new();
         let mut events = Vec::new();
         for chunk in frame.as_bytes().chunks(2) {
@@ -2121,7 +2187,7 @@ mod tests {
         assert!(pending.is_empty());
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].0, "delta");
-        assert_eq!(events[0].1, json!({ "text": "组织记忆" }));
+        assert_eq!(events[0].1, json!({ "text": "组织" }));
     }
 
     #[test]
