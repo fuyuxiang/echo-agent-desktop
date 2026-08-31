@@ -1,0 +1,67 @@
+name: windows-build-temp
+
+on:
+  push:
+    branches:
+      - ci/windows-build-20260831
+    paths:
+      - .github/workflows/windows-build-temp.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install protoc 29.3
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "protoc-29.3-win64.zip"
+          Invoke-WebRequest -Uri "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-win64.zip" -OutFile $archive
+          New-Item -ItemType Directory -Force -Path "C:\Tools\protoc" | Out-Null
+          Expand-Archive -Path $archive -DestinationPath "C:\Tools\protoc" -Force
+          & "C:\Tools\protoc\bin\protoc.exe" --version
+
+      - name: Prepare embedded runtime
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build unsigned NSIS installer
+        shell: pwsh
+        run: |
+          $env:CARGO_BUILD_JOBS = "2"
+          $env:GROK_SHELL_BUNDLE_RG_PATH = (Get-Command rg.exe).Source
+          pnpm tauri build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Commit installer to temporary branch
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis" -Filter "*.exe" | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not generated" }
+          New-Item -ItemType Directory -Force -Path "ci-artifacts" | Out-Null
+          $destination = "ci-artifacts\EchoAgent_0.3.8_windows_x64-setup.exe"
+          Copy-Item $installer.FullName $destination -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --force $destination
+          git commit -m "ci: attach Windows x64 installer [skip ci]"
+          git push origin "HEAD:$env:GITHUB_REF_NAME"
