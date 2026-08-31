@@ -11712,6 +11712,9 @@ button.diff__path {
 /* ---- MCP modal (截图 6) ---- */
 .mcp-overlay { z-index: 1200; }
 .mcp-modal { width: 820px; max-width: calc(100vw - 48px); max-height: calc(100vh - 64px); display: flex; flex-direction: column; background: var(--echo-bg-primary); border-radius: 16px; box-shadow: 0 12px 44px rgba(0,0,0,0.22); overflow: hidden; }
+.um-scroll--mcp { display: flex; padding: 0; overflow: hidden; }
+.mcp-modal--embedded { width: 100%; max-width: none; max-height: none; height: 100%; border-radius: 0; box-shadow: none; background: transparent; }
+.mcp-modal--embedded .mcp-modal-head { padding: 18px 28px; }
 .mcp-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px 24px; border-bottom: 1px solid var(--echo-border-default); }
 .mcp-modal-titlewrap { display: flex; align-items: center; gap: 12px; }
 .mcp-modal-glyph { width: 40px; height: 40px; border-radius: 11px; background: var(--echo-bg-tertiary); color: var(--echo-text-medium); display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }

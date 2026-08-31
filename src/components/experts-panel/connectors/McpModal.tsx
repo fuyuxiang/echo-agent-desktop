@@ -12,11 +12,13 @@ import { McpConfigEditor } from "./McpConfigEditor";
 
 /** MCP management with persisted state, live health and per-server tool details. */
 export function McpModal({
-  onClose, onToast, initialEditing = false,
+  onClose, onToast, initialEditing = false, embedded = false,
 }: {
   onClose: () => void;
   onToast?: (m: string) => void;
   initialEditing?: boolean;
+  /** Render directly inside the connectors page instead of as a modal. */
+  embedded?: boolean;
 }) {
   const [editing, setEditing] = useState(initialEditing);
   const [servers, setServers] = useState<McpServerEntry[]>([]);
@@ -152,9 +154,9 @@ export function McpModal({
     }
   };
 
-  return (
-    <div className="modal-overlay mcp-overlay" onClick={onClose}>
-      <div className="mcp-modal" onClick={(e) => e.stopPropagation()}>
+  const content = (
+      <div className={`mcp-modal${embedded ? " mcp-modal--embedded" : ""}`}
+        onClick={(e) => e.stopPropagation()}>
         <div className="mcp-modal-head">
           <div className="mcp-modal-titlewrap">
             <span className="mcp-modal-glyph"><McpIcon size="md" /></span>
@@ -175,9 +177,11 @@ export function McpModal({
                 </button>
               </>
             )}
-            <button type="button" className="mcp-modal-close" onClick={onClose}>
-              <XCloseIcon size="md" />
-            </button>
+            {!embedded && (
+              <button type="button" className="mcp-modal-close" onClick={onClose}>
+                <XCloseIcon size="md" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -334,6 +338,13 @@ export function McpModal({
           )}
         </div>
       </div>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <div className="modal-overlay mcp-overlay" onClick={onClose}>
+      {content}
     </div>
   );
 }

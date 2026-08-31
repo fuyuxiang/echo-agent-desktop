@@ -31,6 +31,7 @@ vi.mock("@/lib/agent-client", () => ({
 
 import { ImportSkillModal } from "../experts-panel/skills/ImportSkillModal";
 import { McpModal } from "../experts-panel/connectors/McpModal";
+import { ConnectorsTab } from "../experts-panel/connectors/ConnectorsTab";
 
 describe("本地 Skills / MCP 完整流程", () => {
   beforeEach(() => {
@@ -116,5 +117,14 @@ describe("本地 Skills / MCP 完整流程", () => {
     await waitFor(() => expect(mocks.mcpToggleTool).toHaveBeenCalledWith(
       "session-1", "demo", "read_file", false,
     ));
+  });
+
+  it("连接器页直接展示全局 MCP 管理，不再要求额外跳转", async () => {
+    render(<ConnectorsTab pills={<span>连接器页签</span>} />);
+
+    expect(await screen.findByText("暂无 MCP 服务")).toBeInTheDocument();
+    expect(screen.getByText("MCP 服务管理")).toBeInTheDocument();
+    expect(screen.queryByText("查看全局连接器")).not.toBeInTheDocument();
+    expect(document.querySelector(".modal-overlay")).not.toBeInTheDocument();
   });
 });
