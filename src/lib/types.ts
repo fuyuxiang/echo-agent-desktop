@@ -4,7 +4,7 @@
  * the frontend as Tauri events.
  *
  * Source of truth: the `agent-client-protocol` 0.10.4 crate (used by EchoAgent)
- * and the x.ai extensions documented in
+ * and the echo.agent extensions documented in
  *   grok-build/crates/codegen/xai-grok-shell/src/extensions/notification.rs
  *
  * The Rust backend serializes these with serde and emits them as the `payload`
@@ -141,13 +141,13 @@ export interface UsageUpdate {
   };
 }
 
-/** Catch-all for x.ai/grok extension session-update types not modeled above. */
+/** Catch-all for echo.agent extension session-update types not modeled above. */
 export interface ExtensionSessionUpdate {
   type: string;
   [key: string]: unknown;
 }
 
-// ---------- context usage (x.ai/session/info + x.ai/session/usage) ----------
+// ---------- context usage (echo.agent/session/info + echo.agent/session/usage) ----------
 
 /** One itemized context-cost row from EchoAgent (skills listing, MCP servers). */
 export interface TokenUsageCategory {
@@ -159,7 +159,7 @@ export interface TokenUsageCategory {
 }
 
 /**
- * Context-window snapshot from EchoAgent's `x.ai/session/info`
+ * Context-window snapshot from EchoAgent's `echo.agent/session/info`
  * (`ContextInfo` in xai-grok-shell, camelCase on the wire).
  * Note: skills/MCP category estimates overlap `messageTokens` (they're
  * injected as system-reminders in messages), so category percentages are
@@ -183,7 +183,7 @@ export interface ContextInfo {
   usageCategories?: TokenUsageCategory[];
 }
 
-/** Wire response of `x.ai/session/info` (only the fields the UI consumes). */
+/** Wire response of `echo.agent/session/info` (only the fields the UI consumes). */
 export interface SessionInfoResponse {
   sessionId: string;
   cwd: string;
@@ -193,7 +193,7 @@ export interface SessionInfoResponse {
 }
 
 /**
- * Cumulative session token usage from `x.ai/session/usage` (`PromptUsage`
+ * Cumulative session token usage from `echo.agent/session/usage` (`PromptUsage`
  * totals, camelCase on the wire). `inputTokens` includes cache reads, so the
  * average cache hit rate is `cachedReadTokens / inputTokens`.
  */
@@ -302,14 +302,14 @@ export interface SessionSummary {
 }
 
 /** Payload of the `agent://summary` event — a freshly generated or renamed
- *  session title pushed by EchoAgent via `x.ai/session_notification`
+ *  session title pushed by EchoAgent via `echo.agent/session_notification`
  *  (`SessionSummaryGenerated` variant). */
 export interface SessionSummaryEvent {
   sessionId: string;
   title: string;
 }
 
-// ---------- skills (x.ai/skills/*) ----------
+// ---------- skills (echo.agent/skills/*) ----------
 
 /** One discovered skill. Mirrors EchoAgent's `SkillInfo`. */
 export interface SkillInfo {
@@ -363,7 +363,7 @@ export interface SkillInstallResult {
   inspection: SkillPackageInspection;
 }
 
-// ---------- connectors / MCP (x.ai/mcp/*) ----------
+// ---------- connectors / MCP (echo.agent/mcp/*) ----------
 
 /** One MCP server config entry surfaced to the UI. */
 export interface McpServerEntry {
@@ -600,7 +600,7 @@ export interface RunningTask {
 
 // ---------- subagent live events (agent://subagent) ----------
 
-/** A live subagent lifecycle event forwarded from EchoAgent's `x.ai/session_notification`. */
+/** A live subagent lifecycle event forwarded from EchoAgent's `echo.agent/session_notification`. */
 export interface SubagentLiveEvent {
   /** Parent session that owns the subagent. */
   sessionId: string;
@@ -663,10 +663,6 @@ export type AutomationScheduleType = "recurring" | "once";
 export type AutomationPermissionMode = "fullAccess" | "default";
 export type AutomationStatus = "ACTIVE" | "PAUSED";
 
-// ---------- xAI API Key 管理 ----------
-// EchoAgent OAuth 账户类型（AccountInfo/SubscriptionStatus/LogoutResult）已随
-// OAuth 功能一并移除；EchoAgent 现仅保留 xAI API Key（BYOK）认证。
-
 // ---------- agent / assistant defaults (~/.echo-agent/config.toml) ----------
 
 export interface AgentDefaults {
@@ -678,7 +674,7 @@ export interface AgentDefaults {
   rememberToolApprovals?: boolean;
 }
 
-// ---------- plugins + marketplace (x.ai/plugins/*, x.ai/marketplace/*) ----------
+// ---------- plugins + marketplace (echo.agent/plugins/*, echo.agent/marketplace/*) ----------
 
 /** One installed plugin (subset of EchoAgent's PluginInfo). */
 export interface PluginEntry {

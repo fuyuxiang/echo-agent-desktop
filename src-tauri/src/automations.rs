@@ -1,6 +1,6 @@
 //! Automations (定时任务) — EchoAgent-managed local scheduler.
 //!
-//! EchoAgent only exposes `x.ai/scheduler/delete` (deleting tasks it created itself
+//! EchoAgent only exposes `echo.agent/scheduler/delete` (deleting tasks it created itself
 //! via tool calls). It does NOT let a client create new scheduled tasks.
 //! EchoAgent's automation panel needs create/update/list, so EchoAgent keeps
 //! its own automation table in `~/.echo-agent/echoagent-automations.json` and a run

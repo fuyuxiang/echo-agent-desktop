@@ -24,7 +24,6 @@ describe("ensureSession", () => {
     });
     mocks.agentAuthStatus.mockResolvedValue({
       ready: true,
-      hasAuthFile: false,
       providers: ["MiniMax-M3"],
     });
     mocks.providersList.mockResolvedValue({

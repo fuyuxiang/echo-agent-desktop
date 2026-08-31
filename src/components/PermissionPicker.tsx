@@ -7,7 +7,7 @@
  *  - always-approve 始终允许:所有工具调用自动批准
  *
  * 切换会写入 config.toml(影响之后的启动),并通过
- * `x.ai/yolo_mode_changed` 通知运行中的 agent 立即生效。
+ * `echo.agent/yolo_mode_changed` 通知运行中的 agent 立即生效。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {

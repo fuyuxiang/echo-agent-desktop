@@ -137,6 +137,8 @@ if [[ -d "$PATCH_DIR" ]]; then
     done
 fi
 
+"$PROJECT_ROOT/scripts/rename-runtime-namespace.sh" "$GROK_SUBMODULE"
+
 # ---------------------------------------------------------------------------
 # 5. Build (frontend build runs automatically via beforeBuildCommand).
 # ---------------------------------------------------------------------------

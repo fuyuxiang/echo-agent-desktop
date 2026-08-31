@@ -1,7 +1,7 @@
 /**
- * 关于 EchoAgent 对话框 - 显示版本、运行时和认证信息。
+ * 关于 EchoAgent 对话框 - 显示版本、运行时和模型配置状态。
  *
- * 从 agentInit() 的 InitResult 取 agentVersion，从 agentAuthStatus() 取认证状态，
+ * 从 agentInit() 的 InitResult 取 agentVersion，从 agentAuthStatus() 取模型状态。
  */
 import { useEffect, useState } from "react";
 import { XCloseIcon, CheckIcon } from "@/foundation/components/Icon/icons";
@@ -81,7 +81,7 @@ export function AboutDialog({ open, onClose, init }: AboutDialogProps) {
             <dd>{RUNTIME_LABEL}</dd>
           </div>
           <div className="about-dialog__row">
-            <dt>认证状态</dt>
+            <dt>模型状态</dt>
             <dd>
               {authReady === null ? (
                 "检查中…"

@@ -66,19 +66,22 @@ export function PlaceholderPage({
     return <OrganizationMemoryPanel onToast={onToast} />;
   }
 
-  if (label === "专家·技能·连接器") {
-    return <ExpertsPanel onGoHome={onGoHome} onToast={onToast} />;
+  if (["专家·技能·连接器", "技能", "连接器"].includes(label)) {
+    const initialTab = label === "技能" ? "skills" : label === "连接器" ? "connectors" : "experts";
+    return <ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} />;
   }
 
   if (label === "自动化") {
     return <AutomationPanel onToast={onToast} onNavigate={onNavigate} onOpenSession={onOpenSession} cwd={cwd} />;
   }
 
-  if (label === "插件·市场") {
+  if (label === "插件·市场" || label === "插件市场") {
     return (
       <PluginsMarketTabs
+        key={label}
         sessionId={sessionId}
         onToast={onToast}
+        initialTab={label === "插件市场" ? "marketplace" : "plugins"}
       />
     );
   }
@@ -153,11 +156,13 @@ import { PuzzlePieceIcon, RepoIcon } from "@/foundation/components/Icon/icons";
 function PluginsMarketTabs({
   sessionId,
   onToast,
+  initialTab = "plugins",
 }: {
   sessionId?: string;
   onToast?: (msg: string) => void;
+  initialTab?: "plugins" | "marketplace";
 }) {
-  const [tab, setTab] = useState<"plugins" | "marketplace">("plugins");
+  const [tab, setTab] = useState<"plugins" | "marketplace">(initialTab);
   return (
     <div className="plugins-market-wrap">
       <div className="plugins-market-tabs">

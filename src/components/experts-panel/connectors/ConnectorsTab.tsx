@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
-  SearchIcon, AddCircleIcon, FolderOpenIcon, RefreshCwIcon, McpIcon,
+  SearchIcon, AddCircleIcon, FolderOpenIcon, RefreshCwIcon, McpIcon, RestoreIcon,
 } from "@/foundation/components/Icon/icons";
 import {
   connectorsDefaultRoot, connectorsLoad, connectorsReadMcpConfig,
@@ -98,7 +98,10 @@ export function ConnectorsTab({ pills, onToast }: Props) {
    *  success toast when the dangling promise eventually resolves). */
   const oauthDismissedRef = useRef(false);
 
-  const loadCatalog = useCallback(async (r: string): Promise<boolean> => {
+  const loadCatalog = useCallback(async (
+    r: string,
+    persistOverride = false,
+  ): Promise<boolean> => {
     if (isLegacyWorkBuddyPath(r)) {
       clearCatalogRoot("connectors");
       setRoot("");
@@ -111,7 +114,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
       const c = await connectorsLoad(r);
       setCatalog(c);
       setRoot(c.root || r);
-      writeCatalogRoot("connectors", c.root || r);
+      if (persistOverride) writeCatalogRoot("connectors", c.root || r);
       return true;
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
@@ -233,9 +236,22 @@ export function ConnectorsTab({ pills, onToast }: Props) {
         onToast?.("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
         return;
       }
-      if (await loadCatalog(pick)) onToast?.(`已切换连接器数据目录：${pick}`);
+      if (await loadCatalog(pick, true)) onToast?.(`已切换连接器数据目录：${pick}`);
     } catch { /* cancelled */ }
   }, [root, loadCatalog, onToast]);
+
+  const restoreDefault = useCallback(async () => {
+    clearCatalogRoot("connectors");
+    setRoot(""); setCatalog(null); setError("");
+    try {
+      const d = await connectorsDefaultRoot();
+      if (d && !isLegacyWorkBuddyPath(d) && await loadCatalog(d)) {
+        onToast?.("已恢复 EchoAgent 默认连接器目录");
+        return;
+      }
+    } catch { /* handled by the empty state */ }
+    setNeedPick(true);
+  }, [loadCatalog, onToast]);
 
   const openEditor = () => { setMcpEditing(true); setMcpOpen(true); };
   const openMcpList = () => { setMcpEditing(false); setMcpOpen(true); };
@@ -531,6 +547,9 @@ export function ConnectorsTab({ pills, onToast }: Props) {
           <span className="ec-source-label" title={root}>来源：{root || "—"}</span>
           <button type="button" className="ec-source-btn" onClick={chooseDir} title="切换来源目录">
             <FolderOpenIcon size="sm" /><span>选择目录</span>
+          </button>
+          <button type="button" className="ec-source-btn" onClick={restoreDefault} title="恢复 EchoAgent 默认目录">
+            <RestoreIcon size="sm" /><span>恢复默认</span>
           </button>
           <button type="button" className="ec-source-btn" onClick={() => root && loadCatalog(root)}
             disabled={loading} title="重新加载">

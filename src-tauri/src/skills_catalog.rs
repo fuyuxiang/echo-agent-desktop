@@ -281,16 +281,21 @@ fn derive_category(name: &str, desc: &str) -> String {
 
 /// Candidate connector-marketplace roots — the PRIMARY source of product
 /// skills (each connector ships a `skills/SKILL.md`). Mirrors
-/// `connectors_catalog::candidate_roots`. `ECHOAGENT_CONNECTORS_DIR` overrides.
+/// `connectors_catalog::candidate_roots` and follows `ECHO_AGENT_HOME`.
 fn candidate_connector_roots() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    if let Ok(v) = std::env::var("ECHOAGENT_CONNECTORS_DIR") {
-        if !v.is_empty() {
-            out.push(PathBuf::from(v));
-        }
+    if let Some(path) =
+        crate::paths::first_env_path(&["ECHO_AGENT_CONNECTORS_DIR", "ECHOAGENT_CONNECTORS_DIR"])
+    {
+        crate::paths::push_unique_path(&mut out, path);
     }
+    crate::paths::push_unique_path(&mut out, crate::paths::connectors_marketplace_dir());
+
     if let Some(h) = dirs::home_dir() {
-        out.push(h.join(".echo-agent").join("connectors-marketplace"));
+        crate::paths::push_unique_path(
+            &mut out,
+            h.join(".echo-agent").join("connectors-marketplace"),
+        );
     }
     out
 }
@@ -301,16 +306,21 @@ fn connector_root_valid(root: &Path) -> bool {
         .is_file()
 }
 
-/// Candidate built-in skill roots. `ECHOAGENT_BUILTIN_SKILLS_DIR` overrides.
+/// Candidate built-in skill roots. The canonical root follows
+/// `ECHO_AGENT_HOME`; the previous fixed-home location is a fallback.
 fn candidate_builtin_roots() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    if let Ok(v) = std::env::var("ECHOAGENT_BUILTIN_SKILLS_DIR") {
-        if !v.is_empty() {
-            out.push(PathBuf::from(v));
-        }
+    if let Some(path) = crate::paths::first_env_path(&[
+        "ECHO_AGENT_BUILTIN_SKILLS_DIR",
+        "ECHOAGENT_BUILTIN_SKILLS_DIR",
+    ]) {
+        crate::paths::push_unique_path(&mut out, path);
     }
+    crate::paths::push_unique_path(&mut out, crate::paths::builtin_skills_dir());
+
     if let Some(h) = dirs::home_dir() {
-        out.push(
+        crate::paths::push_unique_path(
+            &mut out,
             h.join(".echo-agent")
                 .join("resources")
                 .join("builtin-skills"),
@@ -817,15 +827,9 @@ mod tests {
     // automatically when the connector marketplace isn't present.
 
     fn marketplace_available() -> bool {
-        if let Some(home) = dirs::home_dir() {
-            return home
-                .join(".echo-agent")
-                .join("connectors-marketplace")
-                .join(".echo-agent-connector")
-                .join("connectors.json")
-                .is_file();
-        }
-        false
+        candidate_connector_roots()
+            .iter()
+            .any(|root| connector_root_valid(root))
     }
 
     #[tokio::test]

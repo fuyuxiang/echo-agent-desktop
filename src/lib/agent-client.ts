@@ -55,8 +55,6 @@ import type { QuestionRequest } from "@/stores/question-store";
 
 export interface AuthStatus {
   ready: boolean;
-  /** True if ~/.echo-agent/auth.json exists. */
-  hasAuthFile: boolean;
   /** Human-readable reason when not ready. */
   reason?: string;
   /** Model ids configured in ~/.echo-agent/config.toml (BYOK providers). */
@@ -64,7 +62,7 @@ export interface AuthStatus {
 }
 
 export interface InitResult {
-  /** Whether the agent initialized and authenticated successfully. */
+  /** Whether the agent initialized successfully. */
   ok: boolean;
   auth: AuthStatus;
   /** The cwd the agent bound to (echoes the input). */
@@ -155,7 +153,7 @@ export async function agentShutdown(): Promise<void> {
 }
 
 /**
- * Rename a session via EchoAgent's `x.ai/session/rename` extension method. EchoAgent
+ * Rename a session via EchoAgent's `echo.agent/session/rename` extension method. EchoAgent
  * writes `generated_title` + `title_is_manual=true` to summary.json and
  * broadcasts `SessionSummaryGenerated`, which we also pick up via the
  * `agent://summary` event — so callers don't strictly need to optimistically
@@ -172,7 +170,7 @@ export async function agentRenameSession(
 }
 
 /**
- * Delete a session's persisted history via EchoAgent's `x.ai/session/delete`.
+ * Delete a session's persisted history via EchoAgent's `echo.agent/session/delete`.
  * Removes the on-disk session directory; the caller should drop the sidebar
  * entry on success.
  */
@@ -204,10 +202,10 @@ export async function agentSetSessionArchived(
   return invoke<boolean>("agent_set_session_archived", { sessionId, archived });
 }
 
-// ---------- context usage (x.ai/session/info + x.ai/session/usage) ----------
+// ---------- context usage (echo.agent/session/info + echo.agent/session/usage) ----------
 
 /**
- * Fetch the session's context-window snapshot (`x.ai/session/info`) for the
+ * Fetch the session's context-window snapshot (`echo.agent/session/info`) for the
  * composer's context-usage pill/popover. Rejects when the session isn't live
  * in the agent (e.g. an old session never loaded this launch) — callers
  * should treat that as "no data" and hide the pill.
@@ -217,7 +215,7 @@ export async function agentSessionInfo(sessionId: string): Promise<SessionInfoRe
 }
 
 /**
- * Fetch the session's cumulative token usage (`x.ai/session/usage`) — the
+ * Fetch the session's cumulative token usage (`echo.agent/session/usage`) — the
  * response wraps `PromptUsage` totals; we return the inner `usage` object.
  * Used by the context-usage popover for the average cache hit rate.
  */
@@ -260,7 +258,6 @@ export async function agentResolveQuestion(
 export type ProviderKind =
   | "anthropic"
   | "openai"
-  | "grok"
   | "deepseek"
   | "qwen"
   | "custom"
@@ -382,7 +379,7 @@ export async function providersFetchModels(
   });
 }
 
-// ---------- skills (x.ai/skills/*) ----------
+// ---------- skills (echo.agent/skills/*) ----------
 
 /** List all skills EchoAgent has discovered (user / project / bundled scopes). */
 export async function skillsList(cwd?: string): Promise<SkillInfo[]> {
@@ -422,7 +419,7 @@ export async function skillsUninstallPackage(path: string): Promise<void> {
   await invoke<void>("skills_uninstall_package", { path });
 }
 
-// ---------- connectors / MCP (x.ai/mcp/*) ----------
+// ---------- connectors / MCP (echo.agent/mcp/*) ----------
 
 /** List configured MCP servers. Pass the live sessionId to enrich entries
  *  with session state (EchoAgent's list accepts it optionally). */
@@ -488,7 +485,7 @@ export async function mcpConfigSave(content: string, sessionId?: string): Promis
   return invoke<McpConfigSaveResult>("mcp_config_save", { content, sessionId: sessionId ?? null });
 }
 
-// ---------- MCP OAuth authorization (x.ai/mcp/auth_*) ----------
+// ---------- MCP OAuth authorization (echo.agent/mcp/auth_*) ----------
 
 /** Kick off EchoAgent's browser OAuth flow for one MCP server. EchoAgent opens the
  *  system browser itself and the call resolves when the flow completes
@@ -749,7 +746,7 @@ export async function permissionModeGet(): Promise<PermissionMode> {
 }
 
 /** Set the permission mode: persists to config.toml and live-notifies the
- *  running agent via EchoAgent's `x.ai/yolo_mode_changed` extension notification. */
+ *  running agent via EchoAgent's `echo.agent/yolo_mode_changed` extension notification. */
 export async function permissionModeSet(mode: PermissionMode): Promise<void> {
   await invoke<void>("permission_mode_set", { mode });
 }
@@ -781,12 +778,12 @@ export async function memoryDelete(scope: string, path: string, cwd?: string): P
   await invoke<void>("memory_delete", { scope, path, cwd: cwd ?? null });
 }
 
-/** Trigger EchoAgent to rewrite memories via an LLM pass (`x.ai/memory/rewrite`). */
+/** Trigger EchoAgent to rewrite memories via an LLM pass (`echo.agent/memory/rewrite`). */
 export async function memoryRewrite(): Promise<void> {
   await invoke<void>("memory_rewrite");
 }
 
-/** Flush in-flight memory writes to disk (`x.ai/memory/flush`). */
+/** Flush in-flight memory writes to disk (`echo.agent/memory/flush`). */
 export async function memoryFlush(): Promise<void> {
   await invoke<void>("memory_flush");
 }
@@ -833,9 +830,16 @@ export async function sessionFork(sessionId: string, cwd?: string): Promise<stri
 
 // ---------- slash commands + prompt history ----------
 
-/** List slash commands (builtin + skills + plugins). Powers "/" autocomplete. */
-export async function commandsList(): Promise<SlashCommand[]> {
-  return invoke<SlashCommand[]>("commands_list");
+/**
+ * List slash commands (builtin + skills + plugins/workflows). A live session
+ * yields the authoritative capability-gated catalog; cwd keeps project Skills
+ * and Plugins discoverable before the first session is created.
+ */
+export async function commandsList(sessionId?: string, cwd?: string): Promise<SlashCommand[]> {
+  return invoke<SlashCommand[]>("commands_list", {
+    sessionId: sessionId ?? null,
+    cwd: cwd ?? null,
+  });
 }
 
 /** Cross-session prompt history. */
@@ -924,21 +928,6 @@ export async function automationRecordsDelete(id: string): Promise<void> {
   await invoke<void>("automation_records_delete", { id });
 }
 
-// ---------- xAI API Key 管理 (x.ai/getApiKey / x.ai/setApiKey) ----------
-// EchoAgent OAuth 账户命令（accountInfo/accountCheckSubscription/accountLogout/
-// accountGetAuthUrl/accountCancelAuth）已随 OAuth 功能移除。EchoAgent 仅保留
-// xAI API Key（BYOK）认证路径。
-
-/** Return a masked marker when an xAI API key is configured. */
-export async function accountGetApiKey(): Promise<string | null> {
-  return invoke<string | null>("account_get_api_key");
-}
-
-/** Set or clear the xAI API key. Empty/null clears it. */
-export async function accountSetApiKey(key: string | null): Promise<void> {
-  await invoke<void>("account_set_api_key", { key });
-}
-
 // ---------- agent / assistant defaults (~/.echo-agent/config.toml) ----------
 
 /** Read the new-session defaults (model + permission + remember-tool-approvals). */
@@ -993,14 +982,14 @@ export async function webSearchConfigSave(
   return invoke<boolean>("web_search_config_save", { enable, model });
 }
 
-// ---------- plugins + marketplace (x.ai/plugins/*, x.ai/marketplace/*) ----------
+// ---------- plugins + marketplace (echo.agent/plugins/*, echo.agent/marketplace/*) ----------
 
 import type {
   MarketplaceListResponse,
   PluginsListResponse,
 } from "./types";
 
-/** List installed plugins via `x.ai/plugins/list`. */
+/** List installed plugins via `echo.agent/plugins/list`. */
 export async function pluginsList(sessionId?: string): Promise<PluginsListResponse> {
   return invoke<PluginsListResponse>("plugins_list", { sessionId: sessionId ?? null });
 }
@@ -1013,7 +1002,7 @@ export async function pluginsAction(
   return invoke("plugins_action", { sessionId, action });
 }
 
-/** List marketplace sources + plugins via `x.ai/marketplace/list`. */
+/** List marketplace sources + plugins via `echo.agent/marketplace/list`. */
 export async function marketplaceList(sessionId?: string): Promise<MarketplaceListResponse> {
   return invoke<MarketplaceListResponse>("marketplace_list", { sessionId: sessionId ?? null });
 }
@@ -1181,13 +1170,13 @@ export async function subscribeAgentEvents(handlers: {
   onPermission?: (p: PermissionRequest) => void;
   onComplete?: (p: PromptComplete) => void;
   /** Fired when EchoAgent generates or renames a session title
-   *  (`x.ai/session_notification` → `SessionSummaryGenerated`). */
+   *  (`echo.agent/session_notification` → `SessionSummaryGenerated`). */
   onSummary?: (s: SessionSummaryEvent) => void;
   /** Fired on MCP connector status / init-progress notifications. */
   onMcpStatus?: (p: unknown) => void;
-  /** Fired when EchoAgent asks us to trust a folder (`x.ai/folder_trust/request`). */
+  /** Fired when EchoAgent asks us to trust a folder (`echo.agent/folder_trust/request`). */
   onFolderTrust?: (p: unknown) => void;
-  /** Fired when plan mode is toggled (`x.ai/toggle_plan_mode`). */
+  /** Fired when plan mode is toggled (`echo.agent/toggle_plan_mode`). */
   onPlanMode?: (p: unknown) => void;
   /** Fired when the permission mode (auto/yolo) changes. */
   onPermissionMode?: (p: unknown) => void;
@@ -1197,7 +1186,7 @@ export async function subscribeAgentEvents(handlers: {
   onModelsUpdate?: (p: unknown) => void;
   /** Fired on background task lifecycle (`task_backgrounded`/`task_completed`). */
   onTaskUpdate?: (p: unknown) => void;
-  /** Fired when the agent asks a question (`x.ai/question`). */
+  /** Fired when the agent asks a question (`echo.agent/question`). */
   onQuestion?: (q: QuestionRequest) => void;
   /** Fired when the agent thread dies unexpectedly (panic/crash). */
   onAgentDied?: (p: { reason: string }) => void;

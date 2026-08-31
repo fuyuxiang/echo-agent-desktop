@@ -70,6 +70,12 @@ if (Test-Path $patchDir) {
     }
 }
 
+# ---------------------------------------------------------------------------
+# 4. Migrate the embedded protocol/extension namespace to EchoAgent.
+# ---------------------------------------------------------------------------
+& (Join-Path $ProjectRoot "scripts\rename-runtime-namespace.ps1") `
+    -RuntimeRoot (Join-Path $ProjectRoot "vendor\grok-build")
+
 Log-Step "Setup complete"
 Log-Info "Next:"
 Log-Info "  pnpm install"

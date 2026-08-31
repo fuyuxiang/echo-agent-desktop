@@ -143,6 +143,9 @@ if (Test-Path $patchDir) {
     }
 }
 
+& (Join-Path $ProjectRoot "scripts\rename-runtime-namespace.ps1") `
+    -RuntimeRoot $grokSubmodule
+
 # ---------------------------------------------------------------------------
 # 5. NSIS tool cache (work around GitHub download timeouts in CN).
 #    Pre-place nsis-3.11 + nsis_tauri_utils.dll in Tauri's cache so the

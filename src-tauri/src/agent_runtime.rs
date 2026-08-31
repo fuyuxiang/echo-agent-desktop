@@ -30,7 +30,7 @@ use xai_acp_lib::{
 };
 use xai_grok_shell::agent::init::bootstrap;
 use xai_grok_shell::agent::mvp_agent::MvpAgent;
-use xai_grok_shell::auth::AuthManager;
+use xai_grok_shell::auth::{AuthManager, GrokComConfig};
 use xai_grok_shell::util::config::load_effective_config;
 
 // Re-aliased to mirror EchoAgent's own internal import style.
@@ -52,12 +52,12 @@ pub struct AgentHandle {
 /// Spawn the EchoAgent runtime in-process on a dedicated thread.
 ///
 /// `cwd` is the working directory the agent binds sessions to (typically the
-/// user's home or a chosen project). Auth is read from `~/.echo-agent/auth.json`
-/// — no re-login if it already exists.
+/// user's home or a chosen project). Model credentials come exclusively from
+/// provider configuration; the upstream auth adapter is intentionally empty.
 ///
 /// EchoAgent intentionally skips the upstream startup remote-settings/models
 /// prefetch (the synchronous `start_early_prefetch` join inside `bootstrap`).
-/// That call hits xAI backends and can block first launch for tens of seconds
+/// That call hits upstream remote backends and can block first launch for tens of seconds
 /// on slow networks; BYOK users only need local `config.toml` models. We seed
 /// an empty `RemoteSettings` so bootstrap treats remote config as already
 /// supplied and never opens the network path.
@@ -110,10 +110,14 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
         }
     }
 
-    // 2. Auth: reuse ~/.echo-agent/auth.json.
-    let agent_home = echo_agent_home_dir();
-    let auth_manager = Arc::new(AuthManager::new(&agent_home, cfg.grok_com_config.clone()));
-    auth_manager.configure_refresher(cfg.grok_com_config.auth_provider_command.clone(), None);
+    // 2. The upstream agent constructor requires an AuthManager even for
+    // provider-configured models. Isolate it from legacy auth.json and disable
+    // inline/alternate upstream credentials so it remains an inert adapter.
+    let provider_runtime_home = crate::paths::echo_agent_home_dir().join(".provider-runtime");
+    let auth_manager = Arc::new(AuthManager::new(
+        &provider_runtime_home,
+        GrokComConfig::default(),
+    ));
 
     // 3. Bootstrap: telemetry, bundled files, ModelsManager.
     // Network catalog prefetch is skipped because remote_settings is already Some.
@@ -165,21 +169,12 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
     })
 }
 
-/// Resolve EchoAgent's runtime home. Startup also forwards this path through
-/// the embedded engine's compatibility environment variable.
-pub(crate) fn echo_agent_home_dir() -> PathBuf {
-    let p = crate::paths::echo_agent_home_dir();
-    let _ = std::fs::create_dir_all(&p);
-    p
-}
-
 // ---------- ACP lifecycle helpers ----------
 
-/// Outcome of `initialize`. We only need the auth methods + model id.
+/// Outcome of `initialize`. Provider authentication is configured separately.
 #[derive(Debug, Serialize, Clone)]
 pub struct InitOutcome {
     pub ok: bool,
-    pub auth_methods: Vec<String>,
     pub default_model_id: Option<String>,
     pub agent_version: Option<String>,
 }
@@ -204,14 +199,8 @@ pub async fn initialize(tx: &AcpAgentTx) -> Result<InitOutcome> {
         .await
         .map_err(|e| anyhow!("initialize: {e:?}"))?;
 
-    let auth_methods = resp
-        .auth_methods
-        .iter()
-        .map(|m| m.id().0.as_ref().to_string())
-        .collect();
     Ok(InitOutcome {
         ok: true,
-        auth_methods,
         // EchoAgent's modelState uses `currentModelId` (not `defaultModelId`) for
         // the active model. Try both keys defensively in case of version skew.
         default_model_id: resp
@@ -228,16 +217,6 @@ pub async fn initialize(tx: &AcpAgentTx) -> Result<InitOutcome> {
             .and_then(|v| v.as_str())
             .map(String::from),
     })
-}
-
-/// Authenticate using the agent's first advertised method. With
-/// `~/.echo-agent/auth.json` present and valid this succeeds without interaction.
-pub async fn authenticate(tx: &AcpAgentTx, method_id: &str) -> Result<()> {
-    let req = acp::AuthenticateRequest::new(acp::AuthMethodId::new(method_id.to_string()));
-    let _: acp::AuthenticateResponse = acp_send(req, tx)
-        .await
-        .map_err(|e| anyhow!("authenticate: {e:?}"))?;
-    Ok(())
 }
 
 /// Create a new session bound to `cwd`. Returns the new session id.
@@ -468,7 +447,7 @@ pub async fn cancel(tx: &AcpAgentTx, session_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Rename a session by calling EchoAgent's `x.ai/session/rename` extension method.
+/// Rename a session by calling EchoAgent's `echo.agent/session/rename` extension method.
 ///
 /// This is the canonical path (see `xai-grok-shell/src/extensions/session_admin.rs:60`):
 /// it writes `summary.json`'s `generated_title` with `title_is_manual=true`,
@@ -490,12 +469,13 @@ pub async fn rename_session(
         // `cwd` null is fine — EchoAgent treats it as "search all sessions".
         "cwd": cwd,
     }));
-    let _: acp::ExtResponse = crate::ext::call_ext_value(tx, "x.ai/session/rename", params).await?;
+    let _: acp::ExtResponse =
+        crate::ext::call_ext_value(tx, "echo.agent/session/rename", params).await?;
     Ok(())
 }
 
 /// Delete a session's persisted history by calling EchoAgent's
-/// `x.ai/session/delete` extension method (session_admin.rs:230).
+/// `echo.agent/session/delete` extension method (session_admin.rs:230).
 ///
 /// Removes the on-disk session directory, drops it from the FTS index, and
 /// if the session is live in memory, requests a graceful shutdown. The
@@ -505,11 +485,12 @@ pub async fn delete_session(tx: &AcpAgentTx, session_id: &str, cwd: Option<&str>
         "sessionId": session_id,
         "cwd": cwd,
     }));
-    let _: acp::ExtResponse = crate::ext::call_ext_value(tx, "x.ai/session/delete", params).await?;
+    let _: acp::ExtResponse =
+        crate::ext::call_ext_value(tx, "echo.agent/session/delete", params).await?;
     Ok(())
 }
 
-/// Fetch a session's context-window snapshot via EchoAgent's `x.ai/session/info`
+/// Fetch a session's context-window snapshot via EchoAgent's `echo.agent/session/info`
 /// extension method (session/handlers/session.rs). The response is the
 /// camelCase `SessionInfoResponse` — its `context` field carries
 /// used/total/usagePct plus the token breakdown (system prompt, tool
@@ -520,8 +501,9 @@ pub async fn session_info(tx: &AcpAgentTx, session_id: &str) -> Result<serde_jso
     let params = crate::ext::raw_params(&serde_json::json!({
         "sessionId": session_id,
     }));
-    let resp: serde_json::Value = crate::ext::call_ext(tx, "x.ai/session/info", params).await?;
-    // Unlike most x.ai/* methods, session/info wraps its payload in
+    let resp: serde_json::Value =
+        crate::ext::call_ext(tx, "echo.agent/session/info", params).await?;
+    // Unlike most echo.agent/* methods, session/info wraps its payload in
     // `ExtMethodResult { result, error? }` (session/result.rs) — and reports
     // "session not live" as success({}) rather than an error. Unwrap the
     // envelope so the frontend always sees the bare SessionInfoResponse.
@@ -531,7 +513,7 @@ pub async fn session_info(tx: &AcpAgentTx, session_id: &str) -> Result<serde_jso
     Ok(resp)
 }
 
-/// Fetch a session's cumulative token usage via EchoAgent's `x.ai/session/usage`
+/// Fetch a session's cumulative token usage via EchoAgent's `echo.agent/session/usage`
 /// extension method (extensions/usage.rs). The response's `usage` field is a
 /// `PromptUsage` whose totals include `inputTokens` and `cachedReadTokens` —
 /// the frontend derives the average cache hit rate from those two.
@@ -539,7 +521,7 @@ pub async fn session_usage(tx: &AcpAgentTx, session_id: &str) -> Result<serde_js
     let params = crate::ext::raw_params(&serde_json::json!({
         "sessionId": session_id,
     }));
-    crate::ext::call_ext(tx, "x.ai/session/usage", params).await
+    crate::ext::call_ext(tx, "echo.agent/session/usage", params).await
 }
 
 #[cfg(test)]
@@ -584,8 +566,6 @@ mod tests {
             .expect("initialize timed out (30s)")
             .expect("initialize failed");
         assert!(init.ok, "initialize reported not-ok");
-        assert!(!init.auth_methods.is_empty(), "no auth methods advertised");
-
         // 3. New session: runs AgentBuilder::build + merges the client-side
         //    MCP server entry (team tools live as echoagent__* now).
         let session_id = tokio::time::timeout(

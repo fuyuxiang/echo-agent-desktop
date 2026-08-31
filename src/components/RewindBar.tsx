@@ -2,9 +2,9 @@
  * 回溯/分叉工具栏 — 显示在 ChatView 底部（composer 正上方）。
  *
  * 两个能力：
- *  - Rewind（回溯）：调 `x.ai/rewind/{points,execute}`，回到指定 prompt 索引。
+ *  - Rewind（回溯）：调 `echo.agent/rewind/{points,execute}`，回到指定 prompt 索引。
  *    支持 mode: conversation（仅回退对话）/ files（仅文件）/ all（全量，含对话+文件+记忆）。
- *  - Fork（分叉）：调 `x.ai/session/fork`，复制会话到新 id 探索不同方向。
+ *  - Fork（分叉）：调 `echo.agent/session/fork`，复制会话到新 id 探索不同方向。
  *
  * 增强点（对齐 EchoAgent）：
  *  - 时间线视图：每个回溯点显示时间、prompt 预览、assistant 回复预览、工具调用徽章。
@@ -24,7 +24,7 @@ import {
   GitBranchIcon,
 } from "@/foundation/components/Icon/icons";
 
-/** Rewind mode options matching EchoAgent's x.ai/rewind/execute mode param.
+/** Rewind mode options matching EchoAgent's echo.agent/rewind/execute mode param.
  *  NOTE: EchoAgent's RewindMode enum only has All/ConversationOnly/FilesOnly —
  *  there is no "memory"-only mode (all already includes memory). Don't add
  *  "memory" here or EchoAgent's serde will reject it at runtime. */
