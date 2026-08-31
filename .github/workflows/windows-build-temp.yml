@@ -31,6 +31,11 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          cache-on-failure: true
+
       - name: Install protoc 29.3
         shell: pwsh
         run: |
@@ -69,18 +74,31 @@ jobs:
         shell: pwsh
         run: |
           $env:CARGO_BUILD_JOBS = "2"
-          pnpm tauri build --bundles nsis
+          $logPath = Join-Path $env:RUNNER_TEMP "windows-build.log"
+          pnpm tauri build --bundles nsis 2>&1 | Tee-Object -FilePath $logPath
+          $buildExitCode = $LASTEXITCODE
+          "BUILD_EXIT_CODE=$buildExitCode" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          exit 0
 
-      - name: Commit installer to temporary branch
+      - name: Commit installer or failure log to temporary branch
+        if: always()
         shell: pwsh
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ($env:BUILD_EXIT_CODE -ne "0") {
+            New-Item -ItemType Directory -Force -Path "ci-artifacts" | Out-Null
+            Copy-Item (Join-Path $env:RUNNER_TEMP "windows-build.log") "ci-artifacts\windows-build.log" -Force
+            git add --force "ci-artifacts\windows-build.log"
+            git commit -m "ci: attach failed Windows build log [skip ci]"
+            git push origin "HEAD:$env:GITHUB_REF_NAME"
+            throw "Windows build failed with exit code $env:BUILD_EXIT_CODE"
+          }
           $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis" -Filter "*.exe" | Select-Object -First 1
           if (-not $installer) { throw "NSIS installer was not generated" }
           New-Item -ItemType Directory -Force -Path "ci-artifacts" | Out-Null
           $destination = "ci-artifacts\EchoAgent_0.3.8_windows_x64-setup.exe"
           Copy-Item $installer.FullName $destination -Force
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add --force $destination
           git commit -m "ci: attach Windows x64 installer [skip ci]"
           git push origin "HEAD:$env:GITHUB_REF_NAME"
