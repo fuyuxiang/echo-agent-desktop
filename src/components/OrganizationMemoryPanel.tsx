@@ -593,7 +593,7 @@ function CitationList({ citations }: { citations: AskCitation[] }) {
     try {
       const target = parseEchoDocumentUrl(citation.openUrl);
       if (target.docId !== citation.docId) throw new Error("引用文档 ID 与签名结果不一致");
-      const document = await orgFetchDocument(target.docId, target.page ?? citation.page);
+      const document = await orgFetchDocument(target.docId, target.page ?? citation.page ?? undefined);
       setPreview({ id: citation.id, text: document.text });
     } catch (reason) {
       setError(String(reason));
