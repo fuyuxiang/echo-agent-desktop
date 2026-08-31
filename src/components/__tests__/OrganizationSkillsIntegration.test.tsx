@@ -3,8 +3,6 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
   skillsList: vi.fn(),
-  skillsCatalogDefaultRoot: vi.fn(),
-  skillsCatalogLoad: vi.fn(),
   orgSetSkillPreference: vi.fn(),
   listenOrgSkillsChanged: vi.fn(),
   orgSession: vi.fn(),
@@ -12,14 +10,11 @@ const mocks = vi.hoisted(() => ({
   orgSubmitSkill: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("@/lib/agent-client", () => ({
   skillsList: mocks.skillsList,
   skillsRemove: vi.fn(),
   skillsToggle: vi.fn(),
   skillsUninstallPackage: vi.fn(),
-  skillsCatalogDefaultRoot: mocks.skillsCatalogDefaultRoot,
-  skillsCatalogLoad: mocks.skillsCatalogLoad,
 }));
 vi.mock("@/lib/org-client", () => ({
   orgSetSkillPreference: mocks.orgSetSkillPreference,
@@ -56,12 +51,6 @@ describe("专家技能页的组织 Skill 集成", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    mocks.skillsCatalogDefaultRoot.mockResolvedValue("/tmp/catalog");
-    mocks.skillsCatalogLoad.mockResolvedValue({
-      root: "/tmp/catalog",
-      skills: [],
-      categories: [],
-    });
     mocks.skillsList.mockResolvedValue([
       organizationSkill(true),
       organizationSkill(false),
@@ -92,11 +81,13 @@ describe("专家技能页的组织 Skill 集成", () => {
     });
   });
 
-  it("我安装的直接显示全局目录中的组织 Skill", async () => {
+  it("技能页直接读取全局目录且不再要求选择来源", async () => {
     render(<SkillsTab pills={<span>页签</span>} />);
-    fireEvent.click(await screen.findByRole("button", { name: "我安装的" }));
 
     expect(await screen.findByText("安全规范")).toBeInTheDocument();
+    expect(screen.getByText("用户全局技能 · ~/.echo-agent/skills")).toBeInTheDocument();
+    expect(screen.queryByText("选择来源目录")).not.toBeInTheDocument();
+    expect(mocks.skillsList).toHaveBeenCalled();
     expect(screen.getByText("组织周报")).toBeInTheDocument();
     expect(screen.getByText("全组织共享")).toBeInTheDocument();
     expect(screen.getByText("团队共享")).toBeInTheDocument();
@@ -106,7 +97,6 @@ describe("专家技能页的组织 Skill 集成", () => {
 
   it("组织强制 Skill 不可停用，可选 Skill 通过服务器偏好同步", async () => {
     render(<SkillsTab pills={<span>页签</span>} />);
-    fireEvent.click(await screen.findByRole("button", { name: "我安装的" }));
     await screen.findByText("安全规范");
 
     expect(screen.getByRole("checkbox", { name: "卸载安全规范" })).toBeDisabled();
@@ -118,7 +108,6 @@ describe("专家技能页的组织 Skill 集成", () => {
 
   it("本地 Skill 可直接选择组织范围并打包上传", async () => {
     render(<SkillsTab pills={<span>页签</span>} />);
-    fireEvent.click(await screen.findByRole("button", { name: "我安装的" }));
     fireEvent.click(await screen.findByRole("button", { name: "上传本地分析到组织" }));
 
     expect(await screen.findByRole("heading", { name: "上传到组织" })).toBeInTheDocument();

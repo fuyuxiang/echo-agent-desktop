@@ -1,30 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Upload } from "lucide-react";
 import {
-  SearchIcon, InstalledSkillIcon, AddCircleIcon, RefreshCwIcon,
-  PuzzlePieceIcon, DeleteIcon, FolderOpenIcon, ChevronLeftIcon, SparklesIcon,
-  RestoreIcon,
+  SearchIcon, AddCircleIcon, RefreshCwIcon, PuzzlePieceIcon, DeleteIcon,
 } from "@/foundation/components/Icon/icons";
 import {
   skillsList, skillsRemove, skillsToggle, skillsUninstallPackage,
-  skillsCatalogDefaultRoot, skillsCatalogLoad,
 } from "@/lib/agent-client";
-import type { SkillCatalog, SkillItem, SkillInfo } from "@/lib/types";
-import { Chip } from "../shared/ui";
-import { SkillCatalogCard } from "./SkillCatalogCard";
-import { SkillDetailModal } from "./SkillDetailModal";
+import type { SkillInfo } from "@/lib/types";
 import { ImportSkillModal } from "./ImportSkillModal";
 import { UploadSkillModal } from "./UploadSkillModal";
-import {
-  clearCatalogRoot,
-  isLegacyWorkBuddyPath,
-  readCatalogRoot,
-  writeCatalogRoot,
-} from "@/lib/catalog-root-storage";
 import { listenOrgSkillsChanged, orgSetSkillPreference } from "@/lib/org-client";
-
-const FEATURED_WINDOW = 8;
 
 interface Props {
   pills: React.ReactNode;
@@ -42,7 +27,7 @@ function skillSourceLabel(skill: SkillInfo): string {
   if (skill.orgManaged || skill.scope === "server") {
     return organizationScopeLabel(skill.orgScopeKind);
   }
-  if (skill.managed) return "EchoAgent 管理";
+  if (skill.managed) return "本地用户";
   const labels: Record<string, string> = {
     local: "当前项目",
     repo: "代码仓库",
@@ -113,102 +98,40 @@ function RuntimeSkillRow({
   );
 }
 
-/** 技能 tab — a live catalog scanned from the agents tree + echo-agent
- *  built-ins, plus the existing "我安装的" (runtime-managed) view. */
+/**
+ * 技能页直接展示 EchoAgent Runtime 的技能扫描结果。
+ *
+ * Runtime 会自动扫描用户全局 `~/.echo-agent/skills`，并合并当前工作区、
+ * 内置和插件技能。组织 Skill 也安装在该全局目录下，因此这里不再维护
+ * 另一套“来源目录”或市场目录选择状态。
+ */
 export function SkillsTab({ pills, onToast }: Props) {
-  // ---- catalog (market) state ----
-  const [root, setRoot] = useState<string>(() => readCatalogRoot("skills"));
-  const [catalog, setCatalog] = useState<SkillCatalog | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [needPick, setNeedPick] = useState(false);
-
-  const [view, setView] = useState<"center" | "installed">("center");
-  const [cat, setCat] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [modalSkill, setModalSkill] = useState<SkillItem | null>(null);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [uploadSkill, setUploadSkill] = useState<SkillInfo | null>(null);
 
-  // ---- installed (EchoAgent) state ----
-  const [locals, setLocals] = useState<SkillInfo[]>([]);
-  const [localsLoading, setLocalsLoading] = useState(false);
-
-  const loadCatalog = useCallback(async (
-    r: string,
-    persistOverride = false,
-  ): Promise<boolean> => {
-    if (isLegacyWorkBuddyPath(r)) {
-      clearCatalogRoot("skills");
-      setRoot("");
-      setCatalog(null);
-      setError("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
-      return false;
-    }
-    setLoading(true); setError(""); setNeedPick(false);
+  const reloadSkills = useCallback(async (silent = false) => {
+    setLoading(true);
+    setError("");
     try {
-      const c = await skillsCatalogLoad(r);
-      setCatalog(c);
-      setRoot(c.root || r);
-      if (persistOverride) writeCatalogRoot("skills", c.root || r);
-      return true;
+      setSkills(await skillsList());
     } catch (e) {
-      setError(String(e).replace(/^Error:\s*/, ""));
-      setCatalog(null);
-      return false;
+      const message = String(e).replace(/^Error:\s*/, "");
+      setError(message);
+      if (!silent) onToast?.(`加载技能失败：${message}`);
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  // Resolve the data root on first mount.
-  useEffect(() => {
-    let disposed = false;
-    (async () => {
-      if (root) {
-        const loaded = await loadCatalog(root);
-        if (disposed || loaded) return;
-        clearCatalogRoot("skills");
-        setRoot("");
-      }
-      try {
-        const d = await skillsCatalogDefaultRoot();
-        if (disposed) return;
-        if (d && !isLegacyWorkBuddyPath(d)) {
-          const loaded = await loadCatalog(d);
-          if (!disposed && !loaded) setNeedPick(true);
-        } else {
-          setNeedPick(true);
-        }
-      } catch {
-        if (!disposed) setNeedPick(true);
-      }
-    })();
-    return () => { disposed = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const reloadLocals = useCallback(async (silent = false) => {
-    setLocalsLoading(true);
-    try { setLocals(await skillsList()); }
-    catch (e) {
-      // On the catalog page a failed EchoAgent skill list is non-fatal (the local
-      // installed badges just stay empty) — don't spam a toast. Only surface
-      // the error when the user explicitly opened the "我安装的" view.
-      if (!silent) onToast?.(`加载技能失败：${String(e).replace(/^Error:\s*/, "")}`);
-    }
-    finally { setLocalsLoading(false); }
   }, [onToast]);
-  // Mount: load silently so the catalog page never shows a EchoAgent error toast.
-  useEffect(() => { reloadLocals(true); }, [reloadLocals]);
-  // Entering the installed view: reload with feedback.
-  useEffect(() => { if (view === "installed") reloadLocals(false); }, [view, reloadLocals]);
-  // Native synchronization can happen from login, logout, a preference
-  // change, lease enforcement, or the five-minute background poll.
+
+  useEffect(() => { void reloadSkills(true); }, [reloadSkills]);
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void listenOrgSkillsChanged(() => { void reloadLocals(true); }).then((stop) => {
+    void listenOrgSkillsChanged(() => { void reloadSkills(true); }).then((stop) => {
       if (disposed) stop();
       else unlisten = stop;
     }).catch(() => {});
@@ -216,176 +139,56 @@ export function SkillsTab({ pills, onToast }: Props) {
       disposed = true;
       unlisten?.();
     };
-  }, [reloadLocals]);
-
-  const installedNames = useMemo(
-    () => new Set(locals.map((s) => (s.displayName || s.name).toLowerCase())),
-    [locals],
-  );
-
-  const featured = useMemo(
-    () => (catalog?.skills ?? []).filter((s) => s.featured),
-    [catalog],
-  );
-
-  const chips = useMemo(() => {
-    const present = new Set((catalog?.skills ?? []).map((s) => s.cat));
-    const out: { id: string | null; label: string }[] = [{ id: null, label: "全部" }];
-    for (const c of catalog?.categories ?? []) {
-      if (present.has(c.id)) out.push({ id: c.id, label: c.zh });
-    }
-    return out;
-  }, [catalog]);
+  }, [reloadSkills]);
 
   const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return (catalog?.skills ?? []).filter((s) => {
-      if (cat && s.cat !== cat) return false;
-      if (!q) return true;
-      return (
-        s.name.toLowerCase().includes(q) ||
-        s.desc.toLowerCase().includes(q) ||
-        (s.descEn ?? "").toLowerCase().includes(q)
-      );
-    });
-  }, [catalog, cat, search]);
+    const query = search.trim().toLowerCase();
+    if (!query) return skills;
+    return skills.filter((skill) => (
+      (skill.displayName || skill.name).toLowerCase().includes(query)
+      || skill.name.toLowerCase().includes(query)
+      || (skill.description ?? "").toLowerCase().includes(query)
+      || skillSourceLabel(skill).toLowerCase().includes(query)
+    ));
+  }, [search, skills]);
 
-  const chooseDir = useCallback(async () => {
+  const handleToggle = useCallback(async (skill: SkillInfo, enabled: boolean) => {
+    if (skill.orgMandatory) return;
     try {
-      const sel = await openDialog({
-        directory: true, multiple: false, title: "选择技能数据目录",
-        defaultPath: root || undefined,
-      });
-      const pick = Array.isArray(sel) ? sel[0] : sel;
-      if (!pick) return;
-      if (isLegacyWorkBuddyPath(pick)) {
-        onToast?.("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
-        return;
-      }
-      if (await loadCatalog(pick, true)) onToast?.(`已切换技能数据目录：${pick}`);
-    } catch { /* cancelled */ }
-  }, [root, loadCatalog, onToast]);
-
-  const restoreDefault = useCallback(async () => {
-    clearCatalogRoot("skills");
-    setRoot(""); setCatalog(null); setError("");
-    try {
-      const d = await skillsCatalogDefaultRoot();
-      if (d && !isLegacyWorkBuddyPath(d) && await loadCatalog(d)) {
-        onToast?.("已恢复 EchoAgent 默认技能目录");
-        return;
-      }
-    } catch { /* handled by the empty state */ }
-    setNeedPick(true);
-  }, [loadCatalog, onToast]);
-
-  const handleAdd = (skill: SkillItem) => setModalSkill(skill);
-
-  const handleToggle = useCallback(async (s: SkillInfo, enabled: boolean) => {
-    if (s.orgMandatory) return;
-    try {
-      if ((s.orgManaged || s.scope === "server") && s.orgSkillId) {
-        await orgSetSkillPreference(s.orgSkillId, enabled);
+      if ((skill.orgManaged || skill.scope === "server") && skill.orgSkillId) {
+        await orgSetSkillPreference(skill.orgSkillId, enabled);
         onToast?.(enabled ? "组织 Skill 已安装" : "组织 Skill 已卸载");
       } else {
-        await skillsToggle(s.name, enabled);
+        await skillsToggle(skill.name, enabled);
       }
-      await reloadLocals();
+      await reloadSkills();
+    } catch (e) {
+      onToast?.(`切换失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
-    catch (e) { onToast?.(`切换失败：${String(e).replace(/^Error:\s*/, "")}`); }
-  }, [onToast, reloadLocals]);
+  }, [onToast, reloadSkills]);
 
-  const handleRemove = useCallback(async (s: SkillInfo) => {
-    const removablePath = s.managed ? s.path : s.configuredPath;
-    if (!removablePath) { onToast?.("该技能由项目、内置包或插件管理，请在对应来源中修改"); return; }
-    const action = s.managed ? "卸载" : "从配置中移除";
-    const shared = !s.managed
-      ? locals.filter((candidate) => candidate.configuredPath === removablePath).length
+  const handleRemove = useCallback(async (skill: SkillInfo) => {
+    const removablePath = skill.managed ? skill.path : skill.configuredPath;
+    if (!removablePath) {
+      onToast?.("该技能由项目、内置包或插件管理，请在对应来源中修改");
+      return;
+    }
+    const action = skill.managed ? "卸载" : "从配置中移除";
+    const shared = !skill.managed
+      ? skills.filter((candidate) => candidate.configuredPath === removablePath).length
       : 1;
     const impact = shared > 1 ? `\n\n该路径共提供 ${shared} 个技能，移除后它们都将不再加载。` : "";
-    if (!confirm(`确定${action}技能「${s.displayName || s.name}」？${impact}`)) return;
+    if (!confirm(`确定${action}技能「${skill.displayName || skill.name}」？${impact}`)) return;
     try {
-      if (s.managed) await skillsUninstallPackage(removablePath);
+      if (skill.managed) await skillsUninstallPackage(removablePath);
       else await skillsRemove(removablePath);
-      onToast?.(s.managed ? "已安全卸载" : "已从技能路径中移除");
-      reloadLocals();
+      onToast?.(skill.managed ? "已安全卸载" : "已从技能路径中移除");
+      await reloadSkills();
+    } catch (e) {
+      onToast?.(`移除失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
-    catch (e) { onToast?.(`移除失败：${String(e).replace(/^Error:\s*/, "")}`); }
-  }, [locals, onToast, reloadLocals]);
+  }, [skills, onToast, reloadSkills]);
 
-  // ---- no data dir yet ----
-  if (needPick && !catalog && view === "center") {
-    return (
-      <div className="um-page">
-        <header className="um-topbar">
-          <div className="um-topbar-left">{pills}</div>
-          <div className="um-topbar-right">
-            <button type="button" className="um-btn um-btn--grey" onClick={() => setView("installed")}>
-              <InstalledSkillIcon size="sm" /><span>我安装的</span>
-            </button>
-          </div>
-        </header>
-        <div className="um-scroll">
-          <div className="ec-empty">
-            <FolderOpenIcon size="xl" className="ec-empty-icon" />
-            <p>未找到技能数据目录</p>
-            <p className="ec-empty-hint">请选择包含专家技能目录（<code>&lt;plugin&gt;/skills/*/SKILL.md</code>）的数据根</p>
-            <button type="button" className="um-btn um-btn--primary" onClick={chooseDir}>
-              <FolderOpenIcon size="sm" /><span>选择来源目录</span>
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ---- 我安装的 sub-page ----
-  if (view === "installed") {
-    return (
-      <div className="um-page">
-        <header className="um-topbar">
-          <div className="um-topbar-left">
-            <button type="button" className="um-back" onClick={() => setView("center")}>
-              <ChevronLeftIcon size="sm" /><span>技能市场</span>
-            </button>
-          </div>
-          <div className="um-topbar-right">
-            <button type="button" className="um-btn um-btn--grey" onClick={() => setImportOpen(true)}>
-              <AddCircleIcon size="sm" /><span>添加技能</span>
-            </button>
-          </div>
-        </header>
-        <div className="um-scroll">
-          {localsLoading ? (
-            <div className="ec-loading">加载中…</div>
-          ) : locals.length === 0 ? (
-            <div className="ec-empty">
-              <PuzzlePieceIcon size="xl" className="ec-empty-icon" />
-              <p>还没有安装任何技能</p>
-              <p className="ec-empty-hint">点击右上角「添加技能」或从市场导入</p>
-            </div>
-          ) : (
-            <div className="sk-inst-list">
-              {locals.map((s) => (
-                <RuntimeSkillRow key={s.name + (s.path ?? "")} skill={s}
-                  onToggle={handleToggle} onRemove={handleRemove} onUpload={setUploadSkill} />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {importOpen && (
-          <ImportSkillModal onClose={() => setImportOpen(false)} onToast={onToast}
-            onInstalled={reloadLocals} />
-        )}
-        {uploadSkill && (
-          <UploadSkillModal skill={uploadSkill} onClose={() => setUploadSkill(null)} onToast={onToast} />
-        )}
-      </div>
-    );
-  }
-
-  // ---- catalog (market) ----
   return (
     <div className="um-page">
       <header className="um-topbar">
@@ -393,13 +196,9 @@ export function SkillsTab({ pills, onToast }: Props) {
         <div className="um-topbar-right">
           <div className="um-search">
             <SearchIcon size="sm" className="um-search-icon" />
-            <input className="um-search-input" value={search} placeholder="搜索技能"
-              onChange={(e) => setSearch(e.target.value)} />
+            <input className="um-search-input" value={search} placeholder="搜索已安装技能"
+              onChange={(event) => setSearch(event.target.value)} />
           </div>
-          <button type="button"
-            className="um-btn um-btn--grey" onClick={() => setView("installed")}>
-            <InstalledSkillIcon size="sm" /><span>我安装的</span>
-          </button>
           <button type="button" className="um-btn um-btn--grey" onClick={() => setImportOpen(true)}>
             <AddCircleIcon size="sm" /><span>添加技能</span>
           </button>
@@ -408,83 +207,51 @@ export function SkillsTab({ pills, onToast }: Props) {
 
       <div className="um-scroll">
         <div className="ec-source-bar">
-          <span className="ec-source-label" title={root}>来源：{root || "—"}</span>
-          <button type="button" className="ec-source-btn" onClick={chooseDir} title="切换来源目录">
-            <FolderOpenIcon size="sm" /><span>选择目录</span>
-          </button>
-          <button type="button" className="ec-source-btn" onClick={restoreDefault} title="恢复 EchoAgent 默认目录">
-            <RestoreIcon size="sm" /><span>恢复默认</span>
-          </button>
-          <button type="button" className="ec-source-btn" onClick={() => root && loadCatalog(root)}
-            disabled={loading} title="重新加载">
-            <RefreshCwIcon size="sm" />
+          <span className="ec-source-label" title="~/.echo-agent/skills">
+            用户全局技能 · ~/.echo-agent/skills
+          </span>
+          <button type="button" className="ec-source-btn" onClick={() => void reloadSkills()}
+            disabled={loading} title="重新扫描全局和当前工作区技能">
+            <RefreshCwIcon size="sm" /><span>刷新</span>
           </button>
         </div>
 
-        {loading && !catalog && <div className="ec-loading">扫描技能目录…</div>}
         {error && (
           <div className="ec-error">
             加载失败：{error}
-            <button type="button" className="ec-source-btn" onClick={chooseDir}>选择目录</button>
+            <button type="button" className="ec-source-btn" onClick={() => void reloadSkills()}>重试</button>
           </div>
         )}
 
-        {catalog && (
-          <>
-            {featured.length > 0 && (
-              <section className="sk-featured">
-                <div className="sk-featured-head">
-                  <h3 className="ec-section-title">精选技能</h3>
-                  <span className="ec-section-sub">内置技能 · 共 {featured.length} 个</span>
-                </div>
-                <div className="sk-featured-grid">
-                  {featured.slice(0, FEATURED_WINDOW).map((s) => (
-                    <SkillCatalogCard key={s.id} skill={s}
-                      installed={installedNames.has(s.name.toLowerCase())}
-                      onAdd={handleAdd} onOpen={setModalSkill} />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            <div className="ec-chips">
-              {chips.map((c) => (
-                <Chip key={c.id ?? "all"} label={c.label}
-                  active={cat === c.id} onClick={() => setCat(c.id)} />
-              ))}
-            </div>
-
-            {visible.length === 0 ? (
-              <div className="ec-empty">
-                <SparklesIcon size="xl" className="ec-empty-icon" />
-                <p>{search ? `没有找到与「${search}」匹配的技能` : "该分类暂无技能"}</p>
-              </div>
-            ) : (
-              <div className="sk-grid">
-                {visible.map((s) => (
-                  <SkillCatalogCard key={s.id} skill={s}
-                    installed={installedNames.has(s.name.toLowerCase())}
-                    onAdd={handleAdd} onOpen={setModalSkill} />
-                ))}
-              </div>
-            )}
-          </>
+        {loading && skills.length === 0 ? (
+          <div className="ec-loading">扫描全局技能目录…</div>
+        ) : skills.length === 0 ? (
+          <div className="ec-empty">
+            <PuzzlePieceIcon size="xl" className="ec-empty-icon" />
+            <p>全局目录中还没有技能</p>
+            <p className="ec-empty-hint">点击右上角「添加技能」，或从组织记忆安装共享 Skill</p>
+          </div>
+        ) : visible.length === 0 ? (
+          <div className="ec-empty">
+            <PuzzlePieceIcon size="xl" className="ec-empty-icon" />
+            <p>没有找到与「{search}」匹配的技能</p>
+          </div>
+        ) : (
+          <div className="sk-inst-list">
+            {visible.map((skill) => (
+              <RuntimeSkillRow key={skill.name + (skill.path ?? "")} skill={skill}
+                onToggle={handleToggle} onRemove={handleRemove} onUpload={setUploadSkill} />
+            ))}
+          </div>
         )}
       </div>
 
-      {modalSkill && (
-        <SkillDetailModal
-          skill={modalSkill}
-          installed={locals}
-          onClose={() => setModalSkill(null)}
-          onInstalled={reloadLocals}
-          onToast={onToast}
-        />
-      )}
-
       {importOpen && (
         <ImportSkillModal onClose={() => setImportOpen(false)} onToast={onToast}
-          onInstalled={reloadLocals} />
+          onInstalled={reloadSkills} />
+      )}
+      {uploadSkill && (
+        <UploadSkillModal skill={uploadSkill} onClose={() => setUploadSkill(null)} onToast={onToast} />
       )}
     </div>
   );
