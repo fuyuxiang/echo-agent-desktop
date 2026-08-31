@@ -19,6 +19,31 @@ use tauri::State;
 use crate::commands::AppState;
 use crate::ext::{call_ext, call_ext_value, raw_params};
 
+fn process_cwd() -> String {
+    std::env::current_dir()
+        .ok()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn required_cwd(cwd: Option<String>) -> String {
+    cwd.filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(process_cwd)
+}
+
+fn command_cwd(state: &AppState, cwd: Option<String>) -> String {
+    required_cwd(cwd.or_else(|| {
+        state
+            .cwd
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+    }))
+}
+
 /// One discovered skill. Mirrors the relevant fields of EchoAgent's `SkillInfo`
 /// (`xai-grok-tools/src/implementations/skills/types.rs:40`). Unknown/missing
 /// fields fall back to defaults — the shape is stable across EchoAgent versions but
@@ -115,7 +140,8 @@ pub async fn skills_list(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    skills_list_with_tx(&tx, cwd).await
+    let cwd = command_cwd(&state, cwd);
+    skills_list_with_tx(&tx, Some(cwd)).await
 }
 
 /// Internal form used by automations for execution-time capability checks.
@@ -123,14 +149,12 @@ pub async fn skills_list_with_tx(
     tx: &xai_acp_lib::AcpAgentTx,
     cwd: Option<String>,
 ) -> Result<Vec<SkillInfo>, String> {
-    // EchoAgent's `echo.agent/skills/list` schema requires `cwd` to be a *string* when
-    // present (it rejects `null` with -32602). Omit the key entirely when the
-    // caller has no cwd so EchoAgent falls back to its own default.
-    let mut params_obj = serde_json::Map::new();
-    if let Some(c) = &cwd {
-        params_obj.insert("cwd".into(), serde_json::Value::String(c.clone()));
-    }
-    let params: Arc<RawValue> = raw_params(&serde_json::Value::Object(params_obj));
+    // Current EchoAgent builds require `cwd` and reject both null and a missing
+    // field. Older builds also accept the explicit string, so always provide a
+    // concrete fallback for calls made outside an active project/session.
+    let params: Arc<RawValue> = raw_params(&serde_json::json!({
+        "cwd": required_cwd(cwd),
+    }));
     // Prefer `echo.agent/skills/config` (richer: includes paths/ignore config), but
     // fall back to `echo.agent/skills/list` if the method is unavailable on this
     // EchoAgent build.
@@ -195,6 +219,7 @@ pub async fn skills_add(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
+    let cwd = command_cwd(&state, cwd);
     let params = raw_params(&serde_json::json!({ "path": path, "cwd": cwd }));
     let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/skills/add", params)
         .await
@@ -215,6 +240,7 @@ pub async fn skills_remove(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
+    let cwd = command_cwd(&state, cwd);
     let params = raw_params(&serde_json::json!({ "path": path, "cwd": cwd }));
     let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/skills/remove", params)
         .await
@@ -270,5 +296,12 @@ mod tests {
         assert_eq!(skills[0].display_name.as_deref(), Some("Deploy Service"));
         assert_eq!(skills[0].user_invocable, Some(false));
         assert_eq!(skills[0].when_to_use.as_deref(), Some("release requests"));
+    }
+
+    #[test]
+    fn required_cwd_never_returns_an_empty_value() {
+        assert_eq!(required_cwd(Some("/tmp/project".into())), "/tmp/project");
+        assert!(!required_cwd(None).trim().is_empty());
+        assert!(!required_cwd(Some("  ".into())).trim().is_empty());
     }
 }
