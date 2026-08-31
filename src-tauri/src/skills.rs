@@ -304,4 +304,25 @@ mod tests {
         assert!(!required_cwd(None).trim().is_empty());
         assert!(!required_cwd(Some("  ".into())).trim().is_empty());
     }
+
+    #[test]
+    fn enveloped_runtime_skill_list_decodes() {
+        let response = acp::ExtResponse::new(crate::ext::raw_params(&serde_json::json!({
+            "result": {
+                "skills": [{
+                    "name": "demo",
+                    "description": "Demo skill",
+                    "path": "/tmp/skills/demo/SKILL.md",
+                    "scope": "user",
+                    "enabled": true
+                }]
+            }
+        })));
+
+        let parsed: SkillsListResponse = crate::ext::parse_ext_response(&response).unwrap();
+        let (skills, paths) = parsed.into_parts();
+        assert_eq!(skills[0].name, "demo");
+        assert!(skills[0].enabled);
+        assert!(paths.is_empty());
+    }
 }
