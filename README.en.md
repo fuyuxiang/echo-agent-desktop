@@ -174,6 +174,8 @@ Every path in this table is rooted at `ECHO_AGENT_HOME`; `~/.echo-agent` is only
 
 On first launch, EchoAgent performs a one-time import from the legacy `~/.grok/` data directory: files or subdirectories missing under `~/.echo-agent/` are copied over, except for the retired `auth.json`, and a `.legacy-data-migrated` marker is written so the import never runs again. Existing files in `~/.echo-agent/` always win — the migration never overwrites them — and the legacy directory is left in place for rollback.
 
+The expert marketplace is also safely imported from the historical `~/EchoAgent/agents/` or `~/agents/` location into `experts-marketplace/` under the active data home. When `ECHO_AGENT_HOME` is customized, the connector marketplace and built-in skills under the old default data home follow the same rule. Each import is assembled in a staging directory and atomically moved into place; an existing target always wins and the legacy source is never deleted.
+
 When both `ECHO_AGENT_HOME` and `GROK_HOME` are set, the migration source follows `GROK_HOME`; the embedded runtime is also rewired at startup to use the `ECHO_AGENT_HOME` path so subsequent writes never land in the legacy location.
 
 ## Architecture

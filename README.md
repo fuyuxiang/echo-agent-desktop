@@ -174,6 +174,8 @@ EchoAgent 默认将应用状态保存在 `~/.echo-agent/`。如需修改数据�
 
 首次启动时，EchoAgent 会一次性从旧版数据目录 `~/.grok/` 把缺失的文件和目录（已废弃的 `auth.json` 除外）复制到 `~/.echo-agent/`，再写入 `.legacy-data-migrated` 标记避免重复执行。整个过程只会复制新位置还没有的文件，**绝不会覆盖** `~/.echo-agent/` 中已有的内容，旧目录也保持原样，便于回滚。
 
+专家市场也会从历史的 `~/EchoAgent/agents/` 或 `~/agents/` 安全导入到当前数据根的 `experts-marketplace/`。当使用自定义 `ECHO_AGENT_HOME` 时，旧默认数据根中的连接器市场和内置技能也会以相同规则导入。导入通过临时目录完成后再原子切换，已存在的目标目录始终优先，旧目录不会删除。
+
 如果同时设置了 `ECHO_AGENT_HOME` 和 `GROK_HOME`，迁移源会指向 `GROK_HOME` 指向的目录；嵌入式 Runtime 启动时也会被改写为使用 `ECHO_AGENT_HOME` 对应的路径，避免后续写入落到旧位置。
 
 ## 技术架构

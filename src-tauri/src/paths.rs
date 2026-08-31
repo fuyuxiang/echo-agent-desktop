@@ -59,18 +59,31 @@ pub fn echo_agent_home_dir() -> PathBuf {
 /// Connectors panel. Keep these derived from `ECHO_AGENT_HOME`, just like the
 /// runtime-owned agents, skills and MCP configuration, so a redirected data
 /// home never leaves catalog reads behind in `~/.echo-agent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CatalogRoots {
+    pub experts: PathBuf,
+    pub connectors: PathBuf,
+    pub builtin_skills: PathBuf,
+}
+
+fn catalog_roots(data_home: &Path) -> CatalogRoots {
+    CatalogRoots {
+        experts: data_home.join(EXPERTS_MARKETPLACE_DIR_NAME),
+        connectors: data_home.join(CONNECTORS_MARKETPLACE_DIR_NAME),
+        builtin_skills: data_home.join("resources").join("builtin-skills"),
+    }
+}
+
 pub(crate) fn experts_marketplace_dir() -> PathBuf {
-    echo_agent_home_dir().join(EXPERTS_MARKETPLACE_DIR_NAME)
+    catalog_roots(&echo_agent_home_dir()).experts
 }
 
 pub(crate) fn connectors_marketplace_dir() -> PathBuf {
-    echo_agent_home_dir().join(CONNECTORS_MARKETPLACE_DIR_NAME)
+    catalog_roots(&echo_agent_home_dir()).connectors
 }
 
 pub(crate) fn builtin_skills_dir() -> PathBuf {
-    echo_agent_home_dir()
-        .join("resources")
-        .join("builtin-skills")
+    catalog_roots(&echo_agent_home_dir()).builtin_skills
 }
 
 /// Resolve the first non-empty path override. The first name is the current
@@ -133,6 +146,13 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
         .map_err(|e| format!("write migration marker {}: {e}", marker.display()))?;
     }
 
+    // Catalogs used to be resolved independently from fixed locations under
+    // the OS home directory. Import an existing valid catalog into the active
+    // data home once, without overwriting a target or deleting the source.
+    // Failure is non-fatal because the catalog resolvers retain legacy read
+    // fallbacks and the rest of the application must remain usable.
+    migrate_legacy_catalog_roots(&target);
+
     // Migration may have copied a world-readable legacy file. Harden it on
     // every startup so existing installations are repaired without requiring
     // the user to save provider settings again.
@@ -142,6 +162,66 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
     }
 
     Ok(target)
+}
+
+fn migrate_legacy_catalog_roots(data_home: &Path) {
+    let Some(user_home) = dirs::home_dir() else {
+        return;
+    };
+    let roots = catalog_roots(data_home);
+    let old_default_home = user_home.join(HOME_DIR_NAME);
+
+    let expert_source = [
+        user_home.join("EchoAgent").join("agents"),
+        user_home.join("agents"),
+    ]
+    .into_iter()
+    .find(|path| path.join("_meta").join("_expert_center.json").is_file());
+    if let Some(source) = expert_source {
+        if let Err(error) = migrate_catalog_dir(&source, &roots.experts) {
+            eprintln!("migrate legacy expert marketplace: {error}");
+        }
+    }
+
+    let connector_source = old_default_home.join(CONNECTORS_MARKETPLACE_DIR_NAME);
+    if connector_source
+        .join(".echo-agent-connector")
+        .join("connectors.json")
+        .is_file()
+    {
+        if let Err(error) = migrate_catalog_dir(&connector_source, &roots.connectors) {
+            eprintln!("migrate legacy connector marketplace: {error}");
+        }
+    }
+
+    let builtin_source = old_default_home.join("resources").join("builtin-skills");
+    if builtin_source.is_dir() {
+        if let Err(error) = migrate_catalog_dir(&builtin_source, &roots.builtin_skills) {
+            eprintln!("migrate legacy built-in skills: {error}");
+        }
+    }
+}
+
+/// Copy a legacy catalog through a sibling staging directory, then rename it
+/// into place. The rename makes an interrupted import distinguishable from a
+/// complete target and ensures an existing target always wins.
+fn migrate_catalog_dir(source: &Path, target: &Path) -> io::Result<bool> {
+    if source == target || target.exists() || !source.is_dir() {
+        return Ok(false);
+    }
+    let parent = target.parent().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "catalog target has no parent")
+    })?;
+    fs::create_dir_all(parent)?;
+    let name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid catalog target"))?;
+    let staging = parent.join(format!(".{name}.migrating"));
+    fs::create_dir_all(&staging)?;
+    merge_missing(source, &staging)?;
+    fs::rename(staging, target)?;
+    Ok(true)
 }
 
 /// Write a secret-bearing file atomically with owner-only permissions on Unix.
@@ -265,8 +345,8 @@ fn copy_file_if_missing(source: &Path, destination: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        merge_missing, reject_legacy_workbuddy_path, write_private_file,
-        CONNECTORS_MARKETPLACE_DIR_NAME, EXPERTS_MARKETPLACE_DIR_NAME,
+        catalog_roots, merge_missing, migrate_catalog_dir, reject_legacy_workbuddy_path,
+        write_private_file,
     };
     use std::fs;
     use std::path::Path;
@@ -298,16 +378,17 @@ mod tests {
     #[test]
     fn catalog_layout_uses_children_of_one_data_home() {
         let root = Path::new("/data/echo-agent-home");
+        let catalog = catalog_roots(root);
         assert_eq!(
-            root.join(EXPERTS_MARKETPLACE_DIR_NAME),
+            catalog.experts,
             Path::new("/data/echo-agent-home/experts-marketplace")
         );
         assert_eq!(
-            root.join(CONNECTORS_MARKETPLACE_DIR_NAME),
+            catalog.connectors,
             Path::new("/data/echo-agent-home/connectors-marketplace")
         );
         assert_eq!(
-            root.join("resources").join("builtin-skills"),
+            catalog.builtin_skills,
             Path::new("/data/echo-agent-home/resources/builtin-skills")
         );
     }
@@ -355,6 +436,29 @@ mod tests {
             fs::read_to_string(target.path().join("memory")).unwrap(),
             "keep this file"
         );
+    }
+
+    #[test]
+    fn catalog_migration_is_non_destructive_and_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("legacy-experts");
+        let target = temp.path().join("data-home").join("experts-marketplace");
+        fs::create_dir_all(source.join("_meta")).unwrap();
+        fs::write(source.join("_meta/_expert_center.json"), "catalog").unwrap();
+
+        assert!(migrate_catalog_dir(&source, &target).unwrap());
+        assert_eq!(
+            fs::read_to_string(target.join("_meta/_expert_center.json")).unwrap(),
+            "catalog"
+        );
+        assert!(
+            source.exists(),
+            "legacy source must remain available for rollback"
+        );
+
+        fs::write(source.join("newer.txt"), "must not merge later").unwrap();
+        assert!(!migrate_catalog_dir(&source, &target).unwrap());
+        assert!(!target.join("newer.txt").exists());
     }
 
     #[cfg(unix)]
