@@ -44,6 +44,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "C:\Tools\protoc" | Out-Null
           Expand-Archive -Path $archive -DestinationPath "C:\Tools\protoc" -Force
           & "C:\Tools\protoc\bin\protoc.exe" --version
+          "PROTOC=C:\Tools\protoc\bin\protoc.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Prepare embedded runtime
         shell: pwsh
