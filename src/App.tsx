@@ -48,6 +48,7 @@ import {
   flattenModels,
   notificationAppend,
   memoryAppend,
+  internalReload,
   subscribeAgentEvents,
   type InitResult,
   type WorkspaceInfo,
@@ -72,6 +73,7 @@ import { buildProjectPrompt } from "./lib/project-context";
 import { migrateCatalogRootStorage } from "./lib/catalog-root-storage";
 import { parseRememberArguments, type SlashCommandInvocation } from "./lib/slash-commands";
 import { useUpdateStore } from "./stores/update-store";
+import { useOrgSessionStore } from "./stores/org-session-store";
 
 /** Hidden markers wrapping the expert persona in the text sent to the runtime.
  *  The UI strips these (and everything between them) from user messages. */
@@ -165,6 +167,7 @@ function Shell() {
 
   useEffect(() => {
     migrateCatalogRootStorage();
+    void useOrgSessionStore.getState().hydrate();
     void hydrateKnowledgeSources().catch((error) => {
       console.error("[EchoAgent] Failed to hydrate knowledge sources:", error);
       setToast("知识源后端数据读取失败");
@@ -174,6 +177,16 @@ function Shell() {
       setToast("项目后端数据读取失败，已使用本地缓存");
     });
   }, []);
+
+  // Organization hydration may race the native agent startup. Once the agent
+  // channel is ready, re-advertise the final server-managed Skill set so both
+  // newly restored and already resident sessions observe the same catalog.
+  useEffect(() => {
+    if (!init?.ok) return;
+    void useOrgSessionStore.getState().hydrate()
+      .then(() => internalReload("skills"))
+      .catch(() => {});
+  }, [init?.ok]);
 
   // Update checks run after the shell is interactive and never block agent
   // initialization. Offline/VPN failures stay silent until the user opens the

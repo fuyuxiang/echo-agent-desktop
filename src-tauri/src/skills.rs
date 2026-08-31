@@ -12,6 +12,7 @@
 use agent_client_protocol as acp;
 use serde::Deserialize;
 use serde_json::value::RawValue;
+use std::path::Path;
 use std::sync::Arc;
 use tauri::State;
 
@@ -46,6 +47,21 @@ pub struct SkillInfo {
     /// True for packages copied into and owned by EchoAgent's local installer.
     #[serde(default)]
     pub managed: bool,
+    /// True for a signed package synchronized from echo-agent-server. Kept
+    /// separate from `managed`, which means the local package installer owns
+    /// the directory and may safely uninstall it.
+    #[serde(default)]
+    pub org_managed: bool,
+    #[serde(default)]
+    pub org_skill_id: Option<String>,
+    #[serde(default)]
+    pub org_version_id: Option<String>,
+    #[serde(default)]
+    pub org_scope_kind: Option<String>,
+    #[serde(default)]
+    pub org_mandatory: Option<bool>,
+    #[serde(default)]
+    pub org_allow_personal_override: Option<bool>,
     /// Installed package version when declared by its install manifest.
     #[serde(default)]
     pub version: Option<String>,
@@ -129,10 +145,23 @@ pub async fn skills_list_with_tx(
             v.into_parts()
         }
     };
+    let organization_metadata = crate::org::managed_skills_metadata();
     Ok(skills
         .into_iter()
         .map(|mut skill| {
             if let Some(path) = skill.path.clone() {
+                if let Some((_, meta)) = organization_metadata
+                    .iter()
+                    .find(|(root, _)| Path::new(&path).starts_with(root))
+                {
+                    skill.org_managed = true;
+                    skill.org_skill_id = Some(meta.skill_id.clone());
+                    skill.org_version_id = Some(meta.version_id.clone());
+                    skill.org_scope_kind = Some(meta.scope_kind.clone());
+                    skill.org_mandatory = Some(meta.mandatory);
+                    skill.org_allow_personal_override = Some(meta.allow_personal_override);
+                    skill.version = Some(meta.version.clone());
+                }
                 skill.managed = crate::skill_installer::is_managed_skill(&path);
                 if skill.managed {
                     skill.version = crate::skill_installer::managed_skill_version(&path);
