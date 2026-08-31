@@ -64,34 +64,86 @@ import type {
 } from "@/lib/types";
 
 const FONT_KEY = "echoagent.fontSize";
-const DEFAULT_SHORTCUTS: { key: string; action: string }[] = [
-  { key: "Ctrl/Cmd + N", action: "新建任务" },
-  { key: "Ctrl/Cmd + K", action: "搜索会话" },
-  { key: "Ctrl/Cmd + ,", action: "打开设置" },
-  { key: "Ctrl/Cmd + B", action: "切换侧栏" },
-  { key: "Enter", action: "发送消息" },
-  { key: "Shift + Enter", action: "换行" },
-  { key: "Ctrl/Cmd + F", action: "查找当前会话" },
-  { key: "Esc", action: "关闭当前弹窗" },
-  { key: "/ ", action: "触发技能/命令补全" },
-  { key: "@ ", action: "引用对话文件" },
+const SHORTCUT_GROUPS: Array<{
+  title: string;
+  items: Array<{ key: string; action: string }>;
+}> = [
+  {
+    title: "全局导航",
+    items: [
+      { key: "Ctrl/Cmd + N", action: "新建任务" },
+      { key: "Ctrl/Cmd + K", action: "搜索会话" },
+      { key: "Ctrl/Cmd + ,", action: "打开设置" },
+      { key: "Ctrl/Cmd + B", action: "切换侧栏" },
+    ],
+  },
+  {
+    title: "对话与编辑",
+    items: [
+      { key: "Enter", action: "发送消息" },
+      { key: "Shift + Enter", action: "换行" },
+      { key: "Ctrl/Cmd + F", action: "查找当前会话" },
+      { key: "Esc", action: "关闭当前弹窗" },
+    ],
+  },
+  {
+    title: "快捷输入",
+    items: [
+      { key: "/ ", action: "触发技能/命令补全" },
+      { key: "@ ", action: "引用对话文件" },
+    ],
+  },
 ];
 
 function SectionShell({
   title,
   desc,
+  actions,
   children,
 }: {
   title: string;
   desc?: string;
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="settings-section">
-      <h2 className="settings-section__title">{title}</h2>
-      {desc && <p className="settings-section__desc">{desc}</p>}
+      <header className="settings-section__header">
+        <div className="settings-section__heading">
+          <h2 className="settings-section__title">{title}</h2>
+          {desc && <p className="settings-section__desc">{desc}</p>}
+        </div>
+        {actions && <div className="settings-section__actions">{actions}</div>}
+      </header>
       <div className="settings-section__body">{children}</div>
     </div>
+  );
+}
+
+function SettingsGroup({
+  title,
+  desc,
+  meta,
+  children,
+  className = "",
+}: {
+  title: string;
+  desc?: string;
+  meta?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`settings-group${className ? ` ${className}` : ""}`}>
+      <header className="settings-group__header">
+        <div>
+          <h3 className="settings-group__title">{title}</h3>
+          {desc && <p className="settings-group__desc">{desc}</p>}
+        </div>
+        {meta && <div className="settings-group__meta">{meta}</div>}
+      </header>
+      <div className="settings-group__content">{children}</div>
+    </section>
   );
 }
 
@@ -115,46 +167,55 @@ export function PersonalizeSettingsPanel() {
       title="个性化"
       desc="调整外观和字号。主题切换立即生效，字号应用到整个界面。"
     >
-      <div className="settings-row">
-        <div className="settings-row__label">
-          {theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
-          <span>主题</span>
+      <SettingsGroup title="界面外观" desc="选择适合当前环境的显示主题和阅读字号。">
+        <div className="settings-row settings-row--comfortable">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name">
+              {theme === "dark" ? <Moon size={17} /> : <Sun size={17} />}
+              主题
+            </span>
+            <span className="settings-row__description">在浅色和深色界面之间切换</span>
+          </div>
+          <div className="settings-row__control theme-toggle" role="group" aria-label="界面主题">
+            <button
+              className={`theme-toggle__btn ${theme === "light" ? "theme-toggle__btn--active" : ""}`}
+              onClick={() => setTheme("light")}
+              aria-pressed={theme === "light"}
+            >
+              <Sun size={15} /> 浅色
+            </button>
+            <button
+              className={`theme-toggle__btn ${theme === "dark" ? "theme-toggle__btn--active" : ""}`}
+              onClick={() => setTheme("dark")}
+              aria-pressed={theme === "dark"}
+            >
+              <Moon size={15} /> 深色
+            </button>
+          </div>
         </div>
-        <div className="settings-row__control theme-toggle">
-          <button
-            className={`theme-toggle__btn ${theme === "light" ? "theme-toggle__btn--active" : ""}`}
-            onClick={() => setTheme("light")}
-          >
-            <Sun size={14} /> 浅色
-          </button>
-          <button
-            className={`theme-toggle__btn ${theme === "dark" ? "theme-toggle__btn--active" : ""}`}
-            onClick={() => setTheme("dark")}
-          >
-            <Moon size={14} /> 深色
-          </button>
-        </div>
-      </div>
 
-      <div className="settings-row">
-        <div className="settings-row__label">
-          <Type size={16} />
-          <span>字号</span>
-          <span className="settings-row__hint">（{fontSize}px）</span>
+        <div className="settings-row settings-row--comfortable">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name"><Type size={17} />字号</span>
+            <span className="settings-row__description">当前正文大小为 {fontSize}px</span>
+          </div>
+          <div className="settings-row__control settings-font-control">
+            <span className="settings-font-control__sample settings-font-control__sample--small">A</span>
+            <input
+              type="range"
+              min={11}
+              max={18}
+              value={fontSize}
+              onChange={(e) => setFontSize(Number(e.target.value))}
+              aria-label="界面字号"
+            />
+            <span className="settings-font-control__sample settings-font-control__sample--large">A</span>
+            <button className="settings-reset" onClick={() => setFontSize(13)}>
+              重置
+            </button>
+          </div>
         </div>
-        <div className="settings-row__control">
-          <input
-            type="range"
-            min={11}
-            max={18}
-            value={fontSize}
-            onChange={(e) => setFontSize(Number(e.target.value))}
-          />
-          <button className="settings-reset" onClick={() => setFontSize(13)}>
-            重置
-          </button>
-        </div>
-      </div>
+      </SettingsGroup>
     </SectionShell>
   );
 }
@@ -167,14 +228,20 @@ export function ShortcutsSettingsPanel() {
       title="快捷键"
       desc="以下是当前版本已实际生效的快捷键。"
     >
-      <ul className="shortcuts-list">
-        {DEFAULT_SHORTCUTS.map((s, i) => (
-          <li key={i} className="shortcuts-list__row">
-            <span className="shortcuts-list__action">{s.action}</span>
-            <kbd className="shortcuts-list__key">{s.key}</kbd>
-          </li>
+      <div className="shortcuts-groups">
+        {SHORTCUT_GROUPS.map((group) => (
+          <SettingsGroup title={group.title} key={group.title}>
+            <ul className="shortcuts-list">
+              {group.items.map((shortcut) => (
+                <li key={shortcut.key} className="shortcuts-list__row">
+                  <span className="shortcuts-list__action">{shortcut.action}</span>
+                  <kbd className="shortcuts-list__key">{shortcut.key}</kbd>
+                </li>
+              ))}
+            </ul>
+          </SettingsGroup>
         ))}
-      </ul>
+      </div>
     </SectionShell>
   );
 }
@@ -215,18 +282,35 @@ export function MemorySettingsPanel() {
       title="记忆"
       desc="EchoAgent 跨会话记忆的维护。记忆文件存在 ~/.echo-agent/memory/。"
     >
-      <p className="settings-hint">
-        EchoAgent 在对话中自动学习并写入 <code>MEMORY.md</code>。
-        在侧栏「更多 / 资料库」可以查看和编辑具体内容。
-      </p>
-      <div className="settings-actions">
-        <button className="settings-btn" onClick={handleFlush} disabled={busy}>
-          <Database size={14} /> 强制落盘
-        </button>
-        <button className="settings-btn" onClick={handleRewrite} disabled={busy}>
-          <RefreshCw size={14} /> LLM 重写
-        </button>
-      </div>
+      <SettingsGroup title="记忆存储" desc="对话中学习到的信息会自动写入本地记忆文件。">
+        <div className="settings-row settings-row--comfortable">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name"><Database size={17} />本地记忆目录</span>
+            <span className="settings-row__description">可在侧栏“更多 / 资料库”中查看和编辑</span>
+          </div>
+          <code className="settings-path-chip">~/.echo-agent/memory/</code>
+        </div>
+      </SettingsGroup>
+      <SettingsGroup title="维护操作" desc="通常无需手动执行；仅在需要立即同步或整理记忆时使用。">
+        <div className="settings-action-row">
+          <div className="settings-action-row__content">
+            <strong>立即写入磁盘</strong>
+            <span>将当前尚未持久化的记忆立即保存到本地。</span>
+          </div>
+          <button className="settings-btn" onClick={handleFlush} disabled={busy}>
+            <Database size={15} /> 立即落盘
+          </button>
+        </div>
+        <div className="settings-action-row">
+          <div className="settings-action-row__content">
+            <strong>整理全部记忆</strong>
+            <span>使用当前模型重新组织记忆内容，可能需要一段时间。</span>
+          </div>
+          <button className="settings-btn" onClick={handleRewrite} disabled={busy}>
+            <RefreshCw size={15} /> LLM 重写
+          </button>
+        </div>
+      </SettingsGroup>
       {msg && <p className="settings-msg">{msg}</p>}
     </SectionShell>
   );
@@ -236,42 +320,33 @@ export function MemorySettingsPanel() {
 
 export function HelpSettingsPanel() {
   return (
-    <SectionShell title="帮助与反馈" desc="常用链接和资源。">
-      <ul className="help-list">
-        <li>
-          <ExternalLink size={14} />
-          <a
-            href="https://fuyuxiang.github.io/echo-agent/"
-            target="_blank"
-            rel="noreferrer"
-          >
-            EchoAgent 文档
+    <SectionShell title="帮助与反馈" desc="查阅使用文档、协议说明和常见问题排查步骤。">
+      <SettingsGroup title="帮助资源">
+        <div className="help-grid">
+          <a className="help-card" href="https://fuyuxiang.github.io/echo-agent/" target="_blank" rel="noreferrer">
+            <ExternalLink size={18} />
+            <strong>EchoAgent 文档</strong>
+            <span>查看功能说明、配置方法与最佳实践</span>
           </a>
-        </li>
-        <li>
-          <ExternalLink size={14} />
-          <a
-            href="https://agentclientprotocol.com/"
-            target="_blank"
-            rel="noreferrer"
-          >
-            ACP 协议规范
+          <a className="help-card" href="https://agentclientprotocol.com/" target="_blank" rel="noreferrer">
+            <ExternalLink size={18} />
+            <strong>ACP 协议规范</strong>
+            <span>了解智能体客户端协议和运行机制</span>
           </a>
-        </li>
-        <li>
-          <ExternalLink size={14} />
-          <span>运行时：EchoAgent Runtime（内置）</span>
-        </li>
-      </ul>
-      <p className="settings-hint">
-        遇到问题？请检查：
-        <br />
-        1. 「模型」tab 是否配置了至少一个 Provider / API Key
-        <br />
-        2. <code>~/.echo-agent/config.toml</code> 是否可读写
-        <br />
-        3. 重启 EchoAgent 后再试
-      </p>
+          <div className="help-card help-card--static">
+            <Database size={18} />
+            <strong>内置运行时</strong>
+            <span>当前使用 EchoAgent Runtime，无需额外安装</span>
+          </div>
+        </div>
+      </SettingsGroup>
+      <SettingsGroup title="快速排查" desc="遇到模型不可用或智能体无法启动时，建议按顺序检查。">
+        <ol className="settings-checklist">
+          <li><span>1</span><div><strong>确认模型配置</strong><p>在“模型”页面至少配置一个厂商、API Key 和模型。</p></div></li>
+          <li><span>2</span><div><strong>检查配置文件</strong><p>确认 <code>~/.echo-agent/config.toml</code> 可以正常读写。</p></div></li>
+          <li><span>3</span><div><strong>重新加载或重启</strong><p>先在“系统设置”尝试热重载，仍无效时再重启应用。</p></div></li>
+        </ol>
+      </SettingsGroup>
     </SectionShell>
   );
 }
@@ -338,63 +413,80 @@ export function SecuritySettingsPanel() {
   return (
     <SectionShell
       title="安全中心"
-      desc="编辑工具执行的 allow / ask / deny 规则。"
+      desc="控制智能体调用工具时的授权规则，并管理本地遥测设置。"
     >
-      <div className="settings-row">
-        <div className="settings-row__label">
-          <Shield size={16} />
-          <span>已配置规则</span>
+      <SettingsGroup
+        title="工具权限规则"
+        desc="规则按 deny、ask、allow 的优先级匹配；保存后重启 Agent 生效。"
+        meta={<span className="settings-status-badge">{loading ? "加载中…" : `${rules.length} 条规则`}</span>}
+      >
+        {rules.length > 0 ? (
+          <ul className="rules-list">
+            {rules.map((rule, index) => (
+              <li key={`${rule.action}-${rule.tool}-${rule.pattern ?? ""}-${index}`} className={`rules-list__item rules-list__item--${rule.action}`}>
+                <span className="rules-list__action">{rule.action}</span>
+                <span className="rules-list__tool">{rule.tool}</span>
+                <span className="rules-list__pattern">{rule.pattern || "所有调用"}</span>
+                <button
+                  type="button"
+                  className="rules-list__remove"
+                  onClick={() => setRules((items) => items.filter((_, itemIndex) => itemIndex !== index))}
+                  aria-label={`删除规则 ${index + 1}`}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : !loading ? (
+          <div className="settings-empty-inline">尚未添加自定义权限规则</div>
+        ) : null}
+
+        <div className="permission-rule-builder">
+          <label className="permission-rule-builder__field">
+            <span>处理方式</span>
+            <select className="settings-select" value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value })} aria-label="规则动作">
+              <option value="deny">拒绝 deny</option>
+              <option value="ask">询问 ask</option>
+              <option value="allow">允许 allow</option>
+            </select>
+          </label>
+          <label className="permission-rule-builder__field">
+            <span>工具类型</span>
+            <select className="settings-select" value={draft.tool} onChange={(e) => setDraft({ ...draft, tool: e.target.value })} aria-label="工具类型">
+              {['bash', 'read', 'edit', 'grep', 'mcp', 'webfetch', 'any'].map((tool) => <option key={tool} value={tool}>{tool}</option>)}
+            </select>
+          </label>
+          <label className="permission-rule-builder__field permission-rule-builder__field--pattern">
+            <span>匹配模式（可选）</span>
+            <input className="settings-input" value={draft.pattern ?? ""} onChange={(e) => setDraft({ ...draft, pattern: e.target.value })} placeholder="例如 git *" />
+          </label>
         </div>
-        <div className="settings-row__control">
-          {loading ? "加载中…" : `${rules.length} 条`}
+        <div className="settings-group__footer">
+          <button className="settings-btn" type="button" onClick={addRule}>添加到列表</button>
+          <button className="settings-btn settings-btn--primary" type="button" onClick={() => void saveRules()} disabled={saving}>
+            {saving ? "保存中…" : "保存全部规则"}
+          </button>
         </div>
-      </div>
-      {rules.length > 0 && (
-        <ul className="rules-list">
-          {rules.map((r, i) => (
-            <li key={i} className={`rules-list__item rules-list__item--${r.action}`}>
-              <span className="rules-list__action">{r.action}</span>
-              <span className="rules-list__tool">{r.tool}</span>
-              {r.pattern && <span className="rules-list__pattern">{r.pattern}</span>}
-              <button type="button" onClick={() => setRules((items) => items.filter((_, index) => index !== i))} aria-label={`删除规则 ${i + 1}`}>×</button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="settings-row">
-        <select value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value })} aria-label="规则动作">
-          <option value="deny">deny</option>
-          <option value="ask">ask</option>
-          <option value="allow">allow</option>
-        </select>
-        <select value={draft.tool} onChange={(e) => setDraft({ ...draft, tool: e.target.value })} aria-label="工具类型">
-          {['bash', 'read', 'edit', 'grep', 'mcp', 'webfetch', 'any'].map((tool) => <option key={tool} value={tool}>{tool}</option>)}
-        </select>
-        <input value={draft.pattern ?? ""} onChange={(e) => setDraft({ ...draft, pattern: e.target.value })} placeholder="匹配模式，如 git *（可选）" />
-        <button type="button" onClick={addRule}>添加规则</button>
-        <button type="button" onClick={() => void saveRules()} disabled={saving}>{saving ? "保存中…" : "保存规则"}</button>
-      </div>
+      </SettingsGroup>
       {feedback && <p className="settings-hint" role="status">{feedback}</p>}
-      <p className="settings-hint">
-        EchoAgent 评估顺序：<code>deny</code> &gt; <code>ask</code> &gt; <code>allow</code>。
-        修改需重启 EchoAgent 生效。
-      </p>
-      <div className="settings-row">
-        <div className="settings-row__label">
-          <Shield size={16} />
-          <span>OTLP 遥测端点（可选）</span>
+      <SettingsGroup title="遥测与诊断" desc="仅上报运行事件名、级别和技术属性，不包含对话正文。">
+        <div className="settings-row settings-row--comfortable">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name"><Shield size={17} />OTLP 遥测端点</span>
+            <span className="settings-row__description">留空表示关闭，修改后重启应用生效</span>
+          </div>
+          <div className="settings-row__control settings-row__control--wide">
+            <input
+              className="settings-input"
+              value={otlpEndpoint}
+              onChange={(event) => setOtlpEndpoint(event.target.value)}
+              placeholder="http://127.0.0.1:4318/v1/logs"
+            />
+            <button type="button" className="settings-btn" onClick={saveOtlp}>保存</button>
+          </div>
         </div>
-        <div className="settings-row__control">
-          <input
-            className="settings-input"
-            value={otlpEndpoint}
-            onChange={(event) => setOtlpEndpoint(event.target.value)}
-            placeholder="http://127.0.0.1:4318/v1/logs"
-          />
-          <button type="button" className="settings-btn" onClick={saveOtlp}>保存</button>
-        </div>
-      </div>
-      <p className="settings-hint">仅上报运行事件名、级别和技术属性，不上报对话正文。留空表示关闭。</p>
+      </SettingsGroup>
     </SectionShell>
   );
 }
@@ -412,27 +504,29 @@ export function DataSettingsPanel() {
   }, []);
 
   return (
-    <SectionShell title="数据管理" desc="本地缓存和 EchoAgent 数据目录。">
-      <div className="settings-row">
-        <div className="settings-row__label">
-          <Folder size={16} />
-          <span>EchoAgent 数据目录</span>
+    <SectionShell title="数据管理" desc="查看 EchoAgent 在本机保存的数据位置和内容范围。">
+      <SettingsGroup title="本地数据目录" desc="会话、项目、自动化、通知和配置都保存在此目录。">
+        <div className="settings-row settings-row--comfortable settings-row--path">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name"><Folder size={17} />EchoAgent 数据目录</span>
+            <span className="settings-row__description">此位置包含应用的重要本地数据</span>
+          </div>
+          <code className="settings-path-value">{agentHome || "正在读取…"}</code>
         </div>
-        <div className="settings-row__control">
-          <code>{agentHome}</code>
+        <div className="settings-group__footer">
+          <button className="settings-btn settings-btn--primary" onClick={() => {
+            void openEchoAgentDataDir().catch((error) => setMessage(`打开失败：${String(error).replace(/^Error:\s*/, "")}`));
+          }}>
+            <Folder size={15} /> 在系统中打开
+          </button>
         </div>
-      </div>
-      <div className="settings-actions">
-        <button className="settings-btn" onClick={() => {
-          void openEchoAgentDataDir().catch((error) => setMessage(`打开失败：${String(error).replace(/^Error:\s*/, "")}`));
-        }}>
-          <Folder size={14} /> 在系统中打开
-        </button>
-      </div>
+      </SettingsGroup>
       {message && <p className="settings-msg">{message}</p>}
-      <p className="settings-hint">
-        会话、项目、自动化、通知和配置均持久化在此目录。删除会话请在侧栏对单个会话操作，避免误删其他产品数据。
-      </p>
+      <SettingsGroup title="数据安全" desc="建议通过应用内入口管理数据，避免直接删除目录中的文件。">
+        <div className="settings-info-callout">
+          删除会话请在侧栏对单个会话操作；直接修改或清理目录可能导致项目、通知或配置无法恢复。
+        </div>
+      </SettingsGroup>
     </SectionShell>
   );
 }
@@ -460,17 +554,20 @@ export function GeneralSettingsPanel() {
       title="系统设置"
       desc="热重载 EchoAgent 的配置视图。修改 config.toml 后无需重启整个应用。"
     >
-      <div className="settings-actions">
-        <button className="settings-btn" onClick={() => handleReload("mcp_all")} disabled={busy}>
-          <RefreshCw size={14} /> 重载 MCP
-        </button>
-        <button className="settings-btn" onClick={() => handleReload("skills")} disabled={busy}>
-          <RefreshCw size={14} /> 重载技能
-        </button>
-        <button className="settings-btn" onClick={() => handleReload("models")} disabled={busy}>
-          <RefreshCw size={14} /> 重载模型
-        </button>
-      </div>
+      <SettingsGroup title="运行时热重载" desc="只刷新对应配置，不关闭当前窗口或中断其他页面。">
+        <div className="settings-action-row">
+          <div className="settings-action-row__content"><strong>MCP 连接器</strong><span>重新读取所有 MCP 服务和工具配置。</span></div>
+          <button className="settings-btn" onClick={() => handleReload("mcp_all")} disabled={busy}><RefreshCw size={15} />重新加载</button>
+        </div>
+        <div className="settings-action-row">
+          <div className="settings-action-row__content"><strong>技能目录</strong><span>重新扫描本地、项目和组织下发的技能。</span></div>
+          <button className="settings-btn" onClick={() => handleReload("skills")} disabled={busy}><RefreshCw size={15} />重新加载</button>
+        </div>
+        <div className="settings-action-row">
+          <div className="settings-action-row__content"><strong>模型配置</strong><span>重新读取厂商、凭据和模型目录。</span></div>
+          <button className="settings-btn" onClick={() => handleReload("models")} disabled={busy}><RefreshCw size={15} />重新加载</button>
+        </div>
+      </SettingsGroup>
       {msg && <p className="settings-msg">{msg}</p>}
     </SectionShell>
   );
@@ -537,45 +634,59 @@ export function AccountSettingsPanel() {
 
   return (
     <SectionShell
-      title="API Key 管理"
-      desc="xAI API Key（BYOK 认证）。无需浏览器登录 x.ai；设置 Key 或在「模型」tab 配置 BYOK provider 即可使用。"
+      title="账户管理"
+      desc="管理本机使用的身份凭据和 BYOK 模型授权。凭据只保存在本地配置中。"
     >
       {loading ? (
-        <p className="settings-hint">加载中…</p>
+        <div className="settings-loading-state">正在读取账户状态…</div>
       ) : (
         <>
-          {/* BYOK providers */}
-          {auth && auth.providers.length > 0 && (
-            <div className="settings-row">
-              <div className="settings-row__label">
-                <span>BYOK 模型</span>
+          <SettingsGroup
+            title="认证状态"
+            desc="EchoAgent 会优先使用已配置厂商的 BYOK 凭据。"
+            meta={(
+              <span className={`settings-status-badge ${auth?.ready ? "settings-status-badge--ok" : "settings-status-badge--warn"}`}>
+                {auth?.ready ? "已就绪" : "待配置"}
+              </span>
+            )}
+          >
+            <div className="settings-row settings-row--comfortable">
+              <div className="settings-row__label settings-row__label--stacked">
+                <span className="settings-row__name">BYOK 厂商</span>
+                <span className="settings-row__description">已由模型配置提供访问凭据的厂商</span>
               </div>
               <div className="settings-row__control">
-                <code>{auth.providers.join(", ")}</code>
+                {auth && auth.providers.length > 0
+                  ? <code>{auth.providers.join(", ")}</code>
+                  : <span className="settings-row__empty-value">尚未配置</span>}
               </div>
             </div>
-          )}
+          </SettingsGroup>
 
-          {/* API Key 管理 */}
-          <div className="account-section">
-            <h4 className="account-section__title">xAI API Key</h4>
+          <SettingsGroup
+            title="xAI API Key"
+            desc="适用于直接调用 xAI 模型；其他厂商请在“模型”页面管理。"
+            meta={<span className={`settings-status-badge ${apiKey ? "settings-status-badge--ok" : "settings-status-badge--warn"}`}>{apiKey ? "已配置" : "未设置"}</span>}
+          >
             {!editingKey ? (
-              <div className="settings-row">
-                <div className="settings-row__label">
-                  <Key size={16} />
-                  <span>当前 Key</span>
+              <div className="settings-row settings-row--comfortable">
+                <div className="settings-row__label settings-row__label--stacked">
+                  <span className="settings-row__name"><Key size={17} />当前凭据</span>
+                  <span className="settings-row__description">保存后会同步设置 XAI_API_KEY 环境变量</span>
                 </div>
                 <div className="settings-row__control">
                   {apiKey ? (
-                    <code>••••••••（已安全配置）</code>
+                    <code>••••••••</code>
                   ) : (
                     <span className="settings-warn">未设置</span>
                   )}
                 </div>
               </div>
             ) : (
-              <div className="account-key-editor">
+              <div className="account-key-editor settings-form-block">
+                <label htmlFor="settings-xai-key">新的 API Key</label>
                 <input
+                  id="settings-xai-key"
                   type="password"
                   className="account-key-editor__input"
                   placeholder="xai-..."
@@ -585,7 +696,7 @@ export function AccountSettingsPanel() {
                 />
                 <div className="account-key-editor__actions">
                   <button
-                    className="btn btn--ghost"
+                    className="settings-btn"
                     onClick={() => {
                       setEditingKey(false);
                       setKeyDraft("");
@@ -595,7 +706,7 @@ export function AccountSettingsPanel() {
                     取消
                   </button>
                   <button
-                    className="btn btn--primary"
+                    className="settings-btn settings-btn--primary"
                     onClick={handleSaveKey}
                     disabled={busy}
                   >
@@ -605,9 +716,9 @@ export function AccountSettingsPanel() {
               </div>
             )}
             {!editingKey && (
-              <div className="settings-actions">
+              <div className="settings-group__footer">
                 <button
-                  className="settings-btn"
+                  className="settings-btn settings-btn--primary"
                   onClick={() => {
                     setKeyDraft("");
                     setEditingKey(true);
@@ -627,19 +738,12 @@ export function AccountSettingsPanel() {
                 )}
               </div>
             )}
-            <p className="settings-hint">
-              API Key 存在 <code>~/.echo-agent/config</code>，并设置
-              <code>XAI_API_KEY</code> 环境变量。BYOK 模型在「模型」tab 配置。
+            <p className="settings-group__note">
+              保存位置：<code>~/.echo-agent/config</code>。API Key 不会显示在界面或通知中。
             </p>
-          </div>
+          </SettingsGroup>
 
           {msg && <p className="settings-msg">{msg}</p>}
-
-          {!auth?.ready && (
-            <p className="settings-hint">
-              未就绪。请设置 xAI API Key，或在「模型」tab 配置 BYOK provider。
-            </p>
-          )}
         </>
       )}
     </SectionShell>
@@ -751,43 +855,45 @@ export function AgentSettingsPanel() {
   return (
     <SectionShell
       title="智能体设置"
-      desc="当前 EchoAgent 智能体的配置概览：已加载的技能、MCP 连接器和 slash 命令。数据来自 EchoAgent 的 x.ai/skills/config、x.ai/mcp/list、x.ai/commands/list。"
-    >
-      <div className="settings-actions">
+      desc="查看当前加载的能力，并调整子代理和 Web 搜索等运行时配置。"
+      actions={(
         <button className="settings-btn" onClick={reload} disabled={loading}>
-          <RefreshCw size={14} /> {loading ? "加载中…" : "刷新"}
+          <RefreshCw size={15} /> {loading ? "加载中…" : "刷新状态"}
         </button>
-      </div>
-
+      )}
+    >
       {error && <p className="settings-msg settings-msg--warn">加载失败：{error}</p>}
 
       {/* 汇总统计 */}
-      <div className="agent-stats">
-        <div className="agent-stats__item">
-          <div className="agent-stats__num">{enabledSkills.length}</div>
-          <div className="agent-stats__label">启用技能</div>
-          {disabledSkills.length > 0 && (
-            <div className="agent-stats__sub">+ {disabledSkills.length} 禁用</div>
-          )}
-        </div>
-        <div className="agent-stats__item">
-          <div className="agent-stats__num">{enabledServers.length}</div>
-          <div className="agent-stats__label">已连接 MCP</div>
-          {disabledServers.length > 0 && (
-            <div className="agent-stats__sub">+ {disabledServers.length} 禁用</div>
-          )}
-        </div>
-        <div className="agent-stats__item">
-          <div className="agent-stats__num">{commands.length}</div>
-          <div className="agent-stats__label">slash 命令</div>
-          <div className="agent-stats__sub">
-            {builtinCommands.length} 内置 · {skillCommands.length} 技能 · {pluginCommands.length} 插件
+      <SettingsGroup title="运行概览" desc="数据来自当前活动的 EchoAgent Runtime。">
+        <div className="agent-stats">
+          <div className="agent-stats__item">
+            <div className="agent-stats__num">{enabledSkills.length}</div>
+            <div className="agent-stats__label">启用技能</div>
+            {disabledSkills.length > 0 && (
+              <div className="agent-stats__sub">另有 {disabledSkills.length} 个已停用</div>
+            )}
+          </div>
+          <div className="agent-stats__item">
+            <div className="agent-stats__num">{enabledServers.length}</div>
+            <div className="agent-stats__label">已连接 MCP</div>
+            {disabledServers.length > 0 && (
+              <div className="agent-stats__sub">另有 {disabledServers.length} 个已停用</div>
+            )}
+          </div>
+          <div className="agent-stats__item">
+            <div className="agent-stats__num">{commands.length}</div>
+            <div className="agent-stats__label">Slash 命令</div>
+            <div className="agent-stats__sub">
+              {builtinCommands.length} 内置 · {skillCommands.length} 技能 · {pluginCommands.length} 插件
+            </div>
           </div>
         </div>
-      </div>
+      </SettingsGroup>
 
-      {/* 技能列表 */}
-      <details className="agent-section" open>
+      <SettingsGroup title="已加载能力" desc="展开查看详细清单；启用、停用和安装请前往“专家·技能·连接器”。">
+        {/* 技能列表 */}
+        <details className="agent-section">
         <summary className="agent-section__title">
           技能（{skills.length}）
         </summary>
@@ -817,10 +923,10 @@ export function AgentSettingsPanel() {
             </ul>
           )}
         </div>
-      </details>
+        </details>
 
       {/* MCP 连接器列表 */}
-      <details className="agent-section">
+        <details className="agent-section">
         <summary className="agent-section__title">
           MCP 连接器（{servers.length}）
         </summary>
@@ -855,10 +961,10 @@ export function AgentSettingsPanel() {
             </ul>
           )}
         </div>
-      </details>
+        </details>
 
       {/* Slash 命令 */}
-      <details className="agent-section">
+        <details className="agent-section">
         <summary className="agent-section__title">
           slash 命令（{commands.length}）
         </summary>
@@ -881,19 +987,17 @@ export function AgentSettingsPanel() {
             </ul>
           )}
         </div>
-      </details>
+        </details>
+      </SettingsGroup>
 
       {/* 运行时配置：子代理深度 + Web 搜索 */}
-      <details className="agent-section" open>
-        <summary className="agent-section__title">运行时配置</summary>
-        <div className="agent-section__body">
+      <SettingsGroup title="运行时配置" desc="以下修改需要重启 Agent 后生效。">
           {/* 子代理嵌套深度 */}
           <div className="agent-runtime-row">
             <div className="agent-runtime-row__label">
               <span className="agent-runtime-row__name">子代理嵌套深度</span>
               <span className="agent-runtime-row__hint">
-                最大子代理派发层级（当前 {subagentDepth}）。深度 1 = 仅顶层派发，
-                2 = 子代理可再派发子代理，以此类推。需重启 agent 生效。
+                最大子代理派发层级，当前为 {subagentDepth}。深度 1 表示仅顶层可以派发。
               </span>
             </div>
             <div className="agent-runtime-row__control">
@@ -921,12 +1025,12 @@ export function AgentSettingsPanel() {
             <div className="agent-runtime-row__label">
               <span className="agent-runtime-row__name">Web 搜索</span>
               <span className="agent-runtime-row__hint">
-                启用后 agent 可调用 web_search 工具联网搜索。需指定搜索模型 ID
+                启用后 Agent 可以联网搜索。请指定搜索模型 ID
                 （{webSearchEnabled ? (
                   <span>当前：{webSearchModel || "未设置"}</span>
                 ) : (
                   <span>当前：关闭</span>
-                )}）。需重启 agent 生效。
+                )}）。
               </span>
             </div>
             <div className="agent-runtime-row__control">
@@ -961,12 +1065,9 @@ export function AgentSettingsPanel() {
           {runtimeMsg && (
             <p className="settings-msg settings-msg--info">{runtimeMsg}</p>
           )}
-        </div>
-      </details>
+      </SettingsGroup>
 
-      <p className="settings-hint">
-        管理（启用/禁用/增删）在主界面「专家·技能·连接器」面板。修改后点刷新查看最新状态。
-      </p>
+      <div className="settings-info-callout">能力清单为只读概览。完成管理操作后，可使用页面右上角“刷新状态”查看最新结果。</div>
     </SectionShell>
   );
 }
@@ -1063,105 +1164,130 @@ export function NotificationCenterSettingsPanel() {
   return (
     <SectionShell
       title="通知中心"
-      desc="EchoAgent 收到的所有 EchoAgent 事件通知：权限请求、文件夹信任、任务更新、计划模式、MCP 状态、会话完成等。数据存在 ~/.echo-agent/echoagent-notifications.json。"
-    >
-      <div className="settings-actions">
-        <button className="settings-btn" onClick={reload} disabled={loading}>
-          <RefreshCw size={14} /> {loading ? "加载中…" : "刷新"}
-        </button>
-        <button
-          className="settings-btn"
-          onClick={handleMarkAllRead}
-          disabled={entries.length === 0}
-        >
-          <CheckCheck size={14} /> 全部已读
-        </button>
-        <button
-          className="settings-btn settings-btn--danger"
-          onClick={handleClear}
-          disabled={entries.length === 0}
-        >
-          <Trash2 size={14} /> 清空
-        </button>
-      </div>
-
-      <div className="settings-row">
-        <div className="settings-row__label">
-          <Mail size={16} />
-          <span>未读通知</span>
-        </div>
-        <div className="settings-row__control">
-          <code>{unreadCount}</code> / {entries.length}
-        </div>
-      </div>
-
-      {/* 分类筛选 */}
-      <div className="notification-filters">
-        <Filter size={12} />
-        {KIND_FILTERS.map((f) => (
-          <button
-            key={f.key}
-            className={`notification-filter ${
-              filter === f.key ? "notification-filter--active" : ""
-            }`}
-            onClick={() => setFilter(f.key)}
-          >
-            {f.label}
+      desc="集中查看权限请求、任务更新、运行状态和会话结果。"
+      actions={
+        <>
+          <button className="settings-btn" onClick={reload} disabled={loading}>
+            <RefreshCw size={14} /> {loading ? "加载中…" : "刷新"}
           </button>
-        ))}
-      </div>
-
-      {/* 通知列表 */}
-      <div className="notification-list">
-        {filtered.length === 0 && !loading && (
-          <div className="notification-empty">
-            <Mail size={32} color="var(--echo-text-tertiary)" />
-            <p>暂无通知。当 EchoAgent 产生事件时（权限请求、任务完成等）会记录到这里。</p>
-          </div>
-        )}
-        {filtered.map((entry) => (
-          <div
-            key={entry.id}
-            className={`notification-row notification-row--${entry.severity} ${
-              entry.read ? "notification-row--read" : ""
+          <button
+            className="settings-btn"
+            onClick={handleMarkAllRead}
+            disabled={entries.length === 0}
+          >
+            <CheckCheck size={14} /> 全部已读
+          </button>
+          <button
+            className="settings-btn settings-btn--danger"
+            onClick={handleClear}
+            disabled={entries.length === 0}
+          >
+            <Trash2 size={14} /> 清空
+          </button>
+        </>
+      }
+    >
+      <SettingsGroup
+        title="通知概览"
+        desc="通知仅保存在本机，可随时标记已读或清空。"
+        meta={
+          <span
+            className={`settings-status-badge ${
+              unreadCount > 0 ? "settings-status-badge--accent" : "settings-status-badge--ready"
             }`}
           >
-            <div
-              className={`notification-row__dot notification-row__dot--${severityToDot(entry.severity)}`}
-            />
-            <div className="notification-row__body">
-              <div className="notification-row__head">
-                <span className="notification-row__kind">
-                  {kindLabel(entry.kind as NotificationKind)}
-                </span>
-                <span className="notification-row__title">{entry.title}</span>
-                {!entry.read && <span className="notification-row__unread">未读</span>}
-              </div>
-              {entry.body && (
-                <pre className="notification-row__body-text">{entry.body}</pre>
-              )}
-              <div className="notification-row__meta">
-                <span>{formatTime(entry.at)}</span>
-                {entry.sessionId && (
-                  <span className="notification-row__session">
-                    会话 #{entry.sessionId.slice(0, 8)}
-                  </span>
-                )}
-              </div>
-            </div>
-            {!entry.read && (
-              <button
-                className="notification-row__mark"
-                onClick={() => handleMarkRead(entry.id)}
-                title="标记已读"
-              >
-                <CheckCheck size={12} />
-              </button>
-            )}
+            {unreadCount > 0 ? `${unreadCount} 条未读` : "全部已读"}
+          </span>
+        }
+      >
+        <div className="settings-row settings-row--comfortable">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name">
+              <Mail size={16} /> 通知数量
+            </span>
+            <span className="settings-row__description">
+              当前共记录 {entries.length} 条通知，其中 {unreadCount} 条尚未阅读。
+            </span>
           </div>
-        ))}
-        {loading && <div className="notification-empty">加载中…</div>}
-      </div>
+          <div className="settings-row__control">
+            <span className="settings-metric">{unreadCount}</span>
+            <span className="settings-metric__suffix">未读 / {entries.length} 全部</span>
+          </div>
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup
+        title="通知记录"
+        desc="按事件类型筛选，快速定位需要处理的信息。"
+        meta={<span className="settings-group__count">{filtered.length} 条</span>}
+      >
+        <div className="notification-filters" aria-label="通知类型筛选">
+          <Filter size={13} aria-hidden="true" />
+          {KIND_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              className={`notification-filter ${
+                filter === f.key ? "notification-filter--active" : ""
+              }`}
+              onClick={() => setFilter(f.key)}
+              aria-pressed={filter === f.key}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div className="notification-list">
+          {filtered.length === 0 && !loading && (
+            <div className="notification-empty">
+              <Mail size={32} color="var(--echo-text-tertiary)" />
+              <p>当前筛选条件下暂无通知。</p>
+            </div>
+          )}
+          {filtered.map((entry) => (
+            <div
+              key={entry.id}
+              className={`notification-row notification-row--${entry.severity} ${
+                entry.read ? "notification-row--read" : ""
+              }`}
+            >
+              <div
+                className={`notification-row__dot notification-row__dot--${severityToDot(entry.severity)}`}
+              />
+              <div className="notification-row__body">
+                <div className="notification-row__head">
+                  <span className="notification-row__kind">
+                    {kindLabel(entry.kind as NotificationKind)}
+                  </span>
+                  <span className="notification-row__title">{entry.title}</span>
+                  {!entry.read && <span className="notification-row__unread">未读</span>}
+                </div>
+                {entry.body && (
+                  <pre className="notification-row__body-text">{entry.body}</pre>
+                )}
+                <div className="notification-row__meta">
+                  <span>{formatTime(entry.at)}</span>
+                  {entry.sessionId && (
+                    <span className="notification-row__session">
+                      会话 #{entry.sessionId.slice(0, 8)}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {!entry.read && (
+                <button
+                  className="notification-row__mark"
+                  onClick={() => handleMarkRead(entry.id)}
+                  title="标记已读"
+                  aria-label={`将“${entry.title}”标记为已读`}
+                >
+                  <CheckCheck size={12} />
+                </button>
+              )}
+            </div>
+          ))}
+          {loading && <div className="notification-empty">正在加载通知…</div>}
+        </div>
+      </SettingsGroup>
     </SectionShell>
   );
 }

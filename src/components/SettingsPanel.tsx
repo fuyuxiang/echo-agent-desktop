@@ -54,8 +54,8 @@ import {
 /**
  * EchoAgent-style Settings dialog.
  *
- * Full-screen overlay → centered `.settings-modal` (1040×720) with a fixed
- * 11-item left navigation and a right panel backed by real runtime, config,
+ * Full-screen overlay → centered `.settings-modal` with grouped navigation and
+ * a right panel backed by real runtime, config,
  * notification, memory, security, data and appearance settings.
  *
  * The 模型 section lists configured providers from ~/.echo-agent/config.toml and
@@ -82,18 +82,43 @@ interface NavItem {
   icon: LucideIcon;
 }
 
-const NAV: NavItem[] = [
-  { id: "account", label: "账户管理", icon: User },
-  { id: "agent-mail", label: "通知中心", icon: Mail },
-  { id: "general", label: "系统设置", icon: SettingsIcon },
-  { id: "agent-settings", label: "智能体设置", icon: SlidersHorizontal },
-  { id: "shortcuts", label: "快捷键", icon: Keyboard },
-  { id: "memory", label: "记忆", icon: Brain },
-  { id: "model", label: "模型", icon: Cpu },
-  { id: "personalize", label: "个性化", icon: Palette },
-  { id: "data", label: "数据管理", icon: Database },
-  { id: "security", label: "安全中心", icon: Shield },
-  { id: "help", label: "帮助与反馈", icon: HelpCircle },
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: "账户",
+    items: [
+      { id: "account", label: "账户管理", icon: User },
+      { id: "agent-mail", label: "通知中心", icon: Mail },
+    ],
+  },
+  {
+    label: "智能体",
+    items: [
+      { id: "model", label: "模型", icon: Cpu },
+      { id: "agent-settings", label: "智能体设置", icon: SlidersHorizontal },
+      { id: "memory", label: "记忆", icon: Brain },
+    ],
+  },
+  {
+    label: "应用",
+    items: [
+      { id: "general", label: "系统设置", icon: SettingsIcon },
+      { id: "personalize", label: "个性化", icon: Palette },
+      { id: "shortcuts", label: "快捷键", icon: Keyboard },
+    ],
+  },
+  {
+    label: "数据与支持",
+    items: [
+      { id: "data", label: "数据管理", icon: Database },
+      { id: "security", label: "安全中心", icon: Shield },
+      { id: "help", label: "帮助与反馈", icon: HelpCircle },
+    ],
+  },
 ];
 
 // Provider presets: choosing one pre-fills baseUrl/apiBackend/authScheme and
@@ -215,27 +240,35 @@ export function SettingsPanel({
     >
       <div className="settings-modal">
         <nav className="settings-modal__nav">
-          <ul className="settings-navigation">
-            {NAV.map((item) => {
-              const Icon = item.icon;
-              return (
-                <li key={item.id}>
-                  <button
-                    className={
-                      "settings-navigation__item" +
-                      (active === item.id ? " settings-navigation__item--active" : "")
-                    }
-                    onClick={() => setActive(item.id)}
-                  >
-                    <span className="settings-navigation__icon">
-                      <Icon size={16} strokeWidth={1.75} />
-                    </span>
-                    <span className="settings-navigation__label">{item.label}</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <div className="settings-navigation">
+            {NAV_GROUPS.map((group) => (
+              <section className="settings-navigation__group" key={group.label}>
+                <h2 className="settings-navigation__group-label">{group.label}</h2>
+                <ul className="settings-navigation__list">
+                  {group.items.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <li key={item.id}>
+                        <button
+                          className={
+                            "settings-navigation__item" +
+                            (active === item.id ? " settings-navigation__item--active" : "")
+                          }
+                          onClick={() => setActive(item.id)}
+                          aria-current={active === item.id ? "page" : undefined}
+                        >
+                          <span className="settings-navigation__icon">
+                            <Icon size={17} strokeWidth={1.75} />
+                          </span>
+                          <span className="settings-navigation__label">{item.label}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))}
+          </div>
         </nav>
 
         <div className="settings-modal__content">
@@ -454,20 +487,27 @@ function ModelsSettingsPanel({ onModelsChanged }: { onModelsChanged?: () => void
 
   return (
     <div className="models-settings-panel">
-      <h2 className="models-settings-panel__title">模型</h2>
+      <header className="models-settings-panel__header">
+        <div>
+          <h2 className="models-settings-panel__title">模型</h2>
+          <p className="models-settings-panel__description">
+            管理模型厂商、访问凭据和可用模型。每个厂商可以共享一套连接配置。
+          </p>
+        </div>
+        <button
+          className="echo-button echo-button--primary echo-button--medium"
+          onClick={() => setEditingProvider({ draft: { ...newProviderDraft } })}
+        >
+          <span className="echo-button__content">
+            <Plus size={15} strokeWidth={2} />
+            添加厂商
+          </span>
+        </button>
+      </header>
 
       <section className="models-settings-panel__section">
         <div className="models-settings-panel__section-head">
           <h3 className="models-settings-panel__section-title">厂商与模型</h3>
-          <button
-            className="echo-button echo-button--secondary echo-button--small"
-            onClick={() => setEditingProvider({ draft: { ...newProviderDraft } })}
-          >
-            <span className="echo-button__content">
-              <Plus size={13} strokeWidth={2} style={{ marginRight: 4 }} />
-              添加厂商
-            </span>
-          </button>
         </div>
         <div className="models-settings-panel__card-desc models-settings-panel__grouped-note">
           一个厂商保存一份 API Key / Base URL / 上下文窗口，可挂载多个模型。配置写入{" "}
