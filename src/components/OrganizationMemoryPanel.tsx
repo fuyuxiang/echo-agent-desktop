@@ -50,6 +50,7 @@ import {
   type OrgSkill,
   type Submission,
 } from "@/lib/org-client";
+import { useOrgSessionStore } from "@/stores/org-session-store";
 
 type Tab = "ask" | "documents" | "skills";
 
@@ -87,6 +88,8 @@ function ScopeIcon({ kind }: { kind: OrgScope["kind"] }) {
 
 export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: string) => void }) {
   const [session, setSession] = useState<OrgSession | null>(null);
+  const mirrorOrgSession = useOrgSessionStore((state) => state.setSession);
+  const clearMirroredOrgSession = useOrgSessionStore((state) => state.clearSession);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,6 +142,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
       .then(async (nextSession) => {
         if (!alive) return;
         setSession(nextSession);
+        mirrorOrgSession(nextSession);
         if (nextSession.serverUrl) setServerUrl(nextSession.serverUrl);
         if (nextSession.user?.username) setUsername(nextSession.user.username);
         if (nextSession.loggedIn) await loadWorkspace();
@@ -146,7 +150,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
       .catch((reason) => alive && setError(String(reason)))
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
-  }, [loadWorkspace]);
+  }, [loadWorkspace, mirrorOrgSession]);
 
   useEffect(() => {
     if (!session?.loggedIn) return;
@@ -229,6 +233,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     try {
       const next = await orgLogin(serverUrl, username, password);
       setSession(next);
+      mirrorOrgSession(next);
       setPassword("");
       await loadWorkspace();
     } catch (reason) {
@@ -255,6 +260,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     if (activeRequest.current) ignoredRequests.current.add(activeRequest.current);
     activeRequest.current = null;
     setSession({ loggedIn: false });
+    clearMirroredOrgSession();
     setScopes([]);
     setSelectedScope("");
     setPublishScope("");
@@ -398,7 +404,9 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     setBusy(true);
     try {
       await orgSetSkillPreference(skill.skillId, !skill.enabled);
-      onToast?.(skill.enabled ? "Skill 已停用并从 Runtime 移除" : "Skill 已启用并完成安全同步");
+      onToast?.(skill.enabled
+        ? "Skill 已从用户全局技能目录卸载"
+        : "Skill 已安装到用户全局技能目录");
       await loadWorkspace();
     } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
@@ -427,7 +435,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     setError(null);
     try {
       const result = await orgSyncSkills();
-      onToast?.(`已安全同步 ${result.installed.length} 个 Skills，新会话立即生效`);
+      onToast?.(`已同步 ${result.installed.length} 个已安装 Skills`);
       await loadWorkspace();
     } catch (reason) {
       setError(String(reason));
@@ -549,7 +557,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
       {tab === "skills" && (
         <section className="org-library">
           <div className="org-library__toolbar">
-            <div><h2>组织 Skills</h2><p>服务端审核、签名并分发；客户端验签后安装到只读版本目录，由 Agent 新会话加载。</p></div>
+            <div><h2>组织 Skills</h2><p>点击安装后下载到用户全局 <code>~/.echo-agent/skills/organization</code>，专家技能页直接读取并使用。</p></div>
             <div className="org-library__actions"><button onClick={() => void syncSkills()} disabled={busy}><RefreshCw size={15} />安全同步</button><button className="org-memory__primary" onClick={() => void pickAndUploadSkill()} disabled={busy || !uploadScope || !allowSkillSubmission}><Upload size={15} />上传 ZIP</button></div>
           </div>
           <div className="org-skill-grid">
@@ -558,7 +566,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
               <article className="org-skill-card" key={skill.skillId}>
                 <div><strong>{skill.name}</strong><span>v{skill.version}</span></div>
                 <p>{skill.description}</p>
-                <footer><span className={`org-scope-badge org-scope-badge--${skill.scopeKind}`}><ScopeIcon kind={skill.scopeKind} />{skill.scopeName}</span>{skill.scopeKind === "personal" && <button onClick={() => void publishSkill(skill)} disabled={busy || !publishScope}>发布副本</button>}{skill.mandatory ? <span className="org-state org-state--ready">组织强制</span> : <button onClick={() => void toggleSkill(skill)} disabled={busy}>{skill.enabled ? "停用" : "启用"}</button>}</footer>
+                <footer><span className={`org-scope-badge org-scope-badge--${skill.scopeKind}`}><ScopeIcon kind={skill.scopeKind} />{skill.scopeName}</span>{skill.scopeKind === "personal" && <button onClick={() => void publishSkill(skill)} disabled={busy || !publishScope}>发布副本</button>}{skill.mandatory ? <span className="org-state org-state--ready">组织强制 · 已安装</span> : <button onClick={() => void toggleSkill(skill)} disabled={busy}>{skill.enabled ? "卸载" : "安装"}</button>}</footer>
               </article>
             ))}
           </div>

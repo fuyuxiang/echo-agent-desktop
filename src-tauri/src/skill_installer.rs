@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
@@ -126,6 +126,50 @@ pub async fn skills_uninstall_package(path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || uninstall_path(&path))
         .await
         .map_err(|error| format!("卸载技能包失败：{error}"))?
+}
+
+/// Build the ZIP accepted by echo-agent-server from any local Skill path.
+///
+/// The same parser and file-safety limits as the local installer are used, so
+/// a row from the Skills page can upload its directory or SKILL.md directly;
+/// the frontend never needs to create a temporary archive itself.
+pub(crate) fn package_skill_for_upload(path: &str) -> Result<(String, Vec<u8>), String> {
+    let requested = Path::new(path);
+    // Runtime listings normally point at SKILL.md. In that case upload the
+    // complete Skill directory so references/, scripts/, and assets are not
+    // silently dropped. An arbitrary Markdown file remains a single-file Skill.
+    let source = if requested.file_name().and_then(|name| name.to_str()) == Some("SKILL.md") {
+        requested.parent().unwrap_or(requested)
+    } else {
+        requested
+    };
+    let prepared = prepare_package(source)?;
+    let inspection = inspect_prepared(&prepared)?;
+    let files = collect_package_files(&prepared.root)?;
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+    for file in files {
+        let relative = file
+            .relative
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        writer
+            .start_file(&relative, options)
+            .map_err(|error| format!("创建 Skill ZIP 条目失败：{error}"))?;
+        let mut input =
+            fs::File::open(&file.absolute).map_err(|error| format!("读取技能文件失败：{error}"))?;
+        std::io::copy(&mut input, &mut writer)
+            .map_err(|error| format!("写入 Skill ZIP 失败：{error}"))?;
+    }
+    let bytes = writer
+        .finish()
+        .map_err(|error| format!("完成 Skill ZIP 失败：{error}"))?
+        .into_inner();
+    Ok((format!("{}.zip", slugify(&inspection.name)), bytes))
 }
 
 pub fn is_managed_skill(path: &str) -> bool {
@@ -1044,5 +1088,22 @@ mod tests {
         assert_eq!(slugify("My Skill / 分析"), "my-skill");
         assert!(slugify("分析").starts_with("local-skill-"));
         assert!(slugify("../").starts_with("local-skill-"));
+    }
+
+    #[test]
+    fn upload_package_has_one_root_skill_and_excludes_private_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(dir.path(), "Use this carefully.");
+        fs::write(dir.path().join(INSTALL_MANIFEST), "private").unwrap();
+        fs::create_dir_all(dir.path().join("references")).unwrap();
+        fs::write(dir.path().join("references/policy.md"), "policy").unwrap();
+
+        let (name, bytes) =
+            package_skill_for_upload(dir.path().join("SKILL.md").to_str().unwrap()).unwrap();
+        assert_eq!(name, "test-skill.zip");
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        assert!(archive.by_name("SKILL.md").is_ok());
+        assert!(archive.by_name("references/policy.md").is_ok());
+        assert!(archive.by_name(INSTALL_MANIFEST).is_err());
     }
 }

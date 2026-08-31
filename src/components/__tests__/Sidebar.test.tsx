@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
 import { useSessionsStore } from "@/stores/sessions-store";
+import { resetOrgSessionMirror, useOrgSessionStore } from "@/stores/org-session-store";
 
 const base = {
   onNewSession: vi.fn(),
@@ -17,6 +18,10 @@ const base = {
 };
 
 describe("Sidebar", () => {
+  beforeEach(() => {
+    resetOrgSessionMirror();
+  });
+
   it("渲染导航项", () => {
     render(<Sidebar {...base} />);
     for (const label of ["新建任务", "项目", "专家·技能·连接器", "自动化", "更多"]) {
@@ -62,6 +67,26 @@ describe("Sidebar", () => {
     expect(user.querySelector(".sidebar__user-label")).toHaveTextContent("本地用户");
     expect(footer?.querySelector(".sidebar__logo-spacer")).toBeNull();
     expect(footer?.children).toHaveLength(3);
+  });
+
+  it("登录组织后左下角显示组织用户名", () => {
+    useOrgSessionStore.getState().setSession({
+      loggedIn: true,
+      serverUrl: "https://memory.example.com",
+      user: {
+        id: "u1",
+        username: "alice",
+        displayName: "Alice Zhang",
+        role: "member",
+        clearance: 1,
+      },
+    });
+
+    render(<Sidebar {...base} />);
+
+    const user = screen.getByRole("button", { name: "Alice Zhang" });
+    expect(user).toHaveTextContent("Alice Zhang");
+    expect(user).toHaveAttribute("title", "Alice Zhang · https://memory.example.com");
   });
 
   it("收起侧边栏按钮触发 onToggleCollapse", () => {

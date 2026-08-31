@@ -33,6 +33,7 @@ vi.mock("../Markdown", () => ({
 }));
 
 import { OrganizationMemoryPanel } from "../OrganizationMemoryPanel";
+import { resetOrgSessionMirror, useOrgSessionStore } from "@/stores/org-session-store";
 
 let askListener: ((event: OrgAskEvent) => void) | undefined;
 
@@ -65,6 +66,7 @@ function document(id: string, title: string, scopeId: string, scopeName: string)
 
 describe("OrganizationMemoryPanel", () => {
   beforeEach(() => {
+    resetOrgSessionMirror();
     for (const mock of Object.values(api)) mock.mockReset();
     askListener = undefined;
     api.orgSession.mockResolvedValue({
@@ -97,6 +99,7 @@ describe("OrganizationMemoryPanel", () => {
   it("切换 Scope 时只显示当前范围的文档", async () => {
     render(<OrganizationMemoryPanel />);
     await screen.findByText("Alice · https://memory.example.com");
+    expect(useOrgSessionStore.getState().session?.user?.displayName).toBe("Alice");
 
     fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
     expect(screen.getByText("个人文档")).toBeInTheDocument();
@@ -222,6 +225,31 @@ describe("OrganizationMemoryPanel", () => {
     expect(screen.getByText("完整制度原文")).toBeInTheDocument();
   });
 
+  it("组织 Skill 点击安装后写入用户安装偏好", async () => {
+    api.orgListSkills.mockResolvedValue([{
+      skillId: "skill-1",
+      versionId: "version-1",
+      name: "shared-guide",
+      description: "共享指南",
+      version: "1.0.0",
+      scopeId: personalScope.id,
+      scopeKind: "personal",
+      scopeName: personalScope.name,
+      mandatory: false,
+      allowPersonalOverride: true,
+      enabled: false,
+      updatedAt: 1,
+    }]);
+    api.orgSetSkillPreference.mockResolvedValue({ skillId: "skill-1", enabled: true });
+
+    render(<OrganizationMemoryPanel />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^Skills/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "安装" }));
+
+    await waitFor(() => expect(api.orgSetSkillPreference).toHaveBeenCalledWith("skill-1", true));
+  });
+
   it("停止后忽略迟到的最终事件", async () => {
     render(<OrganizationMemoryPanel />);
     await screen.findByText("Alice · https://memory.example.com");
@@ -274,6 +302,7 @@ describe("OrganizationMemoryPanel", () => {
 
     expect(screen.getByRole("heading", { name: "连接组织记忆" })).toBeInTheDocument();
     expect(screen.queryByText("Alice · https://memory.example.com")).not.toBeInTheDocument();
+    expect(useOrgSessionStore.getState().session?.loggedIn).toBe(false);
     await act(async () => finishLogout?.());
   });
 

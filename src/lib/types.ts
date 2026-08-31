@@ -324,6 +324,13 @@ export interface SkillInfo {
   path?: string;
   /** Package is copied into and owned by EchoAgent's managed local installer. */
   managed?: boolean;
+  /** Signed package synchronized from the organization server. */
+  orgManaged?: boolean;
+  orgSkillId?: string;
+  orgVersionId?: string;
+  orgScopeKind?: "personal" | "team" | "org";
+  orgMandatory?: boolean;
+  orgAllowPersonalOverride?: boolean;
   version?: string;
   author?: string;
   license?: string;
