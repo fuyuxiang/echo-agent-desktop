@@ -13,9 +13,14 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 const HOME_ENV: &str = "ECHO_AGENT_HOME";
 const UPSTREAM_HOME_ENV: &str = "GROK_HOME";
+const UPSTREAM_AUTH_ENV: &str = "GROK_AUTH";
+const UPSTREAM_AUTH_PATH_ENV: &str = "GROK_AUTH_PATH";
 const HOME_DIR_NAME: &str = ".echo-agent";
 const LEGACY_HOME_DIR_NAME: &str = ".grok";
 const MIGRATION_MARKER: &str = ".legacy-data-migrated";
+const LEGACY_AUTH_FILE: &str = "auth.json";
+const EXPERTS_MARKETPLACE_DIR_NAME: &str = "experts-marketplace";
+const CONNECTORS_MARKETPLACE_DIR_NAME: &str = "connectors-marketplace";
 
 /// Reject data roots owned by the retired WorkBuddy integration.
 ///
@@ -50,6 +55,41 @@ pub fn echo_agent_home_dir() -> PathBuf {
         })
 }
 
+/// Canonical roots for the catalogs shown in the Experts · Skills ·
+/// Connectors panel. Keep these derived from `ECHO_AGENT_HOME`, just like the
+/// runtime-owned agents, skills and MCP configuration, so a redirected data
+/// home never leaves catalog reads behind in `~/.echo-agent`.
+pub(crate) fn experts_marketplace_dir() -> PathBuf {
+    echo_agent_home_dir().join(EXPERTS_MARKETPLACE_DIR_NAME)
+}
+
+pub(crate) fn connectors_marketplace_dir() -> PathBuf {
+    echo_agent_home_dir().join(CONNECTORS_MARKETPLACE_DIR_NAME)
+}
+
+pub(crate) fn builtin_skills_dir() -> PathBuf {
+    echo_agent_home_dir()
+        .join("resources")
+        .join("builtin-skills")
+}
+
+/// Resolve the first non-empty path override. The first name is the current
+/// public spelling; later names are compatibility aliases retained for users
+/// of older builds.
+pub(crate) fn first_env_path(names: &[&str]) -> Option<PathBuf> {
+    names.iter().find_map(|name| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    })
+}
+
+pub(crate) fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.contains(&path) {
+        paths.push(path);
+    }
+}
+
 fn legacy_home_dir() -> PathBuf {
     std::env::var_os(UPSTREAM_HOME_ENV)
         .filter(|value| !value.is_empty())
@@ -73,6 +113,11 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
     // if migration later reports an I/O error, so new writes never fall back
     // to the legacy directory.
     std::env::set_var(UPSTREAM_HOME_ENV, &target);
+    // EchoAgent uses only per-provider credentials. Remove upstream account
+    // overrides before background threads start so the inert runtime adapter
+    // cannot inherit an upstream account token from the parent process.
+    std::env::remove_var(UPSTREAM_AUTH_ENV);
+    std::env::remove_var(UPSTREAM_AUTH_PATH_ENV);
 
     fs::create_dir_all(&target)
         .map_err(|e| format!("create EchoAgent home {}: {e}", target.display()))?;
@@ -167,6 +212,9 @@ fn harden_private_dir(path: &Path) -> Result<(), String> {
 fn merge_missing(source: &Path, target: &Path) -> io::Result<()> {
     for entry in fs::read_dir(source)? {
         let entry = entry?;
+        if entry.file_name() == LEGACY_AUTH_FILE {
+            continue;
+        }
         let file_type = entry.file_type()?;
         let destination = target.join(entry.file_name());
 
@@ -216,7 +264,10 @@ fn copy_file_if_missing(source: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_missing, reject_legacy_workbuddy_path, write_private_file};
+    use super::{
+        merge_missing, reject_legacy_workbuddy_path, write_private_file,
+        CONNECTORS_MARKETPLACE_DIR_NAME, EXPERTS_MARKETPLACE_DIR_NAME,
+    };
     use std::fs;
     use std::path::Path;
 
@@ -245,12 +296,30 @@ mod tests {
     }
 
     #[test]
+    fn catalog_layout_uses_children_of_one_data_home() {
+        let root = Path::new("/data/echo-agent-home");
+        assert_eq!(
+            root.join(EXPERTS_MARKETPLACE_DIR_NAME),
+            Path::new("/data/echo-agent-home/experts-marketplace")
+        );
+        assert_eq!(
+            root.join(CONNECTORS_MARKETPLACE_DIR_NAME),
+            Path::new("/data/echo-agent-home/connectors-marketplace")
+        );
+        assert_eq!(
+            root.join("resources").join("builtin-skills"),
+            Path::new("/data/echo-agent-home/resources/builtin-skills")
+        );
+    }
+
+    #[test]
     fn migration_copies_nested_files_without_overwriting() {
         let source = tempfile::tempdir().unwrap();
         let target = tempfile::tempdir().unwrap();
         fs::create_dir_all(source.path().join("memory/nested")).unwrap();
         fs::create_dir_all(target.path().join("memory")).unwrap();
         fs::write(source.path().join("config.toml"), "legacy").unwrap();
+        fs::write(source.path().join("auth.json"), "legacy credentials").unwrap();
         fs::write(source.path().join("memory/MEMORY.md"), "legacy memory").unwrap();
         fs::write(source.path().join("memory/nested/fact.md"), "fact").unwrap();
         fs::write(target.path().join("memory/MEMORY.md"), "current memory").unwrap();
@@ -261,6 +330,7 @@ mod tests {
             fs::read_to_string(target.path().join("config.toml")).unwrap(),
             "legacy"
         );
+        assert!(!target.path().join("auth.json").exists());
         assert_eq!(
             fs::read_to_string(target.path().join("memory/MEMORY.md")).unwrap(),
             "current memory"

@@ -1,6 +1,6 @@
 /**
  * OAuth-waiting modal — shown while EchoAgent drives the MCP browser OAuth flow
- * (x.ai/mcp/auth_trigger). EchoAgent opens the system browser itself; this modal
+ * (echo.agent/mcp/auth_trigger). EchoAgent opens the system browser itself; this modal
  * is the in-app "正在跳转授权" companion (mirrors echo-agent's redirect toast +
  * polling state), and surfaces the failure reason if the flow doesn't
  * complete.

@@ -37,6 +37,7 @@ import {
 import type { ModelOption } from "./ModelSelector";
 import type { AgentEntry } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
+import type { SlashCommandInvocation } from "@/lib/slash-commands";
 
 /** Center chat column: scrollable message list + composer pinned at bottom. */
 export function ChatView({
@@ -56,6 +57,8 @@ export function ChatView({
   apiReady = true,
   setupHint,
   onOpenSettings,
+  commandRefreshKey,
+  onClientSlashCommand,
 }: {
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onCancel: () => void;
@@ -77,6 +80,10 @@ export function ChatView({
   apiReady?: boolean;
   setupHint?: string;
   onOpenSettings?: () => void;
+  commandRefreshKey?: number;
+  onClientSlashCommand?: (
+    invocation: SlashCommandInvocation,
+  ) => boolean | void | Promise<boolean | void>;
 }) {
   const messages = useSessionStore((s) => s.messages);
   const streaming = useSessionStore((s) => s.streaming);
@@ -619,6 +626,9 @@ export function ChatView({
             externalTextNonce={resendNonce}
             onSelectExpert={onSelectExpert}
             onNavigateConnectors={onNavigateConnectors}
+            commandSessionId={sessionId ?? undefined}
+            commandRefreshKey={commandRefreshKey}
+            onClientSlashCommand={onClientSlashCommand}
             activeExpertName={activeExpertName}
             activeExpertAvatar={activeExpertAvatar}
             usageSessionId={sessionId ?? undefined}

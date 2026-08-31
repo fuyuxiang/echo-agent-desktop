@@ -8,7 +8,7 @@ import { EditToolIcon } from "@/foundation/components/Icon/icons";
  *   - click pencil → the title swaps to an <input> with the text selected;
  *   - Enter / blur commits (empty or unchanged = no-op), Esc cancels.
  *
- * `onRename` should persist the title (EchoAgent's x.ai/session/rename) and update
+ * `onRename` should persist the title (EchoAgent's echo.agent/session/rename) and update
  * the sessions store; on rejection the draft reverts to the current title.
  */
 export function TopbarTitle({

@@ -7,7 +7,7 @@ import { PlaceholderPage } from "./components/PlaceholderPage";
 import { Toast } from "./components/Toast";
 // PermissionDialog is now inline in ChatView (PermissionInlineCard), not a global modal.
 import { ThemeProvider } from "./components/ThemeProvider";
-import { SettingsPanel } from "./components/SettingsPanel";
+import { SettingsPanel, type SettingsSectionId } from "./components/SettingsPanel";
 import { SearchOverlay } from "./components/SearchOverlay";
 import { AboutDialog } from "./components/AboutDialog";
 import { FolderTrustDialog } from "./components/FolderTrustDialog";
@@ -41,6 +41,8 @@ import {
   agentSetSessionExpert,
   agentSessionUsage,
   agentAuthStatus,
+  sessionFork,
+  togglePlanMode,
   providersList,
   flattenModels,
   notificationAppend,
@@ -66,6 +68,7 @@ import { hydrateKnowledgeSources } from "./lib/kb-source-storage";
 import { permissionModeFromEvent, usePermissionModeStore } from "./stores/permission-mode-store";
 import { buildProjectPrompt } from "./lib/project-context";
 import { migrateCatalogRootStorage } from "./lib/catalog-root-storage";
+import type { SlashCommandInvocation } from "./lib/slash-commands";
 
 /** Hidden markers wrapping the expert persona in the text sent to the runtime.
  *  The UI strips these (and everything between them) from user messages. */
@@ -125,10 +128,12 @@ function Shell() {
   const [init, setInit] = useState<InitResult | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("model");
   const [searchOpen, setSearchOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [trustRequest, setTrustRequest] = useState<{ cwd?: string; reason?: string } | null>(null);
   const [taskRefreshSignal, setTaskRefreshSignal] = useState(0);
+  const [commandRefreshKey, setCommandRefreshKey] = useState(0);
   const [placeholderView, setPlaceholderView] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -145,6 +150,11 @@ function Shell() {
   const sessionsStore = useSessionsStore;
   const permissionStore = usePermissionStore;
   const questionStore = useQuestionStore;
+
+  const openSettings = useCallback((section: SettingsSectionId = "model") => {
+    setSettingsSection(section);
+    setSettingsOpen(true);
+  }, []);
 
   useEffect(() => {
     migrateCatalogRootStorage();
@@ -193,7 +203,7 @@ function Shell() {
         return resolveConfiguredModelId(options, prev);
       });
 
-      // Unlock the home Composer as soon as a BYOK provider exists (or OAuth).
+      // Unlock the home Composer as soon as a configured provider exists.
       setInit((prev) => (prev ? { ...prev, auth } : prev));
       authReadyRef.current = auth.ready;
     } catch {
@@ -246,6 +256,11 @@ function Shell() {
 
         unlisten = await subscribeAgentEvents({
           onUpdate: (u) => {
+            const updateType = (u as { sessionUpdate?: string; type?: string }).sessionUpdate
+              ?? (u as { type?: string }).type;
+            if (updateType === "available_commands_update") {
+              setCommandRefreshKey((value) => value + 1);
+            }
             sessionStore.getState().applyUpdate(u);
           },
           onPermission: (p) => {
@@ -555,24 +570,24 @@ function Shell() {
   const requireConfiguredModel = (): string | undefined => {
     if (!init?.auth.ready) {
       showToast("请先在「设置 → 模型」配置 API Key");
-      setSettingsOpen(true);
+      openSettings("model");
       return undefined;
     }
     if (newSessionModelId) return newSessionModelId;
     showToast("请先在「设置 → 模型」配置模型");
-    setSettingsOpen(true);
+    openSettings("model");
     return undefined;
   };
   const handlePlaceholder = (label: string) => {
     // Route a few sidebar shortcut buttons to real panels instead of toasts.
     if (label === "用户中心") {
-      setSettingsOpen(true);
+      openSettings("model");
       return;
     }
     if (label === "通知") {
       // Open the settings → 通知中心 tab where all EchoAgent
       // events are logged.
-      setSettingsOpen(true);
+      openSettings("agent-mail");
       return;
     }
     showToast(`${label} 即将上线`);
@@ -650,7 +665,7 @@ function Shell() {
     }
     if (!init?.auth.ready) {
       showToast("请先在「设置 → 模型」配置 API Key");
-      setSettingsOpen(true);
+      openSettings("model");
       return false;
     }
     if (!activeSessionModelId) {
@@ -686,7 +701,7 @@ function Shell() {
     }
   };
 
-  // Topbar title rename — EchoAgent's `x.ai/session/rename`. EchoAgent broadcasts
+  // Topbar title rename — EchoAgent's `echo.agent/session/rename`. EchoAgent broadcasts
   // SessionSummaryGenerated on success (agent://summary → onSummary upserts the
   // same entry); we also upsert optimistically to avoid a flicker while the
   // event round-trips. On failure we rethrow so TopbarTitle reverts its draft.
@@ -832,7 +847,7 @@ function Shell() {
         setSearchOpen(true);
       } else if (event.key === ",") {
         event.preventDefault();
-        setSettingsOpen(true);
+        openSettings("model");
       } else if (key === "b") {
         event.preventDefault();
         setSidebarCollapsed((value) => !value);
@@ -863,7 +878,7 @@ function Shell() {
     sessionsStore.getState().setCurrent(sessionId);
     // Reflect the model actually persisted by this session. Do not fall back to
     // the first configured model: that would only change the picker, not the
-    // backend session, and could route the next prompt to stale Grok settings.
+    // backend session, and could route the next prompt to stale runtime settings.
     setCurrentModelId(selectedModelId);
     // setSession no longer wipes the transcript — it just moves focus. If we
     // already have a cached transcript for this session it arms replay
@@ -921,6 +936,131 @@ function Shell() {
     void agentLoadSession(newId, cwd).catch((e) =>
       sessionStore.getState().setError(friendlyError(e))
     );
+  };
+
+  /** Execute commands owned by the desktop shell. Runtime commands and Skills
+   *  never reach this switch; Composer sends those through ACP unchanged. */
+  const handleClientSlashCommand = async ({
+    name,
+    args,
+  }: SlashCommandInvocation): Promise<boolean> => {
+    switch (name) {
+      case "new":
+      case "clear":
+        setSettingsOpen(false);
+        setSearchOpen(false);
+        handleNewSession();
+        return true;
+      case "search":
+      case "history":
+        setSearchOpen(true);
+        return true;
+      case "help":
+        openSettings("help");
+        return true;
+      case "model":
+        openSettings("model");
+        return true;
+      case "settings": {
+        const aliases: Record<string, SettingsSectionId> = {
+          "": "model",
+          model: "model",
+          agent: "agent-settings",
+          memory: "memory",
+          security: "security",
+          help: "help",
+          shortcuts: "shortcuts",
+          data: "data",
+          general: "general",
+          notifications: "agent-mail",
+        };
+        const section = aliases[args.toLowerCase()];
+        if (!section) {
+          showToast("用法：/settings model|agent|memory|security|help");
+          return false;
+        }
+        openSettings(section);
+        return true;
+      }
+      case "projects":
+        handleNavigate("项目");
+        return true;
+      case "agents":
+        handleNavigate("专家·技能·连接器");
+        return true;
+      case "skills":
+        handleNavigate("技能");
+        return true;
+      case "connectors":
+        handleNavigate("连接器");
+        return true;
+      case "automation":
+        handleNavigate("自动化");
+        return true;
+      case "marketplace":
+        handleNavigate("插件市场");
+        return true;
+      case "usage":
+        handleNavigate("用量统计");
+        return true;
+      case "plan": {
+        const sessionId = sessionsStore.getState().currentSessionId;
+        if (!sessionId) {
+          showToast("/plan 需要先创建会话");
+          return false;
+        }
+        const normalized = args.toLowerCase();
+        if (normalized && !["on", "off", "toggle"].includes(normalized)) {
+          showToast("用法：/plan [on|off]");
+          return false;
+        }
+        const current = sessionStore.getState().planMode;
+        const enabled = normalized === "on"
+          ? true
+          : normalized === "off"
+            ? false
+            : !current;
+        await togglePlanMode(sessionId, enabled);
+        sessionStore.getState().setPlanMode(enabled);
+        showToast(enabled ? "已开启计划模式" : "已关闭计划模式");
+        return true;
+      }
+      case "fork": {
+        const sessionId = sessionsStore.getState().currentSessionId;
+        if (!sessionId) {
+          showToast("/fork 需要先创建会话");
+          return false;
+        }
+        const cwd = findSessionSummary(sessionId)?.cwd || cwdRef.current;
+        const newId = await sessionFork(sessionId, cwd);
+        cwdRef.current = cwd;
+        handleForked(newId);
+        showToast(`已分叉到新会话 ${newId.slice(0, 8)}`);
+        return true;
+      }
+      case "rename": {
+        const sessionId = sessionsStore.getState().currentSessionId;
+        const entry = sessionId ? findSessionSummary(sessionId) : undefined;
+        if (!sessionId || !entry) {
+          showToast("/rename 需要当前会话");
+          return false;
+        }
+        if (!args.trim()) {
+          showToast("用法：/rename <新标题>");
+          return false;
+        }
+        await agentRenameSession(sessionId, args.trim(), entry.cwd);
+        sessionsStore.getState().upsert({ sessionId, title: args.trim() });
+        showToast("会话已重命名");
+        return true;
+      }
+      default:
+        // The command catalog and this executor are deliberately kept in one
+        // typed contract; returning false preserves the user's input if a new
+        // command is added without its action being wired.
+        showToast(`未实现的桌面命令：/${name}`);
+        return false;
+    }
   };
 
   // Select an expert from the + menu (chat or home composer). Instead of
@@ -1046,7 +1186,7 @@ function Shell() {
           onNewSession={handleNewSession}
           onSelect={handleSelectSession}
           onNavigate={handleNavigate}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={() => openSettings("model")}
           onToggleCollapse={() => setSidebarCollapsed(true)}
           onToggleWorkspace={handleToggleWorkspace}
           onOpenSearch={() => setSearchOpen(true)}
@@ -1131,7 +1271,7 @@ function Shell() {
             <div className="app__notice app__notice--err">
               初始化失败:{initError}
               <br />
-              请在「设置 → 账户管理」设置 xAI API Key，或在「设置 → 模型」配置 BYOK provider 后重试。
+              请在「设置 → 模型」配置模型厂商和 API Key 后重试。
             </div>
           ) : !init ? (
             <div className="app__notice">正在本地初始化 agent…</div>
@@ -1139,7 +1279,7 @@ function Shell() {
             <div className="app__notice app__notice--err">
               EchoAgent 未就绪:{init.auth.reason ?? "未知原因"}
               <br />
-              请在「设置 → 账户管理」设置 xAI API Key，或在「设置 → 模型」配置 BYOK provider。
+              请在「设置 → 模型」配置模型厂商和 API Key。
             </div>
           ) : placeholderView ? (
             <PlaceholderPage
@@ -1160,7 +1300,7 @@ function Shell() {
               onCancel={handleCancel}
               apiReady={chatReady}
               setupHint={chatSetupHint}
-              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenSettings={() => openSettings("model")}
               modelId={currentModelId}
               models={models}
               onModelChange={handleModelChange}
@@ -1172,13 +1312,15 @@ function Shell() {
               onToast={showToast}
               onSelectExpert={handleStartWithExpert}
               onNavigateConnectors={() => setPlaceholderView("专家·技能·连接器")}
+              commandRefreshKey={commandRefreshKey}
+              onClientSlashCommand={handleClientSlashCommand}
             />
           ) : (
             <HomePage
               onSend={handleSendNew}
               streaming={streaming}
               apiReady={init.auth.ready && modelConfigured}
-              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenSettings={() => openSettings("model")}
               onPlaceholder={handlePlaceholder}
               modelId={currentModelId}
               models={models}
@@ -1188,6 +1330,8 @@ function Shell() {
               onSelectWorkspace={handleSelectWorkspace}
               onSelectExpert={handleStartWithExpert}
               onNavigateConnectors={() => setPlaceholderView("专家·技能·连接器")}
+              commandRefreshKey={commandRefreshKey}
+              onClientSlashCommand={handleClientSlashCommand}
             />
           )}
         </main>
@@ -1198,7 +1342,12 @@ function Shell() {
         onClose={() => setSearchOpen(false)}
         onSelect={handleSelectSession}
       />
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onModelsChanged={refreshModels} />
+      <SettingsPanel
+        open={settingsOpen}
+        initialSection={settingsSection}
+        onClose={() => setSettingsOpen(false)}
+        onModelsChanged={refreshModels}
+      />
       <AboutDialog open={aboutOpen} onClose={() => setAboutOpen(false)} init={init} />
       <FolderTrustDialog
         request={trustRequest}

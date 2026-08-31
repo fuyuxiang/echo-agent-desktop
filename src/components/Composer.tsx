@@ -21,6 +21,13 @@ import {
 import { WorkspacePicker } from "./WorkspacePicker";
 import { PermissionPicker } from "./PermissionPicker";
 import { SlashCommands, type SlashCommandsHandle } from "./SlashCommands";
+import {
+  isClientSlashCommand,
+  parseSlashInvocation,
+  replaceSlashToken,
+  slashTokenAtCursor,
+  type SlashCommandInvocation,
+} from "@/lib/slash-commands";
 import { InputAddMenu } from "./InputAddMenu";
 import {
   collectDroppedPaths,
@@ -33,12 +40,6 @@ import {
   getActiveAsr,
   createWebSpeechAsrProvider,
 } from "@/lib/voice-contract";
-import {
-  nativeVoiceAvailable,
-  startNativeVoice,
-  stopNativeVoice,
-  subscribeNativeVoice,
-} from "@/lib/native-voice";
 import type { AgentEntry } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 
@@ -86,6 +87,10 @@ export function Composer({
   onSelectExpert,
   onSelectSkill,
   onNavigateConnectors,
+  // Slash-command context and desktop-owned command execution.
+  commandSessionId,
+  commandRefreshKey,
+  onClientSlashCommand,
   /** 流式时把「发送」改为「加入待发送队列」(对齐 EchoAgent message-queue)。
    *  传入后:流式且文本非空时,在停止按钮左侧显示「入队」按钮。 */
   onEnqueue,
@@ -152,6 +157,14 @@ export function Composer({
   onSelectSkill?: (skillName: string) => void;
   /** 加号菜单:跳转到连接器管理面板。 */
   onNavigateConnectors?: () => void;
+  /** Current session used to request the runtime's context-aware command catalog. */
+  commandSessionId?: string;
+  /** Incremented when the runtime publishes available_commands_update. */
+  commandRefreshKey?: number;
+  /** Execute commands owned by the desktop shell (/new, /settings, /plan, ...). */
+  onClientSlashCommand?: (
+    invocation: SlashCommandInvocation,
+  ) => boolean | void | Promise<boolean | void>;
   /** 流式时把「发送」改为「加入待发送队列」(对齐 EchoAgent message-queue)。 */
   onEnqueue?: (text: string) => void;
   /** Name of the expert currently bound to this session (shown as badge in footer). */
@@ -187,11 +200,8 @@ export function Composer({
   const hasRefs = blockList.length > 0;
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<VoiceRecognition | null>(null);
-  const nativeVoiceActiveRef = useRef(false);
-  const nativeVoiceBaseRef = useRef("");
   const mountedRef = useRef(true);
   const onDraftChangeRef = useRef(onDraftChange);
-  const onToastRef = useRef(onToast);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -201,8 +211,7 @@ export function Composer({
 
   useEffect(() => {
     onDraftChangeRef.current = onDraftChange;
-    onToastRef.current = onToast;
-  }, [onDraftChange, onToast]);
+  }, [onDraftChange]);
 
   // 统一更新入口:每次写入输入框内容时同步把草稿推给父组件(若启用持久化)。
   // 回填(draftKey 变化)时不走这里,避免把"恢复出来的字"再当成用户输入回写。
@@ -213,32 +222,6 @@ export function Composer({
       return value;
     });
   };
-
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    void subscribeNativeVoice((event) => {
-      if (!nativeVoiceActiveRef.current) return;
-      if (event.kind === "error") {
-        nativeVoiceActiveRef.current = false;
-        setListening(false);
-        onToastRef.current?.([event.message, event.hint].filter(Boolean).join("；") || "语音识别失败");
-        return;
-      }
-      if (!event.text) return;
-      const base = nativeVoiceBaseRef.current;
-      const separator = base && !/\s$/.test(base) ? " " : "";
-      updateText(`${base}${separator}${event.text}`);
-      if (event.kind === "final") {
-        nativeVoiceBaseRef.current = `${base}${separator}${event.text}`;
-      }
-    })
-      .then((stop) => { unlisten = stop; })
-      .catch(() => { /* ordinary browser/test environment */ });
-    return () => unlisten?.();
-    // The event subscription is tied to this Composer instance; mutable refs
-    // above keep session-specific callbacks current without re-subscribing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   useEffect(() => {
     const el = ref.current;
@@ -286,47 +269,18 @@ export function Composer({
     if (recognition?.abort) recognition.abort();
     else recognition?.stop();
     recognitionRef.current = null;
-    if (nativeVoiceActiveRef.current) {
-      nativeVoiceActiveRef.current = false;
-      setListening(false);
-      void stopNativeVoice().catch(() => {});
-    }
     const next = draft ?? "";
     setText(next);
     setCursorPos(next.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey]);
 
-  // Voice input prefers the Rust-native microphone + streaming STT pipeline.
-  // Web Speech remains a safe fallback for browsers or an unavailable native
-  // backend. macOS bundle usage descriptions live in src-tauri/Info.plist.
+  // Voice input uses the provider-agnostic ASR registry, with Web Speech as
+  // the built-in browser implementation.
   const toggleVoice = async () => {
     if (listening) {
-      if (nativeVoiceActiveRef.current) {
-        setListening(false);
-        try {
-          await stopNativeVoice();
-        } catch (error) {
-          nativeVoiceActiveRef.current = false;
-          onToast?.(`停止语音识别失败：${String(error).replace(/^Error:\s*/, "")}`);
-        }
-      } else {
-        recognitionRef.current?.stop();
-      }
+      recognitionRef.current?.stop();
       return;
-    }
-    let nativeError: unknown;
-    try {
-      if (await nativeVoiceAvailable()) {
-        nativeVoiceBaseRef.current = text;
-        nativeVoiceActiveRef.current = true;
-        await startNativeVoice("zh-CN");
-        setListening(true);
-        return;
-      }
-    } catch (error) {
-      nativeVoiceActiveRef.current = false;
-      nativeError = error;
     }
     // 优先走 provider-agnostic 注册表(对齐 EchoAgent asr:* 契约):外部 provider
     // 注册后优先级更高；非桌面环境回落到内建 Web Speech。
@@ -370,9 +324,7 @@ export function Composer({
     }
     const Ctor = getSpeechRecognitionCtor();
     if (!Ctor) {
-      onToast?.(nativeError
-        ? `原生语音不可用：${String(nativeError).replace(/^Error:\s*/, "")}`
-        : "当前环境不支持语音输入");
+      onToast?.("当前环境不支持语音输入");
       return;
     }
     const rec = new Ctor();
@@ -415,16 +367,57 @@ export function Composer({
       const recognition = recognitionRef.current;
       if (recognition?.abort) recognition.abort();
       else recognition?.stop();
-      if (nativeVoiceActiveRef.current) void stopNativeVoice().catch(() => {});
     };
   }, []);
 
   const [sending, setSending] = useState(false);
 
+  const finishAcceptedSubmission = (submittedText: string) => {
+    if (submittedText.trim()) {
+      histRef.current = pushHistory(histRef.current, submittedText);
+      histCursorRef.current = histRef.current.items.length;
+      draftRef.current = "";
+    }
+    if (mountedRef.current) {
+      updateText("");
+      setAttachments([]);
+    } else {
+      // Navigation commands and accepted new-session sends may unmount this
+      // Composer before their promise settles. Clear the persisted draft too.
+      onDraftChangeRef.current?.("");
+    }
+    onClearSceneTag?.();
+  };
+
   const send = async () => {
     const t = text.trim();
     // 允许空消息发送，或者需要有附件
     if (streaming || sending || disabled || !apiReady) return;
+
+    // Desktop-owned slash commands never enter the model transcript. Runtime
+    // commands and Skills deliberately fall through to onSend/ACP unchanged.
+    const invocation = parseSlashInvocation(t);
+    if (invocation && isClientSlashCommand(invocation.name)) {
+      if (!onClientSlashCommand) {
+        onToast?.(`当前页面无法执行 /${invocation.name}`);
+        return;
+      }
+      setSending(true);
+      try {
+        const result = onClientSlashCommand(invocation);
+        const accepted = result && typeof (result as PromiseLike<boolean | void>).then === "function"
+          ? await result
+          : result;
+        if (accepted === false) return;
+        finishAcceptedSubmission(t);
+      } catch (error) {
+        onToast?.(`命令执行失败：${String(error).replace(/^Error:\s*/, "")}`);
+      } finally {
+        if (mountedRef.current) setSending(false);
+      }
+      return;
+    }
+
     let body = t;
     // 把"操作类型"标签作为上下文前缀一并发出(后端正文仍是可运行的 prompt)。
     if (sceneTag) {
@@ -443,21 +436,7 @@ export function Composer({
     } finally {
       if (mountedRef.current) setSending(false);
     }
-    // 记入输入历史(arrow-key recall)。
-    if (body && body.trim()) {
-      histRef.current = pushHistory(histRef.current, body);
-      histCursorRef.current = histRef.current.items.length;
-      draftRef.current = "";
-    }
-    if (mountedRef.current) {
-      updateText(""); // 后端接受后才清空输入框与草稿。
-      setAttachments([]);
-    } else {
-      // 新建会话会在 agent_send 确认前切换页面；即使组件已卸载，
-      // 也要清除已成功发送的持久化首页草稿。
-      onDraftChangeRef.current?.("");
-    }
-    onClearSceneTag?.();
+    finishAcceptedSubmission(body);
   };
 
   /** 流式时入队(对齐 EchoAgent message-queue):文本非空才入队。 */
@@ -546,29 +525,22 @@ export function Composer({
   // Cursor tracking for slash-command autocomplete.
   const [cursorPos, setCursorPos] = useState(0);
   const slashCommandsRef = useRef<SlashCommandsHandle>(null);
-  // Is the user currently typing a "/xxx" command? Drives SlashCommands menu.
-  const wordBeforeCursor = (() => {
-    const before = text.slice(0, cursorPos);
-    const m = before.match(/\/[\w-]*$/);
-    return m ? m[0] : "";
-  })();
-  const slashVisible = wordBeforeCursor.length > 0 && apiReady && !streaming;
+  // Slash completion is limited to the first token, matching runtime command
+  // resolution. The shared parser supports qualified names such as
+  // `/plugin-name:skill-name`.
+  const slashVisible = !!slashTokenAtCursor(text, cursorPos) && apiReady && !streaming;
 
   const handleSlashPick = (command: string) => {
-    // Replace the "/xxx" fragment (up to cursor) with the picked command + " ".
-    const before = text.slice(0, cursorPos);
-    const after = text.slice(cursorPos);
-    const newBefore = before.replace(/\/[\w-]*$/, command + " ");
-    const next = newBefore + after;
-    updateText(next);
-    const newPos = newBefore.length;
-    setCursorPos(newPos);
+    const replacement = replaceSlashToken(text, cursorPos, command);
+    if (!replacement) return;
+    updateText(replacement.text);
+    setCursorPos(replacement.cursor);
     // Refocus + put caret at the insertion point.
     requestAnimationFrame(() => {
       const el = ref.current;
       if (!el) return;
       el.focus();
-      el.selectionStart = el.selectionEnd = newPos;
+      el.selectionStart = el.selectionEnd = replacement.cursor;
     });
   };
 
@@ -744,12 +716,17 @@ export function Composer({
           }}
         />
         {/* Slash-command autocomplete */}
-        <SlashCommands
-          ref={slashCommandsRef}
-          text={text}
-          cursor={cursorPos}
-          onPick={handleSlashPick}
-        />
+        {apiReady && !streaming && (
+          <SlashCommands
+            ref={slashCommandsRef}
+            text={text}
+            cursor={cursorPos}
+            sessionId={commandSessionId}
+            cwd={cwd}
+            refreshKey={commandRefreshKey}
+            onPick={handleSlashPick}
+          />
+        )}
         <div className="echo-composer__footer">
           <InputAddMenu
             onPickFiles={pickFiles}

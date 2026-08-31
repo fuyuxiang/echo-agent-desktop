@@ -46,7 +46,7 @@ The core agent runtime is embedded directly in the Tauri process and communicate
 
 | Principle | What it means in EchoAgent |
 | --- | --- |
-| **Provider-independent** | Use OpenAI, Anthropic, xAI, DeepSeek, Qwen, or a compatible custom endpoint with your own credentials. |
+| **Provider-independent** | Use OpenAI, Anthropic, DeepSeek, Qwen, or a compatible custom endpoint with your own credentials. |
 | **Workspace-native** | Sessions are attached to real directories, with file context, changes, artifacts, and searchable local history. |
 | **Extensible by default** | Add capabilities through MCP servers, skills, reusable assistants, and sub-agent teams. |
 | **Explicitly controlled** | Folder trust, permission modes, allow/ask/deny rules, and visible tool calls keep execution inspectable. |
@@ -121,7 +121,7 @@ The first build compiles the complete embedded Rust runtime and may take several
 3. Add at least one model under that provider.
 4. Select the model in the composer and start a task.
 
-Built-in presets are available for Anthropic, OpenAI, xAI, DeepSeek, and Qwen. Custom OpenAI-compatible and Anthropic-compatible endpoints are also supported.
+Built-in presets are available for Anthropic, OpenAI, DeepSeek, and Qwen. Custom OpenAI-compatible and Anthropic-compatible endpoints are also supported.
 
 <details>
 <summary><strong>Manual configuration</strong></summary>
@@ -157,7 +157,13 @@ EchoAgent keeps its application state under `~/.echo-agent/` by default. Set `EC
 | Providers, permissions, UI defaults, MCP configuration | `~/.echo-agent/config.toml` and `~/.echo-agent/mcp.json` |
 | Conversations and workspace history | `~/.echo-agent/sessions/` |
 | Reusable assistants | `~/.echo-agent/agents/` |
+| Installed skills | `~/.echo-agent/skills/` |
+| Expert marketplace | `~/.echo-agent/experts-marketplace/` |
+| Connector marketplace and its skills | `~/.echo-agent/connectors-marketplace/` |
+| Built-in skill resources | `~/.echo-agent/resources/builtin-skills/` |
 | Memory and runtime state | `~/.echo-agent/memory/` and EchoAgent-owned JSON files |
+
+Every path in this table is rooted at `ECHO_AGENT_HOME`; `~/.echo-agent` is only the default when that variable is unset. The Experts, Skills, and Connectors panels persist only sources selected manually. Automatically discovered defaults always follow the active data home.
 
 - API keys and endpoint credentials are stored locally in plaintext. On Unix, EchoAgent applies owner-only permissions to secret-bearing files and directories; on Windows, access depends on the current user's filesystem ACLs.
 - Model, MCP, WebDAV, and notification traffic is sent only to services you configure. No hosted EchoAgent account is required.
@@ -166,7 +172,7 @@ EchoAgent keeps its application state under `~/.echo-agent/` by default. Set `EC
 
 ### Data migration
 
-On first launch, EchoAgent performs a one-time import from the legacy `~/.grok/` data directory: any files or subdirectories that are missing under `~/.echo-agent/` are copied over, and a `.legacy-data-migrated` marker is written so the import never runs again. Existing files in `~/.echo-agent/` always win — the migration never overwrites them — and the legacy directory is left in place for rollback.
+On first launch, EchoAgent performs a one-time import from the legacy `~/.grok/` data directory: files or subdirectories missing under `~/.echo-agent/` are copied over, except for the retired `auth.json`, and a `.legacy-data-migrated` marker is written so the import never runs again. Existing files in `~/.echo-agent/` always win — the migration never overwrites them — and the legacy directory is left in place for rollback.
 
 When both `ECHO_AGENT_HOME` and `GROK_HOME` are set, the migration source follows `GROK_HOME`; the embedded runtime is also rewired at startup to use the `ECHO_AGENT_HOME` path so subsequent writes never land in the legacy location.
 

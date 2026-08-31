@@ -5,9 +5,9 @@ import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { AgentEntry } from "@/lib/types";
 import { useSessionsStore, HOME_DRAFT_KEY } from "@/stores/sessions-store";
 import { usePendingExpertStore } from "@/stores/pending-expert-store";
-const logoMarkUrl = "/app-icon.png";
+import type { SlashCommandInvocation } from "@/lib/slash-commands";
 
-/** EchoAgent 首页：品牌区与 Composer。 */
+/** EchoAgent 首页：单一任务入口。 */
 export function HomePage({
   onSend,
   streaming,
@@ -22,6 +22,8 @@ export function HomePage({
   onSelectWorkspace,
   onSelectExpert,
   onNavigateConnectors,
+  commandRefreshKey,
+  onClientSlashCommand,
 }: {
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   streaming: boolean;
@@ -36,6 +38,10 @@ export function HomePage({
   onSelectWorkspace?: (cwd: string) => void;
   onSelectExpert?: (agent: AgentEntry) => void;
   onNavigateConnectors?: () => void;
+  commandRefreshKey?: number;
+  onClientSlashCommand?: (
+    invocation: SlashCommandInvocation,
+  ) => boolean | void | Promise<boolean | void>;
 }) {
   // 受控填充 Composer 的内容 + nonce（召唤专家后写入 quick prompt）。
   const [externalText, setExternalText] = useState("");
@@ -70,20 +76,7 @@ export function HomePage({
     <div className="home">
       <div className="home__inner">
         <header className="home__header">
-          <div className="home__eyebrow">
-            <img
-              className="home__brand-mark"
-              src={logoMarkUrl}
-              alt=""
-              aria-hidden="true"
-              draggable={false}
-            />
-            <span>EchoAgent · 本地 Agent 工作台</span>
-          </div>
-          <h1 className="home__title">从一个清晰的目标开始</h1>
-          <p className="home__subtitle">
-            描述你想完成的工作，EchoAgent 会结合当前工作区、模型和工具制定并执行计划。
-          </p>
+          <h1 className="home__title">今天想完成什么？</h1>
         </header>
 
         <section className="home__composer-area">
@@ -113,6 +106,8 @@ export function HomePage({
             onDraftChange={(t) => setDraft(HOME_DRAFT_KEY, t)}
             onSelectExpert={onSelectExpert}
             onNavigateConnectors={onNavigateConnectors}
+            commandRefreshKey={commandRefreshKey}
+            onClientSlashCommand={onClientSlashCommand}
             activeExpertName={pendingExpert?.name}
             activeExpertAvatar={pendingExpert?.avatarLocal}
           />

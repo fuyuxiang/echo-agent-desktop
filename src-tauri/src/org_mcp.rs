@@ -669,8 +669,12 @@ pub fn persist_registration(tx: &xai_acp_lib::AcpAgentTx, session_id: &str) {
             "headers": { AUTH_HEADER: token },
             "enabled": true
         });
-        match crate::ext::call_ext_value(&tx, "x.ai/mcp/upsert", crate::ext::raw_params(&payload))
-            .await
+        match crate::ext::call_ext_value(
+            &tx,
+            "echo.agent/mcp/upsert",
+            crate::ext::raw_params(&payload),
+        )
+        .await
         {
             Ok(_) => tracing::info!("organization MCP server persisted to config.toml"),
             Err(error) => {

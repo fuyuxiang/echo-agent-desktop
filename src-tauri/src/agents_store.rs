@@ -8,7 +8,7 @@
 //!
 //! Each file is markdown with YAML frontmatter (the `AgentDefinition` fields
 //! from `xai-grok-agent/src/config.rs:714`) plus a body used as the system
-//! prompt. EchoAgent does NOT expose an `x.ai/agents/*` ACP method, so we read and
+//! prompt. EchoAgent does NOT expose an `echo.agent/agents/*` ACP method, so we read and
 //! write these files directly — there's no in-memory state to race with
 //! (EchoAgent's file watcher picks up changes on its own).
 //!

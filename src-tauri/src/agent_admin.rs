@@ -1,16 +1,16 @@
-//! Higher-level EchoAgent admin extensions — bridges the upstream `x.ai/*` methods that
+//! Higher-level EchoAgent admin extensions — bridges the upstream `echo.agent/*` methods that
 //! drive EchoAgent-equivalent features:
 //!
 //! - **Memory** (资料库): read/rewrite `~/.echo-agent/memory/MEMORY.md` + per-cwd
-//!   workspace memory. `x.ai/memory/{flush,rewrite}` + `compact_conversation`.
-//! - **Session search** (历史检索): `x.ai/session/search` over EchoAgent's FTS5.
-//! - **Rewind** (回溯): `x.ai/rewind/{execute,points}`.
-//! - **Prompt history** (命令面板): `x.ai/prompt_history`.
-//! - **Slash commands** ("/ 调用技能与指令"): `x.ai/commands/list`.
-//! - **Session fork/info/close**: `x.ai/session/{fork,info,close}`.
-//! - **Plan mode toggle**: `x.ai/toggle_plan_mode` (notification both ways).
-//! - **Folder trust**: `x.ai/folder_trust/request` responses.
-//! - **Subagent / task observation**: `x.ai/{subagent,task}/*`.
+//!   workspace memory. `echo.agent/memory/{flush,rewrite}` + `compact_conversation`.
+//! - **Session search** (历史检索): `echo.agent/session/search` over EchoAgent's FTS5.
+//! - **Rewind** (回溯): `echo.agent/rewind/{execute,points}`.
+//! - **Prompt history** (命令面板): `echo.agent/prompt_history`.
+//! - **Slash commands** ("/ 调用技能与指令"): `echo.agent/commands/list`.
+//! - **Session fork/info/close**: `echo.agent/session/{fork,info,close}`.
+//! - **Plan mode toggle**: `echo.agent/toggle_plan_mode` (notification both ways).
+//! - **Folder trust**: `echo.agent/folder_trust/request` responses.
+//! - **Subagent / task observation**: `echo.agent/{subagent,task}/*`.
 //!
 //! All ACP calls go through `ext::call_ext` / `call_ext_value`. File-backed
 //! reads (memory markdown) go through direct fs (EchoAgent doesn't expose list).
@@ -174,7 +174,7 @@ pub fn memory_delete(scope: String, path: String, cwd: Option<String>) -> Result
 }
 
 /// Trigger EchoAgent to rewrite memories into structured markdown via an LLM pass.
-/// Maps to `x.ai/memory/rewrite`. Optional — the user can also just edit the
+/// Maps to `echo.agent/memory/rewrite`. Optional — the user can also just edit the
 /// raw MEMORY.md themselves.
 #[tauri::command]
 pub async fn memory_rewrite(state: State<'_, AppState>) -> Result<(), String> {
@@ -185,13 +185,13 @@ pub async fn memory_rewrite(state: State<'_, AppState>) -> Result<(), String> {
         .clone()
         .ok_or("agent not initialized")?;
     let params = raw_params(&serde_json::json!({}));
-    let _: serde_json::Value = call_ext(&tx, "x.ai/memory/rewrite", params)
+    let _: serde_json::Value = call_ext(&tx, "echo.agent/memory/rewrite", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// Flush in-flight memory writes to disk (`x.ai/memory/flush`).
+/// Flush in-flight memory writes to disk (`echo.agent/memory/flush`).
 #[tauri::command]
 pub async fn memory_flush(state: State<'_, AppState>) -> Result<(), String> {
     let tx = state
@@ -201,7 +201,7 @@ pub async fn memory_flush(state: State<'_, AppState>) -> Result<(), String> {
         .clone()
         .ok_or("agent not initialized")?;
     let params = raw_params(&serde_json::json!({}));
-    let _: serde_json::Value = call_ext(&tx, "x.ai/memory/flush", params)
+    let _: serde_json::Value = call_ext(&tx, "echo.agent/memory/flush", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -224,7 +224,7 @@ pub struct SearchHit {
     pub updated_at: Option<String>,
 }
 
-/// `x.ai/session/search` response shape (defensive — varies by EchoAgent version).
+/// `echo.agent/session/search` response shape (defensive — varies by EchoAgent version).
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum SearchResponse {
@@ -274,7 +274,7 @@ pub async fn session_search(
         "includeContent": true,
     });
     let params = raw_params(&payload);
-    let resp: SearchResponse = call_ext(&tx, "x.ai/session/search", params)
+    let resp: SearchResponse = call_ext(&tx, "echo.agent/session/search", params)
         .await
         .map_err(|e| e.to_string())?;
     let raw = match resp {
@@ -331,7 +331,7 @@ pub async fn rewind_points(
         .clone()
         .ok_or("agent not initialized")?;
     let params = raw_params(&serde_json::json!({ "sessionId": session_id }));
-    let v: serde_json::Value = call_ext(&tx, "x.ai/rewind/points", params)
+    let v: serde_json::Value = call_ext(&tx, "echo.agent/rewind/points", params)
         .await
         .map_err(|e| e.to_string())?;
     // Response shape: array or { points: [...] }.
@@ -421,7 +421,7 @@ pub async fn rewind_execute(
         "force": force.unwrap_or(false),
     });
     let params = raw_params(&payload);
-    let _: serde_json::Value = call_ext(&tx, "x.ai/rewind/execute", params)
+    let _: serde_json::Value = call_ext(&tx, "echo.agent/rewind/execute", params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -446,7 +446,7 @@ pub async fn session_fork(
         .clone()
         .ok_or("agent not initialized")?;
     let params = raw_params(&serde_json::json!({ "sessionId": session_id, "cwd": cwd }));
-    let v: serde_json::Value = call_ext(&tx, "x.ai/session/fork", params)
+    let v: serde_json::Value = call_ext(&tx, "echo.agent/session/fork", params)
         .await
         .map_err(|e| e.to_string())?;
     // Response: { sessionId: "..." } or bare string.
@@ -479,27 +479,53 @@ pub struct SlashCommand {
 /// List slash commands EchoAgent knows (builtin + skills + plugins). Powers the
 /// Composer's "/" autocomplete.
 #[tauri::command]
-pub async fn commands_list(state: State<'_, AppState>) -> Result<Vec<SlashCommand>, String> {
+pub async fn commands_list(
+    state: State<'_, AppState>,
+    session_id: Option<String>,
+    cwd: Option<String>,
+) -> Result<Vec<SlashCommand>, String> {
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let params = raw_params(&serde_json::json!({}));
-    let v: serde_json::Value = call_ext(&tx, "x.ai/commands/list", params)
+    let params = raw_params(&serde_json::json!({
+        "sessionId": session_id,
+        "cwd": cwd,
+    }));
+    let v: serde_json::Value = call_ext(&tx, "echo.agent/commands/list", params)
         .await
         .map_err(|e| e.to_string())?;
+    Ok(parse_slash_commands(&v))
+}
+
+fn parse_slash_commands(v: &serde_json::Value) -> Vec<SlashCommand> {
     let arr = v
         .get("commands")
         .and_then(|c| c.as_array())
         .or_else(|| v.as_array());
     let Some(arr) = arr else {
-        return Ok(Vec::new());
+        return Vec::new();
     };
-    Ok(arr
-        .iter()
+    arr.iter()
         .filter_map(|item| {
+            let meta = item.get("_meta");
+            let source = meta
+                .and_then(|m| m.get("pluginName"))
+                .and_then(|s| s.as_str())
+                .map(|name| format!("plugin:{name}"))
+                .or_else(|| {
+                    meta.and_then(|m| m.get("scope"))
+                        .and_then(|s| s.as_str())
+                        .map(|scope| format!("skill:{scope}"))
+                })
+                .or_else(|| {
+                    meta.and_then(|m| m.get("workflowSource"))
+                        .and_then(|s| s.as_str())
+                        .map(|source| format!("workflow:{source}"))
+                })
+                .unwrap_or_else(|| "builtin".to_string());
             Some(SlashCommand {
                 name: item.get("name")?.as_str()?.to_string(),
                 description: item
@@ -507,17 +533,16 @@ pub async fn commands_list(state: State<'_, AppState>) -> Result<Vec<SlashComman
                     .and_then(|s| s.as_str())
                     .map(String::from),
                 argument_hint: item
-                    .get("argumentHint")
+                    .get("input")
+                    .and_then(|input| input.get("hint"))
+                    .or_else(|| item.get("argumentHint"))
                     .or_else(|| item.get("argument_hint"))
                     .and_then(|s| s.as_str())
                     .map(String::from),
-                source: item
-                    .get("source")
-                    .and_then(|s| s.as_str())
-                    .map(String::from),
+                source: Some(source),
             })
         })
-        .collect())
+        .collect()
 }
 
 /// Cross-session prompt history (for the Composer's ↑ history dropdown and
@@ -535,7 +560,7 @@ pub async fn prompt_history(
         .ok_or("agent not initialized")?;
     let payload = serde_json::json!({ "limit": limit.unwrap_or(100) });
     let params = raw_params(&payload);
-    let v: serde_json::Value = call_ext(&tx, "x.ai/prompt_history", params)
+    let v: serde_json::Value = call_ext(&tx, "echo.agent/prompt_history", params)
         .await
         .map_err(|e| e.to_string())?;
     // Response: array of strings or { prompts: [...] } or { history: [...] }.
@@ -586,9 +611,9 @@ pub async fn tasks_list(state: State<'_, AppState>) -> Result<Vec<RunningTask>, 
         .ok_or("agent not initialized")?;
     let params = raw_params(&serde_json::json!({}));
     // Try task/list first; some EchoAgent builds only expose subagent/list_running.
-    let v: serde_json::Value = match call_ext(&tx, "x.ai/task/list", params.clone()).await {
+    let v: serde_json::Value = match call_ext(&tx, "echo.agent/task/list", params.clone()).await {
         Ok(v) => v,
-        Err(_) => call_ext(&tx, "x.ai/subagent/list_running", params)
+        Err(_) => call_ext(&tx, "echo.agent/subagent/list_running", params)
             .await
             .map_err(|e| e.to_string())?,
     };
@@ -639,14 +664,14 @@ pub async fn task_kill(state: State<'_, AppState>, task_id: String) -> Result<()
         .ok_or("agent not initialized")?;
     let params = raw_params(&serde_json::json!({ "taskId": task_id }));
     // Prefer task/kill, fall back to subagent/cancel.
-    if call_ext::<serde_json::Value>(&tx, "x.ai/task/kill", params.clone())
+    if call_ext::<serde_json::Value>(&tx, "echo.agent/task/kill", params.clone())
         .await
         .is_ok()
     {
         return Ok(());
     }
     let subagent_params = raw_params(&serde_json::json!({ "subagentId": task_id }));
-    let _: serde_json::Value = call_ext(&tx, "x.ai/subagent/cancel", subagent_params)
+    let _: serde_json::Value = call_ext(&tx, "echo.agent/subagent/cancel", subagent_params)
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -656,9 +681,9 @@ pub async fn task_kill(state: State<'_, AppState>, task_id: String) -> Result<()
 // Folder trust
 // ========================================================================
 
-/// When EchoAgent sends `x.ai/folder_trust/request`, the frontend shows a dialog.
+/// When EchoAgent sends `echo.agent/folder_trust/request`, the frontend shows a dialog.
 /// The user's decision is sent back via this command, which calls the EchoAgent
-/// ext method `x.ai/folder_trust/respond` (or the ACP-standard permission
+/// ext method `echo.agent/folder_trust/respond` (or the ACP-standard permission
 /// resolution path). The request itself is registered by bridge.rs.
 #[tauri::command]
 pub async fn folder_trust_respond(
@@ -676,7 +701,8 @@ pub async fn folder_trust_respond(
     let params = raw_params(&payload);
     // Best-effort: method name varies; if folder_trust/respond isn't registered,
     // the call returns MethodNotFound which we swallow (the agent will re-ask).
-    let _: serde_json::Value = match call_ext(&tx, "x.ai/folder_trust/respond", params).await {
+    let _: serde_json::Value = match call_ext(&tx, "echo.agent/folder_trust/respond", params).await
+    {
         Ok(v) => v,
         Err(_) => return Ok(()),
     };
@@ -689,7 +715,7 @@ pub async fn folder_trust_respond(
 
 /// Toggle plan mode for the current session. In plan mode EchoAgent plans but
 /// doesn't execute tools until the user approves. Maps to the
-/// `x.ai/toggle_plan_mode` notification (sent client→agent).
+/// `echo.agent/toggle_plan_mode` notification (sent client→agent).
 #[tauri::command]
 pub async fn toggle_plan_mode(
     state: State<'_, AppState>,
@@ -704,7 +730,7 @@ pub async fn toggle_plan_mode(
         .clone()
         .ok_or("agent not initialized")?;
     let notif = acp_ext_notification(
-        "x.ai/toggle_plan_mode",
+        "echo.agent/toggle_plan_mode",
         serde_json::json!({ "sessionId": session_id, "enabled": enabled }),
     );
     let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
@@ -733,7 +759,7 @@ fn acp_ext_notification(
 // ========================================================================
 
 /// Hot-reload EchoAgent's view of MCP servers / skills / models / config without
-/// restarting the app. Maps to `x.ai/internal/reload_*` notifications.
+/// restarting the app. Maps to `echo.agent/internal/reload_*` notifications.
 /// `kind` ∈ "mcp_all" | "mcp_project" | "skills" | "models".
 #[tauri::command]
 pub async fn internal_reload(state: State<'_, AppState>, kind: String) -> Result<(), String> {
@@ -745,10 +771,10 @@ pub async fn internal_reload(state: State<'_, AppState>, kind: String) -> Result
         .clone()
         .ok_or("agent not initialized")?;
     let method = match kind.as_str() {
-        "mcp_all" => "x.ai/internal/reload_all_mcp_servers",
-        "mcp_project" => "x.ai/internal/reload_project_mcp_servers",
-        "skills" => "x.ai/internal/reload_skills",
-        "models" => "x.ai/internal/reload_models",
+        "mcp_all" => "echo.agent/internal/reload_all_mcp_servers",
+        "mcp_project" => "echo.agent/internal/reload_project_mcp_servers",
+        "skills" => "echo.agent/internal/reload_skills",
+        "models" => "echo.agent/internal/reload_models",
         other => return Err(format!("unknown reload kind: {other}")),
     };
     let notif = acp_ext_notification(method, serde_json::json!({}));
@@ -762,64 +788,10 @@ pub async fn internal_reload(state: State<'_, AppState>, kind: String) -> Result
 }
 
 // ========================================================================
-// xAI API Key 管理 — EchoAgent 的 `x.ai/getApiKey` / `x.ai/setApiKey`
-//
-// EchoAgent 只支持 BYOK 认证（xAI API Key / config.toml 里的 [model.*]
-// api_key/env_key）。EchoAgent OAuth 登录（x.ai/auth/info、check_subscription、
-// logout、get_url、cancel）相关的 command 已移除，以避免内核在空配置时
-// fallthrough 到 OIDC 并打开浏览器跳转 x.ai。详见 commands.rs 里
-// `agent_init` 的认证选择逻辑。
+// Plugins + Marketplace (echo.agent/plugins/*, echo.agent/marketplace/*)
 // ========================================================================
 
-/// Return only whether an xAI API key is configured. Secret material must not
-/// cross the Tauri IPC boundary into WebView memory.
-#[tauri::command]
-pub async fn account_get_api_key(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let tx = state
-        .tx
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("agent not initialized")?;
-    let params = raw_params(&serde_json::json!({}));
-    let v: serde_json::Value = call_ext(&tx, "x.ai/getApiKey", params)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(v.get("key")
-        .and_then(|k| k.as_str())
-        .filter(|key| !key.is_empty())
-        .map(|_| "••••••••".to_string()))
-}
-
-/// Set or clear the xAI API key via `x.ai/setApiKey`. Pass an empty string
-/// or null to clear.
-#[tauri::command]
-pub async fn account_set_api_key(
-    state: State<'_, AppState>,
-    key: Option<String>,
-) -> Result<(), String> {
-    let tx = state
-        .tx
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("agent not initialized")?;
-    let params = raw_params(&serde_json::json!({ "key": key.unwrap_or_default() }));
-    let _: serde_json::Value = call_ext(&tx, "x.ai/setApiKey", params)
-        .await
-        .map_err(|e| e.to_string())?;
-    let config = crate::paths::echo_agent_home_dir().join("config.toml");
-    if config.exists() {
-        crate::paths::harden_private_file(&config)?;
-    }
-    Ok(())
-}
-
-// ========================================================================
-// Plugins + Marketplace (x.ai/plugins/*, x.ai/marketplace/*)
-// ========================================================================
-
-/// List installed plugins via `x.ai/plugins/list`. `session_id` is optional —
+/// List installed plugins via `echo.agent/plugins/list`. `session_id` is optional —
 /// EchoAgent answers from the session's registry when given, otherwise from the
 /// shared snapshot. Returns the raw `PluginsListResponse` JSON so the frontend
 /// can render the full shape (skill/agent/hook/mcp counts etc.).
@@ -838,12 +810,12 @@ pub async fn plugins_list(
     // to the shared snapshot.
     let sid = session_id.unwrap_or_default();
     let params = raw_params(&serde_json::json!({ "sessionId": sid }));
-    call_ext(&tx, "x.ai/plugins/list", params)
+    call_ext(&tx, "echo.agent/plugins/list", params)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Execute a plugin action via `x.ai/plugins/action`. The frontend supplies
+/// Execute a plugin action via `echo.agent/plugins/action`. The frontend supplies
 /// the action object verbatim (shape matches EchoAgent's `PluginsActionRequest`).
 /// Returns the action's outcome.
 #[tauri::command]
@@ -860,12 +832,12 @@ pub async fn plugins_action(
         .ok_or("agent not initialized")?;
     let payload = serde_json::json!({ "sessionId": session_id, "action": action });
     let params = raw_params(&payload);
-    call_ext(&tx, "x.ai/plugins/action", params)
+    call_ext(&tx, "echo.agent/plugins/action", params)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// List marketplace sources + their plugins via `x.ai/marketplace/list`.
+/// List marketplace sources + their plugins via `echo.agent/marketplace/list`.
 /// Returns the raw `MarketplaceListResponse` JSON.
 #[tauri::command]
 pub async fn marketplace_list(
@@ -880,7 +852,7 @@ pub async fn marketplace_list(
         .ok_or("agent not initialized")?;
     let sid = session_id.unwrap_or_default();
     let params = raw_params(&serde_json::json!({ "sessionId": sid }));
-    call_ext(&tx, "x.ai/marketplace/list", params)
+    call_ext(&tx, "echo.agent/marketplace/list", params)
         .await
         .map_err(|e| e.to_string())
 }
@@ -901,7 +873,71 @@ pub async fn marketplace_action(
         .ok_or("agent not initialized")?;
     let payload = serde_json::json!({ "sessionId": session_id, "action": action });
     let params = raw_params(&payload);
-    call_ext(&tx, "x.ai/marketplace/action", params)
+    call_ext(&tx, "echo.agent/marketplace/action", params)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_slash_commands;
+
+    #[test]
+    fn parses_current_acp_command_shape_and_sources() {
+        let value = serde_json::json!({
+            "commands": [
+                {
+                    "name": "compact",
+                    "description": "Compress history",
+                    "input": { "hint": "what to preserve" }
+                },
+                {
+                    "name": "review",
+                    "description": "Review changes",
+                    "input": { "hint": "optional scope" },
+                    "_meta": { "scope": "project", "path": "/repo/SKILL.md" }
+                },
+                {
+                    "name": "acme:deploy",
+                    "description": "Deploy",
+                    "_meta": { "scope": "project", "pluginName": "acme" }
+                },
+                {
+                    "name": "release",
+                    "description": "Release workflow",
+                    "_meta": { "workflowSource": "project" }
+                }
+            ]
+        });
+
+        let commands = parse_slash_commands(&value);
+        assert_eq!(commands.len(), 4);
+        assert_eq!(
+            commands[0].argument_hint.as_deref(),
+            Some("what to preserve")
+        );
+        assert_eq!(commands[0].source.as_deref(), Some("builtin"));
+        assert_eq!(commands[1].source.as_deref(), Some("skill:project"));
+        assert_eq!(commands[2].source.as_deref(), Some("plugin:acme"));
+        assert_eq!(commands[3].source.as_deref(), Some("workflow:project"));
+    }
+
+    #[test]
+    fn accepts_legacy_flat_command_shape_and_skips_invalid_rows() {
+        let value = serde_json::json!([
+            {
+                "name": "legacy",
+                "description": "Legacy",
+                "argumentHint": "value",
+                "source": "ignored-legacy-source"
+            },
+            { "description": "missing name" }
+        ]);
+
+        let commands = parse_slash_commands(&value);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].name, "legacy");
+        assert_eq!(commands[0].argument_hint.as_deref(), Some("value"));
+        assert_eq!(commands[0].source.as_deref(), Some("builtin"));
+    }
 }

@@ -384,7 +384,7 @@ pub fn permission_mode_get(_state: State<'_, AppState>) -> String {
 }
 
 /// Set the permission mode: persist to config.toml (for future launches) AND
-/// notify the running agent via EchoAgent's `x.ai/yolo_mode_changed` extension
+/// notify the running agent via EchoAgent's `echo.agent/yolo_mode_changed` extension
 /// notification so existing sessions switch immediately. The notification is
 /// best-effort — if the agent isn't up yet, the config write alone suffices.
 #[tauri::command]
@@ -404,7 +404,8 @@ pub async fn permission_mode_set(state: State<'_, AppState>, mode: String) -> Re
             "yolo_mode": mode == "always-approve",
             "auto_mode": mode == "auto",
         }));
-        let notif = agent_client_protocol::ExtNotification::new("x.ai/yolo_mode_changed", params);
+        let notif =
+            agent_client_protocol::ExtNotification::new("echo.agent/yolo_mode_changed", params);
         let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
         // Fire-and-forget: a send error only means the agent went away mid-call.
         let _ = tx.send(AcpAgentMessage::ExtNotification(AcpArgs {

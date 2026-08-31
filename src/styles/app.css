@@ -5162,8 +5162,7 @@ button.diff__path {
   display: flex;
   flex-direction: column;
 }
-.home__title,
-.home__subtitle {
+.home__title {
   margin: 0;
   font-size: 36px;
   font-weight: 600;
@@ -8773,12 +8772,43 @@ button.diff__path {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.slash-commands__hint {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--echo-text-weak);
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .slash-commands__source {
   font-size: 10px;
   color: var(--echo-text-weak);
   padding: 1px 5px;
   background: var(--echo-bg-tertiary);
   border-radius: 3px;
+}
+.slash-commands__empty,
+.slash-commands__error {
+  padding: 10px;
+  color: var(--echo-text-weak);
+  font-size: 12px;
+}
+.slash-commands__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--echo-danger, #d33a2c);
+}
+.slash-commands__error button {
+  flex-shrink: 0;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 5px;
+  padding: 3px 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 /* ========================================================================
@@ -9819,10 +9849,6 @@ button.diff__path {
   color: #00a884;
   font-weight: 600;
 }
-.settings-warn {
-  color: #e54848;
-  font-weight: 600;
-}
 .settings-link-list {
   list-style: none;
   margin: 0;
@@ -9834,88 +9860,6 @@ button.diff__path {
   color: var(--echo-text-medium);
 }
 
-/* ========================================================================
- * AccountSettingsPanel — 账户管理真实分区
- * ===================================================================== */
-.account-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px;
-  background: var(--echo-bg-secondary);
-  border-radius: 10px;
-}
-.account-card__avatar {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  object-fit: cover;
-  background: var(--echo-bg-tertiary);
-  flex-shrink: 0;
-}
-.account-card__body {
-  flex: 1;
-  min-width: 0;
-}
-.account-card__name {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--echo-text-strong);
-}
-.account-card__email {
-  font-size: 12px;
-  color: var(--echo-text-medium);
-  margin-top: 2px;
-}
-.account-card__method {
-  font-size: 11px;
-  color: var(--echo-text-weak);
-  margin-top: 4px;
-}
-.account-card__method code {
-  font-family: ui-monospace, monospace;
-  background: var(--echo-bg-tertiary);
-  padding: 1px 6px;
-  border-radius: 4px;
-}
-.account-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px;
-  background: var(--echo-bg-secondary);
-  border-radius: 10px;
-}
-.account-section__title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--echo-text-strong);
-}
-.account-key-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.account-key-editor__input {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--echo-border-default);
-  border-radius: 6px;
-  background: var(--echo-bg-primary);
-  color: var(--echo-text-strong);
-  font-size: 12px;
-  font-family: ui-monospace, monospace;
-}
-.account-key-editor__input:focus {
-  border-color: var(--echo-brand);
-  outline: none;
-}
-.account-key-editor__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
 .settings-msg--warn {
   background: rgba(255, 176, 32, 0.08);
   border: 1px solid rgba(255, 176, 32, 0.3);
@@ -11924,7 +11868,7 @@ button.diff__path {
 
 /* ======================================================================
  * ContextUsagePill — Composer 上下文用量胶囊 + 分类占比弹层
- * (EchoAgent 图1 pill / 图2 popover;数据来自 runtime x.ai/session/info+usage)
+ * (EchoAgent 图1 pill / 图2 popover;数据来自 runtime echo.agent/session/info+usage)
  * ====================================================================== */
 .context-usage {
   position: relative;

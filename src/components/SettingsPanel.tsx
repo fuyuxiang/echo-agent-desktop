@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  User,
   Mail,
   Settings as SettingsIcon,
   SlidersHorizontal,
@@ -39,7 +38,6 @@ import {
   type FetchedModel,
 } from "@/lib/agent-client";
 import {
-  AccountSettingsPanel,
   AgentSettingsPanel,
   DataSettingsPanel,
   GeneralSettingsPanel,
@@ -63,8 +61,7 @@ import {
  * That editor writes back through providers_save → EchoAgent's [model.*] tables.
  */
 
-type SectionId =
-  | "account"
+export type SettingsSectionId =
   | "agent-mail"
   | "general"
   | "agent-settings"
@@ -77,7 +74,7 @@ type SectionId =
   | "help";
 
 interface NavItem {
-  id: SectionId;
+  id: SettingsSectionId;
   label: string;
   icon: LucideIcon;
 }
@@ -89,9 +86,8 @@ interface NavGroup {
 
 const NAV_GROUPS: NavGroup[] = [
   {
-    label: "账户",
+    label: "通知",
     items: [
-      { id: "account", label: "账户管理", icon: User },
       { id: "agent-mail", label: "通知中心", icon: Mail },
     ],
   },
@@ -152,15 +148,6 @@ const PRESETS: Record<ProviderKind, Preset> = {
     placeholderKey: "sk-...",
     helpUrl: "platform.openai.com",
   },
-  grok: {
-    label: "xAI Grok",
-    baseUrl: "https://api.x.ai/v1",
-    apiBackend: "chat_completions",
-    authScheme: "bearer",
-    models: ["grok-4", "grok-4-fast", "grok-3"],
-    placeholderKey: "xai-...",
-    helpUrl: "console.x.ai",
-  },
   deepseek: {
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com",
@@ -201,19 +188,22 @@ export function SettingsPanel({
   open,
   onClose,
   onModelsChanged,
+  initialSection = "model",
 }: {
   open: boolean;
   onClose: () => void;
   /** Called after a provider is saved/deleted so the app can refresh its
    *  model picker without a restart. */
   onModelsChanged?: () => void;
+  /** Section selected whenever the dialog is opened. */
+  initialSection?: SettingsSectionId;
 }) {
-  const [active, setActive] = useState<SectionId>("model");
+  const [active, setActive] = useState<SettingsSectionId>(initialSection);
 
-  // Default to the 模型 section every time the dialog opens.
+  // Select the caller-requested section every time the dialog opens.
   useEffect(() => {
-    if (open) setActive("model");
-  }, [open]);
+    if (open) setActive(initialSection);
+  }, [initialSection, open]);
 
   // Esc closes the dialog.
   useEffect(() => {
@@ -297,8 +287,6 @@ export function SettingsPanel({
               <DataSettingsPanel />
             ) : active === "general" ? (
               <GeneralSettingsPanel />
-            ) : active === "account" ? (
-              <AccountSettingsPanel />
             ) : active === "agent-settings" ? (
               <AgentSettingsPanel />
             ) : active === "agent-mail" ? (
@@ -827,7 +815,7 @@ function ProviderEditor({
                 ? "自定义 OpenAI 兼容协议 API"
                 : form.providerKind === "custom_anthropic"
                   ? "自定义 Anthropic 兼容协议 API"
-                  : "支持 OpenAI / Anthropic / xAI 等协议"}
+                  : "支持 OpenAI / Anthropic 等协议"}
             </div>
           </div>
           <button
@@ -852,7 +840,6 @@ function ProviderEditor({
                   [
                     "anthropic",
                     "openai",
-                    "grok",
                     "deepseek",
                     "qwen",
                     "custom",

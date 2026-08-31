@@ -1,7 +1,7 @@
 /**
  * 文件夹信任对话框 - 当 EchoAgent 要求信任一个目录时弹出
  *
- * EchoAgent 在首次对某 cwd 执行工具前会发 `x.ai/folder_trust/request`。
+ * EchoAgent 在首次对某 cwd 执行工具前会发 `echo.agent/folder_trust/request`。
  * 用户选择"信任"或"拒绝"，结果通过 `folderTrustRespond` 回传给 EchoAgent。
  *
  * 信任的目录会写入 EchoAgent 的 trust 配置，之后该目录的工具调用不再询问。

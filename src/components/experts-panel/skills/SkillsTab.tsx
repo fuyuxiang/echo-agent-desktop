@@ -3,6 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   SearchIcon, InstalledSkillIcon, AddCircleIcon, RefreshCwIcon,
   PuzzlePieceIcon, DeleteIcon, FolderOpenIcon, ChevronLeftIcon, SparklesIcon,
+  RestoreIcon,
 } from "@/foundation/components/Icon/icons";
 import {
   skillsList, skillsRemove, skillsToggle, skillsUninstallPackage,
@@ -47,7 +48,10 @@ export function SkillsTab({ pills, onToast }: Props) {
   const [locals, setLocals] = useState<SkillInfo[]>([]);
   const [localsLoading, setLocalsLoading] = useState(false);
 
-  const loadCatalog = useCallback(async (r: string): Promise<boolean> => {
+  const loadCatalog = useCallback(async (
+    r: string,
+    persistOverride = false,
+  ): Promise<boolean> => {
     if (isLegacyWorkBuddyPath(r)) {
       clearCatalogRoot("skills");
       setRoot("");
@@ -60,7 +64,7 @@ export function SkillsTab({ pills, onToast }: Props) {
       const c = await skillsCatalogLoad(r);
       setCatalog(c);
       setRoot(c.root || r);
-      writeCatalogRoot("skills", c.root || r);
+      if (persistOverride) writeCatalogRoot("skills", c.root || r);
       return true;
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
@@ -158,9 +162,22 @@ export function SkillsTab({ pills, onToast }: Props) {
         onToast?.("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
         return;
       }
-      if (await loadCatalog(pick)) onToast?.(`已切换技能数据目录：${pick}`);
+      if (await loadCatalog(pick, true)) onToast?.(`已切换技能数据目录：${pick}`);
     } catch { /* cancelled */ }
   }, [root, loadCatalog, onToast]);
+
+  const restoreDefault = useCallback(async () => {
+    clearCatalogRoot("skills");
+    setRoot(""); setCatalog(null); setError("");
+    try {
+      const d = await skillsCatalogDefaultRoot();
+      if (d && !isLegacyWorkBuddyPath(d) && await loadCatalog(d)) {
+        onToast?.("已恢复 EchoAgent 默认技能目录");
+        return;
+      }
+    } catch { /* handled by the empty state */ }
+    setNeedPick(true);
+  }, [loadCatalog, onToast]);
 
   const handleAdd = (skill: SkillItem) => setModalSkill(skill);
 
@@ -296,6 +313,9 @@ export function SkillsTab({ pills, onToast }: Props) {
           <span className="ec-source-label" title={root}>来源：{root || "—"}</span>
           <button type="button" className="ec-source-btn" onClick={chooseDir} title="切换来源目录">
             <FolderOpenIcon size="sm" /><span>选择目录</span>
+          </button>
+          <button type="button" className="ec-source-btn" onClick={restoreDefault} title="恢复 EchoAgent 默认目录">
+            <RestoreIcon size="sm" /><span>恢复默认</span>
           </button>
           <button type="button" className="ec-source-btn" onClick={() => root && loadCatalog(root)}
             disabled={loading} title="重新加载">

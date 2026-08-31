@@ -27,7 +27,7 @@ export function resolveSessionModelId(
 /**
  * Resolve the model shown by EchoAgent from the user's configured catalog.
  * Runtime defaults are only accepted when the same id is explicitly present
- * in that catalog, so an internal fallback such as `grok-4.6` cannot leak into
+ * in that catalog, so an internal runtime fallback cannot leak into
  * an unconfigured UI or be sent to an unavailable provider.
  */
 export function resolveConfiguredModelId(

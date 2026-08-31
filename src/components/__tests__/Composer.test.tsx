@@ -198,4 +198,67 @@ describe("Composer", () => {
     fireEvent.keyDown(input, { key: "ArrowUp" });
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("a");
   });
+
+  // ---------- 桌面 Slash 命令 ----------
+  it("桌面 Slash 命令由客户端处理，不会作为普通消息发送", async () => {
+    const onSend = vi.fn();
+    const onClientSlashCommand = vi.fn().mockResolvedValue(true);
+    const onDraftChange = vi.fn();
+    render(
+      <Composer
+        {...base}
+        onSend={onSend}
+        onClientSlashCommand={onClientSlashCommand}
+        onDraftChange={onDraftChange}
+      />,
+    );
+    const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "/settings model" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
+
+    await waitFor(() => expect(onClientSlashCommand).toHaveBeenCalledWith({
+      name: "settings",
+      args: "model",
+    }));
+    expect(onSend).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
+    expect(onDraftChange).toHaveBeenLastCalledWith("");
+  });
+
+  it("客户端拒绝 Slash 命令时保留输入", async () => {
+    const onSend = vi.fn();
+    const onClientSlashCommand = vi.fn().mockResolvedValue(false);
+    render(
+      <Composer
+        {...base}
+        draft="/plan maybe"
+        draftKey="s1"
+        onSend={onSend}
+        onClientSlashCommand={onClientSlashCommand}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(onClientSlashCommand).toHaveBeenCalled());
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("/plan maybe");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("运行时 Slash 命令仍按原始文本交给 Agent", () => {
+    const onSend = vi.fn();
+    const onClientSlashCommand = vi.fn();
+    render(
+      <Composer
+        {...base}
+        draft="/acme:review staged"
+        draftKey="s1"
+        onSend={onSend}
+        onClientSlashCommand={onClientSlashCommand}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    expect(onClientSlashCommand).not.toHaveBeenCalled();
+    expect(onSend).toHaveBeenCalledWith("/acme:review staged", []);
+  });
 });

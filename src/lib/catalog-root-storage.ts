@@ -1,17 +1,17 @@
 export type CatalogRootKind = "experts" | "skills" | "connectors";
 
-const ROOT_KEYS: Record<CatalogRootKind, { current: string; legacy: string }> = {
+const ROOT_KEYS: Record<CatalogRootKind, { current: string; deprecated: string[] }> = {
   experts: {
-    current: "echoagent.catalog.experts-root.v1",
-    legacy: "expertsRoot",
+    current: "echoagent.catalog.experts-root.v2",
+    deprecated: ["echoagent.catalog.experts-root.v1", "expertsRoot"],
   },
   skills: {
-    current: "echoagent.catalog.skills-root.v1",
-    legacy: "skillsCatalogRoot",
+    current: "echoagent.catalog.skills-root.v2",
+    deprecated: ["echoagent.catalog.skills-root.v1", "skillsCatalogRoot"],
   },
   connectors: {
-    current: "echoagent.catalog.connectors-root.v1",
-    legacy: "connectorsRoot",
+    current: "echoagent.catalog.connectors-root.v2",
+    deprecated: ["echoagent.catalog.connectors-root.v1", "connectorsRoot"],
   },
 };
 
@@ -45,13 +45,21 @@ export function clearCatalogRoot(kind: CatalogRootKind): void {
   const keys = ROOT_KEYS[kind];
   try {
     storage.removeItem(keys.current);
-    storage.removeItem(keys.legacy);
+    keys.deprecated.forEach((key) => storage.removeItem(key));
   } catch {
     // A disabled or full WebView storage must not block catalog loading.
   }
 }
 
-/** Read the namespaced root and migrate the old generic key once. */
+/**
+ * Read an explicit user-selected catalog root.
+ *
+ * v1 cannot be migrated safely: older panels persisted both automatic
+ * defaults and manual overrides under the same key. Retaining it could pin a
+ * new build to `~/.echo-agent` after `ECHO_AGENT_HOME` changes, so v1 and the
+ * original generic keys are removed once. The backend default is then
+ * resolved from the active EchoAgent data home.
+ */
 export function readCatalogRoot(kind: CatalogRootKind): string {
   const storage = availableStorage();
   if (!storage) return "";
@@ -60,17 +68,12 @@ export function readCatalogRoot(kind: CatalogRootKind): string {
   try {
     const current = (storage.getItem(keys.current) || "").trim();
     if (current && !isLegacyWorkBuddyPath(current)) {
-      storage.removeItem(keys.legacy);
+      keys.deprecated.forEach((key) => storage.removeItem(key));
       return current;
     }
     if (current) storage.removeItem(keys.current);
-
-    const legacy = (storage.getItem(keys.legacy) || "").trim();
-    storage.removeItem(keys.legacy);
-    if (!legacy || isLegacyWorkBuddyPath(legacy)) return "";
-
-    storage.setItem(keys.current, legacy);
-    return legacy;
+    keys.deprecated.forEach((key) => storage.removeItem(key));
+    return "";
   } catch {
     return "";
   }
@@ -87,14 +90,14 @@ export function writeCatalogRoot(kind: CatalogRootKind, path: string): boolean {
   const keys = ROOT_KEYS[kind];
   try {
     storage.setItem(keys.current, normalized);
-    storage.removeItem(keys.legacy);
+    keys.deprecated.forEach((key) => storage.removeItem(key));
     return true;
   } catch {
     return false;
   }
 }
 
-/** Purge/migrate all historical keys even when their feature tabs are unopened. */
+/** Purge historical keys even when their feature tabs are unopened. */
 export function migrateCatalogRootStorage(): void {
   (Object.keys(ROOT_KEYS) as CatalogRootKind[]).forEach(readCatalogRoot);
 }

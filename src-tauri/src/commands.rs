@@ -33,11 +33,9 @@ pub struct AppState {
 #[serde(rename_all = "camelCase")]
 pub struct AuthStatus {
     pub ready: bool,
-    pub has_auth_file: bool,
     pub reason: Option<String>,
-    /// Model ids configured in `~/.echo-agent/config.toml` (BYOK providers). When
-    /// non-empty the app is usable without EchoAgent OAuth — EchoAgent routes prompts
-    /// to the matching `[model.*]` backend.
+    /// Model ids configured in `~/.echo-agent/config.toml`. When non-empty the
+    /// app can route prompts to the matching `[model.*]` backend.
     pub providers: Vec<String>,
 }
 
@@ -55,14 +53,8 @@ fn default_cwd() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn has_auth_file() -> bool {
-    crate::paths::echo_agent_home_dir()
-        .join("auth.json")
-        .exists()
-}
-
 /// Initialize the in-process EchoAgent runtime. Spawns the agent thread, runs
-/// `initialize` + `authenticate`, and starts the dispatcher.
+/// `initialize`, and starts the dispatcher.
 #[tauri::command]
 pub async fn agent_init(
     app: tauri::AppHandle,
@@ -81,12 +73,9 @@ pub async fn agent_init(
     }
     state.tx.lock().unwrap().take();
     crate::automations::clear_runtime_sessions();
-    crate::voice::shutdown();
 
     let cwd = cwd.map(PathBuf::from).unwrap_or_else(default_cwd);
     *state.cwd.lock().unwrap() = Some(cwd.clone());
-
-    let auth_ok = has_auth_file();
 
     // Spawn the agent off the async runtime. `spawn_agent_runtime` does blocking I/O
     // (config load, first-run bundled extract under ~/.echo-agent). Running it
@@ -145,7 +134,8 @@ pub async fn agent_init(
         thread: None,
     });
 
-    // Run the ACP lifecycle: initialize + authenticate.
+    // Run the ACP initialization lifecycle. Provider credentials are managed
+    // solely through the model-provider configuration.
     let tx = state
         .tx
         .lock()
@@ -157,27 +147,9 @@ pub async fn agent_init(
         .await
         .map_err(|e| format!("initialize: {e}"))?;
 
-    // Authenticate ONLY via a BYOK/api_key method. We deliberately never pass
-    // `cached_token`/`grok_com`/`oidc` to `authenticate`, because those fall
-    // through to the in-kernel OIDC/device-code flow which opens the system
-    // browser to x.ai (see vendor auth/oidc/login.rs:423). EchoAgent is
-    // BYOK-only; if no api_key method is advertised we stay unauthenticated and
-    // let the frontend guide the user to set up a provider/API key instead.
-    const XAI_API_KEY_METHOD_ID: &str = "xai.api_key";
-    if let Some(method) = init_outcome
-        .auth_methods
-        .iter()
-        .find(|m| m == &XAI_API_KEY_METHOD_ID)
-    {
-        let _ = agent_runtime::authenticate(&tx, method).await;
-    }
-
     let list = crate::providers::providers_list();
     let model_ids: Vec<String> = list.models.iter().map(|m| m.model_id.clone()).collect();
-    // Usable if EITHER engine authentication is set up OR at least one BYOK provider
-    // is configured. The OAuth-only path requires `auth.json`; the BYOK path
-    // only needs `[model.*]` entries in config.toml.
-    let ready = auth_ok || !model_ids.is_empty();
+    let ready = !model_ids.is_empty();
 
     // Start the automations scheduler now that the agent channel is up.
     // Idempotent — safe if agent_init is somehow called twice.
@@ -200,16 +172,11 @@ pub async fn agent_init(
         ok: true,
         auth: AuthStatus {
             ready,
-            has_auth_file: auth_ok,
             providers: model_ids,
             reason: if ready {
                 None
             } else {
-                Some(
-                    "No provider configured. Set an xAI API Key in Settings → 账户管理, \
-                     or add a BYOK provider in Settings → 模型."
-                        .into(),
-                )
+                Some("No model provider configured. Add one in Settings → 模型.".into())
             },
         },
         cwd: cwd.to_string_lossy().into_owned(),
@@ -220,18 +187,16 @@ pub async fn agent_init(
 
 #[tauri::command]
 pub fn agent_auth_status(_state: State<'_, AppState>) -> AuthStatus {
-    let has = has_auth_file();
     let list = crate::providers::providers_list();
     let model_ids: Vec<String> = list.models.iter().map(|m| m.model_id.clone()).collect();
-    let ready = has || !model_ids.is_empty();
+    let ready = !model_ids.is_empty();
     AuthStatus {
         ready,
-        has_auth_file: has,
         providers: model_ids,
         reason: if ready {
             None
         } else {
-            Some("No provider configured.".into())
+            Some("No model provider configured. Add one in Settings → 模型.".into())
         },
     }
 }
@@ -340,7 +305,6 @@ pub async fn agent_shutdown(state: State<'_, AppState>) -> Result<(), String> {
         scheduler.abort();
     }
     crate::automations::clear_runtime_sessions();
-    crate::voice::shutdown();
     tracing::info!("EchoAgent agent shut down (ready for re-init)");
     Ok(())
 }
@@ -461,7 +425,7 @@ pub fn agent_list_workspaces() -> Vec<WorkspaceInfo> {
     sessions::list_workspaces()
 }
 
-/// Rename a session via EchoAgent's `x.ai/session/rename` extension method. On
+/// Rename a session via EchoAgent's `echo.agent/session/rename` extension method. On
 /// success EchoAgent also broadcasts `SessionSummaryGenerated`, which our bridge
 /// forwards as the `agent://summary` event — so the frontend will receive the
 /// new title twice (once from this return, once from the event). That's fine:
@@ -484,7 +448,7 @@ pub async fn agent_rename_session(
         .map_err(|e| e.to_string())
 }
 
-/// Delete a session's persisted history via EchoAgent's `x.ai/session/delete`.
+/// Delete a session's persisted history via EchoAgent's `echo.agent/session/delete`.
 /// Removes the on-disk session directory; the frontend drops its sidebar
 /// entry on success.
 #[tauri::command]
@@ -512,7 +476,7 @@ pub fn agent_set_session_pinned(session_id: String, pinned: bool) -> Result<bool
     crate::meta::set_pinned(&session_id, pinned)
 }
 
-/// Fetch the session's context-window snapshot (`x.ai/session/info`) for the
+/// Fetch the session's context-window snapshot (`echo.agent/session/info`) for the
 /// composer's context-usage pill/popover. Fails when the session isn't live
 /// in the agent (e.g. an old session never loaded this launch) — the
 /// frontend treats that as "no data" and hides the pill.
@@ -532,7 +496,7 @@ pub async fn agent_session_info(
         .map_err(|e| e.to_string())
 }
 
-/// Fetch the session's cumulative token usage (`x.ai/session/usage`) — used
+/// Fetch the session's cumulative token usage (`echo.agent/session/usage`) — used
 /// by the context-usage popover for the average cache hit rate.
 #[tauri::command]
 pub async fn agent_session_usage(

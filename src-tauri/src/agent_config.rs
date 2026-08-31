@@ -10,7 +10,7 @@
 //! max_depth = 2          # nesting depth (default 1)
 //!
 //! [models]
-//! web_search = "grok-3"  # set to enable web_search tool; remove to disable
+//! web_search = "search-model"  # set to enable web_search tool; remove to disable
 //! ```
 
 use serde::{Deserialize, Serialize};

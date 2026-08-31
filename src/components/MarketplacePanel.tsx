@@ -1,5 +1,5 @@
 /**
- * 市场面板 - 对接 EchoAgent 的 x.ai/marketplace/list + x.ai/marketplace/action
+ * 市场面板 - 对接 EchoAgent 的 echo.agent/marketplace/list + echo.agent/marketplace/action
  *
  * 显示 EchoAgent 配置的所有插件市场源（marketplace sources）及其插件，
  * 支持安装/卸载/更新/刷新源 + 添加/移除源。

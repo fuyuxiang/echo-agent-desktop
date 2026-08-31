@@ -1,5 +1,5 @@
 //! Expert marketplace data — read LIVE from a local EchoAgent data directory
-//! (default `E:\EchoAgent\agents`, overridable from the UI).
+//! (default `${ECHO_AGENT_HOME}/experts-marketplace`, overridable from the UI).
 //!
 //! Layout we consume:
 //!   <root>/_meta/_expert_center.json      — categories + experts (rich fields)
@@ -151,17 +151,21 @@ fn resolve_remote_asset(asset: &str) -> Option<String> {
 // ---------- root discovery ----------
 
 /// Candidate roots probed when the user hasn't picked one. The first whose
-/// `_meta/_expert_center.json` exists wins. `ECHOAGENT_AGENTS_DIR` overrides all.
+/// `_meta/_expert_center.json` exists wins. The canonical marketplace is a
+/// child of `ECHO_AGENT_HOME`; historical locations remain read-only fallbacks
+/// so upgrades do not strand an existing catalog.
 fn candidate_roots() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    if let Ok(v) = std::env::var("ECHOAGENT_AGENTS_DIR") {
-        if !v.is_empty() {
-            out.push(PathBuf::from(v));
-        }
+    if let Some(path) =
+        crate::paths::first_env_path(&["ECHO_AGENT_EXPERTS_DIR", "ECHOAGENT_AGENTS_DIR"])
+    {
+        crate::paths::push_unique_path(&mut out, path);
     }
+    crate::paths::push_unique_path(&mut out, crate::paths::experts_marketplace_dir());
+
     if let Some(h) = dirs::home_dir() {
-        out.push(h.join("EchoAgent").join("agents"));
-        out.push(h.join("agents"));
+        crate::paths::push_unique_path(&mut out, h.join("EchoAgent").join("agents"));
+        crate::paths::push_unique_path(&mut out, h.join("agents"));
     }
     out
 }

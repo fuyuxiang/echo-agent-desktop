@@ -2,8 +2,8 @@
  * 运行中任务面板 - 显示 EchoAgent 的后台任务和子代理
  *
  * EchoAgent 通过工具调用启动的 background tasks 和 spawn_subagent 在后台运行。
- * 这里通过 `x.ai/task/list` + `x.ai/subagent/list_running` 观测它们，
- * 通过 `x.ai/task/kill` / `x.ai/subagent/cancel` 取消。
+ * 这里通过 `echo.agent/task/list` + `echo.agent/subagent/list_running` 观测它们，
+ * 通过 `echo.agent/task/kill` / `echo.agent/subagent/cancel` 取消。
  *
  * 这个面板嵌入到 ChatView 右侧或作为浮层。监听 `agent://task-update` 自动刷新。
  */

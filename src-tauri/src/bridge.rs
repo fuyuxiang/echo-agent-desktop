@@ -5,7 +5,7 @@
 //!    then ack the oneshot (agent future hangs otherwise);
 //!  - `RequestPermission` → register a pending permission in `Permissions`,
 //!    emit `agent://permission` (the frontend resolves via a command);
-//!  - `ExtNotification("x.ai/session/prompt_complete")` → emit `agent://complete`;
+//!  - `ExtNotification("echo.agent/session/prompt_complete")` → emit `agent://complete`;
 //!  - fs/terminal requests → never arrive (we advertised no capability); if
 //!    they do, we deny so the agent future still completes.
 
@@ -225,7 +225,7 @@ pub struct SummaryEvent {
 
 /// Payload emitted on `agent://subagent` — a live subagent lifecycle event
 /// (spawned / progress / finished). EchoAgent sends these as
-/// `x.ai/session_notification` extension notifications addressed to the
+/// `echo.agent/session_notification` extension notifications addressed to the
 /// parent session. We forward the relevant fields so the frontend can show
 /// live subagent progress (turns, tokens, duration, status) — aligning with
 /// EchoAgent's team-runtime panel.
@@ -424,7 +424,7 @@ async fn handle_client_message(
             // params is a RawValue on the wire; deserialize to extract fields.
             let raw_str = b.request.params.get();
             let params: Value = serde_json::from_str(raw_str).unwrap_or(Value::Null);
-            if method == "x.ai/session/prompt_complete" {
+            if method == "echo.agent/session/prompt_complete" {
                 // Prompt finished: surface sessionId / stopReason to the frontend.
                 let session_id = params
                     .get("sessionId")
@@ -541,7 +541,7 @@ async fn handle_client_message(
                         stop_reason,
                     },
                 );
-            } else if method == "x.ai/session_notification" {
+            } else if method == "echo.agent/session_notification" {
                 // Session-scoped notification: EchoAgent uses this to push
                 // `SessionSummaryGenerated` after the first user prompt (the
                 // LLM-generated title). The update is a tagged enum with the
@@ -551,27 +551,33 @@ async fn handle_client_message(
                     "received ext notification, dispatching to handle_session_notification"
                 );
                 handle_session_notification(app, &params);
-            } else if method == "x.ai/mcp/server_status" || method == "x.ai/mcp/init_progress" {
+            } else if method == "echo.agent/mcp/server_status"
+                || method == "echo.agent/mcp/init_progress"
+            {
                 // MCP connector status / startup progress — surface to the
                 // connectors panel for live state updates.
                 let _ = app.emit("agent://mcp-status", &params);
-            } else if method == "x.ai/folder_trust/request" {
+            } else if method == "echo.agent/folder_trust/request" {
                 // EchoAgent is asking us to trust a folder before running tools in
                 // it. Surface to the frontend as a trust dialog.
                 let _ = app.emit("agent://folder-trust", &params);
-            } else if method == "x.ai/toggle_plan_mode" {
+            } else if method == "echo.agent/toggle_plan_mode" {
                 // Plan mode toggled (either by us or by EchoAgent). Mirror to frontend.
                 let _ = app.emit("agent://plan-mode", &params);
-            } else if method == "x.ai/yolo_mode_changed" {
+            } else if method == "echo.agent/yolo_mode_changed" {
                 // Permission mode (auto/yolo) changed.
                 let _ = app.emit("agent://permission-mode", &params);
-            } else if method == "x.ai/models/update" {
+            } else if method == "echo.agent/models/update" {
                 // Model list updated (e.g. after config reload).
                 let _ = app.emit("agent://models-update", &params);
-            } else if method == "x.ai/task_backgrounded" || method == "x.ai/task_completed" {
+            } else if method == "echo.agent/task_backgrounded"
+                || method == "echo.agent/task_completed"
+            {
                 // Background task lifecycle — refresh the tasks panel.
                 let _ = app.emit("agent://task-update", &params);
-            } else if method == "x.ai/git_head_changed" || method == "x.ai/gitHeadChanged" {
+            } else if method == "echo.agent/git_head_changed"
+                || method == "echo.agent/gitHeadChanged"
+            {
                 // git HEAD moved — useful for status bar / worktree UI.
                 let _ = app.emit("agent://git-head", &params);
             }
@@ -589,11 +595,7 @@ async fn handle_client_message(
             let raw_str = b.request.params.get();
             let params: Value = serde_json::from_str(raw_str).unwrap_or(Value::Null);
 
-            if method == "x.ai/question"
-                || method == "_echo-agent.ai/question"
-                || method == "x.ai/ask_user_question"
-                || method == "_echo-agent.ai/ask_user_question"
-            {
+            if method == "echo.agent/ask_user_question" {
                 let tool_call_id = params
                     .get("toolCallId")
                     .and_then(|v| v.as_str())
@@ -722,7 +724,7 @@ async fn handle_client_message(
     }
 }
 
-/// Parse an `x.ai/session_notification` payload and, if it carries a freshly
+/// Parse an `echo.agent/session_notification` payload and, if it carries a freshly
 /// generated session title (`SessionSummaryGenerated`), emit `agent://summary`
 /// so the frontend can update the sidebar entry. Unknown update variants are
 /// ignored (we ACK regardless, in `handle_client_message`).
@@ -747,7 +749,7 @@ fn handle_session_notification(app: &AppHandle, params: &Value) {
         .get("sessionUpdate")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    tracing::info!(session_id, kind, "received x.ai/session_notification");
+    tracing::info!(session_id, kind, "received echo.agent/session_notification");
     match kind {
         "session_summary_generated" => {
             // Accept the camelCase variant too, defensively — reading only
@@ -760,7 +762,7 @@ fn handle_session_notification(app: &AppHandle, params: &Value) {
                 .unwrap_or("");
             let is_manual = params
                 .get("_meta")
-                .and_then(|meta| meta.get("x.ai/titleIsManual"))
+                .and_then(|meta| meta.get("echo.agent/titleIsManual"))
                 .and_then(Value::as_bool)
                 == Some(true);
             let title = if is_manual {

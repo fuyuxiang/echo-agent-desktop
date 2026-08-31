@@ -1,6 +1,6 @@
 //! Connector marketplace — read LIVE from a local EchoAgent connector
-//! marketplace directory (default `~/.echo-agent/connectors-marketplace`,
-//! overridable via the UI).
+//! marketplace directory (default
+//! `${ECHO_AGENT_HOME}/connectors-marketplace`, overridable via the UI).
 //!
 //! Layout we consume:
 //!   <root>/.echo-agent-connector/connectors.json   — marketplace manifest
@@ -241,17 +241,23 @@ fn categories() -> Vec<ConnectorCategory> {
 // ---------- root discovery ----------
 
 /// Candidate roots probed when the user hasn't picked one. The first whose
-/// `.echo-agent-connector/connectors.json` exists wins.
-/// `ECHOAGENT_CONNECTORS_DIR` overrides all.
+/// `.echo-agent-connector/connectors.json` exists wins. The standard root is
+/// derived from `ECHO_AGENT_HOME`; the old fixed-home location is retained as
+/// a compatibility fallback when a custom data home is introduced.
 fn candidate_roots() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    if let Ok(v) = std::env::var("ECHOAGENT_CONNECTORS_DIR") {
-        if !v.is_empty() {
-            out.push(PathBuf::from(v));
-        }
+    if let Some(path) =
+        crate::paths::first_env_path(&["ECHO_AGENT_CONNECTORS_DIR", "ECHOAGENT_CONNECTORS_DIR"])
+    {
+        crate::paths::push_unique_path(&mut out, path);
     }
+    crate::paths::push_unique_path(&mut out, crate::paths::connectors_marketplace_dir());
+
     if let Some(h) = dirs::home_dir() {
-        out.push(h.join(".echo-agent").join("connectors-marketplace"));
+        crate::paths::push_unique_path(
+            &mut out,
+            h.join(".echo-agent").join("connectors-marketplace"),
+        );
     }
     out
 }
@@ -482,21 +488,13 @@ mod tests {
     // ---- integration tests against the real echo-agent marketplace dir ----
 
     fn marketplace_available() -> bool {
-        if let Some(home) = dirs::home_dir() {
-            return home
-                .join(".echo-agent")
-                .join("connectors-marketplace")
-                .join(".echo-agent-connector")
-                .join("connectors.json")
-                .is_file();
-        }
-        false
+        candidate_roots().iter().any(|root| root_has_manifest(root))
     }
 
     #[tokio::test]
     async fn load_returns_real_connectors() {
         if !marketplace_available() {
-            eprintln!("[skip] ~/.echo-agent/connectors-marketplace not present");
+            eprintln!("[skip] EchoAgent connector marketplace not present");
             return;
         }
         let catalog = connectors_load(None).await.expect("load should succeed");

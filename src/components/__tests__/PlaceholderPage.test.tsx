@@ -1,5 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+
+vi.mock("../experts-panel", () => ({
+  ExpertsPanel: ({ initialTab }: { initialTab?: string }) => (
+    <div data-testid="experts-panel">{initialTab}</div>
+  ),
+}));
+vi.mock("../PluginsPanel", () => ({
+  PluginsPanel: () => <div>installed plugins</div>,
+}));
+vi.mock("../MarketplacePanel", () => ({
+  MarketplacePanel: () => <div>plugin marketplace</div>,
+}));
+
 import { PlaceholderPage } from "../PlaceholderPage";
 
 describe("PlaceholderPage", () => {
@@ -18,4 +31,19 @@ describe("PlaceholderPage", () => {
       ).toBeInTheDocument();
     },
   );
+
+  it.each([
+    ["专家·技能·连接器", "experts"],
+    ["技能", "skills"],
+    ["连接器", "connectors"],
+  ])("Slash 路由「%s」直达 %s 页签", (label, tab) => {
+    render(<PlaceholderPage label={label} />);
+    expect(screen.getByTestId("experts-panel")).toHaveTextContent(tab);
+  });
+
+  it("插件市场 Slash 路由直达市场页签", () => {
+    render(<PlaceholderPage label="插件市场" />);
+    expect(screen.getByText("plugin marketplace")).toBeInTheDocument();
+    expect(screen.queryByText("installed plugins")).not.toBeInTheDocument();
+  });
 });

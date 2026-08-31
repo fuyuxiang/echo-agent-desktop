@@ -616,7 +616,7 @@ export function Sidebar({
     setContextMenu({ x: e.clientX, y: e.clientY, sessionId, sessionTitle, isPinned });
   }, []);
 
-  // Rename via EchoAgent's `x.ai/session/rename`. EchoAgent broadcasts
+  // Rename via EchoAgent's `echo.agent/session/rename`. EchoAgent broadcasts
   // SessionSummaryGenerated on success (agent://summary → store upsert); we also
   // update optimistically to avoid flicker.
   const handleRename = useCallback(async (sessionId: string, newTitle: string) => {
@@ -630,7 +630,7 @@ export function Sidebar({
     }
   }, [allSessions, upsertSession, onToast]);
 
-  // Delete via EchoAgent's `x.ai/session/delete` — removes the on-disk session
+  // Delete via EchoAgent's `echo.agent/session/delete` — removes the on-disk session
   // directory. Only drop the sidebar entry once the backend confirms.
   const handleDelete = useCallback(async (sessionId: string) => {
     const session = allSessions.find(s => s.sessionId === sessionId);

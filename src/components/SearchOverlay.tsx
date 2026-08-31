@@ -10,7 +10,7 @@ import type { SearchHit, SessionSummary } from "@/lib/types";
  * Two modes:
  *  - Empty / short query: filter the current workspace's session list by
  *    title (instant, local).
- *  - Query ≥ 2 chars: fire `x.ai/session/search` against EchoAgent's full-text
+ *  - Query ≥ 2 chars: fire `echo.agent/session/search` against EchoAgent's full-text
  *    index (cross-workspace, matches message content + titles). Results show
  *    a snippet of the matched content.
  *
