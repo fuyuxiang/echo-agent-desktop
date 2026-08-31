@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   SearchIcon, MyExpertIcon, ChevronLeftIcon, SparklesIcon,
-  FolderOpenIcon, RefreshCwIcon, RestoreIcon,
+  RefreshCwIcon,
 } from "@/foundation/components/Icon/icons";
 import {
   expertsDefaultRoot, expertsLoad, expertsReadAgentPrompt, expertsLinkAgents,
@@ -14,12 +13,6 @@ import { ExpertDetailModal } from "./ExpertDetailModal";
 import { FeaturedScenes } from "./FeaturedScenes";
 import { usePendingExpertStore } from "@/stores/pending-expert-store";
 import { AssistantsPanel } from "../../AssistantsPanel";
-import {
-  clearCatalogRoot,
-  isLegacyWorkBuddyPath,
-  readCatalogRoot,
-  writeCatalogRoot,
-} from "@/lib/catalog-root-storage";
 
 type ListTab = "expert" | "team";
 type Sort = "popular" | "newest";
@@ -44,29 +37,17 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
   const [modalExpert, setModalExpert] = useState<ExpertItem | null>(null);
   const setPendingExpert = usePendingExpertStore((s) => s.set);
 
-  const [root, setRoot] = useState<string>(() => readCatalogRoot("experts"));
+  const [root, setRoot] = useState("");
   const [catalog, setCatalog] = useState<ExpertCatalog | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [needPick, setNeedPick] = useState(false);
 
-  const loadCatalog = useCallback(async (
-    r: string,
-    persistOverride = false,
-  ): Promise<boolean> => {
-    if (isLegacyWorkBuddyPath(r)) {
-      clearCatalogRoot("experts");
-      setRoot("");
-      setCatalog(null);
-      setError("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
-      return false;
-    }
-    setLoading(true); setError(""); setNeedPick(false);
+  const loadCatalog = useCallback(async (r: string): Promise<boolean> => {
+    setLoading(true); setError("");
     try {
       const c = await expertsLoad(r);
       setCatalog(c);
       setRoot(c.root || r);
-      if (persistOverride) writeCatalogRoot("experts", c.root || r);
       return true;
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
@@ -77,27 +58,25 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
     }
   }, []);
 
-  // Resolve the data root on first mount.
+  // The marketplace is optional. Resolve only EchoAgent's canonical global
+  // root; when it is absent, fall back to the user's global agents directly.
   useEffect(() => {
     let disposed = false;
     (async () => {
-      if (root) {
-        const loaded = await loadCatalog(root);
-        if (disposed || loaded) return;
-        clearCatalogRoot("experts");
-        setRoot("");
-      }
       try {
         const d = await expertsDefaultRoot();
         if (disposed) return;
-        if (d && !isLegacyWorkBuddyPath(d)) {
+        if (d) {
           const loaded = await loadCatalog(d);
-          if (!disposed && !loaded) setNeedPick(true);
-        } else {
-          setNeedPick(true);
+          if (!disposed && !loaded) setView("my");
+          return;
         }
       } catch {
-        if (!disposed) setNeedPick(true);
+        // Fall through to the global agents view.
+      }
+      if (!disposed) {
+        setLoading(false);
+        setView("my");
       }
     })();
     return () => { disposed = true; };
@@ -163,35 +142,6 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
       return ap - bp;
     });
   }, [byType, cat, search, sort]);
-
-  const chooseDir = useCallback(async () => {
-    try {
-      const sel = await openDialog({
-        directory: true, multiple: false, title: "选择专家数据目录",
-        defaultPath: root || undefined,
-      });
-      const pick = Array.isArray(sel) ? sel[0] : sel;
-      if (!pick) return;
-      if (isLegacyWorkBuddyPath(pick)) {
-        onToast?.("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
-        return;
-      }
-      if (await loadCatalog(pick, true)) onToast?.(`已切换专家数据目录：${pick}`);
-    } catch { /* cancelled */ }
-  }, [root, loadCatalog, onToast]);
-
-  const restoreDefault = useCallback(async () => {
-    clearCatalogRoot("experts");
-    setRoot(""); setCatalog(null); setError("");
-    try {
-      const d = await expertsDefaultRoot();
-      if (d && !isLegacyWorkBuddyPath(d) && await loadCatalog(d)) {
-        onToast?.("已恢复 EchoAgent 默认专家目录");
-        return;
-      }
-    } catch { /* handled by the empty state */ }
-    setNeedPick(true);
-  }, [loadCatalog, onToast]);
 
   /** Read the full prompt, set pending expert, navigate home. */
   const handleSummonFromModal = useCallback(async (expert: ExpertItem, promptOverride?: string) => {
@@ -278,21 +228,11 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
     onGoHome?.();
   }, [setPendingExpert, onGoHome]);
 
-  // ---- no data dir yet ----
-  if (needPick && !catalog) {
+  if (loading && !catalog && view === "center") {
     return (
       <div className="um-page">
         <header className="um-topbar"><div className="um-topbar-left">{pills}</div></header>
-        <div className="um-scroll">
-          <div className="ec-empty">
-            <FolderOpenIcon size="xl" className="ec-empty-icon" />
-            <p>未找到专家数据目录</p>
-            <p className="ec-empty-hint">请选择包含 <code>_meta/_expert_center.json</code> 的专家市场目录（默认为 <code>ECHO_AGENT_HOME/experts-marketplace</code>）</p>
-            <button type="button" className="um-btn um-btn--primary" onClick={chooseDir}>
-              <FolderOpenIcon size="sm" /><span>选择来源目录</span>
-            </button>
-          </div>
-        </div>
+        <div className="um-scroll"><div className="ec-loading">加载全局专家目录…</div></div>
       </div>
     );
   }
@@ -303,9 +243,11 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
       <div className="um-page">
         <header className="um-topbar">
           <div className="um-topbar-left">
-            <button type="button" className="um-back" onClick={() => setView("center")}>
-              <ChevronLeftIcon size="sm" /><span>全部专家</span>
-            </button>
+            {catalog ? (
+              <button type="button" className="um-back" onClick={() => setView("center")}>
+                <ChevronLeftIcon size="sm" /><span>全部专家</span>
+              </button>
+            ) : pills}
           </div>
         </header>
         <div className="um-scroll">
@@ -334,16 +276,10 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
 
       <div className="um-scroll">
         <div className="ec-source-bar">
-          <span className="ec-source-label" title={root}>来源：{root || "—"}</span>
-          <button type="button" className="ec-source-btn" onClick={chooseDir} title="切换来源目录">
-            <FolderOpenIcon size="sm" /><span>选择目录</span>
-          </button>
-          <button type="button" className="ec-source-btn" onClick={restoreDefault} title="恢复 EchoAgent 默认目录">
-            <RestoreIcon size="sm" /><span>恢复默认</span>
-          </button>
+          <span className="ec-source-label" title={root}>EchoAgent 全局专家市场</span>
           <button type="button" className="ec-source-btn" onClick={() => root && loadCatalog(root)}
             disabled={loading} title="重新加载">
-            <RefreshCwIcon size="sm" />
+            <RefreshCwIcon size="sm" /><span>刷新</span>
           </button>
         </div>
 
@@ -351,7 +287,7 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
         {error && (
           <div className="ec-error">
             加载失败：{error}
-            <button type="button" className="ec-source-btn" onClick={chooseDir}>选择目录</button>
+            <button type="button" className="ec-source-btn" onClick={() => root && loadCatalog(root)}>重试</button>
           </div>
         )}
 

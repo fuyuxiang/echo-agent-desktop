@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
-  SearchIcon, AddCircleIcon, FolderOpenIcon, RefreshCwIcon, McpIcon, RestoreIcon,
+  SearchIcon, AddCircleIcon, RefreshCwIcon, McpIcon,
 } from "@/foundation/components/Icon/icons";
 import {
   connectorsDefaultRoot, connectorsLoad, connectorsReadMcpConfig,
@@ -20,12 +19,6 @@ import { ConnectorTokenForm } from "./ConnectorTokenForm";
 import { ConnectorAuthModal } from "./ConnectorAuthModal";
 import { ConnectorQrModal } from "./ConnectorQrModal";
 import { McpModal } from "./McpModal";
-import {
-  clearCatalogRoot,
-  isLegacyWorkBuddyPath,
-  readCatalogRoot,
-  writeCatalogRoot,
-} from "@/lib/catalog-root-storage";
 
 interface Props {
   pills: React.ReactNode;
@@ -67,11 +60,10 @@ function nameMatches(name: string, c: ConnectorItem): boolean {
  *  EchoAgent connectors marketplace. Cards open a detail modal; connect goes
  *  through per-kind auth flows (token form / EchoAgent browser OAuth / CLI QR). */
 export function ConnectorsTab({ pills, onToast }: Props) {
-  const [root, setRoot] = useState<string>(() => readCatalogRoot("connectors"));
+  const [root, setRoot] = useState("");
   const [catalog, setCatalog] = useState<ConnectorCatalog | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [needPick, setNeedPick] = useState(false);
 
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState<string | null>(null);
@@ -98,23 +90,12 @@ export function ConnectorsTab({ pills, onToast }: Props) {
    *  success toast when the dangling promise eventually resolves). */
   const oauthDismissedRef = useRef(false);
 
-  const loadCatalog = useCallback(async (
-    r: string,
-    persistOverride = false,
-  ): Promise<boolean> => {
-    if (isLegacyWorkBuddyPath(r)) {
-      clearCatalogRoot("connectors");
-      setRoot("");
-      setCatalog(null);
-      setError("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
-      return false;
-    }
-    setLoading(true); setError(""); setNeedPick(false);
+  const loadCatalog = useCallback(async (r: string): Promise<boolean> => {
+    setLoading(true); setError("");
     try {
       const c = await connectorsLoad(r);
       setCatalog(c);
       setRoot(c.root || r);
-      if (persistOverride) writeCatalogRoot("connectors", c.root || r);
       return true;
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/, ""));
@@ -125,27 +106,20 @@ export function ConnectorsTab({ pills, onToast }: Props) {
     }
   }, []);
 
-  // Resolve the data root on first mount.
+  // Connector marketplace data is optional. Only the canonical EchoAgent
+  // global root is considered; configured MCP services always come from the
+  // runtime's global mcp.json and never require a directory picker.
   useEffect(() => {
     let disposed = false;
     (async () => {
-      if (root) {
-        const loaded = await loadCatalog(root);
-        if (disposed || loaded) return;
-        clearCatalogRoot("connectors");
-        setRoot("");
-      }
       try {
         const d = await connectorsDefaultRoot();
         if (disposed) return;
-        if (d && !isLegacyWorkBuddyPath(d)) {
-          const loaded = await loadCatalog(d);
-          if (!disposed && !loaded) setNeedPick(true);
-        } else {
-          setNeedPick(true);
-        }
+        if (d) await loadCatalog(d);
       } catch {
-        if (!disposed) setNeedPick(true);
+        // Global MCP management remains available without marketplace data.
+      } finally {
+        if (!disposed) setLoading(false);
       }
     })();
     return () => { disposed = true; };
@@ -223,35 +197,6 @@ export function ConnectorsTab({ pills, onToast }: Props) {
     }).then((u) => { unLog = u; });
     return () => { unUrl?.(); unLog?.(); };
   }, []);
-
-  const chooseDir = useCallback(async () => {
-    try {
-      const sel = await openDialog({
-        directory: true, multiple: false, title: "选择连接器数据目录",
-        defaultPath: root || undefined,
-      });
-      const pick = Array.isArray(sel) ? sel[0] : sel;
-      if (!pick) return;
-      if (isLegacyWorkBuddyPath(pick)) {
-        onToast?.("不能使用 WorkBuddy 数据目录，请选择 EchoAgent 数据目录");
-        return;
-      }
-      if (await loadCatalog(pick, true)) onToast?.(`已切换连接器数据目录：${pick}`);
-    } catch { /* cancelled */ }
-  }, [root, loadCatalog, onToast]);
-
-  const restoreDefault = useCallback(async () => {
-    clearCatalogRoot("connectors");
-    setRoot(""); setCatalog(null); setError("");
-    try {
-      const d = await connectorsDefaultRoot();
-      if (d && !isLegacyWorkBuddyPath(d) && await loadCatalog(d)) {
-        onToast?.("已恢复 EchoAgent 默认连接器目录");
-        return;
-      }
-    } catch { /* handled by the empty state */ }
-    setNeedPick(true);
-  }, [loadCatalog, onToast]);
 
   const openEditor = () => { setMcpEditing(true); setMcpOpen(true); };
   const openMcpList = () => { setMcpEditing(false); setMcpOpen(true); };
@@ -507,21 +452,36 @@ export function ConnectorsTab({ pills, onToast }: Props) {
     });
   }, [catalog, cat, search]);
 
-  // ---- no data dir yet ----
-  if (needPick && !catalog) {
+  if (!catalog) {
     return (
       <div className="um-page">
-        <header className="um-topbar"><div className="um-topbar-left">{pills}</div></header>
-        <div className="um-scroll">
-          <div className="ec-empty">
-            <FolderOpenIcon size="xl" className="ec-empty-icon" />
-            <p>未找到连接器数据目录</p>
-            <p className="ec-empty-hint">请选择包含 <code>.echo-agent-connector/connectors.json</code> 的连接器市场目录</p>
-            <button type="button" className="um-btn um-btn--primary" onClick={chooseDir}>
-              <FolderOpenIcon size="sm" /><span>选择来源目录</span>
+        <header className="um-topbar">
+          <div className="um-topbar-left">{pills}</div>
+          <div className="um-topbar-right">
+            <button type="button" className="um-btn um-btn--grey" onClick={openMcpList}>
+              <McpIcon size="sm" /><span>管理连接器</span>
+            </button>
+            <button type="button" className="um-btn um-btn--grey" onClick={openEditor}>
+              <AddCircleIcon size="sm" /><span>添加连接器</span>
             </button>
           </div>
+        </header>
+        <div className="um-scroll">
+          {loading ? <div className="ec-loading">加载全局连接器配置…</div> : (
+            <div className="ec-empty">
+              <McpIcon size="xl" className="ec-empty-icon" />
+              <p>使用 EchoAgent 用户全局连接器</p>
+              <p className="ec-empty-hint">连接器统一读取 ~/.echo-agent/mcp.json，无需选择来源目录</p>
+              {error && <p className="ec-empty-hint">可选连接器市场加载失败：{error}</p>}
+              <button type="button" className="um-btn um-btn--primary" onClick={openMcpList}>
+                <McpIcon size="sm" /><span>查看全局连接器</span>
+              </button>
+            </div>
+          )}
         </div>
+        {mcpOpen && (
+          <McpModal onClose={() => setMcpOpen(false)} onToast={onToast} initialEditing={mcpEditing} />
+        )}
       </div>
     );
   }
@@ -544,16 +504,13 @@ export function ConnectorsTab({ pills, onToast }: Props) {
 
       <div className="um-scroll">
         <div className="ec-source-bar">
-          <span className="ec-source-label" title={root}>来源：{root || "—"}</span>
-          <button type="button" className="ec-source-btn" onClick={chooseDir} title="切换来源目录">
-            <FolderOpenIcon size="sm" /><span>选择目录</span>
-          </button>
-          <button type="button" className="ec-source-btn" onClick={restoreDefault} title="恢复 EchoAgent 默认目录">
-            <RestoreIcon size="sm" /><span>恢复默认</span>
-          </button>
+          <span className="ec-source-label" title={root}>EchoAgent 全局连接器市场</span>
           <button type="button" className="ec-source-btn" onClick={() => root && loadCatalog(root)}
             disabled={loading} title="重新加载">
-            <RefreshCwIcon size="sm" />
+            <RefreshCwIcon size="sm" /><span>刷新</span>
+          </button>
+          <button type="button" className="ec-source-btn" onClick={openMcpList}>
+            <McpIcon size="sm" /><span>管理已配置连接器</span>
           </button>
         </div>
 
@@ -561,7 +518,7 @@ export function ConnectorsTab({ pills, onToast }: Props) {
         {error && (
           <div className="ec-error">
             加载失败：{error}
-            <button type="button" className="ec-source-btn" onClick={chooseDir}>选择目录</button>
+            <button type="button" className="ec-source-btn" onClick={() => root && loadCatalog(root)}>重试</button>
           </div>
         )}
 
