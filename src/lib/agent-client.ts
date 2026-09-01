@@ -911,6 +911,17 @@ export async function taskKill(taskId: string): Promise<void> {
   await invoke<void>("task_kill", { taskId });
 }
 
+export interface RuntimeTeamInfo {
+  teamId: string;
+  members: string[];
+  createdAt: number;
+}
+
+/** Authoritative teams persisted by the embedded team MCP runtime. */
+export async function teamSnapshot(): Promise<RuntimeTeamInfo[]> {
+  return invoke<RuntimeTeamInfo[]>("team_snapshot");
+}
+
 // ---------- folder trust ----------
 
 /** Respond to a folder-trust request from the embedded runtime. */

@@ -57,7 +57,17 @@ import type { AgentEntry, SessionSummary } from "./lib/types";
 import { hydrateProjectsFromBackend, useProjectsStore, type ProjectMeta } from "./stores/projects-store";
 import { useMessageQueueStore, hasActiveItems } from "./stores/message-queue-store";
 import { useSubagentStore } from "./stores/subagent-store";
-import { recordCumulativeUsage, recordUsage, loadUsage, loadQuotaConfig } from "./lib/usage-quota";
+import {
+  checkQuota,
+  consumeQuotaAlert,
+  isQuotaBlocking,
+  recordCumulativeUsage,
+  recordUsage,
+  loadUsage,
+  loadQuotaConfig,
+  type QuotaConfig,
+  type UsageRecord,
+} from "./lib/usage-quota";
 import {
   registerTelemetryProvider,
   createConsoleTelemetryProvider,
@@ -74,11 +84,28 @@ import { migrateCatalogRootStorage } from "./lib/catalog-root-storage";
 import { parseRememberArguments, type SlashCommandInvocation } from "./lib/slash-commands";
 import { useUpdateStore } from "./stores/update-store";
 import { useOrgSessionStore } from "./stores/org-session-store";
+import { indexTaskArtifacts } from "./lib/artifact-catalog";
 
 /** Hidden markers wrapping the expert persona in the text sent to the runtime.
  *  The UI strips these (and everything between them) from user messages. */
 export const EXPERT_PERSONA_BEGIN = "<!--EXPERT_PERSONA_BEGIN-->";
 export const EXPERT_PERSONA_END = "<!--EXPERT_PERSONA_END-->";
+
+function publishQuotaAlert(
+  records: UsageRecord[],
+  config: QuotaConfig | null,
+  sessionId: string,
+): void {
+  const level = consumeQuotaAlert(records, config);
+  if (!level || !config) return;
+  const quota = checkQuota(records, config);
+  const periodLabel = config.period === "daily" ? "今日" : "本月";
+  const title = level === "exceeded" ? "Token 配额已达上限" : "Token 配额接近上限";
+  const body = `${periodLabel}已用 ${quota.used.toLocaleString()} / ${quota.limit.toLocaleString()} Token`
+    + (config.enforcement === "block" && level === "exceeded" ? "，已暂停桌面端手动发送" : "");
+  void notificationAppend("quota", title, body, sessionId, level === "exceeded" ? "error" : "warn")
+    .catch(() => {});
+}
 
 /**
  * Derive a short sidebar title from the user's first message.
@@ -356,6 +383,10 @@ function Shell() {
                 sessionId: p.sessionId,
                 status: abnormal ? "failed" : "completed",
               });
+              const transcript = sessionStore.getState().transcripts[p.sessionId];
+              if (transcript) {
+                indexTaskArtifacts(p.sessionId, summary.title, summary.cwd, transcript.messages);
+              }
 
               // PromptComplete currently contains no usage in the Rust bridge.
               // Query EchoAgent's real cumulative counters and persist only the
@@ -363,20 +394,24 @@ function Shell() {
               // retain it as a compatibility fallback.
               const modelId = summary.currentModelId ?? "unknown";
               void agentSessionUsage(p.sessionId).then((usage) => {
-                recordCumulativeUsage(loadUsage(), {
+                const config = loadQuotaConfig();
+                const next = recordCumulativeUsage(loadUsage(), {
                   sessionId: p.sessionId,
                   modelId,
                   inputTokens: usage.inputTokens ?? 0,
                   outputTokens: usage.outputTokens ?? 0,
-                }, loadQuotaConfig() ?? undefined);
+                }, config ?? undefined);
+                publishQuotaAlert(next, config, p.sessionId);
               }).catch(() => {
                 if (p.usage && (p.usage.promptTokens || p.usage.completionTokens)) {
-                  recordUsage(loadUsage(), {
+                  const config = loadQuotaConfig();
+                  const next = recordUsage(loadUsage(), {
                     sessionId: p.sessionId,
                     modelId,
                     promptTokens: p.usage.promptTokens ?? 0,
                     completionTokens: p.usage.completionTokens ?? 0,
-                  }, loadQuotaConfig() ?? undefined);
+                  }, config ?? undefined);
+                  publishQuotaAlert(next, config, p.sessionId);
                 }
               });
             }
@@ -629,10 +664,16 @@ function Shell() {
     openSettings("model");
     return undefined;
   };
+  const handleNavigate = (label: string) => {
+    setPlaceholderView(label);
+    sessionsStore.getState().setCurrent(null);
+    sessionStore.getState().reset();
+    setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
+  };
   const handlePlaceholder = (label: string) => {
     // Route a few sidebar shortcut buttons to real panels instead of toasts.
     if (label === "用户中心") {
-      openSettings("model");
+      handleNavigate("组织");
       return;
     }
     if (label === "通知") {
@@ -643,12 +684,6 @@ function Shell() {
     }
     showToast(`${label} 即将上线`);
   };
-  const handleNavigate = (label: string) => {
-    setPlaceholderView(label);
-    sessionsStore.getState().setCurrent(null);
-    sessionStore.getState().reset();
-    setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
-  };
 
   // Sidebar project node click → open the Projects panel with that project selected.
   const handleOpenProjectFromSidebar = (projectId: string) => {
@@ -656,9 +691,18 @@ function Shell() {
     handleNavigate("项目");
   };
 
+  const ensureQuotaAllowsSend = (): boolean => {
+    const config = loadQuotaConfig();
+    if (!isQuotaBlocking(loadUsage(), config)) return true;
+    const quota = checkQuota(loadUsage(), config!);
+    showToast(`已达 ${quota.limit.toLocaleString()} Token 配额，请先在「用量统计」调整上限或策略`);
+    return false;
+  };
+
   const handleSendNew = async (text: string, attachments: string[] = []): Promise<boolean> => {
     const modelId = requireConfiguredModel();
     if (!modelId) return false;
+    if (!ensureQuotaAllowsSend()) return false;
     try {
       const cwd = cwdRef.current;
       const sessionId = await agentNewSession(cwd, modelId);
@@ -723,11 +767,24 @@ function Shell() {
       showToast("当前会话的模型未配置，请先在输入框右下角重新选择模型");
       return false;
     }
+    if (!ensureQuotaAllowsSend()) return false;
     try {
+      // A conversation created from the project node may intentionally be
+      // empty. Bind the project contract to its first real user turn so the
+      // session does not silently behave like an ordinary workspace chat.
+      const project = useProjectsStore.getState().projects.find((item) =>
+        item.conversations.some((conversation) => conversation.sessionId === currentSessionId),
+      );
+      const isFirstUserTurn = !sessionStore.getState().messages.some(
+        (message) => message.role === "user",
+      );
+      const textForAgent = project && isFirstUserTurn
+        ? buildProjectPrompt(project, text)
+        : text;
       sessionsStore.getState().upsert({ sessionId: currentSessionId, status: "working" });
       sessionStore.getState().pushUser(text);
       sessionStore.getState().startStreaming();
-      await agentSend(currentSessionId, text, attachments);
+      await agentSend(currentSessionId, textForAgent, attachments);
       return true;
     } catch (e) {
       sessionStore.getState().rollbackPendingTurn();
@@ -941,6 +998,15 @@ function Shell() {
       // Load with the session's OWN cwd (independent sessions have cwd="").
       // Viewing a 空间 child must NOT re-aim the new-session target directory.
       await agentLoadSession(sessionId, sessionCwd ?? "");
+      const transcript = sessionStore.getState().transcripts[sessionId];
+      if (transcript) {
+        indexTaskArtifacts(
+          sessionId,
+          entry?.title ?? "未命名任务",
+          entry?.cwd ?? sessionCwd ?? "",
+          transcript.messages,
+        );
+      }
       if (!selectedModelId) {
         sessionStore.getState().setError(
           persistedModelId
@@ -1225,11 +1291,13 @@ function Shell() {
         sessionStore.getState().startStreaming();
         await agentSend(sessionId, prompt);
       }
+      return sessionId;
     } catch (e) {
       sessionStore.getState().setError(friendlyError(e));
       const sid = sessionStore.getState().sessionId;
       if (sid) sessionsStore.getState().upsert({ sessionId: sid, status: "failed" });
       showToast(`创建项目对话失败：${String(e).replace(/^Error:\s*/, "")}`);
+      return undefined;
     }
   };
 
@@ -1361,6 +1429,7 @@ function Shell() {
             />
           ) : currentSessionId ? (
             <ChatView
+              title={currentTitle}
               onSend={handleSendCurrent}
               onCancel={handleCancel}
               apiReady={chatReady}

@@ -29,13 +29,14 @@ interface ProjectsPanelProps {
   onToast?: (msg: string) => void;
   onStartProject?: (project: ProjectMeta) => void;
   /** Start a new conversation within a project (creates a real EchoAgent session). */
-  onStartProjectConversation?: (projectId: string, message: string) => void;
+  onStartProjectConversation?: (projectId: string, message: string) => Promise<string | undefined>;
+  onOpenSession?: (sessionId: string, cwd?: string) => void;
   onOpenAutomation?: () => void;
 }
 
 const FROM_TEMPLATES = TEMPLATE_OPTIONS.filter((t) => t.id !== "custom");
 
-export function ProjectsPanel({ cwd, onToast, onStartProjectConversation, onOpenAutomation }: ProjectsPanelProps) {
+export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConversation, onOpenSession, onOpenAutomation }: ProjectsPanelProps) {
   const projects = useProjectsStore((s) => s.projects);
   const persisting = useProjectsStore((s) => s.persisting);
   const persistError = useProjectsStore((s) => s.persistError);
@@ -69,6 +70,7 @@ export function ProjectsPanel({ cwd, onToast, onStartProjectConversation, onOpen
         onBack={() => setOpenId(null)}
         onToast={onToast}
         onStartConversation={onStartProjectConversation}
+        onOpenSession={onOpenSession}
         picker={picker}
         onOpenAutomation={onOpenAutomation}
       />
@@ -144,6 +146,7 @@ export function ProjectsPanel({ cwd, onToast, onStartProjectConversation, onOpen
                 key={p.id}
                 project={p}
                 onEnter={() => setOpenId(p.id)}
+                onStart={() => onStartProject?.(p)}
                 onRename={() => handleRename(p)}
                 onDelete={() => void handleDelete(p)}
               />
@@ -197,10 +200,11 @@ export function ProjectsPanel({ cwd, onToast, onStartProjectConversation, onOpen
 // ============================================================
 
 function ProjectCard({
-  project, onEnter, onRename, onDelete,
+  project, onEnter, onStart, onRename, onDelete,
 }: {
   project: ProjectMeta;
   onEnter: () => void;
+  onStart: () => void;
   onRename: () => void;
   onDelete: () => void;
 }) {
@@ -236,6 +240,7 @@ function ProjectCard({
         {menuOpen && (
           <div className="project-card2__menu" onClick={(e) => e.stopPropagation()}>
             <button className="project-card2__menu-item" onClick={() => { setMenuOpen(false); onEnter(); }}>进入项目</button>
+            <button className="project-card2__menu-item" onClick={() => { setMenuOpen(false); onStart(); }}>开始项目对话</button>
             <button className="project-card2__menu-item" onClick={() => { setMenuOpen(false); onRename(); }}>重命名</button>
             <div className="project-card2__menu-sep" />
             <button className="project-card2__menu-item project-card2__menu-item--danger" onClick={() => { setMenuOpen(false); onDelete(); }}>删除</button>

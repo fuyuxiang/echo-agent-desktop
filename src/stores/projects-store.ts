@@ -26,6 +26,8 @@ export interface PlanCard {
   title: string;
   status: PlanStatus;
   source?: string;
+  /** Agent conversation created to execute this plan item. */
+  sessionId?: string;
 }
 
 export interface TaskItem {
@@ -34,6 +36,8 @@ export interface TaskItem {
   scope: "personal" | "shared";
   source: string;
   status: PlanStatus;
+  /** Agent conversation created to execute this task. */
+  sessionId?: string;
 }
 
 export interface AssetItem {
@@ -96,8 +100,12 @@ function normalize(x: unknown): ProjectMeta | null {
     connectors: Array.isArray(o.connectors) ? o.connectors : [],
     experts: Array.isArray(o.experts) ? o.experts : [],
     skills: Array.isArray(o.skills) ? o.skills : [],
-    plans: Array.isArray(o.plans) ? o.plans : [],
-    tasks: Array.isArray(o.tasks) ? o.tasks : [],
+    plans: Array.isArray(o.plans)
+      ? o.plans.map((item) => ({ ...item, status: item.status ?? "pending" }))
+      : [],
+    tasks: Array.isArray(o.tasks)
+      ? o.tasks.map((item) => ({ ...item, status: item.status ?? "pending" }))
+      : [],
     assets: Array.isArray(o.assets) ? o.assets : [],
     members: Array.isArray(o.members) ? o.members : [],
     conversations: Array.isArray(o.conversations) ? o.conversations : [],
@@ -174,8 +182,11 @@ interface ProjectsState {
   ) => void;
   addPlan: (id: string, title: string, status?: PlanStatus) => void;
   movePlan: (id: string, cardId: string, status: PlanStatus) => void;
+  linkPlanSession: (id: string, cardId: string, sessionId: string) => void;
   removePlan: (id: string, cardId: string) => void;
   addTask: (id: string, title: string) => void;
+  moveTask: (id: string, taskId: string, status: PlanStatus) => void;
+  linkTaskSession: (id: string, taskId: string, sessionId: string) => void;
   removeTask: (id: string, taskId: string) => void;
   addAsset: (id: string, a: Pick<AssetItem, "name" | "kind"> & Partial<AssetItem>) => void;
   removeAsset: (id: string, assetId: string) => void;
@@ -234,6 +245,11 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         ...p,
         plans: p.plans.map((c) => (c.id === cardId ? { ...c, status } : c)),
       })),
+    linkPlanSession: (id, cardId, sessionId) =>
+      patch(id, (p) => ({
+        ...p,
+        plans: p.plans.map((card) => card.id === cardId ? { ...card, sessionId } : card),
+      })),
     removePlan: (id, cardId) =>
       patch(id, (p) => ({ ...p, plans: p.plans.filter((c) => c.id !== cardId) })),
     addTask: (id, title) =>
@@ -243,6 +259,16 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
           ...p.tasks,
           { id: uid("task"), title, scope: "personal", source: "manual", status: "pending" },
         ],
+      })),
+    moveTask: (id, taskId, status) =>
+      patch(id, (p) => ({
+        ...p,
+        tasks: p.tasks.map((task) => task.id === taskId ? { ...task, status } : task),
+      })),
+    linkTaskSession: (id, taskId, sessionId) =>
+      patch(id, (p) => ({
+        ...p,
+        tasks: p.tasks.map((task) => task.id === taskId ? { ...task, sessionId } : task),
       })),
     removeTask: (id, taskId) =>
       patch(id, (p) => ({ ...p, tasks: p.tasks.filter((t) => t.id !== taskId) })),
