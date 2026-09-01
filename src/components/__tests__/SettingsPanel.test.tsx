@@ -7,6 +7,7 @@ vi.mock("@/lib/agent-client", () => ({
   providersList: vi.fn().mockResolvedValue({ providers: [], models: [] }),
   agentAuthStatus: vi.fn().mockResolvedValue({ ready: false, providers: [] }),
   commandsList: vi.fn().mockResolvedValue([]),
+  exportTextFile: vi.fn().mockResolvedValue("/tmp/usage.csv"),
   echoAgentDataDir: vi.fn().mockResolvedValue("/tmp/.echo-agent"),
   mcpList: vi.fn().mockResolvedValue([]),
   notificationList: vi.fn().mockResolvedValue([]),
@@ -50,7 +51,8 @@ describe("SettingsPanel", () => {
       expect(screen.getByRole("heading", { name: group, level: 2 })).toBeInTheDocument();
     }
 
-    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(10);
+    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(11);
+    expect(screen.getByRole("button", { name: "Token 用量" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "模型" })).toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("heading", { name: "模型", level: 2 })).toBeInTheDocument();
     expect(screen.getByText("管理模型厂商、访问凭据和可用模型。每个厂商可以共享一套连接配置。"))

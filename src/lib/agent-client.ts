@@ -47,6 +47,7 @@ import type {
   SlashCommand,
   SubagentLiveEvent,
   TurnErrorEvent,
+  TurnUsageEvent,
 } from "./types";
 
 import type { QuestionRequest } from "@/stores/question-store";
@@ -1232,6 +1233,8 @@ export async function subscribeAgentEvents(handlers: {
   onUpdate?: (u: SessionUpdate & { __sessionId?: string }) => void;
   onPermission?: (p: PermissionRequest) => void;
   onComplete?: (p: PromptComplete) => void;
+  /** Exact, replayable per-prompt token/cost usage from TurnCompleted. */
+  onTurnUsage?: (p: TurnUsageEvent) => void;
   /** Fired when EchoAgent generates or renames a session title
    *  (`echo.agent/session_notification` → `SessionSummaryGenerated`). */
   onSummary?: (s: SessionSummaryEvent) => void;
@@ -1282,6 +1285,7 @@ export async function subscribeAgentEvents(handlers: {
   await wire<PermissionRequest>("agent://permission", handlers.onPermission);
   await wire<PromptComplete>("agent://complete", handlers.onComplete);
   await wire<SessionSummaryEvent>("agent://summary", handlers.onSummary);
+  await wire<TurnUsageEvent>("agent://turn-usage", handlers.onTurnUsage);
   await wire("agent://mcp-status", handlers.onMcpStatus);
   await wire("agent://folder-trust", handlers.onFolderTrust);
   await wire("agent://plan-mode", handlers.onPlanMode);
