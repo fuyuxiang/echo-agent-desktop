@@ -1,0 +1,13 @@
+{
+  "integrationMode": "vendored-source",
+  "upstreamRepository": "https://github.com/xai-org/grok-build.git",
+  "upstreamRevision": "c2ad97f87aea4303b6000a2c22128bc91ee76c9b",
+  "importedAt": "2026-09-01",
+  "license": "Apache-2.0",
+  "patches": [
+    "patches/grok-build/01-windows-protoc.patch",
+    "patches/grok-build/02-enterprise-skill-enforcement.patch",
+    "patches/grok-build/03-session-title-reasoning-sanitization.patch"
+  ],
+  "namespace": "echo.agent"
+}

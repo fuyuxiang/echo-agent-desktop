@@ -1,10 +1,9 @@
 //! EchoAgent 内嵌 MCP server —— 团队工具的非侵入式实现。
 //!
-//! 之前 `create_team` / `team_status` / `team_delete` 通过 EchoAgent 补丁
-//! (`patches/grok-build/02-team-tools-enabled-set.patch`) 注入 EchoAgent 的默认
-//! 启用集。本模块改为**标准 MCP streamable-http server**（仅监听
+//! `create_team` / `team_status` / `team_delete` 通过本模块提供的**标准 MCP
+//! streamable-http server** 实现（仅监听
 //! 127.0.0.1），EchoAgent 作为 MCP client 连接，工具以 `echoagent__create_team`
-//! 等名字出现 —— 对 EchoAgent 零侵入，升级上游运行时不再需要运行时补丁。
+//! 等名字出现，不需要修改内嵌 Runtime 的团队工具启用集。
 //!
 //! 注册路径（双保险）：
 //!  1. `agent_runtime::new_session` 时通过 ACP `mcp_servers` 参数传入 —— 会话立即可用
