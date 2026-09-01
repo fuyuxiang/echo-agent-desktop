@@ -40,7 +40,6 @@ import {
   agentRenameSession,
   agentSetModel,
   agentSetSessionExpert,
-  agentSessionUsage,
   agentAuthStatus,
   sessionFork,
   togglePlanMode,
@@ -61,8 +60,7 @@ import {
   checkQuota,
   consumeQuotaAlert,
   isQuotaBlocking,
-  recordCumulativeUsage,
-  recordUsage,
+  recordTurnUsage,
   loadUsage,
   loadQuotaConfig,
   type QuotaConfig,
@@ -388,32 +386,6 @@ function Shell() {
                 indexTaskArtifacts(p.sessionId, summary.title, summary.cwd, transcript.messages);
               }
 
-              // PromptComplete currently contains no usage in the Rust bridge.
-              // Query EchoAgent's real cumulative counters and persist only the
-              // per-session delta. If a future bridge supplies per-turn usage,
-              // retain it as a compatibility fallback.
-              const modelId = summary.currentModelId ?? "unknown";
-              void agentSessionUsage(p.sessionId).then((usage) => {
-                const config = loadQuotaConfig();
-                const next = recordCumulativeUsage(loadUsage(), {
-                  sessionId: p.sessionId,
-                  modelId,
-                  inputTokens: usage.inputTokens ?? 0,
-                  outputTokens: usage.outputTokens ?? 0,
-                }, config ?? undefined);
-                publishQuotaAlert(next, config, p.sessionId);
-              }).catch(() => {
-                if (p.usage && (p.usage.promptTokens || p.usage.completionTokens)) {
-                  const config = loadQuotaConfig();
-                  const next = recordUsage(loadUsage(), {
-                    sessionId: p.sessionId,
-                    modelId,
-                    promptTokens: p.usage.promptTokens ?? 0,
-                    completionTokens: p.usage.completionTokens ?? 0,
-                  }, config ?? undefined);
-                  publishQuotaAlert(next, config, p.sessionId);
-                }
-              });
             }
 
             // Unknown side-channel sessions and failed turns must never start a
@@ -452,6 +424,19 @@ function Shell() {
                 });
               }
             }
+          },
+          onTurnUsage: (payload) => {
+            const config = loadQuotaConfig();
+            const fallbackModelId = findSessionSummary(payload.sessionId)?.currentModelId;
+            const next = recordTurnUsage(loadUsage(), {
+              sessionId: payload.sessionId,
+              promptId: payload.promptId,
+              usage: payload.usage,
+              occurredAt: payload.occurredAt,
+              eventId: payload.eventId,
+              fallbackModelId,
+            }, config ?? undefined);
+            publishQuotaAlert(next, config, payload.sessionId);
           },
           onSummary: ({ sessionId, title }) => {
             // EchoAgent generated (or we renamed) a session title — update the
@@ -665,6 +650,10 @@ function Shell() {
     return undefined;
   };
   const handleNavigate = (label: string) => {
+    if (label === "用量统计") {
+      openSettings("usage");
+      return;
+    }
     setPlaceholderView(label);
     sessionsStore.getState().setCurrent(null);
     sessionStore.getState().reset();
@@ -1088,12 +1077,13 @@ function Shell() {
           help: "help",
           shortcuts: "shortcuts",
           data: "data",
+          usage: "usage",
           general: "general",
           notifications: "agent-mail",
         };
         const section = aliases[args.toLowerCase()];
         if (!section) {
-          showToast("用法：/settings model|agent|memory|security|help");
+          showToast("用法：/settings model|agent|memory|usage|security|help");
           return false;
         }
         openSettings(section);
@@ -1215,6 +1205,7 @@ function Shell() {
   const handleStartProject = async (project: ProjectMeta) => {
     const modelId = requireConfiguredModel();
     if (!modelId) return;
+    if (!ensureQuotaAllowsSend()) return;
     try {
       if (project.cwd) {
         cwdRef.current = project.cwd;
@@ -1257,6 +1248,7 @@ function Shell() {
     if (!project) return;
     const modelId = requireConfiguredModel();
     if (!modelId) return;
+    if (message && !ensureQuotaAllowsSend()) return;
     try {
       const cwd = project.cwd || cwdRef.current;
       const sessionId = await agentNewSession(cwd, modelId);

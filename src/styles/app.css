@@ -12281,40 +12281,61 @@ button.diff__path {
   white-space: nowrap;
 }
 
-/* 用量配额面板 */
-.quota-panel{border:1px solid var(--echo-border-default);border-radius:10px;background:var(--echo-bg-primary);overflow:hidden;font-size:13px}
-.quota-panel__head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--echo-border-default);background:var(--echo-bg-tertiary)}
-.quota-panel__title{font-weight:600;color:var(--echo-text-strong)}
-.quota-panel__period{display:inline-flex;gap:2px}
-.quota-panel__period-btn{padding:2px 12px;border:1px solid var(--echo-border-default);background:var(--echo-bg-primary);color:var(--echo-text-medium);border-radius:6px;font-size:11px;cursor:pointer}
-.quota-panel__period-btn.active{background:var(--echo-brand);color:#fff;border-color:var(--echo-brand)}
-.quota-panel__stats{display:flex;gap:16px;padding:12px 14px}
-.quota-panel__stat{display:flex;flex-direction:column}
-.quota-panel__stat-value{font-size:18px;font-weight:700;color:var(--echo-text-strong);font-variant-numeric:tabular-nums}
-.quota-panel__stat-label{font-size:11px;color:var(--echo-text-light)}
-.quota-panel__quota{padding:8px 14px}
-.quota-panel__quota-head{display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px}
+/* Token 用量与配额 */
+.quota-panel{border:1px solid var(--echo-border-default);border-radius:10px;background:var(--echo-bg-primary);overflow:hidden;font-size:13px;color:var(--echo-text-medium)}
+.quota-panel__head{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 20px;border-bottom:1px solid var(--echo-border-default);background:var(--echo-bg-tertiary)}
+.quota-panel__title{margin:0;font-size:19px;font-weight:700;color:var(--echo-text-strong)}
+.quota-panel__subtitle{margin:4px 0 0;max-width:620px;font-size:12px;line-height:1.5;color:var(--echo-text-light)}
+.quota-panel__actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.quota-panel__action,.quota-panel__save-rates{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:30px;padding:5px 10px;border:1px solid var(--echo-border-default);border-radius:7px;background:var(--echo-bg-primary);color:var(--echo-text-medium);font-size:12px;cursor:pointer}
+.quota-panel__action:hover,.quota-panel__save-rates:hover{border-color:var(--echo-brand);color:var(--echo-brand)}
+.quota-panel__action:disabled{opacity:.45;cursor:not-allowed}
+.quota-panel__action--danger:hover{border-color:#dc2626;color:#dc2626}
+.quota-panel__toolbar{display:flex;align-items:center;justify-content:space-between;padding:12px 20px 0}
+.quota-panel__period{display:inline-flex;gap:3px;padding:3px;border-radius:8px;background:var(--echo-bg-tertiary)}
+.quota-panel__period-btn{padding:4px 14px;border:0;background:transparent;color:var(--echo-text-medium);border-radius:6px;font-size:12px;cursor:pointer}
+.quota-panel__period-btn.active{background:var(--echo-bg-primary);color:var(--echo-text-strong);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.quota-panel__scope{font-size:11px;color:var(--echo-text-light)}
+.quota-panel__stats{display:grid;grid-template-columns:repeat(7,minmax(105px,1fr));gap:8px;padding:12px 20px 18px;overflow-x:auto}
+.quota-panel__stat{display:flex;flex-direction:column;gap:4px;min-width:0;padding:12px;border:1px solid var(--echo-border-default);border-radius:8px;background:var(--echo-bg-tertiary)}
+.quota-panel__stat strong{overflow:hidden;text-overflow:ellipsis;font-size:18px;color:var(--echo-text-strong);font-variant-numeric:tabular-nums}
+.quota-panel__stat span{font-size:11px;color:var(--echo-text-light)}
+.quota-panel__notice{display:flex;align-items:flex-start;gap:7px;margin:0 20px 12px;padding:9px 11px;border:1px solid var(--echo-border-default);border-radius:7px;background:var(--echo-bg-tertiary);font-size:12px;line-height:1.5}
+.quota-panel__notice--warn{border-color:rgba(217,119,6,.35);background:rgba(217,119,6,.08);color:#b45309}
+.quota-panel__quota{padding:14px 20px;border-top:1px solid var(--echo-border-default)}
+.quota-panel__quota-head{display:flex;justify-content:space-between;font-size:12px;margin-bottom:7px}
 .quota-panel__quota-pct{font-variant-numeric:tabular-nums;color:var(--echo-text-medium)}
-.quota-panel__quota-pct.near{color:#d97706}
-.quota-panel__quota-pct.exceeded{color:#dc2626}
-.quota-panel__quota-bar{height:6px;background:var(--echo-bg-tertiary);border-radius:3px;overflow:hidden}
-.quota-panel__quota-fill{height:100%;background:#16a34a;transition:width .3s}
-.quota-panel__quota-fill.near{background:#d97706}
-.quota-panel__quota-fill.exceeded{background:#dc2626}
-.quota-panel__quota-warn{font-size:11px;color:#dc2626;display:block;margin-top:2px}
-.quota-panel__models{padding:8px 14px;border-top:1px solid var(--echo-border-default)}
-.quota-panel__models-title{font-size:11px;font-weight:600;color:var(--echo-text-light);margin-bottom:4px}
-.quota-panel__model-row{display:flex;gap:10px;align-items:center;padding:2px 0;font-size:12px}
-.quota-panel__model-name{flex:1;color:var(--echo-text-strong)}
-.quota-panel__model-tokens{font-variant-numeric:tabular-nums;color:var(--echo-text-medium)}
-.quota-panel__model-count{font-size:11px;color:var(--echo-text-light)}
-.quota-panel__model-cost{font-size:11px;color:var(--echo-text-light)}
-.quota-panel__config{padding:8px 14px;border-top:1px solid var(--echo-border-default)}
-.quota-panel__config-title{font-size:11px;font-weight:600;color:var(--echo-text-light);margin-bottom:4px}
-.quota-panel__config-row{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px}
-.quota-panel__config-row span{min-width:70px;color:var(--echo-text-medium)}
-.quota-panel__config-row select,.quota-panel__config-row input{padding:4px 8px;border:1px solid var(--echo-border-default);border-radius:6px;font-size:12px;background:var(--echo-bg-primary);color:var(--echo-text-strong)}
-.quota-panel__config-note{margin-top:7px;color:var(--echo-text-light);font-size:11px;line-height:1.55}
+.quota-panel__quota-pct.near{color:#d97706}.quota-panel__quota-pct.exceeded{color:#dc2626}
+.quota-panel__quota-bar{height:7px;background:var(--echo-bg-tertiary);border-radius:4px;overflow:hidden}
+.quota-panel__quota-fill{height:100%;background:#16a34a;transition:width .3s}.quota-panel__quota-fill.near{background:#d97706}.quota-panel__quota-fill.exceeded{background:#dc2626}
+.quota-panel__quota-warn{font-size:11px;color:#dc2626;display:block;margin-top:5px}
+.quota-panel__section{padding:16px 20px;border-top:1px solid var(--echo-border-default)}
+.quota-panel__section h3{display:flex;align-items:baseline;justify-content:space-between;margin:0 0 11px;font-size:13px;color:var(--echo-text-strong)}
+.quota-panel__section h3 span{font-size:11px;font-weight:400;color:var(--echo-text-light)}
+.quota-panel__trend{display:grid;grid-template-columns:repeat(14,minmax(32px,1fr));gap:5px;min-height:150px;overflow-x:auto}
+.quota-panel__trend-item{display:grid;grid-template-rows:20px 95px 18px;gap:4px;min-width:32px;text-align:center}
+.quota-panel__trend-value{overflow:hidden;font-size:9px;color:var(--echo-text-light);font-variant-numeric:tabular-nums}
+.quota-panel__trend-track{position:relative;display:flex;align-items:flex-end;justify-content:center;border-radius:5px;background:var(--echo-bg-tertiary);overflow:hidden}
+.quota-panel__trend-track>span{display:block;width:65%;min-height:0;border-radius:4px 4px 0 0;background:var(--echo-brand);transition:height .25s}
+.quota-panel__trend-label{font-size:9px;color:var(--echo-text-light);white-space:nowrap}
+.quota-panel__model-table,.quota-panel__records,.quota-panel__rate-table{overflow-x:auto;border:1px solid var(--echo-border-default);border-radius:8px}
+.quota-panel__model-row{display:grid;grid-template-columns:minmax(160px,2fr) repeat(5,minmax(80px,1fr));gap:10px;align-items:center;padding:8px 10px;border-top:1px solid var(--echo-border-default);font-size:12px;font-variant-numeric:tabular-nums}
+.quota-panel__model-row:first-child{border-top:0}.quota-panel__model-row--head{background:var(--echo-bg-tertiary);color:var(--echo-text-light);font-size:11px}
+.quota-panel__model-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--echo-text-strong);font-weight:500}
+.quota-panel__config-grid{display:grid;grid-template-columns:repeat(3,minmax(150px,1fr));gap:10px}
+.quota-panel__config-row{display:flex;flex-direction:column;align-items:stretch;gap:5px;font-size:12px}.quota-panel__config-row span{color:var(--echo-text-medium)}
+.quota-panel__config-row select,.quota-panel__config-row input,.quota-panel__rate-row input{height:32px;padding:4px 8px;border:1px solid var(--echo-border-default);border-radius:6px;font-size:12px;background:var(--echo-bg-primary);color:var(--echo-text-strong);box-sizing:border-box}
+.quota-panel__config-note,.quota-panel__rates>p{margin:9px 0 0;color:var(--echo-text-light);font-size:11px;line-height:1.55}
+.quota-panel__rates>p{margin:-4px 0 10px}
+.quota-panel__rate-row{display:grid;grid-template-columns:minmax(180px,2fr) minmax(110px,1fr) minmax(110px,1fr);gap:10px;align-items:center;padding:7px 10px;border-top:1px solid var(--echo-border-default)}
+.quota-panel__rate-row:first-child{border-top:0}.quota-panel__rate-row--head{background:var(--echo-bg-tertiary);font-size:11px;color:var(--echo-text-light)}
+.quota-panel__rate-row>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--echo-text-strong)}
+.quota-panel__save-rates{margin-top:10px}
+.quota-panel__record{display:grid;grid-template-columns:minmax(145px,1.3fr) minmax(150px,1.5fr) minmax(110px,1fr) 60px 80px 80px;gap:10px;align-items:center;padding:8px 10px;border-top:1px solid var(--echo-border-default);font-size:11px;font-variant-numeric:tabular-nums}
+.quota-panel__record:first-child{border-top:0}.quota-panel__record--head{background:var(--echo-bg-tertiary);color:var(--echo-text-light)}
+.quota-panel__record>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.quota-panel__record:not(.quota-panel__record--head)>span:nth-child(2){color:var(--echo-text-strong)}
+.quota-panel__empty{padding:18px;text-align:center;color:var(--echo-text-light);font-size:12px}
+@media(max-width:900px){.quota-panel__head{align-items:flex-start;flex-direction:column}.quota-panel__actions{justify-content:flex-start}.quota-panel__stats{grid-template-columns:repeat(2,minmax(120px,1fr))}.quota-panel__config-grid{grid-template-columns:1fr}.quota-panel__trend{grid-template-columns:repeat(14,42px)}}
 
 /* 通知渠道面板 */
 .notify-panel{border:1px solid var(--echo-border-default);border-radius:10px;background:var(--echo-bg-primary);overflow:hidden;font-size:13px}

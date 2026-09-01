@@ -202,8 +202,38 @@ export interface SessionUsage {
   outputTokens: number;
   totalTokens: number;
   cachedReadTokens: number;
+  cacheCreationTokens?: number;
+  reasoningTokens?: number;
+  modelCalls?: number;
+  apiDurationMs?: number;
+  costUsdTicks?: number;
+  costIsPartial?: boolean;
+  modelUsage?: Record<string, SessionUsageModel>;
   numTurns?: number;
   usageIsIncomplete?: boolean;
+}
+
+/** Per-model row nested under PromptUsage.modelUsage. */
+export interface SessionUsageModel {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedReadTokens: number;
+  cacheCreationTokens?: number;
+  reasoningTokens?: number;
+  modelCalls?: number;
+  apiDurationMs?: number;
+  costUsdTicks?: number;
+  costIsPartial?: boolean;
+}
+
+/** Exact per-prompt usage forwarded from the durable TurnCompleted update. */
+export interface TurnUsageEvent {
+  sessionId: string;
+  promptId: string;
+  usage: SessionUsage;
+  occurredAt?: number;
+  eventId?: string;
 }
 
 export type SessionUpdate =
