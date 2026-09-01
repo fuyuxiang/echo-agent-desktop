@@ -93,6 +93,44 @@ export function buildMailtoUrl(
   return `mailto:?subject=${enc(subject)}&body=${enc(body)}`;
 }
 
+/** Copy text with a DOM fallback for desktop webviews without Clipboard API. */
+export async function copyShareText(
+  text: string,
+  deps: {
+    clipboard?: Pick<Clipboard, "writeText"> | null;
+    document?: Document | null;
+  } = {},
+): Promise<boolean> {
+  const clipboard = "clipboard" in deps ? deps.clipboard : globalThis.navigator?.clipboard;
+  if (clipboard?.writeText) {
+    await clipboard.writeText(text);
+    return true;
+  }
+  const doc = "document" in deps ? deps.document : globalThis.document;
+  if (!doc?.body || typeof doc.execCommand !== "function") return false;
+  const textarea = doc.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  doc.body.appendChild(textarea);
+  textarea.select();
+  const copied = doc.execCommand("copy");
+  doc.body.removeChild(textarea);
+  return copied;
+}
+
+/** Use the operating system share sheet when the current webview exposes it. */
+export async function systemShare(
+  payload: SharePayload,
+  title?: string,
+  share?: (data: ShareData) => Promise<void>,
+): Promise<boolean> {
+  const shareFn = share ?? globalThis.navigator?.share?.bind(globalThis.navigator);
+  if (!shareFn) return false;
+  await shareFn({ title: title || "对话分享", text: payload.content });
+  return true;
+}
+
 /**
  * 构造下载用 blob: URL。依赖注入 URL.createObjectURL + Blob 以保持可测。
  * 返回 { url, revoke }。

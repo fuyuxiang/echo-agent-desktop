@@ -15,7 +15,13 @@ import { formatFileSize } from "@/lib/file-utils";
 // 动态
 // ============================================================
 
-export function ActivityTab({ projectId }: { projectId: string }) {
+export function ActivityTab({
+  projectId,
+  onOpenSession,
+}: {
+  projectId: string;
+  onOpenSession?: (sessionId: string, cwd?: string) => void;
+}) {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
   const conversations = project?.conversations ?? [];
   return (
@@ -31,7 +37,11 @@ export function ActivityTab({ projectId }: { projectId: string }) {
       ) : (
         <ul className="pd-task-list" aria-label="最近项目对话">
           {conversations.slice(0, 20).map((conversation) => (
-            <li className="pd-task-item" key={conversation.sessionId}>
+            <li
+              className={`pd-task-item${onOpenSession ? " pd-task-item--clickable" : ""}`}
+              key={conversation.sessionId}
+              onClick={() => onOpenSession?.(conversation.sessionId, project?.cwd)}
+            >
               <span className="pd-task-item__title">{conversation.title}</span>
               <span className="pd-task-item__meta">对话 · {relTime(conversation.createdAt)}</span>
             </li>
@@ -53,15 +63,37 @@ const COL_DOT: Record<PlanStatus, string> = {
   completed: "#18a058",
 };
 
-export function PlanTab({ projectId }: { projectId: string }) {
+export function PlanTab({
+  projectId,
+  onRun,
+  onOpenSession,
+}: {
+  projectId: string;
+  onRun?: (message: string) => Promise<string | undefined>;
+  onOpenSession?: (sessionId: string) => void;
+}) {
   const plans = useProjectsStore((s) => s.projects.find((p) => p.id === projectId)?.plans ?? []);
   const addPlan = useProjectsStore((s) => s.addPlan);
   const movePlan = useProjectsStore((s) => s.movePlan);
+  const linkPlanSession = useProjectsStore((s) => s.linkPlanSession);
   const removePlan = useProjectsStore((s) => s.removePlan);
 
   const newTodo = () => {
     const title = window.prompt("新建待办标题");
     if (title && title.trim()) addPlan(projectId, title.trim(), "pending");
+  };
+
+  const runWithAgent = async (card: { id: string; title: string; status: PlanStatus }) => {
+    if (!onRun) return;
+    const previous = card.status;
+    movePlan(projectId, card.id, "in_progress");
+    try {
+      const sessionId = await onRun(`请执行项目计划项「${card.title}」。先确认完成标准，再实施并汇报产出。`);
+      if (sessionId) linkPlanSession(projectId, card.id, sessionId);
+      else movePlan(projectId, card.id, previous);
+    } catch {
+      movePlan(projectId, card.id, previous);
+    }
   };
 
   return (
@@ -102,6 +134,14 @@ export function PlanTab({ projectId }: { projectId: string }) {
                     <div className="pd-board-card" key={c.id}>
                       <span className="pd-board-card__title">{c.title}</span>
                       <div className="pd-board-card__acts">
+                        {onRun && c.status !== "completed" && (
+                          <button className="pd-board-card__run" onClick={() => void runWithAgent(c)}>
+                            交给 Agent
+                          </button>
+                        )}
+                        {c.sessionId && onOpenSession && (
+                          <button className="pd-board-card__move" onClick={() => onOpenSession(c.sessionId!)}>打开会话</button>
+                        )}
                         {PLAN_COLUMNS.filter((x) => x.status !== c.status).map((x) => (
                           <button
                             key={x.status}
@@ -130,9 +170,19 @@ export function PlanTab({ projectId }: { projectId: string }) {
 // 任务
 // ============================================================
 
-export function TaskTab({ projectId }: { projectId: string }) {
+export function TaskTab({
+  projectId,
+  onRun,
+  onOpenSession,
+}: {
+  projectId: string;
+  onRun?: (message: string) => Promise<string | undefined>;
+  onOpenSession?: (sessionId: string) => void;
+}) {
   const tasks = useProjectsStore((s) => s.projects.find((p) => p.id === projectId)?.tasks ?? []);
   const addTask = useProjectsStore((s) => s.addTask);
+  const moveTask = useProjectsStore((s) => s.moveTask);
+  const linkTaskSession = useProjectsStore((s) => s.linkTaskSession);
   const removeTask = useProjectsStore((s) => s.removeTask);
   const [q, setQ] = useState("");
 
@@ -141,6 +191,19 @@ export function TaskTab({ projectId }: { projectId: string }) {
   const newTask = () => {
     const title = window.prompt("新建任务标题");
     if (title && title.trim()) addTask(projectId, title.trim());
+  };
+
+  const runWithAgent = async (task: (typeof tasks)[number]) => {
+    if (!onRun) return;
+    const previous = task.status;
+    moveTask(projectId, task.id, "in_progress");
+    try {
+      const sessionId = await onRun(`请执行项目任务「${task.title}」。请直接产出可验收结果，如有阻塞请明确说明。`);
+      if (sessionId) linkTaskSession(projectId, task.id, sessionId);
+      else moveTask(projectId, task.id, previous);
+    } catch {
+      moveTask(projectId, task.id, previous);
+    }
   };
 
   return (
@@ -162,7 +225,25 @@ export function TaskTab({ projectId }: { projectId: string }) {
           {filtered.map((t) => (
             <li className="pd-task-item" key={t.id}>
               <span className="pd-task-item__title">{t.title}</span>
-              <span className="pd-task-item__meta">{t.scope === "personal" ? "个人" : "共享"} · {t.source}</span>
+              <span className="pd-task-item__meta">
+                {PLAN_COLUMNS.find((column) => column.status === t.status)?.label ?? "待开始"}
+                {t.sessionId ? " · 已关联 Agent 会话" : ""}
+              </span>
+              <div className="pd-task-item__actions">
+                {onRun && t.status !== "completed" && (
+                  <button className="pd-btn pd-btn--small" onClick={() => void runWithAgent(t)}>交给 Agent</button>
+                )}
+                {t.sessionId && onOpenSession && (
+                  <button className="pd-btn pd-btn--small" onClick={() => onOpenSession(t.sessionId!)}>打开会话</button>
+                )}
+                <select
+                  aria-label={`调整任务状态 ${t.title}`}
+                  value={t.status}
+                  onChange={(event) => moveTask(projectId, t.id, event.target.value as PlanStatus)}
+                >
+                  {PLAN_COLUMNS.map((column) => <option key={column.status} value={column.status}>{column.label}</option>)}
+                </select>
+              </div>
               <button className="pd-task-item__del" aria-label="删除" onClick={() => removeTask(projectId, t.id)}>×</button>
             </li>
           ))}

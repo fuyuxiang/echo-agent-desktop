@@ -59,6 +59,7 @@ export function ChatView({
   onOpenSettings,
   commandRefreshKey,
   onClientSlashCommand,
+  title,
 }: {
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onCancel: () => void;
@@ -84,6 +85,8 @@ export function ChatView({
   onClientSlashCommand?: (
     invocation: SlashCommandInvocation,
   ) => boolean | void | Promise<boolean | void>;
+  /** Current persisted session title, used by export/share filenames. */
+  title?: string;
 }) {
   const messages = useSessionStore((s) => s.messages);
   const streaming = useSessionStore((s) => s.streaming);
@@ -451,7 +454,7 @@ export function ChatView({
             </button>
 
             {messages.length > 0 && (
-              <ShareMenu messages={messages} onDone={onToast} />
+              <ShareMenu messages={messages} title={title} onDone={onToast} />
             )}
           </div>
         </div>

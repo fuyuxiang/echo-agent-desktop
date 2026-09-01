@@ -40,6 +40,10 @@ export interface StorageProvider {
   delete(path: string): Promise<boolean>;
   /** 创建目录。 */
   makeDir(path: string): Promise<boolean>;
+  /** 将用户选择的本地文件流式上传。 */
+  uploadFile?(path: string, localPath: string): Promise<number>;
+  /** 将远程文件流式下载到用户选择的位置。 */
+  downloadFile?(path: string, localPath: string): Promise<number>;
 }
 
 // ---------- WebDAV provider(最常见的自托管云存储)----------
@@ -97,6 +101,16 @@ export function createTauriWebDavProvider(config: StorageProviderConfig): Storag
       await invoke<void>("storage_make_dir", { id: config.id, path });
       return true;
     },
+    uploadFile: (path, localPath) => invoke<number>("storage_upload_file", {
+      id: config.id,
+      path,
+      localPath,
+    }),
+    downloadFile: (path, localPath) => invoke<number>("storage_download_file", {
+      id: config.id,
+      path,
+      localPath,
+    }),
   };
 }
 

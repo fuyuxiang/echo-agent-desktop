@@ -958,7 +958,7 @@ export function Sidebar({
           <UserIcon size="md" />
           <span className="sidebar__user-label">{organizationUserLabel}</span>
         </button>
-        <button className="sidebar__icon-btn" aria-label="通知" onClick={() => onOpenSettings()}>
+        <button className="sidebar__icon-btn" aria-label="通知" onClick={() => onPlaceholder("通知")}>
           <BellIcon size="md" />
         </button>
         <button className="sidebar__icon-btn" aria-label="设置" onClick={onOpenSettings}>

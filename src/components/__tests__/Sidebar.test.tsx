@@ -59,6 +59,17 @@ describe("Sidebar", () => {
     expect(onOpenSettings).toHaveBeenCalled();
   });
 
+  it("通知与用户入口走各自的真实路由", () => {
+    const onPlaceholder = vi.fn();
+    const onOpenSettings = vi.fn();
+    render(<Sidebar {...base} onPlaceholder={onPlaceholder} onOpenSettings={onOpenSettings} />);
+    fireEvent.click(screen.getByRole("button", { name: "通知" }));
+    fireEvent.click(screen.getByRole("button", { name: "本地用户" }));
+    expect(onPlaceholder).toHaveBeenNthCalledWith(1, "通知");
+    expect(onPlaceholder).toHaveBeenNthCalledWith(2, "用户中心");
+    expect(onOpenSettings).not.toHaveBeenCalled();
+  });
+
   it("左下角本地用户与操作按钮保持同一行", () => {
     render(<Sidebar {...base} />);
     const user = screen.getByRole("button", { name: "本地用户" });

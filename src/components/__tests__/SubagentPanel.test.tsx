@@ -36,9 +36,9 @@ describe("SubagentPanel", () => {
     useSessionStore.setState({ sessionId: null });
   });
 
-  it("无 subagent 时不渲染", () => {
-    const { container } = render(<SubagentPanel messages={[]} />);
-    expect(container.firstChild).toBeNull();
+  it("无 subagent 时给出明确空状态", () => {
+    render(<SubagentPanel messages={[]} />);
+    expect(screen.getByText(/尚未派发子代理/)).toBeInTheDocument();
   });
 
   it("从 spawn_subagent transcript 派生并展示", () => {

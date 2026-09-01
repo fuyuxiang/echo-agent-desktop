@@ -373,6 +373,8 @@ pub fn run() {
             agent_admin::plugins_action,
             agent_admin::marketplace_list,
             agent_admin::marketplace_action,
+            // authoritative team runtime registry (shared with the MCP tools)
+            team_mcp::team_snapshot,
             // notification center
             notifications::notification_append,
             notifications::notification_list,
@@ -420,6 +422,8 @@ pub fn run() {
             storage::storage_list,
             storage::storage_read_text,
             storage::storage_write_text,
+            storage::storage_upload_file,
+            storage::storage_download_file,
             storage::storage_delete,
             storage::storage_make_dir,
         ])

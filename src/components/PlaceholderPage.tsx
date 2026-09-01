@@ -19,7 +19,7 @@ interface PlaceholderPageProps {
   /** Navigate to another sidebar view (e.g. 自动化 → 管理连接器 → 专家·技能·连接器). */
   onNavigate?: (label: string) => void;
   /** Open a session produced by an automation run record. */
-  onOpenSession?: (sessionId: string) => void;
+  onOpenSession?: (sessionId: string, cwd?: string) => void;
   /** Navigate to the home page (used after expert summon). */
   onGoHome?: () => void;
   /** Surface transient feedback (errors, success toasts). */
@@ -33,7 +33,7 @@ interface PlaceholderPageProps {
   /** 项目页：进入项目（新建会话并注入说明）。 */
   onStartProject?: (project: ProjectMeta) => void;
   /** 项目页：在项目中新建对话（创建真实 EchoAgent 会话）。 */
-  onStartProjectConversation?: (projectId: string, message: string) => void;
+  onStartProjectConversation?: (projectId: string, message: string) => Promise<string | undefined>;
 }
 
 /** EchoAgent 功能面板（项目/组织/专家能力/自动化/个人记忆/插件市场）。 */
@@ -57,6 +57,7 @@ export function PlaceholderPage({
         onToast={onToast}
         onStartProject={onStartProject}
         onStartProjectConversation={onStartProjectConversation}
+        onOpenSession={onOpenSession}
         onOpenAutomation={() => onNavigate?.("自动化")}
       />
     );

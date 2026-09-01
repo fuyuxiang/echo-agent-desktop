@@ -56,6 +56,40 @@ static TEAMS: LazyLock<Mutex<HashMap<String, TeamInfo>>> = LazyLock::new(|| {
     Mutex::new(teams)
 });
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamSnapshotEntry {
+    pub team_id: String,
+    pub members: Vec<String>,
+    pub created_at: u64,
+}
+
+/// Desktop UI snapshot of the authoritative, persisted team registry.
+/// Keeping this command beside the MCP implementation prevents the renderer
+/// from trying to reconstruct durable state from one conversation transcript.
+#[tauri::command]
+pub fn team_snapshot() -> Vec<TeamSnapshotEntry> {
+    let teams = TEAMS.lock().unwrap();
+    let mut result = teams
+        .values()
+        .map(|team| TeamSnapshotEntry {
+            team_id: team.team_id.clone(),
+            members: team
+                .members
+                .iter()
+                .map(|member| member.name.clone())
+                .collect(),
+            created_at: team.created_at,
+        })
+        .collect::<Vec<_>>();
+    result.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.team_id.cmp(&b.team_id))
+    });
+    result
+}
+
 /// `~/.echo-agent/echoagent-teams.json` —— 与 EchoAgent 配置同目录，方便用户备份。
 fn teams_file() -> std::path::PathBuf {
     crate::paths::echo_agent_home_dir().join("echoagent-teams.json")

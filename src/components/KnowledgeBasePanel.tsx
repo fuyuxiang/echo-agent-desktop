@@ -24,6 +24,8 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   const [searching, setSearching] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [sources, setSources] = useState<Array<{ id: string; label: string; stats: KbIndexStats }>>([]);
+  const [sourcesError, setSourcesError] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const q = debouncedQuery.trim();
   useEffect(() => {
     let cancelled = false;
@@ -40,13 +42,24 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   // 每当 refreshKey 变化(添加/移除/重建/搜索)重新拉取含索引状态的源列表。
   useEffect(() => {
     let cancelled = false;
-    void listKbProvidersWithStats().then((s) => {
-      if (!cancelled) setSources(s);
-    });
+    void listKbProvidersWithStats()
+      .then((s) => {
+        if (!cancelled) {
+          setSources(s);
+          setSourcesError(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          const message = String(error).replace(/^Error:\s*/, "");
+          setSourcesError(message);
+          onToast?.(`读取知识源失败：${message}`);
+        }
+      });
     return () => {
       cancelled = true;
     };
-  }, [refreshKey]);
+  }, [refreshKey, onToast]);
 
   /** 添加本地文件夹知识源:弹出原生目录选择 → 注册 local KbProvider。 */
   const addLocalFolder = async () => {
@@ -100,9 +113,16 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
     }
     let cancelled = false;
     setSearching(true);
+    setSearchError(null);
     void searchKb(q)
       .then((r) => {
         if (!cancelled) setResults(r);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setResults([]);
+          setSearchError(String(error).replace(/^Error:\s*/, ""));
+        }
       })
       .finally(() => {
         if (!cancelled) setSearching(false);
@@ -141,6 +161,14 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
           )}
         </div>
       </div>
+      {sourcesError && (
+        <div className="kb-panel__index-status" role="alert">
+          <span>知识源读取失败：{sourcesError}</span>
+          <button type="button" className="kb-panel__refresh-btn" onClick={() => setRefreshKey((key) => key + 1)}>
+            重试
+          </button>
+        </div>
+      )}
       {/* 已注册知识源 chip 列表(每个可移除)。 */}
       {sources.length > 0 && (
         <div className="kb-panel__sources-row">
@@ -189,6 +217,8 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
         <ul className="kb-panel__list">
           {searching ? (
             <li className="kb-panel__empty">搜索中…</li>
+          ) : searchError ? (
+            <li className="kb-panel__empty" role="alert">搜索失败：{searchError}</li>
           ) : results.length === 0 ? (
             <li className="kb-panel__empty">无匹配结果</li>
           ) : (

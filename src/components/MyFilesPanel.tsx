@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDownIcon } from "@/foundation/components/Icon/icons";
 import {
   SearchIcon,
@@ -8,9 +8,16 @@ import {
   RefreshCwIcon,
 } from "@/foundation/components/Icon/icons";
 import { FileText, FileSpreadsheet, FileImage, FileCode, Film, Music, Globe, File, FolderOpen } from "lucide-react";
-import { listDir, memoryList, openLocalPath } from "@/lib/agent-client";
-import type { MemoryEntry } from "@/lib/types";
+import { listDir, openLocalPath } from "@/lib/agent-client";
 import { formatFileSize, inferFileTypeFromExt, relativeTime, type FileType, type LocalFileItem } from "@/lib/file-utils";
+import {
+  ARTIFACT_CATALOG_EVENT,
+  artifactsFromTranscripts,
+  loadTaskArtifacts,
+  mergeTaskArtifacts,
+} from "@/lib/artifact-catalog";
+import { useSessionStore } from "@/stores/session-store";
+import { useSessionsStore } from "@/stores/sessions-store";
 
 function FileTypeIcon({ type, size = 16 }: { type: FileType; size?: number }) {
   switch (type) {
@@ -53,7 +60,7 @@ export function MyFilesPanel({ cwd, onToast }: MyFilesPanelProps) {
       <div className="myfiles-header">
         <h2 className="myfiles-title">我的文件</h2>
         <p className="myfiles-subtitle">
-          快捷查看任务名成果，上传文件到网络存储开启跨项目应用。
+          集中查看任务生成的成果与当前工作空间文件。云端同步请前往「网络存储」。
         </p>
       </div>
 
@@ -137,27 +144,39 @@ function ArtifactsTab({
   typeFilter: string;
   onToast?: (msg: string) => void;
 }) {
-  const [entries, setEntries] = useState<MemoryEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const transcripts = useSessionStore((state) => state.transcripts);
+  const independent = useSessionsStore((state) => state.independent);
+  const workspaceSessions = useSessionsStore((state) => state.workspaceSessions);
+  const [catalogVersion, setCatalogVersion] = useState(0);
 
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      const list = await memoryList(cwd);
-      setEntries(list);
-    } catch (e) {
-      onToast?.(`加载任务成果失败：${String(e).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [cwd, onToast]);
+  useEffect(() => {
+    const refresh = () => setCatalogVersion((version) => version + 1);
+    window.addEventListener(ARTIFACT_CATALOG_EVENT, refresh);
+    return () => window.removeEventListener(ARTIFACT_CATALOG_EVENT, refresh);
+  }, []);
 
-  useEffect(() => { reload(); }, [reload]);
+  const entries = useMemo(() => {
+    const sessions = [...independent, ...Object.values(workspaceSessions).flat()];
+    const meta = Object.fromEntries(sessions.map((session) => [
+      session.sessionId,
+      {
+        title: session.title,
+        cwd: session.cwd,
+        updatedAt: session.updatedAt ? Date.parse(session.updatedAt) || 0 : 0,
+      },
+    ]));
+    return mergeTaskArtifacts(
+      artifactsFromTranscripts(transcripts, meta),
+      loadTaskArtifacts(),
+    );
+  }, [catalogVersion, independent, transcripts, workspaceSessions]);
 
   const filtered = entries.filter((e) => {
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      if (!e.path.toLowerCase().includes(q) && !e.content.toLowerCase().includes(q))
+      if (!e.path.toLowerCase().includes(q)
+        && !e.sessionTitle.toLowerCase().includes(q)
+        && !e.cwd.toLowerCase().includes(q))
         return false;
     }
     if (typeFilter !== "all") {
@@ -167,16 +186,13 @@ function ArtifactsTab({
     return true;
   });
 
-  if (loading) {
-    return <div className="myfiles-empty">加载中…</div>;
-  }
-
   if (filtered.length === 0) {
     return (
       <div className="myfiles-empty">
         <MyFilesIconV2 size="xl" />
-        <p>暂无文件</p>
-        <button className="myfiles-empty-btn" onClick={reload}>
+        <p>{entries.length === 0 ? "尚未发现任务生成的文件" : "没有匹配的任务成果"}</p>
+        <span className="myfiles-empty-hint">完成文件写入或编辑任务后，成果会自动收录。打开历史会话可回填旧成果。</span>
+        <button className="myfiles-empty-btn" onClick={() => setCatalogVersion((version) => version + 1)}>
           <RefreshCwIcon size="sm" /> 刷新
         </button>
       </div>
@@ -187,29 +203,30 @@ function ArtifactsTab({
     <div className="myfiles-table">
       <div className="myfiles-table-head">
         <span className="myfiles-col-name">名称</span>
-        <span className="myfiles-col-type">类型</span>
-        <span className="myfiles-col-scope">范围</span>
+        <span className="myfiles-col-task">所属任务</span>
+        <span className="myfiles-col-scope">工作空间</span>
+        <span className="myfiles-col-time">更新时间</span>
       </div>
       {filtered.map((entry) => {
         const ft = inferFileTypeFromExt(entry.path);
         return (
           <div
-            key={`${entry.scope}/${entry.path}`}
-            className="myfiles-row"
-            title={entry.content.slice(0, 200)}
+            key={`${entry.sessionId}/${entry.path}`}
+            className="myfiles-row myfiles-row--artifact"
+            title={entry.path}
+            onClick={() => void openLocalPath(entry.path, entry.cwd || cwd).catch((error) => {
+              onToast?.(`打开成果失败：${String(error).replace(/^Error:\s*/, "")}`);
+            })}
           >
             <span className="myfiles-col-name">
               <FileTypeIcon type={ft} size={18} />
               <span className="myfiles-row-name">{entry.path}</span>
             </span>
-            <span className="myfiles-col-type">{ft}</span>
+            <span className="myfiles-col-task" title={entry.sessionTitle}>{entry.sessionTitle}</span>
             <span className="myfiles-col-scope">
-              {entry.scope === "global"
-                ? "全局"
-                : entry.scope === "workspace"
-                  ? "工作区"
-                  : "会话记录"}
+              {entry.cwd ? entry.cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() : "默认空间"}
             </span>
+            <span className="myfiles-col-time">{relativeTime(entry.updatedAt)}</span>
           </div>
         );
       })}

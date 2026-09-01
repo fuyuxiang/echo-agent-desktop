@@ -48,6 +48,8 @@ export interface QuotaConfig {
   period: "daily" | "monthly";
   /** token 上限。 */
   tokenLimit: number;
+  /** 达到上限后的桌面端手动发送策略；旧配置默认仅提醒。 */
+  enforcement?: "warn" | "block";
   /** 费率表(modelId → 每千 token 价格)。 */
   rates?: Record<string, { prompt: number; completion: number }>;
 }
@@ -55,6 +57,7 @@ export interface QuotaConfig {
 const STORAGE_KEY = "echoagent.usage";
 const QUOTA_KEY = "echoagent.quota";
 const SNAPSHOT_KEY = "echoagent.usage-snapshots.v1";
+const QUOTA_ALERT_KEY = "echoagent.quota-alert.v1";
 
 interface CumulativeSnapshot {
   inputTokens: number;
@@ -63,14 +66,24 @@ interface CumulativeSnapshot {
 
 type CumulativeSnapshots = Record<string, CumulativeSnapshot>;
 
-/** 取今日 ISO 日期。 */
-export function todayKey(): string {
-  return new Date().toISOString().slice(0, 10);
+function localDateParts(date: Date): { year: number; month: number; day: number } {
+  return {
+    year: date.getFullYear(),
+    month: date.getMonth() + 1,
+    day: date.getDate(),
+  };
 }
 
-/** 取当月 ISO 月(YYYY-MM)。 */
-export function monthKey(): string {
-  return new Date().toISOString().slice(0, 7);
+/** 取本机时区的今日日期，避免东八区凌晨被记到前一天。 */
+export function todayKey(date = new Date()): string {
+  const { year, month, day } = localDateParts(date);
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/** 取本机时区的当月(YYYY-MM)。 */
+export function monthKey(date = new Date()): string {
+  const { year, month } = localDateParts(date);
+  return `${year}-${String(month).padStart(2, "0")}`;
 }
 
 /** 估算单次调用费用(按费率表)。 */
@@ -196,6 +209,7 @@ export function clearUsage(): UsageRecord[] {
   if (typeof window !== "undefined") {
     try {
       window.localStorage.removeItem(SNAPSHOT_KEY);
+      window.localStorage.removeItem(QUOTA_ALERT_KEY);
     } catch {
       /* noop */
     }
@@ -251,14 +265,51 @@ export function checkQuota(records: UsageRecord[], config: QuotaConfig): {
     config.period === "daily" ? r.date === key : r.date.startsWith(key),
   );
   const used = periodRecords.reduce((s, r) => s + r.promptTokens + r.completionTokens, 0);
-  const pct = config.tokenLimit > 0 ? used / config.tokenLimit : 0;
+  const hasLimit = config.tokenLimit > 0;
+  const pct = hasLimit ? used / config.tokenLimit : 0;
   return {
     used,
     limit: config.tokenLimit,
     pct: Math.round(pct * 100),
-    exceeded: used >= config.tokenLimit,
-    nearLimit: pct >= 0.8 && pct < 1,
+    exceeded: hasLimit && used >= config.tokenLimit,
+    nearLimit: hasLimit && pct >= 0.8 && pct < 1,
   };
+}
+
+/** 是否应暂停桌面端手动发送。未配置/0 上限永远不拦截。 */
+export function isQuotaBlocking(records: UsageRecord[], config: QuotaConfig | null): boolean {
+  return !!config
+    && config.enforcement === "block"
+    && config.tokenLimit > 0
+    && checkQuota(records, config).exceeded;
+}
+
+/**
+ * 在当前周期首次跨过 80% / 100% 时返回告警级别。
+ * 记录阈值状态避免每轮对话重复通知。
+ */
+export function consumeQuotaAlert(
+  records: UsageRecord[],
+  config: QuotaConfig | null,
+): "near" | "exceeded" | null {
+  if (!config || config.tokenLimit <= 0 || typeof window === "undefined") return null;
+  const quota = checkQuota(records, config);
+  const level = quota.exceeded ? "exceeded" : quota.nearLimit ? "near" : null;
+  if (!level) return null;
+  const periodKey = config.period === "daily" ? todayKey() : monthKey();
+  const key = `${config.period}:${periodKey}:${config.tokenLimit}`;
+  try {
+    const previous = JSON.parse(window.localStorage.getItem(QUOTA_ALERT_KEY) ?? "null") as
+      | { key?: string; level?: "near" | "exceeded" }
+      | null;
+    if (previous?.key === key && (previous.level === "exceeded" || previous.level === level)) {
+      return null;
+    }
+    window.localStorage.setItem(QUOTA_ALERT_KEY, JSON.stringify({ key, level }));
+  } catch {
+    // Storage unavailable: preserve the alert rather than hiding a quota event.
+  }
+  return level;
 }
 
 /** 读取配额配置。 */
@@ -278,6 +329,7 @@ export function saveQuotaConfig(config: QuotaConfig): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(QUOTA_KEY, JSON.stringify(config));
+    window.localStorage.removeItem(QUOTA_ALERT_KEY);
   } catch {
     /* noop */
   }

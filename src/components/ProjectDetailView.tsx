@@ -43,6 +43,7 @@ export function ProjectDetailView({
   onBack,
   onToast,
   onStartConversation,
+  onOpenSession,
   picker,
   onOpenAutomation,
 }: {
@@ -50,7 +51,8 @@ export function ProjectDetailView({
   onBack: () => void;
   onToast?: (msg: string) => void;
   /** Start a new conversation within this project (creates a real EchoAgent session). */
-  onStartConversation?: (projectId: string, message: string) => void;
+  onStartConversation?: (projectId: string, message: string) => Promise<string | undefined>;
+  onOpenSession?: (sessionId: string, cwd?: string) => void;
   picker: { options: ProjectPickerOptions; loading: boolean; error: string | null };
   onOpenAutomation?: () => void;
 }) {
@@ -83,7 +85,7 @@ export function ProjectDetailView({
 
   const handleComposerSend = (text: string) => {
     if (onStartConversation) {
-      onStartConversation(live.id, text);
+      void onStartConversation(live.id, text);
     } else {
       const preview = text.slice(0, 20);
       const suffix = text.length > 20 ? "…" : "";
@@ -135,9 +137,9 @@ export function ProjectDetailView({
           </div>
 
           <div className="pd-tab-content">
-            {tab === "activity" && <ActivityTab projectId={live.id} />}
-            {tab === "plan" && <PlanTab projectId={live.id} />}
-            {tab === "task" && <TaskTab projectId={live.id} />}
+            {tab === "activity" && <ActivityTab projectId={live.id} onOpenSession={onOpenSession} />}
+            {tab === "plan" && <PlanTab projectId={live.id} onRun={onStartConversation ? (message) => onStartConversation(live.id, message) : undefined} onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined} />}
+            {tab === "task" && <TaskTab projectId={live.id} onRun={onStartConversation ? (message) => onStartConversation(live.id, message) : undefined} onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined} />}
             {tab === "asset" && <AssetsTab projectId={live.id} onToast={onToast} />}
           </div>
 
@@ -268,8 +270,8 @@ function ProjectComposer({ project, onSend }: { project: ProjectMeta; onSend: (t
         }}
       />
       <div className="pd-composer__footer">
-        <span className="pd-composer__context" title="项目指令和所选运行时能力将注入新会话">
-          项目上下文已启用
+        <span className="pd-composer__context" title="项目指令和所选能力偏好将注入新会话；实际可用性以当前运行时为准">
+          项目上下文将注入
           {project.experts.length > 0 ? ` · ${project.experts.length} Agent` : ""}
           {project.skills.length > 0 ? ` · ${project.skills.length} Skill` : ""}
           {project.connectors.length > 0 ? ` · ${project.connectors.length} MCP` : ""}
