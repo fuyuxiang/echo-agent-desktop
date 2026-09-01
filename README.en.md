@@ -88,12 +88,12 @@ When a packaged build is available, download it from [GitHub Releases](https://g
 | Protocol Buffers | A native `protoc` executable available on `PATH`, or through the `PROTOC` environment variable. |
 | Platform toolchain | macOS: Xcode Command Line Tools. Windows: Visual Studio 2022 Build Tools with **Desktop development with C++** and a Windows SDK. |
 
-The embedded runtime is included as a pinned Git submodule. Clone recursively and run the setup script so the expected revision and compatibility patches are applied. The setup script checks the submodule out at the revision recorded in `patches/grok-build/` and then `git apply`s the maintained patches; building without running setup will fail because the patches have not been applied.
+The embedded runtime is checked in as regular source under `vendor/grok-build/` and versioned atomically with the desktop application. The snapshot already includes the compatibility changes recorded in `patches/grok-build/` and the EchoAgent protocol namespace migration. A normal clone is self-contained: no submodule initialization or live upstream repository is required. The setup script only verifies the integrity of the vendored Runtime.
 
 **macOS**
 
 ```bash
-git clone --recurse-submodules https://github.com/fuyuxiang/echo-agent-desktop.git
+git clone https://github.com/fuyuxiang/echo-agent-desktop.git
 cd echo-agent-desktop
 
 pnpm setup:mac
@@ -104,7 +104,7 @@ pnpm tauri dev
 **Windows (PowerShell)**
 
 ```powershell
-git clone --recurse-submodules https://github.com/fuyuxiang/echo-agent-desktop.git
+git clone https://github.com/fuyuxiang/echo-agent-desktop.git
 cd echo-agent-desktop
 
 pnpm setup:win
@@ -218,8 +218,8 @@ src-tauri/
 ├── src/lib.rs               Tauri setup and command registration
 └── src/*.rs                 Providers, MCP, skills, policy, storage, and more
 
-vendor/grok-build/           Pinned Apache-2.0 runtime submodule
-patches/grok-build/          Maintained compatibility patches
+vendor/grok-build/           Apache-2.0 Runtime source maintained in this repository
+patches/grok-build/          Compatibility patches and upstream-refresh records
 scripts/                     Setup and packaging scripts
 docs/                        Platform-specific documentation
 .github/workflows/           Continuous integration
@@ -246,7 +246,7 @@ CI currently runs TypeScript type-checking, frontend unit tests, and the product
 
 Contributions are welcome, from focused fixes to new runtime capabilities.
 
-1. Fork the repository and clone it with submodules.
+1. Fork and clone the repository normally; the embedded Runtime is already included.
 2. Create a branch from `main`.
 3. Add tests for behavioral changes and run the relevant checks above.
 4. Keep changes scoped and update documentation when behavior changes.
@@ -290,7 +290,7 @@ Provider keys are stored in `~/.echo-agent/config.toml`. They are not placed in 
 
 ## Acknowledgements
 
-- [xai-org/grok-build](https://github.com/xai-org/grok-build) provides the Apache-2.0 runtime components embedded through pinned Rust path dependencies.
+- [xai-org/grok-build](https://github.com/xai-org/grok-build) provides the original Apache-2.0 Runtime source; EchoAgent maintains its compatible source snapshot in this repository.
 - [Tauri](https://tauri.app/), [React](https://react.dev/), and [Vite](https://vite.dev/) provide the core application stack.
 
 EchoAgent is an independent community project. It is not affiliated with, endorsed by, or sponsored by xAI.

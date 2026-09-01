@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Keep the embedded Runtime protocol namespace aligned with EchoAgent.
-# This migration is intentionally idempotent so setup and release builds can
-# both run it after applying upstream compatibility patches.
+# Maintenance helper for importing a newer upstream Runtime snapshot.
+# This migration is intentionally idempotent and is not part of normal setup
+# or release builds because the vendored source already contains the result.
 
 set -euo pipefail
 
@@ -9,8 +9,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUNTIME_ROOT="${1:-$PROJECT_ROOT/vendor/grok-build}"
 
-if ! git -C "$RUNTIME_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    printf 'Embedded Runtime is not initialized at: %s\n' "$RUNTIME_ROOT" >&2
+if [[ ! -f "$RUNTIME_ROOT/Cargo.toml" ]]; then
+    printf 'Embedded Runtime source is incomplete at: %s\n' "$RUNTIME_ROOT" >&2
     exit 1
 fi
 

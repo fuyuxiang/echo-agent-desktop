@@ -15,6 +15,7 @@ jobs:
         with:
           node-version: '22'
           cache: 'pnpm'
+      - run: node scripts/verify-vendored-runtime.mjs
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsc --noEmit
 

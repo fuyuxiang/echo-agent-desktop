@@ -5,9 +5,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-git -C $RuntimeRoot rev-parse --is-inside-work-tree 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    throw "Embedded Runtime is not initialized at: $RuntimeRoot"
+# Maintenance helper for importing a newer upstream Runtime snapshot. Normal
+# setup and release builds do not run it because the result is already vendored.
+if (-not (Test-Path (Join-Path $RuntimeRoot "Cargo.toml"))) {
+    throw "Embedded Runtime source is incomplete at: $RuntimeRoot"
 }
 
 # Construct the legacy namespace without retaining it in the source tree.

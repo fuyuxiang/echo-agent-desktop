@@ -37,11 +37,11 @@ uuid = { version = "1", features = ["v7"] }
 # statusMatch patterns in connector cli.json files (CLI connector auth).
 regex = "1"
 
-# EchoAgent's in-process runtime adapter. The Apache-2.0 upstream component is
-# pinned at <repo>/vendor/grok-build (see .gitmodules and THIRD_PARTY_NOTICES.md);
-# these are relative path dependencies into it. Cargo resolves their
-# `.workspace = true` fields against the upstream root Cargo.toml. We do not
-# join that workspace (see the explicit [workspace] table below).
+# EchoAgent's in-process runtime adapter. The Apache-2.0 Runtime source snapshot
+# is tracked directly at <repo>/vendor/grok-build (see ECHOAGENT_VENDOR.json and
+# THIRD_PARTY_NOTICES.md); these are relative path dependencies into it. Cargo
+# resolves their `.workspace = true` fields against that root Cargo.toml. We do
+# not join that workspace (see the explicit [workspace] table below).
 xai-acp-lib = { path = "../vendor/grok-build/crates/codegen/xai-acp-lib" }
 xai-grok-shell = { path = "../vendor/grok-build/crates/codegen/xai-grok-shell" }
 xai-grok-tools = { path = "../vendor/grok-build/crates/codegen/xai-grok-tools" }

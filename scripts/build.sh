@@ -11,8 +11,8 @@
 #    bash scripts/build.sh --version 0.2.0
 #
 #  Prerequisites:
-#    Run `scripts/setup.sh` once after clone to initialize the
-#    vendor/grok-build submodule.
+#    The complete vendored Runtime source is included in the repository.
+#    `scripts/setup.sh` can be used to verify checkout integrity.
 #
 #  NOTE on code signing / notarization:
 #    This script intentionally does NOT sign or notarize the bundle.
@@ -109,35 +109,12 @@ if [[ -n "$NEW_VERSION" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 4. grok-build submodule sanity check (path deps in Cargo.toml are relative
-#    to vendor/grok-build, so the submodule must be present) + ensure the
-#    Windows protoc patch is applied (idempotent).
+# 4. Vendored Runtime sanity check. Path dependencies in Cargo.toml resolve
+#    directly into vendor/grok-build, which is tracked by this repository.
 # ---------------------------------------------------------------------------
-log_step "Checking grok-build submodule"
-GROK_SUBMODULE="$PROJECT_ROOT/vendor/grok-build"
-if ! git -C "$GROK_SUBMODULE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    log_err "grok-build submodule not initialized at: $GROK_SUBMODULE"
-    log_err "Run \`scripts/setup.sh\` (or \`git submodule update --init vendor/grok-build\`) and retry."
-    exit 1
-fi
-log_ok "grok-build submodule present: $GROK_SUBMODULE"
-
-PATCH_DIR="$PROJECT_ROOT/patches/grok-build"
-if [[ -d "$PATCH_DIR" ]]; then
-    for p in "$PATCH_DIR"/*.patch; do
-        [[ -f "$p" ]] || continue
-        if git -C "$GROK_SUBMODULE" apply --check --reverse "$p" 2>/dev/null; then
-            log_ok "$(basename "$p") already applied"
-        elif git -C "$GROK_SUBMODULE" apply --check "$p" 2>/dev/null; then
-            git -C "$GROK_SUBMODULE" apply "$p"
-            log_ok "applied $(basename "$p")"
-        else
-            log_warn "$(basename "$p") did not apply cleanly — skipping"
-        fi
-    done
-fi
-
-"$PROJECT_ROOT/scripts/rename-runtime-namespace.sh" "$GROK_SUBMODULE"
+log_step "Checking vendored Runtime source"
+node "$PROJECT_ROOT/scripts/verify-vendored-runtime.mjs"
+log_ok "Vendored Runtime source is complete"
 
 # ---------------------------------------------------------------------------
 # 5. Build (frontend build runs automatically via beforeBuildCommand).

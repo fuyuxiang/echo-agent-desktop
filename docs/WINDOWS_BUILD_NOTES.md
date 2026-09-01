@@ -7,7 +7,7 @@ EchoAgent 的 Rust 后端必须使用 MSVC 工具链构建。请先安装 Visual
 ## 1. 工具链初始化
 
 ```powershell
-git clone --recurse-submodules https://github.com/fuyuxiang/echo-agent-desktop.git
+git clone https://github.com/fuyuxiang/echo-agent-desktop.git
 cd echo-agent-desktop
 
 powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
@@ -15,7 +15,7 @@ pnpm install --frozen-lockfile
 .\dev.bat
 ```
 
-`scripts/setup.ps1` 会同步 `vendor/grok-build/` 子模块到 `patches/grok-build/` 中记录的修订，并 `git apply` 项目维护的兼容性补丁。**跳过 Setup 直接编译会因为补丁未应用而失败**。
+`vendor/grok-build/` 已作为普通源码提交到主仓库，并包含 Windows 兼容性补丁和 EchoAgent 协议命名空间迁移。`scripts/setup.ps1` 只检查源码快照是否完整，不会访问或修改其他 Git 仓库。
 
 ### 1a. MSVC 工具链识别 ⚠️ 最容易漏
 
