@@ -8,6 +8,8 @@ use futures::StreamExt;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
 
 const PROPFIND_BODY: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <D:propfind xmlns:D="DAV:"><D:prop><D:displayname/><D:resourcetype/>
@@ -404,6 +406,117 @@ pub async fn storage_write_text(id: String, path: String, content: String) -> Re
     } else {
         Err(response_error(response, "写入文件").await)
     }
+}
+
+#[tauri::command]
+pub async fn storage_upload_file(
+    id: String,
+    path: String,
+    local_path: String,
+) -> Result<u64, String> {
+    crate::policy::require_feature("cloud-storage")?;
+    let config = provider(&id)?;
+    let source = PathBuf::from(local_path);
+    let metadata = tokio::fs::metadata(&source)
+        .await
+        .map_err(|e| format!("读取上传文件失败：{e}"))?;
+    if !metadata.is_file() {
+        return Err("上传源必须是文件".into());
+    }
+    let size = metadata.len();
+    let file = tokio::fs::File::open(&source)
+        .await
+        .map_err(|e| format!("打开上传文件失败：{e}"))?;
+    let body = reqwest::Body::wrap_stream(ReaderStream::new(file));
+    let response = request(&config, reqwest::Method::PUT, &normalize_path(&path))?
+        .header("Content-Type", "application/octet-stream")
+        .header("Content-Length", size)
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("上传失败：{e}"))?;
+    if response.status().is_success() {
+        Ok(size)
+    } else {
+        Err(response_error(response, "上传文件").await)
+    }
+}
+
+#[tauri::command]
+pub async fn storage_download_file(
+    id: String,
+    path: String,
+    local_path: String,
+) -> Result<u64, String> {
+    crate::policy::require_feature("cloud-storage")?;
+    let config = provider(&id)?;
+    let destination = PathBuf::from(local_path);
+    if destination.as_os_str().is_empty() {
+        return Err("下载位置不能为空".into());
+    }
+    let response = request(&config, reqwest::Method::GET, &normalize_path(&path))?
+        .send()
+        .await
+        .map_err(|e| format!("下载失败：{e}"))?;
+    if !response.status().is_success() {
+        return Err(response_error(response, "下载文件").await);
+    }
+
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("download");
+    let temp = destination.with_file_name(format!(
+        ".{file_name}.echoagent-{}.part",
+        uuid::Uuid::now_v7()
+    ));
+    let result = async {
+        let mut output = tokio::fs::File::create(&temp)
+            .await
+            .map_err(|e| format!("创建下载文件失败：{e}"))?;
+        let mut stream = response.bytes_stream();
+        let mut written = 0_u64;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| format!("接收下载数据失败：{e}"))?;
+            output
+                .write_all(&chunk)
+                .await
+                .map_err(|e| format!("写入下载文件失败：{e}"))?;
+            written += chunk.len() as u64;
+        }
+        output
+            .flush()
+            .await
+            .map_err(|e| format!("刷新下载文件失败：{e}"))?;
+        drop(output);
+        // `rename` cannot replace an existing destination on Windows. Move an
+        // existing file aside first and roll it back if the final rename fails.
+        let backup = destination.with_file_name(format!(
+            ".{file_name}.echoagent-{}.backup",
+            uuid::Uuid::now_v7()
+        ));
+        let had_destination = tokio::fs::metadata(&destination).await.is_ok();
+        if had_destination {
+            tokio::fs::rename(&destination, &backup)
+                .await
+                .map_err(|e| format!("准备覆盖下载文件失败：{e}"))?;
+        }
+        if let Err(error) = tokio::fs::rename(&temp, &destination).await {
+            if had_destination {
+                let _ = tokio::fs::rename(&backup, &destination).await;
+            }
+            return Err(format!("保存下载文件失败：{error}"));
+        }
+        if had_destination {
+            let _ = tokio::fs::remove_file(&backup).await;
+        }
+        Ok::<u64, String>(written)
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temp).await;
+    }
+    result
 }
 
 #[tauri::command]

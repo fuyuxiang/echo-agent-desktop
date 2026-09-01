@@ -8,10 +8,13 @@ import { useEffect, useRef, useState } from "react";
 import {
   buildSharePayload,
   buildMailtoUrl,
+  copyShareText,
+  systemShare,
   triggerDownload,
   type ShareFormat,
 } from "@/lib/share";
 import type { ChatMessage } from "@/stores/session-store";
+import { openExternalUrl } from "@/lib/agent-client";
 
 interface ShareMenuProps {
   messages: ChatMessage[];
@@ -44,9 +47,40 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
   const shareMail = () => {
     const payload = buildSharePayload(messages, "text", title);
     const url = buildMailtoUrl(title || "对话分享", payload.content);
-    (openUrl ?? ((u: string) => window.open(u, "_blank")))(url);
+    if (openUrl) {
+      openUrl(url);
+    } else {
+      void openExternalUrl(url).catch((error) => {
+        onDone?.(`打开邮件客户端失败：${String(error).replace(/^Error:\s*/, "")}`);
+      });
+    }
     setOpen(false);
     onDone?.("已打开邮件分享");
+  };
+
+  const copyMarkdown = async () => {
+    const payload = buildSharePayload(messages, "markdown", title);
+    try {
+      if (!await copyShareText(payload.content)) throw new Error("当前环境不支持剪贴板");
+      setOpen(false);
+      onDone?.("已复制 Markdown");
+    } catch (error) {
+      onDone?.(`复制失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  };
+
+  const shareSystem = async () => {
+    const payload = buildSharePayload(messages, "text", title);
+    try {
+      if (!await systemShare(payload, title)) throw new Error("当前系统不支持原生分享");
+      setOpen(false);
+      onDone?.("已打开系统分享");
+    } catch (error) {
+      // Cancelling the native share sheet is expected and needs no error toast.
+      if ((error as { name?: string })?.name !== "AbortError") {
+        onDone?.(`分享失败：${String(error).replace(/^Error:\s*/, "")}`);
+      }
+    }
   };
 
   return (
@@ -67,6 +101,16 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
       </button>
       {open && (
         <div className="share-menu__popover" onClick={(e) => e.stopPropagation()}>
+          <div className="share-menu__note">本地分享，不会自动上传会话</div>
+          <button type="button" className="share-menu__item" onClick={() => void copyMarkdown()}>
+            复制 Markdown
+          </button>
+          {typeof navigator !== "undefined" && typeof navigator.share === "function" && (
+            <button type="button" className="share-menu__item" onClick={() => void shareSystem()}>
+              系统分享…
+            </button>
+          )}
+          <div className="share-menu__divider" />
           <button type="button" className="share-menu__item" onClick={() => exportAs("markdown")}>
             导出 Markdown
           </button>

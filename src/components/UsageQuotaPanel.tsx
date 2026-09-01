@@ -23,7 +23,9 @@ export function UsageQuotaPanel() {
 
   useEffect(() => {
     setRecords(loadUsage());
-    setConfig(loadQuotaConfig());
+    const stored = loadQuotaConfig();
+    setConfig(stored);
+    if (stored) setPeriod(stored.period);
   }, []);
 
   const key = period === "daily" ? todayKey() : monthKey();
@@ -31,13 +33,14 @@ export function UsageQuotaPanel() {
     period === "daily" ? r.date === key : r.date.startsWith(key),
   );
   const summary = summarizeUsage(filtered);
-  const quota = config
+  const quota = config && config.tokenLimit > 0
     ? checkQuota(records, { ...config, period })
     : null;
 
   const saveConfig = (next: QuotaConfig) => {
     saveQuotaConfig(next);
     setConfig(next);
+    setPeriod(next.period);
   };
 
   return (
@@ -129,11 +132,31 @@ export function UsageQuotaPanel() {
           <span>Token 上限</span>
           <input
             type="number"
-            value={config?.tokenLimit ?? ""}
+            min="0"
+            value={config && config.tokenLimit > 0 ? config.tokenLimit : ""}
             placeholder="不限"
-            onChange={(e) => saveConfig({ ...(config ?? { period: "daily" }), tokenLimit: parseInt(e.target.value, 10) || 0 })}
+            onChange={(e) => saveConfig({
+              ...(config ?? { period: "daily" }),
+              tokenLimit: Math.max(0, Number.parseInt(e.target.value, 10) || 0),
+            })}
           />
         </label>
+        <label className="quota-panel__config-row">
+          <span>达到上限</span>
+          <select
+            value={config?.enforcement ?? "warn"}
+            onChange={(e) => saveConfig({
+              ...(config ?? { period: "daily", tokenLimit: 0 }),
+              enforcement: e.target.value as "warn" | "block",
+            })}
+          >
+            <option value="warn">仅提醒</option>
+            <option value="block">暂停手动发送</option>
+          </select>
+        </label>
+        <div className="quota-panel__config-note">
+          留空表示不限。暂停策略只限制本桌面端的手动发送，不会修改模型服务商账单。
+        </div>
       </div>
     </div>
   );

@@ -24,9 +24,9 @@ function diffMsg(path: string, old: string, ne: string): ChatMessage {
 }
 
 describe("FileChangesPanel", () => {
-  it("无 diff 时不渲染", () => {
-    const { container } = render(<FileChangesPanel messages={[]} />);
-    expect(container.firstChild).toBeNull();
+  it("无 diff 时给出明确空状态", () => {
+    render(<FileChangesPanel messages={[]} />);
+    expect(screen.getByText("当前会话尚未产生可识别的文件变更。")).toBeInTheDocument();
   });
 
   it("渲染标题 + 文件数 + 增删汇总", () => {

@@ -7,6 +7,8 @@ import {
   recordCumulativeUsage,
   summarizeUsage,
   checkQuota,
+  consumeQuotaAlert,
+  isQuotaBlocking,
   loadQuotaConfig,
   saveQuotaConfig,
   clearUsage,
@@ -141,6 +143,39 @@ describe("checkQuota", () => {
     ];
     const q = checkQuota(records, { period: "monthly", tokenLimit: 1000 });
     expect(q.used).toBe(450);
+  });
+  it("0 / 空白上限表示不限，不会被判定超限", () => {
+    const records: UsageRecord[] = [
+      { date: todayKey(), modelId: "x", promptTokens: 1, completionTokens: 1, ts: 1 },
+    ];
+    expect(checkQuota(records, { period: "daily", tokenLimit: 0 })).toMatchObject({
+      pct: 0, exceeded: false, nearLimit: false,
+    });
+  });
+  it("只有 block 策略在超限后暂停发送", () => {
+    const records: UsageRecord[] = [
+      { date: todayKey(), modelId: "x", promptTokens: 100, completionTokens: 1, ts: 1 },
+    ];
+    expect(isQuotaBlocking(records, { period: "daily", tokenLimit: 100, enforcement: "warn" })).toBe(false);
+    expect(isQuotaBlocking(records, { period: "daily", tokenLimit: 100, enforcement: "block" })).toBe(true);
+  });
+  it("接近与超限阈值各通知一次", () => {
+    window.localStorage.removeItem("echoagent.quota-alert.v1");
+    const near = [{ date: todayKey(), modelId: "x", promptTokens: 80, completionTokens: 0, ts: 1 }];
+    const exceeded = [{ ...near[0], promptTokens: 101 }];
+    const cfg = { period: "daily", tokenLimit: 100 } as const;
+    expect(consumeQuotaAlert(near, cfg)).toBe("near");
+    expect(consumeQuotaAlert(near, cfg)).toBeNull();
+    expect(consumeQuotaAlert(exceeded, cfg)).toBe("exceeded");
+    expect(consumeQuotaAlert(exceeded, cfg)).toBeNull();
+  });
+});
+
+describe("本地时区日期键", () => {
+  it("使用本地日历日而不是 UTC 日历日", () => {
+    const local = new Date(2026, 8, 1, 0, 30, 0);
+    expect(todayKey(local)).toBe("2026-09-01");
+    expect(monthKey(local)).toBe("2026-09");
   });
 });
 

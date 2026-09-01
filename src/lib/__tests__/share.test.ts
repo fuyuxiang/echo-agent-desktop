@@ -5,6 +5,8 @@ import {
   buildMailtoUrl,
   buildDownloadUrl,
   triggerDownload,
+  copyShareText,
+  systemShare,
 } from "../share";
 import type { ChatMessage } from "@/stores/session-store";
 
@@ -95,6 +97,21 @@ describe("buildDownloadUrl", () => {
     revoke();
     expect(revokeSpy).toHaveBeenCalledWith("blob:x");
     revokeSpy.mockRestore();
+  });
+});
+
+describe("复制与系统分享", () => {
+  it("优先使用 Clipboard API", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    await expect(copyShareText("hello", { clipboard: { writeText } })).resolves.toBe(true);
+    expect(writeText).toHaveBeenCalledWith("hello");
+  });
+
+  it("调用注入的系统分享表", async () => {
+    const share = vi.fn().mockResolvedValue(undefined);
+    const payload = buildSharePayload(messages, "text", "会话");
+    await expect(systemShare(payload, "会话", share)).resolves.toBe(true);
+    expect(share).toHaveBeenCalledWith(expect.objectContaining({ title: "会话", text: payload.content }));
   });
 });
 

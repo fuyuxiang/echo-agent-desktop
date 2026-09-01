@@ -4,7 +4,7 @@
  *
  * 主数据源: `subagent-store`(实时 `agent://subagent` 事件——turns/tokens/duration/进度)。
  * 回退: 从会话消息派生 spawn_subagent 活动(无实时进度,仅状态)。
- * 两者合并去重(实时数据优先)。空时不渲染。
+ * 两者合并去重(实时数据优先)。
  */
 import { useMemo } from "react";
 import { useSubagentStore } from "@/stores/subagent-store";
@@ -71,19 +71,22 @@ export function SubagentPanel({ messages }: SubagentPanelProps) {
     liveSubagents.filter((s) => s.status === "failed" || s.status === "cancelled").length +
     extra.filter((a) => a.status === "failed").length;
 
-  if (allCount === 0) return null;
-
   return (
     <div className="subagent-panel" role="region" aria-label="子代理运行时">
       <div className="subagent-panel__head">
         <span className="subagent-panel__title">子代理</span>
-        <span className="subagent-panel__summary">
-          {allCount} 个 · 运行中 {runningCount}
-          {completedCount > 0 ? ` · 完成 ${completedCount}` : ""}
-          {failedCount > 0 ? ` · 失败 ${failedCount}` : ""}
-        </span>
+        {allCount > 0 && (
+          <span className="subagent-panel__summary">
+            {allCount} 个 · 运行中 {runningCount}
+            {completedCount > 0 ? ` · 完成 ${completedCount}` : ""}
+            {failedCount > 0 ? ` · 失败 ${failedCount}` : ""}
+          </span>
+        )}
       </div>
-      <ul className="subagent-panel__list">
+      {allCount === 0 ? (
+        <div className="runtime-panel-empty">当前会话尚未派发子代理。需要并行任务时，Agent 会在这里展示实时进度。</div>
+      ) : (
+        <ul className="subagent-panel__list">
         {/* Live subagents (rich progress) */}
         {liveSubagents.map((rt) => (
           <li
@@ -159,7 +162,8 @@ export function SubagentPanel({ messages }: SubagentPanelProps) {
             <span className="subagent-panel__status">{STATUS_LABEL[a.status]}</span>
           </li>
         ))}
-      </ul>
+        </ul>
+      )}
     </div>
   );
 }
