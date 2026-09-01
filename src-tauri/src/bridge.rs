@@ -195,6 +195,22 @@ pub struct CompleteEvent {
     pub stop_reason: String,
 }
 
+/// Exact per-prompt usage carried by EchoAgent's durable `TurnCompleted`
+/// session update. Unlike `session/usage`, this is not a process-local
+/// cumulative counter, so the frontend can persist and replay it idempotently
+/// without assigning an old session's history to the current day.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnUsageEvent {
+    pub session_id: String,
+    pub prompt_id: String,
+    pub usage: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+}
+
 /// Payload emitted on `agent://turn-error` — a turn that ended abnormally
 /// (`stopReason: "rate_limit" | "error"`). EchoAgent reports mid-stream failures
 /// (e.g. a 429 hit while a tool was running) via `prompt_complete` with these
@@ -751,6 +767,11 @@ fn handle_session_notification(app: &AppHandle, params: &Value) {
         .unwrap_or("");
     tracing::info!(session_id, kind, "received echo.agent/session_notification");
     match kind {
+        "turn_completed" => {
+            if let Some(event) = parse_turn_usage_event(session_id, params, update) {
+                let _ = app.emit("agent://turn-usage", event);
+            }
+        }
         "session_summary_generated" => {
             // Accept the camelCase variant too, defensively — reading only
             // `sessionSummary` silently drops every generated title (the event
@@ -797,6 +818,34 @@ fn handle_session_notification(app: &AppHandle, params: &Value) {
             );
         }
     }
+}
+
+fn parse_turn_usage_event(
+    session_id: &str,
+    params: &Value,
+    update: &Value,
+) -> Option<TurnUsageEvent> {
+    let prompt_id = update
+        .get("prompt_id")
+        .or_else(|| update.get("promptId"))
+        .and_then(Value::as_str)?;
+    if prompt_id.is_empty() {
+        return None;
+    }
+    let usage = update.get("usage").filter(|value| value.is_object())?;
+    let meta = params.get("_meta");
+    Some(TurnUsageEvent {
+        session_id: session_id.to_string(),
+        prompt_id: prompt_id.to_string(),
+        usage: usage.clone(),
+        occurred_at: meta
+            .and_then(|value| value.get("agentTimestampMs"))
+            .and_then(Value::as_i64),
+        event_id: meta
+            .and_then(|value| value.get("eventId"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
 }
 
 /// Forward subagent lifecycle events to the frontend as `agent://subagent`.
@@ -909,5 +958,48 @@ fn permission_kind_str(k: &acp::PermissionOptionKind) -> &'static str {
         acp::PermissionOptionKind::RejectOnce => "deny",
         acp::PermissionOptionKind::RejectAlways => "deny_always",
         _ => "other",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_durable_turn_usage_with_replay_metadata() {
+        let params = serde_json::json!({
+            "_meta": { "eventId": "evt-1", "agentTimestampMs": 1_788_000_000_000_i64 }
+        });
+        let update = serde_json::json!({
+            "sessionUpdate": "turn_completed",
+            "prompt_id": "p-1",
+            "usage": { "inputTokens": 120, "outputTokens": 30, "modelCalls": 2 }
+        });
+        let event = parse_turn_usage_event("s-1", &params, &update).expect("valid usage");
+        assert_eq!(event.session_id, "s-1");
+        assert_eq!(event.prompt_id, "p-1");
+        assert_eq!(event.occurred_at, Some(1_788_000_000_000));
+        assert_eq!(event.event_id.as_deref(), Some("evt-1"));
+        assert_eq!(event.usage["modelCalls"], 2);
+    }
+
+    #[test]
+    fn rejects_turn_usage_without_prompt_or_ledger() {
+        assert!(parse_turn_usage_event(
+            "s",
+            &Value::Null,
+            &serde_json::json!({
+                "usage": { "inputTokens": 1 }
+            })
+        )
+        .is_none());
+        assert!(parse_turn_usage_event(
+            "s",
+            &Value::Null,
+            &serde_json::json!({
+                "prompt_id": "p"
+            })
+        )
+        .is_none());
     }
 }

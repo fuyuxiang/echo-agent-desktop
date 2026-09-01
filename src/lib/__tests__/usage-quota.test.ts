@@ -5,6 +5,7 @@ import {
   estimateCost,
   recordUsage,
   recordCumulativeUsage,
+  recordTurnUsage,
   summarizeUsage,
   checkQuota,
   consumeQuotaAlert,
@@ -12,6 +13,8 @@ import {
   loadQuotaConfig,
   saveQuotaConfig,
   clearUsage,
+  serializeUsageCsv,
+  usageRecordCost,
   type UsageRecord,
   type QuotaConfig,
 } from "../usage-quota";
@@ -81,6 +84,76 @@ describe("recordCumulativeUsage", () => {
       sessionId: "s1", modelId: "gpt-4", inputTokens: 100, outputTokens: 20,
     });
     expect(second).toHaveLength(1);
+  });
+});
+
+describe("recordTurnUsage", () => {
+  beforeEach(() => clearUsage());
+
+  it("按 session + prompt 幂等记录持久化轮次用量", () => {
+    const entry = {
+      sessionId: "s1",
+      promptId: "p1",
+      occurredAt: new Date(2026, 7, 12, 9, 30).getTime(),
+      usage: {
+        inputTokens: 800,
+        outputTokens: 200,
+        totalTokens: 1000,
+        cachedReadTokens: 300,
+        reasoningTokens: 50,
+        modelCalls: 3,
+        numTurns: 2,
+        modelUsage: {
+          "gpt-4": {
+            inputTokens: 800,
+            outputTokens: 200,
+            totalTokens: 1000,
+            cachedReadTokens: 300,
+            modelCalls: 3,
+          },
+        },
+      },
+    };
+    const first = recordTurnUsage([], entry);
+    const replay = recordTurnUsage(first, entry);
+    expect(replay).toHaveLength(1);
+    expect(replay[0]).toMatchObject({
+      id: "s1:p1",
+      date: "2026-08-12",
+      promptTokens: 800,
+      completionTokens: 200,
+      cachedReadTokens: 300,
+      reasoningTokens: 50,
+      modelCalls: 3,
+      agentTurns: 2,
+      source: "turn",
+    });
+  });
+
+  it("优先使用可信的运行时成本，不完整账本改用本地费率", () => {
+    const base = {
+      sessionId: "s1",
+      promptId: "p1",
+      usage: {
+        inputTokens: 1000,
+        outputTokens: 500,
+        totalTokens: 1500,
+        cachedReadTokens: 0,
+        modelCalls: 1,
+        costUsdTicks: 500_000_000,
+      },
+    };
+    const trusted = recordTurnUsage([], base, config)[0];
+    expect(usageRecordCost(trusted, config)).toBeCloseTo(0.05);
+
+    const incomplete = recordTurnUsage([], {
+      ...base,
+      promptId: "p2",
+      fallbackModelId: "gpt-4",
+      usage: { ...base.usage, usageIsIncomplete: true },
+    }, config)[0];
+    expect(incomplete.providerCost).toBeUndefined();
+    expect(usageRecordCost(incomplete, config)).toBeCloseTo(0.06);
   });
 });
 
@@ -201,5 +274,20 @@ describe("clearUsage", () => {
     clearUsage();
     const raw = window.localStorage.getItem("echoagent.usage");
     expect(JSON.parse(raw!)).toEqual([]);
+  });
+});
+
+describe("用量导出", () => {
+  it("CSV 包含审计字段与数据", () => {
+    const records = recordUsage([], {
+      modelId: "gpt-4",
+      sessionId: "s1",
+      promptId: "p1",
+      promptTokens: 100,
+      completionTokens: 20,
+    });
+    const csv = serializeUsageCsv(records, config);
+    expect(csv).toContain("session_id,prompt_id,model,input_tokens");
+    expect(csv).toContain("s1,p1,gpt-4,100,20,120");
   });
 });

@@ -1,13 +1,30 @@
 /**
- * 本地用量统计与配额 —— weixinpay 计费的本地可移植替代。
+ * Device-local token accounting and quota enforcement for BYOK providers.
  *
- * EchoAgent 用 weixinpay 做计费(依赖腾讯支付后端);EchoAgent 是 BYOK(用户自带 API Key,
- * 无计费通道)。这里用「本地用量统计 + 配额面板」替代:记录每次 API 调用的 token 消耗,
- * 提供日/周/月统计 + 可选配额告警(接近上限时提醒)。纯函数 + localStorage 持久化。
+ * The authoritative input is EchoAgent's durable TurnCompleted usage ledger.
+ * Records are keyed by session + prompt, so live notifications and history
+ * replay are idempotent. This is deliberately described as local usage: it is
+ * not a provider invoice and does not include calls made outside this app.
  */
+
+import type { SessionUsage, SessionUsageModel } from "./types";
+
+export interface UsageModelBreakdown {
+  promptTokens: number;
+  completionTokens: number;
+  cachedReadTokens: number;
+  cacheCreationTokens: number;
+  reasoningTokens: number;
+  modelCalls: number;
+  apiDurationMs: number;
+  /** Trusted provider-reported cost. Undefined means unknown, not free. */
+  providerCost?: number;
+}
 
 /** 一条用量记录。 */
 export interface UsageRecord {
+  /** Stable replay-safe key (`sessionId:promptId`) for modern records. */
+  id?: string;
   /** ISO 日期(YYYY-MM-DD)。 */
   date: string;
   /** 模型 id。 */
@@ -22,6 +39,24 @@ export interface UsageRecord {
   ts: number;
   /** 会话 id；新记录用于去重与追踪，旧数据可能没有。 */
   sessionId?: string;
+  /** Prompt id emitted by the durable TurnCompleted event. */
+  promptId?: string;
+  eventId?: string;
+  /** Actual model requests folded into this prompt. */
+  modelCalls?: number;
+  /** Main-agent loop rounds; distinct from provider model requests. */
+  agentTurns?: number;
+  cachedReadTokens?: number;
+  cacheCreationTokens?: number;
+  reasoningTokens?: number;
+  apiDurationMs?: number;
+  /** Trusted provider-reported total cost. */
+  providerCost?: number;
+  /** Per-model exact split when supplied by the runtime ledger. */
+  modelUsage?: Record<string, UsageModelBreakdown>;
+  /** The runtime warned that folded/subagent usage may be incomplete. */
+  incomplete?: boolean;
+  source?: "turn" | "cumulative" | "legacy";
 }
 
 /** 用量统计汇总。 */
@@ -34,12 +69,28 @@ export interface UsageSummary {
   totalCompletion: number;
   /** 总估算费用。 */
   totalCost: number;
-  /** 记录数。 */
+  /** Actual provider model-call count (legacy records conservatively count as one). */
   count: number;
+  /** User prompt/turn records in the selected period. */
+  requestCount: number;
+  modelCalls: number;
+  cachedReadTokens: number;
+  cacheCreationTokens: number;
+  reasoningTokens: number;
+  apiDurationMs: number;
+  incompleteCount: number;
   /** 按模型分组。 */
-  byModel: Record<string, { tokens: number; cost: number; count: number }>;
+  byModel: Record<string, {
+    tokens: number;
+    promptTokens: number;
+    completionTokens: number;
+    cachedReadTokens: number;
+    reasoningTokens: number;
+    cost: number;
+    count: number;
+  }>;
   /** 按日期分组(YYYY-MM-DD)。 */
-  byDate: Record<string, { tokens: number; cost: number; count: number }>;
+  byDate: Record<string, { tokens: number; cost: number; count: number; requests: number }>;
 }
 
 /** 配额配置。 */
@@ -58,6 +109,8 @@ const STORAGE_KEY = "echoagent.usage";
 const QUOTA_KEY = "echoagent.quota";
 const SNAPSHOT_KEY = "echoagent.usage-snapshots.v1";
 const QUOTA_ALERT_KEY = "echoagent.quota-alert.v1";
+export const USAGE_CHANGED_EVENT = "echoagent:usage-changed";
+export const USD_TICKS_PER_USD = 10_000_000_000;
 
 interface CumulativeSnapshot {
   inputTokens: number;
@@ -86,6 +139,52 @@ export function monthKey(date = new Date()): string {
   return `${year}-${String(month).padStart(2, "0")}`;
 }
 
+function nonNegative(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
+}
+
+function trustedCostFromTicks(
+  ticks: unknown,
+  incomplete = false,
+  partial = false,
+): number | undefined {
+  if (incomplete || partial || typeof ticks !== "number" || !Number.isFinite(ticks) || ticks < 0) {
+    return undefined;
+  }
+  return ticks / USD_TICKS_PER_USD;
+}
+
+function normalizeModelUsage(
+  rows: Record<string, SessionUsageModel> | undefined,
+  incomplete: boolean,
+): Record<string, UsageModelBreakdown> | undefined {
+  if (!rows || typeof rows !== "object") return undefined;
+  const normalized: Record<string, UsageModelBreakdown> = {};
+  for (const [modelId, row] of Object.entries(rows)) {
+    if (!modelId || !row || typeof row !== "object") continue;
+    const promptTokens = nonNegative(row.inputTokens);
+    const completionTokens = nonNegative(row.outputTokens);
+    normalized[modelId] = {
+      promptTokens,
+      completionTokens,
+      cachedReadTokens: nonNegative(row.cachedReadTokens),
+      cacheCreationTokens: nonNegative(row.cacheCreationTokens),
+      reasoningTokens: nonNegative(row.reasoningTokens),
+      modelCalls: nonNegative(row.modelCalls) || (promptTokens + completionTokens > 0 ? 1 : 0),
+      apiDurationMs: nonNegative(row.apiDurationMs),
+      providerCost: trustedCostFromTicks(row.costUsdTicks, incomplete, row.costIsPartial),
+    };
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function emitUsageChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(USAGE_CHANGED_EVENT));
+}
+
 /** 估算单次调用费用(按费率表)。 */
 export function estimateCost(
   modelId: string,
@@ -96,6 +195,34 @@ export function estimateCost(
   if (!rates || !rates[modelId]) return undefined;
   const r = rates[modelId];
   return (promptTokens / 1000) * r.prompt + (completionTokens / 1000) * r.completion;
+}
+
+/** Resolve a record's display cost. Provider cost wins; local rates re-price history. */
+export function usageRecordCost(record: UsageRecord, config?: QuotaConfig | null): number {
+  if (typeof record.providerCost === "number" && Number.isFinite(record.providerCost)) {
+    return Math.max(0, record.providerCost);
+  }
+  const rates = config?.rates;
+  if (record.modelUsage && Object.keys(record.modelUsage).length > 0) {
+    let total = 0;
+    let allPriced = true;
+    for (const [modelId, row] of Object.entries(record.modelUsage)) {
+      if (typeof row.providerCost === "number" && Number.isFinite(row.providerCost)) {
+        total += Math.max(0, row.providerCost);
+        continue;
+      }
+      const estimate = estimateCost(modelId, row.promptTokens, row.completionTokens, rates);
+      if (estimate !== undefined) {
+        total += estimate;
+      } else {
+        allPriced = false;
+      }
+    }
+    if (allPriced) return total;
+  }
+  const estimate = estimateCost(record.modelId, record.promptTokens, record.completionTokens, rates);
+  if (estimate !== undefined) return estimate;
+  return typeof record.cost === "number" && Number.isFinite(record.cost) ? Math.max(0, record.cost) : 0;
 }
 
 /** 读取全部用量记录(按时间顺序)。 */
@@ -114,7 +241,14 @@ export function loadUsage(): UsageRecord[] {
 /** 追加一条用量记录(自动算费用)。 */
 export function recordUsage(
   records: UsageRecord[],
-  entry: { modelId: string; promptTokens: number; completionTokens: number; sessionId?: string },
+  entry: {
+    modelId: string;
+    promptTokens: number;
+    completionTokens: number;
+    sessionId?: string;
+    promptId?: string;
+    modelCalls?: number;
+  },
   config?: QuotaConfig,
 ): UsageRecord[] {
   const cost = estimateCost(entry.modelId, entry.promptTokens, entry.completionTokens, config?.rates);
@@ -126,8 +260,83 @@ export function recordUsage(
     cost,
     ts: Date.now(),
     sessionId: entry.sessionId,
+    promptId: entry.promptId,
+    id: entry.sessionId && entry.promptId ? `${entry.sessionId}:${entry.promptId}` : undefined,
+    modelCalls: entry.modelCalls ?? 1,
+    source: "legacy",
   };
-  const next = [...records, record];
+  const next = record.id
+    ? [...records.filter((item) => item.id !== record.id), record]
+    : [...records, record];
+  saveUsage(next);
+  return next;
+}
+
+/**
+ * Persist one exact prompt ledger. Replaying session history is safe because
+ * the stable session/prompt key replaces the same record instead of appending.
+ */
+export function recordTurnUsage(
+  records: UsageRecord[],
+  entry: {
+    sessionId: string;
+    promptId: string;
+    usage: SessionUsage;
+    occurredAt?: number;
+    eventId?: string;
+    fallbackModelId?: string;
+  },
+  config?: QuotaConfig,
+): UsageRecord[] {
+  if (!entry.sessionId || !entry.promptId || !entry.usage) return records;
+  const ts = typeof entry.occurredAt === "number" && Number.isFinite(entry.occurredAt) && entry.occurredAt > 0
+    ? entry.occurredAt
+    : Date.now();
+  const incomplete = entry.usage.usageIsIncomplete === true;
+  const modelUsage = normalizeModelUsage(entry.usage.modelUsage, incomplete);
+  const modelIds = modelUsage ? Object.keys(modelUsage) : [];
+  const modelId = entry.fallbackModelId || (modelIds.length === 1 ? modelIds[0] : "unknown");
+  const promptTokens = nonNegative(entry.usage.inputTokens);
+  const completionTokens = nonNegative(entry.usage.outputTokens);
+  const record: UsageRecord = {
+    id: `${entry.sessionId}:${entry.promptId}`,
+    date: todayKey(new Date(ts)),
+    modelId,
+    promptTokens,
+    completionTokens,
+    ts,
+    sessionId: entry.sessionId,
+    promptId: entry.promptId,
+    eventId: entry.eventId,
+    modelCalls: nonNegative(entry.usage.modelCalls) || (promptTokens + completionTokens > 0 ? 1 : 0),
+    agentTurns: nonNegative(entry.usage.numTurns),
+    cachedReadTokens: nonNegative(entry.usage.cachedReadTokens),
+    cacheCreationTokens: nonNegative(entry.usage.cacheCreationTokens),
+    reasoningTokens: nonNegative(entry.usage.reasoningTokens),
+    apiDurationMs: nonNegative(entry.usage.apiDurationMs),
+    providerCost: trustedCostFromTicks(
+      entry.usage.costUsdTicks,
+      incomplete,
+      entry.usage.costIsPartial,
+    ),
+    modelUsage,
+    incomplete,
+    source: "turn",
+  };
+  const calculatedCost = usageRecordCost(record, config);
+  if (calculatedCost > 0) record.cost = calculatedCost;
+  // Upgrade an old cumulative/legacy row in place when the durable replay
+  // supplies its stable prompt id. The narrow time+token match avoids deleting
+  // unrelated equal-sized turns.
+  const next = [...records.filter((item) => {
+    if (item.id === record.id) return false;
+    if (item.id) return true;
+    return item.sessionId !== record.sessionId
+      || item.promptTokens !== record.promptTokens
+      || item.completionTokens !== record.completionTokens
+      || Math.abs(item.ts - record.ts) > 120_000;
+  }), record]
+    .sort((a, b) => a.ts - b.ts);
   saveUsage(next);
   return next;
 }
@@ -169,6 +378,7 @@ export function recordCumulativeUsage(
     modelId: entry.modelId,
     promptTokens,
     completionTokens,
+    modelCalls: 1,
   }, config);
 }
 
@@ -198,6 +408,7 @@ function saveUsage(records: UsageRecord[]): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+    emitUsageChanged();
   } catch {
     /* quota / 隐私模式 — 静默降级 */
   }
@@ -214,39 +425,110 @@ export function clearUsage(): UsageRecord[] {
       /* noop */
     }
   }
+  emitUsageChanged();
   return [];
 }
 
-/** 汇总用量(全部或按日期范围过滤)。 */
-export function summarizeUsage(records: UsageRecord[], dateFilter?: { from: string; to: string }): UsageSummary {
+function emptyModelSummary() {
+  return {
+    tokens: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    cachedReadTokens: 0,
+    reasoningTokens: 0,
+    cost: 0,
+    count: 0,
+  };
+}
+
+function modelRowCost(
+  modelId: string,
+  row: UsageModelBreakdown,
+  config?: QuotaConfig | null,
+): number {
+  if (typeof row.providerCost === "number" && Number.isFinite(row.providerCost)) {
+    return Math.max(0, row.providerCost);
+  }
+  return estimateCost(modelId, row.promptTokens, row.completionTokens, config?.rates) ?? 0;
+}
+
+/** Summarize all records or a local-calendar date range. */
+export function summarizeUsage(
+  records: UsageRecord[],
+  dateFilter?: { from: string; to: string },
+  config?: QuotaConfig | null,
+): UsageSummary {
   const filtered = dateFilter
     ? records.filter((r) => r.date >= dateFilter.from && r.date <= dateFilter.to)
     : records;
-  const byModel: Record<string, { tokens: number; cost: number; count: number }> = {};
-  const byDate: Record<string, { tokens: number; cost: number; count: number }> = {};
+  const byModel: UsageSummary["byModel"] = {};
+  const byDate: UsageSummary["byDate"] = {};
   let totalPrompt = 0;
   let totalCompletion = 0;
   let totalCost = 0;
+  let modelCalls = 0;
+  let cachedReadTokens = 0;
+  let cacheCreationTokens = 0;
+  let reasoningTokens = 0;
+  let apiDurationMs = 0;
+  let incompleteCount = 0;
   for (const r of filtered) {
     const tokens = r.promptTokens + r.completionTokens;
+    const recordCalls = r.modelCalls ?? 1;
+    const recordCost = usageRecordCost(r, config);
     totalPrompt += r.promptTokens;
     totalCompletion += r.completionTokens;
-    totalCost += r.cost ?? 0;
-    if (!byModel[r.modelId]) byModel[r.modelId] = { tokens: 0, cost: 0, count: 0 };
-    byModel[r.modelId].tokens += tokens;
-    byModel[r.modelId].cost += r.cost ?? 0;
-    byModel[r.modelId].count += 1;
-    if (!byDate[r.date]) byDate[r.date] = { tokens: 0, cost: 0, count: 0 };
+    totalCost += recordCost;
+    modelCalls += recordCalls;
+    cachedReadTokens += r.cachedReadTokens ?? 0;
+    cacheCreationTokens += r.cacheCreationTokens ?? 0;
+    reasoningTokens += r.reasoningTokens ?? 0;
+    apiDurationMs += r.apiDurationMs ?? 0;
+    if (r.incomplete) incompleteCount += 1;
+
+    if (r.modelUsage && Object.keys(r.modelUsage).length > 0) {
+      for (const [modelId, row] of Object.entries(r.modelUsage)) {
+        if (!byModel[modelId]) byModel[modelId] = emptyModelSummary();
+        const target = byModel[modelId];
+        target.promptTokens += row.promptTokens;
+        target.completionTokens += row.completionTokens;
+        target.tokens += row.promptTokens + row.completionTokens;
+        target.cachedReadTokens += row.cachedReadTokens;
+        target.reasoningTokens += row.reasoningTokens;
+        target.cost += modelRowCost(modelId, row, config);
+        target.count += row.modelCalls;
+      }
+    } else {
+      const modelId = r.modelId || "unknown";
+      if (!byModel[modelId]) byModel[modelId] = emptyModelSummary();
+      const target = byModel[modelId];
+      target.tokens += tokens;
+      target.promptTokens += r.promptTokens;
+      target.completionTokens += r.completionTokens;
+      target.cachedReadTokens += r.cachedReadTokens ?? 0;
+      target.reasoningTokens += r.reasoningTokens ?? 0;
+      target.cost += recordCost;
+      target.count += recordCalls;
+    }
+    if (!byDate[r.date]) byDate[r.date] = { tokens: 0, cost: 0, count: 0, requests: 0 };
     byDate[r.date].tokens += tokens;
-    byDate[r.date].cost += r.cost ?? 0;
-    byDate[r.date].count += 1;
+    byDate[r.date].cost += recordCost;
+    byDate[r.date].count += recordCalls;
+    byDate[r.date].requests += 1;
   }
   return {
     totalTokens: totalPrompt + totalCompletion,
     totalPrompt,
     totalCompletion,
     totalCost,
-    count: filtered.length,
+    count: modelCalls,
+    requestCount: filtered.length,
+    modelCalls,
+    cachedReadTokens,
+    cacheCreationTokens,
+    reasoningTokens,
+    apiDurationMs,
+    incompleteCount,
     byModel,
     byDate,
   };
@@ -330,7 +612,57 @@ export function saveQuotaConfig(config: QuotaConfig): void {
   try {
     window.localStorage.setItem(QUOTA_KEY, JSON.stringify(config));
     window.localStorage.removeItem(QUOTA_ALERT_KEY);
+    emitUsageChanged();
   } catch {
     /* noop */
   }
+}
+
+function csvCell(value: unknown): string {
+  const text = value == null ? "" : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/** Stable, spreadsheet-friendly export of the local prompt ledger. */
+export function serializeUsageCsv(records: UsageRecord[], config?: QuotaConfig | null): string {
+  const headers = [
+    "date", "time", "session_id", "prompt_id", "model", "input_tokens",
+    "output_tokens", "total_tokens", "cached_read_tokens", "cache_creation_tokens",
+    "reasoning_tokens", "model_calls", "agent_turns", "api_duration_ms", "cost_usd",
+    "incomplete", "source",
+  ];
+  const rows = records
+    .slice()
+    .sort((a, b) => a.ts - b.ts)
+    .map((record) => [
+      record.date,
+      new Date(record.ts).toISOString(),
+      record.sessionId,
+      record.promptId,
+      record.modelId,
+      record.promptTokens,
+      record.completionTokens,
+      record.promptTokens + record.completionTokens,
+      record.cachedReadTokens ?? 0,
+      record.cacheCreationTokens ?? 0,
+      record.reasoningTokens ?? 0,
+      record.modelCalls ?? 1,
+      record.agentTurns ?? "",
+      record.apiDurationMs ?? 0,
+      usageRecordCost(record, config) || "",
+      record.incomplete === true,
+      record.source ?? "legacy",
+    ]);
+  return [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
+}
+
+/** JSON export keeps the exact per-model ledger for later audit/import tooling. */
+export function serializeUsageJson(records: UsageRecord[], config?: QuotaConfig | null): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    scope: "device-local",
+    exportedAt: new Date().toISOString(),
+    summary: summarizeUsage(records, undefined, config),
+    records: records.slice().sort((a, b) => a.ts - b.ts),
+  }, null, 2);
 }

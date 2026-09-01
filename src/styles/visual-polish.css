@@ -980,7 +980,7 @@ button,
 
 .quota-panel__stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 12px;
   padding: 20px;
 }
@@ -993,7 +993,8 @@ button,
   background: var(--ui-surface-muted);
 }
 
-.quota-panel__stat-value {
+.quota-panel__stat-value,
+.quota-panel__stat strong {
   font-size: 25px;
 }
 

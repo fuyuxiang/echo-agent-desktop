@@ -8,6 +8,7 @@ import {
   Cpu,
   Palette,
   Database,
+  BarChart3,
   Shield,
   HelpCircle,
   Plus,
@@ -48,6 +49,7 @@ import {
   SecuritySettingsPanel,
   ShortcutsSettingsPanel,
 } from "./SettingsSections";
+import { UsageQuotaPanel } from "./UsageQuotaPanel";
 
 /**
  * EchoAgent-style Settings dialog.
@@ -70,6 +72,7 @@ export type SettingsSectionId =
   | "model"
   | "personalize"
   | "data"
+  | "usage"
   | "security"
   | "help";
 
@@ -110,6 +113,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "数据与支持",
     items: [
+      { id: "usage", label: "Token 用量", icon: BarChart3 },
       { id: "data", label: "数据管理", icon: Database },
       { id: "security", label: "安全中心", icon: Shield },
       { id: "help", label: "帮助与反馈", icon: HelpCircle },
@@ -288,6 +292,8 @@ export function SettingsPanel({
               <SecuritySettingsPanel />
             ) : active === "data" ? (
               <DataSettingsPanel />
+            ) : active === "usage" ? (
+              <UsageQuotaPanel />
             ) : active === "general" ? (
               <GeneralSettingsPanel />
             ) : active === "agent-settings" ? (
