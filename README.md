@@ -88,12 +88,12 @@ EchoAgent 将模型 API 转化为真正可落地的桌面 Agent 工作环境。�
 | Protocol Buffers | 系统 `PATH` 中可用的原生 `protoc`，或通过 `PROTOC` 环境变量指定。 |
 | 平台工具链 | macOS：Xcode Command Line Tools。Windows：Visual Studio 2022 Build Tools，并安装 **Desktop development with C++** 工作负载和 Windows SDK。 |
 
-内嵌 Runtime 以固定版本的 Git Submodule 引入。请递归克隆仓库并执行 Setup 脚本，以确保使用正确的上游版本并应用兼容性补丁。Setup 脚本会同步子模块到 `patches/grok-build/` 中记录的修订，并 `git apply` 项目维护的 patch；如果跳过 Setup 直接编译，会因为补丁未应用而出现构建错误。
+内嵌 Runtime 已作为普通源码完整收录在 `vendor/grok-build/`，与桌面应用由同一仓库、同一提交统一管理。源码快照已经包含 `patches/grok-build/` 记录的兼容性修改和 EchoAgent 协议命名空间迁移；克隆主仓库后无需初始化子模块，也不依赖上游仓库在线可用。Setup 脚本仅负责检查 Vendored Runtime 是否完整。
 
 **macOS**
 
 ```bash
-git clone --recurse-submodules https://github.com/fuyuxiang/echo-agent-desktop.git
+git clone https://github.com/fuyuxiang/echo-agent-desktop.git
 cd echo-agent-desktop
 
 pnpm setup:mac
@@ -104,7 +104,7 @@ pnpm tauri dev
 **Windows（PowerShell）**
 
 ```powershell
-git clone --recurse-submodules https://github.com/fuyuxiang/echo-agent-desktop.git
+git clone https://github.com/fuyuxiang/echo-agent-desktop.git
 cd echo-agent-desktop
 
 pnpm setup:win
@@ -218,8 +218,8 @@ src-tauri/
 ├── src/lib.rs               Tauri 初始化与命令注册
 └── src/*.rs                 Provider、MCP、Skills、Policy、Storage 等模块
 
-vendor/grok-build/           固定版本的 Apache-2.0 Runtime Submodule
-patches/grok-build/          项目维护的兼容性补丁
+vendor/grok-build/           主仓库直接管理的 Apache-2.0 Runtime 源码快照
+patches/grok-build/          上游更新时使用的兼容性补丁与变更记录
 scripts/                     初始化与打包脚本
 docs/                        平台专项文档
 .github/workflows/           持续集成配置
@@ -246,7 +246,7 @@ CI 会在每个 Pull Request 上执行 TypeScript 类型检查、前端单元测
 
 欢迎从小范围修复到 Runtime 新能力等各种形式的贡献。
 
-1. Fork 仓库，并带 Submodule 克隆到本地。
+1. Fork 仓库，并正常克隆到本地；内嵌 Runtime 已包含在主仓库中。
 2. 从 `main` 创建独立分支。
 3. 为行为变更补充测试，并运行上方对应检查。
 4. 保持变更范围清晰；行为发生变化时同步更新文档。
@@ -290,7 +290,7 @@ Provider Key 保存在 `~/.echo-agent/config.toml`。它不会写入项目仓库
 
 ## 致谢
 
-- [xai-org/grok-build](https://github.com/xai-org/grok-build) 提供以固定 Rust Path Dependency 嵌入的 Apache-2.0 Runtime 组件。
+- [xai-org/grok-build](https://github.com/xai-org/grok-build) 提供最初的 Apache-2.0 Runtime 源码；EchoAgent 在主仓库中维护经过兼容性修改的固定源码快照。
 - [Tauri](https://tauri.app/)、[React](https://react.dev/) 和 [Vite](https://vite.dev/) 构成项目的核心应用技术栈。
 
 EchoAgent 是独立的社区开源项目，与 xAI 不存在隶属、背书或赞助关系。

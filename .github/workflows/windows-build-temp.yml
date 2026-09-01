@@ -17,8 +17,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - uses: pnpm/action-setup@v4
 
@@ -50,14 +48,11 @@ jobs:
         shell: pwsh
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
-          $revision = git -C vendor/grok-build rev-parse HEAD
-          if ($LASTEXITCODE -ne 0) { throw "Embedded Runtime is not a Git checkout" }
-          if ($revision -ne "c2ad97f87aea4303b6000a2c22128bc91ee76c9b") {
-            throw "Unexpected Embedded Runtime revision: $revision"
-          }
           if (-not (Test-Path "vendor\grok-build\crates\codegen\xai-grok-agent\Cargo.toml")) {
-            throw "Embedded Runtime checkout is incomplete"
+            throw "Vendored Runtime source is incomplete"
           }
+          $runtimeChanges = git status --porcelain -- vendor/grok-build
+          if ($runtimeChanges) { throw "Setup unexpectedly modified the vendored Runtime: $runtimeChanges" }
           $global:LASTEXITCODE = 0
 
       - name: Install JavaScript dependencies

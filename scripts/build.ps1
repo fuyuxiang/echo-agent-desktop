@@ -9,8 +9,8 @@
 #    powershell -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0.2.0
 #
 #  Prerequisites:
-#    Run `scripts/setup.ps1` once after clone to initialize the
-#    vendor/grok-build submodule.
+#    The complete vendored Runtime source is included in the repository.
+#    `scripts/setup.ps1` can be used to verify checkout integrity.
 # ===========================================================================
 
 [CmdletBinding()]
@@ -31,8 +31,8 @@ function Log-Warn([string]$msg) { Write-Host "  [WARN] $msg" -ForegroundColor Ye
 function Log-Err([string]$msg)  { Write-Host "  [ERR]  $msg" -ForegroundColor Red }
 function Log-Info([string]$msg) { Write-Host "         $msg" -ForegroundColor DarkGray }
 
-# Track paths we reference (Cargo.toml is no longer rewritten — grok-build
-# path deps are now relative to the submodule at vendor/grok-build).
+# Track paths we reference. grok-build path dependencies resolve directly to
+# the source snapshot committed under vendor/grok-build.
 $script:CargoTomlPath = Join-Path $ProjectRoot "src-tauri\Cargo.toml"
 $script:RustToolchainPath = Join-Path $ProjectRoot "rust-toolchain.toml"
 $script:RustToolchainBackup = $null
@@ -111,40 +111,13 @@ if (-not (Get-Command link.exe -ErrorAction SilentlyContinue)) {
 Log-Ok "MSVC link.exe available: $((Get-Command link.exe).Source)"
 
 # ---------------------------------------------------------------------------
-# 4. grok-build submodule sanity check (path deps in Cargo.toml are relative
-#    to vendor/grok-build, so the submodule must be present) + ensure the
-#    Windows protoc patch is applied (idempotent).
+# 4. Vendored Runtime sanity check. Path dependencies in Cargo.toml resolve
+#    directly into vendor/grok-build, which is tracked by this repository.
 # ---------------------------------------------------------------------------
-Log-Step "Checking grok-build submodule"
-$grokSubmodule = Join-Path $ProjectRoot "vendor\grok-build"
-if (-not (Test-Path (Join-Path $grokSubmodule ".git"))) {
-    Log-Err "grok-build submodule not initialized at: $grokSubmodule"
-    Log-Err "Run \`scripts\setup.ps1\` (or \`git submodule update --init vendor\grok-build\`) and retry."
-    exit 1
-}
-Log-Ok "grok-build submodule present: $grokSubmodule"
-
-$patchDir = Join-Path $ProjectRoot "patches\grok-build"
-if (Test-Path $patchDir) {
-    Get-ChildItem $patchDir -Filter *.patch | Sort-Object Name | ForEach-Object {
-        $patch = $_.FullName
-        git -C $grokSubmodule apply --check --reverse $patch 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Log-Ok "$($_.Name) already applied"
-        } else {
-            git -C $grokSubmodule apply --check $patch 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                git -C $grokSubmodule apply $patch
-                Log-Ok "applied $($_.Name)"
-            } else {
-                Log-Warn "$($_.Name) did not apply cleanly - skipping"
-            }
-        }
-    }
-}
-
-& (Join-Path $ProjectRoot "scripts\rename-runtime-namespace.ps1") `
-    -RuntimeRoot $grokSubmodule
+Log-Step "Checking vendored Runtime source"
+& node (Join-Path $ProjectRoot "scripts\verify-vendored-runtime.mjs")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Log-Ok "Vendored Runtime source is complete"
 
 # ---------------------------------------------------------------------------
 # 5. NSIS tool cache (work around GitHub download timeouts in CN).
