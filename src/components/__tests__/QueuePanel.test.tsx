@@ -73,7 +73,7 @@ describe("QueuePanel", () => {
     const onSendNow = vi.fn();
     render(<QueuePanel sessionId="s1" onSendNow={onSendNow} />);
     fireEvent.click(screen.getByRole("button", { name: "立即发送" }));
-    expect(onSendNow).toHaveBeenCalledWith("马上发");
+    expect(onSendNow).toHaveBeenCalledWith("马上发", []);
     await waitFor(() => {
       expect(useMessageQueueStore.getState().getQueue("s1")).toHaveLength(0);
     });
@@ -106,5 +106,15 @@ describe("QueuePanel", () => {
     s.setStatus("s1", id, "paused");
     render(<QueuePanel sessionId="s1" onSendNow={vi.fn()} />);
     expect(screen.getByRole("button", { name: "立即发送" })).toBeDisabled();
+  });
+
+  it("展示队列附件并在发送时保留", async () => {
+    useMessageQueueStore.getState().enqueue("s1", "请优化", ["/tmp/方案.docx"]);
+    const onSendNow = vi.fn();
+    render(<QueuePanel sessionId="s1" onSendNow={onSendNow} />);
+    expect(screen.getByText("📎 方案.docx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "立即发送" }));
+    expect(onSendNow).toHaveBeenCalledWith("请优化", ["/tmp/方案.docx"]);
+    await waitFor(() => expect(useMessageQueueStore.getState().getQueue("s1")).toHaveLength(0));
   });
 });

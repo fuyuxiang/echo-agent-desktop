@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import {
+  agentSend,
   commandsList,
   memoryDelete,
   memoryFlush,
@@ -14,6 +15,28 @@ import {
 } from "../agent-client";
 
 const invokeMock = vi.mocked(invoke);
+
+describe("agentSend attachment contract", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
+  });
+
+  it("分离传递模型正文、附件和用户可见正文", async () => {
+    await agentSend(
+      "session-1",
+      "<system-reminder>hidden</system-reminder>\n\n请优化",
+      ["/tmp/方案.docx"],
+      "请优化",
+    );
+    expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+      sessionId: "session-1",
+      text: "<system-reminder>hidden</system-reminder>\n\n请优化",
+      attachments: ["/tmp/方案.docx"],
+      displayText: "请优化",
+    });
+  });
+});
 
 describe("commandsList", () => {
   beforeEach(() => {

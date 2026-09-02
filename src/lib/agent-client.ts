@@ -140,8 +140,13 @@ export async function agentSetModel(sessionId: string, modelId: string): Promise
 }
 
 /** Send a user prompt; streamed updates arrive via the events below. */
-export async function agentSend(sessionId: string, text: string, attachments: string[] = []): Promise<void> {
-  await invoke<void>("agent_send", { sessionId, text, attachments });
+export async function agentSend(
+  sessionId: string,
+  text: string,
+  attachments: string[] = [],
+  displayText: string = text,
+): Promise<void> {
+  await invoke<void>("agent_send", { sessionId, text, attachments, displayText });
 }
 
 export async function agentCancel(sessionId: string): Promise<void> {

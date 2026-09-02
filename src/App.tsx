@@ -83,11 +83,7 @@ import { parseRememberArguments, type SlashCommandInvocation } from "./lib/slash
 import { useUpdateStore } from "./stores/update-store";
 import { useOrgSessionStore } from "./stores/org-session-store";
 import { indexTaskArtifacts } from "./lib/artifact-catalog";
-
-/** Hidden markers wrapping the expert persona in the text sent to the runtime.
- *  The UI strips these (and everything between them) from user messages. */
-export const EXPERT_PERSONA_BEGIN = "<!--EXPERT_PERSONA_BEGIN-->";
-export const EXPERT_PERSONA_END = "<!--EXPERT_PERSONA_END-->";
+import { EXPERT_PERSONA_BEGIN, EXPERT_PERSONA_END } from "./lib/user-message";
 
 function publishQuotaAlert(
   records: UsageRecord[],
@@ -414,9 +410,9 @@ function Shell() {
                 // Keep the queue item until agentSend acknowledges the request;
                 // a rejected invoke therefore cannot silently lose user input.
                 sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "working" });
-                sessionStore.getState().pushUser(next.text);
+                sessionStore.getState().pushUser(next.text, next.attachments);
                 sessionStore.getState().startStreaming();
-                agentSend(p.sessionId, next.text).then(() => {
+                agentSend(p.sessionId, next.text, next.attachments, next.text).then(() => {
                   useMessageQueueStore.getState().remove(p.sessionId, next.id);
                 }).catch((e) => {
                   sessionStore.getState().setError(friendlyError(e));
@@ -722,9 +718,9 @@ function Shell() {
       }
 
       // UI shows only the user's visible text.
-      sessionStore.getState().pushUser(text);
+      sessionStore.getState().pushUser(text, attachments);
       sessionStore.getState().startStreaming();
-      await agentSend(sessionId, textForAgent, attachments);
+      await agentSend(sessionId, textForAgent, attachments, text);
       return true;
     } catch (e) {
       console.error('[EchoAgent] handleSendNew error:', e);
@@ -771,9 +767,9 @@ function Shell() {
         ? buildProjectPrompt(project, text)
         : text;
       sessionsStore.getState().upsert({ sessionId: currentSessionId, status: "working" });
-      sessionStore.getState().pushUser(text);
+      sessionStore.getState().pushUser(text, attachments);
       sessionStore.getState().startStreaming();
-      await agentSend(currentSessionId, textForAgent, attachments);
+      await agentSend(currentSessionId, textForAgent, attachments, text);
       return true;
     } catch (e) {
       sessionStore.getState().rollbackPendingTurn();
@@ -1232,7 +1228,7 @@ function Shell() {
       const seed = `开始「${project.name}」项目，请先根据项目配置确认目标、约束和下一步。`;
       sessionStore.getState().pushUser(seed);
       sessionStore.getState().startStreaming();
-      await agentSend(sessionId, buildProjectPrompt(project, seed));
+      await agentSend(sessionId, buildProjectPrompt(project, seed), [], seed);
     } catch (e) {
       sessionStore.getState().setError(friendlyError(e));
       const sid = sessionStore.getState().sessionId;
@@ -1281,7 +1277,7 @@ function Shell() {
         const prompt = buildProjectPrompt(project, message);
         sessionStore.getState().pushUser(message);
         sessionStore.getState().startStreaming();
-        await agentSend(sessionId, prompt);
+        await agentSend(sessionId, prompt, [], message);
       }
       return sessionId;
     } catch (e) {

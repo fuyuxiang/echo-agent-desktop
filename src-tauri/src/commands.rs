@@ -254,6 +254,7 @@ pub async fn agent_send(
     session_id: String,
     text: String,
     attachments: Option<Vec<String>>,
+    display_text: Option<String>,
 ) -> Result<(), String> {
     let tx = state
         .tx
@@ -266,6 +267,7 @@ pub async fn agent_send(
         &session_id,
         &text,
         attachments.as_deref().unwrap_or(&[]),
+        display_text.as_deref(),
     )
     .await
     .map_err(|e| e.to_string())

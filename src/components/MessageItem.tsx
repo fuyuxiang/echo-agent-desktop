@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { FileText } from "lucide-react";
 import { Markdown, type MarkdownConfig } from "./markdown/index";
 import { ToolCallCard } from "./ToolCallCard";
 import { LoadingRow } from "./LoadingRow";
@@ -6,7 +7,8 @@ import { FeedbackDialog } from "./FeedbackDialog";
 import { useTheme } from "./ThemeProvider";
 import { useFeedbackStore, type FeedbackRating } from "@/stores/feedback-store";
 import type { ChatMessage, ToolCallView } from "@/stores/session-store";
-import { EXPERT_PERSONA_BEGIN, EXPERT_PERSONA_END } from "@/App";
+import { openLocalPath } from "@/lib/agent-client";
+import { attachmentBasename, stripInjectedUserContext } from "@/lib/user-message";
 const logoMarkUrl = "/app-icon.png";
 import {
   createWebSpeechTtsProvider,
@@ -45,18 +47,6 @@ function speechText(markdown: string): string {
     .trim();
 }
 
-/** Strip the hidden expert persona block from text (used on history replay). */
-function stripPersona(text: string): string {
-  const begin = text.indexOf(EXPERT_PERSONA_BEGIN);
-  if (begin === -1) return text;
-  const end = text.indexOf(EXPERT_PERSONA_END, begin);
-  if (end === -1) return text;
-  const after = end + EXPERT_PERSONA_END.length;
-  // Also strip trailing newlines after the end marker.
-  const rest = text.slice(after).replace(/^\n+/, "");
-  return (text.slice(0, begin) + rest).trim();
-}
-
 /**
  * Renders one chat message. Assistant messages are left-aligned with avatar +
  * name row; user messages are right-aligned bubbles with no avatar / name.
@@ -69,6 +59,7 @@ export function MessageItem({
   message,
   streaming,
   markdownConfig,
+  cwd,
   sessionId,
   onOpenTool,
   onEditResend,
@@ -78,7 +69,7 @@ export function MessageItem({
   message: ChatMessage;
   streaming: boolean;
   markdownConfig?: MarkdownConfig;
-  /** @deprecated kept for call-site compatibility; unused after compact tools. */
+  /** Workspace used to resolve relative attachment paths. */
   cwd?: string;
   /** Current session id — needed to key feedback entries. */
   sessionId?: string;
@@ -86,7 +77,7 @@ export function MessageItem({
   /** Open tool detail in the right-side panel (Phase 2). */
   onOpenTool?: (tc: ToolCallView) => void;
   /** Put text back into the composer for re-editing (user messages only). */
-  onEditResend?: (text: string) => void;
+  onEditResend?: (text: string, attachments: string[]) => void;
   /** Regenerate this response (last assistant message only): rewinds the
    *  conversation to the preceding user prompt and resends it. */
   onRetry?: () => void;
@@ -114,7 +105,7 @@ export function MessageItem({
   /** Extract plain text from all text parts (for copy), stripping hidden persona. */
   const plainText = message.parts
     .filter((p) => p.kind === "text")
-    .map((p) => (message.role === "user" ? stripPersona(p.text) : p.text))
+    .map((p) => (message.role === "user" ? stripInjectedUserContext(p.text) : p.text))
     .join("\n");
 
   /** Extract markdown (text + thought) for "copy as markdown". */
@@ -156,12 +147,46 @@ export function MessageItem({
   }, [onToast, plainText, speaking]);
 
   if (message.role === "user") {
+    const attachments = message.attachments ?? [];
     return (
       <div className="msg msg--user">
         <div>
-          <div className="msg__bubble">
+          <div className={"msg__bubble" + (attachments.length ? " msg__bubble--with-attachments" : "")}>
+            {attachments.length > 0 && (
+              <div className="msg__attachments" role="list" aria-label="附件">
+                {attachments.map((path) => {
+                  const name = attachmentBasename(path);
+                  const extension = name.includes(".")
+                    ? name.slice(name.lastIndexOf(".") + 1).toUpperCase()
+                    : "FILE";
+                  return (
+                    <div key={path} className="msg__attachment-item" role="listitem">
+                      <button
+                        type="button"
+                        className="msg__attachment"
+                        title={path}
+                        aria-label={`打开附件 ${name}`}
+                        onClick={() => {
+                          void openLocalPath(path, cwd).catch((error) => {
+                            onToast?.(`打开附件失败：${String(error).replace(/^Error:\s*/, "")}`);
+                          });
+                        }}
+                      >
+                        <span className="msg__attachment-icon" aria-hidden="true">
+                          <FileText size={20} strokeWidth={1.8} />
+                        </span>
+                        <span className="msg__attachment-copy">
+                          <span className="msg__attachment-name">{name}</span>
+                          <span className="msg__attachment-type">{extension} 文件</span>
+                        </span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {message.parts.map((p, i) =>
-              p.kind === "text" ? <span key={i}>{stripPersona(p.text)}</span> : null
+              p.kind === "text" ? <span key={i}>{stripInjectedUserContext(p.text)}</span> : null
             )}
           </div>
           {/* Hover actions */}
@@ -178,7 +203,7 @@ export function MessageItem({
               <button
                 type="button"
                 className="msg__action-btn"
-                onClick={() => onEditResend(plainText)}
+                onClick={() => onEditResend(plainText, attachments)}
                 title="编辑并重新发送"
               >
                 编辑
