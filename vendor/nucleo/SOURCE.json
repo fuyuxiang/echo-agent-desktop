@@ -1,0 +1,18 @@
+{
+  "integrationMode": "vendored-source",
+  "upstreamRepository": "https://github.com/helix-editor/nucleo.git",
+  "upstreamRevision": "5b74652e482f7c07d827f18c6d21e7540c242c69",
+  "importedAt": "2026-09-02",
+  "license": "MPL-2.0",
+  "crates": [
+    "nucleo",
+    "nucleo-matcher"
+  ],
+  "sourceScope": "build-dependency",
+  "excludedNonBuildAssets": [
+    ".github/"
+  ],
+  "crossPlatformNormalization": [
+    "matcher/LICENSE: relative symlink expanded to a regular file"
+  ]
+}

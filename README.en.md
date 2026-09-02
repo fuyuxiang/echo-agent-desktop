@@ -88,7 +88,7 @@ When a packaged build is available, download it from [GitHub Releases](https://g
 | Protocol Buffers | A native `protoc` executable available on `PATH`, or through the `PROTOC` environment variable. |
 | Platform toolchain | macOS: Xcode Command Line Tools. Windows: Visual Studio 2022 Build Tools with **Desktop development with C++** and a Windows SDK. |
 
-The embedded runtime is checked in as regular source under `vendor/grok-build/` and versioned atomically with the desktop application. Compatibility changes and the EchoAgent protocol namespace migration are integrated directly into that source. A normal clone is self-contained: no submodule initialization or live upstream repository is required. The setup script only verifies the integrity of the vendored Runtime.
+The embedded runtime is checked in as regular source under `vendor/grok-build/` and versioned atomically with the desktop application. Compatibility changes and the EchoAgent protocol namespace migration are integrated directly into that source, while the pinned `async-openai` and `nucleo` sources are also maintained under `vendor/`. A normal clone needs no submodule initialization and does not download source from those three Git repositories during a build. The setup script only verifies the integrity of the vendored source.
 
 **macOS**
 
@@ -219,6 +219,8 @@ src-tauri/
 └── src/*.rs                 Providers, MCP, skills, policy, storage, and more
 
 vendor/grok-build/           Apache-2.0 Runtime source maintained in this repository
+vendor/async-openai/         Vendored OpenAI-compatible Rust client source
+vendor/nucleo/               Vendored fuzzy-matching Rust source
 scripts/                     Setup and packaging scripts
 docs/                        Platform-specific documentation
 .github/workflows/           Continuous integration
