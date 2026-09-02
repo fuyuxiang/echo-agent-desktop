@@ -15,14 +15,19 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-#[cfg(target_os = "windows")]
-use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::{
+    Foundation::LocalFree,
+    Security::Cryptography::{
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    },
+};
 
 const CREDENTIAL_SERVICE: &str = "com.echoagent.organization";
 const PROFILE_FILE: &str = "organization-profile.json";
@@ -292,33 +297,117 @@ fn credential_delete(account: &str) -> Result<(), String> {
     Ok(())
 }
 
-// Windows uses DPAPI: ciphertext is bound to the current OS user and machine.
+// Windows uses DPAPI directly: ciphertext is bound to the current OS user and
+// machine. Keep the raw DPAPI blob on disk so files created by the retired
+// PowerShell implementation remain readable.
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct DpapiBuffer(CRYPT_INTEGER_BLOB);
+
+#[cfg(target_os = "windows")]
+impl DpapiBuffer {
+    fn to_vec(&self) -> Result<Vec<u8>, String> {
+        if self.0.cbData == 0 {
+            return Ok(Vec::new());
+        }
+        if self.0.pbData.is_null() {
+            return Err("DPAPI returned a null output buffer".into());
+        }
+        // SAFETY: CryptProtectData/CryptUnprotectData returned this allocation
+        // and cbData is its initialized byte length. Copy before the allocation
+        // is zeroed and released by Drop.
+        Ok(unsafe { std::slice::from_raw_parts(self.0.pbData, self.0.cbData as usize) }.to_vec())
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for DpapiBuffer {
+    fn drop(&mut self) {
+        if self.0.pbData.is_null() {
+            return;
+        }
+        // SAFETY: DPAPI allocates output with LocalAlloc. Zeroing before
+        // LocalFree prevents decrypted credentials lingering in freed memory.
+        unsafe {
+            std::ptr::write_bytes(self.0.pbData, 0, self.0.cbData as usize);
+            let result = LocalFree(self.0.pbData.cast());
+            debug_assert!(result.is_null(), "LocalFree rejected a DPAPI buffer");
+        }
+        self.0 = CRYPT_INTEGER_BLOB::default();
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn dpapi_input(bytes: &[u8]) -> Result<CRYPT_INTEGER_BLOB, String> {
+    let length = u32::try_from(bytes.len()).map_err(|_| "DPAPI input exceeds 4 GiB")?;
+    Ok(CRYPT_INTEGER_BLOB {
+        cbData: length,
+        pbData: if bytes.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            bytes.as_ptr().cast_mut()
+        },
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    let input = dpapi_input(plaintext)?;
+    let mut output = DpapiBuffer::default();
+    // SAFETY: all optional pointers are null as allowed by CryptProtectData;
+    // input points to plaintext for input.cbData bytes and output is writable.
+    let success = unsafe {
+        CryptProtectData(
+            &input,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output.0,
+        )
+    };
+    if success == 0 {
+        return Err(format!(
+            "DPAPI encryption failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    output.to_vec()
+}
+
+#[cfg(target_os = "windows")]
+fn dpapi_unprotect(ciphertext: &[u8]) -> Result<Vec<u8>, String> {
+    let input = dpapi_input(ciphertext)?;
+    let mut output = DpapiBuffer::default();
+    // SAFETY: all optional pointers are null as allowed by CryptUnprotectData;
+    // input points to ciphertext for input.cbData bytes and output is writable.
+    let success = unsafe {
+        CryptUnprotectData(
+            &input,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output.0,
+        )
+    };
+    if success == 0 {
+        return Err(format!(
+            "DPAPI decryption failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    output.to_vec()
+}
+
 #[cfg(target_os = "windows")]
 fn credential_write(account: &str, secret: &str) -> Result<(), String> {
     let path = crate::paths::echo_agent_home_dir().join(format!(".{account}.dpapi"));
-    let script = format!(
-        "$s=[Console]::In.ReadToEnd();$b=[Text.Encoding]::UTF8.GetBytes($s);\
-         $e=[Security.Cryptography.ProtectedData]::Protect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser);\
-         [IO.File]::WriteAllBytes('{}',$e)",
-        path.to_string_lossy().replace('\'', "''")
-    );
-    let mut child = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("start DPAPI: {e}"))?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or("DPAPI stdin unavailable")?
-        .write_all(secret.as_bytes())
-        .map_err(|e| format!("write DPAPI secret: {e}"))?;
-    let status = child.wait().map_err(|e| format!("wait DPAPI: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("DPAPI encryption failed".into())
-    }
+    let encrypted = dpapi_protect(secret.as_bytes())?;
+    crate::paths::write_private_file(&path, &encrypted)
+        .map_err(|e| format!("write DPAPI credential {}: {e}", path.display()))
 }
 
 #[cfg(target_os = "windows")]
@@ -327,20 +416,12 @@ fn credential_read(account: &str) -> Result<Option<String>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let script = format!(
-        "$e=[IO.File]::ReadAllBytes('{}');\
-         $b=[Security.Cryptography.ProtectedData]::Unprotect($e,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser);\
-         [Console]::Out.Write([Text.Encoding]::UTF8.GetString($b))",
-        path.to_string_lossy().replace('\'', "''")
-    );
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output()
-        .map_err(|e| format!("read DPAPI: {e}"))?;
-    if !output.status.success() {
-        return Err("DPAPI decryption failed".into());
-    }
-    Ok(Some(String::from_utf8_lossy(&output.stdout).to_string()))
+    let encrypted = std::fs::read(&path)
+        .map_err(|e| format!("read DPAPI credential {}: {e}", path.display()))?;
+    let plaintext = dpapi_unprotect(&encrypted)?;
+    String::from_utf8(plaintext)
+        .map(Some)
+        .map_err(|e| format!("DPAPI credential is not valid UTF-8: {e}"))
 }
 
 #[cfg(target_os = "windows")]
@@ -2161,6 +2242,24 @@ mod tests {
         assert!(normalize_server_url("http://127.0.0.1:8787").is_ok());
         assert!(normalize_server_url("http://memory.example.com").is_err());
         assert!(normalize_server_url("https://u:p@memory.example.com").is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_dpapi_round_trip_uses_current_user() {
+        let plaintext = "EchoAgent 组织凭据 \0 🔐".as_bytes();
+        let encrypted = dpapi_protect(plaintext).unwrap();
+
+        assert_ne!(encrypted, plaintext);
+        assert_eq!(dpapi_unprotect(&encrypted).unwrap(), plaintext);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_dpapi_rejects_corrupt_ciphertext() {
+        let error = dpapi_unprotect(b"not-a-dpapi-blob").unwrap_err();
+
+        assert!(error.starts_with("DPAPI decryption failed:"));
     }
 
     #[test]
