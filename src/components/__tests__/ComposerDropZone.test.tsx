@@ -61,7 +61,7 @@ describe("Composer drop-zone", () => {
   });
 
   it("drop 事件收集路径为附件并隐藏遮罩", async () => {
-    render(<Composer {...base} />);
+    const { container } = render(<Composer {...base} />);
     await waitFor(() => expect(dragState.handler).not.toBeNull());
     emit({
       type: "drop",
@@ -71,6 +71,8 @@ describe("Composer drop-zone", () => {
     // 附件 chip 渲染文件名(basename)。
     expect(screen.getByText("a.ts")).toBeInTheDocument();
     expect(screen.getByText("b.md")).toBeInTheDocument();
+    expect(container.querySelectorAll(".composer-attachments__chip")).toHaveLength(2);
+    expect(container.querySelector(".composer-blocks")).toBeNull();
     // 遮罩隐藏。
     expect(screen.queryByText("松开以添加文件到对话")).toBeNull();
   });
