@@ -1,10 +1,7 @@
 // Modified by EchoAgent for the embedded desktop runtime; see ECHOAGENT_VENDOR.md.
-//! Session title generation via LLM tool call.
+//! Session title generation via a lightweight LLM side call.
 
-use crate::sampling::{
-    Client as OaiCompatClient, ConversationItem, ConversationRequest, ConversationToolChoice,
-    ToolSpec,
-};
+use crate::sampling::{Client as OaiCompatClient, ConversationItem, ConversationRequest};
 use crate::session::helpers::chat::floor_char_boundary;
 
 /// Upper bound on the user text that feeds title generation; titles only need
@@ -30,6 +27,21 @@ pub(crate) fn checkpoints_reached(turns: usize) -> usize {
 /// 5-10 words. Applied on a char boundary, so a multibyte title is capped a
 /// little shorter — fine for a safety bound.
 const TITLE_MAX_BYTES: usize = 80;
+
+const INITIAL_TITLE_SYSTEM_PROMPT: &str = r#"Generate a concise, distinctive title for the user's task.
+
+Rules:
+- Match the language used by the user. Keep code identifiers unchanged.
+- Capture the intended outcome or actual topic, not the conversational phrasing.
+- Prefer a concrete action + object + differentiating scope when the request implies an action.
+- Remove filler such as "please", "help me", "take a look", "请", "帮我", "看看", and "一下".
+- For Chinese, usually use 6-16 Chinese characters. For space-delimited languages, use 4-8 words.
+- Do not invent details that are not present in the request.
+- Output only the title as plain text: no quotes, label, explanation, markdown, or punctuation at the end.
+
+Examples:
+- "任务的标题总感觉不够智能，这块你看看怎么优化下" -> "优化任务标题生成"
+- "Can you look into why login redirects forever?" -> "Fix Login Redirect Loop""#;
 
 /// XML-like tags emitted by some reasoning-capable OpenAI-compatible models
 /// inside `assistant.content`. They are internal reasoning, never a title.
@@ -162,11 +174,6 @@ pub(crate) fn save_title_refresh_watermark(session_dir: &std::path::Path, idx: u
     }
 }
 
-#[derive(serde::Deserialize)]
-struct SessionTitle {
-    session_title: String,
-}
-
 /// Remove `<system-reminder>…</system-reminder>` blocks from `text` — they are
 /// system-injected context (e.g. the `/goal` setup reminder), not the user's
 /// words, so they must not drive the session title.
@@ -207,15 +214,23 @@ fn title_source_text(user_message: &str) -> String {
 
 pub(crate) fn title_fallback_from_user_text(user_message: &str) -> String {
     let text = title_source_text(user_message);
-    let s = text
+    // Prefer the first meaningful clause. This especially matters for Chinese,
+    // where splitting on whitespace alone would preserve the entire prompt.
+    let clause = text
+        .split(['\n', '。', '！', '？', '；', '，'])
+        .map(str::trim)
+        .find(|part| !part.is_empty())
+        .unwrap_or_default();
+    let s = clause
         .split_whitespace()
         .take(10)
         .collect::<Vec<_>>()
         .join(" ");
-    if s.is_empty() {
+    let cleaned = clean_title_text(&s);
+    if cleaned.is_empty() {
         "New session".to_string()
     } else {
-        s
+        cleaned
     }
 }
 
@@ -230,16 +245,7 @@ pub async fn generate_session_summary(
 ) -> String {
     let clean_message = title_source_text(&user_message);
     let request = ConversationRequest::from_items(vec![
-        ConversationItem::system(
-            r#"You are tasked with generating the session title. The user is asking almost always software engineering related questions on their codebase.
-We describe the session title below
-# Session Title
-A short and distinctive 5-10 word descriptive title for the session. Super info dense, no filler.
-
-You will be given the user query below encapsulated in <user_query></user_query>.
-
-Just generate the session_title and nothing else"#,
-        ),
+        ConversationItem::system(INITIAL_TITLE_SYSTEM_PROMPT),
         ConversationItem::user(format!(
             r#"<user_query>
 {}
@@ -248,39 +254,18 @@ Just generate the session_title and nothing else"#,
         )),
     ])
     .with_model(model)
-    .with_tools(vec![ToolSpec {
-        name: "session_title".to_owned(),
-        description: Some("Generate the session_title which we use for the user_message".to_owned()),
-        parameters: serde_json::json!({
-            "type": "object",
-            "required": ["session_title"],
-            "properties": {
-                "session_title": {
-                    "type": "string",
-                    "description": "Final session title, just 5-10 word descriptive title for the session. Super info dense, no filler."
-                }
-            },
-            "additionalProperties": false
-        }),
-    }])
-    .with_max_output_tokens(100)
-    .with_temperature(1.0)
-    .with_tool_choice(ConversationToolChoice::Function("session_title".to_owned()));
+    .with_max_output_tokens(60)
+    .with_temperature(0.2);
 
     match client.conversation_collect(request).await {
         Ok(response) => {
-            if let Some(a) = response.assistant()
-                && let Some(tool_call) = a.tool_calls.first()
-                && let Ok(result) = serde_json::from_str::<SessionTitle>(&tool_call.arguments)
-            {
-                let title = clean_title_text(&result.session_title);
-                if !title.is_empty() {
-                    return title;
-                }
+            let title = clean_title_text(&response.assistant_text());
+            if !title.is_empty() {
+                return title;
             }
             tracing::debug!(
                 model = %model,
-                "session title generation: response did not contain a session_title tool call"
+                "session title generation returned no usable plain-text title"
             );
         }
         Err(e) => {
@@ -301,13 +286,16 @@ Just generate the session_title and nothing else"#,
 /// reflects the real topic rather than a possibly-useless first prompt.
 pub(crate) fn title_refresh_instruction(tag: &str) -> String {
     format!(
-        "<{tag}>Generate a session title for the conversation above. It should be a short and \
-         distinctive 5-10 word descriptive title capturing what this session is actually about \
-         (the main task or topic), based on the WHOLE conversation — not just the first message. \
-         Super info dense, no filler. User-role messages wrapped in reminder tags like this one \
-         are injected context, not the user.\n\n\
-         Output ONLY the title: plain text, no quotes, no labels, no markdown. Do NOT call any \
-         tools — respond with plain text only.</{tag}>"
+        "<{tag}>Generate a concise, distinctive title for the WHOLE conversation above, based on \
+         what the user is actually trying to accomplish rather than just the first message.\n\n\
+         Match the language used by the user and keep code identifiers unchanged. Prefer a concrete \
+         action + object + differentiating scope. Remove conversational filler such as \"please\", \
+         \"help me\", \"take a look\", \"请\", \"帮我\", \"看看\", and \"一下\". For Chinese, usually \
+         use 6-16 Chinese characters; for space-delimited languages, use 4-8 words. Never invent \
+         details not established in the conversation. User-role messages wrapped in reminder tags \
+         like this one are injected context, not the user.\n\n\
+         Output ONLY the title as plain text: no quotes, labels, explanation, markdown, or punctuation \
+         at the end. Do NOT call tools.</{tag}>"
     )
 }
 
@@ -398,7 +386,8 @@ mod tests {
         assert!(text.starts_with("<system-reminder>"));
         assert!(text.ends_with("</system-reminder>"));
         assert!(text.contains("WHOLE conversation"));
-        assert!(text.contains("5-10 word"));
+        assert!(text.contains("6-16 Chinese characters"));
+        assert!(text.contains("action + object"));
     }
 
     #[test]
@@ -507,6 +496,17 @@ mod tests {
             ),
             "one two three four five six seven eight nine ten"
         );
+    }
+
+    #[test]
+    fn fallback_uses_first_chinese_clause_and_caps_safely() {
+        assert_eq!(
+            title_fallback_from_user_text("任务的标题总感觉不够智能，这块你看看怎么优化下"),
+            "任务的标题总感觉不够智能"
+        );
+        let title = title_fallback_from_user_text(&"超长中文任务描述".repeat(20));
+        assert!(!title.is_empty() && title.len() <= super::TITLE_MAX_BYTES);
+        assert!(title.is_char_boundary(title.len()));
     }
 
     #[test]
