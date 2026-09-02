@@ -451,6 +451,125 @@
   padding: 16px 18px;
 }
 
+.model-connection-editor__section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid var(--echo-border-subtle);
+  border-radius: 8px;
+  background: var(--echo-bg-secondary);
+}
+
+.model-connection-editor__section--model {
+  border-color: color-mix(in srgb, var(--echo-color-text-brand-default) 30%, var(--echo-border-subtle));
+  background: color-mix(in srgb, var(--echo-color-text-brand-default) 4%, var(--echo-bg-secondary));
+}
+
+.model-connection-editor__section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--echo-text-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.model-connection-editor__section-title small {
+  color: var(--echo-text-weak);
+  font-size: 9px;
+  font-weight: 450;
+}
+
+.model-connection-editor__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.model-connection-editor__chips > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 5px 6px 5px 8px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 999px;
+  background: var(--echo-bg-primary);
+}
+
+.model-connection-editor__chips code {
+  overflow: hidden;
+  color: var(--echo-text-strong);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-connection-editor__chips button {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--echo-text-weak);
+  cursor: pointer;
+}
+
+.model-connection-editor__chips button:hover {
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-strong);
+}
+
+.model-connection-editor__discovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 11px;
+  border: 1px dashed var(--echo-border-default);
+  border-radius: 7px;
+}
+
+.model-connection-editor__discovery > div,
+.model-connection-editor__discovery strong,
+.model-connection-editor__discovery span {
+  display: block;
+}
+
+.model-connection-editor__discovery strong {
+  color: var(--echo-text-strong);
+  font-size: 11px;
+}
+
+.model-connection-editor__discovery > div > span {
+  margin-top: 2px;
+  color: var(--echo-text-weak);
+  font-size: 9px;
+}
+
+.model-connection-editor__discovered {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-connection-editor__footer-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.model-connection-editor__test-note {
+  margin: 0;
+  color: var(--echo-text-weak);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .model-connection-editor__hint {
   margin-left: 5px;
   color: var(--echo-text-weak);

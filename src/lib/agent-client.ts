@@ -427,6 +427,14 @@ export async function providersTestConnection(
   return invoke<FetchedModel[]>("providers_test_connection", { provider });
 }
 
+/** Send a minimal real inference request for a concrete model id. */
+export async function providersTestModelConnection(
+  provider: ModelProviderEntry,
+  modelId: string,
+): Promise<void> {
+  await invoke<void>("providers_test_model_connection", { provider, modelId });
+}
+
 // ---------- skills (echo.agent/skills/*) ----------
 
 /** List all skills EchoAgent has discovered (user / project / bundled scopes). */

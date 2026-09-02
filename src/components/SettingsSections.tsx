@@ -53,6 +53,7 @@ import {
   webSearchConfigSave,
   echoAgentDataDir,
   openEchoAgentDataDir,
+  openExternalUrl,
   type MemoryConfig,
 } from "@/lib/agent-client";
 import type {
@@ -67,6 +68,8 @@ import { APP_VERSION } from "@/lib/app-version";
 import { useUpdateStore } from "@/stores/update-store";
 
 const FONT_KEY = "echoagent.fontSize";
+const ECHO_AGENT_DOCS_URL = "https://fuyuxiang.github.io/echo-agent/";
+const ACP_SPEC_URL = "https://agentclientprotocol.com/";
 const SHORTCUT_GROUPS: Array<{
   title: string;
   items: Array<{ key: string; action: string }>;
@@ -408,6 +411,7 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
 // ---------- 帮助与反馈 ----------
 
 export function HelpSettingsPanel() {
+  const [resourceError, setResourceError] = useState("");
   const updateStatus = useUpdateStore((state) => state.status);
   const update = useUpdateStore((state) => state.update);
   const checkedAt = useUpdateStore((state) => state.checkedAt);
@@ -418,6 +422,13 @@ export function HelpSettingsPanel() {
   const installUpdate = useUpdateStore((state) => state.install);
   const updateBusy = updateStatus === "checking" || updateStatus === "downloading" || updateStatus === "installing";
   const updateProgress = total && total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : undefined;
+
+  const openHelpResource = (url: string) => {
+    setResourceError("");
+    void openExternalUrl(url).catch((error) => {
+      setResourceError(`打开链接失败：${String(error).replace(/^Error:\s*/, "")}`);
+    });
+  };
 
   return (
     <SectionShell title="帮助与反馈" desc="查阅使用文档、协议说明和常见问题排查步骤。">
@@ -469,12 +480,12 @@ export function HelpSettingsPanel() {
       </SettingsGroup>
       <SettingsGroup title="帮助资源">
         <div className="help-grid">
-          <a className="help-card" href="https://fuyuxiang.github.io/echo-agent/" target="_blank" rel="noreferrer">
+          <a className="help-card" href={ECHO_AGENT_DOCS_URL} onClick={(event) => { event.preventDefault(); openHelpResource(ECHO_AGENT_DOCS_URL); }}>
             <ExternalLink size={18} />
             <strong>EchoAgent 文档</strong>
             <span>查看功能说明、配置方法与最佳实践</span>
           </a>
-          <a className="help-card" href="https://agentclientprotocol.com/" target="_blank" rel="noreferrer">
+          <a className="help-card" href={ACP_SPEC_URL} onClick={(event) => { event.preventDefault(); openHelpResource(ACP_SPEC_URL); }}>
             <ExternalLink size={18} />
             <strong>ACP 协议规范</strong>
             <span>了解智能体客户端协议和运行机制</span>
@@ -486,6 +497,7 @@ export function HelpSettingsPanel() {
           </div>
         </div>
       </SettingsGroup>
+      {resourceError && <p className="settings-msg settings-msg--warn" role="alert">{resourceError}</p>}
       <SettingsGroup title="快速排查" desc="遇到模型不可用或智能体无法启动时，建议按顺序检查。">
         <ol className="settings-checklist">
           <li><span>1</span><div><strong>确认模型配置</strong><p>在“模型”页面至少配置一个厂商、API Key 和模型。</p></div></li>
