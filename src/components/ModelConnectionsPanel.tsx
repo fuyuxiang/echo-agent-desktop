@@ -29,6 +29,7 @@ import {
   providersList,
   providersSaveConnection,
   providersTestConnection,
+  providersTestModelConnection,
   type ApiBackend,
   type AuthScheme,
   type FetchedModel,
@@ -281,13 +282,21 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
   };
 
   const handleTestSaved = async (provider: ModelProviderEntry) => {
+    const model = catalog.models.find((entry) => entry.providerId === provider.id);
+    if (!model) {
+      setMessage({ kind: "warn", text: "请先为该连接添加一个 Model ID，再测试实际模型调用。" });
+      return;
+    }
     setTestingProviderId(provider.id);
     setMessage(null);
     try {
-      const models = await providersFetchModelsForProvider(provider.id);
-      setMessage({ kind: "ok", text: `连接正常，服务端返回 ${models.length} 个模型。` });
+      await providersTestModelConnection(
+        { ...provider, apiKey: undefined },
+        modelRemoteId(model),
+      );
+      setMessage({ kind: "ok", text: `模型「${modelRemoteId(model)}」调用成功。` });
     } catch (error) {
-      setMessage({ kind: "err", text: `连接测试失败：${String(error)}` });
+      setMessage({ kind: "err", text: `模型调用失败：${String(error)}` });
     } finally {
       setTestingProviderId(null);
     }
@@ -335,7 +344,7 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
         <div className="model-connections__empty">
           <Server size={24} />
           <strong>还没有可用模型</strong>
-          <span>添加个人连接，验证 API 后即可选择模型。</span>
+          <span>添加个人连接，填写 Base URL、API Key 和 Model ID 后即可使用。</span>
           <button className="echo-button echo-button--primary echo-button--medium" onClick={() => setConnectionEditor("new")}>添加个人连接</button>
         </div>
       ) : (
@@ -380,7 +389,7 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
                   <button className="echo-button echo-button--secondary echo-button--small" onClick={() => void handleTestSaved(selectedProvider)} disabled={testingProviderId === selectedProvider.id}>
                     <span className="echo-button__content">
                       {testingProviderId === selectedProvider.id ? <Loader2 className="models-settings-panel__spin" size={13} /> : <Check size={13} />}
-                      测试连接
+                      测试模型
                     </span>
                   </button>
                   {!selectedProvider.managed && (
@@ -555,17 +564,19 @@ function ConnectionEditor({
     authScheme: original?.authScheme ?? initialPreset.authScheme,
     contextWindow: original?.contextWindow ? String(original.contextWindow) : "",
   });
-  const [step, setStep] = useState<"connection" | "models">("connection");
   const [showKey, setShowKey] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [fetched, setFetched] = useState<FetchedModel[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [discovered, setDiscovered] = useState<FetchedModel[]>([]);
+  const [modelIds, setModelIds] = useState<Set<string>>(
+    new Set(existingModels.map(modelRemoteId)),
+  );
   const [search, setSearch] = useState("");
-  const [manualId, setManualId] = useState("");
+  const [modelInput, setModelInput] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [connectionVerified, setConnectionVerified] = useState(false);
+  const [discoveryMessage, setDiscoveryMessage] = useState<PanelMessage | null>(null);
   const preset = PROVIDER_PRESETS[draft.providerKind];
 
   const handleKindChange = (providerKind: ProviderKind) => {
@@ -581,7 +592,6 @@ function ConnectionEditor({
   };
 
   const validate = (): string | null => {
-    if (!draft.label.trim()) return "请填写连接名称。";
     if (!draft.baseUrl.trim()) return "请填写 Base URL。";
     try {
       const url = new URL(draft.baseUrl);
@@ -594,68 +604,86 @@ function ConnectionEditor({
     return null;
   };
 
-  const handleTest = async () => {
+  const parsedInputModels = () => modelInput
+    .split(/[\n,，]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const allModelIds = () => [...new Set([...modelIds, ...parsedInputModels()])];
+
+  const requireModelIds = (): string[] | null => {
+    const ids = allModelIds();
+    if (ids.length === 0) {
+      setError("请至少填写一个 Model ID。");
+      return null;
+    }
+    return ids;
+  };
+
+  const addInputModels = () => {
+    const values = parsedInputModels();
+    if (values.length === 0) return;
+    setModelIds((current) => new Set([...current, ...values]));
+    setModelInput("");
+    setError(null);
+  };
+
+  const buildModels = (ids: string[]) => ids.map((remoteModelId) => {
+    const existing = existingModels.find((model) => modelRemoteId(model) === remoteModelId);
+    return {
+      modelId: existing?.modelId ?? "",
+      remoteModelId,
+      providerId: original?.id ?? "",
+      name: existing?.name,
+      contextWindow: existing?.contextWindow,
+    } satisfies ModelEntry;
+  });
+
+  const persist = async (ids: string[]) => providersSaveConnection(
+    draftProvider(original, draft),
+    buildModels(ids),
+    true,
+  );
+
+  const handleDiscover = async () => {
     const validation = validate();
     if (validation) { setError(validation); return; }
-    setTesting(true);
+    setDiscovering(true);
     setError(null);
+    setDiscoveryMessage(null);
     try {
       const models = await providersTestConnection(draftProvider(original, draft));
-      const discovered = new Set(models.map((model) => model.id));
+      const remoteIds = new Set(models.map((model) => model.id));
       const locallyConfigured = existingModels
-        .filter((model) => !discovered.has(modelRemoteId(model)))
+        .filter((model) => !remoteIds.has(modelRemoteId(model)))
         .map((model) => ({ id: modelRemoteId(model), ownedBy: "本地已配置" }));
-      setFetched([...models, ...locallyConfigured]);
-      const existing = new Set(existingModels.map(modelRemoteId));
-      setSelected(new Set(existing));
-      setConnectionVerified(true);
-      setStep("models");
-      if (models.length === 0) setError("连接成功，但服务端没有返回模型。可以手动填写模型 ID。");
+      setDiscovered([...models, ...locallyConfigured]);
+      setDiscoveryMessage(models.length > 0
+        ? { kind: "ok", text: `获取到 ${models.length} 个模型，勾选后会随连接一起保存。` }
+        : { kind: "warn", text: "服务端没有返回模型列表，请直接填写 Model ID。" });
     } catch (requestError) {
-      setConnectionVerified(false);
-      setFetched(existingModels.map((model) => ({
+      setDiscovered(existingModels.map((model) => ({
         id: modelRemoteId(model),
         ownedBy: "本地已配置",
       })));
-      setSelected(new Set(existingModels.map(modelRemoteId)));
-      setError(`未能获取模型列表：${String(requestError)}。如果该服务不支持 /models，可手动填写模型 ID。`);
+      setDiscoveryMessage({
+        kind: "warn",
+        text: `无法获取模型列表：${String(requestError)}。这不影响手动填写、测试和保存。`,
+      });
     } finally {
-      setTesting(false);
+      setDiscovering(false);
     }
   };
 
-  const addManualModel = () => {
-    const id = manualId.trim();
-    if (!id) return;
-    setFetched((current) => current.some((model) => model.id === id) ? current : [...current, { id }]);
-    setSelected((current) => new Set(current).add(id));
-    setManualId("");
-    setStep("models");
-    setError(null);
-  };
-
-  const save = async (modelIds: string[], replaceModels = false) => {
+  const handleSave = async () => {
     const validation = validate();
     if (validation) { setError(validation); return; }
-    if (!original && modelIds.length === 0) { setError("请至少选择或手动添加一个模型。"); return; }
+    const ids = requireModelIds();
+    if (!ids) return;
     setSaving(true);
     setError(null);
     try {
-      const models = modelIds.map((remoteModelId) => {
-        const existing = existingModels.find((model) => modelRemoteId(model) === remoteModelId);
-        return {
-          modelId: existing?.modelId ?? "",
-          remoteModelId,
-          providerId: original?.id ?? "",
-          name: existing?.name,
-          contextWindow: existing?.contextWindow,
-        } satisfies ModelEntry;
-      });
-      const result = await providersSaveConnection(
-        draftProvider(original, draft),
-        models,
-        replaceModels,
-      );
+      const result = await persist(ids);
       await onSaved(result.providerId, result.modelIds.length);
     } catch (saveError) {
       setError(String(saveError));
@@ -664,22 +692,48 @@ function ConnectionEditor({
     }
   };
 
-  const visibleModels = fetched.filter((model) => model.id.toLowerCase().includes(search.trim().toLowerCase()));
+  const handleTestAndSave = async () => {
+    const validation = validate();
+    if (validation) { setError(validation); return; }
+    const ids = requireModelIds();
+    if (!ids) return;
+    const target = parsedInputModels()[0] ?? ids[0];
+    setTesting(true);
+    setError(null);
+    try {
+      await providersTestModelConnection(draftProvider(original, draft), target);
+    } catch (testError) {
+      setError(`测试失败，尚未保存：${String(testError)}。如果服务需要特殊参数，可确认后选择“直接保存”。`);
+      setTesting(false);
+      return;
+    }
+    setTesting(false);
+    setSaving(true);
+    try {
+      const result = await persist(ids);
+      await onSaved(result.providerId, result.modelIds.length);
+    } catch (saveError) {
+      setError(`模型测试通过，但保存失败：${String(saveError)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const visibleModels = discovered.filter((model) => (
+    model.id.toLowerCase().includes(search.trim().toLowerCase())
+  ));
 
   return (
     <div className="models-settings-panel__editor-overlay" role="dialog" aria-modal="true" aria-label={original ? "编辑连接" : "添加个人连接"}>
       <div className="model-connection-editor">
         <header className="models-settings-panel__editor-header">
-          <div><div className="models-settings-panel__editor-title">{original ? "编辑个人连接" : "添加个人连接"}</div><div className="models-settings-panel__editor-note">连接验证与模型选择一次完成</div></div>
+          <div><div className="models-settings-panel__editor-title">{original ? "编辑个人连接" : "添加个人连接"}</div><div className="models-settings-panel__editor-note">填写 Base URL、API Key 和 Model ID 即可使用</div></div>
           <button className="echo-button echo-button--ghost echo-button--small echo-button--icon-only" onClick={onCancel} aria-label="关闭"><X size={14} /></button>
         </header>
-        <div className="model-connection-editor__steps">
-          <span className={step === "connection" ? "active" : "done"}>1　连接信息</span>
-          <span className={step === "models" ? "active" : ""}>2　选择模型</span>
-        </div>
 
-        {step === "connection" ? (
-          <div className="model-connection-editor__body">
+        <div className="model-connection-editor__body">
+          <section className="model-connection-editor__section">
+            <div className="model-connection-editor__section-title"><span>连接信息</span><small>{original?.credentialConfigured ? "Base URL 必填 · API Key 可留空复用" : "Base URL 与 API Key 必填"}</small></div>
             <div className="models-settings-panel__field">
               <label className="models-settings-panel__label" htmlFor="model-provider-kind">接口类型</label>
               <div className="models-settings-panel__select-shell">
@@ -690,13 +744,13 @@ function ConnectionEditor({
               </div>
             </div>
             <div className="models-settings-panel__field">
-              <label className="models-settings-panel__label" htmlFor="model-connection-label">连接名称 <span className="model-connection-editor__hint">用于区分多个相同接口</span></label>
+              <label className="models-settings-panel__label" htmlFor="model-connection-label">连接名称 <span className="model-connection-editor__hint">可选，用于区分多个接口</span></label>
               <input id="model-connection-label" className="models-settings-panel__input" value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} placeholder={`例如：工作用 ${preset.shortLabel}`} />
             </div>
             <div className="models-settings-panel__field">
               <label className="models-settings-panel__label" htmlFor="model-base-url">Base URL</label>
               <input id="model-base-url" className="models-settings-panel__input" value={draft.baseUrl} onChange={(event) => setDraft((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://api.example.com/v1" inputMode="url" />
-              <span className="model-connection-editor__help">API 根地址；获取模型时会自动访问其 /models 接口。</span>
+              <span className="model-connection-editor__help">填写 API 根地址，例如以 /v1 结尾；不要填写具体模型名称。</span>
             </div>
             <div className="models-settings-panel__field">
               <label className="models-settings-panel__label" htmlFor="model-api-key">API Key</label>
@@ -706,57 +760,67 @@ function ConnectionEditor({
               </div>
               <span className="model-connection-editor__help"><KeyRound size={11} />保存在本机私有配置中；编辑时无需重复输入。</span>
             </div>
-            <button className="models-settings-panel__advanced-toggle" type="button" onClick={() => setShowAdvanced((current) => !current)}><ChevronDown size={14} className={showAdvanced ? "model-connection-editor__chevron--open" : ""} />高级设置</button>
-            {showAdvanced && (
-              <div className="models-settings-panel__advanced">
-                <div className="models-settings-panel__field-row">
-                  <div className="models-settings-panel__field"><label className="models-settings-panel__label">请求协议</label><select className="models-settings-panel__select" value={draft.apiBackend} onChange={(event) => setDraft((current) => ({ ...current, apiBackend: event.target.value as ApiBackend }))}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="messages">Messages</option></select></div>
-                  <div className="models-settings-panel__field"><label className="models-settings-panel__label">认证方式</label><select className="models-settings-panel__select" value={draft.authScheme} onChange={(event) => setDraft((current) => ({ ...current, authScheme: event.target.value as AuthScheme }))}><option value="bearer">Bearer Token</option><option value="x_api_key">X-API-Key</option></select></div>
-                </div>
-                <div className="models-settings-panel__field"><label className="models-settings-panel__label">默认上下文窗口（可选）</label><input className="models-settings-panel__input" type="number" min={1} value={draft.contextWindow} onChange={(event) => setDraft((current) => ({ ...current, contextWindow: event.target.value }))} placeholder="例如 128000" /></div>
+          </section>
+
+          <section className="model-connection-editor__section model-connection-editor__section--model">
+            <div className="model-connection-editor__section-title"><span>Model ID</span><small>必填 · 不依赖模型列表</small></div>
+            <div className="models-settings-panel__field">
+              <label className="models-settings-panel__label" htmlFor="model-id-input">模型名称 / ID</label>
+              <div className="model-connection-editor__manual-inline">
+                <input id="model-id-input" className="models-settings-panel__input" value={modelInput} onChange={(event) => setModelInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addInputModels(); } }} placeholder="例如 gpt-4o、deepseek-chat、MiniMax-M3" autoComplete="off" />
+                <button className="echo-button echo-button--secondary echo-button--small" type="button" onClick={addInputModels}>加入</button>
+              </div>
+              <span className="model-connection-editor__help">必须与请求参数 model 完全一致；可用逗号一次填写多个。测试时优先使用输入框中的第一个模型。</span>
+            </div>
+            {modelIds.size > 0 && (
+              <div className="model-connection-editor__chips" aria-label="待保存模型">
+                {[...modelIds].map((id) => <span key={id}><code>{id}</code><button type="button" onClick={() => setModelIds((current) => { const next = new Set(current); next.delete(id); return next; })} aria-label={`移除模型 ${id}`}><X size={11} /></button></span>)}
               </div>
             )}
-            {error && <div className="models-settings-panel__editor-error">{error}</div>}
-            {error?.includes("手动填写") && (
-              <div className="model-connection-editor__manual-inline"><input className="models-settings-panel__input" value={manualId} onChange={(event) => setManualId(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") addManualModel(); }} placeholder="输入远端模型 ID" /><button className="echo-button echo-button--secondary echo-button--small" onClick={addManualModel}>继续</button></div>
-            )}
-          </div>
-        ) : (
-          <div className="model-connection-editor__body">
-            <div className={`model-connection-editor__success${connectionVerified ? "" : " model-connection-editor__success--manual"}`}>
-              {connectionVerified ? <CheckCircle2 size={16} /> : <CircleAlert size={16} />}
-              <span>
-                <strong>{connectionVerified ? "连接成功" : "手动配置模型"}</strong>
-                <small>{connectionVerified
-                  ? `当前列表共 ${fetched.length} 个模型，请选择要在 EchoAgent 中使用的模型。`
-                  : "该服务未提供模型列表；保存后请用一次实际对话确认模型 ID。"}</small>
-              </span>
+          </section>
+
+          <button className="models-settings-panel__advanced-toggle" type="button" onClick={() => setShowAdvanced((current) => !current)}><ChevronDown size={14} className={showAdvanced ? "model-connection-editor__chevron--open" : ""} />高级设置</button>
+          {showAdvanced && (
+            <div className="models-settings-panel__advanced">
+              <div className="models-settings-panel__field-row">
+                <div className="models-settings-panel__field"><label className="models-settings-panel__label">请求协议</label><select className="models-settings-panel__select" value={draft.apiBackend} onChange={(event) => setDraft((current) => ({ ...current, apiBackend: event.target.value as ApiBackend }))}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="messages">Messages</option></select></div>
+                <div className="models-settings-panel__field"><label className="models-settings-panel__label">认证方式</label><select className="models-settings-panel__select" value={draft.authScheme} onChange={(event) => setDraft((current) => ({ ...current, authScheme: event.target.value as AuthScheme }))}><option value="bearer">Bearer Token</option><option value="x_api_key">X-API-Key</option></select></div>
+              </div>
+              <div className="models-settings-panel__field"><label className="models-settings-panel__label">默认上下文窗口（可选）</label><input className="models-settings-panel__input" type="number" min={1} value={draft.contextWindow} onChange={(event) => setDraft((current) => ({ ...current, contextWindow: event.target.value }))} placeholder="例如 128000" /></div>
             </div>
-            <input className="models-settings-panel__input" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索模型 ID" />
-            <div className="model-connection-editor__model-picker">
-              {visibleModels.length === 0 ? <div className="model-connections__models-empty">没有匹配的模型，可在下方手动添加。</div> : visibleModels.map((model) => (
-                <label key={model.id}>
-                  <input type="checkbox" checked={selected.has(model.id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(model.id)) next.delete(model.id); else next.add(model.id); return next; })} />
-                  <span><strong>{model.id}</strong>{model.ownedBy && <small>{model.ownedBy}</small>}</span>
-                  {existingModels.some((entry) => modelRemoteId(entry) === model.id) && <em>已配置</em>}
-                </label>
-              ))}
+          )}
+
+          <section className="model-connection-editor__discovery">
+            <div><strong>不知道 Model ID？</strong><span>可尝试读取服务的 /models；不支持时仍可手动配置。</span></div>
+            <button className="echo-button echo-button--ghost echo-button--small" type="button" onClick={() => void handleDiscover()} disabled={discovering}>
+              <span className="echo-button__content">{discovering ? <Loader2 className="models-settings-panel__spin" size={13} /> : <CloudDownload size={13} />}{discovering ? "正在获取…" : "获取模型列表（可选）"}</span>
+            </button>
+          </section>
+          {discoveryMessage && <div className={`model-connections__message model-connections__message--${discoveryMessage.kind}`}>{discoveryMessage.text}</div>}
+          {discovered.length > 0 && (
+            <div className="model-connection-editor__discovered">
+              <input className="models-settings-panel__input" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="筛选已获取的模型" />
+              <div className="model-connection-editor__model-picker">
+                {visibleModels.length === 0 ? <div className="model-connections__models-empty">没有匹配的模型。</div> : visibleModels.map((model) => (
+                  <label key={model.id}>
+                    <input type="checkbox" checked={modelIds.has(model.id)} onChange={() => setModelIds((current) => { const next = new Set(current); if (next.has(model.id)) next.delete(model.id); else next.add(model.id); return next; })} />
+                    <span><strong>{model.id}</strong>{model.ownedBy && <small>{model.ownedBy}</small>}</span>
+                    {existingModels.some((entry) => modelRemoteId(entry) === model.id) && <em>已配置</em>}
+                  </label>
+                ))}
+              </div>
             </div>
-            <div className="model-connection-editor__manual-inline"><input className="models-settings-panel__input" value={manualId} onChange={(event) => setManualId(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") addManualModel(); }} placeholder="找不到？手动输入远端模型 ID" /><button className="echo-button echo-button--secondary echo-button--small" onClick={addManualModel}>添加</button></div>
-            {error && <div className="models-settings-panel__editor-error">{error}</div>}
-          </div>
-        )}
+          )}
+          {error && <div className="models-settings-panel__editor-error">{error}</div>}
+          <p className="model-connection-editor__test-note">测试会向所选模型发送一条极短请求，可能产生少量 API 用量；直接保存不会发起请求。</p>
+        </div>
 
         <footer className="models-settings-panel__editor-footer">
-          <button className="echo-button echo-button--secondary echo-button--medium" onClick={step === "models" ? () => setStep("connection") : onCancel}>{step === "models" ? "上一步" : "取消"}</button>
-          {step === "connection" ? (
-            <>
-              {original && <button className="echo-button echo-button--secondary echo-button--medium" onClick={() => void save([])} disabled={saving}>保存更改</button>}
-              <button className="echo-button echo-button--primary echo-button--medium" onClick={() => void handleTest()} disabled={testing}><span className="echo-button__content">{testing ? <Loader2 className="models-settings-panel__spin" size={13} /> : <RefreshCw size={13} />}{testing ? "正在验证…" : "测试并获取模型"}</span></button>
-            </>
-          ) : (
-            <button className="echo-button echo-button--primary echo-button--medium" onClick={() => void save([...selected], true)} disabled={saving || (!original && selected.size === 0)}>{saving ? "保存中…" : `保存连接${selected.size ? `和 ${selected.size} 个模型` : ""}`}</button>
-          )}
+          <button className="echo-button echo-button--secondary echo-button--medium" onClick={onCancel}>取消</button>
+          <div className="model-connection-editor__footer-actions">
+            <button className="echo-button echo-button--secondary echo-button--medium" onClick={() => void handleSave()} disabled={saving || testing}>{saving ? "保存中…" : "直接保存"}</button>
+            <button className="echo-button echo-button--primary echo-button--medium" onClick={() => void handleTestAndSave()} disabled={saving || testing}><span className="echo-button__content">{testing || saving ? <Loader2 className="models-settings-panel__spin" size={13} /> : <Check size={13} />}{testing ? "正在测试模型…" : saving ? "保存中…" : "测试并保存"}</span></button>
+          </div>
         </footer>
       </div>
     </div>

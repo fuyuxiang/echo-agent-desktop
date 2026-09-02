@@ -34,6 +34,7 @@ vi.mock("@/lib/agent-client", () => ({
   memoryConfigSave: vi.fn(async (memory) => memory),
   memoryFlush: vi.fn(),
   memoryDream: vi.fn(),
+  openExternalUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/lib/org-client", () => ({
@@ -44,7 +45,7 @@ vi.mock("@/lib/org-client", () => ({
 
 import { SettingsPanel } from "../SettingsPanel";
 import { ThemeProvider } from "../ThemeProvider";
-import { memoryConfigSave } from "@/lib/agent-client";
+import { memoryConfigSave, openExternalUrl } from "@/lib/agent-client";
 
 function renderSettings() {
   return render(
@@ -81,6 +82,20 @@ describe("SettingsPanel", () => {
       .toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("heading", { name: "帮助与反馈", level: 2 }))
       .toBeInTheDocument();
+  });
+
+  it("通过桌面端系统浏览器打开帮助资源", async () => {
+    render(
+      <ThemeProvider>
+        <SettingsPanel open initialSection="help" onClose={() => {}} />
+      </ThemeProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("link", { name: /EchoAgent 文档/ }));
+
+    await waitFor(() => {
+      expect(openExternalUrl).toHaveBeenCalledWith("https://fuyuxiang.github.io/echo-agent/");
+    });
   });
 
   it("所有设置入口都能进入对应页面并更新当前页状态", async () => {

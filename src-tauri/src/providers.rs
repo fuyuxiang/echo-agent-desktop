@@ -1569,6 +1569,160 @@ pub async fn providers_test_connection(
     fetch_models(&provider_kind, &api_key, &base_url, auth_scheme).await
 }
 
+/// Test the actual inference endpoint with a concrete model id. This is kept
+/// separate from model discovery because many OpenAI/Anthropic-compatible
+/// gateways intentionally do not expose `GET /models`.
+#[tauri::command]
+pub async fn providers_test_model_connection(
+    provider: ModelProviderEntry,
+    model_id: String,
+) -> Result<(), String> {
+    let model_id = model_id.trim();
+    if model_id.is_empty() {
+        return Err("请填写 Model ID".into());
+    }
+
+    let config = read_config();
+    let stored = (!provider.id.trim().is_empty())
+        .then(|| {
+            config
+                .get("model_providers")
+                .and_then(Value::as_table)
+                .and_then(|providers| providers.get(provider.id.trim()))
+        })
+        .flatten();
+
+    // Organization-managed connections are tested exactly as downloaded;
+    // never accept webview-provided overrides for their endpoint or secret.
+    let rendered = if stored.is_some_and(is_organization_managed) {
+        stored.cloned().ok_or("连接不存在")?
+    } else {
+        if !provider.id.trim().is_empty() {
+            validate_personal_provider_target(&config, provider.id.trim())?;
+        }
+        let legacy_existing = (provider.source == "legacy")
+            .then(|| legacy_provider_details(&config, provider.id.trim()))
+            .flatten()
+            .map(|(connection, _)| connection);
+        let existing = stored.or(legacy_existing.as_ref());
+        provider_to_table(&provider, existing)?
+    };
+
+    let table = rendered.as_table().ok_or("连接配置无效")?;
+    let provider_kind = infer_provider_kind(table);
+    let api_key = resolved_provider_api_key(table).ok_or("请填写 API Key")?;
+    let base_url = table
+        .get("base_url")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let api_backend = table
+        .get("api_backend")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            preset(&provider_kind)
+                .map(|provider| provider.api_backend)
+                .unwrap_or("chat_completions")
+        });
+    let auth_scheme = table.get("auth_scheme").and_then(Value::as_str);
+    test_model_inference(
+        &provider_kind,
+        &api_key,
+        &base_url,
+        api_backend,
+        auth_scheme,
+        model_id,
+    )
+    .await
+}
+
+fn inference_endpoint(base: &str, api_backend: &str) -> Result<String, String> {
+    validate_api_backend(api_backend)?;
+    let path = match api_backend {
+        "responses" => "responses",
+        "messages" => "messages",
+        _ => "chat/completions",
+    };
+    let base = base.trim().trim_end_matches('/');
+    if base.ends_with(path) {
+        Ok(base.to_string())
+    } else {
+        Ok(format!("{base}/{path}"))
+    }
+}
+
+async fn test_model_inference(
+    provider_kind: &str,
+    api_key: &str,
+    base_url: &Option<String>,
+    api_backend: &str,
+    explicit_auth_scheme: Option<&str>,
+    model_id: &str,
+) -> Result<(), String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("请先填写 API Key".into());
+    }
+
+    let base = resolve_fetch_base_url(provider_kind, base_url)?;
+    let url = inference_endpoint(&base, api_backend)?;
+    let auth_scheme = explicit_auth_scheme
+        .map(str::trim)
+        .filter(|scheme| !scheme.is_empty())
+        .map(str::to_string)
+        .or_else(|| preset(provider_kind).map(|provider| provider.auth_scheme.to_string()))
+        .unwrap_or_else(|| "bearer".into());
+    validate_auth_scheme(&auth_scheme)?;
+
+    let payload = match api_backend {
+        "responses" => serde_json::json!({
+            "model": model_id,
+            "input": "Reply with OK.",
+            "max_output_tokens": 16,
+            "stream": false
+        }),
+        "messages" => serde_json::json!({
+            "model": model_id,
+            "max_tokens": 1,
+            "messages": [{ "role": "user", "content": "Reply with OK." }],
+            "stream": false
+        }),
+        _ => serde_json::json!({
+            "model": model_id,
+            "messages": [{ "role": "user", "content": "Reply with OK." }],
+            "stream": false
+        }),
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("创建 HTTP 客户端失败：{error}"))?;
+    let mut request = client.post(&url).json(&payload);
+    request = match auth_scheme.as_str() {
+        "x_api_key" => request
+            .header("x-api-key", key)
+            .header("anthropic-version", "2023-06-01"),
+        _ => request.header("Authorization", format!("Bearer {key}")),
+    };
+
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("请求模型失败：{error}"))?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let body = response.text().await.unwrap_or_default();
+    let snippet = body.chars().take(300).collect::<String>();
+    Err(if snippet.trim().is_empty() {
+        format!("模型接口返回 {status}")
+    } else {
+        format!("模型接口返回 {status}：{snippet}")
+    })
+}
+
 async fn fetch_models(
     provider_kind: &str,
     api_key: &str,
@@ -2385,5 +2539,30 @@ mod tests {
         assert_eq!(t["api_backend"].as_str().unwrap(), "messages");
         assert_eq!(t["auth_scheme"].as_str().unwrap(), "x_api_key");
         assert_eq!(t["api_key"].as_str().unwrap(), "sk-ant-test");
+    }
+
+    #[test]
+    fn inference_endpoint_uses_protocol_path_without_duplication() {
+        assert_eq!(
+            inference_endpoint("https://api.example.com/v1", "chat_completions").unwrap(),
+            "https://api.example.com/v1/chat/completions"
+        );
+        assert_eq!(
+            inference_endpoint(
+                "https://api.example.com/v1/chat/completions/",
+                "chat_completions"
+            )
+            .unwrap(),
+            "https://api.example.com/v1/chat/completions"
+        );
+        assert_eq!(
+            inference_endpoint("https://api.example.com/v1", "responses").unwrap(),
+            "https://api.example.com/v1/responses"
+        );
+        assert_eq!(
+            inference_endpoint("https://api.example.com/v1", "messages").unwrap(),
+            "https://api.example.com/v1/messages"
+        );
+        assert!(inference_endpoint("https://api.example.com/v1", "graphql").is_err());
     }
 }
