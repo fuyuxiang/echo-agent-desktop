@@ -523,7 +523,6 @@ dependencies = [
 [[package]]
 name = "async-openai"
 version = "0.33.1"
-source = "git+https://github.com/our-forks/async-openai.git?rev=95b52ebdedf42143083cf3d6f0e0be7c84e9c808#95b52ebdedf42143083cf3d6f0e0be7c84e9c808"
 dependencies = [
  "async-openai-macros",
  "backoff",
@@ -551,7 +550,6 @@ dependencies = [
 [[package]]
 name = "async-openai-macros"
 version = "0.1.1"
-source = "git+https://github.com/our-forks/async-openai.git?rev=95b52ebdedf42143083cf3d6f0e0be7c84e9c808#95b52ebdedf42143083cf3d6f0e0be7c84e9c808"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6702,7 +6700,6 @@ dependencies = [
 [[package]]
 name = "nucleo"
 version = "0.5.0"
-source = "git+https://github.com/helix-editor/nucleo.git?rev=5b74652#5b74652e482f7c07d827f18c6d21e7540c242c69"
 dependencies = [
  "nucleo-matcher",
  "parking_lot",
@@ -6712,7 +6709,6 @@ dependencies = [
 [[package]]
 name = "nucleo-matcher"
 version = "0.3.1"
-source = "git+https://github.com/helix-editor/nucleo.git?rev=5b74652#5b74652e482f7c07d827f18c6d21e7540c242c69"
 dependencies = [
  "memchr",
  "unicode-segmentation",
