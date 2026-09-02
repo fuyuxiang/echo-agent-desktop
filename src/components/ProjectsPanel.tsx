@@ -7,7 +7,15 @@
  *  - CreateProjectDialog: 对齐目标截图（项目名称 + 指令[选择模板] + 连接器/专家/技能 +添加 + 取消/确定）
  *  - 内部 openId 切换 列表 / ProjectDetailView（无需改 App 路由）
  */
-import { useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { createPortal } from "react-dom";
 import { AddIcon, SearchIcon, MoreDotsIcon, ChevronDownIcon } from "@/foundation/components/Icon/icons";
 import heroImg from "@/assets/landing-hero.png";
 import { useProjectsStore, type ProjectMeta, type RefItem } from "@/stores/projects-store";
@@ -35,6 +43,19 @@ interface ProjectsPanelProps {
 }
 
 const FROM_TEMPLATES = TEMPLATE_OPTIONS.filter((t) => t.id !== "custom");
+const PROJECT_MENU_MARGIN = 8;
+const PROJECT_MENU_OFFSET = 4;
+const PROJECT_MENU_ESTIMATED_WIDTH = 140;
+const PROJECT_MENU_ESTIMATED_HEIGHT = 150;
+const PROJECT_MENU_Z_INDEX = 1200;
+
+interface ProjectMenuPosition {
+  left: number;
+  top: number;
+  width: number;
+  maxHeight: number;
+  placement: "top" | "bottom";
+}
 
 export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConversation, onOpenSession, onOpenAutomation }: ProjectsPanelProps) {
   const projects = useProjectsStore((s) => s.projects);
@@ -210,14 +231,99 @@ function ProjectCard({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPosition, setMenuPosition] = useState<ProjectMenuPosition | null>(null);
+
+  const closeMenu = useCallback((restoreFocus = false) => {
+    setMenuOpen(false);
+    setMenuPosition(null);
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => triggerRef.current?.focus());
+    }
+  }, []);
+
+  const updateMenuPosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    if (
+      rect.bottom < 0 || rect.top > viewportHeight ||
+      rect.right < 0 || rect.left > viewportWidth
+    ) {
+      closeMenu();
+      return;
+    }
+
+    const measuredWidth = menuRef.current?.offsetWidth || PROJECT_MENU_ESTIMATED_WIDTH;
+    // scrollHeight retains the full content height after maxHeight constrains
+    // the visible box, so repositioning can expand the menu again later.
+    const measuredHeight = menuRef.current?.scrollHeight
+      || menuRef.current?.offsetHeight
+      || PROJECT_MENU_ESTIMATED_HEIGHT;
+    const menuWidth = Math.min(measuredWidth, Math.max(0, viewportWidth - PROJECT_MENU_MARGIN * 2));
+    const spaceBelow = viewportHeight - rect.bottom - PROJECT_MENU_OFFSET - PROJECT_MENU_MARGIN;
+    const spaceAbove = rect.top - PROJECT_MENU_OFFSET - PROJECT_MENU_MARGIN;
+    const placement = spaceBelow >= measuredHeight || spaceBelow >= spaceAbove ? "bottom" : "top";
+    const availableHeight = Math.max(0, placement === "bottom" ? spaceBelow : spaceAbove);
+    const renderedHeight = Math.min(measuredHeight, availableHeight);
+    const maxLeft = Math.max(PROJECT_MENU_MARGIN, viewportWidth - menuWidth - PROJECT_MENU_MARGIN);
+    const left = Math.min(Math.max(PROJECT_MENU_MARGIN, rect.right - menuWidth), maxLeft);
+    const desiredTop = placement === "bottom"
+      ? rect.bottom + PROJECT_MENU_OFFSET
+      : rect.top - PROJECT_MENU_OFFSET - renderedHeight;
+    const maxTop = Math.max(PROJECT_MENU_MARGIN, viewportHeight - renderedHeight - PROJECT_MENU_MARGIN);
+    const top = Math.min(Math.max(PROJECT_MENU_MARGIN, desiredTop), maxTop);
+
+    setMenuPosition({ left, top, width: menuWidth, maxHeight: availableHeight, placement });
+  }, [closeMenu]);
+
+  useLayoutEffect(() => {
+    if (!menuOpen) return;
+    updateMenuPosition();
+    const frame = window.requestAnimationFrame(updateMenuPosition);
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+    };
+  }, [menuOpen, updateMenuPosition]);
+
   useEffect(() => {
     if (!menuOpen) return;
     const h = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setMenuOpen(false);
+      const target = e.target as Node;
+      if (ref.current?.contains(target) || menuRef.current?.contains(target)) return;
+      closeMenu();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeMenu(true);
     };
     document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [menuOpen]);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", h);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen, closeMenu]);
+
+  const menuStyle: CSSProperties = menuPosition
+    ? {
+        position: "fixed",
+        left: menuPosition.left,
+        top: menuPosition.top,
+        width: menuPosition.width,
+        minWidth: menuPosition.width,
+        zIndex: PROJECT_MENU_Z_INDEX,
+        maxHeight: menuPosition.maxHeight,
+        overflowY: "auto",
+      }
+    : { position: "fixed", visibility: "hidden" };
 
   return (
     <div className="project-card2" ref={ref}>
@@ -230,23 +336,39 @@ function ProjectCard({
       </div>
       <div className="project-card2__more-wrap">
         <button
+          ref={triggerRef}
           type="button"
           className="project-card2__more"
           aria-label="更多操作"
-          onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (menuOpen) closeMenu();
+            else setMenuOpen(true);
+          }}
         >
           <MoreDotsIcon size="sm" />
         </button>
-        {menuOpen && (
-          <div className="project-card2__menu" onClick={(e) => e.stopPropagation()}>
-            <button className="project-card2__menu-item" onClick={() => { setMenuOpen(false); onEnter(); }}>进入项目</button>
-            <button className="project-card2__menu-item" onClick={() => { setMenuOpen(false); onStart(); }}>开始项目对话</button>
-            <button className="project-card2__menu-item" onClick={() => { setMenuOpen(false); onRename(); }}>重命名</button>
-            <div className="project-card2__menu-sep" />
-            <button className="project-card2__menu-item project-card2__menu-item--danger" onClick={() => { setMenuOpen(false); onDelete(); }}>删除</button>
-          </div>
-        )}
       </div>
+      {menuOpen && typeof document !== "undefined" && createPortal(
+        <div
+          ref={menuRef}
+          className="project-card2__menu"
+          style={menuStyle}
+          role="menu"
+          aria-label={`${project.name} 操作菜单`}
+          data-placement={menuPosition?.placement}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button type="button" role="menuitem" className="project-card2__menu-item" onClick={() => { closeMenu(); onEnter(); }}>进入项目</button>
+          <button type="button" role="menuitem" className="project-card2__menu-item" onClick={() => { closeMenu(); onStart(); }}>开始项目对话</button>
+          <button type="button" role="menuitem" className="project-card2__menu-item" onClick={() => { closeMenu(); onRename(); }}>重命名</button>
+          <div className="project-card2__menu-sep" role="separator" />
+          <button type="button" role="menuitem" className="project-card2__menu-item project-card2__menu-item--danger" onClick={() => { closeMenu(); onDelete(); }}>删除</button>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
