@@ -15,10 +15,10 @@ licenses.
 - Upstream notices: `vendor/grok-build/third_party/NOTICE`
 
 EchoAgent consumes selected Rust crates from this source snapshot as in-process
-path dependencies. The vendored files include EchoAgent modifications recorded
-under `patches/grok-build/` plus the `echo.agent` protocol namespace migration.
-Modified files are maintained by EchoAgent and are not endorsed by the upstream
-project. Upstream copyright, license, and NOTICE material remain intact.
+path dependencies. The vendored files directly include EchoAgent compatibility
+changes and the `echo.agent` protocol namespace migration. Modified files are
+maintained by EchoAgent and are not endorsed by the upstream project. Upstream
+copyright, license, and NOTICE material remain intact.
 
 The names “Grok”, “xAI”, and related upstream crate and model identifiers remain
 the property of their respective owners. EchoAgent is an independent project

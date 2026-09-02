@@ -9,7 +9,7 @@
 
 ### 🧱 Runtime 源码统一管理
 - 将 `vendor/grok-build` 从外部 Git Submodule 转为主仓库直接管理的固定源码快照；普通克隆即可获得完整 Agent Runtime，不再依赖上游仓库在线可用。
-- 将既有兼容性补丁和 `echo.agent` 协议命名空间结果固化进源码，同时保留上游版本、许可证、NOTICE 与后续升级流程。
+- 将既有兼容性修改和 `echo.agent` 协议命名空间结果固化进源码，同时保留上游版本、许可证、NOTICE 与后续升级流程。
 - 初始化、macOS/Windows 打包和 Windows CI 改为校验 Vendored Runtime 完整性，不再隐式修改依赖源码。
 
 ### ✨ EchoAgent 运行时命名与数据目录

@@ -15,7 +15,7 @@ pnpm install --frozen-lockfile
 .\dev.bat
 ```
 
-`vendor/grok-build/` 已作为普通源码提交到主仓库，并包含 Windows 兼容性补丁和 EchoAgent 协议命名空间迁移。`scripts/setup.ps1` 只检查源码快照是否完整，不会访问或修改其他 Git 仓库。
+`vendor/grok-build/` 已作为普通源码提交到主仓库，并直接包含 Windows 兼容性修改和 EchoAgent 协议命名空间迁移。`scripts/setup.ps1` 只检查源码快照是否完整，不会访问或修改其他 Git 仓库。
 
 ### 1a. MSVC 工具链识别 ⚠️ 最容易漏
 

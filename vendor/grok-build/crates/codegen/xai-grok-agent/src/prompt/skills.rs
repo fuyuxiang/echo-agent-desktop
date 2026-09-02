@@ -1,3 +1,4 @@
+// Modified by EchoAgent for the embedded desktop runtime; see ECHOAGENT_VENDOR.md.
 //! Skill and command discovery for system prompt injection.
 //!
 //! Orchestrates priority-based discovery across local, repo, optional
