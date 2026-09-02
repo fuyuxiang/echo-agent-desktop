@@ -148,10 +148,12 @@ export function ChatView({
 
   // ---- 消息"编辑重发":把消息文本回填到输入框 ----
   const [resendText, setResendText] = useState<string | undefined>(undefined);
+  const [resendAttachments, setResendAttachments] = useState<string[]>([]);
   const [resendNonce, setResendNonce] = useState(0);
-  const handleEditResend = useCallback((text: string) => {
-    if (!text.trim()) return;
+  const handleEditResend = useCallback((text: string, attachments: string[]) => {
+    if (!text.trim() && attachments.length === 0) return;
     setResendText(text);
+    setResendAttachments(attachments);
     setResendNonce((n) => n + 1);
   }, []);
 
@@ -169,7 +171,8 @@ export function ChatView({
       .filter((p) => p.kind === "text")
       .map((p) => p.text)
       .join("\n");
-    if (!userText.trim()) return;
+    const userAttachments = lastUserMsg.attachments ?? [];
+    if (!userText.trim() && userAttachments.length === 0) return;
 
     setRetrying(true);
     try {
@@ -189,7 +192,7 @@ export function ChatView({
       );
       await rewindExecute(sessionId, lastPoint.promptIndex, "conversation", true);
       onRewound?.();
-      onSend(userText);
+      onSend(userText || "请分析附件。", userAttachments);
     } catch (e) {
       onToast?.(`重试失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
@@ -594,7 +597,11 @@ export function ChatView({
           {/* 消息队列(对齐 EchoAgent message-queue):流式时可继续排队 prompt。
               非流式时面板为空(QueuePanel 内部 queue.length===0 直接 return null)。 */}
           {sessionId && (
-            <QueuePanel sessionId={sessionId} streaming={streaming} onSendNow={(t) => onSend(t)} />
+            <QueuePanel
+              sessionId={sessionId}
+              streaming={streaming}
+              onSendNow={(text, attachments) => onSend(text, attachments)}
+            />
           )}
           <Composer
             streaming={streaming}
@@ -604,8 +611,8 @@ export function ChatView({
             onSend={onSend}
             onEnqueue={
               sessionId
-                ? (text) => {
-                    useMessageQueueStore.getState().enqueue(sessionId, text);
+                ? (text, attachments) => {
+                    useMessageQueueStore.getState().enqueue(sessionId, text, attachments);
                     onToast?.("已加入待发送队列");
                   }
                 : undefined
@@ -626,6 +633,7 @@ export function ChatView({
               sessionId ? (t) => setDraft(sessionId, t) : undefined
             }
             externalText={resendText}
+            externalAttachments={resendAttachments}
             externalTextNonce={resendNonce}
             onSelectExpert={onSelectExpert}
             onNavigateConnectors={onNavigateConnectors}

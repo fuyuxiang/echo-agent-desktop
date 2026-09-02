@@ -18,6 +18,17 @@ describe("message-queue-store — 入队与读取", () => {
     expect(q[0].status).toBe("queued");
   });
 
+  it("enqueue 保留并去重附件路径", () => {
+    useMessageQueueStore.getState().enqueue(
+      "s1",
+      "请优化",
+      ["/tmp/方案.docx", "/tmp/方案.docx"],
+    );
+    expect(useMessageQueueStore.getState().getQueue("s1")[0].attachments).toEqual([
+      "/tmp/方案.docx",
+    ]);
+  });
+
   it("多条按顺序排列", () => {
     const s = useMessageQueueStore.getState();
     s.enqueue("s1", "a");
