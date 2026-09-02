@@ -109,6 +109,14 @@ pub struct OrgSessionView {
     bootstrap: Option<Value>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgModelSyncView {
+    configured: bool,
+    model_id: Option<String>,
+    synced_at: u64,
+}
+
 fn profile_path() -> PathBuf {
     crate::paths::echo_agent_home_dir().join(PROFILE_FILE)
 }
@@ -147,6 +155,9 @@ fn notify_models_changed(app: &AppHandle, reason: &str) {
         } else {
             tracing::warn!(%error, %reason, "failed to hot-reload organization model");
         }
+    }
+    if let Err(error) = app.emit("org://models-changed", json!({ "reason": reason })) {
+        tracing::debug!(%error, %reason, "failed to emit organization model change event");
     }
 }
 
@@ -657,6 +668,7 @@ async fn sync_organization_model_config(inner: &Arc<OrgInner>) -> Result<Option<
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
+        crate::providers::remove_organization_model_config()?;
         return Err("organization model credential cannot be decrypted".into());
     }
     if !data
@@ -664,6 +676,7 @@ async fn sync_organization_model_config(inner: &Arc<OrgInner>) -> Result<Option<
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
+        crate::providers::remove_organization_model_config()?;
         return Ok(None);
     }
 
@@ -675,12 +688,23 @@ async fn sync_organization_model_config(inner: &Arc<OrgInner>) -> Result<Option<
             .map(str::to_string)
             .ok_or_else(|| format!("organization model config missing {key}"))
     };
+    let lease_until = inner
+        .session
+        .lock()
+        .await
+        .bootstrap
+        .as_ref()
+        .and_then(|bootstrap| bootstrap.get("policy"))
+        .and_then(|policy| policy.get("expiresAt"))
+        .and_then(Value::as_u64)
+        .ok_or("organization policy missing model lease")?;
     let model_id = crate::providers::save_organization_model_config(
         crate::providers::OrganizationModelConfig {
             provider: required("chatProvider")?,
             model: required("chatModel")?,
             base_url: required("chatBaseUrl")?,
             api_key: required("chatKey")?,
+            lease_until,
         },
     )?;
     Ok(Some(model_id))
@@ -832,6 +856,8 @@ pub async fn org_login(
     let deactivation = deactivate_managed_skills();
     notify_skills_changed(&app, "account-switch");
     deactivation?;
+    crate::providers::remove_organization_model_config()?;
+    notify_models_changed(&app, "account-switch");
     let server_url = normalize_server_url(&server_url)?;
     let device_id = Uuid::now_v7().to_string();
     let response = state
@@ -903,7 +929,10 @@ pub async fn org_login(
             notify_models_changed(&app, "login-sync");
         }
         Ok(None) => tracing::debug!("organization chat model is not configured"),
-        Err(error) => tracing::warn!(%error, "initial organization model sync failed"),
+        Err(error) => {
+            notify_models_changed(&app, "login-sync-error");
+            tracing::warn!(%error, "initial organization model sync failed");
+        }
     }
     // 登录即同步。失败不退出账号，但受管 Skill 保持已停用，
     // 避免网络短暂抖动迫使用户重新输入密码。
@@ -925,11 +954,13 @@ pub async fn org_logout(app: AppHandle, state: State<'_, OrgState>) -> Result<()
     // Local logout is the security boundary and must not wait for an offline
     // organization server. Revoke the remote device token afterwards with a
     // short timeout when an access token is available.
-    let cleanup = {
+    let session_cleanup = {
         let mut session = state.inner.session.lock().await;
         clear_local_session(&mut session, profile.as_ref())
     };
+    let model_cleanup = crate::providers::remove_organization_model_config();
     notify_skills_changed(&app, "logout");
+    notify_models_changed(&app, "logout");
     if let (Some(profile), Some(access_token)) = (&profile, access_token) {
         let _ = state
             .inner
@@ -941,7 +972,14 @@ pub async fn org_logout(app: AppHandle, state: State<'_, OrgState>) -> Result<()
             .send()
             .await;
     }
-    cleanup
+    match (session_cleanup, model_cleanup) {
+        (Ok(()), Ok(_)) => Ok(()),
+        (Err(session_error), Ok(_)) => Err(session_error),
+        (Ok(()), Err(model_error)) => Err(model_error),
+        (Err(session_error), Err(model_error)) => Err(format!(
+            "{session_error}; organization model cleanup: {model_error}"
+        )),
+    }
 }
 
 #[tauri::command]
@@ -956,17 +994,59 @@ pub async fn org_session(
                     tracing::info!(%model_id, "organization model configuration restored");
                     notify_models_changed(&app, "session-restore");
                 }
-                Ok(None) => {}
-                Err(error) => tracing::warn!(%error, "organization model restore failed"),
+                Ok(None) => notify_models_changed(&app, "session-restore-unconfigured"),
+                Err(error) => {
+                    notify_models_changed(&app, "session-restore-error");
+                    tracing::warn!(%error, "organization model restore failed");
+                }
             }
             let _ = sync_skills(&state.inner).await;
         } else {
             enforce_skill_lease();
+            let signed_out = state.inner.session.lock().await.profile.is_none();
+            let removed = if signed_out {
+                crate::providers::remove_organization_model_config()
+            } else {
+                crate::providers::enforce_organization_model_lease()
+            };
+            match removed {
+                Ok(true) => notify_models_changed(&app, "lease-expired"),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(%error, "failed to enforce organization model lease"),
+            }
         }
         notify_skills_changed(&app, "session-restore");
     }
     let session = state.inner.session.lock().await;
     Ok(session_view(&session))
+}
+
+#[tauri::command]
+pub async fn org_sync_model_config(
+    app: AppHandle,
+    state: State<'_, OrgState>,
+) -> Result<OrgModelSyncView, String> {
+    if let Err(error) = update_bootstrap(&state.inner).await {
+        if state.inner.session.lock().await.profile.is_none() {
+            crate::providers::remove_organization_model_config()?;
+            notify_models_changed(&app, "session-expired");
+        } else if crate::providers::enforce_organization_model_lease()? {
+            notify_models_changed(&app, "lease-expired");
+        }
+        return Err(error);
+    }
+    let result = sync_organization_model_config(&state.inner).await;
+    notify_models_changed(&app, "manual-sync");
+    let model_id = result?;
+    let synced_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    Ok(OrgModelSyncView {
+        configured: model_id.is_some(),
+        model_id,
+        synced_at,
+    })
 }
 
 #[tauri::command]
@@ -2051,7 +2131,27 @@ pub fn start_background_sync(app: AppHandle) {
                 tracing::debug!(%error, "organization bootstrap refresh skipped");
                 enforce_skill_lease();
                 notify_skills_changed(&app, "lease-check");
+                let signed_out = state.inner.session.lock().await.profile.is_none();
+                let removed = if signed_out {
+                    crate::providers::remove_organization_model_config()
+                } else {
+                    crate::providers::enforce_organization_model_lease()
+                };
+                match removed {
+                    Ok(true) => notify_models_changed(&app, "lease-expired"),
+                    Ok(false) => {}
+                    Err(cleanup_error) => {
+                        tracing::warn!(%cleanup_error, "failed to enforce organization model lease")
+                    }
+                }
                 continue;
+            }
+            match sync_organization_model_config(&state.inner).await {
+                Ok(_) => notify_models_changed(&app, "background-sync"),
+                Err(error) => {
+                    notify_models_changed(&app, "background-sync-error");
+                    tracing::warn!(%error, "periodic organization model sync failed");
+                }
             }
             if let Err(error) = sync_skills(&state.inner).await {
                 tracing::warn!(%error, "periodic managed Skill sync failed");
