@@ -2555,7 +2555,7 @@ dependencies = [
 
 [[package]]
 name = "echoagent"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -2589,6 +2589,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "windows-sys 0.61.2",
  "xai-acp-lib",
  "xai-grok-shell",
  "xai-grok-tools",

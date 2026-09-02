@@ -1,6 +1,6 @@
 [package]
 name = "echoagent"
-version = "0.3.8"
+version = "0.3.9"
 description = "EchoAgent — an open-source desktop agent workspace built on Tauri"
 authors = ["EchoAgent"]
 edition = "2021"
@@ -75,6 +75,11 @@ zip = { version = "3", default-features = false, features = ["deflate"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-autostart = "2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Call Windows DPAPI directly. Spawning PowerShell made credential persistence
+# depend on .NET assembly loading and discarded the actual encryption error.
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 
 [dev-dependencies]
 tempfile = "3"
