@@ -1,3 +1,4 @@
+// Modified by EchoAgent for the embedded desktop runtime; see ECHOAGENT_VENDOR.md.
 use chrono::{DateTime, Utc};
 use std::borrow::Cow;
 use std::io;

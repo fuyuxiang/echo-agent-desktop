@@ -1,3 +1,4 @@
+// Modified by EchoAgent for the embedded desktop runtime; see ECHOAGENT_VENDOR.md.
 //! Concurrency-safe, field-correct writes to a session's `summary.json`.
 //!
 //! The same `summary.json` is mutated by several writers and, on reconnect, by
