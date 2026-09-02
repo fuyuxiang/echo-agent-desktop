@@ -36,6 +36,9 @@ const ORGANIZATION_PROVIDER_ID: &str = "echoagent-organization";
 const ORGANIZATION_MODEL_PREFIX: &str = "organization/";
 const MANAGED_BY_KEY: &str = "echoagent_managed_by";
 const MANAGED_BY_ORGANIZATION: &str = "organization";
+const LABEL_KEY: &str = "echoagent_label";
+const SYNCED_AT_KEY: &str = "echoagent_synced_at";
+const LEASE_UNTIL_KEY: &str = "echoagent_lease_until";
 
 // ---------------------------------------------------------------------------
 // Built-in presets (endpoint + wire protocol per provider_kind).
@@ -95,7 +98,13 @@ fn infer_provider_kind(table: &Map<String, Value>) -> String {
         .unwrap_or("");
     let base = table.get("base_url").and_then(Value::as_str).unwrap_or("");
     match backend {
-        "messages" => "anthropic".into(),
+        "messages" => {
+            if base.contains("api.anthropic.com") {
+                "anthropic".into()
+            } else {
+                "custom_anthropic".into()
+            }
+        }
         "chat_completions" | "responses" => {
             if base.contains("api.openai.com") {
                 "openai".into()
@@ -183,7 +192,7 @@ pub(crate) fn write_config(v: &Value) -> Result<(), String> {
 /// One connection/auth profile as the frontend sees it. Written to
 /// `[model_providers.<id>]`. `api_key`: None = unchanged, Some("") = cleared,
 /// Some("x") = set. When read back it is masked as `"••••"`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelProviderEntry {
     /// The `[model_providers.<id>]` key; models reference it via
@@ -191,7 +200,7 @@ pub struct ModelProviderEntry {
     pub id: String,
     /// `anthropic` | `openai` | `deepseek` | `qwen` | `custom`.
     pub provider_kind: String,
-    /// Optional display label for the UI (not persisted to TOML; derived).
+    /// User-facing connection name. EchoAgent stores it as desktop metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// The secret. None = unchanged, Some("") = cleared, Some("x") = set.
@@ -207,15 +216,33 @@ pub struct ModelProviderEntry {
     /// (shared by all referencing models) — see ModelProviderConfig.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// `personal` | `organization` | `legacy`. Derived from stored metadata.
+    #[serde(default)]
+    pub source: String,
+    /// Managed entries are read-only and can only be changed by org sync.
+    #[serde(default)]
+    pub managed: bool,
+    /// Whether a usable credential is present without exposing the secret.
+    #[serde(default)]
+    pub credential_configured: bool,
+    /// Organization sync timestamp in Unix milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_at: Option<u64>,
+    /// Original provider type sent by the organization server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization_provider: Option<String>,
 }
 
 /// One model catalog entry as the frontend sees it. Written to
 /// `[model.<model_id>]` with a `model_provider` reference.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelEntry {
-    /// The `[model.<id>]` key AND the model slug sent in requests.
+    /// Stable local catalog key used by EchoAgent sessions and selectors.
     pub model_id: String,
+    /// Exact upstream model slug sent in requests. Defaults to `model_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_model_id: Option<String>,
     /// References `[model_providers.<id>]`.
     pub provider_id: String,
     /// Human-readable display name (the runtime's `name` field, used in selectors).
@@ -224,6 +251,8 @@ pub struct ModelEntry {
     /// Per-model context-window override (wins over the provider's value).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    #[serde(default)]
+    pub managed: bool,
 }
 
 /// The list result: every provider + every model, joined by `provider_id`.
@@ -232,6 +261,13 @@ pub struct ModelEntry {
 pub struct ProviderListModel {
     pub providers: Vec<ModelProviderEntry>,
     pub models: Vec<ModelEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveConnectionResult {
+    pub provider_id: String,
+    pub model_ids: Vec<String>,
 }
 
 /// Complete chat configuration downloaded after organization sign-in.
@@ -244,15 +280,40 @@ pub(crate) struct OrganizationModelConfig {
     pub model: String,
     pub base_url: String,
     pub api_key: String,
+    pub lease_until: u64,
 }
 
 // ---------------------------------------------------------------------------
 // Read path (with lazy grouping of legacy per-model entries).
 // ---------------------------------------------------------------------------
 
-/// Mask helper: returns `Some("••••")` when the table carries a key, else None.
+fn resolved_provider_api_key(table: &Map<String, Value>) -> Option<String> {
+    table
+        .get("api_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(String::from)
+        .or_else(|| {
+            let env_keys = table.get("env_key")?;
+            let names = match env_keys {
+                Value::String(name) => vec![name.as_str()],
+                Value::Array(names) => names.iter().filter_map(Value::as_str).collect(),
+                _ => Vec::new(),
+            };
+            names.into_iter().find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
+        })
+}
+
+/// Mask helper: returns `Some("••••")` only when a static key or referenced
+/// environment variable currently resolves to a non-empty credential.
 fn masked_key(table: &Map<String, Value>) -> Option<String> {
-    if table.contains_key("api_key") || table.contains_key("env_key") {
+    if resolved_provider_api_key(table).is_some() {
         Some("••••".into())
     } else {
         None
@@ -261,11 +322,18 @@ fn masked_key(table: &Map<String, Value>) -> Option<String> {
 
 /// Read a `[model_providers.<id>]` table into an entry. The api_key is masked.
 fn provider_from_table(id: &str, table: &Map<String, Value>) -> ModelProviderEntry {
+    let managed =
+        table.get(MANAGED_BY_KEY).and_then(Value::as_str) == Some(MANAGED_BY_ORGANIZATION);
+    let api_key = masked_key(table);
     ModelProviderEntry {
         id: id.to_string(),
         provider_kind: infer_provider_kind(table),
-        label: None,
-        api_key: masked_key(table),
+        label: table
+            .get(LABEL_KEY)
+            .and_then(Value::as_str)
+            .map(String::from)
+            .or_else(|| managed.then(|| "组织提供".to_string())),
+        api_key: api_key.clone(),
         base_url: table
             .get("base_url")
             .and_then(Value::as_str)
@@ -282,6 +350,17 @@ fn provider_from_table(id: &str, table: &Map<String, Value>) -> ModelProviderEnt
             .get("context_window")
             .and_then(Value::as_integer)
             .map(|n| n as u64),
+        source: if managed { "organization" } else { "personal" }.into(),
+        managed,
+        credential_configured: api_key.is_some(),
+        synced_at: table
+            .get(SYNCED_AT_KEY)
+            .and_then(Value::as_integer)
+            .map(|n| n as u64),
+        organization_provider: table
+            .get("organization_provider")
+            .and_then(Value::as_str)
+            .map(String::from),
     }
 }
 
@@ -319,8 +398,23 @@ fn group_legacy_models(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let key_sig = if has_key { "key" } else { "nokey" };
-        let group_key = format!("{base_url}|{key_sig}");
+        // Keep distinct credentials/protocols in distinct synthetic groups.
+        // The full signature stays in memory only and is never returned to the
+        // frontend or logged.
+        let credential_sig = table
+            .get("api_key")
+            .map(Value::to_string)
+            .or_else(|| table.get("env_key").map(Value::to_string))
+            .unwrap_or_else(|| "nokey".into());
+        let backend_sig = table
+            .get("api_backend")
+            .map(Value::to_string)
+            .unwrap_or_default();
+        let auth_sig = table
+            .get("auth_scheme")
+            .map(Value::to_string)
+            .unwrap_or_default();
+        let group_key = format!("{base_url}|{credential_sig}|{backend_sig}|{auth_sig}");
         if !groups.contains_key(&group_key) {
             let kind = infer_provider_kind(table);
             groups.insert(group_key.clone(), (kind, base_url.clone()));
@@ -360,6 +454,11 @@ fn group_legacy_models(
                 .and_then(|t| t.get("context_window"))
                 .and_then(Value::as_integer)
                 .map(|n| n as u64),
+            source: "legacy".into(),
+            managed: false,
+            credential_configured: first_table.and_then(masked_key).is_some(),
+            synced_at: None,
+            organization_provider: None,
         });
         for mid in &members[&gk] {
             let table = models
@@ -368,16 +467,64 @@ fn group_legacy_models(
                 .expect("checked above");
             out_models.push(ModelEntry {
                 model_id: mid.clone(),
+                remote_model_id: table.get("model").and_then(Value::as_str).map(String::from),
                 provider_id: id.clone(),
                 name: table.get("name").and_then(Value::as_str).map(String::from),
                 context_window: table
                     .get("context_window")
                     .and_then(Value::as_integer)
                     .map(|n| n as u64),
+                managed: false,
             });
         }
     }
     (providers, out_models)
+}
+
+/// Locate the connection fields and members behind one synthetic legacy
+/// provider id. This lets the new editor test and migrate old per-model config
+/// without sending the original secret through the webview.
+fn legacy_provider_details(config: &Value, provider_id: &str) -> Option<(Value, Vec<ModelEntry>)> {
+    let providers = config.get("model_providers").and_then(Value::as_table);
+    let mut taken = providers
+        .map(|providers| providers.keys().cloned().collect())
+        .unwrap_or_default();
+    let model_tables = config.get("model").and_then(Value::as_table)?;
+    let (legacy_providers, legacy_models) = group_legacy_models(model_tables, &mut taken);
+    if !legacy_providers
+        .iter()
+        .any(|provider| provider.id == provider_id)
+    {
+        return None;
+    }
+    let members = legacy_models
+        .into_iter()
+        .filter(|model| model.provider_id == provider_id)
+        .collect::<Vec<_>>();
+    let representative = members
+        .first()
+        .and_then(|model| model_tables.get(&model.model_id))
+        .and_then(Value::as_table)?;
+    let mut connection = Map::new();
+    for key in [
+        "base_url",
+        "api_base_url",
+        "api_key",
+        "env_key",
+        "api_backend",
+        "auth_scheme",
+        "extra_headers",
+        "query_params",
+        "env_http_headers",
+        "auth_provider",
+        "auth",
+        "context_window",
+    ] {
+        if let Some(value) = representative.get(key) {
+            connection.insert(key.into(), value.clone());
+        }
+    }
+    Some((Value::Table(connection), members))
 }
 
 /// Produce a stable, human-readable provider id that isn't already taken.
@@ -397,6 +544,95 @@ fn allocate_provider_id(kind: &str, taken: &mut std::collections::HashSet<String
         }
         n += 1;
     }
+}
+
+fn stored_model_slug(model_id: &str, value: &Value) -> String {
+    value
+        .as_table()
+        .and_then(|table| table.get("model"))
+        .and_then(Value::as_str)
+        .unwrap_or(model_id)
+        .to_string()
+}
+
+fn allocate_model_id(
+    remote_model_id: &str,
+    provider_id: &str,
+    models: &Map<String, Value>,
+) -> String {
+    if let Some((id, _)) = models.iter().find(|(id, value)| {
+        value
+            .as_table()
+            .and_then(|table| table.get("model_provider"))
+            .and_then(Value::as_str)
+            == Some(provider_id)
+            && stored_model_slug(id, value) == remote_model_id
+    }) {
+        return id.clone();
+    }
+    if !models.contains_key(remote_model_id) {
+        return remote_model_id.to_string();
+    }
+    let base = format!("{provider_id}/{remote_model_id}");
+    if !models.contains_key(&base) {
+        return base;
+    }
+    let mut suffix = 2;
+    loop {
+        let candidate = format!("{base}-{suffix}");
+        if !models.contains_key(&candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn remove_unselected_provider_models(
+    models: &mut Map<String, Value>,
+    provider_id: &str,
+    selected: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let stale = models
+        .iter()
+        .filter_map(|(model_id, value)| {
+            let belongs_to_provider = value
+                .as_table()
+                .and_then(|table| table.get("model_provider"))
+                .and_then(Value::as_str)
+                == Some(provider_id);
+            (belongs_to_provider && !selected.contains(model_id) && !is_organization_model(value))
+                .then(|| model_id.clone())
+        })
+        .collect::<Vec<_>>();
+    for model_id in &stale {
+        models.remove(model_id);
+    }
+    stale
+}
+
+fn validate_personal_provider_target(config: &Value, provider_id: &str) -> Result<(), String> {
+    if provider_id == ORGANIZATION_PROVIDER_ID {
+        return Err("组织托管连接不能由本地设置修改".into());
+    }
+    let existing = config
+        .get("model_providers")
+        .and_then(Value::as_table)
+        .and_then(|providers| providers.get(provider_id));
+    if existing.is_some_and(is_organization_managed) {
+        return Err("组织托管连接不能由本地设置修改".into());
+    }
+    Ok(())
+}
+
+fn validate_personal_model_target(config: &Value, model_id: &str) -> Result<(), String> {
+    let existing = config
+        .get("model")
+        .and_then(Value::as_table)
+        .and_then(|models| models.get(model_id));
+    if existing.is_some_and(is_organization_model) {
+        return Err("组织托管模型不能由本地设置修改".into());
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +696,11 @@ fn provider_to_table(p: &ModelProviderEntry, existing: Option<&Value>) -> Result
         "base_url",
         needs_base_url,
     )?;
+    let parsed_base_url = url::Url::parse(base_url.trim())
+        .map_err(|error| format!("Base URL 格式不正确：{error}"))?;
+    if !matches!(parsed_base_url.scheme(), "http" | "https") {
+        return Err("Base URL 必须使用 HTTP 或 HTTPS".into());
+    }
     let api_backend = resolve_field(
         &p.api_backend,
         existing_str("api_backend"),
@@ -479,18 +720,30 @@ fn provider_to_table(p: &ModelProviderEntry, existing: Option<&Value>) -> Result
     table.insert("api_backend".into(), Value::String(api_backend));
     table.insert("auth_scheme".into(), Value::String(auth_scheme));
 
+    if let Some(label) = p.label.as_deref() {
+        let label = label.trim();
+        if label.is_empty() {
+            table.remove(LABEL_KEY);
+        } else {
+            table.insert(LABEL_KEY.into(), Value::String(label.to_string()));
+        }
+    }
+
     if let Some(cw) = p.context_window {
         table.insert("context_window".into(), Value::Integer(cw as i64));
+    } else {
+        table.remove("context_window");
     }
 
     // Only touch api_key when the caller supplied one. Some("") clears it.
     if let Some(key) = &p.api_key {
+        let key = key.trim();
         if key.is_empty() {
             table.remove("api_key");
         } else if key.starts_with('•') {
             // Mask coming back from the UI — treat as no-op.
         } else {
-            table.insert("api_key".into(), Value::String(key.clone()));
+            table.insert("api_key".into(), Value::String(key.to_string()));
         }
     }
 
@@ -507,7 +760,13 @@ fn model_to_table(m: &ModelEntry, existing: Option<&Value>) -> Value {
     };
 
     // The model slug the runtime will request. Defaults to the table key when absent.
-    table.insert("model".into(), Value::String(m.model_id.clone()));
+    let remote_model_id = m
+        .remote_model_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or(&m.model_id);
+    table.insert("model".into(), Value::String(remote_model_id.to_string()));
     // Reference the provider for connection/auth config.
     table.insert(
         "model_provider".into(),
@@ -569,6 +828,15 @@ fn is_organization_managed(value: &Value) -> bool {
         == Some(MANAGED_BY_ORGANIZATION)
 }
 
+fn is_organization_model(value: &Value) -> bool {
+    is_organization_managed(value)
+        || value
+            .as_table()
+            .and_then(|table| table.get("model_provider"))
+            .and_then(Value::as_str)
+            == Some(ORGANIZATION_PROVIDER_ID)
+}
+
 /// Apply a downloaded organization model to an in-memory config document.
 /// Existing personal providers/models are preserved. A namespaced local model
 /// id prevents a server model such as `gpt-4o` from replacing a user's own
@@ -590,20 +858,42 @@ fn apply_organization_model_config(
         return Err("organization model Base URL must use HTTP or HTTPS".into());
     }
 
-    let provider_kind = if provider.eq_ignore_ascii_case("openai") {
-        "openai"
-    } else {
-        "custom"
+    let normalized_provider = provider.to_ascii_lowercase();
+    let provider_kind = match normalized_provider.as_str() {
+        "openai" => "openai",
+        "anthropic" => "anthropic",
+        "deepseek" => "deepseek",
+        "qwen" | "dashscope" => "qwen",
+        "anthropic-compatible" | "anthropic_compatible" | "custom_anthropic" => "custom_anthropic",
+        _ => "custom",
     };
+    let provider_preset = preset(provider_kind);
+    let api_backend = provider_preset
+        .as_ref()
+        .map(|preset| preset.api_backend)
+        .unwrap_or("chat_completions");
+    let auth_scheme = provider_preset
+        .as_ref()
+        .map(|preset| preset.auth_scheme)
+        .unwrap_or("bearer");
+    let synced_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
     let entry = ModelProviderEntry {
         id: ORGANIZATION_PROVIDER_ID.into(),
         provider_kind: provider_kind.into(),
-        label: None,
+        label: Some("组织提供".into()),
         api_key: Some(api_key.into()),
         base_url: Some(base_url.into()),
-        api_backend: Some("chat_completions".into()),
-        auth_scheme: Some("bearer".into()),
+        api_backend: Some(api_backend.into()),
+        auth_scheme: Some(auth_scheme.into()),
         context_window: None,
+        source: "organization".into(),
+        managed: true,
+        credential_configured: true,
+        synced_at: Some(synced_at),
+        organization_provider: Some(provider.into()),
     };
     {
         let providers = ensure_table(config, "model_providers")?;
@@ -620,6 +910,11 @@ fn apply_organization_model_config(
             "organization_provider".into(),
             Value::String(provider.into()),
         );
+        table.insert(SYNCED_AT_KEY.into(), Value::Integer(synced_at as i64));
+        table.insert(
+            LEASE_UNTIL_KEY.into(),
+            Value::Integer(downloaded.lease_until as i64),
+        );
         providers.insert(ORGANIZATION_PROVIDER_ID.into(), rendered);
     }
 
@@ -628,7 +923,7 @@ fn apply_organization_model_config(
         let models = ensure_table(config, "model")?;
         let stale: Vec<String> = models
             .iter()
-            .filter_map(|(id, value)| is_organization_managed(value).then(|| id.clone()))
+            .filter_map(|(id, value)| is_organization_model(value).then(|| id.clone()))
             .collect();
         for id in stale {
             models.remove(&id);
@@ -637,9 +932,11 @@ fn apply_organization_model_config(
         let mut rendered = model_to_table(
             &ModelEntry {
                 model_id: model_id.clone(),
+                remote_model_id: Some(model.into()),
                 provider_id: ORGANIZATION_PROVIDER_ID.into(),
                 name: Some(model.into()),
                 context_window: None,
+                managed: true,
             },
             models.get(&model_id),
         );
@@ -649,10 +946,6 @@ fn apply_organization_model_config(
         // The table key is namespaced locally, while requests must use the
         // exact model slug configured by the organization administrator.
         table.insert("model".into(), Value::String(model.into()));
-        table.insert(
-            MANAGED_BY_KEY.into(),
-            Value::String(MANAGED_BY_ORGANIZATION.into()),
-        );
         models.insert(model_id.clone(), rendered);
     }
 
@@ -667,6 +960,97 @@ pub(crate) fn save_organization_model_config(
     let model_id = apply_organization_model_config(&mut config, &downloaded)?;
     write_config(&config)?;
     Ok(model_id)
+}
+
+/// Remove every organization-managed provider/model while preserving personal
+/// connections. Used when the server disables chat configuration or the user
+/// signs out, so downloaded credentials cannot outlive organization access.
+pub(crate) fn remove_organization_model_config() -> Result<bool, String> {
+    let mut config = read_config();
+    let changed = remove_organization_model_config_from(&mut config);
+    if changed {
+        write_config(&config)?;
+    }
+    Ok(changed)
+}
+
+fn remove_organization_model_config_from(config: &mut Value) -> bool {
+    let mut changed = false;
+    let mut removed_model_ids = Vec::new();
+
+    if let Some(providers) = config
+        .as_table_mut()
+        .and_then(|root| root.get_mut("model_providers"))
+        .and_then(Value::as_table_mut)
+    {
+        let stale = providers
+            .iter()
+            .filter_map(|(id, value)| is_organization_managed(value).then(|| id.clone()))
+            .collect::<Vec<_>>();
+        for id in stale {
+            changed |= providers.remove(&id).is_some();
+        }
+    }
+
+    if let Some(models) = config
+        .as_table_mut()
+        .and_then(|root| root.get_mut("model"))
+        .and_then(Value::as_table_mut)
+    {
+        let stale = models
+            .iter()
+            .filter_map(|(id, value)| is_organization_model(value).then(|| id.clone()))
+            .collect::<Vec<_>>();
+        for id in stale {
+            if models.remove(&id).is_some() {
+                removed_model_ids.push(id);
+                changed = true;
+            }
+        }
+    }
+
+    if !removed_model_ids.is_empty() {
+        if let Some(defaults) = config
+            .as_table_mut()
+            .and_then(|root| root.get_mut("models"))
+            .and_then(Value::as_table_mut)
+        {
+            let selected = defaults.get("default").and_then(Value::as_str);
+            if selected.is_some_and(|id| removed_model_ids.iter().any(|removed| removed == id)) {
+                defaults.remove("default");
+                changed = true;
+            }
+        }
+    }
+
+    changed
+}
+
+/// Fail closed after the signed organization policy lease expires. Temporary
+/// network failures may keep the last downloaded configuration only while its
+/// last verified policy is still valid.
+pub(crate) fn enforce_organization_model_lease() -> Result<bool, String> {
+    let config = read_config();
+    let managed_provider = config
+        .get("model_providers")
+        .and_then(Value::as_table)
+        .and_then(|providers| providers.get(ORGANIZATION_PROVIDER_ID))
+        .filter(|provider| is_organization_managed(provider));
+    let lease_until = managed_provider
+        .and_then(Value::as_table)
+        .and_then(|provider| provider.get(LEASE_UNTIL_KEY))
+        .and_then(Value::as_integer)
+        .map(|value| value as u64)
+        .unwrap_or(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if managed_provider.is_some() && lease_until <= now {
+        remove_organization_model_config()
+    } else {
+        Ok(false)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -707,12 +1091,14 @@ pub fn providers_list() -> ProviderListModel {
             if let Some(pid) = table.get("model_provider").and_then(Value::as_str) {
                 models.push(ModelEntry {
                     model_id: model_id.clone(),
+                    remote_model_id: table.get("model").and_then(Value::as_str).map(String::from),
                     provider_id: pid.to_string(),
                     name: table.get("name").and_then(Value::as_str).map(String::from),
                     context_window: table
                         .get("context_window")
                         .and_then(Value::as_integer)
                         .map(|n| n as u64),
+                    managed: is_organization_model(v),
                 });
             }
         }
@@ -732,6 +1118,47 @@ pub fn providers_list() -> ProviderListModel {
     ProviderListModel { providers, models }
 }
 
+/// Return models whose referenced connection has both a valid HTTP(S) endpoint
+/// and a stored credential. This powers the shell readiness gate so a dangling
+/// model table no longer produces a false "ready" state.
+pub(crate) fn usable_model_ids() -> (Vec<String>, Option<String>) {
+    let list = providers_list();
+    if list.models.is_empty() {
+        return (
+            Vec::new(),
+            Some("尚未配置模型，请前往“设置 → 模型与连接”添加连接。".into()),
+        );
+    }
+    let mut usable = Vec::new();
+    for model in &list.models {
+        let Some(provider) = list
+            .providers
+            .iter()
+            .find(|provider| provider.id == model.provider_id)
+        else {
+            continue;
+        };
+        let endpoint_valid = provider
+            .base_url
+            .as_deref()
+            .and_then(|base_url| url::Url::parse(base_url).ok())
+            .is_some_and(|url| matches!(url.scheme(), "http" | "https"));
+        let model_valid = !model
+            .remote_model_id
+            .as_deref()
+            .unwrap_or(&model.model_id)
+            .trim()
+            .is_empty();
+        if provider.credential_configured && endpoint_valid && model_valid {
+            usable.push(model.model_id.clone());
+        }
+    }
+    let reason = usable.is_empty().then(|| {
+        "已有模型条目，但连接缺少有效的 Base URL 或 API Key，请在“设置 → 模型与连接”中修复。".into()
+    });
+    (usable, reason)
+}
+
 /// Save (merge) a provider into `[model_providers.<id>]`. Preserves unknown keys.
 #[tauri::command]
 pub fn providers_save_provider(
@@ -742,6 +1169,7 @@ pub fn providers_save_provider(
         return Err("provider id 不能为空".into());
     }
     let mut config = read_config();
+    validate_personal_provider_target(&config, provider.id.trim())?;
     let mps = ensure_table(&mut config, "model_providers")?;
     let existing = mps.get(&provider.id);
     let rendered = provider_to_table(&provider, existing)?;
@@ -749,31 +1177,190 @@ pub fn providers_save_provider(
     write_config(&config)
 }
 
+/// Atomically save a connection and the models selected during discovery.
+/// An empty provider id allocates a collision-free id such as `custom-2`.
+#[tauri::command]
+pub fn providers_save_connection(
+    _state: State<'_, crate::commands::AppState>,
+    mut provider: ModelProviderEntry,
+    mut models: Vec<ModelEntry>,
+    replace_models: bool,
+) -> Result<SaveConnectionResult, String> {
+    let mut config = read_config();
+    let legacy = (provider.source == "legacy")
+        .then(|| legacy_provider_details(&config, provider.id.trim()))
+        .flatten();
+    let provider_id = if provider.id.trim().is_empty() {
+        let mut taken = config
+            .get("model_providers")
+            .and_then(Value::as_table)
+            .map(|providers| providers.keys().cloned().collect())
+            .unwrap_or_default();
+        allocate_provider_id(provider.provider_kind.trim(), &mut taken)
+    } else {
+        provider.id.trim().to_string()
+    };
+    if provider.provider_kind.trim().is_empty() {
+        return Err("请选择接口类型".into());
+    }
+    validate_personal_provider_target(&config, &provider_id)?;
+    provider.id.clone_from(&provider_id);
+    provider.managed = false;
+    provider.source = "personal".into();
+
+    {
+        let providers = ensure_table(&mut config, "model_providers")?;
+        let existing = providers
+            .get(&provider_id)
+            .or_else(|| legacy.as_ref().map(|(connection, _)| connection));
+        let rendered = provider_to_table(&provider, existing)?;
+        let credential_configured = rendered
+            .as_table()
+            .and_then(resolved_provider_api_key)
+            .is_some();
+        if !credential_configured {
+            return Err("请填写 API Key".into());
+        }
+        providers.insert(provider_id.clone(), rendered);
+    }
+
+    // Saving any part of a legacy connection migrates all of its existing
+    // members unless the caller explicitly chose a replacement set.
+    if !replace_models {
+        if let Some((_, legacy_models)) = &legacy {
+            let supplied = models
+                .iter()
+                .map(|model| model.model_id.clone())
+                .collect::<std::collections::HashSet<_>>();
+            models.extend(
+                legacy_models
+                    .iter()
+                    .filter(|model| !supplied.contains(&model.model_id))
+                    .cloned(),
+            );
+        }
+    }
+
+    let mut model_ids = Vec::with_capacity(models.len());
+    let removed_model_ids = {
+        let model_tables = ensure_table(&mut config, "model")?;
+        for mut model in models {
+            let remote_model_id = model
+                .remote_model_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .or_else(|| {
+                    let id = model.model_id.trim();
+                    (!id.is_empty()).then_some(id)
+                })
+                .ok_or("模型 ID 不能为空")?
+                .to_string();
+            let local_id = if model.model_id.trim().is_empty() {
+                allocate_model_id(&remote_model_id, &provider_id, model_tables)
+            } else {
+                model.model_id.trim().to_string()
+            };
+            if model_tables
+                .get(&local_id)
+                .is_some_and(is_organization_model)
+            {
+                return Err("组织托管模型不能由本地设置修改".into());
+            }
+            if let Some(other_provider) = model_tables
+                .get(&local_id)
+                .and_then(Value::as_table)
+                .and_then(|table| table.get("model_provider"))
+                .and_then(Value::as_str)
+                .filter(|existing| *existing != provider_id)
+            {
+                return Err(format!(
+                    "模型目录 ID「{local_id}」已属于连接「{other_provider}」"
+                ));
+            }
+            model.model_id.clone_from(&local_id);
+            model.remote_model_id = Some(remote_model_id);
+            model.provider_id.clone_from(&provider_id);
+            model.managed = false;
+            let rendered = model_to_table(&model, model_tables.get(&local_id));
+            model_tables.insert(local_id.clone(), rendered);
+            model_ids.push(local_id);
+        }
+        if replace_models {
+            let selected = model_ids.iter().cloned().collect();
+            remove_unselected_provider_models(model_tables, &provider_id, &selected)
+        } else {
+            Vec::new()
+        }
+    };
+
+    if !removed_model_ids.is_empty() {
+        if let Some(defaults) = config
+            .as_table_mut()
+            .and_then(|root| root.get_mut("models"))
+            .and_then(Value::as_table_mut)
+        {
+            let selected = defaults.get("default").and_then(Value::as_str);
+            if selected.is_some_and(|id| removed_model_ids.iter().any(|removed| removed == id)) {
+                defaults.remove("default");
+            }
+        }
+    }
+
+    write_config(&config)?;
+    Ok(SaveConnectionResult {
+        provider_id,
+        model_ids,
+    })
+}
+
 /// Save a model into `[model.<model_id>]` with a `model_provider` reference.
 /// Migrates the entry away from legacy per-model connection fields.
 #[tauri::command]
 pub fn providers_save_model(
     _state: State<'_, crate::commands::AppState>,
-    model: ModelEntry,
-) -> Result<(), String> {
-    if model.model_id.trim().is_empty() {
-        return Err("model_id 不能为空".into());
-    }
+    mut model: ModelEntry,
+) -> Result<String, String> {
     if model.provider_id.trim().is_empty() {
         return Err("provider_id 不能为空".into());
     }
     let mut config = read_config();
+    validate_personal_provider_target(&config, model.provider_id.trim())?;
+    let remote_model_id = model
+        .remote_model_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .or_else(|| {
+            let id = model.model_id.trim();
+            (!id.is_empty()).then_some(id)
+        })
+        .ok_or("模型 ID 不能为空")?
+        .to_string();
     let mdls = ensure_table(&mut config, "model")?;
-    let existing = mdls.get(&model.model_id);
+    let local_id = if model.model_id.trim().is_empty() {
+        allocate_model_id(&remote_model_id, model.provider_id.trim(), mdls)
+    } else {
+        model.model_id.trim().to_string()
+    };
+    if mdls.get(&local_id).is_some_and(is_organization_model) {
+        return Err("组织托管模型不能由本地设置修改".into());
+    }
+    model.model_id.clone_from(&local_id);
+    model.remote_model_id = Some(remote_model_id);
+    model.managed = false;
+    let existing = mdls.get(&local_id);
     let rendered = model_to_table(&model, existing);
-    mdls.insert(model.model_id.clone(), rendered);
-    write_config(&config)
+    mdls.insert(local_id.clone(), rendered);
+    write_config(&config)?;
+    Ok(local_id)
 }
 
 /// Delete a provider AND every model that references it.
 #[tauri::command]
 pub fn providers_delete_provider(id: String) -> Result<(), String> {
     let mut config = read_config();
+    validate_personal_provider_target(&config, id.trim())?;
 
     // Remove the provider table.
     let removed_provider = config
@@ -785,6 +1372,7 @@ pub fn providers_delete_provider(id: String) -> Result<(), String> {
 
     // Cascade: drop every [model.*] referencing it.
     let mut cascaded = 0usize;
+    let mut removed_model_ids = Vec::new();
     if let Some(mdls) = config
         .as_table_mut()
         .and_then(|t| t.get_mut("model"))
@@ -805,8 +1393,21 @@ pub fn providers_delete_provider(id: String) -> Result<(), String> {
             })
             .collect();
         for mid in stale {
-            mdls.remove(&mid);
-            cascaded += 1;
+            if mdls.remove(&mid).is_some() {
+                removed_model_ids.push(mid);
+                cascaded += 1;
+            }
+        }
+    }
+
+    if let Some(defaults) = config
+        .as_table_mut()
+        .and_then(|root| root.get_mut("models"))
+        .and_then(Value::as_table_mut)
+    {
+        let selected = defaults.get("default").and_then(Value::as_str);
+        if selected.is_some_and(|model_id| removed_model_ids.iter().any(|id| id == model_id)) {
+            defaults.remove("default");
         }
     }
 
@@ -820,6 +1421,7 @@ pub fn providers_delete_provider(id: String) -> Result<(), String> {
 #[tauri::command]
 pub fn providers_delete_model(model_id: String) -> Result<(), String> {
     let mut config = read_config();
+    validate_personal_model_target(&config, model_id.trim())?;
     let removed = config
         .as_table_mut()
         .and_then(|t| t.get_mut("model"))
@@ -827,6 +1429,15 @@ pub fn providers_delete_model(model_id: String) -> Result<(), String> {
         .and_then(|m| m.remove(&model_id))
         .is_some();
     if removed {
+        if let Some(defaults) = config
+            .as_table_mut()
+            .and_then(|root| root.get_mut("models"))
+            .and_then(Value::as_table_mut)
+        {
+            if defaults.get("default").and_then(Value::as_str) == Some(model_id.as_str()) {
+                defaults.remove("default");
+            }
+        }
         write_config(&config)?;
     }
     Ok(())
@@ -896,15 +1507,87 @@ pub async fn providers_fetch_models(
     api_key: String,
     base_url: Option<String>,
 ) -> Result<Vec<FetchedModel>, String> {
+    fetch_models(&provider_kind, &api_key, &base_url, None).await
+}
+
+/// Fetch models using an already-saved provider credential. The secret stays
+/// inside native code, so Settings never asks users to re-enter it or exposes
+/// organization-managed keys to the webview.
+#[tauri::command]
+pub async fn providers_fetch_models_for_provider(
+    provider_id: String,
+) -> Result<Vec<FetchedModel>, String> {
+    let config = read_config();
+    let table = config
+        .get("model_providers")
+        .and_then(Value::as_table)
+        .and_then(|providers| providers.get(provider_id.trim()))
+        .and_then(Value::as_table)
+        .ok_or("连接不存在")?;
+    let provider_kind = infer_provider_kind(table);
+    let api_key = resolved_provider_api_key(table).ok_or("该连接没有可用的已保存 API Key")?;
+    let base_url = table
+        .get("base_url")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let auth_scheme = table.get("auth_scheme").and_then(Value::as_str);
+    fetch_models(&provider_kind, &api_key, &base_url, auth_scheme).await
+}
+
+/// Validate an unsaved connection draft. When editing and the key is blank or
+/// masked, reuse the existing native-side secret without sending it to React.
+#[tauri::command]
+pub async fn providers_test_connection(
+    provider: ModelProviderEntry,
+) -> Result<Vec<FetchedModel>, String> {
+    let config = read_config();
+    if !provider.id.trim().is_empty() {
+        validate_personal_provider_target(&config, provider.id.trim())?;
+    }
+    let legacy_existing = (provider.source == "legacy")
+        .then(|| legacy_provider_details(&config, provider.id.trim()))
+        .flatten()
+        .map(|(connection, _)| connection);
+    let existing = (!provider.id.trim().is_empty())
+        .then(|| {
+            config
+                .get("model_providers")
+                .and_then(Value::as_table)
+                .and_then(|providers| providers.get(provider.id.trim()))
+        })
+        .flatten()
+        .or(legacy_existing.as_ref());
+    let rendered = provider_to_table(&provider, existing)?;
+    let table = rendered.as_table().ok_or("连接配置无效")?;
+    let provider_kind = infer_provider_kind(table);
+    let api_key = resolved_provider_api_key(table).ok_or("请填写 API Key")?;
+    let base_url = table
+        .get("base_url")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let auth_scheme = table.get("auth_scheme").and_then(Value::as_str);
+    fetch_models(&provider_kind, &api_key, &base_url, auth_scheme).await
+}
+
+async fn fetch_models(
+    provider_kind: &str,
+    api_key: &str,
+    base_url: &Option<String>,
+    explicit_auth_scheme: Option<&str>,
+) -> Result<Vec<FetchedModel>, String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("请先填写 API Key".into());
     }
 
-    let base = resolve_fetch_base_url(&provider_kind, &base_url)?;
-    let auth_scheme = preset(&provider_kind)
-        .map(|p| p.auth_scheme.to_string())
+    let base = resolve_fetch_base_url(provider_kind, base_url)?;
+    let auth_scheme = explicit_auth_scheme
+        .map(str::trim)
+        .filter(|scheme| !scheme.is_empty())
+        .map(str::to_string)
+        .or_else(|| preset(provider_kind).map(|p| p.auth_scheme.to_string()))
         .unwrap_or_else(|| "bearer".into());
+    validate_auth_scheme(&auth_scheme)?;
 
     let url = format!("{base}/models");
 
@@ -1051,6 +1734,7 @@ mod tests {
             api_backend: None,
             auth_scheme: None,
             context_window: Some(200_000),
+            ..Default::default()
         };
         let result = provider_to_table(&p, None).unwrap();
         let table = result.as_table().unwrap();
@@ -1087,6 +1771,7 @@ mod tests {
             api_backend: None,
             auth_scheme: None,
             context_window: None,
+            ..Default::default()
         };
         let table = provider_to_table(&p, Some(&Value::Table(existing))).unwrap();
         assert_eq!(
@@ -1106,6 +1791,7 @@ mod tests {
             api_backend: None,
             auth_scheme: None,
             context_window: None,
+            ..Default::default()
         };
         assert!(provider_to_table(&p, None).is_err());
     }
@@ -1134,6 +1820,7 @@ mod tests {
             provider_id: "openai".into(),
             name: Some("GPT-4o".into()),
             context_window: None,
+            ..Default::default()
         };
         let table = model_to_table(&m, Some(&Value::Table(existing)))
             .as_table()
@@ -1159,9 +1846,66 @@ mod tests {
             provider_id: "openai".into(),
             name: None,
             context_window: Some(128_000),
+            ..Default::default()
         };
         let table = model_to_table(&m, None).as_table().unwrap().clone();
         assert_eq!(table["context_window"].as_integer().unwrap(), 128_000);
+    }
+
+    #[test]
+    fn model_to_table_keeps_local_id_separate_from_remote_slug() {
+        let model = ModelEntry {
+            model_id: "custom-2/shared-model".into(),
+            remote_model_id: Some("shared-model".into()),
+            provider_id: "custom-2".into(),
+            ..Default::default()
+        };
+        let table = model_to_table(&model, None);
+        assert_eq!(table["model"].as_str(), Some("shared-model"));
+        assert_eq!(table["model_provider"].as_str(), Some("custom-2"));
+    }
+
+    #[test]
+    fn allocate_model_id_namespaces_cross_provider_collision() {
+        let mut models = Map::new();
+        let mut first = Map::new();
+        first.insert("model".into(), Value::String("shared-model".into()));
+        first.insert("model_provider".into(), Value::String("first".into()));
+        models.insert("shared-model".into(), Value::Table(first));
+
+        assert_eq!(
+            allocate_model_id("shared-model", "second", &models),
+            "second/shared-model"
+        );
+    }
+
+    #[test]
+    fn replacing_connection_models_removes_only_unselected_models_from_that_connection() {
+        let mut models = Map::new();
+        for (local_id, provider_id) in [
+            ("keep", "personal"),
+            ("remove", "personal"),
+            ("other", "other-provider"),
+        ] {
+            models.insert(
+                local_id.into(),
+                Value::Table(Map::from_iter([
+                    ("model".into(), Value::String(local_id.into())),
+                    ("model_provider".into(), Value::String(provider_id.into())),
+                ])),
+            );
+        }
+
+        let removed = remove_unselected_provider_models(
+            &mut models,
+            "personal",
+            &std::collections::HashSet::from(["keep".to_string()]),
+        );
+
+        assert_eq!(removed, vec!["remove"]);
+        assert!(models.contains_key("keep"));
+        assert!(!models.contains_key("remove"));
+        assert!(models.contains_key("other"));
     }
 
     #[test]
@@ -1192,6 +1936,7 @@ mod tests {
                 model: "glm-5".into(),
                 base_url: "https://organization.example/v1/".into(),
                 api_key: "sk-organization".into(),
+                lease_until: u64::MAX,
             },
         )
         .unwrap();
@@ -1236,6 +1981,7 @@ mod tests {
                     model: model.into(),
                     base_url: "https://api.openai.com/v1".into(),
                     api_key: format!("sk-{model}"),
+                    lease_until: u64::MAX,
                 },
             )
             .unwrap();
@@ -1251,6 +1997,55 @@ mod tests {
             .and_then(Value::as_table)
             .unwrap();
         assert_eq!(provider["api_key"].as_str(), Some("sk-new-model"));
+    }
+
+    #[test]
+    fn organization_cleanup_preserves_personal_entries_and_clears_default() {
+        let mut config = Value::Table(Map::new());
+        apply_organization_model_config(
+            &mut config,
+            &OrganizationModelConfig {
+                provider: "openai".into(),
+                model: "managed-model".into(),
+                base_url: "https://organization.example/v1".into(),
+                api_key: "sk-managed".into(),
+                lease_until: u64::MAX,
+            },
+        )
+        .unwrap();
+        config["model_providers"].as_table_mut().unwrap().insert(
+            "personal".into(),
+            Value::Table(Map::from_iter([
+                (
+                    "base_url".into(),
+                    Value::String("https://personal.example/v1".into()),
+                ),
+                ("api_key".into(), Value::String("sk-personal".into())),
+            ])),
+        );
+        config["model"].as_table_mut().unwrap().insert(
+            "personal-model".into(),
+            Value::Table(Map::from_iter([
+                ("model".into(), Value::String("personal-model".into())),
+                ("model_provider".into(), Value::String("personal".into())),
+            ])),
+        );
+        config.as_table_mut().unwrap().insert(
+            "models".into(),
+            Value::Table(Map::from_iter([(
+                "default".into(),
+                Value::String("organization/managed-model".into()),
+            )])),
+        );
+
+        assert!(remove_organization_model_config_from(&mut config));
+        assert!(config["model_providers"].get("personal").is_some());
+        assert!(config["model"].get("personal-model").is_some());
+        assert!(config["model_providers"]
+            .get(ORGANIZATION_PROVIDER_ID)
+            .is_none());
+        assert!(config["model"].get("organization/managed-model").is_none());
+        assert!(config["models"].get("default").is_none());
     }
 
     // --- group_legacy_models (lazy migration, display only) ---
@@ -1312,6 +2107,61 @@ mod tests {
         // Disk-like input map is unchanged (display-only grouping).
         assert_eq!(models.len(), 3);
         assert!(models["gpt-4o"].as_table().unwrap().contains_key("api_key"));
+    }
+
+    #[test]
+    fn group_legacy_keeps_different_credentials_separate() {
+        let mut models = Map::new();
+        for (model_id, api_key) in [("model-a", "sk-a"), ("model-b", "sk-b")] {
+            models.insert(
+                model_id.into(),
+                Value::Table(Map::from_iter([
+                    (
+                        "base_url".into(),
+                        Value::String("https://gateway.example/v1".into()),
+                    ),
+                    ("api_key".into(), Value::String(api_key.into())),
+                    (
+                        "api_backend".into(),
+                        Value::String("chat_completions".into()),
+                    ),
+                ])),
+            );
+        }
+
+        let mut taken = std::collections::HashSet::new();
+        let (providers, grouped_models) = group_legacy_models(&models, &mut taken);
+        assert_eq!(providers.len(), 2);
+        assert_eq!(grouped_models.len(), 2);
+        assert_ne!(grouped_models[0].provider_id, grouped_models[1].provider_id);
+    }
+
+    #[test]
+    fn legacy_provider_details_keeps_secret_native_for_transparent_migration() {
+        let mut config = Value::Table(Map::new());
+        config.as_table_mut().unwrap().insert(
+            "model".into(),
+            Value::Table(Map::from_iter([(
+                "legacy-model".into(),
+                Value::Table(Map::from_iter([
+                    (
+                        "base_url".into(),
+                        Value::String("https://legacy.example/v1".into()),
+                    ),
+                    ("api_key".into(), Value::String("sk-legacy".into())),
+                    (
+                        "api_backend".into(),
+                        Value::String("chat_completions".into()),
+                    ),
+                ])),
+            )])),
+        );
+
+        let (connection, members) = legacy_provider_details(&config, "custom").unwrap();
+        assert_eq!(connection["api_key"].as_str(), Some("sk-legacy"));
+        assert_eq!(connection["base_url"].as_str(), Some("https://legacy.example/v1"));
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].model_id, "legacy-model");
     }
 
     #[test]
@@ -1418,6 +2268,7 @@ mod tests {
                             .get("context_window")
                             .and_then(Value::as_integer)
                             .map(|n| n as u64),
+                        ..Default::default()
                     });
                 }
             }
@@ -1507,6 +2358,7 @@ mod tests {
             api_backend: None,
             auth_scheme: None,
             context_window: None,
+            ..Default::default()
         };
         assert!(provider_to_table(&p, None).is_err());
     }
@@ -1522,6 +2374,7 @@ mod tests {
             api_backend: None, // should fall back to preset "messages"
             auth_scheme: None, // should fall back to preset "x_api_key"
             context_window: None,
+            ..Default::default()
         };
         let table = provider_to_table(&p, None).unwrap();
         let t = table.as_table().unwrap();

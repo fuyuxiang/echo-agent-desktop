@@ -3,6 +3,7 @@ use indexmap::IndexMap;
 use super::config::{ConfigModelOverride, EnvKeys};
 use super::config_model_override_parse::{ConfigWarning, ConfigWarningKind};
 use crate::sampling::ApiBackend;
+use xai_grok_sampler::AuthScheme;
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(default)]
@@ -12,6 +13,7 @@ pub struct ModelProviderConfig {
     pub env_key: Option<EnvKeys>,
     pub api_key: Option<String>,
     pub api_backend: Option<ApiBackend>,
+    pub auth_scheme: Option<AuthScheme>,
     pub extra_headers: IndexMap<String, String>,
     /// Query parameters folded into every request URL; inherited by models.
     pub query_params: IndexMap<String, String>,
@@ -21,6 +23,14 @@ pub struct ModelProviderConfig {
     pub auth_provider: Option<String>,
     pub auth: Option<crate::auth::AuthProviderConfig>,
     pub context_window: Option<u64>,
+    // EchoAgent Desktop annotations. Keeping them in the parsed shape avoids
+    // false unknown-field warnings while the Runtime intentionally ignores UI
+    // labels and organization lifecycle metadata.
+    pub echoagent_label: Option<String>,
+    pub echoagent_managed_by: Option<String>,
+    pub echoagent_synced_at: Option<u64>,
+    pub echoagent_lease_until: Option<u64>,
+    pub organization_provider: Option<String>,
 }
 
 pub(crate) fn model_provider_auth_name(provider_id: &str) -> String {
@@ -179,12 +189,14 @@ impl ConfigModelOverride {
             env_key,
             api_key,
             api_backend,
+            auth_scheme,
             extra_headers,
             query_params,
             env_http_headers,
             auth_provider,
             auth,
             context_window,
+            ..
         } = provider;
 
         let mut merged = self.clone();
@@ -192,6 +204,7 @@ impl ConfigModelOverride {
         merged.base_url = merged.base_url.or_else(|| base_url.clone());
         merged.api_base_url = merged.api_base_url.or_else(|| api_base_url.clone());
         merged.api_backend = merged.api_backend.or_else(|| api_backend.clone());
+        merged.auth_scheme = merged.auth_scheme.or(*auth_scheme);
         merged.context_window = merged.context_window.or(*context_window);
         // Inherited wholesale only when the model sets none of its own.
         if merged.extra_headers.is_empty() {
@@ -237,6 +250,7 @@ mod tests {
             [model_providers.gateway]
             base_url = "https://gateway.example/v1"
             context_window = 123456
+            auth_scheme = "x_api_key"
 
             [model_providers.gateway.extra_headers]
             X-Corp = "yes"
@@ -254,6 +268,7 @@ mod tests {
         let model = resolved.get("via-gateway").expect("model should exist");
         assert_eq!(model.info.base_url, "https://gateway.example/v1");
         assert_eq!(model.info.context_window.get(), 123456);
+        assert_eq!(model.info.auth_scheme, AuthScheme::XApiKey);
         assert_eq!(
             model.info.extra_headers.get("X-Corp").map(String::as_str),
             Some("yes")

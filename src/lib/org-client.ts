@@ -136,6 +136,13 @@ export interface OrgAskEvent {
 }
 
 export const orgSession = () => invoke<OrgSession>("org_session");
+export interface OrgModelSyncResult {
+  configured: boolean;
+  modelId?: string | null;
+  syncedAt: number;
+}
+export const orgSyncModelConfig = () =>
+  invoke<OrgModelSyncResult>("org_sync_model_config");
 export const orgLogin = (serverUrl: string, username: string, password: string) =>
   invoke<OrgSession>("org_login", { serverUrl, username, password });
 export const orgLogout = () => invoke<void>("org_logout");
@@ -190,3 +197,6 @@ export const listenOrgAsk = (handler: (event: OrgAskEvent) => void): Promise<Unl
 /** Fired after native organization Skill activation/deactivation is persisted. */
 export const listenOrgSkillsChanged = (handler: () => void): Promise<UnlistenFn> =>
   listen("org://skills-changed", handler);
+
+export const listenOrgModelsChanged = (handler: () => void): Promise<UnlistenFn> =>
+  listen("org://models-changed", handler);

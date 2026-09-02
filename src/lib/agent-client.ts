@@ -269,6 +269,7 @@ export type ApiBackend = "chat_completions" | "responses" | "messages";
 
 /** HTTP auth header style. Mirrors EchoAgent's AuthScheme enum (snake_case). */
 export type AuthScheme = "bearer" | "x_api_key";
+export type ProviderSource = "personal" | "organization" | "legacy";
 
 /**
  * One connection/auth profile — written to `[model_providers.<id>]`. A single
@@ -287,6 +288,11 @@ export interface ModelProviderEntry {
   authScheme?: AuthScheme;
   /** Max context window in tokens, shared by all referencing models. */
   contextWindow?: number;
+  source?: ProviderSource;
+  managed?: boolean;
+  credentialConfigured?: boolean;
+  syncedAt?: number;
+  organizationProvider?: string;
 }
 
 /**
@@ -295,14 +301,17 @@ export interface ModelProviderEntry {
  * fields; connection config lives on the provider.
  */
 export interface ModelEntry {
-  /** The `[model.<id>]` key AND the model slug sent in requests. */
+  /** Stable local catalog key used by sessions and selectors. */
   modelId: string;
+  /** Exact upstream model slug sent in requests. */
+  remoteModelId?: string;
   /** References a ModelProviderEntry.id. */
   providerId: string;
   /** Human-readable display name (EchoAgent's `name` field). */
   name?: string;
   /** Per-model context-window override (wins over the provider's value). */
   contextWindow?: number;
+  managed?: boolean;
 }
 
 /** Result of providers_list: every provider + every model, joined by providerId. */
@@ -325,11 +334,20 @@ export interface ModelOptionRow {
 
 /** Flatten a ProviderListModel into per-model rows (id + label + provider). */
 export function flattenModels(list: ProviderListModel): ModelOptionRow[] {
+  const labels = new Map<string, number>();
+  for (const model of list.models) {
+    const label = model.name || model.remoteModelId || model.modelId;
+    labels.set(label, (labels.get(label) ?? 0) + 1);
+  }
   return list.models.map((m) => {
     const provider = list.providers.find((p) => p.id === m.providerId);
+    const baseLabel = m.name || m.remoteModelId || m.modelId;
+    const sourceLabel = provider?.source === "organization"
+      ? "组织"
+      : provider?.label || provider?.providerKind || m.providerId;
     return {
       id: m.modelId,
-      label: m.name || m.modelId,
+      label: (labels.get(baseLabel) ?? 0) > 1 ? `${baseLabel} · ${sourceLabel}` : baseLabel,
       providerKind: (provider?.providerKind ?? "custom") as ProviderKind,
       providerId: m.providerId,
     };
@@ -344,8 +362,25 @@ export async function providersSaveProvider(provider: ModelProviderEntry): Promi
   await invoke<void>("providers_save_provider", { provider });
 }
 
-export async function providersSaveModel(model: ModelEntry): Promise<void> {
-  await invoke<void>("providers_save_model", { model });
+export interface SaveConnectionResult {
+  providerId: string;
+  modelIds: string[];
+}
+
+export async function providersSaveConnection(
+  provider: ModelProviderEntry,
+  models: ModelEntry[],
+  replaceModels = false,
+): Promise<SaveConnectionResult> {
+  return invoke<SaveConnectionResult>("providers_save_connection", {
+    provider,
+    models,
+    replaceModels,
+  });
+}
+
+export async function providersSaveModel(model: ModelEntry): Promise<string> {
+  return invoke<string>("providers_save_model", { model });
 }
 
 export async function providersDeleteProvider(id: string): Promise<void> {
@@ -378,6 +413,18 @@ export async function providersFetchModels(
     apiKey,
     baseUrl: baseUrl ?? null,
   });
+}
+
+/** Discover models using the provider's native-side stored secret. */
+export async function providersFetchModelsForProvider(providerId: string): Promise<FetchedModel[]> {
+  return invoke<FetchedModel[]>("providers_fetch_models_for_provider", { providerId });
+}
+
+/** Test an unsaved draft; native code reuses the stored key when editing. */
+export async function providersTestConnection(
+  provider: ModelProviderEntry,
+): Promise<FetchedModel[]> {
+  return invoke<FetchedModel[]>("providers_test_connection", { provider });
 }
 
 // ---------- skills (echo.agent/skills/*) ----------
