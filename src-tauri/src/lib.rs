@@ -252,6 +252,7 @@ pub fn run() {
             providers::providers_fetch_models,
             providers::providers_fetch_models_for_provider,
             providers::providers_test_connection,
+            providers::providers_test_model_connection,
             // Deprecated shims kept registered for back-compat.
             providers::providers_save,
             providers::providers_delete,
