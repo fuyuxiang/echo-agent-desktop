@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { PauseIcon } from "@/foundation/components/Icon/icons";
 import { useSessionStore, type ToolCallView } from "@/stores/session-store";
 import { useSessionsStore } from "@/stores/sessions-store";
@@ -38,6 +38,7 @@ import type { ModelOption } from "./ModelSelector";
 import type { AgentEntry } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
+import { useStickToBottom } from "./use-stick-to-bottom";
 
 /** Center chat column: scrollable message list + composer pinned at bottom. */
 export function ChatView({
@@ -258,11 +259,11 @@ export function ChatView({
     [cwd, sessionId, onToast],
   );
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  const { scrollRef, contentRef } = useStickToBottom({
+    contentVersion: messages,
+    streaming,
+    sessionId,
+  });
 
   // 会话内查找:Ctrl/Cmd+F 打开;当前命中滚入视野。
   useEffect(() => {
@@ -485,7 +486,7 @@ export function ChatView({
         />
 
         <div className="chatview__scroll" ref={scrollRef}>
-          <div className="chatview__inner">
+          <div className="chatview__inner" ref={contentRef}>
             {fileChangesOpen && (
               <FileChangesPanel messages={messages} />
             )}
