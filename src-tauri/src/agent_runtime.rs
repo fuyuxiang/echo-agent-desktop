@@ -305,8 +305,9 @@ pub async fn load_session(tx: &AcpAgentTx, session_id: &str, cwd: &Path) -> Resu
     Ok(())
 }
 
-/// Send a user prompt. Returns once the agent accepts it; streamed updates
-/// arrive on the client rx channel (drained by the dispatcher in bridge.rs).
+/// Send a user prompt. ACP resolves this request after the complete model turn;
+/// streamed updates arrive earlier on the client rx channel (drained by the
+/// dispatcher in bridge.rs).
 ///
 /// Automatically retries on 429 rate-limit errors with an exponential backoff
 /// (30s → 60s, max 2 retries) so transient TPM/RPM limits don't immediately
@@ -408,10 +409,7 @@ pub async fn prompt_with_attachments(
                         "echoagent: prompt succeeded after retry"
                     );
                 } else {
-                    tracing::info!(
-                        session_id,
-                        "echoagent: prompt accepted (wait for streamed updates)"
-                    );
+                    tracing::info!(session_id, "echoagent: prompt turn completed");
                 }
                 let _ = resp;
                 return Ok(());
