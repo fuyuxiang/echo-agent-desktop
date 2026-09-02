@@ -190,16 +190,15 @@ export function Composer({
   const histRef = useRef<InputHistory>(createInputHistory(50));
   const histCursorRef = useRef<number>(0);
   const draftRef = useRef<string>("");
-  // 多块提示预览(对齐 EchoAgent content-blocks):把当前引用(expert/attachments/
-  // sceneTag)组装成块,显示为 chip 行 + 组装后的预览(便于用户确认最终发送内容)。
+  // 多块提示预览(对齐 EchoAgent content-blocks):仅显示专家/技能
+  // 引用。附件在下方有可删除的独立 chip，不再重复渲染一份。
   const blockList = useMemo(() => {
     const list = [];
     if (activeExpertName) list.push(blocks.expert({ name: activeExpertName, path: "", scope: "local", raw: "" }));
     if (sceneTag) list.push(blocks.skill(sceneTag.label));
-    for (const p of attachments) list.push(blocks.file(p));
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeExpertName, sceneTag, attachments]);
+  }, [activeExpertName, sceneTag]);
   const hasRefs = blockList.length > 0;
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<VoiceRecognition | null>(null);

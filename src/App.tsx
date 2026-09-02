@@ -84,6 +84,7 @@ import { useUpdateStore } from "./stores/update-store";
 import { useOrgSessionStore } from "./stores/org-session-store";
 import { indexTaskArtifacts } from "./lib/artifact-catalog";
 import { EXPERT_PERSONA_BEGIN, EXPERT_PERSONA_END } from "./lib/user-message";
+import { beginAgentTurn } from "./lib/agent-turn";
 
 function publishQuotaAlert(
   records: UsageRecord[],
@@ -717,10 +718,13 @@ function Shell() {
         usePendingExpertStore.getState().clear();
       }
 
-      // UI shows only the user's visible text.
-      sessionStore.getState().pushUser(text, attachments);
-      sessionStore.getState().startStreaming();
-      await agentSend(sessionId, textForAgent, attachments, text);
+      const accepted = beginAgentTurn({
+        sessionId,
+        promptText: textForAgent,
+        displayText: text,
+        attachments,
+      });
+      if (!accepted) return false;
       return true;
     } catch (e) {
       console.error('[EchoAgent] handleSendNew error:', e);
@@ -766,10 +770,16 @@ function Shell() {
       const textForAgent = project && isFirstUserTurn
         ? buildProjectPrompt(project, text)
         : text;
-      sessionsStore.getState().upsert({ sessionId: currentSessionId, status: "working" });
-      sessionStore.getState().pushUser(text, attachments);
-      sessionStore.getState().startStreaming();
-      await agentSend(currentSessionId, textForAgent, attachments, text);
+      const accepted = beginAgentTurn({
+        sessionId: currentSessionId,
+        promptText: textForAgent,
+        displayText: text,
+        attachments,
+      });
+      if (!accepted) {
+        showToast("当前会话已切换，请重新发送");
+        return false;
+      }
       return true;
     } catch (e) {
       sessionStore.getState().rollbackPendingTurn();
