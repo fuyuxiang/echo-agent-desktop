@@ -5,6 +5,11 @@ import "@testing-library/jest-dom/vitest";
 
 vi.mock("@/lib/agent-client", () => ({
   providersList: vi.fn().mockResolvedValue({ providers: [], models: [] }),
+  agentsDefaultsGet: vi.fn().mockResolvedValue({
+    defaultModel: "",
+    defaultPermission: "",
+    rememberToolApprovals: null,
+  }),
   agentAuthStatus: vi.fn().mockResolvedValue({ ready: false, providers: [] }),
   commandsList: vi.fn().mockResolvedValue([]),
   exportTextFile: vi.fn().mockResolvedValue("/tmp/usage.csv"),
@@ -31,6 +36,12 @@ vi.mock("@/lib/agent-client", () => ({
   memoryDream: vi.fn(),
 }));
 
+vi.mock("@/lib/org-client", () => ({
+  orgSession: vi.fn().mockResolvedValue({ loggedIn: false }),
+  orgSyncModelConfig: vi.fn(),
+  listenOrgModelsChanged: vi.fn().mockResolvedValue(() => {}),
+}));
+
 import { SettingsPanel } from "../SettingsPanel";
 import { ThemeProvider } from "../ThemeProvider";
 import { memoryConfigSave } from "@/lib/agent-client";
@@ -54,8 +65,8 @@ describe("SettingsPanel", () => {
     expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(11);
     expect(screen.getByRole("button", { name: "Token 用量" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "模型" })).toHaveAttribute("aria-current", "page");
-    expect(await screen.findByRole("heading", { name: "模型", level: 2 })).toBeInTheDocument();
-    expect(screen.getByText("管理模型厂商、访问凭据和可用模型。每个厂商可以共享一套连接配置。"))
+    expect(await screen.findByRole("heading", { name: "模型与连接", level: 2 })).toBeInTheDocument();
+    expect(screen.getByText("组织模型自动同步；个人 API 连接保存在本机并可挂载多个模型。"))
       .toBeInTheDocument();
   });
 
@@ -77,7 +88,7 @@ describe("SettingsPanel", () => {
 
     const pages = [
       "通知中心",
-      "模型",
+      "模型与连接",
       "智能体设置",
       "记忆",
       "系统设置",
@@ -89,7 +100,7 @@ describe("SettingsPanel", () => {
     ];
 
     for (const page of pages) {
-      const navigationItem = screen.getByRole("button", { name: page });
+      const navigationItem = screen.getByRole("button", { name: page === "模型与连接" ? "模型" : page });
       fireEvent.click(navigationItem);
       expect(await screen.findByRole("heading", { name: page, level: 2 })).toBeInTheDocument();
       expect(navigationItem).toHaveAttribute("aria-current", "page");

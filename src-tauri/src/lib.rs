@@ -7,8 +7,8 @@
 mod agent_admin;
 mod agent_config;
 mod agent_runtime;
-mod app_updater;
 mod agents_store;
+mod app_updater;
 mod automations;
 mod bridge;
 mod commands;
@@ -245,10 +245,13 @@ pub fn run() {
             // BYOK providers (~/.echo-agent/config.toml [model.*])
             providers::providers_list,
             providers::providers_save_provider,
+            providers::providers_save_connection,
             providers::providers_save_model,
             providers::providers_delete_provider,
             providers::providers_delete_model,
             providers::providers_fetch_models,
+            providers::providers_fetch_models_for_provider,
+            providers::providers_test_connection,
             // Deprecated shims kept registered for back-compat.
             providers::providers_save,
             providers::providers_delete,
@@ -284,6 +287,7 @@ pub fn run() {
             org::org_login,
             org::org_logout,
             org::org_session,
+            org::org_sync_model_config,
             org::org_bootstrap,
             org::org_list_scopes,
             org::org_submit_document,

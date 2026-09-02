@@ -147,8 +147,8 @@ pub async fn agent_init(
         .await
         .map_err(|e| format!("initialize: {e}"))?;
 
-    let list = crate::providers::providers_list();
-    let model_ids: Vec<String> = list.models.iter().map(|m| m.model_id.clone()).collect();
+    let _ = crate::providers::enforce_organization_model_lease();
+    let (model_ids, reason) = crate::providers::usable_model_ids();
     let ready = !model_ids.is_empty();
 
     // Start the automations scheduler now that the agent channel is up.
@@ -173,11 +173,7 @@ pub async fn agent_init(
         auth: AuthStatus {
             ready,
             providers: model_ids,
-            reason: if ready {
-                None
-            } else {
-                Some("No model provider configured. Add one in Settings → 模型.".into())
-            },
+            reason: (!ready).then_some(reason).flatten(),
         },
         cwd: cwd.to_string_lossy().into_owned(),
         agent_version: init_outcome.agent_version,
@@ -187,17 +183,13 @@ pub async fn agent_init(
 
 #[tauri::command]
 pub fn agent_auth_status(_state: State<'_, AppState>) -> AuthStatus {
-    let list = crate::providers::providers_list();
-    let model_ids: Vec<String> = list.models.iter().map(|m| m.model_id.clone()).collect();
+    let _ = crate::providers::enforce_organization_model_lease();
+    let (model_ids, reason) = crate::providers::usable_model_ids();
     let ready = !model_ids.is_empty();
     AuthStatus {
         ready,
         providers: model_ids,
-        reason: if ready {
-            None
-        } else {
-            Some("No model provider configured. Add one in Settings → 模型.".into())
-        },
+        reason: (!ready).then_some(reason).flatten(),
     }
 }
 
