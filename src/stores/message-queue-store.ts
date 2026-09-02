@@ -16,6 +16,8 @@ export interface QueueItem {
   id: string;
   /** 排队的 prompt 文本。 */
   text: string;
+  /** Local paths that must travel with this queued prompt. */
+  attachments?: string[];
   status: QueueItemStatus;
   /** 入队时间戳(ms)。 */
   createdAt: number;
@@ -27,7 +29,7 @@ type QueueMap = Record<string, QueueItem[]>;
 interface QueueState {
   queues: QueueMap;
   /** 入队一条(追加到末尾,默认 queued)。返回新 item 的 id。 */
-  enqueue: (sessionId: string, text: string) => string;
+  enqueue: (sessionId: string, text: string, attachments?: string[]) => string;
   /** 编辑某条文本。 */
   update: (sessionId: string, id: string, text: string) => void;
   /** 删除某条。 */
@@ -54,9 +56,15 @@ function queueOf(map: QueueMap, sessionId: string): QueueItem[] {
 
 export const useMessageQueueStore = create<QueueState>((set, get) => ({
   queues: {},
-  enqueue: (sessionId, text) => {
+  enqueue: (sessionId, text, attachments = []) => {
     const id = newId();
-    const item: QueueItem = { id, text, status: "queued", createdAt: Date.now() };
+    const item: QueueItem = {
+      id,
+      text,
+      attachments: [...new Set(attachments)],
+      status: "queued",
+      createdAt: Date.now(),
+    };
     set((s) => ({
       queues: { ...s.queues, [sessionId]: [...queueOf(s.queues, sessionId), item] },
     }));

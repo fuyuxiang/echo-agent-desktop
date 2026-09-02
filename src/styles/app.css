@@ -454,6 +454,72 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+.msg__bubble--with-attachments {
+  min-width: min(320px, 68vw);
+}
+.msg__attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.msg__attachment-item {
+  min-width: 0;
+}
+.msg__attachment {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.09);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.72);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.msg__attachment:hover {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(0, 0, 0, 0.16);
+}
+.msg__attachment:focus-visible {
+  outline: 2px solid var(--echo-brand);
+  outline-offset: 1px;
+}
+.msg__attachment-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 9px;
+  background: rgba(16, 185, 129, 0.12);
+  color: rgb(5, 150, 105);
+}
+.msg__attachment-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  line-height: 1.35;
+}
+.msg__attachment-name {
+  overflow: hidden;
+  color: rgba(0, 0, 0, 0.9);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg__attachment-type {
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 11px;
+}
 .msg--assistant .msg__header {
   display: flex;
   align-items: center;
@@ -1485,6 +1551,13 @@
   color: var(--echo-text-light);
   font-variant-numeric: tabular-nums;
 }
+.queue-row__content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
 .queue-row__text {
   flex: 1;
   min-width: 0;
@@ -1492,6 +1565,23 @@
   white-space: pre-wrap;
   word-break: break-word;
   cursor: text;
+}
+.queue-row__attachments {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.queue-row__attachment {
+  max-width: 180px;
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-medium);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .queue-row__edit {
   flex: 1;

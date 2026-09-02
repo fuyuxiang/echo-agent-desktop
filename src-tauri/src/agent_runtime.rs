@@ -312,7 +312,7 @@ pub async fn load_session(tx: &AcpAgentTx, session_id: &str, cwd: &Path) -> Resu
 /// (30s → 60s, max 2 retries) so transient TPM/RPM limits don't immediately
 /// surface as hard errors.
 pub async fn prompt(tx: &AcpAgentTx, session_id: &str, text: &str) -> Result<()> {
-    prompt_with_attachments(tx, session_id, text, &[]).await
+    prompt_with_attachments(tx, session_id, text, &[], None).await
 }
 
 fn image_mime(path: &Path) -> Option<&'static str> {
@@ -325,15 +325,14 @@ fn image_mime(path: &Path) -> Option<&'static str> {
     }
 }
 
-/// Send a typed ACP prompt. Supported images are carried as real ImageContent;
-/// other files are explicit @path references so the runtime's read_file tool
-/// can load them on demand.
-pub async fn prompt_with_attachments(
-    tx: &AcpAgentTx,
-    session_id: &str,
+/// Build a typed ACP prompt. `displayText` and the original attachment paths
+/// live in content metadata so history replay can restore the exact user-facing
+/// bubble without exposing injected project/expert context.
+fn build_prompt_blocks(
     text: &str,
     attachments: &[String],
-) -> Result<()> {
+    display_text: Option<&str>,
+) -> Result<Vec<acp::ContentBlock>> {
     let mut referenced = Vec::new();
     let mut images = Vec::new();
     for raw in attachments {
@@ -361,8 +360,34 @@ pub async fn prompt_with_attachments(
             referenced.join("\n")
         )
     };
-    let mut blocks = vec![acp::ContentBlock::from(prompt_text.as_str())];
+    let mut text_meta = acp::Meta::new();
+    text_meta.insert(
+        "displayText".into(),
+        serde_json::Value::String(display_text.unwrap_or(text).to_string()),
+    );
+    if !attachments.is_empty() {
+        text_meta.insert(
+            "echoAgentAttachments".into(),
+            serde_json::json!(attachments),
+        );
+    }
+    let text_block = acp::ContentBlock::Text(acp::TextContent::new(prompt_text).meta(text_meta));
+    let mut blocks = vec![text_block];
     blocks.extend(images);
+    Ok(blocks)
+}
+
+/// Send a typed ACP prompt. Supported images are carried as real ImageContent;
+/// other files are explicit @path references so the runtime's read_file tool
+/// can load them on demand.
+pub async fn prompt_with_attachments(
+    tx: &AcpAgentTx,
+    session_id: &str,
+    text: &str,
+    attachments: &[String],
+    display_text: Option<&str>,
+) -> Result<()> {
+    let blocks = build_prompt_blocks(text, attachments, display_text)?;
     let max_retries = 2;
     let mut delay_secs = 30u64;
     for attempt in 0..=max_retries {
@@ -547,6 +572,31 @@ mod tests {
     //! against the user's `~/.echo-agent` config (~10s). Run with
     //! `cargo test --lib -- --ignored spawn_smoke`.
     use super::*;
+
+    #[test]
+    fn document_attachment_keeps_model_reference_and_replay_metadata() {
+        let attachments = vec!["/tmp/AI数据集平台-数据回流方案.docx".to_string()];
+        let blocks = build_prompt_blocks(
+            "<system-reminder>hidden</system-reminder>\n\n请优化文档",
+            &attachments,
+            Some("请优化文档"),
+        )
+        .expect("document attachment should not require reading the file");
+
+        let acp::ContentBlock::Text(text) = &blocks[0] else {
+            panic!("first prompt block must be text");
+        };
+        assert!(text.text.contains("- @/tmp/AI数据集平台-数据回流方案.docx"));
+        let meta = text.meta.as_ref().expect("replay metadata");
+        assert_eq!(
+            meta.get("displayText"),
+            Some(&serde_json::json!("请优化文档"))
+        );
+        assert_eq!(
+            meta.get("echoAgentAttachments"),
+            Some(&serde_json::json!(attachments)),
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "spawns a real agent thread against ~/.echo-agent (~10s)"]

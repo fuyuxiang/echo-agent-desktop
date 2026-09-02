@@ -8,6 +8,12 @@ import type {
   ToolCallUpdate,
   UsageUpdate,
 } from "@/lib/types";
+import {
+  ATTACHMENTS_META_KEY,
+  normalizeAttachmentPaths,
+  parseLegacyAttachmentPrompt,
+  stripInjectedUserContext,
+} from "@/lib/user-message";
 
 /**
  * A single chat message in the transcript the UI renders.
@@ -20,6 +26,10 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   parts: MessagePart[];
+  /** Local paths attached to a user prompt, in selection order. */
+  attachments?: string[];
+  /** ACP prompt index used to merge replayed text/image chunks into one turn. */
+  promptIndex?: number;
   /** False while the assistant is still streaming this message. */
   complete: boolean;
 }
@@ -109,7 +119,7 @@ interface SessionState {
 
   // --- transcript ops ---
   /** Append a user message (sent optimistically before the round-trip). */
-  pushUser: (text: string) => void;
+  pushUser: (text: string, attachments?: string[]) => void;
   /** Remove the most recent optimistic user message and its empty assistant
    *  placeholder when `agent_send` rejects before the turn starts. */
   rollbackPendingTurn: () => void;
@@ -280,6 +290,134 @@ function appendText(
     parts.push({ kind, text: delta } as MessagePart);
   }
   return { ...msg, parts };
+}
+
+function userMessageText(message: ChatMessage): string {
+  return message.parts
+    .filter((part): part is Extract<MessagePart, { kind: "text" }> => part.kind === "text")
+    .map((part) => part.text)
+    .join("\n");
+}
+
+function mergePaths(existing: string[] | undefined, incoming: string[]): string[] {
+  return [...new Set([...(existing ?? []), ...incoming])];
+}
+
+function completeStreamingAssistant(transcript: SessionTranscript): SessionTranscript {
+  if (!transcript.streamingMessageId) return transcript;
+  const messages = transcript.messages
+    .map((message) =>
+      message.id === transcript.streamingMessageId
+        ? { ...message, complete: true }
+        : message
+    )
+    .filter((message) =>
+      !(message.id === transcript.streamingMessageId && message.parts.length === 0)
+    );
+  return { ...transcript, messages, streamingMessageId: null };
+}
+
+interface ReplayedUserChunk {
+  text: string;
+  attachments: string[];
+  promptIndex?: number;
+  hasText: boolean;
+  hidden: boolean;
+}
+
+/** Normalize one ACP UserMessageChunk, including pre-metadata legacy prompts. */
+function normalizeUserChunk(update: Record<string, unknown>): ReplayedUserChunk {
+  const content = (update.content ?? {}) as Record<string, unknown>;
+  const contentMeta = (content._meta ?? {}) as Record<string, unknown>;
+  const chunkMeta = (update._meta ?? {}) as Record<string, unknown>;
+  const promptIndexValue = chunkMeta.promptIndex ?? chunkMeta.prompt_index;
+  const promptIndex = typeof promptIndexValue === "number" ? promptIndexValue : undefined;
+  const hidden = chunkMeta.hideFromScrollback === true || chunkMeta.hide_from_scrollback === true;
+  const structuredAttachments = normalizeAttachmentPaths(contentMeta[ATTACHMENTS_META_KEY]);
+  const imagePath = content.type === "image" && typeof content.uri === "string"
+    ? [content.uri]
+    : [];
+
+  if (content.type !== "text") {
+    return {
+      text: "",
+      attachments: mergePaths(structuredAttachments, imagePath),
+      promptIndex,
+      hasText: false,
+      hidden,
+    };
+  }
+
+  const rawText = typeof content.text === "string" ? content.text : "";
+  const displayText = typeof contentMeta.displayText === "string"
+    ? stripInjectedUserContext(contentMeta.displayText)
+    : undefined;
+  const legacy = parseLegacyAttachmentPrompt(rawText);
+  return {
+    text: displayText ?? legacy.text,
+    attachments: mergePaths(structuredAttachments, legacy.attachments),
+    promptIndex,
+    hasText: true,
+    hidden,
+  };
+}
+
+function applyUserChunk(transcript: SessionTranscript, chunk: ReplayedUserChunk): SessionTranscript {
+  const messages = [...transcript.messages];
+
+  // A prompt may replay as text followed by one or more image blocks. Merge
+  // every block carrying the same promptIndex into the already-created turn.
+  if (chunk.promptIndex !== undefined) {
+    const matchingIndex = messages.findIndex(
+      (message) => message.role === "user" && message.promptIndex === chunk.promptIndex,
+    );
+    if (matchingIndex !== -1) {
+      const current = messages[matchingIndex];
+      const nextText = chunk.hasText && chunk.text && userMessageText(current) !== chunk.text
+        ? [...current.parts, { kind: "text" as const, text: chunk.text }]
+        : current.parts;
+      messages[matchingIndex] = {
+        ...current,
+        parts: nextText,
+        attachments: mergePaths(current.attachments, chunk.attachments),
+      };
+      return { ...transcript, messages };
+    }
+  }
+
+  // Live sends are inserted optimistically just before an empty assistant
+  // placeholder. Reconcile the ACP echo with that message instead of adding a
+  // duplicate bubble; structured replay metadata enriches it with attachments.
+  const placeholderIndex = transcript.streamingMessageId
+    ? messages.findIndex((message) => message.id === transcript.streamingMessageId)
+    : -1;
+  const optimisticIndex = placeholderIndex > 0 ? placeholderIndex - 1 : -1;
+  const optimistic = optimisticIndex >= 0 ? messages[optimisticIndex] : undefined;
+  if (
+    optimistic?.role === "user"
+    && optimistic.promptIndex === undefined
+    && (!chunk.hasText || userMessageText(optimistic) === chunk.text)
+  ) {
+    messages[optimisticIndex] = {
+      ...optimistic,
+      promptIndex: chunk.promptIndex,
+      attachments: mergePaths(optimistic.attachments, chunk.attachments),
+    };
+    return { ...transcript, messages };
+  }
+
+  // A new replayed user turn closes the previous assistant turn. Insert it
+  // before an empty live placeholder if one exists, otherwise append normally.
+  const completed = completeStreamingAssistant({ ...transcript, messages });
+  const user: ChatMessage = {
+    id: nextId(),
+    role: "user",
+    parts: chunk.text ? [{ kind: "text", text: chunk.text }] : [],
+    attachments: chunk.attachments,
+    promptIndex: chunk.promptIndex,
+    complete: true,
+  };
+  return { ...completed, messages: [...completed.messages, user] };
 }
 
 function upsertToolCall(msg: ChatMessage, tc: ToolCallView): ChatMessage {
@@ -503,7 +641,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       );
     },
 
-    pushUser: (text) => {
+    pushUser: (text, attachments = []) => {
       const sid = get().sessionId;
       if (!sid) return;
       applyToTranscript(sid, (t) => ({
@@ -514,6 +652,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
             id: nextId(),
             role: "user",
             parts: [{ kind: "text", text }],
+            attachments: normalizeAttachmentPaths(attachments),
             complete: true,
           },
         ],
@@ -560,12 +699,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
       // merge turns / overwrite usage). Usage/plan are also part of the cache,
       // so suppress them too during replay.
       const REPLAY_SUPPRESSED = new Set([
+        "user_message_chunk",
         "agent_message_chunk",
         "agent_thought_chunk",
         "tool_call",
         "tool_call_update",
         "usage_update",
         "plan",
+        "turn_completed",
       ]);
 
       applyToTranscript(target, (tr) => {
@@ -582,6 +723,11 @@ export const useSessionStore = create<SessionState>((set, get) => {
         };
 
         switch (t) {
+          case "user_message_chunk": {
+            const chunk = normalizeUserChunk(u as unknown as Record<string, unknown>);
+            if (chunk.hidden || (!chunk.text && chunk.attachments.length === 0)) return tr;
+            return applyUserChunk(tr, chunk);
+          }
           case "agent_message_chunk": {
             const delta = extractDelta((u as { content?: unknown }).content);
             if (!delta) return tr;
@@ -684,6 +830,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
             const uu = u as unknown as PlanUpdate;
             return { ...tr, plan: uu.plan ?? null };
           }
+          case "turn_completed":
+            return completeStreamingAssistant(tr);
           default:
             return tr;
         }

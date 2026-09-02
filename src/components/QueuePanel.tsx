@@ -7,6 +7,7 @@
  */
 import { useState } from "react";
 import { useMessageQueueStore, type QueueItem } from "@/stores/message-queue-store";
+import { attachmentBasename } from "@/lib/user-message";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -20,7 +21,7 @@ interface QueuePanelProps {
   /** agent 正在回复时，「发送」改为安全的「置顶」，不会丢失队列项。 */
   streaming?: boolean;
   /** 手动发送一条；返回 false 表示未接受，队列项必须保留。 */
-  onSendNow?: (text: string) => boolean | void | Promise<boolean | void>;
+  onSendNow?: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
 }
 
 export function QueuePanel({ sessionId, streaming = false, onSendNow }: QueuePanelProps) {
@@ -64,7 +65,7 @@ export function QueuePanel({ sessionId, streaming = false, onSendNow }: QueuePan
             if (!onSendNow || sendingId !== null) return;
             setSendingId(item.id);
             try {
-              const accepted = await onSendNow(item.text);
+              const accepted = await onSendNow(item.text, item.attachments ?? []);
               if (accepted !== false) remove(sessionId, item.id);
             } catch {
               // Sending failed: retain the item so the user can retry or edit it.
@@ -143,15 +144,26 @@ function QueueRow({
           }}
         />
       ) : (
-        <span
-          className="queue-row__text"
-          title="点击编辑"
-          onClick={() => {
-            setDraft(item.text);
-            setEditing(true);
-          }}
-        >
-          {item.text}
+        <span className="queue-row__content">
+          <span
+            className="queue-row__text"
+            title="点击编辑"
+            onClick={() => {
+              setDraft(item.text);
+              setEditing(true);
+            }}
+          >
+            {item.text}
+          </span>
+          {(item.attachments?.length ?? 0) > 0 && (
+            <span className="queue-row__attachments" aria-label="队列附件">
+              {item.attachments!.map((path) => (
+                <span key={path} className="queue-row__attachment" title={path}>
+                  📎 {attachmentBasename(path)}
+                </span>
+              ))}
+            </span>
+          )}
         </span>
       )}
       <span className="queue-row__actions">

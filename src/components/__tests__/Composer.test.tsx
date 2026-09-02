@@ -149,7 +149,7 @@ describe("Composer", () => {
     // 入队按钮可访问名 = "加入待发送队列"。
     const btn = screen.getByRole("button", { name: "加入待发送队列" });
     fireEvent.click(btn);
-    expect(onEnqueue).toHaveBeenCalledWith("排队中");
+    expect(onEnqueue).toHaveBeenCalledWith("排队中", []);
     expect(onDraftChange).toHaveBeenLastCalledWith("");
   });
 
@@ -260,5 +260,21 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     expect(onClientSlashCommand).not.toHaveBeenCalled();
     expect(onSend).toHaveBeenCalledWith("/acme:review staged", []);
+  });
+
+  it("编辑重发时同时恢复正文和附件", () => {
+    const onSend = vi.fn();
+    render(
+      <Composer
+        {...base}
+        onSend={onSend}
+        externalText="请继续优化"
+        externalAttachments={["/tmp/方案.docx"]}
+        externalTextNonce={1}
+      />,
+    );
+    expect(screen.getByText("方案.docx")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    expect(onSend).toHaveBeenCalledWith("请继续优化", ["/tmp/方案.docx"]);
   });
 });

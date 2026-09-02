@@ -35,6 +35,20 @@ const chunk = (text: string, sid: string) =>
     ReturnType<typeof useSessionStore.getState>["applyUpdate"]
   >[0];
 
+const userChunk = (
+  content: Record<string, unknown>,
+  sid: string,
+  promptIndex = 0,
+) =>
+  ({
+    sessionUpdate: "user_message_chunk",
+    content,
+    _meta: { promptIndex },
+    __sessionId: sid,
+  }) as unknown as Parameters<
+    ReturnType<typeof useSessionStore.getState>["applyUpdate"]
+  >[0];
+
 const complete = (sid: string, totalTokens = 0) =>
   ({
     sessionId: sid,
@@ -45,6 +59,10 @@ const complete = (sid: string, totalTokens = 0) =>
 
 const textOf = (idx: number) => {
   const m = useSessionStore.getState().messages[idx];
+  return userMessageTextForTest(m);
+};
+
+const userMessageTextForTest = (m: ReturnType<typeof useSessionStore.getState>["messages"][number]) => {
   return m.parts
     .filter((p) => p.kind === "text")
     .map((p) => (p as { text: string }).text)
@@ -65,6 +83,95 @@ describe("session-store transcripts", () => {
     useSessionStore.getState().setSession("A");
     expect(useSessionStore.getState().messages[0].role).toBe("user");
     expect(textOf(0)).toBe("北京天气怎么样");
+  });
+
+  it("pushUser 保留附件并去重", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.pushUser("请优化", ["/tmp/方案.docx", "/tmp/方案.docx"]);
+    expect(useSessionStore.getState().messages[0].attachments).toEqual(["/tmp/方案.docx"]);
+  });
+
+  it("历史回放按 promptIndex 恢复用户文本、附件和轮次边界", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.applyUpdate(userChunk({
+      type: "text",
+      text: "<system-reminder>hidden</system-reminder>\n\nraw body",
+      _meta: {
+        displayText: "请优化方案",
+        echoAgentAttachments: ["/tmp/方案.docx"],
+      },
+    }, "A", 1));
+    s.applyUpdate(userChunk({
+      type: "image",
+      data: "AAAA",
+      mimeType: "image/png",
+      uri: "/tmp/架构图.png",
+    }, "A", 1));
+    s.applyUpdate(chunk("第一轮回答", "A"));
+    s.applyUpdate(userChunk({ type: "text", text: "第二轮问题" }, "A", 2));
+    s.applyUpdate(chunk("第二轮回答", "A"));
+    s.applyUpdate({
+      sessionUpdate: "turn_completed",
+      __sessionId: "A",
+    } as unknown as Parameters<typeof s.applyUpdate>[0]);
+
+    const messages = useSessionStore.getState().messages;
+    expect(messages.map((message) => message.role)).toEqual([
+      "user", "assistant", "user", "assistant",
+    ]);
+    expect(userMessageTextForTest(messages[0])).toBe("请优化方案");
+    expect(messages[0].attachments).toEqual(["/tmp/方案.docx", "/tmp/架构图.png"]);
+    expect(messages[1].complete).toBe(true);
+    expect(messages[3].complete).toBe(true);
+    expect(useSessionStore.getState().streaming).toBe(false);
+  });
+
+  it("实时 user_message_chunk 与乐观消息合并，不产生重复气泡", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.pushUser("请分析文档");
+    s.startStreaming();
+    s.applyUpdate(userChunk({
+      type: "text",
+      text: "模型实际文本",
+      _meta: {
+        displayText: "请分析文档",
+        echoAgentAttachments: ["/tmp/report.docx"],
+      },
+    }, "A", 7));
+
+    const messages = useSessionStore.getState().messages;
+    expect(messages).toHaveLength(2);
+    expect(messages[0].role).toBe("user");
+    expect(messages[0].promptIndex).toBe(7);
+    expect(messages[0].attachments).toEqual(["/tmp/report.docx"]);
+    expect(messages[1].role).toBe("assistant");
+  });
+
+  it("旧会话回放可从附件文本后缀恢复文档", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.applyUpdate(userChunk({
+      type: "text",
+      text: "请检查\n\n附件（图片已作为多模态内容附加；其他文件请使用 read_file 读取）：\n- @/tmp/旧方案.docx",
+    }, "A", 1));
+    const message = useSessionStore.getState().messages[0];
+    expect(userMessageTextForTest(message)).toBe("请检查");
+    expect(message.attachments).toEqual(["/tmp/旧方案.docx"]);
+  });
+
+  it("历史回放不展示 hideFromScrollback 内部消息", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.applyUpdate({
+      sessionUpdate: "user_message_chunk",
+      content: { type: "text", text: "internal wake-up" },
+      _meta: { promptIndex: 1, hideFromScrollback: true },
+      __sessionId: "A",
+    } as unknown as Parameters<typeof s.applyUpdate>[0]);
+    expect(useSessionStore.getState().messages).toEqual([]);
   });
 
   it("流式中切走:后台 update 累积进旧会话 transcript,不污染当前", () => {

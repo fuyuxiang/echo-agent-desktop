@@ -114,6 +114,19 @@ describe("Composer drop-zone", () => {
     expect(onSend).toHaveBeenCalledWith("看一下", ["C:\\proj\\a.ts"]);
   });
 
+  it("流式时可将纯附件加入队列且不丢路径", async () => {
+    const onEnqueue = vi.fn();
+    render(<Composer {...base} streaming onEnqueue={onEnqueue} />);
+    await waitFor(() => expect(dragState.handler).not.toBeNull());
+    emit({
+      type: "drop",
+      paths: ["C:\\docs\\方案.docx"],
+      position: { x: 0, y: 0 },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "加入待发送队列" }));
+    expect(onEnqueue).toHaveBeenCalledWith("请分析附件。", ["C:\\docs\\方案.docx"]);
+  });
+
   it("卸载时解绑监听", async () => {
     const unlistenFn = vi.fn();
     dragState.unlisten = unlistenFn;

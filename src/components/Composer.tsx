@@ -78,6 +78,7 @@ export function Composer({
   onClearSceneTag,
   // 受控填充:externalTextNonce 变化时把 externalText 写入输入框(用于点击模板)。
   externalText,
+  externalAttachments,
   externalTextNonce,
   // 按会话持久化的草稿:切换 sessionId 时按 draft 回填,每次输入回写 store。
   // 不传这三者时退化为纯组件内 state(向后兼容旧调用方/测试)。
@@ -140,6 +141,8 @@ export function Composer({
   onClearSceneTag?: () => void;
   /** 受控填充的内容(通常是某个模板对应的完整 prompt)。 */
   externalText?: string;
+  /** Files restored together with externalText (for edit-and-resend). */
+  externalAttachments?: string[];
   /** 递增的 nonce;变化时把 externalText 写入输入框并聚焦。 */
   externalTextNonce?: number;
   /**
@@ -166,7 +169,7 @@ export function Composer({
     invocation: SlashCommandInvocation,
   ) => boolean | void | Promise<boolean | void>;
   /** 流式时把「发送」改为「加入待发送队列」(对齐 EchoAgent message-queue)。 */
-  onEnqueue?: (text: string) => void;
+  onEnqueue?: (text: string, attachments?: string[]) => void;
   /** Name of the expert currently bound to this session (shown as badge in footer). */
   activeExpertName?: string;
   /** Local avatar path for the expert badge. */
@@ -248,6 +251,9 @@ export function Composer({
     if (externalTextNonce === undefined) return;
     const next = externalText ?? "";
     updateText(next); // 同步草稿:模板写入也算当前草稿内容。
+    if (externalAttachments !== undefined) {
+      setAttachments([...new Set(externalAttachments)]);
+    }
     setCursorPos(next.length);
     requestAnimationFrame(() => {
       const el = ref.current;
@@ -271,6 +277,9 @@ export function Composer({
     recognitionRef.current = null;
     const next = draft ?? "";
     setText(next);
+    // Attachments are session-scoped. Never carry an unsent local file into
+    // another conversation when ChatView reuses the same Composer instance.
+    setAttachments([]);
     setCursorPos(next.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey]);
@@ -439,13 +448,13 @@ export function Composer({
     finishAcceptedSubmission(body);
   };
 
-  /** 流式时入队(对齐 EchoAgent message-queue):文本非空才入队。 */
+  /** 流式时入队(对齐 EchoAgent message-queue):文本或附件任一非空即可入队。 */
   const enqueue = () => {
     const t = text.trim();
-    if (!t || disabled || !apiReady) return;
+    if ((!t && attachments.length === 0) || disabled || !apiReady) return;
     let body = t;
     if (sceneTag) body = body ? `【${sceneTag.label}】${body}` : `【${sceneTag.label}】`;
-    onEnqueue?.(body);
+    onEnqueue?.(body || "请分析附件。", attachments);
     updateText("");
     setAttachments([]);
     onClearSceneTag?.();
@@ -799,7 +808,7 @@ export function Composer({
           {streaming ? (
             <>
               {/* 流式时可加入待发送队列(对齐 EchoAgent message-queue)。 */}
-              {onEnqueue && text.trim() !== "" && (
+              {onEnqueue && (text.trim() !== "" || attachments.length > 0) && (
                 <button
                   className="echo-composer__send echo-composer__send--enqueue"
                   onClick={(e) => {
