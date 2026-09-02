@@ -1,3 +1,4 @@
+// Modified by EchoAgent for the embedded desktop runtime; see ECHOAGENT_VENDOR.md.
 //! Session title generation via LLM tool call.
 
 use crate::sampling::{

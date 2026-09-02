@@ -88,7 +88,7 @@ EchoAgent 将模型 API 转化为真正可落地的桌面 Agent 工作环境。�
 | Protocol Buffers | 系统 `PATH` 中可用的原生 `protoc`，或通过 `PROTOC` 环境变量指定。 |
 | 平台工具链 | macOS：Xcode Command Line Tools。Windows：Visual Studio 2022 Build Tools，并安装 **Desktop development with C++** 工作负载和 Windows SDK。 |
 
-内嵌 Runtime 已作为普通源码完整收录在 `vendor/grok-build/`，与桌面应用由同一仓库、同一提交统一管理。源码快照已经包含 `patches/grok-build/` 记录的兼容性修改和 EchoAgent 协议命名空间迁移；克隆主仓库后无需初始化子模块，也不依赖上游仓库在线可用。Setup 脚本仅负责检查 Vendored Runtime 是否完整。
+内嵌 Runtime 已作为普通源码完整收录在 `vendor/grok-build/`，与桌面应用由同一仓库、同一提交统一管理。兼容性修改和 EchoAgent 协议命名空间迁移都已直接融入该源码；克隆主仓库后无需初始化子模块，也不依赖上游仓库在线可用。Setup 脚本仅负责检查 Vendored Runtime 是否完整。
 
 **macOS**
 
@@ -219,7 +219,6 @@ src-tauri/
 └── src/*.rs                 Provider、MCP、Skills、Policy、Storage 等模块
 
 vendor/grok-build/           主仓库直接管理的 Apache-2.0 Runtime 源码快照
-patches/grok-build/          上游更新时使用的兼容性补丁与变更记录
 scripts/                     初始化与打包脚本
 docs/                        平台专项文档
 .github/workflows/           持续集成配置

@@ -47,9 +47,6 @@ if (manifest.license !== "Apache-2.0") {
 if (manifest.namespace !== "echo.agent") {
   fail("Vendored Runtime 协议命名空间元数据必须为 echo.agent");
 }
-if (!Array.isArray(manifest.patches) || manifest.patches.length === 0) {
-  fail("Vendored Runtime 必须记录已集成的兼容性补丁");
-}
 if (existsSync(join(runtimeRoot, ".git"))) {
   fail("vendor/grok-build 仍包含独立 Git 元数据，不能作为主仓库普通源码管理");
 }
@@ -57,12 +54,6 @@ if (existsSync(join(runtimeRoot, ".git"))) {
 for (const relativePath of requiredFiles) {
   if (!existsSync(join(runtimeRoot, relativePath))) {
     fail(`Vendored Runtime 源码不完整，缺少：${relativePath}`);
-  }
-}
-
-for (const patchPath of manifest.patches) {
-  if (typeof patchPath !== "string" || !existsSync(join(projectRoot, patchPath))) {
-    fail(`Vendored Runtime 补丁记录无效或文件缺失：${String(patchPath)}`);
   }
 }
 
