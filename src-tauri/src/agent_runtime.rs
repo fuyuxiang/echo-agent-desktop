@@ -164,11 +164,25 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
                 // generic AcpGatewayReceiver (not the AcpAgentGatewayReceiver
                 // alias, which fixes C = AgentSideConnection).
                 let gw_rx = AcpGatewayReceiver::new(acp_agent.rx, agent_rc).with_tracing(true);
-                tokio::task::spawn_local(gw_rx.run());
+                let gateway_task = tokio::task::spawn_local(gw_rx.run());
+                tokio::pin!(gateway_task);
                 tokio::task::yield_now().await;
 
-                cancel_for_thread.cancelled().await;
-                Ok(())
+                // The gateway is the actual ACP event loop. Supervising it is
+                // essential: if it exits because the embedded agent panics or
+                // its channel closes, waiting only for the cancellation token
+                // would leave the desktop with a permanently dead sender that
+                // still appears initialized.
+                tokio::select! {
+                    _ = cancel_for_thread.cancelled() => {
+                        gateway_task.as_mut().abort();
+                        let _ = gateway_task.await;
+                        Ok(())
+                    }
+                    result = &mut gateway_task => {
+                        Err(anyhow!("ACP gateway exited unexpectedly: {result:?}"))
+                    }
+                }
             })
         })?;
 
@@ -303,6 +317,27 @@ pub async fn load_session(tx: &AcpAgentTx, session_id: &str, cwd: &Path) -> Resu
         .await
         .map_err(|e| anyhow!("load_session: {e:?}"))?;
     Ok(())
+}
+
+/// Ask the embedded Runtime for the model catalog it currently exposes over
+/// ACP. This is deliberately queried after `internal/reload_models`; disk
+/// configuration alone is not evidence that the in-memory catalog changed.
+pub async fn model_ids(tx: &AcpAgentTx) -> Result<Vec<String>> {
+    let params = crate::ext::raw_params(&serde_json::json!({}));
+    let resp: acp::ExtResponse =
+        acp_send(acp::ExtRequest::new("echo.agent/models/list", params), tx)
+            .await
+            .map_err(|e| anyhow!("models/list: {e:?}"))?;
+    let state: acp::SessionModelState =
+        crate::ext::parse_ext_response(&resp).map_err(|e| anyhow!("models/list: {e}"))?;
+    let mut ids = state
+        .available_models
+        .into_iter()
+        .map(|model| model.model_id.0.to_string())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
 }
 
 /// Send a user prompt. ACP resolves this request after the complete model turn;
@@ -557,6 +592,36 @@ mod tests {
         assert!(
             agent.rx.try_recv().is_err(),
             "prompt must be sent exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn model_ids_reads_the_runtime_catalog() {
+        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let task = tokio::spawn(async move { model_ids(&client.tx).await });
+
+        let message = agent.rx.recv().await.expect("models/list request");
+        let xai_acp_lib::AcpAgentMessage::ExtMethod(arguments) = message else {
+            panic!("expected ExtMethod");
+        };
+        assert_eq!(arguments.request.method.as_ref(), "echo.agent/models/list");
+        let model_state = acp::SessionModelState::new(
+            "model-a",
+            vec![
+                acp::ModelInfo::new("model-b", "Model B"),
+                acp::ModelInfo::new("model-a", "Model A"),
+            ],
+        );
+        arguments
+            .response_tx
+            .send(Ok(acp::ExtResponse::new(crate::ext::raw_params(
+                &serde_json::json!({ "result": model_state }),
+            ))))
+            .expect("models/list response");
+
+        assert_eq!(
+            task.await.expect("model list task").expect("model list"),
+            vec!["model-a".to_string(), "model-b".to_string()]
         );
     }
 

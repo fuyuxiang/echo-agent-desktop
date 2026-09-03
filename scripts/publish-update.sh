@@ -10,7 +10,7 @@ NOTES_FILE=""
 MANDATORY=0
 
 usage() {
-  echo "Usage: $0 --version 0.3.9 --target windows-x86_64|darwin-aarch64|darwin-x86_64 --artifact FILE [--notes-file FILE] [--mandatory] [--host user@host]"
+  echo "Usage: $0 --version 0.3.10 --target windows-x86_64|darwin-aarch64|darwin-x86_64 --artifact FILE [--notes-file FILE] [--mandatory] [--host user@host]"
 }
 
 while [[ $# -gt 0 ]]; do

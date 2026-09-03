@@ -8,11 +8,27 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 
 use crate::agent_runtime::{self, AgentHandle, InitOutcome};
 use crate::bridge::{PermissionOutcome, Permissions, QuestionOutcome, Questions};
 use crate::sessions::{self, SessionSummary, WorkspaceInfo};
+
+const AGENT_INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const NEW_SESSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+const MODEL_CATALOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const MODEL_RELOAD_ATTEMPTS: usize = 3;
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RuntimeModelState {
+    initialized: bool,
+    revision: Option<String>,
+    model_ids: Vec<String>,
+    last_error: Option<String>,
+    /// Sender identity that produced this snapshot. A late response from a
+    /// retired Runtime must never mark a newly-started Runtime as ready.
+    sender: Option<xai_acp_lib::AcpAgentTx>,
+}
 
 /// State held across commands. The agent channel endpoints live here once
 /// `agent_init` has spawned the agent.
@@ -27,6 +43,108 @@ pub struct AppState {
     /// Replacing/aborting it on restart prevents a stale task from retaining a
     /// closed ACP sender forever.
     pub automation_scheduler: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Last model configuration positively acknowledged by the embedded
+    /// Runtime. Disk configuration alone must never unlock message sending.
+    pub(crate) runtime_models: Mutex<RuntimeModelState>,
+    /// Serialize Runtime model reloads. Organization sync, settings edits and
+    /// startup can all request a reload at the same time; overlapping ACP
+    /// reloads make it impossible to know which disk revision was applied.
+    pub(crate) model_reload_lock: tokio::sync::Mutex<()>,
+}
+
+impl AppState {
+    pub(crate) fn mark_runtime_models_initializing(&self) {
+        *self.runtime_models.lock().unwrap() = RuntimeModelState::default();
+    }
+
+    pub(crate) fn mark_runtime_models_initializing_if_current(
+        &self,
+        sender: &xai_acp_lib::AcpAgentTx,
+    ) -> bool {
+        let tx = self.tx.lock().unwrap();
+        if !tx
+            .as_ref()
+            .is_some_and(|current| current.same_channel(sender))
+        {
+            return false;
+        }
+        *self.runtime_models.lock().unwrap() = RuntimeModelState::default();
+        true
+    }
+
+    pub(crate) fn mark_runtime_models_synced(
+        &self,
+        sender: &xai_acp_lib::AcpAgentTx,
+        revision: String,
+        model_ids: Vec<String>,
+    ) -> bool {
+        let current_sender = self.tx.lock().unwrap();
+        if !current_sender
+            .as_ref()
+            .is_some_and(|current| current.same_channel(sender))
+        {
+            return false;
+        }
+        *self.runtime_models.lock().unwrap() = RuntimeModelState {
+            initialized: true,
+            revision: Some(revision),
+            model_ids,
+            last_error: None,
+            sender: Some(sender.clone()),
+        };
+        true
+    }
+
+    pub(crate) fn mark_runtime_models_failed(&self, error: impl Into<String>) {
+        let mut runtime = self.runtime_models.lock().unwrap();
+        runtime.initialized = false;
+        runtime.revision = None;
+        runtime.model_ids.clear();
+        runtime.sender = None;
+        runtime.last_error = Some(error.into());
+    }
+
+    pub(crate) fn mark_runtime_models_failed_if_current(
+        &self,
+        sender: &xai_acp_lib::AcpAgentTx,
+        error: impl Into<String>,
+    ) {
+        let current_sender = self.tx.lock().unwrap();
+        if current_sender
+            .as_ref()
+            .is_some_and(|current| current.same_channel(sender))
+        {
+            self.mark_runtime_models_failed(error);
+        }
+    }
+
+    /// Invalidate the command-facing runtime only when `tx` is still the
+    /// currently installed agent. An older agent can finish joining after a
+    /// user has already restarted a replacement; it must not poison the new
+    /// runtime's readiness state.
+    pub(crate) fn mark_runtime_dead_if_current(
+        &self,
+        tx: &xai_acp_lib::AcpAgentTx,
+        error: impl Into<String>,
+    ) {
+        let mut current_tx = self.tx.lock().unwrap();
+        let is_current = current_tx
+            .as_ref()
+            .is_some_and(|current| current.same_channel(tx));
+        if !is_current {
+            return;
+        }
+        current_tx.take();
+        drop(current_tx);
+        if let Some(handle) = self.handle.lock().unwrap().take() {
+            handle.cancel.cancel();
+        }
+        if let Some(scheduler) = self.automation_scheduler.lock().unwrap().take() {
+            scheduler.abort();
+        }
+        crate::automations::clear_runtime_sessions();
+        self.mark_runtime_models_failed(error);
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -37,6 +155,12 @@ pub struct AuthStatus {
     /// Model ids configured in `~/.echo-agent/config.toml`. When non-empty the
     /// app can route prompts to the matching `[model.*]` backend.
     pub providers: Vec<String>,
+    /// True only when the embedded Runtime has acknowledged the exact
+    /// model-related configuration revision currently on disk.
+    pub runtime_ready: bool,
+    pub synchronized: bool,
+    pub runtime_models: Vec<String>,
+    pub last_runtime_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -47,6 +171,236 @@ pub struct InitResult {
     pub cwd: String,
     pub agent_version: Option<String>,
     pub default_model_id: Option<String>,
+    pub build_commit: String,
+    pub build_time: String,
+    pub log_dir: String,
+}
+
+fn auth_status(state: &AppState) -> AuthStatus {
+    let _ = crate::providers::enforce_organization_model_lease();
+    let (mut model_ids, disk_reason) = crate::providers::usable_model_ids();
+    model_ids.sort();
+    let revision = crate::providers::model_config_revision();
+    let (runtime, sender_current) = {
+        let current_sender = state.tx.lock().unwrap();
+        let runtime = state.runtime_models.lock().unwrap().clone();
+        let sender_current = runtime.sender.as_ref().is_some_and(|snapshot_sender| {
+            current_sender
+                .as_ref()
+                .is_some_and(|current| current.same_channel(snapshot_sender))
+        });
+        (runtime, sender_current)
+    };
+    auth_status_from_snapshots(model_ids, disk_reason, &revision, runtime, sender_current)
+}
+
+fn auth_status_from_snapshots(
+    model_ids: Vec<String>,
+    disk_reason: Option<String>,
+    revision: &str,
+    runtime: RuntimeModelState,
+    sender_current: bool,
+) -> AuthStatus {
+    let synchronized = sender_current
+        && runtime.initialized
+        && runtime.revision.as_deref() == Some(revision)
+        && model_ids
+            .iter()
+            .all(|id| runtime.model_ids.iter().any(|runtime_id| runtime_id == id));
+    let runtime_ready = synchronized && runtime.last_error.is_none();
+    let ready = !model_ids.is_empty() && runtime_ready;
+    let reason = if ready {
+        None
+    } else if model_ids.is_empty() {
+        disk_reason
+    } else if let Some(error) = runtime.last_error.clone() {
+        Some(format!("Agent Runtime 模型刷新失败：{error}"))
+    } else if !runtime.initialized {
+        Some("Agent Runtime 尚未完成初始化，请稍候或重启应用。".into())
+    } else {
+        Some("Agent Runtime 中的模型配置与磁盘不一致，请在设置中重试刷新。".into())
+    };
+    AuthStatus {
+        ready,
+        reason,
+        providers: model_ids,
+        runtime_ready,
+        synchronized,
+        runtime_models: runtime.model_ids,
+        last_runtime_error: runtime.last_error,
+    }
+}
+
+/// Admit a command only after the in-process Runtime has acknowledged the same
+/// model configuration that is currently on disk. This is deliberately checked
+/// in Rust as well as in the Composer: queue/plan/automation callers can invoke
+/// `agent_send` without going through the visible send button.
+pub(crate) fn require_runtime_ready(
+    state: &AppState,
+    requested_model: Option<&str>,
+) -> Result<(), String> {
+    let status = auth_status(state);
+    validate_runtime_ready(&status, requested_model)
+}
+
+fn validate_runtime_ready(
+    status: &AuthStatus,
+    requested_model: Option<&str>,
+) -> Result<(), String> {
+    if !status.ready {
+        let reason = status
+            .reason
+            .clone()
+            .unwrap_or_else(|| "Agent Runtime 模型未就绪，请在设置中重试模型配置。".into());
+        tracing::warn!(%reason, requested_model, "agent command blocked by runtime readiness gate");
+        return Err(reason);
+    }
+    if let Some(model_id) = requested_model {
+        if !status
+            .runtime_models
+            .iter()
+            .any(|available| available == model_id)
+        {
+            let reason = format!("Agent Runtime 尚未加载模型“{model_id}”，请刷新模型配置后重试。");
+            tracing::warn!(%reason, model_id, "agent command requested unavailable runtime model");
+            return Err(reason);
+        }
+    }
+    Ok(())
+}
+
+/// Read a model id/revision pair from disk without accepting a torn snapshot
+/// while config.toml is being atomically replaced. A caller can compare the
+/// returned revision with the revision observed before Runtime reload.
+fn stable_model_snapshot() -> Option<(String, Vec<String>)> {
+    for _ in 0..4 {
+        let before = crate::providers::model_config_revision();
+        let (mut model_ids, _) = crate::providers::usable_model_ids();
+        model_ids.sort();
+        let after = crate::providers::model_config_revision();
+        if before == after {
+            return Some((after, model_ids));
+        }
+        std::thread::yield_now();
+    }
+    None
+}
+
+/// Tear down a partially initialized runtime before returning an init error.
+/// The dispatcher will naturally stop once its ACP channel is closed; clearing
+/// the command-facing handles immediately prevents sends from hanging on a
+/// stale channel during a retry.
+fn clear_runtime_after_init_failure(state: &AppState) {
+    if let Some(handle) = state.handle.lock().unwrap().take() {
+        handle.cancel.cancel();
+    }
+    state.tx.lock().unwrap().take();
+    if let Some(scheduler) = state.automation_scheduler.lock().unwrap().take() {
+        scheduler.abort();
+    }
+    crate::automations::clear_runtime_sessions();
+    state.mark_runtime_models_initializing();
+}
+
+/// Reload model configuration and acknowledge it only when the file stayed
+/// unchanged for the complete Runtime round-trip. Settings and organization
+/// sync can write config.toml while a reload is in flight; retrying closes that
+/// race instead of advertising a stale Runtime as ready.
+pub(crate) async fn reload_models_and_sync(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    tx: &xai_acp_lib::AcpAgentTx,
+) -> Result<(), String> {
+    let _reload_guard = state.model_reload_lock.lock().await;
+    if !state.mark_runtime_models_initializing_if_current(tx) {
+        return Err("Agent Runtime 已在模型刷新期间重启，请重试。".into());
+    }
+    let mut last_revision = None;
+    for attempt in 1..=MODEL_RELOAD_ATTEMPTS {
+        let before = crate::providers::model_config_revision();
+        let result = crate::agent_admin::request_internal_reload_and_wait(tx, "models").await;
+        match result {
+            Err(error) => {
+                state.mark_runtime_models_failed_if_current(tx, error.clone());
+                return Err(error);
+            }
+            Ok(()) => {
+                let after = crate::providers::model_config_revision();
+                if before == after {
+                    if let Some((revision, disk_model_ids)) = stable_model_snapshot() {
+                        if revision == before {
+                            match tokio::time::timeout(
+                                MODEL_CATALOG_TIMEOUT,
+                                agent_runtime::model_ids(tx),
+                            )
+                            .await
+                            {
+                                Err(_) => {
+                                    let error = format!(
+                                        "读取 Agent Runtime 模型目录超时（{} 秒）",
+                                        MODEL_CATALOG_TIMEOUT.as_secs()
+                                    );
+                                    state.mark_runtime_models_failed_if_current(tx, error.clone());
+                                    return Err(error);
+                                }
+                                Ok(Ok(mut runtime_model_ids)) => {
+                                    runtime_model_ids.sort();
+                                    runtime_model_ids.dedup();
+                                    let all_disk_models_loaded = disk_model_ids.iter().all(|id| {
+                                        runtime_model_ids.iter().any(|loaded| loaded == id)
+                                    });
+                                    if all_disk_models_loaded {
+                                        let committed = state.mark_runtime_models_synced(
+                                            tx,
+                                            revision,
+                                            runtime_model_ids,
+                                        );
+                                        if !committed {
+                                            return Err(
+                                                "Agent Runtime 已在模型刷新期间重启，请重试。"
+                                                    .into(),
+                                            );
+                                        }
+                                        let _ = app.emit(
+                                            "agent://models-update",
+                                            serde_json::json!({ "source": "runtime-ready" }),
+                                        );
+                                        return Ok(());
+                                    }
+                                    tracing::warn!(
+                                        attempt,
+                                        ?disk_model_ids,
+                                        ?runtime_model_ids,
+                                        "Runtime model catalog differs from disk configuration; retrying"
+                                    );
+                                }
+                                Ok(Err(error)) => {
+                                    state.mark_runtime_models_failed_if_current(
+                                        tx,
+                                        error.to_string(),
+                                    );
+                                    return Err(error.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                last_revision = Some(after);
+                tracing::warn!(
+                    attempt,
+                    "model config changed while Runtime reload was in flight; retrying"
+                );
+            }
+        }
+    }
+
+    let error = format!(
+        "模型配置在 Runtime 刷新期间持续变化（{} 次），发送功能已保持禁用，请重试。",
+        MODEL_RELOAD_ATTEMPTS
+    );
+    tracing::error!(revision = ?last_revision, %error, "model Runtime reload did not converge");
+    state.mark_runtime_models_failed_if_current(tx, error.clone());
+    Err(error)
 }
 
 fn default_cwd() -> PathBuf {
@@ -73,6 +427,7 @@ pub async fn agent_init(
     }
     state.tx.lock().unwrap().take();
     crate::automations::clear_runtime_sessions();
+    state.mark_runtime_models_initializing();
 
     let cwd = cwd.map(PathBuf::from).unwrap_or_else(default_cwd);
     *state.cwd.lock().unwrap() = Some(cwd.clone());
@@ -98,11 +453,26 @@ pub async fn agent_init(
     // `rx` is moved in; the dispatcher owns it for the app lifetime.
     crate::bridge::spawn_dispatcher(app.clone(), rx, permissions.share(), questions.share());
 
+    // Install the command-facing handle before starting the death monitor. A
+    // Runtime can fail immediately after spawn; publishing the handle first
+    // ensures that the monitor can invalidate the same generation instead of
+    // racing with a later stale write from this initialization call.
+    let (_placeholder_tx, placeholder_rx) =
+        tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+    *state.handle.lock().unwrap() = Some(AgentHandle {
+        tx: tx.clone(),
+        // Unused placeholder rx — the real rx lives in the dispatcher.
+        rx: placeholder_rx,
+        cancel: cancel.clone(),
+        thread: None,
+    });
+
     // Monitor the agent thread: if it exits unexpectedly (panic/crash), notify
     // the frontend so it can show a "restart agent" prompt instead of hanging.
     if let Some(join_handle) = thread {
         let monitor_app = app.clone();
         let monitor_cancel = cancel.clone();
+        let monitor_tx = tx.clone();
         tokio::task::spawn_blocking(move || {
             let result = join_handle.join();
             // If the cancel token was triggered, this was an intentional shutdown — don't alarm.
@@ -115,24 +485,15 @@ pub async fn agent_init(
                 Err(_) => "agent thread panicked".to_string(),
             };
             tracing::error!(reason = %reason, "EchoAgent runtime thread died");
+            monitor_app
+                .state::<AppState>()
+                .mark_runtime_dead_if_current(&monitor_tx, reason.clone());
             let _ = monitor_app.emit(
                 "agent://agent-died",
                 serde_json::json!({ "reason": reason }),
             );
         });
     }
-
-    // Keep the cancel token so the agent thread can be stopped at shutdown.
-    // (The rx half is now owned by the dispatcher; we hold only tx + cancel.)
-    let (_placeholder_tx, placeholder_rx) =
-        tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
-    *state.handle.lock().unwrap() = Some(AgentHandle {
-        tx,
-        // Unused placeholder rx — the real rx lives in the dispatcher.
-        rx: placeholder_rx,
-        cancel,
-        thread: None,
-    });
 
     // Run the ACP initialization lifecycle. Provider credentials are managed
     // solely through the model-provider configuration.
@@ -143,13 +504,35 @@ pub async fn agent_init(
         .clone()
         .ok_or("agent channel not ready")?;
 
-    let init_outcome: InitOutcome = agent_runtime::initialize(&tx)
-        .await
-        .map_err(|e| format!("initialize: {e}"))?;
+    tracing::info!("agent initialize send");
+    let init_outcome: InitOutcome = match tokio::time::timeout(
+        AGENT_INITIALIZE_TIMEOUT,
+        agent_runtime::initialize(&tx),
+    )
+    .await
+    {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(error)) => {
+            let message = format!("initialize: {error}");
+            tracing::error!(%message, "agent initialize failed");
+            clear_runtime_after_init_failure(&state);
+            return Err(message);
+        }
+        Err(_) => {
+            let message = "initialize timed out after 60 seconds".to_string();
+            tracing::error!(%message, "agent initialize timed out");
+            clear_runtime_after_init_failure(&state);
+            return Err(message);
+        }
+    };
+    tracing::info!("agent initialize OK");
 
-    let _ = crate::providers::enforce_organization_model_lease();
-    let (model_ids, reason) = crate::providers::usable_model_ids();
-    let ready = !model_ids.is_empty();
+    // Close the startup race with settings/org writes: the Runtime explicitly
+    // reloads the latest disk model config before it is advertised as ready.
+    if let Err(error) = reload_models_and_sync(&app, &state, &tx).await {
+        tracing::error!(%error, "initial model reload failed");
+    }
+    let auth = auth_status(&state);
 
     // Start the automations scheduler now that the agent channel is up.
     // Idempotent — safe if agent_init is somehow called twice.
@@ -170,27 +553,19 @@ pub async fn agent_init(
 
     Ok(InitResult {
         ok: true,
-        auth: AuthStatus {
-            ready,
-            providers: model_ids,
-            reason: (!ready).then_some(reason).flatten(),
-        },
+        auth,
         cwd: cwd.to_string_lossy().into_owned(),
         agent_version: init_outcome.agent_version,
         default_model_id: init_outcome.default_model_id,
+        build_commit: env!("ECHOAGENT_BUILD_COMMIT").to_string(),
+        build_time: env!("ECHOAGENT_BUILD_TIME").to_string(),
+        log_dir: crate::logging::log_dir().to_string_lossy().into_owned(),
     })
 }
 
 #[tauri::command]
-pub fn agent_auth_status(_state: State<'_, AppState>) -> AuthStatus {
-    let _ = crate::providers::enforce_organization_model_lease();
-    let (model_ids, reason) = crate::providers::usable_model_ids();
-    let ready = !model_ids.is_empty();
-    AuthStatus {
-        ready,
-        providers: model_ids,
-        reason: (!ready).then_some(reason).flatten(),
-    }
+pub fn agent_auth_status(state: State<'_, AppState>) -> AuthStatus {
+    auth_status(&state)
 }
 
 #[tauri::command]
@@ -204,15 +579,31 @@ pub async fn agent_new_session(
     if let Some(model_id) = model_id.as_deref() {
         crate::policy::require_model(model_id)?;
     }
+    require_runtime_ready(&state, model_id.as_deref())?;
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let session_id = agent_runtime::new_session(&tx, &PathBuf::from(cwd), model_id.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
+    tracing::info!(
+        model_id = model_id.as_deref(),
+        "agent new_session command send"
+    );
+    let session_id = tokio::time::timeout(
+        NEW_SESSION_TIMEOUT,
+        agent_runtime::new_session(&tx, &PathBuf::from(cwd), model_id.as_deref()),
+    )
+    .await
+    .map_err(|_| {
+        tracing::error!(model_id = model_id.as_deref(), "agent new_session command timed out");
+        "创建 Agent 会话超时（45 秒），请重试；若持续失败请重启应用。".to_string()
+    })?
+    .map_err(|error| {
+        tracing::error!(error = ?error, model_id = model_id.as_deref(), "agent new_session command failed");
+        error.to_string()
+    })?;
+    tracing::info!(%session_id, "agent new_session command OK");
     // Team MCP server 已随 new_session 参数注入本会话；这里再异步持久化到
     // config.toml（一次即可），让 load_session 恢复的会话也能用。
     crate::team_mcp::persist_registration(&tx, &session_id);
@@ -256,12 +647,14 @@ pub async fn agent_send(
     attachments: Option<Vec<String>>,
     display_text: Option<String>,
 ) -> Result<(), String> {
+    require_runtime_ready(&state, None)?;
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
+    tracing::info!(%session_id, attachment_count = attachments.as_ref().map_or(0, Vec::len), "agent prompt send");
     agent_runtime::prompt_with_attachments(
         &tx,
         &session_id,
@@ -270,7 +663,10 @@ pub async fn agent_send(
         display_text.as_deref(),
     )
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|error| {
+        tracing::error!(%session_id, error = ?error, "agent prompt failed");
+        error.to_string()
+    })
 }
 
 #[tauri::command]
@@ -299,6 +695,7 @@ pub async fn agent_shutdown(state: State<'_, AppState>) -> Result<(), String> {
         scheduler.abort();
     }
     crate::automations::clear_runtime_sessions();
+    state.mark_runtime_models_initializing();
     tracing::info!("EchoAgent agent shut down (ready for re-init)");
     Ok(())
 }
@@ -401,6 +798,7 @@ pub async fn agent_set_model(
     model_id: String,
 ) -> Result<(), String> {
     crate::policy::require_model(&model_id)?;
+    require_runtime_ready(&state, Some(&model_id))?;
     let tx = state
         .tx
         .lock()
@@ -541,4 +939,94 @@ pub fn agent_set_session_expert(
 #[tauri::command]
 pub fn agent_clear_session_expert(session_id: String) -> Result<bool, String> {
     crate::meta::clear_expert(&session_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn runtime_state(revision: &str, model_ids: &[&str]) -> RuntimeModelState {
+        let (client, _agent) = xai_acp_lib::acp_channels();
+        RuntimeModelState {
+            initialized: true,
+            revision: Some(revision.into()),
+            model_ids: model_ids.iter().map(|id| (*id).into()).collect(),
+            last_error: None,
+            sender: Some(client.tx),
+        }
+    }
+
+    #[test]
+    fn runtime_readiness_requires_current_matching_snapshot() {
+        let disk_models = vec!["model-a".to_string()];
+
+        let unacknowledged = auth_status_from_snapshots(
+            disk_models.clone(),
+            None,
+            "rev-a",
+            RuntimeModelState::default(),
+            false,
+        );
+        assert!(!unacknowledged.ready);
+        assert!(!unacknowledged.runtime_ready);
+
+        let stale_revision = auth_status_from_snapshots(
+            disk_models.clone(),
+            None,
+            "rev-b",
+            runtime_state("rev-a", &["model-a"]),
+            true,
+        );
+        assert!(!stale_revision.ready);
+        assert!(!stale_revision.synchronized);
+
+        let retired_runtime = auth_status_from_snapshots(
+            disk_models.clone(),
+            None,
+            "rev-a",
+            runtime_state("rev-a", &["model-a"]),
+            false,
+        );
+        assert!(!retired_runtime.ready);
+
+        let synchronized = auth_status_from_snapshots(
+            disk_models,
+            None,
+            "rev-a",
+            runtime_state("rev-a", &["model-a", "runtime-default"]),
+            true,
+        );
+        assert!(synchronized.ready);
+        assert!(synchronized.synchronized);
+        assert_eq!(
+            validate_runtime_ready(&synchronized, Some("model-a")),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn runtime_error_and_unavailable_requested_model_block_commands() {
+        let mut failed = runtime_state("rev-a", &["model-a"]);
+        failed.initialized = false;
+        failed.last_error = Some("reload rejected".into());
+        let failed_status =
+            auth_status_from_snapshots(vec!["model-a".into()], None, "rev-a", failed, true);
+        assert!(!failed_status.ready);
+        assert!(failed_status
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("reload rejected"));
+        assert!(validate_runtime_ready(&failed_status, None).is_err());
+
+        let ready_status = auth_status_from_snapshots(
+            vec!["model-a".into()],
+            None,
+            "rev-a",
+            runtime_state("rev-a", &["model-a"]),
+            true,
+        );
+        let error = validate_runtime_ready(&ready_status, Some("model-b")).unwrap_err();
+        assert!(error.contains("model-b"));
+    }
 }

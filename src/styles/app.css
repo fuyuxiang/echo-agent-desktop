@@ -5359,6 +5359,19 @@ button.diff__path {
   flex-direction: column;
   gap: 12px;
 }
+.home__send-status,
+.home__send-error {
+  min-height: 20px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 20px;
+}
+.home__send-status {
+  color: var(--echo-text-medium);
+}
+.home__send-error {
+  color: var(--echo-color-danger, #d92d20);
+}
 .home__chips {
   position: relative;
   min-height: 32px;

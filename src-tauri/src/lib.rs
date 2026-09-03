@@ -19,6 +19,7 @@ mod experts;
 mod ext;
 mod mcp;
 mod meta;
+mod logging;
 mod notifications;
 mod org;
 mod org_mcp;
@@ -193,8 +194,17 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Initialize logging for debugging
-    let _ = tracing_subscriber::fmt::try_init();
+    // Keep the non-blocking file writer alive through the whole Tauri event
+    // loop. Release builds on Windows have no console, so this is the primary
+    // post-mortem record for startup, model reload and session admission.
+    let _logging_guard = logging::init();
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        commit = env!("ECHOAGENT_BUILD_COMMIT"),
+        build_time = env!("ECHOAGENT_BUILD_TIME"),
+        log_dir = %logging::log_dir().display(),
+        "EchoAgent process started"
+    );
 
     if let Err(error) = paths::initialize_runtime_home() {
         tracing::error!(%error, "failed to initialize EchoAgent runtime home");
