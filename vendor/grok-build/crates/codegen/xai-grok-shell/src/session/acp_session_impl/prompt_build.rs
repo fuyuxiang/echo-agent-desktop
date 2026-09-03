@@ -294,7 +294,8 @@ pub(super) fn is_project_instructions(item: &ConversationItem) -> bool {
         .is_some_and(|t| t.starts_with(LEGACY_AGENTS_MD_REMINDER_PREFIX))
 }
 /// Subagent spawns (incl. `resume_from`) overwrite the leading System with the fresh
-/// prompt; top-level user-resumed sessions keep theirs. Absent → insert + grow prefix.
+/// prompt. Top-level resumed sessions keep theirs unless they still carry the legacy
+/// upstream identity. Absent → insert + grow prefix.
 pub(super) fn install_system_prompt(
     conversation: &mut Vec<ConversationItem>,
     inherited_prefix_len: &mut Option<usize>,
@@ -303,7 +304,8 @@ pub(super) fn install_system_prompt(
     system_prompt: &str,
 ) {
     if let Some(ConversationItem::System(sys)) = conversation.first_mut() {
-        if is_subagent_spawn && !preserve_inherited_system {
+        let has_legacy_upstream_identity = sys.content.contains("released by xAI");
+        if !preserve_inherited_system && (is_subagent_spawn || has_legacy_upstream_identity) {
             sys.content = std::sync::Arc::<str>::from(system_prompt);
         }
     } else {
@@ -348,6 +350,16 @@ mod install_system_prompt_tests {
             "preserve_inherited_system must not overwrite the inherited head"
         );
         assert_eq!(prefix, Some(2), "prefix unchanged — System already present");
+    }
+    #[test]
+    fn top_level_resume_replaces_legacy_upstream_identity() {
+        let mut conv = vec![
+            ConversationItem::system("You are Grok released by xAI."),
+            ConversationItem::user("hi"),
+        ];
+        let mut prefix = None;
+        install_system_prompt(&mut conv, &mut prefix, false, false, "fresh Echo prompt");
+        assert_eq!(system_text(&conv[0]), "fresh Echo prompt");
     }
     #[test]
     fn summarized_fork_system_placeholder_is_overwritten() {
