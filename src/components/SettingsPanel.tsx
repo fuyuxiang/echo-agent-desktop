@@ -108,7 +108,7 @@ export function SettingsPanel({
   onClose: () => void;
   /** Called after a provider is saved/deleted so the app can refresh its
    *  model picker without a restart. */
-  onModelsChanged?: () => void;
+  onModelsChanged?: () => void | Promise<void>;
   /** Current live session, required by memory flush/consolidation actions. */
   sessionId?: string;
   /** Section selected whenever the dialog is opened. */

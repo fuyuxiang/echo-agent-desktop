@@ -178,6 +178,7 @@ function Shell() {
   const modelsRef = useRef<ModelOption[]>([]);
   const authReadyRef = useRef(false);
   const promptedUpdateVersionRef = useRef<string | null>(null);
+  const newSessionPendingRef = useRef(false);
 
   const sessionStore = useSessionStore;
   const sessionsStore = useSessionsStore;
@@ -713,9 +714,14 @@ function Shell() {
   };
 
   const handleSendNew = async (text: string, attachments: string[] = []): Promise<boolean> => {
+    // Composer also locks its button while this promise is pending, but this
+    // app-level guard survives a view remount and protects every programmatic
+    // caller from creating duplicate sessions for one submission.
+    if (newSessionPendingRef.current) return false;
     const modelId = requireConfiguredModel();
     if (!modelId) return false;
     if (!ensureQuotaAllowsSend()) return false;
+    newSessionPendingRef.current = true;
     try {
       const cwd = cwdRef.current;
       const sessionId = await agentNewSession(cwd, modelId);
@@ -760,6 +766,8 @@ function Shell() {
       const sid = sessionStore.getState().sessionId;
       if (sid) sessionsStore.getState().upsert({ sessionId: sid, status: "failed" });
       return false;
+    } finally {
+      newSessionPendingRef.current = false;
     }
   };
 

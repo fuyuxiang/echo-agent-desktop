@@ -43,7 +43,7 @@ import type { AgentDefaults } from "@/lib/types";
 import { useOrgSessionStore } from "@/stores/org-session-store";
 
 interface ModelConnectionsPanelProps {
-  onModelsChanged?: () => void;
+  onModelsChanged?: () => void | Promise<void>;
 }
 
 interface ProviderPreset {
@@ -224,7 +224,7 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
   const finishMutation = async (success: string) => {
     const reloadError = await reloadRuntime();
     await reload();
-    onModelsChanged?.();
+    await onModelsChanged?.();
     setMessage(reloadError
       ? { kind: "warn", text: `${success} Runtime 刷新失败：${reloadError}` }
       : { kind: "ok", text: success });
@@ -268,12 +268,15 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
     setMessage(null);
     try {
       const result = await orgSyncModelConfig();
+      const reloadError = await reloadRuntime();
       await reload();
-      onModelsChanged?.();
-      setMessage({
-        kind: "ok",
-        text: result.configured ? "组织模型配置已更新。" : "组织服务器当前未下发模型配置。",
-      });
+      await onModelsChanged?.();
+      const success = result.configured
+        ? "组织模型配置已更新。"
+        : "组织服务器当前未下发模型配置。";
+      setMessage(reloadError
+        ? { kind: "warn", text: `${success} Runtime 刷新失败：${reloadError}` }
+        : { kind: "ok", text: success });
     } catch (error) {
       setMessage({ kind: "err", text: `组织模型同步失败：${String(error)}` });
     } finally {
