@@ -148,17 +148,32 @@ fn notify_skills_changed(app: &AppHandle, reason: &str) {
 }
 
 fn notify_models_changed(app: &AppHandle, reason: &str) {
-    let runtime = app.state::<crate::commands::AppState>();
-    if let Err(error) = crate::agent_admin::request_internal_reload(&runtime, "models") {
-        if error == "agent not initialized" {
-            tracing::debug!(%reason, "organization model synced before agent initialization");
+    let app = app.clone();
+    let reason = reason.to_string();
+    tauri::async_runtime::spawn(async move {
+        let runtime = app.state::<crate::commands::AppState>();
+        // Clone the sender in a separate statement so the MutexGuard is
+        // dropped before awaiting the Runtime reload future (`tokio::spawn`
+        // requires the future to be Send on Windows/Tauri).
+        let tx = runtime.tx.lock().unwrap().clone();
+        let reload_result = if let Some(tx) = tx {
+            crate::commands::reload_models_and_sync(&app, &runtime, &tx).await
         } else {
-            tracing::warn!(%error, %reason, "failed to hot-reload organization model");
+            Err("agent not initialized".to_string())
+        };
+        if let Err(error) = reload_result {
+            if error == "agent not initialized" {
+                tracing::debug!(%reason, "organization model synced before agent initialization");
+            } else {
+                tracing::warn!(%error, %reason, "failed to hot-reload organization model");
+            }
         }
-    }
-    if let Err(error) = app.emit("org://models-changed", json!({ "reason": reason })) {
-        tracing::debug!(%error, %reason, "failed to emit organization model change event");
-    }
+        // Consumers re-read authoritative readiness only after the Runtime
+        // reload has completed (or definitively failed).
+        if let Err(error) = app.emit("org://models-changed", json!({ "reason": reason })) {
+            tracing::debug!(%error, %reason, "failed to emit organization model change event");
+        }
+    });
 }
 
 pub(crate) fn local_kb_sources_path() -> PathBuf {

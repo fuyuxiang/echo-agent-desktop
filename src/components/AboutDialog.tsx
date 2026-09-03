@@ -21,6 +21,7 @@ interface AboutDialogProps {
 export function AboutDialog({ open, onClose, init, onCheckForUpdates }: AboutDialogProps) {
   const [authReady, setAuthReady] = useState<boolean | null>(null);
   const [providers, setProviders] = useState<string[]>([]);
+  const [runtimeReason, setRuntimeReason] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -28,8 +29,12 @@ export function AboutDialog({ open, onClose, init, onCheckForUpdates }: AboutDia
       .then((s) => {
         setAuthReady(s.ready);
         setProviders(s.providers);
+        setRuntimeReason(s.reason ?? null);
       })
-      .catch(() => setAuthReady(false));
+      .catch((error) => {
+        setAuthReady(false);
+        setRuntimeReason(String(error).replace(/^Error:\s*/, ""));
+      });
   }, [open]);
 
   if (!open) return null;
@@ -66,6 +71,14 @@ export function AboutDialog({ open, onClose, init, onCheckForUpdates }: AboutDia
             <dd>v{APP_VERSION}</dd>
           </div>
           <div className="about-dialog__row">
+            <dt>构建标识</dt>
+            <dd><code>{init?.buildCommit ?? "unknown"}</code></dd>
+          </div>
+          <div className="about-dialog__row">
+            <dt>构建时间</dt>
+            <dd title={init?.buildTime}>{init?.buildTime ?? "unknown"}</dd>
+          </div>
+          <div className="about-dialog__row">
             <dt>Agent 运行时</dt>
             <dd>{init?.agentVersion ?? "未知"}</dd>
           </div>
@@ -91,7 +104,7 @@ export function AboutDialog({ open, onClose, init, onCheckForUpdates }: AboutDia
                   <CheckIcon size="sm" /> 就绪
                 </span>
               ) : (
-                <span className="about-dialog__warn">未就绪</span>
+                <span className="about-dialog__warn" title={runtimeReason ?? undefined}>未就绪</span>
               )}
             </dd>
           </div>
@@ -101,6 +114,10 @@ export function AboutDialog({ open, onClose, init, onCheckForUpdates }: AboutDia
               <dd>{providers.join(", ")}</dd>
             </div>
           )}
+          <div className="about-dialog__row">
+            <dt>诊断日志</dt>
+            <dd title={init?.logDir}>{init?.logDir ?? "未知"}</dd>
+          </div>
         </dl>
         <p className="about-dialog__footer">
           基于 <code>Tauri 2</code> + <code>React</code>。第三方组件及许可详见{" "}

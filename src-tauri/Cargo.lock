@@ -2553,7 +2553,7 @@ dependencies = [
 
 [[package]]
 name = "echoagent"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -2584,6 +2584,7 @@ dependencies = [
  "tokio-util",
  "toml 0.8.23",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
  "url",
  "urlencoding",

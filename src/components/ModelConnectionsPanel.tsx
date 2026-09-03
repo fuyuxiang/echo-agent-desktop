@@ -157,9 +157,7 @@ async function reloadRuntime(): Promise<string | null> {
     await internalReload("models");
     return null;
   } catch (error) {
-    const text = String(error);
-    if (text.includes("agent not initialized")) return null;
-    return text;
+    return String(error).replace(/^Error:\s*/, "");
   }
 }
 
@@ -224,9 +222,15 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
   const finishMutation = async (success: string) => {
     const reloadError = await reloadRuntime();
     await reload();
+    // Always refresh the shell's authoritative status. On Runtime failure the
+    // backend reports ready=false, so the Composer stays locked even though
+    // the newly-written model is already visible on disk.
     await onModelsChanged?.();
     setMessage(reloadError
-      ? { kind: "warn", text: `${success} Runtime 刷新失败：${reloadError}` }
+      ? {
+        kind: "err",
+        text: `${success} 但 Agent Runtime 刷新失败，发送功能已保持禁用：${reloadError}。请重试，若持续失败请完全退出后重启应用。`,
+      }
       : { kind: "ok", text: success });
   };
 
@@ -275,7 +279,10 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
         ? "组织模型配置已更新。"
         : "组织服务器当前未下发模型配置。";
       setMessage(reloadError
-        ? { kind: "warn", text: `${success} Runtime 刷新失败：${reloadError}` }
+        ? {
+          kind: "err",
+          text: `${success} 但 Agent Runtime 刷新失败，发送功能已保持禁用：${reloadError}。`,
+        }
         : { kind: "ok", text: success });
     } catch (error) {
       setMessage({ kind: "err", text: `组织模型同步失败：${String(error)}` });

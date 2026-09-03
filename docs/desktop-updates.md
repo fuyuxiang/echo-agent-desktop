@@ -19,7 +19,7 @@ Tauri 生成升级包时必须提供私钥：
 ```bash
 export TAURI_SIGNING_PRIVATE_KEY_PATH="$HOME/.config/echoagent/updater/echoagent.key"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
-bash scripts/build.sh --version 0.3.9
+bash scripts/build.sh --version 0.3.10
 ```
 
 Windows PowerShell：
@@ -27,7 +27,7 @@ Windows PowerShell：
 ```powershell
 $env:TAURI_SIGNING_PRIVATE_KEY_PATH="$HOME\.config\echoagent\updater\echoagent.key"
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
-powershell -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0.3.9
+powershell -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0.3.10
 ```
 
 产物：
@@ -44,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0.3.9
 
 ```bash
 bash scripts/publish-update.sh \
-  --version 0.3.9 \
+  --version 0.3.10 \
   --target darwin-aarch64 \
   --artifact src-tauri/target/release/bundle/macos/EchoAgent.app.tar.gz \
   --notes-file release-notes.md

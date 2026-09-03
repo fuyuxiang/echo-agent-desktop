@@ -172,6 +172,8 @@ function Shell() {
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(undefined);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelSwitching, setModelSwitching] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [homeSendError, setHomeSendError] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cwdRef = useRef<string>("");
@@ -551,8 +553,24 @@ function Shell() {
           },
           onAgentDied: ({ reason }) => {
             console.error('[EchoAgent] Agent thread died:', reason);
-            setToast(`⚠️ AI 引擎异常退出：${reason}。请重启应用。`);
-            sessionStore.getState().setError(`AI 引擎异常退出：${reason}`);
+            const message = `AI 引擎异常退出：${reason}。请重启应用。`;
+            setToast(`⚠️ ${message}`);
+            setInit((previous) => previous
+              ? {
+                ...previous,
+                auth: {
+                  ...previous.auth,
+                  ready: false,
+                  runtimeReady: false,
+                  synchronized: false,
+                  runtimeModels: [],
+                  lastRuntimeError: reason,
+                  reason: message,
+                },
+              }
+              : previous);
+            authReadyRef.current = false;
+            sessionStore.getState().setError(message);
             reportEvent("agent_died", "error", { reason });
           },
           onSubagent: (e) => {
@@ -649,23 +667,24 @@ function Shell() {
     ? activeSessionModelId !== undefined
     : newSessionModelId !== undefined;
   const chatReady = !!init?.auth.ready && !!activeSessionModelId && !modelSwitching;
+  const runtimeSetupHint = init?.auth.reason ?? "请先在「设置 → 模型」配置 API Key";
   const chatSetupHint = modelSwitching
     ? "正在切换模型…"
     : models.length === 0
       ? "请先在「设置 → 模型」配置模型"
       : !activeSessionModelId
         ? "此会话的模型未配置，请在右下角重新选择模型"
-        : "请先在「设置 → 模型」配置 API Key";
+        : runtimeSetupHint;
 
-  const showToast = (message: string) => {
+  const showToast = (message: string, durationMs = 2000) => {
     setToast(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 2000);
+    toastTimer.current = setTimeout(() => setToast(null), durationMs);
   };
 
   const requireConfiguredModel = (): string | undefined => {
     if (!init?.auth.ready) {
-      showToast("请先在「设置 → 模型」配置 API Key");
+      showToast(runtimeSetupHint, 5000);
       openSettings("model");
       return undefined;
     }
@@ -722,6 +741,8 @@ function Shell() {
     if (!modelId) return false;
     if (!ensureQuotaAllowsSend()) return false;
     newSessionPendingRef.current = true;
+    setCreatingSession(true);
+    setHomeSendError(null);
     try {
       const cwd = cwdRef.current;
       const sessionId = await agentNewSession(cwd, modelId);
@@ -758,16 +779,17 @@ function Shell() {
         attachments,
       });
       if (!accepted) return false;
+      setHomeSendError(null);
       return true;
     } catch (e) {
       console.error('[EchoAgent] handleSendNew error:', e);
-      sessionStore.getState().rollbackPendingTurn();
-      sessionStore.getState().setError(friendlyError(e));
-      const sid = sessionStore.getState().sessionId;
-      if (sid) sessionsStore.getState().upsert({ sessionId: sid, status: "failed" });
+      const error = friendlyError(e);
+      setHomeSendError(error);
+      showToast(`创建会话失败：${error}`, 6000);
       return false;
     } finally {
       newSessionPendingRef.current = false;
+      setCreatingSession(false);
     }
   };
 
@@ -783,7 +805,7 @@ function Shell() {
       return false;
     }
     if (!init?.auth.ready) {
-      showToast("请先在「设置 → 模型」配置 API Key");
+      showToast(runtimeSetupHint, 5000);
       openSettings("model");
       return false;
     }
@@ -1495,6 +1517,9 @@ function Shell() {
               onSend={handleSendNew}
               streaming={streaming}
               apiReady={init.auth.ready && modelConfigured}
+              setupHint={init.auth.reason}
+              creatingSession={creatingSession}
+              sendError={homeSendError}
               onOpenSettings={() => openSettings("model")}
               onPlaceholder={handlePlaceholder}
               modelId={currentModelId}

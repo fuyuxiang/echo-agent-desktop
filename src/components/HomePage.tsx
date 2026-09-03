@@ -12,6 +12,9 @@ export function HomePage({
   onSend,
   streaming,
   apiReady,
+  setupHint,
+  creatingSession,
+  sendError,
   onOpenSettings,
   onPlaceholder,
   modelId,
@@ -28,6 +31,9 @@ export function HomePage({
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   streaming: boolean;
   apiReady: boolean;
+  setupHint?: string;
+  creatingSession?: boolean;
+  sendError?: string | null;
   onOpenSettings: () => void;
   onPlaceholder: (label: string) => void;
   modelId?: string;
@@ -86,9 +92,10 @@ export function HomePage({
             onCancel={() => {}}
             apiReady={apiReady}
             setupHint={
-              models?.length
+              setupHint ?? (models?.length
                 ? undefined
                 : "请先在「设置 → 模型」配置模型"
+              )
             }
             onOpenSettings={onOpenSettings}
             onPlaceholder={onPlaceholder}
@@ -111,6 +118,16 @@ export function HomePage({
             activeExpertName={pendingExpert?.name}
             activeExpertAvatar={pendingExpert?.avatarLocal}
           />
+          {creatingSession && (
+            <div className="home__send-status" role="status" aria-live="polite">
+              正在创建 Agent 会话…
+            </div>
+          )}
+          {!creatingSession && sendError && (
+            <div className="home__send-error" role="alert">
+              创建会话失败：{sendError}
+            </div>
+          )}
         </section>
       </div>
     </div>

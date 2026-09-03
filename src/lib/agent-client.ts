@@ -60,6 +60,13 @@ export interface AuthStatus {
   reason?: string;
   /** Model ids configured in ~/.echo-agent/config.toml (BYOK providers). */
   providers: string[];
+  /** Whether Runtime acknowledged the current model configuration. */
+  runtimeReady: boolean;
+  /** Whether Runtime and disk model configuration revisions match. */
+  synchronized: boolean;
+  /** Model ids in the last Runtime-acknowledged configuration. */
+  runtimeModels: string[];
+  lastRuntimeError?: string;
 }
 
 export interface InitResult {
@@ -71,6 +78,10 @@ export interface InitResult {
   agentVersion?: string;
   /** Default model id the agent will use. */
   defaultModelId?: string;
+  /** Build identity from the native binary, independent of frontend assets. */
+  buildCommit: string;
+  buildTime: string;
+  logDir: string;
 }
 
 /**
@@ -94,7 +105,18 @@ export async function agentAuthStatus(): Promise<AuthStatus> {
 // that model from the start (avoids the default `grok-build` model whose
 // sampling config has no key in a BYOK-only setup).
 export async function agentNewSession(cwd: string, modelId?: string): Promise<string> {
-  return invoke<string>("agent_new_session", { cwd, modelId: modelId ?? null });
+  const invocation = invoke<string>("agent_new_session", { cwd, modelId: modelId ?? null });
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error("创建 Agent 会话超时（50 秒），请重试；若持续失败请完全退出后重启应用。"));
+    }, 50_000);
+  });
+  try {
+    return await Promise.race([invocation, timeout]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
 }
 
 // `agent_load_session` triggers a history replay on the agent side: EchoAgent

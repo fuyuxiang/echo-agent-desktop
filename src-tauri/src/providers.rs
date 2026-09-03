@@ -28,6 +28,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::State;
 use toml::map::Map;
 use toml::Value;
@@ -146,6 +147,29 @@ fn validate_auth_scheme(v: &str) -> Result<(), String> {
 
 fn config_path() -> PathBuf {
     crate::paths::echo_agent_home_dir().join("config.toml")
+}
+
+/// Stable, secret-safe fingerprint of the model-related Runtime configuration.
+///
+/// The digest lets the desktop shell prove that the in-process Runtime has
+/// acknowledged the exact configuration currently on disk. The source values
+/// (including API keys) never cross the Tauri boundary or enter logs.
+pub(crate) fn model_config_revision() -> String {
+    let config = read_config();
+    let mut relevant = Map::new();
+    let table = config.as_table();
+    // `internal/reload_models` explicitly refreshes only Config::config_models
+    // and Config::model_providers. Other sections are runtime/startup settings;
+    // including them here would permanently lock chat after an unrelated save
+    // that this reload endpoint never applies.
+    for key in ["model", "model_providers"] {
+        if let Some(value) = table.and_then(|table| table.get(key)) {
+            relevant.insert(key.to_string(), value.clone());
+        }
+    }
+    let encoded = toml::to_string(&Value::Table(relevant)).unwrap_or_default();
+    let digest = Sha256::digest(encoded.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Read config.toml as a TOML value, or an empty table if missing/corrupt.
@@ -1162,7 +1186,7 @@ pub(crate) fn usable_model_ids() -> (Vec<String>, Option<String>) {
 /// Save (merge) a provider into `[model_providers.<id>]`. Preserves unknown keys.
 #[tauri::command]
 pub fn providers_save_provider(
-    _state: State<'_, crate::commands::AppState>,
+    state: State<'_, crate::commands::AppState>,
     provider: ModelProviderEntry,
 ) -> Result<(), String> {
     if provider.id.trim().is_empty() {
@@ -1174,14 +1198,18 @@ pub fn providers_save_provider(
     let existing = mps.get(&provider.id);
     let rendered = provider_to_table(&provider, existing)?;
     mps.insert(provider.id.clone(), rendered);
-    write_config(&config)
+    write_config(&config)?;
+    // The disk revision changed. Keep sends blocked until the in-process
+    // Runtime acknowledges the new model catalog via the awaited reload path.
+    state.mark_runtime_models_initializing();
+    Ok(())
 }
 
 /// Atomically save a connection and the models selected during discovery.
 /// An empty provider id allocates a collision-free id such as `custom-2`.
 #[tauri::command]
 pub fn providers_save_connection(
-    _state: State<'_, crate::commands::AppState>,
+    state: State<'_, crate::commands::AppState>,
     mut provider: ModelProviderEntry,
     mut models: Vec<ModelEntry>,
     replace_models: bool,
@@ -1308,6 +1336,7 @@ pub fn providers_save_connection(
     }
 
     write_config(&config)?;
+    state.mark_runtime_models_initializing();
     Ok(SaveConnectionResult {
         provider_id,
         model_ids,
@@ -1318,7 +1347,7 @@ pub fn providers_save_connection(
 /// Migrates the entry away from legacy per-model connection fields.
 #[tauri::command]
 pub fn providers_save_model(
-    _state: State<'_, crate::commands::AppState>,
+    state: State<'_, crate::commands::AppState>,
     mut model: ModelEntry,
 ) -> Result<String, String> {
     if model.provider_id.trim().is_empty() {
@@ -1353,12 +1382,16 @@ pub fn providers_save_model(
     let rendered = model_to_table(&model, existing);
     mdls.insert(local_id.clone(), rendered);
     write_config(&config)?;
+    state.mark_runtime_models_initializing();
     Ok(local_id)
 }
 
 /// Delete a provider AND every model that references it.
 #[tauri::command]
-pub fn providers_delete_provider(id: String) -> Result<(), String> {
+pub fn providers_delete_provider(
+    state: State<'_, crate::commands::AppState>,
+    id: String,
+) -> Result<(), String> {
     let mut config = read_config();
     validate_personal_provider_target(&config, id.trim())?;
 
@@ -1413,13 +1446,17 @@ pub fn providers_delete_provider(id: String) -> Result<(), String> {
 
     if removed_provider || cascaded > 0 {
         write_config(&config)?;
+        state.mark_runtime_models_initializing();
     }
     Ok(())
 }
 
 /// Delete a single model entry.
 #[tauri::command]
-pub fn providers_delete_model(model_id: String) -> Result<(), String> {
+pub fn providers_delete_model(
+    state: State<'_, crate::commands::AppState>,
+    model_id: String,
+) -> Result<(), String> {
     let mut config = read_config();
     validate_personal_model_target(&config, model_id.trim())?;
     let removed = config
@@ -1439,6 +1476,7 @@ pub fn providers_delete_model(model_id: String) -> Result<(), String> {
             }
         }
         write_config(&config)?;
+        state.mark_runtime_models_initializing();
     }
     Ok(())
 }
@@ -2313,7 +2351,10 @@ mod tests {
 
         let (connection, members) = legacy_provider_details(&config, "custom").unwrap();
         assert_eq!(connection["api_key"].as_str(), Some("sk-legacy"));
-        assert_eq!(connection["base_url"].as_str(), Some("https://legacy.example/v1"));
+        assert_eq!(
+            connection["base_url"].as_str(),
+            Some("https://legacy.example/v1")
+        );
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].model_id, "legacy-model");
     }
