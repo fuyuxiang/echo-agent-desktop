@@ -348,7 +348,7 @@ impl MvpAgent {
         let session_info = session_info_for(&session_id, &cwd);
         let mut model_agent_type: Option<String> = None;
         let mut session_sampling_override: Option<SamplingConfig> = None;
-        let mut disallowed_custom: Option<String> = None;
+        let mut unavailable_custom: Option<String> = None;
         let session_initial_model = chat_initial_model(is_chat_kind, custom_model_id);
         let build_custom_model_id = if is_chat_kind { None } else { custom_model_id };
         let campaign_nudge = if is_chat_kind {
@@ -388,22 +388,37 @@ impl MvpAgent {
                 Ok(_) => {
                     tracing::warn!(
                         requested_model = custom_model,
-                        "Requested model not allowed by allowed_models; falling back to current default model"
+                        "Requested model not allowed by allowed_models"
                     );
                     if !campaign_nudged {
-                        disallowed_custom = Some(custom_model.to_string());
+                        unavailable_custom = Some(format!(
+                            "Requested model \"{custom_model}\" is not selectable under the current allowed_models configuration"
+                        ));
                     }
                     None
                 }
-                Err(_) => {
+                Err(error) => {
                     tracing::warn!(
                         requested_model = custom_model,
-                        fallback_model = %self.models_manager.current_model_id().0,
-                        "Requested model not found, falling back to current default model"
+                        error = ?error,
+                        "Requested model not found"
                     );
+                    if !campaign_nudged {
+                        unavailable_custom = Some(format!(
+                            "Requested model \"{custom_model}\" is not available in the runtime model catalog"
+                        ));
+                    }
                     None
                 }
             });
+        // An explicit client model is a contract, not a preference. Silently
+        // falling back can bind a newly created session to a built-in model
+        // with different credentials, while the client records the requested
+        // id. Fail before the session is persisted so the caller can reload
+        // the catalog or choose another configured model.
+        if let Some(reason) = unavailable_custom {
+            return Err(acp::Error::invalid_params().data(reason));
+        }
         if model_agent_type.is_none()
             && custom_model_id.is_none()
             && let Ok(default_model) =
@@ -599,20 +614,6 @@ impl MvpAgent {
                     )
                 }
             }
-        }
-        if let Some(requested) = disallowed_custom {
-            let current = self.models_manager.current_model_id();
-            let reason = format!(
-                "\"{requested}\" isn't allowed by your allowed_models setting, so this session is using \"{}\".",
-                current.0
-            );
-            self.send_model_auto_switched(
-                &session_id,
-                &acp::ModelId::new(requested),
-                &current,
-                &reason,
-            )
-            .await;
         }
         let indexed_roots = self.indexed_roots_for(cwd.as_path());
         let (git_root, is_git_repo, discovery_failed) =

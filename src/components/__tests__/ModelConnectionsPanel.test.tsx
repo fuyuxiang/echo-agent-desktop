@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -122,6 +122,40 @@ describe("ModelConnectionsPanel", () => {
       );
     });
     expect(mocks.internalReload).toHaveBeenCalledWith("models");
+  });
+
+  it("保存后等待 Runtime 和全局模型状态完全刷新", async () => {
+    mocks.providersSaveConnection.mockResolvedValue({
+      providerId: "custom",
+      modelIds: ["model-a"],
+    });
+    let resolveReload!: () => void;
+    mocks.internalReload.mockImplementation(() => new Promise<void>((resolve) => {
+      resolveReload = resolve;
+    }));
+    let resolveRefresh!: () => void;
+    const onModelsChanged = vi.fn(() => new Promise<void>((resolve) => {
+      resolveRefresh = resolve;
+    }));
+
+    render(<ModelConnectionsPanel onModelsChanged={onModelsChanged} />);
+    await screen.findByText("还没有可用模型");
+    fireEvent.click(screen.getAllByRole("button", { name: "添加个人连接" })[0]);
+    const dialog = screen.getByRole("dialog", { name: "添加个人连接" });
+    fireEvent.change(within(dialog).getByLabelText("Base URL"), { target: { value: "https://api.example.com/v1" } });
+    fireEvent.change(within(dialog).getByLabelText("API Key"), { target: { value: "sk-test" } });
+    fireEvent.change(within(dialog).getByLabelText("模型名称 / ID"), { target: { value: "model-a" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "直接保存" }));
+
+    await waitFor(() => expect(mocks.internalReload).toHaveBeenCalledWith("models"));
+    expect(onModelsChanged).not.toHaveBeenCalled();
+
+    await act(async () => resolveReload());
+    await waitFor(() => expect(onModelsChanged).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("连接已添加，已配置 1 个模型。")).not.toBeInTheDocument();
+
+    await act(async () => resolveRefresh());
+    expect(await screen.findByText("连接已添加，已配置 1 个模型。")).toBeInTheDocument();
   });
 
   it("编辑连接时留空密钥并由原生层复用已保存凭据", async () => {

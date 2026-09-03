@@ -41,6 +41,15 @@
         -moz-osx-font-smoothing: grayscale;
       }
 
+      .echo-startup-fallback {
+        height: 100%;
+        display: grid;
+        place-items: center;
+        background: #f7f7f5;
+        color: #4b4b47;
+        font-size: 14px;
+      }
+
       ::-webkit-scrollbar {
         width: 10px;
         height: 10px;
@@ -66,7 +75,12 @@
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Kept visible until React's first successful commit. If the bundle or
+           WebView initialization fails, Windows users see a status instead of
+           an undiagnosable white surface. -->
+      <div class="echo-startup-fallback" role="status">正在启动 EchoAgent…</div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -982,14 +982,56 @@ fn acp_ext_notification(
 // ========================================================================
 
 /// Hot-reload EchoAgent's view of MCP servers / skills / models / config without
-/// restarting the app. Maps to `echo.agent/internal/reload_*` notifications.
+/// restarting the app. Maps to `echo.agent/internal/reload_*` extension methods.
 /// `kind` ∈ "mcp_all" | "mcp_project" | "skills" | "models".
 #[tauri::command]
 pub async fn internal_reload(state: State<'_, AppState>, kind: String) -> Result<(), String> {
-    request_internal_reload(&state, &kind)
+    let tx = state
+        .tx
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("agent not initialized")?;
+    request_internal_reload_and_wait(&tx, &kind).await
 }
 
-/// Send one of the runtime's internal reload notifications without requiring
+fn internal_reload_method(kind: &str) -> Result<&'static str, String> {
+    match kind {
+        "mcp_all" => Ok("echo.agent/internal/reload_all_mcp_servers"),
+        "mcp_project" => Ok("echo.agent/internal/reload_project_mcp_servers"),
+        "skills" => Ok("echo.agent/internal/reload_skills"),
+        "models" => Ok("echo.agent/internal/reload_models"),
+        other => Err(format!("unknown reload kind: {other}")),
+    }
+}
+
+fn internal_reload_request(kind: &str) -> Result<agent_client_protocol::ExtRequest, String> {
+    Ok(agent_client_protocol::ExtRequest::new(
+        internal_reload_method(kind)?,
+        crate::ext::raw_params(&serde_json::json!({})),
+    ))
+}
+
+/// Send a reload request and do not report success until the runtime has
+/// actually applied it. The gateway executes requests concurrently, so merely
+/// enqueueing this message does not order a following `session/new` behind it.
+async fn request_internal_reload_and_wait(
+    tx: &xai_acp_lib::AcpAgentTx,
+    kind: &str,
+) -> Result<(), String> {
+    let request = internal_reload_request(kind)?;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        xai_acp_lib::acp_send(request, tx),
+    )
+    .await
+    .map_err(|_| format!("reload {kind} timed out after 60 seconds"))?;
+    result
+        .map(|_response: agent_client_protocol::ExtResponse| ())
+        .map_err(|error| format!("reload {kind}: {error:?}"))
+}
+
+/// Send one of the runtime's internal reload extension requests without requiring
 /// a frontend round-trip. Organization Skill synchronization uses this to
 /// tighten or expand every resident session immediately after its signed
 /// server directory set changes.
@@ -1001,17 +1043,10 @@ pub(crate) fn request_internal_reload(state: &AppState, kind: &str) -> Result<()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let method = match kind {
-        "mcp_all" => "echo.agent/internal/reload_all_mcp_servers",
-        "mcp_project" => "echo.agent/internal/reload_project_mcp_servers",
-        "skills" => "echo.agent/internal/reload_skills",
-        "models" => "echo.agent/internal/reload_models",
-        other => return Err(format!("unknown reload kind: {other}")),
-    };
-    let notif = acp_ext_notification(method, serde_json::json!({}));
+    let request = internal_reload_request(kind)?;
     let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
-    let msg = AcpAgentMessage::ExtNotification(AcpArgs {
-        request: notif,
+    let msg = AcpAgentMessage::ExtMethod(AcpArgs {
+        request,
         response_tx,
     });
     tx.send(msg).map_err(|e| format!("send reload: {e}"))?;
@@ -1113,8 +1148,45 @@ pub async fn marketplace_action(
 mod tests {
     use super::{
         check_expected_revision, file_revision, list_memory, parse_slash_commands,
-        resolve_memory_path, MemoryEntryScope, MemoryStorage,
+        request_internal_reload_and_wait, resolve_memory_path, MemoryEntryScope, MemoryStorage,
     };
+
+    #[tokio::test]
+    async fn awaited_reload_completes_only_after_runtime_acknowledges_it() {
+        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let tx = client.tx;
+        let task =
+            tokio::spawn(async move { request_internal_reload_and_wait(&tx, "models").await });
+
+        let message = agent.rx.recv().await.expect("reload request");
+        assert!(!task.is_finished());
+        let xai_acp_lib::AcpAgentMessage::ExtMethod(arguments) = message else {
+            panic!("expected ExtMethod");
+        };
+        assert_eq!(
+            arguments.request.method.as_ref(),
+            "echo.agent/internal/reload_models"
+        );
+        arguments
+            .response_tx
+            .send(Ok(agent_client_protocol::ExtResponse::new(
+                crate::ext::raw_params(&serde_json::json!({ "models": 1 })),
+            )))
+            .expect("reload response");
+
+        assert_eq!(task.await.expect("reload task"), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn awaited_reload_rejects_unknown_kinds_without_sending() {
+        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let error = request_internal_reload_and_wait(&client.tx, "unknown")
+            .await
+            .expect_err("unknown kind must fail");
+
+        assert!(error.contains("unknown reload kind"));
+        assert!(agent.rx.try_recv().is_err());
+    }
 
     #[test]
     fn memory_list_uses_runtime_layout_and_marks_sessions_read_only() {

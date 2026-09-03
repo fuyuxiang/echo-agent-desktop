@@ -309,9 +309,9 @@ pub async fn load_session(tx: &AcpAgentTx, session_id: &str, cwd: &Path) -> Resu
 /// streamed updates arrive earlier on the client rx channel (drained by the
 /// dispatcher in bridge.rs).
 ///
-/// Automatically retries on 429 rate-limit errors with an exponential backoff
-/// (30s → 60s, max 2 retries) so transient TPM/RPM limits don't immediately
-/// surface as hard errors.
+/// Rate-limit handling belongs inside the runtime's sampler. Re-submitting a
+/// whole ACP PromptRequest here is not idempotent: each attempt is persisted as
+/// a new user turn before sampling starts.
 pub async fn prompt(tx: &AcpAgentTx, session_id: &str, text: &str) -> Result<()> {
     prompt_with_attachments(tx, session_id, text, &[], None).await
 }
@@ -389,55 +389,14 @@ pub async fn prompt_with_attachments(
     display_text: Option<&str>,
 ) -> Result<()> {
     let blocks = build_prompt_blocks(text, attachments, display_text)?;
-    let max_retries = 2;
-    let mut delay_secs = 30u64;
-    for attempt in 0..=max_retries {
-        tracing::info!(
-            session_id,
-            text_len = text.len(),
-            attempt,
-            "echoagent: prompt send"
-        );
-        let req = acp::PromptRequest::new(session_id.to_string(), blocks.clone());
-        match acp_send(req, tx).await {
-            Ok(resp) => {
-                let _ = resp;
-                if attempt > 0 {
-                    tracing::info!(
-                        session_id,
-                        attempt,
-                        "echoagent: prompt succeeded after retry"
-                    );
-                } else {
-                    tracing::info!(session_id, "echoagent: prompt turn completed");
-                }
-                let _ = resp;
-                return Ok(());
-            }
-            Err(e) => {
-                let err_str = format!("{e:?}");
-                let is_rate_limit = err_str.contains("-32003")
-                    && (err_str.contains("429")
-                        || err_str.contains("Rate limited")
-                        || err_str.contains("rate limit"));
-                if is_rate_limit && attempt < max_retries {
-                    tracing::warn!(
-                        session_id,
-                        attempt,
-                        delay_secs,
-                        "echoagent: prompt rate-limited, retrying after delay"
-                    );
-                    // Emit a status event so the frontend can show "retrying in Ns".
-                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-                    delay_secs *= 2;
-                    continue;
-                }
-                tracing::error!(error = ?e, "echoagent: prompt acp_send FAILED");
-                return Err(anyhow!("prompt: {e:?}"));
-            }
-        }
-    }
-    unreachable!()
+    tracing::info!(session_id, text_len = text.len(), "echoagent: prompt send");
+    let req = acp::PromptRequest::new(session_id.to_string(), blocks);
+    let _: acp::PromptResponse = acp_send(req, tx).await.map_err(|e| {
+        tracing::error!(session_id, error = ?e, "echoagent: prompt acp_send FAILED");
+        anyhow!("prompt: {e:?}")
+    })?;
+    tracing::info!(session_id, "echoagent: prompt turn completed");
+    Ok(())
 }
 
 /// Switch the model used by an existing session. Maps to EchoAgent's
@@ -570,6 +529,36 @@ mod tests {
     //! against the user's `~/.echo-agent` config (~10s). Run with
     //! `cargo test --lib -- --ignored spawn_smoke`.
     use super::*;
+
+    #[tokio::test]
+    async fn prompt_rate_limit_does_not_resubmit_the_whole_user_turn() {
+        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let tx = client.tx;
+        let task = tokio::spawn(async move {
+            prompt_with_attachments(&tx, "session-1", "hello", &[], None).await
+        });
+
+        let message = agent.rx.recv().await.expect("prompt request");
+        let xai_acp_lib::AcpAgentMessage::Prompt(arguments) = message else {
+            panic!("expected Prompt request");
+        };
+        arguments
+            .response_tx
+            .send(Err(
+                acp::Error::new(-32003, "rate limited").data(serde_json::json!({ "status": 429 }))
+            ))
+            .expect("rate-limit response");
+
+        let result = tokio::time::timeout(std::time::Duration::from_millis(250), task)
+            .await
+            .expect("prompt handler must return instead of scheduling a whole-turn retry")
+            .expect("prompt task");
+        assert!(result.is_err());
+        assert!(
+            agent.rx.try_recv().is_err(),
+            "prompt must be sent exactly once"
+        );
+    }
 
     #[test]
     fn document_attachment_keeps_model_reference_and_replay_metadata() {

@@ -45,6 +45,17 @@ const DESKTOP_MIN_WIDTH: f64 = 1024.0;
 const DESKTOP_MIN_HEIGHT: f64 = 680.0;
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn show_main_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 struct DesktopWindowState {
     width: f64,
@@ -147,13 +158,7 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.unminimize();
-                    let _ = window.set_focus();
-                }
-            }
+            "show" => show_main_window(app),
             "quit" => app.exit(0),
             _ => {}
         });
@@ -203,7 +208,18 @@ pub fn run() {
     team_mcp::serve();
     org_mcp::serve();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Tauri requires single-instance to be the first registered plugin. A
+    // second launch focuses the resident window (which may be tray-hidden)
+    // instead of creating another WebView against the same profile.
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        if !args.iter().any(|arg| arg == "--background") {
+            show_main_window(app);
+        }
+    }));
+
+    builder
         .setup(|app| {
             org::start_background_sync(app.handle().clone());
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]

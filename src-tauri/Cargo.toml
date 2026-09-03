@@ -75,6 +75,10 @@ zip = { version = "3", default-features = false, features = ["deflate"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-autostart = "2"
+# Keep automation/tray launches and ordinary launches in one process. This is
+# especially important on Windows where a hidden resident WebView and a second
+# process can contend for the same WebView2 profile.
+tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Call Windows DPAPI directly. Spawning PowerShell made credential persistence
