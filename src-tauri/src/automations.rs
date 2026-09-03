@@ -27,7 +27,7 @@ use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, Weekday};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use tauri_plugin_autostart::ManagerExt;
@@ -1109,10 +1109,12 @@ pub async fn automations_run(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
+    crate::commands::require_runtime_ready(&state, automation.model_id.as_deref())?;
 
     let started = now_local().to_rfc3339();
     let record_id = record_run_started(&automation, &started);
-    let result = run_automation_once(&tx, &automation, &PathBuf::from(&cwd), &record_id).await;
+    let result =
+        run_automation_once(&state, &tx, &automation, &PathBuf::from(&cwd), &record_id).await;
     if let Err(error) = &result {
         record_run_finished(&record_id, false, None, Some(error));
         notify_run_failure(&app, &automation, error).await;
@@ -1159,6 +1161,7 @@ async fn notify_run_failure(app: &AppHandle, automation: &Automation, error: &st
 /// Open a fresh EchoAgent session and send the automation prompt.
 /// Returns the new session id on success.
 async fn run_automation_once(
+    state: &AppState,
     tx: &xai_acp_lib::AcpAgentTx,
     automation: &Automation,
     cwd: &PathBuf,
@@ -1168,6 +1171,7 @@ async fn run_automation_once(
     if let Some(model_id) = automation.model_id.as_deref() {
         crate::policy::require_model(model_id)?;
     }
+    crate::commands::require_runtime_ready(state, automation.model_id.as_deref())?;
     if !cwd.is_dir() {
         return Err(format!("自动化工作空间不存在：{}", cwd.display()));
     }
@@ -1352,6 +1356,11 @@ pub fn automation_records_delete(id: String) -> Result<(), String> {
 
 /// Scheduler tick. Fires any automation whose `next_run_at` has passed.
 pub async fn scheduler_tick(app: &AppHandle, tx: &xai_acp_lib::AcpAgentTx, default_cwd: &PathBuf) {
+    let state = app.state::<AppState>();
+    if let Err(error) = crate::commands::require_runtime_ready(&state, None) {
+        tracing::debug!(%error, "automation scheduler paused while Agent Runtime is not ready");
+        return;
+    }
     let now = now_local();
     let (due, active_state_changed, has_active) = {
         let _guard = store_access().lock().unwrap();
@@ -1377,7 +1386,7 @@ pub async fn scheduler_tick(app: &AppHandle, tx: &xai_acp_lib::AcpAgentTx, defau
             .unwrap_or_else(|| default_cwd.clone());
         let started = now.to_rfc3339();
         let record_id = record_run_started(automation, &started);
-        match run_automation_once(tx, automation, &cwd, &record_id).await {
+        match run_automation_once(&state, tx, automation, &cwd, &record_id).await {
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!(error = ?e, id = %automation.id, "automation fire failed");

@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::State;
+use tauri::{AppHandle, State};
 use xai_grok_shell::session::memory::{
     storage::normalize_memory_content, MemoryScope, MemoryStorage,
 };
@@ -419,6 +419,7 @@ pub async fn memory_flush(state: State<'_, AppState>, session_id: String) -> Res
 /// indexing, notifications and failure handling.
 #[tauri::command]
 pub async fn memory_dream(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    crate::commands::require_runtime_ready(&state, None)?;
     let tx = state
         .tx
         .lock()
@@ -985,13 +986,20 @@ fn acp_ext_notification(
 /// restarting the app. Maps to `echo.agent/internal/reload_*` extension methods.
 /// `kind` ∈ "mcp_all" | "mcp_project" | "skills" | "models".
 #[tauri::command]
-pub async fn internal_reload(state: State<'_, AppState>, kind: String) -> Result<(), String> {
+pub async fn internal_reload(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    kind: String,
+) -> Result<(), String> {
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
+    if kind == "models" {
+        return crate::commands::reload_models_and_sync(&app, &state, &tx).await;
+    }
     request_internal_reload_and_wait(&tx, &kind).await
 }
 
@@ -1015,7 +1023,7 @@ fn internal_reload_request(kind: &str) -> Result<agent_client_protocol::ExtReque
 /// Send a reload request and do not report success until the runtime has
 /// actually applied it. The gateway executes requests concurrently, so merely
 /// enqueueing this message does not order a following `session/new` behind it.
-async fn request_internal_reload_and_wait(
+pub(crate) async fn request_internal_reload_and_wait(
     tx: &xai_acp_lib::AcpAgentTx,
     kind: &str,
 ) -> Result<(), String> {
