@@ -14,6 +14,17 @@ export function attachmentBasename(path: string): string {
   return normalized.split("/").pop() || path;
 }
 
+/** Image formats that the native ACP bridge sends as multimodal content and
+ * can therefore share the same thumbnail behavior in chat history. */
+export function isImageAttachment(path: string): boolean {
+  const name = attachmentBasename(path);
+  const dot = name.lastIndexOf(".");
+  if (dot === -1) return false;
+  return [".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(
+    name.slice(dot).toLowerCase(),
+  );
+}
+
 export function normalizeAttachmentPaths(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((item): item is string =>

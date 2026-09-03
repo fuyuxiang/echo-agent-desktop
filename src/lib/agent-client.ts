@@ -1270,6 +1270,11 @@ export async function openLocalPath(path: string, cwd?: string): Promise<void> {
   await invoke<void>("open_path", { path, cwd: cwd ?? null });
 }
 
+/** Load a bounded, native-generated JPEG thumbnail for a local image attachment. */
+export async function attachmentThumbnail(path: string): Promise<string> {
+  return invoke<string>("attachment_thumbnail", { path });
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   await invoke<void>("open_url", { url });
 }
