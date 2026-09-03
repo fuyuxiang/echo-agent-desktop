@@ -103,7 +103,9 @@ interface SessionState {
   // --- lifecycle ---
   setSession: (id: string | null) => void;
   reset: () => void;
-  startStreaming: () => void;
+  /** Start an assistant placeholder in a specific transcript. Defaults to the
+   *  focused conversation for ordinary composer sends. */
+  startStreaming: (sessionId?: string) => void;
   markComplete: (p: PromptComplete) => void;
   setError: (e: string | null) => void;
   /** Stop the focused session's stream locally (cancel button): keep any
@@ -119,7 +121,7 @@ interface SessionState {
 
   // --- transcript ops ---
   /** Append a user message (sent optimistically before the round-trip). */
-  pushUser: (text: string, attachments?: string[]) => void;
+  pushUser: (text: string, attachments?: string[], sessionId?: string) => void;
   /** Remove the most recent optimistic user message and its empty assistant
    *  placeholder when `agent_send` rejects before the turn starts. */
   rollbackPendingTurn: () => void;
@@ -518,11 +520,11 @@ export const useSessionStore = create<SessionState>((set, get) => {
         error: null,
       })),
 
-    startStreaming: () => {
+    startStreaming: (sessionId) => {
       // Optimistically insert an empty assistant placeholder so the avatar +
       // "preparing" loading row appears immediately after the user message,
       // instead of a blank gap until the first streamed chunk arrives.
-      const sid = get().sessionId;
+      const sid = sessionId ?? get().sessionId;
       if (!sid) return;
       applyToTranscript(sid, (t) => {
         const id = nextId();
@@ -641,8 +643,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
       );
     },
 
-    pushUser: (text, attachments = []) => {
-      const sid = get().sessionId;
+    pushUser: (text, attachments = [], sessionId) => {
+      const sid = sessionId ?? get().sessionId;
       if (!sid) return;
       applyToTranscript(sid, (t) => ({
         ...t,

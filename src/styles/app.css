@@ -294,9 +294,6 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  /* Explicit transcript following owns the vertical position. Native scroll
-     anchoring otherwise competes with streaming/async content updates. */
-  overflow-anchor: none;
 }
 .chatview__inner {
   max-width: 800px;

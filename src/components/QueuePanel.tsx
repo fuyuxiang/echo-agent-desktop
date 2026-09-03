@@ -112,6 +112,7 @@ function QueueRow({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.text);
   const paused = item.status === "paused";
+  const sending = item.status === "sending";
 
   const commit = () => {
     const t = draft.trim();
@@ -122,11 +123,15 @@ function QueueRow({
 
   return (
     <div
-      className={"queue-row" + (paused ? " queue-row--paused" : "")}
+      className={
+        "queue-row"
+        + (paused ? " queue-row--paused" : "")
+        + (sending ? " queue-row--sending" : "")
+      }
       role="listitem"
     >
       <span className="queue-row__index">{index + 1}</span>
-      {editing ? (
+      {editing && !sending ? (
         <textarea
           className="queue-row__edit"
           value={draft}
@@ -147,8 +152,9 @@ function QueueRow({
         <span className="queue-row__content">
           <span
             className="queue-row__text"
-            title="点击编辑"
+            title={sending ? "发送中" : "点击编辑"}
             onClick={() => {
+              if (sending) return;
               setDraft(item.text);
               setEditing(true);
             }}
@@ -171,7 +177,7 @@ function QueueRow({
           type="button"
           className="queue-row__btn"
           onClick={onUp}
-          disabled={index === 0}
+          disabled={sending || index === 0}
           title="上移"
           aria-label="上移"
         >
@@ -181,7 +187,7 @@ function QueueRow({
           type="button"
           className="queue-row__btn"
           onClick={onDown}
-          disabled={index === total - 1}
+          disabled={sending || index === total - 1}
           title="下移"
           aria-label="下移"
         >
@@ -191,8 +197,9 @@ function QueueRow({
           type="button"
           className="queue-row__btn"
           onClick={onTogglePause}
-          title={paused ? "恢复" : "暂停"}
-          aria-label={paused ? "恢复" : "暂停"}
+          disabled={sending}
+          title={sending ? "发送中" : paused ? "恢复" : "暂停"}
+          aria-label={sending ? "发送中" : paused ? "恢复" : "暂停"}
           aria-pressed={paused}
         >
           {paused ? <PlayIcon size="sm" /> : <PauseIcon size="sm" />}
@@ -201,16 +208,17 @@ function QueueRow({
           type="button"
           className="queue-row__btn queue-row__btn--send"
           onClick={onSendNow}
-          disabled={sendDisabled}
+          disabled={sending || sendDisabled}
           title={sendTitle}
           aria-label={sendTitle}
         >
-          {sendLabel}
+          {sending ? "发送中" : sendLabel}
         </button>
         <button
           type="button"
           className="queue-row__btn"
           onClick={onRemove}
+          disabled={sending}
           title="删除"
           aria-label="删除"
         >

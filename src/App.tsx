@@ -400,23 +400,36 @@ function Shell() {
                 findSessionSummary(p.sessionId)?.currentModelId,
               );
               if (!authReadyRef.current || !queuedModelId) {
-                sessionStore.getState().setError(
-                  "⚠️ 已暂停自动续发：当前会话的模型未配置，请重新选择模型。",
-                );
+                if (sessionStore.getState().sessionId === p.sessionId) {
+                  sessionStore.getState().setError(
+                    "⚠️ 已暂停自动续发：当前会话的模型未配置，请重新选择模型。",
+                  );
+                }
                 sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "failed" });
                 return;
               }
-              const next = q.find((item) => item.status === "queued");
+              const next = useMessageQueueStore.getState().claimNext(p.sessionId);
               if (next) {
-                // Keep the queue item until agentSend acknowledges the request;
-                // a rejected invoke therefore cannot silently lose user input.
+                // PromptRequest resolves after the full model turn. Claim the
+                // item before sending so the completion event cannot dispatch
+                // this same item again while that promise is still pending.
                 sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "working" });
-                sessionStore.getState().pushUser(next.text, next.attachments);
-                sessionStore.getState().startStreaming();
+                sessionStore.getState().pushUser(next.text, next.attachments, p.sessionId);
+                sessionStore.getState().startStreaming(p.sessionId);
                 agentSend(p.sessionId, next.text, next.attachments, next.text).then(() => {
                   useMessageQueueStore.getState().remove(p.sessionId, next.id);
                 }).catch((e) => {
-                  sessionStore.getState().setError(friendlyError(e));
+                  // Preserve a rejected queued message for retry and finalize
+                  // the placeholder in the transcript it actually belongs to.
+                  useMessageQueueStore.getState().setStatus(p.sessionId, next.id, "queued");
+                  sessionStore.getState().markComplete({
+                    sessionId: p.sessionId,
+                    promptId: "",
+                    stopReason: "error",
+                  });
+                  if (sessionStore.getState().sessionId === p.sessionId) {
+                    sessionStore.getState().setError(friendlyError(e));
+                  }
                   sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "failed" });
                 });
               }

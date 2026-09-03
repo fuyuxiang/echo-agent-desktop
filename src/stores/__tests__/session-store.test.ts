@@ -92,6 +92,29 @@ describe("session-store transcripts", () => {
     expect(useSessionStore.getState().messages[0].attachments).toEqual(["/tmp/方案.docx"]);
   });
 
+  it("后台续发只写入目标会话，不污染当前会话", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.pushUser("A 的历史");
+    s.setSession("B");
+    s.pushUser("B 的历史");
+
+    s.pushUser("排队续发", ["/tmp/续发.docx"], "A");
+    s.startStreaming("A");
+
+    const state = useSessionStore.getState();
+    expect(state.sessionId).toBe("B");
+    expect(state.streaming).toBe(false);
+    expect(state.messages).toHaveLength(1);
+    expect(userMessageTextForTest(state.messages[0])).toBe("B 的历史");
+    expect(state.transcripts.A.messages.map((message) => message.role)).toEqual([
+      "user", "user", "assistant",
+    ]);
+    expect(userMessageTextForTest(state.transcripts.A.messages[1])).toBe("排队续发");
+    expect(state.transcripts.A.messages[1].attachments).toEqual(["/tmp/续发.docx"]);
+    expect(state.transcripts.A.streamingMessageId).not.toBeNull();
+  });
+
   it("历史回放按 promptIndex 恢复用户文本、附件和轮次边界", () => {
     const s = useSessionStore.getState();
     s.setSession("A");

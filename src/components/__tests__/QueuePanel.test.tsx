@@ -108,6 +108,18 @@ describe("QueuePanel", () => {
     expect(screen.getByRole("button", { name: "立即发送" })).toBeDisabled();
   });
 
+  it("已被后台取出的条目显示发送中且不可编辑或删除", () => {
+    const s = useMessageQueueStore.getState();
+    s.enqueue("s1", "正在发送");
+    s.claimNext("s1");
+    render(<QueuePanel sessionId="s1" streaming />);
+
+    expect(screen.getByText("正在发送")).toHaveAttribute("title", "发送中");
+    expect(screen.getByRole("button", { name: "删除" })).toBeDisabled();
+    fireEvent.click(screen.getByText("正在发送"));
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
   it("展示队列附件并在发送时保留", async () => {
     useMessageQueueStore.getState().enqueue("s1", "请优化", ["/tmp/方案.docx"]);
     const onSendNow = vi.fn();

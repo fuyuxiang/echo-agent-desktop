@@ -144,8 +144,10 @@ describe("useStickToBottom", () => {
     setScrollMetrics(scroller, {
       scrollHeight: 1_000,
       clientHeight: 400,
-      scrollTop: 200,
+      scrollTop: 600,
     });
+    fireEvent.scroll(scroller);
+    scroller.scrollTop = 200;
     fireEvent.scroll(scroller);
 
     Object.defineProperty(scroller, "scrollHeight", {
@@ -158,17 +160,63 @@ describe("useStickToBottom", () => {
     expect(scroller.scrollTop).toBe(200);
   });
 
+  it("a small upward wheel gesture cancels follow before the next streamed update", () => {
+    const { getByTestId, rerender } = render(<Harness version={1} streaming />);
+    const scroller = getByTestId("scroll");
+    setScrollMetrics(scroller, {
+      scrollHeight: 1_000,
+      clientHeight: 400,
+      scrollTop: 600,
+    });
+
+    // Real trackpads start with small deltas. The old 80px near-bottom rule
+    // kept follow enabled here and the next token snapped straight back down.
+    fireEvent.wheel(scroller, { deltaY: -12 });
+    scroller.scrollTop = 588;
+    fireEvent.scroll(scroller);
+
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      value: 1_100,
+    });
+    act(() => resizeObservers[0].trigger());
+    rerender(<Harness version={2} streaming />);
+    act(flushAnimationFrames);
+
+    expect(scroller.scrollTop).toBe(588);
+  });
+
+  it("scrolling upward cancels an already scheduled bottom alignment", () => {
+    const { getByTestId } = render(<Harness version={1} streaming />);
+    const scroller = getByTestId("scroll");
+    setScrollMetrics(scroller, {
+      scrollHeight: 1_000,
+      clientHeight: 400,
+      scrollTop: 600,
+    });
+    act(() => resizeObservers[0].trigger());
+
+    fireEvent.wheel(scroller, { deltaY: -8 });
+    scroller.scrollTop = 592;
+    fireEvent.scroll(scroller);
+    act(flushAnimationFrames);
+
+    expect(scroller.scrollTop).toBe(592);
+  });
+
   it("resumes following when the user returns near the bottom", () => {
     const { getByTestId } = render(<Harness version={1} />);
     const scroller = getByTestId("scroll");
     setScrollMetrics(scroller, {
       scrollHeight: 1_000,
       clientHeight: 400,
-      scrollTop: 200,
+      scrollTop: 600,
     });
     fireEvent.scroll(scroller);
+    scroller.scrollTop = 200;
+    fireEvent.scroll(scroller);
 
-    scroller.scrollTop = 550;
+    scroller.scrollTop = 600;
     fireEvent.scroll(scroller);
     Object.defineProperty(scroller, "scrollHeight", {
       configurable: true,
@@ -179,7 +227,7 @@ describe("useStickToBottom", () => {
     expect(scroller.scrollTop).toBe(800);
   });
 
-  it("forces the latest output into view when a new response starts", () => {
+  it("does not steal the reader's position when a queued response starts", () => {
     const { getByTestId, rerender } = render(
       <Harness version={1} streaming={false} />,
     );
@@ -187,8 +235,10 @@ describe("useStickToBottom", () => {
     setScrollMetrics(scroller, {
       scrollHeight: 1_000,
       clientHeight: 400,
-      scrollTop: 100,
+      scrollTop: 600,
     });
+    fireEvent.scroll(scroller);
+    scroller.scrollTop = 100;
     fireEvent.scroll(scroller);
 
     Object.defineProperty(scroller, "scrollHeight", {
@@ -197,7 +247,7 @@ describe("useStickToBottom", () => {
     });
     rerender(<Harness version={2} streaming />);
 
-    expect(scroller.scrollTop).toBe(800);
+    expect(scroller.scrollTop).toBe(100);
   });
 
   it("starts each switched conversation at its bottom", () => {
