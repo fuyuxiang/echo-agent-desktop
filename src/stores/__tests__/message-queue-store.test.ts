@@ -179,6 +179,32 @@ describe("message-queue-store — shiftNext", () => {
   });
 });
 
+describe("message-queue-store — claimNext", () => {
+  beforeEach(resetStore);
+
+  it("原子标记发送中，同一条不会被重复取出", () => {
+    const s = useMessageQueueStore.getState();
+    s.enqueue("s1", "a");
+    s.enqueue("s1", "b");
+
+    expect(s.claimNext("s1")?.text).toBe("a");
+    expect(store().getQueue("s1").map((item) => item.status)).toEqual([
+      "sending", "queued",
+    ]);
+    expect(s.claimNext("s1")?.text).toBe("b");
+    expect(s.claimNext("s1")).toBeNull();
+  });
+
+  it("拒绝后可将 sending 恢复为 queued 重试", () => {
+    const s = useMessageQueueStore.getState();
+    const id = s.enqueue("s1", "a");
+    s.claimNext("s1");
+    s.setStatus("s1", id, "queued");
+
+    expect(s.claimNext("s1")?.id).toBe(id);
+  });
+});
+
 describe("message-queue-store — clear", () => {
   beforeEach(resetStore);
 
@@ -206,6 +232,10 @@ describe("hasActiveItems", () => {
 
   it("仅 paused 项返回 false", () => {
     expect(hasActiveItems([{ id: "1", text: "a", status: "paused", createdAt: 1 }])).toBe(false);
+  });
+
+  it("仅 sending 项返回 false，避免完成事件重复发送", () => {
+    expect(hasActiveItems([{ id: "1", text: "a", status: "sending", createdAt: 1 }])).toBe(false);
   });
 
   it("空数组返回 false", () => {
