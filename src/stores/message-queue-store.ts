@@ -9,7 +9,8 @@
  */
 import { create } from "zustand";
 
-export type QueueItemStatus = "queued" | "paused";
+export type QueueItemStatus = "queued" | "paused" | "sending";
+type EditableQueueItemStatus = Exclude<QueueItemStatus, "sending">;
 
 export interface QueueItem {
   /** 稳定 id(用于 React key 与操作寻址)。 */
@@ -37,7 +38,10 @@ interface QueueState {
   /** 移动某条到新位置(0-based)。越界则 clamp。 */
   reorder: (sessionId: string, from: number, to: number) => void;
   /** 暂停 / 恢复。 */
-  setStatus: (sessionId: string, id: string, status: QueueItemStatus) => void;
+  setStatus: (sessionId: string, id: string, status: EditableQueueItemStatus) => void;
+  /** Atomically reserve the first queued item so completion events cannot
+   *  dispatch the same long-running request twice. */
+  claimNext: (sessionId: string) => QueueItem | null;
   /** 取下一条 active(非 paused)项并从队列移除;无则返回 null。 */
   shiftNext: (sessionId: string) => QueueItem | null;
   /** 清空某会话的整个队列。 */
@@ -113,6 +117,19 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
         },
       };
     }),
+  claimNext: (sessionId) => {
+    let claimed: QueueItem | null = null;
+    set((s) => {
+      const q = queueOf(s.queues, sessionId);
+      const idx = q.findIndex((it) => it.status === "queued");
+      if (idx === -1) return s;
+      const next = [...q];
+      claimed = { ...next[idx], status: "sending" };
+      next[idx] = claimed;
+      return { queues: { ...s.queues, [sessionId]: next } };
+    });
+    return claimed;
+  },
   shiftNext: (sessionId) => {
     const q = [...queueOf(get().queues, sessionId)];
     const idx = q.findIndex((it) => it.status === "queued");

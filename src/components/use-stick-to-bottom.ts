@@ -8,10 +8,11 @@ import {
 
 /**
  * Keep the transcript pinned while the user is following the latest output.
- * A small tolerance avoids disabling follow mode because of sub-pixel layout
- * and native scroll rounding.
+ * This tolerance is only for native scroll rounding when the user returns to
+ * the bottom. User intent is detected from scroll direction / input events,
+ * never from this distance.
  */
-export const STICK_TO_BOTTOM_THRESHOLD = 80;
+export const STICK_TO_BOTTOM_THRESHOLD = 2;
 
 export function isNearScrollBottom(
   element: HTMLElement,
@@ -25,7 +26,7 @@ export function isNearScrollBottom(
 interface UseStickToBottomOptions {
   /** A value that changes whenever rendered transcript data changes. */
   contentVersion: unknown;
-  /** Starting a new response always returns the view to the latest output. */
+  /** Whether the focused conversation currently has an active response. */
   streaming: boolean;
   /** Switching conversations must not inherit the old conversation's position. */
   sessionId: string | null;
@@ -55,8 +56,9 @@ export function useStickToBottom({
   const contentRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
   const frameRef = useRef<number | null>(null);
+  const lastScrollTopRef = useRef(0);
+  const touchYRef = useRef<number | null>(null);
   const previousSessionRef = useRef(sessionId);
-  const previousStreamingRef = useRef(streaming);
 
   const cancelScheduledAlignment = useCallback(() => {
     if (frameRef.current === null) return;
@@ -78,6 +80,7 @@ export function useStickToBottom({
         0,
         element.scrollHeight - element.clientHeight,
       );
+      lastScrollTopRef.current = element.scrollTop;
       cancelScheduledAlignment();
       frameRef.current = window.requestAnimationFrame(() => {
         frameRef.current = null;
@@ -86,20 +89,20 @@ export function useStickToBottom({
           0,
           element.scrollHeight - element.clientHeight,
         );
+        lastScrollTopRef.current = element.scrollTop;
       });
     },
     [cancelScheduledAlignment],
   );
 
   // Run before paint so each streamed state update does not visibly flash at
-  // the old position. A new session/turn explicitly resumes bottom following.
+  // the old position. Only switching conversations forces the view to the
+  // bottom: an automatically queued turn must not steal a reader's position.
   useLayoutEffect(() => {
     const sessionChanged = previousSessionRef.current !== sessionId;
-    const streamingStarted = !previousStreamingRef.current && streaming;
     previousSessionRef.current = sessionId;
-    previousStreamingRef.current = streaming;
 
-    alignToBottom(sessionChanged || streamingStarted);
+    alignToBottom(sessionChanged);
   }, [alignToBottom, contentVersion, sessionId, streaming]);
 
   useEffect(() => {
@@ -107,12 +110,57 @@ export function useStickToBottom({
     const contentElement = contentRef.current;
     if (!scrollElement || !contentElement) return;
 
+    lastScrollTopRef.current = scrollElement.scrollTop;
+
+    const pauseFollowing = () => {
+      followRef.current = false;
+      cancelScheduledAlignment();
+    };
     const handleScroll = () => {
-      followRef.current = isNearScrollBottom(scrollElement, threshold);
+      const nextScrollTop = scrollElement.scrollTop;
+      // A decrease is an unambiguous attempt to inspect earlier content. Stop
+      // following immediately, including for tiny scrollbar/trackpad moves.
+      if (nextScrollTop < lastScrollTopRef.current - 0.5) {
+        pauseFollowing();
+      } else if (isNearScrollBottom(scrollElement, threshold)) {
+        // Following resumes naturally only after the user reaches the bottom.
+        followRef.current = true;
+      }
+      lastScrollTopRef.current = nextScrollTop;
+    };
+    const handleWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0 && scrollElement.scrollTop > 0) pauseFollowing();
+    };
+    const handleTouchStart = (event: TouchEvent) => {
+      touchYRef.current = event.touches[0]?.clientY ?? null;
+    };
+    const handleTouchMove = (event: TouchEvent) => {
+      const nextY = event.touches[0]?.clientY;
+      const previousY = touchYRef.current;
+      // Moving the finger down scrolls the transcript towards older content.
+      if (
+        nextY !== undefined
+        && previousY !== null
+        && nextY > previousY
+        && scrollElement.scrollTop > 0
+      ) {
+        pauseFollowing();
+      }
+      touchYRef.current = nextY ?? null;
+    };
+    const handleTouchEnd = () => {
+      touchYRef.current = null;
     };
     const handleLateLayout = () => alignToBottom();
 
     scrollElement.addEventListener("scroll", handleScroll, { passive: true });
+    scrollElement.addEventListener("wheel", handleWheel, { passive: true });
+    scrollElement.addEventListener("touchstart", handleTouchStart, {
+      passive: true,
+    });
+    scrollElement.addEventListener("touchmove", handleTouchMove, { passive: true });
+    scrollElement.addEventListener("touchend", handleTouchEnd, { passive: true });
+    scrollElement.addEventListener("touchcancel", handleTouchEnd, { passive: true });
 
     // The content observer catches asynchronously expanding Markdown, images,
     // and tool cards. Observing the viewport catches footer/composer resizing.
@@ -128,10 +176,15 @@ export function useStickToBottom({
 
     return () => {
       scrollElement.removeEventListener("scroll", handleScroll);
+      scrollElement.removeEventListener("wheel", handleWheel);
+      scrollElement.removeEventListener("touchstart", handleTouchStart);
+      scrollElement.removeEventListener("touchmove", handleTouchMove);
+      scrollElement.removeEventListener("touchend", handleTouchEnd);
+      scrollElement.removeEventListener("touchcancel", handleTouchEnd);
       contentElement.removeEventListener("load", handleLateLayout, true);
       resizeObserver?.disconnect();
     };
-  }, [alignToBottom, sessionId, threshold]);
+  }, [alignToBottom, cancelScheduledAlignment, sessionId, threshold]);
 
   useEffect(() => cancelScheduledAlignment, [cancelScheduledAlignment]);
 
