@@ -4,8 +4,11 @@ import { ThemeProvider } from "../ThemeProvider";
 import { MessageItem } from "../MessageItem";
 import type { ChatMessage } from "@/stores/session-store";
 
-const { openLocalPath } = vi.hoisted(() => ({ openLocalPath: vi.fn().mockResolvedValue(undefined) }));
-vi.mock("@/lib/agent-client", () => ({ openLocalPath }));
+const { openLocalPath, attachmentThumbnail } = vi.hoisted(() => ({
+  openLocalPath: vi.fn().mockResolvedValue(undefined),
+  attachmentThumbnail: vi.fn().mockResolvedValue("jpeg-base64"),
+}));
+vi.mock("@/lib/agent-client", () => ({ openLocalPath, attachmentThumbnail }));
 
 const message: ChatMessage = {
   id: "u1",
@@ -58,5 +61,47 @@ describe("MessageItem user attachments", () => {
       "请优化这份方案",
       ["/tmp/AI数据集平台-数据回流方案.docx"],
     );
+  });
+
+  it("图片附件懒加载原生缩略图并保留点击打开", async () => {
+    const imageMessage: ChatMessage = {
+      ...message,
+      attachments: ["/tmp/screenshot.PNG"],
+    };
+    render(
+      <ThemeProvider>
+        <MessageItem message={imageMessage} streaming={false} cwd="/tmp" />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByText("PNG 图片")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(attachmentThumbnail).toHaveBeenCalledWith("/tmp/screenshot.PNG");
+      expect(document.querySelector(".msg__attachment-thumbnail"))
+        .toHaveAttribute("src", "data:image/jpeg;base64,jpeg-base64");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "打开附件 screenshot.PNG" }));
+    await waitFor(() => {
+      expect(openLocalPath).toHaveBeenCalledWith("/tmp/screenshot.PNG", "/tmp");
+    });
+  });
+
+  it("缩略图生成失败时降级为图片图标，不影响附件卡片", async () => {
+    attachmentThumbnail.mockRejectedValueOnce(new Error("missing"));
+    const imageMessage: ChatMessage = {
+      ...message,
+      attachments: ["/tmp/missing.webp"],
+    };
+    render(
+      <ThemeProvider>
+        <MessageItem message={imageMessage} streaming={false} cwd="/tmp" />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() => expect(attachmentThumbnail).toHaveBeenCalledWith("/tmp/missing.webp"));
+    expect(screen.getByText("WEBP 图片")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "打开附件 missing.webp" })).toBeEnabled();
+    expect(document.querySelector(".msg__attachment-thumbnail")).toBeNull();
   });
 });

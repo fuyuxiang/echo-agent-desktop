@@ -11,6 +11,16 @@ import { create } from "zustand";
 
 export type QueueItemStatus = "queued" | "paused" | "sending";
 type EditableQueueItemStatus = Exclude<QueueItemStatus, "sending">;
+export type SendingSettlement = "consume" | "retry";
+
+export interface QueueTerminalPolicy {
+  /** How an in-flight queue item should leave the `sending` state. */
+  settlement: SendingSettlement;
+  /** Whether this terminal event may advance the queue. */
+  autoAdvance: boolean;
+  /** Whether the conversation should be presented as failed. */
+  failed: boolean;
+}
 
 export interface QueueItem {
   /** 稳定 id(用于 React key 与操作寻址)。 */
@@ -42,6 +52,9 @@ interface QueueState {
   /** Atomically reserve the first queued item so completion events cannot
    *  dispatch the same long-running request twice. */
   claimNext: (sessionId: string) => QueueItem | null;
+  /** Settle the oldest in-flight item for a terminal agent event. Consumed
+   *  items leave the queue; retryable failures return to `queued`. */
+  settleSending: (sessionId: string, settlement: SendingSettlement) => QueueItem | null;
   /** 取下一条 active(非 paused)项并从队列移除;无则返回 null。 */
   shiftNext: (sessionId: string) => QueueItem | null;
   /** 清空某会话的整个队列。 */
@@ -130,6 +143,23 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
     });
     return claimed;
   },
+  settleSending: (sessionId, settlement) => {
+    let settled: QueueItem | null = null;
+    set((s) => {
+      const q = queueOf(s.queues, sessionId);
+      const idx = q.findIndex((it) => it.status === "sending");
+      if (idx === -1) return s;
+      settled = q[idx];
+      const next = settlement === "retry"
+        ? q.map((it, itemIndex) => itemIndex === idx ? { ...it, status: "queued" as const } : it)
+        : q.filter((_, itemIndex) => itemIndex !== idx);
+      const queues = { ...s.queues };
+      if (next.length === 0) delete queues[sessionId];
+      else queues[sessionId] = next;
+      return { queues };
+    });
+    return settled;
+  },
   shiftNext: (sessionId) => {
     const q = [...queueOf(get().queues, sessionId)];
     const idx = q.findIndex((it) => it.status === "queued");
@@ -154,4 +184,22 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
 /** 是否存在任意 active(非 paused)项 —— App 判定「回完一条是否自动续发」。 */
 export function hasActiveItems(q: QueueItem[]): boolean {
   return q.some((it) => it.status === "queued");
+}
+
+/**
+ * Convert an agent terminal reason into explicit queue semantics.
+ *
+ * Cancellation consumes an already-admitted queue item (its user bubble is
+ * present in history) but deliberately does not launch the next item. Failed
+ * requests remain editable/retryable. Other terminal reasons preserve the
+ * existing queue contract and advance to the next item.
+ */
+export function queueTerminalPolicy(stopReason: string): QueueTerminalPolicy {
+  if (["rate_limit", "rate_limited", "error"].includes(stopReason)) {
+    return { settlement: "retry", autoAdvance: false, failed: true };
+  }
+  if (stopReason === "cancelled") {
+    return { settlement: "consume", autoAdvance: false, failed: false };
+  }
+  return { settlement: "consume", autoAdvance: true, failed: false };
 }

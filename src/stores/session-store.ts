@@ -108,10 +108,10 @@ interface SessionState {
   startStreaming: (sessionId?: string) => void;
   markComplete: (p: PromptComplete) => void;
   setError: (e: string | null) => void;
-  /** Stop the focused session's stream locally (cancel button): keep any
-   *  text already streamed, mark the in-flight message complete, clear the
-   *  streaming flag. Does NOT talk to the backend (caller does agentCancel). */
-  stopStreaming: () => void;
+  /** Stop a session's stream locally (cancel button): keep any text already
+   *  streamed, mark the in-flight message complete, and clear its streaming
+   *  flag. Defaults to the focused session. Does NOT talk to the backend. */
+  stopStreaming: (sessionId?: string) => void;
   /** Drop a session's cached transcript so the next focus reloads it from
    *  EchoAgent (used after a rewind that rewrites backend history). */
   dropSessionCache: (id: string) => void;
@@ -602,9 +602,9 @@ export const useSessionStore = create<SessionState>((set, get) => {
       set({ error: e });
     },
 
-    stopStreaming: () => {
+    stopStreaming: (sessionId) => {
       // Cancel button: keep whatever already streamed, just close the turn.
-      const sid = get().sessionId;
+      const sid = sessionId ?? get().sessionId;
       if (!sid) {
         set({ error: null });
         return;

@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileText } from "lucide-react";
 import { Markdown, type MarkdownConfig } from "./markdown/index";
 import { ToolCallCard } from "./ToolCallCard";
 import { LoadingRow } from "./LoadingRow";
 import { FeedbackDialog } from "./FeedbackDialog";
+import { AttachmentVisual } from "./AttachmentVisual";
 import { useTheme } from "./ThemeProvider";
 import { useFeedbackStore, type FeedbackRating } from "@/stores/feedback-store";
 import type { ChatMessage, ToolCallView } from "@/stores/session-store";
 import { openLocalPath } from "@/lib/agent-client";
-import { attachmentBasename, stripInjectedUserContext } from "@/lib/user-message";
+import {
+  attachmentBasename,
+  isImageAttachment,
+  stripInjectedUserContext,
+} from "@/lib/user-message";
 const logoMarkUrl = "/app-icon.png";
 import {
   createWebSpeechTtsProvider,
@@ -156,6 +160,7 @@ export function MessageItem({
               <div className="msg__attachments" role="list" aria-label="附件">
                 {attachments.map((path) => {
                   const name = attachmentBasename(path);
+                  const image = isImageAttachment(path);
                   const extension = name.includes(".")
                     ? name.slice(name.lastIndexOf(".") + 1).toUpperCase()
                     : "FILE";
@@ -163,7 +168,7 @@ export function MessageItem({
                     <div key={path} className="msg__attachment-item" role="listitem">
                       <button
                         type="button"
-                        className="msg__attachment"
+                        className={"msg__attachment" + (image ? " msg__attachment--image" : "")}
                         title={path}
                         aria-label={`打开附件 ${name}`}
                         onClick={() => {
@@ -172,12 +177,12 @@ export function MessageItem({
                           });
                         }}
                       >
-                        <span className="msg__attachment-icon" aria-hidden="true">
-                          <FileText size={20} strokeWidth={1.8} />
-                        </span>
+                        <AttachmentVisual path={path} />
                         <span className="msg__attachment-copy">
                           <span className="msg__attachment-name">{name}</span>
-                          <span className="msg__attachment-type">{extension} 文件</span>
+                          <span className="msg__attachment-type">
+                            {extension} {image ? "图片" : "文件"}
+                          </span>
                         </span>
                       </button>
                     </div>
