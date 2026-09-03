@@ -9,6 +9,7 @@ mod agent_config;
 mod agent_runtime;
 mod agents_store;
 mod app_updater;
+mod attachment_preview;
 mod automations;
 mod bridge;
 mod commands;
@@ -343,6 +344,8 @@ pub fn run() {
             experts::experts_image_bytes,
             experts::experts_read_agent_prompt,
             experts::experts_link_agents,
+            // Safe, bounded previews for local chat image attachments.
+            attachment_preview::attachment_thumbnail,
             // connector marketplace (live from a local EchoAgent marketplace dir)
             connectors_catalog::connectors_default_root,
             connectors_catalog::connectors_list_roots,

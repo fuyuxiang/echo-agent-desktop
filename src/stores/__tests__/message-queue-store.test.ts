@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   useMessageQueueStore,
   hasActiveItems,
+  queueTerminalPolicy,
 } from "../message-queue-store";
 
 const resetStore = () => useMessageQueueStore.setState({ queues: {} });
@@ -205,6 +206,37 @@ describe("message-queue-store — claimNext", () => {
   });
 });
 
+describe("message-queue-store — settleSending", () => {
+  beforeEach(resetStore);
+
+  it("成功或取消后消费最早的 sending 项", () => {
+    const s = useMessageQueueStore.getState();
+    const first = s.enqueue("s1", "a");
+    s.enqueue("s1", "b");
+    s.claimNext("s1");
+
+    expect(s.settleSending("s1", "consume")?.id).toBe(first);
+    expect(store().getQueue("s1").map((item) => item.text)).toEqual(["b"]);
+  });
+
+  it("可重试失败把 sending 退回 queued", () => {
+    const s = useMessageQueueStore.getState();
+    const id = s.enqueue("s1", "a");
+    s.claimNext("s1");
+
+    expect(s.settleSending("s1", "retry")?.id).toBe(id);
+    expect(store().getQueue("s1")[0].status).toBe("queued");
+  });
+
+  it("没有 sending 项时不会消费普通队列消息", () => {
+    const s = useMessageQueueStore.getState();
+    s.enqueue("s1", "a");
+
+    expect(s.settleSending("s1", "consume")).toBeNull();
+    expect(store().getQueue("s1").map((item) => item.text)).toEqual(["a"]);
+  });
+});
+
 describe("message-queue-store — clear", () => {
   beforeEach(resetStore);
 
@@ -240,6 +272,40 @@ describe("hasActiveItems", () => {
 
   it("空数组返回 false", () => {
     expect(hasActiveItems([])).toBe(false);
+  });
+});
+
+describe("queueTerminalPolicy", () => {
+  it("完整 end_turn 允许自动续发", () => {
+    expect(queueTerminalPolicy("end_turn")).toEqual({
+      settlement: "consume",
+      autoAdvance: true,
+      failed: false,
+    });
+  });
+
+  it("用户取消消费在途项但不继续队列", () => {
+    expect(queueTerminalPolicy("cancelled")).toEqual({
+      settlement: "consume",
+      autoAdvance: false,
+      failed: false,
+    });
+  });
+
+  it("错误与限流保留队列项供重试", () => {
+    for (const reason of ["error", "rate_limit", "rate_limited"]) {
+      expect(queueTerminalPolicy(reason)).toEqual({
+        settlement: "retry",
+        autoAdvance: false,
+        failed: true,
+      });
+    }
+  });
+
+  it("其它 ACP 终态保持原有自动续发契约", () => {
+    expect(queueTerminalPolicy("refusal").autoAdvance).toBe(true);
+    expect(queueTerminalPolicy("max_tokens").autoAdvance).toBe(true);
+    expect(queueTerminalPolicy("max_turns").autoAdvance).toBe(true);
   });
 });
 

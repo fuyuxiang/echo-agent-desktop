@@ -501,6 +501,23 @@
   background: rgba(16, 185, 129, 0.12);
   color: rgb(5, 150, 105);
 }
+.msg__attachment--image {
+  padding: 6px;
+}
+.msg__attachment-icon--image {
+  width: 64px;
+  height: 52px;
+  flex-basis: 64px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.05);
+  color: rgba(0, 0, 0, 0.48);
+}
+.msg__attachment-thumbnail {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .msg__attachment-copy {
   display: flex;
   min-width: 0;

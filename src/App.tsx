@@ -54,7 +54,11 @@ import {
 } from "./lib/agent-client";
 import type { AgentEntry, SessionSummary } from "./lib/types";
 import { hydrateProjectsFromBackend, useProjectsStore, type ProjectMeta } from "./stores/projects-store";
-import { useMessageQueueStore, hasActiveItems } from "./stores/message-queue-store";
+import {
+  useMessageQueueStore,
+  hasActiveItems,
+  queueTerminalPolicy,
+} from "./stores/message-queue-store";
 import { useSubagentStore } from "./stores/subagent-store";
 import {
   checkQuota,
@@ -367,7 +371,14 @@ function Shell() {
           onComplete: (p) => {
             reportEvent("session_complete", "info", { sessionId: p.sessionId, stopReason: p.stopReason });
             const summary = findSessionSummary(p.sessionId);
-            const abnormal = ["rate_limit", "rate_limited", "error"].includes(p.stopReason);
+            const queuePolicy = queueTerminalPolicy(p.stopReason);
+            // prompt_complete is the authoritative terminal signal and arrives
+            // before PromptRequest resolves. Settle the in-flight queue row now
+            // so it cannot remain visually stuck while post-turn work finishes.
+            useMessageQueueStore.getState().settleSending(
+              p.sessionId,
+              queuePolicy.settlement,
+            );
             // Completion is routed by session id in the transcript store. This
             // also finalizes a background conversation after the user switches
             // away; side-channel sessions are not added to the sidebar because
@@ -376,7 +387,7 @@ function Shell() {
             if (summary) {
               sessionsStore.getState().upsert({
                 sessionId: p.sessionId,
-                status: abnormal ? "failed" : "completed",
+                status: queuePolicy.failed ? "failed" : "completed",
               });
               const transcript = sessionStore.getState().transcripts[p.sessionId];
               if (transcript) {
@@ -387,7 +398,10 @@ function Shell() {
 
             // Unknown side-channel sessions and failed turns must never start a
             // queued follow-up automatically.
-            if (!summary || abnormal) return;
+            // A user cancellation/pause and every non-success terminal reason
+            // intentionally stop queue progression. In particular, cancelled
+            // must never make a paused conversation start the next prompt.
+            if (!summary || !queuePolicy.autoAdvance) return;
             // Refresh the composer context-usage pill after each turn.
             // Internal/external notifications are dispatched by the Rust bridge
             // for every session (including background automation sessions).
@@ -804,16 +818,24 @@ function Shell() {
 
   const handleCancel = async () => {
     if (!currentSessionId) return;
+    const sessionId = currentSessionId;
     try {
-      await agentCancel(currentSessionId);
+      await agentCancel(sessionId);
     } catch (e) {
-      sessionStore.getState().setError(friendlyError(e));
+      if (sessionStore.getState().sessionId === sessionId) {
+        sessionStore.getState().setError(friendlyError(e));
+      }
     } finally {
       // Don't rely on the backend emitting a `complete` for the cancel (it may
       // be dropped by routing after a fast switch). Finalize locally so the
       // Composer's stop button and the loading row don't hang. Already-streamed
       // text is kept; only the in-flight flag is cleared.
-      sessionStore.getState().stopStreaming();
+      sessionStore.getState().stopStreaming(sessionId);
+      // Always release the queue row, including when forwarding the cancel
+      // notification failed. The prompt has already been admitted into
+      // conversation history, so consuming it avoids a duplicate retry. A
+      // later terminal event / Promise callback is an idempotent no-op.
+      useMessageQueueStore.getState().settleSending(sessionId, "consume");
     }
   };
 

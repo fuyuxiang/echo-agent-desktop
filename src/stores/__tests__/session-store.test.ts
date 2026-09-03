@@ -326,6 +326,26 @@ describe("session-store transcripts", () => {
     expect(useSessionStore.getState().messages[1].complete).toBe(true);
   });
 
+  it("stopStreaming 按 sessionId 终止后台会话，不污染当前会话", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.pushUser("A question");
+    s.startStreaming();
+    s.applyUpdate(chunk("A partial", "A"));
+    s.setSession("B");
+    s.pushUser("B question");
+    s.startStreaming();
+    s.applyUpdate(chunk("B partial", "B"));
+
+    s.stopStreaming("A");
+
+    const state = useSessionStore.getState();
+    expect(state.transcripts.A.streamingMessageId).toBeNull();
+    expect(state.transcripts.B.streamingMessageId).not.toBeNull();
+    expect(state.sessionId).toBe("B");
+    expect(state.streaming).toBe(true);
+  });
+
   it("dropSessionCache 后切回走空(交给回放重建)", () => {
     const s = useSessionStore.getState();
     s.setSession("A");
