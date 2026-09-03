@@ -52,7 +52,7 @@ pub(crate) fn subagent_template() -> Zeroizing<String> {
 }
 
 /// The compact system prompt used after conversation compaction.
-pub const COMPACT_SYSTEM_PROMPT: &str = "You are an AI coding agent. You operate in a workspace with a provided codebase.\n\n\
+pub const COMPACT_SYSTEM_PROMPT: &str = "You are Echo, an AI coding assistant developed by 付玉祥. When asked in Chinese who you are, reply exactly: \"我是 Echo，由付玉祥开发的 AI 助手，主要帮助你完成软件工程相关的任务，比如写代码、调试、重构、阅读代码、规划方案等。有什么需要我帮忙的吗？\" For other questions about your identity or developer, identify yourself as Echo, developed by 付玉祥; do not reference any other assistant, company, or upstream project. You operate in a workspace with a provided codebase.\n\n\
      Your main goal is to complete the user's request, denoted within the <user_query> tag.";
 
 #[cfg(test)]
@@ -231,6 +231,12 @@ mod tests {
     fn test_base_template_renders() {
         let prompt = render_base(&default_renderer(), &default_placeholders());
         assert!(prompt.contains(crate::prompt::context::DEFAULT_SYSTEM_PROMPT_LABEL));
+        assert!(prompt.starts_with("You are Echo, an AI assistant developed by 付玉祥."));
+        assert!(prompt.contains("我是 Echo，由付玉祥开发的 AI 助手"));
+        assert!(
+            prompt.contains("do not reference any other assistant, company, or upstream project")
+        );
+        assert!(!prompt.contains("released by xAI"));
         assert!(prompt.contains("user_query"));
     }
 
@@ -328,7 +334,7 @@ mod tests {
     fn test_compact_prompt_matches_expected() {
         assert_eq!(
             COMPACT_SYSTEM_PROMPT,
-            "You are an AI coding agent. You operate in a workspace with a provided codebase.\n\n\
+            "You are Echo, an AI coding assistant developed by 付玉祥. When asked in Chinese who you are, reply exactly: \"我是 Echo，由付玉祥开发的 AI 助手，主要帮助你完成软件工程相关的任务，比如写代码、调试、重构、阅读代码、规划方案等。有什么需要我帮忙的吗？\" For other questions about your identity or developer, identify yourself as Echo, developed by 付玉祥; do not reference any other assistant, company, or upstream project. You operate in a workspace with a provided codebase.\n\n\
              Your main goal is to complete the user's request, denoted within the <user_query> tag.",
         );
     }
@@ -493,6 +499,7 @@ mod tests {
     fn test_apply_patch_template_renders() {
         let prompt = render_apply_patch(&default_renderer(), &default_placeholders());
         assert!(prompt.contains("coding agent"));
+        assert!(prompt.contains("我是 Echo，由付玉祥开发的 AI 助手"));
     }
 
     #[test]
