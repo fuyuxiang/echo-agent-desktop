@@ -7,6 +7,7 @@
  * 纯函数、无副作用,便于单测。
  */
 import type { ChatMessage } from "@/stores/session-store";
+import { isUpstreamBrandedModelId } from "@/lib/model-branding";
 
 /** 带可选元数据的消息(前向兼容:缺省字段视为不存在)。 */
 export type TimelineMessage = ChatMessage & {
@@ -40,13 +41,16 @@ export function buildTimeline(messages: TimelineMessage[]): TimelineNode[] {
         prevDay = day;
       }
     }
-    // 模型切换分隔。
+    // 模型切换分隔。带上游品牌词的 modelId 不生成分隔条 —— 既不显示品牌名,也不用
+    // 假标签冒充一次切换;但仍推进 prevModel,后续切回真实模型时能正常生成分隔条。
     if (m.modelId && m.modelId !== prevModel) {
-      nodes.push({
-        kind: "model-divider",
-        label: `已切换到 ${m.modelId}`,
-        key: `model-${m.modelId}-${i}`,
-      });
+      if (!isUpstreamBrandedModelId(m.modelId)) {
+        nodes.push({
+          kind: "model-divider",
+          label: `已切换到 ${m.modelId}`,
+          key: `model-${m.modelId}-${i}`,
+        });
+      }
       prevModel = m.modelId;
     }
     nodes.push({ kind: "message", message: m, index: i });

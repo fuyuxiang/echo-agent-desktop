@@ -361,3 +361,43 @@ mod memory_tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Remote catalog fetch
+// ---------------------------------------------------------------------------
+
+/// Pin `[features] remote_fetch = false` unless the user set it explicitly.
+///
+/// EchoAgent is BYOK-only: every usable model comes from the local
+/// `[model_providers.*]` / `[model.*]` tables. The embedded Runtime, left alone,
+/// defaults this flag on and its model-catalog watcher then fetches an upstream
+/// `/v1/models` catalog and merges those entries into the effective catalog.
+/// That path bypasses the `has_custom_endpoint()` isolation in `agent_runtime`
+/// (which only suppresses the *bundled* defaults), so upstream-branded model ids
+/// would reach the picker, the About dialog and the usage table — and it spends a
+/// network round trip that a BYOK setup has no use for.
+///
+/// Must be persisted rather than set in memory: the Runtime resolves this flag by
+/// re-reading the config layers (`resolve_remote_fetch_enabled`), and deliberately
+/// ignores both the env overlay and the in-memory `AgentConfig`, so the user layer
+/// on disk is the only place a host override can land.
+///
+/// Returns true when a write happened. An explicit user value of either polarity
+/// is left untouched, and the key is outside the `model_config_revision` digest
+/// (`["model", "models", "model_providers"]`), so writing it cannot disturb the
+/// runtime-readiness gate.
+pub(crate) fn ensure_remote_fetch_disabled() -> Result<bool, String> {
+    let mut config = crate::providers::read_config();
+    let already_set = config
+        .get("features")
+        .and_then(Value::as_table)
+        .and_then(|features| features.get("remote_fetch"))
+        .and_then(Value::as_bool)
+        .is_some();
+    if already_set {
+        return Ok(false);
+    }
+    set_nested_bool(&mut config, "features", None, "remote_fetch", false)?;
+    crate::providers::write_config(&config)?;
+    Ok(true)
+}

@@ -230,8 +230,17 @@ pub struct AuthStatus {
     /// model-related configuration revision currently on disk.
     pub runtime_ready: bool,
     pub synchronized: bool,
+    /// Runtime catalog as shown to the frontend: upstream-branded ids removed.
     pub runtime_models: Vec<String>,
     pub last_runtime_error: Option<String>,
+    /// The Runtime's catalog verbatim, used for authorization decisions only.
+    ///
+    /// Not serialized: the frontend must render `runtime_models`. Gate checks
+    /// (`validate_runtime_ready`) read this instead, so the display filter can
+    /// never refuse a model the Runtime actually loaded — including a user's own
+    /// connection whose id happens to contain a brand token.
+    #[serde(skip)]
+    pub unfiltered_runtime_models: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -302,15 +311,47 @@ fn auth_status_from_snapshots(
             "Agent Runtime 未加载任何可用模型，请检查“设置 → 模型与连接”中的可用范围配置。".into(),
         )
     };
+    // Branded-id filtering applies ONLY to the two fields the frontend renders.
+    // Every gate above (`synchronized`, `runtime_ready`, `ready`, `reason`) is
+    // computed from the unfiltered catalog on purpose: an empty filtered list
+    // must never flip `ready` to false and lock chat. `require_runtime_ready`
+    // likewise validates a requested model against the unfiltered catalog, so a
+    // legitimate request is never refused because of a display filter.
+    //
+    // For a correctly isolated BYOK setup this is a no-op — the user's own model
+    // ids carry no upstream brand. It matters when the source-level isolation in
+    // `agent_runtime` fails (e.g. an upstream upgrade renames the config keys it
+    // depends on): the UI stays clean instead of surfacing bundled model ids.
     AuthStatus {
         ready,
         reason,
-        providers: model_ids,
+        providers: strip_upstream_branded_ids(model_ids),
         runtime_ready,
         synchronized,
-        runtime_models: runtime.model_ids,
+        runtime_models: strip_upstream_branded_ids(runtime.model_ids.clone()),
         last_runtime_error: runtime.last_error,
+        unfiltered_runtime_models: runtime.model_ids,
     }
+}
+
+/// Upstream vendor brand tokens that must not reach the desktop UI.
+///
+/// Kept in lockstep with `src/lib/model-branding.ts` — the frontend filters the
+/// same tokens as a second layer for values that do not flow through here (usage
+/// records, transcript model dividers).
+const UPSTREAM_BRAND_TOKENS: &[&str] = &["grok", "xai", "x.ai", "spacexai"];
+
+fn is_upstream_branded_model_id(id: &str) -> bool {
+    let normalized = id.to_ascii_lowercase();
+    UPSTREAM_BRAND_TOKENS
+        .iter()
+        .any(|token| normalized.contains(token))
+}
+
+fn strip_upstream_branded_ids(ids: Vec<String>) -> Vec<String> {
+    ids.into_iter()
+        .filter(|id| !is_upstream_branded_model_id(id))
+        .collect()
 }
 
 /// Admit a command only after the in-process Runtime has acknowledged the same
@@ -338,8 +379,10 @@ fn validate_runtime_ready(
         return Err(reason);
     }
     if let Some(model_id) = requested_model {
+        // Deliberately the unfiltered catalog: the display filter must not gate
+        // what can be sent (see `AuthStatus::unfiltered_runtime_models`).
         if !status
-            .runtime_models
+            .unfiltered_runtime_models
             .iter()
             .any(|available| available == model_id)
         {
@@ -1229,6 +1272,72 @@ mod tests {
         assert_eq!(validate_runtime_ready(&status, Some("model-a")), Ok(()));
         // The filtered model is still correctly refused for a direct request.
         assert!(validate_runtime_ready(&status, Some("model-hidden")).is_err());
+    }
+
+    #[test]
+    fn upstream_branded_ids_are_hidden_from_the_frontend() {
+        let status = auth_status_from_snapshots(
+            vec!["model-a".into(), "grok-4.6".into()],
+            None,
+            "rev-a",
+            runtime_state("rev-a", &["model-a", "grok-4.6", "grok-4.5"]),
+            true,
+        );
+        assert_eq!(status.providers, vec!["model-a".to_string()]);
+        assert_eq!(status.runtime_models, vec!["model-a".to_string()]);
+        assert_eq!(
+            status.unfiltered_runtime_models,
+            vec![
+                "model-a".to_string(),
+                "grok-4.6".to_string(),
+                "grok-4.5".to_string()
+            ],
+            "authorization must still see the Runtime catalog verbatim"
+        );
+    }
+
+    /// The display filter must never lock chat: readiness is computed from the
+    /// unfiltered catalog, so a catalog of only branded ids still reads ready and
+    /// those ids remain sendable. Otherwise a bundled-catalog fallback would take
+    /// the app from "usable with an odd model name" to "cannot send at all".
+    #[test]
+    fn branded_id_filter_does_not_regress_readiness_or_authorization() {
+        let status = auth_status_from_snapshots(
+            vec!["grok-4.6".into()],
+            None,
+            "rev-a",
+            runtime_state("rev-a", &["grok-4.6"]),
+            true,
+        );
+        assert!(status.ready, "a display filter must not block chat");
+        assert!(status.runtime_ready);
+        assert!(status.runtime_models.is_empty(), "nothing branded is shown");
+        assert_eq!(validate_runtime_ready(&status, Some("grok-4.6")), Ok(()));
+    }
+
+    /// A user's own connection whose id happens to contain a brand token stays
+    /// fully functional — only its rendered label is replaced.
+    #[test]
+    fn user_model_matching_a_brand_token_is_still_sendable() {
+        let status = auth_status_from_snapshots(
+            vec!["my-grok-proxy".into()],
+            None,
+            "rev-a",
+            runtime_state("rev-a", &["my-grok-proxy"]),
+            true,
+        );
+        assert!(status.ready);
+        assert_eq!(validate_runtime_ready(&status, Some("my-grok-proxy")), Ok(()));
+    }
+
+    #[test]
+    fn brand_token_matching_is_case_insensitive_and_substring_based() {
+        for id in ["grok-4.6", "Grok 4.5", "GROK", "xai-build", "x.ai/v1", "SpaceXAI"] {
+            assert!(is_upstream_branded_model_id(id), "{id} must be filtered");
+        }
+        for id in ["gpt-4o", "deepseek-chat", "qwen-max", "claude-sonnet-4"] {
+            assert!(!is_upstream_branded_model_id(id), "{id} must be kept");
+        }
     }
 
     /// An empty catalog is the signal that the Runtime rejected the reload or
