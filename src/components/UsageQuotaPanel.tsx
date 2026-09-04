@@ -33,6 +33,21 @@ function formatTokens(value: number): string {
   return value.toLocaleString();
 }
 
+/**
+ * Narrow columns (the 14-day trend is ~50px wide) cannot fit a grouped
+ * 7-9 digit token count, so abbreviate there and keep the exact value in the
+ * surrounding tooltip.
+ */
+function formatTokensCompact(value: number): string {
+  if (value < 1000) return String(value);
+  if (value < 1_000_000) {
+    const k = value / 1000;
+    return `${k < 100 ? k.toFixed(1) : Math.round(k)}K`;
+  }
+  const m = value / 1_000_000;
+  return `${m < 10 ? m.toFixed(2) : m < 100 ? m.toFixed(1) : Math.round(m)}M`;
+}
+
 function formatDuration(ms: number): string {
   if (ms <= 0) return "—";
   if (ms < 1000) return `${ms} ms`;
@@ -236,7 +251,7 @@ export function UsageQuotaPanel() {
             const value = trendSummary.byDate[date]?.tokens ?? 0;
             return (
               <div key={date} className="quota-panel__trend-item" title={`${date}: ${formatTokens(value)} Token`}>
-                <span className="quota-panel__trend-value">{value > 0 ? formatTokens(value) : ""}</span>
+                <span className="quota-panel__trend-value">{value > 0 ? formatTokensCompact(value) : ""}</span>
                 <span className="quota-panel__trend-track"><span style={{ height: `${Math.max(value > 0 ? 5 : 0, (value / trendMax) * 100)}%` }} /></span>
                 <span className="quota-panel__trend-label">{date.slice(5)}</span>
               </div>

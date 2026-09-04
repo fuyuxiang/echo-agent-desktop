@@ -12431,7 +12431,7 @@ button.diff__path {
 .quota-panel__section h3 span{font-size:11px;font-weight:400;color:var(--echo-text-light)}
 .quota-panel__trend{display:grid;grid-template-columns:repeat(14,minmax(32px,1fr));gap:5px;min-height:150px;overflow-x:auto}
 .quota-panel__trend-item{display:grid;grid-template-rows:20px 95px 18px;gap:4px;min-width:32px;text-align:center}
-.quota-panel__trend-value{overflow:hidden;font-size:9px;color:var(--echo-text-light);font-variant-numeric:tabular-nums}
+.quota-panel__trend-value{overflow:hidden;font-size:10px;white-space:nowrap;color:var(--echo-text-light);font-variant-numeric:tabular-nums}
 .quota-panel__trend-track{position:relative;display:flex;align-items:flex-end;justify-content:center;border-radius:5px;background:var(--echo-bg-tertiary);overflow:hidden}
 .quota-panel__trend-track>span{display:block;width:65%;min-height:0;border-radius:4px 4px 0 0;background:var(--echo-brand);transition:height .25s}
 .quota-panel__trend-label{font-size:9px;color:var(--echo-text-light);white-space:nowrap}

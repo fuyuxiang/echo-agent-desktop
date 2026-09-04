@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { act, render, screen, fireEvent } from "@testing-library/react";
 import { UsageQuotaPanel } from "../UsageQuotaPanel";
-import { recordUsage, clearUsage, saveQuotaConfig, type UsageRecord } from "@/lib/usage-quota";
+import { recordUsage, clearUsage, saveQuotaConfig, todayKey, type UsageRecord } from "@/lib/usage-quota";
 
 describe("UsageQuotaPanel", () => {
   beforeEach(() => {
@@ -62,6 +62,16 @@ describe("UsageQuotaPanel", () => {
       recordUsage([], { modelId: "gpt-4", promptTokens: 90, completionTokens: 10 });
     });
     expect(screen.getAllByText("100").length).toBeGreaterThan(0);
+  });
+
+  it("趋势柱标签用紧凑数字，完整数值放在 tooltip", () => {
+    recordUsage([], { modelId: "gpt-4", promptTokens: 1_200_000, completionTokens: 34_567 });
+    render(<UsageQuotaPanel />);
+    // 趋势列只有 ~50px 宽，1,234,567 这类完整数字会被裁掉。
+    expect(screen.getByText("1.23M")).toBeInTheDocument();
+    expect(
+      screen.getByTitle(`${todayKey()}: 1,234,567 Token`),
+    ).toBeInTheDocument();
   });
 
   it("可配置本地模型费率", () => {
