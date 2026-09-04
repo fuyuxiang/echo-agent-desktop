@@ -16,9 +16,8 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // --- Mock Tauri 层(让「添加本地文件夹」可在 vitest 下走通) ---
-const openDialog = vi.fn();
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...a: unknown[]) => openDialog(...a) }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+const invokeMock = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invokeMock(...args) }));
 
 // 用可控的 DirectoryReader 替代真实 Tauri 实现。
 const mockReader = { listDir: vi.fn(), readText: vi.fn(), readBytes: vi.fn() };
@@ -76,7 +75,8 @@ describe("知识库端到端冒烟", () => {
   beforeEach(() => {
     resetKbRegistry();
     localStorage.removeItem("echoagent.knowledge-sources.v1");
-    openDialog.mockReset();
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
     mockReader.listDir.mockReset();
     mockReader.readText.mockReset();
     mockReader.readBytes.mockReset();
@@ -107,7 +107,8 @@ describe("知识库端到端冒烟", () => {
       return null;
     });
     // mock dialog:选目录。
-    openDialog.mockResolvedValue("/notes");
+    invokeMock.mockImplementation((command: string) =>
+      Promise.resolve(command === "filesystem_pick_directory" ? "/notes" : undefined));
 
     render(<KnowledgeBasePanel onToast={vi.fn()} />);
 
@@ -143,7 +144,8 @@ describe("知识库端到端冒烟", () => {
 
   it("移除已添加的本地知识源后回到未配置态", async () => {
     mockReader.listDir.mockResolvedValue([]);
-    openDialog.mockResolvedValue("/notes");
+    invokeMock.mockImplementation((command: string) =>
+      Promise.resolve(command === "filesystem_pick_directory" ? "/notes" : undefined));
     render(<KnowledgeBasePanel onToast={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /添加本地文件夹/ }));
     await waitFor(() => expect(screen.getByText(/1 个源/)).toBeInTheDocument());

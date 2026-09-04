@@ -163,6 +163,17 @@ describe("dispatchNotification", () => {
     expect(sender).not.toHaveBeenCalled();
   });
 
+  it("未注入 sender 时安全失败，不从 WebView 直接发起外部请求", async () => {
+    registerNotifyChannel({
+      id: "safe-default",
+      label: "Webhook",
+      kind: "generic-webhook",
+      endpoint: "https://example.invalid/hook",
+      enabled: true,
+    });
+    expect(await dispatchNotification(msg)).toEqual([{ id: "safe-default", ok: false }]);
+  });
+
   it("sender 收到按 kind 构造的 payload(slack → 含 text)", async () => {
     registerNotifyChannel({
       id: "s",

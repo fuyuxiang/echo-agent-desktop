@@ -14,10 +14,24 @@
 //! resolved to absolute local paths so the frontend can lazy-load them as
 //! data URLs via `connectors_icon` (no asset-protocol dependency).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::State;
+
+const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_CONNECTOR_CONFIG_BYTES: u64 = 1024 * 1024;
+const MAX_TOKEN_SCHEMA_BYTES: u64 = 512 * 1024;
+const MAX_ICON_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_LOADED_MARKETPLACE_ROOTS: usize = 64;
+
+fn loaded_marketplace_roots() -> &'static Mutex<HashSet<PathBuf>> {
+    static ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    ROOTS.get_or_init(|| Mutex::new(HashSet::new()))
+}
 
 // ---------- output types ----------
 
@@ -134,11 +148,22 @@ fn loc_str(value: &Value, key: &str) -> Option<String> {
 /// Resolve the on-disk icon for a connector source. Tries `.svg` then `.png`
 /// under `<root>/icons/`.
 fn find_icon(root: &Path, source: &str) -> Option<String> {
-    let icons = root.join("icons");
+    let icons = root.join("icons").canonicalize().ok()?;
+    if icons.parent() != Some(root) {
+        return None;
+    }
     for ext in ["svg", "png"] {
         let p = icons.join(format!("{source}.{ext}"));
-        if p.is_file() {
-            return Some(p.to_string_lossy().into_owned());
+        let Ok(metadata) = std::fs::symlink_metadata(&p) else {
+            continue;
+        };
+        if metadata.is_file() && !metadata.file_type().is_symlink() {
+            let Ok(canonical) = p.canonicalize() else {
+                continue;
+            };
+            if canonical.parent() == Some(icons.as_path()) {
+                return Some(canonical.to_string_lossy().into_owned());
+            }
         }
     }
     None
@@ -148,11 +173,9 @@ fn find_icon(root: &Path, source: &str) -> Option<String> {
 /// `auth_mode: "token"` connectors). Returns None on missing file, parse
 /// error, or a schema with no fields (mirrors echo-agent's `readTokenSchema`).
 fn read_token_schema(root: &Path, source: &str) -> Option<TokenSchema> {
-    let p = root
-        .join("connectors")
-        .join(source)
-        .join("token-schema.json");
-    let bytes = std::fs::read(&p).ok()?;
+    let directory = canonical_connector_dir(&root.to_string_lossy(), source).ok()?;
+    let p = directory.join("token-schema.json");
+    let bytes = read_small_file(&p, MAX_TOKEN_SCHEMA_BYTES, "token-schema.json").ok()?;
     let v: Value = serde_json::from_slice(&bytes).ok()?;
     let fields = v.get("fields").and_then(|f| f.as_array())?;
     if fields.is_empty() {
@@ -263,9 +286,127 @@ fn candidate_roots() -> Vec<PathBuf> {
 }
 
 fn root_has_manifest(root: &Path) -> bool {
-    root.join(".echo-agent-connector")
-        .join("connectors.json")
-        .is_file()
+    let manifest = root.join(".echo-agent-connector").join("connectors.json");
+    std::fs::symlink_metadata(manifest)
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+}
+
+pub(crate) fn validate_connector_source(source: &str) -> Result<&str, String> {
+    let source = source.trim();
+    if source.is_empty()
+        || source.len() > 128
+        || source == "."
+        || source == ".."
+        || source.contains('/')
+        || source.contains('\\')
+        || source.chars().any(char::is_control)
+    {
+        return Err("连接器 source 必须是单一安全路径分量".into());
+    }
+    Ok(source)
+}
+
+/// Resolve an explicitly selected marketplace root and prove that it is a
+/// real directory containing the expected manifest. The canonical path is
+/// returned so all later containment checks share the same namespace.
+pub(crate) fn canonical_marketplace_root(root: &str) -> Result<PathBuf, String> {
+    let requested = PathBuf::from(root);
+    crate::paths::reject_legacy_workbuddy_path(&requested)?;
+    let canonical = requested
+        .canonicalize()
+        .map_err(|error| format!("无法解析连接器目录：{error}"))?;
+    if !canonical.is_dir() || !root_has_manifest(&canonical) {
+        return Err("所选目录不是有效的连接器市场".into());
+    }
+    let metadata_dir = canonical
+        .join(".echo-agent-connector")
+        .canonicalize()
+        .map_err(|error| format!("无法解析连接器 manifest 目录：{error}"))?;
+    if metadata_dir.parent() != Some(canonical.as_path()) {
+        return Err("连接器 manifest 目录越出市场根目录".into());
+    }
+    Ok(canonical)
+}
+
+/// Resolve exactly `<root>/connectors/<source>` and reject symlink/traversal
+/// escapes. Connector CLI files are executable configuration, so simple
+/// string joining is not an adequate trust boundary.
+pub(crate) fn canonical_connector_dir(root: &str, source: &str) -> Result<PathBuf, String> {
+    let root = canonical_marketplace_root(root)?;
+    let source = validate_connector_source(source)?;
+    let connectors = root.join("connectors");
+    let connectors = connectors
+        .canonicalize()
+        .map_err(|error| format!("无法解析 connectors 目录：{error}"))?;
+    if connectors.parent() != Some(root.as_path()) {
+        return Err("connectors 目录越出市场根目录".into());
+    }
+    let directory = connectors
+        .join(source)
+        .canonicalize()
+        .map_err(|error| format!("无法解析连接器目录：{error}"))?;
+    if directory.parent() != Some(connectors.as_path()) || !directory.is_dir() {
+        return Err("连接器目录越出市场边界".into());
+    }
+    Ok(directory)
+}
+
+/// CLI connector specifications are executable code. Permit execution only
+/// from a backend-owned marketplace root (the EchoAgent data root, a legacy
+/// compatible root, or an explicit process-start environment override).
+/// A renderer-selected arbitrary browsing directory may still be inspected,
+/// but it cannot become executable merely by invoking another command.
+pub(crate) fn canonical_executable_connector_dir(
+    root: &str,
+    source: &str,
+) -> Result<PathBuf, String> {
+    let canonical_root = canonical_marketplace_root(root)?;
+    let trusted = candidate_roots().into_iter().any(|candidate| {
+        candidate
+            .canonicalize()
+            .is_ok_and(|candidate| candidate == canonical_root)
+    });
+    if !trusted {
+        return Err(
+            "拒绝执行未受信任目录中的 CLI 连接器；请将市场安装到 EchoAgent 数据目录，或在启动前设置 ECHO_AGENT_CONNECTORS_DIR"
+                .into(),
+        );
+    }
+    canonical_connector_dir(&canonical_root.to_string_lossy(), source)
+}
+
+fn read_small_file(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>, String> {
+    crate::shell_fs::read_regular_file_bounded(path, max_bytes)
+        .map_err(|error| format!("读取 {label} 失败：{error}"))
+}
+
+fn authorize_marketplace_root(
+    access: &crate::shell_fs::FilesystemAccess,
+    raw: &str,
+) -> Result<PathBuf, String> {
+    let canonical = canonical_marketplace_root(raw)?;
+    let native_default = candidate_roots().into_iter().any(|candidate| {
+        candidate
+            .canonicalize()
+            .is_ok_and(|candidate| candidate == canonical)
+    });
+    if !native_default {
+        let authorized = access.require_workspace(raw)?;
+        if authorized != canonical {
+            return Err("连接器目录授权与实际路径不一致".into());
+        }
+    }
+    Ok(canonical)
+}
+
+fn require_loaded_marketplace_root(raw: &str) -> Result<PathBuf, String> {
+    let canonical = canonical_marketplace_root(raw)?;
+    loaded_marketplace_roots()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(&canonical)
+        .then_some(canonical)
+        .ok_or_else(|| "连接器市场尚未由后端加载".to_string())
 }
 
 /// Return the default data root (first existing candidate), or "" if none.
@@ -282,18 +423,33 @@ pub async fn connectors_default_root() -> Result<String, String> {
 /// Directories under `root` that look like a connector marketplace (have the
 /// manifest). Used by the UI's "选择来源目录" picker to validate a selection.
 #[tauri::command]
-pub async fn connectors_list_roots(root: String) -> Result<Vec<String>, String> {
-    let base = PathBuf::from(&root);
-    crate::paths::reject_legacy_workbuddy_path(&base)?;
+pub async fn connectors_list_roots(
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
+    root: String,
+) -> Result<Vec<String>, String> {
+    let requested = PathBuf::from(&root);
+    crate::paths::reject_legacy_workbuddy_path(&requested)?;
+    let base = access.require_workspace(&root)?;
     let mut hits = Vec::new();
     if root_has_manifest(&base) {
-        hits.push(base.to_string_lossy().into_owned());
+        if let Ok(root) = canonical_marketplace_root(&base.to_string_lossy()) {
+            hits.push(root.to_string_lossy().into_owned());
+        }
     }
     if let Ok(rd) = std::fs::read_dir(&base) {
         for entry in rd.flatten() {
             let p = entry.path();
-            if p.is_dir() && root_has_manifest(&p) {
-                hits.push(p.to_string_lossy().into_owned());
+            let metadata = match std::fs::symlink_metadata(&p) {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_dir() || !root_has_manifest(&p) {
+                continue;
+            }
+            if let Ok(root) = canonical_marketplace_root(&p.to_string_lossy()) {
+                if root.starts_with(&base) {
+                    hits.push(root.to_string_lossy().into_owned());
+                }
             }
         }
     }
@@ -305,9 +461,12 @@ pub async fn connectors_list_roots(root: String) -> Result<Vec<String>, String> 
 /// Parse the manifest at `<root>/.echo-agent-connector/connectors.json` and
 /// build the connector list, resolving each icon to a local path.
 #[tauri::command]
-pub async fn connectors_load(root: Option<String>) -> Result<ConnectorCatalog, String> {
+pub async fn connectors_load(
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
+    root: Option<String>,
+) -> Result<ConnectorCatalog, String> {
     let root = match root {
-        Some(r) if !r.is_empty() => PathBuf::from(r),
+        Some(r) if !r.is_empty() => authorize_marketplace_root(&access, &r)?,
         _ => {
             let mut found = PathBuf::new();
             for r in candidate_roots() {
@@ -319,21 +478,34 @@ pub async fn connectors_load(root: Option<String>) -> Result<ConnectorCatalog, S
             if found.as_os_str().is_empty() {
                 return Err("未找到连接器数据目录（.echo-agent-connector/connectors.json）".into());
             }
-            found
+            canonical_marketplace_root(&found.to_string_lossy())?
         }
     };
-    crate::paths::reject_legacy_workbuddy_path(&root)?;
+    load_connector_catalog(&root)
+}
+
+fn load_connector_catalog(root: &Path) -> Result<ConnectorCatalog, String> {
     let manifest_path = root.join(".echo-agent-connector").join("connectors.json");
-    let bytes = std::fs::read(&manifest_path).map_err(|e| format!("读取 manifest 失败：{e}"))?;
+    let bytes = read_small_file(&manifest_path, MAX_MANIFEST_BYTES, "manifest")?;
     let manifest: Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("解析 manifest 失败：{e}"))?;
+    let mut loaded = loaded_marketplace_roots()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !loaded.contains(root) && loaded.len() >= MAX_LOADED_MARKETPLACE_ROOTS {
+        return Err(format!(
+            "本次运行最多加载 {MAX_LOADED_MARKETPLACE_ROOTS} 个连接器市场"
+        ));
+    }
+    loaded.insert(root.to_path_buf());
+    drop(loaded);
 
     let connectors = manifest
         .get("connectors")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|e| build_connector(&root, e))
+                .filter_map(|e| build_connector(root, e))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -352,6 +524,10 @@ fn build_connector(root: &Path, e: &Value) -> Option<ConnectorItem> {
         .and_then(|v| v.as_str())
         .unwrap_or(&id)
         .to_string();
+    if validate_connector_source(&source).is_err() {
+        tracing::warn!(%source, "ignored connector with unsafe source path");
+        return None;
+    }
     let name = loc(&e.get("name").cloned().unwrap_or(Value::Null));
     let name = if name.is_empty() { id.clone() } else { name };
     let name_en = loc_str(e, "name_en");
@@ -414,13 +590,30 @@ fn b64(bytes: &[u8]) -> String {
 pub async fn connectors_icon(path: String) -> Result<String, String> {
     let src = PathBuf::from(&path);
     crate::paths::reject_legacy_workbuddy_path(&src)?;
-    if !src.is_file() {
-        return Err("图标文件不存在".into());
+    let metadata =
+        std::fs::symlink_metadata(&src).map_err(|error| format!("读取图标失败：{error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("图标必须是已加载连接器市场内的普通文件".into());
     }
-    let bytes = std::fs::read(&src).map_err(|e| format!("读取图标失败：{e}"))?;
-    if bytes.len() > 2 * 1024 * 1024 {
+    if metadata.len() > MAX_ICON_BYTES {
         return Err("图标过大".into());
     }
+    let canonical = src
+        .canonicalize()
+        .map_err(|error| format!("无法解析图标路径：{error}"))?;
+    let allowed = loaded_marketplace_roots()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .iter()
+        .any(|root| {
+            root.join("icons")
+                .canonicalize()
+                .is_ok_and(|icons| canonical.parent() == Some(icons.as_path()))
+        });
+    if !allowed {
+        return Err("图标路径不属于当前已加载的连接器市场".into());
+    }
+    let bytes = read_small_file(&canonical, MAX_ICON_BYTES, "图标")?;
     let mime = match src
         .extension()
         .and_then(|e| e.to_str())
@@ -443,15 +636,13 @@ pub async fn connectors_icon(path: String) -> Result<String, String> {
 /// detail modal can show the server config. Missing file yields "".
 #[tauri::command]
 pub async fn connectors_read_mcp_config(root: String, source: String) -> Result<String, String> {
-    let p = PathBuf::from(&root)
-        .join("connectors")
-        .join(&source)
-        .join("mcp.json");
-    crate::paths::reject_legacy_workbuddy_path(&p)?;
+    let root = require_loaded_marketplace_root(&root)?;
+    let p = canonical_connector_dir(&root.to_string_lossy(), &source)?.join("mcp.json");
     if !p.is_file() {
         return Ok(String::new());
     }
-    std::fs::read_to_string(&p).map_err(|e| format!("读取 mcp.json 失败：{e}"))
+    let bytes = read_small_file(&p, MAX_CONNECTOR_CONFIG_BYTES, "mcp.json")?;
+    String::from_utf8(bytes).map_err(|e| format!("mcp.json 不是有效 UTF-8：{e}"))
 }
 
 #[cfg(test)]
@@ -485,6 +676,34 @@ mod tests {
         assert_eq!(loc(&serde_json::Value::Null), "");
     }
 
+    #[test]
+    fn connector_source_rejects_path_traversal() {
+        for unsafe_source in ["", ".", "..", "../outside", "a/b", "a\\b", "line\nbreak"] {
+            assert!(validate_connector_source(unsafe_source).is_err());
+        }
+        assert_eq!(
+            validate_connector_source("github-enterprise").unwrap(),
+            "github-enterprise"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_connector_dir_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("market");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(root.join(".echo-agent-connector")).unwrap();
+        std::fs::create_dir_all(root.join("connectors")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join(".echo-agent-connector/connectors.json"), "{}").unwrap();
+        symlink(&outside, root.join("connectors/escaped")).unwrap();
+
+        assert!(canonical_connector_dir(&root.to_string_lossy(), "escaped").is_err());
+    }
+
     // ---- integration tests against the real echo-agent marketplace dir ----
 
     fn marketplace_available() -> bool {
@@ -497,7 +716,13 @@ mod tests {
             eprintln!("[skip] EchoAgent connector marketplace not present");
             return;
         }
-        let catalog = connectors_load(None).await.expect("load should succeed");
+        let root = candidate_roots()
+            .into_iter()
+            .find(|root| root_has_manifest(root))
+            .expect("marketplace root should exist");
+        let root = canonical_marketplace_root(&root.to_string_lossy())
+            .expect("marketplace root should be canonical");
+        let catalog = load_connector_catalog(&root).expect("load should succeed");
         assert!(
             catalog.connectors.len() > 10,
             "expected many connectors, got {}",

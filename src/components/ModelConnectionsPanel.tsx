@@ -38,9 +38,11 @@ import {
   type ProviderKind,
   type ProviderListModel,
 } from "@/lib/agent-client";
+import { useModalFocus } from "@/lib/use-modal-focus";
 import { listenOrgModelsChanged, orgSyncModelConfig } from "@/lib/org-client";
 import type { AgentDefaults } from "@/lib/types";
 import { useOrgSessionStore } from "@/stores/org-session-store";
+import { useAppDialog } from "./AppDialog";
 
 interface ModelConnectionsPanelProps {
   onModelsChanged?: () => void | Promise<void>;
@@ -174,8 +176,9 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
   const organizationSession = useOrgSessionStore((state) => state.session);
   const hydrateOrganization = useOrgSessionStore((state) => state.hydrate);
+  const { requestConfirmation, dialog } = useAppDialog(selectedProviderId);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (): Promise<string | null> => {
     try {
       const [nextCatalog, nextDefaults] = await Promise.all([
         providersList(),
@@ -191,8 +194,11 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
           ?? nextCatalog.providers[0]?.id
           ?? null;
       });
+      return null;
     } catch (error) {
-      setMessage({ kind: "err", text: `读取模型配置失败：${String(error)}` });
+      const detail = String(error).replace(/^Error:\s*/, "");
+      setMessage({ kind: "err", text: `读取模型配置失败：${detail}` });
+      return detail;
     } finally {
       setLoading(false);
     }
@@ -221,40 +227,61 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
 
   const finishMutation = async (success: string) => {
     const reloadError = await reloadRuntime();
-    await reload();
+    const catalogError = await reload();
     // Always refresh the shell's authoritative status. On Runtime failure the
     // backend reports ready=false, so the Composer stays locked even though
     // the newly-written model is already visible on disk.
-    await onModelsChanged?.();
-    setMessage(reloadError
+    let shellRefreshError: string | null = null;
+    try {
+      await onModelsChanged?.();
+    } catch (error) {
+      shellRefreshError = String(error).replace(/^Error:\s*/, "");
+    }
+    const refreshErrors = [
+      reloadError ? `Agent Runtime 刷新失败：${reloadError}` : null,
+      catalogError ? `模型列表重读失败：${catalogError}` : null,
+      shellRefreshError ? `全局模型状态刷新失败：${shellRefreshError}` : null,
+    ].filter(Boolean);
+    setMessage(refreshErrors.length > 0
       ? {
         kind: "err",
-        text: `${success} 但 Agent Runtime 刷新失败，发送功能已保持禁用：${reloadError}。请重试，若持续失败请完全退出后重启应用。`,
+        text: `${success} 但后续刷新未完成：${refreshErrors.join("；")}。配置已保存，请刷新或重启应用，不要重复执行删除。`,
       }
       : { kind: "ok", text: success });
   };
 
-  const handleDeleteProvider = async (provider: ModelProviderEntry) => {
+  const handleDeleteProvider = (provider: ModelProviderEntry) => {
     if (provider.managed) return;
     const count = catalog.models.filter((model) => model.providerId === provider.id).length;
-    if (!confirm(`删除连接「${connectionName(provider)}」${count ? `及其 ${count} 个模型` : ""}？`)) return;
-    try {
-      await providersDeleteProvider(provider.id);
-      await finishMutation("连接及其模型已删除。");
-    } catch (error) {
-      setMessage({ kind: "err", text: `删除失败：${String(error)}` });
-    }
+    requestConfirmation({
+      title: `删除连接“${connectionName(provider)}”？`,
+      description: count
+        ? `该连接下的 ${count} 个模型也会同时删除。此操作无法撤销。`
+        : "该连接将从本机删除，此操作无法撤销。",
+      confirmLabel: "删除连接",
+      danger: true,
+      action: async () => {
+        await providersDeleteProvider(provider.id);
+        await finishMutation("连接及其模型已删除。");
+      },
+      onError: (error) => setMessage({ kind: "err", text: `删除失败：${String(error)}` }),
+    });
   };
 
-  const handleDeleteModel = async (model: ModelEntry) => {
+  const handleDeleteModel = (model: ModelEntry) => {
     if (model.managed) return;
-    if (!confirm(`删除模型「${model.name || modelRemoteId(model)}」？`)) return;
-    try {
-      await providersDeleteModel(model.modelId);
-      await finishMutation("模型已删除。");
-    } catch (error) {
-      setMessage({ kind: "err", text: `删除失败：${String(error)}` });
-    }
+    const label = model.name || modelRemoteId(model);
+    requestConfirmation({
+      title: `删除模型“${label}”？`,
+      description: "该模型将从当前连接中移除，且不再可用于新对话。",
+      confirmLabel: "删除模型",
+      danger: true,
+      action: async () => {
+        await providersDeleteModel(model.modelId);
+        await finishMutation("模型已删除。");
+      },
+      onError: (error) => setMessage({ kind: "err", text: `删除失败：${String(error)}` }),
+    });
   };
 
   const handleSetDefault = async (model: ModelEntry) => {
@@ -272,18 +299,10 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
     setMessage(null);
     try {
       const result = await orgSyncModelConfig();
-      const reloadError = await reloadRuntime();
-      await reload();
-      await onModelsChanged?.();
       const success = result.configured
         ? "组织模型配置已更新。"
         : "组织服务器当前未下发模型配置。";
-      setMessage(reloadError
-        ? {
-          kind: "err",
-          text: `${success} 但 Agent Runtime 刷新失败，发送功能已保持禁用：${reloadError}。`,
-        }
-        : { kind: "ok", text: success });
+      await finishMutation(success);
     } catch (error) {
       setMessage({ kind: "err", text: `组织模型同步失败：${String(error)}` });
     } finally {
@@ -499,6 +518,7 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
           }}
         />
       )}
+      {dialog}
     </div>
   );
 }
@@ -588,6 +608,7 @@ function ConnectionEditor({
   const [error, setError] = useState<string | null>(null);
   const [discoveryMessage, setDiscoveryMessage] = useState<PanelMessage | null>(null);
   const preset = PROVIDER_PRESETS[draft.providerKind];
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
 
   const handleKindChange = (providerKind: ProviderKind) => {
     const next = PROVIDER_PRESETS[providerKind];
@@ -734,7 +755,7 @@ function ConnectionEditor({
   ));
 
   return (
-    <div className="models-settings-panel__editor-overlay" role="dialog" aria-modal="true" aria-label={original ? "编辑连接" : "添加个人连接"}>
+    <div ref={dialogRef} className="models-settings-panel__editor-overlay" role="dialog" aria-modal="true" aria-label={original ? "编辑连接" : "添加个人连接"} tabIndex={-1}>
       <div className="model-connection-editor">
         <header className="models-settings-panel__editor-header">
           <div><div className="models-settings-panel__editor-title">{original ? "编辑个人连接" : "添加个人连接"}</div><div className="models-settings-panel__editor-note">填写 Base URL、API Key 和 Model ID 即可使用</div></div>
@@ -755,7 +776,7 @@ function ConnectionEditor({
             </div>
             <div className="models-settings-panel__field">
               <label className="models-settings-panel__label" htmlFor="model-connection-label">连接名称 <span className="model-connection-editor__hint">可选，用于区分多个接口</span></label>
-              <input id="model-connection-label" className="models-settings-panel__input" value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} placeholder={`例如：工作用 ${preset.shortLabel}`} />
+              <input id="model-connection-label" className="models-settings-panel__input" value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} placeholder={`例如：工作用 ${preset.shortLabel}`} data-modal-initial-focus />
             </div>
             <div className="models-settings-panel__field">
               <label className="models-settings-panel__label" htmlFor="model-base-url">Base URL</label>
@@ -843,6 +864,7 @@ function ManualModelEditor({ provider, original, onCancel, onSaved }: { provider
   const [contextWindow, setContextWindow] = useState(original?.contextWindow ? String(original.contextWindow) : "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
 
   const save = async () => {
     if (!remoteModelId.trim()) { setError("请填写远端模型 ID。"); return; }
@@ -868,11 +890,11 @@ function ManualModelEditor({ provider, original, onCancel, onSaved }: { provider
   };
 
   return (
-    <div className="models-settings-panel__editor-overlay" role="dialog" aria-modal="true" aria-label={original ? "编辑模型" : "手动添加模型"}>
+    <div ref={dialogRef} className="models-settings-panel__editor-overlay" role="dialog" aria-modal="true" aria-label={original ? "编辑模型" : "手动添加模型"} tabIndex={-1}>
       <div className="models-settings-panel__editor models-settings-panel__editor--narrow">
         <header className="models-settings-panel__editor-header"><div><div className="models-settings-panel__editor-title">{original ? "编辑模型" : "手动添加模型"}</div><div className="models-settings-panel__editor-note">连接：{connectionName(provider)}</div></div><button className="echo-button echo-button--ghost echo-button--small echo-button--icon-only" onClick={onCancel} aria-label="关闭"><X size={14} /></button></header>
         <div className="models-settings-panel__editor-body">
-          <div className="models-settings-panel__field"><label className="models-settings-panel__label">远端模型 ID</label><input className="models-settings-panel__input" value={remoteModelId} onChange={(event) => setRemoteModelId(event.target.value)} placeholder="例如 MiniMax-M3、gpt-5" /><span className="model-connection-editor__help">必须与 API 请求中使用的 model 值完全一致。</span></div>
+          <div className="models-settings-panel__field"><label className="models-settings-panel__label">远端模型 ID</label><input className="models-settings-panel__input" value={remoteModelId} onChange={(event) => setRemoteModelId(event.target.value)} placeholder="例如 MiniMax-M3、gpt-5" data-modal-initial-focus /><span className="model-connection-editor__help">必须与 API 请求中使用的 model 值完全一致。</span></div>
           <div className="models-settings-panel__field"><label className="models-settings-panel__label">显示名称（可选）</label><input className="models-settings-panel__input" value={name} onChange={(event) => setName(event.target.value)} placeholder="例如 工作用 MiniMax" /></div>
           <div className="models-settings-panel__field"><label className="models-settings-panel__label">上下文窗口（可选）</label><input className="models-settings-panel__input" type="number" min={1} value={contextWindow} onChange={(event) => setContextWindow(event.target.value)} placeholder="留空使用连接默认值" /></div>
           {error && <div className="models-settings-panel__editor-error">{error}</div>}
@@ -889,6 +911,7 @@ function ModelImportDialog({ provider, existingModels, onCancel, onSaved }: { pr
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
   const existing = useMemo(() => new Set(existingModels.map(modelRemoteId)), [existingModels]);
 
   useEffect(() => {
@@ -918,9 +941,9 @@ function ModelImportDialog({ provider, existingModels, onCancel, onSaved }: { pr
   };
 
   return (
-    <div className="models-settings-panel__editor-overlay" role="dialog" aria-modal="true" aria-label="同步模型">
+    <div ref={dialogRef} className="models-settings-panel__editor-overlay" role="dialog" aria-modal="true" aria-label="同步模型" tabIndex={-1}>
       <div className="models-settings-panel__editor">
-        <header className="models-settings-panel__editor-header"><div><div className="models-settings-panel__editor-title">同步模型</div><div className="models-settings-panel__editor-note">直接使用「{connectionName(provider)}」中已保存的密钥</div></div><button className="echo-button echo-button--ghost echo-button--small echo-button--icon-only" onClick={onCancel} aria-label="关闭"><X size={14} /></button></header>
+        <header className="models-settings-panel__editor-header"><div><div className="models-settings-panel__editor-title">同步模型</div><div className="models-settings-panel__editor-note">直接使用「{connectionName(provider)}」中已保存的密钥</div></div><button className="echo-button echo-button--ghost echo-button--small echo-button--icon-only" onClick={onCancel} aria-label="关闭" data-modal-initial-focus><X size={14} /></button></header>
         <div className="models-settings-panel__editor-body">
           {loading ? <div className="model-connections__empty"><Loader2 className="models-settings-panel__spin" size={18} />正在获取模型列表…</div> : error ? <div className="models-settings-panel__editor-error">{error}</div> : (
             <div className="model-connection-editor__model-picker">

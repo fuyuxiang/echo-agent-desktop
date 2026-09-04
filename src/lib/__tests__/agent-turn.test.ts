@@ -65,6 +65,10 @@ describe("beginAgentTurn", () => {
   });
 
   it("延迟失败保留已提交的用户附件，并结束等待占位", async () => {
+    // Production creates/hydrates the authoritative summary before admitting
+    // a turn. A status-only event deliberately cannot invent a cwd and route
+    // an unknown id into the inbox.
+    useSessionsStore.getState().upsert({ sessionId: "s1", cwd: "/tmp", title: "test" });
     useSessionStore.getState().setSession("s1");
     const send = vi.fn(() => Promise.reject(new Error("附件读取失败"))) as AgentTurnSender;
 

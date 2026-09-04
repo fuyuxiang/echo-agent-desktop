@@ -653,9 +653,18 @@ pub(crate) async fn save_mcp_disabled_tools(
     disabled_tools: &[String],
 ) -> Result<()> {
     let path = config_path();
-    let mut root: TomlValue = match tokio::fs::read_to_string(&path).await {
-        Ok(s) => toml::from_str(&s).unwrap_or(TomlValue::Table(TomlMap::new())),
-        Err(_) => TomlValue::Table(TomlMap::new()),
+    let _save_guard = super::persist::lock_config_writes().await;
+    let _transaction = super::persist::acquire_config_transaction_lock_at(&path)?;
+    let original = super::persist::read_to_string_or_empty(&path)?;
+    let mut root: TomlValue = if original.is_empty() {
+        TomlValue::Table(TomlMap::new())
+    } else {
+        toml::from_str(&original).map_err(|error| {
+            anyhow::anyhow!(
+                "refusing to overwrite unparseable {}: {error}",
+                path.display()
+            )
+        })?
     };
     let table = root
         .as_table_mut()
@@ -681,12 +690,7 @@ pub(crate) async fn save_mcp_disabled_tools(
     }
 
     let toml_str = toml::to_string_pretty(&root)?;
-    let tmp = path.with_extension("toml.tmp");
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-    tokio::fs::write(&tmp, &toml_str).await?;
-    tokio::fs::rename(&tmp, &path).await?;
+    super::persist::atomic_write_string(&path, &toml_str)?;
     Ok(())
 }
 
@@ -795,8 +799,9 @@ async fn write_toml_table_if_changed(
     } else {
         None
     };
+    let _transaction = super::persist::acquire_config_transaction_lock_at(path)?;
 
-    let original = match tokio::fs::read_to_string(path).await {
+    let original = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && is_user => String::new(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -846,7 +851,8 @@ async fn clear_sticky_project_disabled_at(
     path: &std::path::Path,
     server_name: &str,
 ) -> Result<bool> {
-    let original = match tokio::fs::read_to_string(path).await {
+    let _transaction = super::persist::acquire_config_transaction_lock_at(path)?;
+    let original = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => {
@@ -886,7 +892,8 @@ async fn clear_sticky_project_disabled_at(
 /// Flip sticky project `enabled = true` → false with toml_edit (comments kept).
 /// Inverse of [`clear_sticky_project_disabled_at`].
 async fn set_sticky_project_disabled_at(path: &std::path::Path, server_name: &str) -> Result<bool> {
-    let original = match tokio::fs::read_to_string(path).await {
+    let _transaction = super::persist::acquire_config_transaction_lock_at(path)?;
+    let original = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => {
@@ -992,9 +999,23 @@ pub async fn save_mcp_server_config_at(
     server_name: &str,
     config: &McpServerConfig,
 ) -> Result<()> {
-    let mut root: TomlValue = match tokio::fs::read_to_string(&path).await {
-        Ok(s) => toml::from_str(&s).unwrap_or(TomlValue::Table(TomlMap::new())),
-        Err(_) => TomlValue::Table(TomlMap::new()),
+    let is_user = path == config_path().as_path();
+    let _save_guard = if is_user {
+        Some(super::persist::lock_config_writes().await)
+    } else {
+        None
+    };
+    let _transaction = super::persist::acquire_config_transaction_lock_at(path)?;
+    let original = super::persist::read_to_string_or_empty(path)?;
+    let mut root: TomlValue = if original.is_empty() {
+        TomlValue::Table(TomlMap::new())
+    } else {
+        toml::from_str(&original).map_err(|error| {
+            anyhow::anyhow!(
+                "refusing to overwrite unparseable {}: {error}",
+                path.display()
+            )
+        })?
     };
     let table = root
         .as_table_mut()
@@ -1022,12 +1043,7 @@ pub async fn save_mcp_server_config_at(
     }
 
     let toml_str = toml::to_string_pretty(&root)?;
-    let tmp = path.with_extension("toml.tmp");
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-    tokio::fs::write(&tmp, &toml_str).await?;
-    tokio::fs::rename(&tmp, &path).await?;
+    super::persist::atomic_write_string(path, &toml_str)?;
     Ok(())
 }
 
@@ -1049,10 +1065,24 @@ pub async fn delete_mcp_server_config_at(
     path: &std::path::Path,
     server_name: &str,
 ) -> Result<bool> {
-    let mut root: TomlValue = match tokio::fs::read_to_string(&path).await {
-        Ok(s) => toml::from_str(&s).unwrap_or(TomlValue::Table(TomlMap::new())),
-        Err(_) => return Ok(false),
+    let is_user = path == config_path().as_path();
+    let _save_guard = if is_user {
+        Some(super::persist::lock_config_writes().await)
+    } else {
+        None
     };
+    let _transaction = super::persist::acquire_config_transaction_lock_at(path)?;
+    let original = match super::persist::read_to_string_or_empty(path) {
+        Ok(content) if content.is_empty() => return Ok(false),
+        Ok(content) => content,
+        Err(error) => return Err(error.into()),
+    };
+    let mut root: TomlValue = toml::from_str(&original).map_err(|error| {
+        anyhow::anyhow!(
+            "refusing to overwrite unparseable {}: {error}",
+            path.display()
+        )
+    })?;
     let table = root
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("config root is not a table"))?;
@@ -1099,22 +1129,24 @@ pub async fn delete_mcp_server_config_at(
     }
 
     let toml_str = toml::to_string_pretty(&root)?;
-    let tmp = path.with_extension("toml.tmp");
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-    tokio::fs::write(&tmp, &toml_str).await?;
-    tokio::fs::rename(&tmp, &path).await?;
+    super::persist::atomic_write_string(path, &toml_str)?;
 
-    // Clean up OAuth credentials for the deleted server.
+    remove_mcp_server_credentials(server_name);
+
+    Ok(true)
+}
+
+/// Remove OAuth credentials associated with a server after a transactional
+/// bulk config update. Kept separate from the TOML mutation so callers can
+/// commit several MCP deletions in one config transaction without re-reading
+/// and rewriting the complete file once per server.
+pub fn remove_mcp_server_credentials(server_name: &str) {
     if let Ok(mut cred_store) = xai_grok_mcp::credentials::McpCredentialStore::load_default() {
         let removed = cred_store.remove_by_server_name(server_name);
         if removed > 0 {
             let _ = cred_store.save_default();
         }
     }
-
-    Ok(true)
 }
 
 /// Load disabled_tools for all MCP servers from `[disabled_mcp_tools]` in config.toml.

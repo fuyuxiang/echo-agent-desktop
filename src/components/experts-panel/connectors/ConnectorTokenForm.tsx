@@ -6,10 +6,12 @@
  *
  * Mirrors echo-agent's `ConnectorTokenDialog` / detail-panel token form.
  */
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { ConnectorItem } from "@/lib/types";
 import { OpenExternalIcon } from "@/foundation/components/Icon/icons";
 import { ConnectorIcon } from "../shared/ConnectorIcon";
+import { useModalFocus } from "@/lib/use-modal-focus";
+import { openUrl } from "@/lib/agent-client";
 
 interface Props {
   connector: ConnectorItem;
@@ -20,15 +22,10 @@ interface Props {
 }
 
 export function ConnectorTokenForm({ connector, initialValues, onClose, onSubmit }: Props) {
-  const overlayRef = useRef<HTMLDivElement>(null);
   const schema = connector.tokenSchema!;
   const [values, setValues] = useState<Record<string, string>>(initialValues ?? {});
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
+  const [docError, setDocError] = useState<string | null>(null);
+  const dialogRef = useModalFocus<HTMLFormElement>(true, onClose);
 
   const requiredFields = schema.fields.filter((f) => f.required);
   const allRequiredFilled = requiredFields.every((f) => (values[f.key] ?? "").trim());
@@ -39,10 +36,20 @@ export function ConnectorTokenForm({ connector, initialValues, onClose, onSubmit
     onSubmit(values);
   };
 
+  const handleOpenDocs = async () => {
+    if (!schema.docUrl) return;
+    setDocError(null);
+    try {
+      await openUrl(schema.docUrl);
+    } catch (error) {
+      setDocError(`无法打开帮助链接：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  };
+
   return (
-    <div className="ec-modal-overlay" ref={overlayRef}
-      onClick={(e) => { if (e.target === overlayRef.current) onClose(); }}>
-      <form className="ec-modal" onSubmit={handleSubmit}>
+    <div className="ec-modal-overlay"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <form ref={dialogRef} className="ec-modal" onSubmit={handleSubmit} role="dialog" aria-modal="true" aria-label={schema.title || `${connector.name} 授权`} tabIndex={-1}>
         <button type="button" className="ec-modal-close" onClick={onClose} aria-label="关闭">×</button>
 
         <div className="ec-modal-header">
@@ -54,10 +61,11 @@ export function ConnectorTokenForm({ connector, initialValues, onClose, onSubmit
         </div>
 
         {schema.docUrl && (
-          <a className="cn-token-doclink" href={schema.docUrl} target="_blank" rel="noreferrer">
+          <button type="button" className="cn-token-doclink" onClick={() => void handleOpenDocs()}>
             <OpenExternalIcon size="sm" /><span>{schema.docLabel || "如何获取？"}</span>
-          </a>
+          </button>
         )}
+        {docError && <p className="ec-modal-error" role="alert">{docError}</p>}
 
         <div className="cn-token-fields">
           {schema.fields.map((f) => (
@@ -72,7 +80,7 @@ export function ConnectorTokenForm({ connector, initialValues, onClose, onSubmit
                 placeholder={f.placeholder || ""}
                 value={values[f.key] ?? ""}
                 onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
-                autoFocus={f === schema.fields[0]}
+                data-modal-initial-focus={f === schema.fields[0] ? "" : undefined}
               />
               {f.description && <span className="cn-token-help">{f.description}</span>}
             </label>

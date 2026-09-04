@@ -27,6 +27,7 @@ import {
 } from "./SettingsSections";
 import { UsageQuotaPanel } from "./UsageQuotaPanel";
 import { ModelConnectionsPanel } from "./ModelConnectionsPanel";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 /**
  * EchoAgent-style Settings dialog.
@@ -115,27 +116,19 @@ export function SettingsPanel({
   initialSection?: SettingsSectionId;
 }) {
   const [active, setActive] = useState<SettingsSectionId>(initialSection);
+  const modalRef = useModalFocus<HTMLDivElement>(open, onClose);
 
   // Select the caller-requested section every time the dialog opens.
   useEffect(() => {
     if (open) setActive(initialSection);
   }, [initialSection, open]);
 
-  // Esc closes the dialog.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   if (!open) return null;
 
   return (
     <div
       className="settings-modal-overlay"
+      ref={modalRef}
       role="dialog"
       aria-modal="true"
       aria-label="设置"
@@ -183,6 +176,7 @@ export function SettingsPanel({
             onClick={onClose}
             aria-label="关闭设置"
             title="关闭 (Esc)"
+            data-modal-initial-focus
           >
             <X size={16} strokeWidth={1.75} />
           </button>

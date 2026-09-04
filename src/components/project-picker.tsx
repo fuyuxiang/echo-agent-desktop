@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import type { RefItem } from "@/stores/projects-store";
 import { CheckIcon } from "@/foundation/components/Icon/icons";
 import { agentsList, mcpList, skillsList } from "@/lib/agent-client";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 export type ProjectPickerOptions = Record<"connectors" | "experts" | "skills", RefItem[]>;
 
@@ -186,6 +187,7 @@ export function RefPickerDialog({
   onConfirm: (items: RefItem[]) => void;
 }) {
   const [picked, setPicked] = useState<RefItem[]>(selected);
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
   const toggle = (o: RefItem) =>
     setPicked((prev) =>
       prev.some((p) => p.id === o.id) ? prev.filter((p) => p.id !== o.id) : [...prev, o],
@@ -193,10 +195,18 @@ export function RefPickerDialog({
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
-      <div className="create-colleague-dialog proj-picker-dialog" onClick={(e) => e.stopPropagation()} role="dialog">
+      <div
+        ref={dialogRef}
+        className="create-colleague-dialog proj-picker-dialog"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`添加${title}`}
+        tabIndex={-1}
+      >
         <div className="create-colleague-header">
           <h3>添加{title}</h3>
-          <button className="create-colleague-close" onClick={onCancel} aria-label="关闭">
+          <button className="create-colleague-close" onClick={onCancel} aria-label="关闭" data-modal-initial-focus>
             ×
           </button>
         </div>

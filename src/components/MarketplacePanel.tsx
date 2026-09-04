@@ -7,7 +7,7 @@
  *
  * 市场源配置在 ~/.echo-agent/config.toml 的 [[marketplace.sources]] 段。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Store,
   RefreshCw,
@@ -21,8 +21,10 @@ import {
 import {
   marketplaceAction,
   marketplaceList,
+  openUrl,
 } from "@/lib/agent-client";
 import type { MarketplacePluginEntry, MarketplaceScanResult } from "@/lib/types";
+import { useAppDialog } from "./AppDialog";
 
 interface MarketplacePanelProps {
   sessionId?: string;
@@ -36,21 +38,34 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
   const [query, setQuery] = useState("");
   const [addingSource, setAddingSource] = useState(false);
   const [newSourceUrl, setNewSourceUrl] = useState("");
+  const [externalLinkError, setExternalLinkError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const { requestConfirmation, dialog } = useAppDialog(sessionId);
+  const reloadGeneration = useRef(0);
 
   const reload = useCallback(async () => {
+    const generation = ++reloadGeneration.current;
     setLoading(true);
+    setLoadError(null);
     try {
       const resp = await marketplaceList(sessionId);
+      if (reloadGeneration.current !== generation) return;
       setSources(resp.sources ?? []);
     } catch (e) {
-      onToast?.(`加载市场失败：${String(e).replace(/^Error:\s*/, "")}`);
+      if (reloadGeneration.current !== generation) return;
+      const message = String(e).replace(/^Error:\s*/, "");
+      setLoadError(message);
+      onToast?.(`加载市场失败：${message}`);
     } finally {
-      setLoading(false);
+      if (reloadGeneration.current === generation) setLoading(false);
     }
   }, [sessionId, onToast]);
 
   useEffect(() => {
-    reload();
+    void reload();
+    return () => {
+      reloadGeneration.current += 1;
+    };
   }, [reload]);
 
   const requireSession = (): string | null => {
@@ -85,27 +100,33 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
   );
 
   const handleUninstall = useCallback(
-    async (source: MarketplaceScanResult, plugin: MarketplacePluginEntry) => {
+    (source: MarketplaceScanResult, plugin: MarketplacePluginEntry) => {
       const sid = requireSession();
       if (!sid) return;
-      if (!confirm(`确定卸载「${plugin.name}」？`)) return;
-      const key = `${source.sourceName}/${plugin.name}`;
-      setBusy(key);
-      try {
-        await marketplaceAction(sid, {
-          type: "uninstall",
-          sourceUrlOrPath: source.sourceUrlOrPath,
-          pluginRelativePath: plugin.relativePath,
-        });
-        onToast?.(`已卸载「${plugin.name}」`);
-        reload();
-      } catch (e) {
-        onToast?.(`卸载失败：${String(e).replace(/^Error:\s*/, "")}`);
-      } finally {
-        setBusy(null);
-      }
+      requestConfirmation({
+        title: `卸载插件“${plugin.name}”？`,
+        description: "将从本机移除该插件。如果之后仍需要，可以从市场重新安装。",
+        confirmLabel: "卸载",
+        danger: true,
+        action: async () => {
+          const key = `${source.sourceName}/${plugin.name}`;
+          setBusy(key);
+          try {
+            await marketplaceAction(sid, {
+              type: "uninstall",
+              sourceUrlOrPath: source.sourceUrlOrPath,
+              pluginRelativePath: plugin.relativePath,
+            });
+            onToast?.(`已卸载「${plugin.name}」`);
+            await reload();
+          } finally {
+            setBusy(null);
+          }
+        },
+        onError: (error) => onToast?.(`卸载失败：${String(error).replace(/^Error:\s*/, "")}`),
+      });
     },
-    [sessionId, onToast, reload],
+    [sessionId, onToast, reload, requestConfirmation],
   );
 
   const handleUpdate = useCallback(
@@ -153,25 +174,31 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
   );
 
   const handleRemoveSource = useCallback(
-    async (source: MarketplaceScanResult) => {
+    (source: MarketplaceScanResult) => {
       const sid = requireSession();
       if (!sid) return;
-      if (!confirm(`确定移除市场源「${source.sourceName}」？已安装的插件不会被删除。`)) return;
-      setBusy(`remove:${source.sourceName}`);
-      try {
-        await marketplaceAction(sid, {
-          type: "remove_source",
-          sourceUrlOrPath: source.sourceUrlOrPath,
-        });
-        onToast?.(`已移除源「${source.sourceName}」`);
-        reload();
-      } catch (e) {
-        onToast?.(`移除失败：${String(e).replace(/^Error:\s*/, "")}`);
-      } finally {
-        setBusy(null);
-      }
+      requestConfirmation({
+        title: `移除市场源“${source.sourceName}”？`,
+        description: "市场源配置将从本机移除，已安装的插件不会被删除。",
+        confirmLabel: "移除源",
+        danger: true,
+        action: async () => {
+          setBusy(`remove:${source.sourceName}`);
+          try {
+            await marketplaceAction(sid, {
+              type: "remove_source",
+              sourceUrlOrPath: source.sourceUrlOrPath,
+            });
+            onToast?.(`已移除源「${source.sourceName}」`);
+            await reload();
+          } finally {
+            setBusy(null);
+          }
+        },
+        onError: (error) => onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`),
+      });
     },
-    [sessionId, onToast, reload],
+    [sessionId, onToast, reload, requestConfirmation],
   );
 
   const handleAddSource = useCallback(async () => {
@@ -192,6 +219,18 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
       setBusy(null);
     }
   }, [sessionId, newSourceUrl, onToast, reload]);
+
+  const handleOpenHomepage = useCallback(async (plugin: MarketplacePluginEntry) => {
+    if (!plugin.homepage) return;
+    setExternalLinkError(null);
+    try {
+      await openUrl(plugin.homepage);
+    } catch (error) {
+      const message = `无法打开「${plugin.name}」主页：${String(error).replace(/^Error:\s*/, "")}`;
+      setExternalLinkError(message);
+      onToast?.(message);
+    }
+  }, [onToast]);
 
   // Flatten all plugins across sources for the search box.
   const allPlugins = sources.flatMap((s) =>
@@ -242,6 +281,7 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
             type="text"
             className="marketplace-panel__add-input"
             placeholder="https://github.com/owner/marketplace-repo.git"
+            aria-label="市场源 Git URL"
             value={newSourceUrl}
             onChange={(e) => setNewSourceUrl(e.target.value)}
             autoFocus
@@ -254,7 +294,10 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
             {busy === "add-source" ? "添加中…" : "添加"}
           </button>
           <button
+            type="button"
             className="marketplace-panel__action-btn"
+            aria-label="取消添加市场源"
+            title="取消"
             onClick={() => {
               setAddingSource(false);
               setNewSourceUrl("");
@@ -271,6 +314,7 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
           type="text"
           className="marketplace-panel__search-input"
           placeholder="搜索插件…"
+          aria-label="搜索市场插件"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -280,13 +324,29 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
         {sources.length} 个源 · {totalPlugins} 个插件 · {installedCount} 已安装
       </div>
 
+      {externalLinkError && (
+        <div className="marketplace-source__error" role="alert">
+          <span>{externalLinkError}</span>
+          <button type="button" onClick={() => setExternalLinkError(null)} aria-label="关闭外链错误">×</button>
+        </div>
+      )}
+
+      {loadError && (
+        <div className="panel-inline-error" role="alert">
+          <span>市场数据加载失败：{loadError}</span>
+          <button type="button" onClick={() => void reload()} disabled={loading}>
+            {loading ? "重试中…" : "重试"}
+          </button>
+        </div>
+      )}
+
       {!sessionId && (
         <p className="marketplace-panel__hint">
           ⚠ 安装/卸载需要一个活动会话。请先在主页开启对话。
         </p>
       )}
 
-      {sources.length === 0 && !loading && (
+      {sources.length === 0 && !loading && !loadError && (
         <div className="marketplace-panel__empty">
           <Store size={48} color="var(--echo-text-tertiary)" />
           <p>暂无市场源。</p>
@@ -336,6 +396,7 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
                   onInstall={() => handleInstall(source, plugin)}
                   onUninstall={() => handleUninstall(source, plugin)}
                   onUpdate={() => handleUpdate(source, plugin)}
+                  onOpenHomepage={() => void handleOpenHomepage(plugin)}
                 />
               ))}
             </div>
@@ -353,6 +414,7 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
             onInstall={() => handleInstall(source, plugin)}
             onUninstall={() => handleUninstall(source, plugin)}
             onUpdate={() => handleUpdate(source, plugin)}
+            onOpenHomepage={() => void handleOpenHomepage(plugin)}
           />
         ))}
 
@@ -360,6 +422,7 @@ export function MarketplacePanel({ sessionId, onToast }: MarketplacePanelProps) 
         <div className="marketplace-panel__empty">无匹配的插件</div>
       )}
       {loading && <div className="marketplace-panel__empty">加载中…</div>}
+      {dialog}
     </div>
   );
 }
@@ -371,6 +434,7 @@ function MarketplacePluginCard({
   onInstall,
   onUninstall,
   onUpdate,
+  onOpenHomepage,
 }: {
   plugin: MarketplacePluginEntry;
   sourceName?: string;
@@ -378,6 +442,7 @@ function MarketplacePluginCard({
   onInstall: () => void;
   onUninstall: () => void;
   onUpdate: () => void;
+  onOpenHomepage: () => void;
 }) {
   const installed = plugin.installStatus === "installed";
   return (
@@ -411,14 +476,13 @@ function MarketplacePluginCard({
           {plugin.hasHooks && <span>含 Hooks</span>}
           {plugin.hasMcp && <span>含 MCP</span>}
           {plugin.homepage && (
-            <a
-              href={plugin.homepage}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              type="button"
               className="mp-plugin__link"
+              onClick={onOpenHomepage}
             >
               主页
-            </a>
+            </button>
           )}
         </div>
       </div>

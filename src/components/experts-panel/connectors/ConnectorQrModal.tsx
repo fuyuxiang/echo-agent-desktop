@@ -6,13 +6,14 @@
  * link + "open in browser" row otherwise. Closing the modal kills the
  * in-flight auth process.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import { Copy as CopyIcon } from "lucide-react";
 import type { ConnectorItem } from "@/lib/types";
 import { openUrl } from "@/lib/agent-client";
 import { OpenExternalIcon } from "@/foundation/components/Icon/icons";
 import { ConnectorIcon } from "../shared/ConnectorIcon";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 interface Props {
   connector: ConnectorItem;
@@ -27,14 +28,8 @@ interface Props {
 }
 
 export function ConnectorQrModal({ connector, url, showQr, logs, onCancel, onToast }: Props) {
-  const overlayRef = useRef<HTMLDivElement>(null);
   const [qrDataUrl, setQrDataUrl] = useState("");
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onCancel]);
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
 
   useEffect(() => {
     setQrDataUrl("");
@@ -55,10 +50,10 @@ export function ConnectorQrModal({ connector, url, showQr, logs, onCancel, onToa
   };
 
   return (
-    <div className="ec-modal-overlay" ref={overlayRef}
-      onClick={(e) => { if (e.target === overlayRef.current) onCancel(); }}>
-      <div className="ec-modal">
-        <button type="button" className="ec-modal-close" onClick={onCancel} aria-label="关闭">×</button>
+    <div className="ec-modal-overlay"
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div ref={dialogRef} className="ec-modal" role="dialog" aria-modal="true" aria-label={`${connector.name} 授权`} tabIndex={-1}>
+        <button type="button" className="ec-modal-close" onClick={onCancel} aria-label="关闭" data-modal-initial-focus>×</button>
 
         <div className="ec-modal-header">
           <ConnectorIcon local={connector.iconLocal} name={connector.name} size={48} shape="square" />

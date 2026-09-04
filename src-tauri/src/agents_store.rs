@@ -16,9 +16,66 @@
 //! but the user can launch a new session guided by an agent's prompt, or
 //! spawn the agent via EchoAgent's `spawn_subagent` tool from within a chat.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use tauri::State;
+
+const MAX_AGENT_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_AGENT_FILES: usize = 256;
+const MAX_SCANNED_DIRECTORY_ENTRIES: usize = 1024;
+const MAX_AGENT_NAME_CHARS: usize = 256;
+const MAX_AGENT_DESCRIPTION_CHARS: usize = 4_096;
+const MAX_AGENT_MODEL_TAGS: usize = 16;
+const MAX_TRUSTED_LOCAL_AGENTS: usize = 512;
+
+static TRUSTED_LOCAL_AGENTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn trusted_local_agents() -> &'static Mutex<HashSet<String>> {
+    TRUSTED_LOCAL_AGENTS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn remember_local_agents(agents: &[AgentEntry]) -> Result<(), String> {
+    let mut trusted = trusted_local_agents()
+        .lock()
+        .map_err(|_| "本地专家授权状态已损坏".to_string())?;
+    for agent in agents {
+        if trusted.contains(&agent.name) {
+            continue;
+        }
+        if trusted.len() >= MAX_TRUSTED_LOCAL_AGENTS {
+            return Err(format!(
+                "本次运行最多加载 {MAX_TRUSTED_LOCAL_AGENTS} 个本地专家"
+            ));
+        }
+        trusted.insert(agent.name.clone());
+    }
+    Ok(())
+}
+
+pub(crate) fn require_listed_local_expert(
+    expert_id: &str,
+    expert_name: &str,
+    avatar_local: Option<&str>,
+) -> Result<crate::meta::ExpertBinding, String> {
+    if avatar_local.is_some() || expert_id != expert_name {
+        return Err("本地专家元数据与后端列表不一致".into());
+    }
+    let trusted = trusted_local_agents()
+        .lock()
+        .map_err(|_| "本地专家授权状态已损坏".to_string())?;
+    if !trusted.contains(expert_id) {
+        return Err("本地专家尚未由后端列表加载".into());
+    }
+    Ok(crate::meta::ExpertBinding {
+        expert_id: expert_id.to_string(),
+        expert_name: expert_name.to_string(),
+        source: "local".into(),
+        avatar_local: None,
+    })
+}
 
 /// One agent definition, as surfaced to the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,7 +129,14 @@ fn resolve_user_agent_path(path: &str) -> Result<PathBuf, String> {
     let root = root
         .canonicalize()
         .map_err(|e| format!("resolve agents dir: {e}"))?;
-    let candidate = PathBuf::from(path)
+    let requested = PathBuf::from(path);
+    if std::fs::symlink_metadata(&requested)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err("拒绝访问符号链接 Agent 文件".into());
+    }
+    let candidate = requested
         .canonicalize()
         .map_err(|e| format!("resolve agent path: {e}"))?;
     if candidate.parent() != Some(root.as_path())
@@ -81,6 +145,24 @@ fn resolve_user_agent_path(path: &str) -> Result<PathBuf, String> {
         return Err("拒绝访问用户 Agent 目录之外的路径".into());
     }
     Ok(candidate)
+}
+
+fn read_agent_file(path: &Path) -> Result<String, String> {
+    // Keep the directory scan's symlink check, but enforce it again at open:
+    // another process can replace the entry between canonicalization and read.
+    let bytes = crate::shell_fs::read_regular_file_bounded(path, MAX_AGENT_FILE_BYTES).map_err(
+        |error| {
+            if error.contains("安全上限") {
+                format!(
+                    "Agent 定义不能超过 {} MB",
+                    MAX_AGENT_FILE_BYTES / 1024 / 1024
+                )
+            } else {
+                format!("read {}: {error}", path.display())
+            }
+        },
+    )?;
+    String::from_utf8(bytes).map_err(|error| format!("Agent 定义不是有效 UTF-8：{error}"))
 }
 
 /// Public accessor for the user-scope agents directory (used by experts.rs
@@ -100,19 +182,32 @@ fn project_agents_dir(cwd: &str) -> PathBuf {
 /// are skipped.
 fn scan_dir(dir: &Path, scope: &str) -> Vec<AgentEntry> {
     let mut out = Vec::new();
+    let Ok(root) = dir.canonicalize() else {
+        return out;
+    };
     let Ok(entries) = std::fs::read_dir(dir) else {
         return out;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
-        if !is_md {
-            continue;
-        }
-        let Ok(raw) = std::fs::read_to_string(&path) else {
+    let mut paths = entries
+        .flatten()
+        .take(MAX_SCANNED_DIRECTORY_ENTRIES)
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_file() || file_type.is_symlink() {
+                return None;
+            }
+            let path = entry.path().canonicalize().ok()?;
+            if path.parent() != Some(root.as_path()) {
+                return None;
+            }
+            (path.extension().and_then(|extension| extension.to_str()) == Some("md"))
+                .then_some(path)
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.truncate(MAX_AGENT_FILES);
+    for path in paths {
+        let Ok(raw) = read_agent_file(&path) else {
             continue;
         };
         let fm = parse_frontmatter(&raw);
@@ -211,16 +306,44 @@ fn parse_frontmatter(raw: &str) -> AgentFrontmatter {
 
 /// List all agent definitions visible to EchoAgent. Combines user-scope and
 /// project-scope (for the given cwd). User entries come first, then project.
-#[tauri::command]
-pub fn agents_list(cwd: Option<String>) -> Vec<AgentEntry> {
+fn collect_agents(cwd: Option<&str>) -> Vec<AgentEntry> {
     let mut out = scan_dir(&user_agents_dir(), "user");
     if let Some(cwd) = cwd {
-        out.extend(scan_dir(&project_agents_dir(&cwd), "project"));
+        let cwd = PathBuf::from(cwd);
+        let project_dir = project_agents_dir(&cwd.to_string_lossy());
+        let within_workspace = cwd
+            .canonicalize()
+            .ok()
+            .zip(project_dir.canonicalize().ok())
+            .is_some_and(|(root, agents)| agents.starts_with(root));
+        if within_workspace {
+            out.extend(scan_dir(&project_dir, "project"));
+        }
     }
     // De-dup by name (user scope wins, matching EchoAgent's scope precedence).
     let mut seen = std::collections::HashSet::new();
     out.retain(|a| seen.insert(a.name.clone()));
+    out.truncate(MAX_AGENT_FILES);
     out
+}
+
+#[tauri::command]
+pub fn agents_list(
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
+    cwd: Option<String>,
+) -> Result<Vec<AgentEntry>, String> {
+    let cwd = match cwd.filter(|value| !value.trim().is_empty()) {
+        Some(value) => Some(
+            access
+                .require_workspace(&value)?
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        None => None,
+    };
+    let agents = collect_agents(cwd.as_deref());
+    remember_local_agents(&agents)?;
+    Ok(agents)
 }
 
 pub fn markdown_body(raw: &str) -> String {
@@ -246,7 +369,7 @@ pub fn markdown_body(raw: &str) -> String {
 /// Resolve a selected automation expert to its real prompt body. The lookup
 /// follows the same user-before-project precedence as the editor.
 pub fn resolve_agent_prompt(name: &str, cwd: Option<String>) -> Option<String> {
-    agents_list(cwd)
+    collect_agents(cwd.as_deref())
         .into_iter()
         .find(|agent| agent.name == name)
         .map(|agent| markdown_body(&agent.raw))
@@ -257,7 +380,7 @@ pub fn resolve_agent_prompt(name: &str, cwd: Option<String>) -> Option<String> {
 #[tauri::command]
 pub fn agents_get(path: String) -> Result<String, String> {
     let safe = resolve_user_agent_path(&path)?;
-    std::fs::read_to_string(&safe).map_err(|e| format!("read {}: {e}", safe.display()))
+    read_agent_file(&safe)
 }
 
 /// Save an agent file (create or overwrite). Writes to the user-scope
@@ -271,17 +394,19 @@ pub fn agents_save(name: String, raw: String) -> Result<AgentEntry, String> {
     if name.trim().is_empty() {
         return Err("助理名称不能为空".into());
     }
+    if name.chars().count() > MAX_AGENT_NAME_CHARS {
+        return Err(format!("助理名称不能超过 {MAX_AGENT_NAME_CHARS} 个字符"));
+    }
     let safe_name = slug_for_agent(&name);
-    if raw.len() > 1024 * 1024 {
+    if raw.len() as u64 > MAX_AGENT_FILE_BYTES {
         return Err("Agent 定义不能超过 1 MB".into());
     }
     let dir = user_agents_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create agents dir: {e}"))?;
     let path = dir.join(format!("{safe_name}.md"));
-    std::fs::write(&path, &raw).map_err(|e| format!("write agent: {e}"))?;
-    crate::paths::harden_private_file(&path)?;
+    crate::paths::write_private_file(&path, raw.as_bytes())?;
     let fm = parse_frontmatter(&raw);
-    Ok(AgentEntry {
+    let entry = AgentEntry {
         // Fall back to the caller's display name, never the slug: the slug is a
         // filename detail and showing it would surface "dai-ma-zhuan-jia"-style
         // stems (or a hash) in the UI.
@@ -292,7 +417,9 @@ pub fn agents_save(name: String, raw: String) -> Result<AgentEntry, String> {
         avatar: fm.avatar,
         model_tags: fm.model_tags.clone(),
         raw,
-    })
+    };
+    remember_local_agents(std::slice::from_ref(&entry))?;
+    Ok(entry)
 }
 
 /// Delete an agent file by path.
@@ -315,6 +442,32 @@ pub fn agents_template(
     avatar: Option<u32>,
     model_tags: Option<Vec<String>>,
 ) -> Result<String, String> {
+    if name.trim().is_empty() {
+        return Err("助理名称不能为空".into());
+    }
+    if name.chars().count() > MAX_AGENT_NAME_CHARS {
+        return Err(format!("助理名称不能超过 {MAX_AGENT_NAME_CHARS} 个字符"));
+    }
+    if description.chars().count() > MAX_AGENT_DESCRIPTION_CHARS {
+        return Err(format!(
+            "助理描述不能超过 {MAX_AGENT_DESCRIPTION_CHARS} 个字符"
+        ));
+    }
+    if system_prompt.len() as u64 > MAX_AGENT_FILE_BYTES {
+        return Err("Agent 提示词不能超过 1 MB".into());
+    }
+    if avatar.is_some_and(|value| !(1..=20).contains(&value)) {
+        return Err("头像编号必须在 1 到 20 之间".into());
+    }
+    if let Some(tags) = model_tags.as_ref() {
+        if tags.len() > MAX_AGENT_MODEL_TAGS
+            || tags
+                .iter()
+                .any(|tag| !matches!(tag.as_str(), "default" | "multimodal" | "reasoning"))
+        {
+            return Err("模型能力标签无效".into());
+        }
+    }
     // Write the display name verbatim (quoted), not the filename slug: this
     // field is what the UI lists and what `resolve_agent_prompt` matches on, so
     // slugging it here silently renamed every non-ASCII assistant and broke the
@@ -335,6 +488,9 @@ pub fn agents_template(
     fm.push_str("---\n\n");
     fm.push_str(system_prompt.trim());
     fm.push('\n');
+    if fm.len() as u64 > MAX_AGENT_FILE_BYTES {
+        return Err("Agent 定义不能超过 1 MB".into());
+    }
     Ok(fm)
 }
 
@@ -502,7 +658,11 @@ mod tests {
     #[test]
     fn slug_is_length_capped_on_a_char_boundary() {
         let slug = slug_for_agent(&"代".repeat(200));
-        assert!(slug.len() <= MAX_SLUG_BYTES, "slug was {} bytes", slug.len());
+        assert!(
+            slug.len() <= MAX_SLUG_BYTES,
+            "slug was {} bytes",
+            slug.len()
+        );
         // Truncation must not split a multi-byte char (String would panic).
         assert!(slug.chars().all(|c| c == '代'));
     }
@@ -525,6 +685,34 @@ mod tests {
     }
 
     #[test]
+    fn template_rejects_invalid_or_unbounded_metadata() {
+        assert!(agents_template(
+            "agent".into(),
+            "description".into(),
+            "prompt".into(),
+            Some(21),
+            None,
+        )
+        .is_err());
+        assert!(agents_template(
+            "agent".into(),
+            "description".into(),
+            "prompt".into(),
+            None,
+            Some(vec!["unknown".into()]),
+        )
+        .is_err());
+        assert!(agents_template(
+            "n".repeat(MAX_AGENT_NAME_CHARS + 1),
+            "description".into(),
+            "prompt".into(),
+            None,
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn quoted_scalars_survive_special_characters() {
         // `:` and `#` in a name previously truncated or corrupted the value.
         for name in ["a: b", "say \"hi\"", "back\\slash", "tag#1", "中文: 值"] {
@@ -535,8 +723,63 @@ mod tests {
 
     #[test]
     fn unquoted_legacy_frontmatter_still_parses() {
-        let fm = parse_frontmatter("---\nname: legacy-agent\ndescription: old style\n---\n\nbody\n");
+        let fm =
+            parse_frontmatter("---\nname: legacy-agent\ndescription: old style\n---\n\nbody\n");
         assert_eq!(fm.name.as_deref(), Some("legacy-agent"));
         assert_eq!(fm.description.as_deref(), Some("old style"));
+    }
+
+    #[test]
+    fn oversized_agent_file_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("too-large.md");
+        std::fs::write(&path, vec![b'x'; MAX_AGENT_FILE_BYTES as usize + 1]).unwrap();
+        assert!(read_agent_file(&path).unwrap_err().contains("不能超过"));
+    }
+
+    #[test]
+    fn directory_scan_has_a_stable_file_count_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..(MAX_AGENT_FILES + 5) {
+            std::fs::write(
+                dir.path().join(format!("agent-{index:04}.md")),
+                format!("---\nname: agent-{index:04}\n---\nbody"),
+            )
+            .unwrap();
+        }
+        let agents = scan_dir(dir.path(), "test");
+        assert_eq!(agents.len(), MAX_AGENT_FILES);
+        assert_eq!(agents.first().unwrap().name, "agent-0000");
+        assert_eq!(agents.last().unwrap().name, "agent-0255");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_scan_does_not_follow_agent_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(outside.path(), "---\nname: escaped\n---\nsecret").unwrap();
+        symlink(outside.path(), dir.path().join("escaped.md")).unwrap();
+        assert!(scan_dir(dir.path(), "test").is_empty());
+    }
+
+    #[test]
+    fn local_expert_binding_requires_a_backend_listed_exact_name() {
+        let name = "security-test-local-expert";
+        remember_local_agents(&[AgentEntry {
+            name: name.into(),
+            description: None,
+            scope: "user".into(),
+            path: "/managed/agent.md".into(),
+            raw: "prompt".into(),
+            avatar: None,
+            model_tags: Vec::new(),
+        }])
+        .unwrap();
+        assert!(require_listed_local_expert(name, name, None).is_ok());
+        assert!(require_listed_local_expert(name, name, Some("/etc/passwd")).is_err());
+        assert!(require_listed_local_expert(name, "forged name", None).is_err());
     }
 }

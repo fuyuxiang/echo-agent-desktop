@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Check, Folder, FolderOpen } from "lucide-react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import type { WorkspaceInfo } from "@/lib/agent-client";
+import { filesystemPickDirectory, type WorkspaceInfo } from "@/lib/agent-client";
 
 /**
  * Workspace picker dropdown for the Composer's "选择工作空间" button.
@@ -22,15 +21,64 @@ export function WorkspacePicker({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLUListElement>(null);
+
+  const close = (restoreFocus = true) => {
+    setOpen(false);
+    if (restoreFocus) triggerRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const selected = menuRef.current?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]');
+    (selected ?? menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]'))?.focus();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node)) close(false);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemradio"]') ?? [],
+    );
+    const index = items.indexOf(document.activeElement as HTMLElement);
+    const focusAt = (nextIndex: number) => {
+      if (items.length === 0) return;
+      items[(nextIndex + items.length) % items.length]?.focus();
+    };
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      focusAt(index + 1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      focusAt(index - 1);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      focusAt(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      focusAt(items.length - 1);
+    }
+  };
 
   // Shorten a cwd for display: show last 2 path segments.
   const shortName = (p: string) => {
@@ -43,10 +91,10 @@ export function WorkspacePicker({
   // 打开系统目录选择框,切换到任意文件夹(不限于历史工作空间)。
   const pickFolder = async () => {
     try {
-      const selected = await openDialog({ directory: true, multiple: false });
-      if (!selected || Array.isArray(selected)) return;
+      const selected = await filesystemPickDirectory();
+      if (!selected) return;
       onSelectWorkspace(selected);
-      setOpen(false);
+      close();
     } catch {
       // dialog plugin not available in non-Tauri env (vitest) — no-op.
     }
@@ -58,18 +106,36 @@ export function WorkspacePicker({
         className="workspace-picker__trigger"
         onClick={() => setOpen((o) => !o)}
         type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? "composer-workspace-menu" : undefined}
+        ref={triggerRef}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
       >
         <Folder size={14} strokeWidth={1.75} style={{ marginRight: 6 }} />
         <span className="workspace-picker__label">{triggerLabel}</span>
         <ChevronDown size={14} strokeWidth={1.75} className="workspace-picker__arrow" />
       </button>
       {open && (
-        <ul className="workspace-picker__menu" role="listbox">
-          <li>
+        <ul
+          className="workspace-picker__menu"
+          id="composer-workspace-menu"
+          role="menu"
+          aria-label="选择工作空间"
+          ref={menuRef}
+          onKeyDown={handleMenuKeyDown}
+        >
+          <li role="none">
             <button
               type="button"
               className="workspace-picker__item workspace-picker__item--browse"
               onClick={pickFolder}
+              role="menuitem"
             >
               <FolderOpen size={14} />
               <span className="workspace-picker__item-name">选择文件夹…</span>
@@ -79,7 +145,7 @@ export function WorkspacePicker({
             <li className="workspace-picker__empty">暂无历史工作空间</li>
           )}
           {workspaces.map((w) => (
-            <li key={w.cwd}>
+            <li key={w.cwd} role="none">
               <button
                 type="button"
                 className={
@@ -88,10 +154,10 @@ export function WorkspacePicker({
                 }
                 onClick={() => {
                   onSelectWorkspace(w.cwd);
-                  setOpen(false);
+                  close();
                 }}
-                role="option"
-                aria-selected={w.cwd === cwd}
+                role="menuitemradio"
+                aria-checked={w.cwd === cwd}
                 title={w.cwd}
               >
                 <span className="workspace-picker__item-name">{shortName(w.cwd)}</span>

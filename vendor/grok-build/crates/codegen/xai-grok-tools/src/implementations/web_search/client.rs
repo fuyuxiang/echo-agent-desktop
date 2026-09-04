@@ -158,8 +158,8 @@ impl WebSearchClient {
             .input(query.to_string())
             .tools(vec![rs::Tool::WebSearch(web_search)])
             .store(false)
-            .temperature(0.1)
-            .top_p(0.95)
+            .temperature(0.1_f32)
+            .top_p(0.95_f32)
             .max_output_tokens(8192u32)
             .build()
             .map_err(|e| err(format!("Failed to build request: {e}")))?;
@@ -480,7 +480,10 @@ mod tests {
             .build_request_json("q", Some(v(&["docs.echo.agent"])), None)
             .expect("request json builds");
         let filters = &body["tools"][0]["filters"];
-        assert_eq!(filters["allowed_domains"], serde_json::json!(["docs.echo.agent"]));
+        assert_eq!(
+            filters["allowed_domains"],
+            serde_json::json!(["docs.echo.agent"])
+        );
         assert!(filters.get("excluded_domains").is_none());
     }
     #[test]

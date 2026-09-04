@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   Building2,
   CheckCircle2,
@@ -51,6 +50,7 @@ import {
   type Submission,
 } from "@/lib/org-client";
 import { useOrgSessionStore } from "@/stores/org-session-store";
+import { filesystemPickFiles } from "@/lib/agent-client";
 
 type Tab = "ask" | "documents" | "skills";
 
@@ -329,12 +329,12 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
 
   const pickAndUploadDocument = async () => {
     if (!uploadScope) return;
-    const path = await open({
+    const [path] = await filesystemPickFiles({
       multiple: false,
-      directory: false,
-      filters: [{ name: "可检索文档", extensions: ["md", "txt", "pdf", "docx", "xlsx", "pptx", "png", "jpg", "jpeg"] }],
+      title: "选择要提交的可检索文档",
+      extensions: ["md", "txt", "pdf", "docx", "xlsx", "pptx", "png", "jpg", "jpeg"],
     });
-    if (typeof path !== "string") return;
+    if (!path) return;
     setBusy(true);
     setError(null);
     try {
@@ -350,12 +350,12 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
 
   const pickAndUploadSkill = async () => {
     if (!uploadScope) return;
-    const path = await open({
+    const [path] = await filesystemPickFiles({
       multiple: false,
-      directory: false,
-      filters: [{ name: "Skill ZIP", extensions: ["zip"] }],
+      title: "选择要提交的 Skill ZIP",
+      extensions: ["zip"],
     });
-    if (typeof path !== "string") return;
+    if (!path) return;
     setBusy(true);
     setError(null);
     try {
@@ -371,8 +371,12 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
 
   const uploadNewVersion = async (document: OrgDocument) => {
     const extensions = document.sourceType === "image" ? ["png", "jpg", "jpeg"] : [document.sourceType];
-    const path = await open({ multiple: false, directory: false, filters: [{ name: "同类型新版本", extensions }] });
-    if (typeof path !== "string") return;
+    const [path] = await filesystemPickFiles({
+      multiple: false,
+      title: "选择同类型新版本",
+      extensions,
+    });
+    if (!path) return;
     setBusy(true);
     try {
       await orgNewDocumentVersion(document.id, path);

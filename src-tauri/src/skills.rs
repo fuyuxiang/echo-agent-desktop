@@ -33,15 +33,24 @@ fn required_cwd(cwd: Option<String>) -> String {
         .unwrap_or_else(process_cwd)
 }
 
-fn command_cwd(state: &AppState, cwd: Option<String>) -> String {
-    required_cwd(cwd.or_else(|| {
+fn command_cwd(
+    state: &AppState,
+    access: &crate::shell_fs::FilesystemAccess,
+    cwd: Option<String>,
+) -> Result<String, String> {
+    if let Some(cwd) = cwd.filter(|value| !value.trim().is_empty()) {
+        return access
+            .require_workspace(&cwd)
+            .map(|path| path.to_string_lossy().into_owned());
+    }
+    Ok(required_cwd(
         state
             .cwd
             .lock()
             .unwrap()
             .as_ref()
-            .map(|path| path.to_string_lossy().into_owned())
-    }))
+            .map(|path| path.to_string_lossy().into_owned()),
+    ))
 }
 
 /// One discovered skill. Mirrors the relevant fields of EchoAgent's `SkillInfo`
@@ -132,6 +141,7 @@ impl SkillsListResponse {
 #[tauri::command]
 pub async fn skills_list(
     state: State<'_, AppState>,
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
     cwd: Option<String>,
 ) -> Result<Vec<SkillInfo>, String> {
     let tx = state
@@ -140,8 +150,21 @@ pub async fn skills_list(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let cwd = command_cwd(&state, cwd);
-    skills_list_with_tx(&tx, Some(cwd)).await
+    let cwd = command_cwd(&state, &access, cwd)?;
+    let skills = skills_list_with_tx(&tx, Some(cwd)).await?;
+    for skill in &skills {
+        if let Some(path) = skill.path.as_deref() {
+            if let Err(error) = access.record_trusted_package_source(Path::new(path)) {
+                tracing::warn!(%error, %path, "ignored invalid Runtime Skill package source");
+            }
+        }
+        if let Some(path) = skill.configured_path.as_deref() {
+            if let Err(error) = access.record_configured_skill_source(path) {
+                tracing::warn!(%error, %path, "ignored invalid configured Skill source");
+            }
+        }
+    }
+    Ok(skills)
 }
 
 /// Internal form used by automations for execution-time capability checks.
@@ -207,11 +230,16 @@ pub async fn skills_list_with_tx(
 #[tauri::command]
 pub async fn skills_add(
     state: State<'_, AppState>,
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
     path: String,
     cwd: Option<String>,
 ) -> Result<(), String> {
     crate::policy::require_feature("skills")?;
     crate::policy::require_skill_upload()?;
+    let path = access
+        .require_authorized_package_source(Path::new(&path))?
+        .to_string_lossy()
+        .into_owned();
     crate::skill_installer::validate_registered_source(&path)?;
     let tx = state
         .tx
@@ -219,11 +247,12 @@ pub async fn skills_add(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let cwd = command_cwd(&state, cwd);
+    let cwd = command_cwd(&state, &access, cwd)?;
     let params = raw_params(&serde_json::json!({ "path": path, "cwd": cwd }));
     let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/skills/add", params)
         .await
         .map_err(|e| e.to_string())?;
+    access.record_configured_skill_source(&path)?;
     Ok(())
 }
 
@@ -231,6 +260,7 @@ pub async fn skills_add(
 #[tauri::command]
 pub async fn skills_remove(
     state: State<'_, AppState>,
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
     path: String,
     cwd: Option<String>,
 ) -> Result<(), String> {
@@ -240,7 +270,8 @@ pub async fn skills_remove(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let cwd = command_cwd(&state, cwd);
+    let path = access.require_configured_skill_source(&path)?;
+    let cwd = command_cwd(&state, &access, cwd)?;
     let params = raw_params(&serde_json::json!({ "path": path, "cwd": cwd }));
     let _: acp::ExtResponse = call_ext_value(&tx, "echo.agent/skills/remove", params)
         .await

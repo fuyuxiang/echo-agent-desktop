@@ -51,6 +51,7 @@ import type {
 } from "./types";
 
 import type { QuestionRequest } from "@/stores/question-store";
+import type { PlanApprovalRequest } from "@/stores/session-store";
 import { isUpstreamBrandedModelId } from "@/lib/model-branding";
 
 // ---------- commands ----------
@@ -134,8 +135,11 @@ export async function agentLoadSession(sessionId: string, cwd: string): Promise<
   await invoke<void>("agent_load_session", { sessionId, cwd });
 }
 
-export async function agentListSessions(cwd: string): Promise<SessionSummary[]> {
-  return invoke<SessionSummary[]>("agent_list_sessions", { cwd });
+export async function agentListSessions(
+  cwd: string,
+  includeArchived = false,
+): Promise<SessionSummary[]> {
+  return invoke<SessionSummary[]>("agent_list_sessions", { cwd, includeArchived });
 }
 
 /** A discovered working directory (EchoAgent has run sessions in it). */
@@ -154,6 +158,21 @@ export interface WorkspaceInfo {
  */
 export async function agentListWorkspaces(): Promise<WorkspaceInfo[]> {
   return invoke<WorkspaceInfo[]>("agent_list_workspaces");
+}
+
+/** Pick files in a native dialog and grant only those exact canonical files. */
+export async function filesystemPickFiles(options?: {
+  title?: string;
+  extensions?: string[];
+  multiple?: boolean;
+  maxFiles?: number;
+}): Promise<string[]> {
+  return invoke<string[]>("filesystem_pick_files", {
+    title: options?.title ?? null,
+    extensions: options?.extensions ?? null,
+    multiple: options?.multiple ?? null,
+    maxFiles: options?.maxFiles ?? null,
+  });
 }
 
 /**
@@ -260,8 +279,8 @@ export async function agentSessionUsage(sessionId: string): Promise<SessionUsage
 export async function agentResolvePermission(
   requestId: string,
   outcome: { optionId?: string; cancelled?: boolean }
-): Promise<void> {
-  await invoke<void>("agent_resolve_permission", {
+): Promise<boolean> {
+  return invoke<boolean>("agent_resolve_permission", {
     requestId,
     optionId: outcome.optionId ?? null,
     cancelled: outcome.cancelled ?? false,
@@ -275,14 +294,35 @@ export async function agentResolveQuestion(
     answers?: Record<string, string | string[]>;
     /** Per-question notes/preview, keyed by question text. Freeform uses notes. */
     annotations?: Record<string, { preview?: string; notes?: string }>;
+    /** Exact AskUserQuestionExtResponse outcome. */
+    outcome?: "accepted" | "cancelled" | "chat_about_this" | "skip_interview";
+    /** Plan-mode partial answers (one display string per question). */
+    partialAnswers?: Record<string, string>;
     cancelled?: boolean;
   }
-): Promise<void> {
-  await invoke<void>("agent_resolve_question", {
+): Promise<boolean> {
+  return invoke<boolean>("agent_resolve_question", {
     requestId,
     answers: outcome.answers ?? null,
     annotations: outcome.annotations ?? null,
+    partialAnswers: outcome.partialAnswers ?? null,
+    outcome: outcome.outcome ?? null,
     cancelled: outcome.cancelled ?? false,
+  });
+}
+
+export type PlanApprovalOutcome = "approved" | "cancelled" | "abandoned";
+
+/** Resolve the exact parked exit-plan request; true is the only successful ACK. */
+export async function agentResolvePlanApproval(
+  requestId: string,
+  outcome: PlanApprovalOutcome,
+  feedback?: string,
+): Promise<boolean> {
+  return invoke<boolean>("agent_resolve_plan_approval", {
+    requestId,
+    outcome,
+    feedback: feedback ?? null,
   });
 }
 
@@ -525,9 +565,14 @@ export async function skillsInspectPackage(path: string): Promise<SkillPackageIn
 /** Safely copy and atomically install/update a package under ~/.echo-agent/skills. */
 export async function skillsInstallPackage(
   path: string,
+  expectedSourceHash: string,
   approveHighRisk = false,
 ): Promise<SkillInstallResult> {
-  return invoke<SkillInstallResult>("skills_install_package", { path, approveHighRisk });
+  return invoke<SkillInstallResult>("skills_install_package", {
+    path,
+    expectedSourceHash,
+    approveHighRisk,
+  });
 }
 
 /** Remove an EchoAgent-managed package. External/project skills are never deleted. */
@@ -1040,16 +1085,62 @@ export async function teamSnapshot(): Promise<RuntimeTeamInfo[]> {
 
 // ---------- folder trust ----------
 
-/** Respond to a folder-trust request from the embedded runtime. */
-export async function folderTrustRespond(cwd: string, trusted: boolean): Promise<void> {
-  await invoke<void>("folder_trust_respond", { cwd, trusted });
+export interface FolderTrustRequest {
+  requestId: string;
+  sessionId: string;
+  cwd: string;
+  workspace: string;
+  configKinds: string[];
+}
+
+export interface PendingInteractions {
+  permissions: PermissionRequest[];
+  questions: QuestionRequest[];
+  planApprovals: PlanApprovalRequest[];
+  folderTrustRequests: FolderTrustRequest[];
+}
+
+export interface QuestionClosedEvent {
+  requestId: string;
+  sessionId: string;
+}
+
+/** Observe authoritative closure (answer, timeout, disconnect) of a question. */
+export async function onQuestionClosedEvent(
+  callback: (event: QuestionClosedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<QuestionClosedEvent>("agent://question-closed", (event) => {
+    callback(event.payload);
+  });
+}
+
+/** Replay all unresolved reverse requests, optionally scoped to one session. */
+export async function agentListPendingInteractions(
+  sessionId?: string,
+): Promise<PendingInteractions> {
+  return invoke<PendingInteractions>("agent_list_pending_interactions", {
+    sessionId: sessionId ?? null,
+  });
+}
+
+/** Respond on the original folder-trust ExtMethod channel. */
+export async function folderTrustRespond(
+  requestId: string,
+  trusted: boolean,
+): Promise<boolean> {
+  return invoke<boolean>("folder_trust_respond", { requestId, trusted });
 }
 
 // ---------- plan mode ----------
 
-/** Toggle plan mode for a session (client → EchoAgent notification). */
+/** Idempotently set plan mode; CurrentModeUpdate is the authoritative result. */
+export async function setPlanMode(sessionId: string, enabled: boolean): Promise<void> {
+  await invoke<void>("set_plan_mode", { sessionId, enabled });
+}
+
+/** @deprecated Kept for older callers; behavior is now idempotent set. */
 export async function togglePlanMode(sessionId: string, enabled: boolean): Promise<void> {
-  await invoke<void>("toggle_plan_mode", { sessionId, enabled });
+  await setPlanMode(sessionId, enabled);
 }
 
 // ---------- internal reload ----------
@@ -1092,9 +1183,9 @@ export async function automationsSetStatus(id: string, status: AutomationStatus)
   await invoke<void>("automations_set_status", { id, status });
 }
 
-/** Manually fire an automation now (test run). Opens a new EchoAgent session. */
-export async function automationsRun(id: string): Promise<void> {
-  await invoke<void>("automations_run", { id });
+/** Queue an automation run and return its durable record id immediately. */
+export async function automationsRun(id: string): Promise<string> {
+  return invoke<string>("automations_run", { id });
 }
 
 /** Archive / unarchive a run record. */
@@ -1237,12 +1328,20 @@ export async function notificationClear(): Promise<void> {
 
 // ---------- export ----------
 
-/** Export text content to an absolute path chosen by the user via the save
- *  dialog (e.g. "导出会话为 Markdown"). Unlike write_text_file, this is NOT
- *  restricted to the workspace — the path comes from explicit user consent
- *  in the native save dialog. */
-export async function exportTextFile(path: string, content: string): Promise<string> {
-  return invoke<string>("export_text_file", { path, content });
+/** Select and authorize a local directory in one native backend operation. */
+export async function filesystemPickDirectory(): Promise<string | null> {
+  return invoke<string | null>("filesystem_pick_directory");
+}
+
+/** Show the backend-owned native save dialog and export to its exact result.
+ * The renderer never supplies the destination path, preventing a forged IPC
+ * request from turning export into an arbitrary-file overwrite primitive. */
+export async function exportTextFile(
+  suggestedName: string,
+  content: string,
+  extension: string,
+): Promise<string | null> {
+  return invoke<string | null>("export_text_file", { suggestedName, extension, content });
 }
 
 // ---------- filesystem: directory listing (file-tree sidebar) ----------
@@ -1361,7 +1460,9 @@ export async function subscribeAgentEvents(handlers: {
   /** Fired on MCP connector status / init-progress notifications. */
   onMcpStatus?: (p: unknown) => void;
   /** Fired when EchoAgent asks us to trust a folder (`echo.agent/folder_trust/request`). */
-  onFolderTrust?: (p: unknown) => void;
+  onFolderTrust?: (p: FolderTrustRequest) => void;
+  /** Fired when a plan is parked on the exit-plan approval ExtMethod. */
+  onPlanApproval?: (p: PlanApprovalRequest) => void;
   /** Fired when plan mode is toggled (`echo.agent/toggle_plan_mode`). */
   onPlanMode?: (p: unknown) => void;
   /** Fired when the permission mode (auto/yolo) changes. */
@@ -1374,6 +1475,8 @@ export async function subscribeAgentEvents(handlers: {
   onTaskUpdate?: (p: unknown) => void;
   /** Fired when the agent asks a question (`echo.agent/question`). */
   onQuestion?: (q: QuestionRequest) => void;
+  /** Fired when a question's reverse-request closes, including timeout. */
+  onQuestionClosed?: (event: QuestionClosedEvent) => void;
   /** Fired when the agent thread dies unexpectedly (panic/crash). */
   onAgentDied?: (p: { reason: string }) => void;
   /** Fired on subagent lifecycle (spawned/progress/finished). */
@@ -1407,16 +1510,40 @@ export async function subscribeAgentEvents(handlers: {
   await wire<SessionSummaryEvent>("agent://summary", handlers.onSummary);
   await wire<TurnUsageEvent>("agent://turn-usage", handlers.onTurnUsage);
   await wire("agent://mcp-status", handlers.onMcpStatus);
-  await wire("agent://folder-trust", handlers.onFolderTrust);
+  await wire<FolderTrustRequest>("agent://folder-trust", handlers.onFolderTrust);
+  await wire<PlanApprovalRequest>("agent://plan-approval", handlers.onPlanApproval);
   await wire("agent://plan-mode", handlers.onPlanMode);
   await wire("agent://permission-mode", handlers.onPermissionMode);
   await wire("agent://git-head", handlers.onGitHead);
   await wire("agent://models-update", handlers.onModelsUpdate);
   await wire("agent://task-update", handlers.onTaskUpdate);
   await wire<QuestionRequest>("agent://question", handlers.onQuestion);
+  await wire<QuestionClosedEvent>("agent://question-closed", handlers.onQuestionClosed);
   await wire<{ reason: string }>("agent://agent-died", handlers.onAgentDied);
   await wire<SubagentLiveEvent>("agent://subagent", handlers.onSubagent);
   await wire<TurnErrorEvent>("agent://turn-error", handlers.onTurnError);
+
+  // Close the subscribe-after-emit race. Backend registries retain the typed
+  // request until its bool-ACKed resolution, so replay is safe; stores dedupe
+  // request ids when the same item was also observed live.
+  try {
+    const pending = await agentListPendingInteractions();
+    pending.permissions.forEach((request) => handlers.onPermission?.(request));
+    pending.questions.forEach((request) => handlers.onQuestion?.(request));
+    pending.folderTrustRequests.forEach((request) => handlers.onFolderTrust?.(request));
+    pending.planApprovals.forEach((request) => {
+      handlers.onPlanApproval?.(request);
+      if (handlers.onUpdate) {
+        handlers.onUpdate({
+          ...request,
+          sessionUpdate: "plan_approval_request",
+          __sessionId: request.sessionId,
+        } as unknown as SessionUpdate & { __sessionId?: string });
+      }
+    });
+  } catch (error) {
+    console.warn("failed to replay pending agent interactions", error);
+  }
 
   return () => unlisteners.forEach((u) => u());
 }

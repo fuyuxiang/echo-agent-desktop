@@ -1,86 +1,175 @@
-/**
- * 文件夹信任对话框 - 当 EchoAgent 要求信任一个目录时弹出
- *
- * EchoAgent 在首次对某 cwd 执行工具前会发 `echo.agent/folder_trust/request`。
- * 用户选择"信任"或"拒绝"，结果通过 `folderTrustRespond` 回传给 EchoAgent。
- *
- * 信任的目录会写入 EchoAgent 的 trust 配置，之后该目录的工具调用不再询问。
- */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ShieldCheckIcon, ShieldAlertIcon } from "@/foundation/components/Icon/icons";
-import { folderTrustRespond } from "@/lib/agent-client";
+import {
+  agentListPendingInteractions,
+  folderTrustRespond,
+  type FolderTrustRequest,
+} from "@/lib/agent-client";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
-interface TrustRequest {
+interface LegacyTrustRequest {
+  requestId?: string;
+  sessionId?: string;
   cwd?: string;
+  workspace?: string;
+  configKinds?: string[];
   reason?: string;
   [key: string]: unknown;
 }
 
 interface FolderTrustDialogProps {
-  /** The pending trust request (null = no dialog). */
-  request: TrustRequest | null;
+  /** Legacy event hint from App. The canonical queue is replayed from Rust. */
+  request: LegacyTrustRequest | null;
   onResolve: () => void;
   onToast?: (msg: string) => void;
 }
 
+/** Ordered folder-trust queue backed by the Rust ExtMethod registry. */
 export function FolderTrustDialog({ request, onResolve, onToast }: FolderTrustDialogProps) {
+  const [queue, setQueue] = useState<FolderTrustRequest[]>([]);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const refreshGenerationRef = useRef(0);
+
+  const refresh = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current;
+    setLoading(true);
+    try {
+      const pending = await agentListPendingInteractions();
+      if (refreshGenerationRef.current !== generation) return null;
+      setQueue(pending.folderTrustRequests);
+      setError(null);
+      return pending.folderTrustRequests;
+    } catch (cause) {
+      if (refreshGenerationRef.current !== generation) return null;
+      console.error("list pending folder trust requests failed", cause);
+      setError(`读取待处理信任请求失败：${String(cause).replace(/^Error:\s*/, "")}`);
+      return null;
+    } finally {
+      if (refreshGenerationRef.current === generation) {
+        setLoaded(true);
+        setLoading(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    setBusy(false);
-  }, [request]);
+    void refresh();
+    return () => {
+      refreshGenerationRef.current += 1;
+    };
+  }, [refresh, request]);
 
-  if (!request) return null;
+  const current = queue[0] ?? null;
 
-  const cwd = request.cwd ?? "(unknown)";
-
-  const respond = async (trusted: boolean) => {
+  const respond = useCallback(async (trusted: boolean) => {
+    if (!current) return;
+    if (busy) return;
     setBusy(true);
+    setError(null);
     try {
-      await folderTrustRespond(cwd, trusted);
-    } catch (e) {
-      onToast?.(`信任响应失败：${String(e).replace(/^Error:\s*/, "")}`);
+      const acknowledged = await folderTrustRespond(current.requestId, trusted);
+      if (!acknowledged) throw new Error("后端未找到该信任请求，请重试");
+      setQueue((pending) => pending.filter((item) => item.requestId !== current.requestId));
+      // Re-read the canonical registry before resolving the parent hint. This
+      // keeps the dialog mounted while more requests are queued and closes the
+      // subscribe-after-emit window for a request arriving during the ACK.
+      await refresh();
+    } catch (cause) {
+      const message = String(cause).replace(/^Error:\s*/, "");
+      setError(message);
+      onToast?.(`信任响应失败：${message}`);
     } finally {
       setBusy(false);
-      onResolve();
     }
-  };
+  }, [busy, current, onToast, refresh]);
+
+  // Bootstrap polling is invisible without an event hint. Once a request is
+  // known, loading/errors remain modal until it is safely resolved.
+  const dialogOpen = Boolean(current || (request && (loading || error)));
+  const modalRef = useModalFocus<HTMLDivElement>(
+    dialogOpen,
+    () => {
+      if (current && !busy) void respond(false);
+    },
+  );
+
+  useEffect(() => {
+    if (current || error) {
+      modalRef.current?.querySelector<HTMLElement>("[data-modal-initial-focus]")?.focus();
+    }
+  }, [current?.requestId, error, modalRef]);
+
+  useEffect(() => {
+    if (request && loaded && !loading && !error && queue.length === 0) onResolve();
+  }, [error, loaded, loading, onResolve, queue.length, request]);
+
+  if (!dialogOpen) return null;
+
+  const displayPath = current?.workspace || current?.cwd || request?.workspace || request?.cwd || "(unknown)";
 
   return (
     <div className="modal-overlay trust-dialog__overlay">
-      <div className="trust-dialog" role="dialog" aria-label="文件夹信任">
+      <div
+        className="trust-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="文件夹信任"
+        ref={modalRef}
+        tabIndex={-1}
+      >
         <div className="trust-dialog__icon">
           <ShieldAlertIcon size="lg" />
         </div>
-        <h2 className="trust-dialog__title">信任此工作目录？</h2>
+        <h2 className="trust-dialog__title">信任此工作区？</h2>
         <p className="trust-dialog__desc">
-          EchoAgent 即将在此目录中执行操作（读写文件、运行命令等）。
-          请确认你信任此目录的内容。
+          该目录包含项目级配置。仅当你信任仓库内容时，才允许 EchoAgent
+          加载并运行这些配置。
         </p>
-        <div className="trust-dialog__path" title={cwd}>
-          <code>{cwd}</code>
+        <div className="trust-dialog__path" title={displayPath}>
+          <code>{displayPath}</code>
         </div>
-        {request.reason && (
-          <p className="trust-dialog__reason">{String(request.reason)}</p>
+        {current && current.configKinds.length > 0 && (
+          <p className="trust-dialog__reason">
+            将启用：{current.configKinds.join("、")}
+          </p>
         )}
-        <div className="trust-dialog__actions">
-          <button
-            className="btn btn--ghost"
-            onClick={() => respond(false)}
-            disabled={busy}
-          >
-            不信任
-          </button>
-          <button
-            className="btn btn--primary"
-            onClick={() => respond(true)}
-            disabled={busy}
-          >
-            <ShieldCheckIcon size="sm" /> 信任
-          </button>
-        </div>
+        {current && queue.length > 1 && (
+          <p className="trust-dialog__reason">还有 {queue.length - 1} 个信任请求等待处理</p>
+        )}
+        {loading && !current && <p className="trust-dialog__reason" role="status">正在读取信任请求…</p>}
+        {error && <p className="trust-dialog__reason" role="alert">{error}</p>}
+        {current ? (
+          <div className="trust-dialog__actions">
+            <button
+              className="btn btn--ghost"
+              onClick={() => void respond(false)}
+              disabled={busy}
+              data-modal-initial-focus
+            >
+              不信任
+            </button>
+            <button className="btn btn--primary" onClick={() => void respond(true)} disabled={busy}>
+              <ShieldCheckIcon size="sm" /> 信任并加载
+            </button>
+          </div>
+        ) : error ? (
+          <div className="trust-dialog__actions">
+            <button
+              className="btn btn--primary"
+              type="button"
+              onClick={() => void refresh()}
+              disabled={loading}
+              data-modal-initial-focus
+            >
+              {loading ? "重试中…" : "重试"}
+            </button>
+          </div>
+        ) : null}
         <p className="trust-dialog__hint">
-          信任后该目录的工具调用将不再询问。可在设置中重置。
+          信任按工作区生效；项目 MCP、插件与 hooks 会随即重载。
         </p>
       </div>
     </div>

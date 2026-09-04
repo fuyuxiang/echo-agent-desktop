@@ -55,7 +55,9 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
       try {
         await pluginsAction(sessionId, {
           type: plugin.enabled ? "disable" : "enable",
-          pluginName: plugin.name,
+          // Runtime actions use the stable backend-generated ID; display names
+          // are not unique across project/user/marketplace scopes.
+          pluginId: plugin.id ?? plugin.name,
         });
         onToast?.(plugin.enabled ? `已禁用「${plugin.name}」` : `已启用「${plugin.name}」`);
         reload();

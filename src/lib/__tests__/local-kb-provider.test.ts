@@ -269,6 +269,27 @@ describe("collectKnowledgeFiles", () => {
     expect(files).toHaveLength(3);
   });
 
+  it("遵守扫描条目和目录预算", async () => {
+    let calls = 0;
+    const reader: DirectoryReader = {
+      listDir: async (path) => {
+        calls += 1;
+        return Array.from({ length: 20 }, (_, index) => ({
+          name: `dir-${index}`,
+          path: `${path}/dir-${index}`,
+          isDir: true,
+        }));
+      },
+      readText: async () => null,
+    };
+    await collectKnowledgeFiles("/r", reader, {
+      maxDepth: 10,
+      maxDirectories: 3,
+      maxEntries: 25,
+    });
+    expect(calls).toBeLessThanOrEqual(3);
+  });
+
   it("listDir 失败的目录被跳过", async () => {
     const reader: DirectoryReader = {
       listDir: async () => {
@@ -295,6 +316,20 @@ describe("createLocalKbProvider", () => {
     const p = createLocalKbProvider("", { listDir: async () => [], readText: async () => null });
     expect(p.isEnabled()).toBe(false);
     expect(await p.list()).toEqual([]);
+  });
+
+  it("拒绝过长查询并限制结果数", async () => {
+    const reader: DirectoryReader = {
+      listDir: async () => Array.from({ length: 10 }, (_, index) => ({
+        name: `note-${index}.md`,
+        path: `/kb/note-${index}.md`,
+        isDir: false,
+      })),
+      readText: async () => "matching content",
+    };
+    const p = createLocalKbProvider("/kb", reader, { maxResults: 3 });
+    await expect(p.list("x".repeat(513))).rejects.toThrow(/查询/);
+    expect(await p.list()).toHaveLength(3);
   });
 
   it("有 root → isEnabled true,无 query 列出标题", async () => {

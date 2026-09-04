@@ -6,10 +6,10 @@
  *  - 资产: 从用户选择的文件复制到项目私有目录，支持打开、新建目录和删除
  */
 import { useMemo, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useProjectsStore, PLAN_COLUMNS, type PlanStatus, type AssetItem } from "@/stores/projects-store";
-import { openLocalPath, projectAssetMakeDir, projectAssetRemove, projectAssetsImport } from "@/lib/agent-client";
+import { filesystemPickFiles, openLocalPath, projectAssetMakeDir, projectAssetRemove, projectAssetsImport } from "@/lib/agent-client";
 import { formatFileSize } from "@/lib/file-utils";
+import { useAppDialog } from "./AppDialog";
 
 // ============================================================
 // 动态
@@ -23,27 +23,37 @@ export function ActivityTab({
   onOpenSession?: (sessionId: string, cwd?: string) => void;
 }) {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
-  const conversations = project?.conversations ?? [];
+  const conversations = (project?.conversations ?? []).filter((conversation) => !conversation.archived);
+  const archivedCount = (project?.conversations ?? []).length - conversations.length;
   return (
     <div className="pd-tab">
       <div className="pd-activity-switch" aria-label="项目概览">
         <span className="pd-pill pd-pill--on">{conversations.length} 个对话</span>
+        {archivedCount > 0 && <span className="pd-pill">{archivedCount} 个已归档</span>}
         <span className="pd-pill">{project?.plans.length ?? 0} 项计划</span>
         <span className="pd-pill">{project?.tasks.length ?? 0} 项任务</span>
         <span className="pd-pill">{project?.assets.length ?? 0} 个资产</span>
       </div>
       {conversations.length === 0 ? (
-        <div className="pd-empty">暂无真实运行记录，从下方输入框启动第一个项目对话。</div>
+        <div className="pd-empty">
+          {archivedCount > 0
+            ? "所有项目对话均已归档，可在侧栏的归档筛选中恢复。"
+            : "暂无真实运行记录，从下方输入框启动第一个项目对话。"}
+        </div>
       ) : (
         <ul className="pd-task-list" aria-label="最近项目对话">
           {conversations.slice(0, 20).map((conversation) => (
-            <li
-              className={`pd-task-item${onOpenSession ? " pd-task-item--clickable" : ""}`}
-              key={conversation.sessionId}
-              onClick={() => onOpenSession?.(conversation.sessionId, project?.cwd)}
-            >
-              <span className="pd-task-item__title">{conversation.title}</span>
-              <span className="pd-task-item__meta">对话 · {relTime(conversation.createdAt)}</span>
+            <li key={conversation.sessionId}>
+              <button
+                type="button"
+                className={`pd-task-item${onOpenSession ? " pd-task-item--clickable" : ""}`}
+                style={{ width: "100%", textAlign: "left" }}
+                onClick={() => onOpenSession?.(conversation.sessionId, project?.cwd)}
+                disabled={!onOpenSession}
+              >
+                <span className="pd-task-item__title">{conversation.title}</span>
+                <span className="pd-task-item__meta">对话 · {relTime(conversation.createdAt)}</span>
+              </button>
             </li>
           ))}
         </ul>
@@ -77,10 +87,34 @@ export function PlanTab({
   const movePlan = useProjectsStore((s) => s.movePlan);
   const linkPlanSession = useProjectsStore((s) => s.linkPlanSession);
   const removePlan = useProjectsStore((s) => s.removePlan);
+  const { requestConfirmation, requestInput, dialog } = useAppDialog(projectId);
 
   const newTodo = () => {
-    const title = window.prompt("新建待办标题");
-    if (title && title.trim()) addPlan(projectId, title.trim(), "pending");
+    requestInput({
+      title: "新建待办",
+      fields: [{ name: "title", label: "待办标题", required: true, maxLength: 200 }],
+      confirmLabel: "创建",
+      action: ({ title }) => addPlan(projectId, title.trim(), "pending"),
+    });
+  };
+
+  const newTodoInColumn = (status: PlanStatus, label: string) => {
+    requestInput({
+      title: `在“${label}”新建待办`,
+      fields: [{ name: "title", label: "待办标题", required: true, maxLength: 200 }],
+      confirmLabel: "创建",
+      action: ({ title }) => addPlan(projectId, title.trim(), status),
+    });
+  };
+
+  const requestRemovePlan = (card: (typeof plans)[number]) => {
+    requestConfirmation({
+      title: `删除待办“${card.title}”？`,
+      description: "该待办及其关联信息将从项目中删除。",
+      confirmLabel: "删除待办",
+      danger: true,
+      action: () => removePlan(projectId, card.id),
+    });
   };
 
   const runWithAgent = async (card: { id: string; title: string; status: PlanStatus }) => {
@@ -116,10 +150,7 @@ export function PlanTab({
                 <button
                   className="pd-board-col__add"
                   aria-label={`在${col.label}新建`}
-                  onClick={() => {
-                    const title = window.prompt(`在「${col.label}」新建待办`);
-                    if (title && title.trim()) addPlan(projectId, title.trim(), col.status);
-                  }}
+                  onClick={() => newTodoInColumn(col.status, col.label)}
                 >
                   +
                 </button>
@@ -140,7 +171,14 @@ export function PlanTab({
                           </button>
                         )}
                         {c.sessionId && onOpenSession && (
-                          <button className="pd-board-card__move" onClick={() => onOpenSession(c.sessionId!)}>打开会话</button>
+                          <button
+                            className="pd-board-card__move"
+                            onClick={() => onOpenSession(c.sessionId!)}
+                            disabled={c.sessionArchived}
+                            title={c.sessionArchived ? "该会话已归档，请先在侧栏的归档筛选中恢复" : undefined}
+                          >
+                            {c.sessionArchived ? "会话已归档" : "打开会话"}
+                          </button>
                         )}
                         {PLAN_COLUMNS.filter((x) => x.status !== c.status).map((x) => (
                           <button
@@ -152,7 +190,7 @@ export function PlanTab({
                             →{x.label}
                           </button>
                         ))}
-                        <button className="pd-board-card__del" aria-label="删除" onClick={() => removePlan(projectId, c.id)}>×</button>
+                        <button className="pd-board-card__del" aria-label={`删除待办 ${c.title}`} onClick={() => requestRemovePlan(c)}>×</button>
                       </div>
                     </div>
                   ))
@@ -162,6 +200,7 @@ export function PlanTab({
           );
         })}
       </div>
+      {dialog}
     </div>
   );
 }
@@ -185,12 +224,27 @@ export function TaskTab({
   const linkTaskSession = useProjectsStore((s) => s.linkTaskSession);
   const removeTask = useProjectsStore((s) => s.removeTask);
   const [q, setQ] = useState("");
+  const { requestConfirmation, requestInput, dialog } = useAppDialog(projectId);
 
   const filtered = tasks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase()));
 
   const newTask = () => {
-    const title = window.prompt("新建任务标题");
-    if (title && title.trim()) addTask(projectId, title.trim());
+    requestInput({
+      title: "新建任务",
+      fields: [{ name: "title", label: "任务标题", required: true, maxLength: 200 }],
+      confirmLabel: "创建",
+      action: ({ title }) => addTask(projectId, title.trim()),
+    });
+  };
+
+  const requestRemoveTask = (task: (typeof tasks)[number]) => {
+    requestConfirmation({
+      title: `删除任务“${task.title}”？`,
+      description: "该任务及其关联信息将从项目中删除。",
+      confirmLabel: "删除任务",
+      danger: true,
+      action: () => removeTask(projectId, task.id),
+    });
   };
 
   const runWithAgent = async (task: (typeof tasks)[number]) => {
@@ -213,7 +267,7 @@ export function TaskTab({
           <span className="pd-toolbar__hint">项目任务保存在本机 EchoAgent 私有数据目录</span>
         </div>
         <div className="pd-toolbar__right">
-          <input className="pd-search-inline" placeholder="搜索任务标题" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="pd-search-inline" aria-label="搜索任务标题" placeholder="搜索任务标题" value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="pd-btn pd-btn--primary" onClick={newTask}>+ 新建任务</button>
         </div>
       </div>
@@ -234,7 +288,14 @@ export function TaskTab({
                   <button className="pd-btn pd-btn--small" onClick={() => void runWithAgent(t)}>交给 Agent</button>
                 )}
                 {t.sessionId && onOpenSession && (
-                  <button className="pd-btn pd-btn--small" onClick={() => onOpenSession(t.sessionId!)}>打开会话</button>
+                  <button
+                    className="pd-btn pd-btn--small"
+                    onClick={() => onOpenSession(t.sessionId!)}
+                    disabled={t.sessionArchived}
+                    title={t.sessionArchived ? "该会话已归档，请先在侧栏的归档筛选中恢复" : undefined}
+                  >
+                    {t.sessionArchived ? "会话已归档" : "打开会话"}
+                  </button>
                 )}
                 <select
                   aria-label={`调整任务状态 ${t.title}`}
@@ -244,11 +305,12 @@ export function TaskTab({
                   {PLAN_COLUMNS.map((column) => <option key={column.status} value={column.status}>{column.label}</option>)}
                 </select>
               </div>
-              <button className="pd-task-item__del" aria-label="删除" onClick={() => removeTask(projectId, t.id)}>×</button>
+              <button className="pd-task-item__del" aria-label={`删除任务 ${t.title}`} onClick={() => requestRemoveTask(t)}>×</button>
             </li>
           ))}
         </ul>
       )}
+      {dialog}
     </div>
   );
 }
@@ -264,44 +326,60 @@ function usedBytes(assets: AssetItem[]): number {
 export function AssetsTab({ projectId, onToast }: { projectId: string; onToast?: (message: string) => void }) {
   const assets = useProjectsStore((s) => s.projects.find((p) => p.id === projectId)?.assets ?? []);
   const addAsset = useProjectsStore((s) => s.addAsset);
+  const addAssets = useProjectsStore((s) => s.addAssets);
   const removeAsset = useProjectsStore((s) => s.removeAsset);
   const [q, setQ] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const { requestConfirmation, requestInput, dialog } = useAppDialog(projectId);
 
   const used = useMemo(() => usedBytes(assets), [assets]);
 
-  const newFolder = async () => {
-    const name = window.prompt("文件夹名称");
-    if (!name?.trim()) return;
-    try {
-      const asset = await projectAssetMakeDir(projectId, name.trim());
-      addAsset(projectId, asset);
-      onToast?.("文件夹已创建");
-    } catch (error) {
-      onToast?.(`创建失败：${String(error).replace(/^Error:\s*/, "")}`);
-    }
+  const newFolder = () => {
+    requestInput({
+      title: "新建项目文件夹",
+      description: "文件夹将创建在项目的私有资产目录中。",
+      fields: [{ name: "name", label: "文件夹名称", required: true, maxLength: 255 }],
+      validate: ({ name }) => validateAssetName(name),
+      confirmLabel: "创建",
+      action: async ({ name }) => {
+        const asset = await projectAssetMakeDir(projectId, name.trim());
+        addAsset(projectId, asset);
+        onToast?.("文件夹已创建");
+      },
+      onError: (error) => onToast?.(`创建失败：${String(error).replace(/^Error:\s*/, "")}`),
+    });
   };
   const upload = async () => {
+    if (uploading) return;
     try {
-      const selected = await openDialog({ multiple: true, directory: false });
-      if (!selected) return;
-      const paths = Array.isArray(selected) ? selected : [selected];
+      setUploading(true);
+      const paths = await filesystemPickFiles({ title: "选择要导入项目的文件" });
+      if (paths.length === 0) return;
       const imported = await projectAssetsImport(projectId, paths);
-      imported.forEach((asset) => addAsset(projectId, asset));
+      addAssets(projectId, imported);
       onToast?.(`已导入 ${imported.length} 个文件（原文件未修改）`);
     } catch (error) {
       onToast?.(`导入失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setUploading(false);
     }
   };
 
-  const remove = async (asset: AssetItem) => {
-    if (!window.confirm(`确定删除资产「${asset.name}」？`)) return;
-    try {
-      if (asset.path) await projectAssetRemove(projectId, asset.path);
-      removeAsset(projectId, asset.id);
-      onToast?.(asset.path ? "资产副本已删除" : "旧版资产元数据已删除");
-    } catch (error) {
-      onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`);
-    }
+  const remove = (asset: AssetItem) => {
+    requestConfirmation({
+      title: `删除资产“${asset.name}”？`,
+      description: asset.path
+        ? "项目私有目录中的副本将被永久删除，原始导入文件不受影响。"
+        : "该旧版资产元数据将从项目中删除。",
+      confirmLabel: "删除资产",
+      danger: true,
+      action: async () => {
+        if (asset.path) await projectAssetRemove(projectId, asset.path);
+        removeAsset(projectId, asset.id);
+        onToast?.(asset.path ? "资产副本已删除" : "旧版资产元数据已删除");
+      },
+      onError: (error) => onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`),
+    });
   };
 
   const rows = assets.filter((a) => a.name.toLowerCase().includes(q.toLowerCase()));
@@ -311,13 +389,15 @@ export function AssetsTab({ projectId, onToast }: { projectId: string; onToast?:
       <div className="pd-toolbar">
         <div className="pd-toolbar__left">
           <button className="pd-btn" onClick={newFolder}>新建文件夹</button>
-          <button className="pd-btn" onClick={upload}>导入文件副本</button>
+          <button className="pd-btn" onClick={() => void upload()} disabled={uploading}>
+            {uploading ? "导入中…" : "导入文件副本"}
+          </button>
           <span className="pd-toolbar__hint">
             本地项目资产已用 {formatFileSize(used)}
           </span>
         </div>
         <div className="pd-toolbar__right">
-          <input className="pd-search-inline" placeholder="搜索文件或文件夹…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="pd-search-inline" aria-label="搜索项目资产" placeholder="搜索文件或文件夹…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
       </div>
 
@@ -335,7 +415,7 @@ export function AssetsTab({ projectId, onToast }: { projectId: string; onToast?:
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td className="pd-asset-empty" colSpan={6}>暂无资产，点击「上传文件」或「新建文件夹」开始。</td>
+              <td className="pd-asset-empty" colSpan={6}>暂无资产，点击「导入文件副本」或「新建文件夹」开始。</td>
             </tr>
           ) : (
             rows.map((a) => (
@@ -357,15 +437,25 @@ export function AssetsTab({ projectId, onToast }: { projectId: string; onToast?:
                 <td>{a.updatedAt ? relTime(a.updatedAt) : "-"}</td>
                 <td>{a.kind === "folder" ? "-" : a.sizeBytes !== undefined ? formatFileSize(a.sizeBytes) : a.sizeLabel ?? "-"}</td>
                 <td>
-                  <button className="pd-asset-del" aria-label="删除" onClick={() => void remove(a)}>×</button>
+                  <button className="pd-asset-del" aria-label={`删除资产 ${a.name}`} onClick={() => void remove(a)}>×</button>
                 </td>
               </tr>
             ))
           )}
         </tbody>
       </table>
+      {dialog}
     </div>
   );
+}
+
+function validateAssetName(value: string): string | null {
+  const name = value.trim();
+  if (!name) return "文件夹名称不能为空。";
+  if (name === "." || name === ".." || /[\\/\u0000-\u001f\u007f]/.test(name)) {
+    return "文件夹名称不能包含路径分隔符或控制字符，也不能是 . 或 ..。";
+  }
+  return null;
 }
 
 function relTime(iso: string): string {

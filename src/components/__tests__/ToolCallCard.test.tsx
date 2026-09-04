@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { ToolCallCard } from "../ToolCallCard";
+import { ToolCallCard, ToolCallDetailBody } from "../ToolCallCard";
 import type { ToolCallView } from "@/stores/session-store";
 
 const base: ToolCallView = {
@@ -46,5 +46,31 @@ describe("ToolCallCard", () => {
       />,
     );
     expect(screen.getByText("…")).toBeInTheDocument();
+  });
+
+  it("工具图片只渲染有界的内联栅格数据", () => {
+    render(
+      <ToolCallDetailBody
+        tc={{
+          ...base,
+          content: [{ type: "image", mimeType: "image/png", data: "AAAA", uri: "https://tracker.invalid/pixel" }],
+        }}
+      />,
+    );
+    expect(screen.getByRole("img")).toHaveAttribute("src", "data:image/png;base64,AAAA");
+    expect(screen.getByRole("img").getAttribute("src")).not.toContain("tracker.invalid");
+  });
+
+  it("拦截远程、SVG 或无效工具图片", () => {
+    render(
+      <ToolCallDetailBody
+        tc={{
+          ...base,
+          content: [{ type: "image", mimeType: "image/svg+xml", data: "PHN2Zz4=", uri: "http://127.0.0.1/private" }],
+        }}
+      />,
+    );
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("已拦截不安全");
   });
 });

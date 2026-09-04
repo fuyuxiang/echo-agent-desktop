@@ -5,6 +5,16 @@ import { Composer } from "../Composer";
 const base = { streaming: false, onSend: vi.fn(), onCancel: vi.fn() };
 
 describe("Composer", () => {
+  it("空文本且无附件时不可发送", () => {
+    const onSend = vi.fn();
+    render(<Composer {...base} onSend={onSend} />);
+    const input = screen.getByRole("textbox");
+    const send = screen.getByRole("button", { name: "发送" });
+    expect(send).toBeDisabled();
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("输入后 Enter 发送", () => {
     const onSend = vi.fn();
     render(<Composer {...base} onSend={onSend} />);
@@ -70,6 +80,15 @@ describe("Composer", () => {
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "x" } });
     fireEvent.click(screen.getByRole("button", { name: "停止生成" }));
     expect(onCancel).toHaveBeenCalled();
+  });
+
+  it("取消请求进行中禁用停止按钮，避免重复提交", () => {
+    const onCancel = vi.fn();
+    render(<Composer {...base} streaming cancelling onCancel={onCancel} />);
+    const stop = screen.getByRole("button", { name: "正在停止生成" });
+    expect(stop).toBeDisabled();
+    fireEvent.click(stop);
+    expect(onCancel).not.toHaveBeenCalled();
   });
 
   // ---------- 按会话持久化草稿 ----------

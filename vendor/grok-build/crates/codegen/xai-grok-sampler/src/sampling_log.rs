@@ -9,7 +9,13 @@ pub const TARGET: &str = "sampling_log";
 #[derive(Debug, Clone)]
 pub struct AuthInfo {
     pub auth_type: &'static str,
-    pub auth_prefix: Option<String>,
+    pub has_auth: bool,
+}
+
+fn safe_origin(base_url: &str) -> String {
+    reqwest::Url::parse(base_url)
+        .map(|url| url.origin().ascii_serialization())
+        .unwrap_or_else(|_| "<invalid>".to_owned())
 }
 
 pub fn request_span(
@@ -19,19 +25,38 @@ pub fn request_span(
     base_url: &str,
     auth: &AuthInfo,
 ) -> tracing::Span {
+    let base_origin = safe_origin(base_url);
     tracing::info_span!(
         target: TARGET,
         "sampling_request",
         request_id = %request_id,
         model = model,
         api_backend = api_backend,
-        base_url = base_url,
+        base_url = %base_origin,
         auth_type = auth.auth_type,
-        auth_prefix = auth.auth_prefix.as_deref().unwrap_or(""),
+        has_auth = auth.has_auth,
         // Recorded from `SamplerConfig` / response usage as the request
         // progresses; `field::Empty` lets callers `record()` them later.
         reasoning_effort = tracing::field::Empty,
         output_tokens = tracing::field::Empty,
         reasoning_tokens = tracing::field::Empty,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_origin;
+
+    #[test]
+    fn safe_origin_drops_credentials_path_query_and_fragment() {
+        assert_eq!(
+            safe_origin("https://user:secret@example.com:8443/v1?token=secret#fragment"),
+            "https://example.com:8443"
+        );
+    }
+
+    #[test]
+    fn safe_origin_does_not_echo_invalid_input() {
+        assert_eq!(safe_origin("secret-value"), "<invalid>");
+    }
 }

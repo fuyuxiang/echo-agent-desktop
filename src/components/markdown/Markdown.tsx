@@ -31,6 +31,17 @@ import type { MarkdownConfig, MarkdownProps } from "./types";
 
 /* ---------- sanitize schema (hljs + katex/mathml) ---------- */
 
+const MAX_INLINE_IMAGE_URL_LENGTH = 12 * 1024 * 1024;
+const INLINE_RASTER_DATA_URL = /^data:image\/(?:png|jpe?g|gif|webp);base64,/i;
+
+function isSafeInlineRasterUrl(value: string | undefined): boolean {
+  return Boolean(
+    value
+      && value.length <= MAX_INLINE_IMAGE_URL_LENGTH
+      && INLINE_RASTER_DATA_URL.test(value),
+  );
+}
+
 function buildSanitizeSchema(config?: MarkdownConfig) {
   const schema = { ...defaultSchema };
   schema.attributes = {
@@ -42,6 +53,7 @@ function buildSanitizeSchema(config?: MarkdownConfig) {
     span: ["className", "style", "ariaHidden", "role"],
     div: ["className", "style"],
     pre: [...(defaultSchema.attributes?.pre || []), "className"],
+    img: [...(defaultSchema.attributes?.img || []), "alt", "title"],
     "*": [
       "className",
       "style",
@@ -124,12 +136,16 @@ function buildSanitizeSchema(config?: MarkdownConfig) {
   schema.protocols = {
     ...defaultSchema.protocols,
     href: [...(defaultSchema.protocols?.href || []), ...extraSchemes],
+    // `data:` is admitted by the syntax sanitizer, then constrained to a
+    // small allow-list of raster MIME types and a hard length cap by the
+    // image component below. SVG data URLs remain blocked.
+    src: [...(defaultSchema.protocols?.src || []), "data"],
   };
   if (config?.imageUrlResolver || config?.imageUrlResolverAsync) {
     schema.protocols = {
       ...schema.protocols,
       src: [
-        ...(defaultSchema.protocols?.src || []),
+        ...(schema.protocols.src || []),
         "file",
         "local-file",
         "blob",
@@ -213,7 +229,17 @@ function MarkdownImage({
   alt?: string;
   config?: MarkdownConfig;
 } & React.ImgHTMLAttributes<HTMLImageElement>) {
-  const syncResolved = src ? (config?.imageUrlResolver?.(src) ?? src) : src;
+  // Model-authored Markdown is untrusted. Rendering a remote image directly
+  // would issue a privacy-sensitive GET as soon as the message becomes
+  // visible (tracking pixels and local-network probes do not need CORS).
+  // Only bounded inline raster data, or a URL produced by an explicit host
+  // resolver, may become an <img> source automatically.
+  const hasResolver = Boolean(config?.imageUrlResolver || config?.imageUrlResolverAsync);
+  const syncResolved = src && config?.imageUrlResolver
+    ? config.imageUrlResolver(src)
+    : !hasResolver
+      ? src
+      : undefined;
   const [resolvedSrc, setResolvedSrc] = useState(syncResolved);
 
   useEffect(() => {
@@ -237,7 +263,45 @@ function MarkdownImage({
     };
   }, [config, src, syncResolved]);
 
-  return <img src={resolvedSrc} alt={alt} {...imgProps} />;
+  const safeInlineRaster = isSafeInlineRasterUrl(resolvedSrc);
+  const safeResolvedResource = hasResolver
+    && resolvedSrc != null
+    && (/^(?:blob:|asset:|local-file:)/i.test(resolvedSrc)
+      || /^https:\/\/asset\.localhost(?:\/|$)/i.test(resolvedSrc));
+
+  if (safeInlineRaster || safeResolvedResource) {
+    return <img src={resolvedSrc} alt={alt} {...imgProps} />;
+  }
+
+  const remote = src != null && /^https?:\/\//i.test(src);
+  return (
+    <span className="md-remote-image-blocked" role="note">
+      <span>已阻止自动加载远程图片</span>
+      {remote ? (
+        <a
+          href={src}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(event) => {
+            if (
+              config?.onLinkClick?.({
+                href: src,
+                children: alt,
+                event,
+              }) === false
+            ) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
+        >
+          {alt?.trim() || "在浏览器中打开图片"}
+        </a>
+      ) : alt?.trim() ? (
+        <span>{alt}</span>
+      ) : null}
+    </span>
+  );
 }
 
 /* ---------- main renderer ---------- */
@@ -266,13 +330,16 @@ function MarkdownInner({
   }, [config?.customUrlSchemes]);
 
   const urlTransform = useMemo(() => {
-    const schemes = config?.customUrlSchemes;
-    if (!schemes?.length) return defaultUrlTransform;
-    const prefixes = schemes.map((s) => `${s.scheme}:`);
-    return (value: string) =>
-      prefixes.some((p) => value.toLowerCase().startsWith(p))
+    const prefixes = (config?.customUrlSchemes ?? []).map(
+      (scheme) => `${scheme.scheme.toLowerCase()}:`,
+    );
+    return (value: string) => {
+      if (isSafeInlineRasterUrl(value)) return value;
+      const lowerValue = value.toLowerCase();
+      return prefixes.some((prefix) => lowerValue.startsWith(prefix))
         ? value
         : defaultUrlTransform(value);
+    };
   }, [config?.customUrlSchemes]);
 
   const remarkPlugins = useMemo(
@@ -464,17 +531,13 @@ function MarkdownInner({
           </a>
         );
       },
-      ...(config?.imageUrlResolver || config?.imageUrlResolverAsync
-        ? {
-            img: ({
-              src,
-              alt,
-              ...imgProps
-            }: React.ImgHTMLAttributes<HTMLImageElement>) => (
-              <MarkdownImage src={src} alt={alt} config={config} {...imgProps} />
-            ),
-          }
-        : {}),
+      img: ({
+        src,
+        alt,
+        ...imgProps
+      }: React.ImgHTMLAttributes<HTMLImageElement>) => (
+        <MarkdownImage src={src} alt={alt} config={config} {...imgProps} />
+      ),
     }),
     [config, complete, theme],
   );

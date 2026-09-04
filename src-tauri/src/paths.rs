@@ -15,6 +15,7 @@ const HOME_ENV: &str = "ECHO_AGENT_HOME";
 const UPSTREAM_HOME_ENV: &str = "GROK_HOME";
 const UPSTREAM_AUTH_ENV: &str = "GROK_AUTH";
 const UPSTREAM_AUTH_PATH_ENV: &str = "GROK_AUTH_PATH";
+const SECURE_PROVIDER_URLS_ENV: &str = "ECHO_AGENT_ENFORCE_SECURE_PROVIDER_URLS";
 const HOME_DIR_NAME: &str = ".echo-agent";
 const LEGACY_HOME_DIR_NAME: &str = ".grok";
 const MIGRATION_MARKER: &str = ".legacy-data-migrated";
@@ -53,6 +54,48 @@ pub fn echo_agent_home_dir() -> PathBuf {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(HOME_DIR_NAME)
         })
+}
+
+/// Default user-visible workspace for sessions created without an explicit
+/// folder selection. Keeping this in one dedicated directory avoids treating
+/// the user's entire home directory as an implicit filesystem capability.
+pub(crate) fn default_workspace_dir() -> Result<PathBuf, String> {
+    let mut bases = Vec::new();
+    if let Some(documents) = dirs::document_dir() {
+        push_unique_path(&mut bases, documents);
+    }
+    if let Some(home) = dirs::home_dir() {
+        push_unique_path(&mut bases, home);
+    }
+    if bases.is_empty() {
+        return Err("无法确定默认工作区位置".into());
+    }
+
+    let mut last_error = None;
+    for base in bases {
+        let workspace = default_workspace_path(&base);
+        if let Err(error) = fs::create_dir_all(&workspace) {
+            last_error = Some(format!(
+                "创建默认工作区 {} 失败：{error}",
+                workspace.display()
+            ));
+            continue;
+        }
+        match workspace.canonicalize() {
+            Ok(canonical) => return Ok(canonical),
+            Err(error) => {
+                last_error = Some(format!(
+                    "无法解析默认工作区 {}：{error}",
+                    workspace.display()
+                ));
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "无法创建默认工作区".into()))
+}
+
+fn default_workspace_path(base: &Path) -> PathBuf {
+    base.join("EchoAgent Workspace")
 }
 
 /// Canonical roots for the catalogs shown in the Experts · Skills ·
@@ -126,6 +169,11 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
     // if migration later reports an I/O error, so new writes never fall back
     // to the legacy directory.
     std::env::set_var(UPSTREAM_HOME_ENV, &target);
+    // Tell the embedded sampler to reject insecure provider URLs loaded from
+    // legacy or manually edited Runtime config. This is set by native startup,
+    // not by the WebView, so request-time enforcement cannot be bypassed by
+    // invoking a different settings command.
+    std::env::set_var(SECURE_PROVIDER_URLS_ENV, "1");
     // EchoAgent uses only per-provider credentials. Remove upstream account
     // overrides before background threads start so the inert runtime adapter
     // cannot inherit an upstream account token from the parent process.
@@ -230,45 +278,95 @@ pub(crate) fn write_private_file(path: &Path, contents: &[u8]) -> Result<(), Str
     let parent = path
         .parent()
         .ok_or_else(|| format!("private file has no parent: {}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("private file has no name: {}", path.display()))?;
     fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     harden_private_dir(parent)?;
-    let tmp = path.with_extension(format!(
-        "{}.tmp",
-        path.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("private")
+    // A unique sibling prevents concurrent writers from truncating each
+    // other's staging file. `create_new` also closes the residual collision
+    // window if a UUID is ever repeated.
+    let tmp = parent.join(format!(
+        ".{}.{}.{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        uuid::Uuid::now_v7().simple()
     ));
 
-    let write_to = |target: &Path| -> Result<(), String> {
+    let result = (|| -> Result<(), String> {
         let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         options.mode(0o600);
         let mut file = options
-            .open(target)
-            .map_err(|e| format!("open {}: {e}", target.display()))?;
+            .open(&tmp)
+            .map_err(|e| format!("create private staging file {}: {e}", tmp.display()))?;
         file.write_all(contents)
-            .map_err(|e| format!("write {}: {e}", target.display()))?;
+            .map_err(|e| format!("write {}: {e}", tmp.display()))?;
         file.sync_all()
-            .map_err(|e| format!("sync {}: {e}", target.display()))?;
-        harden_private_file(target)
-    };
-
-    write_to(&tmp)?;
-    if let Err(rename_error) = fs::rename(&tmp, path) {
-        write_to(path).map_err(|fallback| {
-            format!(
-                "replace {}: {rename_error}; fallback: {fallback}",
-                path.display()
-            )
-        })?;
+            .map_err(|e| format!("sync {}: {e}", tmp.display()))?;
+        harden_private_file(&tmp)?;
+        drop(file);
+        replace_file_atomically(&tmp, path)
+    })();
+    if let Err(error) = result {
         let _ = fs::remove_file(&tmp);
+        return Err(error);
     }
     harden_private_file(path)?;
     if let Ok(dir) = fs::File::open(parent) {
         let _ = dir.sync_all();
     }
     Ok(())
+}
+
+#[cfg(not(windows))]
+pub(crate) fn replace_file_atomically(staging: &Path, destination: &Path) -> Result<(), String> {
+    fs::rename(staging, destination).map_err(|error| {
+        format!(
+            "atomically replace {} from {}: {error}",
+            destination.display(),
+            staging.display()
+        )
+    })
+}
+
+#[cfg(windows)]
+pub(crate) fn replace_file_atomically(staging: &Path, destination: &Path) -> Result<(), String> {
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let staging_wide = staging
+        .as_os_str()
+        .encode_wide()
+        .chain(once(0))
+        .collect::<Vec<_>>();
+    let destination_wide = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: both buffers are NUL-terminated and remain alive for the call.
+    let replaced = unsafe {
+        MoveFileExW(
+            staging_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(format!(
+            "atomically replace {} from {}: {}",
+            destination.display(),
+            staging.display(),
+            io::Error::last_os_error()
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 pub(crate) fn harden_private_file(path: &Path) -> Result<(), String> {
@@ -280,7 +378,7 @@ pub(crate) fn harden_private_file(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn harden_private_dir(path: &Path) -> Result<(), String> {
+pub(crate) fn harden_private_dir(path: &Path) -> Result<(), String> {
     #[cfg(unix)]
     {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
@@ -345,8 +443,8 @@ fn copy_file_if_missing(source: &Path, destination: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        catalog_roots, merge_missing, migrate_catalog_dir, reject_legacy_workbuddy_path,
-        write_private_file,
+        catalog_roots, default_workspace_path, merge_missing, migrate_catalog_dir,
+        reject_legacy_workbuddy_path, write_private_file,
     };
     use std::fs;
     use std::path::Path;
@@ -391,6 +489,14 @@ mod tests {
             catalog.builtin_skills,
             Path::new("/data/echo-agent-home/resources/builtin-skills")
         );
+    }
+
+    #[test]
+    fn default_workspace_is_a_dedicated_child_not_the_user_home() {
+        let user_documents = Path::new("/Users/demo/Documents");
+        let workspace = default_workspace_path(user_documents);
+        assert_eq!(workspace, user_documents.join("EchoAgent Workspace"));
+        assert_ne!(workspace, user_documents);
     }
 
     #[test]
@@ -477,6 +583,37 @@ mod tests {
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
+        );
+    }
+
+    #[test]
+    fn concurrent_private_writes_never_publish_partial_content() {
+        let target = tempfile::tempdir().unwrap();
+        let path = target.path().join("config.toml");
+        let payloads = (0..12)
+            .map(|index| format!("writer-{index}:{}", "x".repeat(32 * 1024)))
+            .collect::<Vec<_>>();
+        let handles = payloads
+            .iter()
+            .cloned()
+            .map(|payload| {
+                let path = path.clone();
+                std::thread::spawn(move || write_private_file(&path, payload.as_bytes()).unwrap())
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(payloads.contains(&written));
+        assert_eq!(
+            fs::read_dir(target.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+                .count(),
+            0
         );
     }
 }

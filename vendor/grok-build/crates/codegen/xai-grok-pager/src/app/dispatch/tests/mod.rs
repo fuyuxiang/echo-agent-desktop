@@ -661,6 +661,7 @@ fn make_ask_user_question_args(
         session_id: "test-session".into(),
         tool_call_id: tool_call_id.into(),
         mode: xai_grok_tools::implementations::grok_build::ask_user_question::AskUserQuestionMode::Default,
+        timeout_secs: None,
         questions: vec![Question {
                 question: "ACP-driven question".into(),
                 options: vec![QuestionOption {

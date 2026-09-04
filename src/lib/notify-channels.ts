@@ -184,13 +184,14 @@ export function resetNotifyChannels(): void {
 
 /**
  * 向所有启用渠道分发通知。返回每个渠道的发送结果。
- * 依赖注入 `sender`(默认用 fetch),便于测试。
+ * 依赖注入 `sender`，便于纯函数单测。产品通知一律由 Rust 后端发送，
+ * 不在 WebView 内直接请求 webhook 或打开外部 URL。
  */
 export async function dispatchNotification(
   msg: NotifyMessage,
   deps: { sender?: (channel: NotifyChannel, payload: unknown) => Promise<boolean> } = {},
 ): Promise<Array<{ id: string; ok: boolean }>> {
-  const sender = deps.sender ?? defaultSender;
+  const sender = deps.sender ?? (async () => false);
   const out: Array<{ id: string; ok: boolean }> = [];
   for (const channel of listNotifyChannels()) {
     const payload = buildPayload(channel, msg);
@@ -202,30 +203,4 @@ export async function dispatchNotification(
     }
   }
   return out;
-}
-
-/** 默认发送器:webhook 用 fetch,email 用 window.open,desktop 用 Notification API。 */
-async function defaultSender(channel: NotifyChannel, payload: unknown): Promise<boolean> {
-  if (channel.kind === "email") {
-    if (typeof window !== "undefined") window.open(payload as string, "_blank");
-    return true;
-  }
-  if (channel.kind === "desktop") {
-    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-      const msg = payload as Record<string, unknown>;
-      new Notification(msg.title as string, { body: (msg.body as string) ?? "" });
-      return true;
-    }
-    return false;
-  }
-  // webhook:fetch POST JSON。
-  if (channel.endpoint && typeof fetch !== "undefined") {
-    const res = await fetch(channel.endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    return res.ok;
-  }
-  return false;
 }

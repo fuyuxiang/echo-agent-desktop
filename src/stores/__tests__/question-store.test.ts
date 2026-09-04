@@ -14,8 +14,14 @@ function makeQuestion(requestId: string, sessionId: string): QuestionRequest {
     toolCallId: `tc-${requestId}`,
     title: `Question ${requestId}`,
     questions: [
-      { id: "q1", question: "选择方案", options: ["A", "B", "C"] },
+      {
+        id: "q1",
+        question: "选择方案",
+        options: ["A", "B", "C"].map((label) => ({ label, description: "" })),
+        multiSelect: false,
+      },
     ],
+    mode: "default",
   };
 }
 
@@ -33,6 +39,13 @@ describe("question-store", () => {
     s.request(makeQuestion("r1", "s1"));
     s.request(makeQuestion("r2", "s1"));
     expect(useQuestionStore.getState().queues["s1"].map((q) => q.requestId)).toEqual(["r1", "r2"]);
+  });
+
+  it("重放同一 requestId 时不重复入队", () => {
+    const request = makeQuestion("r1", "s1");
+    useQuestionStore.getState().request(request);
+    useQuestionStore.getState().request(request);
+    expect(useQuestionStore.getState().queues.s1).toHaveLength(1);
   });
 
   it("不同会话隔离", () => {

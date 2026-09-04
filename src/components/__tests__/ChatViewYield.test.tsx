@@ -177,6 +177,24 @@ describe("ChatView pause/yield/resume 闭环", () => {
     expect(screen.getByRole("button", { name: "恢复并继续" })).toBeInTheDocument();
   });
 
+  it("取消失败时不会伪装成已暂停", async () => {
+    setStore({ streaming: true, streamingMessageId: "a1" });
+    baseProps.onCancel.mockResolvedValueOnce(false);
+    const { rerender } = renderChat();
+    fireEvent.click(screen.getByTitle("暂停生成(保留会话,可继续)"));
+    await waitFor(() => expect(baseProps.onToast).toHaveBeenCalledWith(
+      "暂停失败，Agent 仍在运行",
+    ));
+
+    setStore({ streaming: false, streamingMessageId: null });
+    rerender(
+      <ThemeProvider>
+        <ChatView {...baseProps} />
+      </ThemeProvider>,
+    );
+    expect(screen.queryByText("已暂停(会话上下文已保留)")).toBeNull();
+  });
+
   it("「恢复」仅清状态,不触发 onSend", async () => {
     setStore({ streaming: true, streamingMessageId: "a1" });
     const { rerender } = renderChat();

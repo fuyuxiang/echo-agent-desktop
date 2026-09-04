@@ -17,9 +17,9 @@ mod connector_cli;
 mod connectors_catalog;
 mod experts;
 mod ext;
+mod logging;
 mod mcp;
 mod meta;
-mod logging;
 mod notifications;
 mod org;
 mod org_mcp;
@@ -37,7 +37,7 @@ mod skills_catalog;
 mod storage;
 mod team_mcp;
 
-use bridge::{Permissions, Questions};
+use bridge::{FolderTrusts, Permissions, PlanApprovals, Questions};
 use commands::AppState;
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -100,7 +100,7 @@ fn save_desktop_window_state(app: &tauri::AppHandle, window: &tauri::WebviewWind
         maximized,
     };
     if let Ok(payload) = serde_json::to_vec(&state) {
-        let _ = std::fs::write(path, payload);
+        let _ = crate::paths::write_private_file(&path, &payload);
     }
 }
 
@@ -111,7 +111,7 @@ fn restore_desktop_window_state(app: &tauri::AppHandle, window: &tauri::WebviewW
     let Some(path) = desktop_window_state_path(app) else {
         return;
     };
-    let Ok(payload) = std::fs::read(path) else {
+    let Ok(payload) = crate::shell_fs::read_regular_file_bounded(&path, 16 * 1024) else {
         return;
     };
     let Ok(state) = serde_json::from_slice::<DesktopWindowState>(&payload) else {
@@ -242,6 +242,9 @@ pub fn run() {
         .manage(AppState::default())
         .manage(Permissions::new())
         .manage(Questions::new())
+        .manage(PlanApprovals::new())
+        .manage(FolderTrusts::new())
+        .manage(shell_fs::FilesystemAccess::new())
         .manage(org::shared_state())
         .invoke_handler(tauri::generate_handler![
             // session lifecycle
@@ -257,6 +260,8 @@ pub fn run() {
             commands::agent_shutdown,
             commands::agent_resolve_permission,
             commands::agent_resolve_question,
+            commands::agent_resolve_plan_approval,
+            commands::agent_list_pending_interactions,
             commands::agent_rename_session,
             commands::agent_delete_session,
             commands::agent_set_session_pinned,
@@ -401,6 +406,7 @@ pub fn run() {
             agent_admin::tasks_list,
             agent_admin::task_kill,
             agent_admin::folder_trust_respond,
+            agent_admin::set_plan_mode,
             agent_admin::toggle_plan_mode,
             agent_admin::internal_reload,
             agent_admin::plugins_list,
@@ -430,6 +436,8 @@ pub fn run() {
             automations::automation_records_delete,
             // shell / filesystem (markdown links, path click, apply write)
             shell_fs::open_url,
+            shell_fs::filesystem_pick_directory,
+            shell_fs::filesystem_pick_files,
             shell_fs::open_path,
             shell_fs::reveal_in_folder,
             shell_fs::path_stat,

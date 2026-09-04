@@ -831,10 +831,13 @@ export interface AutomationRunRecord {
   id: string;
   automationId: string;
   automationName: string;
-  status: "running" | "success" | "failed" | string;
+  status: "queued" | "running" | "success" | "failed" | string;
   startedAt: string;
   finishedAt?: string;
   sessionId?: string;
+  cwd?: string;
+  modelId?: string;
+  scheduledFor?: string;
   error?: string;
   archived: boolean;
 }

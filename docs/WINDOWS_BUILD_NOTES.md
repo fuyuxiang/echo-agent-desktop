@@ -56,7 +56,9 @@ winget install --id Google.Protobuf --accept-package-agreements --accept-source-
 # 解压到 C:\Tools\protoc\
 ```
 
-`PROTOC` 环境变量已在 `src-tauri/.cargo/config.toml` 的 `[env]` 段设好，默认指向 `C:\Tools\protoc\bin\protoc.exe`；若安装到其他位置请相应修改。
+`scripts/build.ps1` 会依次使用显式设置的 `PROTOC`、PATH 上的 `protoc.exe`、
+以及默认路径 `C:\Tools\protoc\bin\protoc.exe`。若安装到其他位置，请设置
+`PROTOC` 环境变量或将其加入 PATH。
 
 > 旧版 Runtime 的 `descriptor_set_out=NUL` 处理可能在 `protoc` 的 CWD 下生成一个真实名为 `NUL` 的文件，是无害垃圾。用 `cmd del` 或 `git clean` 无法删除，需要 Node 构造 `\\?\` 前缀的绝对路径：`fs.unlinkSync('\\\\?\\C:\\path\\to\\NUL')`。
 

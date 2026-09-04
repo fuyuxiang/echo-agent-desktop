@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { XCloseIcon, FolderOpenIcon } from "@/foundation/components/Icon/icons";
-import { skillsInspectPackage, skillsInstallPackage } from "@/lib/agent-client";
+import { filesystemPickDirectory, filesystemPickFiles, skillsInspectPackage, skillsInstallPackage } from "@/lib/agent-client";
 import type { SkillPackageInspection, SkillRiskLevel } from "@/lib/types";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 const RISK_LABEL: Record<SkillRiskLevel, string> = {
   low: "低风险",
@@ -18,19 +18,24 @@ export function ImportSkillModal({
   onToast?: (m: string) => void;
   onInstalled?: () => void;
 }) {
-  const [dragging, setDragging] = useState(false);
-  const [autoInstall, setAutoInstall] = useState(true);
+  // Keep inspection and installation as two distinct user actions. Even a
+  // low-risk third-party skill can contain instructions that materially alter
+  // an agent's behaviour, so selecting a package must never install it.
+  const [autoInstall, setAutoInstall] = useState(false);
   const [busy, setBusy] = useState(false);
   const [selectedPath, setSelectedPath] = useState("");
   const [inspection, setInspection] = useState<SkillPackageInspection | null>(null);
   const [acceptedHighRisk, setAcceptedHighRisk] = useState(false);
   const [error, setError] = useState("");
+  const dialogRef = useModalFocus<HTMLDivElement>(true, () => {
+    if (!busy) onClose();
+  });
 
   const commitInstall = async (path: string, report: SkillPackageInspection, approved = false) => {
     setBusy(true);
     setError("");
     try {
-      const result = await skillsInstallPackage(path, approved);
+      const result = await skillsInstallPackage(path, report.sourceHash, approved);
       onToast?.(`${result.updated ? "已更新" : "已安装"}技能「${result.inspection.name}」`);
       onInstalled?.();
       onClose();
@@ -63,29 +68,24 @@ export function ImportSkillModal({
 
   const pickFile = async () => {
     try {
-      const selected = await openDialog({
-        multiple: false,
+      const [selected] = await filesystemPickFiles({
         title: "选择技能文件（Markdown 或 ZIP）",
-        filters: [{ name: "技能包", extensions: ["md", "markdown", "zip"] }],
+        extensions: ["md", "markdown", "zip"],
+        multiple: false,
       });
-      if (selected && !Array.isArray(selected)) await inspect(selected);
-    } catch { /* cancelled */ }
+      if (selected) await inspect(selected);
+    } catch (cause) {
+      setError(`选择技能文件失败：${String(cause).replace(/^Error:\s*/, "")}`);
+    }
   };
 
   const pickFolder = async () => {
     try {
-      const selected = await openDialog({ directory: true, multiple: false, title: "选择技能文件夹" });
-      if (selected && !Array.isArray(selected)) await inspect(selected);
-    } catch { /* cancelled */ }
-  };
-
-  const onDrop = async (event: React.DragEvent) => {
-    event.preventDefault();
-    setDragging(false);
-    const files = Array.from(event.dataTransfer.files) as (File & { path?: string })[];
-    const path = files[0]?.path;
-    if (path) await inspect(path);
-    else setError("无法读取拖入文件的本地路径，请点击选择文件或文件夹");
+      const selected = await filesystemPickDirectory();
+      if (selected) await inspect(selected);
+    } catch (cause) {
+      setError(`选择技能文件夹失败：${String(cause).replace(/^Error:\s*/, "")}`);
+    }
   };
 
   const canInstall = inspection
@@ -93,28 +93,36 @@ export function ImportSkillModal({
     && !busy;
 
   return (
-    <div className="modal-overlay sk-import-overlay" onClick={onClose}>
-      <div className="sk-import sk-import--managed" onClick={(e) => e.stopPropagation()}>
+    <div className="modal-overlay sk-import-overlay" onClick={(event) => {
+      if (event.target === event.currentTarget && !busy) onClose();
+    }}>
+      <div ref={dialogRef} className="sk-import sk-import--managed" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="安装本地技能" tabIndex={-1}>
         <div className="sk-import-head">
           <div>
             <h3>安装本地技能</h3>
             <p>安装前检查内容，并复制到 EchoAgent 管理目录</p>
           </div>
-          <button type="button" className="sk-import-close" onClick={onClose} disabled={busy}>
+          <button type="button" className="sk-import-close" onClick={onClose} disabled={busy} aria-label="关闭" data-modal-initial-focus>
             <XCloseIcon size="md" />
           </button>
         </div>
         <div className="sk-import-body">
           <div
-            className={`sk-drop${dragging ? " sk-drop--drag" : ""}${busy ? " sk-drop--busy" : ""}`}
+            className={`sk-drop${busy ? " sk-drop--busy" : ""}`}
+            role="button"
+            tabIndex={busy ? -1 : 0}
+            aria-label="选择 Markdown 或 ZIP 技能文件"
             onClick={() => { if (!busy) void pickFile(); }}
-            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={onDrop}
+            onKeyDown={(event) => {
+              if (!busy && (event.key === "Enter" || event.key === " ")) {
+                event.preventDefault();
+                void pickFile();
+              }
+            }}
           >
             <FolderOpenIcon size="xl" className="sk-drop-icon" />
             <div className="sk-drop-title">
-              {dragging ? "松开以检查" : busy ? "正在检查技能包…" : "拖入 Markdown / ZIP，或点击选择"}
+              {busy ? "正在检查技能包…" : "点击选择 Markdown / ZIP"}
             </div>
             {selectedPath && <div className="sk-drop-path" title={selectedPath}>{selectedPath}</div>}
           </div>
@@ -128,7 +136,7 @@ export function ImportSkillModal({
             <span>仅在检查结果为低风险时自动安装</span>
           </label>
 
-          {error && <div className="sk-install-error">{error}</div>}
+          {error && <div className="sk-install-error" role="alert">{error}</div>}
 
           {inspection && (
             <div className="sk-inspection">

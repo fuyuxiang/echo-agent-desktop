@@ -19,6 +19,34 @@ export interface OtlpConfig {
   headers?: Record<string, string>;
 }
 
+/**
+ * Validate the collector boundary before any network request is made.
+ * Remote collectors must use HTTPS; plaintext HTTP is limited to exact
+ * loopback hosts for local development. Credentials and URL suffixes that
+ * could hide routing data are intentionally rejected.
+ */
+export function validateOtlpEndpoint(endpoint: string): string {
+  const value = endpoint.trim();
+  if (!value) throw new Error("OTLP 地址不能为空");
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("OTLP 地址格式不正确");
+  }
+  if (parsed.username || parsed.password) throw new Error("OTLP 地址不能包含用户名或密码");
+  if (value.includes("?") || value.includes("#")) throw new Error("OTLP 地址不能包含查询参数或片段");
+  if (parsed.protocol === "https:") return value;
+  if (parsed.protocol !== "http:") throw new Error("OTLP 地址仅支持 HTTPS，或本机回环 HTTP");
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "[::1]") {
+    throw new Error("HTTP OTLP 仅允许 localhost、127.0.0.1 或 ::1");
+  }
+  return value;
+}
+
 /** 把一条 TelemetryEvent 转为 OTLP logs 请求体的 JSON(简化:resource_logs 格式)。 */
 export function eventToOtlpLog(event: TelemetryEvent, config: OtlpConfig): Record<string, unknown> {
   const severity = event.level === "error" ? "ERROR" : event.level === "warn" ? "WARN" : "INFO";
@@ -85,6 +113,8 @@ export interface HttpSender {
   post(url: string, body: string, headers?: Record<string, string>): Promise<{ ok: boolean; status: number }>;
 }
 
+const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
+
 /**
  * 批量导出:把多条事件聚合成一次 OTLP logs 请求(减少 HTTP 往返)。
  * 返回发送结果。
@@ -95,6 +125,7 @@ export async function exportEventsBatch(
   sender: HttpSender,
 ): Promise<{ ok: boolean; status: number; count: number }> {
   if (events.length === 0) return { ok: true, status: 0, count: 0 };
+  const endpoint = validateOtlpEndpoint(config.endpoint);
   // 合并所有事件到一个 resourceLogs(共享 resource)。
   const body = {
     resourceLogs: [
@@ -117,7 +148,7 @@ export async function exportEventsBatch(
       },
     ],
   };
-  const res = await sender.post(config.endpoint, JSON.stringify(body), {
+  const res = await sender.post(endpoint, JSON.stringify(body), {
     "Content-Type": "application/json",
     ...config.headers,
   });
@@ -127,8 +158,20 @@ export async function exportEventsBatch(
 /** 默认 HTTP 发送器(运行时用 fetch)。 */
 export const defaultHttpSender: HttpSender = {
   async post(url, body, headers) {
+    const endpoint = validateOtlpEndpoint(url);
     if (typeof fetch === "undefined") return { ok: false, status: 0 };
-    const res = await fetch(url, { method: "POST", body, headers });
-    return { ok: res.ok, status: res.status };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), DEFAULT_HTTP_TIMEOUT_MS);
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        body,
+        headers,
+        signal: controller.signal,
+      });
+      return { ok: res.ok, status: res.status };
+    } finally {
+      clearTimeout(timeout);
+    }
   },
 };

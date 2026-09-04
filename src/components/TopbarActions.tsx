@@ -7,7 +7,6 @@
  * 位置：main-topbar 右侧（标题旁边）。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { MoreDotsIcon, PinFilledIcon, ArchiveIcon } from "@/foundation/components/Icon/icons";
 import { useSessionStore } from "@/stores/session-store";
 import {
@@ -16,6 +15,7 @@ import {
   agentSetSessionArchived,
 } from "@/lib/agent-client";
 import { buildSessionMarkdown, sanitizeFilename } from "@/lib/export-markdown";
+import type { SessionSummary } from "@/lib/types";
 
 interface TopbarActionsProps {
   sessionId: string;
@@ -23,7 +23,9 @@ interface TopbarActionsProps {
   pinned?: boolean;
   onToast?: (msg: string) => void;
   /** After archive/pin mutations, parent merges the patch into the sessions store. */
-  onSessionsChanged?: (patch?: Record<string, unknown>) => void;
+  onSessionsChanged?: (patch?: Partial<SessionSummary>) => void;
+  /** Called after the backend confirms archive state, so App can leave the hidden session. */
+  onArchived?: (archived: boolean) => void;
 }
 
 export function TopbarActions({
@@ -32,10 +34,12 @@ export function TopbarActions({
   pinned,
   onToast,
   onSessionsChanged,
+  onArchived,
 }: TopbarActionsProps) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   // Close dropdown on outside click.
   useEffect(() => {
@@ -45,8 +49,23 @@ export function TopbarActions({
         setOpen(false);
       }
     };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const first = menuRef.current?.querySelector<HTMLButtonElement>("[role='menuitem']");
+    first?.focus();
   }, [open]);
 
   const handleExport = useCallback(async () => {
@@ -60,12 +79,8 @@ export function TopbarActions({
       }
       const md = buildSessionMarkdown(messages, title);
       const suggested = sanitizeFilename(title || "对话导出") + ".md";
-      const path = await saveDialog({
-        defaultPath: suggested,
-        filters: [{ name: "Markdown", extensions: ["md"] }],
-      });
+      const path = await exportTextFile(suggested, md, "md");
       if (!path) return; // user cancelled
-      await exportTextFile(path, md);
       onToast?.(`已导出到 ${path}`);
     } catch (e) {
       onToast?.(`导出失败：${String(e).replace(/^Error:\s*/, "")}`);
@@ -92,24 +107,28 @@ export function TopbarActions({
     setOpen(false);
     setBusy(true);
     try {
-      await agentSetSessionArchived(sessionId, true);
+      const archived = await agentSetSessionArchived(sessionId, true);
       onToast?.("已归档（可在侧栏筛选中找回）");
-      onSessionsChanged?.({ archived: true });
+      onSessionsChanged?.({ archived });
+      onArchived?.(archived);
     } catch (e) {
       onToast?.(`归档失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
       setBusy(false);
     }
-  }, [sessionId, onToast, onSessionsChanged]);
+  }, [sessionId, onArchived, onToast, onSessionsChanged]);
 
   return (
     <div className="topbar-actions" ref={menuRef}>
       <button
+        ref={triggerRef}
         type="button"
         className="main-topbar__btn"
         aria-label="更多操作"
         data-tip="更多操作"
         disabled={busy}
+        aria-haspopup="menu"
+        aria-expanded={open}
         onClick={(e) => {
           e.stopPropagation();
           setOpen((v) => !v);
@@ -119,16 +138,16 @@ export function TopbarActions({
       </button>
 
       {open && (
-        <div className="topbar-actions__menu" onClick={(e) => e.stopPropagation()}>
-          <button type="button" className="topbar-actions__item" onClick={handleExport}>
+        <div className="topbar-actions__menu" role="menu" aria-label="当前会话操作" onClick={(e) => e.stopPropagation()}>
+          <button type="button" role="menuitem" className="topbar-actions__item" onClick={handleExport}>
             <span className="topbar-actions__item-icon">📄</span>
             <span>导出为 Markdown</span>
           </button>
-          <button type="button" className="topbar-actions__item" onClick={handleTogglePin}>
+          <button type="button" role="menuitem" className="topbar-actions__item" onClick={handleTogglePin}>
             <PinFilledIcon size="sm" />
             <span>{pinned ? "取消置顶" : "置顶会话"}</span>
           </button>
-          <button type="button" className="topbar-actions__item" onClick={handleArchive}>
+          <button type="button" role="menuitem" className="topbar-actions__item" onClick={handleArchive}>
             <ArchiveIcon size="sm" />
             <span>归档会话</span>
           </button>

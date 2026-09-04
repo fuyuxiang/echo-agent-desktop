@@ -36,6 +36,8 @@ anyhow = "1"
 uuid = { version = "1", features = ["v7"] }
 # statusMatch patterns in connector cli.json files (CLI connector auth).
 regex = "1"
+fs2 = "0.4"
+libc = "0.2"
 
 # EchoAgent's in-process runtime adapter. The Apache-2.0 Runtime source snapshot
 # is tracked directly at <repo>/vendor/grok-build (see ECHOAGENT_VENDOR.json and
@@ -81,10 +83,14 @@ tauri-plugin-autostart = "2"
 # process can contend for the same WebView2 profile.
 tauri-plugin-single-instance = "2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+security-framework-sys = "2.17"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # Call Windows DPAPI directly. Spawning PowerShell made credential persistence
 # depend on .NET assembly loading and discarded the actual encryption error.
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
 tempfile = "3"

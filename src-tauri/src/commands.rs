@@ -4,20 +4,55 @@
 //! They drive the in-process EchoAgent runtime (see agent_runtime.rs) and bridge streamed
 //! events back via Tauri events (see bridge.rs).
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
 use crate::agent_runtime::{self, AgentHandle, InitOutcome};
-use crate::bridge::{PermissionOutcome, Permissions, QuestionOutcome, Questions};
+use crate::bridge::{
+    FolderTrusts, PendingInteractionsFrontend, PermissionOutcome, Permissions, PlanApprovalOutcome,
+    PlanApprovals, QuestionOutcome, Questions,
+};
 use crate::sessions::{self, SessionSummary, WorkspaceInfo};
 
 const AGENT_INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const NEW_SESSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 const MODEL_CATALOG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const MODEL_RELOAD_ATTEMPTS: usize = 3;
+const MAX_SESSION_ID_CHARS: usize = 256;
+const MAX_PROMPT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_DISPLAY_TEXT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_QUESTION_FIELDS: usize = 128;
+const MAX_QUESTION_KEY_CHARS: usize = 16 * 1024;
+const MAX_QUESTION_VALUE_CHARS: usize = 64 * 1024;
+const MAX_QUESTION_SELECTIONS: usize = 64;
+const MAX_QUESTION_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
+fn valid_session_id(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.chars().count() <= MAX_SESSION_ID_CHARS
+        && !value.chars().any(char::is_control)
+}
+
+fn validate_send_payload(
+    session_id: &str,
+    text: &str,
+    display_text: Option<&str>,
+) -> Result<(), String> {
+    if !valid_session_id(session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    if text.len() > MAX_PROMPT_BYTES {
+        return Err("消息内容不能超过 4 MiB".into());
+    }
+    if display_text.is_some_and(|value| value.len() > MAX_DISPLAY_TEXT_BYTES) {
+        return Err("展示文本不能超过 4 MiB".into());
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RuntimeModelState {
@@ -62,6 +97,10 @@ pub struct AppState {
     /// timed out. The Runtime completes and persists these regardless, so they
     /// are tracked here and reclaimed instead of leaking as ghost sessions.
     pub(crate) orphaned_sessions: Mutex<Vec<OrphanedSession>>,
+    /// Native-authoritative workspace binding for every session admitted into
+    /// the current Runtime generation. Renderer-provided session ids and paths
+    /// are never sufficient to authorize attachment reads.
+    session_workspaces: Mutex<HashMap<String, PathBuf>>,
 }
 
 /// A session the Runtime finished creating after its caller stopped waiting.
@@ -84,7 +123,9 @@ impl AppState {
     }
 
     pub(crate) fn is_current_generation(&self, generation: u64) -> bool {
-        self.init_generation.load(std::sync::atomic::Ordering::SeqCst) == generation
+        self.init_generation
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == generation
     }
 
     /// Record a session that arrived after its caller stopped waiting. The
@@ -116,6 +157,30 @@ impl AppState {
 
     pub(crate) fn clear_orphaned_sessions(&self) {
         self.orphaned_sessions.lock().unwrap().clear();
+    }
+
+    pub(crate) fn record_session_workspace(&self, session_id: &str, cwd: &Path) {
+        self.session_workspaces
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), cwd.to_path_buf());
+    }
+
+    pub(crate) fn session_workspace(&self, session_id: &str) -> Result<PathBuf, String> {
+        self.session_workspaces
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| "当前会话尚未建立可信工作区绑定，请重新打开会话".to_string())
+    }
+
+    pub(crate) fn forget_session_workspace(&self, session_id: &str) {
+        self.session_workspaces.lock().unwrap().remove(session_id);
+    }
+
+    pub(crate) fn clear_session_workspaces(&self) {
+        self.session_workspaces.lock().unwrap().clear();
     }
 
     pub(crate) fn mark_runtime_models_initializing(&self) {
@@ -213,6 +278,8 @@ impl AppState {
         }
         crate::automations::clear_runtime_sessions();
         self.clear_orphaned_sessions();
+        self.clear_session_workspaces();
+        crate::agent_admin::clear_runtime_capabilities();
         self.mark_runtime_models_failed(error);
         true
     }
@@ -261,7 +328,7 @@ pub struct InitResult {
 }
 
 fn auth_status(state: &AppState) -> AuthStatus {
-    let _ = crate::providers::enforce_organization_model_lease();
+    let _ = crate::org::enforce_organization_model_lease();
     let (mut model_ids, disk_reason) = crate::providers::usable_model_ids();
     model_ids.sort();
     let revision = crate::providers::model_config_revision();
@@ -307,9 +374,7 @@ fn auth_status_from_snapshots(
     } else if !synchronized {
         Some("Agent Runtime 中的模型配置与磁盘不一致，请在设置中重试刷新。".into())
     } else {
-        Some(
-            "Agent Runtime 未加载任何可用模型，请检查“设置 → 模型与连接”中的可用范围配置。".into(),
-        )
+        Some("Agent Runtime 未加载任何可用模型，请检查“设置 → 模型与连接”中的可用范围配置。".into())
     };
     // Branded-id filtering applies ONLY to the two fields the frontend renders.
     // Every gate above (`synchronized`, `runtime_ready`, `ready`, `reason`) is
@@ -432,6 +497,8 @@ fn clear_runtime_after_init_failure(state: &AppState, generation: u64) {
     }
     crate::automations::clear_runtime_sessions();
     state.clear_orphaned_sessions();
+    state.clear_session_workspaces();
+    crate::agent_admin::clear_runtime_capabilities();
     state.mark_runtime_models_initializing();
 }
 
@@ -541,8 +608,53 @@ pub(crate) async fn reload_models_and_sync(
     Err(error)
 }
 
-fn default_cwd() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+fn default_cwd() -> Result<PathBuf, String> {
+    crate::paths::default_workspace_dir()
+}
+
+/// Validate, but never create, a session workspace capability. Only native
+/// folder selection, the native default workspace, or trusted persisted roots
+/// may populate `FilesystemAccess`; renderer calls cannot self-authorize by
+/// reaching the session lifecycle API.
+fn authorized_session_cwd(
+    filesystem: &crate::shell_fs::FilesystemAccess,
+    claimed: &str,
+) -> Result<String, String> {
+    filesystem
+        .require_workspace(claimed)
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn trusted_existing_session_cwd(
+    state: &AppState,
+    filesystem: &crate::shell_fs::FilesystemAccess,
+    session_id: &str,
+    claimed: Option<&str>,
+) -> Result<PathBuf, String> {
+    if !valid_session_id(session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    if let Ok(bound) = state.session_workspace(session_id) {
+        if let Some(claimed) = claimed.filter(|value| !value.trim().is_empty()) {
+            let claimed = filesystem.require_workspace(claimed)?;
+            if claimed != bound {
+                return Err("会话工作区与后端绑定不一致".into());
+            }
+        }
+        return Ok(bound);
+    }
+    let claimed = claimed
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("历史会话操作必须提供工作区")?;
+    let canonical = filesystem.require_workspace(claimed)?;
+    let canonical_text = canonical.to_string_lossy();
+    if !sessions::list_sessions(&canonical_text, true)
+        .iter()
+        .any(|summary| summary.session_id == session_id)
+    {
+        return Err("会话不属于声明的工作区".into());
+    }
+    Ok(canonical)
 }
 
 /// Initialize the in-process EchoAgent runtime. Spawns the agent thread, runs
@@ -553,6 +665,8 @@ pub async fn agent_init(
     state: State<'_, AppState>,
     permissions: State<'_, Permissions>,
     questions: State<'_, Questions>,
+    plan_approvals: State<'_, PlanApprovals>,
+    folder_trusts: State<'_, FolderTrusts>,
     cwd: Option<String>,
 ) -> Result<InitResult, String> {
     // Startup, the retry button and the settings dialog can all call this at
@@ -560,6 +674,16 @@ pub async fn agent_init(
     // handshake and cleanup from interleaving with another's.
     let _init_guard = state.init_lock.lock().await;
     let generation = state.begin_init_generation();
+
+    // A renderer/runtime restart invalidates every outstanding reverse
+    // request. Resolve all of them conservatively before installing the new
+    // runtime so an old request can never approve work in a new generation.
+    tokio::join!(
+        permissions.cancel_all(),
+        questions.cancel_all(),
+        plan_approvals.cancel_all(),
+        folder_trusts.cancel_all(),
+    );
 
     // A retry/re-init must retire the prior runtime and its scheduler before a
     // replacement is spawned; dropping the handle alone does not cancel it.
@@ -572,9 +696,21 @@ pub async fn agent_init(
     state.tx.lock().unwrap().take();
     crate::automations::clear_runtime_sessions();
     state.clear_orphaned_sessions();
+    state.clear_session_workspaces();
+    crate::agent_admin::clear_runtime_capabilities();
     state.mark_runtime_models_initializing();
 
-    let cwd = cwd.map(PathBuf::from).unwrap_or_else(default_cwd);
+    let cwd = match cwd {
+        Some(cwd) => {
+            let filesystem = app.state::<crate::shell_fs::FilesystemAccess>();
+            filesystem.require_workspace(&cwd)?
+        }
+        None => {
+            let cwd = default_cwd()?;
+            let filesystem = app.state::<crate::shell_fs::FilesystemAccess>();
+            filesystem.authorize_workspace(&cwd.to_string_lossy())?
+        }
+    };
     *state.cwd.lock().unwrap() = Some(cwd.clone());
 
     // Spawn the agent off the async runtime. `spawn_agent_runtime` does blocking I/O
@@ -596,7 +732,14 @@ pub async fn agent_init(
 
     // Start the dispatcher that forwards agent→client messages to events.
     // `rx` is moved in; the dispatcher owns it for the app lifetime.
-    crate::bridge::spawn_dispatcher(app.clone(), rx, permissions.share(), questions.share());
+    crate::bridge::spawn_dispatcher(
+        app.clone(),
+        rx,
+        permissions.share(),
+        questions.share(),
+        plan_approvals.share(),
+        folder_trusts.share(),
+    );
 
     // Install the command-facing handle before starting the death monitor. A
     // Runtime can fail immediately after spawn; publishing the handle first
@@ -732,6 +875,10 @@ pub async fn agent_new_session(
 ) -> Result<String, String> {
     crate::policy::require_feature("sessions")?;
     crate::org::enforce_skill_lease();
+    let cwd = {
+        let filesystem = app.state::<crate::shell_fs::FilesystemAccess>();
+        authorized_session_cwd(&filesystem, &cwd)?
+    };
     if let Some(model_id) = model_id.as_deref() {
         crate::policy::require_model(model_id)?;
     }
@@ -748,6 +895,7 @@ pub async fn agent_new_session(
     // sessions the UI never learned about.
     if let Some(session_id) = state.take_orphaned_session(&cwd, model_id.as_deref()) {
         tracing::info!(%session_id, "adopting session created by a timed-out request");
+        state.record_session_workspace(&session_id, Path::new(&cwd));
         crate::team_mcp::persist_registration(&tx, &session_id);
         crate::org_mcp::persist_registration(&tx, &session_id);
         return Ok(session_id);
@@ -780,19 +928,26 @@ pub async fn agent_new_session(
         };
         match unclaimed {
             Ok(session_id) => {
+                if !valid_session_id(&session_id) {
+                    tracing::error!("Runtime returned an invalid orphaned session id");
+                    return;
+                }
                 tracing::warn!(
                     %session_id,
                     "new_session completed after its caller timed out; reclaiming"
                 );
                 crate::team_mcp::persist_registration(&task_tx, &session_id);
                 crate::org_mcp::persist_registration(&task_tx, &session_id);
-                task_app.state::<AppState>().record_orphaned_session(
-                    OrphanedSession {
+                task_app
+                    .state::<AppState>()
+                    .record_session_workspace(&session_id, Path::new(&task_cwd));
+                task_app
+                    .state::<AppState>()
+                    .record_orphaned_session(OrphanedSession {
                         session_id: session_id.clone(),
                         cwd: task_cwd,
                         model_id: task_model,
-                    },
-                );
+                    });
                 let _ = task_app.emit(
                     "agent://session-reclaimed",
                     serde_json::json!({ "sessionId": session_id }),
@@ -810,9 +965,7 @@ pub async fn agent_new_session(
                 model_id = model_id.as_deref(),
                 "agent new_session command timed out"
             );
-            return Err(
-                "创建 Agent 会话超时（45 秒），请重试；若持续失败请重启应用。".to_string(),
-            );
+            return Err("创建 Agent 会话超时（45 秒），请重试；若持续失败请重启应用。".to_string());
         }
         Ok(Err(_)) => {
             tracing::error!("new_session task ended without producing a result");
@@ -828,7 +981,11 @@ pub async fn agent_new_session(
         }
         Ok(Ok(Ok(session_id))) => session_id,
     };
+    if !valid_session_id(&session_id) {
+        return Err("Agent Runtime 返回的会话 ID 无效".into());
+    }
     tracing::info!(%session_id, "agent new_session command OK");
+    state.record_session_workspace(&session_id, Path::new(&cwd));
     // Team MCP server 已随 new_session 参数注入本会话；这里再异步持久化到
     // config.toml（一次即可），让 load_session 恢复的会话也能用。
     crate::team_mcp::persist_registration(&tx, &session_id);
@@ -838,20 +995,36 @@ pub async fn agent_new_session(
 
 #[tauri::command]
 pub async fn agent_load_session(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: String,
     cwd: String,
 ) -> Result<(), String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
     crate::org::enforce_skill_lease();
+    let cwd = {
+        let filesystem = app.state::<crate::shell_fs::FilesystemAccess>();
+        let cwd = authorized_session_cwd(&filesystem, &cwd)?;
+        if !sessions::list_sessions(&cwd, true)
+            .iter()
+            .any(|summary| summary.session_id == session_id)
+        {
+            return Err("会话不属于声明的工作区".into());
+        }
+        cwd
+    };
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    agent_runtime::load_session(&tx, &session_id, &PathBuf::from(cwd))
+    agent_runtime::load_session(&tx, &session_id, &PathBuf::from(&cwd))
         .await
         .map_err(|e| e.to_string())?;
+    state.record_session_workspace(&session_id, Path::new(&cwd));
     // 恢复的会话从 config.toml 读 MCP 列表 —— 若端口较上次运行漂移，这里
     // 的 upsert 会用当前 URL 刷新并 live 重连（EchoAgent 的 toggle 路径）。
     crate::team_mcp::persist_registration(&tx, &session_id);
@@ -860,31 +1033,49 @@ pub async fn agent_load_session(
 }
 
 #[tauri::command]
-pub fn agent_list_sessions(cwd: String) -> Vec<SessionSummary> {
-    sessions::list_sessions(&cwd)
+pub fn agent_list_sessions(
+    filesystem: State<'_, crate::shell_fs::FilesystemAccess>,
+    cwd: String,
+    include_archived: Option<bool>,
+) -> Result<Vec<SessionSummary>, String> {
+    let cwd = filesystem.require_workspace(&cwd)?;
+    Ok(sessions::list_sessions(
+        &cwd.to_string_lossy(),
+        include_archived.unwrap_or(false),
+    ))
 }
 
 #[tauri::command]
 pub async fn agent_send(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: String,
     text: String,
     attachments: Option<Vec<String>>,
     display_text: Option<String>,
 ) -> Result<(), String> {
+    validate_send_payload(&session_id, &text, display_text.as_deref())?;
     require_runtime_ready(&state, None)?;
+    let workspace = state.session_workspace(&session_id)?;
+    let attachments = attachments.unwrap_or_default();
+    let attachments = if attachments.is_empty() {
+        Vec::new()
+    } else {
+        app.state::<crate::shell_fs::FilesystemAccess>()
+            .validate_session_attachments(&workspace, &attachments)?
+    };
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    tracing::info!(%session_id, attachment_count = attachments.as_ref().map_or(0, Vec::len), "agent prompt send");
+    tracing::info!(%session_id, attachment_count = attachments.len(), "agent prompt send");
     agent_runtime::prompt_with_attachments(
         &tx,
         &session_id,
         &text,
-        attachments.as_deref().unwrap_or(&[]),
+        &attachments,
         display_text.as_deref(),
     )
     .await
@@ -896,6 +1087,10 @@ pub async fn agent_send(
 
 #[tauri::command]
 pub async fn agent_cancel(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    state.session_workspace(&session_id)?;
     let tx = state
         .tx
         .lock()
@@ -910,7 +1105,13 @@ pub async fn agent_cancel(state: State<'_, AppState>, session_id: String) -> Res
 /// Cleanly shut down the agent (cancel token + clear state) so the frontend
 /// can call `agent_init` again to restart. Used after `agent://agent-died`.
 #[tauri::command]
-pub async fn agent_shutdown(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn agent_shutdown(
+    state: State<'_, AppState>,
+    permissions: State<'_, Permissions>,
+    questions: State<'_, Questions>,
+    plan_approvals: State<'_, PlanApprovals>,
+    folder_trusts: State<'_, FolderTrusts>,
+) -> Result<(), String> {
     // Trigger the cancel token so the agent thread's `cancelled().await` resolves.
     if let Some(handle) = state.handle.lock().unwrap().take() {
         handle.cancel.cancel();
@@ -920,6 +1121,15 @@ pub async fn agent_shutdown(state: State<'_, AppState>) -> Result<(), String> {
         scheduler.abort();
     }
     crate::automations::clear_runtime_sessions();
+    state.clear_orphaned_sessions();
+    state.clear_session_workspaces();
+    crate::agent_admin::clear_runtime_capabilities();
+    tokio::join!(
+        permissions.cancel_all(),
+        questions.cancel_all(),
+        plan_approvals.cancel_all(),
+        folder_trusts.cancel_all(),
+    );
     state.mark_runtime_models_initializing();
     tracing::info!("EchoAgent agent shut down (ready for re-init)");
     Ok(())
@@ -941,11 +1151,54 @@ pub async fn agent_resolve_permission(
     Ok(permissions.resolve(&request_id, outcome).await)
 }
 
+/// Return all currently parked agent→client interactions. The frontend calls
+/// this after wiring event listeners, making permission/question/plan/trust
+/// requests replayable across renderer reloads and background-session switches.
+#[tauri::command]
+pub async fn agent_list_pending_interactions(
+    permissions: State<'_, Permissions>,
+    questions: State<'_, Questions>,
+    plan_approvals: State<'_, PlanApprovals>,
+    folder_trusts: State<'_, FolderTrusts>,
+    session_id: Option<String>,
+) -> Result<PendingInteractionsFrontend, String> {
+    Ok(crate::bridge::pending_interactions(
+        &permissions,
+        &questions,
+        &plan_approvals,
+        &folder_trusts,
+        session_id.as_deref(),
+    )
+    .await)
+}
+
+/// Fulfil the exact `echo.agent/exit_plan_mode` reverse request. Unknown
+/// outcomes are rejected instead of being interpreted as approval.
+#[tauri::command]
+pub async fn agent_resolve_plan_approval(
+    plan_approvals: State<'_, PlanApprovals>,
+    request_id: String,
+    outcome: String,
+    feedback: Option<String>,
+) -> Result<bool, String> {
+    let outcome = match outcome.as_str() {
+        "approved" => PlanApprovalOutcome::Approved,
+        "cancelled" => PlanApprovalOutcome::Cancelled {
+            feedback: feedback.filter(|value| !value.trim().is_empty()),
+        },
+        "abandoned" => PlanApprovalOutcome::Abandoned,
+        other => return Err(format!("invalid plan approval outcome: {other}")),
+    };
+    Ok(plan_approvals.resolve(&request_id, outcome).await)
+}
+
 /// Resolve a pending question request from the frontend.
 ///
 /// Wire contract for EchoAgent's `AskUserQuestionExtResponse`:
-/// - `cancelled: true` → `{ "outcome": "cancelled" }`
-/// - otherwise → `{ "outcome": "accepted", "answers": {...}, "annotations"?: {...} }`
+/// - `outcome: "cancelled"` → `{ "outcome": "cancelled" }`
+/// - `outcome: "accepted"` → `{ "outcome": "accepted", ... }`
+/// - plan-only actions preserve partial answers as `chat_about_this` or
+///   `skip_interview`.
 ///
 /// `answers` must be keyed by **question text** (not synthetic id). Values may
 /// be a string or a list of strings (multi-select). Freeform answers use
@@ -954,62 +1207,158 @@ pub async fn agent_resolve_permission(
 pub async fn agent_resolve_question(
     questions: State<'_, Questions>,
     request_id: String,
-    answers: Option<std::collections::HashMap<String, serde_json::Value>>,
+    mut answers: Option<std::collections::HashMap<String, serde_json::Value>>,
     annotations: Option<std::collections::HashMap<String, QuestionAnnotationDto>>,
+    partial_answers: Option<std::collections::HashMap<String, String>>,
+    outcome: Option<String>,
     cancelled: Option<bool>,
 ) -> Result<bool, String> {
-    let outcome = if cancelled.unwrap_or(false) {
-        QuestionOutcome::Cancelled
-    } else if let Some(raw_answers) = answers {
-        let mut normalized = std::collections::HashMap::new();
-        for (k, v) in raw_answers {
-            let labels = match v {
-                serde_json::Value::String(s) => {
-                    if s.is_empty() {
-                        continue;
+    validate_question_payload(
+        &request_id,
+        answers.as_ref(),
+        annotations.as_ref(),
+        partial_answers.as_ref(),
+        outcome.as_deref(),
+    )?;
+    let requested = if cancelled.unwrap_or(false) {
+        "cancelled"
+    } else {
+        outcome.as_deref().unwrap_or(if answers.is_some() {
+            "accepted"
+        } else {
+            "cancelled"
+        })
+    };
+    let outcome = match requested {
+        "cancelled" => QuestionOutcome::Cancelled,
+        "chat_about_this" => QuestionOutcome::ChatAboutThis {
+            partial_answers: partial_answers.unwrap_or_default(),
+        },
+        "skip_interview" => QuestionOutcome::SkipInterview {
+            partial_answers: partial_answers.unwrap_or_default(),
+        },
+        "accepted" => {
+            let mut normalized = std::collections::HashMap::new();
+            for (k, v) in answers.take().unwrap_or_default() {
+                let labels = match v {
+                    serde_json::Value::String(s) => {
+                        if s.is_empty() {
+                            continue;
+                        }
+                        vec![s]
                     }
-                    vec![s]
+                    serde_json::Value::Array(arr) => arr
+                        .into_iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                    _ => continue,
+                };
+                if !labels.is_empty() {
+                    normalized.insert(k, labels);
                 }
-                serde_json::Value::Array(arr) => arr
-                    .into_iter()
-                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                    .filter(|s| !s.is_empty())
-                    .collect(),
-                _ => continue,
-            };
-            if !labels.is_empty() {
-                normalized.insert(k, labels);
+            }
+            let anns = annotations.map(|m| {
+                m.into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            crate::bridge::QuestionAnnotation {
+                                preview: v.preview,
+                                notes: v.notes,
+                            },
+                        )
+                    })
+                    .collect()
+            });
+            QuestionOutcome::Accepted {
+                answers: normalized,
+                annotations: anns,
             }
         }
-        let anns = annotations.map(|m| {
-            m.into_iter()
-                .map(|(k, v)| {
-                    (
-                        k,
-                        crate::bridge::QuestionAnnotation {
-                            preview: v.preview,
-                            notes: v.notes,
-                        },
-                    )
-                })
-                .collect()
-        });
-        QuestionOutcome::Accepted {
-            answers: normalized,
-            annotations: anns,
-        }
-    } else {
-        QuestionOutcome::Cancelled
+        other => return Err(format!("invalid question outcome: {other}")),
     };
     Ok(questions.resolve(&request_id, outcome).await)
 }
 
 /// DTO for per-question annotations from the frontend.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionAnnotationDto {
     pub preview: Option<String>,
     pub notes: Option<String>,
+}
+
+fn validate_question_payload(
+    request_id: &str,
+    answers: Option<&std::collections::HashMap<String, serde_json::Value>>,
+    annotations: Option<&std::collections::HashMap<String, QuestionAnnotationDto>>,
+    partial_answers: Option<&std::collections::HashMap<String, String>>,
+    outcome: Option<&str>,
+) -> Result<(), String> {
+    if !valid_session_id(request_id) {
+        return Err("问题请求 ID 无效或过长".into());
+    }
+    if outcome.is_some_and(|value| value.len() > 32 || value.chars().any(char::is_control)) {
+        return Err("问题响应类型无效".into());
+    }
+    let answers_len = answers.map_or(0, HashMap::len);
+    let annotations_len = annotations.map_or(0, HashMap::len);
+    let partial_len = partial_answers.map_or(0, HashMap::len);
+    if answers_len > MAX_QUESTION_FIELDS
+        || annotations_len > MAX_QUESTION_FIELDS
+        || partial_len > MAX_QUESTION_FIELDS
+    {
+        return Err(format!("问题响应字段不能超过 {MAX_QUESTION_FIELDS} 个"));
+    }
+    let valid_key = |value: &str| {
+        !value.trim().is_empty()
+            && value.chars().count() <= MAX_QUESTION_KEY_CHARS
+            && !value.chars().any(|character| character == '\0')
+    };
+    let valid_value = |value: &str| {
+        value.chars().count() <= MAX_QUESTION_VALUE_CHARS
+            && !value.chars().any(|character| character == '\0')
+    };
+    if answers.is_some_and(|items| {
+        items.iter().any(|(key, value)| {
+            !valid_key(key)
+                || match value {
+                    serde_json::Value::String(value) => !valid_value(value),
+                    serde_json::Value::Array(values) => {
+                        values.len() > MAX_QUESTION_SELECTIONS
+                            || values
+                                .iter()
+                                .any(|value| value.as_str().is_none_or(|value| !valid_value(value)))
+                    }
+                    _ => true,
+                }
+        })
+    }) || annotations.is_some_and(|items| {
+        items.iter().any(|(key, value)| {
+            !valid_key(key)
+                || value
+                    .preview
+                    .as_deref()
+                    .is_some_and(|value| !valid_value(value))
+                || value
+                    .notes
+                    .as_deref()
+                    .is_some_and(|value| !valid_value(value))
+        })
+    }) || partial_answers.is_some_and(|items| {
+        items
+            .iter()
+            .any(|(key, value)| !valid_key(key) || !valid_value(value))
+    }) {
+        return Err("问题响应包含无效或过长字段".into());
+    }
+    let encoded = serde_json::to_vec(&(answers, annotations, partial_answers))
+        .map_err(|error| format!("无法校验问题响应：{error}"))?;
+    if encoded.len() > MAX_QUESTION_RESPONSE_BYTES {
+        return Err("问题响应不能超过 4 MiB".into());
+    }
+    Ok(())
 }
 
 /// Switch the model used by an existing session. Maps to EchoAgent's
@@ -1022,6 +1371,10 @@ pub async fn agent_set_model(
     session_id: String,
     model_id: String,
 ) -> Result<(), String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    state.session_workspace(&session_id)?;
     crate::policy::require_model(&model_id)?;
     require_runtime_ready(&state, Some(&model_id))?;
     let tx = state
@@ -1038,8 +1391,16 @@ pub async fn agent_set_model(
 /// List every working directory EchoAgent has seen (deduplicated), with a session
 /// count per cwd. Used to populate the Composer's workspace picker.
 #[tauri::command]
-pub fn agent_list_workspaces() -> Vec<WorkspaceInfo> {
-    sessions::list_workspaces()
+pub fn agent_list_workspaces(
+    filesystem: State<'_, crate::shell_fs::FilesystemAccess>,
+) -> Vec<WorkspaceInfo> {
+    let workspaces = sessions::list_workspaces();
+    for workspace in &workspaces {
+        if let Err(error) = filesystem.authorize_workspace(&workspace.cwd) {
+            tracing::warn!(%error, cwd = %workspace.cwd, "persisted workspace was not added to filesystem allow-list");
+        }
+    }
+    workspaces
 }
 
 /// Rename a session via EchoAgent's `echo.agent/session/rename` extension method. On
@@ -1049,18 +1410,35 @@ pub fn agent_list_workspaces() -> Vec<WorkspaceInfo> {
 /// both arrive at the same store `upsert` and are idempotent.
 #[tauri::command]
 pub async fn agent_rename_session(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: String,
     title: String,
     cwd: Option<String>,
 ) -> Result<(), String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    if title.trim().is_empty()
+        || title.chars().count() > 512
+        || title.chars().any(|character| character == '\0')
+    {
+        return Err("会话标题为空、过长或包含非法字符".into());
+    }
+    let workspace = trusted_existing_session_cwd(
+        &state,
+        &app.state::<crate::shell_fs::FilesystemAccess>(),
+        &session_id,
+        cwd.as_deref(),
+    )?;
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    agent_runtime::rename_session(&tx, &session_id, &title, cwd.as_deref())
+    let workspace = workspace.to_string_lossy().into_owned();
+    agent_runtime::rename_session(&tx, &session_id, &title, Some(&workspace))
         .await
         .map_err(|e| e.to_string())
 }
@@ -1070,19 +1448,32 @@ pub async fn agent_rename_session(
 /// entry on success.
 #[tauri::command]
 pub async fn agent_delete_session(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: String,
     cwd: Option<String>,
 ) -> Result<(), String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    let workspace = trusted_existing_session_cwd(
+        &state,
+        &app.state::<crate::shell_fs::FilesystemAccess>(),
+        &session_id,
+        cwd.as_deref(),
+    )?;
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    agent_runtime::delete_session(&tx, &session_id, cwd.as_deref())
+    let workspace = workspace.to_string_lossy().into_owned();
+    agent_runtime::delete_session(&tx, &session_id, Some(&workspace))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    state.forget_session_workspace(&session_id);
+    Ok(())
 }
 
 /// Pin or unpin a session. EchoAgent's `Summary` has no `pinned` field, so this is
@@ -1102,6 +1493,10 @@ pub async fn agent_session_info(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<serde_json::Value, String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    state.session_workspace(&session_id)?;
     let tx = state
         .tx
         .lock()
@@ -1120,6 +1515,10 @@ pub async fn agent_session_usage(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<serde_json::Value, String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    state.session_workspace(&session_id)?;
     let tx = state
         .tx
         .lock()
@@ -1143,21 +1542,35 @@ pub fn agent_set_session_archived(session_id: String, archived: bool) -> Result<
 /// Bind an expert to a session (EchoAgent-only state). Returns `true` on success.
 #[tauri::command]
 pub fn agent_set_session_expert(
+    state: State<'_, AppState>,
     session_id: String,
     expert_id: String,
     expert_name: String,
     source: String,
     avatar_local: Option<String>,
 ) -> Result<bool, String> {
-    crate::meta::set_expert(
-        &session_id,
-        crate::meta::ExpertBinding {
-            expert_id,
-            expert_name,
-            source,
-            avatar_local,
-        },
-    )
+    // Requiring a live backend binding prevents a forged renderer payload from
+    // attaching metadata to arbitrary historical session ids. Expert fields,
+    // especially local avatar paths, are resolved against exact rows emitted
+    // by backend-managed catalogs rather than trusted from IPC.
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    state.session_workspace(&session_id)?;
+    let binding = match source.as_str() {
+        "marketplace" => crate::experts::require_loaded_marketplace_expert(
+            &expert_id,
+            &expert_name,
+            avatar_local.as_deref(),
+        )?,
+        "local" => crate::agents_store::require_listed_local_expert(
+            &expert_id,
+            &expert_name,
+            avatar_local.as_deref(),
+        )?,
+        _ => return Err("专家来源未经后端授权".into()),
+    };
+    crate::meta::set_expert(&session_id, binding)
 }
 
 /// Remove the expert binding from a session. Returns `true` if a binding was removed.
@@ -1169,6 +1582,38 @@ pub fn agent_clear_session_expert(session_id: String) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renderer_message_and_question_payloads_are_bounded() {
+        assert!(validate_send_payload("session", "hello", Some("hello")).is_ok());
+        assert!(validate_send_payload("session", &"x".repeat(MAX_PROMPT_BYTES + 1), None).is_err());
+        assert!(
+            validate_send_payload(&"s".repeat(MAX_SESSION_ID_CHARS + 1), "hello", None).is_err()
+        );
+
+        let valid_answers =
+            HashMap::from([("Which?".into(), serde_json::json!(["first", "second"]))]);
+        assert!(validate_question_payload(
+            "request",
+            Some(&valid_answers),
+            None,
+            None,
+            Some("accepted")
+        )
+        .is_ok());
+        let oversized = HashMap::from([(
+            "Which?".into(),
+            serde_json::Value::String("x".repeat(MAX_QUESTION_VALUE_CHARS + 1)),
+        )]);
+        assert!(validate_question_payload(
+            "request",
+            Some(&oversized),
+            None,
+            None,
+            Some("accepted")
+        )
+        .is_err());
+    }
 
     fn runtime_state(revision: &str, model_ids: &[&str]) -> RuntimeModelState {
         let (client, _agent) = xai_acp_lib::acp_channels();
@@ -1267,7 +1712,10 @@ mod tests {
             runtime_state("rev-a", &["model-a"]),
             true,
         );
-        assert!(status.ready, "a filtered-out disk model must not block chat");
+        assert!(
+            status.ready,
+            "a filtered-out disk model must not block chat"
+        );
         assert!(status.synchronized);
         assert_eq!(validate_runtime_ready(&status, Some("model-a")), Ok(()));
         // The filtered model is still correctly refused for a direct request.
@@ -1327,12 +1775,22 @@ mod tests {
             true,
         );
         assert!(status.ready);
-        assert_eq!(validate_runtime_ready(&status, Some("my-grok-proxy")), Ok(()));
+        assert_eq!(
+            validate_runtime_ready(&status, Some("my-grok-proxy")),
+            Ok(())
+        );
     }
 
     #[test]
     fn brand_token_matching_is_case_insensitive_and_substring_based() {
-        for id in ["grok-4.6", "Grok 4.5", "GROK", "xai-build", "x.ai/v1", "SpaceXAI"] {
+        for id in [
+            "grok-4.6",
+            "Grok 4.5",
+            "GROK",
+            "xai-build",
+            "x.ai/v1",
+            "SpaceXAI",
+        ] {
             assert!(is_upstream_branded_model_id(id), "{id} must be filtered");
         }
         for id in ["gpt-4o", "deepseek-chat", "qwen-max", "claude-sonnet-4"] {
@@ -1353,7 +1811,10 @@ mod tests {
         );
         assert!(!status.ready);
         assert!(!status.runtime_ready);
-        assert!(status.synchronized, "revision did match; only the catalog is empty");
+        assert!(
+            status.synchronized,
+            "revision did match; only the catalog is empty"
+        );
         assert!(status.reason.as_deref().unwrap().contains("可用范围"));
     }
 
@@ -1381,6 +1842,54 @@ mod tests {
         );
         // Adopted once only.
         assert_eq!(state.take_orphaned_session("/work", Some("model-a")), None);
+    }
+
+    #[test]
+    fn forged_session_cwd_is_rejected_without_expanding_filesystem_access() {
+        let temp = tempfile::tempdir().unwrap();
+        let trusted = temp.path().join("trusted");
+        let forged = temp.path().join("forged");
+        std::fs::create_dir_all(&trusted).unwrap();
+        std::fs::create_dir_all(&forged).unwrap();
+        let filesystem = crate::shell_fs::FilesystemAccess::default();
+        filesystem
+            .authorize_workspace(&trusted.to_string_lossy())
+            .unwrap();
+
+        let error = authorized_session_cwd(&filesystem, &forged.to_string_lossy()).unwrap_err();
+        assert!(error.contains("未经用户授权"));
+        // Validation is non-mutating: a second attempt is still rejected.
+        assert!(authorized_session_cwd(&filesystem, &forged.to_string_lossy()).is_err());
+    }
+
+    #[test]
+    fn native_selected_workspace_is_accepted_for_new_sessions() {
+        let workspace = tempfile::tempdir().unwrap();
+        let filesystem = crate::shell_fs::FilesystemAccess::default();
+        let canonical = filesystem
+            .authorize_workspace(&workspace.path().to_string_lossy())
+            .unwrap();
+
+        assert_eq!(
+            authorized_session_cwd(&filesystem, &workspace.path().to_string_lossy()).unwrap(),
+            canonical.to_string_lossy().into_owned()
+        );
+    }
+
+    #[test]
+    fn restored_trusted_workspace_is_accepted_for_loaded_sessions() {
+        let workspace = tempfile::tempdir().unwrap();
+        // `FilesystemAccess::new` feeds durable session/knowledge roots through
+        // this same native-only registration method during startup.
+        let restored = crate::shell_fs::FilesystemAccess::default();
+        let persisted_canonical = restored
+            .authorize_workspace(&workspace.path().to_string_lossy())
+            .unwrap();
+
+        assert_eq!(
+            authorized_session_cwd(&restored, &workspace.path().to_string_lossy()).unwrap(),
+            persisted_canonical.to_string_lossy().into_owned()
+        );
     }
 
     #[test]

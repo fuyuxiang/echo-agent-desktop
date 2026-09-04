@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   XCloseIcon, SearchIcon, ConfigureIcon, McpIcon, DeleteIcon, RefreshCwIcon,
 } from "@/foundation/components/Icon/icons";
@@ -9,6 +9,8 @@ import { ensureSession } from "@/lib/ensure-session";
 import { useSessionStore } from "@/stores/session-store";
 import type { McpServerEntry } from "@/lib/types";
 import { McpConfigEditor } from "./McpConfigEditor";
+import { useModalFocus } from "@/lib/use-modal-focus";
+import { useAppDialog } from "../../AppDialog";
 
 /** MCP management with persisted state, live health and per-server tool details. */
 export function McpModal({
@@ -30,24 +32,37 @@ export function McpModal({
   const [mutating, setMutating] = useState<string | null>(null);
   const [setupDrafts, setSetupDrafts] = useState<Record<string, Record<string, string>>>({});
   const [diagnostics, setDiagnostics] = useState<Record<string, { status?: string; reason?: string; detail?: string }>>({});
+  const dialogRef = useModalFocus<HTMLDivElement>(!embedded, onClose);
+  const activeSessionId = useSessionStore((state) => state.sessionId);
+  const { requestConfirmation, dialog } = useAppDialog(activeSessionId);
+  const reloadGeneration = useRef(0);
 
   const reload = useCallback(async (refresh = false) => {
+    const generation = ++reloadGeneration.current;
     refresh ? setRefreshing(true) : setLoading(true);
     setError("");
     try {
-      const sessionId = useSessionStore.getState().sessionId ?? undefined;
-      setServers(await mcpList(sessionId, refresh));
+      const next = await mcpList(activeSessionId ?? undefined, refresh);
+      if (reloadGeneration.current === generation) setServers(next);
     } catch (e) {
+      if (reloadGeneration.current !== generation) return;
       const message = String(e).replace(/^Error:\s*/, "");
       setError(message);
       if (refresh) onToast?.(`MCP 诊断失败：${message}`);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (reloadGeneration.current === generation) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [onToast]);
+  }, [activeSessionId, onToast]);
 
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    void reload();
+    return () => {
+      reloadGeneration.current += 1;
+    };
+  }, [reload]);
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -77,7 +92,7 @@ export function McpModal({
     setMutating(server.name);
     try {
       const result = await mcpToggle(
-        useSessionStore.getState().sessionId ?? undefined,
+        activeSessionId ?? undefined,
         server.name,
         enabled,
       );
@@ -91,26 +106,32 @@ export function McpModal({
     }
   };
 
-  const handleDelete = async (server: McpServerEntry) => {
+  const handleDelete = (server: McpServerEntry) => {
     if (!server.editable) {
       onToast?.("该服务来自项目或插件，请在对应来源中管理");
       return;
     }
-    if (!confirm(`确定删除 MCP 服务「${server.displayName || server.name}」？\n\n将移除本地服务配置；如需撤销第三方授权，请同时前往对应服务处理。`)) return;
-    setMutating(server.name);
-    try {
-      const result = await mcpDelete(
-        useSessionStore.getState().sessionId ?? undefined,
-        server.name,
-      );
-      onToast?.(result.warnings[0] ? `已删除；${result.warnings[0]}` : "已删除");
-      if (expanded === server.name) setExpanded(null);
-      await reload();
-    } catch (e) {
-      onToast?.(`删除失败：${String(e).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setMutating(null);
-    }
+    requestConfirmation({
+      title: `删除 MCP 服务“${server.displayName || server.name}”？`,
+      description: "将移除本地服务配置。如需撤销第三方授权，还需前往对应服务处理。",
+      confirmLabel: "删除服务",
+      danger: true,
+      action: async () => {
+        setMutating(server.name);
+        try {
+          const result = await mcpDelete(
+            activeSessionId ?? undefined,
+            server.name,
+          );
+          if (expanded === server.name) setExpanded(null);
+          await reload();
+          onToast?.(result.warnings[0] ? `已删除；${result.warnings[0]}` : "已删除");
+        } finally {
+          setMutating(null);
+        }
+      },
+      onError: (error) => onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`),
+    });
   };
 
   const handleSetup = async (server: McpServerEntry) => {
@@ -127,7 +148,7 @@ export function McpModal({
     }
     setMutating(`setup:${server.name}`);
     try {
-      const sessionId = useSessionStore.getState().sessionId ?? await ensureSession();
+      const sessionId = activeSessionId ?? await ensureSession();
       await mcpSetup(sessionId, server.name, values);
       onToast?.(`已完成「${server.displayName || server.name}」配置并启动`);
       await reload(true);
@@ -142,7 +163,7 @@ export function McpModal({
     const key = `tool:${server.name}:${toolName}`;
     setMutating(key);
     try {
-      const sessionId = useSessionStore.getState().sessionId;
+      const sessionId = activeSessionId;
       if (!sessionId) throw new Error("工具尚未加载到活动会话");
       await mcpToggleTool(sessionId, server.name, toolName, enabled);
       onToast?.(enabled ? "已在当前会话启用工具" : "已在当前会话停用工具");
@@ -155,8 +176,15 @@ export function McpModal({
   };
 
   const content = (
-      <div className={`mcp-modal${embedded ? " mcp-modal--embedded" : ""}`}
-        onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className={`mcp-modal${embedded ? " mcp-modal--embedded" : ""}`}
+        onClick={(e) => e.stopPropagation()}
+        role={embedded ? undefined : "dialog"}
+        aria-modal={embedded ? undefined : "true"}
+        aria-label={embedded ? undefined : "MCP 服务管理"}
+        tabIndex={embedded ? undefined : -1}
+      >
         <div className="mcp-modal-head">
           <div className="mcp-modal-titlewrap">
             <span className="mcp-modal-glyph"><McpIcon size="md" /></span>
@@ -178,7 +206,7 @@ export function McpModal({
               </>
             )}
             {!embedded && (
-              <button type="button" className="mcp-modal-close" onClick={onClose}>
+              <button type="button" className="mcp-modal-close" onClick={onClose} aria-label="关闭" data-modal-initial-focus>
                 <XCloseIcon size="md" />
               </button>
             )}
@@ -195,6 +223,7 @@ export function McpModal({
                 <div className="um-search um-search--flex">
                   <SearchIcon size="sm" className="um-search-icon" />
                   <input className="um-search-input" value={search} placeholder="搜索名称、命令或 URL…"
+                    aria-label="搜索 MCP 服务"
                     onChange={(e) => setSearch(e.target.value)} />
                 </div>
                 <span className="mcp-summary">{servers.length} 个服务 · {servers.reduce((sum, s) => sum + s.tools.length, 0)} 个工具</span>
@@ -209,7 +238,7 @@ export function McpModal({
 
               {loading ? (
                 <div className="ec-loading">加载中…</div>
-              ) : servers.length === 0 ? (
+              ) : error && servers.length === 0 ? null : servers.length === 0 ? (
                 <div className="mcp-empty">
                   <McpIcon size="xl" className="mcp-empty-icon" />
                   <div className="mcp-empty-title">暂无 MCP 服务</div>
@@ -250,12 +279,14 @@ export function McpModal({
                           </button>
                           <label className="sk-toggle" title={server.enabled ? "已启用" : "已停用"}>
                             <input type="checkbox" checked={server.enabled}
+                              aria-label={`${server.enabled ? "停用" : "启用"} MCP 服务 ${server.displayName || server.name}`}
                               disabled={mutating === server.name || server.setupRequired}
                               onChange={() => void handleToggle(server, !server.enabled)} />
                             <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
                           </label>
                           {server.editable && (
                             <button type="button" className="sk-inst-del" title="删除用户配置"
+                              aria-label={`删除 MCP 服务 ${server.displayName || server.name}`}
                               disabled={mutating === server.name}
                               onClick={() => void handleDelete(server)}><DeleteIcon size="sm" /></button>
                           )}
@@ -315,6 +346,7 @@ export function McpModal({
                                     </div>
                                     <label className="sk-toggle mcp-tool-toggle" title="仅影响当前会话">
                                       <input type="checkbox" checked={tool.enabled}
+                                        aria-label={`${tool.enabled ? "停用" : "启用"}工具 ${tool.displayName || tool.name}`}
                                         disabled={mutating === `tool:${server.name}:${tool.name}`}
                                         onChange={() => void handleToolToggle(server, tool.name, !tool.enabled)} />
                                       <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
@@ -337,6 +369,7 @@ export function McpModal({
             </div>
           )}
         </div>
+        {dialog}
       </div>
   );
 

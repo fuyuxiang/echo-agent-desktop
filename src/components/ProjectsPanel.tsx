@@ -10,6 +10,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -30,6 +31,8 @@ import {
 } from "./project-picker";
 import { ProjectDetailView } from "./ProjectDetailView";
 import { projectAssetsRemoveAll } from "@/lib/agent-client";
+import { useModalFocus } from "@/lib/use-modal-focus";
+import { useAppDialog } from "./AppDialog";
 
 interface ProjectsPanelProps {
   cwd?: string;
@@ -69,7 +72,11 @@ export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConv
   const [query, setQuery] = useState("");
   const [create, setCreate] = useState<CreatePreset | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ProjectMeta | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const createButtonRef = useRef<HTMLButtonElement>(null);
   const picker = useProjectPickerOptions(cwd);
+  const { requestInput, dialog } = useAppDialog(openId);
 
   // Auto-open a project when navigated from the sidebar.
   useEffect(() => {
@@ -86,35 +93,52 @@ export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConv
   const openProject = projects.find((p) => p.id === openId) ?? null;
   if (openProject) {
     return (
-      <ProjectDetailView
-        project={openProject}
-        onBack={() => setOpenId(null)}
-        onToast={onToast}
-        onStartConversation={onStartProjectConversation}
-        onOpenSession={onOpenSession}
-        picker={picker}
-        onOpenAutomation={onOpenAutomation}
-      />
+      <>
+        <ProjectDetailView
+          project={openProject}
+          onBack={() => setOpenId(null)}
+          onToast={onToast}
+          onStartConversation={onStartProjectConversation}
+          onOpenSession={onOpenSession}
+          picker={picker}
+          onOpenAutomation={onOpenAutomation}
+        />
+        {dialog}
+      </>
     );
   }
 
   const handleRename = (p: ProjectMeta) => {
-    const next = window.prompt("重命名项目", p.name);
-    if (next && next.trim() && next.trim() !== p.name) rename(p.id, next.trim());
+    requestInput({
+      title: `重命名项目“${p.name}”`,
+      fields: [{ name: "name", label: "项目名称", defaultValue: p.name, required: true, maxLength: 120 }],
+      confirmLabel: "保存",
+      validate: ({ name }) => {
+        const trimmed = name.trim();
+        if (trimmed === p.name) return "请输入与当前不同的项目名称。";
+        return projects.some((project) => project.id !== p.id && project.name.trim() === trimmed)
+          ? "已有同名项目，请使用其他名称。"
+          : null;
+      },
+      action: ({ name }) => rename(p.id, name.trim()),
+    });
   };
-  const handleDelete = async (p: ProjectMeta) => {
-    const detail = p.assets.length > 0
-      ? `\n项目中的 ${p.assets.length} 项资产副本也会删除。`
-      : "";
-    if (window.confirm(`确定删除项目「${p.name}」？${detail}\n原始文件和历史会话不会被删除。`)) {
-      try {
-        await projectAssetsRemoveAll(p.id);
-      } catch (error) {
-        onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`);
-        return;
-      }
-      remove(p.id);
+  const handleDelete = async () => {
+    const target = deleteTarget;
+    if (!target || deleting) return;
+    setDeleting(true);
+    try {
+      await projectAssetsRemoveAll(target.id);
+      remove(target.id);
+      setDeleteTarget(null);
       onToast?.("已删除项目");
+      // The original menu trigger disappears with the deleted card. Move
+      // focus to the primary project action instead of leaving it on <body>.
+      window.requestAnimationFrame(() => createButtonRef.current?.focus());
+    } catch (error) {
+      onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -132,7 +156,7 @@ export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConv
         <div className="project-hero__text">
           <h1 className="project-hero__title">项目</h1>
           <p className="project-hero__subtitle">围绕目标组织上下文、对话与交付资产</p>
-          <button type="button" className="project-hero__create" onClick={() => setCreate({})}>
+          <button ref={createButtonRef} type="button" className="project-hero__create" onClick={() => setCreate({})}>
             <AddIcon size="sm" />
             <span>新建项目</span>
           </button>
@@ -169,7 +193,7 @@ export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConv
                 onEnter={() => setOpenId(p.id)}
                 onStart={() => onStartProject?.(p)}
                 onRename={() => handleRename(p)}
-                onDelete={() => void handleDelete(p)}
+                onDelete={() => setDeleteTarget(p)}
               />
             ))}
           </div>
@@ -212,6 +236,81 @@ export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConv
           picker={picker}
         />
       )}
+      {deleteTarget && (
+        <ProjectDeleteDialog
+          project={deleteTarget}
+          busy={deleting}
+          onCancel={() => {
+            if (!deleting) setDeleteTarget(null);
+          }}
+          onConfirm={() => void handleDelete()}
+        />
+      )}
+      {dialog}
+    </div>
+  );
+}
+
+function ProjectDeleteDialog({
+  project,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  project: ProjectMeta;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const titleId = useId();
+  const descriptionId = useId();
+  const dialogRef = useModalFocus<HTMLDivElement>(true, () => {
+    if (!busy) onCancel();
+  });
+  const assetDetail = project.assets.length > 0
+    ? `项目中的 ${project.assets.length} 项资产副本也会删除。`
+    : "";
+
+  return (
+    <div
+      className="modal-overlay"
+      onClick={(event) => {
+        if (event.target === event.currentTarget && !busy) onCancel();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        className="atm-confirm-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        tabIndex={-1}
+      >
+        <h3 id={titleId} className="atm-confirm-title">确定删除项目「{project.name}」？</h3>
+        <p id={descriptionId} className="atm-confirm-content">
+          {assetDetail}{assetDetail ? " " : ""}原始文件和历史会话不会被删除。
+        </p>
+        <div className="atm-confirm-actions">
+          <button
+            type="button"
+            className="atm-btn atm-btn--secondary"
+            onClick={onCancel}
+            disabled={busy}
+            data-modal-initial-focus
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            className="atm-btn atm-btn--danger"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? "删除中…" : "删除项目"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -327,13 +426,13 @@ function ProjectCard({
 
   return (
     <div className="project-card2" ref={ref}>
-      <div className="project-card2__main" onClick={onEnter}>
+      <button type="button" className="project-card2__main" onClick={onEnter}>
         <span className="project-card2__glyph"><ProjectGlyph /></span>
         <span className="project-card2__body">
           <span className="project-card2__name">{project.name}</span>
           <span className="project-card2__sub">{addedLabel(project.createdAt)}</span>
         </span>
-      </div>
+      </button>
       <div className="project-card2__more-wrap">
         <button
           ref={triggerRef}
@@ -365,7 +464,20 @@ function ProjectCard({
           <button type="button" role="menuitem" className="project-card2__menu-item" onClick={() => { closeMenu(); onStart(); }}>开始项目对话</button>
           <button type="button" role="menuitem" className="project-card2__menu-item" onClick={() => { closeMenu(); onRename(); }}>重命名</button>
           <div className="project-card2__menu-sep" role="separator" />
-          <button type="button" role="menuitem" className="project-card2__menu-item project-card2__menu-item--danger" onClick={() => { closeMenu(); onDelete(); }}>删除</button>
+          <button
+            type="button"
+            role="menuitem"
+            className="project-card2__menu-item project-card2__menu-item--danger"
+            onClick={() => {
+              // Preserve a connected invoker for the modal focus hook before
+              // the portal menu item is removed.
+              triggerRef.current?.focus();
+              closeMenu();
+              onDelete();
+            }}
+          >
+            删除
+          </button>
         </div>,
         document.body,
       )}
@@ -399,6 +511,7 @@ function CreateProjectDialog({
   const [pickerFor, setPickerFor] = useState<null | "connectors" | "experts" | "skills">(null);
   const [tplOpen, setTplOpen] = useState(false);
   const tplRef = useOutsideClose<HTMLDivElement>(tplOpen, () => setTplOpen(false));
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
 
   const applyTemplate = (id: string) => {
     const t = getTemplate(id);
@@ -433,7 +546,15 @@ function CreateProjectDialog({
 
   return (
     <div className="modal-overlay create-colleague-overlay" onClick={onCancel}>
-      <div className="create-colleague-dialog create-project-dialog" onClick={(e) => e.stopPropagation()} role="dialog">
+      <div
+        ref={dialogRef}
+        className="create-colleague-dialog create-project-dialog"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="新建项目"
+        tabIndex={-1}
+      >
         <div className="create-colleague-header">
           <h3>新建项目</h3>
           <button className="create-colleague-close" onClick={onCancel} aria-label="关闭">×</button>
@@ -449,7 +570,7 @@ function CreateProjectDialog({
               maxLength={15}
               onChange={(e) => setName(e.target.value)}
               placeholder="请输入项目名称"
-              autoFocus
+              data-modal-initial-focus
             />
           </div>
 

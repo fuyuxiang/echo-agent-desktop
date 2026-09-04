@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { XCloseIcon } from "@/foundation/components/Icon/icons";
 const logoMarkUrl = "/app-icon.png";
@@ -68,6 +68,34 @@ async function win(action: "minimize" | "maximize" | "close") {
   }
 }
 
+function handleDropdownKeyDown(
+  event: ReactKeyboardEvent<HTMLDivElement>,
+  onEscape: () => void,
+) {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    onEscape();
+    return;
+  }
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+
+  const items = Array.from(
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)'),
+  );
+  if (items.length === 0) return;
+  event.preventDefault();
+  const current = items.indexOf(document.activeElement as HTMLButtonElement);
+  if (event.key === "Home") items[0].focus();
+  else if (event.key === "End") items[items.length - 1].focus();
+  else if (event.key === "ArrowDown") {
+    items[current < 0 ? 0 : (current + 1) % items.length].focus();
+  } else {
+    items[current < 0 ? items.length - 1 : (current - 1 + items.length) % items.length].focus();
+  }
+}
+
 /** Insert text at the cursor position of the currently focused editable
  *  element (textarea/input). Used by the Edit → Paste menu item. Falls back
  *  to execCommand('insertText') when available so undo history is preserved. */
@@ -111,6 +139,9 @@ export function TitleBar({
 }) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
+  const menuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const dropdownRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const pendingKeyboardFocus = useRef<{ name: string; edge: "first" | "last" } | null>(null);
 
   useEffect(() => {
     const checkMaximized = async () => {
@@ -129,6 +160,33 @@ export function TitleBar({
     };
     checkMaximized();
   }, []);
+
+  useEffect(() => {
+    const pending = pendingKeyboardFocus.current;
+    if (!openMenu || !pending || pending.name !== openMenu) return;
+    const items = dropdownRefs.current[openMenu]?.querySelectorAll<HTMLButtonElement>(
+      '[role="menuitem"]:not(:disabled)',
+    );
+    items?.[pending.edge === "first" ? 0 : items.length - 1]?.focus();
+    pendingKeyboardFocus.current = null;
+  }, [openMenu]);
+
+  const openMenuFromKeyboard = (name: string, edge: "first" | "last") => {
+    if (openMenu === name) {
+      const items = dropdownRefs.current[name]?.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]:not(:disabled)',
+      );
+      items?.[edge === "first" ? 0 : items.length - 1]?.focus();
+      return;
+    }
+    pendingKeyboardFocus.current = { name, edge };
+    setOpenMenu(name);
+  };
+
+  const closeMenuAndRestoreFocus = (name: string) => {
+    setOpenMenu(null);
+    menuButtonRefs.current[name]?.focus();
+  };
 
   const runItem = (item: MenuItem) => {
     setOpenMenu(null);
@@ -190,19 +248,52 @@ export function TitleBar({
         {Object.keys(MENUS).map((name) => (
           <div key={name} className="titlebar__menu-wrap">
             <button
+              ref={(element) => {
+                menuButtonRefs.current[name] = element;
+              }}
+              type="button"
               className={"titlebar__menu" + (openMenu === name ? " titlebar__menu--open" : "")}
               onClick={() => setOpenMenu(openMenu === name ? null : name)}
               aria-label={name}
+              aria-haspopup="menu"
+              aria-expanded={openMenu === name}
+              aria-controls={openMenu === name ? `titlebar-menu-${name}` : undefined}
+              onKeyDown={(event) => {
+                if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
+                  event.preventDefault();
+                  openMenuFromKeyboard(name, event.key === "ArrowUp" ? "last" : "first");
+                } else if (event.key === "Escape" && openMenu === name) {
+                  event.preventDefault();
+                  setOpenMenu(null);
+                }
+              }}
             >
               {name}
             </button>
             {openMenu === name && (
               <>
-                <div className="titlebar__backdrop" onClick={() => setOpenMenu(null)} />
-                <div className="titlebar__dropdown" role="menu">
+                <div
+                  className="titlebar__backdrop"
+                  onClick={() => closeMenuAndRestoreFocus(name)}
+                />
+                <div
+                  ref={(element) => {
+                    dropdownRefs.current[name] = element;
+                  }}
+                  id={`titlebar-menu-${name}`}
+                  className="titlebar__dropdown"
+                  role="menu"
+                  aria-label={`${name}菜单`}
+                  onKeyDown={(event) => handleDropdownKeyDown(
+                    event,
+                    () => closeMenuAndRestoreFocus(name),
+                  )}
+                >
                   {MENUS[name].map((item) => (
                     <button
                       key={item.label}
+                      type="button"
+                      role="menuitem"
                       className="titlebar__dropdown-item"
                       onClick={() => runItem(item)}
                     >

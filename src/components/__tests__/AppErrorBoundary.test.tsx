@@ -9,8 +9,16 @@ function BrokenView(): never {
 }
 
 describe("AppErrorBoundary", () => {
-  beforeEach(() => vi.spyOn(console, "error").mockImplementation(() => {}));
-  afterEach(() => vi.restoreAllMocks());
+  const preventExpectedWindowError = (event: ErrorEvent) => event.preventDefault();
+
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    window.addEventListener("error", preventExpectedWindowError);
+  });
+  afterEach(() => {
+    window.removeEventListener("error", preventExpectedWindowError);
+    vi.restoreAllMocks();
+  });
 
   it("根组件异常时显示可操作错误页而不是白屏", () => {
     render(

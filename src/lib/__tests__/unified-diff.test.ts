@@ -83,6 +83,26 @@ describe("computeUnifiedDiff", () => {
     const lines = computeUnifiedDiff("", "");
     expect(lines.length).toBe(0);
   });
+
+  it("超大差异使用有界回退并限制渲染行数", () => {
+    const oldText = Array.from({ length: 8_000 }, (_, index) => `old-${index}`).join("\n");
+    const newText = Array.from({ length: 8_000 }, (_, index) => `new-${index}`).join("\n");
+    const lines = computeUnifiedDiff(oldText, newText);
+    expect(lines.length).toBeLessThanOrEqual(4_001);
+    expect(lines.some((line) => line.text.includes("已省略"))).toBe(true);
+    expect(lines[0]).toMatchObject({ kind: "del", oldLine: 1, text: "old-0" });
+    expect(lines[lines.length - 1]).toMatchObject({ kind: "add", newLine: 8_000, text: "new-7999" });
+  });
+
+  it("大文件的局部编辑仍保留精确上下文", () => {
+    const oldLines = Array.from({ length: 10_000 }, (_, index) => `line-${index}`);
+    const newLines = [...oldLines];
+    newLines[5_000] = "changed";
+    const lines = computeUnifiedDiff(oldLines.join("\n"), newLines.join("\n"), 3);
+    expect(summarizeDiff(lines)).toMatchObject({ added: 1, removed: 1 });
+    expect(lines.some((line) => line.text === "changed")).toBe(true);
+    expect(lines.length).toBeLessThan(20);
+  });
 });
 
 describe("hunksToUnifiedLines", () => {

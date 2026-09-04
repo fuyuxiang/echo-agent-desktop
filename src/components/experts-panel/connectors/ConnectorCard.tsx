@@ -23,15 +23,17 @@ export function ConnectorCard({
   const badge = BADGE[authState];
   const connected = authState === "installed" || authState === "authed";
   return (
-    <article className="cn-card" onClick={() => onOpen(connector)}>
-      <ConnectorIcon local={connector.iconLocal} name={connector.name} size={36} shape="square" />
-      <div className="cn-card-info">
-        <div className="cn-card-name">
-          {connector.name}
-          {badge && <span className={`cn-badge ${badge.cls}`}>{badge.text}</span>}
+    <article className="cn-card">
+      <button type="button" className="cn-card-main" onClick={() => onOpen(connector)} aria-label={`查看连接器 ${connector.name} 详情`}>
+        <ConnectorIcon local={connector.iconLocal} name={connector.name} size={36} shape="square" />
+        <div className="cn-card-info">
+          <div className="cn-card-name">
+            {connector.name}
+            {badge && <span className={`cn-badge ${badge.cls}`}>{badge.text}</span>}
+          </div>
+          <p className="cn-card-desc">{connector.desc}</p>
         </div>
-        <p className="cn-card-desc">{connector.desc}</p>
-      </div>
+      </button>
       <button type="button" className="sk-add"
         title={connected ? "重新配置" : authState === "needs-auth" ? "去授权" : "配置 / 连接"}
         onClick={(e) => { e.stopPropagation(); onConfigure(connector); }}>

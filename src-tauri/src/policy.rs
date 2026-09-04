@@ -1,10 +1,14 @@
 //! Authoritative local policy store and backend enforcement gates.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+const MAX_POLICY_BYTES: u64 = 1024 * 1024;
+const MAX_POLICY_ARRAY_ITEMS: usize = 512;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,9 +34,21 @@ fn policy_path() -> PathBuf {
 
 fn validate_rule(rule: &PolicyRule) -> Result<(), String> {
     match rule.rule_type.as_str() {
-        "model-whitelist" | "disabled-features" | "sandbox-rules" => {
-            if !rule.value.is_array() {
+        "model-whitelist" | "disabled-features" => {
+            let Some(values) = rule.value.as_array() else {
                 return Err(format!("{} must be an array", rule.rule_type));
+            };
+            if values.len() > MAX_POLICY_ARRAY_ITEMS
+                || values.iter().any(|value| {
+                    value.as_str().is_none_or(|item| {
+                        item.is_empty() || item.len() > 512 || item.chars().any(char::is_control)
+                    })
+                })
+            {
+                return Err(format!(
+                    "{} must contain at most {MAX_POLICY_ARRAY_ITEMS} non-empty strings",
+                    rule.rule_type
+                ));
             }
         }
         "skill-upload" => {
@@ -46,11 +62,10 @@ fn validate_rule(rule: &PolicyRule) -> Result<(), String> {
                 return Err("permission-mode must be ask, auto or always-approve".into());
             }
         }
-        "max-tokens-per-day" => {
-            if rule.value.as_u64().filter(|v| *v > 0).is_none() {
-                return Err("max-tokens-per-day must be a positive integer".into());
-            }
-        }
+        "sandbox-rules" | "max-tokens-per-day" => return Err(format!(
+            "policy type '{}' is not supported by this build and was not saved; enforcing it only in the UI would create a false security boundary",
+            rule.rule_type
+        )),
         other => return Err(format!("unknown policy type: {other}")),
     }
     Ok(())
@@ -76,10 +91,36 @@ fn merge_rules(rules: Vec<PolicyRule>) -> Vec<PolicyRule> {
 }
 
 pub fn read_policy() -> PolicySet {
-    let Ok(raw) = std::fs::read_to_string(policy_path()) else {
+    let path = policy_path();
+    let Ok(file) = std::fs::File::open(&path) else {
         return PolicySet::default();
     };
-    let mut set: PolicySet = serde_json::from_str(&raw).unwrap_or_default();
+    let mut raw = Vec::new();
+    if file
+        .take(MAX_POLICY_BYTES.saturating_add(1))
+        .read_to_end(&mut raw)
+        .is_err()
+        || raw.len() as u64 > MAX_POLICY_BYTES
+    {
+        tracing::warn!(path = %path.display(), "local policy file is unreadable or exceeds 1MB; no local policy was loaded");
+        return PolicySet::default();
+    }
+    let mut set: PolicySet = match serde_json::from_slice(&raw) {
+        Ok(set) => set,
+        Err(error) => {
+            tracing::warn!(%error, "local policy file is invalid; no local policy was loaded");
+            return PolicySet::default();
+        }
+    };
+    // Legacy builds accepted policy kinds they never enforced. Never expose
+    // those entries as active policy after an upgrade.
+    set.rules.retain(|rule| {
+        let result = validate_rule(rule);
+        if let Err(error) = &result {
+            tracing::warn!(rule_type = %rule.rule_type, %error, "ignored unsupported local policy rule");
+        }
+        result.is_ok()
+    });
     set.rules = merge_rules(set.rules);
     set
 }
@@ -106,11 +147,15 @@ pub fn require_model(model_id: &str) -> Result<(), String> {
     let Some(models) = value("model-whitelist").and_then(|v| v.as_array().cloned()) else {
         return Ok(());
     };
-    if models.is_empty() || models.iter().any(|v| v.as_str() == Some(model_id)) {
+    if model_allowed(&models, model_id) {
         Ok(())
     } else {
         Err(format!("策略禁止使用模型 {model_id}"))
     }
+}
+
+fn model_allowed(models: &[Value], model_id: &str) -> bool {
+    models.iter().any(|value| value.as_str() == Some(model_id))
 }
 
 pub fn require_skill_upload() -> Result<(), String> {
@@ -145,7 +190,17 @@ pub fn policy_get() -> PolicySet {
 
 #[tauri::command]
 pub fn policy_save(policy: PolicySet) -> Result<PolicySet, String> {
-    write_policy(policy)
+    write_policy(normalize_local_policy(policy))
+}
+
+fn normalize_local_policy(mut policy: PolicySet) -> PolicySet {
+    // IPC callers do not get to self-assign an administrator-like source or
+    // priority. Managed organization policy has its own signed channel.
+    for rule in &mut policy.rules {
+        rule.priority = 0;
+        rule.source = Some("local-user".into());
+    }
+    policy
 }
 
 #[cfg(test)]
@@ -195,5 +250,34 @@ mod tests {
             source: None,
         };
         assert!(validate_rule(&unknown).is_err());
+
+        for unsupported in ["sandbox-rules", "max-tokens-per-day"] {
+            let rule = PolicyRule {
+                rule_type: unsupported.into(),
+                value: Value::Array(Vec::new()),
+                priority: 0,
+                source: None,
+            };
+            assert!(validate_rule(&rule).unwrap_err().contains("not supported"));
+        }
+    }
+
+    #[test]
+    fn renderer_metadata_is_replaced_with_local_provenance() {
+        let policy = normalize_local_policy(PolicySet {
+            rules: vec![PolicyRule {
+                rule_type: "skill-upload".into(),
+                value: Value::Bool(true),
+                priority: i64::MAX,
+                source: Some("administrator".into()),
+            }],
+        });
+        assert_eq!(policy.rules[0].priority, 0);
+        assert_eq!(policy.rules[0].source.as_deref(), Some("local-user"));
+    }
+
+    #[test]
+    fn explicit_empty_model_whitelist_denies_every_model() {
+        assert!(!model_allowed(&[], "model-a"));
     }
 }

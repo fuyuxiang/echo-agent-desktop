@@ -26,6 +26,28 @@ export const KB_PPTX_EXTS = [".pptx"];
 export const KB_SHEET_EXTS = [".xlsx"];
 /** 全部 OOXML 扩展(docx/pptx/xlsx)。 */
 export const KB_OFFICE_EXTS = [...KB_DOCX_EXTS, ...KB_PPTX_EXTS, ...KB_SHEET_EXTS];
+const MAX_KB_QUERY_CHARS = 512;
+const MAX_INDEXED_CONTENT_CHARS = 512 * 1024;
+const MAX_CONTENT_CACHE_CHARS = 4 * 1024 * 1024;
+const MAX_CONTENT_CACHE_ENTRIES = 64;
+const DEFAULT_MAX_SCAN_ENTRIES = 10_000;
+const DEFAULT_MAX_DIRECTORIES = 1_000;
+const DEFAULT_MAX_RESULTS = 200;
+
+function boundedText(value: string | null): string | null {
+  if (value == null || value.length <= MAX_INDEXED_CONTENT_CHARS) return value;
+  return value.slice(0, MAX_INDEXED_CONTENT_CHARS);
+}
+
+function boundedInteger(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const numeric = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(minimum, Math.min(maximum, Math.floor(numeric)));
+}
 
 /** 目录读取注入接口(运行时用 Tauri list_dir 实现;测试用内存 mock)。 */
 export interface DirectoryReader {
@@ -90,19 +112,18 @@ export function extractOfficeText(bytes: Uint8Array, nameOrExt: string): string 
       readText: (p: string) => (p in files ? new TextDecoder("utf-8").decode(files[p]) : null),
       listEntries: () => Object.keys(files),
     };
+    let extracted: string | null = null;
     if (ext === ".docx") {
       if (!files["word/document.xml"]) return null;
-      return extractDocxFromZip(reader)?.text ?? null;
+      extracted = extractDocxFromZip(reader)?.text ?? null;
+    } else if (ext === ".pptx") {
+      extracted = extractPptxFromZip(reader)?.text ?? null;
+    } else if (ext === ".xlsx") {
+      extracted = extractSheetFromZip(reader)?.text ?? null;
+    } else {
+      return null;
     }
-    if (ext === ".pptx") {
-      const extract = extractPptxFromZip(reader);
-      return extract?.text ?? null;
-    }
-    if (ext === ".xlsx") {
-      const extract = extractSheetFromZip(reader);
-      return extract?.text ?? null;
-    }
-    return null;
+    return boundedText(extracted);
   } catch {
     return null;
   }
@@ -177,14 +198,32 @@ export function fileToEntry(
 export async function collectKnowledgeFiles(
   root: string,
   reader: DirectoryReader,
-  opts: { maxDepth?: number; maxFiles?: number } = {},
+  opts: {
+    maxDepth?: number;
+    maxFiles?: number;
+    maxDirectories?: number;
+    maxEntries?: number;
+  } = {},
 ): Promise<Array<{ name: string; path: string }>> {
-  const maxDepth = opts.maxDepth ?? 5;
-  const maxFiles = opts.maxFiles ?? 500;
+  const maxDepth = boundedInteger(opts.maxDepth, 5, 0, 10);
+  const maxFiles = boundedInteger(opts.maxFiles, 500, 1, 1_000);
+  const maxDirectories = boundedInteger(
+    opts.maxDirectories,
+    DEFAULT_MAX_DIRECTORIES,
+    1,
+    5_000,
+  );
+  const maxEntries = boundedInteger(opts.maxEntries, DEFAULT_MAX_SCAN_ENTRIES, 1, 50_000);
   const out: Array<{ name: string; path: string }> = [];
   const seen = new Set<string>();
   const queue: Array<{ path: string; depth: number }> = [{ path: root, depth: 0 }];
-  while (queue.length > 0 && out.length < maxFiles) {
+  let scannedEntries = 0;
+  while (
+    queue.length > 0
+    && out.length < maxFiles
+    && seen.size < maxDirectories
+    && scannedEntries < maxEntries
+  ) {
     const { path, depth } = queue.shift()!;
     if (seen.has(path)) continue;
     seen.add(path);
@@ -195,8 +234,15 @@ export async function collectKnowledgeFiles(
       continue;
     }
     for (const e of entries) {
+      if (scannedEntries >= maxEntries) break;
+      scannedEntries += 1;
       if (e.isDir) {
-        if (depth + 1 <= maxDepth) queue.push({ path: e.path, depth: depth + 1 });
+        if (
+          depth + 1 <= maxDepth
+          && seen.size + queue.length < maxDirectories
+        ) {
+          queue.push({ path: e.path, depth: depth + 1 });
+        }
       } else if (isAnyKnowledgeFile(e.name)) {
         if (out.length >= maxFiles) break;
         out.push({ name: e.name, path: e.path });
@@ -217,11 +263,47 @@ export async function collectKnowledgeFiles(
 export function createLocalKbProvider(
   root: string,
   reader: DirectoryReader,
-  options: { maxDepth?: number; maxFiles?: number; id?: string; label?: string } = {},
+  options: {
+    maxDepth?: number;
+    maxFiles?: number;
+    maxDirectories?: number;
+    maxEntries?: number;
+    maxResults?: number;
+    id?: string;
+    label?: string;
+  } = {},
 ): KbProvider {
   const providerId = options.id ?? "local";
+  const maxResults = boundedInteger(options.maxResults, DEFAULT_MAX_RESULTS, 1, 1_000);
   let cache: Array<{ name: string; path: string }> | null = null;
   const contentCache = new Map<string, string | null>();
+  let cachedCharacters = 0;
+  const readCached = (path: string): { hit: boolean; value: string | null } => {
+    if (!contentCache.has(path)) return { hit: false, value: null };
+    const value = contentCache.get(path) ?? null;
+    contentCache.delete(path);
+    contentCache.set(path, value);
+    return { hit: true, value };
+  };
+  const rememberContent = (path: string, raw: string | null): string | null => {
+    const value = boundedText(raw);
+    const previous = contentCache.get(path);
+    if (previous) cachedCharacters -= previous.length;
+    contentCache.delete(path);
+    contentCache.set(path, value);
+    if (value) cachedCharacters += value.length;
+    while (
+      contentCache.size > MAX_CONTENT_CACHE_ENTRIES
+      || cachedCharacters > MAX_CONTENT_CACHE_CHARS
+    ) {
+      const oldest = contentCache.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      const removed = contentCache.get(oldest);
+      if (removed) cachedCharacters -= removed.length;
+      contentCache.delete(oldest);
+    }
+    return value;
+  };
   let lastScannedAt: number | undefined;
   const scanOnce = async () => {
     cache = await collectKnowledgeFiles(root, reader, options);
@@ -238,38 +320,49 @@ export function createLocalKbProvider(
     isEnabled: () => !!root,
     async list(query) {
       if (!root) return [];
+      const normalizedQuery = query?.trim() ?? "";
+      if (normalizedQuery.length > MAX_KB_QUERY_CHARS) {
+        throw new Error(`知识库查询不能超过 ${MAX_KB_QUERY_CHARS} 个字符`);
+      }
       const files = await ensureCache();
       const out: KbEntry[] = [];
       for (const f of files) {
         // 有 query 时读内容做命中 + 片段;无 query 时只列标题(避免全量读文件)。
         let content: string | null = null;
-        if (query) {
+        if (normalizedQuery) {
           if (isOfficeFile(f.name)) {
             // OOXML(docx/pptx/xlsx):读字节 → zip-reader + doc-preview 提取文本。
-            if (contentCache.has(f.path)) {
-              content = contentCache.get(f.path) ?? null;
+            const cached = readCached(f.path);
+            if (cached.hit) {
+              content = cached.value;
             } else {
               const bytes = reader.readBytes ? await reader.readBytes(f.path).catch(() => null) : null;
-              content = bytes ? extractOfficeText(bytes, f.name) : null;
-              contentCache.set(f.path, content);
+              content = rememberContent(f.path, bytes ? extractOfficeText(bytes, f.name) : null);
             }
           } else {
-            if (contentCache.has(f.path)) {
-              content = contentCache.get(f.path) ?? null;
+            const cached = readCached(f.path);
+            if (cached.hit) {
+              content = cached.value;
             } else {
-              content = await reader.readText(f.path).catch(() => null);
-              contentCache.set(f.path, content);
+              content = rememberContent(
+                f.path,
+                await reader.readText(f.path).catch(() => null),
+              );
             }
           }
         }
-        const entry = fileToEntry(f, content, query);
+        const entry = fileToEntry(f, content, normalizedQuery || undefined);
         if (entry) out.push({ ...entry, source: providerId });
+        if (out.length >= maxResults) {
+          break;
+        }
       }
       return out;
     },
     /** 重建索引:清缓存并重新扫描目录(本地文件夹内容变化后手动刷新)。返回新条目数。 */
     async rebuild() {
       contentCache.clear();
+      cachedCharacters = 0;
       await scanOnce();
       return cache!.length;
     },

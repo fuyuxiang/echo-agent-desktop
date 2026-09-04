@@ -1,18 +1,58 @@
+import { lazy, Suspense, useState, type ReactNode } from "react";
 import { AgentToolIcon } from "@/foundation/components/Icon/icons";
-import { ProjectsPanel } from "./ProjectsPanel";
-import { ExpertsPanel } from "./experts-panel";
-import { AutomationPanel } from "./AutomationPanel";
-import { ResourcesPanel } from "./ResourcesPanel";
-import { MyFilesPanel } from "./MyFilesPanel";
-import { PluginsPanel } from "./PluginsPanel";
-import { MarketplacePanel } from "./MarketplacePanel";
-import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
-import { UsageQuotaPanel } from "./UsageQuotaPanel";
-import { NotifyChannelsPanel } from "./NotifyChannelsPanel";
-import { CloudStoragePanel } from "./CloudStoragePanel";
-import { OrganizationMemoryPanel } from "./OrganizationMemoryPanel";
 import type { ProjectMeta } from "@/stores/projects-store";
 import { openExternalUrl, openLocalPath } from "@/lib/agent-client";
+
+const ProjectsPanel = lazy(() =>
+  import("./ProjectsPanel").then((module) => ({ default: module.ProjectsPanel })),
+);
+const ExpertsPanel = lazy(() =>
+  import("./experts-panel").then((module) => ({ default: module.ExpertsPanel })),
+);
+const AutomationPanel = lazy(() =>
+  import("./AutomationPanel").then((module) => ({ default: module.AutomationPanel })),
+);
+const ResourcesPanel = lazy(() =>
+  import("./ResourcesPanel").then((module) => ({ default: module.ResourcesPanel })),
+);
+const MyFilesPanel = lazy(() =>
+  import("./MyFilesPanel").then((module) => ({ default: module.MyFilesPanel })),
+);
+const PluginsPanel = lazy(() =>
+  import("./PluginsPanel").then((module) => ({ default: module.PluginsPanel })),
+);
+const MarketplacePanel = lazy(() =>
+  import("./MarketplacePanel").then((module) => ({ default: module.MarketplacePanel })),
+);
+const KnowledgeBasePanel = lazy(() =>
+  import("./KnowledgeBasePanel").then((module) => ({ default: module.KnowledgeBasePanel })),
+);
+const UsageQuotaPanel = lazy(() =>
+  import("./UsageQuotaPanel").then((module) => ({ default: module.UsageQuotaPanel })),
+);
+const NotifyChannelsPanel = lazy(() =>
+  import("./NotifyChannelsPanel").then((module) => ({ default: module.NotifyChannelsPanel })),
+);
+const CloudStoragePanel = lazy(() =>
+  import("./CloudStoragePanel").then((module) => ({ default: module.CloudStoragePanel })),
+);
+const OrganizationMemoryPanel = lazy(() =>
+  import("./OrganizationMemoryPanel").then((module) => ({ default: module.OrganizationMemoryPanel })),
+);
+
+function DeferredPanel({ children }: { children: ReactNode }) {
+  return (
+    <Suspense
+      fallback={(
+        <div className="placeholder-page" role="status" aria-live="polite">
+          <p className="placeholder-page__desc">正在加载…</p>
+        </div>
+      )}
+    >
+      {children}
+    </Suspense>
+  );
+}
 
 interface PlaceholderPageProps {
   label: string;
@@ -51,92 +91,116 @@ export function PlaceholderPage({
 }: PlaceholderPageProps) {
   if (label === "项目") {
     return (
-      <ProjectsPanel
-        cwd={cwd}
-        onSelectWorkspace={onSelectWorkspace}
-        onToast={onToast}
-        onStartProject={onStartProject}
-        onStartProjectConversation={onStartProjectConversation}
-        onOpenSession={onOpenSession}
-        onOpenAutomation={() => onNavigate?.("自动化")}
-      />
+      <DeferredPanel>
+        <ProjectsPanel
+          cwd={cwd}
+          onSelectWorkspace={onSelectWorkspace}
+          onToast={onToast}
+          onStartProject={onStartProject}
+          onStartProjectConversation={onStartProjectConversation}
+          onOpenSession={onOpenSession}
+          onOpenAutomation={() => onNavigate?.("自动化")}
+        />
+      </DeferredPanel>
     );
   }
 
   if (label === "组织") {
-    return <OrganizationMemoryPanel onToast={onToast} />;
+    return <DeferredPanel><OrganizationMemoryPanel onToast={onToast} /></DeferredPanel>;
   }
 
   if (["专家·技能·连接器", "技能", "连接器"].includes(label)) {
     const initialTab = label === "技能" ? "skills" : label === "连接器" ? "connectors" : "experts";
-    return <ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} />;
+    return (
+      <DeferredPanel>
+        <ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} />
+      </DeferredPanel>
+    );
   }
 
   if (label === "自动化") {
-    return <AutomationPanel onToast={onToast} onNavigate={onNavigate} onOpenSession={onOpenSession} cwd={cwd} />;
+    return (
+      <DeferredPanel>
+        <AutomationPanel onToast={onToast} onNavigate={onNavigate} onOpenSession={onOpenSession} cwd={cwd} />
+      </DeferredPanel>
+    );
   }
 
   if (label === "插件·市场" || label === "插件市场") {
     return (
-      <PluginsMarketTabs
-        key={label}
-        sessionId={sessionId}
-        onToast={onToast}
-        initialTab={label === "插件市场" ? "marketplace" : "plugins"}
-      />
+      <DeferredPanel>
+        <PluginsMarketTabs
+          key={label}
+          sessionId={sessionId}
+          onToast={onToast}
+          initialTab={label === "插件市场" ? "marketplace" : "plugins"}
+        />
+      </DeferredPanel>
     );
   }
 
   if (label === "更多" || label === "资料库" || label === "个人记忆") {
-    return <ResourcesPanel cwd={cwd} sessionId={sessionId} onToast={onToast} />;
+    return (
+      <DeferredPanel>
+        <ResourcesPanel cwd={cwd} sessionId={sessionId} onToast={onToast} />
+      </DeferredPanel>
+    );
   }
 
   if (label === "我的文件") {
-    return <MyFilesPanel cwd={cwd} onToast={onToast} />;
+    return <DeferredPanel><MyFilesPanel cwd={cwd} onToast={onToast} /></DeferredPanel>;
   }
 
   // 知识库(可插拔源,对齐 EchoAgent knowledge-base-panel)。
   if (label === "知识库") {
     return (
-      <div className="placeholder-page placeholder-page--panel">
-        <KnowledgeBasePanel
-          onOpen={(id, url) => {
-            const target = url ?? id;
-            const open = /^https?:\/\//i.test(target)
-              ? openExternalUrl(target)
-              : openLocalPath(target, cwd);
-            void open.catch((error) => onToast?.(`打开知识条目失败：${String(error).replace(/^Error:\s*/, "")}`));
-          }}
-          onToast={onToast}
-        />
-      </div>
+      <DeferredPanel>
+        <div className="placeholder-page placeholder-page--panel">
+          <KnowledgeBasePanel
+            onOpen={(id, url) => {
+              const target = url ?? id;
+              const open = /^https?:\/\//i.test(target)
+                ? openExternalUrl(target)
+                : openLocalPath(target, cwd);
+              void open.catch((error) => onToast?.(`打开知识条目失败：${String(error).replace(/^Error:\s*/, "")}`));
+            }}
+            onToast={onToast}
+          />
+        </div>
+      </DeferredPanel>
     );
   }
 
   // 用量配额(对齐 EchoAgent credit-usage)。
   if (label === "用量统计") {
     return (
-      <div className="placeholder-page placeholder-page--panel">
-        <UsageQuotaPanel />
-      </div>
+      <DeferredPanel>
+        <div className="placeholder-page placeholder-page--panel">
+          <UsageQuotaPanel />
+        </div>
+      </DeferredPanel>
     );
   }
 
   // 通知渠道(对齐 EchoAgent IM 渠道)。
   if (label === "通知渠道") {
     return (
-      <div className="placeholder-page placeholder-page--panel">
-        <NotifyChannelsPanel onToast={onToast} />
-      </div>
+      <DeferredPanel>
+        <div className="placeholder-page placeholder-page--panel">
+          <NotifyChannelsPanel onToast={onToast} />
+        </div>
+      </DeferredPanel>
     );
   }
 
   // 云存储(对齐 EchoAgent 腾讯 Drive)。
   if (label === "云存储") {
     return (
-      <div className="placeholder-page placeholder-page--panel">
-        <CloudStoragePanel onToast={onToast} />
-      </div>
+      <DeferredPanel>
+        <div className="placeholder-page placeholder-page--panel">
+          <CloudStoragePanel onToast={onToast} />
+        </div>
+      </DeferredPanel>
     );
   }
 
@@ -152,7 +216,6 @@ export function PlaceholderPage({
 }
 
 /** 双 tab 容器：插件（已安装）/ 市场（可浏览安装）。 */
-import { useState } from "react";
 import { PuzzlePieceIcon, RepoIcon } from "@/foundation/components/Icon/icons";
 function PluginsMarketTabs({
   sessionId,

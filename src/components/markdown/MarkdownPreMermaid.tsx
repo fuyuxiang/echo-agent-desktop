@@ -35,6 +35,7 @@ export const MarkdownPreMermaid = memo(function MarkdownPreMermaid({
   const reactId = useId().replace(/:/g, "");
   const [mode, setMode] = useState<"diagram" | "code">("diagram");
   const [svg, setSvg] = useState<string | null>(null);
+  const [svgUrl, setSvgUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rendering, setRendering] = useState(false);
 
@@ -81,6 +82,22 @@ export const MarkdownPreMermaid = memo(function MarkdownPreMermaid({
       cancelled = true;
     };
   }, [complete, mode, code, theme, reactId]);
+
+  // Render generated SVG through the browser's image decoder instead of
+  // injecting it into the application DOM. Even though Mermaid runs in
+  // `strict` mode, model-authored diagrams are untrusted input and future
+  // Mermaid regressions must not turn SVG markup into executable WebView DOM.
+  useEffect(() => {
+    if (!svg || typeof URL.createObjectURL !== "function") {
+      setSvgUrl(null);
+      return;
+    }
+    const nextUrl = URL.createObjectURL(
+      new Blob([svg], { type: "image/svg+xml;charset=utf-8" }),
+    );
+    setSvgUrl(nextUrl);
+    return () => URL.revokeObjectURL(nextUrl);
+  }, [svg]);
 
   const handleDownload = useMemo(() => {
     return () => {
@@ -153,11 +170,10 @@ export const MarkdownPreMermaid = memo(function MarkdownPreMermaid({
           </pre>
         ) : rendering ? (
           <div className="md-mermaid-loading">正在渲染图表…</div>
-        ) : svg ? (
-          <div
-            className="md-mermaid-diagram"
-            dangerouslySetInnerHTML={{ __html: svg }}
-          />
+        ) : svg && svgUrl ? (
+          <div className="md-mermaid-diagram">
+            <img src={svgUrl} alt="Mermaid 图表" />
+          </div>
         ) : (
           <pre className="md-code-pre">
             <code className="language-mermaid">{code}</code>

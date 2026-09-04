@@ -17,6 +17,8 @@ export interface ProjectConversation {
   sessionId: string;
   title: string;
   createdAt: string;
+  /** Mirrors the session sidecar flag so project links never open a hidden row. */
+  archived?: boolean;
 }
 
 export type PlanStatus = "pending" | "in_progress" | "paused" | "completed";
@@ -28,6 +30,7 @@ export interface PlanCard {
   source?: string;
   /** Agent conversation created to execute this plan item. */
   sessionId?: string;
+  sessionArchived?: boolean;
 }
 
 export interface TaskItem {
@@ -38,6 +41,7 @@ export interface TaskItem {
   status: PlanStatus;
   /** Agent conversation created to execute this task. */
   sessionId?: string;
+  sessionArchived?: boolean;
 }
 
 export interface AssetItem {
@@ -189,11 +193,16 @@ interface ProjectsState {
   linkTaskSession: (id: string, taskId: string, sessionId: string) => void;
   removeTask: (id: string, taskId: string) => void;
   addAsset: (id: string, a: Pick<AssetItem, "name" | "kind"> & Partial<AssetItem>) => void;
+  addAssets: (id: string, assets: Array<Pick<AssetItem, "name" | "kind"> & Partial<AssetItem>>) => void;
   removeAsset: (id: string, assetId: string) => void;
   addMember: (id: string, name: string) => void;
   addConversation: (id: string, conv: ProjectConversation) => void;
   removeConversation: (id: string, sessionId: string) => void;
   updateConversationTitle: (id: string, sessionId: string, title: string) => void;
+  /** Mirror archive state into every project reference to this session. */
+  setSessionArchived: (sessionId: string, archived: boolean) => void;
+  /** Remove deleted session links from conversations, plans and tasks. */
+  removeSessionReferences: (sessionId: string) => void;
 }
 
 export const useProjectsStore = create<ProjectsState>((set, get) => {
@@ -290,6 +299,27 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
           },
         ],
       })),
+    addAssets: (id, assets) => {
+      if (assets.length === 0) return;
+      const now = new Date().toISOString();
+      patch(id, (p) => ({
+        ...p,
+        assets: [
+          ...p.assets,
+          ...assets.map((asset) => ({
+            id: uid("asset"),
+            name: asset.name,
+            kind: asset.kind,
+            ext: asset.ext,
+            sizeLabel: asset.sizeLabel,
+            updater: asset.updater ?? "-",
+            updatedAt: asset.updatedAt ?? now,
+            path: asset.path,
+            sizeBytes: asset.sizeBytes,
+          })),
+        ],
+      }));
+    },
     removeAsset: (id, assetId) =>
       patch(id, (p) => ({ ...p, assets: p.assets.filter((a) => a.id !== assetId) })),
     addMember: (id, name) =>
@@ -313,6 +343,70 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
           c.sessionId === sessionId ? { ...c, title } : c,
         ),
       })),
+    setSessionArchived: (sessionId, archived) => {
+      let changed = false;
+      const next = get().projects.map((project) => {
+        const needsUpdate = project.conversations.some(
+          (item) => item.sessionId === sessionId && !!item.archived !== archived,
+        ) || project.plans.some(
+          (item) => item.sessionId === sessionId && !!item.sessionArchived !== archived,
+        ) || project.tasks.some(
+          (item) => item.sessionId === sessionId && !!item.sessionArchived !== archived,
+        );
+        if (!needsUpdate) return project;
+        changed = true;
+        return {
+          ...project,
+          conversations: project.conversations.map((conversation) =>
+            conversation.sessionId === sessionId
+              ? { ...conversation, archived }
+              : conversation,
+          ),
+          plans: project.plans.map((plan) =>
+            plan.sessionId === sessionId
+              ? { ...plan, sessionArchived: archived }
+              : plan,
+          ),
+          tasks: project.tasks.map((task) =>
+            task.sessionId === sessionId
+              ? { ...task, sessionArchived: archived }
+              : task,
+          ),
+        };
+      });
+      if (!changed) return;
+      set({ projects: next });
+      persist(next);
+    },
+    removeSessionReferences: (sessionId) => {
+      let changed = false;
+      const next = get().projects.map((project) => {
+        const hasConversation = project.conversations.some((item) => item.sessionId === sessionId);
+        const hasPlan = project.plans.some((item) => item.sessionId === sessionId);
+        const hasTask = project.tasks.some((item) => item.sessionId === sessionId);
+        if (!hasConversation && !hasPlan && !hasTask) return project;
+        changed = true;
+        const conversations = project.conversations.filter((item) => item.sessionId !== sessionId);
+        const plans = project.plans.map((plan) => {
+          if (plan.sessionId !== sessionId) return plan;
+          const nextPlan: PlanCard = { ...plan };
+          delete nextPlan.sessionId;
+          delete nextPlan.sessionArchived;
+          return nextPlan;
+        });
+        const tasks = project.tasks.map((task) => {
+          if (task.sessionId !== sessionId) return task;
+          const nextTask: TaskItem = { ...task };
+          delete nextTask.sessionId;
+          delete nextTask.sessionArchived;
+          return nextTask;
+        });
+        return { ...project, conversations, plans, tasks };
+      });
+      if (!changed) return;
+      set({ projects: next });
+      persist(next);
+    },
   };
 });
 

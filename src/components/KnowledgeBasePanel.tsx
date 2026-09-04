@@ -5,10 +5,16 @@
  * lib/knowledge-base)。本面板提供搜索框 + 跨源结果列表。无 provider 时显示空态。
  */
 import { useEffect, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { searchKb, listKbProvidersWithStats, rebuildAllKbProviders, type KbEntry, type KbIndexStats } from "@/lib/knowledge-base";
+import {
+  searchKbWithDiagnostics,
+  listKbProvidersWithStats,
+  rebuildAllKbProviders,
+  type KbEntry,
+  type KbIndexStats,
+} from "@/lib/knowledge-base";
 import { isTauriAvailable } from "@/lib/tauri-kb-reader";
 import { addLocalKnowledgeSource, hydrateKnowledgeSources, removeKnowledgeSource } from "@/lib/kb-source-storage";
+import { filesystemPickDirectory } from "@/lib/agent-client";
 
 interface KnowledgeBasePanelProps {
   /** 打开条目回调(可选)。 */
@@ -26,6 +32,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   const [sources, setSources] = useState<Array<{ id: string; label: string; stats: KbIndexStats }>>([]);
   const [sourcesError, setSourcesError] = useState<string | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchRetryKey, setSearchRetryKey] = useState(0);
   const q = debouncedQuery.trim();
   useEffect(() => {
     let cancelled = false;
@@ -68,9 +75,9 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
       return;
     }
     try {
-      const dir = await openDialog({ directory: true, multiple: false });
-      if (!dir || Array.isArray(dir)) return;
-      const { added } = await addLocalKnowledgeSource(dir as string);
+      const dir = await filesystemPickDirectory();
+      if (!dir) return;
+      const { added } = await addLocalKnowledgeSource(dir);
       setRefreshKey((k) => k + 1);
       onToast?.(added ? "已添加本地知识源" : "该知识源已存在");
     } catch (e) {
@@ -109,14 +116,32 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   useEffect(() => {
     if (!q) {
       setResults([]);
+      setSearchError(null);
+      setSearching(false);
       return;
     }
     let cancelled = false;
     setSearching(true);
     setSearchError(null);
-    void searchKb(q)
-      .then((r) => {
-        if (!cancelled) setResults(r);
+    void searchKbWithDiagnostics(q)
+      .then(({ entries, failures, successfulProviders }) => {
+        if (!cancelled) {
+          setResults(entries);
+          if (failures.length === 0) {
+            setSearchError(null);
+          } else {
+            const details = failures
+              .map((failure) => `${failure.label}：${failure.message}`)
+              .join("；");
+            setSearchError(
+              successfulProviders > 0
+                ? entries.length > 0
+                  ? `部分知识源搜索失败（${details}），已显示其他知识源的结果。`
+                  : `部分知识源搜索失败（${details}），其他知识源未找到匹配结果。`
+                : `所有知识源搜索失败（${details}）。`,
+            );
+          }
+        }
       })
       .catch((error) => {
         if (!cancelled) {
@@ -130,7 +155,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
     return () => {
       cancelled = true;
     };
-  }, [q]);
+  }, [q, searchRetryKey]);
 
   return (
     <div className="kb-panel" role="region" aria-label="知识库">
@@ -214,28 +239,43 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
         aria-label="搜索知识库"
       />
       {q && (
-        <ul className="kb-panel__list">
-          {searching ? (
-            <li className="kb-panel__empty">搜索中…</li>
-          ) : searchError ? (
-            <li className="kb-panel__empty" role="alert">搜索失败：{searchError}</li>
-          ) : results.length === 0 ? (
-            <li className="kb-panel__empty">无匹配结果</li>
-          ) : (
-            results.map((e) => (
-              <li
-                key={`${e.source}:${e.id}`}
-                className="kb-panel__row"
-                onClick={() => onOpen?.(e.id, e.url)}
-                title={e.url ?? e.title}
+        <>
+          {searchError && !searching && (
+            <div className="kb-panel__index-status" role="alert">
+              <span>{searchError}</span>
+              <button
+                type="button"
+                className="kb-panel__refresh-btn"
+                onClick={() => setSearchRetryKey((key) => key + 1)}
               >
-                <span className="kb-panel__row-source">{e.source}</span>
-                <span className="kb-panel__row-title">{e.title}</span>
-                {e.snippet && <span className="kb-panel__row-snippet">{e.snippet}</span>}
-              </li>
-            ))
+                重试搜索
+              </button>
+            </div>
           )}
-        </ul>
+          <ul className="kb-panel__list" aria-label="知识库搜索结果" aria-busy={searching}>
+            {searching ? (
+              <li className="kb-panel__empty" role="status">搜索中…</li>
+            ) : results.length === 0 && !searchError ? (
+              <li className="kb-panel__empty">无匹配结果</li>
+            ) : (
+              results.map((e) => (
+                <li key={`${e.source}:${e.id}`}>
+                  <button
+                    type="button"
+                    className="kb-panel__row"
+                    onClick={() => onOpen?.(e.id, e.url)}
+                    title={e.url ?? e.title}
+                    aria-label={`打开知识条目：${e.title}`}
+                  >
+                    <span className="kb-panel__row-source">{e.source}</span>
+                    <span className="kb-panel__row-title">{e.title}</span>
+                    {e.snippet && <span className="kb-panel__row-snippet">{e.snippet}</span>}
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+        </>
       )}
     </div>
   );

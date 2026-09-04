@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { useFeedbackStore, type FeedbackRating } from "@/stores/feedback-store";
 import { XCloseIcon } from "@/foundation/components/Icon/icons";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 interface FeedbackDialogProps {
   open: boolean;
@@ -47,6 +48,7 @@ export function FeedbackDialog({
       setNote("");
     }
   }, [open]);
+  const dialogRef = useModalFocus<HTMLDivElement>(open, onClose);
 
   const submit = () => {
     useFeedbackStore
@@ -66,10 +68,12 @@ export function FeedbackDialog({
 
   return (
     <div
+      ref={dialogRef}
       className="feedback-dialog__overlay"
       role="dialog"
       aria-modal="true"
       aria-label="消息反馈"
+      tabIndex={-1}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -82,6 +86,7 @@ export function FeedbackDialog({
             className="feedback-dialog__close"
             onClick={onClose}
             aria-label="关闭"
+            data-modal-initial-focus
           >
             <XCloseIcon size="sm" />
           </button>

@@ -666,9 +666,15 @@
 .atm-row-right-text { display: inline-flex; align-items: center; gap: 8px; }
 .atm-row-hover-actions { display: none; align-items: center; gap: 12px; }
 .atm-row:hover .atm-row-hover-actions,
-.atm-row--menu-open .atm-row-hover-actions { display: flex; }
+.atm-row--menu-open .atm-row-hover-actions,
+.atm-row:focus-within .atm-row-hover-actions { display: flex; }
+.atm-row:focus-visible {
+  outline: 2px solid var(--echo-color-primary, #126bff);
+  outline-offset: -2px;
+}
 .atm-row:hover .atm-row-right-text,
-.atm-row--menu-open .atm-row-right-text { display: none; }
+.atm-row--menu-open .atm-row-right-text,
+.atm-row:focus-within .atm-row-right-text { display: none; }
 .atm-row-action-btn,
 .atm-row-archive-btn,
 .atm-row-delete-btn {
@@ -684,6 +690,12 @@
   color: var(--echo-color-text-secondary);
   cursor: pointer;
 }
+.atm-row-action-btn:disabled,
+.atm-row-archive-btn:disabled,
+.atm-row-delete-btn:disabled {
+  color: var(--echo-color-text-disabled, rgba(0, 0, 0, 0.3));
+  cursor: not-allowed;
+}
 .atm-row-action-btn:hover:not(:disabled),
 .atm-row-archive-btn:hover:not(:disabled),
 .atm-row-delete-btn:hover:not(:disabled) { background: transparent; color: var(--echo-color-text-primary); }
@@ -697,6 +709,9 @@
   height: 16px;
   color: var(--echo-color-text-secondary);
   cursor: pointer;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 .atm-row-more-hint:hover { color: var(--echo-color-text-primary); }
 .atm-row-menu {
@@ -739,6 +754,10 @@
 }
 .atm-records-group { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; }
 .atm-records-group-label {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
   padding: 4px 8px;
   font-size: 12px;
   font-weight: 600;

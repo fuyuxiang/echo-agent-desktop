@@ -4,9 +4,9 @@
  * usage info, ability intro, skill tags, "试试这样问我" quick prompts,
  * and a "召唤 XXX" button at the bottom.
  */
-import { useEffect, useRef } from "react";
 import type { ExpertItem } from "@/lib/types";
 import { ThumbImg } from "../shared/ThumbImg";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 interface Props {
   expert: ExpertItem;
@@ -16,16 +16,7 @@ interface Props {
 }
 
 export function ExpertDetailModal({ expert, onClose, onSummon }: Props) {
-  const overlayRef = useRef<HTMLDivElement>(null);
-
-  // Close on Escape or backdrop click.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onClose);
 
   const title = expert.title || expert.name;
   const sub = expert.name !== title ? expert.name : "";
@@ -34,11 +25,10 @@ export function ExpertDetailModal({ expert, onClose, onSummon }: Props) {
   return (
     <div
       className="ec-modal-overlay"
-      ref={overlayRef}
-      onClick={(e) => { if (e.target === overlayRef.current) onClose(); }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="ec-modal">
-        <button className="ec-modal-close" onClick={onClose} aria-label="关闭">×</button>
+      <div ref={dialogRef} className="ec-modal" role="dialog" aria-modal="true" aria-label={`${title} 专家详情`} tabIndex={-1}>
+        <button className="ec-modal-close" onClick={onClose} aria-label="关闭" data-modal-initial-focus>×</button>
 
         {/* Header: avatar + name + profession + category */}
         <div className="ec-modal-header">

@@ -47,7 +47,6 @@ describe("ResourcesPanel", () => {
     api.memoryFlush.mockResolvedValue(undefined);
     api.memoryDream.mockResolvedValue(undefined);
     api.memoryRewrite.mockResolvedValue("# Global\n\nRewritten");
-    vi.stubGlobal("confirm", vi.fn(() => true));
   });
 
   it("列出 Runtime 记忆，会话日志只读", async () => {

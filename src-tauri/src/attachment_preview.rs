@@ -9,8 +9,10 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use base64::Engine as _;
+use tauri::State;
 
 const MAX_SOURCE_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_THUMB_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION: u32 = 20_000;
 const MAX_DECODE_ALLOC: u64 = 160 * 1024 * 1024;
 const THUMB_LONG_EDGE: u32 = 320;
@@ -33,10 +35,14 @@ fn cache_path(cache_dir: &Path, source: &Path) -> PathBuf {
 }
 
 fn cache_is_fresh(cache: &Path, source_modified: Option<SystemTime>) -> bool {
-    let Ok(cache_meta) = std::fs::metadata(cache) else {
+    let Ok(cache_meta) = std::fs::symlink_metadata(cache) else {
         return false;
     };
-    if cache_meta.len() == 0 {
+    if cache_meta.file_type().is_symlink()
+        || !cache_meta.is_file()
+        || cache_meta.len() == 0
+        || cache_meta.len() > MAX_THUMB_BYTES
+    {
         return false;
     }
     match (cache_meta.modified().ok(), source_modified) {
@@ -61,23 +67,18 @@ fn make_thumbnail_sync(source: &Path, cache_dir: &Path) -> Result<String, String
         return Err("不支持的图片附件格式".into());
     }
     let source_meta =
-        std::fs::metadata(source).map_err(|error| format!("读取图片信息失败：{error}"))?;
-    if !source_meta.is_file() {
-        return Err("图片附件不是文件".into());
-    }
-    if source_meta.len() > MAX_SOURCE_BYTES {
-        return Err("图片附件超过 20MB".into());
-    }
+        std::fs::symlink_metadata(source).map_err(|error| format!("读取图片信息失败：{error}"))?;
+    let source_bytes = crate::shell_fs::read_regular_file_bounded(source, MAX_SOURCE_BYTES)
+        .map_err(|error| format!("读取图片失败：{error}"))?;
 
     let cache = cache_path(cache_dir, source);
     if cache_is_fresh(&cache, source_meta.modified().ok()) {
-        let bytes =
-            std::fs::read(&cache).map_err(|error| format!("读取缩略图缓存失败：{error}"))?;
+        let bytes = crate::shell_fs::read_regular_file_bounded(&cache, MAX_THUMB_BYTES)
+            .map_err(|error| format!("读取缩略图缓存失败：{error}"))?;
         return Ok(base64::engine::general_purpose::STANDARD.encode(bytes));
     }
 
-    let mut reader = image::ImageReader::open(source)
-        .map_err(|error| format!("打开图片失败：{error}"))?
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(source_bytes))
         .with_guessed_format()
         .map_err(|error| format!("识别图片格式失败：{error}"))?;
     let mut limits = image::Limits::default();
@@ -97,9 +98,7 @@ fn make_thumbnail_sync(source: &Path, cache_dir: &Path) -> Result<String, String
         .encode(rgb.as_raw(), width, height, image::ColorType::Rgb8.into())
         .map_err(|error| format!("编码缩略图失败：{error}"))?;
 
-    if let Err(error) = std::fs::create_dir_all(cache_dir) {
-        tracing::warn!(error = %error, path = %cache_dir.display(), "failed to create attachment thumbnail cache");
-    } else if let Err(error) = std::fs::write(&cache, &jpeg) {
+    if let Err(error) = crate::paths::write_private_file(&cache, &jpeg) {
         tracing::warn!(error = %error, path = %cache.display(), "failed to cache attachment thumbnail");
     }
     Ok(base64::engine::general_purpose::STANDARD.encode(jpeg))
@@ -112,9 +111,13 @@ async fn make_thumbnail(source: PathBuf, cache_dir: PathBuf) -> Result<String, S
 }
 
 #[tauri::command]
-pub async fn attachment_thumbnail(path: String) -> Result<String, String> {
+pub async fn attachment_thumbnail(
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
+    path: String,
+) -> Result<String, String> {
+    let source = access.require_authorized_file(Path::new(&path))?;
     make_thumbnail(
-        PathBuf::from(path),
+        source,
         crate::paths::echo_agent_home_dir().join("attachment-thumbs"),
     )
     .await
@@ -164,5 +167,30 @@ mod tests {
             .await
             .expect_err("text files are not thumbnails");
         assert!(error.contains("不支持"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn poisoned_cache_symlink_is_replaced_without_touching_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let source = temp.path().join("sample.png");
+        let cache_dir = temp.path().join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255]))
+            .save(&source)
+            .unwrap();
+        let outside = temp.path().join("outside.txt");
+        std::fs::write(&outside, "unchanged").unwrap();
+        let cache = cache_path(&cache_dir, &source);
+        symlink(&outside, &cache).unwrap();
+
+        make_thumbnail(source, cache_dir).await.unwrap();
+        assert_eq!(std::fs::read_to_string(outside).unwrap(), "unchanged");
+        assert!(!std::fs::symlink_metadata(cache)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 }

@@ -9,6 +9,7 @@ import { agentAuthStatus } from "@/lib/agent-client";
 import type { InitResult } from "@/lib/agent-client";
 import { APP_VERSION } from "@/lib/app-version";
 import { isUpstreamBrandedModelId, stripUpstreamBrandedIds } from "@/lib/model-branding";
+import { useModalFocus } from "@/lib/use-modal-focus";
 const logoMarkUrl = "/app-icon.png";
 const RUNTIME_LABEL = "EchoAgent Runtime（内置）";
 
@@ -38,18 +39,22 @@ export function AboutDialog({ open, onClose, init, onCheckForUpdates }: AboutDia
         setRuntimeReason(String(error).replace(/^Error:\s*/, ""));
       });
   }, [open]);
+  const dialogRef = useModalFocus<HTMLDivElement>(open, onClose);
 
   if (!open) return null;
 
   return (
     <div className="about-dialog__overlay" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="about-dialog"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-label="关于 EchoAgent"
+        tabIndex={-1}
       >
-        <button className="about-dialog__close" onClick={onClose} aria-label="关闭">
+        <button className="about-dialog__close" onClick={onClose} aria-label="关闭" data-modal-initial-focus>
           <XCloseIcon size="md" />
         </button>
         <div className="about-dialog__header">

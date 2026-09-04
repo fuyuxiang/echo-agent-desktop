@@ -6,8 +6,8 @@
 //! processes from borrowing the desktop user's organization session.
 
 use axum::{
-    extract::State,
-    http::{HeaderMap, StatusCode},
+    extract::{DefaultBodyLimit, State},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Router,
@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::io::Read;
+use std::io::{Cursor, Read};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -25,8 +25,16 @@ use uuid::Uuid;
 
 pub const MCP_SERVER_NAME: &str = "echoagent_organization_memory";
 pub const AUTH_HEADER: &str = "x-echo-org-mcp-token";
-const MCP_PREFERRED_PORT: u16 = 14751;
-const MCP_PORT_SCAN: u16 = 20;
+const MAX_MCP_BODY_BYTES: usize = 256 * 1024;
+const MAX_TOOL_TEXT_CHARS: usize = 8_192;
+const MAX_IDENTIFIER_CHARS: usize = 256;
+const MAX_SCOPE_ITEMS: usize = 64;
+const MAX_LOCAL_SOURCES_BYTES: u64 = 1024 * 1024;
+const MAX_LOCAL_FILE_BYTES: u64 = 5 * 1024 * 1024;
+const MAX_OFFICE_ENTRY_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_OFFICE_XML_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_LOCAL_SCAN_ENTRIES: usize = 10_000;
+const MAX_LOCAL_FILES: usize = 500;
 
 static BOUND_PORT: OnceLock<u16> = OnceLock::new();
 static PROCESS_TOKEN: OnceLock<String> = OnceLock::new();
@@ -35,6 +43,7 @@ static PERSISTED: Mutex<bool> = Mutex::new(false);
 #[derive(Clone)]
 struct ServerState {
     token: String,
+    expected_host: String,
 }
 
 pub fn serve() {
@@ -46,11 +55,15 @@ pub fn serve() {
         tracing::error!("organization MCP server: no free loopback port");
         return;
     };
-    let port = listener
-        .local_addr()
-        .map(|addr| addr.port())
-        .unwrap_or(MCP_PREFERRED_PORT);
-    let token = Uuid::new_v4().to_string();
+    let address = match listener.local_addr() {
+        Ok(address) => address,
+        Err(error) => {
+            tracing::error!(%error, "organization MCP server: unable to read bound address");
+            return;
+        }
+    };
+    let port = address.port();
+    let token = format!("{}{}", Uuid::now_v7().simple(), Uuid::now_v7().simple());
     let _ = BOUND_PORT.set(port);
     let _ = PROCESS_TOKEN.set(token.clone());
     tracing::info!(port, "organization MCP server listening");
@@ -71,7 +84,11 @@ pub fn serve() {
             .route("/mcp", post(handle_post))
             .route("/mcp", get(method_not_allowed))
             .route("/mcp", delete(method_not_allowed))
-            .with_state(ServerState { token });
+            .layer(DefaultBodyLimit::max(MAX_MCP_BODY_BYTES))
+            .with_state(ServerState {
+                token,
+                expected_host: address.to_string(),
+            });
         if let Err(error) = axum::serve(listener, app).await {
             tracing::error!(%error, "organization MCP server stopped");
         }
@@ -79,13 +96,7 @@ pub fn serve() {
 }
 
 fn bind_with_retry() -> Option<TcpListener> {
-    for offset in 0..=MCP_PORT_SCAN {
-        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, MCP_PREFERRED_PORT + offset));
-        if let Ok(listener) = TcpListener::bind(address) {
-            return Some(listener);
-        }
-    }
-    None
+    TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).ok()
 }
 
 pub fn server_config() -> Option<(String, String)> {
@@ -112,12 +123,8 @@ async fn handle_post(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let authorized = headers
-        .get(AUTH_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == state.token);
-    if !authorized {
-        return StatusCode::UNAUTHORIZED.into_response();
+    if let Err(status) = validate_request_headers(&headers, &state) {
+        return status.into_response();
     }
     let request: JsonRpcRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
@@ -137,6 +144,47 @@ async fn handle_post(
         other => return rpc_error(id, -32601, format!("method not found: {other}")),
     };
     rpc_result(id, result)
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
+        == 0
+}
+
+fn validate_request_headers(headers: &HeaderMap, state: &ServerState) -> Result<(), StatusCode> {
+    let token = headers
+        .get(AUTH_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    if !constant_time_eq(token.as_bytes(), state.token.as_bytes()) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    if !host.eq_ignore_ascii_case(&state.expected_host) {
+        return Err(StatusCode::MISDIRECTED_REQUEST);
+    }
+    if headers.contains_key(header::ORIGIN) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .unwrap_or_default();
+    if !content_type.eq_ignore_ascii_case("application/json") {
+        return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+    Ok(())
 }
 
 fn initialize_result(params: &Value) -> Value {
@@ -273,55 +321,97 @@ fn tools_list_result() -> Value {
 }
 
 async fn tools_call(params: &Value) -> Result<Value, String> {
-    let name = params
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or("tool name is required")?;
-    let arguments = params
-        .get("arguments")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let name = required_string_bounded(params, "name", 128)?;
+    let arguments = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(value) if value.is_object() => value.clone(),
+        Some(_) => return Err("tool arguments must be an object".into()),
+    };
     let data = match name {
         "knowledge_ask" => {
-            let question = required_string(&arguments, "question")?;
+            let question = required_string_bounded(&arguments, "question", MAX_TOOL_TEXT_CHARS)?;
+            let mode = optional_string_bounded(&arguments, "mode", 16)?.unwrap_or("auto");
+            if !matches!(mode, "auto" | "fast" | "deep") {
+                return Err("mode must be auto, fast, or deep".into());
+            }
             let mut input = json!({
                 "question": question,
-                "mode": arguments.get("mode").and_then(Value::as_str).unwrap_or("auto")
+                "mode": mode
             });
-            copy_non_null(&arguments, "scope_kinds", &mut input, "scopeKinds");
-            copy_non_null(&arguments, "scope_ids", &mut input, "scopeIds");
+            if let Some(kinds) = validated_string_array(
+                &arguments,
+                "scope_kinds",
+                MAX_SCOPE_ITEMS,
+                16,
+                Some(&["personal", "team", "org"]),
+            )? {
+                input["scopeKinds"] = kinds.clone();
+            }
+            if let Some(ids) = validated_string_array(
+                &arguments,
+                "scope_ids",
+                MAX_SCOPE_ITEMS,
+                MAX_IDENTIFIER_CHARS,
+                None,
+            )? {
+                input["scopeIds"] = ids.clone();
+            }
             crate::org::mcp_ask(input).await?
         }
         "knowledge_search" => {
-            let query = required_string(&arguments, "query")?;
+            let query = required_string_bounded(&arguments, "query", MAX_TOOL_TEXT_CHARS)?;
+            let limit = validated_limit(&arguments)?;
             let mut input = json!({
                 "query": query,
-                "limit": arguments.get("limit").and_then(Value::as_u64).unwrap_or(8),
+                "limit": limit,
                 "multi_hop": arguments.get("multi_hop").and_then(Value::as_bool).unwrap_or(false)
             });
-            copy_non_null(&arguments, "scope_ids", &mut input, "scope_ids");
-            if let Some(kinds) = arguments
-                .get("scope_kinds")
-                .filter(|value| !value.is_null())
+            if arguments
+                .get("multi_hop")
+                .is_some_and(|value| !value.is_boolean())
             {
+                return Err("multi_hop must be a boolean".into());
+            }
+            if let Some(ids) = validated_string_array(
+                &arguments,
+                "scope_ids",
+                MAX_SCOPE_ITEMS,
+                MAX_IDENTIFIER_CHARS,
+                None,
+            )? {
+                input["scope_ids"] = ids.clone();
+            }
+            if let Some(kinds) = validated_string_array(
+                &arguments,
+                "scope_kinds",
+                MAX_SCOPE_ITEMS,
+                16,
+                Some(&["personal", "team", "org"]),
+            )? {
                 input["filters"] = json!({ "scope_kinds": kinds });
             }
             crate::org::mcp_json(Method::POST, "/api/v1/retrieve", Some(input)).await?
         }
         "knowledge_fetch_document" | "knowledge_fetch_doc" => {
-            let doc_id = required_string(&arguments, "doc_id")?;
+            let doc_id = required_string_bounded(&arguments, "doc_id", MAX_IDENTIFIER_CHARS)?;
             let mut input = json!({ "docId": doc_id });
-            copy_non_null(&arguments, "page", &mut input, "page");
+            if let Some(page) = validated_page(&arguments)? {
+                input["page"] = json!(page);
+            }
             crate::org::mcp_json(Method::POST, "/api/v1/docs/fetch", Some(input)).await?
         }
         "knowledge_list_documents" | "knowledge_list_docs" => {
             let mut url = url::Url::parse("http://local/api/v1/docs").expect("static URL");
             {
                 let mut query = url.query_pairs_mut();
-                if let Some(scope_id) = arguments.get("scope_id").and_then(Value::as_str) {
+                if let Some(scope_id) =
+                    optional_string_bounded(&arguments, "scope_id", MAX_IDENTIFIER_CHARS)?
+                {
                     query.append_pair("scopeId", scope_id);
                 }
-                if let Some(text) = arguments.get("query").and_then(Value::as_str) {
+                if let Some(text) =
+                    optional_string_bounded(&arguments, "query", MAX_TOOL_TEXT_CHARS)?
+                {
                     query.append_pair("q", text);
                 }
             }
@@ -333,7 +423,7 @@ async fn tools_call(params: &Value) -> Result<Value, String> {
             crate::org::mcp_json(Method::GET, &path, None).await?
         }
         "knowledge_who_knows" => {
-            let topic = required_string(&arguments, "topic")?;
+            let topic = required_string_bounded(&arguments, "topic", MAX_TOOL_TEXT_CHARS)?;
             let result = crate::org::mcp_json(
                 Method::POST,
                 "/api/v1/retrieve",
@@ -386,11 +476,20 @@ async fn tools_call(params: &Value) -> Result<Value, String> {
             json!({ "people": people.into_iter().take(5).collect::<Vec<_>>() })
         }
         "knowledge_submit" => {
-            let kind = required_string(&arguments, "kind")?;
-            let content = required_string(&arguments, "content")?;
-            let target_scope = required_string(&arguments, "target_scope")?;
+            let kind = required_string_bounded(&arguments, "kind", 32)?;
+            if !matches!(
+                kind,
+                "fact" | "decision" | "convention" | "pitfall" | "howto"
+            ) {
+                return Err("unsupported knowledge kind".into());
+            }
+            let content = required_string_bounded(&arguments, "content", 2_000)?;
+            let target_scope =
+                required_string_bounded(&arguments, "target_scope", MAX_IDENTIFIER_CHARS)?;
             let mut payload = json!({ "kind": kind, "content": content });
-            copy_non_null(&arguments, "rationale", &mut payload, "rationale");
+            if let Some(rationale) = optional_string_bounded(&arguments, "rationale", 2_000)? {
+                payload["rationale"] = json!(rationale);
+            }
             crate::org::mcp_json(
                 Method::POST,
                 "/api/v1/promotions",
@@ -407,15 +506,15 @@ async fn tools_call(params: &Value) -> Result<Value, String> {
             if !crate::org::local_knowledge_allowed().await {
                 return Err("signed organization policy disables local knowledge".into());
             }
-            let query = required_string(&arguments, "query")?;
-            let limit = arguments.get("limit").and_then(Value::as_u64).unwrap_or(8) as usize;
+            let query = required_string_bounded(&arguments, "query", MAX_TOOL_TEXT_CHARS)?;
+            let limit = validated_limit(&arguments)? as usize;
             json!({ "items": search_local_knowledge(query, limit)? })
         }
         "local_knowledge_fetch" => {
             if !crate::org::local_knowledge_allowed().await {
                 return Err("signed organization policy disables local knowledge".into());
             }
-            let path = required_string(&arguments, "path")?;
+            let path = required_string_bounded(&arguments, "path", 4_096)?;
             let canonical = authorized_local_path(path)?;
             let text = read_local_knowledge(&canonical)?;
             json!({ "path": canonical, "text": text })
@@ -436,20 +535,39 @@ fn enabled_by_default() -> bool {
     true
 }
 
-fn local_roots() -> Vec<PathBuf> {
-    let Ok(bytes) = std::fs::read(crate::org::local_kb_sources_path()) else {
-        return Vec::new();
+fn local_roots() -> Result<Vec<PathBuf>, String> {
+    let path = crate::org::local_kb_sources_path();
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("read local knowledge sources metadata: {error}")),
     };
-    let Ok(sources) = serde_json::from_slice::<Vec<LocalSource>>(&bytes) else {
-        return Vec::new();
-    };
-    sources
-        .into_iter()
-        .filter(|source| source.enabled)
-        .filter_map(|source| std::fs::canonicalize(source.root).ok())
-        .filter(|root| root.is_dir())
-        .take(50)
-        .collect()
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("local knowledge sources config must be a regular file".into());
+    }
+    if metadata.len() > MAX_LOCAL_SOURCES_BYTES {
+        return Err("local knowledge sources config exceeds 1MB".into());
+    }
+    let bytes = crate::shell_fs::read_regular_file_bounded(&path, MAX_LOCAL_SOURCES_BYTES)
+        .map_err(|error| format!("read local knowledge sources: {error}"))?;
+    let sources = serde_json::from_slice::<Vec<LocalSource>>(&bytes)
+        .map_err(|error| format!("invalid local knowledge sources config: {error}"))?;
+    if sources.len() > 50 {
+        return Err("local knowledge sources config contains more than 50 roots".into());
+    }
+    let mut roots = Vec::new();
+    for source in sources.into_iter().filter(|source| source.enabled) {
+        if source.root.chars().count() > 4_096 || source.root.contains('\0') {
+            return Err("local knowledge root path is invalid".into());
+        }
+        let Ok(root) = std::fs::canonicalize(source.root) else {
+            continue;
+        };
+        if root.is_dir() && !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    Ok(roots)
 }
 
 fn supported_local_file(path: &Path) -> bool {
@@ -462,37 +580,60 @@ fn supported_local_file(path: &Path) -> bool {
     )
 }
 
-fn local_files() -> Vec<PathBuf> {
+fn local_files() -> Result<Vec<PathBuf>, String> {
     let mut out = Vec::new();
-    for root in local_roots() {
-        let mut queue = VecDeque::from([(root, 0usize)]);
+    let mut scanned_entries = 0usize;
+    for root in local_roots()? {
+        let mut queue = VecDeque::from([(root.clone(), 0usize)]);
         while let Some((directory, depth)) = queue.pop_front() {
-            if depth > 5 || out.len() >= 500 {
+            if depth > 5
+                || out.len() >= MAX_LOCAL_FILES
+                || scanned_entries >= MAX_LOCAL_SCAN_ENTRIES
+            {
                 continue;
             }
-            let Ok(entries) = std::fs::read_dir(directory) else {
+            let Ok(canonical_directory) = std::fs::canonicalize(&directory) else {
+                continue;
+            };
+            if !canonical_directory.starts_with(&root) {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(canonical_directory) else {
                 continue;
             };
             for entry in entries.flatten() {
-                let Ok(kind) = entry.file_type() else {
-                    continue;
-                };
-                if kind.is_symlink() {
-                    continue;
+                scanned_entries = scanned_entries.saturating_add(1);
+                if scanned_entries > MAX_LOCAL_SCAN_ENTRIES {
+                    break;
                 }
                 let path = entry.path();
-                if kind.is_dir() && depth < 5 {
-                    queue.push_back((path, depth + 1));
-                } else if kind.is_file() && supported_local_file(&path) {
-                    out.push(path);
-                    if out.len() >= 500 {
+                let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                    continue;
+                };
+                if metadata.file_type().is_symlink() {
+                    continue;
+                }
+                let Ok(canonical) = std::fs::canonicalize(&path) else {
+                    continue;
+                };
+                if !canonical.starts_with(&root) {
+                    continue;
+                }
+                if metadata.is_dir() && depth < 5 {
+                    queue.push_back((canonical, depth + 1));
+                } else if metadata.is_file() && supported_local_file(&canonical) {
+                    out.push(canonical);
+                    if out.len() >= MAX_LOCAL_FILES {
                         break;
                     }
                 }
             }
         }
+        if out.len() >= MAX_LOCAL_FILES || scanned_entries >= MAX_LOCAL_SCAN_ENTRIES {
+            break;
+        }
     }
-    out
+    Ok(out)
 }
 
 fn xml_text(xml: &str) -> String {
@@ -518,9 +659,12 @@ fn xml_text(xml: &str) -> String {
 }
 
 fn read_local_knowledge(path: &Path) -> Result<String, String> {
-    let metadata = std::fs::metadata(path)
+    let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| format!("read local knowledge metadata: {error}"))?;
-    if metadata.len() > 5 * 1024 * 1024 {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("local knowledge path must be a regular file".into());
+    }
+    if metadata.len() > MAX_LOCAL_FILE_BYTES {
         return Err("local knowledge file exceeds 5MB".into());
     }
     let extension = path
@@ -528,12 +672,13 @@ fn read_local_knowledge(path: &Path) -> Result<String, String> {
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
+    let bytes = crate::shell_fs::read_regular_file_bounded(path, MAX_LOCAL_FILE_BYTES)
+        .map_err(|error| format!("read local knowledge: {error}"))?;
     if matches!(extension.as_str(), "docx" | "pptx" | "xlsx") {
-        let file = std::fs::File::open(path)
-            .map_err(|error| format!("open local Office file: {error}"))?;
-        let mut archive = zip::ZipArchive::new(file)
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
             .map_err(|error| format!("open local Office ZIP: {error}"))?;
         let mut parts = Vec::new();
+        let mut total_xml_bytes = 0_u64;
         for index in 0..archive.len().min(500) {
             let mut entry = archive
                 .by_index(index)
@@ -548,17 +693,33 @@ fn read_local_knowledge(path: &Path) -> Result<String, String> {
                 }
                 _ => false,
             };
-            if !selected || entry.size() > 2 * 1024 * 1024 {
+            if !selected {
                 continue;
             }
-            let mut xml = String::new();
-            if entry.read_to_string(&mut xml).is_ok() {
-                parts.push(xml_text(&xml))
+            if entry.size() > MAX_OFFICE_ENTRY_BYTES {
+                return Err("local Office XML entry exceeds 2MB".into());
             }
+            let remaining = MAX_OFFICE_XML_BYTES.saturating_sub(total_xml_bytes);
+            if remaining == 0 || entry.size() > remaining {
+                return Err("local Office XML content exceeds 8MB".into());
+            }
+            let read_limit = remaining.min(MAX_OFFICE_ENTRY_BYTES);
+            let mut bytes = Vec::new();
+            (&mut entry)
+                .take(read_limit + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| format!("read local Office XML: {error}"))?;
+            if bytes.len() as u64 > read_limit {
+                return Err("local Office XML content exceeds its size limit".into());
+            }
+            total_xml_bytes = total_xml_bytes.saturating_add(bytes.len() as u64);
+            let xml = String::from_utf8(bytes)
+                .map_err(|_| "local Office XML is not valid UTF-8".to_string())?;
+            parts.push(xml_text(&xml));
         }
         return Ok(parts.join("\n"));
     }
-    std::fs::read_to_string(path).map_err(|error| format!("read local knowledge: {error}"))
+    String::from_utf8(bytes).map_err(|_| "local knowledge file is not valid UTF-8".into())
 }
 
 fn authorized_local_path(raw: &str) -> Result<PathBuf, String> {
@@ -566,7 +727,7 @@ fn authorized_local_path(raw: &str) -> Result<PathBuf, String> {
     if !path.is_file() || !supported_local_file(&path) {
         return Err("unsupported local knowledge file".into());
     }
-    if !local_roots().iter().any(|root| path.starts_with(root)) {
+    if !local_roots()?.iter().any(|root| path.starts_with(root)) {
         return Err("local knowledge path is outside configured roots".into());
     }
     Ok(path)
@@ -575,28 +736,38 @@ fn authorized_local_path(raw: &str) -> Result<PathBuf, String> {
 fn search_local_knowledge(query: &str, limit: usize) -> Result<Vec<Value>, String> {
     let query_lower = query.to_lowercase();
     let mut items = Vec::new();
-    for path in local_files() {
+    for path in local_files()? {
         let title = path
             .file_stem()
             .and_then(|value| value.to_str())
             .unwrap_or("");
         let title_hit = title.to_lowercase().contains(&query_lower);
-        let text = read_local_knowledge(&path).unwrap_or_default();
+        let Ok(text) = read_local_knowledge(&path) else {
+            continue;
+        };
         let lower = text.to_lowercase();
         let Some(position) = lower.find(&query_lower).or_else(|| title_hit.then_some(0)) else {
             continue;
         };
-        let start = position.saturating_sub(80);
+        let approximate_character = lower
+            .get(..position)
+            .map(|prefix| prefix.chars().count())
+            .unwrap_or_default();
+        let start_character = approximate_character.saturating_sub(80);
         let snippet = text
-            .get(start..text.len().min(start + 320))
-            .unwrap_or(&text)
-            .to_string();
+            .chars()
+            .skip(start_character)
+            .take(320)
+            .collect::<String>();
+        let open_url = url::Url::from_file_path(&path)
+            .ok()
+            .map(|url| url.to_string());
         items.push(json!({
             "path": path,
             "title": title,
             "snippet": snippet,
             "source": "local",
-            "openUrl": format!("file://{}", path.to_string_lossy())
+            "openUrl": open_url
         }));
         if items.len() >= limit.min(20) {
             break;
@@ -605,17 +776,105 @@ fn search_local_knowledge(query: &str, limit: usize) -> Result<Vec<Value>, Strin
     Ok(items)
 }
 
-fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
-    value
+fn required_string_bounded<'a>(
+    value: &'a Value,
+    key: &str,
+    max_chars: usize,
+) -> Result<&'a str, String> {
+    let text = value
         .get(key)
         .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| format!("{key} is required"))
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| format!("{key} is required"))?;
+    if text.chars().count() > max_chars || has_disallowed_control(text) {
+        return Err(format!(
+            "{key} must contain at most {max_chars} non-control characters"
+        ));
+    }
+    Ok(text)
 }
 
-fn copy_non_null(source: &Value, source_key: &str, target: &mut Value, target_key: &str) {
-    if let Some(value) = source.get(source_key).filter(|value| !value.is_null()) {
-        target[target_key] = value.clone();
+fn optional_string_bounded<'a>(
+    value: &'a Value,
+    key: &str,
+    max_chars: usize,
+) -> Result<Option<&'a str>, String> {
+    let Some(raw) = value.get(key) else {
+        return Ok(None);
+    };
+    if raw.is_null() {
+        return Ok(None);
+    }
+    let text = raw
+        .as_str()
+        .ok_or_else(|| format!("{key} must be a string"))?;
+    if text.chars().count() > max_chars || has_disallowed_control(text) {
+        return Err(format!(
+            "{key} must contain at most {max_chars} non-control characters"
+        ));
+    }
+    Ok(Some(text))
+}
+
+fn validated_string_array<'a>(
+    value: &'a Value,
+    key: &str,
+    max_items: usize,
+    max_chars: usize,
+    allowed: Option<&[&str]>,
+) -> Result<Option<&'a Value>, String> {
+    let Some(raw) = value.get(key) else {
+        return Ok(None);
+    };
+    if raw.is_null() {
+        return Ok(None);
+    }
+    let items = raw
+        .as_array()
+        .ok_or_else(|| format!("{key} must be an array"))?;
+    if items.len() > max_items {
+        return Err(format!("{key} cannot contain more than {max_items} items"));
+    }
+    for item in items {
+        let text = item
+            .as_str()
+            .filter(|text| !text.trim().is_empty())
+            .ok_or_else(|| format!("{key} must contain non-empty strings"))?;
+        if text.chars().count() > max_chars || has_disallowed_control(text) {
+            return Err(format!(
+                "each {key} item must be at most {max_chars} characters"
+            ));
+        }
+        if allowed.is_some_and(|values| !values.contains(&text)) {
+            return Err(format!("{key} contains an unsupported value"));
+        }
+    }
+    Ok(Some(raw))
+}
+
+fn has_disallowed_control(text: &str) -> bool {
+    text.chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+}
+
+fn validated_limit(value: &Value) -> Result<u64, String> {
+    match value.get("limit") {
+        None | Some(Value::Null) => Ok(8),
+        Some(raw) => raw
+            .as_u64()
+            .filter(|limit| (1..=20).contains(limit))
+            .ok_or_else(|| "limit must be an integer from 1 to 20".into()),
+    }
+}
+
+fn validated_page(value: &Value) -> Result<Option<u64>, String> {
+    match value.get("page") {
+        None | Some(Value::Null) => Ok(None),
+        Some(raw) => raw
+            .as_u64()
+            .filter(|page| (1..=1_000_000).contains(page))
+            .map(Some)
+            .ok_or_else(|| "page must be an integer from 1 to 1000000".into()),
     }
 }
 
@@ -698,8 +957,10 @@ mod tests {
         tokio::spawn(async move {
             let app = Router::new()
                 .route("/mcp", post(handle_post))
+                .layer(DefaultBodyLimit::max(MAX_MCP_BODY_BYTES))
                 .with_state(ServerState {
                     token: "test-secret".into(),
+                    expected_host: address.to_string(),
                 });
             let _ = axum::serve(listener, app).await;
         });
@@ -727,5 +988,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 10);
+    }
+
+    #[test]
+    fn rejects_invalid_headers_and_unbounded_tool_inputs() {
+        let state = ServerState {
+            token: "secret".into(),
+            expected_host: "127.0.0.1:1234".into(),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTH_HEADER, "secret".parse().unwrap());
+        headers.insert(header::HOST, "127.0.0.1:1234".parse().unwrap());
+        headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        assert_eq!(validate_request_headers(&headers, &state), Ok(()));
+
+        headers.insert(header::ORIGIN, "https://attacker.example".parse().unwrap());
+        assert_eq!(
+            validate_request_headers(&headers, &state),
+            Err(StatusCode::FORBIDDEN)
+        );
+
+        assert!(required_string_bounded(
+            &json!({ "question": "x".repeat(MAX_TOOL_TEXT_CHARS + 1) }),
+            "question",
+            MAX_TOOL_TEXT_CHARS,
+        )
+        .is_err());
+        assert!(validated_string_array(
+            &json!({ "scope_ids": vec!["id"; MAX_SCOPE_ITEMS + 1] }),
+            "scope_ids",
+            MAX_SCOPE_ITEMS,
+            MAX_IDENTIFIER_CHARS,
+            None,
+        )
+        .is_err());
     }
 }
