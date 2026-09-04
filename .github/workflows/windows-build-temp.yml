@@ -93,7 +93,11 @@ jobs:
           $installer = Get-ChildItem "src-tauri\target\release\bundle\nsis" -Filter "*.exe" | Select-Object -First 1
           if (-not $installer) { throw "NSIS installer was not generated" }
           New-Item -ItemType Directory -Force -Path "ci-artifacts" | Out-Null
-          $destination = "ci-artifacts\EchoAgent_0.3.9_windows_x64-setup.exe"
+          # Read the version from package.json so the artifact name cannot drift
+          # from the app version the way a hardcoded string did.
+          $version = (Get-Content "package.json" -Raw | ConvertFrom-Json).version
+          if (-not $version) { throw "Could not read version from package.json" }
+          $destination = "ci-artifacts\EchoAgent_${version}_windows_x64-setup.exe"
           Copy-Item $installer.FullName $destination -Force
           git add --force $destination
           git commit -m "ci: attach Windows x64 installer [skip ci]"

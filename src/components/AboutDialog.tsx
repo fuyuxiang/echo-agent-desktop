@@ -79,6 +79,10 @@ export function AboutDialog({ open, onClose, init, onCheckForUpdates }: AboutDia
             <dd title={init?.buildTime}>{init?.buildTime ?? "unknown"}</dd>
           </div>
           <div className="about-dialog__row">
+            <dt>提交时间</dt>
+            <dd title={init?.buildCommitTime}>{init?.buildCommitTime ?? "unknown"}</dd>
+          </div>
+          <div className="about-dialog__row">
             <dt>Agent 运行时</dt>
             <dd>{init?.agentVersion ?? "未知"}</dd>
           </div>
