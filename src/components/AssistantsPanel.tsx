@@ -8,7 +8,7 @@
  *  - CreateColleagueDialog: modal 弹窗，含 "从模板创建" / "从专家雇佣" 两个 tab
  *  - 点击卡片 → 助理个人资料页(profile)
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AssistantIcon,
   AddCircleIcon,
@@ -33,6 +33,8 @@ import {
   agentsTemplate,
 } from "@/lib/agent-client";
 import type { AgentEntry } from "@/lib/types";
+import { useModalFocus } from "@/lib/use-modal-focus";
+import { useAppDialog } from "./AppDialog";
 
 const AVATAR_PRESETS: { bg: string; emoji: string }[] = [
   { bg: "#FF6B9D", emoji: "🌸" },
@@ -122,22 +124,36 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
   const [searchQuery, setSearchQuery] = useState("");
   const [userAssistants, setUserAssistants] = useState<AgentEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditorDraft | null>(null);
   const [profileAgent, setProfileAgent] = useState<AgentEntry | null>(null);
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const { requestConfirmation, dialog } = useAppDialog();
+  const reloadGeneration = useRef(0);
 
   const reload = useCallback(async () => {
+    const generation = ++reloadGeneration.current;
     setLoading(true);
+    setLoadError(null);
     try {
-      setUserAssistants(await agentsList());
+      const next = await agentsList();
+      if (reloadGeneration.current === generation) setUserAssistants(next);
     } catch (e) {
-      onToast?.(`加载助理失败：${String(e).replace(/^Error:\s*/, "")}`);
+      if (reloadGeneration.current !== generation) return;
+      const message = String(e).replace(/^Error:\s*/, "");
+      setLoadError(message);
+      onToast?.(`加载助理失败：${message}`);
     } finally {
-      setLoading(false);
+      if (reloadGeneration.current === generation) setLoading(false);
     }
   }, [onToast]);
 
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    void reload();
+    return () => {
+      reloadGeneration.current += 1;
+    };
+  }, [reload]);
 
   const openFromTemplate = useCallback((tpl: (typeof ASSISTANT_TEMPLATES)[number]) => {
     setEditing({
@@ -173,24 +189,44 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
     try {
       const raw = await agentsTemplate(draft.name, draft.description, draft.systemPrompt, draft.avatar, draft.modelTags.length > 0 ? draft.modelTags : undefined);
       const saved = await agentsSave(draft.name, raw);
-      onToast?.(draft.isNew ? `已创建助理「${saved.name}」` : "已保存");
+      let cleanupWarning: string | null = null;
+      if (!draft.isNew && draft.path && draft.path !== saved.path) {
+        try {
+          await agentsDelete(draft.path);
+        } catch (cleanupError) {
+          cleanupWarning = String(cleanupError).replace(/^Error:\s*/, "");
+        }
+      }
+      onToast?.(
+        cleanupWarning
+          ? `新名称已保存，但旧文件移除失败：${cleanupWarning}`
+          : draft.isNew
+            ? `已创建助理「${saved.name}」`
+            : "已保存",
+      );
       setEditing(null);
-      reload();
+      await reload();
     } catch (e) {
       onToast?.(`保存失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
   }, [onToast, reload]);
 
-  const handleDelete = useCallback(async (agent: AgentEntry) => {
-    if (!confirm(`确定删除助理「${agent.name}」？`)) return;
-    try {
-      await agentsDelete(agent.path);
-      onToast?.("已删除");
-      reload();
-    } catch (e) {
-      onToast?.(`删除失败：${String(e).replace(/^Error:\s*/, "")}`);
-    }
-  }, [onToast, reload]);
+  const handleDelete = useCallback((agent: AgentEntry) => {
+    requestConfirmation({
+      title: `删除助理“${agent.name}”？`,
+      description: "该助理的本地配置将被删除，此操作无法撤销。",
+      confirmLabel: "删除助理",
+      danger: true,
+      action: async () => {
+        await agentsDelete(agent.path);
+        setUserAssistants((current) => current.filter((entry) => entry.path !== agent.path));
+        setProfileAgent((current) => current?.path === agent.path ? null : current);
+        onToast?.("已删除");
+        await reload();
+      },
+      onError: (error) => onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`),
+    });
+  }, [onToast, reload, requestConfirmation]);
 
   const filteredTemplates = ASSISTANT_TEMPLATES.filter((t) =>
     t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -203,13 +239,16 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
 
   if (profileAgent) {
     return (
-      <ColleagueProfile
-        agent={profileAgent}
-        onBack={() => setProfileAgent(null)}
-        onChat={() => { onUseAssistant?.(profileAgent); setProfileAgent(null); }}
-        onEdit={() => { openEdit(profileAgent); setProfileAgent(null); }}
-        onDelete={() => { handleDelete(profileAgent); setProfileAgent(null); }}
-      />
+      <>
+        <ColleagueProfile
+          agent={profileAgent}
+          onBack={() => setProfileAgent(null)}
+          onChat={() => { onUseAssistant?.(profileAgent); setProfileAgent(null); }}
+          onEdit={() => { openEdit(profileAgent); setProfileAgent(null); }}
+          onDelete={() => handleDelete(profileAgent)}
+        />
+        {dialog}
+      </>
     );
   }
 
@@ -226,6 +265,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
                 <input
                   type="text"
                   className="colleagues-panel-search-input"
+                  aria-label="搜索助理"
                   placeholder="搜索助理..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
@@ -248,7 +288,15 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
           {loading && filteredAssistants.length === 0 && (
             <div className="colleagues-panel-state">加载中…</div>
           )}
-          {!loading && filteredAssistants.length === 0 && userAssistants.length === 0 && (
+          {loadError && (
+            <div className="panel-inline-error" role="alert">
+              <span>助理列表加载失败：{loadError}</span>
+              <button type="button" onClick={() => void reload()} disabled={loading}>
+                {loading ? "重试中…" : "重试"}
+              </button>
+            </div>
+          )}
+          {!loading && !loadError && filteredAssistants.length === 0 && userAssistants.length === 0 && (
             <div className="colleagues-panel-state colleagues-panel-state--empty">
               <AssistantIcon size="xl" className="colleagues-panel-empty-icon" />
               <p>还没有助理，从下方模板创建一个吧</p>
@@ -264,10 +312,6 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
                   <div key={agent.path} className="colleague-card-wrapper">
                     <div
                       className={`colleague-card${isOpen ? " is-menu-open" : ""}`}
-                      onClick={(e) => {
-                        if ((e.target as HTMLElement).closest(".colleague-card-more, .colleague-card-menu")) return;
-                        setProfileAgent(agent);
-                      }}
                     >
                       {/* More Menu Trigger */}
                       <button
@@ -288,26 +332,33 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
                         </div>
                       )}
 
-                      {/* Identity */}
-                      <div className="colleague-card-identity">
-                        <ColleagueAvatar index={agent.avatar} name={agent.name} size={48} status={statusVariant} />
-                        <div className="colleague-card-identity-text">
-                          <div className="colleague-card-name-row">
-                            <span className="colleague-card-name">{agent.name}</span>
-                            <span className={`colleague-card-status-pill colleague-card-status-pill--${statusVariant}`}>
-                              {statusVariant === "working" ? "工作中" : statusVariant === "idle" ? "空闲" : "异常"}
-                            </span>
-                          </div>
-                          <div className="colleague-card-role">
-                            {agent.modelTags?.map((t) => MODEL_TAGS.find(m => m.key === t)?.label ?? t).join(" · ") || "通用助理"}
+                      <button
+                        type="button"
+                        className="colleague-card-profile-main"
+                        onClick={() => setProfileAgent(agent)}
+                        aria-label={`查看助理 ${agent.name} 详情`}
+                      >
+                        {/* Identity */}
+                        <div className="colleague-card-identity">
+                          <ColleagueAvatar index={agent.avatar} name={agent.name} size={48} status={statusVariant} />
+                          <div className="colleague-card-identity-text">
+                            <div className="colleague-card-name-row">
+                              <span className="colleague-card-name">{agent.name}</span>
+                              <span className={`colleague-card-status-pill colleague-card-status-pill--${statusVariant}`}>
+                                {statusVariant === "working" ? "工作中" : statusVariant === "idle" ? "空闲" : "异常"}
+                              </span>
+                            </div>
+                            <div className="colleague-card-role">
+                              {agent.modelTags?.map((t) => MODEL_TAGS.find(m => m.key === t)?.label ?? t).join(" · ") || "通用助理"}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Description */}
-                      <div className="colleague-card-description">
-                        {agent.description ?? "（无描述）"}
-                      </div>
+                        {/* Description */}
+                        <span className="colleague-card-description">
+                          {agent.description ?? "（无描述）"}
+                        </span>
+                      </button>
 
                       {/* Chat Button */}
                       <button
@@ -337,7 +388,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
             {filteredTemplates.map((tpl) => {
               return (
                 <div key={tpl.id} className="colleague-card-wrapper">
-                  <div className="colleague-card colleague-card--template" onClick={() => openFromTemplate(tpl)}>
+                  <button type="button" className="colleague-card colleague-card--template" onClick={() => openFromTemplate(tpl)}>
                     <div className="colleague-card-identity">
                       <ColleagueAvatar index={tpl.defaultAvatar} name={tpl.name} size={48} overrideColor={tpl.color} />
                       <div className="colleague-card-identity-text">
@@ -355,7 +406,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
                         </span>
                       ))}
                     </div>
-                  </div>
+                  </button>
                 </div>
               );
             })}
@@ -401,6 +452,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
           onHireExpert={openFromHireExpert}
         />
       )}
+      {dialog}
     </div>
   );
 }
@@ -484,11 +536,17 @@ function CreateColleagueDialog({
   draft: EditorDraft;
   existingAgents: AgentEntry[];
   onCancel: () => void;
-  onSave: (draft: EditorDraft) => void;
+  onSave: (draft: EditorDraft) => void | Promise<void>;
   onHireExpert: (agent: AgentEntry) => void;
 }) {
   const [d, setD] = useState<EditorDraft>(draft);
   const [tab, setTab] = useState<"create" | "hire">(draft.isNew && !draft.name ? "create" : "create");
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const cancel = () => {
+    if (!savingRef.current) onCancel();
+  };
+  const dialogRef = useModalFocus<HTMLDivElement>(true, cancel);
   const set = <K extends keyof EditorDraft>(k: K, v: EditorDraft[K]) =>
     setD((prev) => ({ ...prev, [k]: v }));
 
@@ -501,12 +559,32 @@ function CreateColleagueDialog({
     }));
   };
 
+  const submit = async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await onSave(d);
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
   return (
-    <div className="modal-overlay create-colleague-overlay" onClick={onCancel}>
-      <div className="create-colleague-dialog" onClick={(e) => e.stopPropagation()} role="dialog">
+    <div className="modal-overlay create-colleague-overlay" onClick={cancel}>
+      <div
+        ref={dialogRef}
+        className="create-colleague-dialog"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={d.isNew ? "创建助理" : `编辑 ${d.name}`}
+        tabIndex={-1}
+      >
         <div className="create-colleague-header">
           <h3>{d.isNew ? "创建助理" : `编辑 ${d.name}`}</h3>
-          <button className="create-colleague-close" onClick={onCancel}>
+          <button className="create-colleague-close" onClick={cancel} aria-label="关闭" disabled={saving}>
             <XCloseIcon size="md" />
           </button>
         </div>
@@ -517,12 +595,14 @@ function CreateColleagueDialog({
             <button
               className={`create-colleague-tab${tab === "create" ? " create-colleague-tab--active" : ""}`}
               onClick={() => setTab("create")}
+              disabled={saving}
             >
               自定义创建
             </button>
             <button
               className={`create-colleague-tab${tab === "hire" ? " create-colleague-tab--active" : ""}`}
               onClick={() => setTab("hire")}
+              disabled={saving}
             >
               从专家雇佣
             </button>
@@ -537,6 +617,7 @@ function CreateColleagueDialog({
                 <button
                   key={agent.path}
                   className="create-colleague-hire-card"
+                  disabled={saving}
                   onClick={() => { onHireExpert(agent); }}
                 >
                   <ColleagueAvatar index={agent.avatar} name={agent.name} size={40} />
@@ -563,6 +644,9 @@ function CreateColleagueDialog({
                       type="button"
                       className={`create-colleague-avatar-item${d.avatar === i + 1 ? " create-colleague-avatar-item--selected" : ""}`}
                       style={{ background: preset.bg }}
+                      aria-label={`选择头像 ${i + 1}`}
+                      aria-pressed={d.avatar === i + 1}
+                      disabled={saving}
                       onClick={() => set("avatar", i + 1)}
                     >
                       {(d.name || "?").charAt(0).toUpperCase()}
@@ -578,9 +662,12 @@ function CreateColleagueDialog({
               <input
                 type="text"
                 className="create-colleague-input"
+                aria-label="助理名称"
                 value={d.name}
+                disabled={saving}
                 onChange={(e) => set("name", e.target.value)}
                 placeholder="例如：代码审查专家"
+                data-modal-initial-focus
               />
             </div>
 
@@ -590,7 +677,9 @@ function CreateColleagueDialog({
               <input
                 type="text"
                 className="create-colleague-input"
+                aria-label="助理描述"
                 value={d.description}
+                disabled={saving}
                 onChange={(e) => set("description", e.target.value)}
                 placeholder="一句话描述助理的职责"
               />
@@ -607,6 +696,8 @@ function CreateColleagueDialog({
                     className={`create-colleague-tag${d.modelTags.includes(tag.key) ? " create-colleague-tag--on" : ""}`}
                     onClick={() => toggleTag(tag.key)}
                     title={tag.desc}
+                    aria-pressed={d.modelTags.includes(tag.key)}
+                    disabled={saving}
                   >
                     {tag.label}
                   </button>
@@ -619,7 +710,9 @@ function CreateColleagueDialog({
               <label className="create-colleague-label">System Prompt</label>
               <textarea
                 className="create-colleague-textarea"
+                aria-label="助理 System Prompt"
                 value={d.systemPrompt}
+                disabled={saving}
                 onChange={(e) => set("systemPrompt", e.target.value)}
                 rows={6}
                 placeholder="定义助理的角色、语气、行为约束…"
@@ -629,14 +722,14 @@ function CreateColleagueDialog({
         )}
 
         <div className="create-colleague-footer">
-          <button className="btn btn--ghost" onClick={onCancel}>取消</button>
+          <button className="btn btn--ghost" onClick={cancel} disabled={saving}>取消</button>
           {tab === "create" && (
             <button
               className="btn btn--primary"
-              onClick={() => onSave(d)}
-              disabled={!d.name.trim() || !d.systemPrompt.trim()}
+              onClick={() => void submit()}
+              disabled={saving || !d.name.trim() || !d.systemPrompt.trim()}
             >
-              {d.isNew ? "创建" : "保存"}
+              {saving ? "保存中…" : d.isNew ? "创建" : "保存"}
             </button>
           )}
         </div>

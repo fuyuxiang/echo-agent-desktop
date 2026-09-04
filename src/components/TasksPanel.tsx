@@ -7,7 +7,7 @@
  *
  * 这个面板嵌入到 ChatView 右侧或作为浮层。监听 `agent://task-update` 自动刷新。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   TaskListIcon,
   DeleteIcon,
@@ -27,21 +27,32 @@ interface TasksPanelProps {
 export function TasksPanel({ refreshSignal, onToast }: TasksPanelProps) {
   const [tasks, setTasks] = useState<RunningTask[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const reloadGenerationRef = useRef(0);
 
   const reload = useCallback(async () => {
+    const generation = ++reloadGenerationRef.current;
     setLoading(true);
     try {
-      setTasks(await tasksList());
-    } catch {
-      // EchoAgent may not support task/list — show empty.
-      setTasks([]);
+      const nextTasks = await tasksList();
+      if (reloadGenerationRef.current !== generation) return;
+      setTasks(nextTasks);
+      setError(null);
+    } catch (cause) {
+      if (reloadGenerationRef.current !== generation) return;
+      // Keep the last known tasks visible so a transient list failure never
+      // removes the user's only way to terminate background work.
+      setError(String(cause).replace(/^Error:\s*/, ""));
     } finally {
-      setLoading(false);
+      if (reloadGenerationRef.current === generation) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    reload();
+    void reload();
+    return () => {
+      reloadGenerationRef.current += 1;
+    };
   }, [reload, refreshSignal]);
 
   const handleKill = useCallback(
@@ -57,7 +68,7 @@ export function TasksPanel({ refreshSignal, onToast }: TasksPanelProps) {
     [onToast, reload],
   );
 
-  if (tasks.length === 0 && !loading) {
+  if (tasks.length === 0 && !loading && !error) {
     return null; // Hide entirely when empty — panel only shows when there's work.
   }
 
@@ -72,10 +83,16 @@ export function TasksPanel({ refreshSignal, onToast }: TasksPanelProps) {
           onClick={reload}
           disabled={loading}
           title="刷新"
+          aria-label={error ? "重试加载运行中任务" : "刷新运行中任务"}
         >
           <RefreshCwIcon size="sm" />
         </button>
       </div>
+      {error && (
+        <div className="tasks-panel__loading" role="alert">
+          加载运行中任务失败：{error}。已保留上次结果，请重试。
+        </div>
+      )}
       <ul className="tasks-panel__list">
         {tasks.map((task) => (
           <li key={task.id} className="tasks-panel__item">

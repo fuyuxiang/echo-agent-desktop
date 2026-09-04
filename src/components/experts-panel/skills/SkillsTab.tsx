@@ -10,6 +10,7 @@ import type { SkillInfo } from "@/lib/types";
 import { ImportSkillModal } from "./ImportSkillModal";
 import { UploadSkillModal } from "./UploadSkillModal";
 import { listenOrgSkillsChanged, orgSetSkillPreference } from "@/lib/org-client";
+import { useAppDialog } from "../../AppDialog";
 
 interface Props {
   pills: React.ReactNode;
@@ -92,6 +93,7 @@ function RuntimeSkillRow({
       )}
       {onRemove && removablePath && !organizationManaged && (
         <button type="button" className="sk-inst-del" title="移除"
+          aria-label={`移除技能 ${name}`}
           onClick={() => onRemove(skill)}><DeleteIcon size="sm" /></button>
       )}
     </div>
@@ -112,6 +114,7 @@ export function SkillsTab({ pills, onToast }: Props) {
   const [error, setError] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [uploadSkill, setUploadSkill] = useState<SkillInfo | null>(null);
+  const { requestConfirmation, dialog } = useAppDialog();
 
   const reloadSkills = useCallback(async (silent = false) => {
     setLoading(true);
@@ -167,7 +170,7 @@ export function SkillsTab({ pills, onToast }: Props) {
     }
   }, [onToast, reloadSkills]);
 
-  const handleRemove = useCallback(async (skill: SkillInfo) => {
+  const handleRemove = useCallback((skill: SkillInfo) => {
     const removablePath = skill.managed ? skill.path : skill.configuredPath;
     if (!removablePath) {
       onToast?.("该技能由项目、内置包或插件管理，请在对应来源中修改");
@@ -177,17 +180,24 @@ export function SkillsTab({ pills, onToast }: Props) {
     const shared = !skill.managed
       ? skills.filter((candidate) => candidate.configuredPath === removablePath).length
       : 1;
-    const impact = shared > 1 ? `\n\n该路径共提供 ${shared} 个技能，移除后它们都将不再加载。` : "";
-    if (!confirm(`确定${action}技能「${skill.displayName || skill.name}」？${impact}`)) return;
-    try {
-      if (skill.managed) await skillsUninstallPackage(removablePath);
-      else await skillsRemove(removablePath);
-      onToast?.(skill.managed ? "已安全卸载" : "已从技能路径中移除");
-      await reloadSkills();
-    } catch (e) {
-      onToast?.(`移除失败：${String(e).replace(/^Error:\s*/, "")}`);
-    }
-  }, [skills, onToast, reloadSkills]);
+    requestConfirmation({
+      title: `${action}技能“${skill.displayName || skill.name}”？`,
+      description: shared > 1
+        ? `该路径共提供 ${shared} 个技能，移除后它们都将不再加载。`
+        : skill.managed
+          ? "技能包将从本机卸载，之后可以重新安装。"
+          : "该路径将从技能配置中移除，原文件不会被删除。",
+      confirmLabel: action,
+      danger: true,
+      action: async () => {
+        if (skill.managed) await skillsUninstallPackage(removablePath);
+        else await skillsRemove(removablePath);
+        await reloadSkills();
+        onToast?.(skill.managed ? "已安全卸载" : "已从技能路径中移除");
+      },
+      onError: (error) => onToast?.(`移除失败：${String(error).replace(/^Error:\s*/, "")}`),
+    });
+  }, [skills, onToast, reloadSkills, requestConfirmation]);
 
   return (
     <div className="um-page">
@@ -197,6 +207,7 @@ export function SkillsTab({ pills, onToast }: Props) {
           <div className="um-search">
             <SearchIcon size="sm" className="um-search-icon" />
             <input className="um-search-input" value={search} placeholder="搜索已安装技能"
+              aria-label="搜索已安装技能"
               onChange={(event) => setSearch(event.target.value)} />
           </div>
           <button type="button" className="um-btn um-btn--grey" onClick={() => setImportOpen(true)}>
@@ -225,7 +236,7 @@ export function SkillsTab({ pills, onToast }: Props) {
 
         {loading && skills.length === 0 ? (
           <div className="ec-loading">扫描全局技能目录…</div>
-        ) : skills.length === 0 ? (
+        ) : error && skills.length === 0 ? null : skills.length === 0 ? (
           <div className="ec-empty">
             <PuzzlePieceIcon size="xl" className="ec-empty-icon" />
             <p>全局目录中还没有技能</p>
@@ -253,6 +264,7 @@ export function SkillsTab({ pills, onToast }: Props) {
       {uploadSkill && (
         <UploadSkillModal skill={uploadSkill} onClose={() => setUploadSkill(null)} onToast={onToast} />
       )}
+      {dialog}
     </div>
   );
 }

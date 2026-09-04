@@ -28,8 +28,6 @@ import {
   EditToolIcon,
   MoreDotsIcon,
   ArchiveIcon,
-  EchoPinIcon,
-  EchoUnpinIcon,
   AddIcon,
   MyFilesIconV2,
   MoreMenuImaKnowledgeIcon,
@@ -152,10 +150,11 @@ function filterSessions(
   sessions: SessionSummary[],
   status: SessionStatus | null,
   date: string | null,
+  archived: boolean,
 ): SessionSummary[] {
-  if (!status && !date) return sessions;
   const dateStart = getDateStart(date);
   return sessions.filter((s) => {
+    if (!!s.archived !== archived) return false;
     if (status && !statusMatches(s.status, status)) return false;
     if (dateStart !== null) {
       const t = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
@@ -169,16 +168,20 @@ function filterSessions(
 function TaskFilterMenu({
   filterStatus,
   filterDate,
+  filterArchived,
   hasFilter,
   onSelectStatus,
   onSelectDate,
+  onSelectArchived,
   onClear,
 }: {
   filterStatus: SessionStatus | null;
   filterDate: string | null;
+  filterArchived: boolean;
   hasFilter: boolean;
   onSelectStatus: (s: SessionStatus | null) => void;
   onSelectDate: (d: string | null) => void;
+  onSelectArchived: (archived: boolean) => void;
   onClear: () => void;
 }) {
   return (
@@ -192,6 +195,9 @@ function TaskFilterMenu({
             return (
               <button
                 key={opt.value ?? "__all_status"}
+                type="button"
+                role="menuitemradio"
+                aria-checked={selected}
                 className={"task-filter-menu__option" + (selected ? " task-filter-menu__option--selected" : "")}
                 onClick={() => onSelectStatus(opt.value)}
               >
@@ -200,6 +206,33 @@ function TaskFilterMenu({
               </button>
             );
           })}
+        </div>
+      </div>
+      <div className="task-filter-menu__divider" />
+      <div className="task-filter-menu__section">
+        <div className="task-filter-menu__section-title">会话范围</div>
+        <div className="task-filter-menu__options">
+          {[
+            { value: false, label: "活动会话" },
+            { value: true, label: "已归档会话" },
+          ].map((option) => (
+            <button
+              key={String(option.value)}
+              type="button"
+              role="menuitemradio"
+              aria-checked={filterArchived === option.value}
+              className={
+                "task-filter-menu__option"
+                + (filterArchived === option.value ? " task-filter-menu__option--selected" : "")
+              }
+              onClick={() => onSelectArchived(option.value)}
+            >
+              <span className="task-filter-menu__option-label">{option.label}</span>
+              {filterArchived === option.value && (
+                <span className="task-filter-menu__option-check"><CheckIcon /></span>
+              )}
+            </button>
+          ))}
         </div>
       </div>
       <div className="task-filter-menu__divider" />
@@ -212,6 +245,9 @@ function TaskFilterMenu({
             return (
               <button
                 key={opt.value ?? "__all_date"}
+                type="button"
+                role="menuitemradio"
+                aria-checked={selected}
                 className={"task-filter-menu__option" + (selected ? " task-filter-menu__option--selected" : "")}
                 onClick={() => onSelectDate(opt.value)}
               >
@@ -225,6 +261,7 @@ function TaskFilterMenu({
       <div className="task-filter-menu__divider" />
       {/* 重置 */}
       <button
+        type="button"
         className={"task-filter-menu__reset" + (!hasFilter ? " task-filter-menu__reset--disabled" : "")}
         onClick={() => { if (hasFilter) onClear(); }}
         disabled={!hasFilter}
@@ -235,23 +272,70 @@ function TaskFilterMenu({
   );
 }
 
+const MENU_ITEM_SELECTOR =
+  '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)';
+
+function focusMenuEdge(menu: HTMLElement | null, edge: "first" | "last"): void {
+  if (!menu) return;
+  const items = Array.from(menu.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR));
+  items[edge === "first" ? 0 : items.length - 1]?.focus();
+}
+
+/** WAI-ARIA-style navigation shared by the sidebar's vertical menus. */
+function handleMenuKeyDown(
+  event: React.KeyboardEvent<HTMLElement>,
+  onEscape: () => void,
+): void {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    onEscape();
+    return;
+  }
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+
+  const items = Array.from(
+    event.currentTarget.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR),
+  );
+  if (items.length === 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const current = items.indexOf(document.activeElement as HTMLElement);
+  if (event.key === "Home") {
+    items[0].focus();
+  } else if (event.key === "End") {
+    items[items.length - 1].focus();
+  } else if (event.key === "ArrowDown") {
+    items[current < 0 ? 0 : (current + 1) % items.length].focus();
+  } else {
+    items[current < 0 ? items.length - 1 : (current - 1 + items.length) % items.length].focus();
+  }
+}
+
 interface ContextMenuProps {
   x: number;
   y: number;
   sessionId: string;
   sessionTitle: string;
   isPinned: boolean;
+  isArchived: boolean;
   onClose: () => void;
   onRename: (sessionId: string, newTitle: string) => void;
   onDelete: (sessionId: string) => void;
   onPin: (sessionId: string, pinned: boolean) => void;
-  onArchive: (sessionId: string) => void;
+  onArchive: (sessionId: string, archived: boolean) => void;
 }
 
-function SessionContextMenu({ x, y, sessionId, sessionTitle, isPinned, onClose, onRename, onDelete, onPin, onArchive }: ContextMenuProps) {
+function SessionContextMenu({ x, y, sessionId, sessionTitle, isPinned, isArchived, onClose, onRename, onDelete, onPin, onArchive }: ContextMenuProps) {
   const [renaming, setRenaming] = useState(false);
   const [newTitle, setNewTitle] = useState(sessionTitle);
   const inputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    menuRef.current?.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
+  }, []);
 
   useEffect(() => {
     if (renaming && inputRef.current) {
@@ -262,8 +346,15 @@ function SessionContextMenu({ x, y, sessionId, sessionTitle, isPinned, onClose, 
 
   useEffect(() => {
     const handleClick = () => onClose();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
     document.addEventListener("click", handleClick);
-    return () => document.removeEventListener("click", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("click", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
   }, [onClose]);
 
   const handleRename = () => {
@@ -276,9 +367,13 @@ function SessionContextMenu({ x, y, sessionId, sessionTitle, isPinned, onClose, 
 
   return (
     <div
+      ref={menuRef}
       className="context-menu"
+      role="menu"
+      aria-label={`${sessionTitle} 会话操作`}
       style={{ position: "fixed", left: x, top: y, zIndex: 1000 }}
       onClick={(e) => e.stopPropagation()}
+      onKeyDown={(event) => handleMenuKeyDown(event, onClose)}
     >
       {renaming ? (
         <div className="context-menu__rename">
@@ -296,19 +391,19 @@ function SessionContextMenu({ x, y, sessionId, sessionTitle, isPinned, onClose, 
         </div>
       ) : (
         <>
-          <button className="context-menu__item" onClick={() => setRenaming(true)}>
+          <button type="button" role="menuitem" className="context-menu__item" onClick={() => setRenaming(true)}>
             <EditToolIcon size="sm" />
             <span>重命名</span>
           </button>
-          <button className="context-menu__item" onClick={() => { onPin(sessionId, !isPinned); onClose(); }}>
+          <button type="button" role="menuitem" className="context-menu__item" onClick={() => { onPin(sessionId, !isPinned); onClose(); }}>
             <PinFilledIcon size="sm" />
             <span>{isPinned ? "取消置顶" : "置顶"}</span>
           </button>
-          <button className="context-menu__item" onClick={() => { onArchive(sessionId); onClose(); }}>
+          <button type="button" role="menuitem" className="context-menu__item" onClick={() => { onArchive(sessionId, !isArchived); onClose(); }}>
             <ArchiveIcon size="sm" />
-            <span>归档</span>
+            <span>{isArchived ? "恢复会话" : "归档"}</span>
           </button>
-          <button className="context-menu__item context-menu__item--danger" onClick={() => { onDelete(sessionId); onClose(); }}>
+          <button type="button" role="menuitem" className="context-menu__item context-menu__item--danger" onClick={() => { onDelete(sessionId); onClose(); }}>
             <DeleteIcon size="sm" />
             <span>删除</span>
           </button>
@@ -333,6 +428,9 @@ function MoreDropdown({
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const pendingKeyboardFocus = useRef<"first" | "last" | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearCloseTimer = () => {
@@ -372,6 +470,22 @@ function MoreDropdown({
   }, [open]);
 
   useEffect(() => () => clearCloseTimer(), []);
+
+  useEffect(() => {
+    if (!open || !pendingKeyboardFocus.current) return;
+    focusMenuEdge(menuRef.current, pendingKeyboardFocus.current);
+    pendingKeyboardFocus.current = null;
+  }, [open]);
+
+  const openFromKeyboard = (edge: "first" | "last") => {
+    clearCloseTimer();
+    if (open) {
+      focusMenuEdge(menuRef.current, edge);
+      return;
+    }
+    pendingKeyboardFocus.current = edge;
+    setOpen(true);
+  };
 
   const ITEMS: {
     id: string;
@@ -465,6 +579,7 @@ function MoreDropdown({
       onMouseLeave={scheduleClose}
     >
       <button
+        ref={triggerRef}
         type="button"
         className={
           "sidebar__nav-item" +
@@ -472,15 +587,34 @@ function MoreDropdown({
         }
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-controls={open ? "sidebar-more-menu" : undefined}
         onClick={() => setOpen((o) => !o)}
-        onFocus={openMenu}
+        onKeyDown={(event) => {
+          if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
+            event.preventDefault();
+            openFromKeyboard(event.key === "ArrowUp" ? "last" : "first");
+          } else if (event.key === "Escape" && open) {
+            event.preventDefault();
+            setOpen(false);
+          }
+        }}
       >
         <EchoMoreNavIcon size="md" />
         <span>更多</span>
         <span className="sidebar__nav-sub">常用工具</span>
       </button>
       {open && (
-        <div className="sidebar__more-popover" role="menu">
+        <div
+          ref={menuRef}
+          id="sidebar-more-menu"
+          className="sidebar__more-popover"
+          role="menu"
+          aria-label="更多功能"
+          onKeyDown={(event) => handleMenuKeyDown(event, () => {
+            setOpen(false);
+            triggerRef.current?.focus();
+          })}
+        >
           {(["内容", "工具", "系统"] as const).map((group) => (
             <div className="sidebar__more-group" key={group}>
               <div className="sidebar__more-group-title">{group}</div>
@@ -513,7 +647,7 @@ function MoreDropdown({
 /**
  * EchoAgent 风格侧栏:品牌行 / 导航 / 双分组(任务 + 空间) / 底部用户区。
  *
- * 任务分组列「独立会话」(cwd 为空);空间分组列本地工作目录节点,每个节点可
+ * 任务分组列初始/home cwd 的收件箱会话;空间分组列其他本地工作目录节点,每个节点可
  * 展开懒加载其下的会话。详见 sessions-store 的双分组模型。
  */
 export function Sidebar({
@@ -528,6 +662,9 @@ export function Sidebar({
   onToast,
   onOpenProject,
   onStartProjectConversation,
+  onSessionArchived,
+  onSessionDeleted,
+  onRetrySessions,
   activeNav,
 }: {
   onNewSession: () => void;
@@ -547,6 +684,11 @@ export function Sidebar({
   onOpenProject?: (projectId: string) => void;
   /** Start a new conversation within a project. */
   onStartProjectConversation?: (projectId: string) => void;
+  /** Keep App's focused transcript and project references in sync. */
+  onSessionArchived?: (sessionId: string, archived: boolean) => void;
+  onSessionDeleted?: (sessionId: string) => void;
+  /** Retry the recoverable session/workspace catalog load. */
+  onRetrySessions?: () => void;
   activeNav: string;
 }) {
   const independent = useSessionsStore((s) => s.independent);
@@ -573,8 +715,12 @@ export function Sidebar({
   const filterDate = useSessionsStore((s) => s.filterDate);
   const setFilterStatus = useSessionsStore((s) => s.setFilterStatus);
   const setFilterDate = useSessionsStore((s) => s.setFilterDate);
+  const filterArchived = useSessionsStore((s) => s.filterArchived);
+  const setFilterArchived = useSessionsStore((s) => s.setFilterArchived);
   const clearFilters = useSessionsStore((s) => s.clearFilters);
   const hasFilter = useSessionsStore(selectHasFilter);
+  const sessionsLoading = useSessionsStore((s) => s.loading);
+  const sessionsError = useSessionsStore((s) => s.error);
 
   // Projects from the local store — shown as expandable nodes in 空间.
   const projects = useProjectsStore((s) => s.projects);
@@ -582,6 +728,9 @@ export function Sidebar({
 
   const [filterOpen, setFilterOpen] = useState(false);
   const filterRef = useRef<HTMLDivElement>(null);
+  const filterTriggerRef = useRef<HTMLButtonElement>(null);
+  const filterMenuRef = useRef<HTMLDivElement>(null);
+  const pendingFilterFocus = useRef<"first" | "last" | null>(null);
 
   // Close filter dropdown on outside click / Escape
   useEffect(() => {
@@ -602,12 +751,29 @@ export function Sidebar({
     };
   }, [filterOpen]);
 
+  useEffect(() => {
+    if (!filterOpen || !pendingFilterFocus.current) return;
+    focusMenuEdge(filterMenuRef.current, pendingFilterFocus.current);
+    pendingFilterFocus.current = null;
+  }, [filterOpen]);
+
+  const openFilterFromKeyboard = (edge: "first" | "last") => {
+    if (filterOpen) {
+      focusMenuEdge(filterMenuRef.current, edge);
+      return;
+    }
+    pendingFilterFocus.current = edge;
+    setFilterOpen(true);
+  };
+
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
     sessionId: string;
     sessionTitle: string;
     isPinned: boolean;
+    isArchived: boolean;
+    returnFocus?: HTMLElement;
   } | null>(null);
 
   // Flat view across both groups — used to look up a session's cwd for the
@@ -617,10 +783,16 @@ export function Sidebar({
     [independent, workspaceSessions],
   );
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean) => {
+  const handleContextMenu = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean, isArchived: boolean) => {
     e.preventDefault();
     e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY, sessionId, sessionTitle, isPinned });
+    const focused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const returnFocus = focused && e.currentTarget.contains(focused)
+      ? focused
+      : e.currentTarget.querySelector<HTMLElement>("button") ?? undefined;
+    setContextMenu({ x: e.clientX, y: e.clientY, sessionId, sessionTitle, isPinned, isArchived, returnFocus });
   }, []);
 
   // Rename via EchoAgent's `echo.agent/session/rename`. EchoAgent broadcasts
@@ -644,11 +816,13 @@ export function Sidebar({
     const cwd = session?.cwd;
     try {
       await agentDeleteSession(sessionId, cwd);
-      removeSession(sessionId);
+      removeSession(sessionId, cwd);
+      useProjectsStore.getState().removeSessionReferences(sessionId);
+      onSessionDeleted?.(sessionId);
     } catch (e) {
       onToast?.(`删除失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
-  }, [allSessions, removeSession, onToast]);
+  }, [allSessions, removeSession, onSessionDeleted, onToast]);
 
   // Pin/unpin — EchoAgent-only state (~/.echo-agent/echoagent-state.json).
   const handlePin = useCallback(async (sessionId: string, pinned: boolean) => {
@@ -664,71 +838,99 @@ export function Sidebar({
 
   // Archive — EchoAgent-only state; archived sessions are filtered out of
   // list_sessions, so drop the sidebar entry immediately on success.
-  const handleArchive = useCallback(async (sessionId: string) => {
+  const handleArchive = useCallback(async (sessionId: string, archived: boolean) => {
+    const session = allSessions.find((entry) => entry.sessionId === sessionId);
+    if (!session) return;
     try {
-      await agentSetSessionArchived(sessionId, true);
-      removeSession(sessionId);
+      const next = await agentSetSessionArchived(sessionId, archived);
+      upsertSession({ ...session, archived: next });
+      useProjectsStore.getState().setSessionArchived(sessionId, next);
+      onSessionArchived?.(sessionId, next);
+      onToast?.(next ? "已归档，可在筛选中恢复" : "已恢复会话");
     } catch (e) {
-      onToast?.(`归档失败：${String(e).replace(/^Error:\s*/, "")}`);
+      onToast?.(`${archived ? "归档" : "恢复"}失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
-  }, [removeSession, onToast]);
+  }, [allSessions, onSessionArchived, onToast, upsertSession]);
 
   // Open the row's context menu anchored to its 更多 hover button.
-  const openMenuFromButton = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean) => {
+  const openMenuFromButton = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean, isArchived: boolean) => {
     e.preventDefault();
     e.stopPropagation();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setContextMenu({ x: rect.left, y: rect.bottom + 4, sessionId, sessionTitle, isPinned });
+    setContextMenu({
+      x: rect.left,
+      y: rect.bottom + 4,
+      sessionId,
+      sessionTitle,
+      isPinned,
+      isArchived,
+      returnFocus: e.currentTarget as HTMLElement,
+    });
   }, []);
 
   // One session row, shared by the 任务 group and 空间 node children.
-  // No leading icon (EchoAgent parity); hover reveals 更多/归档/置顶 actions
-  // in place of the relative-time tail.
+  // The selectable surface and action button are siblings. Nesting click-only
+  // spans inside a button made pin/archive unreachable to keyboard users and
+  // produced invalid interactive markup.
   const renderConv = (s: SessionSummary) => (
-    <button
+    <div
       key={s.sessionId}
       className={
         "sidebar__conv" +
         (s.sessionId === currentSessionId ? " sidebar__conv--active" : "") +
         (s.pinned ? " sidebar__conv--pinned" : "")
       }
-      onClick={() => onSelect(s.sessionId, s.cwd)}
-      onContextMenu={(e) => handleContextMenu(e, s.sessionId, s.title || "未命名会话", s.pinned || false)}
-      title={s.title}
+      onContextMenu={(e) => handleContextMenu(
+        e,
+        s.sessionId,
+        s.title || "未命名会话",
+        s.pinned || false,
+        s.archived || false,
+      )}
     >
-      <span className="sidebar__conv-title">{s.title || "未命名会话"}</span>
-      {s.pinned && <PinFilledIcon size="sm" className="sidebar__conv-pin" />}
-      {s.updatedAt && <span className="sidebar__conv-time">{relativeTime(s.updatedAt)}</span>}
-      <span className="sidebar__conv-actions" onClick={(e) => e.stopPropagation()}>
-        <span
-          role="button"
-          className="sidebar__conv-action"
-          aria-label="更多"
-          data-tip="更多"
-          onClick={(e) => openMenuFromButton(e, s.sessionId, s.title || "未命名会话", s.pinned || false)}
-        >
-          <MoreDotsIcon size="sm" />
-        </span>
-        <span
-          role="button"
-          className="sidebar__conv-action"
-          aria-label="归档"
-          data-tip="归档"
-          onClick={() => handleArchive(s.sessionId)}
-        >
-          <ArchiveIcon size="sm" />
-        </span>
-        <span
-          role="button"
-          className="sidebar__conv-action"
-          aria-label={s.pinned ? "取消置顶" : "置顶"}
-          data-tip={s.pinned ? "取消置顶" : "置顶"}
-          onClick={() => handlePin(s.sessionId, !s.pinned)}
-        >
-          {s.pinned ? <EchoUnpinIcon size="sm" /> : <EchoPinIcon size="sm" />}
-        </span>
-      </span>
-    </button>
+      <button
+        type="button"
+        onClick={() => onSelect(s.sessionId, s.cwd)}
+        title={s.title}
+        aria-current={s.sessionId === currentSessionId ? "page" : undefined}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          flex: 1,
+          minWidth: 0,
+          height: "100%",
+          padding: 0,
+          border: 0,
+          background: "transparent",
+          color: "inherit",
+          font: "inherit",
+          textAlign: "left",
+          cursor: "pointer",
+        }}
+      >
+        <span className="sidebar__conv-title">{s.title || "未命名会话"}</span>
+        {s.pinned && <PinFilledIcon size="sm" className="sidebar__conv-pin" />}
+        {s.updatedAt && <span className="sidebar__conv-time">{relativeTime(s.updatedAt)}</span>}
+      </button>
+      <button
+        type="button"
+        className="sidebar__conv-action"
+        aria-label={`${s.title || "未命名会话"}的会话操作`}
+        aria-haspopup="menu"
+        aria-expanded={contextMenu?.sessionId === s.sessionId}
+        data-tip="会话操作"
+        onClick={(e) => openMenuFromButton(
+          e,
+          s.sessionId,
+          s.title || "未命名会话",
+          s.pinned || false,
+          s.archived || false,
+        )}
+        style={{ border: 0, padding: 0, background: "transparent", flex: "none" }}
+      >
+        <MoreDotsIcon size="sm" />
+      </button>
+    </div>
   );
 
   // 空间 nodes = every workspace except the inbox (homeCwd), whose sessions
@@ -737,9 +939,12 @@ export function Sidebar({
 
   // Apply status + date filters to the 任务 (independent) list.
   const filteredIndependent = useMemo(
-    () => filterSessions(independent, filterStatus, filterDate),
-    [independent, filterStatus, filterDate],
+    () => filterSessions(independent, filterStatus, filterDate, filterArchived),
+    [independent, filterStatus, filterDate, filterArchived],
   );
+  const scopedIndependentCount = independent.filter(
+    (session) => !!session.archived === filterArchived,
+  ).length;
 
   return (
     <aside className="sidebar">
@@ -798,10 +1003,31 @@ export function Sidebar({
       </nav>
 
       <div className="sidebar__content">
+        {sessionsError && (
+          <div className="sidebar__empty" role="alert">
+            <span>会话目录加载失败：{sessionsError}</span>
+            {onRetrySessions && (
+              <button type="button" className="btn btn--ghost" onClick={onRetrySessions}>
+                重试
+              </button>
+            )}
+          </div>
+        )}
+        {sessionsLoading && (
+          <div className="sidebar__empty" role="status">
+            {independent.length === 0 ? "正在加载会话…" : "正在刷新会话…"}
+          </div>
+        )}
         {/* 任务分组: 收件箱(初始目录)下的会话 */}
         <div className="sidebar__section-head">
-          <button className="sidebar__section-label" onClick={() => setTasksOpen(!tasksOpen)}>
-            <span>任务 ({hasFilter ? `${filteredIndependent.length}/${independent.length}` : independent.length})</span>
+          <button
+            type="button"
+            className="sidebar__section-label"
+            aria-expanded={tasksOpen}
+            aria-controls="sidebar-task-list"
+            onClick={() => setTasksOpen(!tasksOpen)}
+          >
+            <span>任务 ({hasFilter ? `${filteredIndependent.length}/${scopedIndependentCount}` : scopedIndependentCount})</span>
             <ChevronDownIcon
               size="sm"
               className={"sidebar__chevron" + (tasksOpen ? "" : " sidebar__chevron--collapsed")}
@@ -809,23 +1035,47 @@ export function Sidebar({
           </button>
           <div className="task-filter-wrap" ref={filterRef}>
             <button
+              ref={filterTriggerRef}
+              type="button"
               className={"sidebar__section-action task-filter-trigger" + (hasFilter ? " task-filter-trigger--active" : "")}
               aria-label="筛选任务"
               aria-haspopup="menu"
               aria-expanded={filterOpen}
+              aria-controls={filterOpen ? "sidebar-task-filter-menu" : undefined}
               onClick={() => setFilterOpen((v) => !v)}
+              onKeyDown={(event) => {
+                if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
+                  event.preventDefault();
+                  openFilterFromKeyboard(event.key === "ArrowUp" ? "last" : "first");
+                } else if (event.key === "Escape" && filterOpen) {
+                  event.preventDefault();
+                  setFilterOpen(false);
+                }
+              }}
             >
               <FilterIcon size="sm" />
               {hasFilter && <span className="task-filter-trigger__dot" />}
             </button>
             {filterOpen && (
-              <div className="task-filter-popover" role="menu">
+              <div
+                ref={filterMenuRef}
+                id="sidebar-task-filter-menu"
+                className="task-filter-popover"
+                role="menu"
+                aria-label="任务筛选"
+                onKeyDown={(event) => handleMenuKeyDown(event, () => {
+                  setFilterOpen(false);
+                  filterTriggerRef.current?.focus();
+                })}
+              >
                 <TaskFilterMenu
                   filterStatus={filterStatus}
                   filterDate={filterDate}
+                  filterArchived={filterArchived}
                   hasFilter={hasFilter}
                   onSelectStatus={setFilterStatus}
                   onSelectDate={setFilterDate}
+                  onSelectArchived={setFilterArchived}
                   onClear={clearFilters}
                 />
               </div>
@@ -833,19 +1083,25 @@ export function Sidebar({
           </div>
         </div>
         {tasksOpen && (
-          <div className="sidebar__group">
-            {filteredIndependent.length === 0 && independent.length > 0 && (
+          <div id="sidebar-task-list" className="sidebar__group">
+            {filteredIndependent.length === 0 && scopedIndependentCount > 0 && (
               <div className="sidebar__empty sidebar__empty--filter">无匹配筛选条件的任务</div>
             )}
-            {filteredIndependent.length === 0 && independent.length === 0 && (
-              <div className="sidebar__empty">暂无任务</div>
+            {filteredIndependent.length === 0 && scopedIndependentCount === 0 && !sessionsLoading && (
+              <div className="sidebar__empty">{filterArchived ? "暂无已归档任务" : "暂无任务"}</div>
             )}
             {sortPinnedFirst(filteredIndependent).map(renderConv)}
           </div>
         )}
 
         {/* 空间分组: 项目节点 + 本地工作目录节点 */}
-        <button className="sidebar__section-label" onClick={() => setSpacesOpen(!spacesOpen)}>
+        <button
+          type="button"
+          className="sidebar__section-label"
+          aria-expanded={spacesOpen}
+          aria-controls="sidebar-space-list"
+          onClick={() => setSpacesOpen(!spacesOpen)}
+        >
           <span>空间 ({projects.length + spaceNodes.length})</span>
           <ChevronDownIcon
             size="sm"
@@ -853,49 +1109,73 @@ export function Sidebar({
           />
         </button>
         {spacesOpen && (
-          <div className="sidebar__group">
+          <div id="sidebar-space-list" className="sidebar__group">
             {/* 项目节点 */}
             {projects.length === 0 && spaceNodes.length === 0 && (
               <div className="sidebar__empty">暂无空间</div>
             )}
             {projects.map((proj) => {
               const open = !!expandedProjects[proj.id];
+              const projectConversations = proj.conversations.filter(
+                (conversation) => !!conversation.archived === filterArchived,
+              );
               return (
                 <div key={proj.id} className="sidebar__node-wrap">
-                  <button
+                  <div
                     className="sidebar__node sidebar__node--project"
-                    onClick={() => onOpenProject?.(proj.id)}
                     title={proj.name}
                   >
-                    <ProjectNodeIcon />
-                    <span className="sidebar__node-name">{proj.name}</span>
-                    <span
-                      role="button"
-                      className="sidebar__node-action"
-                      aria-label="新建对话"
-                      data-tip="新建对话"
-                      onClick={(e: React.MouseEvent) => {
-                        e.stopPropagation();
-                        onStartProjectConversation?.(proj.id);
+                    <button
+                      type="button"
+                      onClick={() => onOpenProject?.(proj.id)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        flex: 1,
+                        minWidth: 0,
+                        padding: 0,
+                        border: 0,
+                        background: "transparent",
+                        color: "inherit",
+                        font: "inherit",
+                        textAlign: "left",
+                        cursor: "pointer",
                       }}
                     >
+                      <ProjectNodeIcon />
+                      <span className="sidebar__node-name">{proj.name}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar__node-action"
+                      aria-label={`在${proj.name}中新建对话`}
+                      data-tip="新建对话"
+                      onClick={() => onStartProjectConversation?.(proj.id)}
+                      style={{ border: 0, padding: 0, background: "transparent" }}
+                    >
                       <AddIcon size="sm" />
-                    </span>
-                    <ChevronDownIcon
-                      size="sm"
-                      className={"sidebar__chevron" + (open ? "" : " sidebar__chevron--collapsed")}
-                      onClick={(e: React.MouseEvent) => {
-                        e.stopPropagation();
-                        setExpandedProjects((prev) => ({ ...prev, [proj.id]: !prev[proj.id] }));
-                      }}
-                    />
-                  </button>
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar__node-action"
+                      aria-label={`${open ? "收起" : "展开"}${proj.name}对话`}
+                      aria-expanded={open}
+                      onClick={() => setExpandedProjects((prev) => ({ ...prev, [proj.id]: !prev[proj.id] }))}
+                      style={{ border: 0, padding: 0, background: "transparent" }}
+                    >
+                      <ChevronDownIcon
+                        size="sm"
+                        className={"sidebar__chevron" + (open ? "" : " sidebar__chevron--collapsed")}
+                      />
+                    </button>
+                  </div>
                   {open && (
                     <div className="sidebar__children">
-                      {proj.conversations.length === 0 && (
-                        <div className="sidebar__empty">暂无对话</div>
+                      {projectConversations.length === 0 && (
+                        <div className="sidebar__empty">{filterArchived ? "暂无已归档对话" : "暂无对话"}</div>
                       )}
-                      {proj.conversations.map((conv) => (
+                      {projectConversations.map((conv) => (
                         <button
                           key={conv.sessionId}
                           className={
@@ -918,12 +1198,16 @@ export function Sidebar({
             {spaceNodes.map((ws) => {
               const open = !!expanded[ws.cwd];
               const children = workspaceSessions[ws.cwd];
+              const filteredChildren = children
+                ? filterSessions(children, filterStatus, filterDate, filterArchived)
+                : undefined;
               return (
                 <div key={ws.cwd} className="sidebar__node-wrap">
                   <button
                     className="sidebar__node"
                     onClick={() => onToggleWorkspace(ws.cwd, !open)}
                     title={ws.cwd}
+                    aria-expanded={open}
                   >
                     <EchoExpertNavIcon size="sm" />
                     <span className="sidebar__node-name">{basename(ws.cwd)}</span>
@@ -935,8 +1219,12 @@ export function Sidebar({
                   {open && (
                     <div className="sidebar__children">
                       {children === undefined && <div className="sidebar__empty">加载中…</div>}
-                      {children && children.length === 0 && <div className="sidebar__empty">暂无会话</div>}
-                      {children && sortPinnedFirst(children).map(renderConv)}
+                      {filteredChildren && filteredChildren.length === 0 && (
+                        <div className="sidebar__empty">
+                          {filterArchived ? "暂无已归档会话" : children?.length ? "无匹配筛选条件的会话" : "暂无会话"}
+                        </div>
+                      )}
+                      {filteredChildren && sortPinnedFirst(filteredChildren).map(renderConv)}
                     </div>
                   )}
                 </div>
@@ -973,7 +1261,12 @@ export function Sidebar({
           sessionId={contextMenu.sessionId}
           sessionTitle={contextMenu.sessionTitle}
           isPinned={contextMenu.isPinned}
-          onClose={() => setContextMenu(null)}
+          isArchived={contextMenu.isArchived}
+          onClose={() => {
+            const returnFocus = contextMenu.returnFocus;
+            setContextMenu(null);
+            requestAnimationFrame(() => returnFocus?.focus());
+          }}
           onRename={handleRename}
           onDelete={handleDelete}
           onPin={handlePin}

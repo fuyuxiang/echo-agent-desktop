@@ -10,7 +10,10 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
-import { togglePlanMode } from "@/lib/agent-client";
+import {
+  agentResolvePlanApproval,
+  setPlanMode as agentSetPlanMode,
+} from "@/lib/agent-client";
 import type { PlanEntry, PlanEntryPriority, PlanEntryStatus } from "@/lib/types";
 import {
   reorderPlan,
@@ -53,13 +56,16 @@ interface PlanPanelProps {
 export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
   const plan = useSessionStore((s) => s.plan);
   const planMode = useSessionStore((s) => s.planMode);
-  const setPlanMode = useSessionStore((s) => s.setPlanMode);
+  const planApproval = useSessionStore((s) => s.planApproval);
+  const dismissPlanApproval = useSessionStore((s) => s.dismissPlanApproval);
   const setPlan = useSessionStore((s) => s.setPlan);
 
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
   const [dirty, setDirty] = useState(false);
   const [elapsed, setElapsed] = useState<Record<number, number>>({});
+  const [approvalBusy, setApprovalBusy] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Track when each task started (for elapsed time display).
   const startTimesRef = useRef<Record<number, number>>({});
@@ -99,20 +105,61 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
     setElapsed({});
   }, [plan?.entries.length]);
 
+  useEffect(() => {
+    setApprovalBusy(false);
+    setApprovalError(null);
+  }, [planApproval?.requestId]);
+
   const handleTogglePlanMode = useCallback(async () => {
     if (!sessionId) return;
     try {
-      await togglePlanMode(sessionId, !planMode);
-      setPlanMode(!planMode);
-      onToast?.(planMode ? "已退出计划模式" : "已进入计划模式");
+      await agentSetPlanMode(sessionId, !planMode);
+      onToast?.(planMode ? "已请求退出计划模式" : "已请求进入计划模式");
     } catch (e) {
       onToast?.(`切换失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
-  }, [sessionId, planMode, setPlanMode, onToast]);
+  }, [sessionId, planMode, onToast]);
+
+  const resolveApproval = useCallback(async (
+    outcome: "approved" | "cancelled" | "abandoned",
+    feedback?: string,
+  ) => {
+    if (!planApproval || approvalBusy) return false;
+    setApprovalBusy(true);
+    setApprovalError(null);
+    try {
+      const acknowledged = await agentResolvePlanApproval(
+        planApproval.requestId,
+        outcome,
+        feedback,
+      );
+      if (!acknowledged) throw new Error("后端未找到该计划审批请求，请重试");
+      dismissPlanApproval(planApproval.requestId, planApproval.sessionId);
+      return true;
+    } catch (error) {
+      const message = String(error).replace(/^Error:\s*/, "");
+      setApprovalError(message);
+      onToast?.(`审批失败：${message}`);
+      return false;
+    } finally {
+      setApprovalBusy(false);
+    }
+  }, [approvalBusy, dismissPlanApproval, onToast, planApproval]);
 
   const syncPlan = useCallback(async (execute: boolean) => {
-    if (!onSend || !plan) return;
+    if (!plan) return;
     try {
+      if (planApproval) {
+        const accepted = execute
+          ? await resolveApproval("approved")
+          : await resolveApproval("cancelled", planRevisionPrompt(plan, false));
+        if (accepted) {
+          setDirty(false);
+          onToast?.(execute ? "计划已批准，开始执行" : "修订已送回 Agent 继续规划");
+        }
+        return;
+      }
+      if (!onSend) return;
       const accepted = await onSend(planRevisionPrompt(plan, execute));
       if (accepted === false) {
         onToast?.("当前会话正在工作，修订计划尚未同步");
@@ -123,22 +170,25 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
     } catch (error) {
       onToast?.(`同步失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
-  }, [onSend, onToast, plan]);
+  }, [onSend, onToast, plan, planApproval, resolveApproval]);
 
   const updateLocalPlan = useCallback((next: NonNullable<typeof plan>) => {
     setPlan(next);
     setDirty(true);
   }, [setPlan]);
 
-  const handleApprove = useCallback(() => {
-    void syncPlan(true);
-  }, [syncPlan]);
+  const handleApprove = useCallback(() => void resolveApproval("approved"), [resolveApproval]);
 
-  const handleReject = useCallback(() => {
-    if (!onSend) return;
-    onSend("我不满意这个计划，请重新规划。");
-    onToast?.("已拒绝计划");
-  }, [onSend, onToast]);
+  const handleRevise = useCallback(() => {
+    const feedback = plan
+      ? planRevisionPrompt(plan, false)
+      : "请继续完善计划，暂不开始执行。";
+    void resolveApproval("cancelled", feedback);
+  }, [plan, resolveApproval]);
+
+  const handleAbandon = useCallback(() => {
+    void resolveApproval("abandoned");
+  }, [resolveApproval]);
 
   const handleSkip = useCallback(
     (idx: number) => {
@@ -214,8 +264,35 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
     [plan, editText, updateLocalPlan],
   );
 
+  const approvalActions = planApproval ? (
+    <div className="plan-panel__approval">
+      <button
+        className="plan-panel__approve-btn"
+        onClick={handleApprove}
+        disabled={approvalBusy}
+      >
+        <CheckIcon size="sm" /> 批准执行
+      </button>
+      <button
+        className="plan-panel__reject-btn"
+        onClick={handleRevise}
+        disabled={approvalBusy}
+      >
+        修改计划
+      </button>
+      <button
+        className="plan-panel__reject-btn"
+        onClick={handleAbandon}
+        disabled={approvalBusy}
+      >
+        <XCloseIcon size="sm" /> 放弃计划
+      </button>
+      {approvalError && <p role="alert">{approvalError}</p>}
+    </div>
+  ) : null;
+
   // Empty states
-  if (planMode && (!plan || plan.entries.length === 0)) {
+  if ((planMode || planApproval) && (!plan || plan.entries.length === 0)) {
     return (
       <div className="plan-panel plan-panel--empty">
         <TaskListIcon size="xl" color="var(--echo-text-tertiary)" />
@@ -223,6 +300,10 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
         <p className="plan-panel__hint">
           发送一个任务，EchoAgent 会先制定计划再执行。
         </p>
+        {planApproval?.planContent && (
+          <pre className="plan-panel__approval-content">{planApproval.planContent}</pre>
+        )}
+        {approvalActions}
         <button className="plan-panel__mode-btn" onClick={handleTogglePlanMode}>
           退出计划模式
         </button>
@@ -247,8 +328,7 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
   const total = plan.entries.length;
   const progressPct = total > 0 ? Math.round((completed / total) * 100) : 0;
   const allDone = completed === total;
-  // Plan is awaiting approval when planMode is on and no task has started yet.
-  const awaitingApproval = planMode && inProgress === 0 && completed === 0;
+  const awaitingApproval = planApproval != null;
 
   return (
     <div className="plan-panel">
@@ -295,16 +375,7 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
       )}
 
       {/* Approval buttons (shown when plan is awaiting user confirmation) */}
-      {awaitingApproval && (
-        <div className="plan-panel__approval">
-          <button className="plan-panel__approve-btn" onClick={handleApprove}>
-            <CheckIcon size="sm" /> 批准执行
-          </button>
-          <button className="plan-panel__reject-btn" onClick={handleReject}>
-            <XCloseIcon size="sm" /> 重新规划
-          </button>
-        </div>
-      )}
+      {awaitingApproval && approvalActions}
 
       {/* Completion banner */}
       {allDone && (

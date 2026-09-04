@@ -80,6 +80,26 @@ describe("Markdown 渲染（§6 验证）", () => {
     expect(link.getAttribute("rel")).toContain("noopener");
   });
 
+  it("不会自动加载模型 Markdown 中的远程图片", () => {
+    render(<Markdown>{"![tracking pixel](http://127.0.0.1:8080/private)"}</Markdown>);
+
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("已阻止自动加载远程图片");
+    expect(screen.getByRole("link", { name: "tracking pixel" })).toHaveAttribute(
+      "href",
+      "http://127.0.0.1:8080/private",
+    );
+  });
+
+  it("仍允许有界的内联栅格图片", () => {
+    render(<Markdown>{"![inline](data:image/png;base64,AAAA)"}</Markdown>);
+
+    expect(screen.getByRole("img", { name: "inline" })).toHaveAttribute(
+      "src",
+      "data:image/png;base64,AAAA",
+    );
+  });
+
   it("原始 HTML 不进 DOM(无 rehype-raw,script/onerror 天然不存在)", () => {
     render(
       <Markdown>

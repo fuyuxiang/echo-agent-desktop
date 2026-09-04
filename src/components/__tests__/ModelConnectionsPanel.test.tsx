@@ -124,6 +124,25 @@ describe("ModelConnectionsPanel", () => {
     expect(mocks.internalReload).toHaveBeenCalledWith("models");
   });
 
+  it("连接编辑器具有初始焦点、Tab 圈定、Escape 与触发器恢复", async () => {
+    render(<ModelConnectionsPanel />);
+    await screen.findByText("还没有可用模型");
+    const opener = screen.getAllByRole("button", { name: "添加个人连接" })[0];
+    opener.focus();
+    fireEvent.click(opener);
+
+    const dialog = screen.getByRole("dialog", { name: "添加个人连接" });
+    expect(within(dialog).getByLabelText(/连接名称/)).toHaveFocus();
+    const last = within(dialog).getByRole("button", { name: "测试并保存" });
+    last.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(within(dialog).getByRole("button", { name: "关闭" })).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "添加个人连接" })).toBeNull();
+    expect(opener).toHaveFocus();
+  });
+
   it("保存后等待 Runtime 和全局模型状态完全刷新", async () => {
     mocks.providersSaveConnection.mockResolvedValue({
       providerId: "custom",
@@ -285,5 +304,35 @@ describe("ModelConnectionsPanel", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: "直接保存" }));
     await waitFor(() => expect(mocks.providersSaveConnection).toHaveBeenCalledTimes(1));
+  });
+
+  it("删除已成功但后续全局刷新失败时不保留可重复删除的弹窗", async () => {
+    const provider = {
+      id: "personal",
+      providerKind: "custom" as const,
+      label: "个人连接",
+      source: "personal" as const,
+      credentialConfigured: true,
+      baseUrl: "https://api.example.com/v1",
+      apiBackend: "chat_completions" as const,
+      authScheme: "bearer" as const,
+    };
+    let deleted = false;
+    mocks.providersList.mockImplementation(async () => deleted
+      ? { providers: [], models: [] }
+      : { providers: [provider], models: [] });
+    mocks.providersDeleteProvider.mockImplementation(async () => { deleted = true; });
+    const onModelsChanged = vi.fn().mockRejectedValue(new Error("shell refresh failed"));
+
+    render(<ModelConnectionsPanel onModelsChanged={onModelsChanged} />);
+    await screen.findByText("个人连接", { selector: "h3" });
+    fireEvent.click(screen.getByRole("button", { name: "删除连接" }));
+    const dialog = screen.getByRole("alertdialog", { name: "删除连接“个人连接”？" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除连接" }));
+
+    await waitFor(() => expect(mocks.providersDeleteProvider).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(await screen.findByText(/shell refresh failed/)).toHaveTextContent("配置已保存");
+    expect(mocks.providersDeleteProvider).toHaveBeenCalledTimes(1);
   });
 });

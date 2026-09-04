@@ -4,6 +4,7 @@ import {
   PREVIEW_SANDBOX,
   normalizePreviewUrl,
   previewTitle,
+  safeRemoteImageUrl,
 } from "../browser-preview";
 
 describe("isPreviewableUrl", () => {
@@ -21,6 +22,9 @@ describe("isPreviewableUrl", () => {
     expect(isPreviewableUrl("http://localhost")).toBe(false);
     expect(isPreviewableUrl("http://127.0.0.1")).toBe(false);
     expect(isPreviewableUrl("http://[::1]")).toBe(false);
+    expect(isPreviewableUrl("http://2130706433")).toBe(false);
+    expect(isPreviewableUrl("http://ipc.localhost")).toBe(false);
+    expect(isPreviewableUrl("http://asset.localhost")).toBe(false);
   });
   it("拒绝内网/链路本地段", () => {
     expect(isPreviewableUrl("http://10.0.0.1")).toBe(false);
@@ -28,6 +32,10 @@ describe("isPreviewableUrl", () => {
     expect(isPreviewableUrl("http://169.254.1.1")).toBe(false);
     expect(isPreviewableUrl("http://172.16.0.1")).toBe(false);
     expect(isPreviewableUrl("http://172.31.255.255")).toBe(false);
+    expect(isPreviewableUrl("http://100.64.0.1")).toBe(false);
+    expect(isPreviewableUrl("http://[fd00::1]")).toBe(false);
+    expect(isPreviewableUrl("http://[fe80::1]")).toBe(false);
+    expect(isPreviewableUrl("http://printer.local")).toBe(false);
   });
   it("172.15/172.32 不在内网段,允许", () => {
     expect(isPreviewableUrl("http://172.15.0.1")).toBe(true);
@@ -37,12 +45,28 @@ describe("isPreviewableUrl", () => {
     expect(isPreviewableUrl("not a url")).toBe(false);
     expect(isPreviewableUrl("")).toBe(false);
   });
+  it("拒绝账号凭据、尾点内网名和过长 URL", () => {
+    expect(isPreviewableUrl("https://user:secret@example.com")).toBe(false);
+    expect(isPreviewableUrl("https://localhost./resource")).toBe(false);
+    expect(isPreviewableUrl(`https://example.com/${"x".repeat(4096)}`)).toBe(false);
+  });
+});
+
+describe("safeRemoteImageUrl", () => {
+  it("默认拒绝远程目录图片，避免目录源触发内网访问", () => {
+    expect(safeRemoteImageUrl("https://cdn.example.com/avatar.png")).toBeUndefined();
+    expect(safeRemoteImageUrl("http://cdn.example.com/avatar.png")).toBeUndefined();
+    expect(safeRemoteImageUrl("https://127.0.0.1/avatar.png")).toBeUndefined();
+    expect(safeRemoteImageUrl("https://user:secret@example.com/avatar.png")).toBeUndefined();
+  });
 });
 
 describe("PREVIEW_SANDBOX", () => {
   it("包含 allow-scripts 但不含 allow-top-navigation", () => {
     expect(PREVIEW_SANDBOX).toContain("allow-scripts");
     expect(PREVIEW_SANDBOX).not.toContain("allow-top-navigation");
+    expect(PREVIEW_SANDBOX).not.toContain("allow-same-origin");
+    expect(PREVIEW_SANDBOX).not.toContain("allow-popups");
   });
 });
 

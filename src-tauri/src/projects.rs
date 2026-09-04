@@ -5,14 +5,30 @@
 //! only as an offline/migration cache.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
 use serde_json::Value;
+use tauri::State;
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 
 const MAX_PROJECTS: usize = 500;
 const MAX_BYTES: usize = 8 * 1024 * 1024;
+const MAX_JSON_DEPTH: usize = 32;
+const MAX_JSON_NODES: usize = 100_000;
+const MAX_JSON_COLLECTION_ITEMS: usize = 10_000;
+const MAX_JSON_STRING_CHARS: usize = 256 * 1024;
+const MAX_ASSET_FILE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ASSET_BATCH_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_ASSET_NAME_CHARS: usize = 240;
 
 static ACCESS: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -47,39 +63,96 @@ fn validate_project_id(project_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn asset_root(project_id: &str) -> Result<PathBuf, String> {
-    validate_project_id(project_id)?;
-    let root = crate::paths::echo_agent_home_dir()
-        .join("projects")
-        .join(project_id)
-        .join("assets");
-    std::fs::create_dir_all(&root).map_err(|error| format!("创建项目资产目录失败：{error}"))?;
-    Ok(root)
+fn ensure_real_child_dir(parent: &Path, child: &Path, label: &str) -> Result<PathBuf, String> {
+    match std::fs::symlink_metadata(child) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(format!("{label}必须是真实目录，不能是符号链接"));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(child).map_err(|error| format!("创建{label}失败：{error}"))?;
+            let metadata = std::fs::symlink_metadata(child)
+                .map_err(|error| format!("检查{label}失败：{error}"))?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(format!("{label}在创建期间被替换"));
+            }
+        }
+        Err(error) => return Err(format!("检查{label}失败：{error}")),
+    }
+    let canonical = child
+        .canonicalize()
+        .map_err(|error| format!("解析{label}失败：{error}"))?;
+    if canonical == parent || !canonical.starts_with(parent) {
+        return Err(format!("{label}超出 EchoAgent 项目数据目录"));
+    }
+    crate::paths::harden_private_dir(&canonical)?;
+    Ok(canonical)
 }
 
-fn available_destination(root: &std::path::Path, name: &str) -> PathBuf {
-    let direct = root.join(name);
-    if !direct.exists() {
-        return direct;
+fn projects_root_at(data_home: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(data_home)
+        .map_err(|error| format!("创建 EchoAgent 数据目录失败：{error}"))?;
+    let canonical_home = data_home
+        .canonicalize()
+        .map_err(|error| format!("解析 EchoAgent 数据目录失败：{error}"))?;
+    ensure_real_child_dir(&canonical_home, &data_home.join("projects"), "项目数据目录")
+}
+
+fn project_root_at(data_home: &Path, project_id: &str) -> Result<PathBuf, String> {
+    validate_project_id(project_id)?;
+    let projects = projects_root_at(data_home)?;
+    ensure_real_child_dir(&projects, &projects.join(project_id), "项目目录")
+}
+
+fn asset_root_at(data_home: &Path, project_id: &str) -> Result<PathBuf, String> {
+    let project = project_root_at(data_home, project_id)?;
+    ensure_real_child_dir(&project, &project.join("assets"), "项目资产目录")
+}
+
+fn asset_root(project_id: &str) -> Result<PathBuf, String> {
+    asset_root_at(&crate::paths::echo_agent_home_dir(), project_id)
+}
+
+fn destination_at_index(root: &Path, name: &str, index: usize) -> PathBuf {
+    if index == 1 {
+        return root.join(name);
     }
-    let path = std::path::Path::new(name);
+    let path = Path::new(name);
     let stem = path.file_stem().and_then(|v| v.to_str()).unwrap_or("asset");
     let ext = path.extension().and_then(|v| v.to_str());
-    for index in 2..10_000 {
-        let candidate = match ext {
-            Some(ext) => root.join(format!("{stem} ({index}).{ext}")),
-            None => root.join(format!("{stem} ({index})")),
-        };
-        if !candidate.exists() {
+    match ext {
+        Some(ext) => root.join(format!("{stem} ({index}).{ext}")),
+        None => root.join(format!("{stem} ({index})")),
+    }
+}
+
+#[cfg(test)]
+fn available_destination(root: &Path, name: &str) -> PathBuf {
+    for index in 1..10_000 {
+        let candidate = destination_at_index(root, name, index);
+        if matches!(
+            std::fs::symlink_metadata(&candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        ) {
             return candidate;
         }
     }
-    root.join(format!("{stem}-{}", chrono::Utc::now().timestamp_millis()))
+    root.join(format!(
+        "asset-{}-{}",
+        chrono::Utc::now().timestamp_millis(),
+        uuid::Uuid::now_v7().simple()
+    ))
 }
 
 fn asset_from_path(path: &std::path::Path, kind: &str) -> Result<ProjectAssetImport, String> {
     let metadata =
-        std::fs::metadata(path).map_err(|error| format!("读取资产元数据失败：{error}"))?;
+        std::fs::symlink_metadata(path).map_err(|error| format!("读取资产元数据失败：{error}"))?;
+    if metadata.file_type().is_symlink()
+        || (kind == "file" && !metadata.is_file())
+        || (kind == "folder" && !metadata.is_dir())
+    {
+        return Err("项目资产类型在处理期间发生了变化".into());
+    }
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
@@ -102,12 +175,55 @@ fn asset_from_path(path: &std::path::Path, kind: &str) -> Result<ProjectAssetImp
     })
 }
 
+fn validate_json_value(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), String> {
+    if depth > MAX_JSON_DEPTH {
+        return Err(format!("项目数据层级不能超过 {MAX_JSON_DEPTH} 层"));
+    }
+    *nodes = nodes.saturating_add(1);
+    if *nodes > MAX_JSON_NODES {
+        return Err(format!("项目数据节点不能超过 {MAX_JSON_NODES} 个"));
+    }
+    match value {
+        Value::String(value) if value.chars().count() > MAX_JSON_STRING_CHARS => Err(format!(
+            "项目数据中的单个文本不能超过 {MAX_JSON_STRING_CHARS} 个字符"
+        )),
+        Value::Array(values) => {
+            if values.len() > MAX_JSON_COLLECTION_ITEMS {
+                return Err(format!(
+                    "项目数据中的单个列表不能超过 {MAX_JSON_COLLECTION_ITEMS} 项"
+                ));
+            }
+            for value in values {
+                validate_json_value(value, depth + 1, nodes)?;
+            }
+            Ok(())
+        }
+        Value::Object(values) => {
+            if values.len() > MAX_JSON_COLLECTION_ITEMS {
+                return Err(format!(
+                    "项目数据中的单个对象不能超过 {MAX_JSON_COLLECTION_ITEMS} 个字段"
+                ));
+            }
+            for (key, value) in values {
+                if key.chars().count() > 256 || key.chars().any(char::is_control) {
+                    return Err("项目数据包含不合法字段名".into());
+                }
+                validate_json_value(value, depth + 1, nodes)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 fn validate(projects: &[Value]) -> Result<(), String> {
     if projects.len() > MAX_PROJECTS {
         return Err(format!("项目数量不能超过 {MAX_PROJECTS} 个"));
     }
     let mut ids = HashSet::new();
+    let mut nodes = 0usize;
     for project in projects {
+        validate_json_value(project, 0, &mut nodes)?;
         let object = project
             .as_object()
             .ok_or_else(|| "项目数据必须是对象".to_string())?;
@@ -125,6 +241,9 @@ fn validate(projects: &[Value]) -> Result<(), String> {
         if id.len() > 160 || name.chars().count() > 120 {
             return Err(format!("项目 {id} 的 id 或名称过长"));
         }
+        if name.chars().any(char::is_control) {
+            return Err(format!("项目 {id} 的名称包含控制字符"));
+        }
         if !ids.insert(id.to_string()) {
             return Err(format!("项目 id 重复：{id}"));
         }
@@ -135,23 +254,77 @@ fn validate(projects: &[Value]) -> Result<(), String> {
 fn import_one(
     root: &std::path::Path,
     source: &std::path::Path,
+    remaining_batch_bytes: u64,
 ) -> Result<(ProjectAssetImport, PathBuf), String> {
     let metadata = std::fs::symlink_metadata(source)
         .map_err(|error| format!("读取 {} 失败：{error}", source.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(format!("仅支持导入普通文件：{}", source.display()));
     }
-    if metadata.len() > 512 * 1024 * 1024 {
+    if metadata.len() > MAX_ASSET_FILE_BYTES {
         return Err(format!("单个文件不能超过 512 MB：{}", source.display()));
+    }
+    if metadata.len() > remaining_batch_bytes {
+        return Err("单次导入的文件总大小不能超过 2 GB".into());
     }
     let name = source
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| "源文件名不是有效 UTF-8".to_string())?;
-    let destination = available_destination(root, name);
-    if let Err(error) = std::fs::copy(source, &destination) {
+    if name.chars().count() > MAX_ASSET_NAME_CHARS || name.chars().any(char::is_control) {
+        return Err(format!("文件名过长或包含控制字符：{}", source.display()));
+    }
+
+    let mut input_options = OpenOptions::new();
+    input_options.read(true);
+    #[cfg(unix)]
+    input_options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    #[cfg(windows)]
+    input_options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    let input = input_options
+        .open(source)
+        .map_err(|error| format!("打开 {} 失败：{error}", source.display()))?;
+    let opened_metadata = input
+        .metadata()
+        .map_err(|error| format!("读取 {} 失败：{error}", source.display()))?;
+    let copy_limit = MAX_ASSET_FILE_BYTES.min(remaining_batch_bytes);
+    if !opened_metadata.is_file() || opened_metadata.len() > copy_limit {
+        return Err(format!(
+            "文件在导入前发生变化或超过大小上限：{}",
+            source.display()
+        ));
+    }
+
+    let (destination, mut output) = (1..10_000)
+        .find_map(|index| {
+            let destination = destination_at_index(root, name, index);
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            match options.open(&destination) {
+                Ok(file) => Some(Ok((destination, file))),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(format!("创建项目资产副本失败：{error}"))),
+            }
+        })
+        .unwrap_or_else(|| Err("同名项目资产过多，请先整理文件".to_string()))?;
+    let copy_result = (|| -> Result<(), String> {
+        let mut limited = input.take(copy_limit.saturating_add(1));
+        let copied = std::io::copy(&mut limited, &mut output)
+            .map_err(|error| format!("导入 {} 失败：{error}", source.display()))?;
+        if copied > copy_limit {
+            return Err(format!("文件在导入期间超过大小上限：{}", source.display()));
+        }
+        output
+            .flush()
+            .and_then(|_| output.sync_all())
+            .map_err(|error| format!("保存项目资产副本失败：{error}"))
+    })();
+    drop(output);
+    if let Err(error) = copy_result {
         let _ = std::fs::remove_file(&destination);
-        return Err(format!("导入 {} 失败：{error}", source.display()));
+        return Err(error);
     }
     if let Err(error) = crate::paths::harden_private_file(&destination) {
         let _ = std::fs::remove_file(&destination);
@@ -172,9 +345,15 @@ fn import_files(
 ) -> Result<Vec<ProjectAssetImport>, String> {
     let mut imported = Vec::with_capacity(sources.len());
     let mut copied = Vec::with_capacity(sources.len());
+    let mut total_bytes = 0u64;
     for source in sources {
-        match import_one(root, source) {
+        match import_one(
+            root,
+            source,
+            MAX_ASSET_BATCH_BYTES.saturating_sub(total_bytes),
+        ) {
             Ok((asset, destination)) => {
+                total_bytes = total_bytes.saturating_add(asset.size_bytes);
                 imported.push(asset);
                 copied.push(destination);
             }
@@ -190,11 +369,37 @@ fn import_files(
 }
 
 fn read_from(path: &std::path::Path) -> Result<Vec<Value>, String> {
-    let raw = match std::fs::read(path) {
-        Ok(raw) => raw,
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(format!("读取项目数据失败：{error}")),
     };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("项目数据必须是普通文件，不能是符号链接".into());
+    }
+    if metadata.len() > MAX_BYTES as u64 {
+        return Err("项目数据文件超过 8 MB 安全上限".into());
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    #[cfg(windows)]
+    options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    let file = options
+        .open(path)
+        .map_err(|error| format!("打开项目数据失败：{error}"))?;
+    if !file
+        .metadata()
+        .map_err(|error| format!("检查项目数据失败：{error}"))?
+        .is_file()
+    {
+        return Err("项目数据在打开期间被替换".into());
+    }
+    let mut raw = Vec::new();
+    file.take((MAX_BYTES + 1) as u64)
+        .read_to_end(&mut raw)
+        .map_err(|error| format!("读取项目数据失败：{error}"))?;
     if raw.len() > MAX_BYTES {
         return Err("项目数据文件超过 8 MB 安全上限".into());
     }
@@ -234,6 +439,7 @@ pub fn projects_save(projects: Vec<Value>) -> Result<(), String> {
 /// asset directory. Sources are never moved or modified.
 #[tauri::command]
 pub fn project_assets_import(
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
     project_id: String,
     sources: Vec<String>,
 ) -> Result<Vec<ProjectAssetImport>, String> {
@@ -244,7 +450,10 @@ pub fn project_assets_import(
         return Err("单次最多导入 100 个文件".into());
     }
     let root = asset_root(&project_id)?;
-    let sources = sources.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    let sources = sources
+        .into_iter()
+        .map(|source| access.require_authorized_file(std::path::Path::new(&source)))
+        .collect::<Result<Vec<_>, _>>()?;
     import_files(&root, &sources)
 }
 
@@ -254,29 +463,58 @@ pub fn project_asset_make_dir(
     name: String,
 ) -> Result<ProjectAssetImport, String> {
     let name = name.trim();
-    if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.chars().any(char::is_control)
+        || name.chars().count() > MAX_ASSET_NAME_CHARS
+    {
         return Err("文件夹名称不合法".into());
     }
     let root = asset_root(&project_id)?;
-    let destination = available_destination(&root, name);
-    std::fs::create_dir(&destination).map_err(|error| format!("创建文件夹失败：{error}"))?;
+    let destination = (1..10_000)
+        .find_map(|index| {
+            let destination = destination_at_index(&root, name, index);
+            match std::fs::create_dir(&destination) {
+                Ok(()) => Some(Ok(destination)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(format!("创建文件夹失败：{error}"))),
+            }
+        })
+        .unwrap_or_else(|| Err("同名项目资产过多，请先整理文件".to_string()))?;
+    crate::paths::harden_private_dir(&destination)?;
     asset_from_path(&destination, "folder")
 }
 
 #[tauri::command]
 pub fn project_asset_remove(project_id: String, path: String) -> Result<(), String> {
-    let root = asset_root(&project_id)?
+    let root = asset_root(&project_id)?;
+    if path.chars().count() > 32_768 || path.chars().any(|ch| ch == '\0') {
+        return Err("项目资产路径过长或包含空字符".into());
+    }
+    let claimed = PathBuf::from(path);
+    if !claimed.is_absolute() {
+        return Err("项目资产路径必须是绝对路径".into());
+    }
+    let name = claimed
+        .file_name()
+        .ok_or_else(|| "项目资产路径缺少文件名".to_string())?;
+    let parent = claimed
+        .parent()
+        .ok_or_else(|| "项目资产路径缺少父目录".to_string())?
         .canonicalize()
-        .map_err(|error| format!("解析资产目录失败：{error}"))?;
-    let target = PathBuf::from(path)
-        .canonicalize()
-        .map_err(|error| format!("解析资产路径失败：{error}"))?;
-    if target == root || !target.starts_with(&root) {
+        .map_err(|error| format!("解析资产父目录失败：{error}"))?;
+    if parent != root && !parent.starts_with(&root) {
         return Err("拒绝删除项目资产目录之外的路径".into());
     }
+    let target = parent.join(name);
     let metadata =
         std::fs::symlink_metadata(&target).map_err(|error| format!("读取资产失败：{error}"))?;
-    if metadata.is_file() {
+    if metadata.file_type().is_symlink() {
+        Err("拒绝删除符号链接资产".into())
+    } else if metadata.is_file() {
         std::fs::remove_file(&target).map_err(|error| format!("删除文件失败：{error}"))
     } else if metadata.is_dir() {
         std::fs::remove_dir(&target).map_err(|error| format!("删除文件夹失败（必须为空）：{error}"))
@@ -290,7 +528,25 @@ pub fn project_asset_remove(project_id: String, path: String) -> Result<(), Stri
 #[tauri::command]
 pub fn project_assets_remove_all(project_id: String) -> Result<(), String> {
     validate_project_id(&project_id)?;
-    let projects_root = crate::paths::echo_agent_home_dir().join("projects");
+    let data_home = crate::paths::echo_agent_home_dir();
+    let projects_root_path = data_home.join("projects");
+    if !projects_root_path.exists() {
+        return Ok(());
+    }
+    let projects_metadata = std::fs::symlink_metadata(&projects_root_path)
+        .map_err(|error| format!("读取项目目录失败：{error}"))?;
+    if projects_metadata.file_type().is_symlink() || !projects_metadata.is_dir() {
+        return Err("拒绝从符号链接或非目录的项目根路径删除数据".into());
+    }
+    let canonical_home = data_home
+        .canonicalize()
+        .map_err(|error| format!("解析 EchoAgent 数据目录失败：{error}"))?;
+    let projects_root = projects_root_path
+        .canonicalize()
+        .map_err(|error| format!("解析项目目录失败：{error}"))?;
+    if projects_root == canonical_home || !projects_root.starts_with(&canonical_home) {
+        return Err("拒绝从 EchoAgent 数据目录之外删除项目".into());
+    }
     let project_root = projects_root.join(&project_id);
     if !project_root.exists() {
         return Ok(());
@@ -300,15 +556,10 @@ pub fn project_assets_remove_all(project_id: String) -> Result<(), String> {
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err("拒绝删除符号链接或非目录的项目路径".into());
     }
-    let canonical_projects = projects_root
-        .canonicalize()
-        .map_err(|error| format!("解析项目目录失败：{error}"))?;
     let canonical_project = project_root
         .canonicalize()
         .map_err(|error| format!("解析待删除项目目录失败：{error}"))?;
-    if canonical_project == canonical_projects
-        || !canonical_project.starts_with(&canonical_projects)
-    {
+    if canonical_project == projects_root || !canonical_project.starts_with(&projects_root) {
         return Err("拒绝删除项目数据目录之外的路径".into());
     }
     std::fs::remove_dir_all(&canonical_project)
@@ -317,7 +568,10 @@ pub fn project_assets_remove_all(project_id: String) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{available_destination, import_files, read_from, validate, write_to};
+    use super::{
+        asset_root_at, available_destination, import_files, read_from, validate, write_to,
+        MAX_BYTES,
+    };
     use serde_json::json;
 
     #[test]
@@ -373,5 +627,42 @@ mod tests {
         let error = import_files(asset_dir.path(), &[valid, missing]).unwrap_err();
         assert!(error.contains("读取"));
         assert_eq!(std::fs::read_dir(asset_dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn project_store_rejects_oversized_and_deep_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let oversized = dir.path().join("oversized.json");
+        std::fs::write(&oversized, vec![b' '; MAX_BYTES + 1]).unwrap();
+        assert!(read_from(&oversized).unwrap_err().contains("8 MB"));
+
+        let mut nested = json!("leaf");
+        for _ in 0..40 {
+            nested = json!([nested]);
+        }
+        assert!(
+            validate(&[json!({"id": "p1", "name": "A", "nested": nested})])
+                .unwrap_err()
+                .contains("层级")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_store_and_asset_roots_reject_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real_store = dir.path().join("real.json");
+        std::fs::write(&real_store, "[]").unwrap();
+        let linked_store = dir.path().join("projects.json");
+        symlink(&real_store, &linked_store).unwrap();
+        assert!(read_from(&linked_store).unwrap_err().contains("符号链接"));
+
+        let external = tempfile::tempdir().unwrap();
+        symlink(external.path(), dir.path().join("projects")).unwrap();
+        assert!(asset_root_at(dir.path(), "safe-id")
+            .unwrap_err()
+            .contains("符号链接"));
     }
 }

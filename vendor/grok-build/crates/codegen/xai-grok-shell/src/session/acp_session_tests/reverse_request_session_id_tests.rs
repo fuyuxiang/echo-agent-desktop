@@ -14,6 +14,7 @@ fn ask_user_question_request_carries_session_id() {
         tool_call_id: "call-1".to_string(),
         questions: vec![],
         mode: AskUserQuestionMode::Default,
+        timeout_secs: None,
     };
     assert!(!req.session_id.is_empty());
     // Wire format is camelCase (`sessionId`); Tier-2 routing reads it.

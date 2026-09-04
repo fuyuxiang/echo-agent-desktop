@@ -66,6 +66,8 @@ import type {
 } from "@/lib/types";
 import { APP_VERSION } from "@/lib/app-version";
 import { useUpdateStore } from "@/stores/update-store";
+import { validateOtlpEndpoint } from "@/lib/otlp-exporter";
+import { useAppDialog } from "./AppDialog";
 
 const FONT_KEY = "echoagent.fontSize";
 const ECHO_AGENT_DOCS_URL = "https://fuyuxiang.github.io/echo-agent/";
@@ -268,6 +270,7 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [config, setConfig] = useState<MemoryConfig>(DEFAULT_MEMORY_CONFIG);
   const [loading, setLoading] = useState(true);
+  const { requestConfirmation, dialog } = useAppDialog(sessionId);
 
   useEffect(() => {
     let cancelled = false;
@@ -319,21 +322,26 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
     }
   };
 
-  const handleDream = async () => {
+  const handleDream = () => {
     if (!sessionId) {
       setMsg("整理记忆需要一个已打开的会话。");
       return;
     }
-    if (!confirm("将历史会话记录归纳到长期记忆，是否继续？")) return;
-    setBusy(true);
-    try {
-      await memoryDream(sessionId);
-      setMsg("长期记忆整理完成。");
-    } catch (e) {
-      setMsg(`失败：${String(e).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setBusy(false);
-    }
+    requestConfirmation({
+      title: "整理历史会话记忆？",
+      description: "Agent 会把历史会话记录归纳到长期记忆中，可能会修改现有记忆内容。",
+      confirmLabel: "开始整理",
+      action: async () => {
+        setBusy(true);
+        try {
+          await memoryDream(sessionId);
+          setMsg("长期记忆整理完成。");
+        } finally {
+          setBusy(false);
+        }
+      },
+      onError: (error) => setMsg(`失败：${String(error).replace(/^Error:\s*/, "")}`),
+    });
   };
 
   const toggles: Array<{
@@ -404,6 +412,7 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
         </div>
       </SettingsGroup>
       {msg && <p className="settings-msg">{msg}</p>}
+      {dialog}
     </SectionShell>
   );
 }
@@ -514,6 +523,7 @@ export function HelpSettingsPanel() {
 export function SecuritySettingsPanel() {
   const [rules, setRules] = useState<PermissionRule[]>([]);
   const [loading, setLoading] = useState(true);
+  const [rulesError, setRulesError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<PermissionRule>({ action: "ask", tool: "bash", pattern: "" });
   const [feedback, setFeedback] = useState("");
@@ -521,12 +531,24 @@ export function SecuritySettingsPanel() {
     try { return localStorage.getItem("echoagent.otlp.endpoint") ?? ""; } catch { return ""; }
   });
 
-  useEffect(() => {
-    permissionList()
-      .then(setRules)
-      .catch(() => setRules([]))
-      .finally(() => setLoading(false));
+  const loadRules = useCallback(async () => {
+    setLoading(true);
+    try {
+      const nextRules = await permissionList();
+      setRules(nextRules);
+      setRulesError(null);
+    } catch (reason) {
+      // Preserve the last known rules. Replacing them with [] would make the
+      // next "save all" silently erase a valid backend configuration.
+      setRulesError(String(reason).replace(/^Error:\s*/, ""));
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadRules();
+  }, [loadRules]);
 
   const addRule = () => {
     if (!draft.tool.trim()) return;
@@ -539,6 +561,7 @@ export function SecuritySettingsPanel() {
   };
 
   const saveRules = async () => {
+    if (loading || rulesError) return;
     setSaving(true);
     setFeedback("");
     try {
@@ -555,9 +578,7 @@ export function SecuritySettingsPanel() {
     const endpoint = otlpEndpoint.trim();
     if (endpoint) {
       try {
-        const parsed = new URL(endpoint);
-        if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error("仅支持 HTTP/HTTPS");
-        localStorage.setItem("echoagent.otlp.endpoint", endpoint);
+        localStorage.setItem("echoagent.otlp.endpoint", validateOtlpEndpoint(endpoint));
       } catch (error) {
         setFeedback(`OTLP 地址无效：${String(error).replace(/^Error:\s*/, "")}`);
         return;
@@ -576,8 +597,16 @@ export function SecuritySettingsPanel() {
       <SettingsGroup
         title="工具权限规则"
         desc="规则按 deny、ask、allow 的优先级匹配；保存后重启 Agent 生效。"
-        meta={<span className="settings-status-badge">{loading ? "加载中…" : `${rules.length} 条规则`}</span>}
+        meta={<span className="settings-status-badge">{loading ? "加载中…" : rulesError ? "加载失败" : `${rules.length} 条规则`}</span>}
       >
+        {rulesError && (
+          <div className="settings-msg settings-msg--warn" role="alert">
+            <span>权限规则读取失败：{rulesError}。已保留上次数据，修复前不会允许覆盖保存。</span>{" "}
+            <button type="button" className="settings-btn" onClick={() => void loadRules()} disabled={loading}>
+              {loading ? "重试中…" : "重试"}
+            </button>
+          </div>
+        )}
         {rules.length > 0 ? (
           <ul className="rules-list">
             {rules.map((rule, index) => (
@@ -590,20 +619,21 @@ export function SecuritySettingsPanel() {
                   className="rules-list__remove"
                   onClick={() => setRules((items) => items.filter((_, itemIndex) => itemIndex !== index))}
                   aria-label={`删除规则 ${index + 1}`}
+                  disabled={loading || Boolean(rulesError)}
                 >
                   ×
                 </button>
               </li>
             ))}
           </ul>
-        ) : !loading ? (
+        ) : !loading && !rulesError ? (
           <div className="settings-empty-inline">尚未添加自定义权限规则</div>
         ) : null}
 
         <div className="permission-rule-builder">
           <label className="permission-rule-builder__field">
             <span>处理方式</span>
-            <select className="settings-select" value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value })} aria-label="规则动作">
+            <select className="settings-select" value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value })} aria-label="规则动作" disabled={loading || Boolean(rulesError)}>
               <option value="deny">拒绝 deny</option>
               <option value="ask">询问 ask</option>
               <option value="allow">允许 allow</option>
@@ -611,18 +641,18 @@ export function SecuritySettingsPanel() {
           </label>
           <label className="permission-rule-builder__field">
             <span>工具类型</span>
-            <select className="settings-select" value={draft.tool} onChange={(e) => setDraft({ ...draft, tool: e.target.value })} aria-label="工具类型">
+            <select className="settings-select" value={draft.tool} onChange={(e) => setDraft({ ...draft, tool: e.target.value })} aria-label="工具类型" disabled={loading || Boolean(rulesError)}>
               {['bash', 'read', 'edit', 'grep', 'mcp', 'webfetch', 'any'].map((tool) => <option key={tool} value={tool}>{tool}</option>)}
             </select>
           </label>
           <label className="permission-rule-builder__field permission-rule-builder__field--pattern">
             <span>匹配模式（可选）</span>
-            <input className="settings-input" value={draft.pattern ?? ""} onChange={(e) => setDraft({ ...draft, pattern: e.target.value })} placeholder="例如 git *" />
+            <input className="settings-input" value={draft.pattern ?? ""} onChange={(e) => setDraft({ ...draft, pattern: e.target.value })} placeholder="例如 git *" disabled={loading || Boolean(rulesError)} />
           </label>
         </div>
         <div className="settings-group__footer">
-          <button className="settings-btn" type="button" onClick={addRule}>添加到列表</button>
-          <button className="settings-btn settings-btn--primary" type="button" onClick={() => void saveRules()} disabled={saving}>
+          <button className="settings-btn" type="button" onClick={addRule} disabled={loading || Boolean(rulesError)}>添加到列表</button>
+          <button className="settings-btn settings-btn--primary" type="button" onClick={() => void saveRules()} disabled={saving || loading || Boolean(rulesError)}>
             {saving ? "保存中…" : "保存全部规则"}
           </button>
         </div>
@@ -741,40 +771,61 @@ export function AgentSettingsPanel() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [servers, setServers] = useState<McpServerEntry[]>([]);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
-  const [subagentDepth, setSubagentDepth] = useState<number>(1);
-  const [subagentDraft, setSubagentDraft] = useState<string>("1");
-  const [webSearchEnabled, setWebSearchEnabled] = useState<boolean>(false);
+  const [subagentDepth, setSubagentDepth] = useState<number | null>(null);
+  const [subagentDraft, setSubagentDraft] = useState<string>("");
+  const [webSearchEnabled, setWebSearchEnabled] = useState<boolean | null>(null);
   const [webSearchModel, setWebSearchModel] = useState<string>("");
   const [webSearchDraftModel, setWebSearchDraftModel] = useState<string>("");
   const [savingRuntime, setSavingRuntime] = useState(false);
   const [runtimeMsg, setRuntimeMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadErrors, setLoadErrors] = useState<Partial<Record<
+    "skills" | "mcp" | "commands" | "subagents" | "webSearch",
+    string
+  >>>({});
 
   const reload = useCallback(async () => {
     setLoading(true);
-    setError(null);
-    try {
-      const [sk, mc, cmd, sa, ws] = await Promise.all([
-        skillsList().catch(() => [] as SkillInfo[]),
-        mcpList().catch(() => [] as McpServerEntry[]),
-        commandsList().catch(() => [] as SlashCommand[]),
-        subagentsConfigGet().catch(() => ({ maxDepth: 1 })),
-        webSearchConfigGet().catch(() => ({ enabled: false, model: "" })),
-      ]);
-      setSkills(sk);
-      setServers(mc);
-      setCommands(cmd);
-      setSubagentDepth(sa.maxDepth);
-      setSubagentDraft(String(sa.maxDepth));
-      setWebSearchEnabled(ws.enabled);
-      setWebSearchModel(ws.model);
-      setWebSearchDraftModel(ws.model);
-    } catch (e) {
-      setError(String(e).replace(/^Error:\s*/, ""));
-    } finally {
-      setLoading(false);
+    setLoadErrors({});
+    const [sk, mc, cmd, sa, ws] = await Promise.allSettled([
+      skillsList(),
+      mcpList(),
+      commandsList(),
+      subagentsConfigGet(),
+      webSearchConfigGet(),
+    ]);
+    const failures: Partial<Record<
+      "skills" | "mcp" | "commands" | "subagents" | "webSearch",
+      string
+    >> = {};
+    const failureText = (reason: unknown) => String(reason).replace(/^Error:\s*/, "");
+
+    if (sk.status === "fulfilled") setSkills(sk.value);
+    else failures.skills = failureText(sk.reason);
+    if (mc.status === "fulfilled") setServers(mc.value);
+    else failures.mcp = failureText(mc.reason);
+    if (cmd.status === "fulfilled") setCommands(cmd.value);
+    else failures.commands = failureText(cmd.reason);
+    if (sa.status === "fulfilled") {
+      setSubagentDepth(sa.value.maxDepth);
+      setSubagentDraft(String(sa.value.maxDepth));
+    } else {
+      setSubagentDepth(null);
+      setSubagentDraft("");
+      failures.subagents = failureText(sa.reason);
     }
+    if (ws.status === "fulfilled") {
+      setWebSearchEnabled(ws.value.enabled);
+      setWebSearchModel(ws.value.model);
+      setWebSearchDraftModel(ws.value.model);
+    } else {
+      setWebSearchEnabled(null);
+      setWebSearchModel("");
+      setWebSearchDraftModel("");
+      failures.webSearch = failureText(ws.reason);
+    }
+    setLoadErrors(failures);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -783,6 +834,7 @@ export function AgentSettingsPanel() {
 
   /** Save subagent max_depth. Clamped to ≥1 on the backend. */
   const saveSubagentDepth = useCallback(async () => {
+    if (subagentDepth === null || loadErrors.subagents) return;
     setSavingRuntime(true);
     setRuntimeMsg(null);
     try {
@@ -795,11 +847,12 @@ export function AgentSettingsPanel() {
     } finally {
       setSavingRuntime(false);
     }
-  }, [subagentDraft]);
+  }, [loadErrors.subagents, subagentDepth, subagentDraft]);
 
   /** Toggle web search on/off. */
   const saveWebSearch = useCallback(
     async (enable: boolean) => {
+      if (webSearchEnabled === null || loadErrors.webSearch) return;
       setSavingRuntime(true);
       setRuntimeMsg(null);
       try {
@@ -822,7 +875,7 @@ export function AgentSettingsPanel() {
         setSavingRuntime(false);
       }
     },
-    [webSearchDraftModel],
+    [loadErrors.webSearch, webSearchDraftModel, webSearchEnabled],
   );
 
   const enabledSkills = skills.filter((s) => s.enabled);
@@ -843,27 +896,45 @@ export function AgentSettingsPanel() {
         </button>
       )}
     >
-      {error && <p className="settings-msg settings-msg--warn">加载失败：{error}</p>}
+      {Object.keys(loadErrors).length > 0 && (
+        <div className="settings-msg settings-msg--warn" role="alert">
+          <span>
+            部分智能体配置读取失败：
+            {Object.entries(loadErrors)
+              .map(([key, message]) => `${({
+                skills: "技能",
+                mcp: "MCP 连接器",
+                commands: "Slash 命令",
+                subagents: "子代理配置",
+                webSearch: "Web 搜索配置",
+              } as Record<string, string>)[key]}：${message}`)
+              .join("；")}
+          </span>{" "}
+          <button type="button" className="settings-btn" onClick={() => void reload()} disabled={loading}>
+            {loading ? "重试中…" : "重试"}
+          </button>
+        </div>
+      )}
 
       {/* 汇总统计 */}
       <SettingsGroup title="运行概览" desc="数据来自当前活动的 EchoAgent Runtime。">
         <div className="agent-stats">
           <div className="agent-stats__item">
-            <div className="agent-stats__num">{enabledSkills.length}</div>
+            <div className="agent-stats__num">{loadErrors.skills ? "—" : enabledSkills.length}</div>
             <div className="agent-stats__label">启用技能</div>
             {disabledSkills.length > 0 && (
               <div className="agent-stats__sub">另有 {disabledSkills.length} 个已停用</div>
             )}
           </div>
           <div className="agent-stats__item">
-            <div className="agent-stats__num">{enabledServers.length}</div>
+            <div className="agent-stats__num">{loadErrors.mcp ? "—" : enabledServers.length}</div>
             <div className="agent-stats__label">已连接 MCP</div>
             {disabledServers.length > 0 && (
               <div className="agent-stats__sub">另有 {disabledServers.length} 个已停用</div>
             )}
           </div>
           <div className="agent-stats__item">
-            <div className="agent-stats__num">{commands.length}</div>
+            <div className="agent-stats__num">{loadErrors.commands ? "—" : commands.length}</div>
             <div className="agent-stats__label">Slash 命令</div>
             <div className="agent-stats__sub">
               {builtinCommands.length} 内置 · {skillCommands.length} 技能 · {pluginCommands.length} 插件
@@ -879,7 +950,9 @@ export function AgentSettingsPanel() {
           技能（{skills.length}）
         </summary>
         <div className="agent-section__body">
-          {skills.length === 0 ? (
+          {loadErrors.skills ? (
+            <p className="settings-hint">技能清单读取失败，请重试。</p>
+          ) : skills.length === 0 ? (
             <p className="settings-hint">暂无技能。在「专家·技能·连接器」面板添加。</p>
           ) : (
             <ul className="agent-list">
@@ -912,7 +985,9 @@ export function AgentSettingsPanel() {
           MCP 连接器（{servers.length}）
         </summary>
         <div className="agent-section__body">
-          {servers.length === 0 ? (
+          {loadErrors.mcp ? (
+            <p className="settings-hint">MCP 连接器清单读取失败，请重试。</p>
+          ) : servers.length === 0 ? (
             <p className="settings-hint">
               暂无连接器。编辑 <code>~/.echo-agent/config.toml</code> 的 <code>[mcp_servers.*]</code> 段。
             </p>
@@ -950,7 +1025,9 @@ export function AgentSettingsPanel() {
           slash 命令（{commands.length}）
         </summary>
         <div className="agent-section__body">
-          {commands.length === 0 ? (
+          {loadErrors.commands ? (
+            <p className="settings-hint">Slash 命令清单读取失败，请重试。</p>
+          ) : commands.length === 0 ? (
             <p className="settings-hint">暂无命令。</p>
           ) : (
             <ul className="agent-list">
@@ -978,7 +1055,9 @@ export function AgentSettingsPanel() {
             <div className="agent-runtime-row__label">
               <span className="agent-runtime-row__name">子代理嵌套深度</span>
               <span className="agent-runtime-row__hint">
-                最大子代理派发层级，当前为 {subagentDepth}。深度 1 表示仅顶层可以派发。
+                {subagentDepth === null
+                  ? "子代理配置当前不可用，重试成功前不会保存任何默认值。"
+                  : `最大子代理派发层级，当前为 ${subagentDepth}。深度 1 表示仅顶层可以派发。`}
               </span>
             </div>
             <div className="agent-runtime-row__control">
@@ -989,12 +1068,18 @@ export function AgentSettingsPanel() {
                 className="settings-input settings-input--narrow"
                 value={subagentDraft}
                 onChange={(e) => setSubagentDraft(e.target.value)}
-                disabled={savingRuntime}
+                disabled={savingRuntime || loading || subagentDepth === null || !!loadErrors.subagents}
               />
               <button
                 className="settings-btn"
                 onClick={saveSubagentDepth}
-                disabled={savingRuntime || subagentDraft === String(subagentDepth)}
+                disabled={
+                  savingRuntime ||
+                  loading ||
+                  subagentDepth === null ||
+                  !!loadErrors.subagents ||
+                  subagentDraft === String(subagentDepth)
+                }
               >
                 {savingRuntime ? "保存中…" : "保存"}
               </button>
@@ -1007,7 +1092,9 @@ export function AgentSettingsPanel() {
               <span className="agent-runtime-row__name">Web 搜索</span>
               <span className="agent-runtime-row__hint">
                 启用后 Agent 可以联网搜索。请指定搜索模型 ID
-                （{webSearchEnabled ? (
+                （{webSearchEnabled === null ? (
+                  <span>配置不可用</span>
+                ) : webSearchEnabled ? (
                   <span>当前：{webSearchModel || "未设置"}</span>
                 ) : (
                   <span>当前：关闭</span>
@@ -1021,13 +1108,13 @@ export function AgentSettingsPanel() {
                 placeholder="搜索模型 ID，如 search-model"
                 value={webSearchDraftModel}
                 onChange={(e) => setWebSearchDraftModel(e.target.value)}
-                disabled={savingRuntime}
+                disabled={savingRuntime || loading || webSearchEnabled === null || !!loadErrors.webSearch}
               />
-              {webSearchEnabled ? (
+              {webSearchEnabled === true ? (
                 <button
                   className="settings-btn settings-btn--danger"
                   onClick={() => saveWebSearch(false)}
-                  disabled={savingRuntime}
+                  disabled={savingRuntime || loading || !!loadErrors.webSearch}
                 >
                   关闭
                 </button>
@@ -1035,7 +1122,13 @@ export function AgentSettingsPanel() {
                 <button
                   className="settings-btn"
                   onClick={() => saveWebSearch(true)}
-                  disabled={savingRuntime || !webSearchDraftModel.trim()}
+                  disabled={
+                    savingRuntime ||
+                    loading ||
+                    webSearchEnabled === null ||
+                    !!loadErrors.webSearch ||
+                    !webSearchDraftModel.trim()
+                  }
                 >
                   启用
                 </button>
@@ -1101,14 +1194,18 @@ const KIND_FILTERS: { key: string; label: string }[] = [
 export function NotificationCenterSettingsPanel() {
   const [entries, setEntries] = useState<NotificationEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [mutating, setMutating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("all");
+  const { requestConfirmation, dialog } = useAppDialog();
 
   const reload = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       setEntries(await notificationList());
-    } catch {
-      setEntries([]);
+    } catch (loadError) {
+      setError(String(loadError).replace(/^Error:\s*/, ""));
     } finally {
       setLoading(false);
     }
@@ -1120,22 +1217,52 @@ export function NotificationCenterSettingsPanel() {
 
   const handleMarkRead = useCallback(
     async (id: number) => {
-      await notificationMarkRead(id);
-      reload();
+      setMutating(true);
+      setError(null);
+      try {
+        await notificationMarkRead(id);
+        await reload();
+      } catch (markError) {
+        setError(String(markError).replace(/^Error:\s*/, ""));
+      } finally {
+        setMutating(false);
+      }
     },
     [reload],
   );
 
   const handleMarkAllRead = useCallback(async () => {
-    await notificationMarkAllRead();
-    reload();
+    setMutating(true);
+    setError(null);
+    try {
+      await notificationMarkAllRead();
+      await reload();
+    } catch (markError) {
+      setError(String(markError).replace(/^Error:\s*/, ""));
+    } finally {
+      setMutating(false);
+    }
   }, [reload]);
 
-  const handleClear = useCallback(async () => {
-    if (!confirm("确定清空所有通知？")) return;
-    await notificationClear();
-    reload();
-  }, [reload]);
+  const handleClear = useCallback(() => {
+    requestConfirmation({
+      title: "清空所有通知？",
+      description: "所有本机通知记录都将被删除，此操作无法撤销。",
+      confirmLabel: "清空通知",
+      danger: true,
+      action: async () => {
+        setMutating(true);
+        setError(null);
+        try {
+          await notificationClear();
+          await reload();
+        } finally {
+          setMutating(false);
+        }
+      },
+      onError: (clearError) => setError(String(clearError).replace(/^Error:\s*/, "")),
+    });
+  }, [reload, requestConfirmation]);
 
   const filtered = entries.filter(
     (e) => filter === "all" || String(e.kind) === filter,
@@ -1148,26 +1275,31 @@ export function NotificationCenterSettingsPanel() {
       desc="集中查看权限请求、任务更新、运行状态和会话结果。"
       actions={
         <>
-          <button className="settings-btn" onClick={reload} disabled={loading}>
+          <button className="settings-btn" onClick={reload} disabled={loading || mutating}>
             <RefreshCw size={14} /> {loading ? "加载中…" : "刷新"}
           </button>
           <button
             className="settings-btn"
             onClick={handleMarkAllRead}
-            disabled={entries.length === 0}
+            disabled={entries.length === 0 || loading || mutating}
           >
             <CheckCheck size={14} /> 全部已读
           </button>
           <button
             className="settings-btn settings-btn--danger"
             onClick={handleClear}
-            disabled={entries.length === 0}
+            disabled={(!error && entries.length === 0) || loading || mutating}
           >
             <Trash2 size={14} /> 清空
           </button>
         </>
       }
     >
+      {error && (
+        <p className="settings-msg settings-msg--warn" role="alert">
+          通知记录不可用：{error}。原文件未被覆盖；你可以修复文件后重试，或点击“清空”重建。
+        </p>
+      )}
       <SettingsGroup
         title="通知概览"
         desc="通知仅保存在本机，可随时标记已读或清空。"
@@ -1257,7 +1389,8 @@ export function NotificationCenterSettingsPanel() {
               {!entry.read && (
                 <button
                   className="notification-row__mark"
-                  onClick={() => handleMarkRead(entry.id)}
+                  onClick={() => void handleMarkRead(entry.id)}
+                  disabled={mutating}
                   title="标记已读"
                   aria-label={`将“${entry.title}”标记为已读`}
                 >
@@ -1269,6 +1402,7 @@ export function NotificationCenterSettingsPanel() {
           {loading && <div className="notification-empty">正在加载通知…</div>}
         </div>
       </SettingsGroup>
+      {dialog}
     </SectionShell>
   );
 }

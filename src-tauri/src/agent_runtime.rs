@@ -15,6 +15,8 @@
 //! etc.) rather than round-tripping them back to us. We only need to handle
 //! `session/update` (streaming + tool calls) and `session/request_permission`.
 
+use std::fs::OpenOptions;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -35,6 +37,14 @@ use xai_grok_shell::util::config::load_effective_config;
 
 // Re-aliased to mirror EchoAgent's own internal import style.
 use xai_grok_shell::agent::config::{Config as AgentConfig, RuntimeResolutionContext};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+
+const MAX_IMAGE_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 
 /// One end of the ACP channel pair that lives on the Tauri (multi-thread) side.
 /// The client sends requests to the agent via `tx` (`AcpAgentTx`) and receives
@@ -165,9 +175,7 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
             .filter_map(|provider| provider.get("base_url")?.as_str())
             .collect();
         let model_urls = legacy_model_base_urls(&cfg);
-        if let Some(first_byok_url) =
-            pick_byok_base_url(provider_urls, model_urls.into_iter())
-        {
+        if let Some(first_byok_url) = pick_byok_base_url(provider_urls, model_urls) {
             tracing::info!(
                 models_base_url = %first_byok_url,
                 "BYOK: set endpoints.models_base_url to skip built-in default models"
@@ -271,8 +279,9 @@ pub async fn initialize(tx: &AcpAgentTx) -> Result<InitOutcome> {
             // Advertise NO fs and NO terminal capability → the agent uses its
             // own built-in file/shell tools and never round-trips those
             // requests back to us. (ClientCapabilities::new() defaults to
-            // both disabled; we only spell out terminal(false) for clarity.)
-            acp::ClientCapabilities::new().terminal(false),
+            // both disabled; folder-trust is an EchoAgent extension capability
+            // and must live under clientCapabilities._meta.)
+            desktop_client_capabilities(),
         )
         .meta(meta.as_object().cloned());
     let resp: acp::InitializeResponse = acp_send(req, tx)
@@ -297,6 +306,15 @@ pub async fn initialize(tx: &AcpAgentTx) -> Result<InitOutcome> {
             .and_then(|v| v.as_str())
             .map(String::from),
     })
+}
+
+fn desktop_client_capabilities() -> acp::ClientCapabilities {
+    let meta = serde_json::json!({
+        "echo.agent/folderTrust": { "interactive": true },
+    });
+    acp::ClientCapabilities::new()
+        .terminal(false)
+        .meta(meta.as_object().cloned())
 }
 
 /// Create a new session bound to `cwd`. Returns the new session id.
@@ -327,11 +345,11 @@ pub async fn new_session_with_options(
 ) -> Result<String> {
     tracing::info!(cwd = %cwd.display(), model_id, "echoagent: new_session send");
     let mut servers = Vec::new();
-    if let Some(url) = crate::team_mcp::server_url() {
-        servers.push(acp::McpServer::Http(acp::McpServerHttp::new(
-            crate::team_mcp::MCP_SERVER_NAME,
-            url,
-        )));
+    if let (Some(url), Some(authorization)) = (
+        crate::team_mcp::server_url(),
+        crate::team_mcp::authorization_header(),
+    ) {
+        servers.push(authenticated_team_mcp_server(url, authorization));
     }
     if let Some((url, token)) = crate::org_mcp::server_config() {
         servers.push(acp::McpServer::Http(
@@ -360,6 +378,14 @@ pub async fn new_session_with_options(
     })?;
     tracing::info!(session_id = %resp.session_id.0, "echoagent: new_session OK");
     Ok(resp.session_id.0.to_string())
+}
+
+fn authenticated_team_mcp_server(url: String, authorization: String) -> acp::McpServer {
+    acp::McpServer::Http(
+        acp::McpServerHttp::new(crate::team_mcp::MCP_SERVER_NAME, url).headers(vec![
+            acp::HttpHeader::new(crate::team_mcp::AUTH_HEADER, authorization),
+        ]),
+    )
 }
 
 /// Resume an existing session by replaying its persisted history.
@@ -416,6 +442,48 @@ fn image_mime(path: &Path) -> Option<&'static str> {
     }
 }
 
+fn read_image_attachment(path: &Path) -> Result<Vec<u8>> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| anyhow!("attachment {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(anyhow!(
+            "image attachment must be a regular file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > MAX_IMAGE_ATTACHMENT_BYTES {
+        return Err(anyhow!("image attachment exceeds 20MB: {}", path.display()));
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    #[cfg(windows)]
+    options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    let file = options
+        .open(path)
+        .map_err(|error| anyhow!("read attachment {}: {error}", path.display()))?;
+    if !file
+        .metadata()
+        .map_err(|error| anyhow!("read attachment {}: {error}", path.display()))?
+        .is_file()
+    {
+        return Err(anyhow!(
+            "image attachment changed while opening: {}",
+            path.display()
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_IMAGE_ATTACHMENT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| anyhow!("read attachment {}: {error}", path.display()))?;
+    if bytes.len() as u64 > MAX_IMAGE_ATTACHMENT_BYTES {
+        return Err(anyhow!("image attachment exceeds 20MB: {}", path.display()));
+    }
+    Ok(bytes)
+}
+
 /// Build a typed ACP prompt. `displayText` and the original attachment paths
 /// live in content metadata so history replay can restore the exact user-facing
 /// bubble without exposing injected project/expert context.
@@ -429,13 +497,7 @@ fn build_prompt_blocks(
     for raw in attachments {
         let path = PathBuf::from(raw);
         if let Some(mime) = image_mime(&path) {
-            let metadata = std::fs::metadata(&path)
-                .map_err(|e| anyhow!("attachment {}: {e}", path.display()))?;
-            if metadata.len() > 20 * 1024 * 1024 {
-                return Err(anyhow!("image attachment exceeds 20MB: {}", path.display()));
-            }
-            let bytes = std::fs::read(&path)
-                .map_err(|e| anyhow!("read attachment {}: {e}", path.display()))?;
+            let bytes = read_image_attachment(&path)?;
             let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
             images.push(acp::ContentBlock::Image(
                 acp::ImageContent::new(encoded, mime).uri(Some(raw.clone())),
@@ -509,6 +571,23 @@ pub async fn set_session_model(tx: &AcpAgentTx, session_id: &str, model_id: &str
         anyhow!("set_session_model: {e:?}")
     })?;
     tracing::info!(session_id, model_id, "echoagent: set_session_model OK");
+    Ok(())
+}
+
+/// Set (never toggle) the authoritative ACP session mode. The Runtime emits a
+/// `CurrentModeUpdate` that the frontend consumes; callers must not infer the
+/// resulting mode from stale local state.
+pub async fn set_session_mode(tx: &AcpAgentTx, session_id: &str, enabled: bool) -> Result<()> {
+    let mode_id = if enabled { "plan" } else { "default" };
+    tracing::info!(session_id, mode_id, "echoagent: set_session_mode send");
+    let request = acp::SetSessionModeRequest::new(
+        acp::SessionId::new(session_id.to_string()),
+        acp::SessionModeId::new(mode_id),
+    );
+    let _: acp::SetSessionModeResponse = acp_send(request, tx).await.map_err(|error| {
+        tracing::error!(session_id, mode_id, error = ?error, "echoagent: set_session_mode FAILED");
+        anyhow!("set_session_mode: {error:?}")
+    })?;
     Ok(())
 }
 
@@ -620,6 +699,48 @@ mod tests {
     //! `cargo test --lib -- --ignored spawn_smoke`.
     use super::*;
 
+    #[test]
+    fn desktop_advertises_interactive_folder_trust_under_capability_meta() {
+        let value = serde_json::to_value(desktop_client_capabilities())
+            .expect("serialize client capabilities");
+        assert_eq!(
+            value["_meta"]["echo.agent/folderTrust"]["interactive"],
+            true
+        );
+        assert_eq!(value["terminal"], false);
+    }
+
+    #[test]
+    fn injected_team_mcp_server_carries_bearer_authorization() {
+        let value = serde_json::to_value(authenticated_team_mcp_server(
+            "http://127.0.0.1:1234/mcp".into(),
+            "Bearer test-token".into(),
+        ))
+        .expect("serialize MCP server");
+        let encoded = value.to_string();
+        assert!(encoded.contains(crate::team_mcp::AUTH_HEADER));
+        assert!(encoded.contains("Bearer test-token"));
+    }
+
+    #[tokio::test]
+    async fn set_session_mode_sends_idempotent_standard_acp_request() {
+        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let task = tokio::spawn(async move { set_session_mode(&client.tx, "s-1", true).await });
+        let message = agent.rx.recv().await.expect("set mode request");
+        let xai_acp_lib::AcpAgentMessage::SetSessionMode(arguments) = message else {
+            panic!("expected SetSessionMode request")
+        };
+        assert_eq!(arguments.request.session_id.0.as_ref(), "s-1");
+        assert_eq!(arguments.request.mode_id.0.as_ref(), "plan");
+        arguments
+            .response_tx
+            .send(Ok(acp::SetSessionModeResponse::default()))
+            .expect("set mode response");
+        task.await
+            .expect("set mode task")
+            .expect("set mode success");
+    }
+
     #[tokio::test]
     async fn prompt_rate_limit_does_not_resubmit_the_whole_user_turn() {
         let (client, mut agent) = xai_acp_lib::acp_channels();
@@ -705,6 +826,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn image_attachment_is_bounded_before_encoding() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let image = dir.path().join("large.png");
+        let file = std::fs::File::create(&image).expect("create image");
+        file.set_len(MAX_IMAGE_ATTACHMENT_BYTES + 1)
+            .expect("make sparse image");
+        let error = build_prompt_blocks("inspect", &[image.to_string_lossy().into_owned()], None)
+            .expect_err("oversized image must be rejected");
+        assert!(error.to_string().contains("exceeds 20MB"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn image_attachment_rejects_symbolic_links() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let target = dir.path().join("target.png");
+        let link = dir.path().join("link.png");
+        std::fs::write(&target, b"image").expect("write image");
+        symlink(&target, &link).expect("create link");
+        let error = build_prompt_blocks("inspect", &[link.to_string_lossy().into_owned()], None)
+            .expect_err("image symlink must be rejected");
+        assert!(error.to_string().contains("regular file"));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "spawns a real agent thread against ~/.echo-agent (~10s)"]
     async fn spawn_smoke_spawn_initialize_new_session() {
@@ -784,8 +932,18 @@ mod byok_isolation_tests {
             usable_base_url("http://127.0.0.1:11434/v1"),
             Some("http://127.0.0.1:11434/v1".to_string())
         );
-        for rejected in ["", "   ", "not-a-url", "ftp://example.com", "file:///etc/hosts"] {
-            assert_eq!(usable_base_url(rejected), None, "{rejected:?} must be rejected");
+        for rejected in [
+            "",
+            "   ",
+            "not-a-url",
+            "ftp://example.com",
+            "file:///etc/hosts",
+        ] {
+            assert_eq!(
+                usable_base_url(rejected),
+                None,
+                "{rejected:?} must be rejected"
+            );
         }
     }
 
@@ -820,7 +978,10 @@ mod byok_isolation_tests {
     #[test]
     fn providers_win_over_legacy_model_entries() {
         assert_eq!(
-            pick_byok_base_url(["https://provider.example.com"], ["https://legacy.example.com"]),
+            pick_byok_base_url(
+                ["https://provider.example.com"],
+                ["https://legacy.example.com"]
+            ),
             Some("https://provider.example.com".to_string())
         );
     }
@@ -828,7 +989,10 @@ mod byok_isolation_tests {
     #[test]
     fn skips_unusable_entries_before_settling_on_a_valid_one() {
         assert_eq!(
-            pick_byok_base_url(["", "not-a-url", "https://third.example.com"], std::iter::empty()),
+            pick_byok_base_url(
+                ["", "not-a-url", "https://third.example.com"],
+                std::iter::empty()
+            ),
             Some("https://third.example.com".to_string())
         );
     }

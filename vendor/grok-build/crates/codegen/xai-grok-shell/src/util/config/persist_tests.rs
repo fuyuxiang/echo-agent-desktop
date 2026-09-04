@@ -1294,3 +1294,162 @@ custom_unknown_key = 42
         "unmodeled (unknown to the schema) field must survive"
     );
 }
+
+/// The advisory transaction lock must span the read as well as the replace.
+/// Otherwise every thread below can read the same snapshot and only the last
+/// writer survives. Unrelated hand-written sections are part of the assertion
+/// because the desktop and Runtime own different slices of this same file.
+#[test]
+fn config_toml_transaction_serializes_concurrent_writers_and_preserves_fields() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[custom]
+keep = "hand-written"
+
+[models]
+default = "existing-model"
+"#,
+    )
+    .unwrap();
+
+    const WRITERS: usize = 12;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(WRITERS));
+    let handles = (0..WRITERS)
+        .map(|index| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                update_config_toml_at(&path, |root| {
+                    let writers = root
+                        .as_table_mut()
+                        .unwrap()
+                        .entry("concurrent_writers")
+                        .or_insert_with(|| TomlValue::Table(TomlMap::new()))
+                        .as_table_mut()
+                        .unwrap();
+                    writers.insert(index.to_string(), TomlValue::Integer(index as i64));
+                    // Widen the stale-snapshot window this test protects.
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    Ok(())
+                })
+                .unwrap();
+            })
+        })
+        .collect::<Vec<_>>();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let saved: TomlValue = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        saved
+            .get("concurrent_writers")
+            .and_then(TomlValue::as_table)
+            .map(TomlMap::len),
+        Some(WRITERS),
+        "no concurrent transaction may be lost"
+    );
+    assert_eq!(
+        saved
+            .get("custom")
+            .and_then(|value| value.get("keep"))
+            .and_then(TomlValue::as_str),
+        Some("hand-written")
+    );
+    assert_eq!(
+        saved
+            .get("models")
+            .and_then(|value| value.get("default"))
+            .and_then(TomlValue::as_str),
+        Some("existing-model")
+    );
+}
+
+#[test]
+fn config_toml_transaction_rejects_oversized_input_without_mutating_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.toml");
+    let original = vec![b'#'; MAX_CONFIG_FILE_BYTES as usize + 1];
+    std::fs::write(&path, &original).unwrap();
+
+    let error = update_config_toml_at(&path, |_| Ok(())).unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind),
+        Some(std::io::ErrorKind::InvalidData)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn config_toml_transaction_rejects_malformed_input_without_mutating_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.toml");
+    let original = b"[broken\nvalue = true\n";
+    std::fs::write(&path, original).unwrap();
+
+    let error = update_config_toml_at(&path, |_| Ok(())).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("refusing to overwrite unparseable"),
+        "unexpected error: {error:#}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[cfg(unix)]
+#[test]
+fn config_toml_transaction_rejects_symlink_without_touching_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("outside.toml");
+    let path = temp.path().join("config.toml");
+    std::fs::write(&target, "secret = true\n").unwrap();
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+
+    let error = update_config_toml_at(&path, |_| Ok(())).unwrap_err();
+    assert_eq!(
+        error
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind),
+        Some(std::io::ErrorKind::InvalidData)
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "secret = true\n");
+    assert!(
+        std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[test]
+fn atomic_config_write_rejects_non_file_destination() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.toml");
+    std::fs::create_dir(&path).unwrap();
+
+    let error = atomic_write_string(&path, "valid = true\n").unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(path.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_config_write_rejects_symlink_parent() {
+    let temp = tempfile::tempdir().unwrap();
+    let real_parent = temp.path().join("real-parent");
+    let linked_parent = temp.path().join("linked-parent");
+    std::fs::create_dir(&real_parent).unwrap();
+    std::os::unix::fs::symlink(&real_parent, &linked_parent).unwrap();
+
+    let error =
+        atomic_write_string(&linked_parent.join("config.toml"), "valid = true\n").unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert!(!real_parent.join("config.toml").exists());
+}

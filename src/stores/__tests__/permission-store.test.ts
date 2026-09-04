@@ -37,6 +37,13 @@ describe("permission-store", () => {
     expect(usePermissionStore.getState().queues["s1"].map((q) => q.requestId)).toEqual(["r1", "r2", "r3"]);
   });
 
+  it("重放同一 requestId 时不重复入队", () => {
+    const request = makePerm("r1", "s1");
+    usePermissionStore.getState().request(request);
+    usePermissionStore.getState().request(request);
+    expect(usePermissionStore.getState().queues.s1).toHaveLength(1);
+  });
+
   it("不同会话隔离", () => {
     const s = usePermissionStore.getState();
     s.request(makePerm("r1", "s1"));

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Search, X, Clock, FileText } from "lucide-react";
 import { useSessionsStore } from "@/stores/sessions-store";
-import { sessionSearch } from "@/lib/agent-client";
+import { agentListSessions, sessionSearch } from "@/lib/agent-client";
 import type { SearchHit, SessionSummary } from "@/lib/types";
 
 /**
@@ -14,9 +14,8 @@ import type { SearchHit, SessionSummary } from "@/lib/types";
  *    index (cross-workspace, matches message content + titles). Results show
  *    a snippet of the matched content.
  *
- * Selecting a hit: if it's a local title match we have the sessionId directly;
- * if it's a remote FTS hit we still call onSelect(sessionId) — the parent
- * decides whether to switch workspaces first.
+ * Selecting an uncached FTS hit hydrates its workspace summary first, so the
+ * parent always receives an authoritative cwd/title/model tuple.
  */
 export function SearchOverlay({
   open,
@@ -25,7 +24,7 @@ export function SearchOverlay({
 }: {
   open: boolean;
   onClose: () => void;
-  onSelect: (sessionId: string, cwd?: string) => void;
+  onSelect: (sessionId: string, cwd?: string) => void | Promise<void>;
 }) {
   // Two-section model: there is no single flat list anymore. For local title
   // matching we flatten whatever the sidebar currently holds (independent +
@@ -33,6 +32,7 @@ export function SearchOverlay({
   // EchoAgent FTS below, so unexpanded nodes remain searchable by content/title.
   const independent = useSessionsStore((s) => s.independent);
   const workspaceSessions = useSessionsStore((s) => s.workspaceSessions);
+  const homeCwd = useSessionsStore((s) => s.homeCwd);
   const sessions = useMemo<SessionSummary[]>(
     () => [...independent, ...Object.values(workspaceSessions).flat()],
     [independent, workspaceSessions],
@@ -40,22 +40,63 @@ export function SearchOverlay({
   const [query, setQuery] = useState("");
   const [remoteHits, setRemoteHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [openingId, setOpeningId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchGenerationRef = useRef(0);
+  const lifecycleGenerationRef = useRef(0);
+  const openingRef = useRef(false);
 
   useEffect(() => {
     if (open) {
+      const lifecycleGeneration = ++lifecycleGenerationRef.current;
+      previousFocusRef.current = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
       setQuery("");
       setRemoteHits([]);
+      setSearchError(null);
+      setOpeningId(null);
       const t = setTimeout(() => inputRef.current?.focus(), 0);
-      return () => clearTimeout(t);
+      return () => {
+        clearTimeout(t);
+        searchGenerationRef.current += 1;
+        if (lifecycleGenerationRef.current === lifecycleGeneration) {
+          lifecycleGenerationRef.current += 1;
+        }
+        openingRef.current = false;
+        previousFocusRef.current?.focus();
+      };
     }
   }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const focusable = Array.from(
+        modalRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -63,20 +104,25 @@ export function SearchOverlay({
 
   // Debounced remote search. Only kicks in for queries ≥ 2 chars.
   const runRemoteSearch = useCallback(async (q: string) => {
+    const generation = ++searchGenerationRef.current;
     if (q.trim().length < 2) {
       setRemoteHits([]);
+      setSearchError(null);
       setSearching(false);
       return;
     }
     setSearching(true);
+    setSearchError(null);
     try {
       const hits = await sessionSearch(q.trim(), undefined, 30);
-      setRemoteHits(hits);
-    } catch {
-      // EchoAgent FTS not available / index empty — fall back to local-only.
-      setRemoteHits([]);
+      if (searchGenerationRef.current === generation) setRemoteHits(hits);
+    } catch (error) {
+      if (searchGenerationRef.current === generation) {
+        setRemoteHits([]);
+        setSearchError(String(error).replace(/^Error:\s*/, ""));
+      }
     } finally {
-      setSearching(false);
+      if (searchGenerationRef.current === generation) setSearching(false);
     }
   }, []);
 
@@ -96,10 +142,47 @@ export function SearchOverlay({
     return sessions.filter((s) => s.title.toLowerCase().includes(q));
   })();
 
-  // Dedupe: remote hits whose sessionId already appears in localMatches are
-  // shown only once (in the remote section, which has the snippet).
-  const localIds = new Set(localMatches.map((s) => s.sessionId));
-  const remoteOnly = remoteHits.filter((h) => !localIds.has(h.sessionId));
+  // Prefer the FTS result for duplicate ids because it carries the matching
+  // message snippet; keep title-only local rows for ids FTS did not return.
+  const remoteIds = new Set(remoteHits.map((hit) => hit.sessionId));
+  const localOnly = localMatches.filter((session) => !remoteIds.has(session.sessionId));
+
+  const openSession = async (sessionId: string, cwd?: string) => {
+    if (openingRef.current) return;
+    openingRef.current = true;
+    const lifecycleGeneration = lifecycleGenerationRef.current;
+    setOpeningId(sessionId);
+    setSearchError(null);
+    try {
+      let summary = sessions.find((item) => item.sessionId === sessionId);
+      if (!summary) {
+        if (!cwd) throw new Error("检索结果缺少工作区信息，无法打开");
+        const hydrated = await agentListSessions(cwd, true);
+        if (lifecycleGenerationRef.current !== lifecycleGeneration) return;
+        const store = useSessionsStore.getState();
+        if (cwd === homeCwd) store.setIndependent(hydrated);
+        else store.setWorkspaceSessions(cwd, hydrated);
+        summary = hydrated.find((item) => item.sessionId === sessionId);
+      }
+      if (!summary) {
+        throw new Error("会话不存在、已归档，或当前无权访问");
+      }
+      if (summary.archived) {
+        throw new Error("该会话已归档，请先在侧栏的归档筛选中恢复");
+      }
+      await onSelect(summary.sessionId, summary.cwd);
+      if (lifecycleGenerationRef.current === lifecycleGeneration) onClose();
+    } catch (error) {
+      if (lifecycleGenerationRef.current === lifecycleGeneration) {
+        setSearchError(String(error).replace(/^Error:\s*/, ""));
+      }
+    } finally {
+      if (lifecycleGenerationRef.current === lifecycleGeneration) {
+        openingRef.current = false;
+        setOpeningId(null);
+      }
+    }
+  };
 
   if (!open) return null;
 
@@ -113,18 +196,19 @@ export function SearchOverlay({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="conversation-search-modal">
+      <div className="conversation-search-modal" ref={modalRef}>
         <div className="conversation-search-modal__input-wrapper">
           <Search size={16} strokeWidth={1.75} className="conversation-search-modal__icon" />
           <input
             ref={inputRef}
             className="conversation-search-modal__input"
             placeholder="搜索会话标题或内容…"
+            aria-label="搜索会话标题或内容"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
           {searching && (
-            <span className="conversation-search-modal__spinner">搜索中…</span>
+            <span className="conversation-search-modal__spinner" role="status" aria-live="polite">搜索中…</span>
           )}
           <button
             className="conversation-search-modal__close"
@@ -137,21 +221,27 @@ export function SearchOverlay({
         </div>
 
         <div className="conversation-search-modal__body">
-          {localMatches.length > 0 && (
+          {searchError && (
+            <div className="conversation-search-modal__empty" role="alert">
+              <div>搜索或打开失败：{searchError}</div>
+              {query.trim().length >= 2 && (
+                <button type="button" onClick={() => void runRemoteSearch(query)}>重试搜索</button>
+              )}
+            </div>
+          )}
+          {localOnly.length > 0 && (
             <>
               <div className="conversation-search-modal__count">
-                本地会话 ({localMatches.length})
+                本地会话 ({localOnly.length})
               </div>
               <ul className="conversation-search-modal__list">
-                {localMatches.slice(0, 30).map((s) => (
+                {localOnly.slice(0, 30).map((s) => (
                   <li key={s.sessionId}>
                     <button
                       type="button"
                       className="conversation-search-modal__item"
-                      onClick={() => {
-                        onSelect(s.sessionId, s.cwd);
-                        onClose();
-                      }}
+                      onClick={() => void openSession(s.sessionId, s.cwd)}
+                      disabled={openingId !== null}
                       title={s.title}
                     >
                       <Clock
@@ -169,21 +259,19 @@ export function SearchOverlay({
             </>
           )}
 
-          {remoteOnly.length > 0 && (
+          {remoteHits.length > 0 && (
             <>
               <div className="conversation-search-modal__count">
-                全文检索结果 ({remoteOnly.length})
+                全文检索结果 ({remoteHits.length})
               </div>
               <ul className="conversation-search-modal__list">
-                {remoteOnly.map((h) => (
+                {remoteHits.map((h) => (
                   <li key={h.sessionId}>
                     <button
                       type="button"
                       className="conversation-search-modal__item conversation-search-modal__item--remote"
-                      onClick={() => {
-                        onSelect(h.sessionId, h.cwd);
-                        onClose();
-                      }}
+                      onClick={() => void openSession(h.sessionId, h.cwd)}
+                      disabled={openingId !== null}
                       title={h.cwd ?? h.sessionId}
                     >
                       <FileText
@@ -196,11 +284,9 @@ export function SearchOverlay({
                           {h.title || h.sessionId.slice(0, 8)}
                         </div>
                         {h.snippet && (
-                          <div
-                            className="conversation-search-modal__item-snippet"
-                            // EchoAgent FTS5 returns plain-text snippets; safe to render.
-                            dangerouslySetInnerHTML={{ __html: escapeHtml(h.snippet) }}
-                          />
+                          <div className="conversation-search-modal__item-snippet">
+                            {h.snippet}
+                          </div>
                         )}
                         {h.cwd && (
                           <div className="conversation-search-modal__item-cwd">
@@ -216,16 +302,18 @@ export function SearchOverlay({
           )}
 
           {!searching &&
-            localMatches.length === 0 &&
-            remoteOnly.length === 0 &&
+            !searchError &&
+            localOnly.length === 0 &&
+            remoteHits.length === 0 &&
             query.trim().length > 0 && (
               <div className="conversation-search-modal__empty">
                 没有匹配的会话
               </div>
             )}
           {!searching &&
-            localMatches.length === 0 &&
-            remoteOnly.length === 0 &&
+            !searchError &&
+            localOnly.length === 0 &&
+            remoteHits.length === 0 &&
             query.trim().length === 0 && (
               <div className="conversation-search-modal__count">
                 输入关键词搜索会话内容（EchoAgent FTS5 全文索引）
@@ -235,12 +323,4 @@ export function SearchOverlay({
       </div>
     </div>
   );
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }

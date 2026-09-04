@@ -39,6 +39,7 @@ import type { AgentEntry } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
 import { useStickToBottom } from "./use-stick-to-bottom";
+import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
 
 /** Center chat column: scrollable message list + composer pinned at bottom. */
 export function ChatView({
@@ -48,6 +49,7 @@ export function ChatView({
   models,
   onModelChange,
   cwd,
+  newSessionTargetCwd,
   workspaces,
   onSelectWorkspace,
   onRewound,
@@ -58,22 +60,25 @@ export function ChatView({
   apiReady = true,
   setupHint,
   onOpenSettings,
+  cancelling = false,
   commandRefreshKey,
   onClientSlashCommand,
   title,
 }: {
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
-  onCancel: () => void;
+  onCancel: () => boolean | void | Promise<boolean | void>;
   modelId?: string;
   models?: ModelOption[];
   onModelChange?: (id: string) => void;
   cwd?: string;
+  /** Target chosen for a future session; never use it for active-session IO. */
+  newSessionTargetCwd?: string;
   workspaces?: WorkspaceInfo[];
   onSelectWorkspace?: (cwd: string) => void;
   /** Rewind rewrote backend history — reload the transcript. */
-  onRewound?: () => void;
+  onRewound?: (sessionId: string) => void | Promise<void>;
   /** Fork created a new session id — navigate to it. */
-  onForked?: (newSessionId: string) => void;
+  onForked?: (newSessionId: string, sourceSessionId: string, sourceCwd?: string) => void;
   /** Surface transient feedback from the rewind/fork toolbar. */
   onToast?: (msg: string) => void;
   onSelectExpert?: (agent: AgentEntry) => void;
@@ -82,6 +87,7 @@ export function ChatView({
   apiReady?: boolean;
   setupHint?: string;
   onOpenSettings?: () => void;
+  cancelling?: boolean;
   commandRefreshKey?: number;
   onClientSlashCommand?: (
     invocation: SlashCommandInvocation,
@@ -107,12 +113,22 @@ export function ChatView({
   // pause/yield(对齐 EchoAgent session:requestYield):软暂停,保留会话上下文。
   const [yieldStore, setYieldStore] = useState<Record<string, ReturnType<typeof createYieldStore>>["k"]>(() => createYieldStore());
   const yielded = sessionId ? isYielded(yieldStore, sessionId) : false;
-  const handlePause = useCallback(() => {
+  const handlePause = useCallback(async () => {
     if (!sessionId || !streaming) return;
-    setYieldStore((s) => requestYield(s, sessionId));
+    const targetSessionId = sessionId;
+    setYieldStore((s) => requestYield(s, targetSessionId));
     // EchoAgent 无原生 yield,用 cancel 软停止(保留会话);yield 状态在 complete 后确认。
-    onCancel();
-  }, [sessionId, streaming, onCancel]);
+    try {
+      const accepted = await onCancel();
+      if (accepted === false) {
+        setYieldStore((state) => clearYield(state, targetSessionId));
+        onToast?.("暂停失败，Agent 仍在运行");
+      }
+    } catch {
+      setYieldStore((state) => clearYield(state, targetSessionId));
+      onToast?.("暂停失败，Agent 仍在运行");
+    }
+  }, [sessionId, streaming, onCancel, onToast]);
   const handleResume = useCallback(() => {
     if (!sessionId) return;
     setYieldStore((s) => clearYield(s, sessionId));
@@ -162,6 +178,7 @@ export function ChatView({
   const [retrying, setRetrying] = useState(false);
   const handleRetry = useCallback(async () => {
     if (!sessionId || streaming || retrying) return;
+    const targetSessionId = sessionId;
     // Find the last user message text.
     const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
     if (!lastUserMsg) {
@@ -179,7 +196,7 @@ export function ChatView({
     try {
       // Rewind the conversation to the last user prompt (conversation only —
       // don't touch files), which drops the assistant turn we're regenerating.
-      const points = await rewindPoints(sessionId);
+      const points = await rewindPoints(targetSessionId);
       if (points.length === 0) {
         // Nothing to rewind — bailing here is important: without a rewind we
         // would just append a duplicate user turn on top of the old one.
@@ -191,9 +208,15 @@ export function ChatView({
       const lastPoint = points.reduce((a, b) =>
         b.promptIndex > a.promptIndex ? b : a,
       );
-      await rewindExecute(sessionId, lastPoint.promptIndex, "conversation", true);
-      onRewound?.();
-      onSend(userText || "请分析附件。", userAttachments);
+      await rewindExecute(targetSessionId, lastPoint.promptIndex, "conversation", true);
+      await onRewound?.(targetSessionId);
+      // Session selection may change while rewind/reload is pending. Do not
+      // route the old prompt through the newly focused conversation.
+      if (useSessionStore.getState().sessionId !== targetSessionId) {
+        onToast?.("已回溯原会话；因你已切换会话，未自动重发");
+        return;
+      }
+      await onSend(userText || "请分析附件。", userAttachments);
     } catch (e) {
       onToast?.(`重试失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
@@ -269,6 +292,7 @@ export function ChatView({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        if (isGlobalShortcutBlocked()) return;
         if (messages.length > 0) {
           e.preventDefault();
           setFindOpen(true);
@@ -316,7 +340,7 @@ export function ChatView({
             {cwd && workspaces && onSelectWorkspace && (
               <div className="chatview__workspace-bar">
                 <WorkspacePicker
-                  cwd={cwd}
+                  cwd={newSessionTargetCwd ?? cwd}
                   workspaces={workspaces}
                   onSelectWorkspace={onSelectWorkspace}
                 />
@@ -619,10 +643,11 @@ export function ChatView({
                 : undefined
             }
             onCancel={onCancel}
+            cancelling={cancelling}
             modelId={modelId}
             models={models}
             onModelChange={onModelChange}
-            cwd={cwd}
+            cwd={newSessionTargetCwd ?? cwd}
             workspaces={workspaces}
             onSelectWorkspace={onSelectWorkspace}
             showDisclaimer

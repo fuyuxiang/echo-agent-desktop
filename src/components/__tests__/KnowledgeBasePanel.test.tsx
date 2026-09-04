@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
-// Mock Tauri dialog + tauri-kb-reader,使「添加本地文件夹」可在 vitest 下测试。
-const openDialog = vi.fn();
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: (...a: unknown[]) => openDialog(...a) }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+// Mock native filesystem picker + tauri-kb-reader so the secure backend-owned
+// selection flow remains testable outside Tauri.
+const invokeMock = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invokeMock(...args) }));
 vi.mock("@/lib/tauri-kb-reader", () => ({
   isTauriAvailable: () => true,
   createTauriDirectoryReader: () => ({
@@ -20,11 +21,14 @@ describe("KnowledgeBasePanel", () => {
   beforeEach(() => {
     resetKbRegistry();
     localStorage.removeItem("echoagent.knowledge-sources.v1");
-    openDialog.mockReset();
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
   });
 
-  it("无 provider 显示未配置", () => {
-    render(<KnowledgeBasePanel />);
+  it("无 provider 显示未配置", async () => {
+    await act(async () => {
+      render(<KnowledgeBasePanel />);
+    });
     expect(screen.getByText("未配置知识源")).toBeInTheDocument();
   });
 
@@ -76,8 +80,9 @@ describe("KnowledgeBasePanel", () => {
     await waitFor(() => expect(screen.getByText("无匹配结果")).toBeInTheDocument());
   });
 
-  it("点击结果回调 onOpen", async () => {
+  it("搜索结果是键盘可达的原生按钮", async () => {
     const onOpen = vi.fn();
+    const user = userEvent.setup();
     registerKbProvider({
       id: "docs",
       label: "文档库",
@@ -88,13 +93,68 @@ describe("KnowledgeBasePanel", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "搜索知识库" }), {
       target: { value: "T" },
     });
-    await waitFor(() => expect(screen.getByText("T")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("T"));
+    const result = await screen.findByRole("button", { name: "打开知识条目：T" });
+    result.focus();
+    expect(result).toHaveFocus();
+    await user.keyboard("{Enter}");
     expect(onOpen).toHaveBeenCalledWith("9", "https://x/9");
   });
 
+  it("部分 provider 失败时保留可用结果并给出明确反馈", async () => {
+    registerKbProvider({
+      id: "bad",
+      label: "云端文档",
+      isEnabled: () => true,
+      list: () => Promise.reject(new Error("连接超时")),
+    });
+    registerKbProvider({
+      id: "good",
+      label: "本地文档",
+      isEnabled: () => true,
+      list: () => [{ id: "ok", title: "可用结果" }],
+    });
+    render(<KnowledgeBasePanel />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索知识库" }), {
+      target: { value: "文档" },
+    });
+
+    expect(await screen.findByRole("button", { name: "打开知识条目：可用结果" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("部分知识源搜索失败");
+    expect(screen.getByRole("alert")).toHaveTextContent("云端文档：连接超时");
+    expect(screen.queryByText("无匹配结果")).toBeNull();
+    expect(screen.getByRole("button", { name: "重试搜索" })).toBeInTheDocument();
+  });
+
+  it("全部 provider 失败时显示可重试错误，重试成功后恢复结果", async () => {
+    let attempts = 0;
+    registerKbProvider({
+      id: "flaky",
+      label: "临时离线源",
+      isEnabled: () => true,
+      list: () => {
+        attempts += 1;
+        if (attempts === 1) return Promise.reject(new Error("索引暂不可用"));
+        return [{ id: "recovered", title: "已恢复文档" }];
+      },
+    });
+    render(<KnowledgeBasePanel />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索知识库" }), {
+      target: { value: "文档" },
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("所有知识源搜索失败");
+    expect(screen.queryByText("无匹配结果")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "重试搜索" }));
+
+    expect(await screen.findByRole("button", { name: "打开知识条目：已恢复文档" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
   it("「添加本地文件夹」弹出目录选择并注册稳定 provider", async () => {
-    openDialog.mockResolvedValue("/my/notes");
+    invokeMock.mockImplementation((command: string) =>
+      Promise.resolve(command === "filesystem_pick_directory" ? "/my/notes" : undefined));
     const before = listKbProviders().length;
     render(<KnowledgeBasePanel onToast={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /添加本地文件夹/ }));
@@ -102,15 +162,16 @@ describe("KnowledgeBasePanel", () => {
     expect(listKbProviders()).toEqual([
       expect.objectContaining({ id: expect.stringMatching(/^local-/), label: "本地：notes" }),
     ]);
-    expect(openDialog).toHaveBeenCalledWith({ directory: true, multiple: false });
+    expect(invokeMock).toHaveBeenCalledWith("filesystem_pick_directory");
   });
 
   it("取消选择(返回 null)不注册 provider", async () => {
-    openDialog.mockResolvedValue(null);
+    invokeMock.mockImplementation((command: string) =>
+      Promise.resolve(command === "filesystem_pick_directory" ? null : undefined));
     const before = listKbProviders().length;
     render(<KnowledgeBasePanel onToast={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: /添加本地文件夹/ }));
-    await waitFor(() => expect(openDialog).toHaveBeenCalled());
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("filesystem_pick_directory"));
     expect(listKbProviders().length).toBe(before);
   });
 
@@ -146,8 +207,10 @@ describe("KnowledgeBasePanel", () => {
     expect(onToast).toHaveBeenCalledWith(expect.stringContaining("5 项"));
   });
 
-  it("无知识源时不显示「刷新索引」按钮", () => {
-    render(<KnowledgeBasePanel onToast={vi.fn()} />);
+  it("无知识源时不显示「刷新索引」按钮", async () => {
+    await act(async () => {
+      render(<KnowledgeBasePanel onToast={vi.fn()} />);
+    });
     expect(screen.queryByRole("button", { name: /刷新索引/ })).toBeNull();
   });
 

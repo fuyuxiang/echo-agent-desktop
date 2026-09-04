@@ -58,6 +58,9 @@ pub struct AskUserQuestionExtRequest {
     pub questions: Vec<Question>,
     /// Controls whether the client shows plan-mode-only actions.
     pub mode: AskUserQuestionMode,
+    /// Whole-questionnaire response budget. `None` means no response timer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
 }
 
 /// Accepts both `"value"` (old wire format) and `["value"]` (new wire format)
@@ -180,6 +183,8 @@ pub enum UserQuestionError {
 pub struct UserQuestionRequest {
     pub tool_call_id: String,
     pub questions: Vec<Question>,
+    /// Exact response budget used by the tool's blocking wait.
+    pub timeout_secs: Option<u64>,
     #[educe(Debug(ignore))]
     pub result_tx: oneshot::Sender<UserQuestionResult>,
 }
@@ -313,12 +318,14 @@ mod tests {
             tool_call_id: "tc-1".to_string(),
             questions: vec![],
             mode: AskUserQuestionMode::Plan,
+            timeout_secs: Some(45),
         };
         let json = serde_json::to_value(&req).unwrap();
         // camelCase field names
         assert!(json.get("sessionId").is_some());
         assert!(json.get("toolCallId").is_some());
         assert_eq!(json["mode"], "plan");
+        assert_eq!(json["timeoutSecs"], 45);
     }
 
     #[test]
@@ -328,6 +335,7 @@ mod tests {
             tool_call_id: "tc-1".to_string(),
             questions: sample_questions(),
             mode: AskUserQuestionMode::Default,
+            timeout_secs: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: AskUserQuestionExtRequest = serde_json::from_str(&json).unwrap();
@@ -335,6 +343,7 @@ mod tests {
         assert_eq!(back.tool_call_id, "tc-1");
         assert_eq!(back.questions.len(), 2);
         assert_eq!(back.mode, AskUserQuestionMode::Default);
+        assert_eq!(back.timeout_secs, None);
     }
 
     // -- AskUserQuestionExtResponse serde --

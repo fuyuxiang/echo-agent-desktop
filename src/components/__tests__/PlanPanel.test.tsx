@@ -22,12 +22,17 @@ vi.mock("@/stores/session-store", () => ({
         ],
       },
       planMode: false,
+      planApproval: null,
       setPlan: mocks.setPlan,
       setPlanMode: vi.fn(),
+      dismissPlanApproval: vi.fn(),
     }),
 }));
 
-vi.mock("@/lib/agent-client", () => ({ togglePlanMode: mocks.togglePlanMode }));
+vi.mock("@/lib/agent-client", () => ({
+  setPlanMode: mocks.togglePlanMode,
+  agentResolvePlanApproval: vi.fn(),
+}));
 
 import { PlanPanel } from "../PlanPanel";
 

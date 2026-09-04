@@ -11,7 +11,7 @@
  *  - 文件/记忆变更徽章：标记哪些步骤产生了文件改动或记忆写入。
  *  - 三种模式按钮：仅对话 / 仅文件 / 全量。
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   rewindExecute,
   rewindPoints,
@@ -23,6 +23,8 @@ import {
   ChevronDownIcon,
   GitBranchIcon,
 } from "@/foundation/components/Icon/icons";
+import { useModalFocus } from "@/lib/use-modal-focus";
+import { useAppDialog } from "./AppDialog";
 
 /** Rewind mode options matching EchoAgent's echo.agent/rewind/execute mode param.
  *  NOTE: EchoAgent's RewindMode enum only has All/ConversationOnly/FilesOnly —
@@ -45,8 +47,8 @@ const MODE_TITLES: Record<RewindMode, string> = {
 interface RewindBarProps {
   sessionId: string;
   cwd?: string;
-  onForked?: (newSessionId: string) => void;
-  onRewound?: () => void;
+  onForked?: (newSessionId: string, sourceSessionId: string, sourceCwd?: string) => void;
+  onRewound?: (sessionId: string) => void | Promise<void>;
   onToast?: (msg: string) => void;
 }
 
@@ -60,67 +62,118 @@ export function RewindBar({
   const [open, setOpen] = useState(false);
   const [points, setPoints] = useState<RewindPoint[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** Currently selected mode for the next rewind action. */
   const [selectedMode, setSelectedMode] = useState<RewindMode>("all");
+  const activeSessionRef = useRef(sessionId);
+  const requestGenerationRef = useRef(0);
+  const dialogId = useId();
+  const dialogTitleId = useId();
+  const dialogRef = useModalFocus<HTMLDivElement>(open, () => setOpen(false));
+  const { requestConfirmation, dialog } = useAppDialog(sessionId);
 
-  const loadPoints = async () => {
+  const loadPoints = useCallback(async () => {
+    const targetSessionId = sessionId;
+    const generation = ++requestGenerationRef.current;
     setLoading(true);
+    setLoadError(null);
     try {
-      setPoints(await rewindPoints(sessionId));
-    } catch {
-      setPoints([]);
+      const next = await rewindPoints(targetSessionId);
+      if (
+        activeSessionRef.current === targetSessionId
+        && requestGenerationRef.current === generation
+      ) {
+        setPoints(next);
+      }
+    } catch (error) {
+      if (
+        activeSessionRef.current === targetSessionId
+        && requestGenerationRef.current === generation
+      ) {
+        setPoints([]);
+        setLoadError(String(error).replace(/^Error:\s*/, ""));
+      }
     } finally {
-      setLoading(false);
+      if (
+        activeSessionRef.current === targetSessionId
+        && requestGenerationRef.current === generation
+      ) {
+        setLoading(false);
+      }
     }
-  };
+  }, [sessionId]);
+
+  useLayoutEffect(() => {
+    activeSessionRef.current = sessionId;
+    requestGenerationRef.current += 1;
+    setOpen(false);
+    setPoints([]);
+    setLoadError(null);
+    setLoading(false);
+    setBusy(false);
+    setSelectedMode("all");
+  }, [sessionId]);
 
   useEffect(() => {
-    if (open && points.length === 0) loadPoints();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, sessionId]);
+    if (open && points.length === 0 && !loading && !loadError) void loadPoints();
+  }, [open, points.length, loading, loadError, loadPoints]);
 
   const handleRewind = async (idx: number) => {
+    const targetSessionId = sessionId;
+    const targetMode = selectedMode;
     setBusy(true);
     try {
-      await rewindExecute(sessionId, idx, selectedMode, true);
-      const label = MODE_LABELS[selectedMode];
+      await rewindExecute(targetSessionId, idx, targetMode, true);
+      const label = MODE_LABELS[targetMode];
       onToast?.(`已回溯（${label}）`);
-      onRewound?.();
-      setOpen(false);
+      await onRewound?.(targetSessionId);
+      if (activeSessionRef.current === targetSessionId) setOpen(false);
     } catch (e) {
       onToast?.(`回溯失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
-      setBusy(false);
+      if (activeSessionRef.current === targetSessionId) setBusy(false);
     }
   };
 
-  const handleFork = async () => {
-    if (!confirm("分叉此会话？会复制到新会话，原会话保留。")) return;
-    setBusy(true);
-    try {
-      const newId = await sessionFork(sessionId, cwd);
-      onToast?.(`已分叉到新会话 ${newId.slice(0, 8)}`);
-      onForked?.(newId);
-    } catch (e) {
-      onToast?.(`分叉失败：${String(e).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setBusy(false);
-    }
+  const handleFork = () => {
+    const targetSessionId = sessionId;
+    const targetCwd = cwd;
+    requestConfirmation({
+      title: "分叉此会话？",
+      description: "当前会话将复制为一个新会话，原会话与其内容会完整保留。",
+      confirmLabel: "创建分叉",
+      action: async () => {
+        setBusy(true);
+        try {
+          const newId = await sessionFork(targetSessionId, targetCwd);
+          onToast?.(`已分叉到新会话 ${newId.slice(0, 8)}`);
+          onForked?.(newId, targetSessionId, targetCwd);
+        } finally {
+          if (activeSessionRef.current === targetSessionId) setBusy(false);
+        }
+      },
+      onError: (error) => onToast?.(`分叉失败：${String(error).replace(/^Error:\s*/, "")}`),
+    });
   };
 
   return (
     <div className="rewind-bar">
       <button
+        type="button"
         className="rewind-bar__btn"
         onClick={() => setOpen((v) => !v)}
         disabled={busy}
         title="回溯到历史某一步"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={dialogId}
       >
         <ClockIcon size="sm" /> 回溯
         <ChevronDownIcon size="sm" />
       </button>
       <button
+        type="button"
         className="rewind-bar__btn"
         onClick={handleFork}
         disabled={busy}
@@ -130,14 +183,23 @@ export function RewindBar({
       </button>
 
       {open && (
-        <div className="rewind-bar__dropdown rewind-bar__dropdown--timeline">
+        <div
+          ref={dialogRef}
+          id={dialogId}
+          className="rewind-bar__dropdown rewind-bar__dropdown--timeline"
+          role="dialog"
+          aria-labelledby={dialogTitleId}
+          tabIndex={-1}
+        >
           {/* Header with refresh */}
           <div className="rewind-bar__header">
-            <span>回溯时间线</span>
+            <span id={dialogTitleId}>回溯时间线</span>
             <button
+              type="button"
               className="rewind-bar__refresh"
               onClick={loadPoints}
               disabled={loading}
+              aria-label="刷新回溯点"
             >
               {loading ? "加载中…" : "刷新"}
             </button>
@@ -147,6 +209,7 @@ export function RewindBar({
           <div className="rewind-bar__modes">
             {(Object.keys(MODE_LABELS) as RewindMode[]).map((mode) => (
               <button
+                type="button"
                 key={mode}
                 className={
                   "rewind-bar__mode-btn" +
@@ -154,6 +217,8 @@ export function RewindBar({
                 }
                 onClick={() => setSelectedMode(mode)}
                 title={MODE_TITLES[mode]}
+                aria-pressed={selectedMode === mode}
+                data-modal-initial-focus={selectedMode === mode ? "" : undefined}
               >
                 {MODE_LABELS[mode]}
               </button>
@@ -162,7 +227,13 @@ export function RewindBar({
 
           {/* Timeline list */}
           {loading && <div className="rewind-bar__empty">加载中…</div>}
-          {!loading && points.length === 0 && (
+          {!loading && loadError && (
+            <div className="rewind-bar__empty" role="alert">
+              <div>加载回溯点失败：{loadError}</div>
+              <button type="button" onClick={() => void loadPoints()}>重试</button>
+            </div>
+          )}
+          {!loading && !loadError && points.length === 0 && (
             <div className="rewind-bar__empty">无回溯点（会话刚创建）</div>
           )}
           <ul className="rewind-bar__timeline">
@@ -218,6 +289,7 @@ export function RewindBar({
 
                   {/* Rewind action button */}
                   <button
+                    type="button"
                     className="rewind-bar__timeline-action"
                     onClick={() => handleRewind(p.promptIndex)}
                     disabled={busy}
@@ -230,6 +302,7 @@ export function RewindBar({
           </ul>
         </div>
       )}
+      {dialog}
     </div>
   );
 }

@@ -22,11 +22,19 @@ export interface ZipEntry {
   compressedSize: number;
 }
 
+const MAX_ZIP_INPUT_BYTES = 8 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 512;
+const MAX_ENTRY_OUTPUT_BYTES = 4 * 1024 * 1024;
+const MAX_TOTAL_OUTPUT_BYTES = 16 * 1024 * 1024;
+
 /**
  * 列出 zip 字节里的所有 entry(解析本地文件头)。
  * 每个本地文件头签名 0x04034b50(PK\x03\x04)。
  */
 export function listZipEntries(data: Uint8Array): ZipEntry[] {
+  if (data.byteLength > MAX_ZIP_INPUT_BYTES) {
+    throw new Error("zip input exceeds 8MB preview limit");
+  }
   const entries: ZipEntry[] = [];
   let off = 0;
   const dv = makeDataView(data);
@@ -34,28 +42,63 @@ export function listZipEntries(data: Uint8Array): ZipEntry[] {
     const sig = dv.getUint32(off, true);
     if (sig !== 0x04034b50) break; // 不再是本地文件头
     if (off + 30 > data.length) break;
+    const flags = dv.getUint16(off + 6, true);
+    if ((flags & 0x1) !== 0) throw new Error("encrypted zip entries are unsupported");
     const method = dv.getUint16(off + 8, true);
     const compressedSize = dv.getUint32(off + 18, true);
     const nameLen = dv.getUint16(off + 26, true);
     const extraLen = dv.getUint16(off + 28, true);
     const nameStart = off + 30;
     const nameEnd = nameStart + nameLen;
-    if (nameEnd > data.length) break;
-    const name = utf8Decode(data.subarray(nameStart, nameEnd));
     const dataOffset = nameEnd + extraLen;
+    if (nameEnd > data.length || dataOffset > data.length) {
+      throw new Error("zip entry header exceeds archive bounds");
+    }
+    const name = utf8Decode(data.subarray(nameStart, nameEnd));
+    const dataEnd = dataOffset + compressedSize;
+    if (!Number.isSafeInteger(dataEnd) || dataEnd > data.length) {
+      throw new Error("zip entry data exceeds archive bounds");
+    }
+    if (
+      name.length > 4_096
+      || name.includes("\0")
+      || name.startsWith("/")
+      || name.replace(/\\/g, "/").split("/").includes("..")
+    ) {
+      throw new Error("zip entry name is unsafe");
+    }
+    if (entries.length >= MAX_ZIP_ENTRIES) {
+      throw new Error("zip contains too many entries");
+    }
     entries.push({ name, method, dataOffset, compressedSize });
     // 跳到下一个 entry(若有 data descriptor 且 compressedSize 为 0,无法定位 → 停)。
     if (compressedSize === 0) break;
-    off = dataOffset + compressedSize;
+    off = dataEnd;
   }
   return entries;
 }
 
 /** 解压单个 entry 的数据(STORE 或 DEFLATE)。 */
-export function extractEntry(data: Uint8Array, entry: ZipEntry): Uint8Array {
+export function extractEntry(
+  data: Uint8Array,
+  entry: ZipEntry,
+  maxOutputBytes = MAX_ENTRY_OUTPUT_BYTES,
+): Uint8Array {
+  if (
+    entry.dataOffset < 0
+    || entry.compressedSize < 0
+    || entry.dataOffset + entry.compressedSize > data.length
+  ) {
+    throw new Error("zip entry data exceeds archive bounds");
+  }
   const compressed = data.subarray(entry.dataOffset, entry.dataOffset + entry.compressedSize);
-  if (entry.method === 0) return compressed; // STORE
-  if (entry.method === 8) return inflate(compressed); // DEFLATE
+  if (entry.method === 0) {
+    if (compressed.byteLength > maxOutputBytes) {
+      throw new Error("zip entry exceeds preview output limit");
+    }
+    return compressed;
+  }
+  if (entry.method === 8) return inflate(compressed, maxOutputBytes); // DEFLATE
   throw new Error(`unsupported zip method: ${entry.method}`);
 }
 
@@ -64,10 +107,15 @@ export function extractEntry(data: Uint8Array, entry: ZipEntry): Uint8Array {
  * 出错的 entry 被跳过(返回有效部分)。
  */
 export function readZip(data: Uint8Array): Record<string, Uint8Array> {
-  const out: Record<string, Uint8Array> = {};
+  const out = Object.create(null) as Record<string, Uint8Array>;
+  let totalOutputBytes = 0;
   for (const e of listZipEntries(data)) {
     try {
-      out[e.name] = extractEntry(data, e);
+      const remaining = MAX_TOTAL_OUTPUT_BYTES - totalOutputBytes;
+      if (remaining <= 0) break;
+      const extracted = extractEntry(data, e, Math.min(MAX_ENTRY_OUTPUT_BYTES, remaining));
+      totalOutputBytes += extracted.byteLength;
+      out[e.name] = extracted;
     } catch {
       /* 跳过解压失败的 entry */
     }
@@ -112,8 +160,17 @@ function makeDataView(bytes: Uint8Array): DataView {
 
 function base64ToBytes(base64: string): Uint8Array {
   // 浏览器/atob 可用;Node 也有。清理 data: 前缀与空白。
+  if (base64.length > Math.ceil(MAX_ZIP_INPUT_BYTES * 1.5) + 4_096) {
+    throw new Error("base64 zip input exceeds preview limit");
+  }
   const clean = base64.replace(/^data:[^;]*;base64,/, "").replace(/\s/g, "");
+  if (clean.length > Math.ceil(MAX_ZIP_INPUT_BYTES * 4 / 3) + 4) {
+    throw new Error("base64 zip input exceeds preview limit");
+  }
   const bin = atob(clean);
+  if (bin.length > MAX_ZIP_INPUT_BYTES) {
+    throw new Error("zip input exceeds 8MB preview limit");
+  }
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
@@ -122,7 +179,7 @@ function base64ToBytes(base64: string): Uint8Array {
 // ---------- 迷你 RAW INFLATE(DEFLATE 解压)----------
 // 实现 RFC 1951:bit-stream + 固定/动态 Huffman + LZ77 回引。完整覆盖,无外部依赖。
 
-function inflate(data: Uint8Array): Uint8Array {
+function inflate(data: Uint8Array, maxOutputBytes: number): Uint8Array {
   const bs = new BitStream(data);
   const out: number[] = [];
   // 预填 32K 窗口足够(LZ77 距离 ≤ 32768)。
@@ -135,13 +192,16 @@ function inflate(data: Uint8Array): Uint8Array {
       bs.alignToByte();
       const len = bs.readAlignedUint16();
       const nlen = bs.readAlignedUint16();
-      void nlen; // 校验位忽略(容错)
+      if ((len ^ 0xffff) !== nlen) throw new Error("deflate: invalid stored block length");
+      if (out.length + len > maxOutputBytes) {
+        throw new Error("deflate output exceeds preview limit");
+      }
       for (let i = 0; i < len; i++) out.push(bs.readAlignedByte());
     } else if (btype === 1) {
-      inflateBlock(bs, out, FIXED_LIT_TREE, FIXED_DIST_TREE);
+      inflateBlock(bs, out, FIXED_LIT_TREE, FIXED_DIST_TREE, maxOutputBytes);
     } else if (btype === 2) {
       const { lit, dist } = readDynamicTrees(bs);
-      inflateBlock(bs, out, lit, dist);
+      inflateBlock(bs, out, lit, dist, maxOutputBytes);
     } else {
       throw new Error("invalid deflate block type 3");
     }
@@ -182,6 +242,7 @@ class BitStream {
     void consumed;
   }
   readAlignedByte(): number {
+    if (this.pos >> 3 >= this.data.length) throw new Error("deflate: unexpected EOF");
     const v = this.data[this.pos >> 3];
     this.pos += 8;
     return v;
@@ -251,19 +312,34 @@ const CODE_LEN_ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 1
 const CODE_LEN_EXTRA = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 7];
 const CODE_LEN_BASE = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 11];
 
-function inflateBlock(bs: BitStream, out: number[], lit: HuffTree, dist: HuffTree) {
+function inflateBlock(
+  bs: BitStream,
+  out: number[],
+  lit: HuffTree,
+  dist: HuffTree,
+  maxOutputBytes: number,
+) {
   for (;;) {
     const sym = decodeHuff(bs, lit);
     if (sym < 256) {
+      if (out.length >= maxOutputBytes) {
+        throw new Error("deflate output exceeds preview limit");
+      }
       out.push(sym);
     } else if (sym === 256) {
       return; // 块结束
     } else {
       const li = sym - 257;
+      if (li < 0 || li >= LEN_BASE.length) throw new Error("deflate: invalid length symbol");
       const length = LEN_BASE[li] + (LEN_EXTRA[li] ? bs.readBits(LEN_EXTRA[li]) : 0);
       const dsym = decodeHuff(bs, dist);
+      if (dsym < 0 || dsym >= DIST_BASE.length) throw new Error("deflate: invalid distance symbol");
       const distance = DIST_BASE[dsym] + (DIST_EXTRA[dsym] ? bs.readBits(DIST_EXTRA[dsym]) : 0);
       const start = out.length - distance;
+      if (distance <= 0 || start < 0) throw new Error("deflate: invalid back-reference");
+      if (out.length + length > maxOutputBytes) {
+        throw new Error("deflate output exceeds preview limit");
+      }
       for (let i = 0; i < length; i++) out.push(out[start + i]);
     }
   }
@@ -282,6 +358,7 @@ function readDynamicTrees(bs: BitStream): { lit: HuffTree; dist: HuffTree } {
     if (sym < 16) {
       lengths.push(sym);
     } else if (sym === 16) {
+      if (lengths.length === 0) throw new Error("deflate: repeat code has no predecessor");
       const rep = bs.readBits(CODE_LEN_EXTRA[16]) + CODE_LEN_BASE[16];
       const prev = lengths[lengths.length - 1] ?? 0;
       for (let i = 0; i < rep; i++) lengths.push(prev);
@@ -291,6 +368,9 @@ function readDynamicTrees(bs: BitStream): { lit: HuffTree; dist: HuffTree } {
     } else if (sym === 18) {
       const rep = bs.readBits(CODE_LEN_EXTRA[18]) + CODE_LEN_BASE[18];
       for (let i = 0; i < rep; i++) lengths.push(0);
+    }
+    if (lengths.length > hlit + hdist) {
+      throw new Error("deflate: code-length sequence exceeds declared size");
     }
   }
   const litLengths = lengths.slice(0, hlit);

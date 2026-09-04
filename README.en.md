@@ -165,6 +165,8 @@ EchoAgent keeps its application state under `~/.echo-agent/` by default. Set `EC
 
 Every path in this table is rooted at `ECHO_AGENT_HOME`; `~/.echo-agent` is only the default when that variable is unset. The Experts, Skills, and Connectors panels persist only sources selected manually. Automatically discovered defaults always follow the active data home.
 
+New tasks without an explicit directory use `EchoAgent Workspace` inside the system Documents directory by default (falling back to a same-named subdirectory of the user home when Documents is unavailable). EchoAgent does not grant the entire user home by default. To use another workspace or local knowledge source, grant it explicitly through the native directory picker.
+
 - API keys and endpoint credentials are stored locally in plaintext. On Unix, EchoAgent applies owner-only permissions to secret-bearing files and directories; on Windows, access depends on the current user's filesystem ACLs.
 - Model, MCP, WebDAV, and notification traffic is sent only to services you configure. No hosted EchoAgent account is required.
 - Tool execution may read files, modify files, or run commands. Use permission rules and restricted modes for repositories or data you do not fully trust.
@@ -241,7 +243,7 @@ docs/                        Platform-specific documentation
 | `pnpm dist:mac` | Build an unsigned DMG on macOS. |
 | `pnpm dist:win` | Build an unsigned NSIS installer on Windows. |
 
-CI currently runs TypeScript type-checking, frontend unit tests, and the production frontend build on every pull request. Rust changes should also be verified locally with the relevant Cargo tests.
+CI runs TypeScript type-checking, frontend unit tests, the production frontend build, and Rust formatting, Clippy, and unit-test checks on every pull request. Running focused tests locally before pushing is still recommended for faster feedback.
 
 ### Contributing
 

@@ -1592,7 +1592,8 @@ pub use xai_grok_config::{deep_merge_toml, expand_env_vars_in_string, expand_env
 /// Deduplicates: if the path is already present, this is a no-op.
 pub(crate) fn add_plugin_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = crate::util::grok_home::grok_home().join("config.toml");
-    let content = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let _transaction = crate::util::config::acquire_config_transaction_lock_at(&config_path)?;
+    let content = crate::util::config::read_to_string_or_empty(&config_path)?;
     let mut config: toml::Value = if content.is_empty() {
         toml::Value::Table(toml::map::Map::new())
     } else {
@@ -1625,7 +1626,7 @@ pub(crate) fn add_plugin_path(path: &str) -> Result<(), Box<dyn std::error::Erro
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
+    crate::util::config::atomic_write_string(&config_path, &toml::to_string_pretty(&config)?)?;
     Ok(())
 }
 /// Remove a plugin path from `[plugins].paths` in `~/.grok/config.toml`.
@@ -1633,6 +1634,7 @@ pub(crate) fn add_plugin_path(path: &str) -> Result<(), Box<dyn std::error::Erro
 /// If the path is not found, this is a no-op (returns Ok).
 pub(crate) fn remove_plugin_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = crate::util::grok_home::grok_home().join("config.toml");
+    let _transaction = crate::util::config::acquire_config_transaction_lock_at(&config_path)?;
     let content = match std::fs::read_to_string(&config_path) {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -1648,7 +1650,7 @@ pub(crate) fn remove_plugin_path(path: &str) -> Result<(), Box<dyn std::error::E
     {
         paths.retain(|v| v.as_str().is_none_or(|s| s != path));
     }
-    std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
+    crate::util::config::atomic_write_string(&config_path, &toml::to_string_pretty(&config)?)?;
     Ok(())
 }
 /// Add a plugin to `[plugins].disabled` in `~/.grok/config.toml`.
@@ -1657,7 +1659,8 @@ pub(crate) fn remove_plugin_path(path: &str) -> Result<(), Box<dyn std::error::E
 /// Deduplicates: if already present, this is a no-op.
 pub fn add_disabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = crate::util::grok_home::grok_home().join("config.toml");
-    let content = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let _transaction = crate::util::config::acquire_config_transaction_lock_at(&config_path)?;
+    let content = crate::util::config::read_to_string_or_empty(&config_path)?;
     let mut config: toml::Value = if content.is_empty() {
         toml::Value::Table(toml::map::Map::new())
     } else {
@@ -1692,7 +1695,7 @@ pub fn add_disabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Er
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
+    crate::util::config::atomic_write_string(&config_path, &toml::to_string_pretty(&config)?)?;
     Ok(())
 }
 /// Remove a plugin from `[plugins].disabled` in `~/.grok/config.toml`.
@@ -1700,6 +1703,7 @@ pub fn add_disabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Er
 /// If the plugin is not in the disabled list, this is a no-op.
 pub fn remove_disabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = crate::util::grok_home::grok_home().join("config.toml");
+    let _transaction = crate::util::config::acquire_config_transaction_lock_at(&config_path)?;
     let content = match std::fs::read_to_string(&config_path) {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -1715,7 +1719,7 @@ pub fn remove_disabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error:
     {
         disabled.retain(|v| v.as_str().is_none_or(|s| s != plugin_id));
     }
-    std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
+    crate::util::config::atomic_write_string(&config_path, &toml::to_string_pretty(&config)?)?;
     Ok(())
 }
 /// Add a plugin to `[plugin_cta].dismissed` in `~/.grok/config.toml`.
@@ -1732,7 +1736,8 @@ pub fn add_dismissed_plugin_cta_to_file(
     plugin_id: &str,
     config_path: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let content = std::fs::read_to_string(config_path).unwrap_or_default();
+    let _transaction = crate::util::config::acquire_config_transaction_lock_at(config_path)?;
+    let content = crate::util::config::read_to_string_or_empty(config_path)?;
     let mut config: toml::Value = if content.is_empty() {
         toml::Value::Table(toml::map::Map::new())
     } else {
@@ -1767,7 +1772,7 @@ pub fn add_dismissed_plugin_cta_to_file(
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(config_path, toml::to_string_pretty(&config)?)?;
+    crate::util::config::atomic_write_string(config_path, &toml::to_string_pretty(&config)?)?;
     Ok(())
 }
 /// All plugin ids listed in `[plugin_cta].dismissed` in `~/.grok/config.toml`.
@@ -1870,7 +1875,8 @@ pub(crate) fn post_install_plugin(repo_key: &str) -> (Vec<String>, Vec<String>) 
 /// Deduplicates: if already present, this is a no-op.
 pub fn add_enabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = crate::util::grok_home::grok_home().join("config.toml");
-    let content = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let _transaction = crate::util::config::acquire_config_transaction_lock_at(&config_path)?;
+    let content = crate::util::config::read_to_string_or_empty(&config_path)?;
     let mut config: toml::Value = if content.is_empty() {
         toml::Value::Table(toml::map::Map::new())
     } else {
@@ -1905,12 +1911,13 @@ pub fn add_enabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Err
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
+    crate::util::config::atomic_write_string(&config_path, &toml::to_string_pretty(&config)?)?;
     Ok(())
 }
 /// Remove a plugin from `[plugins].enabled` in `~/.grok/config.toml`.
 pub fn remove_enabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = crate::util::grok_home::grok_home().join("config.toml");
+    let _transaction = crate::util::config::acquire_config_transaction_lock_at(&config_path)?;
     let content = match std::fs::read_to_string(&config_path) {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -1926,7 +1933,7 @@ pub fn remove_enabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::
     {
         enabled.retain(|v| v.as_str().is_none_or(|s| s != plugin_id));
     }
-    std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
+    crate::util::config::atomic_write_string(&config_path, &toml::to_string_pretty(&config)?)?;
     Ok(())
 }
 /// Add a hook path to `~/.grok/hooks-paths` (one path per line).

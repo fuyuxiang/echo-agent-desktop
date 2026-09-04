@@ -21,6 +21,7 @@ const resetStore = () =>
     streamingMessageId: null,
     usage: {},
     plan: null,
+    planApproval: null,
     error: null,
     planMode: false,
   });
@@ -72,6 +73,48 @@ const userMessageTextForTest = (m: ReturnType<typeof useSessionStore.getState>["
 describe("session-store transcripts", () => {
   beforeEach(resetStore);
 
+  it("plan mode 按会话隔离并消费权威 current_mode_update", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    store.applyUpdate({
+      sessionUpdate: "current_mode_update",
+      currentModeId: "plan",
+      __sessionId: "A",
+    } as never);
+    store.setSession("B");
+    expect(useSessionStore.getState().planMode).toBe(false);
+    store.setSession("A");
+    expect(useSessionStore.getState().planMode).toBe(true);
+    store.applyUpdate({
+      sessionUpdate: "current_mode_update",
+      currentModeId: "default",
+      __sessionId: "A",
+    } as never);
+    expect(useSessionStore.getState().planMode).toBe(false);
+  });
+
+  it("计划审批重放去重，并按 requestId 解除", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    const update = {
+      sessionUpdate: "plan_approval_request",
+      requestId: "r-1",
+      sessionId: "A",
+      toolCallId: "tc-1",
+      planContent: "# Plan",
+      __sessionId: "A",
+    } as never;
+    store.applyUpdate(update);
+    store.applyUpdate(update);
+    expect(useSessionStore.getState().transcripts.A.planApprovals).toHaveLength(1);
+    store.applyUpdate({
+      sessionUpdate: "plan_approval_resolved",
+      requestId: "r-1",
+      __sessionId: "A",
+    } as never);
+    expect(useSessionStore.getState().planApproval).toBeNull();
+  });
+
   it("切离再切回保留本地 pushUser 的用户消息", () => {
     useSessionStore.getState().setSession("A");
     useSessionStore.getState().pushUser("北京天气怎么样");
@@ -113,6 +156,36 @@ describe("session-store transcripts", () => {
     expect(userMessageTextForTest(state.transcripts.A.messages[1])).toBe("排队续发");
     expect(state.transcripts.A.messages[1].attachments).toEqual(["/tmp/续发.docx"]);
     expect(state.transcripts.A.streamingMessageId).not.toBeNull();
+  });
+
+  it("对异常超长的流式输出设置界面累积上限", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.applyUpdate(chunk("x".repeat(2_000_100), "A"));
+    const message = useSessionStore.getState().messages[0];
+    const text = message.parts[0] as { kind: "text"; text: string };
+    expect(text.text.length).toBeLessThanOrEqual(2_000_000);
+    expect(text.text).toContain("输出过大");
+  });
+
+  it("在合并多块流式内容时就限制中间字符串大小", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.applyUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: [
+        { type: "text", text: "a".repeat(1_500_000) },
+        { type: "text", text: "b".repeat(1_500_000) },
+        { type: "text", text: "c".repeat(1_500_000) },
+      ],
+      __sessionId: "A",
+    } as unknown as Parameters<typeof s.applyUpdate>[0]);
+
+    const message = useSessionStore.getState().messages[0];
+    const text = message.parts[0] as { kind: "text"; text: string };
+    expect(text.text.length).toBeLessThanOrEqual(2_000_000);
+    expect(text.text).toContain("输出过大");
+    expect(text.text).not.toContain("c");
   });
 
   it("历史回放按 promptIndex 恢复用户文本、附件和轮次边界", () => {
@@ -437,5 +510,14 @@ describe("tool_call content 归一化 (normalizeToolCallContent)", () => {
   it("terminal → command_output 占位(保持旧行为)", () => {
     const out = applyToolCall([{ type: "terminal", terminalId: "t1" }]);
     expect(out).toEqual([{ type: "command_output", command: undefined, output: "[terminal t1]" }]);
+  });
+
+  it("工具输出块数有上限，避免恶意 MCP 卡死界面", () => {
+    const out = applyToolCall(Array.from({ length: 300 }, (_, index) => ({
+      type: "content",
+      content: { type: "text", text: String(index) },
+    })));
+    expect(out).toHaveLength(256);
+    expect(out[255]).toEqual({ type: "text", text: "255" });
   });
 });

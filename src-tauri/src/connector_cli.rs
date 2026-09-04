@@ -18,7 +18,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -28,6 +30,12 @@ use std::os::windows::process::CommandExt;
 /// command just runs to completion anyway.
 const STEP_TIMEOUT: Duration = Duration::from_secs(600);
 const SHORT_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_CLI_SPEC_BYTES: u64 = 1024 * 1024;
+const MAX_COMMAND_BYTES: usize = 4096;
+const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
+const MAX_AUTH_SCAN_BYTES: usize = 2 * 1024 * 1024;
+const MAX_AUTH_LINE_BYTES: usize = 16 * 1024;
+const MAX_AUTH_LOG_EVENTS: usize = 2_000;
 
 // ---------- cli.json schema ----------
 
@@ -61,6 +69,13 @@ struct CliSpec {
     auth_qr_modal: Option<bool>,
     #[serde(default)]
     auth_suppress_browser: Option<bool>,
+}
+
+struct LoadedCliSpec {
+    spec: CliSpec,
+    /// Canonical spec path plus a digest of the exact bytes approved by the
+    /// user. Editing cli.json invalidates trust immediately.
+    trust_key: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,6 +181,11 @@ fn active_children() -> &'static Mutex<HashMap<String, Vec<u32>>> {
     ACTIVE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn trusted_specs() -> &'static Mutex<std::collections::HashSet<String>> {
+    static TRUSTED: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    TRUSTED.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
 fn register_child(source: &str, pid: u32) {
     active_children()
         .lock()
@@ -191,8 +211,10 @@ fn kill_process_tree(pid: u32) {
     }
     #[cfg(not(windows))]
     {
-        let _ = std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
+        let _ = std::process::Command::new("/bin/kill")
+            // Negative PID targets the dedicated process group created in
+            // `shell_command`, including grandchildren.
+            .args(["-KILL", &format!("-{pid}")])
             .output();
     }
 }
@@ -202,24 +224,58 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 // ---------- helpers ----------
 
-fn spec_path(root: &str, source: &str) -> PathBuf {
-    PathBuf::from(root)
-        .join("connectors")
-        .join(source)
-        .join("cli.json")
+fn spec_path(root: &str, source: &str) -> Result<PathBuf, String> {
+    Ok(
+        crate::connectors_catalog::canonical_executable_connector_dir(root, source)?
+            .join("cli.json"),
+    )
 }
 
-fn read_spec(root: &str, source: &str) -> Result<Option<CliSpec>, String> {
-    let path = spec_path(root, source);
-    crate::paths::reject_legacy_workbuddy_path(&path)?;
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("读取 cli.json 失败：{e}")),
+fn read_spec(root: &str, source: &str) -> Result<Option<LoadedCliSpec>, String> {
+    let path = spec_path(root, source)?;
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取 cli.json 失败：{error}")),
     };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("cli.json 必须是连接器目录内的普通文件".into());
+    }
+    if metadata.len() > MAX_CLI_SPEC_BYTES {
+        return Err("cli.json 超过 1MB 限制".into());
+    }
+    let raw = crate::shell_fs::read_regular_file_bounded(&path, MAX_CLI_SPEC_BYTES)
+        .and_then(|bytes| {
+            String::from_utf8(bytes).map_err(|e| format!("cli.json 必须是 UTF-8 文本：{e}"))
+        })
+        .map_err(|e| format!("读取 cli.json 失败：{e}"))?;
     let spec: CliSpec =
         serde_json::from_str(&raw).map_err(|e| format!("解析 cli.json 失败：{e}"))?;
-    Ok(Some(spec))
+    let digest = Sha256::digest(raw.as_bytes());
+    let fingerprint = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(Some(LoadedCliSpec {
+        spec,
+        trust_key: format!("{}:{fingerprint}", path.to_string_lossy()),
+    }))
+}
+
+fn validate_command(line: &str) -> Result<&str, String> {
+    let line = line.trim();
+    if line.is_empty()
+        || line.len() > MAX_COMMAND_BYTES
+        || line.contains('\0')
+        || line.contains('\r')
+        || line.contains('\n')
+        || line
+            .chars()
+            .any(|character| character.is_control() && character != '\t')
+    {
+        return Err("连接器命令为空、过长或包含控制字符".into());
+    }
+    Ok(line)
 }
 
 fn platform_key() -> &'static str {
@@ -238,10 +294,89 @@ fn platform_key() -> &'static str {
 }
 
 fn pick_platform(cmd: &PlatformCmd) -> Option<String> {
-    cmd.get(platform_key())
-        .or_else(|| cmd.get("linux"))
-        .or_else(|| cmd.values().next())
-        .cloned()
+    // Never execute a command authored for another operating system. Besides
+    // being unreliable, fallback-to-any-value can reinterpret quoting under a
+    // different shell with surprising results.
+    cmd.get(platform_key()).cloned()
+}
+
+fn commands_for_confirmation(spec: &CliSpec) -> Result<Vec<String>, String> {
+    let mut commands = Vec::new();
+    let mut push = |command: Option<String>| -> Result<(), String> {
+        if let Some(command) = command {
+            let command = validate_command(&command)?.to_string();
+            if !commands.contains(&command) {
+                commands.push(command);
+            }
+        }
+        Ok(())
+    };
+    push(spec.init.as_ref().and_then(pick_platform))?;
+    push(
+        spec.version_check
+            .as_ref()
+            .and_then(|check| pick_platform(&check.command)),
+    )?;
+    match &spec.auth {
+        Some(AuthSpec::Steps(steps)) => {
+            if steps.len() > 64 {
+                return Err("cli.json 授权步骤超过 64 个上限".into());
+            }
+            for step in steps {
+                push(pick_platform(&step.command))?;
+                push(step.skip_if.as_ref().and_then(pick_platform))?;
+            }
+        }
+        Some(AuthSpec::Single(command)) => push(pick_platform(command))?,
+        None => {}
+    }
+    push(spec.status.as_ref().and_then(pick_platform))?;
+    push(spec.un_auth.as_ref().and_then(pick_platform))?;
+    Ok(commands)
+}
+
+fn confirm_spec_execution(app: &AppHandle, loaded: &LoadedCliSpec) -> Result<(), String> {
+    if trusted_specs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(&loaded.trust_key)
+    {
+        return Ok(());
+    }
+    let commands = commands_for_confirmation(&loaded.spec)?;
+    if commands.is_empty() {
+        return Err("cli.json 没有当前平台可执行的命令".into());
+    }
+    let mut details = commands
+        .iter()
+        .take(12)
+        .enumerate()
+        .map(|(index, command)| format!("{}. {command}", index + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if commands.len() > 12 {
+        details.push_str(&format!("\n…另有 {} 条命令", commands.len() - 12));
+    }
+    let approved = app
+        .dialog()
+        .message(format!(
+            "连接器将以当前用户权限执行本地 shell 命令（本次进程内信任，cli.json 变更后失效）：\n\n{details}"
+        ))
+        .title("允许连接器执行本地命令？")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "允许本次".into(),
+            "取消".into(),
+        ))
+        .blocking_show();
+    if !approved {
+        return Err("用户取消了连接器命令执行".into());
+    }
+    trusted_specs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(loaded.trust_key.clone());
+    Ok(())
 }
 
 fn shell_command(line: &str) -> tokio::process::Command {
@@ -256,20 +391,76 @@ fn shell_command(line: &str) -> tokio::process::Command {
     {
         let mut c = tokio::process::Command::new("sh");
         c.args(["-c", line]);
+        // Put the shell and every descendant in a dedicated process group so
+        // timeout/cancel can terminate the whole connector command tree.
+        c.process_group(0);
         c
     }
 }
 
 /// Run a command to completion, returning (exit_code, combined output).
 async fn run_capture(line: &str, timeout: Duration) -> Result<(i32, String), String> {
-    let fut = shell_command(line).output();
-    let out = tokio::time::timeout(timeout, fut)
-        .await
-        .map_err(|_| format!("命令超时：{line}"))?
+    use tokio::io::AsyncReadExt;
+
+    let line = validate_command(line)?;
+    let mut child = shell_command(line)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
         .map_err(|e| format!("命令启动失败：{line}：{e}"))?;
-    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&out.stderr));
-    Ok((out.status.code().unwrap_or(-1), text))
+    let pid = child.id().ok_or("连接器命令启动后未返回进程 ID")?;
+    let mut stdout = child.stdout.take().ok_or("无法捕获命令 stdout")?;
+    let mut stderr = child.stderr.take().ok_or("无法捕获命令 stderr")?;
+
+    async fn drain_capped(
+        stream: &mut (impl tokio::io::AsyncRead + Unpin),
+    ) -> std::io::Result<(Vec<u8>, bool)> {
+        let mut kept = Vec::new();
+        let mut buffer = [0_u8; 8192];
+        let mut truncated = false;
+        loop {
+            let read = stream.read(&mut buffer).await?;
+            if read == 0 {
+                break;
+            }
+            let remaining = MAX_CAPTURE_BYTES.saturating_sub(kept.len());
+            if remaining > 0 {
+                kept.extend_from_slice(&buffer[..read.min(remaining)]);
+            }
+            truncated |= read > remaining;
+        }
+        Ok((kept, truncated))
+    }
+
+    let execution = async {
+        let (status, stdout, stderr) = tokio::try_join!(
+            child.wait(),
+            drain_capped(&mut stdout),
+            drain_capped(&mut stderr)
+        )?;
+        Ok::<_, std::io::Error>((status, stdout, stderr))
+    };
+    let (status, (stdout, stdout_truncated), (stderr, stderr_truncated)) =
+        match tokio::time::timeout(timeout, execution).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => {
+                kill_process_tree(pid);
+                let _ = child.kill().await;
+                return Err(format!("命令执行失败：{line}：{error}"));
+            }
+            Err(_) => {
+                kill_process_tree(pid);
+                let _ = child.kill().await;
+                return Err(format!("命令超时：{line}"));
+            }
+        };
+    let mut text = String::from_utf8_lossy(&stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&stderr));
+    if stdout_truncated || stderr_truncated {
+        text.push_str("\n…(连接器命令输出已截断)");
+    }
+    Ok((status.code().unwrap_or(-1), text))
 }
 
 /// Extract the first `x.y.z` version substring from command output.
@@ -360,9 +551,11 @@ async fn check_authed(spec: &CliSpec) -> bool {
             return expect.iter().all(|(k, want)| {
                 v.get(k)
                     .map(|got| {
-                        got.as_str()
-                            .map(|s| s == want)
-                            .unwrap_or_else(|| got.to_string() == *want)
+                        got.as_str().map(|s| s == want).unwrap_or_else(|| {
+                            serde_json::from_str::<serde_json::Value>(want)
+                                .map(|parsed| got == &parsed)
+                                .unwrap_or(false)
+                        })
                     })
                     .unwrap_or(false)
             });
@@ -375,6 +568,17 @@ async fn check_authed(spec: &CliSpec) -> bool {
 
 /// Extract the first https URL containing `domain` from a line of output.
 fn extract_auth_url(line: &str, domain: &str) -> Option<String> {
+    let allowed = if let Ok(url) = url::Url::parse(domain) {
+        url.host_str()?
+            .trim_matches(['[', ']'])
+            .to_ascii_lowercase()
+    } else {
+        url::Url::parse(&format!("https://{}", domain.trim().trim_matches('/')))
+            .ok()?
+            .host_str()?
+            .trim_matches(['[', ']'])
+            .to_ascii_lowercase()
+    };
     let mut start = 0;
     while let Some(pos) = line[start..].find("https://") {
         let abs = start + pos;
@@ -383,12 +587,132 @@ fn extract_auth_url(line: &str, domain: &str) -> Option<String> {
             .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '<' || c == '>')
             .unwrap_or(rest.len());
         let candidate = rest[..end].trim_end_matches([')', ']', '}', '.', ',', ';']);
-        if candidate.contains(domain) {
-            return Some(candidate.to_string());
+        if let Ok(parsed) = url::Url::parse(candidate) {
+            let host = parsed
+                .host_str()
+                .unwrap_or_default()
+                .trim_matches(['[', ']'])
+                .to_ascii_lowercase();
+            let host_matches = host == allowed
+                || (!allowed.parse::<std::net::IpAddr>().is_ok()
+                    && host
+                        .strip_suffix(&allowed)
+                        .is_some_and(|prefix| prefix.ends_with('.')));
+            if parsed.scheme() == "https"
+                && parsed.username().is_empty()
+                && parsed.password().is_none()
+                && host_matches
+            {
+                return Some(parsed.to_string());
+            }
         }
         start = abs + end.max(1);
     }
     None
+}
+
+struct AuthOutputConfig<'a> {
+    source: &'a str,
+    domain: Option<&'a str>,
+    qr_modal: bool,
+    suppress_browser: bool,
+}
+
+#[derive(Default)]
+struct AuthOutputState {
+    emitted_logs: usize,
+    emitted_url: bool,
+}
+
+fn emit_auth_output_line(
+    app: &AppHandle,
+    config: &AuthOutputConfig<'_>,
+    bytes: &[u8],
+    state: &mut AuthOutputState,
+) {
+    let line = String::from_utf8_lossy(bytes);
+    // Prevent terminal control sequences/newlines from forging adjacent UI
+    // records. Tabs are retained for readable CLI formatting.
+    let line = line
+        .chars()
+        .filter(|character| !character.is_control() || *character == '\t')
+        .collect::<String>();
+    if state.emitted_logs < MAX_AUTH_LOG_EVENTS {
+        let _ = app.emit(
+            "connector://cli-auth-log",
+            CliAuthLogEvent {
+                source: config.source.to_string(),
+                line: line.clone(),
+            },
+        );
+        state.emitted_logs += 1;
+    }
+    if !state.emitted_url {
+        if let Some(url) = config
+            .domain
+            .and_then(|domain| extract_auth_url(&line, domain))
+        {
+            let _ = app.emit(
+                "connector://cli-auth-url",
+                CliAuthUrlEvent {
+                    source: config.source.to_string(),
+                    url,
+                    qr_modal: config.qr_modal,
+                    suppress_browser: config.suppress_browser,
+                },
+            );
+            state.emitted_url = true;
+        }
+    }
+}
+
+async fn drain_auth_output(
+    mut stream: impl tokio::io::AsyncRead + Unpin,
+    app: &AppHandle,
+    source: &str,
+    domain: Option<&str>,
+    qr_modal: bool,
+    suppress_browser: bool,
+) -> std::io::Result<()> {
+    use tokio::io::AsyncReadExt;
+
+    let mut buffer = [0_u8; 8192];
+    let mut pending = Vec::with_capacity(1024);
+    let mut scanned = 0_usize;
+    let config = AuthOutputConfig {
+        source,
+        domain,
+        qr_modal,
+        suppress_browser,
+    };
+    let mut output_state = AuthOutputState::default();
+    let mut dropping_long_line = false;
+    loop {
+        let read = stream.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        let remaining = MAX_AUTH_SCAN_BYTES.saturating_sub(scanned);
+        let inspect = read.min(remaining);
+        scanned = scanned.saturating_add(read);
+        for byte in &buffer[..inspect] {
+            if *byte == b'\n' {
+                if !pending.is_empty() || !dropping_long_line {
+                    emit_auth_output_line(app, &config, &pending, &mut output_state);
+                }
+                pending.clear();
+                dropping_long_line = false;
+            } else if pending.len() < MAX_AUTH_LINE_BYTES {
+                pending.push(*byte);
+            } else {
+                dropping_long_line = true;
+            }
+        }
+    }
+    if !pending.is_empty() {
+        emit_auth_output_line(app, &config, &pending, &mut output_state);
+    }
+    Ok(())
 }
 
 fn normalize_steps(spec: &CliSpec) -> Vec<ResolvedStep> {
@@ -432,98 +756,53 @@ async fn run_auth_step(
     step: &ResolvedStep,
     qr_modal: bool,
 ) -> Result<i32, String> {
-    use tokio::io::{AsyncBufReadExt, BufReader};
-
-    let mut child = shell_command(&step.command)
+    let command = validate_command(&step.command)?;
+    let mut child = shell_command(command)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("授权命令启动失败：{}：{e}", step.command))?;
-    let pid = child.id().unwrap_or(0);
+        .map_err(|e| format!("授权命令启动失败：{command}：{e}"))?;
+    let pid = child.id().ok_or("授权命令启动后未返回进程 ID")?;
     register_child(source, pid);
 
-    let stdout = child.stdout.take().map(BufReader::new);
-    let stderr = child.stderr.take().map(BufReader::new);
-
-    let scan_line = |line: &str| {
-        let _ = app.emit(
-            "connector://cli-auth-log",
-            CliAuthLogEvent {
-                source: source.to_string(),
-                line: line.to_string(),
-            },
-        );
-        if let Some(domain) = &step.url_domain {
-            if let Some(url) = extract_auth_url(line, domain) {
-                let _ = app.emit(
-                    "connector://cli-auth-url",
-                    CliAuthUrlEvent {
-                        source: source.to_string(),
-                        url,
-                        qr_modal,
-                        suppress_browser: step.suppress_browser,
-                    },
-                );
-            }
-        }
+    let stdout = child.stdout.take().ok_or("无法捕获授权命令 stdout")?;
+    let stderr = child.stderr.take().ok_or("无法捕获授权命令 stderr")?;
+    let execution = async {
+        let (status, (), ()) = tokio::try_join!(
+            child.wait(),
+            drain_auth_output(
+                stdout,
+                app,
+                source,
+                step.url_domain.as_deref(),
+                qr_modal,
+                step.suppress_browser,
+            ),
+            drain_auth_output(
+                stderr,
+                app,
+                source,
+                step.url_domain.as_deref(),
+                qr_modal,
+                step.suppress_browser,
+            )
+        )?;
+        Ok::<_, std::io::Error>(status)
     };
 
-    let mut out_lines = stdout.map(|r| r.lines());
-    let mut err_lines = stderr.map(|r| r.lines());
-
-    // Drain stdout/stderr concurrently with waiting on the child.
-    let wait = async {
-        loop {
-            tokio::select! {
-                line = async {
-                    match out_lines.as_mut() {
-                        Some(l) => Some(l.next_line().await),
-                        None => None,
-                    }
-                }, if out_lines.is_some() => {
-                    match line {
-                        Some(Ok(Some(l))) => scan_line(&l),
-                        _ => { out_lines = None; }
-                    }
-                }
-                line = async {
-                    match err_lines.as_mut() {
-                        Some(l) => Some(l.next_line().await),
-                        None => None,
-                    }
-                }, if err_lines.is_some() => {
-                    match line {
-                        Some(Ok(Some(l))) => scan_line(&l),
-                        _ => { err_lines = None; }
-                    }
-                }
-                status = child.wait() => {
-                    // Drain remaining buffered output, then return.
-                    while let Some(l) = &mut out_lines {
-                        match l.next_line().await {
-                            Ok(Some(line)) => scan_line(&line),
-                            _ => break,
-                        }
-                    }
-                    while let Some(l) = &mut err_lines {
-                        match l.next_line().await {
-                            Ok(Some(line)) => scan_line(&line),
-                            _ => break,
-                        }
-                    }
-                    return status.map_err(|e| format!("等待授权命令失败：{e}"));
-                }
-            }
-        }
-    };
-
-    let result = tokio::time::timeout(STEP_TIMEOUT, wait).await;
+    let result = tokio::time::timeout(STEP_TIMEOUT, execution).await;
     unregister_child(source, pid);
     match result {
         Ok(Ok(status)) => Ok(status.code().unwrap_or(-1)),
-        Ok(Err(e)) => Err(e),
+        Ok(Err(error)) => {
+            kill_process_tree(pid);
+            let _ = child.kill().await;
+            Err(format!("等待授权命令失败：{error}"))
+        }
         Err(_) => {
             kill_process_tree(pid);
+            let _ = child.kill().await;
             Err("授权超时（10 分钟），请重试".to_string())
         }
     }
@@ -538,8 +817,8 @@ pub async fn connectors_cli_status(
     root: String,
     source: String,
 ) -> Result<CliStatusResult, String> {
-    let spec = match read_spec(&root, &source)? {
-        Some(s) => s,
+    let loaded = match read_spec(&root, &source)? {
+        Some(loaded) => loaded,
         None => {
             return Ok(CliStatusResult {
                 has_spec: false,
@@ -551,6 +830,21 @@ pub async fn connectors_cli_status(
             })
         }
     };
+    if !trusted_specs()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(&loaded.trust_key)
+    {
+        return Ok(CliStatusResult {
+            has_spec: true,
+            installed: false,
+            cli_version: None,
+            authed: false,
+            qr_modal: loaded.spec.auth_qr_modal.unwrap_or(false),
+            error: Some("尚未允许该连接器执行本地命令；请点击连接并审核命令".into()),
+        });
+    }
+    let spec = loaded.spec;
     let (installed, cli_version) = check_installed(&spec).await;
     let authed = if installed {
         check_authed(&spec).await
@@ -589,8 +883,8 @@ pub async fn connectors_cli_auth(
         res
     };
 
-    let spec = match read_spec(&root, &source)? {
-        Some(s) => s,
+    let loaded = match read_spec(&root, &source)? {
+        Some(loaded) => loaded,
         None => {
             return Ok(finish(CliAuthResult {
                 ok: false,
@@ -599,6 +893,8 @@ pub async fn connectors_cli_auth(
             }))
         }
     };
+    confirm_spec_execution(&app, &loaded)?;
+    let spec = loaded.spec;
 
     // 1. Ensure the CLI is installed (run `init` when the version check fails).
     let (mut installed, _) = check_installed(&spec).await;
@@ -714,6 +1010,7 @@ pub async fn connectors_cli_auth(
 /// Cancel an in-flight authorization for a connector (kills the child tree).
 #[tauri::command]
 pub async fn connectors_cli_auth_cancel(source: String) -> Result<(), String> {
+    crate::connectors_catalog::validate_connector_source(&source)?;
     let pids: Vec<u32> = active_children()
         .lock()
         .unwrap()
@@ -728,8 +1025,14 @@ pub async fn connectors_cli_auth_cancel(source: String) -> Result<(), String> {
 
 /// Run the connector's unAuth command (logout / credential wipe).
 #[tauri::command]
-pub async fn connectors_cli_unauth(root: String, source: String) -> Result<(), String> {
-    let spec = read_spec(&root, &source)?.ok_or("该连接器没有 cli.json")?;
+pub async fn connectors_cli_unauth(
+    app: AppHandle,
+    root: String,
+    source: String,
+) -> Result<(), String> {
+    let loaded = read_spec(&root, &source)?.ok_or("该连接器没有 cli.json")?;
+    confirm_spec_execution(&app, &loaded)?;
+    let spec = loaded.spec;
     let un_auth = spec.un_auth.ok_or("cli.json 没有 unAuth 命令")?;
     let line = pick_platform(&un_auth).ok_or("当前平台不支持 unAuth")?;
     let (code, out) = run_capture(&line, SHORT_TIMEOUT).await?;
@@ -749,14 +1052,56 @@ pub async fn connectors_cli_skills_dir(
     root: String,
     source: String,
 ) -> Result<Option<String>, String> {
-    let dir = PathBuf::from(root)
-        .join("connectors")
-        .join(&source)
-        .join("skills");
-    crate::paths::reject_legacy_workbuddy_path(&dir)?;
-    Ok(if dir.is_dir() {
-        Some(dir.to_string_lossy().into_owned())
-    } else {
-        None
-    })
+    let connector = crate::connectors_catalog::canonical_executable_connector_dir(&root, &source)?;
+    let dir = connector.join("skills");
+    if !dir.exists() {
+        return Ok(None);
+    }
+    let dir = dir
+        .canonicalize()
+        .map_err(|error| format!("无法解析连接器 skills 目录：{error}"))?;
+    if !dir.is_dir() || dir.parent() != Some(connector.as_path()) {
+        return Err("连接器 skills 目录越出连接器边界".into());
+    }
+    Ok(Some(dir.to_string_lossy().into_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auth_url_requires_exact_https_domain_boundary() {
+        assert_eq!(
+            extract_auth_url(
+                "open https://login.example.com/oauth?code=1 now",
+                "example.com"
+            )
+            .as_deref(),
+            Some("https://login.example.com/oauth?code=1")
+        );
+        assert!(
+            extract_auth_url("https://example.com.attacker.invalid/oauth", "example.com").is_none()
+        );
+        assert!(
+            extract_auth_url("https://attacker.invalid/?next=example.com", "example.com").is_none()
+        );
+        assert!(extract_auth_url("http://example.com/oauth", "example.com").is_none());
+    }
+
+    #[test]
+    fn platform_commands_do_not_fall_back_to_another_os() {
+        let mut commands = PlatformCmd::new();
+        commands.insert("definitely-not-this-platform".into(), "dangerous".into());
+        assert!(pick_platform(&commands).is_none());
+        commands.insert(platform_key().into(), "expected".into());
+        assert_eq!(pick_platform(&commands).as_deref(), Some("expected"));
+    }
+
+    #[test]
+    fn connector_commands_reject_multiline_injection() {
+        assert!(validate_command("echo safe").is_ok());
+        assert!(validate_command("echo safe\nrm -rf target").is_err());
+        assert!(validate_command(&"x".repeat(MAX_COMMAND_BYTES + 1)).is_err());
+    }
 }

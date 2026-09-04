@@ -10,6 +10,7 @@ import {
   resetKbRegistry,
   listKbProviders,
   searchKb,
+  searchKbWithDiagnostics,
   kbStats,
   type KbProvider,
 } from "../knowledge-base";
@@ -212,6 +213,40 @@ describe("searchKb / kbStats", () => {
     });
     registerKbProvider(provider("good", [{ id: "1", title: "OK" }]));
     expect((await searchKb("")).map((e) => e.title)).toEqual(["OK"]);
+  });
+
+  it("诊断搜索保留健康 provider 结果并返回失败源", async () => {
+    registerKbProvider({
+      id: "bad",
+      label: "失效文档库",
+      isEnabled: () => true,
+      list: async () => {
+        throw new Error("连接超时");
+      },
+    });
+    registerKbProvider(provider("good", [{ id: "1", title: "可用文档" }], true, "本地文档"));
+
+    await expect(searchKbWithDiagnostics("")).resolves.toEqual({
+      entries: [{ id: "1", title: "可用文档", source: "good" }],
+      failures: [{ id: "bad", label: "失效文档库", message: "连接超时" }],
+      successfulProviders: 1,
+    });
+  });
+
+  it("诊断搜索在全部 provider 失败时不伪装成普通空结果", async () => {
+    registerKbProvider({
+      id: "broken",
+      label: "离线知识源",
+      isEnabled: () => true,
+      list: () => Promise.reject(new Error("无法读取索引")),
+    });
+
+    const result = await searchKbWithDiagnostics("关键词");
+    expect(result.entries).toEqual([]);
+    expect(result.successfulProviders).toBe(0);
+    expect(result.failures).toEqual([
+      { id: "broken", label: "离线知识源", message: "无法读取索引" },
+    ]);
   });
 
   it("kbStats 统计启用 provider 数 + 条目数", async () => {

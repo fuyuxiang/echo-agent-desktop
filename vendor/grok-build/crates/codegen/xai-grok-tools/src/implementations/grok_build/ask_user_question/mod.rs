@@ -409,10 +409,22 @@ impl xai_tool_runtime::Tool for AskUserQuestionTool {
         // ── Step 3: Create oneshot ──────────────────────────────────────
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
 
+        // Resolve the response budget before dispatch so the coordinator and
+        // the blocking timer receive the exact same value.
+        let params = {
+            let res = resources.lock().await;
+            res.get::<crate::types::resources::Params<AskUserQuestionParams>>()
+                .map(|p| p.0)
+                .unwrap_or_default()
+        };
+        let wait = params.wait_budget();
+        let timeout_secs = wait.map(|duration| duration.as_secs());
+
         // ── Step 4: Send UserQuestionRequest ────────────────────────────
         let request = types::UserQuestionRequest {
             tool_call_id: ctx.call_id.as_str().to_owned(),
             questions: input.questions.clone(),
+            timeout_secs,
             result_tx,
         };
 
@@ -423,8 +435,8 @@ impl xai_tool_runtime::Tool for AskUserQuestionTool {
             ));
         }
 
-        // ── Step 5: Emit UserQuestionAsked + read the wait budget ───────
-        let params = {
+        // ── Step 5: Emit UserQuestionAsked notification ───────────────
+        {
             let questions_json = serde_json::to_value(&input.questions)
                 .unwrap_or_else(|_| serde_json::Value::Array(vec![]));
             let res = resources.lock().await;
@@ -434,13 +446,7 @@ impl xai_tool_runtime::Tool for AskUserQuestionTool {
                     questions_json,
                 });
             }
-            // Shell-injected params win; absent or unset fields keep the legacy
-            // env→default budget so non-shell registry consumers are unchanged.
-            res.get::<crate::types::resources::Params<AskUserQuestionParams>>()
-                .map(|p| p.0)
-                .unwrap_or_default()
-        };
-        let wait = params.wait_budget();
+        }
         // One wording for both unanswered paths (cancel + timeout below).
         let unanswered = format::unanswered_text(params.non_interactive.unwrap_or(false));
         tracing::info!(
@@ -924,7 +930,8 @@ mod tests {
             }
         });
 
-        let _request = rx.recv().await.expect("should receive request");
+        let request = rx.recv().await.expect("should receive request");
+        assert_eq!(request.timeout_secs, Some(5));
         tokio::time::advance(std::time::Duration::from_secs(6)).await;
 
         let result = handle.await.unwrap().unwrap();
@@ -1131,6 +1138,10 @@ mod tests {
         });
 
         let request = rx.recv().await.expect("should receive request");
+        assert_eq!(
+            request.timeout_secs, None,
+            "disabled runtime timer must also omit the client countdown"
+        );
         // Far past both the default and any env-overridden budget.
         tokio::time::advance(RESPONSE_TIMEOUT.max(response_timeout()) * 4).await;
 

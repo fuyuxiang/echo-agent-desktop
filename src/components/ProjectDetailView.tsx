@@ -6,7 +6,7 @@
  *  项目元数据由 Rust 数据文件持久；计划/任务可编辑，资产是已复制
  *  到项目私有目录的真实文件，专家/技能/MCP 选项来自当前运行时。
  */
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   useProjectsStore,
   type ProjectMeta,
@@ -19,6 +19,8 @@ import {
 } from "./project-picker";
 import { ActivityTab, PlanTab, TaskTab, AssetsTab } from "./project-tabs";
 import { FolderIcon } from "@/foundation/components/Icon/icons";
+import { useModalFocus } from "@/lib/use-modal-focus";
+import { useAppDialog } from "./AppDialog";
 
 type TabKey = "activity" | "plan" | "task" | "asset";
 type DrawerKey = "instruction" | "connectors" | "experts" | "skills" | "automation";
@@ -65,6 +67,7 @@ export function ProjectDetailView({
   const [drawer, setDrawer] = useState<DrawerKey | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
   const [pickerFor, setPickerFor] = useState<null | "connectors" | "experts" | "skills">(null);
+  const { requestInput, dialog } = useAppDialog(live.id);
 
   const setPicked = (k: typeof pickerFor, items: RefItem[]) => {
     if (!k) return;
@@ -75,21 +78,28 @@ export function ProjectDetailView({
   };
 
   const invite = () => {
-    const name = window.prompt("添加参与者备注（姓名或角色）");
-    if (name && name.trim()) {
-      addMember(live.id, name.trim());
-      onToast?.(`已添加参与者备注：${name.trim()}`);
-      setMembersOpen(false);
-    }
+    requestInput({
+      title: "添加参与者备注",
+      description: "可以填写姓名、职责或角色。该备注仅保存在本机项目中。",
+      fields: [{ name: "name", label: "姓名或角色", required: true, maxLength: 100 }],
+      confirmLabel: "添加",
+      action: ({ name }) => {
+        const trimmed = name.trim();
+        addMember(live.id, trimmed);
+        onToast?.(`已添加参与者备注：${trimmed}`);
+        setMembersOpen(false);
+      },
+    });
   };
 
-  const handleComposerSend = (text: string) => {
+  const handleComposerSend = async (text: string): Promise<boolean> => {
     if (onStartConversation) {
-      void onStartConversation(live.id, text);
+      return Boolean(await onStartConversation(live.id, text));
     } else {
       const preview = text.slice(0, 20);
       const suffix = text.length > 20 ? "…" : "";
       onToast?.(`无法启动项目会话：${preview}${suffix}`);
+      return false;
     }
   };
 
@@ -180,6 +190,7 @@ export function ProjectDetailView({
           onConfirm={(items) => setPicked(pickerFor, items)}
         />
       )}
+      {dialog}
     </div>
   );
 }
@@ -199,23 +210,48 @@ function ConfigDrawer({
 }) {
   const updateConfig = useProjectsStore((s) => s.updateConfig);
   const card = CONFIG_CARDS.find((c) => c.key === drawer)!;
+  const [instructionDraft, setInstructionDraft] = useState(project.instructions ?? "");
+  useEffect(() => {
+    setInstructionDraft(project.instructions ?? "");
+  }, [project.id, project.instructions]);
+  const closeDrawer = useCallback(() => {
+    if (drawer === "instruction" && instructionDraft !== (project.instructions ?? "")) {
+      updateConfig(project.id, { instructions: instructionDraft });
+    }
+    onClose();
+  }, [drawer, instructionDraft, onClose, project.id, project.instructions, updateConfig]);
+  const dialogRef = useModalFocus<HTMLDivElement>(true, closeDrawer);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="create-colleague-dialog proj-drawer" onClick={(e) => e.stopPropagation()} role="dialog">
+    <div className="modal-overlay" onClick={closeDrawer}>
+      <div
+        ref={dialogRef}
+        className="create-colleague-dialog proj-drawer"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`项目配置：${card.title}`}
+        tabIndex={-1}
+      >
         <div className="create-colleague-header">
           <h3>{card.title}</h3>
-          <button className="create-colleague-close" onClick={onClose} aria-label="关闭">×</button>
+          <button
+            className="create-colleague-close"
+            onClick={closeDrawer}
+            aria-label="关闭"
+            data-modal-initial-focus={drawer === "instruction" ? undefined : ""}
+          >×</button>
         </div>
         <div className="create-colleague-body">
           {drawer === "instruction" && (
             <textarea
               className="create-colleague-textarea"
               rows={8}
-              value={project.instructions ?? ""}
-              onChange={(e) => updateConfig(project.id, { instructions: e.target.value })}
+              value={instructionDraft}
+              maxLength={128_000}
+              onChange={(e) => setInstructionDraft(e.target.value)}
               placeholder="设定项目背景与规范，让 AI 与你高效协作…"
-              autoFocus
+              data-modal-initial-focus
             />
           )}
           {drawer === "connectors" && (
@@ -230,12 +266,12 @@ function ConfigDrawer({
           {drawer === "automation" && (
             <div className="proj-drawer-empty">
               <p>自动化在统一调度中心配置，可选择本项目目录作为运行工作区。</p>
-              <button className="btn btn--ghost" onClick={() => { onClose(); onOpenAutomation?.(); }}>打开自动化中心</button>
+              <button className="btn btn--ghost" onClick={() => { closeDrawer(); onOpenAutomation?.(); }}>打开自动化中心</button>
             </div>
           )}
         </div>
         <div className="create-colleague-footer">
-          <button className="btn btn--primary" onClick={onClose}>完成</button>
+          <button className="btn btn--primary" onClick={closeDrawer}>完成</button>
         </div>
       </div>
     </div>
@@ -246,13 +282,24 @@ function ConfigDrawer({
 // 项目级 Composer 薄壳（左 Craft/Auto/技能/连接器 + 右 +/发送）
 // ============================================================
 
-function ProjectComposer({ project, onSend }: { project: ProjectMeta; onSend: (text: string) => void }) {
+function ProjectComposer({ project, onSend }: { project: ProjectMeta; onSend: (text: string) => Promise<boolean> }) {
   const [text, setText] = useState("");
-  const send = () => {
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const send = async () => {
     const t = text.trim();
-    if (!t) return;
-    onSend(t);
-    setText("");
+    if (!t || sending) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      const sent = await onSend(t);
+      if (sent) setText("");
+      else setSendError("消息尚未发送，请完成模型配置或检查当前配额后重试。");
+    } catch (error) {
+      setSendError(`发送失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setSending(false);
+    }
   };
   return (
     <div className="pd-composer">
@@ -261,14 +308,16 @@ function ProjectComposer({ project, onSend }: { project: ProjectMeta; onSend: (t
         rows={1}
         value={text}
         placeholder="输入消息..."
+        disabled={sending}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            send();
+            void send();
           }
         }}
       />
+      {sendError && <div className="pd-composer__error" role="alert">{sendError}</div>}
       <div className="pd-composer__footer">
         <span className="pd-composer__context" title="项目指令和所选能力偏好将注入新会话；实际可用性以当前运行时为准">
           项目上下文将注入
@@ -277,7 +326,9 @@ function ProjectComposer({ project, onSend }: { project: ProjectMeta; onSend: (t
           {project.connectors.length > 0 ? ` · ${project.connectors.length} MCP` : ""}
         </span>
         <span className="pd-composer__spacer" />
-        <button className="pd-composer__send" onClick={send} aria-label="发送" disabled={!text.trim()}>➤</button>
+        <button className="pd-composer__send" onClick={() => void send()} aria-label="发送" disabled={!text.trim() || sending}>
+          {sending ? "…" : "➤"}
+        </button>
       </div>
     </div>
   );

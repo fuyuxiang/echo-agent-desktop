@@ -917,7 +917,7 @@ async fn handle_add_source(url: &str) -> xai_hooks_plugins_types::ActionOutcome 
     let write = {
         let name = name.clone();
         tokio::task::spawn_blocking(move || {
-            let _flock = acquire_init_lock(&grok_home).ok();
+            let _flock = acquire_init_lock(&grok_home)?;
             add_marketplace_source(&config_path, &name, &input, is_official)
         })
         .await
@@ -1058,7 +1058,17 @@ fn remove_source_locked(source_url_or_path: &str) -> xai_hooks_plugins_types::Ac
     use xai_hooks_plugins_types::{ActionOutcome, OutcomeStatus};
 
     let grok_home = xai_grok_config::grok_home();
-    let _flock = acquire_init_lock(&grok_home).ok();
+    let _flock = match acquire_init_lock(&grok_home) {
+        Ok(lock) => lock,
+        Err(error) => {
+            return ActionOutcome {
+                status: OutcomeStatus::InternalError,
+                message: format!("Failed to lock config: {error}"),
+                requires_reload: false,
+                requires_restart: false,
+            };
+        }
+    };
 
     let uninstalled = plugin::uninstall_marketplace_source_plugins(source_url_or_path);
 
@@ -1204,33 +1214,14 @@ fn read_official_marketplace_auto_installed(config_path: &std::path::Path) -> bo
     read_marketplace_bool_flag(config_path, "official_marketplace_auto_installed")
 }
 
-/// Acquire an advisory exclusive `flock` on `<grok_home>/.config-init.lock`,
-/// retrying briefly under contention, to serialize first-run auto-register
-/// across processes. Only `WouldBlock` retries; other I/O errors return early.
-/// The lock file is intentionally never removed (flock releases on exit).
-fn acquire_init_lock(grok_home: &std::path::Path) -> std::io::Result<std::fs::File> {
-    use fs2::FileExt;
-    let _ = std::fs::create_dir_all(grok_home);
-    let lock_path = grok_home.join(".config-init.lock");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        // Contents are irrelevant; truncate(false) silences clippy::suspicious_open_options.
-        .truncate(false)
-        .open(&lock_path)?;
-    for _ in 0..50 {
-        match file.try_lock_exclusive() {
-            Ok(()) => return Ok(file),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::WouldBlock,
-        format!("timed out waiting for {} after 1s", lock_path.display()),
-    ))
+/// Acquire the shared Runtime configuration transaction lock. The helper uses
+/// the historical `.config-init.lock` path, so marketplace initialization,
+/// MCP mutations, settings saves, and desktop-side writes all serialize on the
+/// same advisory lock across threads and processes.
+fn acquire_init_lock(
+    grok_home: &std::path::Path,
+) -> std::io::Result<crate::util::config::ConfigTransactionGuard> {
+    crate::util::config::acquire_config_transaction_lock_at(&grok_home.join("config.toml"))
 }
 
 fn is_default_skills_plugin_subdir(plugin_subdir: &str) -> bool {

@@ -2044,6 +2044,7 @@ pub(crate) async fn spawn_session_actor(
                     tool_call_id: request.tool_call_id.clone(),
                     questions: request.questions.clone(),
                     mode,
+                    timeout_secs: request.timeout_secs,
                 };
                 debug_assert!(
                     !ext_req.session_id.is_empty(),

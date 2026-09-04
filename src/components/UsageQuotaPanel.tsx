@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { AlertTriangle, Download, RefreshCw, Trash2 } from "lucide-react";
 import { exportTextFile } from "@/lib/agent-client";
 import {
@@ -19,6 +18,7 @@ import {
   type UsageRecord,
 } from "@/lib/usage-quota";
 import { sanitizeModelLabel, stripUpstreamBrandedIds } from "@/lib/model-branding";
+import { useAppDialog } from "./AppDialog";
 
 type Period = "daily" | "monthly";
 type RateDraft = { prompt: string; completion: string };
@@ -85,6 +85,7 @@ export function UsageQuotaPanel() {
   const [rateDrafts, setRateDrafts] = useState<Record<string, RateDraft>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { requestConfirmation, dialog } = useAppDialog();
 
   const refresh = useCallback(() => {
     setRecords(loadUsage());
@@ -174,15 +175,15 @@ export function UsageQuotaPanel() {
     }
     setBusy(true);
     try {
-      const path = await saveDialog({
-        defaultPath: `echoagent-usage-${todayKey()}.${format}`,
-        filters: [{ name: format.toUpperCase(), extensions: [format] }],
-      });
-      if (!path) return;
       const content = format === "csv"
         ? serializeUsageCsv(records, config)
         : serializeUsageJson(records, config);
-      await exportTextFile(path, content);
+      const path = await exportTextFile(
+        `echoagent-usage-${todayKey()}.${format}`,
+        content,
+        format,
+      );
+      if (!path) return;
       setMessage(`已导出到 ${path}`);
     } catch (error) {
       setMessage(`导出失败：${String(error).replace(/^Error:\s*/, "")}`);
@@ -193,10 +194,17 @@ export function UsageQuotaPanel() {
 
   const handleClear = () => {
     if (records.length === 0) return;
-    if (!window.confirm("清空本机所有 Token 用量记录？此操作无法撤销，建议先导出备份。")) return;
-    clearUsage();
-    setRecords([]);
-    setMessage("本机用量记录已清空。");
+    requestConfirmation({
+      title: "清空所有 Token 用量记录？",
+      description: "此操作只会清空本机记录，且无法撤销。建议先导出备份。",
+      confirmLabel: "清空记录",
+      danger: true,
+      action: () => {
+        clearUsage();
+        setRecords([]);
+        setMessage("本机用量记录已清空。");
+      },
+    });
   };
 
   const recent = filtered.slice().sort((a, b) => b.ts - a.ts).slice(0, 20);
@@ -331,6 +339,7 @@ export function UsageQuotaPanel() {
           </div>
         )}
       </div>
+      {dialog}
     </section>
   );
 }

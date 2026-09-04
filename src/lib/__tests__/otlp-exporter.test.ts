@@ -4,12 +4,35 @@ import {
   metricToOtlpMetric,
   exportEventsBatch,
   defaultHttpSender,
+  validateOtlpEndpoint,
   type OtlpConfig,
   type HttpSender,
 } from "../otlp-exporter";
 import type { TelemetryEvent, TelemetryMetric } from "../telemetry-contract";
 
 const config: OtlpConfig = { endpoint: "http://localhost:4318/v1/logs", serviceName: "echoagent" };
+
+describe("validateOtlpEndpoint", () => {
+  it.each([
+    "https://otel.example.com/v1/logs",
+    "http://localhost:4318/v1/logs",
+    "http://127.0.0.1:4318/v1/logs",
+    "http://[::1]:4318/v1/logs",
+  ])("允许安全端点 %s", (endpoint) => {
+    expect(validateOtlpEndpoint(endpoint)).toBe(endpoint);
+  });
+
+  it.each([
+    "http://collector.example.com/v1/logs",
+    "http://localhost.evil.test/v1/logs",
+    "ftp://localhost/v1/logs",
+    "https://user:secret@otel.example.com/v1/logs",
+    "https://otel.example.com/v1/logs?tenant=a",
+    "https://otel.example.com/v1/logs#debug",
+  ])("拒绝不安全端点 %s", (endpoint) => {
+    expect(() => validateOtlpEndpoint(endpoint)).toThrow();
+  });
+});
 
 describe("eventToOtlpLog", () => {
   it("构造 OTLP logs 请求体", () => {
@@ -61,6 +84,15 @@ describe("exportEventsBatch", () => {
     expect(res.ok).toBe(false);
     expect(res.status).toBe(500);
   });
+  it("运行时在调用发送器前拒绝不安全端点", async () => {
+    const post = vi.fn(async () => ({ ok: true, status: 200 }));
+    await expect(exportEventsBatch(
+      [{ name: "x", level: "info" }],
+      { ...config, endpoint: "http://collector.example.com/v1/logs" },
+      { post },
+    )).rejects.toThrow(/HTTP OTLP/);
+    expect(post).not.toHaveBeenCalled();
+  });
 });
 
 describe("defaultHttpSender", () => {
@@ -74,6 +106,29 @@ describe("defaultHttpSender", () => {
       expect(res.ok).toBe(false);
     } finally {
       globalThis.fetch = origFetch;
+    }
+  });
+
+  it("默认 fetch 超过 10 秒会取消，避免遥测请求无限积压", async () => {
+    vi.useFakeTimers();
+    const origFetch = globalThis.fetch;
+    let observedSignal: AbortSignal | undefined;
+    globalThis.fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        observedSignal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    }) as typeof fetch;
+
+    try {
+      const request = defaultHttpSender.post("http://localhost:4318/v1/logs", "{}");
+      const rejection = expect(request).rejects.toThrow("aborted");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(observedSignal?.aborted).toBe(true);
+      await rejection;
+    } finally {
+      globalThis.fetch = origFetch;
+      vi.useRealTimers();
     }
   });
 });

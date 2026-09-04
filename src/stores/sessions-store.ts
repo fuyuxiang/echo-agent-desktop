@@ -14,9 +14,9 @@ export const HOME_DRAFT_KEY = "__home__";
  * The sidebar no longer shows a single cwd's sessions flat under one "默认空间".
  * Instead it renders two collapsible groups:
  *
- *   任务 (N)  — `independent`: sessions with an empty cwd (playground / 独立任务).
- *               Sourced from `agentListSessions("")`, which the Rust backend
- *               already filters to cwd-less sessions (sessions.rs:111).
+ *   任务 (N)  — `independent`: sessions in the app's initial/home cwd.
+ *               The runtime requires absolute paths, so the home cwd is the
+ *               inbox grouping key rather than an empty-string sentinel.
  *   空间 (M)  — `workspaces`: one expandable node per local working directory
  *               (sourced from `agentListWorkspaces()`). Expanding a node lazily
  *               loads that cwd's sessions into `workspaceSessions[cwd]`.
@@ -50,6 +50,15 @@ interface SessionsState {
   filterStatus: SessionStatus | null;
   /** Sidebar task filter: selected date range (null = 全部时间). */
   filterDate: string | null;
+  /** Show archived sessions instead of active sessions. */
+  filterArchived: boolean;
+  /**
+   * Patches such as `agent://summary` can arrive before their owning workspace
+   * has been hydrated. Keep them here until a full summary (with cwd) arrives;
+   * treating a missing cwd as the inbox would silently move the session to the
+   * wrong group.
+   */
+  pendingSessionPatches: Record<string, Partial<SessionSummary>>;
   /**
    * Per-session Composer drafts (unsent textarea text), keyed by sessionId.
    * UI-only state: EchoAgent has no concept of "user hasn't pressed send yet", so
@@ -71,6 +80,7 @@ interface SessionsState {
   setQuery: (q: string) => void;
   setFilterStatus: (s: SessionStatus | null) => void;
   setFilterDate: (d: string | null) => void;
+  setFilterArchived: (archived: boolean) => void;
   clearFilters: () => void;
   /** Save the draft for one session id. Empty string deletes the entry so
    *  the map stays tidy and `drafts[id] ?? ""` always reflects truth. */
@@ -83,12 +93,16 @@ interface SessionsState {
    *  updates the right group without needing the cwd. */
   upsert: (s: Partial<SessionSummary> & { sessionId: string }) => void;
   /** Remove a session from every group and decrement its workspace node count. */
-  remove: (id: string) => void;
+  remove: (id: string, cwd?: string) => void;
 }
 
 /** Returns true when any sidebar task filter is active. */
-export function selectHasFilter(s: { filterStatus: SessionStatus | null; filterDate: string | null }): boolean {
-  return s.filterStatus !== null || s.filterDate !== null;
+export function selectHasFilter(s: {
+  filterStatus: SessionStatus | null;
+  filterDate: string | null;
+  filterArchived: boolean;
+}): boolean {
+  return s.filterStatus !== null || s.filterDate !== null || s.filterArchived;
 }
 
 export const useSessionsStore = create<SessionsState>((set) => ({
@@ -105,14 +119,37 @@ export const useSessionsStore = create<SessionsState>((set) => ({
   query: "",
   filterStatus: null,
   filterDate: null,
+  filterArchived: false,
+  pendingSessionPatches: {},
   drafts: {},
 
-  setIndependent: (independent) => set({ independent }),
+  setIndependent: (incoming) =>
+    set((state) => {
+      const pendingSessionPatches = { ...state.pendingSessionPatches };
+      const independent = incoming.map((entry) => {
+        const patch = pendingSessionPatches[entry.sessionId];
+        if (!patch) return entry;
+        delete pendingSessionPatches[entry.sessionId];
+        return { ...entry, ...patch, cwd: entry.cwd };
+      });
+      return { independent, pendingSessionPatches };
+    }),
   setWorkspaces: (workspaces) => set({ workspaces }),
   setWorkspaceSessions: (cwd, list) =>
-    set((state) => ({
-      workspaceSessions: { ...state.workspaceSessions, [cwd]: list },
-    })),
+    set((state) => {
+      const pendingSessionPatches = { ...state.pendingSessionPatches };
+      const merged = list.map((entry) => {
+        const patch = pendingSessionPatches[entry.sessionId];
+        if (!patch) return entry;
+        delete pendingSessionPatches[entry.sessionId];
+        // The hydrated list owns routing. A title-only patch must not change it.
+        return { ...entry, ...patch, cwd: entry.cwd || cwd };
+      });
+      return {
+        workspaceSessions: { ...state.workspaceSessions, [cwd]: merged },
+        pendingSessionPatches,
+      };
+    }),
   setTasksOpen: (tasksOpen) => set({ tasksOpen }),
   setSpacesOpen: (spacesOpen) => set({ spacesOpen }),
   setExpanded: (cwd, b) =>
@@ -124,7 +161,8 @@ export const useSessionsStore = create<SessionsState>((set) => ({
   setQuery: (query) => set({ query }),
   setFilterStatus: (filterStatus) => set({ filterStatus }),
   setFilterDate: (filterDate) => set({ filterDate }),
-  clearFilters: () => set({ filterStatus: null, filterDate: null }),
+  setFilterArchived: (filterArchived) => set({ filterArchived }),
+  clearFilters: () => set({ filterStatus: null, filterDate: null, filterArchived: false }),
   setDraft: (id, text) =>
     set((state) => {
       // Avoid a new object reference when nothing changes (no text + absent).
@@ -148,13 +186,17 @@ export const useSessionsStore = create<SessionsState>((set) => ({
   upsert: (s) =>
     set((state) => {
       const id = s.sessionId;
+      const pending = state.pendingSessionPatches[id];
+      const patch = pending ? { ...pending, ...s } : s;
+      const pendingSessionPatches = { ...state.pendingSessionPatches };
+      delete pendingSessionPatches[id];
 
       // 1) Update in place if it already lives in the 任务 group.
       const iIdx = state.independent.findIndex((x) => x.sessionId === id);
       if (iIdx !== -1) {
         const independent = [...state.independent];
-        independent[iIdx] = { ...independent[iIdx], ...s };
-        return { independent };
+        independent[iIdx] = { ...independent[iIdx], ...patch };
+        return { independent, pendingSessionPatches };
       }
 
       // 2) Update in place if it already lives in some 空间 node's cache.
@@ -163,8 +205,11 @@ export const useSessionsStore = create<SessionsState>((set) => ({
         const wIdx = list.findIndex((x) => x.sessionId === id);
         if (wIdx !== -1) {
           const next = [...list];
-          next[wIdx] = { ...next[wIdx], ...s };
-          return { workspaceSessions: { ...state.workspaceSessions, [cwd]: next } };
+          next[wIdx] = { ...next[wIdx], ...patch };
+          return {
+            workspaceSessions: { ...state.workspaceSessions, [cwd]: next },
+            pendingSessionPatches,
+          };
         }
       }
 
@@ -172,44 +217,60 @@ export const useSessionsStore = create<SessionsState>((set) => ({
       // EchoAgent started in (homeCwd); EchoAgent rejects empty cwd so every session has
       // an absolute path. A session whose cwd equals homeCwd (or, defensively,
       // an empty cwd) is independent; everything else belongs to a 空间 node.
-      const cwd = s.cwd ?? "";
+      const cwd = patch.cwd ?? "";
+      if (!cwd) {
+        // A summary/title/status notification is not enough to route a brand-new
+        // row. Retain it until list_sessions or a caller supplies the cwd.
+        return {
+          pendingSessionPatches: {
+            ...state.pendingSessionPatches,
+            [id]: { ...state.pendingSessionPatches[id], ...patch },
+          },
+        };
+      }
       const isInbox = !cwd || cwd === state.homeCwd;
       if (isInbox) {
         const inserted: SessionSummary = {
           title: "未命名会话",
           cwd: state.homeCwd,
-          ...s,
+          ...patch,
           // Fresh sessions must carry a timestamp so the sidebar's
           // recently-active sort pins them to the top instead of sinking.
-          updatedAt: s.updatedAt ?? new Date().toISOString(),
+          updatedAt: patch.updatedAt ?? new Date().toISOString(),
         };
-        return { independent: [inserted, ...state.independent] };
+        return { independent: [inserted, ...state.independent], pendingSessionPatches };
       }
 
-      // Non-empty cwd ⇒ belongs to a 空间 node. Only insert if that node's
-      // cache is loaded (expanded); otherwise the node's sessionCount carries
-      // the truth until the user expands it (or a refresh repopulates it).
-      if (Object.prototype.hasOwnProperty.call(state.workspaceSessions, cwd)) {
-        const inserted: SessionSummary = {
-          title: "未命名会话",
-          cwd,
-          ...s,
-          updatedAt: s.updatedAt ?? new Date().toISOString(),
-        };
-        return {
-          workspaceSessions: {
-            ...state.workspaceSessions,
-            [cwd]: [inserted, ...state.workspaceSessions[cwd]],
-          },
-        };
-      }
-
-      // Node not expanded — nothing to insert into right now.
-      return {};
+      // Non-empty cwd ⇒ belongs to a 空间 node. Keep the row even when the
+      // node has never been expanded. The next expansion refreshes the canonical
+      // list, but until then the newly-created/searched session remains addressable.
+      const inserted: SessionSummary = {
+        title: "未命名会话",
+        cwd,
+        ...patch,
+        updatedAt: patch.updatedAt ?? new Date().toISOString(),
+      };
+      const existingWorkspace = state.workspaces.find((workspace) => workspace.cwd === cwd);
+      const workspaces = existingWorkspace
+        ? state.workspaces.map((workspace) =>
+            workspace.cwd === cwd
+              ? { ...workspace, sessionCount: workspace.sessionCount + 1, lastTitle: inserted.title }
+              : workspace,
+          )
+        : [{ cwd, sessionCount: 1, lastTitle: inserted.title }, ...state.workspaces];
+      return {
+        workspaceSessions: {
+          ...state.workspaceSessions,
+          [cwd]: [inserted, ...(state.workspaceSessions[cwd] ?? [])],
+        },
+        workspaces,
+        pendingSessionPatches,
+      };
     }),
 
-  remove: (id) =>
+  remove: (id, explicitCwd) =>
     set((state) => {
+      const removedIndependent = state.independent.find((x) => x.sessionId === id);
       const independent = state.independent.filter((x) => x.sessionId !== id);
 
       // Drop from any 空间 node cache that holds it, remembering which cwd
@@ -225,11 +286,13 @@ export const useSessionsStore = create<SessionsState>((set) => ({
 
       // Optimistically decrement the affected node's count (floored at 0).
       // A subsequent refresh corrects this against the on-disk truth.
+      const authoritativeCwd = removedCwd
+        ?? (explicitCwd && explicitCwd !== state.homeCwd ? explicitCwd : null);
       const workspaces =
-        removedCwd == null
+        authoritativeCwd == null
           ? state.workspaces
           : state.workspaces.map((w) =>
-              w.cwd === removedCwd
+              w.cwd === authoritativeCwd
                 ? { ...w, sessionCount: Math.max(0, w.sessionCount - 1) }
                 : w,
             );
@@ -241,11 +304,20 @@ export const useSessionsStore = create<SessionsState>((set) => ({
         delete drafts[id];
       }
 
+      const pendingSessionPatches = { ...state.pendingSessionPatches };
+      delete pendingSessionPatches[id];
+
+      // If neither the visible lists nor an explicit cwd knew this id, preserve
+      // object identity and counts instead of applying a speculative decrement.
+      const found = !!removedIndependent || removedCwd !== null || !!state.pendingSessionPatches[id];
+      if (!found && !explicitCwd) return {};
+
       return {
         independent,
         workspaceSessions,
         workspaces,
         drafts,
+        pendingSessionPatches,
         currentSessionId:
           state.currentSessionId === id ? null : state.currentSessionId,
       };
