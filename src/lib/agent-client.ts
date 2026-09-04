@@ -81,6 +81,7 @@ export interface InitResult {
   /** Build identity from the native binary, independent of frontend assets. */
   buildCommit: string;
   buildTime: string;
+  buildCommitTime: string;
   logDir: string;
 }
 
@@ -109,6 +110,9 @@ export async function agentNewSession(cwd: string, modelId?: string): Promise<st
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
+      // Last-resort guard only: the backend now bounds this itself at 45s and
+      // reclaims a session that the Runtime finishes after the timeout, so a
+      // retry adopts that session instead of creating a duplicate.
       reject(new Error("创建 Agent 会话超时（50 秒），请重试；若持续失败请完全退出后重启应用。"));
     }, 50_000);
   });
@@ -357,6 +361,29 @@ export interface ModelOptionRow {
   label: string;
   providerKind: ProviderKind;
   providerId: string;
+}
+
+/**
+ * Restrict model options to the Runtime's effective catalog.
+ *
+ * `config.toml`'s `[models]` filters (`allowed_models`, `hidden_models`,
+ * `disabled_models`) are applied inside the Runtime, so a model configured on
+ * disk may legitimately not be selectable. The backend refuses those on send,
+ * so offering them in the picker would produce an avoidable error.
+ *
+ * An empty `runtimeModels` means the catalog has not been read yet (init in
+ * flight); the disk list is returned unchanged so the picker does not blank out.
+ */
+export function filterModelsByRuntimeCatalog(
+  options: ModelOptionRow[],
+  runtimeModels: string[],
+): ModelOptionRow[] {
+  if (runtimeModels.length === 0) return options;
+  const catalog = new Set(runtimeModels);
+  const allowed = options.filter((option) => catalog.has(option.id));
+  // Never hand back an empty picker on an unexpected id mismatch — a visible
+  // list that errors on send beats a list with nothing in it.
+  return allowed.length > 0 ? allowed : options;
 }
 
 /** Flatten a ProviderListModel into per-model rows (id + label + provider). */

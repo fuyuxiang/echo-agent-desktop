@@ -155,14 +155,22 @@ fn config_path() -> PathBuf {
 /// acknowledged the exact configuration currently on disk. The source values
 /// (including API keys) never cross the Tauri boundary or enter logs.
 pub(crate) fn model_config_revision() -> String {
-    let config = read_config();
+    model_config_revision_of(&read_config())
+}
+
+/// Pure digest of the model-related sections of a config value.
+fn model_config_revision_of(config: &Value) -> String {
     let mut relevant = Map::new();
     let table = config.as_table();
-    // `internal/reload_models` explicitly refreshes only Config::config_models
-    // and Config::model_providers. Other sections are runtime/startup settings;
-    // including them here would permanently lock chat after an unrelated save
-    // that this reload endpoint never applies.
-    for key in ["model", "model_providers"] {
+    // `internal/reload_models` refreshes Config::models (the whole `[models]`
+    // table: default model, allowed/hidden/disabled filters, search and summary
+    // model pins), Config::config_models and Config::model_providers. All three
+    // must be part of the digest: a filter-only edit changes what the Runtime
+    // catalog exposes, so a revision that ignored `[models]` could not prove the
+    // Runtime had applied the configuration currently on disk. Other sections
+    // are runtime/startup settings this endpoint never applies; including them
+    // would permanently lock chat after an unrelated save.
+    for key in ["model", "models", "model_providers"] {
         if let Some(value) = table.and_then(|table| table.get(key)) {
             relevant.insert(key.to_string(), value.clone());
         }
@@ -1854,6 +1862,61 @@ async fn fetch_models(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- model_config_revision ---
+
+    /// `internal/reload_models` reloads the whole `[models]` table, so a filter
+    /// edit must move the revision. Otherwise a stale Runtime catalog could be
+    /// certified as synchronized against the new configuration.
+    #[test]
+    fn revision_tracks_model_filter_changes() {
+        let base: Value = r#"
+[models]
+default = "model-a"
+[model.model-a]
+[model_providers.p1]
+base_url = "https://example.com"
+"#
+        .parse()
+        .expect("base config parses");
+        let filtered: Value = r#"
+[models]
+default = "model-a"
+hidden_models = ["model-a"]
+[model.model-a]
+[model_providers.p1]
+base_url = "https://example.com"
+"#
+        .parse()
+        .expect("filtered config parses");
+
+        assert_ne!(
+            model_config_revision_of(&base),
+            model_config_revision_of(&filtered),
+            "a [models] filter edit must change the revision"
+        );
+        assert_eq!(
+            model_config_revision_of(&base),
+            model_config_revision_of(&base.clone()),
+            "the digest must be stable for identical input"
+        );
+    }
+
+    /// Sections the reload endpoint never applies must not move the revision, or
+    /// an unrelated save would lock chat until the next reload.
+    #[test]
+    fn revision_ignores_unrelated_sections() {
+        let base: Value = "[models]\ndefault = \"model-a\"\n"
+            .parse()
+            .expect("base parses");
+        let with_extra: Value = "[models]\ndefault = \"model-a\"\n[tui]\ntheme = \"dark\"\n"
+            .parse()
+            .expect("extended parses");
+        assert_eq!(
+            model_config_revision_of(&base),
+            model_config_revision_of(&with_extra)
+        );
+    }
 
     // --- infer_provider_kind ---
 

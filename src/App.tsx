@@ -45,6 +45,7 @@ import {
   togglePlanMode,
   providersList,
   flattenModels,
+  filterModelsByRuntimeCatalog,
   notificationAppend,
   memoryAppend,
   internalReload,
@@ -257,7 +258,16 @@ function Shell() {
   const refreshModels = useCallback(async () => {
     try {
       const [list, auth] = await Promise.all([providersList(), agentAuthStatus()]);
-      const options = flattenModels(list);
+      // Show only what the Runtime can actually serve. `[models]` filters
+      // (allowed_models / hidden_models / disabled_models) are applied inside
+      // the Runtime, so a disk entry can be absent from its catalog — offering
+      // it here would let the user pick a model the backend then refuses.
+      // While the catalog is still empty (init in flight) keep the disk list, or
+      // the picker would blank out on every cold start.
+      const options = filterModelsByRuntimeCatalog(
+        flattenModels(list),
+        auth.runtimeModels,
+      );
       setModels(options);
       modelsRef.current = options;
 
@@ -616,7 +626,12 @@ function Shell() {
         // Load the model list (from config.toml [model.*]) for the picker.
         // Each model becomes one ModelOption; the id is the EchoAgent routing slug.
         const providers = await providersList();
-        const providerOptions = flattenModels(providers);
+        // Same Runtime-catalog restriction as `refreshModels`: only offer models
+        // the Runtime actually exposes after applying its `[models]` filters.
+        const providerOptions = filterModelsByRuntimeCatalog(
+          flattenModels(providers),
+          result.auth.runtimeModels,
+        );
         setModels(providerOptions);
         modelsRef.current = providerOptions;
 
