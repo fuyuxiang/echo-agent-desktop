@@ -1704,24 +1704,35 @@ button,
   border-radius: 9px;
 }
 
+/* Token counts routinely reach 7-9 digits, so the column has to stay wide
+ * enough for the value below to render in full instead of being clipped. */
 .quota-panel__stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
   gap: 12px;
   padding: 20px;
 }
 
 .quota-panel__stat {
   gap: 4px;
-  padding: 18px;
+  padding: 16px 14px;
   border: 1px solid var(--ui-line);
   border-radius: var(--ui-radius-md);
   background: var(--ui-surface-muted);
 }
 
+/* Scale with the card so a long value shrinks instead of getting cut off. */
 .quota-panel__stat-value,
 .quota-panel__stat strong {
-  font-size: 25px;
+  font-size: clamp(15px, 1.55vw, 22px);
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.quota-panel__stat span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .quota-panel__quota,
