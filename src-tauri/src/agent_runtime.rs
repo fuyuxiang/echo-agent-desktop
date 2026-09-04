@@ -49,6 +49,38 @@ pub struct AgentHandle {
     pub thread: Option<std::thread::JoinHandle<Result<()>>>,
 }
 
+/// Accept only an absolute http(s) URL, mirroring `providers::usable_model_ids`.
+fn usable_base_url(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let parsed = url::Url::parse(trimmed).ok()?;
+    matches!(parsed.scheme(), "http" | "https").then(|| trimmed.to_string())
+}
+
+/// Pick the first usable BYOK inference base URL, provider entries first.
+///
+/// Split from the raw-TOML walk so the selection rule is unit-testable without
+/// constructing a Runtime config: `provider_base_urls` comes from
+/// `[model_providers.*].base_url` (the format the settings UI writes) and
+/// `model_base_urls` from per-model `base_url` keys (the legacy format).
+/// Providers win because a UI-configured model carries no `base_url` of its own.
+fn pick_byok_base_url<'a>(
+    provider_base_urls: impl IntoIterator<Item = &'a str>,
+    model_base_urls: impl IntoIterator<Item = &'a str>,
+) -> Option<String> {
+    provider_base_urls
+        .into_iter()
+        .find_map(usable_base_url)
+        .or_else(|| model_base_urls.into_iter().find_map(usable_base_url))
+}
+
+/// Per-model `base_url` values from the legacy config format.
+fn legacy_model_base_urls(cfg: &AgentConfig) -> Vec<&str> {
+    cfg.config_models
+        .values()
+        .filter_map(|model| model.base_url.as_deref())
+        .collect()
+}
+
 /// Spawn the EchoAgent runtime in-process on a dedicated thread.
 ///
 /// `cwd` is the working directory the agent binds sessions to (typically the
@@ -65,6 +97,19 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
     // Team tools 已迁移到内嵌 MCP server（team_mcp.rs，lib.rs 启动时 serve）。
     // 这里不再需要注册 —— new_session 会把 MCP server 传给 EchoAgent，EchoAgent 以
     // client 身份连接（工具名 echoagent__create_team 等）。对 EchoAgent 零补丁。
+
+    // 0. Pin off the Runtime's upstream model-catalog fetch before the config is
+    // read, so the load below already sees it. BYOK-only: the remote catalog adds
+    // nothing but would merge upstream-branded model ids into the picker. A
+    // failure here is not fatal — the branded-id filters downstream still hold —
+    // so it is logged rather than propagated.
+    match crate::agent_config::ensure_remote_fetch_disabled() {
+        Ok(true) => tracing::info!("BYOK: pinned [features] remote_fetch = false"),
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(%error, "could not pin [features] remote_fetch; continuing")
+        }
+    }
 
     // 1. Load + resolve config (~/.echo-agent/config.toml; defaults if absent).
     let raw = load_effective_config().map_err(|e| anyhow!("load config: {e}"))?;
@@ -101,23 +146,33 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
     // (`start_early_prefetch` + thread join). See module comment above.
     cfg.remote_settings = Some(local_remote_settings);
 
-    // BYOK model isolation: if the user has any [model.*] with a custom
+    // BYOK model isolation: if the user has any BYOK connection with a custom
     // base_url, set endpoints.models_base_url so the runtime's `has_custom_endpoint()`
-    // returns true → skips loading built-in default models (gpt-5.6-terra,
-    // Claude, Kimi, etc.). Those built-ins route through an upstream proxy that
-    // requires upstream credentials, so selecting one in a BYOK-only setup yields 401.
+    // returns true → skips loading built-in default models. Those built-ins route
+    // through an upstream proxy that requires upstream credentials, so selecting one
+    // in a BYOK-only setup yields 401 — and their upstream-branded ids would surface
+    // in the desktop UI (model picker, About dialog, usage table).
+    //
+    // `raw` is the embedded Runtime's toml 0.9 value while this crate pins its
+    // own toml 0.8, so it is walked through inherent methods without naming the
+    // type — the same in-place approach as the `[memory] enabled` read above.
     if cfg.endpoints.models_base_url.is_none() {
-        if let Some(first_byok_url) = cfg
-            .config_models
-            .values()
-            .filter_map(|m| m.base_url.as_deref())
-            .find(|u| !u.is_empty())
+        let provider_urls: Vec<&str> = raw
+            .get("model_providers")
+            .and_then(|providers| providers.as_table())
+            .into_iter()
+            .flat_map(|providers| providers.values())
+            .filter_map(|provider| provider.get("base_url")?.as_str())
+            .collect();
+        let model_urls = legacy_model_base_urls(&cfg);
+        if let Some(first_byok_url) =
+            pick_byok_base_url(provider_urls, model_urls.into_iter())
         {
-            cfg.endpoints.models_base_url = Some(first_byok_url.to_string());
             tracing::info!(
                 models_base_url = %first_byok_url,
                 "BYOK: set endpoints.models_base_url to skip built-in default models"
             );
+            cfg.endpoints.models_base_url = Some(first_byok_url);
         }
     }
 
@@ -710,5 +765,90 @@ mod tests {
         if let Some(thread) = handle.thread {
             let _ = tokio::task::spawn_blocking(move || thread.join()).await;
         }
+    }
+}
+
+/// Pure unit tests for the BYOK endpoint-isolation rule. Unlike the smoke test
+/// above these spawn nothing and always run.
+#[cfg(test)]
+mod byok_isolation_tests {
+    use super::{pick_byok_base_url, usable_base_url};
+
+    #[test]
+    fn accepts_http_and_https_only() {
+        assert_eq!(
+            usable_base_url("https://api.deepseek.com"),
+            Some("https://api.deepseek.com".to_string())
+        );
+        assert_eq!(
+            usable_base_url("http://127.0.0.1:11434/v1"),
+            Some("http://127.0.0.1:11434/v1".to_string())
+        );
+        for rejected in ["", "   ", "not-a-url", "ftp://example.com", "file:///etc/hosts"] {
+            assert_eq!(usable_base_url(rejected), None, "{rejected:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn trims_surrounding_whitespace() {
+        assert_eq!(
+            usable_base_url("  https://api.openai.com/v1  "),
+            Some("https://api.openai.com/v1".to_string())
+        );
+    }
+
+    /// The regression this whole change exists for: a connection saved by the
+    /// settings UI keeps `base_url` on `[model_providers.<id>]`, so the model
+    /// entry carries none. Scanning models alone found nothing and the bundled
+    /// upstream catalog leaked into the picker.
+    #[test]
+    fn provider_base_url_is_found_when_models_carry_none() {
+        assert_eq!(
+            pick_byok_base_url(["https://api.deepseek.com"], std::iter::empty()),
+            Some("https://api.deepseek.com".to_string())
+        );
+    }
+
+    #[test]
+    fn legacy_per_model_base_url_still_works() {
+        assert_eq!(
+            pick_byok_base_url(std::iter::empty(), ["https://legacy.example.com/v1"]),
+            Some("https://legacy.example.com/v1".to_string())
+        );
+    }
+
+    #[test]
+    fn providers_win_over_legacy_model_entries() {
+        assert_eq!(
+            pick_byok_base_url(["https://provider.example.com"], ["https://legacy.example.com"]),
+            Some("https://provider.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn skips_unusable_entries_before_settling_on_a_valid_one() {
+        assert_eq!(
+            pick_byok_base_url(["", "not-a-url", "https://third.example.com"], std::iter::empty()),
+            Some("https://third.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn falls_back_to_models_when_every_provider_url_is_unusable() {
+        assert_eq!(
+            pick_byok_base_url(["", "ftp://nope"], ["https://model.example.com"]),
+            Some("https://model.example.com".to_string())
+        );
+    }
+
+    /// No configured connection yet (first launch): nothing to isolate against.
+    /// This is the one case where the bundled catalog can still load, which is
+    /// why the branded-id filters downstream are not optional.
+    #[test]
+    fn no_configuration_yields_none() {
+        assert_eq!(
+            pick_byok_base_url(std::iter::empty(), std::iter::empty()),
+            None
+        );
     }
 }

@@ -18,6 +18,7 @@ import {
   type QuotaConfig,
   type UsageRecord,
 } from "@/lib/usage-quota";
+import { sanitizeModelLabel, stripUpstreamBrandedIds } from "@/lib/model-branding";
 
 type Period = "daily" | "monthly";
 type RateDraft = { prompt: string; completion: string };
@@ -64,9 +65,17 @@ function lastLocalDateKeys(days: number): string[] {
   return result;
 }
 
+/**
+ * 明细行的模型列文案。带上游品牌词的 id 显示为中性文案 —— 历史用量记录可能是在源头
+ * 防护生效之前落盘的,过滤保证旧数据也不会把品牌名带到界面上。
+ */
 function recordModels(record: UsageRecord): string {
   const ids = Object.keys(record.modelUsage ?? {});
-  return ids.length > 0 ? ids.join(", ") : record.modelId || "unknown";
+  if (ids.length > 0) {
+    const labels = new Set(ids.map((id) => sanitizeModelLabel(id)));
+    return Array.from(labels).join(", ");
+  }
+  return record.modelId ? sanitizeModelLabel(record.modelId) : "unknown";
 }
 
 export function UsageQuotaPanel() {
@@ -118,10 +127,12 @@ export function UsageQuotaPanel() {
   }, config), [config, records, trendKeys]);
   const trendMax = Math.max(1, ...trendKeys.map((date) => trendSummary.byDate[date]?.tokens ?? 0));
 
-  const modelIds = useMemo(() => Array.from(new Set([
+  // 费率配置列表剔除带上游品牌词的 id:那些模型在 BYOK 环境下不可调用,为其配置费率
+  // 没有意义,而这里必须显示原始 id(它是费率表的键),无法像别处那样替换成中性文案。
+  const modelIds = useMemo(() => stripUpstreamBrandedIds(Array.from(new Set([
     ...Object.keys(summarizeUsage(records, undefined, config).byModel),
     ...Object.keys(config.rates ?? {}),
-  ])).sort(), [config, records]);
+  ]))).sort(), [config, records]);
 
   useEffect(() => {
     setRateDrafts(Object.fromEntries(modelIds.map((modelId) => {
@@ -267,7 +278,7 @@ export function UsageQuotaPanel() {
             <div className="quota-panel__model-row quota-panel__model-row--head" role="row"><span>模型</span><span>输入</span><span>输出</span><span>缓存</span><span>调用</span><span>费用</span></div>
             {Object.entries(summary.byModel).sort((a, b) => b[1].tokens - a[1].tokens).map(([modelId, row]) => (
               <div key={modelId} className="quota-panel__model-row" role="row">
-                <span className="quota-panel__model-name" title={modelId}>{modelId}</span><span>{formatTokens(row.promptTokens)}</span><span>{formatTokens(row.completionTokens)}</span><span>{formatTokens(row.cachedReadTokens)}</span><span>{formatTokens(row.count)}</span><span>{row.cost > 0 ? `$${row.cost.toFixed(4)}` : "—"}</span>
+                <span className="quota-panel__model-name" title={sanitizeModelLabel(modelId)}>{sanitizeModelLabel(modelId)}</span><span>{formatTokens(row.promptTokens)}</span><span>{formatTokens(row.completionTokens)}</span><span>{formatTokens(row.cachedReadTokens)}</span><span>{formatTokens(row.count)}</span><span>{row.cost > 0 ? `$${row.cost.toFixed(4)}` : "—"}</span>
               </div>
             ))}
           </div>

@@ -8,6 +8,7 @@ import { XCloseIcon, CheckIcon } from "@/foundation/components/Icon/icons";
 import { agentAuthStatus } from "@/lib/agent-client";
 import type { InitResult } from "@/lib/agent-client";
 import { APP_VERSION } from "@/lib/app-version";
+import { isUpstreamBrandedModelId, stripUpstreamBrandedIds } from "@/lib/model-branding";
 const logoMarkUrl = "/app-icon.png";
 const RUNTIME_LABEL = "EchoAgent Runtime（内置）";
 
@@ -28,7 +29,8 @@ export function AboutDialog({ open, onClose, init, onCheckForUpdates }: AboutDia
     agentAuthStatus()
       .then((s) => {
         setAuthReady(s.ready);
-        setProviders(s.providers);
+        // 兜底：上游品牌模型不进入这一行。就绪状态仍取后端原值，过滤只影响显示。
+        setProviders(stripUpstreamBrandedIds(s.providers));
         setRuntimeReason(s.reason ?? null);
       })
       .catch((error) => {
@@ -88,7 +90,11 @@ export function AboutDialog({ open, onClose, init, onCheckForUpdates }: AboutDia
           </div>
           <div className="about-dialog__row">
             <dt>默认模型</dt>
-            <dd>{init?.defaultModelId ?? "未指定"}</dd>
+            <dd>
+              {isUpstreamBrandedModelId(init?.defaultModelId)
+                ? "未指定"
+                : init?.defaultModelId ?? "未指定"}
+            </dd>
           </div>
           <div className="about-dialog__row">
             <dt>工作目录</dt>

@@ -129,3 +129,40 @@ describe("countModelSwitches", () => {
     expect(countModelSwitches([m("a", { modelId: "x" }), m("b", { modelId: "x" })])).toBe(0);
   });
 });
+
+describe("buildTimeline 品牌模型兜底", () => {
+  it("带上游品牌词的 modelId 不生成分隔条", () => {
+    const nodes = buildTimeline([m("a", { modelId: "grok-4.6" })]);
+    expect(nodes.filter((n) => n.kind === "model-divider")).toHaveLength(0);
+    expect(nodes.filter((n) => n.kind === "message")).toHaveLength(1);
+  });
+
+  it("分隔条文案不含品牌词", () => {
+    const nodes = buildTimeline([
+      m("a", { modelId: "grok-4.6" }),
+      m("b", { modelId: "gpt-4o" }),
+    ]);
+    const labels = nodes
+      .filter((n): n is Extract<typeof n, { kind: "model-divider" }> => n.kind === "model-divider")
+      .map((n) => n.label);
+    expect(labels).toEqual(["已切换到 gpt-4o"]);
+  });
+
+  it("从品牌模型切到真实模型时仍生成一次分隔条", () => {
+    const nodes = buildTimeline([
+      m("a", { modelId: "grok-4.6" }),
+      m("b", { modelId: "deepseek-chat" }),
+      m("c", { modelId: "deepseek-chat" }),
+    ]);
+    expect(nodes.filter((n) => n.kind === "model-divider")).toHaveLength(1);
+  });
+
+  it("消息本身不会因为品牌 modelId 被丢弃", () => {
+    const nodes = buildTimeline([
+      m("a", { modelId: "grok-4.6" }),
+      m("b", { modelId: "grok-4.5" }),
+    ]);
+    expect(nodes.filter((n) => n.kind === "message")).toHaveLength(2);
+    expect(nodes.filter((n) => n.kind === "model-divider")).toHaveLength(0);
+  });
+});

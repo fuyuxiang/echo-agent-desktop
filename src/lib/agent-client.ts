@@ -51,6 +51,7 @@ import type {
 } from "./types";
 
 import type { QuestionRequest } from "@/stores/question-store";
+import { isUpstreamBrandedModelId } from "@/lib/model-branding";
 
 // ---------- commands ----------
 
@@ -378,12 +379,17 @@ export function filterModelsByRuntimeCatalog(
   options: ModelOptionRow[],
   runtimeModels: string[],
 ): ModelOptionRow[] {
-  if (runtimeModels.length === 0) return options;
+  // Upstream-branded ids never belong in the picker, including on the
+  // mismatch fallback below — they come from the embedded Runtime's bundled
+  // catalog, not from a connection the user configured, so selecting one
+  // cannot succeed. See `model-branding`.
+  const selectable = options.filter((option) => !isUpstreamBrandedModelId(option.id));
+  if (runtimeModels.length === 0) return selectable;
   const catalog = new Set(runtimeModels);
-  const allowed = options.filter((option) => catalog.has(option.id));
+  const allowed = selectable.filter((option) => catalog.has(option.id));
   // Never hand back an empty picker on an unexpected id mismatch — a visible
   // list that errors on send beats a list with nothing in it.
-  return allowed.length > 0 ? allowed : options;
+  return allowed.length > 0 ? allowed : selectable;
 }
 
 /** Flatten a ProviderListModel into per-model rows (id + label + provider). */
