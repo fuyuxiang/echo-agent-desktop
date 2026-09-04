@@ -29,3 +29,28 @@ describe("filterModelsByRuntimeCatalog", () => {
     expect(filterModelsByRuntimeCatalog(three, ["m3", "m1"])).toEqual([row("m1"), row("m3")]);
   });
 });
+
+describe("filterModelsByRuntimeCatalog 品牌模型兜底", () => {
+  it("即使 Runtime 目录里有品牌模型，也不出现在选择器中", () => {
+    const options = [row("gpt-4o"), row("grok-4.6")];
+    expect(filterModelsByRuntimeCatalog(options, ["gpt-4o", "grok-4.6"])).toEqual([
+      row("gpt-4o"),
+    ]);
+  });
+
+  it("Runtime 目录未读取时也过滤品牌模型", () => {
+    const options = [row("gpt-4o"), row("grok-4.5")];
+    expect(filterModelsByRuntimeCatalog(options, [])).toEqual([row("gpt-4o")]);
+  });
+
+  it("id 不匹配回退到磁盘列表时仍不放行品牌模型", () => {
+    const options = [row("deepseek-chat"), row("grok-4.6")];
+    expect(filterModelsByRuntimeCatalog(options, ["unrelated"])).toEqual([
+      row("deepseek-chat"),
+    ]);
+  });
+
+  it("磁盘列表只有品牌模型时返回空选择器（没有可用模型可提供）", () => {
+    expect(filterModelsByRuntimeCatalog([row("grok-4.6"), row("grok-4.5")], [])).toEqual([]);
+  });
+});
