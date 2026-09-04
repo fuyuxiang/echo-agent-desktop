@@ -122,6 +122,28 @@ describe("zip-reader — listZipEntries / extractEntry", () => {
     const [entry] = listZipEntries(zip);
     expect(Buffer.from(extractEntry(zip, entry)).equals(original)).toBe(true);
   });
+
+  it("拒绝越界条目和超限解压输出", () => {
+    const corrupt = Buffer.from(buildZip([
+      { name: "bad", method: 0, data: Buffer.from("x") },
+    ]));
+    corrupt.writeUInt32LE(10_000, 18);
+    expect(() => listZipEntries(corrupt)).toThrow(/bounds/);
+
+    const compressed = deflateRawSync(Buffer.from("A".repeat(8_192)));
+    const bomb = buildZip([{ name: "large.xml", method: 8, data: compressed }]);
+    const [entry] = listZipEntries(bomb);
+    expect(() => extractEntry(bomb, entry, 1_024)).toThrow(/limit/);
+  });
+
+  it("条目映射没有可被 __proto__ 污染的原型", () => {
+    const zip = buildZip([
+      { name: "__proto__", method: 0, data: Buffer.from("safe") },
+    ]);
+    const files = readZip(zip);
+    expect(Object.getPrototypeOf(files)).toBeNull();
+    expect(Buffer.from(files.__proto__).toString()).toBe("safe");
+  });
 });
 
 describe("zip-reader → doc-preview ZipReader 适配", () => {

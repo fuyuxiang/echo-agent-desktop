@@ -8,6 +8,7 @@ import {
   type OrgScope,
 } from "@/lib/org-client";
 import type { SkillInfo } from "@/lib/types";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 function scopeLabel(scope: OrgScope): string {
   return scope.kind === "team" ? `团队 · ${scope.name}` : `全组织 · ${scope.name}`;
@@ -29,6 +30,9 @@ export function UploadSkillModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const name = skill.displayName || skill.name;
+  const dialogRef = useModalFocus<HTMLDivElement>(true, () => {
+    if (!busy) onClose();
+  });
 
   useEffect(() => {
     let alive = true;
@@ -76,14 +80,16 @@ export function UploadSkillModal({
   };
 
   return (
-    <div className="modal-overlay sk-import-overlay" onClick={() => !busy && onClose()}>
-      <div className="sk-import sk-upload" onClick={(event) => event.stopPropagation()}>
+    <div className="modal-overlay sk-import-overlay" onClick={(event) => {
+      if (event.target === event.currentTarget && !busy) onClose();
+    }}>
+      <div ref={dialogRef} className="sk-import sk-upload" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={`上传技能「${name}」`} tabIndex={-1}>
         <div className="sk-import-head">
           <div>
             <h3>上传到组织</h3>
             <p>将本地 Skill「{name}」打包后提交给服务器，审核通过后其他用户可安装。</p>
           </div>
-          <button type="button" className="sk-import-close" onClick={onClose} disabled={busy} aria-label="关闭">
+          <button type="button" className="sk-import-close" onClick={onClose} disabled={busy} aria-label="关闭" data-modal-initial-focus>
             <XCloseIcon size="md" />
           </button>
         </div>
@@ -104,7 +110,7 @@ export function UploadSkillModal({
             </label>
           ) : null}
 
-          {error && <div className="sk-install-error">{error}</div>}
+          {error && <div className="sk-install-error" role="alert">{error}</div>}
 
           <div className="sk-upload-note">
             上传内容会先经过服务器安全扫描。普通成员提交到团队或组织后，需要管理员审核才会对其他用户可见。

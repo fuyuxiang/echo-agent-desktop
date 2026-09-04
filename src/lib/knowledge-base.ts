@@ -148,19 +148,50 @@ export async function listKbProvidersWithStats(): Promise<
  * 支持 async provider(list 可能返回 Promise)。
  */
 export async function searchKb(query: string): Promise<KbEntry[]> {
+  return (await searchKbWithDiagnostics(query)).entries;
+}
+
+/** A provider-level search failure that callers can surface without losing
+ * results returned by healthy providers. */
+export interface KbSearchFailure {
+  id: string;
+  label: string;
+  message: string;
+}
+
+export interface KbSearchResult {
+  entries: KbEntry[];
+  failures: KbSearchFailure[];
+  successfulProviders: number;
+}
+
+/**
+ * Search every provider while retaining provider-level failures. The legacy
+ * `searchKb` helper intentionally returns entries only; interactive surfaces
+ * should use this diagnostic variant so an outage is not presented as a true
+ * empty result.
+ */
+export async function searchKbWithDiagnostics(query: string): Promise<KbSearchResult> {
   const out: KbEntry[] = [];
+  const failures: KbSearchFailure[] = [];
+  let successfulProviders = 0;
   for (const p of registry.providers) {
-    if (!p.isEnabled()) continue;
     try {
+      if (!p.isEnabled()) continue;
       const list = await p.list(query);
       for (const e of list) {
         out.push({ ...e, source: e.source || p.id });
       }
-    } catch {
-      /* provider 故障不影响其它 */
+      successfulProviders += 1;
+    } catch (error) {
+      failures.push({
+        id: p.id,
+        label: p.label,
+        message: String(error).replace(/^Error:\s*/, "") || "未知错误",
+      });
     }
   }
-  return out;
+  return { entries: out, failures, successfulProviders };
 }
 
 /** 统计:启用 provider 数 + 条目总数(无 query 时 list() 返回全部)。 */

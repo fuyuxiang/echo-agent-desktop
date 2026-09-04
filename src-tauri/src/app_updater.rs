@@ -103,10 +103,7 @@ pub async fn app_update_check(app: AppHandle) -> Result<AppUpdateCheck, String> 
 /// different release than the one the user accepted. The official updater then
 /// downloads, verifies the minisign signature, installs, and restarts.
 #[tauri::command]
-pub async fn app_update_install(
-    app: AppHandle,
-    expected_version: String,
-) -> Result<(), String> {
+pub async fn app_update_install(app: AppHandle, expected_version: String) -> Result<(), String> {
     let updater = build_updater(&app)?;
     let update = updater
         .check()
@@ -134,12 +131,7 @@ pub async fn app_update_install(
                 let total_downloaded = progress_downloaded
                     .fetch_add(chunk_length as u64, Ordering::Relaxed)
                     + chunk_length as u64;
-                emit_progress(
-                    &progress_app,
-                    "progress",
-                    total_downloaded,
-                    content_length,
-                );
+                emit_progress(&progress_app, "progress", total_downloaded, content_length);
             },
             move || {
                 emit_progress(
@@ -153,12 +145,7 @@ pub async fn app_update_install(
         .await
         .map_err(|error| format!("更新下载、签名校验或安装失败：{error}"))?;
 
-    emit_progress(
-        &app,
-        "installed",
-        downloaded.load(Ordering::Relaxed),
-        None,
-    );
+    emit_progress(&app, "installed", downloaded.load(Ordering::Relaxed), None);
 
     // On Windows the updater exits after starting the installer and never
     // reaches this line. macOS/Linux replace the bundle in-place and need an

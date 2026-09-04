@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, Download, Loader2, X } from "lucide-react";
 import { APP_VERSION } from "@/lib/app-version";
 import { useUpdateStore } from "@/stores/update-store";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 function formatBytes(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "0 MB";
@@ -18,16 +19,21 @@ export function UpdateDialog({ open, onClose }: { open: boolean; onClose: () => 
   const install = useUpdateStore((state) => state.install);
   const busy = status === "checking" || status === "downloading" || status === "installing";
   const progress = total && total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : undefined;
+  const dialogRef = useModalFocus<HTMLElement>(open, () => {
+    if (!busy) onClose();
+  });
 
   if (!open) return null;
 
   return (
     <div className="update-dialog__overlay" role="presentation" onClick={() => !busy && onClose()}>
       <section
+        ref={dialogRef}
         className="update-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="update-dialog-title"
+        tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <button
@@ -35,6 +41,7 @@ export function UpdateDialog({ open, onClose }: { open: boolean; onClose: () => 
           onClick={onClose}
           disabled={busy}
           aria-label="关闭更新窗口"
+          data-modal-initial-focus
         >
           <X size={18} />
         </button>

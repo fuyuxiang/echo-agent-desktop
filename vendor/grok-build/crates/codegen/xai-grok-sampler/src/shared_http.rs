@@ -83,6 +83,9 @@ fn build_http_client() -> Result<reqwest::Client, reqwest::Error> {
 
     xai_grok_extra_ca::build_reqwest_client(|builder| {
         builder
+            // Sampling endpoints are explicit credential-bearing origins.
+            // Never replay their requests through an implicit redirect.
+            .redirect(reqwest::redirect::Policy::none())
             .pool_max_idle_per_host(pool_max_idle)
             .pool_idle_timeout(Duration::from_secs(pool_idle_timeout_secs))
             .connect_timeout(Duration::from_secs(connect_timeout_secs))
@@ -103,6 +106,7 @@ fn build_http_client_http1() -> Result<reqwest::Client, reqwest::Error> {
 
     xai_grok_extra_ca::build_reqwest_client(|builder| {
         builder
+            .redirect(reqwest::redirect::Policy::none())
             .http1_only()
             .pool_max_idle_per_host(0)
             .pool_idle_timeout(Duration::from_secs(0))

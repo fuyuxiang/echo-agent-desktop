@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Mic, X, type LucideIcon } from "lucide-react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ChevronDownIcon, SendPlaneIcon } from "@/foundation/components/Icon/icons";
 import { ModelSelector, type ModelOption } from "./ModelSelector";
 import { ThumbImg } from "./experts-panel/shared/ThumbImg";
@@ -30,18 +28,12 @@ import {
 } from "@/lib/slash-commands";
 import { InputAddMenu } from "./InputAddMenu";
 import {
-  collectDroppedPaths,
-  isDragHovering,
-  isDragDrop,
-  type DragDropEvent,
-} from "@/lib/drop-utils";
-import {
   registerAsrProvider,
   getActiveAsr,
   createWebSpeechAsrProvider,
 } from "@/lib/voice-contract";
 import type { AgentEntry } from "@/lib/types";
-import type { WorkspaceInfo } from "@/lib/agent-client";
+import { filesystemPickFiles, type WorkspaceInfo } from "@/lib/agent-client";
 
 /**
  * EchoAgent 风格输入卡片(圆角16):左下 +,右下 Auto 下拉/麦克风/发送;
@@ -51,6 +43,7 @@ import type { WorkspaceInfo } from "@/lib/agent-client";
  */
 export function Composer({
   streaming,
+  cancelling = false,
   disabled,
   onSend,
   onCancel,
@@ -104,9 +97,11 @@ export function Composer({
   usageMsgCount,
 }: {
   streaming: boolean;
+  /** A cancellation request is in flight; keep the stop action single-shot. */
+  cancelling?: boolean;
   disabled?: boolean;
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
-  onCancel: () => void;
+  onCancel: () => boolean | void | Promise<boolean | void>;
   placeholder?: string;
   apiReady?: boolean;
   /** Message shown when the composer is unavailable. */
@@ -399,8 +394,9 @@ export function Composer({
 
   const send = async () => {
     const t = text.trim();
-    // 允许空消息发送，或者需要有附件
-    if (streaming || sending || disabled || !apiReady) return;
+    // A scene tag is contextual metadata, not a user prompt. Require actual
+    // text or at least one attachment for every submission path.
+    if ((!t && attachments.length === 0) || streaming || sending || disabled || !apiReady) return;
 
     // Desktop-owned slash commands never enter the model transcript. Runtime
     // commands and Skills deliberately fall through to onSend/ACP unchanged.
@@ -461,74 +457,17 @@ export function Composer({
 
   const pickFiles = async () => {
     try {
-      const selected = await openDialog({ multiple: true });
-      if (!selected) return;
-      const paths = Array.isArray(selected) ? selected : [selected];
+      const paths = await filesystemPickFiles({ maxFiles: 20 });
+      if (paths.length === 0) return;
       setAttachments((prev) => {
         const set = new Set(prev);
         paths.forEach((p) => set.add(p));
         return [...set];
       });
-    } catch {
-      // dialog plugin not available in non-Tauri env (vitest) — no-op.
+    } catch (error) {
+      onToast?.(`选择附件失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
   };
-
-  // ---------- 拖拽文件附件(对齐 EchoAgent drop-zone)----------
-  // Tauri webview 的 DOM onDrop 拿不到本地文件绝对路径(只给 File blob),
-  // 必须用原生 drag-drop 事件。enter/over 显示遮罩;drop 收集路径并入附件;
-  // leave 隐藏遮罩。非 Tauri 环境(vitest)getCurrentWebview 会抛错,安全降级。
-  const [dragActive, setDragActive] = useState(false);
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    let cancelled = false;
-    try {
-      const webview = getCurrentWebview();
-      webview
-        .onDragDropEvent((event) => {
-          // Tauri 把 DragDropEvent 包在 Event<T>.payload 里。
-          const e = event.payload as DragDropEvent;
-          if (isDragDrop(e)) {
-            const incoming = collectDroppedPaths(e.paths);
-            if (incoming.length > 0) {
-              setAttachments((prev) => {
-                const seen = new Set(prev);
-                const out = [...prev];
-                for (const p of incoming) {
-                  if (!seen.has(p)) {
-                    seen.add(p);
-                    out.push(p);
-                  }
-                }
-                return out;
-              });
-            }
-            setDragActive(false);
-          } else {
-            setDragActive(isDragHovering(e));
-          }
-        })
-        .then((un) => {
-          if (cancelled) {
-            // 组件已卸载,立刻解绑。
-            try { un(); } catch { /* noop */ }
-          } else {
-            unlisten = un;
-          }
-        })
-        .catch(() => {
-          /* 非 Tauri 环境无此事件 — 静默降级 */
-        });
-    } catch {
-      /* getCurrentWebview 在非 Tauri 环境抛错 — 静默降级 */
-    }
-    return () => {
-      cancelled = true;
-      if (unlisten) {
-        try { unlisten(); } catch { /* noop */ }
-      }
-    };
-  }, []);
 
   // Cursor tracking for slash-command autocomplete.
   const [cursorPos, setCursorPos] = useState(0);
@@ -576,13 +515,6 @@ export function Composer({
         {!apiReady && (
           <div className="echo-composer__setup-hint" role="button" tabIndex={0}>
             {setupHint}
-          </div>
-        )}
-
-        {/* 拖拽文件落区遮罩(对齐 EchoAgent drop-zone) */}
-        {dragActive && (
-          <div className="echo-composer__dropzone" role="status" aria-live="polite">
-            <span className="echo-composer__dropzone-text">松开以添加文件到对话</span>
           </div>
         )}
 
@@ -825,9 +757,11 @@ export function Composer({
                 className="echo-composer__send echo-composer__send--stop"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onCancel();
+                  if (!cancelling) void onCancel();
                 }}
-                aria-label="停止生成"
+                disabled={cancelling}
+                aria-label={cancelling ? "正在停止生成" : "停止生成"}
+                title={cancelling ? "正在停止生成…" : "停止生成"}
               >
                 ■
               </button>
@@ -844,7 +778,7 @@ export function Composer({
                 e.stopPropagation();
                 send();
               }}
-              disabled={disabled || !apiReady || sending}
+              disabled={disabled || !apiReady || sending || (text.trim() === "" && attachments.length === 0)}
               aria-label="发送"
               title={!apiReady ? setupHint : sending ? "正在发送" : "发送消息"}
             >

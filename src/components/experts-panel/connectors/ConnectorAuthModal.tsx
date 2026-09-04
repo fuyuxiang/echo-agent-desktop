@@ -5,9 +5,9 @@
  * polling state), and surfaces the failure reason if the flow doesn't
  * complete.
  */
-import { useEffect, useRef } from "react";
 import type { ConnectorItem } from "@/lib/types";
 import { ConnectorIcon } from "../shared/ConnectorIcon";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 interface Props {
   connector: ConnectorItem;
@@ -17,19 +17,13 @@ interface Props {
 }
 
 export function ConnectorAuthModal({ connector, error, onClose }: Props) {
-  const overlayRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onClose);
 
   return (
-    <div className="ec-modal-overlay" ref={overlayRef}
-      onClick={(e) => { if (e.target === overlayRef.current) onClose(); }}>
-      <div className="ec-modal">
-        <button type="button" className="ec-modal-close" onClick={onClose} aria-label="关闭">×</button>
+    <div className="ec-modal-overlay"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div ref={dialogRef} className="ec-modal" role="dialog" aria-modal="true" aria-label={`${connector.name} 授权`} tabIndex={-1}>
+        <button type="button" className="ec-modal-close" onClick={onClose} aria-label="关闭" data-modal-initial-focus>×</button>
 
         <div className="ec-modal-header">
           <ConnectorIcon local={connector.iconLocal} name={connector.name} size={48} shape="square" />

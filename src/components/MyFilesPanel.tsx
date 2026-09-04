@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDownIcon } from "@/foundation/components/Icon/icons";
 import {
   SearchIcon,
@@ -217,6 +217,16 @@ function ArtifactsTab({
             onClick={() => void openLocalPath(entry.path, entry.cwd || cwd).catch((error) => {
               onToast?.(`打开成果失败：${String(error).replace(/^Error:\s*/, "")}`);
             })}
+            role="button"
+            tabIndex={0}
+            aria-label={`打开成果 ${entry.path}`}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              void openLocalPath(entry.path, entry.cwd || cwd).catch((error) => {
+                onToast?.(`打开成果失败：${String(error).replace(/^Error:\s*/, "")}`);
+              });
+            }}
           >
             <span className="myfiles-col-name">
               <FileTypeIcon type={ft} size={18} />
@@ -248,10 +258,14 @@ function LocalFilesTab({
   const [files, setFiles] = useState<LocalFileItem[]>([]);
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loadedDir, setLoadedDir] = useState<string | null>(null);
+  const loadGenerationRef = useRef(0);
   const currentDir = breadcrumb.length > 0 ? breadcrumb[breadcrumb.length - 1] : (cwd || "");
 
   const loadDir = useCallback(async (dir: string) => {
     if (!dir) return;
+    const generation = ++loadGenerationRef.current;
     setLoading(true);
     try {
       const entries = await listDir(dir, cwd, 2000);
@@ -267,17 +281,34 @@ function LocalFilesTab({
         if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
+      if (loadGenerationRef.current !== generation) return;
       setFiles(items);
-    } catch {
-      setFiles([]);
+      setLoadedDir(dir);
+      setError(null);
+    } catch (cause) {
+      if (loadGenerationRef.current !== generation) return;
+      setError(String(cause).replace(/^Error:\s*/, ""));
       onToast?.("读取目录失败，请检查目录是否存在且可读");
     } finally {
-      setLoading(false);
+      if (loadGenerationRef.current === generation) setLoading(false);
     }
-  }, [onToast]);
+  }, [cwd, onToast]);
 
   useEffect(() => {
-    if (currentDir) loadDir(currentDir);
+    setBreadcrumb([]);
+  }, [cwd]);
+
+  useEffect(() => {
+    if (currentDir) void loadDir(currentDir);
+    else {
+      setFiles([]);
+      setLoadedDir(null);
+      setError(null);
+      setLoading(false);
+    }
+    return () => {
+      loadGenerationRef.current += 1;
+    };
   }, [currentDir, loadDir]);
 
   const handleEnterFolder = (path: string) => {
@@ -345,6 +376,15 @@ function LocalFilesTab({
 
       {loading && <div className="myfiles-empty">加载中…</div>}
 
+      {!loading && error && (
+        <div className="myfiles-empty" role="alert">
+          <p>读取目录失败：{error}</p>
+          <button className="myfiles-empty-btn" type="button" onClick={() => void loadDir(currentDir)}>
+            <RefreshCwIcon size="sm" /> 重试
+          </button>
+        </div>
+      )}
+
       {!loading && !currentDir && (
         <div className="myfiles-empty">
           <FolderOpenIcon size="xl" />
@@ -352,14 +392,14 @@ function LocalFilesTab({
         </div>
       )}
 
-      {!loading && currentDir && filtered.length === 0 && (
+      {!loading && !error && currentDir && filtered.length === 0 && (
         <div className="myfiles-empty">
           <MyFilesIconV2 size="xl" />
           <p>暂无文件</p>
         </div>
       )}
 
-      {!loading && filtered.length > 0 && (
+      {!loading && filtered.length > 0 && (!error || loadedDir === currentDir) && (
         <div className="myfiles-table">
           <div className="myfiles-table-head">
             <span className="myfiles-col-name">名称</span>
@@ -375,6 +415,17 @@ function LocalFilesTab({
                 if (file.isDir) handleEnterFolder(file.path);
                 else void openLocalPath(file.path, cwd).catch((error) => {
                   onToast?.(`打开文件失败：${String(error).replace(/^Error:\s*/, "")}`);
+                });
+              }}
+              role="button"
+              tabIndex={0}
+              aria-label={`${file.isDir ? "打开文件夹" : "打开文件"} ${file.name}`}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                if (file.isDir) handleEnterFolder(file.path);
+                else void openLocalPath(file.path, cwd).catch((cause) => {
+                  onToast?.(`打开文件失败：${String(cause).replace(/^Error:\s*/, "")}`);
                 });
               }}
             >

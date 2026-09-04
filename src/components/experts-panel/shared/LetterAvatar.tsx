@@ -57,7 +57,7 @@ export function LetterAvatar({
     <span className={`um-avatar${className ? ` ${className}` : ""}`} style={style}
       aria-label={name} role="img">
       {showImg ? (
-        <img src={src} alt="" loading="lazy"
+        <img src={src} alt="" loading="lazy" referrerPolicy="no-referrer"
           onError={() => setFailed(true)}
           style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }} />
       ) : (

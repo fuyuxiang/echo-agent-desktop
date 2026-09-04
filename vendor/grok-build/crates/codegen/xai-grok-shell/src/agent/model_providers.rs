@@ -242,6 +242,7 @@ impl ConfigModelOverride {
 
 #[cfg(test)]
 mod tests {
+    use super::AuthScheme;
     use crate::agent::config::{Config, resolve_credentials, resolve_model_list};
     #[test]
     fn model_inherits_provider_connection_defaults() {

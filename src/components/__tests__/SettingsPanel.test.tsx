@@ -20,9 +20,12 @@ vi.mock("@/lib/agent-client", () => ({
   notificationMarkAllRead: vi.fn().mockResolvedValue(undefined),
   notificationClear: vi.fn().mockResolvedValue(undefined),
   permissionList: vi.fn().mockResolvedValue([]),
+  permissionSave: vi.fn().mockResolvedValue(undefined),
   skillsList: vi.fn().mockResolvedValue([]),
   subagentsConfigGet: vi.fn().mockResolvedValue({ maxDepth: 1 }),
+  subagentsConfigSave: vi.fn().mockResolvedValue(1),
   webSearchConfigGet: vi.fn().mockResolvedValue({ enabled: false, model: "" }),
+  webSearchConfigSave: vi.fn().mockResolvedValue(undefined),
   memoryConfigGet: vi.fn().mockResolvedValue({
     enabled: true,
     initialInjectionEnabled: true,
@@ -45,7 +48,17 @@ vi.mock("@/lib/org-client", () => ({
 
 import { SettingsPanel } from "../SettingsPanel";
 import { ThemeProvider } from "../ThemeProvider";
-import { memoryConfigSave, openExternalUrl } from "@/lib/agent-client";
+import {
+  memoryConfigSave,
+  notificationList,
+  openExternalUrl,
+  permissionList,
+  permissionSave,
+  subagentsConfigGet,
+  subagentsConfigSave,
+  webSearchConfigGet,
+  webSearchConfigSave,
+} from "@/lib/agent-client";
 
 function renderSettings() {
   return render(
@@ -56,6 +69,37 @@ function renderSettings() {
 }
 
 describe("SettingsPanel", () => {
+  it("打开后置焦点、圈定 Tab，Escape 关闭并恢复原焦点", async () => {
+    const opener = document.createElement("button");
+    opener.textContent = "打开设置";
+    document.body.appendChild(opener);
+    opener.focus();
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <ThemeProvider>
+        <SettingsPanel open onClose={onClose} />
+      </ThemeProvider>,
+    );
+
+    const close = screen.getByRole("button", { name: "关闭设置" });
+    expect(close).toHaveFocus();
+    const dialog = screen.getByRole("dialog", { name: "设置" });
+    const focusable = Array.from(dialog.querySelectorAll<HTMLButtonElement>("button:not([disabled])"));
+    focusable[focusable.length - 1]?.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(focusable[0]).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    rerender(
+      <ThemeProvider>
+        <SettingsPanel open={false} onClose={onClose} />
+      </ThemeProvider>,
+    );
+    expect(opener).toHaveFocus();
+    opener.remove();
+  });
+
   it("按使用场景分组全部设置入口，并默认打开模型页", async () => {
     const { container } = renderSettings();
 
@@ -138,6 +182,51 @@ describe("SettingsPanel", () => {
     expect(screen.getByRole("button", { name: "清空" })).toBeDisabled();
   });
 
+  it("通知类型可按后端 snake_case 值筛选", async () => {
+    vi.mocked(notificationList).mockResolvedValueOnce([
+      {
+        id: 1,
+        kind: "folder_trust",
+        at: "2026-09-04T20:00:00+08:00",
+        title: "需要信任工作区",
+        severity: "warn",
+        read: false,
+      },
+      {
+        id: 2,
+        kind: "info",
+        at: "2026-09-04T20:01:00+08:00",
+        title: "普通通知",
+        severity: "info",
+        read: true,
+      },
+    ]);
+    render(
+      <ThemeProvider>
+        <SettingsPanel open initialSection="agent-mail" onClose={() => {}} />
+      </ThemeProvider>,
+    );
+
+    expect(await screen.findByText("需要信任工作区")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "文件夹信任" }));
+    expect(screen.getByText("需要信任工作区")).toBeInTheDocument();
+    expect(screen.queryByText("普通通知")).not.toBeInTheDocument();
+  });
+
+  it("通知文件损坏时显示可恢复错误而不是伪装成空列表", async () => {
+    vi.mocked(notificationList).mockRejectedValueOnce(new Error("解析通知记录失败"));
+    render(
+      <ThemeProvider>
+        <SettingsPanel open initialSection="agent-mail" onClose={() => {}} />
+      </ThemeProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "通知记录不可用：解析通知记录失败。原文件未被覆盖；你可以修复文件后重试，或点击“清空”重建。",
+    );
+    expect(screen.getByRole("button", { name: "清空" })).toBeEnabled();
+  });
+
   it("记忆开关保存完整配置", async () => {
     render(
       <ThemeProvider>
@@ -158,5 +247,56 @@ describe("SettingsPanel", () => {
     expect(
       screen.getByText("记忆配置已保存，重启 Agent 后对新会话生效。"),
     ).toBeInTheDocument();
+  });
+
+  it("运行时配置分项读取失败时不使用默认值且禁止保存", async () => {
+    vi.mocked(subagentsConfigGet).mockRejectedValueOnce(new Error("子代理配置损坏"));
+    vi.mocked(webSearchConfigGet).mockRejectedValueOnce(new Error("Web 配置不可读"));
+    const { container } = render(
+      <ThemeProvider>
+        <SettingsPanel open initialSection="agent-settings" onClose={() => {}} />
+      </ThemeProvider>,
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("子代理配置：子代理配置损坏");
+    expect(alert).toHaveTextContent("Web 搜索配置：Web 配置不可读");
+    const depth = container.querySelector<HTMLInputElement>('input[type="number"]');
+    const webModel = screen.getByPlaceholderText("搜索模型 ID，如 search-model");
+    expect(depth).toBeDisabled();
+    expect(depth).toHaveValue(null);
+    expect(webModel).toBeDisabled();
+    expect(subagentsConfigSave).not.toHaveBeenCalled();
+    expect(webSearchConfigSave).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(depth).toBeEnabled();
+    expect(depth).toHaveValue(1);
+    expect(webModel).toBeEnabled();
+  });
+
+  it("权限规则加载失败时不伪装空列表或允许覆盖，重试后恢复", async () => {
+    vi.mocked(permissionList)
+      .mockReset()
+      .mockRejectedValueOnce(new Error("权限配置损坏"))
+      .mockResolvedValueOnce([{ action: "deny", tool: "bash", pattern: "rm *" }]);
+    vi.mocked(permissionSave).mockClear();
+    render(
+      <ThemeProvider>
+        <SettingsPanel open initialSection="security" onClose={() => {}} />
+      </ThemeProvider>,
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("权限规则读取失败：权限配置损坏");
+    expect(screen.queryByText("尚未添加自定义权限规则")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存全部规则" })).toBeDisabled();
+    expect(permissionSave).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByText("rm *")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存全部规则" })).toBeEnabled();
   });
 });

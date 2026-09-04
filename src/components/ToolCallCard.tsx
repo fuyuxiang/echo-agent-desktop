@@ -17,6 +17,26 @@ type ToolCallCardProps = {
   onOpen?: (tc: ToolCallView) => void;
 };
 
+const MAX_TOOL_IMAGE_BASE64_CHARS = 16 * 1024 * 1024;
+const SAFE_TOOL_IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+function toolImageSource(image: ImageToolContent): string | null {
+  const mimeType = image.mimeType.trim().toLowerCase();
+  const data = image.data.trim();
+  // Tool output is model/server-controlled. Never auto-load its optional URI:
+  // an http/file URI could probe local services or disclose that a message was
+  // viewed. Only bounded inline raster bytes are rendered; SVG stays blocked.
+  if (
+    !SAFE_TOOL_IMAGE_MIME.has(mimeType)
+    || data.length === 0
+    || data.length > MAX_TOOL_IMAGE_BASE64_CHARS
+    || !/^[a-z0-9+/]*={0,2}$/i.test(data)
+  ) {
+    return null;
+  }
+  return `data:${mimeType};base64,${data}`;
+}
+
 /**
  * Compact inline tool-call row (Phase 1 — EchoAgent `unknown-tool-compact`).
  *
@@ -155,15 +175,22 @@ export function ToolCallDetailBody({
       )}
       {images.length > 0 && (
         <div className="toolcall__images">
-          {images.map((img, i) => (
-            <img
-              key={i}
-              className="toolcall__image"
-              src={img.uri || `data:${img.mimeType};base64,${img.data}`}
-              alt={img.uri || `工具输出图片 ${i + 1}`}
-              loading="lazy"
-            />
-          ))}
+          {images.map((img, i) => {
+            const src = toolImageSource(img);
+            return src ? (
+              <img
+                key={i}
+                className="toolcall__image"
+                src={src}
+                alt={`工具输出图片 ${i + 1}`}
+                loading="lazy"
+              />
+            ) : (
+              <p key={i} className="tool-detail__empty" role="note">
+                已拦截不安全或过大的工具图片输出
+              </p>
+            );
+          })}
         </div>
       )}
       {texts.map((t, i) => (

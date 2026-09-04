@@ -142,4 +142,37 @@ describe("FeedbackDialog", () => {
     expect(e.stars).toBeUndefined();
     expect(e.note).toBeUndefined();
   });
+
+  it("打开后聚焦关闭按钮，圈定 Tab，Escape 关闭后恢复触发器", () => {
+    const onClose = vi.fn();
+    const view = (open: boolean) => (
+      <>
+        <button type="button">打开反馈</button>
+        <FeedbackDialog
+          open={open}
+          sessionId="s1"
+          messageId="m1"
+          rating="up"
+          onClose={onClose}
+        />
+      </>
+    );
+    const { rerender } = render(view(false));
+    const invoker = screen.getByRole("button", { name: "打开反馈" });
+    invoker.focus();
+
+    rerender(view(true));
+    const close = screen.getByRole("button", { name: "关闭" });
+    expect(close).toHaveFocus();
+
+    const submit = screen.getByRole("button", { name: "提交" });
+    submit.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(close).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    rerender(view(false));
+    expect(invoker).toHaveFocus();
+  });
 });

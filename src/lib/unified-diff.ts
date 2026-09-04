@@ -1,5 +1,5 @@
 /**
- * Unified diff 算法 — 基于 Myers diff 的行级 diff。
+ * Unified diff 算法 — 有界的行级 diff。
  *
  * 替代 ToolCallCard 中的朴素逐行对比。对齐 EchoAgent 的
  * `multi-edit-diff-viewer.tsx` 和 `diff-viewer.tsx`。
@@ -29,8 +29,45 @@ export interface UnifiedDiffResult {
   path?: string;
 }
 
+// A full LCS table is quadratic. Keep the exact algorithm for normal edits,
+// then use a linear, prefix/suffix-preserving fallback for unusually large
+// tool output. The rendered result is capped as a second line of defence so a
+// hostile MCP response cannot freeze the WebView with tens of thousands of
+// DOM nodes.
+const MAX_LCS_CELLS = 1_000_000;
+const MAX_RENDERED_DIFF_LINES = 4_000;
+
+function capRenderedLines(lines: DiffLine[]): DiffLine[] {
+  if (lines.length <= MAX_RENDERED_DIFF_LINES) return lines;
+  const headCount = Math.floor(MAX_RENDERED_DIFF_LINES / 2);
+  const tailCount = MAX_RENDERED_DIFF_LINES - headCount;
+  const omitted = lines.length - headCount - tailCount;
+  return [
+    ...lines.slice(0, headCount),
+    { kind: "context", text: `… 已省略 ${omitted} 行以保持界面流畅 …` },
+    ...lines.slice(-tailCount),
+  ];
+}
+
+function filterContext(lines: DiffLine[], contextLines: number): DiffLine[] {
+  if (lines.every((line) => line.kind === "context")) return capRenderedLines(lines);
+  const kept = new Array(lines.length).fill(false);
+  for (let index = 0; index < lines.length; index++) {
+    if (lines[index].kind === "context") continue;
+    for (
+      let cursor = Math.max(0, index - contextLines);
+      cursor <= Math.min(lines.length - 1, index + contextLines);
+      cursor++
+    ) {
+      kept[cursor] = true;
+    }
+  }
+  return capRenderedLines(lines.filter((_, index) => kept[index]));
+}
+
 /**
- * 计算两组文本行的 diff(基于 Myers diff 算法的简化版)。
+ * 计算两组文本行的 diff。常规编辑使用精确 LCS；超大输入使用
+ * 线性回退，避免二次方内存/时间导致桌面端卡死。
  * 返回带 +/-/context 标记的行列表。
  *
  * @param oldText 旧文本
@@ -52,54 +89,86 @@ export function computeUnifiedDiff(
   // 完全空 → 无 diff
   if (n === 0 && m === 0) return [];
 
-  // Build LCS dp table
-  const dp: number[][] = [];
-  for (let ii = 0; ii <= n; ii++) dp.push(new Array(m + 1).fill(0));
-  for (let ii = 1; ii <= n; ii++) {
-    for (let jj = 1; jj <= m; jj++) {
-      if (oldLines[ii - 1] === newLines[jj - 1]) {
-        dp[ii][jj] = dp[ii - 1][jj - 1] + 1;
+  let prefix = 0;
+  while (prefix < n && prefix < m && oldLines[prefix] === newLines[prefix]) prefix++;
+  let oldEnd = n;
+  let newEnd = m;
+  while (
+    oldEnd > prefix
+    && newEnd > prefix
+    && oldLines[oldEnd - 1] === newLines[newEnd - 1]
+  ) {
+    oldEnd--;
+    newEnd--;
+  }
+
+  const lines: DiffLine[] = [];
+  for (let index = 0; index < prefix; index++) {
+    lines.push({ kind: "context", oldLine: index + 1, newLine: index + 1, text: oldLines[index] });
+  }
+
+  const oldMiddle = oldLines.slice(prefix, oldEnd);
+  const newMiddle = newLines.slice(prefix, newEnd);
+  if (oldMiddle.length * newMiddle.length <= MAX_LCS_CELLS) {
+    const dp: number[][] = [];
+    for (let row = 0; row <= oldMiddle.length; row++) {
+      dp.push(new Array(newMiddle.length + 1).fill(0));
+    }
+    for (let row = 1; row <= oldMiddle.length; row++) {
+      for (let column = 1; column <= newMiddle.length; column++) {
+        dp[row][column] = oldMiddle[row - 1] === newMiddle[column - 1]
+          ? dp[row - 1][column - 1] + 1
+          : Math.max(dp[row - 1][column], dp[row][column - 1]);
+      }
+    }
+
+    let row = oldMiddle.length;
+    let column = newMiddle.length;
+    const middle: DiffLine[] = [];
+    while (row > 0 || column > 0) {
+      if (row > 0 && column > 0 && oldMiddle[row - 1] === newMiddle[column - 1]) {
+        middle.push({
+          kind: "context",
+          oldLine: prefix + row,
+          newLine: prefix + column,
+          text: oldMiddle[row - 1],
+        });
+        row--;
+        column--;
+      } else if (
+        column > 0
+        && (row === 0 || dp[row][column - 1] >= dp[row - 1][column])
+      ) {
+        middle.push({ kind: "add", newLine: prefix + column, text: newMiddle[column - 1] });
+        column--;
       } else {
-        dp[ii][jj] = Math.max(dp[ii - 1][jj], dp[ii][jj - 1]);
+        middle.push({ kind: "del", oldLine: prefix + row, text: oldMiddle[row - 1] });
+        row--;
       }
     }
-  }
-
-  // Backtrack to build diff lines
-  let i = n, j = m;
-  const temp: DiffLine[] = [];
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-      temp.push({ kind: "context", oldLine: i, newLine: j, text: oldLines[i - 1] });
-      i--; j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      temp.push({ kind: "add", newLine: j, text: newLines[j - 1] });
-      j--;
-    } else {
-      temp.push({ kind: "del", oldLine: i, text: oldLines[i - 1] });
-      i--;
+    middle.reverse();
+    lines.push(...middle);
+  } else {
+    // Bounded coarse fallback. Common prefix/suffix and exact line numbers are
+    // still preserved; only move detection inside a huge changed region is
+    // intentionally sacrificed.
+    for (let index = prefix; index < oldEnd; index++) {
+      lines.push({ kind: "del", oldLine: index + 1, text: oldLines[index] });
     }
-  }
-  temp.reverse();
-
-  // 无变化 → 返回全部 context
-  if (temp.every((l) => l.kind === "context")) return temp;
-
-  // 只保留变化行 ± contextLines 范围内的行
-  const kept = new Array(temp.length).fill(false);
-  for (let k = 0; k < temp.length; k++) {
-    if (temp[k].kind !== "context") {
-      for (let c = Math.max(0, k - contextLines); c <= Math.min(temp.length - 1, k + contextLines); c++) {
-        kept[c] = true;
-      }
+    for (let index = prefix; index < newEnd; index++) {
+      lines.push({ kind: "add", newLine: index + 1, text: newLines[index] });
     }
   }
 
-  const result: DiffLine[] = [];
-  for (let k = 0; k < temp.length; k++) {
-    if (kept[k]) result.push(temp[k]);
+  for (let oldIndex = oldEnd, newIndex = newEnd; oldIndex < n && newIndex < m; oldIndex++, newIndex++) {
+    lines.push({
+      kind: "context",
+      oldLine: oldIndex + 1,
+      newLine: newIndex + 1,
+      text: oldLines[oldIndex],
+    });
   }
-  return result;
+  return filterContext(lines, Math.max(0, Math.min(contextLines, 100)));
 }
 
 /** 统计 diff 结果 */
@@ -131,5 +200,5 @@ export function hunksToUnifiedLines(
       result.push({ kind: "add", newLine: h.new.start + i, text: h.new.lines[i] });
     }
   }
-  return result;
+  return capRenderedLines(result);
 }

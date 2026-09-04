@@ -53,4 +53,29 @@ describe("ModelSelector", () => {
     expect(onModelChange).toHaveBeenCalledWith("MiniMax-M3");
     expect(onParentClick).not.toHaveBeenCalled();
   });
+
+  it("支持方向键导航、Escape 关闭与焦点恢复", () => {
+    render(
+      <ModelSelector
+        modelId="glm-5"
+        models={[
+          { id: "glm-5", label: "GLM 5" },
+          { id: "deepseek-chat", label: "DeepSeek Chat" },
+        ]}
+        onModelChange={vi.fn()}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "GLM 5" });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const first = screen.getByRole("option", { name: /GLM 5/ });
+    const second = screen.getByRole("option", { name: /DeepSeek Chat/ });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(second).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+  });
 });

@@ -55,6 +55,14 @@ interface Usage {
   totalTokens?: number;
 }
 
+/** One parked `echo.agent/exit_plan_mode` reverse request. */
+export interface PlanApprovalRequest {
+  requestId: string;
+  sessionId: string;
+  toolCallId: string;
+  planContent?: string;
+}
+
 /**
  * Per-session transcript — the single source of truth.
  *
@@ -78,6 +86,10 @@ export interface SessionTranscript {
   streamingMessageId: string | null;
   usage: Usage;
   plan: Plan | null;
+  /** Authoritative mode from ACP CurrentModeUpdate. */
+  planMode: boolean;
+  /** Ordered, replayable approvals owned by this session. */
+  planApprovals: PlanApprovalRequest[];
   suppressReplay: boolean;
 }
 
@@ -95,9 +107,10 @@ interface SessionState {
   streamingMessageId: string | null;
   usage: Usage;
   plan: Plan | null;
+  planApproval: PlanApprovalRequest | null;
 
   error: string | null;
-  /** Plan mode on/off — toggled by user or by EchoAgent via notification. */
+  /** Plan mode on/off — mirror of the focused session's authoritative mode. */
   planMode: boolean;
 
   // --- lifecycle ---
@@ -135,8 +148,10 @@ interface SessionState {
   setMessages: (msgs: ChatMessage[]) => void;
   /** Replace the focused session's plan. */
   setPlan: (plan: Plan | null) => void;
-  /** Toggle plan mode (user-initiated or EchoAgent notification). */
-  setPlanMode: (enabled: boolean) => void;
+  /** Apply an authoritative mode value to a session (focused by default). */
+  setPlanMode: (enabled: boolean, sessionId?: string) => void;
+  requestPlanApproval: (request: PlanApprovalRequest) => void;
+  dismissPlanApproval: (requestId: string, sessionId?: string) => void;
 }
 
 let seq = 0;
@@ -147,8 +162,37 @@ const EMPTY_TRANSCRIPT: SessionTranscript = {
   streamingMessageId: null,
   usage: {},
   plan: null,
+  planMode: false,
+  planApprovals: [],
   suppressReplay: false,
 };
+
+const MAX_MESSAGE_TEXT_CHARS = 2_000_000;
+const MAX_TOOL_CONTENT_BLOCKS = 256;
+const MAX_TOOL_TEXT_CHARS = 1_000_000;
+const MAX_TOOL_DIFF_CHARS = 1_000_000;
+const MAX_TOOL_IMAGE_BASE64_CHARS = 16 * 1024 * 1024;
+const TRUNCATED_OUTPUT_MARKER = "\n\n… 输出过大，已停止在界面中继续累积 …";
+
+function boundedString(value: unknown, maxChars: number): string {
+  if (typeof value !== "string") return "";
+  return value.length <= maxChars ? value : value.slice(0, maxChars);
+}
+
+function boundedRawInput(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  try {
+    const encoded = JSON.stringify(value);
+    if (!encoded || encoded.length <= 256_000) return value;
+    return {
+      truncated: true,
+      preview: encoded.slice(0, 64_000),
+      message: "工具参数过大，仅显示前 64,000 个字符",
+    };
+  } catch {
+    return "(工具参数无法显示)";
+  }
+}
 
 // Side-channel update listeners: keyed by session id. The inspiration panel
 // registers one to accumulate EchoAgent's streamed JSON output for a side session.
@@ -194,37 +238,40 @@ export function registerForeignUpdateListener(
  */
 function normalizeToolCallContent(raw: unknown): ToolCallContent[] {
   if (!Array.isArray(raw)) return [];
-  return (raw as Record<string, unknown>[]).map((item) => {
+  return (raw as unknown[]).slice(0, MAX_TOOL_CONTENT_BLOCKS).map((rawItem) => {
+    const item = rawItem && typeof rawItem === "object"
+      ? rawItem as Record<string, unknown>
+      : {};
     const t = item.type as string;
 
     // ACP wraps text/images/etc inside { type:"content", content: ContentBlock }.
     if (t === "content") {
       const inner = item.content as Record<string, unknown> | undefined;
       if (inner?.type === "text") {
-        return { type: "text" as const, text: (inner.text as string) ?? "" };
+        return { type: "text" as const, text: boundedString(inner.text, MAX_TOOL_TEXT_CHARS) };
       }
       // EchoAgent's read_file returns ImageContent for image/PDF files
       // (acp_conversion.rs): base64 `data` + `mimeType` (+ optional `uri`).
       if (inner?.type === "image") {
         return {
           type: "image" as const,
-          data: (inner.data as string) ?? "",
-          mimeType: (inner.mimeType as string) ?? "image/png",
-          uri: inner.uri as string | undefined,
+          data: boundedString(inner.data, MAX_TOOL_IMAGE_BASE64_CHARS),
+          mimeType: boundedString(inner.mimeType, 128) || "image/png",
+          uri: typeof inner.uri === "string" ? boundedString(inner.uri, 4_096) : undefined,
         };
       }
       // resource_link carries a human name + URI — degrade to text so the
       // card still shows something useful.
       if (inner?.type === "resource_link") {
-        const name = (inner.name as string) ?? "";
-        const uri = (inner.uri as string) ?? "";
-        return { type: "text" as const, text: uri ? `${name}\n${uri}` : name };
+        const name = boundedString(inner.name, 4_096);
+        const uri = boundedString(inner.uri, 4_096);
+        return { type: "text" as const, text: boundedString(uri ? `${name}\n${uri}` : name, MAX_TOOL_TEXT_CHARS) };
       }
       // Embedded resource with inline text — surface the text.
       if (inner?.type === "resource") {
         const res = inner.resource as Record<string, unknown> | undefined;
         if (res && typeof res.text === "string") {
-          return { type: "text" as const, text: res.text };
+          return { type: "text" as const, text: boundedString(res.text, MAX_TOOL_TEXT_CHARS) };
         }
         return { type: "text" as const, text: "(binary resource)" };
       }
@@ -233,12 +280,15 @@ function normalizeToolCallContent(raw: unknown): ToolCallContent[] {
 
     // ACP diff uses flat oldText/newText; frontend expects nested diff.old/new.
     if (t === "diff") {
+      const diff = item.diff && typeof item.diff === "object"
+        ? item.diff as Record<string, unknown>
+        : {};
       return {
         type: "diff" as const,
         diff: {
-          path: (item.path as string) ?? "",
-          old: (item.oldText as string) ?? "",
-          new: (item.newText as string) ?? "",
+          path: boundedString(diff.path ?? item.path, 4_096),
+          old: boundedString(diff.old ?? item.oldText, MAX_TOOL_DIFF_CHARS),
+          new: boundedString(diff.new ?? item.newText, MAX_TOOL_DIFF_CHARS),
         },
       };
     }
@@ -248,12 +298,32 @@ function normalizeToolCallContent(raw: unknown): ToolCallContent[] {
       return {
         type: "command_output" as const,
         command: undefined,
-        output: `[terminal ${(item.terminalId as string) ?? ""}]`,
+        output: `[terminal ${boundedString(item.terminalId, 4_096)}]`,
       };
     }
 
-    // Already in frontend format (text / diff / command_output) — pass through.
-    return item as unknown as ToolCallContent;
+    if (t === "text") {
+      return { type: "text" as const, text: boundedString(item.text, MAX_TOOL_TEXT_CHARS) };
+    }
+    if (t === "image") {
+      return {
+        type: "image" as const,
+        data: boundedString(item.data, MAX_TOOL_IMAGE_BASE64_CHARS),
+        mimeType: boundedString(item.mimeType, 128) || "image/png",
+        uri: typeof item.uri === "string" ? boundedString(item.uri, 4_096) : undefined,
+      };
+    }
+    if (t === "command_output") {
+      return {
+        type: "command_output" as const,
+        command: typeof item.command === "string" ? boundedString(item.command, 16_384) : undefined,
+        output: boundedString(item.output, MAX_TOOL_TEXT_CHARS),
+        exitCode: typeof item.exitCode === "number" || item.exitCode === null
+          ? item.exitCode
+          : undefined,
+      };
+    }
+    return { type: "text" as const, text: "(不支持的工具输出类型)" };
   });
 }
 
@@ -287,9 +357,18 @@ function appendText(
   const parts = [...msg.parts];
   const last = parts[parts.length - 1];
   if (last && last.kind === kind) {
-    parts[parts.length - 1] = { kind, text: last.text + delta } as MessagePart;
+    if (last.text.endsWith(TRUNCATED_OUTPUT_MARKER)) return msg;
+    const available = MAX_MESSAGE_TEXT_CHARS - last.text.length - TRUNCATED_OUTPUT_MARKER.length;
+    const text = delta.length <= Math.max(0, available)
+      ? last.text + delta
+      : last.text + delta.slice(0, Math.max(0, available)) + TRUNCATED_OUTPUT_MARKER;
+    parts[parts.length - 1] = { kind, text } as MessagePart;
   } else {
-    parts.push({ kind, text: delta } as MessagePart);
+    const available = MAX_MESSAGE_TEXT_CHARS - TRUNCATED_OUTPUT_MARKER.length;
+    const text = delta.length <= available
+      ? delta
+      : delta.slice(0, available) + TRUNCATED_OUTPUT_MARKER;
+    parts.push({ kind, text } as MessagePart);
   }
   return { ...msg, parts };
 }
@@ -443,6 +522,8 @@ function mirrorOf(t: SessionTranscript | undefined) {
     streaming: (t?.streamingMessageId ?? null) != null,
     usage: t?.usage ?? {},
     plan: t?.plan ?? null,
+    planMode: t?.planMode ?? false,
+    planApproval: t?.planApprovals?.[0] ?? null,
   };
 }
 
@@ -477,6 +558,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
     streamingMessageId: null,
     usage: {},
     plan: null,
+    planApproval: null,
     error: null,
     planMode: false,
 
@@ -719,9 +801,28 @@ export const useSessionStore = create<SessionState>((set, get) => {
         const extractDelta = (content: unknown): string => {
           if (!content) return "";
           if (Array.isArray(content)) {
-            return content.map((c: { text?: string }) => c.text ?? "").join("");
+            // Cap while extracting, before allocating a joined intermediate.
+            // A malformed/provider-controlled update may contain an enormous
+            // number of blocks or many multi-megabyte strings; appendText's
+            // final cap alone would be too late to avoid the temporary spike.
+            const chunks: string[] = [];
+            let remaining = MAX_MESSAGE_TEXT_CHARS;
+            for (const block of content.slice(0, MAX_TOOL_CONTENT_BLOCKS)) {
+              if (remaining === 0) break;
+              const text = boundedString(
+                (block as { text?: unknown } | null)?.text,
+                remaining,
+              );
+              if (!text) continue;
+              chunks.push(text);
+              remaining -= text.length;
+            }
+            return chunks.join("");
           }
-          return (content as { text?: string }).text ?? "";
+          return boundedString(
+            (content as { text?: unknown }).text,
+            MAX_MESSAGE_TEXT_CHARS,
+          );
         };
 
         switch (t) {
@@ -764,14 +865,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
             const status = (raw.status as string) || "in_progress";
             const view: ToolCallView = {
               toolCallId:
-                (raw.toolCallId as string) ??
-                (raw.tool_call_id as string) ??
-                "",
-              title: (raw.title as string) ?? "",
-              kind: (raw.kind as string) ?? "other",
-              status: status as ToolCallView["status"],
+                boundedString(raw.toolCallId ?? raw.tool_call_id, 4_096),
+              title: boundedString(raw.title, 4_096),
+              kind: boundedString(raw.kind, 128) || "other",
+              status: status === "completed" || status === "failed"
+                ? status
+                : "in_progress",
               content: normalizeToolCallContent(raw.content),
-              rawInput: raw.rawInput ?? raw.raw_input,
+              rawInput: boundedRawInput(raw.rawInput ?? raw.raw_input),
             };
             messages[idx] = upsertToolCall(messages[idx], view);
             return { ...tr, messages: [...messages], streamingMessageId: id };
@@ -784,21 +885,17 @@ export const useSessionStore = create<SessionState>((set, get) => {
             const tcId =
               (raw.toolCallId as string) ?? (raw.tool_call_id as string);
             const deltaFields: Record<string, unknown> = {};
-            for (const key of [
-              "kind",
-              "status",
-              "title",
-              "content",
-              "rawInput",
-              "rawOutput",
-              "locations",
-            ] as const) {
-              if (raw[key] !== undefined) deltaFields[key] = raw[key];
+            if (raw.kind !== undefined) deltaFields.kind = boundedString(raw.kind, 128) || "other";
+            if (raw.title !== undefined) deltaFields.title = boundedString(raw.title, 4_096);
+            if (raw.status !== undefined) {
+              deltaFields.status = raw.status === "completed" || raw.status === "failed"
+                ? raw.status
+                : "in_progress";
             }
+            if (raw.content !== undefined) deltaFields.content = raw.content;
+            if (raw.rawInput !== undefined) deltaFields.rawInput = boundedRawInput(raw.rawInput);
             if (raw.raw_input !== undefined && deltaFields.rawInput === undefined)
-              deltaFields.rawInput = raw.raw_input;
-            if (raw.raw_output !== undefined && deltaFields.rawOutput === undefined)
-              deltaFields.rawOutput = raw.raw_output;
+              deltaFields.rawInput = boundedRawInput(raw.raw_input);
             if (deltaFields.content !== undefined) {
               deltaFields.content = normalizeToolCallContent(
                 deltaFields.content
@@ -832,6 +929,28 @@ export const useSessionStore = create<SessionState>((set, get) => {
             const uu = u as unknown as PlanUpdate;
             return { ...tr, plan: uu.plan ?? null };
           }
+          case "current_mode_update": {
+            const raw = u as unknown as Record<string, unknown>;
+            const modeId = raw.currentModeId ?? raw.current_mode_id;
+            // Unknown modes are intentionally not treated as plan mode.
+            return { ...tr, planMode: modeId === "plan" };
+          }
+          case "plan_approval_request": {
+            const request = u as unknown as PlanApprovalRequest;
+            const existing = tr.planApprovals ?? [];
+            if (existing.some((item) => item.requestId === request.requestId)) return tr;
+            return { ...tr, planApprovals: [...existing, request] };
+          }
+          case "plan_approval_resolved": {
+            const requestId = (u as unknown as { requestId?: string }).requestId;
+            if (!requestId) return tr;
+            return {
+              ...tr,
+              planApprovals: (tr.planApprovals ?? []).filter(
+                (item) => item.requestId !== requestId,
+              ),
+            };
+          }
           case "turn_completed":
             return completeStreamingAssistant(tr);
           default:
@@ -852,7 +971,30 @@ export const useSessionStore = create<SessionState>((set, get) => {
       applyToTranscript(sid, (t) => ({ ...t, plan }));
     },
 
-    setPlanMode: (enabled) => set({ planMode: enabled }),
+    setPlanMode: (enabled, sessionId) => {
+      const sid = sessionId ?? get().sessionId;
+      if (!sid) return;
+      applyToTranscript(sid, (transcript) => ({ ...transcript, planMode: enabled }));
+    },
+
+    requestPlanApproval: (request) => {
+      applyToTranscript(request.sessionId, (transcript) => {
+        const pending = transcript.planApprovals ?? [];
+        if (pending.some((item) => item.requestId === request.requestId)) return transcript;
+        return { ...transcript, planApprovals: [...pending, request] };
+      });
+    },
+
+    dismissPlanApproval: (requestId, sessionId) => {
+      const sid = sessionId ?? get().sessionId;
+      if (!sid) return;
+      applyToTranscript(sid, (transcript) => ({
+        ...transcript,
+        planApprovals: (transcript.planApprovals ?? []).filter(
+          (item) => item.requestId !== requestId,
+        ),
+      }));
+    },
   };
 });
 

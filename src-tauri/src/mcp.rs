@@ -8,14 +8,47 @@
 //! arrive via `echo.agent/mcp/server_status` (forwarded as `agent://mcp-status`).
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use agent_client_protocol as acp;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::commands::AppState;
 use crate::ext::{call_ext, call_ext_value, raw_params};
+
+const MAX_MCP_CONFIG_BYTES: usize = 2 * 1024 * 1024;
+const MAX_MCP_REQUEST_BYTES: usize = 1024 * 1024;
+const MAX_MCP_SERVERS: usize = 128;
+const MAX_SESSION_ID_CHARS: usize = 256;
+const MAX_SETUP_FIELDS: usize = 128;
+const MAX_SETUP_KEY_CHARS: usize = 256;
+const MAX_SETUP_VALUE_BYTES: usize = 64 * 1024;
+const MAX_SETUP_TOTAL_BYTES: usize = 1024 * 1024;
+const MAX_TOOL_NAME_CHARS: usize = 256;
+const MUTATION_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+static MCP_MUTATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static MIRROR_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
+
+async fn acquire_mcp_mutation() -> Result<tokio::sync::MutexGuard<'static, ()>, String> {
+    tokio::time::timeout(MUTATION_LOCK_TIMEOUT, MCP_MUTATION.lock())
+        .await
+        .map_err(|_| "MCP 配置正在被其他操作修改，请稍后重试".to_string())
+}
+
+fn validate_optional_session(state: &AppState, session_id: Option<&str>) -> Result<(), String> {
+    if let Some(session_id) = session_id {
+        validate_session_id(session_id)?;
+        state.session_workspace(session_id)?;
+    }
+    Ok(())
+}
 
 /// One MCP server entry surfaced to the UI. Mirrors the fields of EchoAgent's
 /// `McpServerEntry` (`xai-grok-shell/src/inspect/mod.rs:227`) plus the live
@@ -159,7 +192,7 @@ impl McpListResponse {
 /// Frontend payload for creating/updating an MCP server. We keep this loose
 /// (transport-discriminated) so the UI can support both stdio and HTTP without
 /// a round of protocol churn.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpUpsertRequest {
     pub name: String,
@@ -219,6 +252,7 @@ pub async fn mcp_list(
     session_id: Option<String>,
     refresh: Option<bool>,
 ) -> Result<Vec<McpServerEntry>, String> {
+    validate_optional_session(&state, session_id.as_deref())?;
     let tx = state
         .tx
         .lock()
@@ -267,7 +301,7 @@ fn map_wire_entry(wire: McpServerWire) -> McpServerEntry {
         _ => None,
     };
     let source = wire.source.unwrap_or_else(|| "local".into());
-    let editable = source == "local" && user_config_has_server(&wire.name);
+    let editable = source == "local" && user_config_has_server(&wire.name).unwrap_or(false);
     let env = wire
         .env
         .into_iter()
@@ -299,11 +333,17 @@ fn map_wire_entry(wire: McpServerWire) -> McpServerEntry {
 /// `[mcp_servers.<name>]` shape EchoAgent expects (see McpServerTransportConfig).
 #[tauri::command]
 pub async fn mcp_upsert(
+    app: AppHandle,
     state: State<'_, AppState>,
     session_id: Option<String>,
     server: McpUpsertRequest,
 ) -> Result<McpMutationResult, String> {
+    let _mutation = acquire_mcp_mutation().await?;
     validate_upsert_request(&server)?;
+    validate_optional_session(&state, session_id.as_deref())?;
+    if stdio_change_requires_confirmation(&server, &read_user_config_requests()?) {
+        confirm_stdio_execution(&app, std::slice::from_ref(&server))?;
+    }
     let tx = state.tx.lock().unwrap().clone();
     apply_upsert(tx.as_ref(), session_id.as_deref(), &server).await
 }
@@ -315,7 +355,9 @@ pub async fn mcp_delete(
     session_id: Option<String>,
     name: String,
 ) -> Result<McpMutationResult, String> {
+    let _mutation = acquire_mcp_mutation().await?;
     validate_server_name(&name)?;
+    validate_optional_session(&state, session_id.as_deref())?;
     let tx = state.tx.lock().unwrap().clone();
     apply_delete(tx.as_ref(), session_id.as_deref(), &name).await
 }
@@ -323,12 +365,24 @@ pub async fn mcp_delete(
 /// Enable or disable an MCP server at runtime (no restart needed).
 #[tauri::command]
 pub async fn mcp_toggle(
+    app: AppHandle,
     state: State<'_, AppState>,
     session_id: Option<String>,
     name: String,
     enabled: bool,
 ) -> Result<McpMutationResult, String> {
+    let _mutation = acquire_mcp_mutation().await?;
     validate_server_name(&name)?;
+    validate_optional_session(&state, session_id.as_deref())?;
+    if enabled {
+        let configured = read_user_config_requests()?;
+        if let Some(server) = configured
+            .iter()
+            .find(|server| server.name == name && server.transport == "stdio")
+        {
+            confirm_stdio_execution(&app, std::slice::from_ref(server))?;
+        }
+    }
     let tx = state.tx.lock().unwrap().clone();
     apply_toggle(tx.as_ref(), session_id.as_deref(), &name, enabled).await
 }
@@ -344,15 +398,9 @@ pub async fn mcp_setup(
     values: HashMap<String, String>,
 ) -> Result<(), String> {
     validate_server_name(&name)?;
-    if session_id.trim().is_empty() {
-        return Err("完成 MCP Setup 需要一个活动会话".into());
-    }
-    if values
-        .iter()
-        .any(|(key, value)| key.trim().is_empty() || value.trim().is_empty())
-    {
-        return Err("Setup 字段名和值不能为空".into());
-    }
+    validate_session_id(&session_id)?;
+    validate_setup_values(&values)?;
+    state.session_workspace(&session_id)?;
     let tx = state
         .tx
         .lock()
@@ -380,9 +428,9 @@ pub async fn mcp_toggle_tool(
     enabled: bool,
 ) -> Result<(), String> {
     validate_server_name(&server_name)?;
-    if session_id.trim().is_empty() || tool_name.trim().is_empty() {
-        return Err("切换 MCP 工具需要活动会话和有效工具名".into());
-    }
+    validate_session_id(&session_id)?;
+    validate_tool_name(&tool_name)?;
+    state.session_workspace(&session_id)?;
     let tx = state
         .tx
         .lock()
@@ -407,6 +455,10 @@ async fn apply_upsert(
     server: &McpUpsertRequest,
 ) -> Result<McpMutationResult, String> {
     validate_upsert_request(server)?;
+    // A corrupt compatibility mirror must fail before any Runtime/canonical
+    // mutation; otherwise reporting the mirror error would conceal a partial
+    // update and a later operation could overwrite evidence of corruption.
+    let _ = read_mirror_servers()?;
     if server.enabled == Some(false) {
         persist_server_config(server).await?;
         mirror_single_server(server, false)?;
@@ -487,9 +539,10 @@ async fn apply_delete(
     session_id: Option<&str>,
     name: &str,
 ) -> Result<McpMutationResult, String> {
+    let _ = read_mirror_servers()?;
     let mut warnings = Vec::new();
     let mut applied_live = false;
-    let was_user_config = user_config_has_server(name);
+    let was_user_config = user_config_has_server(name)?;
     if let (Some(session_id), Some(tx)) = (session_id.filter(|value| !value.is_empty()), tx) {
         let params = raw_params(&serde_json::json!({
             "session_id": session_id,
@@ -507,13 +560,12 @@ async fn apply_delete(
     // The Runtime delete persists before resolving the session. Calling this
     // again is idempotent and also covers the no-session/stale-session path.
     let path = runtime_config_path();
-    let existed = xai_grok_shell::util::config::delete_mcp_server_config_at(&path, name)
-        .await
-        .map_err(|e| format!("删除 MCP 配置失败：{e}"))?;
+    crate::providers::update_config(|root| apply_mcp_document(root, &[], &[name.to_string()]))
+        .map_err(|error| format!("删除 MCP 配置失败：{error}"))?;
     if path.exists() {
         crate::paths::harden_private_file(&path)?;
     }
-    if !existed && !applied_live && !was_user_config {
+    if !applied_live && !was_user_config {
         return Err(format!("MCP 服务「{name}」不是可删除的用户配置"));
     }
     mirror_delete_server(name)?;
@@ -530,6 +582,7 @@ async fn apply_toggle(
     name: &str,
     enabled: bool,
 ) -> Result<McpMutationResult, String> {
+    let _ = read_mirror_servers()?;
     let mut warnings = Vec::new();
     let mut applied_live = false;
     if let (Some(session_id), Some(tx)) = (session_id.filter(|value| !value.is_empty()), tx) {
@@ -547,10 +600,8 @@ async fn apply_toggle(
     } else if session_id.is_some() {
         warnings.push("本地 Runtime 尚未初始化；状态将在新会话中生效".into());
     }
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    xai_grok_shell::util::config::save_mcp_server_enabled_in(name, enabled, &cwd)
-        .await
-        .map_err(|e| format!("保存 MCP 启用状态失败：{e}"))?;
+    crate::providers::update_config(|root| apply_mcp_toggle(root, name, enabled))
+        .map_err(|error| format!("保存 MCP 启用状态失败：{error}"))?;
     mirror_toggle_server(name, enabled)?;
     if session_id.is_none() {
         warnings.push("状态已保存，将对新会话生效".into());
@@ -690,10 +741,93 @@ fn validate_server_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_session_id(session_id: &str) -> Result<(), String> {
+    if session_id.trim().is_empty()
+        || session_id.chars().count() > MAX_SESSION_ID_CHARS
+        || session_id.chars().any(char::is_control)
+    {
+        return Err("完成 MCP 操作需要有效的活动会话".into());
+    }
+    Ok(())
+}
+
+fn validate_setup_values(values: &HashMap<String, String>) -> Result<(), String> {
+    if values.len() > MAX_SETUP_FIELDS {
+        return Err(format!("Setup 字段不能超过 {MAX_SETUP_FIELDS} 个"));
+    }
+    let mut total = 0_usize;
+    for (key, value) in values {
+        if key.trim().is_empty()
+            || key.chars().count() > MAX_SETUP_KEY_CHARS
+            || key.chars().any(char::is_control)
+            || value.trim().is_empty()
+            || value.len() > MAX_SETUP_VALUE_BYTES
+            || value.contains('\0')
+        {
+            return Err("Setup 字段名或值无效、过长".into());
+        }
+        total = total
+            .checked_add(key.len())
+            .and_then(|length| length.checked_add(value.len()))
+            .ok_or_else(|| "Setup 字段总长度溢出".to_string())?;
+        if total > MAX_SETUP_TOTAL_BYTES {
+            return Err("Setup 字段总大小不能超过 1 MiB".into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_tool_name(tool_name: &str) -> Result<(), String> {
+    if tool_name.trim().is_empty()
+        || tool_name.chars().count() > MAX_TOOL_NAME_CHARS
+        || tool_name.chars().any(char::is_control)
+    {
+        return Err("工具名称无效或过长".into());
+    }
+    Ok(())
+}
+
 fn validate_upsert_request(server: &McpUpsertRequest) -> Result<(), String> {
     validate_server_name(&server.name)?;
-    if server.target.trim().is_empty() {
+    let encoded =
+        serde_json::to_vec(server).map_err(|error| format!("MCP 配置无法序列化：{error}"))?;
+    if encoded.len() > MAX_MCP_REQUEST_BYTES {
+        return Err("MCP 单服务配置超过 1 MiB 安全上限".into());
+    }
+    if server.target.trim().is_empty()
+        || server.target.len() > 4096
+        || server.target.chars().any(char::is_control)
+    {
         return Err("MCP 命令或 URL 不能为空".into());
+    }
+    if server.args.len() > 256
+        || server
+            .args
+            .iter()
+            .any(|arg| arg.len() > 8192 || arg.chars().any(char::is_control))
+    {
+        return Err("MCP 参数数量、长度或控制字符不合法".into());
+    }
+    if server.env.len() > 256
+        || server.env.iter().any(|(key, value)| {
+            key.is_empty()
+                || key.len() > 256
+                || key.contains('=')
+                || key.chars().any(char::is_control)
+                || value.len() > 64 * 1024
+                || value.contains('\0')
+        })
+    {
+        return Err("MCP 环境变量数量、名称或值不合法".into());
+    }
+    if server.cwd.as_ref().is_some_and(|cwd| {
+        cwd.len() > 4096 || cwd.contains('\0') || cwd.chars().any(|ch| matches!(ch, '\r' | '\n'))
+    }) || server.oauth_scopes.len() > 128
+        || server.oauth_scopes.iter().any(|scope| {
+            scope.is_empty() || scope.len() > 1024 || scope.chars().any(char::is_control)
+        })
+    {
+        return Err("MCP 工作目录或 OAuth scope 不合法".into());
     }
     match server.transport.as_str() {
         "stdio" => {}
@@ -703,10 +837,35 @@ fn validate_upsert_request(server: &McpUpsertRequest) -> Result<(), String> {
             if !matches!(url.scheme(), "http" | "https") {
                 return Err("MCP URL 仅支持 http:// 或 https://".into());
             }
+            if url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.fragment().is_some()
+            {
+                return Err("MCP URL 缺少主机或包含用户凭据/fragment".into());
+            }
             if url.scheme() == "http"
-                && !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
+                && !url.host_str().is_some_and(|host| {
+                    matches!(host, "127.0.0.1" | "localhost")
+                        || host.trim_matches(['[', ']']) == "::1"
+                })
             {
                 return Err("远程 MCP 服务必须使用 HTTPS；HTTP 仅允许本机回环地址".into());
+            }
+            let header_bytes = server
+                .headers
+                .iter()
+                .map(|(name, value)| name.len().saturating_add(value.len()))
+                .sum::<usize>();
+            if server.headers.len() > 128
+                || header_bytes > 256 * 1024
+                || server.headers.iter().any(|(name, value)| {
+                    reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_err()
+                        || reqwest::header::HeaderValue::from_str(value).is_err()
+                        || value.len() > 64 * 1024
+                })
+            {
+                return Err("MCP Header 数量、名称或值不合法".into());
             }
         }
         other => return Err(format!("不支持的 MCP 传输类型：{other}")),
@@ -719,10 +878,14 @@ fn validate_upsert_request(server: &McpUpsertRequest) -> Result<(), String> {
             return Err(format!("{label}必须在 1–3600 秒之间"));
         }
     }
-    if server
-        .tool_timeouts
-        .iter()
-        .any(|(name, value)| name.trim().is_empty() || *value == 0 || *value > 3600)
+    if server.tool_timeouts.len() > 256
+        || server.tool_timeouts.iter().any(|(name, value)| {
+            name.trim().is_empty()
+                || name.chars().count() > MAX_TOOL_NAME_CHARS
+                || name.chars().any(char::is_control)
+                || *value == 0
+                || *value > 3600
+        })
     {
         return Err("逐工具超时的名称不能为空，时长必须在 1–3600 秒之间".into());
     }
@@ -732,6 +895,88 @@ fn validate_upsert_request(server: &McpUpsertRequest) -> Result<(), String> {
         return Err("环境变量名和 Header 名不能为空".into());
     }
     Ok(())
+}
+
+fn is_enabled(server: &McpUpsertRequest) -> bool {
+    server.enabled.unwrap_or(true)
+}
+
+fn same_stdio_execution(left: &McpUpsertRequest, right: &McpUpsertRequest) -> bool {
+    left.transport == "stdio"
+        && right.transport == "stdio"
+        && left.target == right.target
+        && left.args == right.args
+        && left.env == right.env
+        && left.cwd == right.cwd
+        && is_enabled(left) == is_enabled(right)
+}
+
+fn stdio_change_requires_confirmation(
+    incoming: &McpUpsertRequest,
+    existing: &[McpUpsertRequest],
+) -> bool {
+    if incoming.transport != "stdio" || !is_enabled(incoming) {
+        return false;
+    }
+    existing
+        .iter()
+        .find(|server| server.name == incoming.name)
+        .is_none_or(|server| !same_stdio_execution(incoming, server))
+}
+
+fn confirm_stdio_execution(app: &AppHandle, servers: &[McpUpsertRequest]) -> Result<(), String> {
+    if servers.is_empty() {
+        return Ok(());
+    }
+    let details = servers
+        .iter()
+        .take(5)
+        .map(|server| {
+            let mut command = std::iter::once(server.target.as_str())
+                .chain(server.args.iter().take(12).map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if command.chars().count() > 1200 {
+                command = command.chars().take(1200).collect::<String>();
+                command.push('…');
+            } else if server.args.len() > 12 {
+                command.push_str(" …");
+            }
+            let cwd = server.cwd.as_deref().unwrap_or("默认工作目录");
+            let env_names = if server.env.is_empty() {
+                "无".to_string()
+            } else {
+                server.env.keys().cloned().collect::<Vec<_>>().join(", ")
+            };
+            format!(
+                "• {}\n  命令: {}\n  工作目录: {}\n  环境变量名: {}",
+                server.name, command, cwd, env_names
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let extra = if servers.len() > 5 {
+        format!("\n\n另有 {} 个本地进程配置。", servers.len() - 5)
+    } else {
+        String::new()
+    };
+    let approved = app
+        .dialog()
+        .message(format!(
+            "MCP stdio 会以当前用户权限启动本地进程。仅当你信任命令及其来源时允许。\n\n{details}{extra}"
+        ))
+        .title("允许 MCP 启动本地进程？")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "允许本次".into(),
+            "取消".into(),
+        ))
+        .blocking_show();
+    if approved {
+        Ok(())
+    } else {
+        Err("MCP_STDIO_CONFIRMATION_REQUIRED: 用户未允许启动本地 MCP 进程".into())
+    }
 }
 
 fn runtime_config_path() -> PathBuf {
@@ -773,54 +1018,125 @@ fn request_to_runtime_config(
 
 async fn persist_server_config(server: &McpUpsertRequest) -> Result<(), String> {
     let path = runtime_config_path();
-    let config = request_to_runtime_config(server);
-    xai_grok_shell::util::config::save_mcp_server_config_at(&path, &server.name, &config)
-        .await
-        .map_err(|e| format!("保存 MCP 配置失败：{e}"))?;
-    crate::paths::harden_private_file(&path)?;
-    if server.enabled == Some(false) {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        xai_grok_shell::util::config::save_mcp_server_enabled_in(&server.name, false, &cwd)
-            .await
-            .map_err(|e| format!("保存 MCP 停用状态失败：{e}"))?;
+    crate::providers::update_config(|root| {
+        apply_mcp_document(root, std::slice::from_ref(server), &[])
+    })
+    .map_err(|error| format!("保存 MCP 配置失败：{error}"))?;
+    if path.exists() {
+        crate::paths::harden_private_file(&path)?;
     }
     Ok(())
 }
 
-fn user_config_has_server(name: &str) -> bool {
-    let content = match std::fs::read_to_string(runtime_config_path()) {
-        Ok(content) => content,
-        Err(_) => return false,
+fn read_bounded_text(path: &Path, max_bytes: usize, label: &str) -> Result<Option<String>, String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取 {label} 信息失败：{error}")),
     };
-    toml::from_str::<toml::Value>(&content)
-        .ok()
-        .and_then(|root| root.get("mcp_servers").cloned())
-        .and_then(|servers| servers.as_table().cloned())
-        .is_some_and(|servers| servers.contains_key(name))
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("{label} 必须是普通文件，不能是符号链接"));
+    }
+    if metadata.len() > max_bytes as u64 {
+        return Err(format!(
+            "{label} 超过 {} MiB 安全上限",
+            max_bytes / 1024 / 1024
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| format!("打开 {label} 失败：{error}"))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| format!("读取已打开 {label} 信息失败：{error}"))?;
+    if !opened_metadata.is_file() || opened_metadata.len() > max_bytes as u64 {
+        return Err(format!(
+            "{label} 超过 {} MiB 安全上限",
+            max_bytes / 1024 / 1024
+        ));
+    }
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    file.take(max_bytes as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("读取 {label} 失败：{error}"))?;
+    if bytes.len() > max_bytes {
+        return Err(format!(
+            "{label} 超过 {} MiB 安全上限",
+            max_bytes / 1024 / 1024
+        ));
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| format!("{label} 不是有效 UTF-8"))
+}
+
+fn user_config_has_server(name: &str) -> Result<bool, String> {
+    let Some(content) =
+        read_bounded_text(&runtime_config_path(), MAX_MCP_CONFIG_BYTES, "config.toml")?
+    else {
+        return Ok(false);
+    };
+    let root = toml::from_str::<toml::Value>(&content)
+        .map_err(|error| format!("config.toml 格式无效，无法读取 MCP 配置：{error}"))?;
+    let Some(value) = root.get("mcp_servers") else {
+        return Ok(false);
+    };
+    let servers = value
+        .as_table()
+        .ok_or("config.toml 的 mcp_servers 必须是 TOML 表")?;
+    if servers.len() > MAX_MCP_SERVERS {
+        return Err(format!("Runtime MCP 服务数量超过 {MAX_MCP_SERVERS} 个"));
+    }
+    Ok(servers.contains_key(name))
 }
 
 fn read_user_config_requests() -> Result<Vec<McpUpsertRequest>, String> {
     use xai_grok_shell::util::config::{McpServerConfig, McpServerTransportConfig};
-    let content = match std::fs::read_to_string(runtime_config_path()) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("读取 Runtime MCP 配置失败：{error}")),
-    };
+    let content =
+        match read_bounded_text(&runtime_config_path(), MAX_MCP_CONFIG_BYTES, "config.toml")? {
+            Some(content) => content,
+            None => return Ok(Vec::new()),
+        };
     let root: toml::Value = toml::from_str(&content)
         .map_err(|error| format!("config.toml 格式无效，无法读取 MCP 配置：{error}"))?;
-    let disabled: HashSet<String> = root
-        .get("disabled_mcp_servers")
-        .and_then(|value| value.as_array())
-        .map(|values| {
+    let disabled: HashSet<String> = match root.get("disabled_mcp_servers") {
+        None => HashSet::new(),
+        Some(value) => {
+            let values = value
+                .as_array()
+                .ok_or("config.toml 的 disabled_mcp_servers 必须是字符串数组")?;
+            if values.len() > MAX_MCP_SERVERS {
+                return Err(format!(
+                    "Runtime 已停用 MCP 服务数量超过 {MAX_MCP_SERVERS} 个"
+                ));
+            }
             values
                 .iter()
-                .filter_map(|value| value.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    let Some(servers) = root.get("mcp_servers").and_then(|value| value.as_table()) else {
+                .map(|value| {
+                    value
+                        .as_str()
+                        .ok_or("config.toml 的 disabled_mcp_servers 必须是字符串数组")
+                        .map(str::to_string)
+                })
+                .collect::<Result<HashSet<_>, _>>()?
+        }
+    };
+    let Some(value) = root.get("mcp_servers") else {
         return Ok(Vec::new());
     };
+    let servers = value
+        .as_table()
+        .ok_or("config.toml 的 mcp_servers 必须是 TOML 表")?;
+    if servers.len() > MAX_MCP_SERVERS {
+        return Err(format!("Runtime MCP 服务数量超过 {MAX_MCP_SERVERS} 个"));
+    }
     let mut out = Vec::new();
     for (name, value) in servers {
         let config: McpServerConfig = value
@@ -888,7 +1204,7 @@ fn read_user_config_requests() -> Result<Vec<McpUpsertRequest>, String> {
                 oauth_scopes.unwrap_or_default(),
             ),
         };
-        out.push(McpUpsertRequest {
+        let request = McpUpsertRequest {
             name: name.clone(),
             transport,
             target,
@@ -907,7 +1223,10 @@ fn read_user_config_requests() -> Result<Vec<McpUpsertRequest>, String> {
             setup,
             tool_timeouts,
             expose_image_base64,
-        });
+        };
+        validate_upsert_request(&request)
+            .map_err(|error| format!("MCP 服务「{name}」配置无效：{error}"))?;
+        out.push(request);
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
@@ -957,7 +1276,7 @@ pub async fn mcp_config_path() -> Result<String, String> {
 #[tauri::command]
 pub async fn mcp_config_read() -> Result<McpConfigFile, String> {
     let path = mcp_json_path();
-    let mut servers = read_mirror_servers();
+    let mut servers = read_mirror_servers()?;
     // config.toml is canonical. Merge its valid user entries into the editor,
     // while preserving mirror-only fields (for example token-form prefill env
     // on an HTTP connector) and legacy entries awaiting first save/import.
@@ -970,8 +1289,14 @@ pub async fn mcp_config_read() -> Result<McpConfigFile, String> {
         }
         servers.insert(request.name, generated);
     }
+    if servers.len() > MAX_MCP_SERVERS {
+        return Err(format!("合并后的 MCP 服务数量超过 {MAX_MCP_SERVERS} 个"));
+    }
     let content = serde_json::to_string_pretty(&serde_json::json!({ "mcpServers": servers }))
         .map_err(|e| format!("生成 mcp.json 编辑内容失败：{e}"))?;
+    if content.len() > MAX_MCP_CONFIG_BYTES {
+        return Err("MCP 配置编辑内容超过 2 MiB 安全上限".into());
+    }
     Ok(McpConfigFile {
         file_path: path.to_string_lossy().into_owned(),
         content,
@@ -983,10 +1308,16 @@ pub async fn mcp_config_read() -> Result<McpConfigFile, String> {
 /// are also hot-applied; without one they take effect on the next session.
 #[tauri::command]
 pub async fn mcp_config_save(
+    app: AppHandle,
     state: State<'_, AppState>,
     content: String,
     session_id: Option<String>,
 ) -> Result<McpConfigSaveResult, String> {
+    let _mutation = acquire_mcp_mutation().await?;
+    validate_optional_session(&state, session_id.as_deref())?;
+    if content.len() > MAX_MCP_CONFIG_BYTES {
+        return Err("MCP 配置超过 2MB 限制".into());
+    }
     let trimmed = content.trim();
     let parsed: serde_json::Value = if trimmed.is_empty() {
         serde_json::from_str(EMPTY_MCP_JSON).unwrap()
@@ -1006,6 +1337,9 @@ pub async fn mcp_config_save(
         .transpose()?
         .cloned()
         .unwrap_or_default();
+    if map.len() > MAX_MCP_SERVERS {
+        return Err(format!("MCP 服务数量超过 {MAX_MCP_SERVERS} 个的上限"));
+    }
 
     // Validate the complete document before any mutation. One malformed entry
     // must never leave a half-applied config.
@@ -1018,21 +1352,25 @@ pub async fn mcp_config_save(
         requests.push(request);
     }
 
-    let previous = read_mirror_servers();
+    let existing_requests = read_user_config_requests()?;
+    let changed_stdio = requests
+        .iter()
+        .filter(|request| stdio_change_requires_confirmation(request, &existing_requests))
+        .collect::<Vec<_>>();
+    if !changed_stdio.is_empty() {
+        let changed_stdio = changed_stdio.into_iter().cloned().collect::<Vec<_>>();
+        confirm_stdio_execution(&app, &changed_stdio)?;
+    }
+
+    let previous = read_mirror_servers()?;
     let mut previous_names: HashSet<String> = previous.keys().cloned().collect();
-    previous_names.extend(
-        read_user_config_requests()?
-            .into_iter()
-            .map(|request| request.name),
-    );
+    previous_names.extend(existing_requests.into_iter().map(|request| request.name));
     let incoming_names: HashSet<String> = map.keys().cloned().collect();
     let removed: Vec<String> = previous_names
         .iter()
         .filter(|name| !incoming_names.contains(*name))
         .cloned()
         .collect();
-    let config_path = runtime_config_path();
-    let config_snapshot = std::fs::read(&config_path).ok();
     let tx = state.tx.lock().unwrap().clone();
     let sid = session_id.filter(|value| !value.is_empty());
     let mut warnings = Vec::new();
@@ -1082,24 +1420,12 @@ pub async fn mcp_config_save(
         warnings.push("本地 Runtime 尚未初始化；配置将在新会话中生效".into());
     }
 
-    let persist_result = async {
-        for request in &requests {
-            persist_server_config(request).await?;
-        }
-        for name in &removed {
-            xai_grok_shell::util::config::delete_mcp_server_config_at(&config_path, name)
-                .await
-                .map_err(|e| format!("删除 MCP 配置「{name}」失败：{e}"))?;
-        }
-        if config_path.exists() {
-            crate::paths::harden_private_file(&config_path)?;
-        }
-        Ok::<(), String>(())
-    }
-    .await;
-    if let Err(error) = persist_result {
-        restore_config_snapshot(&config_path, config_snapshot.as_deref())?;
-        return Err(error);
+    // Persist the complete MCP document in one shared config transaction. A
+    // per-server loop can expose intermediate states and, more importantly,
+    // lets an unrelated Runtime settings write land between snapshots.
+    persist_mcp_document(&requests, &removed)?;
+    for name in &removed {
+        xai_grok_shell::util::config::remove_mcp_server_credentials(name);
     }
 
     let normalized = if trimmed.is_empty() {
@@ -1107,9 +1433,14 @@ pub async fn mcp_config_save(
     } else {
         content.as_bytes()
     };
-    if let Err(error) = crate::paths::write_private_file(&mcp_json_path(), normalized) {
-        restore_config_snapshot(&config_path, config_snapshot.as_deref())?;
-        return Err(format!("保存 mcp.json 失败：{error}"));
+    if let Err(error) = write_mirror_document(normalized) {
+        // config.toml is canonical and has already committed successfully. Do
+        // not restore a stale whole-file snapshot here: that could erase an
+        // unrelated concurrent provider/settings update. The editor rebuilds
+        // its view from canonical config on the next read.
+        warnings.push(format!(
+            "Runtime 配置已保存，但 mcp.json 兼容镜像更新失败：{error}"
+        ));
     }
     if sid.is_none() && (!requests.is_empty() || !removed.is_empty()) {
         warnings.push("配置已保存，将在下次创建会话时启动".into());
@@ -1120,6 +1451,145 @@ pub async fn mcp_config_save(
         applied_live,
         warnings,
     })
+}
+
+fn persist_mcp_document(requests: &[McpUpsertRequest], removed: &[String]) -> Result<(), String> {
+    crate::providers::update_config(|root| apply_mcp_document(root, requests, removed))?;
+    let path = runtime_config_path();
+    if path.exists() {
+        crate::paths::harden_private_file(&path)?;
+    }
+    Ok(())
+}
+
+fn apply_mcp_document(
+    root: &mut toml::Value,
+    requests: &[McpUpsertRequest],
+    removed: &[String],
+) -> Result<(), String> {
+    let table = root
+        .as_table_mut()
+        .ok_or_else(|| "config.toml 顶层必须是 TOML 表".to_string())?;
+
+    {
+        let servers = table
+            .entry("mcp_servers")
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+            .as_table_mut()
+            .ok_or_else(|| "[mcp_servers] 必须是 TOML 表".to_string())?;
+        for request in requests {
+            let serialized = toml::Value::try_from(request_to_runtime_config(request))
+                .map_err(|error| format!("MCP 服务「{}」序列化失败：{error}", request.name))?;
+            servers.insert(request.name.clone(), serialized);
+        }
+        for name in removed {
+            servers.remove(name);
+        }
+    }
+    if table
+        .get("mcp_servers")
+        .and_then(toml::Value::as_table)
+        .is_some_and(toml::map::Map::is_empty)
+    {
+        table.remove("mcp_servers");
+    }
+
+    let affected_names = requests
+        .iter()
+        .map(|request| request.name.as_str())
+        .chain(removed.iter().map(String::as_str))
+        .collect::<HashSet<_>>();
+    let mut disabled = table
+        .get("disabled_mcp_servers")
+        .and_then(toml::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .filter(|name| !affected_names.contains(*name))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    disabled.extend(
+        requests
+            .iter()
+            .filter(|request| request.enabled == Some(false))
+            .map(|request| request.name.clone()),
+    );
+    if disabled.is_empty() {
+        table.remove("disabled_mcp_servers");
+    } else {
+        table.insert(
+            "disabled_mcp_servers".into(),
+            toml::Value::Array(disabled.into_iter().map(toml::Value::String).collect()),
+        );
+    }
+
+    if let Some(disabled_tools) = table
+        .get_mut("disabled_mcp_tools")
+        .and_then(toml::Value::as_table_mut)
+    {
+        for name in removed {
+            disabled_tools.remove(name);
+        }
+        if disabled_tools.is_empty() {
+            table.remove("disabled_mcp_tools");
+        }
+    }
+    Ok(())
+}
+
+fn apply_mcp_toggle(root: &mut toml::Value, name: &str, enabled: bool) -> Result<(), String> {
+    let table = root
+        .as_table_mut()
+        .ok_or_else(|| "config.toml 顶层必须是 TOML 表".to_string())?;
+    if let Some(server) = table
+        .get_mut("mcp_servers")
+        .and_then(toml::Value::as_table_mut)
+        .and_then(|servers| servers.get_mut(name))
+        .and_then(toml::Value::as_table_mut)
+    {
+        server.insert("enabled".into(), toml::Value::Boolean(enabled));
+    }
+    let mut disabled = match table.get("disabled_mcp_servers") {
+        None => Vec::new(),
+        Some(value) => {
+            let values = value
+                .as_array()
+                .ok_or("disabled_mcp_servers 必须是字符串数组")?;
+            if values.len() > MAX_MCP_SERVERS {
+                return Err(format!("已停用 MCP 服务数量超过 {MAX_MCP_SERVERS} 个"));
+            }
+            values
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .ok_or("disabled_mcp_servers 必须是字符串数组")
+                        .map(str::to_string)
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .filter(|value| value != name)
+                .collect()
+        }
+    };
+    if !enabled {
+        if disabled.len() >= MAX_MCP_SERVERS {
+            return Err(format!("已停用 MCP 服务数量超过 {MAX_MCP_SERVERS} 个"));
+        }
+        disabled.push(name.to_string());
+    }
+    if disabled.is_empty() {
+        table.remove("disabled_mcp_servers");
+    } else {
+        table.insert(
+            "disabled_mcp_servers".into(),
+            toml::Value::Array(disabled.into_iter().map(toml::Value::String).collect()),
+        );
+    }
+    Ok(())
 }
 
 /// Map one standard `mcpServers.<name>` value (the shape editors like EchoAgent
@@ -1450,74 +1920,150 @@ fn request_to_mirror_json(server: &McpUpsertRequest) -> serde_json::Value {
     serde_json::Value::Object(object)
 }
 
-fn read_mirror_servers() -> serde_json::Map<String, serde_json::Value> {
-    let content = match std::fs::read_to_string(mcp_json_path()) {
-        Ok(content) => content,
-        Err(_) => return serde_json::Map::new(),
-    };
-    serde_json::from_str::<serde_json::Value>(&content)
-        .ok()
-        .and_then(|root| root.get("mcpServers").cloned())
-        .and_then(|servers| servers.as_object().cloned())
-        .unwrap_or_default()
+fn with_mirror_transaction<T>(operation: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    let _process = MIRROR_TRANSACTION
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "mcp.json 事务锁已损坏".to_string())?;
+    let path = mcp_json_path();
+    let parent = path
+        .parent()
+        .ok_or_else(|| "mcp.json 路径没有父目录".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| format!("创建 MCP 配置目录失败：{error}"))?;
+    crate::paths::harden_private_dir(parent)?;
+    let lock_path = parent.join(".mcp-json.lock");
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let lock_file = options
+        .open(&lock_path)
+        .map_err(|error| format!("打开 mcp.json 事务锁失败：{error}"))?;
+    crate::paths::harden_private_file(&lock_path)?;
+    let mut acquired = false;
+    for _ in 0..200 {
+        match lock_file.try_lock_exclusive() {
+            Ok(()) => {
+                acquired = true;
+                break;
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(format!("锁定 mcp.json 失败：{error}")),
+        }
+    }
+    if !acquired {
+        return Err("mcp.json 正在被其他进程修改，请稍后重试".into());
+    }
+    let result = operation();
+    let unlock =
+        FileExt::unlock(&lock_file).map_err(|error| format!("解锁 mcp.json 失败：{error}"));
+    match (result, unlock) {
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }
 
-fn write_mirror_servers(servers: serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+fn read_mirror_servers_at(
+    path: &Path,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let Some(content) = read_bounded_text(path, MAX_MCP_CONFIG_BYTES, "mcp.json")? else {
+        return Ok(serde_json::Map::new());
+    };
+    let root: serde_json::Value =
+        serde_json::from_str(&content).map_err(|error| format!("mcp.json 格式无效：{error}"))?;
+    let servers = root
+        .get("mcpServers")
+        .ok_or("mcp.json 缺少 mcpServers 字段")?
+        .as_object()
+        .ok_or("mcp.json 的 mcpServers 必须是对象")?
+        .clone();
+    if servers.len() > MAX_MCP_SERVERS {
+        return Err(format!("mcp.json 服务数量超过 {MAX_MCP_SERVERS} 个"));
+    }
+    Ok(servers)
+}
+
+fn read_mirror_servers_unlocked() -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    read_mirror_servers_at(&mcp_json_path())
+}
+
+fn read_mirror_servers() -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    with_mirror_transaction(read_mirror_servers_unlocked)
+}
+
+fn write_mirror_servers_unlocked(
+    servers: serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    write_mirror_servers_at(&mcp_json_path(), servers)
+}
+
+fn write_mirror_servers_at(
+    path: &Path,
+    servers: serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    if servers.len() > MAX_MCP_SERVERS {
+        return Err(format!("mcp.json 服务数量超过 {MAX_MCP_SERVERS} 个"));
+    }
     let content = serde_json::to_vec_pretty(&serde_json::json!({ "mcpServers": servers }))
         .map_err(|e| format!("序列化 mcp.json 失败：{e}"))?;
-    crate::paths::write_private_file(&mcp_json_path(), &content)
+    if content.len() > MAX_MCP_CONFIG_BYTES {
+        return Err("mcp.json 超过 2 MiB 安全上限".into());
+    }
+    crate::paths::write_private_file(path, &content)
+}
+
+fn write_mirror_document(content: &[u8]) -> Result<(), String> {
+    if content.len() > MAX_MCP_CONFIG_BYTES {
+        return Err("mcp.json 超过 2 MiB 安全上限".into());
+    }
+    with_mirror_transaction(|| crate::paths::write_private_file(&mcp_json_path(), content))
 }
 
 fn mirror_single_server(server: &McpUpsertRequest, _preserve_runtime: bool) -> Result<(), String> {
-    let mut servers = read_mirror_servers();
-    let mut next = request_to_mirror_json(server);
-    // Keep editor-only token prefill fields that are intentionally not valid
-    // in the Runtime's HTTP schema.
-    if let (Some(old), Some(next_obj)) = (servers.get(&server.name), next.as_object_mut()) {
-        if let Some(old_env) = old.get("env") {
-            next_obj.entry("env").or_insert_with(|| old_env.clone());
+    with_mirror_transaction(|| {
+        let mut servers = read_mirror_servers_unlocked()?;
+        let mut next = request_to_mirror_json(server);
+        // Keep editor-only token prefill fields that are intentionally not valid
+        // in the Runtime's HTTP schema.
+        if let (Some(old), Some(next_obj)) = (servers.get(&server.name), next.as_object_mut()) {
+            if let Some(old_env) = old.get("env") {
+                next_obj.entry("env").or_insert_with(|| old_env.clone());
+            }
         }
-    }
-    servers.insert(server.name.clone(), next);
-    write_mirror_servers(servers)
+        servers.insert(server.name.clone(), next);
+        write_mirror_servers_unlocked(servers)
+    })
 }
 
 fn mirror_delete_server(name: &str) -> Result<(), String> {
-    let mut servers = read_mirror_servers();
-    servers.remove(name);
-    write_mirror_servers(servers)
+    with_mirror_transaction(|| {
+        let mut servers = read_mirror_servers_unlocked()?;
+        servers.remove(name);
+        write_mirror_servers_unlocked(servers)
+    })
 }
 
 fn mirror_toggle_server(name: &str, enabled: bool) -> Result<(), String> {
-    let mut servers = read_mirror_servers();
-    if let Some(config) = servers
-        .get_mut(name)
-        .and_then(|value| value.as_object_mut())
-    {
-        config.insert("enabled".into(), enabled.into());
-        write_mirror_servers(servers)?;
-    }
-    Ok(())
-}
-
-fn restore_config_snapshot(path: &std::path::Path, snapshot: Option<&[u8]>) -> Result<(), String> {
-    if let Some(bytes) = snapshot {
-        crate::paths::write_private_file(path, bytes)
-    } else if path.exists() {
-        // The operation created config.toml from scratch. Preserve unrelated
-        // config safety by only removing it when it is now an empty TOML table.
-        let empty = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|content| toml::from_str::<toml::Value>(&content).ok())
-            .and_then(|value| value.as_table().cloned())
-            .is_some_and(|table| table.is_empty());
-        if empty {
-            std::fs::remove_file(path).map_err(|e| format!("回滚配置文件失败：{e}"))?;
+    with_mirror_transaction(|| {
+        let mut servers = read_mirror_servers_unlocked()?;
+        if let Some(config) = servers
+            .get_mut(name)
+            .and_then(|value| value.as_object_mut())
+        {
+            config.insert("enabled".into(), enabled.into());
+            write_mirror_servers_unlocked(servers)?;
         }
         Ok(())
-    } else {
-        Ok(())
-    }
+    })
 }
 
 // ---------- MCP OAuth authorization (echo.agent/mcp/auth_*) ----------
@@ -1555,6 +2101,9 @@ pub async fn mcp_auth_trigger(
     session_id: String,
     server_name: String,
 ) -> Result<McpAuthTriggerResult, String> {
+    validate_session_id(&session_id)?;
+    validate_server_name(&server_name)?;
+    state.session_workspace(&session_id)?;
     let tx = state
         .tx
         .lock()
@@ -1568,6 +2117,15 @@ pub async fn mcp_auth_trigger(
     let wire: McpAuthTriggerWire = call_ext(&tx, "echo.agent/mcp/auth_trigger", params)
         .await
         .map_err(|e| e.to_string())?;
+    if wire.status.chars().count() > 64
+        || wire.status.chars().any(char::is_control)
+        || wire
+            .error
+            .as_ref()
+            .is_some_and(|error| error.chars().count() > 4_096)
+    {
+        return Err("MCP 授权响应无效或过长".into());
+    }
     Ok(McpAuthTriggerResult {
         status: wire.status,
         error: wire.error,
@@ -1598,6 +2156,8 @@ pub async fn mcp_auth_status(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Vec<McpAuthStatusEntry>, String> {
+    validate_session_id(&session_id)?;
+    state.session_workspace(&session_id)?;
     let tx = state
         .tx
         .lock()
@@ -1608,12 +2168,40 @@ pub async fn mcp_auth_status(
     let wire: McpAuthStatusWire = call_ext(&tx, "echo.agent/mcp/auth_status", params)
         .await
         .map_err(|e| e.to_string())?;
+    if wire.servers.len() > MAX_MCP_SERVERS
+        || wire.servers.iter().any(|entry| {
+            validate_server_name(&entry.server_name).is_err()
+                || entry.status.chars().count() > 64
+                || entry.status.chars().any(char::is_control)
+        })
+    {
+        return Err("MCP 授权状态响应无效或过大".into());
+    }
     Ok(wire.servers)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_and_tool_payloads_are_bounded() {
+        let mut too_many = HashMap::new();
+        for index in 0..=MAX_SETUP_FIELDS {
+            too_many.insert(format!("key-{index}"), "value".to_string());
+        }
+        assert!(validate_setup_values(&too_many).is_err());
+        assert!(validate_setup_values(&HashMap::from([(
+            "token".into(),
+            "x".repeat(MAX_SETUP_VALUE_BYTES + 1),
+        )]))
+        .is_err());
+        assert!(
+            validate_setup_values(&HashMap::from([("token".into(), "secret".into(),)])).is_ok()
+        );
+        assert!(validate_session_id(&"s".repeat(MAX_SESSION_ID_CHARS + 1)).is_err());
+        assert!(validate_tool_name(&"t".repeat(MAX_TOOL_NAME_CHARS + 1)).is_err());
+    }
 
     #[test]
     fn runtime_list_wire_maps_transport_health_and_tools() {
@@ -1735,5 +2323,158 @@ mod tests {
             .contains("HTTPS"));
         request.target = "http://127.0.0.1:3000/mcp".into();
         validate_upsert_request(&request).unwrap();
+
+        request.transport = "stdio".into();
+        request.target = "npx".into();
+        assert!(stdio_change_requires_confirmation(&request, &[]));
+        assert!(!stdio_change_requires_confirmation(
+            &request,
+            std::slice::from_ref(&request)
+        ));
+        let mut changed = request.clone();
+        changed.args.push("untrusted-package".into());
+        assert!(stdio_change_requires_confirmation(
+            &changed,
+            std::slice::from_ref(&request)
+        ));
+        changed.enabled = Some(false);
+        assert!(!stdio_change_requires_confirmation(
+            &changed,
+            std::slice::from_ref(&request)
+        ));
+    }
+
+    #[test]
+    fn complete_mcp_document_update_preserves_unrelated_runtime_config() {
+        let mut root: toml::Value = r#"
+disabled_mcp_servers = ["old", "concurrent"]
+
+[custom]
+keep = "hand-written"
+
+[model_providers.openai]
+base_url = "https://api.example.test/v1"
+
+[mcp_servers.old]
+command = "old-command"
+
+[mcp_servers.concurrent]
+command = "must-survive"
+
+[disabled_mcp_tools]
+old = ["legacy"]
+"#
+        .parse()
+        .unwrap();
+        let replacement = McpUpsertRequest {
+            name: "replacement".into(),
+            transport: "stdio".into(),
+            target: "new-command".into(),
+            args: vec!["--safe".into()],
+            env: HashMap::new(),
+            headers: HashMap::new(),
+            enabled: Some(false),
+            cwd: None,
+            bearer_token_env_var: None,
+            oauth_client_id: None,
+            oauth_client_secret_env_var: None,
+            oauth_scopes: Vec::new(),
+            startup_timeout_sec: None,
+            tool_timeout_sec: None,
+            oauth: None,
+            setup: None,
+            tool_timeouts: HashMap::new(),
+            expose_image_base64: None,
+        };
+
+        apply_mcp_document(&mut root, &[replacement], &["old".into()]).unwrap();
+
+        assert_eq!(root["custom"]["keep"].as_str(), Some("hand-written"));
+        assert_eq!(
+            root["model_providers"]["openai"]["base_url"].as_str(),
+            Some("https://api.example.test/v1")
+        );
+        assert!(root["mcp_servers"].get("old").is_none());
+        assert_eq!(
+            root["mcp_servers"]["concurrent"]["command"].as_str(),
+            Some("must-survive"),
+            "an MCP entry added after the editor snapshot must not be erased"
+        );
+        assert_eq!(
+            root["mcp_servers"]["replacement"]["command"].as_str(),
+            Some("new-command")
+        );
+        let disabled = root["disabled_mcp_servers"].as_array().unwrap();
+        assert!(disabled
+            .iter()
+            .any(|value| value.as_str() == Some("concurrent")));
+        assert!(disabled
+            .iter()
+            .any(|value| value.as_str() == Some("replacement")));
+        assert!(!disabled.iter().any(|value| value.as_str() == Some("old")));
+        assert!(root
+            .get("disabled_mcp_tools")
+            .and_then(|value| value.get("old"))
+            .is_none());
+    }
+
+    #[test]
+    fn corrupt_or_oversized_mirror_is_rejected_without_overwrite() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("mcp.json");
+        let corrupt = b"{ definitely-not-json";
+        std::fs::write(&path, corrupt).unwrap();
+
+        assert!(read_mirror_servers_at(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), corrupt);
+
+        std::fs::write(&path, vec![b'x'; MAX_MCP_CONFIG_BYTES + 1]).unwrap();
+        assert!(read_mirror_servers_at(&path)
+            .unwrap_err()
+            .contains("安全上限"));
+    }
+
+    #[test]
+    fn mirror_writer_roundtrips_a_bounded_document() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("mcp.json");
+        let servers = serde_json::Map::from_iter([(
+            "demo".to_string(),
+            serde_json::json!({ "command": "echo", "args": ["ok"] }),
+        )]);
+
+        write_mirror_servers_at(&path, servers.clone()).unwrap();
+        assert_eq!(read_mirror_servers_at(&path).unwrap(), servers);
+    }
+
+    #[test]
+    fn toggle_rejects_malformed_or_unbounded_disabled_lists() {
+        let mut malformed: toml::Value = r#"disabled_mcp_servers = ["ok", 42]"#.parse().unwrap();
+        assert!(apply_mcp_toggle(&mut malformed, "demo", true).is_err());
+
+        let values = (0..=MAX_MCP_SERVERS)
+            .map(|index| toml::Value::String(format!("server-{index}")))
+            .collect();
+        let mut oversized = toml::Value::Table(toml::map::Map::from_iter([(
+            "disabled_mcp_servers".into(),
+            toml::Value::Array(values),
+        )]));
+        assert!(apply_mcp_toggle(&mut oversized, "demo", true).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_reader_rejects_symlinked_mirror() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("outside.json");
+        let link = temp.path().join("mcp.json");
+        std::fs::write(&target, EMPTY_MCP_JSON).unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(read_mirror_servers_at(&link)
+            .unwrap_err()
+            .contains("符号链接"));
     }
 }

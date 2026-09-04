@@ -1,9 +1,17 @@
 import { create } from "zustand";
 
+export interface QuestionOption {
+  id?: string;
+  label: string;
+  description: string;
+  preview?: string;
+}
+
 export interface QuestionItem {
   id: string;
   question: string;
-  options: string[];
+  options: QuestionOption[];
+  multiSelect: boolean;
 }
 
 export interface QuestionRequest {
@@ -12,6 +20,8 @@ export interface QuestionRequest {
   toolCallId: string;
   title: string;
   questions: QuestionItem[];
+  mode: "default" | "plan";
+  /** Seconds, when supplied by the Runtime extension version. */
   timeout?: number;
 }
 
@@ -30,6 +40,7 @@ export const useQuestionStore = create<QuestionState>((set) => ({
     set((s) => {
       const sid = q.sessionId || "__global";
       const prev = s.queues[sid] ?? [];
+      if (prev.some((pending) => pending.requestId === q.requestId)) return s;
       return { queues: { ...s.queues, [sid]: [...prev, q] } };
     }),
   dismiss: (requestId, sessionId) =>

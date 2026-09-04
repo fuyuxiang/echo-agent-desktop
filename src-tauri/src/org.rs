@@ -6,16 +6,25 @@
 
 use base64::Engine;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use fs2::FileExt;
 use futures::StreamExt;
 use reqwest::{Method, Response, StatusCode};
+#[cfg(target_os = "macos")]
+use security_framework::passwords::{
+    delete_generic_password, get_generic_password, set_generic_password,
+};
+#[cfg(target_os = "macos")]
+use security_framework_sys::base::errSecItemNotFound;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
+};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
@@ -29,9 +38,40 @@ use windows_sys::Win32::{
     },
 };
 
+const MAX_DOCUMENT_UPLOAD_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_SKILL_UPLOAD_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_LOCAL_JSON_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_JSON_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_JSON_REQUEST_BYTES: usize = 4 * 1024 * 1024;
+const MAX_SSE_EVENT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SSE_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_SERVER_URL_CHARS: usize = 2_048;
+const MAX_USERNAME_CHARS: usize = 256;
+const MAX_PASSWORD_BYTES: usize = 16 * 1024;
+const MAX_TOKEN_BYTES: usize = 64 * 1024;
+const MAX_PROFILE_FIELD_CHARS: usize = 512;
+const MAX_SIGNING_FIELD_BYTES: usize = 2 * 1024 * 1024;
+const MAX_ERROR_MESSAGE_CHARS: usize = 2_048;
+const MAX_ASK_QUESTION_CHARS: usize = 32 * 1024;
+const MAX_ASK_SCOPES: usize = 100;
+const MAX_PENDING_ASKS: usize = 32;
+const MAX_MANAGED_SKILLS: usize = 512;
+const MAX_MANAGED_SKILL_FILES: usize = 512;
+const MAX_MANAGED_SKILL_DEPTH: usize = 12;
+const MAX_RESOURCE_ID_CHARS: usize = 512;
+const MAX_QUERY_CHARS: usize = 4_096;
+const MAX_TITLE_CHARS: usize = 4_096;
+const MAX_TAGS: usize = 64;
+const MAX_TAG_CHARS: usize = 256;
+const MAX_FEEDBACK_CHARS: usize = 16_384;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const MAX_FALLBACK_CREDENTIALS: usize = 32;
+
 const CREDENTIAL_SERVICE: &str = "com.echoagent.organization";
 const PROFILE_FILE: &str = "organization-profile.json";
 const SKILL_STATE_FILE: &str = "organization-skills.json";
+const SKILL_STATE_LOCK_FILE: &str = ".organization-skills.lock";
+const MODEL_STATE_LOCK_FILE: &str = ".organization-model.lock";
 const LOCAL_KB_SOURCES_FILE: &str = "local-knowledge-sources.json";
 const ORGANIZATION_CA_PEM: &[u8] = include_bytes!("../certs/echo-agent-server-ca.pem");
 
@@ -57,6 +97,23 @@ struct OrgInner {
     client: reqwest::Client,
     session: AsyncMutex<OrgSession>,
     cancellations: Mutex<HashMap<String, CancellationToken>>,
+    /// Serializes the network/download portion of managed-Skill syncs. State
+    /// transactions use a separate bounded file lock so logout never waits on
+    /// a potentially slow organization server.
+    skill_sync: AsyncMutex<()>,
+    skill_state_transaction: Mutex<()>,
+    model_state_transaction: Mutex<()>,
+    /// Invalidates work that started under an earlier account or preference.
+    /// Package activation and the final commit both check this while holding
+    /// the state transaction lock.
+    skill_epoch: AtomicU64,
+    /// Orders concurrent model downloads for the same account. A response
+    /// from an earlier request must not overwrite a newer synchronization.
+    model_epoch: AtomicU64,
+    /// Changes exactly when a new organization identity is published or the
+    /// current identity is cleared. Every authenticated response carries the
+    /// generation it was requested under.
+    account_generation: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -66,10 +123,13 @@ pub struct OrgState {
 
 impl Default for OrgState {
     fn default() -> Self {
-        let profile = read_json::<OrgProfile>(&profile_path()).ok();
+        let profile = read_json::<OrgProfile>(&profile_path())
+            .ok()
+            .filter(|profile| validate_profile(profile).is_ok());
         let refresh_token = profile
             .as_ref()
-            .and_then(|p| credential_read(&credential_account(p)).ok().flatten());
+            .and_then(|p| credential_read(&credential_account(p)).ok().flatten())
+            .and_then(|token| validated_token(&token, "organization refresh token").ok());
         // This private CA only augments the organization HTTP client. Model
         // providers, MCP servers, and every other outbound client keep their
         // existing public-root trust policy.
@@ -79,6 +139,9 @@ impl Default for OrgState {
             inner: Arc::new(OrgInner {
                 client: reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(120))
+                    // Never forward organization Bearer credentials to a
+                    // redirect target. Endpoints are expected to be final.
+                    .redirect(reqwest::redirect::Policy::none())
                     .user_agent(format!("EchoAgent/{}", env!("CARGO_PKG_VERSION")))
                     .add_root_certificate(organization_ca)
                     .build()
@@ -89,6 +152,12 @@ impl Default for OrgState {
                     ..Default::default()
                 }),
                 cancellations: Mutex::new(HashMap::new()),
+                skill_sync: AsyncMutex::new(()),
+                skill_state_transaction: Mutex::new(()),
+                model_state_transaction: Mutex::new(()),
+                skill_epoch: AtomicU64::new(0),
+                model_epoch: AtomicU64::new(0),
+                account_generation: AtomicU64::new(0),
             }),
         }
     }
@@ -98,6 +167,27 @@ static SHARED_ORG_STATE: OnceLock<OrgState> = OnceLock::new();
 
 pub fn shared_state() -> OrgState {
     SHARED_ORG_STATE.get_or_init(OrgState::default).clone()
+}
+
+pub(crate) fn enforce_organization_model_lease() -> Result<bool, String> {
+    let state = shared_state();
+    with_model_state_transaction(&state.inner, || {
+        crate::providers::enforce_organization_model_lease()
+    })
+}
+
+async fn enforce_model_for_current_session(inner: &Arc<OrgInner>) -> Result<bool, String> {
+    // Keep the session identity stable until the model transaction finishes.
+    // Otherwise an old bootstrap failure could observe "signed out", wait for
+    // a concurrent login, and then delete that new account's configuration.
+    let session = inner.session.lock().await;
+    with_model_state_transaction(inner, || {
+        if session.profile.is_none() {
+            crate::providers::remove_organization_model_config()
+        } else {
+            crate::providers::enforce_organization_model_lease()
+        }
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +213,168 @@ fn profile_path() -> PathBuf {
 
 fn skill_state_path() -> PathBuf {
     crate::paths::echo_agent_home_dir().join(SKILL_STATE_FILE)
+}
+
+fn with_skill_state_transaction<T>(
+    inner: &OrgInner,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    with_skill_state_transaction_at(inner, &skill_state_path(), operation)
+}
+
+fn with_skill_state_transaction_at<T>(
+    inner: &OrgInner,
+    state_path: &Path,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let _process_guard = inner
+        .skill_state_transaction
+        .lock()
+        .map_err(|_| "organization Skill state lock is poisoned".to_string())?;
+    let parent = state_path.parent().ok_or_else(|| {
+        format!(
+            "organization Skill state path has no parent: {}",
+            state_path.display()
+        )
+    })?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("create organization state directory: {error}"))?;
+    crate::paths::harden_private_dir(parent)?;
+    let lock_path = parent.join(SKILL_STATE_LOCK_FILE);
+    if std::fs::symlink_metadata(&lock_path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(format!(
+            "organization Skill state lock must not be a symlink: {}",
+            lock_path.display()
+        ));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).read(true).write(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let lock_file = options
+        .open(&lock_path)
+        .map_err(|error| format!("open organization Skill state lock: {error}"))?;
+    crate::paths::harden_private_file(&lock_path)?;
+    let mut acquired = false;
+    for _ in 0..200 {
+        match lock_file.try_lock_exclusive() {
+            Ok(()) => {
+                acquired = true;
+                break;
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "lock organization Skill state {}: {error}",
+                    lock_path.display()
+                ))
+            }
+        }
+    }
+    if !acquired {
+        return Err("organization Skill state is busy; please try again".into());
+    }
+    let result = operation();
+    let unlock = FileExt::unlock(&lock_file)
+        .map_err(|error| format!("unlock organization Skill state: {error}"));
+    match (result, unlock) {
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
+fn invalidate_skill_sync(inner: &OrgInner) {
+    inner.skill_epoch.fetch_add(1, Ordering::SeqCst);
+}
+
+fn require_current_skill_epoch(inner: &OrgInner, expected: u64) -> Result<(), String> {
+    if inner.skill_epoch.load(Ordering::SeqCst) == expected {
+        Ok(())
+    } else {
+        Err("organization account or Skill preferences changed during synchronization".into())
+    }
+}
+
+fn with_model_state_transaction<T>(
+    inner: &OrgInner,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let _process_guard = inner
+        .model_state_transaction
+        .lock()
+        .map_err(|_| "organization model state lock is poisoned".to_string())?;
+    let parent = crate::paths::echo_agent_home_dir();
+    std::fs::create_dir_all(&parent)
+        .map_err(|error| format!("create organization state directory: {error}"))?;
+    crate::paths::harden_private_dir(&parent)?;
+    let lock_path = parent.join(MODEL_STATE_LOCK_FILE);
+    if std::fs::symlink_metadata(&lock_path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(format!(
+            "organization model state lock must not be a symlink: {}",
+            lock_path.display()
+        ));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).read(true).write(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let lock_file = options
+        .open(&lock_path)
+        .map_err(|error| format!("open organization model state lock: {error}"))?;
+    crate::paths::harden_private_file(&lock_path)?;
+    let mut acquired = false;
+    for _ in 0..200 {
+        match lock_file.try_lock_exclusive() {
+            Ok(()) => {
+                acquired = true;
+                break;
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(format!("lock organization model state: {error}")),
+        }
+    }
+    if !acquired {
+        return Err("organization model state is busy; please try again".into());
+    }
+    let result = operation();
+    let unlock = FileExt::unlock(&lock_file)
+        .map_err(|error| format!("unlock organization model state: {error}"));
+    match (result, unlock) {
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
+fn invalidate_account_generation(inner: &OrgInner) {
+    inner.account_generation.fetch_add(1, Ordering::SeqCst);
+}
+
+fn require_current_model_epoch(expected: u64, current: u64) -> Result<(), String> {
+    if current == expected {
+        Ok(())
+    } else {
+        Err("organization model synchronization was superseded".into())
+    }
 }
 
 /// Organization packages live under the same user-global Skills tree scanned
@@ -194,7 +446,11 @@ pub fn org_local_kb_sources_get() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn org_local_kb_sources_set(sources: Value) -> Result<(), String> {
+pub fn org_local_kb_sources_set(
+    filesystem: State<'_, crate::shell_fs::FilesystemAccess>,
+    sources: Value,
+) -> Result<(), String> {
+    ensure_value_size(&sources, 512 * 1024, "local knowledge sources")?;
     let items = sources
         .as_array()
         .ok_or("local knowledge sources must be an array")?;
@@ -207,16 +463,25 @@ pub fn org_local_kb_sources_set(sources: Value) -> Result<(), String> {
             .get("root")
             .and_then(Value::as_str)
             .ok_or("local knowledge source missing root")?;
-        let path = PathBuf::from(root);
-        if !path.is_absolute() || !path.is_dir() {
-            return Err(format!(
-                "local knowledge source is not an existing absolute directory: {root}"
-            ));
+        let id = item.get("id").and_then(Value::as_str).unwrap_or("local");
+        let label = item.get("label").and_then(Value::as_str).unwrap_or("local");
+        if root.len() > 4_096
+            || id.trim().is_empty()
+            || id.chars().count() > 256
+            || id.chars().any(char::is_control)
+            || label.chars().count() > MAX_PROFILE_FIELD_CHARS
+            || label.chars().any(char::is_control)
+        {
+            return Err("local knowledge source fields are invalid or too long".into());
         }
+        // Persist only a root already granted by native selection or restored
+        // from trusted native state. Otherwise a forged descriptor could turn
+        // into a filesystem grant after the next application restart.
+        let path = filesystem.require_workspace(root)?;
         normalized.push(json!({
-            "id": item.get("id").and_then(Value::as_str).unwrap_or("local"),
+            "id": id,
             "kind": "local-folder",
-            "label": item.get("label").and_then(Value::as_str).unwrap_or("local"),
+            "label": label,
             "root": path.to_string_lossy(),
             "enabled": item.get("enabled").and_then(Value::as_bool).unwrap_or(true)
         }));
@@ -245,12 +510,73 @@ fn fallback_credentials_path() -> PathBuf {
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let bytes = read_file_bounded(path, MAX_LOCAL_JSON_BYTES, "JSON store")?;
     serde_json::from_slice(&bytes).map_err(|e| format!("parse {}: {e}", path.display()))
+}
+
+fn read_json_or_default_if_missing<T>(path: &Path) -> Result<T, String>
+where
+    T: for<'de> Deserialize<'de> + Default,
+{
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(error) => Err(format!("inspect {}: {error}", path.display())),
+        Ok(_) => read_json(path),
+    }
+}
+
+fn read_file_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "{label} must be a regular file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "{label} exceeds the safety limit: {}",
+            path.display()
+        ));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| format!("open {}: {error}", path.display()))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| format!("inspect opened {}: {error}", path.display()))?;
+    if !opened_metadata.is_file() || opened_metadata.len() > max_bytes {
+        return Err(format!(
+            "{label} exceeds the safety limit: {}",
+            path.display()
+        ));
+    }
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "{label} exceeds the safety limit: {}",
+            path.display()
+        ));
+    }
+    Ok(bytes)
 }
 
 fn write_json_private<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("serialize: {e}"))?;
+    if bytes.len() as u64 > MAX_LOCAL_JSON_BYTES {
+        return Err("JSON store exceeds 16 MiB".into());
+    }
     crate::paths::write_private_file(path, &bytes)
 }
 
@@ -268,59 +594,35 @@ fn signing_key_account(profile: &OrgProfile) -> String {
 
 #[cfg(target_os = "macos")]
 fn credential_write(account: &str, secret: &str) -> Result<(), String> {
-    let status = Command::new("security")
-        .args([
-            "add-generic-password",
-            "-U",
-            "-a",
-            account,
-            "-s",
-            CREDENTIAL_SERVICE,
-            "-w",
-            secret,
-        ])
-        .status()
-        .map_err(|e| format!("open macOS Keychain: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("macOS Keychain refused the organization credential".into())
+    if secret.len() > MAX_TOKEN_BYTES {
+        return Err("organization credential exceeds the safety limit".into());
     }
+    set_generic_password(CREDENTIAL_SERVICE, account, secret.as_bytes())
+        .map_err(|error| format!("write macOS Keychain credential: {error}"))
 }
 
 #[cfg(target_os = "macos")]
 fn credential_read(account: &str) -> Result<Option<String>, String> {
-    let output = Command::new("security")
-        .args([
-            "find-generic-password",
-            "-a",
-            account,
-            "-s",
-            CREDENTIAL_SERVICE,
-            "-w",
-        ])
-        .output()
-        .map_err(|e| format!("read macOS Keychain: {e}"))?;
-    if !output.status.success() {
-        return Ok(None);
+    let bytes = match get_generic_password(CREDENTIAL_SERVICE, account) {
+        Ok(bytes) => bytes,
+        Err(error) if error.code() == errSecItemNotFound => return Ok(None),
+        Err(error) => return Err(format!("read macOS Keychain credential: {error}")),
+    };
+    if bytes.len() > MAX_TOKEN_BYTES {
+        return Err("organization credential exceeds the safety limit".into());
     }
-    Ok(Some(
-        String::from_utf8_lossy(&output.stdout).trim().to_string(),
-    ))
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| "macOS Keychain credential is not valid UTF-8".to_string())
 }
 
 #[cfg(target_os = "macos")]
 fn credential_delete(account: &str) -> Result<(), String> {
-    let _ = Command::new("security")
-        .args([
-            "delete-generic-password",
-            "-a",
-            account,
-            "-s",
-            CREDENTIAL_SERVICE,
-        ])
-        .status();
-    Ok(())
+    match delete_generic_password(CREDENTIAL_SERVICE, account) {
+        Ok(()) => Ok(()),
+        Err(error) if error.code() == errSecItemNotFound => Ok(()),
+        Err(error) => Err(format!("delete macOS Keychain credential: {error}")),
+    }
 }
 
 // Windows uses DPAPI directly: ciphertext is bound to the current OS user and
@@ -430,6 +732,9 @@ fn dpapi_unprotect(ciphertext: &[u8]) -> Result<Vec<u8>, String> {
 
 #[cfg(target_os = "windows")]
 fn credential_write(account: &str, secret: &str) -> Result<(), String> {
+    if secret.len() > MAX_TOKEN_BYTES {
+        return Err("organization credential exceeds the safety limit".into());
+    }
     let path = crate::paths::echo_agent_home_dir().join(format!(".{account}.dpapi"));
     let encrypted = dpapi_protect(secret.as_bytes())?;
     crate::paths::write_private_file(&path, &encrypted)
@@ -442,9 +747,11 @@ fn credential_read(account: &str) -> Result<Option<String>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let encrypted = std::fs::read(&path)
-        .map_err(|e| format!("read DPAPI credential {}: {e}", path.display()))?;
+    let encrypted = read_file_bounded(&path, MAX_TOKEN_BYTES as u64 * 4, "DPAPI credential file")?;
     let plaintext = dpapi_unprotect(&encrypted)?;
+    if plaintext.len() > MAX_TOKEN_BYTES {
+        return Err("organization credential exceeds the safety limit".into());
+    }
     String::from_utf8(plaintext)
         .map(Some)
         .map_err(|e| format!("DPAPI credential is not valid UTF-8: {e}"))
@@ -462,31 +769,66 @@ fn credential_delete(account: &str) -> Result<(), String> {
 
 // Linux builds without a Secret Service session fall back to an owner-only file.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn fallback_credential_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn read_fallback_credentials() -> Result<HashMap<String, String>, String> {
+    let values =
+        read_json_or_default_if_missing::<HashMap<String, String>>(&fallback_credentials_path())?;
+    if values.len() > MAX_FALLBACK_CREDENTIALS
+        || values.iter().any(|(account, secret)| {
+            account.is_empty()
+                || account.chars().count() > 256
+                || account.chars().any(char::is_control)
+                || secret.len() > MAX_TOKEN_BYTES
+        })
+    {
+        return Err("organization credential store is invalid or oversized".into());
+    }
+    Ok(values)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn credential_write(account: &str, secret: &str) -> Result<(), String> {
-    let mut values =
-        read_json::<HashMap<String, String>>(&fallback_credentials_path()).unwrap_or_default();
+    if secret.len() > MAX_TOKEN_BYTES {
+        return Err("organization credential exceeds the safety limit".into());
+    }
+    let _guard = fallback_credential_lock()
+        .lock()
+        .map_err(|_| "organization credential lock is poisoned".to_string())?;
+    let mut values = read_fallback_credentials()?;
+    if !values.contains_key(account) && values.len() >= MAX_FALLBACK_CREDENTIALS {
+        return Err("organization credential store contains too many accounts".into());
+    }
     values.insert(account.to_string(), secret.to_string());
     write_json_private(&fallback_credentials_path(), &values)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn credential_read(account: &str) -> Result<Option<String>, String> {
-    Ok(
-        read_json::<HashMap<String, String>>(&fallback_credentials_path())
-            .unwrap_or_default()
-            .remove(account),
-    )
+    let _guard = fallback_credential_lock()
+        .lock()
+        .map_err(|_| "organization credential lock is poisoned".to_string())?;
+    Ok(read_fallback_credentials()?.remove(account))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn credential_delete(account: &str) -> Result<(), String> {
-    let mut values =
-        read_json::<HashMap<String, String>>(&fallback_credentials_path()).unwrap_or_default();
+    let _guard = fallback_credential_lock()
+        .lock()
+        .map_err(|_| "organization credential lock is poisoned".to_string())?;
+    let mut values = read_fallback_credentials()?;
     values.remove(account);
     write_json_private(&fallback_credentials_path(), &values)
 }
 
 fn normalize_server_url(raw: &str) -> Result<String, String> {
+    if raw.chars().count() > MAX_SERVER_URL_CHARS {
+        return Err("organization server URL is too long".into());
+    }
     let mut url = Url::parse(raw.trim()).map_err(|e| format!("invalid server URL: {e}"))?;
     let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
     if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
@@ -506,15 +848,84 @@ fn normalize_server_url(raw: &str) -> Result<String, String> {
     Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
+fn validate_profile(profile: &OrgProfile) -> Result<(), String> {
+    if normalize_server_url(&profile.server_url)? != profile.server_url {
+        return Err("organization profile contains a non-canonical server URL".into());
+    }
+    for (label, value) in [
+        ("username", profile.username.as_str()),
+        ("user id", profile.user_id.as_str()),
+        ("device id", profile.device_id.as_str()),
+    ] {
+        if value.trim().is_empty()
+            || value.chars().count() > MAX_PROFILE_FIELD_CHARS
+            || value.chars().any(char::is_control)
+        {
+            return Err(format!(
+                "organization profile {label} is invalid or too long"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validated_token(value: &str, label: &str) -> Result<String, String> {
+    if value.is_empty() || value.len() > MAX_TOKEN_BYTES || value.chars().any(char::is_control) {
+        return Err(format!("{label} is invalid or exceeds the safety limit"));
+    }
+    Ok(value.to_string())
+}
+
+fn bounded_message(value: &str) -> String {
+    value.chars().take(MAX_ERROR_MESSAGE_CHARS).collect()
+}
+
+fn ensure_value_size(value: &Value, max_bytes: usize, label: &str) -> Result<(), String> {
+    let size = serde_json::to_vec(value)
+        .map_err(|error| format!("serialize {label}: {error}"))?
+        .len();
+    if size > max_bytes {
+        return Err(format!("{label} exceeds the safety limit"));
+    }
+    Ok(())
+}
+
+fn validate_bounded_text(
+    value: &str,
+    label: &str,
+    max_chars: usize,
+    allow_empty: bool,
+) -> Result<(), String> {
+    if (!allow_empty && value.trim().is_empty())
+        || value.chars().count() > max_chars
+        || value.chars().any(char::is_control)
+    {
+        return Err(format!("{label} is invalid or too long"));
+    }
+    Ok(())
+}
+
+fn validate_resource_id(value: &str, label: &str) -> Result<(), String> {
+    validate_bounded_text(value, label, MAX_RESOURCE_ID_CHARS, false)
+}
+
 fn endpoint(base: &str, path: &str) -> String {
     format!("{}{}", base.trim_end_matches('/'), path)
 }
 
 fn clear_local_session(
+    inner: &OrgInner,
     session: &mut OrgSession,
     profile: Option<&OrgProfile>,
 ) -> Result<(), String> {
     let mut errors = Vec::new();
+    invalidate_account_generation(inner);
+    // Revoke Runtime paths while the account's signing credential is still
+    // available for strict sidecar validation. Every cleanup step remains
+    // best-effort so a credential-store failure cannot preserve local access.
+    if let Err(error) = deactivate_managed_skills(inner) {
+        errors.push(error);
+    }
     if let Some(profile) = profile {
         if let Err(error) = credential_delete(&credential_account(profile)) {
             errors.push(error);
@@ -523,15 +934,25 @@ fn clear_local_session(
             errors.push(error);
         }
     }
-    if let Err(error) = std::fs::remove_file(profile_path()) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            errors.push(format!("delete organization profile: {error}"));
+    if let Err(error) = with_model_state_transaction(inner, || {
+        let mut transaction_errors = Vec::new();
+        if let Err(error) = crate::providers::remove_organization_model_config() {
+            transaction_errors.push(format!("remove organization model config: {error}"));
         }
-    }
-    *session = OrgSession::default();
-    if let Err(error) = deactivate_managed_skills() {
+        if let Err(error) = std::fs::remove_file(profile_path()) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                transaction_errors.push(format!("delete organization profile: {error}"));
+            }
+        }
+        if transaction_errors.is_empty() {
+            Ok(())
+        } else {
+            Err(transaction_errors.join("; "))
+        }
+    }) {
         errors.push(error);
     }
+    *session = OrgSession::default();
     if errors.is_empty() {
         Ok(())
     } else {
@@ -549,43 +970,80 @@ fn cancel_pending_requests(inner: &Arc<OrgInner>) {
     }
 }
 
+async fn read_response_bounded(
+    response: Response,
+    max_bytes: u64,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes)
+    {
+        return Err(format!("{label} exceeds the response safety limit"));
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| format!("read {label}: {error}"))?;
+        let next_len = bytes
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| format!("{label} length overflow"))?;
+        if next_len as u64 > max_bytes {
+            return Err(format!("{label} exceeds the response safety limit"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
 async fn response_data(response: Response) -> Result<Value, String> {
     let status = response.status();
-    let value: Value = response
-        .json()
-        .await
-        .map_err(|e| format!("decode server response: {e}"))?;
+    let bytes =
+        read_response_bounded(response, MAX_JSON_RESPONSE_BYTES, "organization response").await?;
+    let value: Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("decode server response: {e}"))?;
     let code = value
         .get("code")
         .and_then(Value::as_i64)
         .unwrap_or(status.as_u16() as i64);
     if !status.is_success() || code != 0 {
-        return Err(value
-            .get("msg")
-            .and_then(Value::as_str)
-            .unwrap_or("organization request failed")
-            .to_string());
+        return Err(bounded_message(
+            value
+                .get("msg")
+                .and_then(Value::as_str)
+                .unwrap_or("organization request failed"),
+        ));
     }
     Ok(value.get("data").cloned().unwrap_or(Value::Null))
 }
 
-async fn refresh(inner: &Arc<OrgInner>, rejected_access: &str) -> Result<(), String> {
-    let mut session = inner.session.lock().await;
-    if session
-        .access_token
-        .as_deref()
-        .is_some_and(|token| token != rejected_access)
-    {
-        return Ok(());
-    }
-    let profile = session
-        .profile
-        .clone()
-        .ok_or("not signed in to an organization")?;
-    let refresh_token = session
-        .refresh_token
-        .clone()
-        .ok_or("organization session expired")?;
+async fn refresh(
+    inner: &Arc<OrgInner>,
+    rejected_access: &str,
+    expected: &AccountContext,
+) -> Result<(), String> {
+    let (profile, refresh_token, prior_access) = {
+        let session = inner.session.lock().await;
+        require_account_context_locked(inner, &session, expected)?;
+        if session
+            .access_token
+            .as_deref()
+            .is_some_and(|token| token != rejected_access)
+        {
+            return Ok(());
+        }
+        let profile = session
+            .profile
+            .clone()
+            .ok_or("not signed in to an organization")?;
+        let refresh_token = session
+            .refresh_token
+            .clone()
+            .ok_or("organization session expired")?;
+        (profile, refresh_token, session.access_token.clone())
+    };
+    validated_token(&refresh_token, "organization refresh token")?;
     let response = inner
         .client
         .post(endpoint(&profile.server_url, "/api/v1/auth/refresh"))
@@ -598,7 +1056,11 @@ async fn refresh(inner: &Arc<OrgInner>, rejected_access: &str) -> Result<(), Str
         Ok(data) => data,
         Err(error) => {
             if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-                let cleanup = clear_local_session(&mut session, Some(&profile));
+                let mut session = inner.session.lock().await;
+                if require_account_context_locked(inner, &session, expected).is_err() {
+                    return Err("organization account changed while refresh was in flight".into());
+                }
+                let cleanup = clear_local_session(inner, &mut session, Some(&profile));
                 return Err(match cleanup {
                     Ok(()) => error,
                     Err(cleanup_error) => {
@@ -617,20 +1079,95 @@ async fn refresh(inner: &Arc<OrgInner>, rejected_access: &str) -> Result<(), Str
         .get("refreshToken")
         .and_then(Value::as_str)
         .ok_or("refresh response missing refresh token")?;
-    credential_write(&credential_account(&profile), next_refresh)?;
-    session.access_token = Some(access.to_string());
-    session.refresh_token = Some(next_refresh.to_string());
+    let access = validated_token(access, "organization access token")?;
+    let next_refresh = validated_token(next_refresh, "organization refresh token")?;
+    let mut session = inner.session.lock().await;
+    require_account_context_locked(inner, &session, expected)?;
+    if session.access_token != prior_access {
+        // Another refresh already won. Never let a later response roll its
+        // tokens back, even though both requests used the same account.
+        return Ok(());
+    }
+    credential_write(&credential_account(&profile), &next_refresh)?;
+    session.access_token = Some(access);
+    session.refresh_token = Some(next_refresh);
     Ok(())
 }
 
-async fn auth_snapshot(inner: &Arc<OrgInner>) -> Result<(String, String), String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AccountContext {
+    account_id: String,
+    generation: u64,
+}
+
+struct AuthenticatedHttpResponse {
+    response: Response,
+    context: AccountContext,
+}
+
+fn account_context_matches(
+    expected: &AccountContext,
+    generation: u64,
+    current_account: Option<&str>,
+) -> bool {
+    expected.generation == generation && current_account == Some(expected.account_id.as_str())
+}
+
+fn session_account_id(session: &OrgSession) -> Option<String> {
+    session.profile.as_ref().map(credential_account)
+}
+
+fn require_account_context_locked(
+    inner: &OrgInner,
+    session: &OrgSession,
+    expected: &AccountContext,
+) -> Result<(), String> {
+    let account = session_account_id(session);
+    if account_context_matches(
+        expected,
+        inner.account_generation.load(Ordering::SeqCst),
+        account.as_deref(),
+    ) {
+        Ok(())
+    } else {
+        Err("organization account changed while request was in flight".into())
+    }
+}
+
+fn require_account_context_generation(
+    inner: &OrgInner,
+    expected: &AccountContext,
+) -> Result<(), String> {
+    if inner.account_generation.load(Ordering::SeqCst) == expected.generation {
+        Ok(())
+    } else {
+        Err("organization account changed while request was in flight".into())
+    }
+}
+
+async fn require_account_context(
+    inner: &OrgInner,
+    expected: &AccountContext,
+) -> Result<(), String> {
+    let session = inner.session.lock().await;
+    require_account_context_locked(inner, &session, expected)
+}
+
+async fn auth_snapshot(inner: &Arc<OrgInner>) -> Result<(String, String, AccountContext), String> {
     let session = inner.session.lock().await;
     let profile = session
         .profile
         .as_ref()
         .ok_or("not signed in to an organization")?;
     let access = session.access_token.clone().unwrap_or_default();
-    Ok((profile.server_url.clone(), access))
+    Ok((
+        profile.server_url.clone(),
+        access,
+        AccountContext {
+            account_id: credential_account(profile),
+            generation: inner.account_generation.load(Ordering::SeqCst),
+        },
+    ))
 }
 
 async fn authenticated_response(
@@ -638,11 +1175,42 @@ async fn authenticated_response(
     method: Method,
     path: &str,
     body: Option<Value>,
-) -> Result<Response, String> {
+) -> Result<AuthenticatedHttpResponse, String> {
+    authenticated_response_for_context(inner, method, path, body, None).await
+}
+
+async fn authenticated_response_for_context(
+    inner: &Arc<OrgInner>,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+    expected_context: Option<&AccountContext>,
+) -> Result<AuthenticatedHttpResponse, String> {
+    if path.len() > 8_192 || !path.starts_with('/') {
+        return Err("organization request path is invalid or too long".into());
+    }
+    if body.as_ref().is_some_and(|value| {
+        serde_json::to_vec(value)
+            .map(|bytes| bytes.len() > MAX_JSON_REQUEST_BYTES)
+            .unwrap_or(true)
+    }) {
+        return Err("organization request body exceeds 4 MiB".into());
+    }
+    let mut original_context: Option<AccountContext> = None;
     for attempt in 0..2 {
-        let (base, access) = auth_snapshot(inner).await?;
+        let (base, access, context) = auth_snapshot(inner).await?;
+        if expected_context.is_some_and(|expected| expected != &context) {
+            return Err("organization account changed before request was sent".into());
+        }
+        if original_context
+            .as_ref()
+            .is_some_and(|original| original != &context)
+        {
+            return Err("organization account changed before request retry".into());
+        }
+        original_context.get_or_insert_with(|| context.clone());
         if access.is_empty() {
-            refresh(inner, "").await?;
+            refresh(inner, "", &context).await?;
             continue;
         }
         let mut request = inner
@@ -657,10 +1225,11 @@ async fn authenticated_response(
             .await
             .map_err(|e| format!("organization server unreachable: {e}"))?;
         if response.status() == StatusCode::UNAUTHORIZED && attempt == 0 {
-            refresh(inner, &access).await?;
+            refresh(inner, &access, &context).await?;
             continue;
         }
-        return Ok(response);
+        require_account_context(inner, &context).await?;
+        return Ok(AuthenticatedHttpResponse { response, context });
     }
     Err("organization session expired".into())
 }
@@ -671,58 +1240,155 @@ async fn authenticated_json(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, String> {
-    response_data(authenticated_response(inner, method, path, body).await?).await
+    Ok(authenticated_json_with_context(inner, method, path, body)
+        .await?
+        .0)
+}
+
+async fn authenticated_json_with_context(
+    inner: &Arc<OrgInner>,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+) -> Result<(Value, AccountContext), String> {
+    authenticated_json_with_expected_context(inner, method, path, body, None).await
+}
+
+async fn authenticated_json_for_context(
+    inner: &Arc<OrgInner>,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+    expected_context: &AccountContext,
+) -> Result<Value, String> {
+    Ok(
+        authenticated_json_with_expected_context(inner, method, path, body, Some(expected_context))
+            .await?
+            .0,
+    )
+}
+
+async fn authenticated_json_with_expected_context(
+    inner: &Arc<OrgInner>,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+    expected_context: Option<&AccountContext>,
+) -> Result<(Value, AccountContext), String> {
+    let authenticated =
+        authenticated_response_for_context(inner, method, path, body, expected_context).await?;
+    let data = response_data(authenticated.response).await?;
+    require_account_context(inner, &authenticated.context).await?;
+    Ok((data, authenticated.context))
 }
 
 /// Download the organization's complete chat credential and persist it using
 /// the same provider/model schema as models created manually in Settings.
 async fn sync_organization_model_config(inner: &Arc<OrgInner>) -> Result<Option<String>, String> {
-    let data = authenticated_json(inner, Method::GET, "/api/v1/client/model-config", None).await?;
-    if data
+    sync_organization_model_config_for_context(inner, None).await
+}
+
+async fn sync_organization_model_config_for_context(
+    inner: &Arc<OrgInner>,
+    expected_context: Option<&AccountContext>,
+) -> Result<Option<String>, String> {
+    if let Some(expected_context) = expected_context {
+        require_account_context(inner, expected_context).await?;
+    }
+    let expected_model_epoch = inner
+        .model_epoch
+        .fetch_add(1, Ordering::SeqCst)
+        .wrapping_add(1);
+    let (data, request_context) = authenticated_json_with_expected_context(
+        inner,
+        Method::GET,
+        "/api/v1/client/model-config",
+        None,
+        expected_context,
+    )
+    .await?;
+    let credential_error = data
         .get("credentialError")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        crate::providers::remove_organization_model_config()?;
-        return Err("organization model credential cannot be decrypted".into());
-    }
-    if !data
+        .unwrap_or(false);
+    let configured = data
         .get("configured")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        crate::providers::remove_organization_model_config()?;
-        return Ok(None);
-    }
+        .unwrap_or(false);
 
-    let required = |key: &str| -> Result<String, String> {
-        data.get(key)
+    let required = |key: &str, max_bytes: usize| -> Result<String, String> {
+        let value = data
+            .get(key)
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .ok_or_else(|| format!("organization model config missing {key}"))
+            .ok_or_else(|| format!("organization model config missing {key}"))?;
+        if value.len() > max_bytes || value.chars().any(char::is_control) {
+            return Err(format!(
+                "organization model config {key} is invalid or too long"
+            ));
+        }
+        Ok(value.to_string())
     };
-    let lease_until = inner
-        .session
-        .lock()
-        .await
-        .bootstrap
-        .as_ref()
-        .and_then(|bootstrap| bootstrap.get("policy"))
-        .and_then(|policy| policy.get("expiresAt"))
-        .and_then(Value::as_u64)
-        .ok_or("organization policy missing model lease")?;
-    let model_id = crate::providers::save_organization_model_config(
-        crate::providers::OrganizationModelConfig {
-            provider: required("chatProvider")?,
-            model: required("chatModel")?,
-            base_url: required("chatBaseUrl")?,
-            api_key: required("chatKey")?,
-            lease_until,
-        },
-    )?;
-    Ok(Some(model_id))
+    let downloaded: Result<Option<crate::providers::OrganizationModelConfig>, String> =
+        if credential_error || !configured {
+            Ok(None)
+        } else {
+            let lease_until = {
+                let session = inner.session.lock().await;
+                require_account_context_locked(inner, &session, &request_context).and_then(|_| {
+                    session
+                        .bootstrap
+                        .as_ref()
+                        .and_then(|bootstrap| bootstrap.get("policy"))
+                        .and_then(|policy| policy.get("expiresAt"))
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| "organization policy missing model lease".to_string())
+                })
+            };
+            lease_until.and_then(|lease_until| {
+                Ok(Some(crate::providers::OrganizationModelConfig {
+                    provider: required("chatProvider", MAX_PROFILE_FIELD_CHARS)?,
+                    model: required("chatModel", MAX_PROFILE_FIELD_CHARS)?,
+                    base_url: required("chatBaseUrl", MAX_SERVER_URL_CHARS)?,
+                    api_key: required("chatKey", MAX_TOKEN_BYTES)?,
+                    lease_until,
+                }))
+            })
+        };
+    with_model_state_transaction(inner, || {
+        require_current_model_epoch(
+            expected_model_epoch,
+            inner.model_epoch.load(Ordering::SeqCst),
+        )?;
+        require_account_context_generation(inner, &request_context)?;
+        let persisted_profile = read_json::<OrgProfile>(&profile_path())?;
+        validate_profile(&persisted_profile)?;
+        if credential_account(&persisted_profile) != request_context.account_id {
+            return Err("organization account changed before model configuration commit".into());
+        }
+        match downloaded {
+            Ok(Some(downloaded)) => {
+                crate::providers::save_organization_model_config(downloaded).map(Some)
+            }
+            Ok(None) => {
+                crate::providers::remove_organization_model_config()?;
+                if credential_error {
+                    Err("organization model credential cannot be decrypted".into())
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(validation_error) => {
+                match crate::providers::remove_organization_model_config() {
+                    Ok(_) => Err(validation_error),
+                    Err(cleanup_error) => Err(format!(
+                        "{validation_error}; failed to clear invalid organization model configuration: {cleanup_error}"
+                    )),
+                }
+            }
+        }
+    })
 }
 
 pub(crate) async fn mcp_json(
@@ -735,20 +1401,21 @@ pub(crate) async fn mcp_json(
 
 pub(crate) async fn mcp_ask(input: Value) -> Result<Value, String> {
     let state = shared_state();
-    let response = authenticated_response(
+    let authenticated = authenticated_response(
         &state.inner,
         Method::POST,
         "/api/v1/knowledge/ask",
         Some(input),
     )
     .await?;
+    let response = authenticated.response;
     if !response.status().is_success() {
         return Err(format!("knowledge ask: HTTP {}", response.status()));
     }
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("read knowledge answer: {e}"))?;
+    let bytes = read_response_bounded(response, MAX_SSE_TOTAL_BYTES, "knowledge answer").await?;
+    require_account_context(&state.inner, &authenticated.context).await?;
+    let text =
+        String::from_utf8(bytes).map_err(|_| "knowledge answer is not valid UTF-8".to_string())?;
     for block in text.split("\n\n") {
         if block.lines().any(|line| line == "event: final") {
             let data = block
@@ -764,20 +1431,43 @@ pub(crate) async fn mcp_ask(input: Value) -> Result<Value, String> {
 }
 
 async fn update_bootstrap(inner: &Arc<OrgInner>) -> Result<Value, String> {
-    let data = authenticated_json(inner, Method::GET, "/api/v1/client/bootstrap", None).await?;
+    Ok(update_bootstrap_with_context(inner, None).await?.0)
+}
+
+async fn update_bootstrap_with_context(
+    inner: &Arc<OrgInner>,
+    expected_context: Option<&AccountContext>,
+) -> Result<(Value, AccountContext), String> {
+    let (data, request_context) = authenticated_json_with_expected_context(
+        inner,
+        Method::GET,
+        "/api/v1/client/bootstrap",
+        None,
+        expected_context,
+    )
+    .await?;
     let key_text = data
         .get("signingPublicKey")
         .and_then(Value::as_str)
         .ok_or("bootstrap missing signing public key")?;
+    if key_text.len() > MAX_SIGNING_FIELD_BYTES {
+        return Err("organization signing public key exceeds the safety limit".into());
+    }
     let key = decode_public_key(key_text)?;
     let payload = data
         .get("policyPayload")
         .and_then(Value::as_str)
         .ok_or("bootstrap missing signed policy payload")?;
+    if payload.len() > MAX_SIGNING_FIELD_BYTES {
+        return Err("organization policy payload exceeds the safety limit".into());
+    }
     let signature_text = data
         .get("policySignature")
         .and_then(Value::as_str)
         .ok_or("bootstrap missing policy signature")?;
+    if signature_text.len() > MAX_SIGNING_FIELD_BYTES {
+        return Err("organization policy signature exceeds the safety limit".into());
+    }
     verify_signed_payload(&key, payload, signature_text, "organization policy")?;
     let signed_policy: Value = serde_json::from_str(payload)
         .map_err(|error| format!("decode signed organization policy: {error}"))?;
@@ -804,6 +1494,7 @@ async fn update_bootstrap(inner: &Arc<OrgInner>) -> Result<Value, String> {
         .and_then(Value::as_u64)
         .ok_or("organization policy missing version")?;
     let mut session = inner.session.lock().await;
+    require_account_context_locked(inner, &session, &request_context)?;
     let profile = session
         .profile
         .as_ref()
@@ -829,20 +1520,28 @@ async fn update_bootstrap(inner: &Arc<OrgInner>) -> Result<Value, String> {
     if next_version < prior_version {
         return Err("organization policy rollback was rejected".into());
     }
+    if let Some(user) = data.get("user") {
+        ensure_value_size(user, 1024 * 1024, "organization user profile")?;
+    }
+    ensure_value_size(
+        &data,
+        MAX_JSON_RESPONSE_BYTES as usize,
+        "organization bootstrap",
+    )?;
     session.user = data.get("user").cloned();
     session.bootstrap = Some(data.clone());
-    Ok(data)
+    Ok((data, request_context))
 }
 
-async fn require_policy(inner: &Arc<OrgInner>, key: &str) -> Result<(), String> {
-    let bootstrap = update_bootstrap(inner).await?;
+async fn require_policy(inner: &Arc<OrgInner>, key: &str) -> Result<AccountContext, String> {
+    let (bootstrap, request_context) = update_bootstrap_with_context(inner, None).await?;
     if bootstrap
         .get("policy")
         .and_then(|policy| policy.get(key))
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        Ok(())
+        Ok(request_context)
     } else {
         Err(format!("organization policy disables {key}"))
     }
@@ -865,14 +1564,16 @@ pub async fn org_login(
     username: String,
     password: String,
 ) -> Result<OrgSessionView, String> {
-    cancel_pending_requests(&state.inner);
-    // 账号切换时先从 Runtime 移除上一账号的受管 Skill，
-    // 新账号同步失败也不得继续使用旧权限。
-    let deactivation = deactivate_managed_skills();
-    notify_skills_changed(&app, "account-switch");
-    deactivation?;
-    crate::providers::remove_organization_model_config()?;
-    notify_models_changed(&app, "account-switch");
+    let username = username.trim().to_string();
+    if username.is_empty()
+        || username.chars().count() > MAX_USERNAME_CHARS
+        || username.chars().any(char::is_control)
+    {
+        return Err("organization username is invalid or too long".into());
+    }
+    if password.is_empty() || password.len() > MAX_PASSWORD_BYTES {
+        return Err("organization password is empty or exceeds the safety limit".into());
+    }
     let server_url = normalize_server_url(&server_url)?;
     let device_id = Uuid::now_v7().to_string();
     let response = state
@@ -887,39 +1588,81 @@ pub async fn org_login(
     let access_token = data
         .get("accessToken")
         .and_then(Value::as_str)
-        .ok_or("login response missing access token")?
-        .to_string();
+        .ok_or("login response missing access token")?;
     let refresh_token = data
         .get("refreshToken")
         .and_then(Value::as_str)
-        .ok_or("login response missing refresh token")?
-        .to_string();
+        .ok_or("login response missing refresh token")?;
+    let access_token = validated_token(access_token, "organization access token")?;
+    let refresh_token = validated_token(refresh_token, "organization refresh token")?;
     let user = data
         .get("user")
         .cloned()
         .ok_or("login response missing user")?;
+    ensure_value_size(&user, 1024 * 1024, "organization user profile")?;
     let user_id = user
         .get("id")
         .and_then(Value::as_str)
         .ok_or("login response missing user id")?
         .to_string();
+    if user_id.trim().is_empty()
+        || user_id.chars().count() > MAX_PROFILE_FIELD_CHARS
+        || user_id.chars().any(char::is_control)
+    {
+        return Err("organization user id is invalid or too long".into());
+    }
     let profile = OrgProfile {
         server_url,
         username,
         user_id,
         device_id,
     };
-    let credential_account = credential_account(&profile);
-    credential_write(&credential_account, &refresh_token)?;
-    if let Err(error) = write_json_private(&profile_path(), &profile) {
-        let cleanup = credential_delete(&credential_account);
-        return Err(match cleanup {
-            Ok(()) => error,
-            Err(cleanup_error) => format!("{error}; credential cleanup: {cleanup_error}"),
-        });
-    }
-    {
+    validate_profile(&profile)?;
+    let new_credential_account = credential_account(&profile);
+    // Do not revoke the active account merely because a replacement login
+    // fails (bad password, offline server, malformed response). Switch the
+    // local security boundary only after the new identity is authenticated.
+    cancel_pending_requests(&state.inner);
+    let login_context = {
         let mut session = state.inner.session.lock().await;
+        let previous_profile = session.profile.clone();
+        // A sync may still be in flight under the previous account. Invalidate
+        // it and purge while the session lock prevents a new old-account
+        // snapshot, then publish the new identity.
+        invalidate_account_generation(&state.inner);
+        deactivate_managed_skills(&state.inner)?;
+        with_model_state_transaction(&state.inner, || {
+            // Any old-model commit either completed before this lock and is
+            // removed here, or observes the new account generation after it.
+            crate::providers::remove_organization_model_config()?;
+            credential_write(&new_credential_account, &refresh_token)?;
+            if let Err(error) = write_json_private(&profile_path(), &profile) {
+                let cleanup = credential_delete(&new_credential_account);
+                return Err(match cleanup {
+                    Ok(()) => error,
+                    Err(cleanup_error) => {
+                        format!("{error}; credential cleanup: {cleanup_error}")
+                    }
+                });
+            }
+            if let Some(previous_profile) = previous_profile
+                .as_ref()
+                .filter(|previous| credential_account(previous) != new_credential_account)
+            {
+                for old_account in [
+                    credential_account(previous_profile),
+                    signing_key_account(previous_profile),
+                ] {
+                    if let Err(error) = credential_delete(&old_account) {
+                        // The new profile is already durable and must not be
+                        // rolled back into an inconsistent old session merely
+                        // because best-effort stale credential cleanup failed.
+                        tracing::warn!(%error, "failed to delete credential for replaced organization account");
+                    }
+                }
+            }
+            Ok(())
+        })?;
         *session = OrgSession {
             profile: Some(profile),
             access_token: Some(access_token),
@@ -927,18 +1670,29 @@ pub async fn org_login(
             user: Some(user),
             bootstrap: None,
         };
-    }
-    if let Err(error) = update_bootstrap(&state.inner).await {
+        AccountContext {
+            account_id: new_credential_account.clone(),
+            generation: state.inner.account_generation.load(Ordering::SeqCst),
+        }
+    };
+    notify_skills_changed(&app, "account-switch");
+    notify_models_changed(&app, "account-switch");
+    if let Err(error) = update_bootstrap_with_context(&state.inner, Some(&login_context)).await {
         let mut session = state.inner.session.lock().await;
+        if require_account_context_locked(&state.inner, &session, &login_context).is_err() {
+            return Err(format!(
+                "{error}; organization login was superseded by another account change"
+            ));
+        }
         let profile = session.profile.clone();
-        let cleanup = clear_local_session(&mut session, profile.as_ref());
+        let cleanup = clear_local_session(&state.inner, &mut session, profile.as_ref());
         return Err(match cleanup {
             Ok(()) => error,
             Err(cleanup_error) => format!("{error}; local session cleanup: {cleanup_error}"),
         });
     }
     // 模型凭证优先同步，避免受管 Skill 包下载延迟模型进入 Runtime。
-    match sync_organization_model_config(&state.inner).await {
+    match sync_organization_model_config_for_context(&state.inner, Some(&login_context)).await {
         Ok(Some(model_id)) => {
             tracing::info!(%model_id, "organization model configuration downloaded");
             notify_models_changed(&app, "login-sync");
@@ -951,29 +1705,28 @@ pub async fn org_login(
     }
     // 登录即同步。失败不退出账号，但受管 Skill 保持已停用，
     // 避免网络短暂抖动迫使用户重新输入密码。
-    match sync_skills(&state.inner).await {
+    match sync_skills_for_context(&state.inner, Some(&login_context)).await {
         Ok(_) => notify_skills_changed(&app, "login-sync"),
         Err(error) => tracing::warn!(%error, "initial managed Skill sync failed"),
     }
     let session = state.inner.session.lock().await;
+    require_account_context_locked(&state.inner, &session, &login_context)?;
     Ok(session_view(&session))
 }
 
 #[tauri::command]
 pub async fn org_logout(app: AppHandle, state: State<'_, OrgState>) -> Result<(), String> {
     cancel_pending_requests(&state.inner);
-    let (profile, access_token) = {
-        let session = state.inner.session.lock().await;
-        (session.profile.clone(), session.access_token.clone())
-    };
     // Local logout is the security boundary and must not wait for an offline
     // organization server. Revoke the remote device token afterwards with a
     // short timeout when an access token is available.
-    let session_cleanup = {
+    let (profile, access_token, session_cleanup) = {
         let mut session = state.inner.session.lock().await;
-        clear_local_session(&mut session, profile.as_ref())
+        let current_profile = session.profile.clone();
+        let access_token = session.access_token.clone();
+        let cleanup = clear_local_session(&state.inner, &mut session, current_profile.as_ref());
+        (current_profile, access_token, cleanup)
     };
-    let model_cleanup = crate::providers::remove_organization_model_config();
     notify_skills_changed(&app, "logout");
     notify_models_changed(&app, "logout");
     if let (Some(profile), Some(access_token)) = (&profile, access_token) {
@@ -987,14 +1740,7 @@ pub async fn org_logout(app: AppHandle, state: State<'_, OrgState>) -> Result<()
             .send()
             .await;
     }
-    match (session_cleanup, model_cleanup) {
-        (Ok(()), Ok(_)) => Ok(()),
-        (Err(session_error), Ok(_)) => Err(session_error),
-        (Ok(()), Err(model_error)) => Err(model_error),
-        (Err(session_error), Err(model_error)) => Err(format!(
-            "{session_error}; organization model cleanup: {model_error}"
-        )),
-    }
+    session_cleanup
 }
 
 #[tauri::command]
@@ -1018,12 +1764,7 @@ pub async fn org_session(
             let _ = sync_skills(&state.inner).await;
         } else {
             enforce_skill_lease();
-            let signed_out = state.inner.session.lock().await.profile.is_none();
-            let removed = if signed_out {
-                crate::providers::remove_organization_model_config()
-            } else {
-                crate::providers::enforce_organization_model_lease()
-            };
+            let removed = enforce_model_for_current_session(&state.inner).await;
             match removed {
                 Ok(true) => notify_models_changed(&app, "lease-expired"),
                 Ok(false) => {}
@@ -1042,10 +1783,7 @@ pub async fn org_sync_model_config(
     state: State<'_, OrgState>,
 ) -> Result<OrgModelSyncView, String> {
     if let Err(error) = update_bootstrap(&state.inner).await {
-        if state.inner.session.lock().await.profile.is_none() {
-            crate::providers::remove_organization_model_config()?;
-            notify_models_changed(&app, "session-expired");
-        } else if crate::providers::enforce_organization_model_lease()? {
+        if enforce_model_for_current_session(&state.inner).await? {
             notify_models_changed(&app, "lease-expired");
         }
         return Err(error);
@@ -1084,6 +1822,12 @@ pub async fn org_list_documents(
     scope_id: Option<String>,
     query: Option<String>,
 ) -> Result<Value, String> {
+    if let Some(scope_id) = scope_id.as_deref() {
+        validate_resource_id(scope_id, "organization scope id")?;
+    }
+    if let Some(query) = query.as_deref() {
+        validate_bounded_text(query, "organization document query", MAX_QUERY_CHARS, true)?;
+    }
     let mut path = Url::parse("http://local/api/v1/docs").unwrap();
     {
         let mut pairs = path.query_pairs_mut();
@@ -1107,6 +1851,7 @@ pub async fn org_document_status(
     state: State<'_, OrgState>,
     doc_id: String,
 ) -> Result<Value, String> {
+    validate_resource_id(&doc_id, "organization document id")?;
     authenticated_json(
         &state.inner,
         Method::GET,
@@ -1130,6 +1875,7 @@ pub async fn org_fetch_document(
     doc_id: String,
     page: Option<u32>,
 ) -> Result<Value, String> {
+    validate_resource_id(&doc_id, "organization document id")?;
     authenticated_json(
         &state.inner,
         Method::POST,
@@ -1144,6 +1890,7 @@ pub async fn org_archive_document(
     state: State<'_, OrgState>,
     doc_id: String,
 ) -> Result<Value, String> {
+    validate_resource_id(&doc_id, "organization document id")?;
     authenticated_json(
         &state.inner,
         Method::DELETE,
@@ -1156,24 +1903,29 @@ pub async fn org_archive_document(
 #[tauri::command]
 pub async fn org_new_document_version(
     state: State<'_, OrgState>,
+    filesystem: State<'_, crate::shell_fs::FilesystemAccess>,
     doc_id: String,
     file_path: String,
 ) -> Result<Value, String> {
-    let path = PathBuf::from(file_path);
+    validate_resource_id(&doc_id, "organization document id")?;
+    if file_path.len() > 4_096 || file_path.contains('\0') {
+        return Err("document path is invalid or too long".into());
+    }
+    let request_context = active_account_context(&state.inner).await?;
+    let path = filesystem.require_authorized_file(Path::new(&file_path))?;
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or("invalid file name")?
         .to_string();
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    let bytes = read_bounded_upload_file(&path, MAX_DOCUMENT_UPLOAD_BYTES, "文档").await?;
     authenticated_multipart(
         &state.inner,
         &format!("/api/v1/docs/{}/new-version", urlencoding::encode(&doc_id)),
         &[],
         &name,
         &bytes,
+        Some(&request_context),
     )
     .await
 }
@@ -1184,6 +1936,8 @@ pub async fn org_publish_document(
     doc_id: String,
     target_scope_id: String,
 ) -> Result<Value, String> {
+    validate_resource_id(&doc_id, "organization document id")?;
+    validate_resource_id(&target_scope_id, "organization target scope id")?;
     authenticated_json(
         &state.inner,
         Method::POST,
@@ -1199,11 +1953,51 @@ async fn authenticated_multipart(
     fields: &[(String, String)],
     file_name: &str,
     bytes: &[u8],
+    expected_context: Option<&AccountContext>,
 ) -> Result<Value, String> {
+    if path.len() > 8_192
+        || !path.starts_with('/')
+        || fields.len() > 64
+        || file_name.is_empty()
+        || file_name.chars().count() > 1_024
+        || file_name.chars().any(char::is_control)
+        || bytes.len() as u64 > MAX_DOCUMENT_UPLOAD_BYTES
+    {
+        return Err("organization multipart request is invalid or too large".into());
+    }
+    let mut field_bytes = 0_usize;
+    for (key, value) in fields {
+        if key.is_empty()
+            || key.chars().count() > 128
+            || key.chars().any(char::is_control)
+            || value.chars().count() > 16 * 1024
+            || value.chars().any(|character| character == '\0')
+        {
+            return Err("organization multipart fields are invalid or too large".into());
+        }
+        field_bytes = field_bytes
+            .checked_add(key.len())
+            .and_then(|size| size.checked_add(value.len()))
+            .ok_or("organization multipart field size overflow")?;
+    }
+    if field_bytes > 512 * 1024 {
+        return Err("organization multipart fields exceed 512 KiB".into());
+    }
+    let mut original_context: Option<AccountContext> = None;
     for attempt in 0..2 {
-        let (base, access) = auth_snapshot(inner).await?;
+        let (base, access, context) = auth_snapshot(inner).await?;
+        if expected_context.is_some_and(|expected| expected != &context) {
+            return Err("organization account changed before upload was sent".into());
+        }
+        if original_context
+            .as_ref()
+            .is_some_and(|original| original != &context)
+        {
+            return Err("organization account changed before upload retry".into());
+        }
+        original_context.get_or_insert_with(|| context.clone());
         if access.is_empty() {
-            refresh(inner, "").await?;
+            refresh(inner, "", &context).await?;
             continue;
         }
         let mut form = reqwest::multipart::Form::new();
@@ -1223,23 +2017,101 @@ async fn authenticated_multipart(
             .await
             .map_err(|e| format!("upload to organization: {e}"))?;
         if response.status() == StatusCode::UNAUTHORIZED && attempt == 0 {
-            refresh(inner, &access).await?;
+            refresh(inner, &access, &context).await?;
             continue;
         }
-        return response_data(response).await;
+        let data = response_data(response).await?;
+        require_account_context(inner, &context).await?;
+        return Ok(data);
     }
     Err("organization session expired".into())
+}
+
+async fn read_bounded_upload_file(
+    path: &Path,
+    max_bytes: u64,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    let path = path.to_path_buf();
+    let error_label = label.to_string();
+    let task_label = error_label.clone();
+    tauri::async_runtime::spawn_blocking(move || read_file_bounded(&path, max_bytes, &task_label))
+        .await
+        .map_err(|error| format!("读取{error_label}任务失败：{error}"))?
+}
+
+pub(crate) fn canonical_org_managed_skill_directory(raw: &str) -> Option<PathBuf> {
+    let requested = Path::new(raw);
+    let directory = if requested.file_name().and_then(|name| name.to_str()) == Some("SKILL.md") {
+        requested.parent()?
+    } else {
+        requested
+    };
+    let canonical = directory.canonicalize().ok()?;
+    managed_skills_metadata()
+        .into_iter()
+        .find_map(|(trusted, _)| {
+            trusted
+                .canonicalize()
+                .ok()
+                .filter(|trusted| trusted == &canonical)
+                .map(|_| canonical.clone())
+        })
+}
+
+fn require_authorized_skill_upload_source(
+    filesystem: &crate::shell_fs::FilesystemAccess,
+    raw: &str,
+) -> Result<PathBuf, String> {
+    if let Some(managed) = crate::skill_installer::canonical_managed_skill_directory(raw) {
+        return Ok(managed);
+    }
+    if let Some(managed) = canonical_org_managed_skill_directory(raw) {
+        return Ok(managed);
+    }
+    let path = Path::new(raw);
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|error| format!("无法读取 Skill 来源：{error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("Skill 来源不能是符号链接".into());
+    }
+    if metadata.is_file() {
+        filesystem.require_authorized_file(path)
+    } else if metadata.is_dir() {
+        filesystem.require_workspace(raw)
+    } else {
+        Err("Skill 来源必须是普通文件或目录".into())
+    }
 }
 
 #[tauri::command]
 pub async fn org_submit_document(
     state: State<'_, OrgState>,
+    filesystem: State<'_, crate::shell_fs::FilesystemAccess>,
     file_path: String,
     scope_id: String,
     title: Option<String>,
     tags: Option<Vec<String>>,
 ) -> Result<Value, String> {
-    let bootstrap = update_bootstrap(&state.inner).await?;
+    if file_path.len() > 4_096 || file_path.contains('\0') {
+        return Err("document path is invalid or too long".into());
+    }
+    validate_resource_id(&scope_id, "organization scope id")?;
+    if let Some(title) = title.as_deref() {
+        validate_bounded_text(title, "organization document title", MAX_TITLE_CHARS, true)?;
+    }
+    if tags.as_ref().is_some_and(|tags| {
+        tags.len() > MAX_TAGS
+            || tags.iter().any(|tag| {
+                tag.trim().is_empty()
+                    || tag.chars().count() > MAX_TAG_CHARS
+                    || tag.chars().any(char::is_control)
+            })
+            || tags.iter().map(String::len).sum::<usize>() > 16 * 1024
+    }) {
+        return Err("organization document tags are invalid or too large".into());
+    }
+    let (bootstrap, request_context) = update_bootstrap_with_context(&state.inner, None).await?;
     let is_personal = bootstrap
         .get("scopes")
         .and_then(Value::as_array)
@@ -1258,15 +2130,13 @@ pub async fn org_submit_document(
     {
         return Err("organization policy disables personal cloud knowledge".into());
     }
-    let path = PathBuf::from(file_path);
+    let path = filesystem.require_authorized_file(Path::new(&file_path))?;
     let name = path
         .file_name()
         .and_then(|v| v.to_str())
         .ok_or("invalid file name")?
         .to_string();
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let bytes = read_bounded_upload_file(&path, MAX_DOCUMENT_UPLOAD_BYTES, "文档").await?;
     let mut fields = vec![("scopeId".to_string(), scope_id)];
     if let Some(title) = title {
         fields.push(("title".into(), title));
@@ -1280,6 +2150,7 @@ pub async fn org_submit_document(
         &fields,
         &name,
         &bytes,
+        Some(&request_context),
     )
     .await
 }
@@ -1305,6 +2176,7 @@ pub async fn org_skill_detail(
     state: State<'_, OrgState>,
     skill_id: String,
 ) -> Result<Value, String> {
+    validate_resource_id(&skill_id, "organization Skill id")?;
     authenticated_json(
         &state.inner,
         Method::GET,
@@ -1321,7 +2193,10 @@ pub async fn org_set_skill_preference(
     skill_id: String,
     enabled: bool,
 ) -> Result<Value, String> {
-    let result = authenticated_json(
+    validate_resource_id(&skill_id, "organization Skill id")?;
+    let request_context = active_account_context(&state.inner).await?;
+    let request_account = request_context.account_id.clone();
+    let result = authenticated_json_for_context(
         &state.inner,
         Method::PUT,
         &format!(
@@ -1329,17 +2204,32 @@ pub async fn org_set_skill_preference(
             urlencoding::encode(&skill_id)
         ),
         Some(json!({ "enabled": enabled })),
+        &request_context,
     )
     .await?;
     // A preference update and the preceding sync cursor can share the same
     // millisecond. Force a full fetch when installing so the newly enabled
     // package cannot be skipped by the server's strict `updated_at > cursor`.
-    if enabled {
-        let mut local = read_json::<SkillSyncState>(&skill_state_path()).unwrap_or_default();
-        local.cursor.clear();
-        write_json_private(&skill_state_path(), &local)?;
-    }
-    sync_skills(&state.inner).await?;
+    invalidate_skill_sync(&state.inner);
+    with_skill_state_transaction(&state.inner, || {
+        require_account_context_generation(&state.inner, &request_context)?;
+        let persisted_profile = read_json::<OrgProfile>(&profile_path())?;
+        validate_profile(&persisted_profile)?;
+        if credential_account(&persisted_profile) != request_account {
+            return Err("organization account changed while updating Skill preference".into());
+        }
+        let mut local = load_or_recover_skill_state_unlocked()?;
+        if !local.account_id.is_empty() && local.account_id != request_account {
+            return Err("managed Skill state belongs to a different account".into());
+        }
+        local.account_id = request_account.clone();
+        if enabled {
+            local.cursor.clear();
+        }
+        bump_skill_revision(&mut local);
+        write_json_private(&skill_state_path(), &local)
+    })?;
+    sync_skills_for_context(&state.inner, Some(&request_context)).await?;
     notify_skills_changed(&app, "preference");
     Ok(result)
 }
@@ -1350,12 +2240,15 @@ pub async fn org_publish_skill(
     skill_id: String,
     target_scope_id: String,
 ) -> Result<Value, String> {
-    require_policy(&state.inner, "allowSkillSubmission").await?;
-    authenticated_json(
+    validate_resource_id(&skill_id, "organization Skill id")?;
+    validate_resource_id(&target_scope_id, "organization target scope id")?;
+    let request_context = require_policy(&state.inner, "allowSkillSubmission").await?;
+    authenticated_json_for_context(
         &state.inner,
         Method::POST,
         &format!("/api/v1/skills/{}/publish", urlencoding::encode(&skill_id)),
         Some(json!({ "targetScopeId": target_scope_id })),
+        &request_context,
     )
     .await
 }
@@ -1366,6 +2259,13 @@ pub async fn org_qa_feedback(
     qa_event_id: String,
     feedback: String,
 ) -> Result<Value, String> {
+    validate_resource_id(&qa_event_id, "organization QA event id")?;
+    validate_bounded_text(
+        &feedback,
+        "organization QA feedback",
+        MAX_FEEDBACK_CHARS,
+        false,
+    )?;
     authenticated_json(
         &state.inner,
         Method::POST,
@@ -1381,12 +2281,20 @@ pub async fn org_qa_feedback(
 #[tauri::command]
 pub async fn org_submit_skill(
     state: State<'_, OrgState>,
+    filesystem: State<'_, crate::shell_fs::FilesystemAccess>,
     file_path: String,
     scope_id: String,
     version: Option<String>,
 ) -> Result<Value, String> {
-    require_policy(&state.inner, "allowSkillSubmission").await?;
-    let path = PathBuf::from(file_path);
+    if file_path.len() > 4_096 || file_path.contains('\0') {
+        return Err("Skill path is invalid or too long".into());
+    }
+    validate_resource_id(&scope_id, "organization scope id")?;
+    if let Some(version) = version.as_deref() {
+        validate_bounded_text(version, "organization Skill version", 256, false)?;
+    }
+    let request_context = require_policy(&state.inner, "allowSkillSubmission").await?;
+    let path = require_authorized_skill_upload_source(&filesystem, &file_path)?;
     let is_zip = path.is_file()
         && path
             .extension()
@@ -1398,9 +2306,7 @@ pub async fn org_submit_skill(
             .and_then(|value| value.to_str())
             .ok_or("invalid file name")?
             .to_string();
-        let bytes = tokio::fs::read(&path)
-            .await
-            .map_err(|error| format!("read {}: {error}", path.display()))?;
+        let bytes = read_bounded_upload_file(&path, MAX_SKILL_UPLOAD_BYTES, "Skill ZIP").await?;
         (name, bytes)
     } else {
         let source = path.to_string_lossy().into_owned();
@@ -1420,6 +2326,7 @@ pub async fn org_submit_skill(
         &fields,
         &name,
         &bytes,
+        Some(&request_context),
     )
     .await
 }
@@ -1435,7 +2342,7 @@ pub async fn org_skill_submissions_mine(state: State<'_, OrgState>) -> Result<Va
     .await
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(default)]
 struct InstalledSkill {
@@ -1453,10 +2360,17 @@ struct InstalledSkill {
     allow_personal_override: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(default)]
 struct SkillSyncState {
+    /// Stable hash of the authenticated server/user pair. It prevents a state
+    /// downloaded for one account being adopted by another account that uses
+    /// the same organization signing key.
+    account_id: String,
+    /// A fresh UUID on every committed mutation. Comparing it at commit time
+    /// prevents cross-process ABA/lost-update races.
+    revision: String,
     cursor: String,
     lease_until: u64,
     installed: HashMap<String, InstalledSkill>,
@@ -1480,6 +2394,22 @@ pub(crate) fn managed_skills_metadata() -> Vec<(PathBuf, ManagedSkillMetadata)> 
         return Vec::new();
     };
     if validate_skill_state(&state).is_err() {
+        return Vec::new();
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if state.lease_until > 0 && state.lease_until < now {
+        return Vec::new();
+    }
+    let Ok(profile) = read_json::<OrgProfile>(&profile_path()) else {
+        return Vec::new();
+    };
+    if validate_profile(&profile).is_err()
+        || state.account_id.is_empty()
+        || state.account_id != credential_account(&profile)
+    {
         return Vec::new();
     }
     state
@@ -1598,21 +2528,54 @@ fn verify_installed_skill(public_key: &VerifyingKey, item: &InstalledSkill) -> R
     if signed != expected {
         return Err("installed Skill sidecar differs from its signed manifest".into());
     }
-    let canonical = organization_skills_root()
-        .join(&item.skill_id)
-        .join(&item.version_id);
-    if item.path != canonical.to_string_lossy() || !canonical.join("SKILL.md").is_file() {
+    let home = crate::paths::echo_agent_home_dir();
+    let skills_root = home.join("skills");
+    let managed_root = organization_skills_root();
+    let family = managed_root.join(&item.skill_id);
+    let canonical = family.join(&item.version_id);
+    let packages = managed_root.join(".packages");
+    let package_family = packages.join(&item.skill_id);
+    for (label, path) in [
+        ("Skills root", &skills_root),
+        ("organization Skills root", &managed_root),
+        ("managed Skill family", &family),
+        ("managed Skill version", &canonical),
+        ("managed Skill package root", &packages),
+        ("managed Skill package family", &package_family),
+    ] {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| format!("inspect {label} {}: {error}", path.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(format!("{label} must be a real directory"));
+        }
+    }
+    let canonical_home = home
+        .canonicalize()
+        .map_err(|error| format!("canonicalize EchoAgent home: {error}"))?;
+    let canonical_managed = managed_root
+        .canonicalize()
+        .map_err(|error| format!("canonicalize organization Skills root: {error}"))?;
+    if !canonical_managed.starts_with(&canonical_home) {
+        return Err("organization Skills root escaped the EchoAgent home".into());
+    }
+    let entry = canonical.join("SKILL.md");
+    let entry_metadata = std::fs::symlink_metadata(&entry)
+        .map_err(|error| format!("inspect managed Skill entry: {error}"))?;
+    if item.path != canonical.to_string_lossy()
+        || entry_metadata.file_type().is_symlink()
+        || !entry_metadata.is_file()
+    {
         return Err("installed Skill path is not canonical or its entry is missing".into());
     }
-    let canonical_package = organization_skills_root()
-        .join(".packages")
-        .join(&item.skill_id)
-        .join(format!("{}.zip", item.version_id));
+    let canonical_package = package_family.join(format!("{}.zip", item.version_id));
     if item.package_path != canonical_package.to_string_lossy() {
         return Err("installed Skill package cache path is not canonical".into());
     }
-    let package = std::fs::read(&canonical_package)
-        .map_err(|error| format!("read installed Skill package cache: {error}"))?;
+    let package = read_file_bounded(
+        &canonical_package,
+        MAX_SKILL_UPLOAD_BYTES,
+        "installed Skill package cache",
+    )?;
     if format!("{:x}", Sha256::digest(&package)) != item.hash {
         return Err("installed Skill package cache hash mismatch".into());
     }
@@ -1624,7 +2587,11 @@ fn collect_installed_files(
     root: &Path,
     directory: &Path,
     files: &mut HashSet<PathBuf>,
+    depth: usize,
 ) -> Result<(), String> {
+    if depth > MAX_MANAGED_SKILL_DEPTH {
+        return Err("installed Skill directory nesting is too deep".into());
+    }
     for entry in std::fs::read_dir(directory)
         .map_err(|error| format!("read installed Skill directory: {error}"))?
     {
@@ -1636,8 +2603,13 @@ fn collect_installed_files(
             return Err("installed Skill contains a symbolic link".into());
         }
         if kind.is_dir() {
-            collect_installed_files(root, &entry.path(), files)?;
+            collect_installed_files(root, &entry.path(), files, depth + 1)?;
         } else if kind.is_file() {
+            if files.len() >= MAX_MANAGED_SKILL_FILES {
+                return Err(format!(
+                    "installed Skill contains more than {MAX_MANAGED_SKILL_FILES} files"
+                ));
+            }
             let entry_path = entry.path();
             let relative = entry_path
                 .strip_prefix(root)
@@ -1657,7 +2629,13 @@ fn collect_installed_files(
 fn verify_extracted_skill(bytes: &[u8], root: &Path) -> Result<(), String> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| format!("open cached Skill ZIP: {error}"))?;
+    if archive.len() > MAX_MANAGED_SKILL_FILES {
+        return Err(format!(
+            "cached Skill ZIP contains more than {MAX_MANAGED_SKILL_FILES} files"
+        ));
+    }
     let mut expected = HashSet::new();
+    let mut total_size = 0_u64;
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -1675,9 +2653,20 @@ fn verify_extracted_skill(bytes: &[u8], root: &Path) -> Result<(), String> {
             .enclosed_name()
             .ok_or("unsafe path in cached Skill ZIP")?
             .to_path_buf();
-        let installed = std::fs::read(root.join(&relative)).map_err(|error| {
-            format!("read installed Skill file {}: {error}", relative.display())
-        })?;
+        if relative.components().count() > MAX_MANAGED_SKILL_DEPTH {
+            return Err("cached Skill ZIP directory nesting is too deep".into());
+        }
+        total_size = total_size
+            .checked_add(entry.size())
+            .ok_or("cached Skill ZIP expanded size overflow")?;
+        if total_size > MAX_SKILL_UPLOAD_BYTES {
+            return Err("cached Skill ZIP expands beyond 20MB".into());
+        }
+        let installed = read_file_bounded(
+            &root.join(&relative),
+            MAX_SKILL_UPLOAD_BYTES,
+            "installed Skill file",
+        )?;
         let mut packaged = Vec::with_capacity(entry.size() as usize);
         std::io::Read::read_to_end(&mut entry, &mut packaged)
             .map_err(|error| format!("read cached Skill file {}: {error}", relative.display()))?;
@@ -1690,7 +2679,7 @@ fn verify_extracted_skill(bytes: &[u8], root: &Path) -> Result<(), String> {
         expected.insert(relative);
     }
     let mut actual = HashSet::new();
-    collect_installed_files(root, root, &mut actual)?;
+    collect_installed_files(root, root, &mut actual, 0)?;
     if actual != expected {
         return Err("installed Skill file set differs from its signed package".into());
     }
@@ -1700,10 +2689,12 @@ fn verify_extracted_skill(bytes: &[u8], root: &Path) -> Result<(), String> {
 fn cache_skill_package(bytes: &[u8], skill_id: &str, version_id: &str) -> Result<PathBuf, String> {
     Uuid::parse_str(skill_id).map_err(|_| "invalid Skill id from organization server")?;
     Uuid::parse_str(version_id).map_err(|_| "invalid Skill version id from organization server")?;
-    let path = organization_skills_root()
-        .join(".packages")
-        .join(skill_id)
-        .join(format!("{version_id}.zip"));
+    ensure_organization_skills_root()?;
+    let packages = organization_skills_root().join(".packages");
+    ensure_private_directory_without_symlink(&packages, "managed Skill package cache")?;
+    let family = packages.join(skill_id);
+    ensure_private_directory_without_symlink(&family, "managed Skill package family")?;
+    let path = family.join(format!("{version_id}.zip"));
     crate::paths::write_private_file(&path, bytes)?;
     Ok(path)
 }
@@ -1715,13 +2706,24 @@ fn extract_skill_package(
 ) -> Result<PathBuf, String> {
     Uuid::parse_str(skill_id).map_err(|_| "invalid Skill id from organization server")?;
     Uuid::parse_str(version_id).map_err(|_| "invalid Skill version id from organization server")?;
+    ensure_organization_skills_root()?;
     let root = organization_skills_root().join(skill_id);
+    ensure_private_directory_without_symlink(&root, "managed Skill family")?;
     let final_dir = root.join(version_id);
-    if final_dir.join("SKILL.md").is_file() {
-        verify_extracted_skill(bytes, &final_dir)?;
-        return Ok(final_dir);
+    match std::fs::symlink_metadata(&final_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(format!(
+                "managed Skill version must be a real directory: {}",
+                final_dir.display()
+            ))
+        }
+        Ok(_) => {
+            verify_extracted_skill(bytes, &final_dir)?;
+            return Ok(final_dir);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("inspect managed Skill version: {error}")),
     }
-    std::fs::create_dir_all(&root).map_err(|e| format!("create Skill root: {e}"))?;
     let temp = root.join(format!(".{version_id}.{}.tmp", Uuid::now_v7()));
     std::fs::create_dir_all(&temp).map_err(|e| format!("create Skill staging dir: {e}"))?;
     let result = (|| -> Result<(), String> {
@@ -1804,7 +2806,43 @@ fn pinned_signing_key() -> Result<VerifyingKey, String> {
     decode_public_key(&text)
 }
 
+fn validate_installed_skill_fields(key: &str, item: &InstalledSkill) -> Result<(), String> {
+    if key != item.skill_id
+        || Uuid::parse_str(key).is_err()
+        || Uuid::parse_str(&item.version_id).is_err()
+        || item.version.chars().count() > MAX_PROFILE_FIELD_CHARS
+        || item.name.trim().is_empty()
+        || item.name.chars().count() > MAX_PROFILE_FIELD_CHARS
+        || item.path.len() > 4_096
+        || item.package_path.len() > 4_096
+        || item.hash.len() > 256
+        || item.signature_payload.len() > MAX_SIGNING_FIELD_BYTES
+        || item.signature.len() > MAX_SIGNING_FIELD_BYTES
+        || item.scope_kind.len() > 64
+    {
+        return Err("managed Skill state contains invalid or oversized fields".into());
+    }
+    Ok(())
+}
+
 fn validate_skill_state(state: &SkillSyncState) -> Result<(), String> {
+    if state.account_id.chars().count() > 256
+        || state.account_id.chars().any(char::is_control)
+        || (!state.revision.is_empty() && Uuid::parse_str(&state.revision).is_err())
+    {
+        return Err("managed Skill state identity or revision is invalid".into());
+    }
+    if state.cursor.chars().count() > 4_096 || state.cursor.chars().any(char::is_control) {
+        return Err("managed Skill cursor is invalid or too long".into());
+    }
+    if state.installed.len() > MAX_MANAGED_SKILLS {
+        return Err(format!(
+            "managed Skill state exceeds {MAX_MANAGED_SKILLS} entries"
+        ));
+    }
+    for (key, item) in &state.installed {
+        validate_installed_skill_fields(key, item)?;
+    }
     if state.installed.is_empty() {
         return Ok(());
     }
@@ -1815,47 +2853,230 @@ fn validate_skill_state(state: &SkillSyncState) -> Result<(), String> {
     Ok(())
 }
 
+fn bump_skill_revision(state: &mut SkillSyncState) {
+    state.revision = Uuid::now_v7().to_string();
+}
+
+fn read_skill_state_strict_unlocked() -> Result<SkillSyncState, String> {
+    let state = read_json_or_default_if_missing::<SkillSyncState>(&skill_state_path())?;
+    validate_skill_state(&state)?;
+    Ok(state)
+}
+
+fn quarantine_skill_state_unlocked() -> Result<Option<PathBuf>, String> {
+    let path = skill_state_path();
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("inspect managed Skill state: {error}")),
+        Ok(_) => {}
+    }
+    let parent = path
+        .parent()
+        .ok_or("managed Skill state path has no parent")?;
+    let quarantine = parent.join(format!(".{SKILL_STATE_FILE}.corrupt.{}", Uuid::now_v7()));
+    std::fs::rename(&path, &quarantine)
+        .map_err(|error| format!("quarantine invalid managed Skill state: {error}"))?;
+    Ok(Some(quarantine))
+}
+
+fn ensure_organization_skills_root() -> Result<(), String> {
+    let home = crate::paths::echo_agent_home_dir();
+    std::fs::create_dir_all(&home)
+        .map_err(|error| format!("create EchoAgent home for managed Skills: {error}"))?;
+    crate::paths::harden_private_dir(&home)?;
+    let skills = home.join("skills");
+    ensure_private_directory_without_symlink(&skills, "Skills root")?;
+    let organization = skills.join("organization");
+    ensure_private_directory_without_symlink(&organization, "organization Skills root")?;
+    let canonical_home = home
+        .canonicalize()
+        .map_err(|error| format!("canonicalize EchoAgent home: {error}"))?;
+    let canonical_organization = organization
+        .canonicalize()
+        .map_err(|error| format!("canonicalize organization Skills root: {error}"))?;
+    if !canonical_organization.starts_with(&canonical_home) {
+        return Err("organization Skills root escaped the EchoAgent home".into());
+    }
+    Ok(())
+}
+
+fn ensure_private_directory_without_symlink(path: &Path, label: &str) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(format!(
+                "{label} must be a real directory: {}",
+                path.display()
+            ))
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(path)
+                .map_err(|error| format!("create {label} {}: {error}", path.display()))?;
+        }
+        Err(error) => return Err(format!("inspect {label} {}: {error}", path.display())),
+    }
+    crate::paths::harden_private_dir(path)
+}
+
+fn purge_organization_skills_root_unlocked() -> Result<(), String> {
+    let root = organization_skills_root();
+    let parent = root
+        .parent()
+        .ok_or("organization Skills root has no parent")?;
+    match std::fs::symlink_metadata(parent) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("inspect Skills root: {error}")),
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err("Skills root must be a real directory".into())
+        }
+        Ok(_) => {}
+    }
+    match std::fs::symlink_metadata(&root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("inspect organization Skills root: {error}")),
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            std::fs::remove_file(&root)
+                .map_err(|error| format!("remove unsafe organization Skills root: {error}"))
+        }
+        Ok(_) => {
+            // Rename first so Runtime lookups stop seeing the old tree before
+            // recursive deletion begins. The fixed sibling path stays under a
+            // verified, non-symlink Skills directory.
+            let retired = parent.join(format!(".organization.retired.{}", Uuid::now_v7()));
+            std::fs::rename(&root, &retired)
+                .map_err(|error| format!("retire organization Skills root: {error}"))?;
+            std::fs::remove_dir_all(&retired)
+                .map_err(|error| format!("delete retired organization Skills root: {error}"))
+        }
+    }
+}
+
 fn write_runtime_skill_config(state: &SkillSyncState) -> Result<(), String> {
     // Sidecar 和 config.toml 都属于用户可编辑文件。每次注入 Runtime
     // 前重新验证服务端签名，不信任 sidecar 里的 mandatory/覆盖值。
     validate_skill_state(state)?;
-    let mut config = crate::providers::read_config();
-    let root = config.as_table_mut().ok_or("config root is not a table")?;
-    let skills = root
-        .entry("skills")
-        .or_insert_with(|| toml::Value::Table(Default::default()))
-        .as_table_mut()
-        .ok_or("[skills] is not a table")?;
-    // Runtime only understands a flat Server scope, so collapse same-name
-    // packages here. Normally personal > team > org. A mandatory/non-
-    // overridable enterprise package wins over an unlocked personal package;
-    // between protected packages the broader organization policy wins.
-    let mut winners = std::collections::BTreeMap::<String, &InstalledSkill>::new();
-    for candidate in state.installed.values() {
-        winners
-            .entry(candidate.name.clone())
-            .and_modify(|current| {
-                if skill_precedes(candidate, current) {
-                    *current = candidate;
-                }
-            })
-            .or_insert(candidate);
+    crate::providers::update_config(|config| {
+        let root = config.as_table_mut().ok_or("config root is not a table")?;
+        let skills = root
+            .entry("skills")
+            .or_insert_with(|| toml::Value::Table(Default::default()))
+            .as_table_mut()
+            .ok_or("[skills] is not a table")?;
+        // Runtime only understands a flat Server scope, so collapse same-name
+        // packages here. Normally personal > team > org. A mandatory/non-
+        // overridable enterprise package wins over an unlocked personal package;
+        // between protected packages the broader organization policy wins.
+        let mut winners = std::collections::BTreeMap::<String, &InstalledSkill>::new();
+        for candidate in state.installed.values() {
+            winners
+                .entry(candidate.name.clone())
+                .and_modify(|current| {
+                    if skill_precedes(candidate, current) {
+                        *current = candidate;
+                    }
+                })
+                .or_insert(candidate);
+        }
+        let paths = winners
+            .values()
+            .map(|item| toml::Value::String(item.path.clone()))
+            .collect();
+        let enforced = winners
+            .values()
+            .filter(|item| item.mandatory || !item.allow_personal_override)
+            .map(|item| toml::Value::String(item.name.clone()))
+            .collect();
+        skills.insert("server_skill_dirs".into(), toml::Value::Array(paths));
+        skills.insert(
+            "server_enforced_skill_names".into(),
+            toml::Value::Array(enforced),
+        );
+        Ok(())
+    })
+}
+
+fn recover_invalid_skill_state_unlocked(load_error: &str) -> Result<SkillSyncState, String> {
+    // Fail closed first. Even if quarantine or disk cleanup later fails, the
+    // Runtime must stop receiving paths derived from a corrupt sidecar.
+    let mut empty = SkillSyncState::default();
+    bump_skill_revision(&mut empty);
+    let mut cleanup_errors = Vec::new();
+    if let Err(error) = write_runtime_skill_config(&empty) {
+        cleanup_errors.push(format!("clear Runtime managed Skills: {error}"));
     }
-    let paths = winners
-        .values()
-        .map(|item| toml::Value::String(item.path.clone()))
-        .collect();
-    let enforced = winners
-        .values()
-        .filter(|item| item.mandatory || !item.allow_personal_override)
-        .map(|item| toml::Value::String(item.name.clone()))
-        .collect();
-    skills.insert("server_skill_dirs".into(), toml::Value::Array(paths));
-    skills.insert(
-        "server_enforced_skill_names".into(),
-        toml::Value::Array(enforced),
-    );
-    crate::providers::write_config(&config)
+    let quarantined = match quarantine_skill_state_unlocked() {
+        Ok(path) => path,
+        Err(error) => {
+            cleanup_errors.push(error);
+            None
+        }
+    };
+    if let Err(error) = purge_organization_skills_root_unlocked() {
+        cleanup_errors.push(error);
+    }
+    // Only create a fresh sidecar after the invalid object was moved away. A
+    // directory/symlink that could not be quarantined must not be overwritten.
+    if quarantined.is_some() || !skill_state_path().exists() {
+        if let Err(error) = write_json_private(&skill_state_path(), &empty) {
+            cleanup_errors.push(format!("write reset managed Skill state: {error}"));
+        }
+    }
+    if cleanup_errors.is_empty() {
+        tracing::warn!(
+            error = %bounded_message(load_error),
+            quarantine = ?quarantined,
+            "invalid managed Skill state was quarantined and disabled"
+        );
+        Ok(empty)
+    } else {
+        Err(format!(
+            "managed Skill state is invalid ({load_error}); fail-closed cleanup: {}",
+            cleanup_errors.join("; ")
+        ))
+    }
+}
+
+fn load_or_recover_skill_state_unlocked() -> Result<SkillSyncState, String> {
+    match read_skill_state_strict_unlocked() {
+        Ok(state) => Ok(state),
+        Err(error) => recover_invalid_skill_state_unlocked(&error),
+    }
+}
+
+async fn active_account_context(inner: &OrgInner) -> Result<AccountContext, String> {
+    let session = inner.session.lock().await;
+    let profile = session
+        .profile
+        .as_ref()
+        .ok_or("not signed in to an organization")?;
+    if session.refresh_token.is_none() && session.access_token.is_none() {
+        return Err("organization session has no usable credential".into());
+    }
+    Ok(AccountContext {
+        account_id: credential_account(profile),
+        generation: inner.account_generation.load(Ordering::SeqCst),
+    })
+}
+
+async fn active_skill_account_id(inner: &OrgInner) -> Result<String, String> {
+    Ok(active_account_context(inner).await?.account_id)
+}
+
+fn require_skill_commit_current(
+    expected_epoch: u64,
+    current_epoch: u64,
+    expected_account: &str,
+    current_account: &str,
+    base: &SkillSyncState,
+    current: &SkillSyncState,
+) -> Result<(), String> {
+    if expected_epoch != current_epoch || expected_account != current_account {
+        return Err("organization account changed during Skill synchronization".into());
+    }
+    if current != base {
+        return Err("organization Skill state changed concurrently; please retry".into());
+    }
+    Ok(())
 }
 
 fn skill_precedes(candidate: &InstalledSkill, current: &InstalledSkill) -> bool {
@@ -1890,53 +3111,101 @@ fn skill_precedes(candidate: &InstalledSkill, current: &InstalledSkill) -> bool 
         || (candidate_rank == current_rank && candidate.skill_id < current.skill_id)
 }
 
-fn deactivate_managed_skills() -> Result<(), String> {
-    let mut state = read_json::<SkillSyncState>(&skill_state_path()).unwrap_or_default();
-    let installed = state.installed.values().cloned().collect::<Vec<_>>();
-    state.installed.clear();
-    state.cursor.clear();
-    state.lease_until = 0;
-    write_runtime_skill_config(&state)?;
-    write_json_private(&skill_state_path(), &state)?;
-    for item in &installed {
-        remove_installed_package(item);
-    }
-    Ok(())
+fn deactivate_managed_skills(inner: &OrgInner) -> Result<(), String> {
+    // Increment before waiting on the state lock. An in-flight sync either
+    // finishes an already locked package write (which this cleanup then
+    // purges), or observes the new epoch before its next write/commit.
+    invalidate_skill_sync(inner);
+    with_skill_state_transaction(inner, || {
+        let mut errors = Vec::new();
+        if let Err(error) = load_or_recover_skill_state_unlocked() {
+            errors.push(error);
+        }
+        let mut empty = SkillSyncState::default();
+        bump_skill_revision(&mut empty);
+        // Clear Runtime config before filesystem work; logout must fail closed
+        // even if a read-only/corrupt package tree cannot be removed.
+        if let Err(error) = write_runtime_skill_config(&empty) {
+            errors.push(format!("clear Runtime managed Skills: {error}"));
+        }
+        if let Err(error) = purge_organization_skills_root_unlocked() {
+            errors.push(error);
+        }
+        if let Err(error) = write_json_private(&skill_state_path(), &empty) {
+            errors.push(format!("persist disabled managed Skill state: {error}"));
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    })
 }
 
 pub fn enforce_skill_lease() {
-    let mut state = read_json::<SkillSyncState>(&skill_state_path()).unwrap_or_default();
-    let mut removed = Vec::new();
+    let state = shared_state();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    if validate_skill_state(&state).is_err() {
-        tracing::error!(
-            "managed Skill sidecar signature validation failed; disabling managed Skills"
-        );
-        removed.extend(state.installed.values().cloned());
-        state.installed.clear();
-        state.cursor.clear();
-        state.lease_until = 0;
-    } else if state.lease_until > 0 && state.lease_until < now {
-        removed.extend(state.installed.values().cloned());
-        state.installed.clear();
-        // 租约过期后下次联网必须全量同步。保留旧 cursor 会让服务端
-        // 返回空增量，导致已暂停的 Skill 永远无法恢复。
-        state.cursor.clear();
-        state.lease_until = 0;
-    }
-    // 即使租约未过期也覆写 config.toml，这会在每次 Agent 会话
-    // 前恢复签名策略，本地手工删除强制项不能持续生效。
-    if let Err(error) = write_runtime_skill_config(&state) {
-        tracing::warn!(%error, "failed to enforce managed Skill runtime config");
-    }
-    if let Err(error) = write_json_private(&skill_state_path(), &state) {
-        tracing::warn!(%error, "failed to persist managed Skill lease state");
-    }
-    for item in &removed {
-        remove_installed_package(item);
+    if let Err(error) = with_skill_state_transaction(&state.inner, || {
+        let mut local = match read_skill_state_strict_unlocked() {
+            Ok(state) => state,
+            Err(error) => {
+                invalidate_skill_sync(&state.inner);
+                recover_invalid_skill_state_unlocked(&error)?
+            }
+        };
+        let persisted_account = read_json::<OrgProfile>(&profile_path())
+            .ok()
+            .filter(|profile| validate_profile(profile).is_ok())
+            .map(|profile| credential_account(&profile));
+        let account_mismatch = !local.installed.is_empty()
+            && match persisted_account.as_deref() {
+                None => true,
+                Some(account) => !local.account_id.is_empty() && local.account_id != account,
+            };
+        let expired = local.lease_until > 0 && local.lease_until < now;
+        if account_mismatch || expired {
+            invalidate_skill_sync(&state.inner);
+            local = SkillSyncState::default();
+            bump_skill_revision(&mut local);
+            // 租约过期后下次联网必须全量同步。保留旧 cursor 会让服务端
+            // 返回空增量，导致已暂停的 Skill 永远无法恢复。
+            let mut errors = Vec::new();
+            if let Err(error) = write_runtime_skill_config(&local) {
+                errors.push(format!("clear Runtime managed Skills: {error}"));
+            }
+            if let Err(error) = purge_organization_skills_root_unlocked() {
+                errors.push(error);
+            }
+            if let Err(error) = write_json_private(&skill_state_path(), &local) {
+                errors.push(format!("persist expired managed Skill state: {error}"));
+            }
+            return if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors.join("; "))
+            };
+        }
+        let mut changed = false;
+        if !local.installed.is_empty() && local.account_id.is_empty() {
+            local.account_id = persisted_account.unwrap_or_default();
+            changed = true;
+        }
+        if local.revision.is_empty() {
+            bump_skill_revision(&mut local);
+            changed = true;
+        }
+        // 即使租约未过期也覆写 config.toml，这会在每次 Agent 会话
+        // 前恢复签名策略，本地手工删除强制项不能持续生效。
+        if changed {
+            write_json_private(&skill_state_path(), &local)?;
+        }
+        write_runtime_skill_config(&local)?;
+        Ok(())
+    }) {
+        tracing::warn!(%error, "failed to enforce managed Skill lease state");
     }
 }
 
@@ -1963,18 +3232,56 @@ fn remove_installed_package(item: &InstalledSkill) {
         tracing::warn!(skill_id = %item.skill_id, version_id = %item.version_id, "refused unsafe managed Skill cleanup path");
         return;
     }
-    let family_dir = organization_skills_root().join(&item.skill_id);
+    let managed_root = organization_skills_root();
+    if !std::fs::symlink_metadata(&managed_root)
+        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+    {
+        tracing::warn!(path = %managed_root.display(), "refused managed Skill cleanup through an unsafe root");
+        return;
+    }
+    let family_dir = managed_root.join(&item.skill_id);
+    if !std::fs::symlink_metadata(&family_dir)
+        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+    {
+        // Removing a final-component symlink does not touch its target. Never
+        // append a version id through an untrusted family directory.
+        if std::fs::symlink_metadata(&family_dir)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink() || metadata.is_file())
+        {
+            let _ = std::fs::remove_file(&family_dir);
+        }
+        tracing::warn!(path = %family_dir.display(), "refused managed Skill cleanup through an unsafe family directory");
+        return;
+    }
     let version_dir = family_dir.join(&item.version_id);
-    if let Err(error) = std::fs::remove_dir_all(&version_dir) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(%error, path = %version_dir.display(), "failed to remove revoked managed Skill package");
+    match std::fs::symlink_metadata(&version_dir) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            if let Err(error) = std::fs::remove_dir_all(&version_dir) {
+                tracing::warn!(%error, path = %version_dir.display(), "failed to remove revoked managed Skill package");
+            }
+        }
+        Ok(_) => {
+            if let Err(error) = std::fs::remove_file(&version_dir) {
+                tracing::warn!(%error, path = %version_dir.display(), "failed to remove unsafe managed Skill version entry");
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!(%error, path = %version_dir.display(), "failed to inspect revoked managed Skill package")
         }
     }
     let _ = std::fs::remove_dir(&family_dir);
-    let cached = organization_skills_root()
-        .join(".packages")
-        .join(&item.skill_id)
-        .join(format!("{}.zip", item.version_id));
+    let packages = managed_root.join(".packages");
+    let package_family = packages.join(&item.skill_id);
+    if !std::fs::symlink_metadata(&packages)
+        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        || !std::fs::symlink_metadata(&package_family)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+    {
+        tracing::warn!(path = %package_family.display(), "refused managed Skill cache cleanup through an unsafe directory");
+        return;
+    }
+    let cached = package_family.join(format!("{}.zip", item.version_id));
     if let Err(error) = std::fs::remove_file(&cached) {
         if error.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!(%error, path = %cached.display(), "failed to remove revoked managed Skill cache");
@@ -1983,23 +3290,61 @@ fn remove_installed_package(item: &InstalledSkill) {
 }
 
 async fn sync_skills(inner: &Arc<OrgInner>) -> Result<Value, String> {
-    let mut local = read_json::<SkillSyncState>(&skill_state_path()).unwrap_or_default();
-    if validate_skill_state(&local).is_err() {
-        tracing::warn!("discarding invalid managed Skill sidecar and forcing a full sync");
-        let invalid = local.installed.values().cloned().collect::<Vec<_>>();
-        local = SkillSyncState::default();
-        write_runtime_skill_config(&local)?;
-        write_json_private(&skill_state_path(), &local)?;
-        for item in &invalid {
-            remove_installed_package(item);
-        }
+    sync_skills_for_context(inner, None).await
+}
+
+async fn sync_skills_for_context(
+    inner: &Arc<OrgInner>,
+    expected_context: Option<&AccountContext>,
+) -> Result<Value, String> {
+    // Only one network sync per process. Logout/account switch intentionally
+    // does not wait for this guard; it invalidates `skill_epoch` and takes the
+    // short state transaction lock instead.
+    let _sync_guard = inner.skill_sync.lock().await;
+    let expected_epoch = inner.skill_epoch.load(Ordering::SeqCst);
+    let account_context = active_account_context(inner).await?;
+    if expected_context.is_some_and(|expected| expected != &account_context) {
+        return Err("organization account changed before Skill synchronization".into());
     }
+    let account_id = account_context.account_id.clone();
+    require_current_skill_epoch(inner, expected_epoch)?;
+    require_account_context_generation(inner, &account_context)?;
+    let base = with_skill_state_transaction(inner, || {
+        require_current_skill_epoch(inner, expected_epoch)?;
+        require_account_context_generation(inner, &account_context)?;
+        let persisted_profile = read_json::<OrgProfile>(&profile_path())?;
+        validate_profile(&persisted_profile)?;
+        if credential_account(&persisted_profile) != account_id {
+            return Err("organization account changed before Skill synchronization".into());
+        }
+        let mut state = load_or_recover_skill_state_unlocked()?;
+        if !state.account_id.is_empty() && state.account_id != account_id {
+            return Err("managed Skill state belongs to a different account".into());
+        }
+        let mut changed = false;
+        if state.account_id.is_empty() {
+            state.account_id = account_id.clone();
+            changed = true;
+        }
+        if state.revision.is_empty() {
+            bump_skill_revision(&mut state);
+            changed = true;
+        }
+        if changed {
+            write_json_private(&skill_state_path(), &state)?;
+        }
+        Ok(state)
+    })?;
+    let mut local = base.clone();
     let path = format!(
         "/api/v1/skills/sync?cursor={}",
         urlencoding::encode(&local.cursor)
     );
-    let data = authenticated_json(inner, Method::GET, &path, None).await?;
-    let bootstrap = update_bootstrap(inner).await?;
+    let data =
+        authenticated_json_for_context(inner, Method::GET, &path, None, &account_context).await?;
+    let (bootstrap, _) = update_bootstrap_with_context(inner, Some(&account_context)).await?;
+    require_current_skill_epoch(inner, expected_epoch)?;
+    require_account_context_generation(inner, &account_context)?;
     let key_text = bootstrap
         .get("signingPublicKey")
         .and_then(Value::as_str)
@@ -2010,34 +3355,96 @@ async fn sync_skills(inner: &Arc<OrgInner>) -> Result<Value, String> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    if upserts.len() > MAX_MANAGED_SKILLS {
+        return Err(format!(
+            "organization Skill sync exceeds {MAX_MANAGED_SKILLS} upserts"
+        ));
+    }
     let mut obsolete_packages = Vec::new();
     for item in upserts {
+        ensure_value_size(
+            &item,
+            MAX_SIGNING_FIELD_BYTES.saturating_mul(2),
+            "organization Skill sync item",
+        )?;
+        let skill_id = item
+            .get("skillId")
+            .and_then(Value::as_str)
+            .ok_or("Skill item missing id")?
+            .to_string();
+        let version_id = item
+            .get("versionId")
+            .and_then(Value::as_str)
+            .ok_or("Skill item missing version id")?
+            .to_string();
+        Uuid::parse_str(&skill_id).map_err(|_| "invalid Skill id from organization server")?;
+        Uuid::parse_str(&version_id)
+            .map_err(|_| "invalid Skill version id from organization server")?;
+        if !local.installed.contains_key(&skill_id) && local.installed.len() >= MAX_MANAGED_SKILLS {
+            return Err(format!(
+                "managed Skill state exceeds {MAX_MANAGED_SKILLS} entries"
+            ));
+        }
         let package_url = item
             .get("packageUrl")
             .and_then(Value::as_str)
             .ok_or("Skill item missing package URL")?;
-        let response = authenticated_response(inner, Method::GET, package_url, None).await?;
+        let authenticated = authenticated_response_for_context(
+            inner,
+            Method::GET,
+            package_url,
+            None,
+            Some(&account_context),
+        )
+        .await?;
+        let response = authenticated.response;
         if !response.status().is_success() {
             return Err(format!("download Skill: HTTP {}", response.status()));
         }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("read Skill package: {e}"))?;
+        let bytes =
+            read_response_bounded(response, MAX_SKILL_UPLOAD_BYTES, "managed Skill package")
+                .await?;
         verify_skill_package(&public_key, &item, &bytes)?;
-        let skill_id = item
-            .get("skillId")
-            .and_then(Value::as_str)
-            .ok_or("Skill item missing id")?;
-        let version_id = item
-            .get("versionId")
-            .and_then(Value::as_str)
-            .ok_or("Skill item missing version id")?;
-        let package_path = cache_skill_package(&bytes, skill_id, version_id)?;
-        let install_path = extract_skill_package(&bytes, skill_id, version_id)?;
+        require_current_skill_epoch(inner, expected_epoch)?;
+        require_account_context_generation(inner, &account_context)?;
+        if active_skill_account_id(inner).await? != account_id {
+            return Err("organization account changed during Skill download".into());
+        }
+        // Package paths become executable Runtime inputs. Check both the
+        // in-process epoch and cross-process state baseline while holding the
+        // same transaction used by logout/preference/lease mutations.
+        let (package_path, install_path) = with_skill_state_transaction(inner, || {
+            require_current_skill_epoch(inner, expected_epoch)?;
+            require_account_context_generation(inner, &account_context)?;
+            let current = match read_skill_state_strict_unlocked() {
+                Ok(state) => state,
+                Err(error) => {
+                    invalidate_skill_sync(inner);
+                    let cleanup = recover_invalid_skill_state_unlocked(&error);
+                    return Err(format!(
+                        "managed Skill state became invalid during synchronization: {error}{}",
+                        cleanup
+                            .err()
+                            .map(|cleanup| format!("; fail-closed cleanup: {cleanup}"))
+                            .unwrap_or_default()
+                    ));
+                }
+            };
+            require_skill_commit_current(
+                expected_epoch,
+                inner.skill_epoch.load(Ordering::SeqCst),
+                &account_id,
+                &current.account_id,
+                &base,
+                &current,
+            )?;
+            let package_path = cache_skill_package(&bytes, &skill_id, &version_id)?;
+            let install_path = extract_skill_package(&bytes, &skill_id, &version_id)?;
+            Ok((package_path, install_path))
+        })?;
         let installed = InstalledSkill {
-            skill_id: skill_id.to_string(),
-            version_id: version_id.to_string(),
+            skill_id: skill_id.clone(),
+            version_id: version_id.clone(),
             version: item
                 .get("version")
                 .and_then(Value::as_str)
@@ -2046,7 +3453,7 @@ async fn sync_skills(inner: &Arc<OrgInner>) -> Result<Value, String> {
             name: item
                 .get("name")
                 .and_then(Value::as_str)
-                .unwrap_or(skill_id)
+                .unwrap_or(&skill_id)
                 .to_string(),
             path: install_path.to_string_lossy().into_owned(),
             package_path: package_path.to_string_lossy().into_owned(),
@@ -2079,18 +3486,24 @@ async fn sync_skills(inner: &Arc<OrgInner>) -> Result<Value, String> {
                 .and_then(Value::as_bool)
                 .unwrap_or(true),
         };
-        if let Some(previous) = local.installed.insert(skill_id.to_string(), installed) {
+        validate_installed_skill_fields(&skill_id, &installed)?;
+        if let Some(previous) = local.installed.insert(skill_id, installed) {
             if previous.version_id != version_id {
                 obsolete_packages.push(previous);
             }
         }
     }
-    for revoked in data
+    let revoked = data
         .get("revoked")
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default()
-    {
+        .unwrap_or_default();
+    if revoked.len() > MAX_MANAGED_SKILLS {
+        return Err(format!(
+            "organization Skill sync exceeds {MAX_MANAGED_SKILLS} revocations"
+        ));
+    }
+    for revoked in revoked {
         if let Some(skill_id) = revoked.get("skillId").and_then(Value::as_str) {
             if let Some(previous) = local.installed.remove(skill_id) {
                 obsolete_packages.push(previous);
@@ -2098,6 +3511,11 @@ async fn sync_skills(inner: &Arc<OrgInner>) -> Result<Value, String> {
         }
     }
     if let Some(visible_ids) = data.get("visibleSkillIds").and_then(Value::as_array) {
+        if visible_ids.len() > MAX_MANAGED_SKILLS {
+            return Err(format!(
+                "organization Skill sync exceeds {MAX_MANAGED_SKILLS} visible ids"
+            ));
+        }
         let visible = visible_ids
             .iter()
             .filter_map(Value::as_str)
@@ -2105,17 +3523,60 @@ async fn sync_skills(inner: &Arc<OrgInner>) -> Result<Value, String> {
             .collect::<HashSet<_>>();
         obsolete_packages.extend(reconcile_visible_skills(&mut local, &visible));
     }
-    local.cursor = data
+    let next_cursor = data
         .get("nextCursor")
         .and_then(Value::as_str)
-        .unwrap_or(&local.cursor)
-        .to_string();
-    local.lease_until = data.get("leaseUntil").and_then(Value::as_u64).unwrap_or(0);
-    write_runtime_skill_config(&local)?;
-    write_json_private(&skill_state_path(), &local)?;
-    for item in &obsolete_packages {
-        remove_installed_package(item);
+        .unwrap_or(&local.cursor);
+    if next_cursor.chars().count() > 4_096 || next_cursor.chars().any(char::is_control) {
+        return Err("organization Skill cursor is invalid or too long".into());
     }
+    local.cursor = next_cursor.to_string();
+    local.lease_until = data.get("leaseUntil").and_then(Value::as_u64).unwrap_or(0);
+    if active_skill_account_id(inner).await? != account_id {
+        return Err("organization account changed before Skill commit".into());
+    }
+    with_skill_state_transaction(inner, || {
+        require_current_skill_epoch(inner, expected_epoch)?;
+        require_account_context_generation(inner, &account_context)?;
+        let persisted_profile = read_json::<OrgProfile>(&profile_path())?;
+        validate_profile(&persisted_profile)?;
+        if credential_account(&persisted_profile) != account_id {
+            return Err("organization account changed before Skill commit".into());
+        }
+        let current = match read_skill_state_strict_unlocked() {
+            Ok(state) => state,
+            Err(error) => {
+                invalidate_skill_sync(inner);
+                let cleanup = recover_invalid_skill_state_unlocked(&error);
+                return Err(format!(
+                    "managed Skill state became invalid before commit: {error}{}",
+                    cleanup
+                        .err()
+                        .map(|cleanup| format!("; fail-closed cleanup: {cleanup}"))
+                        .unwrap_or_default()
+                ));
+            }
+        };
+        require_skill_commit_current(
+            expected_epoch,
+            inner.skill_epoch.load(Ordering::SeqCst),
+            &account_id,
+            &current.account_id,
+            &base,
+            &current,
+        )?;
+        local.account_id = account_id.clone();
+        bump_skill_revision(&mut local);
+        // State first, Runtime second: a config write failure cannot leave
+        // uncommitted paths active, and the next lease check can safely retry
+        // materializing a valid committed state.
+        write_json_private(&skill_state_path(), &local)?;
+        write_runtime_skill_config(&local)?;
+        for item in &obsolete_packages {
+            remove_installed_package(item);
+        }
+        Ok(())
+    })?;
     Ok(json!({
         "cursor": local.cursor,
         "leaseUntil": local.lease_until,
@@ -2146,12 +3607,7 @@ pub fn start_background_sync(app: AppHandle) {
                 tracing::debug!(%error, "organization bootstrap refresh skipped");
                 enforce_skill_lease();
                 notify_skills_changed(&app, "lease-check");
-                let signed_out = state.inner.session.lock().await.profile.is_none();
-                let removed = if signed_out {
-                    crate::providers::remove_organization_model_config()
-                } else {
-                    crate::providers::enforce_organization_model_lease()
-                };
+                let removed = enforce_model_for_current_session(&state.inner).await;
                 match removed {
                     Ok(true) => notify_models_changed(&app, "lease-expired"),
                     Ok(false) => {}
@@ -2186,13 +3642,14 @@ async fn run_ask_stream(
     cancel: CancellationToken,
     input: Value,
 ) -> Result<(), String> {
-    let response = authenticated_response(
+    let authenticated = authenticated_response(
         &state.inner,
         Method::POST,
         "/api/v1/knowledge/ask",
         Some(input),
     )
     .await?;
+    let response = authenticated.response;
     if !response.status().is_success() {
         return Err(format!("knowledge ask: HTTP {}", response.status()));
     }
@@ -2202,6 +3659,7 @@ async fn run_ask_stream(
     // is split across two chunks.
     let mut pending = Vec::new();
     let mut terminal_seen = false;
+    let mut total_bytes = 0_u64;
     loop {
         let next = tokio::select! {
             _ = cancel.cancelled() => break,
@@ -2211,7 +3669,14 @@ async fn run_ask_stream(
             break;
         };
         let chunk = chunk.map_err(|e| format!("read answer stream: {e}"))?;
+        total_bytes = total_bytes
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| "knowledge answer length overflow".to_string())?;
+        if total_bytes > MAX_SSE_TOTAL_BYTES {
+            return Err("knowledge answer exceeds 32 MiB".into());
+        }
         pending.extend_from_slice(&chunk);
+        require_account_context_generation(&state.inner, &authenticated.context)?;
         for (event, payload) in drain_sse_events(&mut pending)? {
             terminal_seen |= matches!(event.as_str(), "final" | "error");
             let _ = app.emit(
@@ -2219,10 +3684,14 @@ async fn run_ask_stream(
                 json!({ "requestId": request_id, "event": event, "data": payload }),
             );
         }
+        if pending.len() > MAX_SSE_EVENT_BYTES {
+            return Err("knowledge answer event exceeds 2 MiB".into());
+        }
     }
     if cancel.is_cancelled() {
         return Ok(());
     }
+    require_account_context(&state.inner, &authenticated.context).await?;
     // A compliant sender normally terminates every event with a blank line,
     // but accept a final unterminated frame when the connection closes cleanly.
     if !pending.iter().all(u8::is_ascii_whitespace) {
@@ -2253,6 +3722,9 @@ fn sse_boundary(bytes: &[u8]) -> Option<(usize, usize)> {
 }
 
 fn parse_sse_block(block: &[u8]) -> Result<(String, Value), String> {
+    if block.len() > MAX_SSE_EVENT_BYTES {
+        return Err("knowledge answer event exceeds 2 MiB".into());
+    }
     let text = std::str::from_utf8(block).map_err(|e| format!("decode answer stream: {e}"))?;
     let mut event = "message";
     let mut data = Vec::new();
@@ -2290,14 +3762,39 @@ pub async fn org_ask_start(
     scope_kinds: Option<Vec<String>>,
     scope_ids: Option<Vec<String>>,
 ) -> Result<String, String> {
+    if question.trim().is_empty() || question.chars().count() > MAX_ASK_QUESTION_CHARS {
+        return Err("organization question is empty or too long".into());
+    }
+    let mode = mode.unwrap_or_else(|| "auto".into());
+    if !matches!(mode.as_str(), "auto" | "fast" | "deep") {
+        return Err("organization knowledge mode is invalid".into());
+    }
+    for (label, values) in [
+        ("scopeKinds", scope_kinds.as_ref()),
+        ("scopeIds", scope_ids.as_ref()),
+    ] {
+        if values.is_some_and(|values| {
+            values.len() > MAX_ASK_SCOPES
+                || values.iter().any(|value| {
+                    value.trim().is_empty()
+                        || value.chars().count() > MAX_PROFILE_FIELD_CHARS
+                        || value.chars().any(char::is_control)
+                })
+        }) {
+            return Err(format!("organization {label} is invalid or too large"));
+        }
+    }
     let request_id = Uuid::now_v7().to_string();
     let cancel = CancellationToken::new();
-    state
-        .inner
-        .cancellations
-        .lock()
-        .unwrap()
-        .insert(request_id.clone(), cancel.clone());
+    {
+        let mut cancellations = state.inner.cancellations.lock().unwrap();
+        if cancellations.len() >= MAX_PENDING_ASKS {
+            return Err(format!(
+                "at most {MAX_PENDING_ASKS} organization questions may run concurrently"
+            ));
+        }
+        cancellations.insert(request_id.clone(), cancel.clone());
+    }
     let owned_state = state.inner.clone();
     let task_state = OrgState {
         inner: owned_state.clone(),
@@ -2305,7 +3802,7 @@ pub async fn org_ask_start(
     let task_id = request_id.clone();
     let mut input = json!({
         "question": question,
-        "mode": mode.unwrap_or_else(|| "auto".into()),
+        "mode": mode,
     });
     if let Some(kinds) = scope_kinds {
         input["scopeKinds"] = json!(kinds);
@@ -2357,6 +3854,146 @@ mod tests {
         assert!(normalize_server_url("http://127.0.0.1:8787").is_ok());
         assert!(normalize_server_url("http://memory.example.com").is_err());
         assert!(normalize_server_url("https://u:p@memory.example.com").is_err());
+        assert!(normalize_server_url(&format!(
+            "https://example.com/{}",
+            "a".repeat(MAX_SERVER_URL_CHARS)
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn organization_credentials_and_profile_fields_are_bounded() {
+        assert!(validated_token("valid-token", "token").is_ok());
+        assert!(validated_token(&"x".repeat(MAX_TOKEN_BYTES + 1), "token").is_err());
+
+        let valid = OrgProfile {
+            server_url: "https://memory.example.com".into(),
+            username: "alice".into(),
+            user_id: "user-1".into(),
+            device_id: "device-1".into(),
+        };
+        assert!(validate_profile(&valid).is_ok());
+        let mut invalid = valid;
+        invalid.username = "x".repeat(MAX_PROFILE_FIELD_CHARS + 1);
+        assert!(validate_profile(&invalid).is_err());
+    }
+
+    #[test]
+    fn late_authenticated_response_cannot_commit_to_a_new_account_generation() {
+        let old_request = AccountContext {
+            account_id: "account-a".into(),
+            generation: 7,
+        };
+        assert!(account_context_matches(&old_request, 7, Some("account-a")));
+        assert!(!account_context_matches(&old_request, 8, Some("account-a")));
+        assert!(!account_context_matches(&old_request, 7, Some("account-b")));
+        assert!(!account_context_matches(&old_request, 7, None));
+    }
+
+    #[test]
+    fn late_model_response_cannot_overwrite_a_newer_sync() {
+        assert!(require_current_model_epoch(8, 8).is_ok());
+        assert!(require_current_model_epoch(7, 8).is_err());
+    }
+
+    #[test]
+    fn local_store_reader_rejects_oversized_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("store.json");
+        std::fs::write(&path, vec![b'x'; 33]).unwrap();
+        assert!(read_file_bounded(&path, 32, "test store").is_err());
+    }
+
+    #[test]
+    fn local_store_defaults_only_when_missing_and_rejects_corruption() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("store.json");
+        let missing = read_json_or_default_if_missing::<SkillSyncState>(&path).unwrap();
+        assert_eq!(missing, SkillSyncState::default());
+
+        std::fs::write(&path, b"{ definitely-not-json }").unwrap();
+        assert!(read_json_or_default_if_missing::<SkillSyncState>(&path).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_store_reader_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("outside.json");
+        let link = temp.path().join("store.json");
+        std::fs::write(&target, b"{}").unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(read_file_bounded(&link, 32, "test store").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_skill_transaction_rejects_symlink_lock_file() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target.lock");
+        std::fs::write(&target, b"").unwrap();
+        symlink(&target, temp.path().join(SKILL_STATE_LOCK_FILE)).unwrap();
+        let inner = OrgInner {
+            client: reqwest::Client::new(),
+            session: AsyncMutex::new(OrgSession::default()),
+            cancellations: Mutex::new(HashMap::new()),
+            skill_sync: AsyncMutex::new(()),
+            skill_state_transaction: Mutex::new(()),
+            model_state_transaction: Mutex::new(()),
+            skill_epoch: AtomicU64::new(0),
+            model_epoch: AtomicU64::new(0),
+            account_generation: AtomicU64::new(0),
+        };
+        let state_path = temp.path().join(SKILL_STATE_FILE);
+        assert!(with_skill_state_transaction_at(&inner, &state_path, || Ok(())).is_err());
+    }
+
+    #[test]
+    fn managed_skill_state_fields_are_bounded_before_crypto_or_io() {
+        let id = Uuid::nil().to_string();
+        let item = InstalledSkill {
+            skill_id: id.clone(),
+            version_id: Uuid::now_v7().to_string(),
+            name: "x".repeat(MAX_PROFILE_FIELD_CHARS + 1),
+            ..Default::default()
+        };
+        assert!(validate_installed_skill_fields(&id, &item).is_err());
+
+        let mut invalid_state = SkillSyncState {
+            account_id: "account".into(),
+            revision: "not-a-uuid".into(),
+            ..Default::default()
+        };
+        assert!(validate_skill_state(&invalid_state).is_err());
+        invalid_state.revision = Uuid::now_v7().to_string();
+        assert!(validate_skill_state(&invalid_state).is_ok());
+    }
+
+    #[test]
+    fn managed_skill_commit_rejects_stale_epoch_account_and_disk_revision() {
+        let base = SkillSyncState {
+            account_id: "account-a".into(),
+            revision: Uuid::now_v7().to_string(),
+            cursor: "cursor-a".into(),
+            ..Default::default()
+        };
+        assert!(require_skill_commit_current(7, 7, "account-a", "account-a", &base, &base).is_ok());
+        assert!(
+            require_skill_commit_current(7, 8, "account-a", "account-a", &base, &base).is_err()
+        );
+        assert!(
+            require_skill_commit_current(7, 7, "account-a", "account-b", &base, &base).is_err()
+        );
+        let mut concurrent = base.clone();
+        concurrent.revision = Uuid::now_v7().to_string();
+        assert!(
+            require_skill_commit_current(7, 7, "account-a", "account-a", &base, &concurrent)
+                .is_err()
+        );
     }
 
     #[cfg(target_os = "windows")]
@@ -2426,6 +4063,12 @@ mod tests {
                 ("first".into(), first.clone()),
                 ("second".into(), second.clone()),
             ])),
+            skill_sync: AsyncMutex::new(()),
+            skill_state_transaction: Mutex::new(()),
+            model_state_transaction: Mutex::new(()),
+            skill_epoch: AtomicU64::new(0),
+            model_epoch: AtomicU64::new(0),
+            account_generation: AtomicU64::new(0),
         });
         cancel_pending_requests(&inner);
         assert!(first.is_cancelled());

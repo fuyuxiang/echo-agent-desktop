@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { expertsThumbnail } from "@/lib/agent-client";
+import { safeRemoteImageUrl } from "@/lib/browser-preview";
 import { LetterAvatar } from "./LetterAvatar";
 
 /** path -> resolved data URL. Survives across cards / remounts so scrolling back
@@ -52,8 +53,9 @@ interface ThumbImgProps {
 export function ThumbImg({
   local, url, name, size = 40, shape = "square", color, className,
 }: ThumbImgProps) {
+  const safeUrl = safeRemoteImageUrl(url);
   const [src, setSrc] = useState<string | undefined>(() =>
-    local ? cached(local) : url,
+    local ? cached(local) : safeUrl,
   );
   const wrapRef = useRef<HTMLSpanElement>(null);
   const startedRef = useRef(false);
@@ -61,7 +63,7 @@ export function ThumbImg({
   useEffect(() => {
     startedRef.current = false;
     if (!local) {
-      setSrc(url);
+      setSrc(safeUrl);
       return;
     }
     const hit = cached(local);
@@ -70,15 +72,18 @@ export function ThumbImg({
       return;
     }
     setSrc(undefined); // letter until the thumbnail is ready
+    let disposed = false;
     const start = () => {
       if (startedRef.current) return;
       startedRef.current = true;
-      loadThumb(local).then((u) => setSrc(u || url));
+      loadThumb(local).then((u) => {
+        if (!disposed) setSrc(u || safeUrl);
+      });
     };
     const el = wrapRef.current;
     if (!el || typeof IntersectionObserver === "undefined") {
       start();
-      return;
+      return () => { disposed = true; };
     }
     const io = new IntersectionObserver(
       (entries) => {
@@ -92,8 +97,11 @@ export function ThumbImg({
       { rootMargin: "300px 0px" },
     );
     io.observe(el);
-    return () => io.disconnect();
-  }, [local, url]);
+    return () => {
+      disposed = true;
+      io.disconnect();
+    };
+  }, [local, safeUrl]);
 
   // The observed wrapper must have a box, so it carries the avatar's footprint
   // (inline-flex keeps it inline like a bare avatar would be).

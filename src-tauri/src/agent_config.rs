@@ -60,18 +60,18 @@ pub fn subagents_config_get() -> SubagentsConfig {
 #[tauri::command]
 pub fn subagents_config_save(max_depth: i64) -> Result<i64, String> {
     let clamped = if max_depth < 1 { 1 } else { max_depth };
-    let mut config = crate::providers::read_config();
-    let subagents = config
-        .as_table_mut()
-        .map(|t| {
-            t.entry("subagents")
-                .or_insert_with(|| Value::Table(Default::default()))
-        })
-        .and_then(Value::as_table_mut)
-        .ok_or_else(|| "config root is not a table".to_string())?;
-    subagents.insert("max_depth".to_string(), Value::Integer(clamped));
-    crate::providers::write_config(&config)?;
-    Ok(clamped)
+    crate::providers::update_config(|config| {
+        let subagents = config
+            .as_table_mut()
+            .map(|t| {
+                t.entry("subagents")
+                    .or_insert_with(|| Value::Table(Default::default()))
+            })
+            .and_then(Value::as_table_mut)
+            .ok_or_else(|| "config root is not a table".to_string())?;
+        subagents.insert("max_depth".to_string(), Value::Integer(clamped));
+        Ok(clamped)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -111,26 +111,26 @@ pub fn web_search_config_get() -> WebSearchConfig {
 /// verbatim). When disabling, the key is removed. Requires an EchoAgent restart.
 #[tauri::command]
 pub fn web_search_config_save(enable: bool, model: Option<String>) -> Result<bool, String> {
-    let mut config = crate::providers::read_config();
-    let models = config
-        .as_table_mut()
-        .map(|t| {
-            t.entry("models")
-                .or_insert_with(|| Value::Table(Default::default()))
-        })
-        .and_then(Value::as_table_mut)
-        .ok_or_else(|| "config root is not a table".to_string())?;
-    if enable {
-        let mid = model.unwrap_or_default().trim().to_string();
-        if mid.is_empty() {
-            return Err("enabling web_search requires a model id".to_string());
+    crate::providers::update_config(|config| {
+        let models = config
+            .as_table_mut()
+            .map(|t| {
+                t.entry("models")
+                    .or_insert_with(|| Value::Table(Default::default()))
+            })
+            .and_then(Value::as_table_mut)
+            .ok_or_else(|| "config root is not a table".to_string())?;
+        if enable {
+            let mid = model.unwrap_or_default().trim().to_string();
+            if mid.is_empty() {
+                return Err("enabling web_search requires a model id".to_string());
+            }
+            models.insert("web_search".to_string(), Value::String(mid));
+        } else {
+            models.remove("web_search");
         }
-        models.insert("web_search".to_string(), Value::String(mid));
-    } else {
-        models.remove("web_search");
-    }
-    crate::providers::write_config(&config)?;
-    Ok(enable)
+        Ok(enable)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -267,45 +267,45 @@ fn set_nested_bool(
 /// Agent Runtime is restarted.
 #[tauri::command]
 pub fn memory_config_save(memory: MemoryConfig) -> Result<MemoryConfig, String> {
-    let mut config = crate::providers::read_config();
-    set_nested_bool(&mut config, "memory", None, "enabled", memory.enabled)?;
-    set_nested_bool(
-        &mut config,
-        "memory",
-        Some("initial_injection"),
-        "enabled",
-        memory.initial_injection_enabled,
-    )?;
-    set_nested_bool(
-        &mut config,
-        "memory",
-        Some("session"),
-        "save_on_end",
-        memory.save_on_end,
-    )?;
-    set_nested_bool(
-        &mut config,
-        "memory",
-        Some("watcher"),
-        "enabled",
-        memory.watcher_enabled,
-    )?;
-    set_nested_bool(
-        &mut config,
-        "memory",
-        Some("dream"),
-        "enabled",
-        memory.dream_enabled,
-    )?;
-    set_nested_bool(
-        &mut config,
-        "compaction",
-        Some("memory_flush"),
-        "enabled",
-        memory.auto_flush_enabled,
-    )?;
-    crate::providers::write_config(&config)?;
-    Ok(memory)
+    crate::providers::update_config(|config| {
+        set_nested_bool(config, "memory", None, "enabled", memory.enabled)?;
+        set_nested_bool(
+            config,
+            "memory",
+            Some("initial_injection"),
+            "enabled",
+            memory.initial_injection_enabled,
+        )?;
+        set_nested_bool(
+            config,
+            "memory",
+            Some("session"),
+            "save_on_end",
+            memory.save_on_end,
+        )?;
+        set_nested_bool(
+            config,
+            "memory",
+            Some("watcher"),
+            "enabled",
+            memory.watcher_enabled,
+        )?;
+        set_nested_bool(
+            config,
+            "memory",
+            Some("dream"),
+            "enabled",
+            memory.dream_enabled,
+        )?;
+        set_nested_bool(
+            config,
+            "compaction",
+            Some("memory_flush"),
+            "enabled",
+            memory.auto_flush_enabled,
+        )?;
+        Ok(memory)
+    })
 }
 
 #[cfg(test)]
@@ -387,17 +387,17 @@ mod memory_tests {
 /// (`["model", "models", "model_providers"]`), so writing it cannot disturb the
 /// runtime-readiness gate.
 pub(crate) fn ensure_remote_fetch_disabled() -> Result<bool, String> {
-    let mut config = crate::providers::read_config();
-    let already_set = config
-        .get("features")
-        .and_then(Value::as_table)
-        .and_then(|features| features.get("remote_fetch"))
-        .and_then(Value::as_bool)
-        .is_some();
-    if already_set {
-        return Ok(false);
-    }
-    set_nested_bool(&mut config, "features", None, "remote_fetch", false)?;
-    crate::providers::write_config(&config)?;
-    Ok(true)
+    crate::providers::update_config(|config| {
+        let already_set = config
+            .get("features")
+            .and_then(Value::as_table)
+            .and_then(|features| features.get("remote_fetch"))
+            .and_then(Value::as_bool)
+            .is_some();
+        if already_set {
+            return Ok(false);
+        }
+        set_nested_bool(config, "features", None, "remote_fetch", false)?;
+        Ok(true)
+    })
 }

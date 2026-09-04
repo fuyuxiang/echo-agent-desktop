@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ExpertItem, FeaturedScene } from "@/lib/types";
 import { expertsImageBytes } from "@/lib/agent-client";
+import { safeRemoteImageUrl } from "@/lib/browser-preview";
 import { ThumbImg } from "../shared/ThumbImg";
 import { ScrollRow } from "../shared/ui";
 
@@ -76,15 +77,16 @@ export function FeaturedScenes({
 /** Banner image: prefer the local file (read via command), then the remote URL;
  *  on any failure it renders nothing so the card's gradient shows through. */
 function SceneBanner({ local, remote }: { local?: string; remote?: string }) {
+  const safeRemote = safeRemoteImageUrl(remote);
   const [src, setSrc] = useState<string | undefined>(() =>
-    local ? bannerCache.get(local) : remote,
+    local ? bannerCache.get(local) : safeRemote,
   );
   const [broken, setBroken] = useState(false);
 
   useEffect(() => {
     setBroken(false);
     if (!local) {
-      setSrc(remote);
+      setSrc(safeRemote);
       return;
     }
     const hit = bannerCache.get(local);
@@ -92,19 +94,20 @@ function SceneBanner({ local, remote }: { local?: string; remote?: string }) {
       setSrc(hit);
       return;
     }
-    setSrc(remote); // remote (or undefined) until the local bytes resolve
+    // Avoid a remote tracking request while a bundled local image is loading.
+    setSrc(undefined);
     let disposed = false;
     loadBanner(local).then((u) => {
-      if (!disposed && u) setSrc(u);
+      if (!disposed) setSrc(u || safeRemote);
     });
     return () => {
       disposed = true;
     };
-  }, [local, remote]);
+  }, [local, safeRemote]);
 
   if (broken || !src) return null;
   return (
-    <img className="ec-scene-bg" src={src} alt="" loading="lazy"
+    <img className="ec-scene-bg" src={src} alt="" loading="lazy" referrerPolicy="no-referrer"
       onError={() => setBroken(true)} />
   );
 }

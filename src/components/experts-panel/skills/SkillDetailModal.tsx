@@ -6,8 +6,8 @@
  * Unlike EchoAgent (which inlines the view), we use a full-screen overlay so
  * the back button returns to the skill grid without disturbing the grid state.
  */
-import { useEffect, useMemo, useState } from "react";
-import type { SkillItem, SkillInfo } from "@/lib/types";
+import { useEffect, useId, useMemo, useState } from "react";
+import type { SkillItem, SkillInfo, SkillPackageInspection } from "@/lib/types";
 import {
   skillsCatalogReadSkill,
   skillsInspectPackage,
@@ -19,6 +19,7 @@ import { LetterAvatar } from "../shared/LetterAvatar";
 import {
   ChevronLeftIcon, AddIcon, CheckIcon, FileTextIcon, Code2Icon,
 } from "@/foundation/components/Icon/icons";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 interface Props {
   skill: SkillItem;
@@ -33,18 +34,28 @@ export function SkillDetailModal({ skill, installed = [], onClose, onInstalled, 
   const [mode, setMode] = useState<"preview" | "code">("preview");
   const [rawMd, setRawMd] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [installing, setInstalling] = useState(false);
+  const [pendingInspection, setPendingInspection] = useState<SkillPackageInspection | null>(null);
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onClose);
 
   useEffect(() => {
     let disposed = false;
     setLoading(true);
     setRawMd("");
+    setLoadError(null);
     skillsCatalogReadSkill(skill.sourceDir)
       .then((txt) => { if (!disposed) setRawMd(txt); })
-      .catch(() => { if (!disposed) setRawMd(""); })
+      .catch((reason) => {
+        if (!disposed) {
+          setRawMd("");
+          setLoadError(String(reason).replace(/^Error:\s*/, ""));
+        }
+      })
       .finally(() => { if (!disposed) setLoading(false); });
     return () => { disposed = true; };
-  }, [skill.sourceDir]);
+  }, [skill.sourceDir, reloadKey]);
 
   // Parse frontmatter + body from the raw markdown.
   const { meta, body } = useMemo(() => parseFrontmatter(rawMd), [rawMd]);
@@ -58,24 +69,39 @@ export function SkillDetailModal({ skill, installed = [], onClose, onInstalled, 
   const canUpdate = Boolean(installedEntry && skill.version && installedEntry.version !== skill.version);
 
   const handleInstall = async () => {
-    if (installing || (installedEntry && !canUpdate)) return;
+    if (installing || loading || loadError || (installedEntry && !canUpdate)) return;
     setInstalling(true);
     try {
       const report = await skillsInspectPackage(skill.sourceDir);
-      let approved = false;
-      if (report.riskLevel === "high") {
-        const details = report.findings.slice(0, 5).map((finding) => `• ${finding.message}`).join("\n");
-        approved = confirm(`技能「${skill.name}」被标记为高风险：\n\n${details}\n\n确定仍要安装？`);
-        if (!approved) return;
-      } else if (report.riskLevel === "medium") {
-        const details = report.findings.slice(0, 5).map((finding) => `• ${finding.message}`).join("\n");
-        if (!confirm(`技能「${skill.name}」包含需要关注的操作：\n\n${details}\n\n检查源码后确认安装？`)) return;
+      if (report.riskLevel === "high" || report.riskLevel === "medium") {
+        setPendingInspection(report);
+        return;
       }
-      const result = await skillsInstallPackage(skill.sourceDir, approved);
+      const result = await skillsInstallPackage(skill.sourceDir, report.sourceHash, false);
       onToast?.(`${result.updated ? "已更新" : "已安装"}技能「${skill.name}」`);
       onInstalled?.();
     } catch (e) {
       onToast?.(`导入失败：${String(e).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  const confirmRiskInstall = async () => {
+    const report = pendingInspection;
+    if (!report || installing) return;
+    setInstalling(true);
+    try {
+      const result = await skillsInstallPackage(
+        skill.sourceDir,
+        report.sourceHash,
+        report.riskLevel === "high",
+      );
+      setPendingInspection(null);
+      onToast?.(`${result.updated ? "已更新" : "已安装"}技能「${skill.name}」`);
+      onInstalled?.();
+    } catch (reason) {
+      onToast?.(`导入失败：${String(reason).replace(/^Error:\s*/, "")}`);
     } finally {
       setInstalling(false);
     }
@@ -86,10 +112,10 @@ export function SkillDetailModal({ skill, installed = [], onClose, onInstalled, 
 
   return (
     <div className="sk-detail-overlay" onClick={onClose}>
-      <div className="sk-detail" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} className="sk-detail" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={`${displayName} 技能详情`} tabIndex={-1}>
         {/* Header bar with back button */}
         <div className="sk-detail-bar">
-          <button type="button" className="um-back" onClick={onClose}>
+          <button type="button" className="um-back" onClick={onClose} data-modal-initial-focus>
             <ChevronLeftIcon size="sm" /><span>技能市场</span>
           </button>
         </div>
@@ -117,7 +143,7 @@ export function SkillDetailModal({ skill, installed = [], onClose, onInstalled, 
                     </label>
                   </>
                 ) : (
-                  <button type="button" className="sk-detail-install-btn" onClick={handleInstall} disabled={installing}>
+                  <button type="button" className="sk-detail-install-btn" onClick={handleInstall} disabled={installing || loading || Boolean(loadError)}>
                     <AddIcon size="sm" /><span>{installing ? "安装中…" : canUpdate ? "更新技能" : "安装技能"}</span>
                   </button>
                 )}
@@ -143,6 +169,13 @@ export function SkillDetailModal({ skill, installed = [], onClose, onInstalled, 
           {/* Content */}
           {loading ? (
             <div className="sk-detail-loading">加载技能详情…</div>
+          ) : loadError ? (
+            <div className="sk-detail-empty" role="alert">
+              <p>技能预览加载失败：{loadError}</p>
+              <button type="button" className="um-btn um-btn--grey" onClick={() => setReloadKey((value) => value + 1)}>
+                重试加载预览
+              </button>
+            </div>
           ) : mode === "code" ? (
             <pre className="sk-detail-code"><code>{rawMd}</code></pre>
           ) : (
@@ -167,6 +200,65 @@ export function SkillDetailModal({ skill, installed = [], onClose, onInstalled, 
               )}
             </div>
           )}
+        </div>
+      </div>
+      {pendingInspection && (
+        <SkillRiskConfirmDialog
+          skillName={displayName}
+          inspection={pendingInspection}
+          busy={installing}
+          onCancel={() => {
+            if (!installing) setPendingInspection(null);
+          }}
+          onConfirm={() => void confirmRiskInstall()}
+        />
+      )}
+    </div>
+  );
+}
+
+function SkillRiskConfirmDialog({
+  skillName,
+  inspection,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  skillName: string;
+  inspection: SkillPackageInspection;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const titleId = useId();
+  const dialogRef = useModalFocus<HTMLDivElement>(true, () => {
+    if (!busy) onCancel();
+  });
+  const highRisk = inspection.riskLevel === "high";
+
+  return (
+    <div className="modal-overlay" onClick={(event) => {
+      event.stopPropagation();
+      if (event.target === event.currentTarget && !busy) onCancel();
+    }}>
+      <div ref={dialogRef} className="atm-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onClick={(event) => event.stopPropagation()}>
+        <h3 id={titleId} className="atm-confirm-title">
+          {highRisk ? "确认安装高风险技能" : "确认安装需审查技能"}
+        </h3>
+        <p className="atm-confirm-content">技能「{skillName}」{highRisk ? "被标记为高风险" : "包含需要关注的操作"}：</p>
+        {inspection.findings.length > 0 && (
+          <ul className="automation-permission-confirm__list">
+            {inspection.findings.slice(0, 5).map((finding, index) => (
+              <li key={`${finding.code}-${finding.path ?? index}`}>{finding.message}</li>
+            ))}
+          </ul>
+        )}
+        <p className="atm-confirm-content">请确认你已检查完整源码和上述风险。</p>
+        <div className="atm-confirm-actions">
+          <button type="button" className="atm-btn atm-btn--secondary" onClick={onCancel} disabled={busy} data-modal-initial-focus>取消</button>
+          <button type="button" className="atm-btn atm-btn--danger" onClick={onConfirm} disabled={busy}>
+            {busy ? "安装中…" : highRisk ? "仍要安装" : "确认安装"}
+          </button>
         </div>
       </div>
     </div>

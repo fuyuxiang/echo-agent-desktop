@@ -11,10 +11,32 @@
 //! `featured`. Scanning is wrapped in `spawn_blocking` so the ~550 file walk
 //! never blocks the async runtime.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use tauri::State;
+
+const MAX_SKILL_MARKDOWN_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_SCANNED_SKILLS: usize = 2_000;
+const MAX_LOADED_SKILL_ROOTS: usize = 64;
+
+fn loaded_skill_roots() -> &'static Mutex<HashSet<PathBuf>> {
+    static ROOTS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    ROOTS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+}
+
+fn read_bounded_markdown(path: &Path) -> Result<String, String> {
+    let bytes = crate::shell_fs::read_regular_file_bounded(path, MAX_SKILL_MARKDOWN_BYTES)
+        .map_err(|error| format!("读取 SKILL.md 失败：{error}"))?;
+    String::from_utf8(bytes).map_err(|error| format!("SKILL.md 不是 UTF-8：{error}"))
+}
 
 // ---------- output types ----------
 
@@ -91,9 +113,9 @@ fn extract_frontmatter(text: &str) -> Option<&str> {
     // Find a line that is exactly `---` (allow trailing whitespace).
     let mut pos = 0;
     while pos < rest.len() {
-        let nl_pos = match rest[pos..].find('\n') {
-            Some(i) => pos + i,
-            None => return None,
+        let nl_pos = {
+            let i = rest[pos..].find('\n')?;
+            pos + i
         };
         let line = rest[pos..nl_pos].trim_end();
         if line == "---" {
@@ -301,9 +323,7 @@ fn candidate_connector_roots() -> Vec<PathBuf> {
 }
 
 fn connector_root_valid(root: &Path) -> bool {
-    root.join(".echo-agent-connector")
-        .join("connectors.json")
-        .is_file()
+    regular_file(&root.join(".echo-agent-connector").join("connectors.json"))
 }
 
 /// Candidate built-in skill roots. The canonical root follows
@@ -330,18 +350,68 @@ fn candidate_builtin_roots() -> Vec<PathBuf> {
 }
 
 fn builtin_root_valid(root: &Path) -> bool {
-    if !root.is_dir() {
+    let Ok(root_metadata) = std::fs::symlink_metadata(root) else {
+        return false;
+    };
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
         return false;
     }
     // Must contain at least one SKILL.md one level down.
     if let Ok(rd) = std::fs::read_dir(root) {
         for entry in rd.flatten() {
-            if entry.path().join("SKILL.md").is_file() {
+            let path = entry.path();
+            let is_plain_directory = std::fs::symlink_metadata(&path)
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+            if is_plain_directory && regular_file(&path.join("SKILL.md")) {
                 return true;
             }
         }
     }
     false
+}
+
+fn authorize_skill_root(
+    access: &crate::shell_fs::FilesystemAccess,
+    raw: &str,
+    defaults: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let requested = PathBuf::from(raw);
+    crate::paths::reject_legacy_workbuddy_path(&requested)?;
+    let metadata = std::fs::symlink_metadata(&requested)
+        .map_err(|error| format!("无法读取技能目录：{error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("技能目录必须是普通目录，不能是符号链接".into());
+    }
+    let canonical = requested
+        .canonicalize()
+        .map_err(|error| format!("无法解析技能目录：{error}"))?;
+    let is_default = defaults.iter().any(|candidate| {
+        candidate
+            .canonicalize()
+            .is_ok_and(|candidate| candidate == canonical)
+    });
+    if !is_default {
+        let authorized = access.require_workspace(raw)?;
+        if authorized != canonical {
+            return Err("技能目录授权与实际路径不一致".into());
+        }
+    }
+    Ok(canonical)
+}
+
+fn remember_skill_roots(roots: impl IntoIterator<Item = PathBuf>) -> Result<(), String> {
+    let mut loaded = loaded_skill_roots()
+        .lock()
+        .map_err(|_| "技能目录授权状态已损坏".to_string())?;
+    for root in roots {
+        if !loaded.contains(&root) && loaded.len() >= MAX_LOADED_SKILL_ROOTS {
+            return Err(format!(
+                "本次运行最多加载 {MAX_LOADED_SKILL_ROOTS} 个技能目录"
+            ));
+        }
+        loaded.insert(root);
+    }
+    Ok(())
 }
 
 /// Return the default connector-marketplace root (first valid candidate), or "".
@@ -357,9 +427,11 @@ pub async fn skills_catalog_default_root() -> Result<String, String> {
 
 /// Validate a user-picked connector-marketplace directory (used by the UI picker).
 #[tauri::command]
-pub async fn skills_catalog_list_roots(root: String) -> Result<Vec<String>, String> {
-    let base = PathBuf::from(&root);
-    crate::paths::reject_legacy_workbuddy_path(&base)?;
+pub async fn skills_catalog_list_roots(
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
+    root: String,
+) -> Result<Vec<String>, String> {
+    let base = access.require_workspace(&root)?;
     let mut hits = Vec::new();
     if connector_root_valid(&base) {
         hits.push(base.to_string_lossy().into_owned());
@@ -367,8 +439,18 @@ pub async fn skills_catalog_list_roots(root: String) -> Result<Vec<String>, Stri
     if let Ok(rd) = std::fs::read_dir(&base) {
         for entry in rd.flatten() {
             let p = entry.path();
-            if p.is_dir() && connector_root_valid(&p) {
-                hits.push(p.to_string_lossy().into_owned());
+            let metadata = match std::fs::symlink_metadata(&p) {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_dir() || !connector_root_valid(&p)
+            {
+                continue;
+            }
+            if let Ok(canonical) = p.canonicalize() {
+                if canonical.starts_with(&base) {
+                    hits.push(canonical.to_string_lossy().into_owned());
+                }
             }
         }
     }
@@ -398,7 +480,7 @@ struct RawSkill {
 /// the id/name from the directory and try to lift a description from the body.
 /// Returns None only when the file can't be read at all.
 fn parse_skill_file(path: &Path, origin: &str, plugin: Option<&str>) -> Option<RawSkill> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = read_bounded_markdown(path).ok()?;
     let dir_name = path
         .parent()
         .and_then(|p| p.file_name())
@@ -567,15 +649,24 @@ fn scan_connector_skills(root: &Path) -> Vec<RawSkill> {
         Ok(r) => r,
         Err(_) => return out,
     };
-    for entry in rd.flatten() {
+    for entry in rd.flatten().take(MAX_SCANNED_SKILLS + 1) {
+        if out.len() >= MAX_SCANNED_SKILLS {
+            break;
+        }
         let conn_path = entry.path();
-        if !conn_path.is_dir() {
+        let plain_directory = std::fs::symlink_metadata(&conn_path)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+        if !plain_directory {
             continue;
         }
         let source = entry.file_name().to_string_lossy().into_owned();
         // Top-level skill: connectors/<source>/skills/SKILL.md
         let skill_md = conn_path.join("skills").join("SKILL.md");
-        if skill_md.is_file() {
+        if regular_file(&skill_md)
+            && skill_md
+                .canonicalize()
+                .is_ok_and(|path| path.starts_with(root))
+        {
             if let Some(mut rs) = parse_skill_file(&skill_md, "connector", Some(&source)) {
                 // Resolve the connector icon so the card can show it.
                 rs.icon_local = find_connector_icon(root, &source);
@@ -591,8 +682,13 @@ fn find_connector_icon(root: &Path, source: &str) -> Option<String> {
     let icons = root.join("icons");
     for ext in ["svg", "png"] {
         let p = icons.join(format!("{source}.{ext}"));
-        if p.is_file() {
-            return Some(p.to_string_lossy().into_owned());
+        if regular_file(&p) {
+            let Ok(canonical) = p.canonicalize() else {
+                continue;
+            };
+            if canonical.starts_with(root) {
+                return Some(canonical.to_string_lossy().into_owned());
+            }
         }
     }
     None
@@ -605,13 +701,22 @@ fn scan_builtin_skills(root: &Path) -> Vec<RawSkill> {
         Ok(r) => r,
         Err(_) => return out,
     };
-    for entry in rd.flatten() {
+    for entry in rd.flatten().take(MAX_SCANNED_SKILLS + 1) {
+        if out.len() >= MAX_SCANNED_SKILLS {
+            break;
+        }
         let p = entry.path();
-        if !p.is_dir() {
+        let plain_directory = std::fs::symlink_metadata(&p)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+        if !plain_directory {
             continue;
         }
         let skill_md = p.join("SKILL.md");
-        if skill_md.is_file() {
+        if regular_file(&skill_md)
+            && skill_md
+                .canonicalize()
+                .is_ok_and(|path| path.starts_with(root))
+        {
             if let Some(rs) = parse_skill_file(&skill_md, "builtin", None) {
                 out.push(rs);
             }
@@ -623,35 +728,59 @@ fn scan_builtin_skills(root: &Path) -> Vec<RawSkill> {
 /// Load and merge both sources, dedup by skill id (built-ins win + featured).
 #[tauri::command]
 pub async fn skills_catalog_load(
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
     root: Option<String>,
     builtin_root: Option<String>,
 ) -> Result<SkillCatalog, String> {
     // Resolve the connector-marketplace root (primary skill source).
     let conn_root = match root {
-        Some(r) if !r.is_empty() => PathBuf::from(r),
+        Some(r) if !r.is_empty() => {
+            authorize_skill_root(&access, &r, &candidate_connector_roots())?
+        }
         _ => candidate_connector_roots()
             .into_iter()
             .find(|r| {
                 crate::paths::reject_legacy_workbuddy_path(r).is_ok() && connector_root_valid(r)
             })
+            .and_then(|root| root.canonicalize().ok())
             .unwrap_or_default(),
     };
     // Resolve the built-in root.
     let builtin_root = match builtin_root {
-        Some(r) if !r.is_empty() => PathBuf::from(r),
+        Some(r) if !r.is_empty() => authorize_skill_root(&access, &r, &candidate_builtin_roots())?,
         _ => candidate_builtin_roots()
             .into_iter()
             .find(|r| {
                 crate::paths::reject_legacy_workbuddy_path(r).is_ok() && builtin_root_valid(r)
             })
+            .and_then(|root| root.canonicalize().ok())
             .unwrap_or_default(),
     };
     if !conn_root.as_os_str().is_empty() {
         crate::paths::reject_legacy_workbuddy_path(&conn_root)?;
+        if !connector_root_valid(&conn_root) {
+            return Err("所选目录不是有效的连接器技能目录".into());
+        }
     }
     if !builtin_root.as_os_str().is_empty() {
         crate::paths::reject_legacy_workbuddy_path(&builtin_root)?;
+        if !builtin_root_valid(&builtin_root) {
+            return Err("所选目录不是有效的内置技能目录".into());
+        }
     }
+    load_skill_catalog(&access, conn_root, builtin_root).await
+}
+
+async fn load_skill_catalog(
+    access: &crate::shell_fs::FilesystemAccess,
+    conn_root: PathBuf,
+    builtin_root: PathBuf,
+) -> Result<SkillCatalog, String> {
+    remember_skill_roots(
+        [conn_root.clone(), builtin_root.clone()]
+            .into_iter()
+            .filter(|root| !root.as_os_str().is_empty()),
+    )?;
 
     let conn_root_clone = conn_root.clone();
     let builtin_root_clone = builtin_root.clone();
@@ -710,6 +839,9 @@ pub async fn skills_catalog_load(
         (false, true) => std::cmp::Ordering::Greater,
         _ => a.name.cmp(&b.name),
     });
+    for skill in &skills {
+        access.record_trusted_package_source(Path::new(&skill.source_dir))?;
+    }
 
     Ok(SkillCatalog {
         root: conn_root.to_string_lossy().into_owned(),
@@ -726,12 +858,30 @@ pub async fn skills_catalog_load(
 /// before installing.
 #[tauri::command]
 pub async fn skills_catalog_read_skill(dir: String) -> Result<String, String> {
-    let p = PathBuf::from(&dir).join("SKILL.md");
-    crate::paths::reject_legacy_workbuddy_path(&p)?;
-    if !p.is_file() {
+    let requested = PathBuf::from(&dir);
+    crate::paths::reject_legacy_workbuddy_path(&requested)?;
+    let directory = requested
+        .canonicalize()
+        .map_err(|error| format!("无法解析技能目录：{error}"))?;
+    let allowed = loaded_skill_roots()
+        .lock()
+        .map_err(|_| "技能目录授权状态已损坏".to_string())?
+        .iter()
+        .any(|root| directory.starts_with(root));
+    if !allowed {
+        return Err("拒绝读取已加载技能目录之外的 SKILL.md".into());
+    }
+    let p = directory.join("SKILL.md");
+    if !regular_file(&p) {
         return Err(format!("未找到 SKILL.md：{dir}"));
     }
-    std::fs::read_to_string(&p).map_err(|e| format!("读取 SKILL.md 失败：{e}"))
+    let canonical = p
+        .canonicalize()
+        .map_err(|error| format!("无法解析 SKILL.md：{error}"))?;
+    if canonical.parent() != Some(directory.as_path()) {
+        return Err("SKILL.md 越出技能目录".into());
+    }
+    read_bounded_markdown(&canonical)
 }
 
 #[cfg(test)]
@@ -838,7 +988,18 @@ mod tests {
             eprintln!("[skip] connector marketplace not present on this machine");
             return;
         }
-        let catalog = skills_catalog_load(None, None)
+        let conn_root = candidate_connector_roots()
+            .into_iter()
+            .find(|root| connector_root_valid(root))
+            .and_then(|root| root.canonicalize().ok())
+            .unwrap_or_default();
+        let builtin_root = candidate_builtin_roots()
+            .into_iter()
+            .find(|root| builtin_root_valid(root))
+            .and_then(|root| root.canonicalize().ok())
+            .unwrap_or_default();
+        let access = crate::shell_fs::FilesystemAccess::default();
+        let catalog = load_skill_catalog(&access, conn_root, builtin_root)
             .await
             .expect("load should succeed");
         // The marketplace ships dozens of connector skills.

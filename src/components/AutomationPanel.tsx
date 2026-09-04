@@ -9,7 +9,7 @@
  *
  * 数据：automations_snapshot（本地 JSON 存储 + 桌面端后台调度器）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   AddIcon,
   AlarmClockIcon,
@@ -74,26 +74,37 @@ import { AutomationEditPage, type ModelOption } from "./automation/AutomationEdi
 import { AutomationPermissionConfirmDialog } from "./automation/AutomationPermissionConfirmDialog";
 import { usePermissionConfirm } from "./automation/usePermissionConfirm";
 import type { ConnectorOption } from "./automation/ConnectorSelector";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 interface AutomationPanelProps {
   onToast?: (msg: string) => void;
   onNavigate?: (label: string) => void;
-  onOpenSession?: (sessionId: string) => void;
+  onOpenSession?: (sessionId: string, cwd?: string) => void;
   cwd?: string;
 }
 
 type TabKey = "tasks" | "records";
 type RecordFilter = "all" | "success" | "failed" | "running" | "archived";
+type ReferenceCatalog = "workspaces" | "models" | "skills" | "experts" | "connectors";
+
+const REFERENCE_CATALOG_LABELS: Record<ReferenceCatalog, string> = {
+  workspaces: "工作空间",
+  models: "模型",
+  skills: "技能",
+  experts: "专家",
+  connectors: "连接器",
+};
 
 const RECORD_FILTERS: { key: RecordFilter; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "success", label: "成功" },
   { key: "failed", label: "失败" },
-  { key: "running", label: "运行中" },
+  { key: "running", label: "进行中" },
   { key: "archived", label: "已归档" },
 ];
 
 function recordStatusLabel(item: AutomationRunRecord): string {
+  if (item.status === "queued") return "等待调度";
   if (item.status === "running") return "运行中";
   if (item.status === "success") return "成功";
   if (item.status === "failed") return "失败";
@@ -101,6 +112,9 @@ function recordStatusLabel(item: AutomationRunRecord): string {
 }
 
 function RecordStatusIcon({ item }: { item: AutomationRunRecord }) {
+  if (item.status === "queued") {
+    return <RunningStatusIcon size={16} color="var(--echo-color-text-disabled, #777)" />;
+  }
   if (item.status === "running") {
     return (
       <span className="atm-status-icon-spinning" style={{ display: "inline-flex" }}>
@@ -129,13 +143,31 @@ function ConfirmDialog({
   onOk: () => void;
   onCancel: () => void;
 }) {
+  const titleId = useId();
+  const contentId = useId();
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
+
   return (
     <div className="modal-overlay" onClick={onCancel}>
-      <div className="atm-confirm-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <h3 className="atm-confirm-title">{title}</h3>
-        <p className="atm-confirm-content">{content}</p>
+      <div
+        ref={dialogRef}
+        className="atm-confirm-dialog"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={contentId}
+        tabIndex={-1}
+      >
+        <h3 id={titleId} className="atm-confirm-title">{title}</h3>
+        <p id={contentId} className="atm-confirm-content">{content}</p>
         <div className="atm-confirm-actions">
-          <button type="button" className="atm-btn atm-btn--secondary" onClick={onCancel}>
+          <button
+            type="button"
+            className="atm-btn atm-btn--secondary"
+            onClick={onCancel}
+            data-modal-initial-focus
+          >
             取消
           </button>
           <button type="button" className={`atm-btn ${danger ? "atm-btn--danger" : "atm-btn--primary"}`} onClick={onOk}>
@@ -151,6 +183,9 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
   // ---------- 数据 ----------
   const [snapshot, setSnapshot] = useState<AutomationSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const snapshotGenerationRef = useRef(0);
+  const [runStartingIds, setRunStartingIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<TabKey>("tasks");
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<RecordFilter>("all");
@@ -174,6 +209,9 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [experts, setExperts] = useState<AgentEntry[]>([]);
   const [connectors, setConnectors] = useState<ConnectorOption[]>([]);
+  const [referencesLoading, setReferencesLoading] = useState(true);
+  const [referenceErrors, setReferenceErrors] = useState<Partial<Record<ReferenceCatalog, string>>>({});
+  const referenceGenerationRef = useRef(0);
 
   // ---------- 确认弹窗 ----------
   const [confirmState, setConfirmState] = useState<{
@@ -184,40 +222,86 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
   } | null>(null);
 
   const refresh = useCallback(
-    async (silent = false) => {
+    async (silent = false, notify = true) => {
+      const generation = ++snapshotGenerationRef.current;
       if (!silent) setLoading(true);
       try {
-        setSnapshot(await automationsSnapshot());
+        const nextSnapshot = await automationsSnapshot();
+        if (snapshotGenerationRef.current !== generation) return;
+        setSnapshot(nextSnapshot);
+        setSnapshotError(null);
       } catch (e) {
-        onToast?.(`加载自动化数据失败：${String(e).replace(/^Error:\s*/, "")}`);
+        if (snapshotGenerationRef.current !== generation) return;
+        const message = String(e).replace(/^Error:\s*/, "");
+        setSnapshotError(message);
+        if (notify) onToast?.(`加载自动化数据失败：${message}`);
       } finally {
-        if (!silent) setLoading(false);
+        if (snapshotGenerationRef.current === generation && !silent) setLoading(false);
       }
     },
     [onToast],
   );
 
   useEffect(() => {
-    refresh();
+    void refresh();
+    return () => {
+      snapshotGenerationRef.current += 1;
+    };
   }, [refresh]);
 
+  const hasUnfinishedRuns = snapshot?.records.some(
+    (record) => record.status === "queued" || record.status === "running",
+  ) ?? false;
+
   useEffect(() => {
-    agentListWorkspaces().then(setWorkspaces).catch(() => setWorkspaces([]));
-    providersList()
-      .then((list) => setModels(flattenModels(list)))
-      .catch(() => setModels([]));
-    skillsList(cwd)
-      .then((list) => setSkills(list.filter((skill) => skill.enabled)))
-      .catch(() => setSkills([]));
-    agentsList(cwd).then(setExperts).catch(() => setExperts([]));
-    mcpList()
-      .then((list) =>
-        setConnectors(
-          list.map((c) => ({ id: c.name, name: c.name, connected: c.enabled })),
-        ),
-      )
-      .catch(() => setConnectors([]));
+    if (!hasUnfinishedRuns) return;
+    const timer = window.setInterval(() => {
+      void refresh(true, false);
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [hasUnfinishedRuns, refresh]);
+
+  const loadReferenceCatalogs = useCallback(async () => {
+    const generation = ++referenceGenerationRef.current;
+    setReferencesLoading(true);
+    const [workspaceResult, modelResult, skillResult, expertResult, connectorResult] = await Promise.allSettled([
+      agentListWorkspaces(),
+      providersList(),
+      skillsList(cwd),
+      agentsList(cwd),
+      mcpList(),
+    ]);
+    if (referenceGenerationRef.current !== generation) return;
+
+    const errors: Partial<Record<ReferenceCatalog, string>> = {};
+    const captureError = (key: ReferenceCatalog, reason: unknown) => {
+      errors[key] = String(reason).replace(/^Error:\s*/, "");
+    };
+    if (workspaceResult.status === "fulfilled") setWorkspaces(workspaceResult.value);
+    else captureError("workspaces", workspaceResult.reason);
+    if (modelResult.status === "fulfilled") setModels(flattenModels(modelResult.value));
+    else captureError("models", modelResult.reason);
+    if (skillResult.status === "fulfilled") setSkills(skillResult.value.filter((skill) => skill.enabled));
+    else captureError("skills", skillResult.reason);
+    if (expertResult.status === "fulfilled") setExperts(expertResult.value);
+    else captureError("experts", expertResult.reason);
+    if (connectorResult.status === "fulfilled") {
+      setConnectors(connectorResult.value.map((connector) => ({
+        id: connector.name,
+        name: connector.name,
+        connected: connector.enabled,
+      })));
+    } else captureError("connectors", connectorResult.reason);
+    setReferenceErrors(errors);
+    setReferencesLoading(false);
   }, [cwd]);
+
+  useEffect(() => {
+    void loadReferenceCatalogs();
+    return () => {
+      referenceGenerationRef.current += 1;
+    };
+  }, [loadReferenceCatalogs]);
 
   useEffect(() => {
     if (!filterOpen) return;
@@ -351,12 +435,19 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
 
   const handleRunTest = useCallback(
     async (automationId: string) => {
+      setRunStartingIds((current) => new Set(current).add(automationId));
       try {
         await automationsRun(automationId);
-        onToast?.("已触发测试运行。测试运行不会影响正式调度时间。");
+        onToast?.("已加入运行队列。测试运行不会影响正式调度时间。");
         await refresh(true);
       } catch (e) {
         onToast?.(`触发测试运行失败：${String(e).replace(/^Error:\s*/, "")}`);
+      } finally {
+        setRunStartingIds((current) => {
+          const next = new Set(current);
+          next.delete(automationId);
+          return next;
+        });
       }
     },
     [onToast, refresh],
@@ -375,6 +466,8 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
         try {
           await automationsSave(automationFromDraft(draft, editingAutomation));
           await handleRunTest(editingAutomation.id);
+        } catch (e) {
+          onToast?.(`保存自动化任务失败：${String(e).replace(/^Error:\s*/, "")}`);
         } finally {
           setSaving(false);
         }
@@ -459,6 +552,15 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
     () => new Map((snapshot?.automations ?? []).map((a) => [a.id, a])),
     [snapshot],
   );
+  const busyAutomationIds = useMemo(() => {
+    const ids = new Set(runStartingIds);
+    for (const record of snapshot?.records ?? []) {
+      if (record.status === "queued" || record.status === "running") {
+        ids.add(record.automationId);
+      }
+    }
+    return ids;
+  }, [runStartingIds, snapshot]);
   const { completedItems, archivedItems } = useMemo(() => {
     const completed: AutomationRunRecord[] = [];
     const archived: AutomationRunRecord[] = [];
@@ -482,7 +584,9 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
     let items = [...completedItems, ...archivedItems];
     if (filterStatus === "success") items = items.filter((i) => i.status === "success" && !i.archived);
     else if (filterStatus === "failed") items = items.filter((i) => i.status === "failed" && !i.archived);
-    else if (filterStatus === "running") items = items.filter((i) => i.status === "running" && !i.archived);
+    else if (filterStatus === "running") {
+      items = items.filter((i) => (i.status === "queued" || i.status === "running") && !i.archived);
+    }
     else if (filterStatus === "archived") items = items.filter((i) => i.archived);
     if (query) {
       items = items.filter((i) =>
@@ -536,8 +640,23 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
   // 编辑态渲染（截图 2）
   // ============================================================
   if ((editingAutomation || isCreating) && draft) {
+    const referenceErrorEntries = Object.entries(referenceErrors) as Array<[ReferenceCatalog, string]>;
     return (
       <div className="automation-panel echo-agent-automation">
+        {(referencesLoading || referenceErrorEntries.length > 0) && (
+          <div className="atm-background-notice" role={referenceErrorEntries.length > 0 ? "alert" : "status"}>
+            <span>
+              {referenceErrorEntries.length > 0
+                ? `部分引用数据加载失败：${referenceErrorEntries.map(([key, message]) => `${REFERENCE_CATALOG_LABELS[key]}：${message}`).join("；")}。已保留其他可用数据。`
+                : "正在加载工作空间、模型与运行时能力…"}
+            </span>
+            {referenceErrorEntries.length > 0 && (
+              <button type="button" className="atm-toolbar-btn" onClick={() => void loadReferenceCatalogs()} disabled={referencesLoading}>
+                {referencesLoading ? "重试中…" : "重试"}
+              </button>
+            )}
+          </div>
+        )}
         <AutomationEditPage
           mode={isCreating ? "create" : "edit"}
           draft={draft}
@@ -723,9 +842,30 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
         </div>
       )}
 
+      {snapshot && snapshotError && (
+        <div className="atm-background-notice" role="alert">
+          <span>刷新自动化数据失败：{snapshotError}。已保留上次数据。</span>
+          <button type="button" className="atm-toolbar-btn" onClick={() => void refresh()} disabled={loading}>
+            {loading ? "重试中…" : "重试"}
+          </button>
+        </div>
+      )}
+
       {/* ---------- 内容 ---------- */}
       {loading && !snapshot ? (
         <div className="atm-panel-empty">加载中…</div>
+      ) : snapshotError && !snapshot ? (
+        <div className="atm-empty-state" role="alert">
+          <div className="atm-empty-state-hero">
+            <div className="atm-empty-state-icon"><ErrorCircleIcon size={48} /></div>
+            <div className="atm-empty-state-text">自动化数据加载失败：{snapshotError}</div>
+            <div className="atm-empty-state-actions">
+              <button type="button" className="atm-empty-action-btn" onClick={() => void refresh()}>
+                重试
+              </button>
+            </div>
+          </div>
+        </div>
       ) : showTemplatePage ? (
         <div className="atm-template-page">
           <AutomationTemplateGrid templates={AUTOMATION_TEMPLATES} onSelectTemplate={handleCreate} />
@@ -765,6 +905,7 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
                 automation={automation}
                 isBatchMode={isBatchMode}
                 isSelected={selectedIds.has(automation.id)}
+                isRunning={busyAutomationIds.has(automation.id)}
                 onEdit={handleEdit}
                 onRunTest={handleRunTest}
                 onTogglePause={handleTogglePause}
@@ -786,6 +927,7 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
                 automation={automation}
                 isBatchMode={isBatchMode}
                 isSelected={selectedIds.has(automation.id)}
+                isRunning={busyAutomationIds.has(automation.id)}
                 onEdit={handleEdit}
                 onRunTest={handleRunTest}
                 onTogglePause={handleTogglePause}
@@ -822,8 +964,10 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
             const isCollapsed = collapsedGroups.has(group.label);
             return (
               <div className="atm-records-group" key={group.label}>
-                <div
+                <button
+                  type="button"
                   className="atm-records-group-label"
+                  aria-expanded={!isCollapsed}
                   onClick={() =>
                     setCollapsedGroups((prev) => {
                       const next = new Set(prev);
@@ -839,7 +983,7 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
                     height={14}
                     className={`atm-records-group-chevron${isCollapsed ? " atm-records-group-chevron--collapsed" : ""}`}
                   />
-                </div>
+                </button>
                 {!isCollapsed &&
                   group.items.map((item) => (
                     <InboxRow
@@ -855,14 +999,19 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
           })}
           {archivedRecords.length > 0 && (
             <div className="atm-records-group atm-records-group--archived">
-              <div className="atm-records-group-label" onClick={() => setArchivedGroupOpen((v) => !v)}>
+              <button
+                type="button"
+                className="atm-records-group-label"
+                aria-expanded={archivedGroupOpen}
+                onClick={() => setArchivedGroupOpen((v) => !v)}
+              >
                 已归档
                 <ChevronDownIcon
                   width={14}
                   height={14}
                   className={`atm-records-group-chevron${archivedGroupOpen ? "" : " atm-records-group-chevron--collapsed"}`}
                 />
-              </div>
+              </button>
               {archivedGroupOpen &&
                 archivedRecords.map((item) => (
                   <InboxRow
@@ -905,6 +1054,7 @@ function AutomationRow({
   automation,
   isBatchMode,
   isSelected,
+  isRunning,
   onEdit,
   onRunTest,
   onTogglePause,
@@ -914,6 +1064,7 @@ function AutomationRow({
   automation: Automation;
   isBatchMode: boolean;
   isSelected: boolean;
+  isRunning: boolean;
   onEdit: (a: Automation) => void;
   onRunTest: (id: string) => void;
   onTogglePause: (id: string, status: AutomationStatus) => void;
@@ -922,6 +1073,7 @@ function AutomationRow({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const isActive = automation.status === "ACTIVE";
   const scheduleDesc = describeSchedule(automation);
   const validityDesc = describeValidity(automation);
@@ -944,7 +1096,15 @@ function AutomationRow({
   return (
     <div
       className={`atm-row${isBatchMode ? " atm-row--batch" : ""}${menuOpen ? " atm-row--menu-open" : ""}`}
+      role="button"
+      tabIndex={0}
       onClick={() => (isBatchMode ? onToggleSelect(automation.id) : onEdit(automation))}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        if (isBatchMode) onToggleSelect(automation.id);
+        else onEdit(automation);
+      }}
     >
       <div className="atm-row-left">
         {isBatchMode && (
@@ -990,7 +1150,9 @@ function AutomationRow({
             <button
               type="button"
               className="atm-row-action-btn"
-              title="测试运行"
+              title={isRunning ? "该任务已在运行" : "测试运行"}
+              aria-label={isRunning ? `「${automation.name}」正在运行` : `测试运行「${automation.name}」`}
+              disabled={isRunning}
               onClick={(e) => {
                 e.stopPropagation();
                 onRunTest(automation.id);
@@ -999,15 +1161,19 @@ function AutomationRow({
               <PlayIcon width={16} height={16} />
             </button>
             <div className="atm-row-menu-wrap" ref={menuRef}>
-              <span
+              <button
+                ref={menuTriggerRef}
+                type="button"
                 className="atm-row-more-hint"
+                aria-label={`打开「${automation.name}」更多操作`}
+                aria-expanded={menuOpen}
                 onClick={(e) => {
                   e.stopPropagation();
                   setMenuOpen((v) => !v);
                 }}
               >
                 <MoreDotsIcon width={16} height={16} />
-              </span>
+              </button>
               {menuOpen && (
                 <div className="atm-row-menu" onClick={(e) => e.stopPropagation()}>
                   <button
@@ -1025,6 +1191,9 @@ function AutomationRow({
                     type="button"
                     className="atm-row-menu-item atm-row-menu-item--danger"
                     onClick={() => {
+                      // Keep a connected, meaningful restore target before the
+                      // menu item is removed and the confirmation dialog mounts.
+                      menuTriggerRef.current?.focus();
                       setMenuOpen(false);
                       onDelete(automation.id);
                     }}
@@ -1057,24 +1226,24 @@ function InboxRow({
   archived?: boolean;
   onArchive: (id: string) => void;
   onDelete: (id: string) => void;
-  onOpenSession?: (sessionId: string) => void;
+  onOpenSession?: (sessionId: string, cwd?: string) => void;
 }) {
-  const isRunning = item.status === "running";
+  const isUnfinished = item.status === "queued" || item.status === "running";
   const date = new Date(item.finishedAt || item.startedAt);
   const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const dateTime = `${formatRunTime(item.finishedAt || item.startedAt)}`;
 
   return (
     <div
-      className={`atm-row atm-inbox-row${archived ? " atm-archived" : ""}${isRunning ? " atm-inbox-row--running" : ""}${item.sessionId ? " atm-inbox-row--openable" : ""}`}
+      className={`atm-row atm-inbox-row${archived ? " atm-archived" : ""}${isUnfinished ? " atm-inbox-row--running" : ""}${item.sessionId ? " atm-inbox-row--openable" : ""}`}
       title={item.error || (item.sessionId ? "打开本次自动化会话" : undefined)}
       role={item.sessionId ? "button" : undefined}
       tabIndex={item.sessionId ? 0 : undefined}
-      onClick={() => item.sessionId && onOpenSession?.(item.sessionId)}
+      onClick={() => item.sessionId && onOpenSession?.(item.sessionId, item.cwd)}
       onKeyDown={(event) => {
         if (item.sessionId && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
-          onOpenSession?.(item.sessionId);
+          onOpenSession?.(item.sessionId, item.cwd);
         }
       }}
     >
@@ -1098,7 +1267,7 @@ function InboxRow({
             <RecordStatusIcon item={item} />
           )}
         </span>
-        {!isRunning && (
+        {!isUnfinished && (
           <div className="atm-row-hover-actions">
             {!archived && (
               <button

@@ -1,5 +1,5 @@
 /** Local memory browser/editor backed by the embedded Runtime's canonical storage. */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BookIcon,
   SearchIcon,
@@ -19,6 +19,8 @@ import {
   memorySave,
 } from "@/lib/agent-client";
 import type { MemoryEntry } from "@/lib/types";
+import { useModalFocus } from "@/lib/use-modal-focus";
+import { useAppDialog } from "./AppDialog";
 
 interface ResourcesPanelProps {
   cwd?: string;
@@ -48,23 +50,35 @@ function scopeLabel(scope: MemoryEntry["scope"]): string {
 export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps) {
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
+  const { requestConfirmation, dialog } = useAppDialog(JSON.stringify([cwd ?? null, sessionId ?? null]));
+  const reloadGeneration = useRef(0);
 
   const reload = useCallback(async () => {
+    const generation = ++reloadGeneration.current;
     setLoading(true);
+    setLoadError(null);
     try {
-      setEntries(await memoryList(cwd));
+      const next = await memoryList(cwd);
+      if (reloadGeneration.current === generation) setEntries(next);
     } catch (error) {
-      onToast?.(`加载个人记忆失败：${errorText(error)}`);
+      if (reloadGeneration.current !== generation) return;
+      const message = errorText(error);
+      setLoadError(message);
+      onToast?.(`加载个人记忆失败：${message}`);
     } finally {
-      setLoading(false);
+      if (reloadGeneration.current === generation) setLoading(false);
     }
   }, [cwd, onToast]);
 
   useEffect(() => {
     void reload();
+    return () => {
+      reloadGeneration.current += 1;
+    };
   }, [reload]);
 
   const handleSave = useCallback(async (draft: EditorState) => {
@@ -100,20 +114,29 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
     }
   }, [cwd, onToast, reload]);
 
-  const handleDelete = useCallback(async (entry: MemoryEntry) => {
+  const handleDelete = useCallback((entry: MemoryEntry) => {
     if (entry.readOnly) return;
-    if (!confirm(`确定删除${scopeLabel(entry.scope)}记忆文件？此操作无法撤销。`)) return;
-    setBusy(true);
-    try {
-      await memoryDelete(entry.scope, entry.path, cwd, entry.revision);
-      onToast?.("已删除记忆文件");
-      await reload();
-    } catch (error) {
-      onToast?.(`删除失败：${errorText(error)}`);
-    } finally {
-      setBusy(false);
-    }
-  }, [cwd, onToast, reload]);
+    requestConfirmation({
+      title: `删除${scopeLabel(entry.scope)}记忆文件？`,
+      description: `将永久删除“${entry.path}”，此操作无法撤销。`,
+      confirmLabel: "删除记忆",
+      danger: true,
+      action: async () => {
+        setBusy(true);
+        try {
+          await memoryDelete(entry.scope, entry.path, cwd, entry.revision);
+          setEntries((current) => current.filter((candidate) => !(
+            candidate.scope === entry.scope && candidate.path === entry.path
+          )));
+          onToast?.("已删除记忆文件");
+          await reload();
+        } finally {
+          setBusy(false);
+        }
+      },
+      onError: (error) => onToast?.(`删除失败：${errorText(error)}`),
+    });
+  }, [cwd, onToast, reload, requestConfirmation]);
 
   const handleFlush = useCallback(async () => {
     if (!sessionId) {
@@ -131,22 +154,27 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
     }
   }, [onToast, reload, sessionId]);
 
-  const handleDream = useCallback(async () => {
+  const handleDream = useCallback(() => {
     if (!sessionId) {
       onToast?.("整理记忆需要一个已打开的会话");
       return;
     }
-    if (!confirm("整理会把历史会话记录归纳到长期记忆中，是否继续？")) return;
-    setBusy(true);
-    try {
-      await memoryDream(sessionId);
-      await reload();
-    } catch (error) {
-      onToast?.(`整理失败：${errorText(error)}`);
-    } finally {
-      setBusy(false);
-    }
-  }, [onToast, reload, sessionId]);
+    requestConfirmation({
+      title: "整理历史会话记忆？",
+      description: "Agent 会把历史会话记录归纳到长期记忆中，可能会修改现有记忆内容。",
+      confirmLabel: "开始整理",
+      action: async () => {
+        setBusy(true);
+        try {
+          await memoryDream(sessionId);
+          await reload();
+        } finally {
+          setBusy(false);
+        }
+      },
+      onError: (error) => onToast?.(`整理失败：${errorText(error)}`),
+    });
+  }, [onToast, reload, requestConfirmation, sessionId]);
 
   const handleRewriteDraft = useCallback(async (draft: EditorState) => {
     if (!sessionId) {
@@ -201,7 +229,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
 
       <div className="resources-panel__search">
         <SearchIcon size="md" className="resources-panel__search-icon" />
-        <input className="resources-panel__search-input" placeholder="搜索记忆…" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <input className="resources-panel__search-input" aria-label="搜索记忆" placeholder="搜索记忆…" value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
 
       <div className="resources-panel__stats">
@@ -209,6 +237,15 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         {cwd && <span>· 工作区 {workspaceCount}</span>}
         {cwd && <span>· 会话记录 {sessionCount}</span>}
       </div>
+
+      {loadError && (
+        <div className="panel-inline-error" role="alert">
+          <span>个人记忆加载失败：{loadError}</span>
+          <button type="button" onClick={() => void reload()} disabled={loading}>
+            {loading ? "重试中…" : "重试"}
+          </button>
+        </div>
+      )}
 
       <button
         className="resources-panel__create-btn"
@@ -225,7 +262,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
       </button>
 
       <div className="resources-panel__list">
-        {!loading && filtered.length === 0 && (
+        {!loading && !loadError && filtered.length === 0 && (
           <div className="resources-panel__empty">
             <BookIcon size="xl" color="var(--echo-text-tertiary)" />
             <p>暂无记忆。可手动添加，也可在对话中使用 <code>/remember</code> 保存。</p>
@@ -274,6 +311,7 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
           onSave={() => void handleSave(editing)}
         />
       )}
+      {dialog}
     </div>
   );
 }
@@ -297,9 +335,12 @@ function MemoryEditor({
   onRewrite: () => void;
   onSave: () => void;
 }) {
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
+  const dialogLabel = draft.isNew ? "添加记忆" : `${draft.readOnly ? "查看" : "编辑"} ${draft.path}`;
+
   return (
     <div className="modal-overlay memory-editor__overlay" onClick={onCancel}>
-      <div className="memory-editor" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
+      <div ref={dialogRef} className="memory-editor" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={dialogLabel} tabIndex={-1}>
         <div className="memory-editor__header">
           <h3>{draft.isNew ? "添加记忆" : `${draft.readOnly ? "查看" : "编辑"} ${draft.path}`}</h3>
           <button className="memory-editor__close" onClick={onCancel} aria-label="关闭">✕</button>
@@ -324,11 +365,13 @@ function MemoryEditor({
         </div>
         <textarea
           className="memory-editor__content"
+          aria-label={draft.isNew ? "记忆内容" : `记忆内容 ${draft.path}`}
           value={draft.content}
           readOnly={draft.readOnly}
           onChange={(event) => onChange({ ...draft, content: event.target.value })}
           placeholder={draft.isNew ? "例如：代码示例优先使用 TypeScript，并说明关键设计取舍。" : undefined}
           spellCheck={false}
+          data-modal-initial-focus
         />
         <div className="memory-editor__footer">
           <button className="btn btn--ghost" onClick={onCancel}>{draft.readOnly ? "关闭" : "取消"}</button>

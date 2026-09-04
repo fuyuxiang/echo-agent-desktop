@@ -146,39 +146,39 @@ pub fn write_rules(rules: Vec<PermissionRule>) -> Result<(), String> {
             return Err("permission pattern must be a single line".into());
         }
     }
-    let mut config = crate::providers::read_config();
-    let table = config.as_table_mut().ok_or("config root is not a table")?;
-    // Reset the [permission] block: drop it entirely so we rewrite from scratch.
-    table.remove("permission");
-    if rules.is_empty() {
-        // No rules → just ensure no stale block remains.
-        return crate::providers::write_config(&config);
-    }
-    let mut perm = Map::new();
-    // Group by action.
-    let mut deny: Vec<Value> = Vec::new();
-    let mut allow: Vec<Value> = Vec::new();
-    let mut ask: Vec<Value> = Vec::new();
-    for rule in &rules {
-        let compact = rule_to_compact(rule);
-        let v = Value::String(compact);
-        match rule.action.as_str() {
-            "deny" => deny.push(v),
-            "ask" => ask.push(v),
-            _ => allow.push(v),
+    crate::providers::update_config(|config| {
+        let table = config.as_table_mut().ok_or("config root is not a table")?;
+        // Reset the [permission] block: drop it entirely so we rewrite from scratch.
+        table.remove("permission");
+        if rules.is_empty() {
+            return Ok(());
         }
-    }
-    if !deny.is_empty() {
-        perm.insert("deny".into(), Value::Array(deny));
-    }
-    if !allow.is_empty() {
-        perm.insert("allow".into(), Value::Array(allow));
-    }
-    if !ask.is_empty() {
-        perm.insert("ask".into(), Value::Array(ask));
-    }
-    table.insert("permission".into(), Value::Table(perm));
-    crate::providers::write_config(&config)
+        let mut perm = Map::new();
+        // Group by action.
+        let mut deny: Vec<Value> = Vec::new();
+        let mut allow: Vec<Value> = Vec::new();
+        let mut ask: Vec<Value> = Vec::new();
+        for rule in &rules {
+            let compact = rule_to_compact(rule);
+            let v = Value::String(compact);
+            match rule.action.as_str() {
+                "deny" => deny.push(v),
+                "ask" => ask.push(v),
+                _ => allow.push(v),
+            }
+        }
+        if !deny.is_empty() {
+            perm.insert("deny".into(), Value::Array(deny));
+        }
+        if !allow.is_empty() {
+            perm.insert("allow".into(), Value::Array(allow));
+        }
+        if !ask.is_empty() {
+            perm.insert("ask".into(), Value::Array(ask));
+        }
+        table.insert("permission".into(), Value::Table(perm));
+        Ok(())
+    })
 }
 
 /// List the current permission rules. Read-only — no agent round-trip needed.
@@ -204,7 +204,7 @@ pub fn permission_save(
 /// The current "new session" defaults that affect every agent/assistant.
 /// Mirrors EchoAgent's `[models] default` and `[ui] default_selected_permission`
 /// config keys (see user-guide/05-configuration.md).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDefaults {
     /// Model id used for new sessions (`[models] default`). Empty = EchoAgent
@@ -222,16 +222,6 @@ pub struct AgentDefaults {
     /// (`[ui] remember_tool_approvals`). Null = unset.
     #[serde(default)]
     pub remember_tool_approvals: Option<bool>,
-}
-
-impl Default for AgentDefaults {
-    fn default() -> Self {
-        Self {
-            default_model: String::new(),
-            default_permission: String::new(),
-            remember_tool_approvals: None,
-        }
-    }
 }
 
 /// Read the agent defaults from config.toml.
@@ -260,48 +250,49 @@ pub fn read_defaults() -> AgentDefaults {
 /// Write the agent defaults to config.toml. We preserve all other keys in
 /// `[models]` and `[ui]` (merge, not replace).
 pub fn write_defaults(defaults: &AgentDefaults) -> Result<(), String> {
-    let mut config = crate::providers::read_config();
-    let root = config.as_table_mut().ok_or("config root is not a table")?;
+    crate::providers::update_config(|config| {
+        let root = config.as_table_mut().ok_or("config root is not a table")?;
 
-    // [models].default
-    if !root.contains_key("models") {
-        root.insert("models".into(), Value::Table(Map::new()));
-    }
-    if let Some(models) = root.get_mut("models").and_then(Value::as_table_mut) {
-        if defaults.default_model.is_empty() {
-            models.remove("default");
-        } else {
-            models.insert(
-                "default".into(),
-                Value::String(defaults.default_model.clone()),
-            );
+        // [models].default
+        if !root.contains_key("models") {
+            root.insert("models".into(), Value::Table(Map::new()));
         }
-    }
-
-    // [ui].default_selected_permission + remember_tool_approvals
-    if !root.contains_key("ui") {
-        root.insert("ui".into(), Value::Table(Map::new()));
-    }
-    if let Some(ui) = root.get_mut("ui").and_then(Value::as_table_mut) {
-        if defaults.default_permission.is_empty() {
-            ui.remove("default_selected_permission");
-        } else {
-            ui.insert(
-                "default_selected_permission".into(),
-                Value::String(defaults.default_permission.clone()),
-            );
-        }
-        match defaults.remember_tool_approvals {
-            Some(b) => {
-                ui.insert("remember_tool_approvals".into(), Value::Boolean(b));
-            }
-            None => {
-                ui.remove("remember_tool_approvals");
+        if let Some(models) = root.get_mut("models").and_then(Value::as_table_mut) {
+            if defaults.default_model.is_empty() {
+                models.remove("default");
+            } else {
+                models.insert(
+                    "default".into(),
+                    Value::String(defaults.default_model.clone()),
+                );
             }
         }
-    }
 
-    crate::providers::write_config(&config)
+        // [ui].default_selected_permission + remember_tool_approvals
+        if !root.contains_key("ui") {
+            root.insert("ui".into(), Value::Table(Map::new()));
+        }
+        if let Some(ui) = root.get_mut("ui").and_then(Value::as_table_mut) {
+            if defaults.default_permission.is_empty() {
+                ui.remove("default_selected_permission");
+            } else {
+                ui.insert(
+                    "default_selected_permission".into(),
+                    Value::String(defaults.default_permission.clone()),
+                );
+            }
+            match defaults.remember_tool_approvals {
+                Some(b) => {
+                    ui.insert("remember_tool_approvals".into(), Value::Boolean(b));
+                }
+                None => {
+                    ui.remove("remember_tool_approvals");
+                }
+            }
+        }
+
+        Ok(())
+    })
 }
 
 /// Read the agent defaults (new-session model + default permission).
@@ -365,16 +356,17 @@ pub fn write_permission_mode(mode: &str) -> Result<(), String> {
     if !PERMISSION_MODES.contains(&mode) {
         return Err(format!("unknown permission mode: {mode}"));
     }
-    let mut config = crate::providers::read_config();
-    let root = config.as_table_mut().ok_or("config root is not a table")?;
-    if !root.contains_key("ui") {
-        root.insert("ui".into(), Value::Table(Map::new()));
-    }
-    let ui = root.get_mut("ui").and_then(Value::as_table_mut).unwrap();
-    ui.insert("permission_mode".into(), Value::String(mode.into()));
-    ui.remove("approval_mode");
-    ui.remove("yolo");
-    crate::providers::write_config(&config)
+    crate::providers::update_config(|config| {
+        let root = config.as_table_mut().ok_or("config root is not a table")?;
+        if !root.contains_key("ui") {
+            root.insert("ui".into(), Value::Table(Map::new()));
+        }
+        let ui = root.get_mut("ui").and_then(Value::as_table_mut).unwrap();
+        ui.insert("permission_mode".into(), Value::String(mode.into()));
+        ui.remove("approval_mode");
+        ui.remove("yolo");
+        Ok(())
+    })
 }
 
 /// Current permission mode ("ask" | "auto" | "always-approve").

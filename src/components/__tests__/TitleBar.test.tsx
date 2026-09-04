@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 
 const minimize = vi.fn();
@@ -21,6 +22,35 @@ describe("TitleBar", () => {
     expect(screen.getByRole("button", { name: "编辑" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "窗口" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "帮助" })).toBeInTheDocument();
+  });
+
+  it("菜单触发器暴露状态，支持方向键导航与 Escape 焦点恢复", async () => {
+    const user = userEvent.setup();
+    render(<TitleBar onPlaceholder={() => {}} />);
+    const trigger = screen.getByRole("button", { name: "帮助" });
+
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    trigger.focus();
+    await user.keyboard("{ArrowDown}");
+
+    const menu = screen.getByRole("menu", { name: "帮助菜单" });
+    const items = within(menu).getAllByRole("menuitem");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(items[0]).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(items[items.length - 1]).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(items[0]).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(items[items.length - 1]).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(items[0]).toHaveFocus();
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menu", { name: "帮助菜单" })).toBeNull();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
   });
 
   it("编辑菜单展开后点击复制调用 execCommand 并收起", () => {

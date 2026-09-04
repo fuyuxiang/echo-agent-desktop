@@ -14,6 +14,7 @@ use std::path::{Component, Path, PathBuf};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tauri::State;
 use uuid::Uuid;
 
 const INSTALL_MANIFEST: &str = ".echo-agent-install.json";
@@ -102,8 +103,26 @@ struct PackageFile {
     size: u64,
 }
 
+fn require_authorized_package(
+    access: &crate::shell_fs::FilesystemAccess,
+    raw: &str,
+) -> Result<String, String> {
+    let canonical = if let Some(managed) = canonical_managed_skill_directory(raw) {
+        managed
+    } else if let Some(managed) = crate::org::canonical_org_managed_skill_directory(raw) {
+        managed
+    } else {
+        access.require_authorized_package_source(Path::new(raw))?
+    };
+    Ok(canonical.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
-pub async fn skills_inspect_package(path: String) -> Result<SkillPackageInspection, String> {
+pub async fn skills_inspect_package(
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
+    path: String,
+) -> Result<SkillPackageInspection, String> {
+    let path = require_authorized_package(&access, &path)?;
     tauri::async_runtime::spawn_blocking(move || inspect_path(&path))
         .await
         .map_err(|error| format!("检查技能包失败：{error}"))?
@@ -111,14 +130,19 @@ pub async fn skills_inspect_package(path: String) -> Result<SkillPackageInspecti
 
 #[tauri::command]
 pub async fn skills_install_package(
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
     path: String,
+    expected_source_hash: String,
     approve_high_risk: bool,
 ) -> Result<SkillInstallResult, String> {
     crate::policy::require_feature("skills")?;
     crate::policy::require_skill_upload()?;
-    tauri::async_runtime::spawn_blocking(move || install_path(&path, approve_high_risk))
-        .await
-        .map_err(|error| format!("安装技能包失败：{error}"))?
+    let path = require_authorized_package(&access, &path)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        install_path(&path, &expected_source_hash, approve_high_risk)
+    })
+    .await
+    .map_err(|error| format!("安装技能包失败：{error}"))?
 }
 
 #[tauri::command]
@@ -160,9 +184,10 @@ pub(crate) fn package_skill_for_upload(path: &str) -> Result<(String, Vec<u8>), 
         writer
             .start_file(&relative, options)
             .map_err(|error| format!("创建 Skill ZIP 条目失败：{error}"))?;
-        let mut input =
-            fs::File::open(&file.absolute).map_err(|error| format!("读取技能文件失败：{error}"))?;
-        std::io::copy(&mut input, &mut writer)
+        let bytes = crate::shell_fs::read_regular_file_bounded(&file.absolute, file.size)
+            .map_err(|error| format!("读取技能文件失败：{error}"))?;
+        writer
+            .write_all(&bytes)
             .map_err(|error| format!("写入 Skill ZIP 失败：{error}"))?;
     }
     let bytes = writer
@@ -173,21 +198,28 @@ pub(crate) fn package_skill_for_upload(path: &str) -> Result<(String, Vec<u8>), 
 }
 
 pub fn is_managed_skill(path: &str) -> bool {
-    let candidate = skill_directory(Path::new(path));
-    let root = managed_skills_root();
-    candidate.parent() == Some(root.as_path()) && candidate.join(INSTALL_MANIFEST).is_file()
+    canonical_managed_skill_directory(path).is_some()
+}
+
+pub(crate) fn canonical_managed_skill_directory(path: &str) -> Option<PathBuf> {
+    let root = managed_skills_root().canonicalize().ok()?;
+    let candidate = skill_directory(Path::new(path)).canonicalize().ok()?;
+    if candidate.parent() != Some(root.as_path()) {
+        return None;
+    }
+    let manifest = candidate.join(INSTALL_MANIFEST);
+    let metadata = fs::symlink_metadata(manifest).ok()?;
+    (!metadata.file_type().is_symlink() && metadata.is_file()).then_some(candidate)
 }
 
 pub fn managed_skill_version(path: &str) -> Option<String> {
-    let manifest = read_manifest(&skill_directory(Path::new(path)))?;
+    let manifest = read_manifest(&canonical_managed_skill_directory(path)?)?;
     manifest.version
 }
 
 pub fn managed_skill_directory(path: &str) -> Option<String> {
-    let directory = skill_directory(Path::new(path));
-    (directory.parent() == Some(managed_skills_root().as_path())
-        && directory.join(INSTALL_MANIFEST).is_file())
-    .then(|| directory.to_string_lossy().into_owned())
+    canonical_managed_skill_directory(path)
+        .map(|directory| directory.to_string_lossy().into_owned())
 }
 
 /// Validate an external path before registering it in `[skills].paths`.
@@ -230,7 +262,7 @@ pub fn validate_registered_source(path: &str) -> Result<(), String> {
         return Err(format!("一次最多注册 {MAX_FILES} 个技能"));
     }
     for hit in hits {
-        let markdown = fs::read_to_string(&hit)
+        let markdown = read_skill_text(&hit, MAX_FILE_BYTES)
             .map_err(|e| format!("{} 必须是 UTF-8 Markdown：{e}", hit.display()))?;
         let root = hit.parent().unwrap_or(input);
         parse_skill_metadata(&markdown, root)?;
@@ -251,13 +283,31 @@ fn inspect_path(path: &str) -> Result<SkillPackageInspection, String> {
     inspect_prepared(&prepared)
 }
 
-fn install_path(path: &str, approve_high_risk: bool) -> Result<SkillInstallResult, String> {
+fn install_path(
+    path: &str,
+    expected_source_hash: &str,
+    approve_high_risk: bool,
+) -> Result<SkillInstallResult, String> {
     let prepared = prepare_package(Path::new(path))?;
     let inspection = inspect_prepared(&prepared)?;
+    require_matching_source_hash(expected_source_hash, &inspection.source_hash)?;
     if inspection.risk_level == SkillRiskLevel::High && !approve_high_risk {
         return Err("该技能包包含高风险内容，请先查看风险报告并明确确认".into());
     }
     install_prepared(&prepared, inspection, &managed_skills_root())
+}
+
+fn require_matching_source_hash(expected: &str, actual: &str) -> Result<(), String> {
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("安装请求缺少有效的技能包内容指纹，请重新检查".into());
+    }
+    // Inspection and installation are separate IPC calls. Bind the user's
+    // approval to the exact inspected bytes so a file watcher, sync client or
+    // attacker cannot replace a benign package between those two actions.
+    if actual != expected {
+        return Err("技能包在检查后已发生变化，请重新查看风险报告再安装".into());
+    }
+    Ok(())
 }
 
 fn install_prepared(
@@ -372,9 +422,16 @@ fn prepare_package(input: &Path) -> Result<PreparedPackage, String> {
         .into_owned();
     if meta.is_dir() {
         let root = locate_skill_root(input)?;
+        // Work from an owned snapshot. Otherwise a directory could change
+        // after risk inspection but before hashing/installing or uploading.
+        let temp = staging_root().join(Uuid::now_v7().to_string());
+        if let Err(error) = copy_package(&root, &temp) {
+            let _ = fs::remove_dir_all(&temp);
+            return Err(error);
+        }
         return Ok(PreparedPackage {
-            root,
-            cleanup_root: None,
+            root: temp.clone(),
+            cleanup_root: Some(temp),
             source_path,
         });
     }
@@ -394,7 +451,12 @@ fn prepare_package(input: &Path) -> Result<PreparedPackage, String> {
             }
             let temp = staging_root().join(Uuid::now_v7().to_string());
             fs::create_dir_all(&temp).map_err(|e| format!("创建技能临时目录失败：{e}"))?;
-            if let Err(error) = fs::copy(input, temp.join("SKILL.md")) {
+            let copy_result = crate::shell_fs::read_regular_file_bounded(input, MAX_FILE_BYTES)
+                .and_then(|bytes| {
+                    fs::write(temp.join("SKILL.md"), bytes)
+                        .map_err(|error| format!("写入技能快照失败：{error}"))
+                });
+            if let Err(error) = copy_result {
                 let _ = fs::remove_dir_all(&temp);
                 return Err(format!("复制技能文件失败：{error}"));
             }
@@ -409,18 +471,13 @@ fn prepare_package(input: &Path) -> Result<PreparedPackage, String> {
 }
 
 fn prepare_zip(input: &Path, source_path: String) -> Result<PreparedPackage, String> {
-    let compressed = fs::metadata(input)
-        .map_err(|e| format!("读取 ZIP 失败：{e}"))?
-        .len();
-    if compressed > MAX_TOTAL_BYTES {
-        return Err("ZIP 压缩包超过 20MB 限制".into());
-    }
+    let compressed = crate::shell_fs::read_regular_file_bounded(input, MAX_TOTAL_BYTES)
+        .map_err(|error| format!("读取 ZIP 失败：{error}"))?;
     let temp = staging_root().join(Uuid::now_v7().to_string());
     fs::create_dir_all(&temp).map_err(|e| format!("创建解压目录失败：{e}"))?;
     let result = (|| -> Result<PathBuf, String> {
-        let file = fs::File::open(input).map_err(|e| format!("打开 ZIP 失败：{e}"))?;
-        let mut archive =
-            zip::ZipArchive::new(file).map_err(|e| format!("无效的 ZIP 压缩包：{e}"))?;
+        let mut archive = zip::ZipArchive::new(Cursor::new(compressed))
+            .map_err(|e| format!("无效的 ZIP 压缩包：{e}"))?;
         if archive.len() > MAX_FILES {
             return Err(format!("ZIP 文件数超过 {MAX_FILES} 个限制"));
         }
@@ -489,7 +546,7 @@ fn inspect_prepared(prepared: &PreparedPackage) -> Result<SkillPackageInspection
         .iter()
         .find(|f| f.relative.file_name().and_then(|n| n.to_str()) == Some("SKILL.md"))
         .ok_or("技能包缺少 SKILL.md")?;
-    let markdown = fs::read_to_string(&skill_file.absolute)
+    let markdown = read_skill_text(&skill_file.absolute, MAX_FILE_BYTES)
         .map_err(|e| format!("SKILL.md 必须是 UTF-8 文本：{e}"))?;
     let (name, description, version, mut warnings) =
         parse_skill_metadata(&markdown, &prepared.root)?;
@@ -777,7 +834,8 @@ fn scan_risk(files: &[PackageFile]) -> Result<(SkillRiskLevel, Vec<SkillRiskFind
         if file.size > 1024 * 1024 {
             continue;
         }
-        let bytes = fs::read(&file.absolute).map_err(|e| format!("读取技能文件失败：{e}"))?;
+        let bytes = crate::shell_fs::read_regular_file_bounded(&file.absolute, 1024 * 1024)
+            .map_err(|e| format!("读取技能文件失败：{e}"))?;
         let Ok(text) = String::from_utf8(bytes) else {
             continue;
         };
@@ -834,23 +892,19 @@ fn add_finding(
     }
 }
 
+fn read_skill_text(path: &Path, max_bytes: u64) -> Result<String, String> {
+    let bytes = crate::shell_fs::read_regular_file_bounded(path, max_bytes)?;
+    String::from_utf8(bytes).map_err(|error| error.to_string())
+}
+
 fn package_hash(files: &[PackageFile]) -> Result<String, String> {
     let mut hasher = Sha256::new();
     for file in files {
         hasher.update(file.relative.to_string_lossy().as_bytes());
         hasher.update([0]);
-        let mut input =
-            fs::File::open(&file.absolute).map_err(|e| format!("读取技能文件失败：{e}"))?;
-        let mut buffer = [0u8; 8192];
-        loop {
-            let read = input
-                .read(&mut buffer)
-                .map_err(|e| format!("读取技能文件失败：{e}"))?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
-        }
+        let bytes = crate::shell_fs::read_regular_file_bounded(&file.absolute, file.size)
+            .map_err(|e| format!("读取技能文件失败：{e}"))?;
+        hasher.update(bytes);
         hasher.update([0xff]);
     }
     Ok(format!("{:x}", hasher.finalize()))
@@ -867,8 +921,24 @@ fn copy_package(source: &Path, target: &Path) -> Result<(), String> {
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("创建技能子目录失败：{e}"))?;
         }
-        fs::copy(&file.absolute, &destination)
+        let bytes = crate::shell_fs::read_regular_file_bounded(&file.absolute, file.size)
+            .map_err(|e| format!("读取技能文件 {} 失败：{e}", file.relative.display()))?;
+        let permissions = fs::metadata(&file.absolute)
+            .ok()
+            .map(|meta| meta.permissions());
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&destination)
+            .map_err(|e| format!("创建技能文件 {} 失败：{e}", file.relative.display()))?;
+        output
+            .write_all(&bytes)
+            .and_then(|_| output.flush())
             .map_err(|e| format!("复制技能文件 {} 失败：{e}", file.relative.display()))?;
+        if let Some(permissions) = permissions {
+            fs::set_permissions(&destination, permissions)
+                .map_err(|e| format!("设置技能文件权限 {} 失败：{e}", file.relative.display()))?;
+        }
     }
     Ok(())
 }
@@ -982,26 +1052,29 @@ fn find_managed_by_name_in(root: &Path, name: &str) -> Option<PathBuf> {
 }
 
 fn read_manifest(path: &Path) -> Option<InstallManifest> {
-    let bytes = fs::read(path.join(INSTALL_MANIFEST)).ok()?;
+    let bytes =
+        crate::shell_fs::read_regular_file_bounded(&path.join(INSTALL_MANIFEST), 1024 * 1024)
+            .ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
 fn clear_disabled_skill(name: &str) -> Result<(), String> {
-    let mut config = crate::providers::read_config();
-    let Some(root) = config.as_table_mut() else {
-        return Ok(());
-    };
-    let Some(skills) = root.get_mut("skills").and_then(|v| v.as_table_mut()) else {
-        return Ok(());
-    };
-    let Some(disabled) = skills.get_mut("disabled").and_then(|v| v.as_array_mut()) else {
-        return Ok(());
-    };
-    disabled.retain(|value| value.as_str() != Some(name));
-    if disabled.is_empty() {
-        skills.remove("disabled");
-    }
-    crate::providers::write_config(&config)
+    crate::providers::update_config(|config| {
+        let Some(root) = config.as_table_mut() else {
+            return Ok(());
+        };
+        let Some(skills) = root.get_mut("skills").and_then(|v| v.as_table_mut()) else {
+            return Ok(());
+        };
+        let Some(disabled) = skills.get_mut("disabled").and_then(|v| v.as_array_mut()) else {
+            return Ok(());
+        };
+        disabled.retain(|value| value.as_str() != Some(name));
+        if disabled.is_empty() {
+            skills.remove("disabled");
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -1027,6 +1100,30 @@ mod tests {
         assert_eq!(report.version.as_deref(), Some("1.2.3"));
         assert_eq!(report.risk_level, SkillRiskLevel::Low);
         assert_eq!(report.source_hash.len(), 64);
+    }
+
+    #[test]
+    fn directory_package_is_an_owned_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(dir.path(), "original body");
+        let prepared = prepare_package(dir.path()).unwrap();
+        write_skill(dir.path(), "changed after selection");
+
+        let snapshotted = fs::read_to_string(prepared.root.join("SKILL.md")).unwrap();
+        assert!(snapshotted.contains("original body"));
+        assert!(!snapshotted.contains("changed after selection"));
+    }
+
+    #[test]
+    fn install_approval_is_bound_to_the_inspected_hash() {
+        let hash = "a".repeat(64);
+        assert!(require_matching_source_hash(&hash, &hash).is_ok());
+        assert!(require_matching_source_hash(&hash, &"b".repeat(64))
+            .unwrap_err()
+            .contains("已发生变化"));
+        assert!(require_matching_source_hash("not-a-hash", &hash)
+            .unwrap_err()
+            .contains("指纹"));
     }
 
     #[test]

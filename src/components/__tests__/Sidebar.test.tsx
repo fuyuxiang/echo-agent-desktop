@@ -1,9 +1,18 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { resetOrgSessionMirror, useOrgSessionStore } from "@/stores/org-session-store";
+
+vi.mock("@/lib/agent-client", () => ({
+  agentRenameSession: vi.fn().mockResolvedValue(undefined),
+  agentDeleteSession: vi.fn().mockResolvedValue(undefined),
+  agentSetSessionPinned: vi.fn((_id: string, pinned: boolean) => Promise.resolve(pinned)),
+  agentSetSessionArchived: vi.fn((_id: string, archived: boolean) => Promise.resolve(archived)),
+  projectsLoad: vi.fn().mockResolvedValue([]),
+  projectsSave: vi.fn().mockResolvedValue(undefined),
+}));
 
 const base = {
   onNewSession: vi.fn(),
@@ -20,6 +29,24 @@ const base = {
 describe("Sidebar", () => {
   beforeEach(() => {
     resetOrgSessionMirror();
+    useSessionsStore.setState({
+      independent: [],
+      workspaces: [],
+      workspaceSessions: {},
+      tasksOpen: true,
+      spacesOpen: true,
+      expanded: {},
+      homeCwd: "/home",
+      currentSessionId: null,
+      loading: false,
+      error: null,
+      query: "",
+      filterStatus: null,
+      filterDate: null,
+      filterArchived: false,
+      pendingSessionPatches: {},
+      drafts: {},
+    });
   });
 
   it("渲染导航项", () => {
@@ -44,7 +71,6 @@ describe("Sidebar", () => {
     render(<Sidebar {...base} onSelect={onSelect} />);
     fireEvent.click(screen.getByText("测试会话"));
     expect(onSelect).toHaveBeenCalledWith("s1", "");
-    useSessionsStore.getState().setIndependent([]);
   });
 
   it("搜索按钮触发 onOpenSearch,设置按钮触发 onOpenSettings", () => {
@@ -107,6 +133,19 @@ describe("Sidebar", () => {
     expect(onToggleCollapse).toHaveBeenCalled();
   });
 
+  it("任务与空间折叠按钮暴露 aria-expanded 状态", () => {
+    render(<Sidebar {...base} />);
+    const tasks = screen.getByRole("button", { name: /^\u4efb\u52a1/ });
+    const spaces = screen.getByRole("button", { name: /^\u7a7a\u95f4/ });
+
+    expect(tasks).toHaveAttribute("aria-expanded", "true");
+    expect(spaces).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(tasks);
+    fireEvent.click(spaces);
+    expect(tasks).toHaveAttribute("aria-expanded", "false");
+    expect(spaces).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("hover「更多」只展示保留的功能入口", () => {
     const onNavigate = vi.fn();
     render(<Sidebar {...base} onNavigate={onNavigate} />);
@@ -144,5 +183,67 @@ describe("Sidebar", () => {
     expect(menu).toBeInTheDocument();
     fireEvent.click(screen.getByText("知识库"));
     expect(onNavigate).toHaveBeenCalledWith("知识库");
+  });
+
+  it("「更多」菜单支持方向键、Home/End 和 Escape 焦点回退", async () => {
+    const user = userEvent.setup();
+    render(<Sidebar {...base} />);
+    const trigger = screen.getByRole("button", { name: /更多/ });
+    trigger.focus();
+
+    await user.keyboard("{ArrowDown}");
+    const menu = screen.getByRole("menu", { name: "更多功能" });
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items[0]).toHaveFocus();
+
+    await user.keyboard("{ArrowDown}");
+    expect(items[1]).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(items[items.length - 1]).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(items[0]).toHaveFocus();
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menu", { name: "更多功能" })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("任务筛选菜单可用方向键打开、循环导航并用 Escape 关闭", async () => {
+    const user = userEvent.setup();
+    render(<Sidebar {...base} />);
+    const trigger = screen.getByRole("button", { name: "筛选任务" });
+    trigger.focus();
+
+    await user.keyboard("{ArrowUp}");
+    const menu = screen.getByRole("menu", { name: "任务筛选" });
+    const items = within(menu).getAllByRole("menuitemradio");
+    expect(items[items.length - 1]).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(items[0]).toHaveFocus();
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menu", { name: "任务筛选" })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("归档筛选可查看并恢复会话", async () => {
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "active", title: "活动会话", cwd: "/home", archived: false },
+      { sessionId: "archived", title: "归档会话", cwd: "/home", archived: true },
+    ]);
+    const onSessionArchived = vi.fn();
+    render(<Sidebar {...base} onSessionArchived={onSessionArchived} />);
+    expect(screen.getByText("活动会话")).toBeInTheDocument();
+    expect(screen.queryByText("归档会话")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "筛选任务" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "已归档会话" }));
+    expect(screen.getByText("归档会话")).toBeInTheDocument();
+    expect(screen.queryByTitle("活动会话")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "归档会话的会话操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /\u6062\u590d\u4f1a\u8bdd/ }));
+    await waitFor(() => expect(onSessionArchived).toHaveBeenCalledWith("archived", false));
+    expect(useSessionsStore.getState().independent.find((item) => item.sessionId === "archived")?.archived).toBe(false);
   });
 });

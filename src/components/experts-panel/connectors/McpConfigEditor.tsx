@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronLeftIcon } from "@/foundation/components/Icon/icons";
 import { mcpConfigPath, mcpConfigRead, mcpConfigSave } from "@/lib/agent-client";
 import { useSessionStore } from "@/stores/session-store";
+import { useAppDialog } from "../../AppDialog";
 
 const EMPTY = "{\n  \"mcpServers\": {}\n}";
 
@@ -23,6 +24,7 @@ export function McpConfigEditor({
   const [error, setError] = useState("");
   const gutterRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const { requestConfirmation, dialog } = useAppDialog();
 
   useEffect(() => {
     (async () => {
@@ -49,8 +51,17 @@ export function McpConfigEditor({
   };
 
   const doBack = () => {
-    if (hasChanges && !confirm("有未保存的修改，确定放弃？")) return;
-    onBack();
+    if (!hasChanges) {
+      onBack();
+      return;
+    }
+    requestConfirmation({
+      title: "放弃未保存的修改？",
+      description: "MCP 配置编辑器中的更改将丢失，原配置文件保持不变。",
+      confirmLabel: "放弃修改",
+      danger: true,
+      action: onBack,
+    });
   };
 
   const doSave = async () => {
@@ -119,6 +130,7 @@ export function McpConfigEditor({
         )}
         {error && <div className="mcp-editor-error">{error}</div>}
       </div>
+      {dialog}
     </div>
   );
 }

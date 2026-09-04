@@ -21,6 +21,7 @@ export const usePermissionStore = create<PermissionState>((set) => ({
     set((s) => {
       const sid = p.sessionId || "__global";
       const prev = s.queues[sid] ?? [];
+      if (prev.some((pending) => pending.requestId === p.requestId)) return s;
       return { queues: { ...s.queues, [sid]: [...prev, p] } };
     }),
   dismiss: (requestId, sessionId) =>

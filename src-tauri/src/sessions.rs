@@ -6,9 +6,23 @@
 //! hash fallback for long paths); rather than reproduce that exactly we scan
 //! ALL session directories and filter by the matching cwd inside summary.json.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+
+const MAX_SUMMARY_BYTES: u64 = 1024 * 1024;
+const MAX_CWD_DIRECTORIES: usize = 2_048;
+const MAX_SESSION_DIRECTORIES: usize = 20_000;
+const MAX_SESSION_RESULTS: usize = 10_000;
+const MAX_WORKSPACE_RESULTS: usize = 512;
+const MAX_TITLE_CHARS: usize = 512;
+const MAX_CWD_CHARS: usize = 4_096;
+const MAX_SESSION_ID_CHARS: usize = 256;
+const MAX_MODEL_ID_CHARS: usize = 256;
+const MAX_UPDATED_AT_CHARS: usize = 128;
+const MAX_EXPERT_ID_CHARS: usize = 256;
+const MAX_EXPERT_NAME_CHARS: usize = 512;
+const MAX_EXPERT_AVATAR_CHARS: usize = 4_096;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +100,80 @@ struct SummaryInfo {
     cwd: Option<String>,
 }
 
+fn bounded_text(value: String, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value;
+    }
+    value.chars().take(max_chars).collect()
+}
+
+fn safe_session_id(value: String) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > MAX_SESSION_ID_CHARS
+        || value.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn read_summary_file(path: &Path) -> Option<SummaryFile> {
+    let bytes = crate::shell_fs::read_regular_file_bounded(path, MAX_SUMMARY_BYTES).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn summary_cwd(summary: &SummaryFile) -> String {
+    summary
+        .cwd
+        .clone()
+        .or_else(|| summary.info.as_ref().and_then(|info| info.cwd.clone()))
+        .unwrap_or_default()
+}
+
+fn canonical_workspace(raw: &str) -> Option<PathBuf> {
+    if raw.is_empty() || raw.chars().count() > MAX_CWD_CHARS {
+        return None;
+    }
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return None;
+    }
+    let canonical = path.canonicalize().ok()?;
+    canonical.is_dir().then_some(canonical)
+}
+
+fn workspace_dir_matches_request(cwd_dir: &Path, raw_cwd: &str, canonical: Option<&Path>) -> bool {
+    let Some(dirname) = cwd_dir.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if dirname == xai_grok_shell::util::grok_home::encode_cwd_dirname(raw_cwd) {
+        return true;
+    }
+    canonical.is_some_and(|path| {
+        dirname == xai_grok_shell::util::grok_home::encode_cwd_dirname(&path.to_string_lossy())
+    })
+}
+
+fn authoritative_session_id(session_dir: &Path, summary: &SummaryFile) -> Option<String> {
+    let directory_id = safe_session_id(session_dir.file_name()?.to_str()?.to_string())?;
+    // A summary is data, not authority for locating a session. If it contains
+    // an id it must agree with its enclosing directory; otherwise a copied or
+    // forged summary could make workspace A authorize loading a session in B.
+    for claimed in [
+        summary.session_id.as_deref(),
+        summary.info.as_ref().and_then(|info| info.id.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if safe_session_id(claimed.to_string()).as_deref() != Some(directory_id.as_str()) {
+            return None;
+        }
+    }
+    Some(directory_id)
+}
+
 fn display_title(summary: &SummaryFile) -> Option<String> {
     let generated = summary
         .generated_title
@@ -98,90 +186,109 @@ fn display_title(summary: &SummaryFile) -> Option<String> {
     // already persisted before that filter existed.
     if summary.title_is_manual == Some(true) {
         if let Some(title) = generated {
-            return Some(title.to_string());
+            return Some(bounded_text(title.to_string(), MAX_TITLE_CHARS));
         }
     } else if let Some(title) = generated.and_then(crate::session_title::clean_auto_title) {
-        return Some(title);
+        return Some(bounded_text(title, MAX_TITLE_CHARS));
     }
 
     summary
         .summary
         .as_deref()
         .and_then(crate::session_title::clean_auto_title)
+        .map(|title| bounded_text(title, MAX_TITLE_CHARS))
 }
 
 /// List sessions for a given cwd. Reads `~/.echo-agent/sessions/**/*.json` and
 /// filters by cwd. Best-effort: missing/invalid entries are skipped.
-pub fn list_sessions(cwd: &str) -> Vec<SessionSummary> {
+pub fn list_sessions(cwd: &str, include_archived: bool) -> Vec<SessionSummary> {
     let sessions_root = agent_sessions_root();
     let mut out = Vec::new();
+    let requested_canonical = canonical_workspace(cwd);
+    let output_cwd = requested_canonical
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| bounded_text(cwd.to_string(), MAX_CWD_CHARS));
+    let mut visited_sessions = 0_usize;
 
     let Ok(cwd_dirs) = std::fs::read_dir(&sessions_root) else {
         return out;
     };
-    for cwd_entry in cwd_dirs.flatten() {
+    for cwd_entry in cwd_dirs.flatten().take(MAX_CWD_DIRECTORIES) {
         let cwd_path = cwd_entry.path();
-        if !cwd_path.is_dir() {
+        if !cwd_entry.file_type().is_ok_and(|kind| kind.is_dir()) {
             continue;
         }
         let Ok(session_dirs) = std::fs::read_dir(&cwd_path) else {
             continue;
         };
         for sess_entry in session_dirs.flatten() {
+            if visited_sessions >= MAX_SESSION_DIRECTORIES || out.len() >= MAX_SESSION_RESULTS {
+                break;
+            }
+            visited_sessions += 1;
             let sess_path = sess_entry.path();
+            if !sess_entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
             let summary_path = sess_path.join("summary.json");
-            let Ok(content) = std::fs::read_to_string(&summary_path) else {
+            let Some(s) = read_summary_file(&summary_path) else {
                 continue;
             };
-            let Ok(s) = serde_json::from_str::<SummaryFile>(&content) else {
+            // A present cwd must resolve to the requested workspace. Legacy
+            // summaries without cwd are accepted only from the exact encoded
+            // directory for the requested raw/canonical path; absence must
+            // never become a wildcard across every workspace.
+            let entry_cwd = summary_cwd(&s);
+            if entry_cwd.is_empty() {
+                if !workspace_dir_matches_request(&cwd_path, cwd, requested_canonical.as_deref()) {
+                    continue;
+                }
+            } else {
+                let entry_canonical = canonical_workspace(&entry_cwd);
+                if !workspace_dir_matches_request(&cwd_path, &entry_cwd, entry_canonical.as_deref())
+                {
+                    continue;
+                }
+                let same_workspace = match (requested_canonical.as_ref(), entry_canonical.as_ref())
+                {
+                    (Some(requested), Some(entry)) => requested == entry,
+                    _ => entry_cwd == cwd,
+                };
+                if !same_workspace {
+                    continue;
+                }
+            }
+            let Some(session_id) = authoritative_session_id(&sess_path, &s) else {
                 continue;
             };
-            // Filter by cwd: trust summary.json's `cwd` (or nested `info.cwd`)
-            // since the encoded dirname is not reliably reversible.
-            let entry_cwd = s
-                .cwd
-                .clone()
-                .or_else(|| s.info.as_ref().and_then(|i| i.cwd.clone()))
-                .unwrap_or_default();
-            if !entry_cwd.is_empty() && entry_cwd != cwd {
-                continue;
-            }
-            let session_id = s
-                .session_id
-                .clone()
-                .or_else(|| s.info.as_ref().and_then(|i| i.id.clone()))
-                .or_else(|| {
-                    sess_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(String::from)
-                })
-                .unwrap_or_default();
-            if session_id.is_empty() {
-                continue;
-            }
             // Title: generated_title wins over legacy `summary`. This matches
             // EchoAgent's display_title precedence (persistence.rs:961-968).
             let title = display_title(&s).unwrap_or_else(|| "未命名会话".into());
-            let updated_at = s.updated_at.clone().or_else(|| s.last_active_at.clone());
+            let updated_at = s
+                .updated_at
+                .clone()
+                .or_else(|| s.last_active_at.clone())
+                .map(|value| bounded_text(value, MAX_UPDATED_AT_CHARS));
             let is_git_repo = s.git_root_dir.as_ref().map(|p| !p.is_empty());
             out.push(SessionSummary {
                 session_id,
                 title,
                 updated_at,
-                cwd: if entry_cwd.is_empty() {
-                    cwd.to_string()
-                } else {
-                    entry_cwd
-                },
+                cwd: output_cwd.clone(),
                 is_git_repo,
                 pinned: None,
                 archived: None,
-                current_model_id: s.current_model_id.clone(),
+                current_model_id: s
+                    .current_model_id
+                    .map(|value| bounded_text(value, MAX_MODEL_ID_CHARS)),
                 expert_id: None,
                 expert_name: None,
                 expert_avatar: None,
             });
+        }
+        if visited_sessions >= MAX_SESSION_DIRECTORIES || out.len() >= MAX_SESSION_RESULTS {
+            break;
         }
     }
     // Merge EchoAgent-only pinned/archived state (sidecar file, since EchoAgent's
@@ -190,15 +297,21 @@ pub fn list_sessions(cwd: &str) -> Vec<SessionSummary> {
     let pinned = state.pinned_set();
     let archived = state.archived_set();
     let experts = state.expert_map();
-    // Archived sessions are hidden from the sidebar entirely.
-    out.retain(|entry| !archived.contains(&entry.session_id));
+    // Keep the historical default (hide archived), while allowing the archive
+    // view to request the same authoritative rows with `archived: true`.
+    apply_archive_visibility(&mut out, &archived, include_archived);
     for entry in &mut out {
         entry.pinned = Some(pinned.contains(&entry.session_id));
-        entry.archived = Some(false);
         if let Some(binding) = experts.get(&entry.session_id) {
-            entry.expert_id = Some(binding.expert_id.clone());
-            entry.expert_name = Some(binding.expert_name.clone());
-            entry.expert_avatar = binding.avatar_local.clone();
+            entry.expert_id = Some(bounded_text(binding.expert_id.clone(), MAX_EXPERT_ID_CHARS));
+            entry.expert_name = Some(bounded_text(
+                binding.expert_name.clone(),
+                MAX_EXPERT_NAME_CHARS,
+            ));
+            entry.expert_avatar = binding
+                .avatar_local
+                .clone()
+                .map(|value| bounded_text(value, MAX_EXPERT_AVATAR_CHARS));
         }
     }
     // Sort: pinned first, then by updated_at descending (falling back to the
@@ -214,6 +327,19 @@ pub fn list_sessions(cwd: &str) -> Vec<SessionSummary> {
             })
     });
     out
+}
+
+fn apply_archive_visibility(
+    sessions: &mut Vec<SessionSummary>,
+    archived: &std::collections::HashSet<String>,
+    include_archived: bool,
+) {
+    if !include_archived {
+        sessions.retain(|entry| !archived.contains(&entry.session_id));
+    }
+    for entry in sessions {
+        entry.archived = Some(archived.contains(&entry.session_id));
+    }
 }
 
 /// A discovered workspace (working directory EchoAgent has run sessions in).
@@ -239,29 +365,49 @@ pub fn list_workspaces() -> Vec<WorkspaceInfo> {
     // cwd -> (count, last_title)
     let mut map: std::collections::HashMap<String, (usize, Option<String>)> =
         std::collections::HashMap::new();
+    let mut visited_sessions = 0_usize;
 
     let Ok(cwd_dirs) = std::fs::read_dir(&sessions_root) else {
         return Vec::new();
     };
-    for cwd_entry in cwd_dirs.flatten() {
+    for cwd_entry in cwd_dirs.flatten().take(MAX_CWD_DIRECTORIES) {
         let cwd_path = cwd_entry.path();
-        if !cwd_path.is_dir() {
+        if !cwd_entry.file_type().is_ok_and(|kind| kind.is_dir()) {
             continue;
         }
         let Ok(session_dirs) = std::fs::read_dir(&cwd_path) else {
             continue;
         };
         for sess_entry in session_dirs.flatten() {
-            let summary_path = sess_entry.path().join("summary.json");
-            let Ok(content) = std::fs::read_to_string(&summary_path) else {
+            if visited_sessions >= MAX_SESSION_DIRECTORIES {
+                break;
+            }
+            visited_sessions += 1;
+            if !sess_entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let session_path = sess_entry.path();
+            let summary_path = session_path.join("summary.json");
+            let Some(s) = read_summary_file(&summary_path) else {
                 continue;
             };
-            let Ok(s) = serde_json::from_str::<SummaryFile>(&content) else {
+            if authoritative_session_id(&session_path, &s).is_none() {
                 continue;
-            };
+            }
             let title = display_title(&s);
-            let entry_cwd = s.cwd.unwrap_or_default();
-            if entry_cwd.is_empty() {
+            let entry_cwd = summary_cwd(&s);
+            let Some(entry_cwd) = canonical_workspace(&entry_cwd) else {
+                continue;
+            };
+            if !workspace_dir_matches_request(
+                &cwd_path,
+                &summary_cwd(&s),
+                Some(entry_cwd.as_path()),
+            ) {
+                continue;
+            }
+            let entry_cwd = entry_cwd.to_string_lossy().into_owned();
+            if !map.contains_key(&entry_cwd) && map.len() >= MAX_WORKSPACE_RESULTS {
                 continue;
             }
             let entry = map.entry(entry_cwd).or_insert((0, None));
@@ -270,6 +416,9 @@ pub fn list_workspaces() -> Vec<WorkspaceInfo> {
             if let Some(title) = title {
                 entry.1 = Some(title);
             }
+        }
+        if visited_sessions >= MAX_SESSION_DIRECTORIES {
+            break;
         }
     }
 
@@ -287,6 +436,7 @@ pub fn list_workspaces() -> Vec<WorkspaceInfo> {
             .cmp(&a.session_count)
             .then(a.cwd.cmp(&b.cwd))
     });
+    out.truncate(MAX_WORKSPACE_RESULTS);
     out
 }
 
@@ -296,10 +446,44 @@ fn agent_sessions_root() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_title, SummaryFile};
+    use super::{
+        apply_archive_visibility, authoritative_session_id, display_title, read_summary_file,
+        summary_cwd, workspace_dir_matches_request, SessionSummary, SummaryFile, MAX_SUMMARY_BYTES,
+        MAX_TITLE_CHARS,
+    };
 
     fn summary(json: &str) -> SummaryFile {
         serde_json::from_str(json).expect("valid summary fixture")
+    }
+
+    fn session(id: &str) -> SessionSummary {
+        SessionSummary {
+            session_id: id.into(),
+            title: id.into(),
+            updated_at: None,
+            cwd: "/tmp".into(),
+            is_git_repo: None,
+            pinned: None,
+            archived: None,
+            current_model_id: None,
+            expert_id: None,
+            expert_name: None,
+            expert_avatar: None,
+        }
+    }
+
+    #[test]
+    fn archived_sessions_are_opt_in_and_marked_authoritatively() {
+        let archived = std::collections::HashSet::from(["archived".to_string()]);
+        let mut default_rows = vec![session("active"), session("archived")];
+        apply_archive_visibility(&mut default_rows, &archived, false);
+        assert_eq!(default_rows.len(), 1);
+        assert_eq!(default_rows[0].archived, Some(false));
+
+        let mut all_rows = vec![session("active"), session("archived")];
+        apply_archive_visibility(&mut all_rows, &archived, true);
+        assert_eq!(all_rows.len(), 2);
+        assert_eq!(all_rows[1].archived, Some(true));
     }
 
     #[test]
@@ -347,5 +531,74 @@ mod tests {
             display_title(&parsed).as_deref(),
             Some("Document <think> XML tag")
         );
+    }
+
+    #[test]
+    fn nested_info_cwd_is_preserved_for_workspace_recovery() {
+        let parsed = summary(r#"{"info":{"cwd":"/tmp/nested"}}"#);
+        assert_eq!(summary_cwd(&parsed), "/tmp/nested");
+    }
+
+    #[test]
+    fn missing_summary_cwd_only_matches_its_authoritative_encoded_directory() {
+        let requested = "/tmp/project-a";
+        let matching = std::path::PathBuf::from(
+            xai_grok_shell::util::grok_home::encode_cwd_dirname(requested),
+        );
+        let other = std::path::PathBuf::from(xai_grok_shell::util::grok_home::encode_cwd_dirname(
+            "/tmp/project-b",
+        ));
+        assert!(workspace_dir_matches_request(&matching, requested, None));
+        assert!(!workspace_dir_matches_request(&other, requested, None));
+    }
+
+    #[test]
+    fn summary_cannot_claim_another_session_directory_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_dir = temp.path().join("authoritative-id");
+        let matching = summary(r#"{"session_id":"authoritative-id"}"#);
+        assert_eq!(
+            authoritative_session_id(&session_dir, &matching).as_deref(),
+            Some("authoritative-id")
+        );
+
+        let forged = summary(r#"{"session_id":"different-session"}"#);
+        assert!(authoritative_session_id(&session_dir, &forged).is_none());
+        let nested = summary(r#"{"info":{"id":"different-session"}}"#);
+        assert!(authoritative_session_id(&session_dir, &nested).is_none());
+    }
+
+    #[test]
+    fn persisted_titles_are_bounded_before_reaching_the_renderer() {
+        let long = "x".repeat(MAX_TITLE_CHARS + 100);
+        let parsed = summary(&format!(
+            r#"{{"generated_title":"{long}","title_is_manual":true}}"#
+        ));
+        assert_eq!(
+            display_title(&parsed).unwrap().chars().count(),
+            MAX_TITLE_CHARS
+        );
+    }
+
+    #[test]
+    fn oversized_summary_is_rejected_before_json_allocation() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("summary.json");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_SUMMARY_BYTES + 1).unwrap();
+        assert!(read_summary_file(&path).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn summary_symlink_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target.json");
+        let link = temp.path().join("summary.json");
+        std::fs::write(&target, r#"{"session_id":"secret"}"#).unwrap();
+        symlink(target, &link).unwrap();
+        assert!(read_summary_file(&link).is_none());
     }
 }

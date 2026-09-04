@@ -5,7 +5,8 @@
  * 以完全访问权限创建（或从默认权限升级为完全访问）前必须勾选
  * 「我已了解风险…」才能确认创建；也可一键「改为「默认权限」运行 →」。
  */
-import { useCallback, useState } from "react";
+import { useCallback, useId, useState } from "react";
+import { useModalFocus } from "@/lib/use-modal-focus";
 import { Checkbox } from "./controls";
 
 function WarningIcon() {
@@ -43,23 +44,30 @@ export function AutomationPermissionConfirmDialog({
     onFallbackToDefault?.();
     setAcknowledged(false);
   }, [onFallbackToDefault]);
+  const titleId = useId();
+  const descriptionId = useId();
+  const dialogRef = useModalFocus<HTMLDivElement>(open, handleCancel);
 
   if (!open) return null;
   return (
     <div className="modal-overlay automation-permission-confirm__overlay" onClick={handleCancel}>
       <div
+        ref={dialogRef}
         className="automation-permission-confirm__dialog"
         onClick={(e) => e.stopPropagation()}
-        role="dialog"
+        role="alertdialog"
         aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        tabIndex={-1}
       >
         <div className="automation-permission-confirm__header">
           <span className="automation-permission-confirm__icon">
             <WarningIcon />
           </span>
-          <h3 className="automation-permission-confirm__title">这条自动化任务将以完全访问权限运行</h3>
+          <h3 id={titleId} className="automation-permission-confirm__title">这条自动化任务将以完全访问权限运行</h3>
         </div>
-        <p className="automation-permission-confirm__desc">
+        <p id={descriptionId} className="automation-permission-confirm__desc">
           你手动选择了完全访问权限。这不是默认选项，它意味着 AI 可以在无人值守时直接：
         </p>
         <ul className="automation-permission-confirm__list">
@@ -84,7 +92,12 @@ export function AutomationPermissionConfirmDialog({
             </button>
           )}
           <div className="automation-permission-confirm__actions-right">
-            <button type="button" className="atm-btn atm-btn--secondary" onClick={handleCancel}>
+            <button
+              type="button"
+              className="atm-btn atm-btn--secondary"
+              onClick={handleCancel}
+              data-modal-initial-focus
+            >
               取消
             </button>
             <button

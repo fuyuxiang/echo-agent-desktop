@@ -75,6 +75,40 @@ foreach ($cmd in @("pnpm", "cargo", "rustc")) {
 }
 Log-Ok "Core tools present"
 
+# Prefer an explicitly configured protoc, then PATH, then the documented
+# Windows install location. Do not put this machine-specific path in Cargo's
+# repository config: Cargo also reads that config on macOS and Linux.
+$protoc = $null
+if ($env:PROTOC) {
+    if (Test-Path $env:PROTOC) {
+        $protoc = $env:PROTOC
+    } else {
+        Log-Err "PROTOC points to a missing file: $env:PROTOC"
+        exit 1
+    }
+} else {
+    $protocCommand = Get-Command protoc.exe -ErrorAction SilentlyContinue
+    if ($protocCommand) {
+        $protoc = $protocCommand.Source
+    } else {
+        $defaultProtoc = "C:\Tools\protoc\bin\protoc.exe"
+        if (Test-Path $defaultProtoc) {
+            $env:PROTOC = $defaultProtoc
+            $protoc = $defaultProtoc
+        }
+    }
+}
+if (-not $protoc) {
+    Log-Err "protoc not found. Install protobuf, add protoc.exe to PATH, or set PROTOC."
+    exit 1
+}
+$protocVersion = & $protoc --version
+if ($LASTEXITCODE -ne 0) {
+    Log-Err "protoc failed to run: $protoc"
+    exit $LASTEXITCODE
+}
+Log-Ok "protoc available: $protocVersion ($protoc)"
+
 # ---------------------------------------------------------------------------
 # 3. MSVC environment (cargo x86_64-pc-windows-msvc needs link.exe + SDK).
 #    Reuses the same vcvars/vswhere dance as dev.bat.

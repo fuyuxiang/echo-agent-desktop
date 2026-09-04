@@ -36,14 +36,14 @@ describe("PlaceholderPage", () => {
     ["专家·技能·连接器", "experts"],
     ["技能", "skills"],
     ["连接器", "connectors"],
-  ])("Slash 路由「%s」直达 %s 页签", (label, tab) => {
+  ])("Slash 路由「%s」直达 %s 页签", async (label, tab) => {
     render(<PlaceholderPage label={label} />);
-    expect(screen.getByTestId("experts-panel")).toHaveTextContent(tab);
+    expect(await screen.findByTestId("experts-panel")).toHaveTextContent(tab);
   });
 
-  it("插件市场 Slash 路由直达市场页签", () => {
+  it("插件市场 Slash 路由直达市场页签", async () => {
     render(<PlaceholderPage label="插件市场" />);
-    expect(screen.getByText("plugin marketplace")).toBeInTheDocument();
+    expect(await screen.findByText("plugin marketplace")).toBeInTheDocument();
     expect(screen.queryByText("installed plugins")).not.toBeInTheDocument();
   });
 });
