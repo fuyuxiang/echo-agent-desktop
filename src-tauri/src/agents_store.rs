@@ -165,10 +165,20 @@ fn parse_frontmatter(raw: &str) -> AgentFrontmatter {
             continue;
         };
         let k = k.trim();
-        let v = v.trim().trim_matches('"').trim_matches('\'');
+        let v = v.trim();
         match k {
-            "name" if !v.is_empty() => fm.name = Some(v.to_string()),
-            "description" if !v.is_empty() => fm.description = Some(v.to_string()),
+            "name" => {
+                let parsed = parse_scalar(v);
+                if !parsed.is_empty() {
+                    fm.name = Some(parsed);
+                }
+            }
+            "description" => {
+                let parsed = parse_scalar(v);
+                if !parsed.is_empty() {
+                    fm.description = Some(parsed);
+                }
+            }
             "avatar" => {
                 if let Ok(n) = v.parse::<u32>() {
                     fm.avatar = Some(n);
@@ -255,10 +265,13 @@ pub fn agents_get(path: String) -> Result<String, String> {
 /// The caller supplies the full markdown body (frontmatter + prompt).
 #[tauri::command]
 pub fn agents_save(name: String, raw: String) -> Result<AgentEntry, String> {
-    let safe_name = sanitize_name(&name);
-    if safe_name.is_empty() {
-        return Err("agent name must not be empty".into());
+    // Only a blank name is rejected. The slug is derived separately and always
+    // resolves to something writable, so a valid display name in any script
+    // (e.g. "代码专家") can be saved.
+    if name.trim().is_empty() {
+        return Err("助理名称不能为空".into());
     }
+    let safe_name = slug_for_agent(&name);
     if raw.len() > 1024 * 1024 {
         return Err("Agent 定义不能超过 1 MB".into());
     }
@@ -269,7 +282,10 @@ pub fn agents_save(name: String, raw: String) -> Result<AgentEntry, String> {
     crate::paths::harden_private_file(&path)?;
     let fm = parse_frontmatter(&raw);
     Ok(AgentEntry {
-        name: fm.name.unwrap_or(safe_name),
+        // Fall back to the caller's display name, never the slug: the slug is a
+        // filename detail and showing it would surface "dai-ma-zhuan-jia"-style
+        // stems (or a hash) in the UI.
+        name: fm.name.unwrap_or_else(|| name.trim().to_string()),
         description: fm.description,
         scope: "user".into(),
         path: path.to_string_lossy().into_owned(),
@@ -299,10 +315,14 @@ pub fn agents_template(
     avatar: Option<u32>,
     model_tags: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let safe = sanitize_name(&name);
+    // Write the display name verbatim (quoted), not the filename slug: this
+    // field is what the UI lists and what `resolve_agent_prompt` matches on, so
+    // slugging it here silently renamed every non-ASCII assistant and broke the
+    // automation prompt lookup.
     let mut fm = format!(
-        "---\nname: {safe}\ndescription: {}\n",
-        description.replace('\n', " ")
+        "---\nname: {}\ndescription: {}\n",
+        yaml_scalar(name.trim()),
+        yaml_scalar(&description)
     );
     if let Some(a) = avatar {
         fm.push_str(&format!("avatar: {a}\n"));
@@ -318,17 +338,205 @@ pub fn agents_template(
     Ok(fm)
 }
 
-/// Normalize an agent name for use as a filename. EchoAgent's `normalize_skill_name`
-/// lowercases and allows `[a-z0-9-]`; we apply the same rule to agent names.
+/// Longest slug we will write, in bytes. Well under the 255-byte per-component
+/// limit of ext4/APFS/NTFS once `.md` and a dedupe suffix are appended.
+const MAX_SLUG_BYTES: usize = 120;
+
+/// Characters that are unsafe in a path component on Windows or POSIX.
+fn is_unsafe_filename_char(c: char) -> bool {
+    matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        || c.is_control()
+        || c.is_whitespace()
+}
+
+/// Derive a filesystem-safe slug from an agent's display name.
+///
+/// This deliberately preserves non-ASCII letters (CJK included) instead of
+/// stripping them: every filesystem we target stores UTF-8 filenames, and the
+/// old `[a-z0-9-]`-only rule reduced a purely Chinese name such as "代码专家"
+/// to the empty string, which made saving it impossible. Only genuinely unsafe
+/// path characters are folded to `-`.
+///
+/// Returns an empty string when nothing usable survives (e.g. a name made
+/// entirely of punctuation); callers must supply their own fallback rather than
+/// writing a file with no stem — see [`slug_for_agent`].
 fn sanitize_name(name: &str) -> String {
-    name.trim()
-        .to_lowercase()
-        .chars()
-        .map(|c| match c {
-            'a'..='z' | '0'..='9' => c,
-            _ => '-',
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string()
+    let mut slug = String::new();
+    let mut pending_dash = false;
+    for ch in name.trim().chars() {
+        // Fold separators and unsafe characters into a single `-` so
+        // "产品经理 （副本）" does not become a run of dashes.
+        if is_unsafe_filename_char(ch) || ch == '-' || ch == '.' {
+            pending_dash = !slug.is_empty();
+            continue;
+        }
+        let lowered = ch.to_lowercase().next().unwrap_or(ch);
+        if slug.len() + lowered.len_utf8() + usize::from(pending_dash) > MAX_SLUG_BYTES {
+            break;
+        }
+        if pending_dash {
+            slug.push('-');
+            pending_dash = false;
+        }
+        slug.push(lowered);
+    }
+    // Never hand back `.`/`..`-like stems, which are not valid filenames.
+    slug.trim_matches('-').to_string()
+}
+
+/// Short stable hash used to name agents whose display name yields no slug.
+fn fallback_slug(name: &str) -> String {
+    // FNV-1a: tiny, dependency-free, and stable across runs so re-saving the
+    // same name overwrites its own file instead of piling up duplicates.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in name.trim().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("agent-{hash:016x}")
+}
+
+/// Filename stem for an agent, guaranteed non-empty for any non-blank name.
+fn slug_for_agent(name: &str) -> String {
+    let slug = sanitize_name(name);
+    if slug.is_empty() {
+        fallback_slug(name)
+    } else {
+        slug
+    }
+}
+
+/// Escape a display name for a single-line YAML scalar value.
+///
+/// Quoting is what lets a name containing `:` or `#` survive a round trip, and
+/// it must stay symmetric with [`parse_scalar`].
+fn yaml_scalar(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace(['\n', '\r'], " ");
+    format!("\"{escaped}\"")
+}
+
+/// Read a single-line YAML scalar: unwrap one layer of matching quotes and undo
+/// the escaping applied by [`yaml_scalar`]. Unquoted legacy values pass through
+/// unchanged, so agent files written before quoting still parse.
+fn parse_scalar(value: &str) -> String {
+    let value = value.trim();
+    let quote = match value.chars().next() {
+        Some(q @ ('"' | '\'')) if value.len() >= 2 && value.ends_with(q) => q,
+        // Unquoted (or unbalanced): take it literally, matching the old parser.
+        _ => return value.to_string(),
+    };
+    let inner = &value[1..value.len() - 1];
+    if quote == '\'' {
+        // YAML single-quoted style has no backslash escapes.
+        return inner.replace("''", "'");
+    }
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            // Covers the `\\` and `\"` pairs that yaml_scalar emits.
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cjk_names_keep_a_usable_slug() {
+        // Regression: the old `[a-z0-9-]`-only rule emptied these, so saving a
+        // Chinese-named assistant failed with "agent name must not be empty".
+        assert_eq!(sanitize_name("代码专家"), "代码专家");
+        assert_eq!(sanitize_name("产品经理（副本）"), "产品经理（副本）");
+        assert!(!slug_for_agent("代码专家").is_empty());
+    }
+
+    #[test]
+    fn mixed_and_ascii_names_normalize() {
+        assert_eq!(sanitize_name("Code Reviewer"), "code-reviewer");
+        assert_eq!(sanitize_name("数据分析 Pro"), "数据分析-pro");
+        assert_eq!(sanitize_name("  spaced  out  "), "spaced-out");
+    }
+
+    #[test]
+    fn unsafe_path_characters_are_folded() {
+        assert_eq!(sanitize_name("a/b"), "a-b");
+        assert_eq!(sanitize_name("../../etc/passwd"), "etc-passwd");
+        assert_eq!(sanitize_name("a:b*c?d\"e<f>g|h"), "a-b-c-d-e-f-g-h");
+        assert_eq!(sanitize_name(".."), "");
+        assert_eq!(sanitize_name("."), "");
+        // A slug can never reintroduce a path separator or traversal.
+        for name in ["../x", "..", "a/../b", "C:\\x"] {
+            let slug = slug_for_agent(name);
+            assert!(!slug.is_empty());
+            assert!(!slug.contains('/') && !slug.contains('\\') && slug != ".." && slug != ".");
+        }
+    }
+
+    #[test]
+    fn names_with_no_usable_slug_fall_back_to_a_stable_hash() {
+        // Every character here is either unsafe or stripped, so the slug is
+        // empty and the hash fallback is what keeps the save working.
+        let slug = slug_for_agent("...");
+        assert!(slug.starts_with("agent-"), "unexpected slug {slug:?}");
+        // Stable across calls so re-saving overwrites rather than duplicating.
+        assert_eq!(slug, slug_for_agent("..."));
+        assert_ne!(slug, slug_for_agent("///"));
+        // `!` is legal in a filename, so it must NOT be forced onto the fallback.
+        assert_eq!(slug_for_agent("!!!"), "!!!");
+    }
+
+    #[test]
+    fn slug_is_length_capped_on_a_char_boundary() {
+        let slug = slug_for_agent(&"代".repeat(200));
+        assert!(slug.len() <= MAX_SLUG_BYTES, "slug was {} bytes", slug.len());
+        // Truncation must not split a multi-byte char (String would panic).
+        assert!(slug.chars().all(|c| c == '代'));
+    }
+
+    #[test]
+    fn template_roundtrips_the_display_name_not_the_slug() {
+        let raw = agents_template(
+            "代码专家".into(),
+            "帮忙审查代码".into(),
+            "你是一名代码审查专家。".into(),
+            Some(3),
+            Some(vec!["default".into()]),
+        )
+        .expect("template");
+        let fm = parse_frontmatter(&raw);
+        assert_eq!(fm.name.as_deref(), Some("代码专家"));
+        assert_eq!(fm.description.as_deref(), Some("帮忙审查代码"));
+        assert_eq!(fm.avatar, Some(3));
+        assert_eq!(fm.model_tags, vec!["default".to_string()]);
+    }
+
+    #[test]
+    fn quoted_scalars_survive_special_characters() {
+        // `:` and `#` in a name previously truncated or corrupted the value.
+        for name in ["a: b", "say \"hi\"", "back\\slash", "tag#1", "中文: 值"] {
+            let line = yaml_scalar(name);
+            assert_eq!(parse_scalar(&line), name, "roundtrip failed for {name:?}");
+        }
+    }
+
+    #[test]
+    fn unquoted_legacy_frontmatter_still_parses() {
+        let fm = parse_frontmatter("---\nname: legacy-agent\ndescription: old style\n---\n\nbody\n");
+        assert_eq!(fm.name.as_deref(), Some("legacy-agent"));
+        assert_eq!(fm.description.as_deref(), Some("old style"));
+    }
 }
