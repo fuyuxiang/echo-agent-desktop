@@ -1062,14 +1062,18 @@ export async function promptHistory(limit?: number): Promise<string[]> {
 
 // ---------- tasks / subagents ----------
 
-/** List running background tasks / subagents. */
-export async function tasksList(): Promise<RunningTask[]> {
-  return invoke<RunningTask[]>("tasks_list");
+/** List running background tasks / subagents owned by one live session. */
+export async function tasksList(sessionId: string): Promise<RunningTask[]> {
+  return invoke<RunningTask[]>("tasks_list", { sessionId });
 }
 
 /** Kill a running task or subagent. */
-export async function taskKill(taskId: string): Promise<void> {
-  await invoke<void>("task_kill", { taskId });
+export async function taskKill(
+  sessionId: string,
+  taskId: string,
+  source: RunningTask["source"],
+): Promise<void> {
+  await invoke<void>("task_kill", { sessionId, taskId, source });
 }
 
 export interface RuntimeTeamInfo {

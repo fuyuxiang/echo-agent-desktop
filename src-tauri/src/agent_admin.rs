@@ -1189,6 +1189,7 @@ pub async fn prompt_history(
 #[serde(rename_all = "camelCase")]
 pub struct RunningTask {
     pub id: String,
+    pub source: RunningTaskSource,
     #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
@@ -1199,72 +1200,158 @@ pub struct RunningTask {
     pub session_id: Option<String>,
 }
 
-/// List running background tasks / subagents. Powers a "running tasks" panel.
-#[tauri::command]
-pub async fn tasks_list(state: State<'_, AppState>) -> Result<Vec<RunningTask>, String> {
-    let tx = state
-        .tx
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("agent not initialized")?;
-    let params = raw_params(&serde_json::json!({}));
-    // Try task/list first; some EchoAgent builds only expose subagent/list_running.
-    let v: serde_json::Value = match call_ext(&tx, "echo.agent/task/list", params.clone()).await {
-        Ok(v) => v,
-        Err(_) => call_ext(&tx, "echo.agent/subagent/list_running", params)
-            .await
-            .map_err(|e| e.to_string())?,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunningTaskSource {
+    Task,
+    Subagent,
+}
+
+fn parse_running_tasks(
+    value: &serde_json::Value,
+    requested_session_id: &str,
+    source: RunningTaskSource,
+) -> Vec<RunningTask> {
+    let collection_key = match source {
+        RunningTaskSource::Task => "tasks",
+        RunningTaskSource::Subagent => "subagents",
     };
-    validate_admin_response(&v)?;
-    let arr = v
-        .get("tasks")
-        .or_else(|| v.get("subagents"))
-        .and_then(|x| x.as_array())
-        .or_else(|| v.as_array());
-    let Some(arr) = arr else {
-        return Ok(Vec::new());
+    let Some(rows) = value
+        .get(collection_key)
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| value.as_array())
+    else {
+        return Vec::new();
     };
-    Ok(arr
-        .iter()
+
+    rows.iter()
         .take(MAX_ADMIN_RESULTS)
         .filter_map(|item| {
+            // task/list returns terminal history as well as live processes. The
+            // floating panel must contain only work the user can still stop.
+            if source == RunningTaskSource::Task
+                && item.get("completed").and_then(serde_json::Value::as_bool) == Some(true)
+            {
+                return None;
+            }
             let id = item
                 .get("id")
                 .or_else(|| item.get("taskId"))
+                .or_else(|| item.get("task_id"))
                 .or_else(|| item.get("subagentId"))
+                .or_else(|| item.get("subagent_id"))
                 .and_then(|value| value.as_str())?;
             if !valid_admin_id(id) {
                 return None;
             }
+
+            let reported_session_id = item
+                .get("sessionId")
+                .or_else(|| item.get("session_id"))
+                .or_else(|| item.get("ownerSessionId"))
+                .or_else(|| item.get("owner_session_id"))
+                .or_else(|| item.get("parentSessionId"))
+                .or_else(|| item.get("parent_session_id"))
+                .and_then(serde_json::Value::as_str);
+            // Parent and child agents can share a terminal backend. Do not
+            // expose another session's process in the active session panel.
+            if reported_session_id.is_some_and(|id| id != requested_session_id) {
+                return None;
+            }
+
+            let kind = match source {
+                RunningTaskSource::Task => item.get("kind"),
+                RunningTaskSource::Subagent => item
+                    .get("subagentType")
+                    .or_else(|| item.get("subagent_type")),
+            };
+            let description = item
+                .get("description")
+                .or_else(|| item.get("displayCommand"))
+                .or_else(|| item.get("display_command"))
+                .or_else(|| item.get("command"));
+            let status = item
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("running");
             Some(RunningTask {
                 id: id.to_string(),
-                kind: item
-                    .get("kind")
-                    .and_then(|s| s.as_str())
+                source,
+                kind: kind
+                    .and_then(serde_json::Value::as_str)
                     .map(|value| bounded_text(value.to_string(), 256)),
-                description: item
-                    .get("description")
-                    .and_then(|s| s.as_str())
+                description: description
+                    .and_then(serde_json::Value::as_str)
                     .map(|value| bounded_text(value.to_string(), 4_096)),
-                status: item
-                    .get("status")
-                    .and_then(|s| s.as_str())
-                    .map(|value| bounded_text(value.to_string(), 256)),
-                session_id: item
-                    .get("sessionId")
-                    .and_then(|s| s.as_str())
-                    .map(|value| bounded_text(value.to_string(), MAX_ADMIN_ID_CHARS)),
+                status: Some(bounded_text(status.to_string(), 256)),
+                session_id: Some(requested_session_id.to_string()),
             })
         })
-        .collect())
+        .collect()
 }
 
-/// Kill a running background task or subagent.
+async fn list_running_tasks(
+    tx: &xai_acp_lib::AcpAgentTx,
+    session_id: &str,
+) -> Result<Vec<RunningTask>, String> {
+    let params = raw_params(&serde_json::json!({ "sessionId": session_id }));
+
+    // Background terminal tasks and subagents are separate catalogs. Query
+    // both; an older runtime may lack one endpoint, so retain the other result.
+    let task_result =
+        call_ext::<serde_json::Value>(tx, "echo.agent/task/list", params.clone()).await;
+    let subagent_result =
+        call_ext::<serde_json::Value>(tx, "echo.agent/subagent/list_running", params).await;
+
+    let mut tasks = Vec::new();
+    let mut successful_endpoints = 0_u8;
+    let mut failures = Vec::new();
+    for (method, source, result) in [
+        ("echo.agent/task/list", RunningTaskSource::Task, task_result),
+        (
+            "echo.agent/subagent/list_running",
+            RunningTaskSource::Subagent,
+            subagent_result,
+        ),
+    ] {
+        match result {
+            Ok(value) => match validate_admin_response(&value) {
+                Ok(()) => {
+                    successful_endpoints += 1;
+                    tasks.extend(parse_running_tasks(&value, session_id, source));
+                }
+                Err(error) => failures.push(format!("{method}: {error}")),
+            },
+            Err(error) => failures.push(format!("{method}: {error}")),
+        }
+    }
+
+    if successful_endpoints == 0 {
+        return Err(format!("运行中任务查询失败：{}", failures.join("；")));
+    }
+    for failure in failures {
+        tracing::warn!(%failure, "one running-task endpoint was unavailable");
+    }
+
+    let mut seen = HashSet::new();
+    tasks.retain(|task| seen.insert((task.source, task.id.clone())));
+    tasks.truncate(MAX_ADMIN_RESULTS);
+    Ok(tasks)
+}
+
+/// List running background tasks and subagents owned by one live session.
 #[tauri::command]
-pub async fn task_kill(state: State<'_, AppState>, task_id: String) -> Result<(), String> {
-    if !valid_admin_id(&task_id) {
-        return Err("任务 ID 无效或过长".into());
+pub async fn tasks_list(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<RunningTask>, String> {
+    if !valid_admin_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    // A sidebar selection becomes current just before its Runtime load finishes.
+    // It cannot own running work during that short unbound window.
+    if state.session_workspace(&session_id).is_err() {
+        return Ok(Vec::new());
     }
     let tx = state
         .tx
@@ -1272,19 +1359,62 @@ pub async fn task_kill(state: State<'_, AppState>, task_id: String) -> Result<()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let params = raw_params(&serde_json::json!({ "taskId": task_id }));
-    // Prefer task/kill, fall back to subagent/cancel.
-    if call_ext::<serde_json::Value>(&tx, "echo.agent/task/kill", params.clone())
-        .await
-        .is_ok()
-    {
-        return Ok(());
+    list_running_tasks(&tx, &session_id).await
+}
+
+async fn kill_running_task(
+    tx: &xai_acp_lib::AcpAgentTx,
+    session_id: String,
+    task_id: String,
+    source: RunningTaskSource,
+) -> Result<(), String> {
+    let response: serde_json::Value = match source {
+        RunningTaskSource::Task => {
+            let params = raw_params(&serde_json::json!({
+                "sessionId": session_id,
+                "taskId": task_id,
+            }));
+            call_ext(tx, "echo.agent/task/kill", params)
+                .await
+                .map_err(|error| error.to_string())?
+        }
+        RunningTaskSource::Subagent => {
+            let params = raw_params(&serde_json::json!({ "subagentId": task_id }));
+            call_ext(tx, "echo.agent/subagent/cancel", params)
+                .await
+                .map_err(|error| error.to_string())?
+        }
+    };
+    validate_admin_response(&response)?;
+    let not_found = response.get("outcome").is_some_and(|outcome| {
+        outcome.as_str() == Some("not_found")
+            || outcome.get("kind").and_then(serde_json::Value::as_str) == Some("not_found")
+    });
+    if not_found {
+        return Err("任务已结束或不存在".into());
     }
-    let subagent_params = raw_params(&serde_json::json!({ "subagentId": task_id }));
-    let _: serde_json::Value = call_ext(&tx, "echo.agent/subagent/cancel", subagent_params)
-        .await
-        .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Kill a running background task or subagent through its owning endpoint.
+#[tauri::command]
+pub async fn task_kill(
+    state: State<'_, AppState>,
+    session_id: String,
+    task_id: String,
+    source: RunningTaskSource,
+) -> Result<(), String> {
+    if !valid_admin_id(&task_id) {
+        return Err("任务 ID 无效或过长".into());
+    }
+    require_live_session(&state, &session_id)?;
+    let tx = state
+        .tx
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("agent not initialized")?;
+    kill_running_task(&tx, session_id, task_id, source).await
 }
 
 // ========================================================================
@@ -1910,12 +2040,170 @@ pub async fn marketplace_action(
 #[cfg(test)]
 mod tests {
     use super::{
-        check_expected_revision, file_revision, list_memory, normalize_plugin_action,
-        parse_slash_commands, remember_marketplace, remember_plugins,
+        check_expected_revision, file_revision, kill_running_task, list_memory, list_running_tasks,
+        normalize_plugin_action, parse_slash_commands, remember_marketplace, remember_plugins,
         request_internal_reload_and_wait, require_listed_marketplace_source,
         require_listed_plugin_id, resolve_memory_path, secure_remote_source, validate_admin_action,
-        MemoryEntryScope, MemoryStorage, MAX_ADMIN_ACTION_STRING_BYTES,
+        MemoryEntryScope, MemoryStorage, RunningTaskSource, MAX_ADMIN_ACTION_STRING_BYTES,
     };
+
+    fn assert_session_params(
+        arguments: &xai_acp_lib::AcpArgs<agent_client_protocol::ExtRequest>,
+        expected: &str,
+    ) {
+        let params: serde_json::Value =
+            serde_json::from_str(arguments.request.params.get()).expect("valid ext params");
+        assert_eq!(params["sessionId"], expected);
+    }
+
+    #[tokio::test]
+    async fn running_tasks_send_session_id_to_both_endpoints_and_merge_live_rows() {
+        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let task = tokio::spawn(async move { list_running_tasks(&client.tx, "session-1").await });
+
+        let first = agent.rx.recv().await.expect("task/list request");
+        let xai_acp_lib::AcpAgentMessage::ExtMethod(first) = first else {
+            panic!("expected task/list ExtMethod");
+        };
+        assert_eq!(first.request.method.as_ref(), "echo.agent/task/list");
+        assert_session_params(&first, "session-1");
+        first
+            .response_tx
+            .send(Ok(agent_client_protocol::ExtResponse::new(
+                crate::ext::raw_params(&serde_json::json!({
+                    "result": {
+                        "tasks": [
+                            {
+                                "task_id": "task-live",
+                                "command": "cargo test",
+                                "completed": false,
+                                "kind": "bash",
+                                "owner_session_id": "session-1"
+                            },
+                            {
+                                "task_id": "task-complete",
+                                "command": "done",
+                                "completed": true,
+                                "owner_session_id": "session-1"
+                            },
+                            {
+                                "task_id": "task-foreign",
+                                "command": "other",
+                                "completed": false,
+                                "owner_session_id": "session-2"
+                            }
+                        ]
+                    }
+                })),
+            )))
+            .expect("task/list response");
+
+        let second = agent
+            .rx
+            .recv()
+            .await
+            .expect("subagent/list_running request");
+        let xai_acp_lib::AcpAgentMessage::ExtMethod(second) = second else {
+            panic!("expected subagent/list_running ExtMethod");
+        };
+        assert_eq!(
+            second.request.method.as_ref(),
+            "echo.agent/subagent/list_running"
+        );
+        assert_session_params(&second, "session-1");
+        second
+            .response_tx
+            .send(Ok(agent_client_protocol::ExtResponse::new(
+                crate::ext::raw_params(&serde_json::json!({
+                    "result": {
+                        "subagents": [{
+                            "subagentId": "subagent-live",
+                            "parentSessionId": "session-1",
+                            "subagentType": "explore",
+                            "description": "inspect code"
+                        }]
+                    }
+                })),
+            )))
+            .expect("subagent/list_running response");
+
+        let rows = task.await.expect("join list task").expect("list succeeds");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "task-live");
+        assert_eq!(rows[0].source, RunningTaskSource::Task);
+        assert_eq!(rows[0].description.as_deref(), Some("cargo test"));
+        assert_eq!(rows[1].id, "subagent-live");
+        assert_eq!(rows[1].source, RunningTaskSource::Subagent);
+        assert_eq!(rows[1].kind.as_deref(), Some("explore"));
+    }
+
+    #[tokio::test]
+    async fn running_task_kill_uses_the_owning_endpoint_contract() {
+        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let task = tokio::spawn(async move {
+            kill_running_task(
+                &client.tx,
+                "session-1".into(),
+                "task-1".into(),
+                RunningTaskSource::Task,
+            )
+            .await
+        });
+
+        let message = agent.rx.recv().await.expect("task/kill request");
+        let xai_acp_lib::AcpAgentMessage::ExtMethod(arguments) = message else {
+            panic!("expected task/kill ExtMethod");
+        };
+        assert_eq!(arguments.request.method.as_ref(), "echo.agent/task/kill");
+        let params: serde_json::Value =
+            serde_json::from_str(arguments.request.params.get()).expect("valid task kill params");
+        assert_eq!(params["sessionId"], "session-1");
+        assert_eq!(params["taskId"], "task-1");
+        arguments
+            .response_tx
+            .send(Ok(agent_client_protocol::ExtResponse::new(
+                crate::ext::raw_params(&serde_json::json!({
+                    "result": { "taskId": "task-1", "outcome": "killed" }
+                })),
+            )))
+            .expect("task/kill response");
+        assert_eq!(task.await.expect("join kill task"), Ok(()));
+
+        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let subagent = tokio::spawn(async move {
+            kill_running_task(
+                &client.tx,
+                "session-1".into(),
+                "subagent-1".into(),
+                RunningTaskSource::Subagent,
+            )
+            .await
+        });
+        let message = agent.rx.recv().await.expect("subagent/cancel request");
+        let xai_acp_lib::AcpAgentMessage::ExtMethod(arguments) = message else {
+            panic!("expected subagent/cancel ExtMethod");
+        };
+        assert_eq!(
+            arguments.request.method.as_ref(),
+            "echo.agent/subagent/cancel"
+        );
+        let params: serde_json::Value = serde_json::from_str(arguments.request.params.get())
+            .expect("valid subagent cancel params");
+        assert_eq!(params["subagentId"], "subagent-1");
+        arguments
+            .response_tx
+            .send(Ok(agent_client_protocol::ExtResponse::new(
+                crate::ext::raw_params(&serde_json::json!({
+                    "result": {
+                        "subagentId": "subagent-1",
+                        "cancelled": true,
+                        "outcome": { "kind": "cancelled" }
+                    }
+                })),
+            )))
+            .expect("subagent/cancel response");
+        assert_eq!(subagent.await.expect("join subagent cancel"), Ok(()));
+    }
 
     #[tokio::test]
     async fn awaited_reload_completes_only_after_runtime_acknowledges_it() {
