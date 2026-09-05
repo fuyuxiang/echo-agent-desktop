@@ -282,8 +282,8 @@ body.dark,
   --echo-bg-hover: color-mix(in srgb, var(--echo-palette-white-100) 6%, transparent);
   --echo-bg-active: var(--echo-palette-white-10);
   --echo-bg-overlay: var(--echo-palette-black-60);
-  --echo-border-default: color-mix(in srgb, var(--echo-palette-black-100) 8%, transparent);
-  --echo-border-weak: color-mix(in srgb, var(--echo-palette-black-100) 4%, transparent);
+  --echo-border-default: color-mix(in srgb, var(--echo-palette-white-100) 10%, transparent);
+  --echo-border-weak: color-mix(in srgb, var(--echo-palette-white-100) 6%, transparent);
   --echo-border-subtle: color-mix(in srgb, var(--echo-palette-white-100) 6%, transparent);
   --echo-border-strong: var(--echo-color-border-primary);
   --echo-border-focus: var(--echo-color-border-focus);
@@ -437,7 +437,7 @@ body.dark,
   --echo-button-danger-border-disabled: var(--echo-color-text-error-disabled);
   --echo-button-danger-bg-soft-hover: color-mix(in srgb, var(--echo-color-text-error-default) 12%, transparent);
   --echo-button-danger-bg-soft-active: color-mix(in srgb, var(--echo-color-text-error-default) 20%, transparent);
-  --echo-icon-strong: color-mix(in srgb, var(--echo-palette-black-100) 96%, transparent);
+  --echo-icon-strong: color-mix(in srgb, var(--echo-palette-white-100) 96%, transparent);
   --echo-icon-primary: var(--echo-palette-white-90);
   --echo-icon-secondary: var(--echo-palette-white-70);
   --echo-icon-medium: var(--echo-palette-white-70);

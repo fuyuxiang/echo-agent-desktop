@@ -784,7 +784,7 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
                       className={`atm-filter-btn${filterStatus !== "all" ? " atm-filter-btn--active" : ""}`}
                       onClick={() => setFilterOpen((v) => !v)}
                     >
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" style={{ color: "var(--echo-palette-black-70)" }}>
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
                         <path d="M2 4h12M4.5 8h7M6.5 12h3" />
                       </svg>
                       {filterStatus !== "all" && <span className="atm-filter-dot" />}
