@@ -3,7 +3,7 @@ import { ChevronDown, Check, Folder, FolderOpen } from "lucide-react";
 import { filesystemPickDirectory, type WorkspaceInfo } from "@/lib/agent-client";
 
 /**
- * Workspace picker dropdown for the Composer's "选择工作空间" button.
+ * Working-directory picker for the Composer.
  * Lists every cwd EchoAgent has seen (from list_workspaces). Selecting one
  * calls onSelectWorkspace — switching cwd means the next new session will
  * be bound to it (ACP locks cwd per-session, so we don't migrate the
@@ -86,9 +86,9 @@ export function WorkspacePicker({
     return parts.slice(-2).join("/") || p;
   };
 
-  const triggerLabel = cwd ? shortName(cwd) : "选择工作空间";
+  const triggerLabel = cwd ? shortName(cwd) : "选择工作目录";
 
-  // 打开系统目录选择框,切换到任意文件夹(不限于历史工作空间)。
+  // 打开系统目录选择框，切换到任意文件夹（不限于历史目录）。
   const pickFolder = async () => {
     try {
       const selected = await filesystemPickDirectory();
@@ -126,7 +126,7 @@ export function WorkspacePicker({
           className="workspace-picker__menu"
           id="composer-workspace-menu"
           role="menu"
-          aria-label="选择工作空间"
+          aria-label="选择工作目录"
           ref={menuRef}
           onKeyDown={handleMenuKeyDown}
         >
@@ -142,7 +142,7 @@ export function WorkspacePicker({
             </button>
           </li>
           {workspaces.length === 0 && (
-            <li className="workspace-picker__empty">暂无历史工作空间</li>
+            <li className="workspace-picker__empty">暂无历史工作目录</li>
           )}
           {workspaces.map((w) => (
             <li key={w.cwd} role="none">

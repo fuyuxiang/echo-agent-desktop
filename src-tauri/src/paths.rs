@@ -95,7 +95,7 @@ pub(crate) fn default_workspace_dir() -> Result<PathBuf, String> {
 }
 
 fn default_workspace_path(base: &Path) -> PathBuf {
-    base.join("EchoAgent Workspace")
+    base.join("EchoAgent")
 }
 
 /// Canonical roots for the catalogs shown in the Experts · Skills ·
@@ -495,7 +495,7 @@ mod tests {
     fn default_workspace_is_a_dedicated_child_not_the_user_home() {
         let user_documents = Path::new("/Users/demo/Documents");
         let workspace = default_workspace_path(user_documents);
-        assert_eq!(workspace, user_documents.join("EchoAgent Workspace"));
+        assert_eq!(workspace, user_documents.join("EchoAgent"));
         assert_ne!(workspace, user_documents);
     }
 

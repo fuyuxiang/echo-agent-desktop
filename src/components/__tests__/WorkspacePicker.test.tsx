@@ -24,7 +24,7 @@ describe("WorkspacePicker", () => {
     const trigger = screen.getByRole("button", { name: /work\/one/ });
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("menu", { name: "选择工作空间" })).toBeInTheDocument();
+    expect(screen.getByRole("menu", { name: "选择工作目录" })).toBeInTheDocument();
     const current = screen.getByRole("menuitemradio", { name: /work\/one/ });
     const next = screen.getByRole("menuitemradio", { name: /work\/two/ });
     expect(current).toHaveFocus();

@@ -165,7 +165,7 @@ EchoAgent keeps its application state under `~/.echo-agent/` by default. Set `EC
 
 Every path in this table is rooted at `ECHO_AGENT_HOME`; `~/.echo-agent` is only the default when that variable is unset. The Experts, Skills, and Connectors panels persist only sources selected manually. Automatically discovered defaults always follow the active data home.
 
-New tasks without an explicit directory use `EchoAgent Workspace` inside the system Documents directory by default (falling back to a same-named subdirectory of the user home when Documents is unavailable). EchoAgent does not grant the entire user home by default. To use another workspace or local knowledge source, grant it explicitly through the native directory picker.
+New tasks without an explicit directory use `EchoAgent` inside the system Documents directory by default (falling back to a same-named subdirectory of the user home when Documents is unavailable). EchoAgent does not grant the entire user home by default. To use another working directory or local knowledge source, grant it explicitly through the native directory picker.
 
 - API keys and endpoint credentials are stored locally in plaintext. On Unix, EchoAgent applies owner-only permissions to secret-bearing files and directories; on Windows, access depends on the current user's filesystem ACLs.
 - Model, MCP, WebDAV, and notification traffic is sent only to services you configure. No hosted EchoAgent account is required.

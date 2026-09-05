@@ -146,7 +146,6 @@ function ArtifactsTab({
 }) {
   const transcripts = useSessionStore((state) => state.transcripts);
   const independent = useSessionsStore((state) => state.independent);
-  const workspaceSessions = useSessionsStore((state) => state.workspaceSessions);
   const [catalogVersion, setCatalogVersion] = useState(0);
 
   useEffect(() => {
@@ -156,8 +155,7 @@ function ArtifactsTab({
   }, []);
 
   const entries = useMemo(() => {
-    const sessions = [...independent, ...Object.values(workspaceSessions).flat()];
-    const meta = Object.fromEntries(sessions.map((session) => [
+    const meta = Object.fromEntries(independent.map((session) => [
       session.sessionId,
       {
         title: session.title,
@@ -169,7 +167,7 @@ function ArtifactsTab({
       artifactsFromTranscripts(transcripts, meta),
       loadTaskArtifacts(),
     );
-  }, [catalogVersion, independent, transcripts, workspaceSessions]);
+  }, [catalogVersion, independent, transcripts]);
 
   const filtered = entries.filter((e) => {
     if (searchQuery) {

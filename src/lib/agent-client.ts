@@ -89,7 +89,7 @@ export interface InitResult {
 
 /**
  * Initialize the in-process EchoAgent agent. If `cwd` is omitted the backend
- * defaults to the user's home directory.
+ * uses EchoAgent's dedicated default working directory.
  */
 export async function agentInit(cwd?: string): Promise<InitResult> {
   return invoke<InitResult>("agent_init", { cwd: cwd ?? null });
@@ -142,6 +142,13 @@ export async function agentListSessions(
   return invoke<SessionSummary[]>("agent_list_sessions", { cwd, includeArchived });
 }
 
+/** List persisted sessions across every historical working directory. */
+export async function agentListAllSessions(
+  includeArchived = false,
+): Promise<SessionSummary[]> {
+  return invoke<SessionSummary[]>("agent_list_all_sessions", { includeArchived });
+}
+
 /** A discovered working directory (EchoAgent has run sessions in it). */
 export interface WorkspaceInfo {
   /** Absolute path of the working directory. */
@@ -154,7 +161,7 @@ export interface WorkspaceInfo {
 
 /**
  * List every working directory EchoAgent has ever seen (deduplicated), with a
- * session count per cwd. Used to populate the Composer's workspace picker.
+ * session count per cwd. Used to populate the Composer's working-directory picker.
  */
 export async function agentListWorkspaces(): Promise<WorkspaceInfo[]> {
   return invoke<WorkspaceInfo[]>("agent_list_workspaces");

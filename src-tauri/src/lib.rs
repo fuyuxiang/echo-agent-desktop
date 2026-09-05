@@ -253,6 +253,7 @@ pub fn run() {
             commands::agent_new_session,
             commands::agent_load_session,
             commands::agent_list_sessions,
+            commands::agent_list_all_sessions,
             commands::agent_set_model,
             commands::agent_list_workspaces,
             commands::agent_send,

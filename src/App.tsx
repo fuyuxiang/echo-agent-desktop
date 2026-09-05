@@ -30,6 +30,7 @@ import {
   agentSend,
   agentCancel,
   agentLoadSession,
+  agentListAllSessions,
   agentListSessions,
   agentListWorkspaces,
   agentRenameSession,
@@ -143,13 +144,10 @@ function extractMarkdownBody(raw: string): string {
   return rest.slice(closeIdx + 1).replace(/^\n---\s*/, "").trim();
 }
 
-/** Find a session in either sidebar group without depending on a render. */
+/** Find a session in the complete catalog without depending on a render. */
 function findSessionSummary(sessionId: string): SessionSummary | undefined {
-  const state = useSessionsStore.getState();
-  return state.independent.find((entry) => entry.sessionId === sessionId)
-    ?? Object.values(state.workspaceSessions)
-      .flat()
-      .find((entry) => entry.sessionId === sessionId);
+  return useSessionsStore.getState().independent
+    .find((entry) => entry.sessionId === sessionId);
 }
 
 /** Views that inspect or maintain memory belonging to the active session. */
@@ -265,16 +263,14 @@ function Shell() {
     authReadyRef.current = !!init?.auth.ready;
   }, [init?.auth.ready]);
 
-  /** Session/workspace discovery is recoverable and must not take down the shell. */
-  const refreshSessionCatalog = useCallback(async (cwdOverride?: string) => {
-    const cwd = cwdOverride ?? sessionsStore.getState().homeCwd;
-    if (!cwd) return;
+  /** Session/directory discovery is recoverable and must not take down the shell. */
+  const refreshSessionCatalog = useCallback(async () => {
     const generation = ++sessionCatalogGenerationRef.current;
     const store = sessionsStore.getState();
     store.setLoading(true);
     store.setError(null);
     const [sessionResult, workspaceResult] = await Promise.allSettled([
-      agentListSessions(cwd, true),
+      agentListAllSessions(true),
       agentListWorkspaces(),
     ]);
     if (sessionCatalogGenerationRef.current !== generation) return;
@@ -288,7 +284,7 @@ function Shell() {
       sessionsStore.getState().setWorkspaces(workspaceResult.value);
       setWorkspaces(workspaceResult.value);
     } else {
-      failures.push(`工作区：${friendlyError(workspaceResult.reason)}`);
+      failures.push(`工作目录：${friendlyError(workspaceResult.reason)}`);
     }
     const latest = sessionsStore.getState();
     latest.setError(failures.length > 0 ? failures.join("；") : null);
@@ -379,11 +375,10 @@ function Shell() {
     (async () => {
       try {
         const result = await agentInit();
-        // EchoAgent rejects an empty cwd ("Path is not absolute"), so every session
-        // needs an absolute path. We treat EchoAgent's initial cwd as the "inbox":
-        // 新建任务 aims at it (⇒ 任务 group), and the user can re-aim a new
-        // session at another directory via the Composer workspace picker
-        // (⇒ that 空间 node). homeCwd drives the store's group routing.
+        // EchoAgent rejects an empty cwd, so every session needs an absolute
+        // execution directory. It does not determine sidebar ownership: all
+        // sessions enter the catalog and explicit project references determine
+        // whether the sidebar presents one under 任务 or 项目.
         if (disposed) return;
         setNewSessionTargetCwd(result.cwd);
         sessionsStore.getState().setHomeCwd(result.cwd);
@@ -424,23 +419,8 @@ function Shell() {
             if (mode) usePermissionModeStore.getState().setMode(mode);
           },
           onGitHead: (payload) => {
-            void agentListWorkspaces().then((nextWorkspaces) => {
-              sessionsStore.getState().setWorkspaces(nextWorkspaces);
-              setWorkspaces(nextWorkspaces);
-            }).catch(() => {});
-            const eventSessionId = (payload as { sessionId?: string } | null)?.sessionId;
-            const cwd = eventSessionId
-              ? findSessionSummary(eventSessionId)?.cwd
-              : findSessionSummary(sessionsStore.getState().currentSessionId ?? "")?.cwd;
-            if (cwd) {
-              void agentListSessions(cwd, true).then((list) => {
-                if (cwd === sessionsStore.getState().homeCwd) {
-                  sessionsStore.getState().setIndependent(list);
-                } else {
-                  sessionsStore.getState().setWorkspaceSessions(cwd, list);
-                }
-              }).catch(() => {});
-            }
+            void payload;
+            void refreshSessionCatalog();
           },
           onComplete: (p) => {
             reportEvent("session_complete", "info", { sessionId: p.sessionId, stopReason: p.stopReason });
@@ -684,7 +664,7 @@ function Shell() {
         // These catalogs fail independently. Keep the shell usable and expose
         // local retry controls instead of converting a disk/index hiccup into a
         // fatal initialization screen.
-        void refreshSessionCatalog(result.cwd);
+        void refreshSessionCatalog();
         void refreshModels(result.defaultModelId);
       } catch (e) {
         if (!disposed) setInitError(friendlyError(e));
@@ -705,19 +685,12 @@ function Shell() {
   ]);
 
   const currentSessionId = sessionsStore((s) => s.currentSessionId);
-  // The active session's sidebar entry (title + cwd), looked up across the
-  // 任务 + 空间 groups — drives the topbar title on the conversation page and
-  // the cwd scoping of a manual rename (mirrors EchoAgent's topbar).
+  // The active session's catalog entry drives the topbar title and cwd scoping
+  // of a manual rename (mirrors EchoAgent's topbar).
   const currentEntry = sessionsStore((s) => {
     const id = s.currentSessionId;
     if (!id) return undefined;
-    const inTasks = s.independent.find((x) => x.sessionId === id);
-    if (inTasks) return inTasks;
-    for (const cwd of Object.keys(s.workspaceSessions)) {
-      const hit = s.workspaceSessions[cwd].find((x) => x.sessionId === id);
-      if (hit) return hit;
-    }
-    return undefined;
+    return s.independent.find((x) => x.sessionId === id);
   });
   const currentTitle = currentEntry?.title || "";
   const activeSessionCwd = currentEntry?.cwd;
@@ -1023,37 +996,18 @@ function Shell() {
     }
   };
 
-  // Workspace picker: only re-aim the "target cwd" for the NEXT new session.
-  // In the two-section model the sidebar already shows every workspace, so we
-  // must NOT clear the current transcript or rebuild the list here — picking a
-  // directory just decides which group the next 新建任务 lands in (empty =
-  // 任务 group, a real dir = that 空间 node).
+  // Working-directory picker: only re-aim the cwd for the NEXT new session.
+  // Existing task/project ownership and the current transcript stay intact.
   // No agent re-init is needed: spawn_agent_runtime ignores its cwd and every session
   // carries its own cwd at new_session/load_session time.
   const handleSelectWorkspace = (newCwd: string) => {
     setNewSessionTargetCwd(newCwd);
-    // Refresh the workspace list so a freshly picked directory appears in the
-    // picker and sidebar without requiring an app restart.
-    void agentListWorkspaces().then((ws) => {
-      sessionsStore.getState().setWorkspaces(ws);
-      setWorkspaces(ws);
-    }).catch(() => {/* non-fatal */});
-    // Refresh the sidebar's session list for the newly picked cwd (list_sessions
-    // already filters by cwd server-side). Picking the inbox cwd refreshes the
-    // 任务 group; any other cwd loads + expands that 空间 node immediately,
-    // instead of waiting for the user to expand it.
     if (!newCwd) return;
-    void agentListSessions(newCwd, true)
-      .then((list) => {
-        const store = sessionsStore.getState();
-        if (newCwd === store.homeCwd) {
-          store.setIndependent(list);
-        } else {
-          store.setWorkspaceSessions(newCwd, list);
-          store.setExpanded(newCwd, true);
-        }
-      })
-      .catch(() => {/* non-fatal */});
+    const current = sessionsStore.getState().workspaces;
+    if (current.some((workspace) => workspace.cwd === newCwd)) return;
+    const next = [{ cwd: newCwd, sessionCount: 0 }, ...current];
+    sessionsStore.getState().setWorkspaces(next);
+    setWorkspaces(next);
   };
 
   const handleNewSession = () => {
@@ -1122,36 +1076,20 @@ function Shell() {
     return () => window.removeEventListener("keydown", onShortcut);
   }, [models]);
 
-  // 空间节点展开/折叠: 记录展开态, 首次展开时懒加载该 cwd 的子会话。
-  const handleToggleWorkspace = async (cwd: string, next: boolean) => {
-    sessionsStore.getState().setExpanded(cwd, next);
-    if (next && sessionsStore.getState().workspaceSessions[cwd] === undefined) {
-      try {
-        const list = await agentListSessions(cwd, true);
-        sessionsStore.getState().setWorkspaceSessions(cwd, list);
-      } catch (e) {
-        showToast(`加载空间会话失败：${String(e)}`);
-      }
-    }
-  };
-
   const handleSelectSession = async (sessionId: string, sessionCwd?: string) => {
     const generation = ++selectionGenerationRef.current;
     let entry = findSessionSummary(sessionId);
-    // FTS/project/automation links may point at a session whose workspace node
-    // has never been expanded. Hydrate the complete summary before navigating
-    // so title, model and cwd are all authoritative.
+    // FTS/project/automation links can outlive a stale catalog. Hydrate that
+    // cwd and merge it without replacing tasks from other directories.
     if (!entry) {
       if (!sessionCwd) {
-        showToast("无法打开会话：缺少所属工作区信息", 5000);
+        showToast("无法打开会话：缺少工作目录信息", 5000);
         return;
       }
       try {
         const list = await agentListSessions(sessionCwd, true);
         if (selectionGenerationRef.current !== generation) return;
-        const store = sessionsStore.getState();
-        if (sessionCwd === store.homeCwd) store.setIndependent(list);
-        else store.setWorkspaceSessions(sessionCwd, list);
+        sessionsStore.getState().mergeSessions(list);
         entry = list.find((item) => item.sessionId === sessionId);
       } catch (error) {
         if (selectionGenerationRef.current === generation) {
@@ -1184,8 +1122,8 @@ function Shell() {
     // transcript. Either way the focused mirror is refreshed in one step.
     sessionStore.getState().setSession(sessionId);
     try {
-      // Load with the session's OWN cwd (independent sessions have cwd="").
-      // Viewing a 空间 child must NOT re-aim the new-session target directory.
+      // Load with the session's own cwd. Opening history must not re-aim the
+      // working directory selected for the next new task.
       await agentLoadSession(sessionId, entry.cwd);
       if (sessionsStore.getState().currentSessionId === sessionId) {
         setTaskRefreshSignal((value) => value + 1);
@@ -1445,8 +1383,7 @@ function Shell() {
     handleGoHome();
   };
 
-  // 进入本地项目：把种子会话瞄到项目关联目录（使其归入对应空间节点），
-  // 新建会话并注入项目说明作为种子消息。
+  // 进入本地项目：在项目关联目录中新建会话，并注入项目说明作为种子消息。
   const handleStartProject = async (project: ProjectMeta) => {
     const modelId = requireConfiguredModel();
     if (!modelId) return;
@@ -1571,7 +1508,6 @@ function Shell() {
           onNavigate={handleNavigate}
           onOpenSettings={() => openSettings("model")}
           onToggleCollapse={() => setSidebarCollapsed(true)}
-          onToggleWorkspace={handleToggleWorkspace}
           onOpenSearch={() => setSearchOpen(true)}
           onPlaceholder={handlePlaceholder}
           onToast={showToast}

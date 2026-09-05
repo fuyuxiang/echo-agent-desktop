@@ -17,7 +17,6 @@ describe("SearchOverlay", () => {
     useSessionsStore.setState({
       independent: [],
       workspaces: [],
-      workspaceSessions: {},
       homeCwd: "/home",
       currentSessionId: null,
       filterStatus: null,
@@ -51,7 +50,7 @@ describe("SearchOverlay", () => {
 
     await waitFor(() => expect(agentListSessions).toHaveBeenCalledWith("/workspace", true));
     expect(onSelect).toHaveBeenCalledWith("remote", "/workspace");
-    expect(useSessionsStore.getState().workspaceSessions["/workspace"][0]).toMatchObject({
+    expect(useSessionsStore.getState().independent[0]).toMatchObject({
       title: "完整标题",
       currentModelId: "model-a",
     });

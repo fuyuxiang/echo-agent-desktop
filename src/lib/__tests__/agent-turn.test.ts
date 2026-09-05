@@ -18,7 +18,6 @@ function resetStores() {
   });
   useSessionsStore.setState({
     independent: [],
-    workspaceSessions: {},
     homeCwd: "/tmp",
     currentSessionId: null,
   });
