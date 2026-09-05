@@ -353,7 +353,7 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
     { key: "initialInjectionEnabled", name: "会话开始时检索", description: "首轮对话自动注入相关长期记忆" },
     { key: "saveOnEnd", name: "会话结束时保存", description: "将有效会话的摘要保存为可检索记录" },
     { key: "watcherEnabled", name: "监听外部修改", description: "手动编辑记忆文件后自动同步索引" },
-    { key: "autoFlushEnabled", name: "自动落盘", description: "空闲或上下文压缩前提取并保存长期信息" },
+    { key: "autoFlushEnabled", name: "自动落盘", description: "空闲或上下文压缩前提取信息并写入会话记录" },
     { key: "dreamEnabled", name: "自动整理", description: "定期将会话记录合并为结构化长期记忆" },
   ];
 
