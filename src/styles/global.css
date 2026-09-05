@@ -41,27 +41,36 @@
 }
 
 /*
- * Short-form aliases used by some EchoAgent components and by EchoAgent's
- * own placeholder UI. These map onto the semantic tokens above and exist
- * in both light (:root) and dark ([data-theme="dark"]) forms.
+ * Compatibility aliases used by migrated components. The canonical surface,
+ * text and border values live in tokens.css; aliases here must only point to
+ * those values and must never redefine them per theme.
  */
 :root {
-  --echo-bg-primary: var(--echo-color-bg-secondary-default, #ffffff);
-  --echo-bg-secondary: var(--echo-color-bg-primary-default, #fafafa);
-  --echo-bg-tertiary: var(--echo-color-bg-primary-hover, #f2f2f2);
-  --echo-text-strong: var(--echo-color-text-primary, #1a1a1a);
-  --echo-text-medium: var(--echo-color-text-secondary, #555);
-  --echo-text-weak: var(--echo-color-text-tertiary, #999);
+  color-scheme: light;
   --echo-brand: var(--echo-brand-primary, #00c29a);
-  --echo-border-default: var(--echo-color-border-primary, #e6e6e6);
+  --echo-brand-hover: var(--echo-color-text-brand-hover, #40d1b3);
+  --echo-accent: var(--echo-brand);
+  --echo-color-primary: var(--echo-brand);
+  --echo-text-primary: var(--echo-text-strong);
+  --echo-text-secondary: var(--echo-text-medium);
+  --echo-text-light: var(--echo-text-weak);
+  --echo-text-brand: var(--echo-color-text-brand-default);
+  --echo-bg-elevated: var(--echo-bg-primary);
+  --echo-bg-input: var(--echo-bg-primary);
+  --echo-border: var(--echo-border-default);
+  --echo-border-soft: var(--echo-border-weak);
+  --echo-danger: var(--echo-status-error);
+  --echo-color-danger: var(--echo-status-error);
+  --echo-color-text-danger: var(--echo-color-text-error-default);
+  --echo-link: var(--echo-color-text-link-default);
+  --echo-status-success-soft: var(--echo-badge-success-bg);
+  --echo-font-family: var(
+    --vscode-font-family,
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    "PingFang SC", "Microsoft YaHei", sans-serif
+  );
 }
 
 [data-theme="dark"] {
-  --echo-bg-primary: var(--echo-color-bg-secondary-default, #1f1f1f);
-  --echo-bg-secondary: var(--echo-color-bg-primary-default, #141414);
-  --echo-bg-tertiary: var(--echo-color-bg-primary-hover, #2a2a2a);
-  --echo-text-strong: var(--echo-color-text-primary, rgba(255, 255, 255, 0.92));
-  --echo-text-medium: var(--echo-color-text-secondary, rgba(255, 255, 255, 0.65));
-  --echo-text-weak: var(--echo-color-text-tertiary, rgba(255, 255, 255, 0.45));
-  --echo-border-default: var(--echo-color-border-primary, #262626);
+  color-scheme: dark;
 }

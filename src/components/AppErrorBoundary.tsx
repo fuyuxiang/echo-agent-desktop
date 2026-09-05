@@ -32,8 +32,8 @@ export class AppErrorBoundary extends Component<
         role="alert"
         style={{
           alignItems: "center",
-          background: "#f7f7f5",
-          color: "#252522",
+          background: "var(--echo-bg-primary, #f7f7f5)",
+          color: "var(--echo-text-strong, #252522)",
           display: "flex",
           flexDirection: "column",
           gap: 12,
@@ -44,12 +44,12 @@ export class AppErrorBoundary extends Component<
         }}
       >
         <h1 style={{ fontSize: 20, margin: 0 }}>界面启动失败</h1>
-        <p style={{ color: "#666660", margin: 0, maxWidth: 560 }}>
+        <p style={{ color: "var(--echo-text-medium, #666660)", margin: 0, maxWidth: 560 }}>
           EchoAgent 遇到了界面错误，未继续显示空白页。
         </p>
         <code
           style={{
-            background: "#ecece8",
+            background: "var(--echo-bg-tertiary, #ecece8)",
             borderRadius: 6,
             maxWidth: 720,
             overflowWrap: "anywhere",
@@ -62,10 +62,10 @@ export class AppErrorBoundary extends Component<
           type="button"
           onClick={() => window.location.reload()}
           style={{
-            background: "#252522",
+            background: "var(--echo-control-selected-bg, #252522)",
             border: 0,
             borderRadius: 7,
-            color: "white",
+            color: "var(--echo-control-selected-fg, white)",
             cursor: "pointer",
             padding: "8px 16px",
           }}
