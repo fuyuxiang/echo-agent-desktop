@@ -23,6 +23,7 @@ const MAX_UPDATED_AT_CHARS: usize = 128;
 const MAX_EXPERT_ID_CHARS: usize = 256;
 const MAX_EXPERT_NAME_CHARS: usize = 512;
 const MAX_EXPERT_AVATAR_CHARS: usize = 4_096;
+const MAX_CWD_METADATA_BYTES: u64 = (MAX_CWD_CHARS * 4) as u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -143,6 +144,33 @@ fn canonical_workspace(raw: &str) -> Option<PathBuf> {
     canonical.is_dir().then_some(canonical)
 }
 
+/// Recover a cwd from its authoritative directory when an early summary did
+/// not persist cwd. Short paths are URL-encoded in the directory name; long
+/// paths use a bounded `.cwd` sidecar. Never trust a decoded value unless
+/// re-encoding it points back to the same directory.
+fn cwd_from_directory(cwd_dir: &Path) -> Option<String> {
+    let dirname = cwd_dir.file_name()?.to_str()?;
+    let decoded = urlencoding::decode(dirname).ok()?.into_owned();
+    let raw = if Path::new(&decoded).is_absolute() {
+        decoded
+    } else {
+        let bytes = crate::shell_fs::read_regular_file_bounded(
+            &cwd_dir.join(".cwd"),
+            MAX_CWD_METADATA_BYTES,
+        )
+        .ok()?;
+        String::from_utf8(bytes).ok()?.trim().to_string()
+    };
+    if raw.is_empty()
+        || raw.chars().count() > MAX_CWD_CHARS
+        || !Path::new(&raw).is_absolute()
+        || !workspace_dir_matches_request(cwd_dir, &raw, canonical_workspace(&raw).as_deref())
+    {
+        return None;
+    }
+    Some(raw)
+}
+
 fn workspace_dir_matches_request(cwd_dir: &Path, raw_cwd: &str, canonical: Option<&Path>) -> bool {
     let Some(dirname) = cwd_dir.file_name().and_then(|name| name.to_str()) else {
         return false;
@@ -197,6 +225,74 @@ fn display_title(summary: &SummaryFile) -> Option<String> {
         .as_deref()
         .and_then(crate::session_title::clean_auto_title)
         .map(|title| bounded_text(title, MAX_TITLE_CHARS))
+}
+
+fn to_session_summary(
+    session_dir: &Path,
+    summary: SummaryFile,
+    cwd: String,
+) -> Option<SessionSummary> {
+    let session_id = authoritative_session_id(session_dir, &summary)?;
+    let title = display_title(&summary).unwrap_or_else(|| "未命名会话".into());
+    let updated_at = summary
+        .updated_at
+        .clone()
+        .or_else(|| summary.last_active_at.clone())
+        .map(|value| bounded_text(value, MAX_UPDATED_AT_CHARS));
+    let is_git_repo = summary.git_root_dir.as_ref().map(|path| !path.is_empty());
+    Some(SessionSummary {
+        session_id,
+        title,
+        updated_at,
+        cwd,
+        is_git_repo,
+        pinned: None,
+        archived: None,
+        current_model_id: summary
+            .current_model_id
+            .map(|value| bounded_text(value, MAX_MODEL_ID_CHARS)),
+        expert_id: None,
+        expert_name: None,
+        expert_avatar: None,
+    })
+}
+
+fn apply_metadata_and_sort(out: &mut Vec<SessionSummary>, include_archived: bool) {
+    // Merge EchoAgent-only pinned/archived state (sidecar file, since EchoAgent's
+    // Summary has no such fields and would clobber any we tried to add).
+    let state = crate::meta::read_state();
+    let pinned = state.pinned_set();
+    let archived = state.archived_set();
+    let experts = state.expert_map();
+    // Keep the historical default (hide archived), while allowing the archive
+    // view to request the same authoritative rows with `archived: true`.
+    apply_archive_visibility(out, &archived, include_archived);
+    for entry in out.iter_mut() {
+        entry.pinned = Some(pinned.contains(&entry.session_id));
+        if let Some(binding) = experts.get(&entry.session_id) {
+            entry.expert_id = Some(bounded_text(binding.expert_id.clone(), MAX_EXPERT_ID_CHARS));
+            entry.expert_name = Some(bounded_text(
+                binding.expert_name.clone(),
+                MAX_EXPERT_NAME_CHARS,
+            ));
+            entry.expert_avatar = binding
+                .avatar_local
+                .clone()
+                .map(|value| bounded_text(value, MAX_EXPERT_AVATAR_CHARS));
+        }
+    }
+    // Sort: pinned first, then by updated_at descending (falling back to the
+    // session_id, which is a UUIDv7 — roughly chronological).
+    out.sort_by(|a, b| {
+        b.pinned
+            .unwrap_or(false)
+            .cmp(&a.pinned.unwrap_or(false))
+            .then_with(|| {
+                b.updated_at
+                    .cmp(&a.updated_at)
+                    .then_with(|| b.session_id.cmp(&a.session_id))
+            })
+    });
 }
 
 /// List sessions for a given cwd. Reads `~/.echo-agent/sessions/**/*.json` and
@@ -259,74 +355,90 @@ pub fn list_sessions(cwd: &str, include_archived: bool) -> Vec<SessionSummary> {
                     continue;
                 }
             }
-            let Some(session_id) = authoritative_session_id(&sess_path, &s) else {
-                continue;
-            };
-            // Title: generated_title wins over legacy `summary`. This matches
-            // EchoAgent's display_title precedence (persistence.rs:961-968).
-            let title = display_title(&s).unwrap_or_else(|| "未命名会话".into());
-            let updated_at = s
-                .updated_at
-                .clone()
-                .or_else(|| s.last_active_at.clone())
-                .map(|value| bounded_text(value, MAX_UPDATED_AT_CHARS));
-            let is_git_repo = s.git_root_dir.as_ref().map(|p| !p.is_empty());
-            out.push(SessionSummary {
-                session_id,
-                title,
-                updated_at,
-                cwd: output_cwd.clone(),
-                is_git_repo,
-                pinned: None,
-                archived: None,
-                current_model_id: s
-                    .current_model_id
-                    .map(|value| bounded_text(value, MAX_MODEL_ID_CHARS)),
-                expert_id: None,
-                expert_name: None,
-                expert_avatar: None,
-            });
+            if let Some(summary) = to_session_summary(&sess_path, s, output_cwd.clone()) {
+                out.push(summary);
+            }
         }
         if visited_sessions >= MAX_SESSION_DIRECTORIES || out.len() >= MAX_SESSION_RESULTS {
             break;
         }
     }
-    // Merge EchoAgent-only pinned/archived state (sidecar file, since EchoAgent's
-    // Summary has no such fields and would clobber any we tried to add).
-    let state = crate::meta::read_state();
-    let pinned = state.pinned_set();
-    let archived = state.archived_set();
-    let experts = state.expert_map();
-    // Keep the historical default (hide archived), while allowing the archive
-    // view to request the same authoritative rows with `archived: true`.
-    apply_archive_visibility(&mut out, &archived, include_archived);
-    for entry in &mut out {
-        entry.pinned = Some(pinned.contains(&entry.session_id));
-        if let Some(binding) = experts.get(&entry.session_id) {
-            entry.expert_id = Some(bounded_text(binding.expert_id.clone(), MAX_EXPERT_ID_CHARS));
-            entry.expert_name = Some(bounded_text(
-                binding.expert_name.clone(),
-                MAX_EXPERT_NAME_CHARS,
-            ));
-            entry.expert_avatar = binding
-                .avatar_local
-                .clone()
-                .map(|value| bounded_text(value, MAX_EXPERT_AVATAR_CHARS));
+    apply_metadata_and_sort(&mut out, include_archived);
+    out
+}
+
+/// List sessions from every persisted working directory in one bounded scan.
+/// A task's cwd remains its execution context; it is not a presentation group.
+/// This lets upgraded clients recover sessions created under an older default
+/// cwd without granting an arbitrary caller the ability to choose a directory.
+pub fn list_all_sessions(include_archived: bool) -> Result<Vec<SessionSummary>, String> {
+    let sessions_root = agent_sessions_root();
+    let mut out = list_all_sessions_from_root(&sessions_root)?;
+    apply_metadata_and_sort(&mut out, include_archived);
+    Ok(out)
+}
+
+fn list_all_sessions_from_root(sessions_root: &Path) -> Result<Vec<SessionSummary>, String> {
+    let mut out = Vec::new();
+    let mut visited_sessions = 0_usize;
+
+    let cwd_dirs = match std::fs::read_dir(sessions_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(error) => return Err(format!("读取历史任务目录失败：{error}")),
+    };
+    for cwd_entry in cwd_dirs.flatten().take(MAX_CWD_DIRECTORIES) {
+        let cwd_path = cwd_entry.path();
+        if !cwd_entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Ok(session_dirs) = std::fs::read_dir(&cwd_path) else {
+            continue;
+        };
+        for session_entry in session_dirs.flatten() {
+            if visited_sessions >= MAX_SESSION_DIRECTORIES || out.len() >= MAX_SESSION_RESULTS {
+                break;
+            }
+            visited_sessions += 1;
+            let session_path = session_entry.path();
+            if !session_entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let Some(summary) = read_summary_file(&session_path.join("summary.json")) else {
+                continue;
+            };
+            // Early summaries may omit cwd. Recover it only from the
+            // authoritative encoded directory (and its bounded `.cwd` sidecar).
+            let raw_cwd = match summary_cwd(&summary) {
+                value if !value.is_empty() => value,
+                _ => match cwd_from_directory(&cwd_path) {
+                    Some(value) => value,
+                    None => continue,
+                },
+            };
+            if raw_cwd.is_empty()
+                || raw_cwd.chars().count() > MAX_CWD_CHARS
+                || !Path::new(&raw_cwd).is_absolute()
+            {
+                continue;
+            }
+            let canonical = canonical_workspace(&raw_cwd);
+            if !workspace_dir_matches_request(&cwd_path, &raw_cwd, canonical.as_deref()) {
+                continue;
+            }
+            let output_cwd = canonical
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| bounded_text(raw_cwd, MAX_CWD_CHARS));
+            if let Some(summary) = to_session_summary(&session_path, summary, output_cwd) {
+                out.push(summary);
+            }
+        }
+        if visited_sessions >= MAX_SESSION_DIRECTORIES || out.len() >= MAX_SESSION_RESULTS {
+            break;
         }
     }
-    // Sort: pinned first, then by updated_at descending (falling back to the
-    // session_id, which is a UUIDv7 — roughly chronological).
-    out.sort_by(|a, b| {
-        b.pinned
-            .unwrap_or(false)
-            .cmp(&a.pinned.unwrap_or(false))
-            .then_with(|| {
-                b.updated_at
-                    .cmp(&a.updated_at)
-                    .then_with(|| b.session_id.cmp(&a.session_id))
-            })
-    });
-    out
+
+    Ok(out)
 }
 
 fn apply_archive_visibility(
@@ -343,7 +455,7 @@ fn apply_archive_visibility(
 }
 
 /// A discovered workspace (working directory EchoAgent has run sessions in).
-/// Used to populate the Composer's "选择工作空间" dropdown.
+/// Used to populate the Composer's working-directory dropdown.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
@@ -395,15 +507,20 @@ pub fn list_workspaces() -> Vec<WorkspaceInfo> {
                 continue;
             }
             let title = display_title(&s);
-            let entry_cwd = summary_cwd(&s);
-            let Some(entry_cwd) = canonical_workspace(&entry_cwd) else {
+            let claimed_cwd = summary_cwd(&s);
+            let raw_entry_cwd = if claimed_cwd.is_empty() {
+                match cwd_from_directory(&cwd_path) {
+                    Some(value) => value,
+                    None => continue,
+                }
+            } else {
+                claimed_cwd
+            };
+            let Some(entry_cwd) = canonical_workspace(&raw_entry_cwd) else {
                 continue;
             };
-            if !workspace_dir_matches_request(
-                &cwd_path,
-                &summary_cwd(&s),
-                Some(entry_cwd.as_path()),
-            ) {
+            if !workspace_dir_matches_request(&cwd_path, &raw_entry_cwd, Some(entry_cwd.as_path()))
+            {
                 continue;
             }
             let entry_cwd = entry_cwd.to_string_lossy().into_owned();
@@ -447,9 +564,9 @@ fn agent_sessions_root() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_archive_visibility, authoritative_session_id, display_title, read_summary_file,
-        summary_cwd, workspace_dir_matches_request, SessionSummary, SummaryFile, MAX_SUMMARY_BYTES,
-        MAX_TITLE_CHARS,
+        apply_archive_visibility, authoritative_session_id, display_title,
+        list_all_sessions_from_root, read_summary_file, summary_cwd, workspace_dir_matches_request,
+        SessionSummary, SummaryFile, MAX_SUMMARY_BYTES, MAX_TITLE_CHARS,
     };
 
     fn summary(json: &str) -> SummaryFile {
@@ -587,6 +704,70 @@ mod tests {
         let file = std::fs::File::create(&path).unwrap();
         file.set_len(MAX_SUMMARY_BYTES + 1).unwrap();
         assert!(read_summary_file(&path).is_none());
+    }
+
+    #[test]
+    fn global_catalog_recovers_sessions_across_default_cwd_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions_root = temp.path().join("sessions");
+        let legacy_cwd = temp.path().join("legacy-home");
+        let current_cwd = temp.path().join("Documents").join("EchoAgent");
+        std::fs::create_dir_all(&legacy_cwd).unwrap();
+        std::fs::create_dir_all(&current_cwd).unwrap();
+
+        for (cwd, id, title) in [
+            (&legacy_cwd, "legacy-session", "旧任务"),
+            (&current_cwd, "current-session", "新任务"),
+        ] {
+            let cwd = cwd.canonicalize().unwrap().to_string_lossy().into_owned();
+            let session_dir = sessions_root
+                .join(xai_grok_shell::util::grok_home::encode_cwd_dirname(&cwd))
+                .join(id);
+            std::fs::create_dir_all(&session_dir).unwrap();
+            std::fs::write(
+                session_dir.join("summary.json"),
+                serde_json::json!({
+                    "session_id": id,
+                    "cwd": cwd,
+                    "generated_title": title,
+                    "title_is_manual": true,
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+
+        let legacy_cwd_string = legacy_cwd
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let no_cwd_dir = sessions_root
+            .join(xai_grok_shell::util::grok_home::encode_cwd_dirname(
+                &legacy_cwd_string,
+            ))
+            .join("legacy-without-cwd");
+        std::fs::create_dir_all(&no_cwd_dir).unwrap();
+        std::fs::write(
+            no_cwd_dir.join("summary.json"),
+            serde_json::json!({
+                "session_id": "legacy-without-cwd",
+                "generated_title": "更早的任务",
+                "title_is_manual": true,
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let rows = list_all_sessions_from_root(&sessions_root).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().any(|row| row.session_id == "legacy-session"
+            && row.cwd == legacy_cwd.canonicalize().unwrap().to_string_lossy()));
+        assert!(rows.iter().any(|row| row.session_id == "current-session"
+            && row.cwd == current_cwd.canonicalize().unwrap().to_string_lossy()));
+        assert!(rows
+            .iter()
+            .any(|row| row.session_id == "legacy-without-cwd" && row.cwd == legacy_cwd_string));
     }
 
     #[cfg(unix)]

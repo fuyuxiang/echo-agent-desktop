@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { Sidebar } from "../Sidebar";
 import { useSessionsStore } from "@/stores/sessions-store";
+import { useProjectsStore } from "@/stores/projects-store";
 import { resetOrgSessionMirror, useOrgSessionStore } from "@/stores/org-session-store";
 
 vi.mock("@/lib/agent-client", () => ({
@@ -20,7 +21,6 @@ const base = {
   onNavigate: vi.fn(),
   onOpenSettings: vi.fn(),
   onToggleCollapse: vi.fn(),
-  onToggleWorkspace: vi.fn(),
   onOpenSearch: vi.fn(),
   onPlaceholder: vi.fn(),
   activeNav: "新建任务",
@@ -32,10 +32,8 @@ describe("Sidebar", () => {
     useSessionsStore.setState({
       independent: [],
       workspaces: [],
-      workspaceSessions: {},
       tasksOpen: true,
-      spacesOpen: true,
-      expanded: {},
+      projectsOpen: true,
       homeCwd: "/home",
       currentSessionId: null,
       loading: false,
@@ -46,6 +44,12 @@ describe("Sidebar", () => {
       filterArchived: false,
       pendingSessionPatches: {},
       drafts: {},
+    });
+    useProjectsStore.setState({
+      projects: [],
+      activeProjectId: null,
+      persisting: false,
+      persistError: null,
     });
   });
 
@@ -133,17 +137,58 @@ describe("Sidebar", () => {
     expect(onToggleCollapse).toHaveBeenCalled();
   });
 
-  it("任务与空间折叠按钮暴露 aria-expanded 状态", () => {
+  it("任务与项目折叠按钮暴露 aria-expanded 状态", () => {
     render(<Sidebar {...base} />);
     const tasks = screen.getByRole("button", { name: /^\u4efb\u52a1/ });
-    const spaces = screen.getByRole("button", { name: /^\u7a7a\u95f4/ });
+    const projects = screen.getByRole("button", { name: /^\u9879\u76ee \(/ });
 
     expect(tasks).toHaveAttribute("aria-expanded", "true");
-    expect(spaces).toHaveAttribute("aria-expanded", "true");
+    expect(projects).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(tasks);
-    fireEvent.click(spaces);
+    fireEvent.click(projects);
     expect(tasks).toHaveAttribute("aria-expanded", "false");
-    expect(spaces).toHaveAttribute("aria-expanded", "false");
+    expect(projects).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("升级后旧默认目录会话仍显示为任务且不生成用户名空间", () => {
+    useSessionsStore.setState({
+      independent: [{ sessionId: "legacy", title: "升级前任务", cwd: "/Users/fuyuxiang" }],
+      workspaces: [{ cwd: "/Users/fuyuxiang", sessionCount: 1 }],
+      homeCwd: "/Users/fuyuxiang/Documents/EchoAgent",
+    });
+
+    render(<Sidebar {...base} />);
+
+    expect(screen.getByText("升级前任务")).toBeInTheDocument();
+    expect(screen.queryByText("fuyuxiang")).toBeNull();
+    expect(screen.getByRole("button", { name: "项目 (0)" })).toBeInTheDocument();
+  });
+
+  it("项目会话只在其真实项目下展示", () => {
+    useSessionsStore.setState({
+      independent: [{ sessionId: "project-session", title: "项目对话", cwd: "/workspace" }],
+    });
+    useProjectsStore.setState({
+      projects: [{
+        id: "project-1",
+        name: "客户项目",
+        cwd: "/workspace",
+        createdAt: "2026-09-05T00:00:00.000Z",
+        connectors: [], experts: [], skills: [], plans: [], tasks: [], assets: [], members: [],
+        conversations: [{
+          sessionId: "project-session",
+          title: "项目对话",
+          createdAt: "2026-09-05T00:00:00.000Z",
+        }],
+      }],
+    });
+
+    render(<Sidebar {...base} />);
+
+    expect(screen.queryByText("项目对话")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "展开客户项目对话" }));
+    expect(screen.getByText("项目对话")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^\u4efb\u52a1/ })).toHaveTextContent("任务 (0)");
   });
 
   it("hover「更多」只展示保留的功能入口", () => {

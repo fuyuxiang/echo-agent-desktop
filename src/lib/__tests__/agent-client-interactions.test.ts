@@ -5,6 +5,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { invoke } from "@tauri-apps/api/core";
 import {
   agentListPendingInteractions,
+  agentListAllSessions,
   agentListSessions,
   agentResolvePlanApproval,
   agentResolveQuestion,
@@ -67,6 +68,7 @@ describe("agent interaction command contracts", () => {
   it("keeps mode setting idempotent and archived listing opt-in", async () => {
     invokeMock.mockResolvedValue(undefined);
     await setPlanMode("session-1", true);
+    await agentListAllSessions(true);
     await agentListSessions("/repo");
     await agentListSessions("/repo", true);
 
@@ -74,11 +76,14 @@ describe("agent interaction command contracts", () => {
       sessionId: "session-1",
       enabled: true,
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(2, "agent_list_sessions", {
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "agent_list_all_sessions", {
+      includeArchived: true,
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "agent_list_sessions", {
       cwd: "/repo",
       includeArchived: false,
     });
-    expect(invokeMock).toHaveBeenNthCalledWith(3, "agent_list_sessions", {
+    expect(invokeMock).toHaveBeenNthCalledWith(4, "agent_list_sessions", {
       cwd: "/repo",
       includeArchived: true,
     });

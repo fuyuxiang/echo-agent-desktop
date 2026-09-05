@@ -37,7 +37,7 @@ import { filesystemPickFiles, type WorkspaceInfo } from "@/lib/agent-client";
 
 /**
  * EchoAgent 风格输入卡片(圆角16):左下 +,右下 Auto 下拉/麦克风/发送;
- * showMeta 时卡片内部底部显示"选择工作空间/默认权限"。
+ * showMeta 时卡片内部底部显示“选择工作目录/默认权限”。
  * showDisclaimer 时卡片下方渲染免责声明行。
  * apiReady=false 时输入禁用,点击卡片引导打开设置。
  */

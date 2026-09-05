@@ -20,7 +20,6 @@ describe("ensureSession", () => {
       homeCwd: "/tmp/echoagent-test",
       currentSessionId: null,
       independent: [],
-      workspaceSessions: {},
     });
     mocks.agentAuthStatus.mockResolvedValue({
       ready: true,

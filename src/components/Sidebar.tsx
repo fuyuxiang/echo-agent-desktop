@@ -46,15 +46,6 @@ const NAV = [
   { label: "自动化", icon: EchoAutomationNavIcon },
 ];
 
-/** Last path segment of a working directory, used as a 空间 node label. */
-function basename(p: string): string {
-  if (!p) return "默认空间";
-  const norm = p.replace(/[\\/]+$/, "");
-  const i = Math.max(norm.lastIndexOf("/"), norm.lastIndexOf("\\"));
-  const name = i >= 0 ? norm.slice(i + 1) : norm;
-  return name || "默认空间";
-}
-
 /** Compact, locale-friendly relative time for the sidebar row tail. */
 function relativeTime(iso: string): string {
   const t = new Date(iso).getTime();
@@ -645,10 +636,10 @@ function MoreDropdown({
 }
 
 /**
- * EchoAgent 风格侧栏:品牌行 / 导航 / 双分组(任务 + 空间) / 底部用户区。
+ * EchoAgent 风格侧栏:品牌行 / 导航 / 双分组(任务 + 项目) / 底部用户区。
  *
- * 任务分组列初始/home cwd 的收件箱会话;空间分组列其他本地工作目录节点,每个节点可
- * 展开懒加载其下的会话。详见 sessions-store 的双分组模型。
+ * 工作目录只控制 Agent 的文件上下文。任务与项目的展示归属由项目实体中的显式
+ * 会话引用决定，因此升级前使用旧默认目录的任务不会变成伪项目节点。
  */
 export function Sidebar({
   onNewSession,
@@ -656,7 +647,6 @@ export function Sidebar({
   onNavigate,
   onOpenSettings,
   onToggleCollapse,
-  onToggleWorkspace,
   onOpenSearch,
   onPlaceholder,
   onToast,
@@ -673,8 +663,6 @@ export function Sidebar({
   onOpenSettings: () => void;
   /** Collapse the sidebar; an expand affordance is rendered over the main area. */
   onToggleCollapse: () => void;
-  /** Expand/collapse a 空间 (workspace) node; lazy-loads its sessions. */
-  onToggleWorkspace: (cwd: string, next: boolean) => void;
   /** Open the session search overlay. */
   onOpenSearch: () => void;
   onPlaceholder: (label: string) => void;
@@ -687,22 +675,18 @@ export function Sidebar({
   /** Keep App's focused transcript and project references in sync. */
   onSessionArchived?: (sessionId: string, archived: boolean) => void;
   onSessionDeleted?: (sessionId: string) => void;
-  /** Retry the recoverable session/workspace catalog load. */
+  /** Retry the recoverable session/working-directory catalog load. */
   onRetrySessions?: () => void;
   activeNav: string;
 }) {
   const independent = useSessionsStore((s) => s.independent);
-  const workspaces = useSessionsStore((s) => s.workspaces);
-  const homeCwd = useSessionsStore((s) => s.homeCwd);
-  const workspaceSessions = useSessionsStore((s) => s.workspaceSessions);
   const tasksOpen = useSessionsStore((s) => s.tasksOpen);
-  const spacesOpen = useSessionsStore((s) => s.spacesOpen);
-  const expanded = useSessionsStore((s) => s.expanded);
+  const projectsOpen = useSessionsStore((s) => s.projectsOpen);
   const currentSessionId = useSessionsStore((s) => s.currentSessionId);
   const upsertSession = useSessionsStore((s) => s.upsert);
   const removeSession = useSessionsStore((s) => s.remove);
   const setTasksOpen = useSessionsStore((s) => s.setTasksOpen);
-  const setSpacesOpen = useSessionsStore((s) => s.setSpacesOpen);
+  const setProjectsOpen = useSessionsStore((s) => s.setProjectsOpen);
   const organizationSession = useOrgSessionStore((s) => s.session);
   const organizationUserLabel = organizationSession?.loggedIn
     ? organizationSession.user?.displayName?.trim()
@@ -722,7 +706,7 @@ export function Sidebar({
   const sessionsLoading = useSessionsStore((s) => s.loading);
   const sessionsError = useSessionsStore((s) => s.error);
 
-  // Projects from the local store — shown as expandable nodes in 空间.
+  // Real project entities are the only nodes shown in the 项目 section.
   const projects = useProjectsStore((s) => s.projects);
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
 
@@ -776,12 +760,7 @@ export function Sidebar({
     returnFocus?: HTMLElement;
   } | null>(null);
 
-  // Flat view across both groups — used to look up a session's cwd for the
-  // rename/delete/pin round-trips (the entries may live in either group).
-  const allSessions = useMemo<SessionSummary[]>(
-    () => [...independent, ...Object.values(workspaceSessions).flat()],
-    [independent, workspaceSessions],
-  );
+  const allSessions = independent;
 
   const handleContextMenu = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean, isArchived: boolean) => {
     e.preventDefault();
@@ -933,16 +912,27 @@ export function Sidebar({
     </div>
   );
 
-  // 空间 nodes = every workspace except the inbox (homeCwd), whose sessions
-  // already appear in the 任务 group.
-  const spaceNodes = workspaces.filter((w) => w.cwd !== homeCwd);
-
-  // Apply status + date filters to the 任务 (independent) list.
-  const filteredIndependent = useMemo(
-    () => filterSessions(independent, filterStatus, filterDate, filterArchived),
-    [independent, filterStatus, filterDate, filterArchived],
+  const projectSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const project of projects) {
+      for (const conversation of project.conversations) ids.add(conversation.sessionId);
+      for (const plan of project.plans) if (plan.sessionId) ids.add(plan.sessionId);
+      for (const task of project.tasks) if (task.sessionId) ids.add(task.sessionId);
+    }
+    return ids;
+  }, [projects]);
+  const taskSessions = useMemo(
+    () => independent.filter((session) => !projectSessionIds.has(session.sessionId)),
+    [independent, projectSessionIds],
   );
-  const scopedIndependentCount = independent.filter(
+
+  // Apply status + date filters only to standalone tasks. Project conversations
+  // remain accessible below their owning project and in global search.
+  const filteredIndependent = useMemo(
+    () => filterSessions(taskSessions, filterStatus, filterDate, filterArchived),
+    [taskSessions, filterStatus, filterDate, filterArchived],
+  );
+  const scopedIndependentCount = taskSessions.filter(
     (session) => !!session.archived === filterArchived,
   ).length;
 
@@ -1018,7 +1008,7 @@ export function Sidebar({
             {independent.length === 0 ? "正在加载会话…" : "正在刷新会话…"}
           </div>
         )}
-        {/* 任务分组: 收件箱(初始目录)下的会话 */}
+        {/* 任务分组: 所有未归属项目的会话，cwd 不参与分类。 */}
         <div className="sidebar__section-head">
           <button
             type="button"
@@ -1094,25 +1084,24 @@ export function Sidebar({
           </div>
         )}
 
-        {/* 空间分组: 项目节点 + 本地工作目录节点 */}
+        {/* 项目分组: 仅展示真实项目实体。 */}
         <button
           type="button"
           className="sidebar__section-label"
-          aria-expanded={spacesOpen}
-          aria-controls="sidebar-space-list"
-          onClick={() => setSpacesOpen(!spacesOpen)}
+          aria-expanded={projectsOpen}
+          aria-controls="sidebar-project-list"
+          onClick={() => setProjectsOpen(!projectsOpen)}
         >
-          <span>空间 ({projects.length + spaceNodes.length})</span>
+          <span>项目 ({projects.length})</span>
           <ChevronDownIcon
             size="sm"
-            className={"sidebar__chevron" + (spacesOpen ? "" : " sidebar__chevron--collapsed")}
+            className={"sidebar__chevron" + (projectsOpen ? "" : " sidebar__chevron--collapsed")}
           />
         </button>
-        {spacesOpen && (
-          <div id="sidebar-space-list" className="sidebar__group">
-            {/* 项目节点 */}
-            {projects.length === 0 && spaceNodes.length === 0 && (
-              <div className="sidebar__empty">暂无空间</div>
+        {projectsOpen && (
+          <div id="sidebar-project-list" className="sidebar__group">
+            {projects.length === 0 && (
+              <div className="sidebar__empty">暂无项目</div>
             )}
             {projects.map((proj) => {
               const open = !!expandedProjects[proj.id];
@@ -1189,42 +1178,6 @@ export function Sidebar({
                           <span className="sidebar__conv-time">{relativeTime(conv.createdAt)}</span>
                         </button>
                       ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {/* 工作目录节点 */}
-            {spaceNodes.map((ws) => {
-              const open = !!expanded[ws.cwd];
-              const children = workspaceSessions[ws.cwd];
-              const filteredChildren = children
-                ? filterSessions(children, filterStatus, filterDate, filterArchived)
-                : undefined;
-              return (
-                <div key={ws.cwd} className="sidebar__node-wrap">
-                  <button
-                    className="sidebar__node"
-                    onClick={() => onToggleWorkspace(ws.cwd, !open)}
-                    title={ws.cwd}
-                    aria-expanded={open}
-                  >
-                    <EchoExpertNavIcon size="sm" />
-                    <span className="sidebar__node-name">{basename(ws.cwd)}</span>
-                    <ChevronDownIcon
-                      size="sm"
-                      className={"sidebar__chevron" + (open ? "" : " sidebar__chevron--collapsed")}
-                    />
-                  </button>
-                  {open && (
-                    <div className="sidebar__children">
-                      {children === undefined && <div className="sidebar__empty">加载中…</div>}
-                      {filteredChildren && filteredChildren.length === 0 && (
-                        <div className="sidebar__empty">
-                          {filterArchived ? "暂无已归档会话" : children?.length ? "无匹配筛选条件的会话" : "暂无会话"}
-                        </div>
-                      )}
-                      {filteredChildren && sortPinnedFirst(filteredChildren).map(renderConv)}
                     </div>
                   )}
                 </div>

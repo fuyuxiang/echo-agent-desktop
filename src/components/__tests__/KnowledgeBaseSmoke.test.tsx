@@ -65,7 +65,6 @@ const base = {
   onNavigate: vi.fn(),
   onOpenSettings: vi.fn(),
   onToggleCollapse: vi.fn(),
-  onToggleWorkspace: vi.fn(),
   onOpenSearch: vi.fn(),
   onPlaceholder: vi.fn(),
   activeNav: "新建任务",

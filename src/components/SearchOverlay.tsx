@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Search, X, Clock, FileText } from "lucide-react";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { agentListSessions, sessionSearch } from "@/lib/agent-client";
@@ -26,17 +26,9 @@ export function SearchOverlay({
   onClose: () => void;
   onSelect: (sessionId: string, cwd?: string) => void | Promise<void>;
 }) {
-  // Two-section model: there is no single flat list anymore. For local title
-  // matching we flatten whatever the sidebar currently holds (independent +
-  // any expanded 空间 node caches). Cross-cwd content search still goes via
-  // EchoAgent FTS below, so unexpanded nodes remain searchable by content/title.
+  // The local catalog already spans every historical working directory.
   const independent = useSessionsStore((s) => s.independent);
-  const workspaceSessions = useSessionsStore((s) => s.workspaceSessions);
-  const homeCwd = useSessionsStore((s) => s.homeCwd);
-  const sessions = useMemo<SessionSummary[]>(
-    () => [...independent, ...Object.values(workspaceSessions).flat()],
-    [independent, workspaceSessions],
-  );
+  const sessions = independent;
   const [query, setQuery] = useState("");
   const [remoteHits, setRemoteHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
@@ -156,12 +148,10 @@ export function SearchOverlay({
     try {
       let summary = sessions.find((item) => item.sessionId === sessionId);
       if (!summary) {
-        if (!cwd) throw new Error("检索结果缺少工作区信息，无法打开");
+        if (!cwd) throw new Error("检索结果缺少工作目录信息，无法打开");
         const hydrated = await agentListSessions(cwd, true);
         if (lifecycleGenerationRef.current !== lifecycleGeneration) return;
-        const store = useSessionsStore.getState();
-        if (cwd === homeCwd) store.setIndependent(hydrated);
-        else store.setWorkspaceSessions(cwd, hydrated);
+        useSessionsStore.getState().mergeSessions(hydrated);
         summary = hydrated.find((item) => item.sessionId === sessionId);
       }
       if (!summary) {
