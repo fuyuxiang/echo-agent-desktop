@@ -213,9 +213,19 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         <div>
           <h2 className="resources-panel__title">个人记忆</h2>
           <p className="resources-panel__subtitle">管理跨会话偏好、项目上下文和 Agent 自动生成的会话记录</p>
+          <div className="resources-panel__context" aria-label="当前记忆上下文">
+            <span className="resources-panel__context-label">{cwd ? "当前工作区" : "全局记忆"}</span>
+            {cwd && <code className="resources-panel__context-path" title={cwd}>{cwd}</code>}
+            <span className={sessionId
+              ? "resources-panel__session-state resources-panel__session-state--connected"
+              : "resources-panel__session-state"}
+            >
+              {sessionId ? "已连接当前会话" : "未连接会话，仅支持查看和手动编辑"}
+            </span>
+          </div>
         </div>
         <div className="resources-panel__header-actions">
-          <button className="resources-panel__action-btn" onClick={handleFlush} disabled={busy || !sessionId} title="提取当前会话中的长期信息并立即写入磁盘">
+          <button className="resources-panel__action-btn" onClick={handleFlush} disabled={busy || !sessionId} title="提取当前会话中的可复用信息并写入会话记录">
             落盘
           </button>
           <button className="resources-panel__action-btn" onClick={handleDream} disabled={busy || !sessionId} title="把历史会话记录归纳为长期记忆">
@@ -265,7 +275,10 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         {!loading && !loadError && filtered.length === 0 && (
           <div className="resources-panel__empty">
             <BookIcon size="xl" color="var(--echo-text-tertiary)" />
-            <p>暂无记忆。可手动添加，也可在对话中使用 <code>/remember</code> 保存。</p>
+            <p>
+              暂无记忆文件。请确认已在“设置 → 记忆”中启用本地记忆并重启 Agent；
+              也可手动添加，或在对话中使用 <code>/remember</code> 保存。
+            </p>
           </div>
         )}
         {filtered.map((entry) => (

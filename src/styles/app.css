@@ -7622,6 +7622,38 @@ button.diff__path {
   font-weight: 600;
   color: rgb(34, 34, 34);
 }
+.resources-panel__context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 8px;
+  max-width: min(680px, 65vw);
+  font-size: 11px;
+  color: var(--echo-text-medium);
+}
+.resources-panel__context-label {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--echo-text-strong);
+}
+.resources-panel__context-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+  color: var(--echo-text-medium);
+}
+.resources-panel__session-state {
+  flex-shrink: 0;
+  padding-left: 10px;
+  border-left: 1px solid var(--echo-border-default);
+  color: var(--echo-text-weak);
+}
+.resources-panel__session-state--connected {
+  color: var(--echo-success, #2f8f5b);
+}
 .resources-panel__actions {
   display: flex;
   align-items: center;
