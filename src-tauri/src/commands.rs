@@ -1045,6 +1045,16 @@ pub fn agent_list_sessions(
     ))
 }
 
+/// Return the complete persisted session catalog across working directories.
+/// The cwd in each row is execution context only; the frontend decides whether
+/// a session belongs to a project from explicit project references.
+#[tauri::command]
+pub fn agent_list_all_sessions(
+    include_archived: Option<bool>,
+) -> Result<Vec<SessionSummary>, String> {
+    sessions::list_all_sessions(include_archived.unwrap_or(false))
+}
+
 #[tauri::command]
 pub async fn agent_send(
     app: tauri::AppHandle,

@@ -19,10 +19,8 @@ describe("sessions-store drafts", () => {
     useSessionsStore.setState({
       independent: [],
       workspaces: [],
-      workspaceSessions: {},
       tasksOpen: true,
-      spacesOpen: true,
-      expanded: {},
+      projectsOpen: true,
       homeCwd: "",
       currentSessionId: null,
       loading: false,
@@ -103,19 +101,19 @@ describe("sessions-store drafts", () => {
     expect(entry2?.updatedAt).toBe("2020-01-01T00:00:00.000Z");
   });
 
-  it("未知 cwd 的 summary 先暂存，hydrate 后合并且不误入任务组", () => {
+  it("未知 cwd 的 summary 先暂存，hydrate 后合并到完整任务目录", () => {
     useSessionsStore.getState().setHomeCwd("/home");
     useSessionsStore.getState().upsert({ sessionId: "remote", title: "事件标题" });
     expect(useSessionsStore.getState().independent).toHaveLength(0);
     expect(useSessionsStore.getState().pendingSessionPatches.remote?.title).toBe("事件标题");
 
-    useSessionsStore.getState().setWorkspaceSessions("/workspace", [{
+    useSessionsStore.getState().mergeSessions([{
       sessionId: "remote",
       title: "原标题",
       cwd: "/workspace",
       currentModelId: "model-a",
     }]);
-    expect(useSessionsStore.getState().workspaceSessions["/workspace"][0]).toMatchObject({
+    expect(useSessionsStore.getState().independent[0]).toMatchObject({
       sessionId: "remote",
       title: "事件标题",
       cwd: "/workspace",
@@ -124,7 +122,7 @@ describe("sessions-store drafts", () => {
     expect(useSessionsStore.getState().pendingSessionPatches.remote).toBeUndefined();
   });
 
-  it("新工作区会话在节点未展开时也不会丢失", () => {
+  it("在非默认工作目录新建的会话仍进入任务目录", () => {
     useSessionsStore.getState().setHomeCwd("/home");
     useSessionsStore.getState().upsert({
       sessionId: "workspace-new",
@@ -132,7 +130,7 @@ describe("sessions-store drafts", () => {
       cwd: "/workspace",
       currentModelId: "model-a",
     });
-    expect(useSessionsStore.getState().workspaceSessions["/workspace"][0]).toMatchObject({
+    expect(useSessionsStore.getState().independent[0]).toMatchObject({
       sessionId: "workspace-new",
       cwd: "/workspace",
       currentModelId: "model-a",
@@ -143,15 +141,24 @@ describe("sessions-store drafts", () => {
     }));
   });
 
-  it("删除工作区会话同步移除缓存并修正计数", () => {
+  it("删除会话同步修正工作目录计数", () => {
     useSessionsStore.setState({
       workspaces: [{ cwd: "/workspace", sessionCount: 2 }],
-      workspaceSessions: {
-        "/workspace": [{ sessionId: "s1", title: "one", cwd: "/workspace" }],
-      },
+      independent: [{ sessionId: "s1", title: "one", cwd: "/workspace" }],
     });
     useSessionsStore.getState().remove("s1", "/workspace");
-    expect(useSessionsStore.getState().workspaceSessions["/workspace"]).toEqual([]);
+    expect(useSessionsStore.getState().independent).toEqual([]);
     expect(useSessionsStore.getState().workspaces[0].sessionCount).toBe(1);
+  });
+
+  it("切换默认工作目录不会改变已有任务的归属", () => {
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "legacy", title: "旧任务", cwd: "/Users/alice" },
+      { sessionId: "current", title: "新任务", cwd: "/Users/alice/Documents/EchoAgent" },
+    ]);
+    useSessionsStore.getState().setHomeCwd("/Users/alice/Documents/EchoAgent");
+
+    expect(useSessionsStore.getState().independent.map((item) => item.sessionId))
+      .toEqual(["legacy", "current"]);
   });
 });

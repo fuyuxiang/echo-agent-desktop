@@ -38,13 +38,11 @@ vi.mock("@/stores/sessions-store", () => ({
     drafts: Record<string, string>;
     setDraft: () => void;
     independent: unknown[];
-    workspaceSessions: Record<string, unknown[]>;
   }) => unknown) =>
     sel({
       drafts: {},
       setDraft: () => {},
       independent: [],
-      workspaceSessions: {},
     }),
   HOME_DRAFT_KEY: "home",
 }));
@@ -56,7 +54,7 @@ vi.mock("@/lib/agent-client", async () => {
   const asyncArr = async () => [];
   for (const name of [
     "rewindExecute", "rewindPoints", "agentInit", "agentNewSession", "agentSend",
-    "agentCancel", "agentLoadSession", "agentListSessions", "agentListWorkspaces",
+    "agentCancel", "agentLoadSession", "agentListAllSessions", "agentListSessions", "agentListWorkspaces",
     "agentRenameSession", "agentSetModel", "agentSetSessionExpert", "agentAuthStatus",
     "providersList", "flattenModels", "notificationAppend", "subscribeAgentEvents",
     "commandsList", "promptHistory", "tasksList", "taskKill", "permissionList",
