@@ -53,6 +53,7 @@ describe("ResourcesPanel", () => {
     render(<ResourcesPanel cwd="/repo" sessionId="session-1" />);
 
     expect(await screen.findByText("2026-08-31-session.md")).toBeInTheDocument();
+    expect(screen.getByLabelText("当前记忆上下文")).toHaveTextContent("当前工作区/repo已连接当前会话");
     expect(screen.getByText("会话记录")).toBeInTheDocument();
     expect(screen.getAllByTitle("删除")).toHaveLength(1);
 
@@ -67,6 +68,15 @@ describe("ResourcesPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "落盘" }));
     await waitFor(() => expect(api.memoryFlush).toHaveBeenCalledWith("session-1"));
+  });
+
+  it("没有活动会话时明确说明维护能力受限", async () => {
+    render(<ResourcesPanel cwd="/repo" />);
+    await screen.findByText("MEMORY.md");
+
+    expect(screen.getByLabelText("当前记忆上下文")).toHaveTextContent("未连接会话");
+    expect(screen.getByRole("button", { name: "落盘" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "整理" })).toBeDisabled();
   });
 
   it("新建记忆追加到工作区主文件", async () => {

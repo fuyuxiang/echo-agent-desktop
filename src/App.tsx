@@ -152,6 +152,11 @@ function findSessionSummary(sessionId: string): SessionSummary | undefined {
       .find((entry) => entry.sessionId === sessionId);
 }
 
+/** Views that inspect or maintain memory belonging to the active session. */
+function isMemoryResourceView(label: string | null): boolean {
+  return label === "更多" || label === "资料库" || label === "个人记忆";
+}
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -756,6 +761,10 @@ function Shell() {
     }
     selectionGenerationRef.current += 1;
     setPlaceholderView(label);
+    // Personal memory is an inspector for the active session, not a separate
+    // navigation context. Keep both stores focused so the panel can address the
+    // live session for flush/dream and resolve its authoritative workspace cwd.
+    if (isMemoryResourceView(label)) return;
     sessionsStore.getState().setCurrent(null);
     sessionStore.getState().reset();
     setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
@@ -1330,11 +1339,11 @@ function Shell() {
         const memoryCwd = activeId
           ? findSessionSummary(activeId)?.cwd
           : newSessionTargetCwd;
-        if (!memoryCwd) {
+        if (remember.scope === "workspace" && !memoryCwd) {
           showToast("无法确定当前工作区，记忆未保存");
           return false;
         }
-        await memoryAppend(remember.scope, remember.content, memoryCwd);
+        await memoryAppend(remember.scope, remember.content, memoryCwd || undefined);
         showToast(remember.scope === "global" ? "已保存到全局记忆" : "已保存到当前工作区记忆");
         return true;
       }
@@ -1671,7 +1680,9 @@ function Shell() {
                   onOpenSession={handleSelectSession}
                   onGoHome={handleGoHome}
                   onToast={showToast}
-                  cwd={newSessionTargetCwd}
+                  cwd={isMemoryResourceView(placeholderView)
+                    ? activeSessionCwd || newSessionTargetCwd
+                    : newSessionTargetCwd}
                   onSelectWorkspace={handleSelectWorkspace}
                   sessionId={currentSessionId ?? undefined}
                   onStartProject={handleStartProject}

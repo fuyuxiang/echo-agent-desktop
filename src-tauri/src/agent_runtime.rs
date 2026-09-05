@@ -219,7 +219,14 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
                 // whose OutMessage is `AcpClientMessage` — matching what
                 // `acp_agent.tx` (Sender<AcpClientMessage>) accepts.
                 let gateway = AcpAgentGatewaySender::new(client_tx);
-                let agent = MvpAgent::with_models(gateway, &cfg, auth_manager, models_manager);
+                let mut agent = MvpAgent::with_models(gateway, &cfg, auth_manager, models_manager);
+                // `with_models` deliberately leaves MvpAgent::memory_config as None.
+                // Upstream launchers apply the already-resolved configuration with
+                // `set_memory_config`; the desktop's direct-dispatch launcher must do
+                // the same or every session starts without a memory backend.
+                if let Some(memory_config) = cfg.memory_config.clone() {
+                    agent.set_memory_config(memory_config);
+                }
                 let agent_rc = Rc::new(agent);
 
                 // Direct dispatch: the receiver calls MvpAgent's `acp::Agent`
