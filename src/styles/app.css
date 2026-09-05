@@ -8773,7 +8773,11 @@ button.diff__path {
   bottom: 16px;
   right: 16px;
   z-index: 50;
-  width: 320px;
+  width: min(320px, calc(100vw - 32px));
+  max-height: min(480px, calc(100vh - 32px));
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
   background: var(--echo-bg-primary);
   border: 1px solid var(--echo-border-default);
   border-radius: 12px;
@@ -8786,6 +8790,9 @@ button.diff__path {
   justify-content: space-between;
   margin-bottom: 8px;
 }
+.tasks-panel--collapsed .tasks-panel__header {
+  margin-bottom: 0;
+}
 .tasks-panel__title {
   display: flex;
   align-items: center;
@@ -8795,7 +8802,12 @@ button.diff__path {
   font-weight: 600;
   color: var(--echo-text-strong);
 }
-.tasks-panel__refresh {
+.tasks-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.tasks-panel__control {
   border: none;
   background: transparent;
   color: var(--echo-text-weak);
@@ -8803,9 +8815,22 @@ button.diff__path {
   padding: 4px;
   display: flex;
   align-items: center;
+  justify-content: center;
+  border-radius: 4px;
 }
-.tasks-panel__refresh:hover {
+.tasks-panel__control:hover:not(:disabled) {
   color: var(--echo-text-strong);
+  background: var(--echo-bg-secondary);
+}
+.tasks-panel__control:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.tasks-panel__collapse svg {
+  transition: transform 0.15s ease;
+}
+.tasks-panel--collapsed .tasks-panel__collapse svg {
+  transform: rotate(-90deg);
 }
 .tasks-panel__list {
   list-style: none;
@@ -8814,6 +8839,8 @@ button.diff__path {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
 }
 .tasks-panel__item {
   display: flex;
@@ -8860,6 +8887,10 @@ button.diff__path {
 .tasks-panel__kill:hover {
   color: #e54848;
   background: rgba(229, 72, 72, 0.1);
+}
+.tasks-panel__kill:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 .tasks-panel__loading {
   font-size: 12px;
