@@ -630,6 +630,8 @@ export interface SlashCommand {
 
 export interface RunningTask {
   id: string;
+  /** Native endpoint that owns this id and must handle cancellation. */
+  source: "task" | "subagent";
   kind?: string;
   description?: string;
   status?: string;

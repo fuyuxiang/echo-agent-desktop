@@ -1006,6 +1006,9 @@ function Shell() {
             return;
           }
           await agentLoadSession(sessionId, sessionCwd);
+          if (sessionsStore.getState().currentSessionId === sessionId) {
+            setTaskRefreshSignal((value) => value + 1);
+          }
           await trySet();
           commit();
           return;
@@ -1184,6 +1187,9 @@ function Shell() {
       // Load with the session's OWN cwd (independent sessions have cwd="").
       // Viewing a 空间 child must NOT re-aim the new-session target directory.
       await agentLoadSession(sessionId, entry.cwd);
+      if (sessionsStore.getState().currentSessionId === sessionId) {
+        setTaskRefreshSignal((value) => value + 1);
+      }
       const transcript = sessionStore.getState().transcripts[sessionId];
       if (transcript) {
         indexTaskArtifacts(
@@ -1227,6 +1233,9 @@ function Shell() {
     sessionStore.getState().setSession(rewoundSessionId);
     try {
       await agentLoadSession(rewoundSessionId, entry.cwd);
+      if (sessionsStore.getState().currentSessionId === rewoundSessionId) {
+        setTaskRefreshSignal((value) => value + 1);
+      }
     } catch (error) {
       if (sessionsStore.getState().currentSessionId === rewoundSessionId) {
         sessionStore.getState().setError(friendlyError(error));
@@ -1256,11 +1265,17 @@ function Shell() {
     setPlaceholderView(null);
     sessionsStore.getState().setCurrent(newId);
     sessionStore.getState().setSession(newId);
-    void agentLoadSession(newId, cwd).catch((e) => {
-      if (sessionsStore.getState().currentSessionId === newId) {
-        sessionStore.getState().setError(friendlyError(e));
-      }
-    });
+    void agentLoadSession(newId, cwd)
+      .then(() => {
+        if (sessionsStore.getState().currentSessionId === newId) {
+          setTaskRefreshSignal((value) => value + 1);
+        }
+      })
+      .catch((e) => {
+        if (sessionsStore.getState().currentSessionId === newId) {
+          sessionStore.getState().setError(friendlyError(e));
+        }
+      });
   };
 
   /** Execute commands owned by the desktop shell. Runtime commands and Skills
@@ -1781,7 +1796,11 @@ function Shell() {
           onToast={showToast}
         />
       </Suspense>
-      <TasksPanel refreshSignal={taskRefreshSignal} onToast={showToast} />
+      <TasksPanel
+        sessionId={currentSessionId ?? undefined}
+        refreshSignal={taskRefreshSignal}
+        onToast={showToast}
+      />
       <SecondarySidebar onSelectExpert={handleStartWithExpert} onToast={showToast} />
     </div>
   );

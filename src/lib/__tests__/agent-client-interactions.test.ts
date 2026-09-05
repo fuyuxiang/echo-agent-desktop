@@ -11,6 +11,8 @@ import {
   automationsRun,
   folderTrustRespond,
   setPlanMode,
+  taskKill,
+  tasksList,
 } from "../agent-client";
 
 const invokeMock = vi.mocked(invoke);
@@ -85,5 +87,27 @@ describe("agent interaction command contracts", () => {
   it("returns the durable automation run record id", async () => {
     invokeMock.mockResolvedValue("run-123");
     await expect(automationsRun("automation-1")).resolves.toBe("run-123");
+  });
+
+  it("scopes running-task queries and kills to the selected session", async () => {
+    invokeMock.mockResolvedValue([]);
+
+    await tasksList("session-1");
+    await taskKill("session-1", "task-7", "task");
+    await taskKill("session-1", "subagent-8", "subagent");
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "tasks_list", {
+      sessionId: "session-1",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "task_kill", {
+      sessionId: "session-1",
+      taskId: "task-7",
+      source: "task",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(3, "task_kill", {
+      sessionId: "session-1",
+      taskId: "subagent-8",
+      source: "subagent",
+    });
   });
 });

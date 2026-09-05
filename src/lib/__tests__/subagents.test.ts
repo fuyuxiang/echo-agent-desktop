@@ -130,9 +130,9 @@ describe("deriveSubagents", () => {
 describe("tasksToActivities / taskStatusToToolStatus", () => {
   it("RunningTask → SubagentActivity", () => {
     const tasks: RunningTask[] = [
-      { id: "tk1", description: "后台搜索", status: "running" },
-      { id: "tk2", description: "已完成", status: "done" },
-      { id: "tk3", description: "失败", status: "failed" },
+      { id: "tk1", source: "task", description: "后台搜索", status: "running" },
+      { id: "tk2", source: "task", description: "已完成", status: "done" },
+      { id: "tk3", source: "subagent", description: "失败", status: "failed" },
     ];
     const acts = tasksToActivities(tasks);
     expect(acts[0].status).toBe("in_progress");
