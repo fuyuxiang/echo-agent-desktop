@@ -67,6 +67,7 @@ const MAX_FEEDBACK_CHARS: usize = 16_384;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 const MAX_FALLBACK_CREDENTIALS: usize = 32;
 
+#[cfg(target_os = "macos")]
 const CREDENTIAL_SERVICE: &str = "com.echoagent.organization";
 const PROFILE_FILE: &str = "organization-profile.json";
 const SKILL_STATE_FILE: &str = "organization-skills.json";
