@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback, createContext, useContext } from "react";
+import { useLayoutEffect, useState, useCallback, createContext, useContext } from "react";
 
-type Theme = "light" | "dark";
+export type Theme = "light" | "dark";
 
 interface ThemeCtx {
   theme: Theme;
@@ -10,22 +10,43 @@ interface ThemeCtx {
 
 const Ctx = createContext<ThemeCtx | null>(null);
 
-const STORAGE_KEY = "echoagent.theme";
+export const THEME_STORAGE_KEY = "echoagent.theme";
 
-function initialTheme(): Theme {
+export function getStoredTheme(): Theme {
   if (typeof window === "undefined") return "light";
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved === "light" || saved === "dark") return saved;
+  try {
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === "light" || saved === "dark") return saved;
+  } catch {
+    // WebView privacy/storage restrictions must not prevent the UI from loading.
+  }
   // Default to light, matching EchoAgent.
   return "light";
 }
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(initialTheme);
+export function applyTheme(theme: Theme) {
+  if (typeof document === "undefined") return;
+  document.documentElement.setAttribute("data-theme", theme);
+  document.documentElement.style.colorScheme = theme;
+}
 
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem(STORAGE_KEY, theme);
+/** Apply the persisted theme before React mounts to avoid a light startup frame. */
+export function initializeTheme(): Theme {
+  const theme = getStoredTheme();
+  applyTheme(theme);
+  return theme;
+}
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [theme, setThemeState] = useState<Theme>(getStoredTheme);
+
+  useLayoutEffect(() => {
+    applyTheme(theme);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Keep the selected theme for this process even when persistence is unavailable.
+    }
   }, [theme]);
 
   const setTheme = useCallback((t: Theme) => setThemeState(t), []);

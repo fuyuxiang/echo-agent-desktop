@@ -5,6 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/app-icon.png" />
     <title>EchoAgent</title>
+    <script>
+      // Set the saved theme before styles and React load so startup never paints
+      // a light frame for users who selected dark mode.
+      (() => {
+        let theme = "light";
+        try {
+          const saved = localStorage.getItem("echoagent.theme");
+          if (saved === "dark" || saved === "light") theme = saved;
+        } catch (_) {
+          // Storage may be unavailable in a restricted WebView; light is safe.
+        }
+        document.documentElement.setAttribute("data-theme", theme);
+        document.documentElement.style.colorScheme = theme;
+      })();
+    </script>
     <!--
       Global base layer — ported from echo-agent/renderer/index.html.
       EchoAgent injects VS Code theme variables from the host; here we hardcode
@@ -41,6 +56,11 @@
         -moz-osx-font-smoothing: grayscale;
       }
 
+      html[data-theme="dark"] body {
+        background-color: #1f1f1f;
+        color: rgba(255, 255, 255, 0.92);
+      }
+
       .echo-startup-fallback {
         height: 100%;
         display: grid;
@@ -50,6 +70,11 @@
         font-size: 14px;
       }
 
+      html[data-theme="dark"] .echo-startup-fallback {
+        background: #1f1f1f;
+        color: rgba(255, 255, 255, 0.72);
+      }
+
       ::-webkit-scrollbar {
         width: 10px;
         height: 10px;
@@ -57,19 +82,19 @@
       ::-webkit-scrollbar-thumb {
         background-color: var(
           --vscode-scrollbarSlider-background,
-          rgba(100, 100, 100, 0.4)
+          var(--echo-scrollbar-thumb, rgba(100, 100, 100, 0.4))
         );
       }
       ::-webkit-scrollbar-thumb:hover {
         background-color: var(
           --vscode-scrollbarSlider-hoverBackground,
-          rgba(100, 100, 100, 0.7)
+          var(--echo-scrollbar-thumb-hover, rgba(100, 100, 100, 0.7))
         );
       }
       ::-webkit-scrollbar-thumb:active {
         background-color: var(
           --vscode-scrollbarSlider-activeBackground,
-          rgba(0, 0, 0, 0.6)
+          var(--echo-scrollbar-thumb-hover, rgba(100, 100, 100, 0.7))
         );
       }
     </style>

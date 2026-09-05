@@ -420,11 +420,11 @@
 }
 .msg-wrap--find-hit {
   box-shadow: inset 3px 0 0 var(--echo-brand);
-  background: rgba(0, 0, 0, 0.02);
+  background: color-mix(in srgb, var(--echo-text-strong) 3%, transparent);
 }
 .msg-wrap--find-current {
   box-shadow: inset 3px 0 0 var(--echo-brand);
-  background: rgba(0, 122, 255, 0.06);
+  background: color-mix(in srgb, var(--echo-brand) 8%, transparent);
 }
 
 /* ---------- messages ---------- */
@@ -446,8 +446,8 @@
 .msg__bubble {
   max-width: 100%;
   padding: 8px 12px;
-  background: rgb(235, 235, 235);
-  color: rgba(0, 0, 0, 0.9);
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-strong);
   border-radius: 16px 16px 0 16px;
   font-size: 14px;
   line-height: 22px;
@@ -473,9 +473,9 @@
   width: 100%;
   min-width: 0;
   padding: 9px 10px;
-  border: 1px solid rgba(0, 0, 0, 0.09);
+  border: 1px solid var(--echo-border-default);
   border-radius: 11px;
-  background: rgba(255, 255, 255, 0.72);
+  background: color-mix(in srgb, var(--echo-bg-primary) 84%, transparent);
   color: inherit;
   font: inherit;
   text-align: left;
@@ -483,8 +483,8 @@
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 .msg__attachment:hover {
-  background: rgba(255, 255, 255, 0.96);
-  border-color: rgba(0, 0, 0, 0.16);
+  background: var(--echo-bg-primary);
+  border-color: var(--echo-border-strong);
 }
 .msg__attachment:focus-visible {
   outline: 2px solid var(--echo-brand);
@@ -509,8 +509,8 @@
   height: 52px;
   flex-basis: 64px;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.05);
-  color: rgba(0, 0, 0, 0.48);
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-weak);
 }
 .msg__attachment-thumbnail {
   display: block;
@@ -527,14 +527,14 @@
 }
 .msg__attachment-name {
   overflow: hidden;
-  color: rgba(0, 0, 0, 0.9);
+  color: var(--echo-text-strong);
   font-size: 13px;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .msg__attachment-type {
-  color: rgba(0, 0, 0, 0.5);
+  color: var(--echo-text-weak);
   font-size: 11px;
 }
 .msg--assistant .msg__header {
@@ -1754,7 +1754,7 @@
 .msg--assistant .msg__name {
   font-size: 13px;
   font-weight: 500;
-  color: rgba(0, 0, 0, 0.9);
+  color: var(--echo-text-strong);
 }
 .msg--assistant .msg__avatar {
   width: 24px;
@@ -1777,7 +1777,7 @@
   color: var(--echo-text-strong);
 }
 .msg--assistant .msg__body code:not(pre code) {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--echo-bg-hover);
   border-radius: 3px;
   padding: 0 4px;
 }
@@ -4556,13 +4556,13 @@ button.diff__path {
 }
 /* EchoAgent 首页: composer 外层托盘(input-slot)灰渐变背景,包裹白卡+meta行 */
 .echo-composer-wrap--home {
-  background: linear-gradient(rgb(240, 240, 240) 0%, rgb(245, 245, 245) 100%);
+  background: linear-gradient(var(--echo-bg-tertiary) 0%, var(--echo-bg-secondary) 100%);
   border-radius: 18px;
   padding: 2px 2px 4px;
 }
 .echo-composer {
   position: relative;
-  background: #fff;
+  background: var(--echo-bg-primary);
   border: none;
   border-radius: 16px;
   box-shadow: 0 12px 24px -8px rgba(0,0,0,.02), 0 2px 4px -4px rgba(0,0,0,.02);
@@ -4576,7 +4576,7 @@ button.diff__path {
 }
 .echo-composer--disabled {
   cursor: pointer;
-  background: color-mix(in srgb, var(--echo-palette-black-100) 2%, transparent);
+  background: var(--echo-bg-hover);
 }
 .echo-composer__setup-hint {
   position: absolute;
@@ -4606,8 +4606,7 @@ button.diff__path {
   min-height: 70px;
 }
 .echo-composer__input::placeholder {
-  /* EchoAgent: 占位文本实为 0.9 黑 + opacity 0.5 → 等效 0.45 */
-  color: rgba(0, 0, 0, 0.45);
+  color: var(--echo-text-weak);
 }
 .echo-composer__input:disabled {
   cursor: pointer;
@@ -4874,7 +4873,7 @@ button.diff__path {
 }
 .echo-composer__tool--active {
   color: var(--echo-brand);
-  background: rgba(var(--echo-brand-rgb, 0, 122, 255), 0.1);
+  background: color-mix(in srgb, var(--echo-brand) 10%, transparent);
   animation: echo-composer__pulse 1.4s ease-in-out infinite;
 }
 @keyframes echo-composer__pulse {
@@ -4892,7 +4891,7 @@ button.diff__path {
   gap: 2px;
   border-radius: 8px;
   font-size: 13px;
-  color: rgb(51, 51, 51);
+  color: var(--echo-text-strong);
 }
 .echo-composer__model:hover {
   background: var(--echo-bg-hover);
@@ -4912,8 +4911,7 @@ button.diff__path {
 }
 .echo-composer__send:disabled,
 .echo-composer__send--empty {
-  /* EchoAgent: 输入为空时发送按钮呈灰圆深灰飞机(禁用态视觉) */
-  background: rgb(232, 232, 232);
+  background: var(--echo-bg-tertiary);
   color: var(--echo-text-tertiary);
 }
 .echo-composer__send:disabled {
@@ -4941,12 +4939,12 @@ button.diff__path {
   background: transparent;
   cursor: pointer;
   font-size: 13px;
-  color: rgba(0, 0, 0, 0.5);
+  color: var(--echo-text-medium);
   border-radius: 8px;
   padding: 0 8px;
 }
 .echo-composer-meta__btn:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--echo-bg-hover);
 }
 .echo-composer__disclaimer {
   text-align: center;
@@ -4956,7 +4954,7 @@ button.diff__path {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(0, 0, 0, 0.3);
+  color: var(--echo-text-weak);
 }
 
 /* 权限选择器放进卡片内 footer 时的左间距 */
@@ -5122,7 +5120,7 @@ button.diff__path {
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 .project-card2:hover {
-  border-color: #d8d8d8;
+  border-color: var(--echo-border-strong);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
 }
 .project-card2__main {
@@ -5149,8 +5147,8 @@ button.diff__path {
   align-items: center;
   justify-content: center;
   border-radius: 10px;
-  background: #f1f1f1;
-  color: #444;
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-medium);
 }
 .project-card2__body {
   display: flex;
@@ -5293,7 +5291,7 @@ button.diff__path {
 .proj-picker-dialog { width: 420px; }
 .proj-picker-body { gap: 6px; }
 .proj-picker-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--echo-border-default, #ececec); border-radius: 8px; background: var(--echo-bg-primary, #fff); font-size: 13px; color: var(--echo-text-medium); cursor: pointer; text-align: left; }
-.proj-picker-item--on { border-color: var(--echo-brand); background: rgba(var(--echo-brand-rgb, 0,122,255), 0.06); }
+.proj-picker-item--on { border-color: var(--echo-brand); background: color-mix(in srgb, var(--echo-brand) 6%, transparent); }
 .proj-picker-check { width: 18px; height: 18px; border: 1px solid var(--echo-border-default, #ccc); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; flex-shrink: 0; }
 .proj-picker-check--on { background: var(--echo-brand); border-color: var(--echo-brand); }
 .proj-drawer { width: 520px; }
@@ -5614,7 +5612,7 @@ button.diff__path {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: rgba(0, 0, 0, 0.55);
+  color: var(--echo-text-medium);
 }
 
 /* ===== Composer 内"操作类型"黑色标签(复刻 EchoAgent scene tag) ===== */
@@ -5688,16 +5686,15 @@ button.diff__path {
   align-items: flex-start;
 }
 .sidebar__logo {
-  /* EchoAgent: 12px/700/rgba(0,0,0,0.3) */
   font-size: 12px;
   font-weight: 700;
   line-height: 18px;
-  color: rgba(0, 0, 0, 0.3);
+  color: var(--echo-text-weak);
 }
 .sidebar__version {
   font-size: 10px;
   line-height: 14px;
-  color: rgba(0, 0, 0, 0.2);
+  color: var(--echo-text-muted);
 }
 .sidebar__logo-spacer {
   flex: 1;
@@ -6182,14 +6179,14 @@ button.diff__path {
   transition: background 0.12s ease;
 }
 .model-selector__trigger {
-  color: rgb(51, 51, 51);
+  color: var(--echo-text-strong);
 }
 .workspace-picker__trigger {
-  color: rgba(0, 0, 0, 0.5);
+  color: var(--echo-text-medium);
 }
 .model-selector__trigger:hover,
 .workspace-picker__trigger:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--echo-bg-hover);
 }
 .model-selector__label,
 .workspace-picker__label {
@@ -6422,8 +6419,8 @@ button.diff__path {
   padding: 2px 8px;
   font-size: 11px;
   color: var(--echo-brand);
-  background: rgba(0, 122, 255, 0.08);
-  border: 1px solid rgba(0, 122, 255, 0.2);
+  background: color-mix(in srgb, var(--echo-brand) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--echo-brand) 20%, transparent);
   border-radius: 8px;
   max-width: 160px;
   overflow: hidden;
@@ -6644,7 +6641,7 @@ button.diff__path {
   width: 12px;
   height: 12px;
   border: 1.5px solid var(--echo-text-tertiary);
-  border-top-color: var(--echo-palette-green-500, #22c55e);
+  border-top-color: var(--echo-status-success, #22c55e);
   border-radius: 50%;
   animation: sidebar-spin 0.8s linear infinite;
 }
@@ -6671,7 +6668,7 @@ button.diff__path {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: rgb(34, 34, 34);
+  color: var(--echo-text-strong);
 }
 .assistants-panel__create-btn {
   display: flex;
@@ -6923,7 +6920,7 @@ button.diff__path {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: rgb(34, 34, 34);
+  color: var(--echo-text-strong);
 }
 .projects-panel__create-btn {
   display: flex;
@@ -7114,7 +7111,7 @@ button.diff__path {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: rgb(34, 34, 34);
+  color: var(--echo-text-strong);
 }
 .experts-panel__actions {
   display: flex;
@@ -7415,7 +7412,7 @@ button.diff__path {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: rgb(34, 34, 34);
+  color: var(--echo-text-strong);
 }
 .automation-panel__create-btn {
   display: flex;
@@ -7620,7 +7617,7 @@ button.diff__path {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: rgb(34, 34, 34);
+  color: var(--echo-text-strong);
 }
 .resources-panel__context {
   display: flex;
@@ -11350,7 +11347,7 @@ button.diff__path {
 .resources-panel,
 .plugins-panel,
 .marketplace-panel {
-  color: rgb(34, 34, 34);
+  color: var(--echo-text-strong);
 }
 
 /* ========================================================================
