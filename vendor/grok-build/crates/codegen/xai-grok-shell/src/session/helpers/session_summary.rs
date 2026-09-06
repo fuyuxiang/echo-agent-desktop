@@ -28,6 +28,12 @@ pub(crate) fn checkpoints_reached(turns: usize) -> usize {
 /// little shorter — fine for a safety bound.
 const TITLE_MAX_BYTES: usize = 80;
 
+/// Desktop-reserved delimiters around an expert persona injected into a model
+/// prompt. This context is intentionally invisible to the user and therefore
+/// must never participate in title generation or refresh.
+const EXPERT_PERSONA_BEGIN: &str = "<!--EXPERT_PERSONA_BEGIN-->";
+const EXPERT_PERSONA_END: &str = "<!--EXPERT_PERSONA_END-->";
+
 const INITIAL_TITLE_SYSTEM_PROMPT: &str = r#"Generate a concise, distinctive title for the user's task.
 
 Rules:
@@ -120,6 +126,30 @@ fn strip_internal_reasoning_blocks(raw: &str) -> String {
     output
 }
 
+pub(crate) fn contains_expert_persona_markup(raw: &str) -> bool {
+    raw.contains(EXPERT_PERSONA_BEGIN) || raw.contains(EXPERT_PERSONA_END)
+}
+
+/// Remove every complete expert-persona block. An unterminated opening marker
+/// discards its tail because all following text is ambiguous injected context;
+/// a stray closing marker remains detectable and is rejected by title cleanup.
+pub(crate) fn strip_expert_persona_blocks(raw: &str) -> String {
+    let mut output = raw.to_string();
+    loop {
+        let Some(start) = output.find(EXPERT_PERSONA_BEGIN) else {
+            break;
+        };
+        let after_open = start + EXPERT_PERSONA_BEGIN.len();
+        let Some(relative_end) = output[after_open..].find(EXPERT_PERSONA_END) else {
+            output.truncate(start);
+            break;
+        };
+        let end = after_open + relative_end + EXPERT_PERSONA_END.len();
+        output.replace_range(start..end, "");
+    }
+    output.trim().to_string()
+}
+
 /// Durable title-refresh checkpoint watermark under `{session_dir}/`: the number
 /// of [`TITLE_REFRESH_TURNS`] checkpoints already consumed. Written on every
 /// completed attempt (success or failure) so the freeze survives resume,
@@ -199,12 +229,9 @@ fn strip_system_reminder_blocks(text: &str) -> String {
 /// markup, then cap to the first few KB. Stripping runs before the cap so a
 /// leading reminder larger than the cap is still removed.
 fn title_source_text(user_message: &str) -> String {
-    let without_reminders = strip_system_reminder_blocks(user_message);
-    let base = if without_reminders.is_empty() {
-        user_message
-    } else {
-        &without_reminders
-    };
+    let without_persona = strip_expert_persona_blocks(user_message);
+    let without_reminders = strip_system_reminder_blocks(&without_persona);
+    let base = &without_reminders;
     let mut display =
         xai_grok_tools::implementations::skills::skill::extract_skill_display_text(base)
             .unwrap_or_else(|| base.to_string());
@@ -303,9 +330,13 @@ pub(crate) fn title_refresh_instruction(tag: &str) -> String {
 /// (whitespace collapse, stray label/quote stripping) plus the
 /// [`TITLE_MAX_BYTES`] cap.
 pub(crate) fn clean_title_text(raw: &str) -> String {
+    let without_persona = strip_expert_persona_blocks(raw);
+    if contains_expert_persona_markup(&without_persona) {
+        return String::new();
+    }
     // Strip reasoning before applying the byte cap. Otherwise a long `<think>`
     // prefix is truncated first and the actual title after `</think>` is lost.
-    let without_reasoning = strip_internal_reasoning_blocks(raw);
+    let without_reasoning = strip_internal_reasoning_blocks(&without_persona);
     if contains_internal_reasoning_markup(&without_reasoning) {
         return String::new();
     }
@@ -321,8 +352,9 @@ pub(crate) fn clean_title_text(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        TITLE_SOURCE_MAX_BYTES, clean_title_text, strip_system_reminder_blocks,
-        title_fallback_from_user_text, title_refresh_instruction, title_source_text,
+        TITLE_SOURCE_MAX_BYTES, clean_title_text, strip_expert_persona_blocks,
+        strip_system_reminder_blocks, title_fallback_from_user_text, title_refresh_instruction,
+        title_source_text,
     };
 
     #[test]
@@ -530,6 +562,23 @@ mod tests {
         let input = "<command-name>deploy</command-name>\n\
                       <command-message>/deploy</command-message>";
         assert_eq!(title_fallback_from_user_text(input), "/deploy");
+    }
+
+    #[test]
+    fn expert_persona_never_becomes_a_title_source_or_title() {
+        let input = "<!--EXPERT_PERSONA_BEGIN-->\nexpert instructions\n\
+                     <!--EXPERT_PERSONA_END-->\n\n帮我写一个关于秋天的文章";
+        assert_eq!(
+            title_fallback_from_user_text(input),
+            "帮我写一个关于秋天的文章"
+        );
+        assert_eq!(clean_title_text(input), "帮我写一个关于秋天的文章");
+        assert_eq!(clean_title_text("<!--EXPERT_PERSONA_BEGIN-->"), "");
+        assert_eq!(clean_title_text("<!--EXPERT_PERSONA_END-->"), "");
+        assert_eq!(
+            strip_expert_persona_blocks(input),
+            "帮我写一个关于秋天的文章"
+        );
     }
 
     #[test]

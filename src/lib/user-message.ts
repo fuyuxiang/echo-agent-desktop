@@ -39,7 +39,12 @@ export function stripInjectedUserContext(text: string): string {
     const begin = visible.indexOf(EXPERT_PERSONA_BEGIN);
     if (begin === -1) break;
     const end = visible.indexOf(EXPERT_PERSONA_END, begin);
-    if (end === -1) break;
+    // An unterminated reserved block is corrupt transport context. Hiding its
+    // tail is safer than exposing an internal persona in chat/title surfaces.
+    if (end === -1) {
+      visible = visible.slice(0, begin);
+      break;
+    }
     visible = visible.slice(0, begin) + visible.slice(end + EXPERT_PERSONA_END.length);
   }
   visible = visible.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "");

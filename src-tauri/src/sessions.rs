@@ -24,6 +24,10 @@ const MAX_EXPERT_ID_CHARS: usize = 256;
 const MAX_EXPERT_NAME_CHARS: usize = 512;
 const MAX_EXPERT_AVATAR_CHARS: usize = 4_096;
 const MAX_CWD_METADATA_BYTES: u64 = (MAX_CWD_CHARS * 4) as u64;
+// One update line can contain the full 4 MiB prompt with JSON escaping. Read a
+// bounded prefix only when an old automatic title was rejected as internal
+// markup; ordinary session listing never touches the larger update log.
+const MAX_TITLE_RECOVERY_PREFIX_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -227,13 +231,59 @@ fn display_title(summary: &SummaryFile) -> Option<String> {
         .map(|title| bounded_text(title, MAX_TITLE_CHARS))
 }
 
+/// Recover a user-facing title for sessions written by builds that generated
+/// an automatic title from injected expert context. `updates.jsonl` preserves
+/// the compact ACP `displayText`; raw text is a compatibility fallback and is
+/// stripped by `fallback_title_from_user_text` before use.
+fn recover_title_from_updates(session_dir: &Path) -> Option<String> {
+    let bytes = crate::shell_fs::read_regular_file_prefix(
+        &session_dir.join("updates.jsonl"),
+        MAX_TITLE_RECOVERY_PREFIX_BYTES,
+    )
+    .ok()?;
+
+    for line in bytes.split(|byte| *byte == b'\n') {
+        let Ok(update) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(payload) = update.get("params").and_then(|params| params.get("update")) else {
+            continue;
+        };
+        if payload
+            .get("sessionUpdate")
+            .and_then(serde_json::Value::as_str)
+            != Some("user_message_chunk")
+        {
+            continue;
+        }
+        let Some(content) = payload.get("content") else {
+            continue;
+        };
+        let display_text = content
+            .get("_meta")
+            .and_then(|meta| meta.get("displayText").or_else(|| meta.get("display_text")))
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| !text.trim().is_empty());
+        let raw_text = content.get("text").and_then(serde_json::Value::as_str);
+        if let Some(title) = display_text
+            .or(raw_text)
+            .and_then(crate::session_title::fallback_title_from_user_text)
+        {
+            return Some(bounded_text(title, MAX_TITLE_CHARS));
+        }
+    }
+    None
+}
+
 fn to_session_summary(
     session_dir: &Path,
     summary: SummaryFile,
     cwd: String,
 ) -> Option<SessionSummary> {
     let session_id = authoritative_session_id(session_dir, &summary)?;
-    let title = display_title(&summary).unwrap_or_else(|| "未命名会话".into());
+    let title = display_title(&summary)
+        .or_else(|| recover_title_from_updates(session_dir))
+        .unwrap_or_else(|| "未命名会话".into());
     let updated_at = summary
         .updated_at
         .clone()
@@ -506,7 +556,7 @@ pub fn list_workspaces() -> Vec<WorkspaceInfo> {
             if authoritative_session_id(&session_path, &s).is_none() {
                 continue;
             }
-            let title = display_title(&s);
+            let title = display_title(&s).or_else(|| recover_title_from_updates(&session_path));
             let claimed_cwd = summary_cwd(&s);
             let raw_entry_cwd = if claimed_cwd.is_empty() {
                 match cwd_from_directory(&cwd_path) {
@@ -564,9 +614,9 @@ fn agent_sessions_root() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_archive_visibility, authoritative_session_id, display_title,
-        list_all_sessions_from_root, read_summary_file, summary_cwd, workspace_dir_matches_request,
-        SessionSummary, SummaryFile, MAX_SUMMARY_BYTES, MAX_TITLE_CHARS,
+        MAX_SUMMARY_BYTES, MAX_TITLE_CHARS, SessionSummary, SummaryFile, apply_archive_visibility,
+        authoritative_session_id, display_title, list_all_sessions_from_root, read_summary_file,
+        recover_title_from_updates, summary_cwd, to_session_summary, workspace_dir_matches_request,
     };
 
     fn summary(json: &str) -> SummaryFile {
@@ -633,6 +683,73 @@ mod tests {
             }"#,
         );
         assert_eq!(display_title(&parsed), None);
+    }
+
+    #[test]
+    fn historical_expert_marker_title_recovers_from_display_text() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_dir = temp.path().join("expert-session");
+        std::fs::create_dir(&session_dir).unwrap();
+        std::fs::write(
+            session_dir.join("updates.jsonl"),
+            serde_json::json!({
+                "method": "session/update",
+                "params": {
+                    "update": {
+                        "sessionUpdate": "user_message_chunk",
+                        "content": {
+                            "type": "text",
+                            "text": "<!--EXPERT_PERSONA_BEGIN-->\nexpert\n<!--EXPERT_PERSONA_END-->\n\n帮我写一个关于秋天的文章",
+                            "_meta": { "displayText": "帮我写一个关于秋天的文章" }
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            recover_title_from_updates(&session_dir).as_deref(),
+            Some("帮我写一个关于秋天的文章")
+        );
+        let parsed = summary(
+            r#"{
+                "session_id":"expert-session",
+                "session_summary":"<!--EXPERT_PERSONA_BEGIN-->",
+                "generated_title":"<!--EXPERT_PERSONA_BEGIN-->"
+            }"#,
+        );
+        assert_eq!(
+            to_session_summary(&session_dir, parsed, "/tmp".into())
+                .unwrap()
+                .title,
+            "帮我写一个关于秋天的文章"
+        );
+    }
+
+    #[test]
+    fn historical_expert_marker_title_recovers_from_legacy_raw_text() {
+        let temp = tempfile::tempdir().unwrap();
+        let update = serde_json::json!({
+            "params": {
+                "update": {
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {
+                        "type": "text",
+                        "text": "<!--EXPERT_PERSONA_BEGIN-->\nexpert\n<!--EXPERT_PERSONA_END-->\n\n修复登录跳转问题"
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            temp.path().join("updates.jsonl"),
+            format!("not-json\n{}\n", update),
+        )
+        .unwrap();
+        assert_eq!(
+            recover_title_from_updates(temp.path()).as_deref(),
+            Some("修复登录跳转问题")
+        );
     }
 
     #[test]

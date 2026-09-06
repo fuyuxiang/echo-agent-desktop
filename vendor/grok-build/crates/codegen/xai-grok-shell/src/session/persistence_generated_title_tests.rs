@@ -150,6 +150,21 @@ fn display_title_returns_generated_title_when_set() {
 }
 
 #[test]
+fn display_title_hides_persisted_expert_persona_marker_from_old_builds() {
+    let mut summary = Summary::new(
+        &Info {
+            id: acp::SessionId::new("test"),
+            cwd: "/tmp".into(),
+        },
+        default_model_id(),
+    )
+    .unwrap();
+    summary.session_summary = "<!--EXPERT_PERSONA_BEGIN-->".into();
+    summary.generated_title = Some("<!--EXPERT_PERSONA_BEGIN-->".into());
+    assert_eq!(summary.display_title(), "");
+}
+
+#[test]
 fn display_title_falls_back_on_empty_generated_title() {
     let mut summary = Summary::new(
         &Info {
