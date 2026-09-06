@@ -1860,6 +1860,11 @@ async fn handle_toggle_tool(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResu
 struct McpUpsertRequest {
     session_id: String,
     server_name: String,
+    /// Internal clients may attach a capability to one live session without
+    /// making it part of the user's durable MCP configuration. Public callers
+    /// omit this field and retain the historical persist-first behaviour.
+    #[serde(default = "default_true")]
+    persist: bool,
     #[serde(flatten)]
     config: crate::util::config::McpServerConfig,
 }
@@ -1868,10 +1873,13 @@ async fn handle_upsert(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     let req = parse_params::<McpUpsertRequest>(args)?;
     let acp_id = acp::SessionId::new(req.session_id.clone());
 
-    // Persist to config.toml first.
-    crate::util::config::save_mcp_server_config(&req.server_name, &req.config)
-        .await
-        .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+    if req.persist {
+        // User-managed MCP servers remain durable by default. Internal
+        // session-scoped capabilities explicitly opt out.
+        crate::util::config::save_mcp_server_config(&req.server_name, &req.config)
+            .await
+            .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+    }
 
     // Build the ACP server config for live addition.
     let server_config = req
@@ -1884,10 +1892,16 @@ async fn handle_upsert(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         .get_session_handle(&acp_id)
         .ok_or_else(|| acp::Error::invalid_params().data("session not found"))?;
 
-    handle
-        .toggle_mcp_server(req.server_name, true, Some(server_config))
-        .await
-        .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+    if req.persist {
+        handle
+            .toggle_mcp_server(req.server_name, true, Some(server_config))
+            .await
+    } else {
+        handle
+            .toggle_mcp_server_session_scoped(req.server_name, true, Some(server_config))
+            .await
+    }
+    .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
 
     to_ext_response(Ok(McpToggleResponse { ok: true }))
 }
@@ -1898,22 +1912,27 @@ async fn handle_upsert(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
 struct McpDeleteRequest {
     session_id: String,
     server_name: String,
+    #[serde(default = "default_true")]
+    persist: bool,
 }
 
 async fn handle_delete(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     let req = parse_params::<McpDeleteRequest>(args)?;
     let acp_id = acp::SessionId::new(req.session_id.clone());
 
-    // Verify the server exists in local config (not managed).
-    let existed = crate::util::config::delete_mcp_server_config(&req.server_name)
-        .await
-        .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+    if req.persist {
+        // Durable deletion retains the existing safety rule: managed/non-local
+        // servers cannot be removed through the user-facing extension.
+        let existed = crate::util::config::delete_mcp_server_config(&req.server_name)
+            .await
+            .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
 
-    if !existed {
-        return Err(acp::Error::invalid_params().data(format!(
-            "server '{}' not found in config.toml (only locally-configured servers can be deleted)",
-            req.server_name
-        )));
+        if !existed {
+            return Err(acp::Error::invalid_params().data(format!(
+                "server '{}' not found in config.toml (only locally-configured servers can be deleted)",
+                req.server_name
+            )));
+        }
     }
 
     // Live teardown: disable the server in the running session.
@@ -1921,14 +1940,23 @@ async fn handle_delete(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         .get_session_handle(&acp_id)
         .ok_or_else(|| acp::Error::invalid_params().data("session not found"))?;
 
-    handle
-        .toggle_mcp_server(req.server_name.clone(), false, None)
-        .await
-        .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+    if req.persist {
+        handle
+            .toggle_mcp_server(req.server_name.clone(), false, None)
+            .await
+    } else {
+        handle
+            .toggle_mcp_server_session_scoped(req.server_name.clone(), false, None)
+            .await
+    }
+    .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
 
-    // The toggle path spawns a task that adds the server to
-    // `disabled_mcp_servers`. Clear user list only — do not unstick project.
-    let _ = crate::util::config::save_user_mcp_server_enabled(&req.server_name, true).await;
+    // The durable toggle path adds the server to `disabled_mcp_servers`.
+    // Deletion must clear that marker; the session-scoped path skips both
+    // writes and therefore has nothing to compensate.
+    if req.persist {
+        let _ = crate::util::config::save_user_mcp_server_enabled(&req.server_name, true).await;
+    }
 
     to_ext_response(Ok(McpToggleResponse { ok: true }))
 }
@@ -1955,6 +1983,34 @@ mod tests {
         );
         // Sanity: the forward sibling on the same prefix DOES route.
         assert_eq!(route_mcp_method(wire::MCP_CALL), Some(McpRoute::Call));
+    }
+
+    #[test]
+    fn internal_mcp_mutations_can_be_session_scoped() {
+        let scoped: McpUpsertRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "session-1",
+            "server_name": "internal",
+            "persist": false,
+            "url": "http://127.0.0.1:1234/mcp"
+        }))
+        .unwrap();
+        assert!(!scoped.persist);
+
+        let durable: McpUpsertRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "session-1",
+            "server_name": "user-server",
+            "url": "https://mcp.example.test/mcp"
+        }))
+        .unwrap();
+        assert!(durable.persist);
+
+        let removal: McpDeleteRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "session-1",
+            "server_name": "internal",
+            "persist": false
+        }))
+        .unwrap();
+        assert!(!removal.persist);
     }
 
     fn gateway_tool(

@@ -31,6 +31,37 @@ pub trait EmbeddingProvider: Send + Sync {
 
     /// The dimensionality of the embedding vectors.
     fn dimensions(&self) -> usize;
+
+    /// Stable identity of the embedding space used for cache invalidation.
+    /// Providers may override this when the endpoint is part of model identity.
+    fn fingerprint(&self) -> String {
+        format!("{}:{}", self.model_name(), self.dimensions())
+    }
+}
+
+pub(crate) fn validate_embedding_batch(
+    embeddings: &[Vec<f32>],
+    expected_count: usize,
+    expected_dimensions: usize,
+) -> Result<(), String> {
+    if embeddings.len() != expected_count {
+        return Err(format!(
+            "embedding provider returned {} vectors for {expected_count} inputs",
+            embeddings.len()
+        ));
+    }
+    for (index, embedding) in embeddings.iter().enumerate() {
+        if embedding.len() != expected_dimensions {
+            return Err(format!(
+                "embedding {index} has {} dimensions; expected {expected_dimensions}",
+                embedding.len()
+            ));
+        }
+        if embedding.iter().any(|value| !value.is_finite()) {
+            return Err(format!("embedding {index} contains a non-finite value"));
+        }
+    }
+    Ok(())
 }
 
 /// API-based embedding provider using an OpenAI-compatible embeddings endpoint.
@@ -164,16 +195,40 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
                         .and_then(|d| d.as_array())
                         .ok_or("embedding response missing 'data' array")?;
 
+                    let mut ordered = vec![None; batch.len()];
                     for item in data {
+                        let index = item
+                            .get("index")
+                            .and_then(|value| value.as_u64())
+                            .and_then(|value| usize::try_from(value).ok())
+                            .filter(|index| *index < batch.len())
+                            .ok_or("embedding item has an invalid index")?;
+                        if ordered[index].is_some() {
+                            return Err(format!("embedding response repeats index {index}").into());
+                        }
                         let embedding: Vec<f32> = item
                             .get("embedding")
                             .and_then(|e| e.as_array())
                             .ok_or("embedding item missing 'embedding' array")?
                             .iter()
-                            .filter_map(|v| v.as_f64().map(|f| f as f32))
-                            .collect();
-                        all_embeddings.push(embedding);
+                            .map(|value| {
+                                value
+                                    .as_f64()
+                                    .filter(|number| number.is_finite())
+                                    .map(|number| number as f32)
+                                    .filter(|number| number.is_finite())
+                                    .ok_or("embedding contains a non-finite or non-numeric value")
+                            })
+                            .collect::<Result<_, _>>()?;
+                        ordered[index] = Some(embedding);
                     }
+                    let batch_embeddings = ordered
+                        .into_iter()
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or("embedding response omitted one or more inputs")?;
+                    validate_embedding_batch(&batch_embeddings, batch.len(), self.dimensions)
+                        .map_err(|error| format!("invalid embedding response: {error}"))?;
+                    all_embeddings.extend(batch_embeddings);
                     success = true;
                     break;
                 }
@@ -209,6 +264,18 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
 
     fn dimensions(&self) -> usize {
         self.dimensions
+    }
+
+    fn fingerprint(&self) -> String {
+        // Do not persist endpoint URLs (which may contain tenant identifiers),
+        // but do distinguish equal model names served by different backends.
+        let endpoint_hash = blake3::hash(self.api_base.as_bytes());
+        format!(
+            "api:{}:{}:{}",
+            &endpoint_hash.to_hex()[..16],
+            self.model,
+            self.dimensions
+        )
     }
 }
 
@@ -279,5 +346,13 @@ mod tests {
         let provider = MockEmbeddingProvider { dimensions: 128 };
         let results = provider.embed_batch(&["test"]).await.unwrap();
         assert_eq!(results[0].len(), 128);
+    }
+
+    #[test]
+    fn validation_rejects_partial_wrong_dimension_and_non_finite_batches() {
+        assert!(validate_embedding_batch(&[vec![0.0, 1.0]], 2, 2).is_err());
+        assert!(validate_embedding_batch(&[vec![0.0]], 1, 2).is_err());
+        assert!(validate_embedding_batch(&[vec![0.0, f32::NAN]], 1, 2).is_err());
+        assert!(validate_embedding_batch(&[vec![0.0, 1.0]], 1, 2).is_ok());
     }
 }

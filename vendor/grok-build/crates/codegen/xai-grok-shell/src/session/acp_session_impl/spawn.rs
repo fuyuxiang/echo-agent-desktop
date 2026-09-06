@@ -1960,6 +1960,19 @@ pub(crate) async fn spawn_session_actor(
             {
                 let reindex_start = std::time::Instant::now();
                 let (mut total_added, mut total_updated, mut total_removed) = (0, 0, 0);
+                // Repair indexes created by older broad watcher behavior. Only
+                // the shared global memory, this workspace's durable memory,
+                // and its live session logs may remain searchable.
+                if let Ok(indexed_paths) = index.all_indexed_paths() {
+                    for indexed_path in indexed_paths {
+                        let path = std::path::PathBuf::from(indexed_path);
+                        if (!path.is_file() || !storage.is_indexable_memory_file(&path))
+                            && let Ok(removed) = index.delete_path(&path)
+                        {
+                            total_removed += removed;
+                        }
+                    }
+                }
                 for file in &files {
                     let source = storage.classify_source(file);
                     if let Ok(stats) = index.reindex_file(file, source) {

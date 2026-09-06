@@ -24,6 +24,7 @@ export type ToolRenderer =
   | "team-status" // 查询团队状态
   | "agent-mail"
   | "specialist" // 专家列表卡
+  | "knowledge" // 组织上下文/组织知识证据
   | "unknown";
 
 const RENDERER_MAP: Array<{ test: RegExp; renderer: ToolRenderer }> = [
@@ -45,6 +46,7 @@ const RENDERER_MAP: Array<{ test: RegExp; renderer: ToolRenderer }> = [
   { test: /^(echoagent__)?(team_status|status)$/i, renderer: "team-status" },
   { test: /^(agent_mail|send_mail|email)$/i, renderer: "agent-mail" },
   { test: /^(specialist|expert_list)$/i, renderer: "specialist" },
+  { test: /knowledge_(context|ask|feedback|search|fetch|list|who|submit)|organization_memory/i, renderer: "knowledge" },
 ];
 
 /** 按 kind 判定渲染器类型。 */
@@ -88,6 +90,8 @@ export function rendererLabel(renderer: ToolRenderer): string {
       return "邮件";
     case "specialist":
       return "专家";
+    case "knowledge":
+      return "组织知识";
     case "default":
       return "工具";
     default:
@@ -126,6 +130,8 @@ export function rendererIcon(renderer: ToolRenderer): string {
       return "📧";
     case "specialist":
       return "🧑‍🔬";
+    case "knowledge":
+      return "🧠";
     default:
       return "🔧";
   }
@@ -168,6 +174,10 @@ export function summarizeTool(tc: ToolCallView, renderer: ToolRenderer): string 
       const cmds = raw?.commands ?? raw?.items;
       const n = Array.isArray(cmds) ? cmds.length : undefined;
       return typeof n === "number" ? `延迟执行 ${n} 条命令` : tc.title;
+    }
+    case "knowledge": {
+      const query = raw?.task ?? raw?.query ?? raw?.question ?? raw?.topic;
+      return typeof query === "string" ? query.slice(0, 80) : tc.title;
     }
     default:
       return tc.title;

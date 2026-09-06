@@ -535,6 +535,9 @@ pub enum SessionCommand {
     ToggleMcpServer {
         server_name: String,
         enabled: bool,
+        /// Whether this live toggle should also update the user's durable
+        /// enabled/disabled state. Internal optional capabilities set false.
+        persist_enabled_state: bool,
         /// Fully-formed server config to add when re-enabling. Built by the
         /// caller via `merge_managed_mcp_servers` (with OAuth headers injected).
         /// `None` when disabling.

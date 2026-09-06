@@ -515,6 +515,41 @@ impl MemoryIndex {
     // Vector operations (no-op if !vec_available)
     // -----------------------------------------------------------------------
 
+    /// Ensure cached vectors belong to the active embedding space.
+    /// Returns true when stale vectors were invalidated. This prevents silent
+    /// cross-model similarity corruption when a model or endpoint changes but
+    /// happens to use the same dimensions.
+    pub fn ensure_embedding_fingerprint(&self, fingerprint: &str) -> Result<bool, rusqlite::Error> {
+        if !self.vec_available {
+            return Ok(false);
+        }
+        let stored: Option<String> = self
+            .db
+            .query_row(
+                schema::GET_META_SQL,
+                params!["embedding_fingerprint"],
+                |row| row.get(0),
+            )
+            .ok();
+        if stored.as_deref() == Some(fingerprint) {
+            return Ok(false);
+        }
+
+        let tx = self.db.unchecked_transaction()?;
+        tx.execute("DELETE FROM chunks_vec", [])?;
+        tx.execute(
+            schema::UPSERT_META_SQL,
+            params!["embedding_fingerprint", fingerprint],
+        )?;
+        tx.commit()?;
+        tracing::info!(
+            target: crate::MEMORY_LOG_TARGET,
+            had_previous = stored.is_some(),
+            "embedding space changed; invalidated cached memory vectors"
+        );
+        Ok(true)
+    }
+
     /// Return chunks that don't have embeddings yet.
     pub fn chunks_without_embeddings(&self) -> Result<Vec<(String, String)>, rusqlite::Error> {
         if !self.vec_available {
@@ -542,6 +577,14 @@ impl MemoryIndex {
         if !self.vec_available {
             return Ok(());
         }
+        if embedding.len() != self.embedding_dimensions
+            || embedding.iter().any(|value| !value.is_finite())
+        {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "embedding must contain {} finite dimensions",
+                self.embedding_dimensions
+            )));
+        }
         let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
         self.db.execute(
             "INSERT OR REPLACE INTO chunks_vec(chunk_id, embedding) VALUES (?1, ?2)",
@@ -558,6 +601,14 @@ impl MemoryIndex {
     ) -> Result<Vec<(String, f32)>, rusqlite::Error> {
         if !self.vec_available {
             return Ok(vec![]);
+        }
+        if query_embedding.len() != self.embedding_dimensions
+            || query_embedding.iter().any(|value| !value.is_finite())
+        {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "query embedding must contain {} finite dimensions",
+                self.embedding_dimensions
+            )));
         }
         let query_bytes: Vec<u8> = query_embedding
             .iter()
@@ -758,6 +809,36 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let idx = test_index(&tmp);
         assert_eq!(idx.embedding_dimensions(), 1536);
+    }
+
+    #[test]
+    fn embedding_fingerprint_change_invalidates_cached_vectors() {
+        init_sqlite_vec();
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("fingerprint.sqlite");
+        let mut idx = MemoryIndex::open_or_create(
+            &db_path,
+            test_storage(&tmp),
+            MemoryIndexConfig::default(),
+            4,
+        )
+        .unwrap();
+        if !idx.vec_available() {
+            return;
+        }
+        let source = tmp.path().join("source.md");
+        std::fs::write(&source, "# Knowledge\n\nDurable vector content.").unwrap();
+        idx.reindex_file(&source, "workspace").unwrap();
+        let chunk_id = format!("{}:0", source.to_string_lossy());
+
+        assert!(idx.ensure_embedding_fingerprint("model-a:4").unwrap());
+        idx.upsert_embedding(&chunk_id, &[0.1, 0.2, 0.3, 0.4])
+            .unwrap();
+        assert!(!idx.ensure_embedding_fingerprint("model-a:4").unwrap());
+        assert!(idx.chunks_without_embeddings().unwrap().is_empty());
+
+        assert!(idx.ensure_embedding_fingerprint("model-b:4").unwrap());
+        assert_eq!(idx.chunks_without_embeddings().unwrap().len(), 1);
     }
 
     #[test]

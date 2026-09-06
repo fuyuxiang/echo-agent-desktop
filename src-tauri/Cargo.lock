@@ -13476,6 +13476,7 @@ dependencies = [
  "serde_json",
  "sqlite-vec",
  "tar",
+ "tempfile",
  "tokio",
  "tracing",
  "windows",
