@@ -41,6 +41,19 @@ describe("user-message attachment compatibility", () => {
     )).toBe("用户正文");
   });
 
+  it("removes repeated expert persona blocks without hiding user text", () => {
+    expect(stripInjectedUserContext(
+      "prefix\n<!--EXPERT_PERSONA_BEGIN-->one<!--EXPERT_PERSONA_END-->\n"
+      + "<!--EXPERT_PERSONA_BEGIN-->two<!--EXPERT_PERSONA_END-->\nuser task",
+    )).toBe("prefix\n\n\nuser task");
+  });
+
+  it("drops the tail of an unterminated expert persona block", () => {
+    expect(stripInjectedUserContext(
+      "visible\n<!--EXPERT_PERSONA_BEGIN-->\ninternal",
+    )).toBe("visible");
+  });
+
   it("normalizes both Windows and POSIX basenames", () => {
     expect(attachmentBasename("C:\\docs\\方案.docx")).toBe("方案.docx");
     expect(attachmentBasename("/tmp/report.pdf")).toBe("report.pdf");
