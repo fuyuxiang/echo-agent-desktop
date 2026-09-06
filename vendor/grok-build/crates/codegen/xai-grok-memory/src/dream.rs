@@ -137,7 +137,10 @@ pub enum DreamStatus {
     Failed(String),
 }
 
-const MAX_DREAM_INPUT_CHARS: usize = 32_000;
+/// The consolidation request must contain the complete existing durable memory.
+/// A larger bound keeps normal workspaces useful with current long-context models;
+/// workspaces beyond it are rejected safely instead of silently amputated.
+const MAX_DREAM_INPUT_CHARS: usize = 128_000;
 
 /// Output of [`build_dream_user_message`]: the prompt text and the stems
 /// that were actually read (within the size cap).
@@ -176,7 +179,9 @@ pub(crate) fn is_scaffold_template(content: &str) -> bool {
 /// knowledge with new sessions.
 ///
 /// Reads each session file and concatenates their contents with separators.
-/// Stops adding sessions once total size exceeds [`MAX_DREAM_INPUT_CHARS`].
+/// Adds only complete session logs that fit within [`MAX_DREAM_INPUT_CHARS`].
+/// Existing durable memory is never truncated: if it alone does not fit,
+/// consolidation is skipped and all source files remain untouched.
 /// Returns `None` if no session files could be read.
 pub fn build_dream_user_message(
     sessions_dir: &Path,
@@ -189,23 +194,19 @@ pub fn build_dream_user_message(
     if let Some(mem) = existing_memory {
         let trimmed = mem.trim();
         if !trimmed.is_empty() && !is_scaffold_template(trimmed) {
-            buf.push_str("--- Existing Memory (merge with new sessions) ---\n\n");
-            let cap = MAX_DREAM_INPUT_CHARS / 2;
-            if trimmed.len() <= cap {
-                buf.push_str(trimmed);
-            } else {
-                let mut end = cap;
-                while end > 0 && !trimmed.is_char_boundary(end) {
-                    end -= 1;
-                }
-                buf.push_str(&trimmed[..end]);
+            let prefix = "--- Existing Memory (merge with new sessions) ---\n\n";
+            if prefix.chars().count() + trimmed.chars().count() > MAX_DREAM_INPUT_CHARS {
                 tracing::warn!(
                     target: LOG,
-                    original = trimmed.len(),
-                    cap,
-                    "DREAM_BUILD_MESSAGE: existing memory truncated"
+                    chars = trimmed.chars().count(),
+                    limit = MAX_DREAM_INPUT_CHARS,
+                    "DREAM_BUILD_MESSAGE: existing memory exceeds safe prompt limit; preserving it unchanged"
                 );
+                return None;
             }
+            buf.clear();
+            buf.push_str(prefix);
+            buf.push_str(trimmed);
         }
     }
 
@@ -215,25 +216,27 @@ pub fn build_dream_user_message(
         if let Ok(content) = std::fs::read_to_string(&path)
             && !content.trim().is_empty()
         {
-            if !buf.is_empty() {
-                buf.push_str("\n\n");
-            }
-            buf.push_str("--- Session: ");
-            buf.push_str(stem);
-            buf.push_str(" ---\n\n");
-            buf.push_str(&content);
-            processed_stems.push(stem.clone());
-
-            if buf.len() >= MAX_DREAM_INPUT_CHARS {
+            let separator = format!(
+                "{}--- Session: {stem} ---\n\n",
+                if buf.is_empty() { "" } else { "\n\n" }
+            );
+            let candidate_chars = separator.chars().count() + content.chars().count();
+            let current_chars = buf.chars().count();
+            if current_chars + candidate_chars > MAX_DREAM_INPUT_CHARS {
                 tracing::warn!(
                     target: LOG,
                     sessions_read = processed_stems.len(),
                     total = stems.len(),
-                    chars = buf.len(),
-                    "DREAM_BUILD_MESSAGE: truncated input at {MAX_DREAM_INPUT_CHARS} chars"
+                    skipped_stem = %stem,
+                    candidate_chars,
+                    limit = MAX_DREAM_INPUT_CHARS,
+                    "DREAM_BUILD_MESSAGE: complete session did not fit; leaving it for a later pass"
                 );
-                break;
+                continue;
             }
+            buf.push_str(&separator);
+            buf.push_str(&content);
+            processed_stems.push(stem.clone());
         }
     }
     if processed_stems.is_empty() {
@@ -255,7 +258,7 @@ pub fn build_dream_user_message(
 
 /// Output cap for dream responses. Hardcoded for v1; can be moved to
 /// `MemoryDreamConfig` if operational tuning is needed.
-const MAX_DREAM_CHARS: usize = 16_000;
+const MAX_DREAM_CHARS: usize = 128_000;
 
 /// Process the dream model's response.
 ///
@@ -269,7 +272,8 @@ const MAX_DREAM_CHARS: usize = 16_000;
 /// directly without normalization, dream's markdown structure is
 /// preserved as-is.
 ///
-/// Truncates content exceeding [`MAX_DREAM_CHARS`].
+/// Rejects content exceeding [`MAX_DREAM_CHARS`] so a partial markdown
+/// document can never replace the complete durable memory.
 pub fn process_dream_response(response: &str) -> Option<String> {
     let trimmed = response.trim();
     if trimmed.is_empty() {
@@ -292,27 +296,22 @@ pub fn process_dream_response(response: &str) -> Option<String> {
     }
 
     let char_count = trimmed.chars().count();
-    let (content, accepted_chars) = if char_count > MAX_DREAM_CHARS {
+    if char_count > MAX_DREAM_CHARS {
         tracing::warn!(
             target: LOG,
             original = char_count,
             limit = MAX_DREAM_CHARS,
-            "DREAM_RESPONSE: truncated"
+            "DREAM_RESPONSE: rejected oversized response"
         );
-        (
-            trimmed.chars().take(MAX_DREAM_CHARS).collect(),
-            MAX_DREAM_CHARS,
-        )
-    } else {
-        (trimmed.to_string(), char_count)
-    };
+        return None;
+    }
 
     tracing::info!(
         target: LOG,
-        chars = accepted_chars,
+        chars = char_count,
         "DREAM_RESPONSE: accepted"
     );
-    Some(content)
+    Some(trimmed.to_string())
 }
 
 /// Minimum age (in seconds) a session file must have before cleanup will
@@ -320,29 +319,51 @@ pub fn process_dream_response(response: &str) -> Option<String> {
 /// may still be actively appending to.
 const CLEANUP_RECENCY_GUARD_SECS: u64 = 300; // 5 minutes
 
-/// Delete session log files whose stems were processed during dream.
+/// Archive session log files whose stems were processed during dream.
 ///
 /// Returns the stems that were actually removed from disk. The caller
-/// uses this list to purge the corresponding search-index entries —
-/// stems skipped by the recency guard or that failed to delete are
+/// uses this list to purge the corresponding active search-index entries —
+/// stems skipped by the recency guard or that failed to archive are
 /// excluded so their index chunks remain intact.
 ///
-/// Logs warnings for individual deletion failures but never propagates
+/// Logs warnings for individual archive failures but never propagates
 /// errors \u{2014} the consolidation has already succeeded at this point.
 ///
 /// Files modified within the last [`CLEANUP_RECENCY_GUARD_SECS`] are
-/// skipped to avoid deleting logs that a concurrent session is still
+/// skipped to avoid moving logs that a concurrent session is still
 /// actively writing to.
-fn clean_processed_sessions(sessions_dir: &Path, stems: &[String]) -> Vec<String> {
+fn archive_processed_sessions(sessions_dir: &Path, stems: &[String]) -> Vec<String> {
     let mut cleaned = Vec::new();
     let now = SystemTime::now();
+    let archive_dir = sessions_dir.join("archive");
     for stem in stems {
         let path = sessions_dir.join(format!("{stem}.md"));
 
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
+            Ok(_) => {
+                tracing::warn!(
+                    target: LOG,
+                    path = %path.display(),
+                    "DREAM_ARCHIVE: source is not a regular file"
+                );
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                tracing::warn!(
+                    target: LOG,
+                    path = %path.display(),
+                    %error,
+                    "DREAM_ARCHIVE: could not inspect source"
+                );
+                continue;
+            }
+        };
+
         // Recency guard: skip files modified very recently — a
         // concurrent session may be actively appending.
-        if let Ok(meta) = std::fs::metadata(&path)
-            && let Ok(mtime) = meta.modified()
+        if let Ok(mtime) = metadata.modified()
             && now.duration_since(mtime).unwrap_or_default().as_secs() < CLEANUP_RECENCY_GUARD_SECS
         {
             tracing::debug!(
@@ -353,7 +374,22 @@ fn clean_processed_sessions(sessions_dir: &Path, stems: &[String]) -> Vec<String
             continue;
         }
 
-        match std::fs::remove_file(&path) {
+        if let Err(e) = std::fs::create_dir_all(&archive_dir) {
+            tracing::warn!(
+                target: LOG,
+                error = %e,
+                "DREAM_ARCHIVE: could not create archive directory"
+            );
+            break;
+        }
+        let mut destination = archive_dir.join(format!("{stem}.md"));
+        if destination.exists() {
+            destination = archive_dir.join(format!(
+                "{stem}-{}.md",
+                chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            ));
+        }
+        match std::fs::rename(&path, &destination) {
             Ok(()) => cleaned.push(stem.clone()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Already gone \u{2014} not an error, but don't count as removed.
@@ -363,7 +399,7 @@ fn clean_processed_sessions(sessions_dir: &Path, stems: &[String]) -> Vec<String
                     target: LOG,
                     path = %path.display(),
                     error = %e,
-                    "DREAM_CLEANUP: failed to delete session file"
+                    "DREAM_ARCHIVE: failed to archive session file"
                 );
             }
         }
@@ -373,7 +409,7 @@ fn clean_processed_sessions(sessions_dir: &Path, stems: &[String]) -> Vec<String
             target: LOG,
             cleaned = cleaned.len(),
             total = stems.len(),
-            "DREAM_CLEANUP: removed processed session files"
+            "DREAM_ARCHIVE: archived processed session files"
         );
     }
     cleaned
@@ -426,6 +462,7 @@ pub fn execute_dream(
     let content = match process_dream_response(response) {
         Some(c) => c,
         None => {
+            let _ = lock.rollback(prior);
             tracing::info!(target: LOG, sessions_eligible, "DREAM_EXECUTE: nothing to consolidate");
             return DreamResult {
                 status: DreamStatus::NothingToConsolidate,
@@ -447,7 +484,7 @@ pub fn execute_dream(
     }
 
     // Consolidation succeeded — clean up the session files that were read.
-    let cleaned_stems = clean_processed_sessions(sessions_dir, processed_stems);
+    let cleaned_stems = archive_processed_sessions(sessions_dir, processed_stems);
 
     tracing::info!(
         target: LOG,
@@ -711,7 +748,7 @@ mod tests {
     }
 
     /// Write a session file and back-date its mtime so it passes the
-    /// recency guard in `clean_processed_sessions`.
+    /// recency guard in `archive_processed_sessions`.
     fn write_old_session_content(dir: &Path, name: &str, content: &str) {
         write_session_content(dir, name, content);
         let old = SystemTime::now() - Duration::from_secs(CLEANUP_RECENCY_GUARD_SECS + 60);
@@ -813,14 +850,12 @@ mod tests {
     }
 
     #[test]
-    fn process_truncates_long_content() {
+    fn process_rejects_oversized_content_instead_of_truncating_memory() {
         let header = "## Long\n\n";
         let body = "x".repeat(MAX_DREAM_CHARS + 1000);
         let input = format!("{header}{body}");
 
-        let result = process_dream_response(&input).unwrap();
-        assert_eq!(result.chars().count(), MAX_DREAM_CHARS);
-        assert!(result.starts_with("## Long"));
+        assert!(process_dream_response(&input).is_none());
     }
 
     #[test]
@@ -1000,20 +1035,20 @@ mod tests {
     fn build_message_respects_input_size_cap() {
         let dir = TempDir::new().unwrap();
         let sessions = dir.path().join("sessions");
-        let big_content = "x".repeat(MAX_DREAM_INPUT_CHARS);
+        let big_content = "x".repeat(MAX_DREAM_INPUT_CHARS - 32);
         write_session_content(&sessions, "big", &big_content);
         write_session_content(&sessions, "small", "should not appear");
 
         let stems = vec!["big".to_string(), "small".to_string()];
         let msg = build_dream_user_message(&sessions, &stems, None).unwrap();
 
-        assert!(msg.content.len() >= MAX_DREAM_INPUT_CHARS);
+        assert!(msg.content.chars().count() <= MAX_DREAM_INPUT_CHARS);
         assert!(
             !msg.content.contains("should not appear"),
             "second session should be skipped after cap"
         );
         // Only the first stem should be in processed_stems — the second
-        // was beyond the 32K cap and must NOT be cleaned up.
+        // was beyond the cap and must NOT be archived.
         assert_eq!(msg.processed_stems, vec!["big"]);
     }
 
@@ -1029,7 +1064,7 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn cleanup_deletes_processed_sessions_on_completed() {
+    fn cleanup_archives_processed_sessions_on_completed() {
         let dir = TempDir::new().unwrap();
         let lock = DreamLock::new(dir.path());
         let (storage, _ws) = test_storage(&dir);
@@ -1047,9 +1082,11 @@ mod tests {
         assert!(matches!(result.status, DreamStatus::Completed { .. }));
         assert_eq!(result.cleaned_stems.len(), 2);
 
-        // Both files should be gone
+        // Both files leave the active directory but remain recoverable.
         assert!(!sessions.join("sess-a.md").exists());
         assert!(!sessions.join("sess-b.md").exists());
+        assert!(sessions.join("archive/sess-a.md").exists());
+        assert!(sessions.join("archive/sess-b.md").exists());
     }
 
     #[test]
@@ -1089,9 +1126,8 @@ mod tests {
         let sessions = dir.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
 
-        // Create a directory where a .md file is expected — remove_file
-        // on a directory fails even as root, giving us a guaranteed
-        // cleanup failure without relying on chmod. Back-date the dir's
+        // Create a directory where a regular .md file is expected. The
+        // archive path must reject it without relying on chmod. Back-date the dir's
         // mtime so it passes the recency guard.
         let bad_path = sessions.join("bad-stem.md");
         fs::create_dir_all(&bad_path).unwrap();
@@ -1205,7 +1241,7 @@ mod tests {
         let sessions = dir.path().join("sessions");
 
         // First session fills the buffer past the cap
-        let big_content = "x".repeat(MAX_DREAM_INPUT_CHARS);
+        let big_content = "x".repeat(MAX_DREAM_INPUT_CHARS - 32);
         write_session_content(&sessions, "first", &big_content);
         // Second session should NOT be processed (over cap)
         write_session_content(&sessions, "second", "small content");
@@ -1229,20 +1265,21 @@ mod tests {
 
     #[test]
     fn end_to_end_cap_boundary_cleanup() {
-        // Integration test: build_dream_user_message hits the 32K cap
-        // partway through the stems list, then execute_dream cleans up
-        // only the processed files while preserving unprocessed ones.
+        // Integration test: an oversized log is retained while later complete
+        // logs are consolidated and moved into the recoverable archive.
         let dir = TempDir::new().unwrap();
         let lock = DreamLock::new(dir.path());
         let (storage, _ws) = test_storage(&dir);
 
         let sessions = dir.path().join("sessions");
 
-        // Create 5 session files. The first 2 will fill past the cap;
-        // sessions 3-5 should survive cleanup.
-        let half_cap = MAX_DREAM_INPUT_CHARS / 2 + 500; // slightly over half
-        write_old_session_content(&sessions, "aaa-first", &"a".repeat(half_cap));
-        write_old_session_content(&sessions, "bbb-second", &"b".repeat(half_cap));
+        // The first file cannot fit as a complete unit; the later small files can.
+        write_old_session_content(
+            &sessions,
+            "aaa-first",
+            &"a".repeat(MAX_DREAM_INPUT_CHARS + 1),
+        );
+        write_old_session_content(&sessions, "bbb-second", "small content 2");
         write_old_session_content(&sessions, "ccc-third", "small content 3");
         write_old_session_content(&sessions, "ddd-fourth", "small content 4");
         write_old_session_content(&sessions, "eee-fifth", "small content 5");
@@ -1258,19 +1295,16 @@ mod tests {
         .map(String::from)
         .collect();
 
-        // Phase 1: build_dream_user_message should cap after the first 2
+        // Phase 1: skip the oversized file without starving later logs.
         let dream_msg = build_dream_user_message(&sessions, &all_stems, None).unwrap();
         assert_eq!(
-            dream_msg.processed_stems.len(),
-            2,
-            "only first 2 sessions should fit within 32K cap"
+            dream_msg.processed_stems,
+            vec!["bbb-second", "ccc-third", "ddd-fourth", "eee-fifth"]
         );
-        assert_eq!(dream_msg.processed_stems[0], "aaa-first");
-        assert_eq!(dream_msg.processed_stems[1], "bbb-second");
 
         // Phase 2: execute_dream with a valid response should clean up
         // only the processed stems.
-        let response = "## Consolidated\n\nMerged from 2 sessions.";
+        let response = "## Consolidated\n\nMerged from 4 sessions.";
         let result = execute_dream(
             &lock,
             &storage,
@@ -1282,16 +1316,16 @@ mod tests {
         );
 
         assert!(matches!(result.status, DreamStatus::Completed { .. }));
-        assert_eq!(result.cleaned_stems.len(), 2);
+        assert_eq!(result.cleaned_stems.len(), 4);
 
-        // Processed files deleted
-        assert!(!sessions.join("aaa-first.md").exists());
+        // Oversized source is still active; processed files are archived.
+        assert!(sessions.join("aaa-first.md").exists());
         assert!(!sessions.join("bbb-second.md").exists());
-
-        // Unprocessed files preserved
-        assert!(sessions.join("ccc-third.md").exists());
-        assert!(sessions.join("ddd-fourth.md").exists());
-        assert!(sessions.join("eee-fifth.md").exists());
+        assert!(!sessions.join("ccc-third.md").exists());
+        assert!(!sessions.join("ddd-fourth.md").exists());
+        assert!(!sessions.join("eee-fifth.md").exists());
+        assert!(sessions.join("archive/bbb-second.md").exists());
+        assert!(sessions.join("archive/eee-fifth.md").exists());
     }
 
     #[test]
@@ -1305,7 +1339,7 @@ mod tests {
 
         // Pass both — "missing" doesn't exist, should not error or count
         let cleaned =
-            clean_processed_sessions(&sessions, &["exists".to_string(), "missing".to_string()]);
+            archive_processed_sessions(&sessions, &["exists".to_string(), "missing".to_string()]);
 
         assert_eq!(
             cleaned.len(),
@@ -1314,6 +1348,7 @@ mod tests {
         );
         assert_eq!(cleaned[0], "exists");
         assert!(!sessions.join("exists.md").exists());
+        assert!(sessions.join("archive/exists.md").exists());
     }
 
     // -------------------------------------------------------------------

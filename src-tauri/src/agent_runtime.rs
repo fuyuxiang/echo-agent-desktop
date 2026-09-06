@@ -54,6 +54,9 @@ pub struct AgentHandle {
     pub tx: AcpAgentTx,
     pub rx: AcpClientRx,
     pub cancel: CancellationToken,
+    /// Becomes true only after live session actors have completed their
+    /// graceful shutdown hooks and the ACP gateway has stopped.
+    pub shutdown_complete: tokio::sync::watch::Receiver<bool>,
     /// JoinHandle for the agent OS thread. Used to detect unexpected exits
     /// (panics, crashes) so the frontend can show a "restart agent" prompt.
     pub thread: Option<std::thread::JoinHandle<Result<()>>>,
@@ -204,6 +207,7 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
 
     // 5. Agent thread (!Send → own OS thread + current_thread runtime + LocalSet).
     let cancel_for_thread = cancel.clone();
+    let (shutdown_complete_tx, shutdown_complete_rx) = tokio::sync::watch::channel(false);
     let thread_handle = std::thread::Builder::new()
         .name("echo-agent-runtime".into())
         .spawn(move || -> Result<()> {
@@ -211,7 +215,7 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
                 .enable_all()
                 .build()?;
             let local = tokio::task::LocalSet::new();
-            local.block_on(&rt, async move {
+            let result = local.block_on(&rt, async move {
                 let client_tx = acp_agent.tx.clone();
                 // The gateway sender implements `acp::Client` and forwards the
                 // agent's reverse-direction calls onto our mpsc channel.
@@ -233,6 +237,7 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
                 // methods directly (Pattern A from spawn_grok_shell). Use the
                 // generic AcpGatewayReceiver (not the AcpAgentGatewayReceiver
                 // alias, which fixes C = AgentSideConnection).
+                let shutdown_agent = agent_rc.clone();
                 let gw_rx = AcpGatewayReceiver::new(acp_agent.rx, agent_rc).with_tracing(true);
                 let gateway_task = tokio::task::spawn_local(gw_rx.run());
                 tokio::pin!(gateway_task);
@@ -245,6 +250,9 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
                 // still appears initialized.
                 tokio::select! {
                     _ = cancel_for_thread.cancelled() => {
+                        shutdown_agent
+                            .flush_all_sessions(std::time::Duration::from_secs(10))
+                            .await;
                         gateway_task.as_mut().abort();
                         let _ = gateway_task.await;
                         Ok(())
@@ -253,13 +261,16 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
                         Err(anyhow!("ACP gateway exited unexpectedly: {result:?}"))
                     }
                 }
-            })
+            });
+            let _ = shutdown_complete_tx.send(true);
+            result
         })?;
 
     Ok(AgentHandle {
         tx: acp_client.tx,
         rx: acp_client.rx,
         cancel,
+        shutdown_complete: shutdown_complete_rx,
         thread: Some(thread_handle),
     })
 }
@@ -335,8 +346,9 @@ fn desktop_client_capabilities() -> acp::ClientCapabilities {
 /// The in-process team MCP server (team_mcp.rs) rides along as a client-side
 /// `mcp_servers` entry — EchoAgent's merge gives the client layer top priority,
 /// so the team tools (`echoagent__create_team` etc.) are live from this
-/// session's first turn. Persistent registration to config.toml happens
-/// separately after the session exists (team_mcp::persist_registration).
+/// session's first turn. Team tools are persisted separately after the
+/// session exists; organization-memory tools remain session-scoped and are
+/// hot-attached only while a verified shared organization scope is available.
 pub async fn new_session(tx: &AcpAgentTx, cwd: &Path, model_id: Option<&str>) -> Result<String> {
     new_session_with_options(tx, cwd, model_id, None).await
 }
@@ -358,7 +370,7 @@ pub async fn new_session_with_options(
     ) {
         servers.push(authenticated_team_mcp_server(url, authorization));
     }
-    if let Some((url, token)) = crate::org_mcp::server_config() {
+    if let Some((url, token)) = crate::org_mcp::active_server_config() {
         servers.push(acp::McpServer::Http(
             acp::McpServerHttp::new(crate::org_mcp::MCP_SERVER_NAME, url).headers(vec![
                 acp::HttpHeader::new(crate::org_mcp::AUTH_HEADER, token),

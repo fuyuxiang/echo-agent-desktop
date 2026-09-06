@@ -198,6 +198,14 @@ pub async fn hybrid_search(
     query: &str,
     config: &MemorySearchConfig,
 ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+    if let Some(provider) = embedding_provider {
+        let fingerprint = provider.fingerprint();
+        if index.ensure_embedding_fingerprint(&fingerprint)? {
+            // Rebuild immediately so a model switch degrades for at most this
+            // operation rather than leaving the vector index empty indefinitely.
+            super::embed_missing_chunks(index, provider).await;
+        }
+    }
     let candidate_limit = config.max_results * 3;
 
     // Phase 1 (sync): FTS search + supplemental evergreen query so
@@ -218,13 +226,21 @@ pub async fn hybrid_search(
         resolve_query_embedding(embedding_provider, index.vec_available(), query).await;
 
     // Phase 3 (sync): vector search + scoring + merge
-    Ok(hybrid_search_merge(index, fts_results, query_embedding.embedding(), config)?.results)
+    Ok(hybrid_search_merge(
+        index,
+        query,
+        fts_results,
+        query_embedding.embedding(),
+        config,
+    )?
+    .results)
 }
 
 /// Synchronous merge phase: vector search (if embedding provided), score
 /// normalization, temporal decay, source weighting, MMR, and truncation.
 pub(super) fn hybrid_search_merge(
     index: &MemoryIndex,
+    query: &str,
     fts_results: Vec<super::index::FtsResult>,
     query_embedding: Option<&[f32]>,
     config: &MemorySearchConfig,
@@ -268,13 +284,20 @@ pub(super) fn hybrid_search_merge(
             .iter()
             .map(|r| r.rank)
             .fold(f64::NEG_INFINITY, f64::max);
-        // When there's only 1 FTS result, min_rank == max_rank, so range = EPSILON
-        // and normalized = 1.0. This is correct: a single result gets full score.
+        // Relative rank alone is unsafe: a lone weak OR-term match otherwise
+        // becomes a misleading 1.0. Blend it with absolute query-term coverage.
         let range = (max_rank - min_rank).max(f64::EPSILON);
 
         for r in &fts_results {
             // FTS5 rank: more negative = better. Normalize so best = 1.0
-            let normalized = 1.0 - (r.rank - min_rank) / range;
+            let relative = 1.0 - (r.rank - min_rank) / range;
+            let coverage = index
+                .get_chunk(&r.chunk_id)
+                .ok()
+                .flatten()
+                .map(|chunk| lexical_query_coverage(query, &chunk.text))
+                .unwrap_or(0.0);
+            let normalized = relative * (0.25 + 0.75 * coverage);
             fts_scores.insert(r.chunk_id.clone(), normalized);
         }
     }
@@ -426,6 +449,37 @@ pub(super) fn hybrid_search_merge(
     })
 }
 
+/// Fraction of meaningful query terms present in a candidate. CJK phrases are
+/// decomposed into character bigrams so partial Chinese matches do not receive
+/// the same confidence as full-phrase matches.
+fn lexical_query_coverage(query: &str, text: &str) -> f64 {
+    let mut terms = Vec::new();
+    for keyword in super::query_expansion::extract_keywords(query) {
+        let chars: Vec<char> = keyword.chars().collect();
+        if chars.len() > 2 && chars.iter().any(|character| is_cjk(*character)) {
+            terms.extend(chars.windows(2).map(|pair| pair.iter().collect::<String>()));
+        } else {
+            terms.push(keyword);
+        }
+    }
+    if terms.is_empty() {
+        return 1.0;
+    }
+    let haystack = text.to_lowercase();
+    let matches = terms
+        .iter()
+        .filter(|term| haystack.contains(term.as_str()))
+        .count();
+    matches as f64 / terms.len() as f64
+}
+
+fn is_cjk(character: char) -> bool {
+    matches!(
+        character,
+        '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}'
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,6 +532,7 @@ mod tests {
         };
         let merged = hybrid_search_merge(
             &index,
+            "rust",
             index.search_fts("rust", 3).unwrap(),
             Some(&[0.0; 4]),
             &config,
@@ -851,6 +906,7 @@ mod tests {
         let config = MemorySearchConfig::default();
         let results = hybrid_search_merge(
             &idx,
+            "rust ownership",
             idx.search_fts("rust ownership", 10).unwrap(),
             None,
             &config,
@@ -927,6 +983,7 @@ mod tests {
 
         let results = hybrid_search_merge(
             &idx,
+            "rust ownership",
             idx.search_fts("rust ownership", 10).unwrap(),
             None,
             &config,
@@ -1006,6 +1063,40 @@ mod tests {
             "FTS-only score ({:.4}) must exceed 0.3",
             results[0].score,
         );
+    }
+
+    #[tokio::test]
+    async fn lone_partial_match_does_not_receive_full_confidence() {
+        let tmp = TempDir::new().unwrap();
+        let mut idx = test_index(&tmp);
+        let file_path = tmp.path().join("partial.md");
+        std::fs::write(&file_path, "# Rust\n\nRust ownership notes.").unwrap();
+        idx.reindex_file(&file_path, "workspace").unwrap();
+        let config = MemorySearchConfig {
+            min_score: 0.5,
+            ..Default::default()
+        };
+
+        let results = hybrid_search(
+            &idx,
+            None,
+            "rust kubernetes postgres accessibility",
+            &config,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            results.is_empty(),
+            "one weak OR-term match must not look exact"
+        );
+    }
+
+    #[test]
+    fn chinese_coverage_uses_character_bigrams() {
+        let coverage = lexical_query_coverage("数据库连接错误", "处理数据库连接超时");
+        assert!(coverage > 0.3 && coverage < 1.0, "coverage was {coverage}");
+        assert_eq!(lexical_query_coverage("数据库连接", "数据库连接"), 1.0);
     }
 
     /// Global MEMORY.md chunks (source_weight = 0.7) should still be
@@ -1148,9 +1239,15 @@ mod tests {
             ..Default::default()
         };
 
-        let results = hybrid_search_merge(&idx, fts_results, Some(&query_embedding[0]), &config)
-            .unwrap()
-            .results;
+        let results = hybrid_search_merge(
+            &idx,
+            "rust programming",
+            fts_results,
+            Some(&query_embedding[0]),
+            &config,
+        )
+        .unwrap()
+        .results;
 
         assert!(!results.is_empty(), "should find at least one result");
         // With absolute normalization, the combined score should be
@@ -1417,6 +1514,7 @@ mod tests {
 
         let results = hybrid_search_merge(
             &idx,
+            "rust ownership",
             idx.search_fts("rust ownership", 10).unwrap(),
             None,
             &config,

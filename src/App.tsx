@@ -85,6 +85,7 @@ import { migrateCatalogRootStorage } from "./lib/catalog-root-storage";
 import { parseRememberArguments, type SlashCommandInvocation } from "./lib/slash-commands";
 import { useUpdateStore } from "./stores/update-store";
 import { useOrgSessionStore } from "./stores/org-session-store";
+import { listenOrgSessionChanged } from "./lib/org-client";
 import { indexTaskArtifacts } from "./lib/artifact-catalog";
 import {
   EXPERT_PERSONA_BEGIN,
@@ -226,6 +227,21 @@ function Shell() {
       console.error("[EchoAgent] Failed to hydrate projects:", error);
       setToast("项目后端数据读取失败，已使用本地缓存");
     });
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listenOrgSessionChanged(({ session }) => {
+      useOrgSessionStore.getState().setSession(session);
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    }).catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   // Organization hydration may race the native agent startup. Once the agent

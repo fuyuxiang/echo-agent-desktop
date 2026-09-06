@@ -510,7 +510,7 @@ impl SessionActor {
             None
         }
     }
-    /// Increment the compaction counter and launch a pre-compaction memory flush.
+    /// Increment the compaction counter and complete a pre-compaction memory flush.
     ///
     /// The counter is incremented before the flush check so the once-per-cycle
     /// guard does not suppress the first eligible flush.
@@ -541,17 +541,11 @@ impl SessionActor {
             compaction_count,
         ) {
             let snapshot = self.snapshot_memory_flush_state().await;
-            tokio::task::spawn_local({
-                let session = self.clone();
-                async move {
-                    if session.run_memory_flush(trigger, Some(snapshot)).await {
-                        session
-                            .memory
-                            .last_flush_compaction
-                            .store(compaction_count, std::sync::atomic::Ordering::Relaxed);
-                    }
-                }
-            });
+            if self.run_memory_flush(trigger, Some(snapshot)).await {
+                self.memory
+                    .last_flush_compaction
+                    .store(compaction_count, std::sync::atomic::Ordering::Relaxed);
+            }
         }
     }
     /// Tag the current `session.compact` span with `mode` (and `detail`, for

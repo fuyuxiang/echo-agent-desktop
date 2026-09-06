@@ -109,7 +109,7 @@ export function PlaceholderPage({
   }
 
   if (label === "组织") {
-    return <DeferredPanel><OrganizationMemoryPanel onToast={onToast} /></DeferredPanel>;
+    return <DeferredPanel><OrganizationMemoryPanel onToast={onToast} cwd={cwd} /></DeferredPanel>;
   }
 
   if (["专家·技能·连接器", "技能", "连接器"].includes(label)) {

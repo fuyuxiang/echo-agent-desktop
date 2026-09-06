@@ -4,6 +4,7 @@
 //! and workspace-scoped memory. All workspace-scoped memory lives under
 //! `~/.grok/memory/{project-slug}-{hash8}/` to avoid polluting the user's repo.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use xai_grok_tools::util::grok_home::grok_home;
@@ -58,7 +59,9 @@ impl MemoryStorage {
             .unwrap_or_else(|| grok_home().join("memory"));
         let workspace_dir = if use_workspace_hash {
             let workspace_hash = compute_workspace_hash(cwd);
-            global_dir.join(&workspace_hash)
+            let next = global_dir.join(&workspace_hash);
+            migrate_legacy_workspace_dir(cwd, &global_dir, &next);
+            next
         } else {
             global_dir.clone()
         };
@@ -143,6 +146,27 @@ impl MemoryStorage {
         }
     }
 
+    /// Whether a watcher path belongs to this backend's live memory set.
+    ///
+    /// The watcher observes the shared memory root recursively, so accepting
+    /// every Markdown event would mix other projects, `.history` snapshots,
+    /// and consolidated session archives into the current workspace index.
+    pub fn is_indexable_memory_file(&self, path: &Path) -> bool {
+        if path.extension().and_then(|value| value.to_str()) != Some("md") {
+            return false;
+        }
+        let candidate = normalize_event_path(path);
+        if candidate == normalize_event_path(&self.global_memory_file())
+            || candidate == normalize_event_path(&self.workspace_memory_file())
+        {
+            return true;
+        }
+        // Only direct children of the active sessions directory qualify,
+        // never archive/history files.
+        let sessions_dir = normalize_event_path(&self.sessions_dir());
+        candidate.parent() == Some(sessions_dir.as_path())
+    }
+
     /// Path to the workspace sessions directory.
     pub fn sessions_dir(&self) -> PathBuf {
         self.workspace_dir.join("sessions")
@@ -180,12 +204,12 @@ impl MemoryStorage {
         std::fs::create_dir_all(&sessions_dir)?;
 
         if append && path.exists() {
-            use std::io::Write;
             let timestamp = chrono::Utc::now().format("%H:%M:%S UTC");
             let mut file = std::fs::OpenOptions::new().append(true).open(&path)?;
             write!(file, "\n\n---\n\n<!-- flush {timestamp} -->\n\n{content}")?;
+            file.sync_all()?;
         } else {
-            std::fs::write(&path, content)?;
+            atomic_write_with_history(&path, content.as_bytes())?;
         }
         tracing::debug!(path = %path.display(), append, "wrote daily session log");
 
@@ -212,7 +236,7 @@ impl MemoryStorage {
             }
         };
 
-        std::fs::write(&path, content)?;
+        atomic_write_with_history(&path, content.as_bytes())?;
         tracing::debug!(path = %path.display(), scope = ?scope, "wrote long-term memory");
 
         Ok(())
@@ -252,12 +276,12 @@ impl MemoryStorage {
             .append(true)
             .open(&path)?;
 
-        use std::io::Write;
         if file.metadata()?.len() > 0 {
             write!(file, "\n\n{normalized}")?;
         } else {
             write!(file, "{normalized}")?;
         }
+        file.sync_all()?;
 
         tracing::debug!(path = %path.display(), scope = ?scope, "appended to memory");
         Ok(())
@@ -446,8 +470,8 @@ impl MemoryStorage {
     /// Deletion criteria (tiered):
     /// 1. `tmp*` dirs: remove empty ones unconditionally; remove non-empty
     ///    ones older than 7 days.
-    /// 2. Other workspaces with no session files: remove if older than
-    ///    `max_age_days`.
+    /// 2. Other workspaces with no session files and no substantive durable
+    ///    memory: remove if older than `max_age_days`.
     /// 3. Non-empty non-tmp workspaces: never touched.
     ///
     /// Returns the number of directories removed.
@@ -511,6 +535,13 @@ impl MemoryStorage {
 /// A workspace directory is "empty" if its `sessions/` subdirectory either
 /// does not exist or contains no entries.
 fn is_empty_workspace(dir: &Path) -> bool {
+    let memory_file = dir.join("MEMORY.md");
+    if let Ok(content) = std::fs::read_to_string(&memory_file)
+        && !content.trim().is_empty()
+        && !crate::dream::is_scaffold_template(&content)
+    {
+        return false;
+    }
     let sessions = dir.join("sessions");
     if !sessions.is_dir() {
         return true;
@@ -518,6 +549,72 @@ fn is_empty_workspace(dir: &Path) -> bool {
     match std::fs::read_dir(&sessions) {
         Ok(mut entries) => entries.next().is_none(),
         Err(_) => true,
+    }
+}
+
+/// Atomically replace a durable memory file and retain the previous version.
+/// The history copy is made before replacement, and the temporary file lives
+/// beside the destination so persistence never crosses filesystem boundaries.
+fn atomic_write_with_history(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "memory destination is not a regular file: {}",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "memory path has no parent",
+        )
+    })?;
+    std::fs::create_dir_all(parent)?;
+
+    if path.exists() {
+        let history_dir = parent.join(".history");
+        std::fs::create_dir_all(&history_dir)?;
+        let stem = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("MEMORY");
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.9fZ");
+        let history_path = history_dir.join(format!("{stem}-{stamp}-{}.md", std::process::id()));
+        let mut source = std::fs::File::open(path)?;
+        let mut history = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&history_path)?;
+        std::io::copy(&mut source, &mut history)?;
+        history.sync_all()?;
+    }
+
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(content)?;
+    temporary.as_file_mut().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    if let Ok(directory) = std::fs::File::open(parent) {
+        let _ = directory.sync_all();
+    }
+    Ok(())
+}
+
+/// Normalize both existing and just-deleted watcher paths. Canonicalizing the
+/// parent handles macOS `/tmp` -> `/private/tmp` aliases even after a remove
+/// event makes the full file path unavailable.
+fn normalize_event_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = dunce::canonicalize(path) {
+        return canonical;
+    }
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => dunce::canonicalize(parent)
+            .map(|canonical| canonical.join(name))
+            .unwrap_or_else(|_| path.to_path_buf()),
+        _ => path.to_path_buf(),
     }
 }
 
@@ -603,9 +700,11 @@ fn is_ephemeral_cwd(cwd: &Path) -> bool {
 /// - `slug` is the repo or directory name, slugified (max 40 chars)
 /// - `hash8` is 8 hex chars from blake3 for uniqueness
 ///
-/// **Identity strategy:** Prefers git remote `org/repo` as the identity
+/// **Identity strategy:** Prefers git remote `host/org/repo` as the identity
 /// source — all clones, worktrees, and copies of the same repository
 /// resolve to the same memory directory regardless of filesystem path.
+/// Including the host prevents repositories with the same owner/name on
+/// different Git forges from sharing private memory by accident.
 /// Falls back to filesystem path when not inside a git repo or when
 /// no `origin` remote is configured.
 fn compute_workspace_hash(cwd: &Path) -> String {
@@ -643,7 +742,7 @@ fn compute_workspace_hash(cwd: &Path) -> String {
     format!("{slug}-{hash8}")
 }
 
-/// Extract a normalized `org/repo` identifier from the git remote URL.
+/// Extract a normalized `host/org/repo` identifier from the git remote URL.
 ///
 /// Uses `git2` (already a dependency) to discover the repository from
 /// `cwd` and read the `origin` remote URL. Returns `None` if not a git
@@ -655,38 +754,89 @@ pub(crate) fn extract_repo_identity(cwd: &Path) -> Option<String> {
     normalize_remote_url(url)
 }
 
-/// Normalize a git remote URL to `org/repo` form.
+/// Normalize a git remote URL to `host/org/repo` form.
 ///
-/// Strips protocol prefix, host, and trailing `.git`:
-/// - `git@github.com:acme/widgets.git`       → `"acme/widgets"`
-/// - `https://github.com/acme/widgets.git`   → `"acme/widgets"`
-/// - `ssh://git@github.com/acme/widgets`     → `"acme/widgets"`
+/// Strips protocol credentials, ports, and trailing `.git` while preserving
+/// the forge hostname as part of the stable identity:
+/// - `git@github.com:acme/widgets.git`       → `"github.com/acme/widgets"`
+/// - `https://github.com/acme/widgets.git`   → `"github.com/acme/widgets"`
+/// - `ssh://git@github.com/acme/widgets`     → `"github.com/acme/widgets"`
 fn normalize_remote_url(url: &str) -> Option<String> {
-    let path = if let Some(colon_pos) = url.find(':') {
+    let (host, path) = if let Some(colon_pos) = url.find(':') {
         // SSH format: git@github.com:org/repo.git
         if url[..colon_pos].contains('@') && !url[..colon_pos].contains('/') {
-            &url[colon_pos + 1..]
+            (url[..colon_pos].rsplit('@').next()?, &url[colon_pos + 1..])
         } else {
             // HTTPS/SSH-with-scheme: https://github.com/org/repo.git
             url.split("//")
                 .nth(1)
                 .and_then(|after_scheme| after_scheme.split_once('/'))
-                .map(|(_, path)| path)?
+                .map(|(authority, path)| {
+                    let without_credentials = authority.rsplit('@').next().unwrap_or(authority);
+                    let host = without_credentials
+                        .split(':')
+                        .next()
+                        .unwrap_or(without_credentials);
+                    (host, path)
+                })?
         }
     } else {
         return None;
     };
 
+    let host = host.trim().to_ascii_lowercase();
     let cleaned = path
-        .trim_end_matches(".git")
         .trim_end_matches('/')
+        .trim_end_matches(".git")
         .trim_start_matches('/');
 
-    if cleaned.is_empty() || !cleaned.contains('/') {
+    if host.is_empty() || cleaned.is_empty() || !cleaned.contains('/') {
         return None;
     }
 
-    Some(cleaned.to_string())
+    Some(format!("{host}/{cleaned}"))
+}
+
+/// Move a pre-host-identity workspace directory to the collision-safe name.
+/// Migration is deliberately best-effort and never merges or deletes data: if
+/// both directories exist, both are retained for manual reconciliation.
+fn migrate_legacy_workspace_dir(cwd: &Path, global_dir: &Path, next: &Path) {
+    if next.exists() {
+        return;
+    }
+    let Some(identity) = extract_repo_identity(cwd) else {
+        return;
+    };
+    let mut parts = identity.splitn(2, '/');
+    let _host = parts.next();
+    let Some(legacy_identity) = parts.next() else {
+        return;
+    };
+    let slug_source = legacy_identity
+        .rsplit('/')
+        .next()
+        .unwrap_or(legacy_identity);
+    let slug = slugify(slug_source, 40);
+    let slug = if slug.is_empty() { "workspace" } else { &slug };
+    let hash = blake3::hash(legacy_identity.as_bytes());
+    let legacy = global_dir.join(format!("{slug}-{}", &hash.to_hex()[..8]));
+    if legacy == next || !legacy.exists() {
+        return;
+    }
+    if let Err(error) = std::fs::rename(&legacy, next) {
+        tracing::warn!(
+            from = %legacy.display(),
+            to = %next.display(),
+            error = %error,
+            "could not migrate legacy workspace memory directory"
+        );
+    } else {
+        tracing::info!(
+            from = %legacy.display(),
+            to = %next.display(),
+            "migrated workspace memory to collision-safe repository identity"
+        );
+    }
 }
 
 /// Generate a URL-safe slug from a string (e.g., first user message).
@@ -912,6 +1062,56 @@ mod tests {
     }
 
     #[test]
+    fn test_long_term_replacement_keeps_previous_version() {
+        let tmp = TempDir::new().unwrap();
+        let global_dir = tmp.path().join("memory");
+        let workspace_dir = global_dir.join("abc123");
+        let storage = MemoryStorage::with_paths(global_dir, workspace_dir.clone());
+
+        storage
+            .write_long_term(MemoryScope::Workspace, "# Version one")
+            .unwrap();
+        storage
+            .write_long_term(MemoryScope::Workspace, "# Version two")
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(workspace_dir.join("MEMORY.md")).unwrap(),
+            "# Version two"
+        );
+        let history: Vec<_> = std::fs::read_dir(workspace_dir.join(".history"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(&history[0]).unwrap(),
+            "# Version one"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_long_term_write_rejects_symlink_destination() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        let global_dir = tmp.path().join("memory");
+        let workspace_dir = global_dir.join("abc123");
+        std::fs::create_dir_all(&workspace_dir).unwrap();
+        let outside = tmp.path().join("outside.md");
+        std::fs::write(&outside, "do not replace").unwrap();
+        symlink(&outside, workspace_dir.join("MEMORY.md")).unwrap();
+        let storage = MemoryStorage::with_paths(global_dir, workspace_dir);
+
+        let error = storage
+            .write_long_term(MemoryScope::Workspace, "# Replacement")
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(std::fs::read_to_string(outside).unwrap(), "do not replace");
+    }
+
+    #[test]
     fn test_storage_list_memory_files() {
         let tmp = TempDir::new().unwrap();
         let global_dir = tmp.path().join("memory");
@@ -948,6 +1148,22 @@ mod tests {
                 .unwrap()
                 == "memory"
         );
+    }
+
+    #[test]
+    fn test_indexable_files_exclude_history_archives_and_other_workspaces() {
+        let tmp = TempDir::new().unwrap();
+        let global_dir = tmp.path().join("memory");
+        let workspace_dir = global_dir.join("current");
+        let storage = MemoryStorage::with_paths(global_dir.clone(), workspace_dir.clone());
+
+        assert!(storage.is_indexable_memory_file(&global_dir.join("MEMORY.md")));
+        assert!(storage.is_indexable_memory_file(&workspace_dir.join("MEMORY.md")));
+        assert!(storage.is_indexable_memory_file(&workspace_dir.join("sessions/live.md")));
+        assert!(!storage.is_indexable_memory_file(&workspace_dir.join(".history/MEMORY-old.md")));
+        assert!(!storage.is_indexable_memory_file(&workspace_dir.join("sessions/archive/old.md")));
+        assert!(!storage.is_indexable_memory_file(&global_dir.join("other/MEMORY.md")));
+        assert!(!storage.is_indexable_memory_file(&global_dir.join("loose-note.md")));
     }
 
     #[test]
@@ -1314,7 +1530,7 @@ mod tests {
     fn test_normalize_ssh_url() {
         assert_eq!(
             normalize_remote_url("git@github.com:acme/widgets.git"),
-            Some("acme/widgets".to_string())
+            Some("github.com/acme/widgets".to_string())
         );
     }
 
@@ -1322,7 +1538,7 @@ mod tests {
     fn test_normalize_https_url() {
         assert_eq!(
             normalize_remote_url("https://github.com/acme/widgets.git"),
-            Some("acme/widgets".to_string())
+            Some("github.com/acme/widgets".to_string())
         );
     }
 
@@ -1330,7 +1546,15 @@ mod tests {
     fn test_normalize_https_no_dot_git() {
         assert_eq!(
             normalize_remote_url("https://github.com/acme/widgets"),
-            Some("acme/widgets".to_string())
+            Some("github.com/acme/widgets".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_trailing_slash_after_dot_git() {
+        assert_eq!(
+            normalize_remote_url("https://github.com/acme/widgets.git/"),
+            Some("github.com/acme/widgets".to_string())
         );
     }
 
@@ -1338,7 +1562,7 @@ mod tests {
     fn test_normalize_ssh_with_scheme() {
         assert_eq!(
             normalize_remote_url("ssh://git@github.com/acme/widgets"),
-            Some("acme/widgets".to_string())
+            Some("github.com/acme/widgets".to_string())
         );
     }
 
@@ -1346,7 +1570,7 @@ mod tests {
     fn test_normalize_self_hosted() {
         assert_eq!(
             normalize_remote_url("git@gitlab.example.com:team/project.git"),
-            Some("team/project".to_string())
+            Some("gitlab.example.com/team/project".to_string())
         );
     }
 
@@ -1369,7 +1593,7 @@ mod tests {
     fn test_normalize_deep_path() {
         assert_eq!(
             normalize_remote_url("https://github.com/acme/tools/sub.git"),
-            Some("acme/tools/sub".to_string())
+            Some("github.com/acme/tools/sub".to_string())
         );
     }
 
@@ -1380,6 +1604,13 @@ mod tests {
         let ssh_scheme = normalize_remote_url("ssh://git@github.com/acme/widgets.git");
         assert_eq!(ssh, https);
         assert_eq!(https, ssh_scheme);
+    }
+
+    #[test]
+    fn test_normalize_different_hosts_produce_different_identity() {
+        let github = normalize_remote_url("git@github.com:acme/widgets.git");
+        let gitlab = normalize_remote_url("git@gitlab.com:acme/widgets.git");
+        assert_ne!(github, gitlab);
     }
 
     // -----------------------------------------------------------------------
@@ -1400,7 +1631,7 @@ mod tests {
             "should detect repo identity from git directory with origin remote"
         );
         let id = identity.unwrap();
-        assert_eq!(id, "example/demo");
+        assert_eq!(id, "github.com/example/demo");
     }
 
     #[test]
@@ -1408,6 +1639,30 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let identity = extract_repo_identity(tmp.path());
         assert_eq!(identity, None, "non-git directory should return None");
+    }
+
+    #[test]
+    fn test_storage_migrates_legacy_remote_identity_directory() {
+        let tmp = TempDir::new().unwrap();
+        let repo_dir = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+        let repo = git2::Repository::init(&repo_dir).unwrap();
+        repo.remote("origin", "git@github.com:example/demo.git")
+            .unwrap();
+        let memory_root = tmp.path().join("memory");
+        std::fs::create_dir_all(&memory_root).unwrap();
+        let legacy_hash = blake3::hash(b"example/demo");
+        let legacy_dir = memory_root.join(format!("demo-{}", &legacy_hash.to_hex()[..8]));
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join("MEMORY.md"), "# Existing knowledge").unwrap();
+
+        let storage = MemoryStorage::new(&repo_dir, Some(&memory_root));
+
+        assert!(!legacy_dir.exists());
+        assert_eq!(
+            std::fs::read_to_string(storage.workspace_memory_file()).unwrap(),
+            "# Existing knowledge"
+        );
     }
 
     #[test]
@@ -1745,7 +2000,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gc_workspace_with_memory_md_but_no_sessions_is_empty() {
+    fn test_gc_preserves_workspace_with_durable_memory() {
         let tmp = TempDir::new().unwrap();
         let global_dir = tmp.path().join("memory");
         let workspace_dir = global_dir.join("current-ws");
@@ -1760,10 +2015,10 @@ mod tests {
 
         let removed = storage.gc(30).unwrap();
         assert_eq!(
-            removed, 1,
-            "workspace with MEMORY.md but no sessions is empty"
+            removed, 0,
+            "durable MEMORY.md content must never be garbage-collected"
         );
-        assert!(!ws.exists());
+        assert!(ws.exists());
     }
 
     #[test]

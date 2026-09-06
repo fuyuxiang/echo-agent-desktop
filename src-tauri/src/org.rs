@@ -195,6 +195,7 @@ async fn enforce_model_for_current_session(inner: &Arc<OrgInner>) -> Result<bool
 #[serde(rename_all = "camelCase")]
 pub struct OrgSessionView {
     logged_in: bool,
+    organization_memory_enabled: bool,
     server_url: Option<String>,
     user: Option<Value>,
     bootstrap: Option<Value>,
@@ -277,7 +278,7 @@ fn with_skill_state_transaction_at<T>(
                 return Err(format!(
                     "lock organization Skill state {}: {error}",
                     lock_path.display()
-                ))
+                ));
             }
         }
     }
@@ -427,6 +428,19 @@ fn notify_models_changed(app: &AppHandle, reason: &str) {
             tracing::debug!(%error, %reason, "failed to emit organization model change event");
         }
     });
+}
+
+pub(crate) async fn notify_session_changed(app: &AppHandle, reason: &str) {
+    let state = shared_state();
+    let session = state.inner.session.lock().await;
+    let view = session_view(&session);
+    drop(session);
+    if let Err(error) = app.emit(
+        "org://session-changed",
+        json!({ "reason": reason, "session": view }),
+    ) {
+        tracing::debug!(%error, %reason, "failed to emit organization session change event");
+    }
 }
 
 pub(crate) fn local_kb_sources_path() -> PathBuf {
@@ -919,6 +933,7 @@ fn clear_local_session(
     session: &mut OrgSession,
     profile: Option<&OrgProfile>,
 ) -> Result<(), String> {
+    crate::org_mcp::set_capability_enabled(false);
     let mut errors = Vec::new();
     invalidate_account_generation(inner);
     // Revoke Runtime paths while the account's signing credential is still
@@ -1009,12 +1024,19 @@ async fn response_data(response: Response) -> Result<Value, String> {
         .and_then(Value::as_i64)
         .unwrap_or(status.as_u16() as i64);
     if !status.is_success() || code != 0 {
-        return Err(bounded_message(
+        let message = bounded_message(
             value
                 .get("msg")
                 .and_then(Value::as_str)
                 .unwrap_or("organization request failed"),
-        ));
+        );
+        if status.is_server_error() {
+            return Err(format!(
+                "organization server unavailable (HTTP {}): {message}",
+                status.as_u16()
+            ));
+        }
+        return Err(message);
     }
     Ok(value.get("data").cloned().unwrap_or(Value::Null))
 }
@@ -1380,14 +1402,12 @@ async fn sync_organization_model_config_for_context(
                     Ok(None)
                 }
             }
-            Err(validation_error) => {
-                match crate::providers::remove_organization_model_config() {
-                    Ok(_) => Err(validation_error),
-                    Err(cleanup_error) => Err(format!(
-                        "{validation_error}; failed to clear invalid organization model configuration: {cleanup_error}"
-                    )),
-                }
-            }
+            Err(validation_error) => match crate::providers::remove_organization_model_config() {
+                Ok(_) => Err(validation_error),
+                Err(cleanup_error) => Err(format!(
+                    "{validation_error}; failed to clear invalid organization model configuration: {cleanup_error}"
+                )),
+            },
         }
     })
 }
@@ -1397,10 +1417,28 @@ pub(crate) async fn mcp_json(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, String> {
-    authenticated_json(&shared_state().inner, method, path, body).await
+    let result = authenticated_json(&shared_state().inner, method, path, body).await;
+    if result
+        .as_ref()
+        .is_err_and(|error| is_organization_capability_failure(error))
+    {
+        crate::org_mcp::set_capability_enabled(false);
+    }
+    result
 }
 
 pub(crate) async fn mcp_ask(input: Value) -> Result<Value, String> {
+    let result = mcp_ask_inner(input).await;
+    if result
+        .as_ref()
+        .is_err_and(|error| is_organization_capability_failure(error))
+    {
+        crate::org_mcp::set_capability_enabled(false);
+    }
+    result
+}
+
+async fn mcp_ask_inner(input: Value) -> Result<Value, String> {
     let state = shared_state();
     let authenticated = authenticated_response(
         &state.inner,
@@ -1436,6 +1474,36 @@ async fn update_bootstrap(inner: &Arc<OrgInner>) -> Result<Value, String> {
 }
 
 async fn update_bootstrap_with_context(
+    inner: &Arc<OrgInner>,
+    expected_context: Option<&AccountContext>,
+) -> Result<(Value, AccountContext), String> {
+    let capability_context = match expected_context {
+        Some(context) => Some(context.clone()),
+        None => active_account_context(inner).await.ok(),
+    };
+    let result = update_bootstrap_with_context_inner(inner, expected_context).await;
+    match result.as_ref() {
+        Ok((bootstrap, _)) => {
+            crate::org_mcp::set_capability_enabled(bootstrap_enables_organization_memory(
+                bootstrap,
+            ));
+        }
+        Err(_) => {
+            // A late failure from an account that has already been replaced
+            // must not detach tools belonging to the new identity.
+            let still_current = match capability_context.as_ref() {
+                Some(context) => require_account_context(inner, context).await.is_ok(),
+                None => true,
+            };
+            if still_current {
+                crate::org_mcp::set_capability_enabled(false);
+            }
+        }
+    }
+    result
+}
+
+async fn update_bootstrap_with_context_inner(
     inner: &Arc<OrgInner>,
     expected_context: Option<&AccountContext>,
 ) -> Result<(Value, AccountContext), String> {
@@ -1506,7 +1574,7 @@ async fn update_bootstrap_with_context(
             return Err(
                 "organization signing key changed; explicit administrator migration is required"
                     .into(),
-            )
+            );
         }
         None => credential_write(&key_account, key_text)?,
         Some(_) => {}
@@ -1534,6 +1602,41 @@ async fn update_bootstrap_with_context(
     Ok((data, request_context))
 }
 
+fn bootstrap_enables_organization_memory(bootstrap: &Value) -> bool {
+    bootstrap
+        .get("scopes")
+        .and_then(Value::as_array)
+        .is_some_and(|scopes| {
+            scopes.iter().any(|scope| {
+                matches!(
+                    scope.get("kind").and_then(Value::as_str),
+                    Some("team" | "org")
+                )
+            })
+        })
+}
+
+fn is_organization_capability_failure(error: &str) -> bool {
+    [
+        "organization server unreachable",
+        "organization server unavailable",
+        "read organization response",
+        "decode server response",
+        "refresh organization session",
+        "organization session expired",
+        "not signed in to an organization",
+        "organization session has no usable credential",
+        "organization account changed",
+        "knowledge ask: HTTP 5",
+        "read knowledge answer",
+        "knowledge answer is not valid UTF-8",
+        "decode knowledge final event",
+        "knowledge answer stream ended without a final event",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+}
+
 async fn require_policy(inner: &Arc<OrgInner>, key: &str) -> Result<AccountContext, String> {
     let (bootstrap, request_context) = update_bootstrap_with_context(inner, None).await?;
     if bootstrap
@@ -1551,6 +1654,7 @@ async fn require_policy(inner: &Arc<OrgInner>, key: &str) -> Result<AccountConte
 fn session_view(session: &OrgSession) -> OrgSessionView {
     OrgSessionView {
         logged_in: session.profile.is_some() && session.refresh_token.is_some(),
+        organization_memory_enabled: crate::org_mcp::capability_enabled(),
         server_url: session.profile.as_ref().map(|p| p.server_url.clone()),
         user: session.user.clone(),
         bootstrap: session.bootstrap.clone(),
@@ -1676,22 +1780,41 @@ pub async fn org_login(
             generation: state.inner.account_generation.load(Ordering::SeqCst),
         }
     };
+    // The authenticated identity has changed, but its signed bootstrap and
+    // shared-scope membership have not been verified yet. Detach the previous
+    // account's tools immediately; successful bootstrap below re-enables them.
+    crate::org_mcp::set_capability_enabled(false);
+    crate::org_mcp::reconcile_all_sessions(&app).await;
     notify_skills_changed(&app, "account-switch");
     notify_models_changed(&app, "account-switch");
     if let Err(error) = update_bootstrap_with_context(&state.inner, Some(&login_context)).await {
-        let mut session = state.inner.session.lock().await;
-        if require_account_context_locked(&state.inner, &session, &login_context).is_err() {
-            return Err(format!(
-                "{error}; organization login was superseded by another account change"
-            ));
+        let (failure, superseded) = {
+            let mut session = state.inner.session.lock().await;
+            if require_account_context_locked(&state.inner, &session, &login_context).is_err() {
+                (
+                    format!("{error}; organization login was superseded by another account change"),
+                    true,
+                )
+            } else {
+                let profile = session.profile.clone();
+                let message =
+                    match clear_local_session(&state.inner, &mut session, profile.as_ref()) {
+                        Ok(()) => error,
+                        Err(cleanup_error) => {
+                            format!("{error}; local session cleanup: {cleanup_error}")
+                        }
+                    };
+                (message, false)
+            }
+        };
+        if !superseded {
+            crate::org_mcp::reconcile_all_sessions(&app).await;
+            notify_session_changed(&app, "login-bootstrap-failed").await;
         }
-        let profile = session.profile.clone();
-        let cleanup = clear_local_session(&state.inner, &mut session, profile.as_ref());
-        return Err(match cleanup {
-            Ok(()) => error,
-            Err(cleanup_error) => format!("{error}; local session cleanup: {cleanup_error}"),
-        });
+        return Err(failure);
     }
+    crate::org_mcp::reconcile_all_sessions(&app).await;
+    notify_session_changed(&app, "login").await;
     // 模型凭证优先同步，避免受管 Skill 包下载延迟模型进入 Runtime。
     match sync_organization_model_config_for_context(&state.inner, Some(&login_context)).await {
         Ok(Some(model_id)) => {
@@ -1718,6 +1841,7 @@ pub async fn org_login(
 #[tauri::command]
 pub async fn org_logout(app: AppHandle, state: State<'_, OrgState>) -> Result<(), String> {
     cancel_pending_requests(&state.inner);
+    crate::org_mcp::set_capability_enabled(false);
     // Local logout is the security boundary and must not wait for an offline
     // organization server. Revoke the remote device token afterwards with a
     // short timeout when an access token is available.
@@ -1728,6 +1852,8 @@ pub async fn org_logout(app: AppHandle, state: State<'_, OrgState>) -> Result<()
         let cleanup = clear_local_session(&state.inner, &mut session, current_profile.as_ref());
         (current_profile, access_token, cleanup)
     };
+    crate::org_mcp::reconcile_all_sessions(&app).await;
+    notify_session_changed(&app, "logout").await;
     notify_skills_changed(&app, "logout");
     notify_models_changed(&app, "logout");
     if let (Some(profile), Some(access_token)) = (&profile, access_token) {
@@ -1773,7 +1899,10 @@ pub async fn org_session(
             }
         }
         notify_skills_changed(&app, "session-restore");
+    } else {
+        crate::org_mcp::set_capability_enabled(false);
     }
+    crate::org_mcp::reconcile_all_sessions(&app).await;
     let session = state.inner.session.lock().await;
     Ok(session_view(&session))
 }
@@ -1845,6 +1974,126 @@ pub async fn org_list_documents(
         path.query().map(|q| format!("?{q}")).unwrap_or_default()
     );
     authenticated_json(&state.inner, Method::GET, &request_path, None).await
+}
+
+#[tauri::command]
+pub async fn org_list_memories(
+    state: State<'_, OrgState>,
+    scope_id: Option<String>,
+    kind: Option<String>,
+    query: Option<String>,
+) -> Result<Value, String> {
+    if let Some(scope_id) = scope_id.as_deref() {
+        validate_resource_id(scope_id, "organization scope id")?;
+    }
+    if let Some(kind) = kind.as_deref() {
+        if !matches!(
+            kind,
+            "fact" | "decision" | "convention" | "pitfall" | "howto"
+        ) {
+            return Err("organization memory kind is invalid".into());
+        }
+    }
+    if let Some(query) = query.as_deref() {
+        validate_bounded_text(query, "organization memory query", MAX_QUERY_CHARS, true)?;
+    }
+    let mut url = Url::parse("http://local/api/v1/memories").unwrap();
+    {
+        let mut pairs = url.query_pairs_mut();
+        if let Some(scope) = scope_id {
+            pairs.append_pair("scope", &scope);
+        }
+        if let Some(kind) = kind {
+            pairs.append_pair("kind", &kind);
+        }
+        if let Some(query) = query {
+            pairs.append_pair("q", &query);
+        }
+    }
+    let request_path = format!(
+        "{}{}",
+        url.path(),
+        url.query()
+            .map(|query| format!("?{query}"))
+            .unwrap_or_default()
+    );
+    authenticated_json(&state.inner, Method::GET, &request_path, None).await
+}
+
+#[tauri::command]
+pub async fn org_memory_promotions_mine(state: State<'_, OrgState>) -> Result<Value, String> {
+    authenticated_json(&state.inner, Method::GET, "/api/v1/promotions/mine", None).await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn org_submit_memory_candidate(
+    state: State<'_, OrgState>,
+    target_scope_id: String,
+    kind: String,
+    content: String,
+    rationale: Option<String>,
+    outcome: Option<String>,
+    workspace_ref: Option<String>,
+    valid_until: Option<i64>,
+    sensitivity: Option<u8>,
+) -> Result<Value, String> {
+    validate_resource_id(&target_scope_id, "organization target scope id")?;
+    if !matches!(
+        kind.as_str(),
+        "fact" | "decision" | "convention" | "pitfall" | "howto"
+    ) {
+        return Err("organization memory kind is invalid".into());
+    }
+    validate_bounded_text(&content, "organization memory content", 2_000, false)?;
+    for (value, label, max) in [
+        (rationale.as_deref(), "organization memory rationale", 2_000),
+        (outcome.as_deref(), "organization memory outcome", 2_000),
+        (
+            workspace_ref.as_deref(),
+            "organization workspace reference",
+            1_000,
+        ),
+    ] {
+        if let Some(value) = value {
+            validate_bounded_text(value, label, max, true)?;
+        }
+    }
+    let sensitivity = sensitivity.unwrap_or(0);
+    if sensitivity > 3 {
+        return Err("organization memory sensitivity must be from 0 to 3".into());
+    }
+    let mut payload = json!({
+        "kind": kind,
+        "content": content,
+        "confidence": 0.7,
+        "observedAt": chrono::Utc::now().timestamp_millis(),
+        "sensitivity": sensitivity
+    });
+    if let Some(value) = rationale {
+        payload["rationale"] = json!(value);
+    }
+    if let Some(value) = outcome {
+        payload["outcome"] = json!(value);
+    }
+    if let Some(value) = workspace_ref {
+        payload["workspaceRef"] = json!(value);
+    }
+    if let Some(value) = valid_until {
+        payload["validUntil"] = json!(value);
+    }
+    authenticated_json(
+        &state.inner,
+        Method::POST,
+        "/api/v1/promotions",
+        Some(json!({
+            "payloadType": "memory",
+            "payload": payload,
+            "source": "manual",
+            "targetScope": target_scope_id
+        })),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2716,7 +2965,7 @@ fn extract_skill_package(
             return Err(format!(
                 "managed Skill version must be a real directory: {}",
                 final_dir.display()
-            ))
+            ));
         }
         Ok(_) => {
             verify_extracted_skill(bytes, &final_dir)?;
@@ -2907,7 +3156,7 @@ fn ensure_private_directory_without_symlink(path: &Path, label: &str) -> Result<
             return Err(format!(
                 "{label} must be a real directory: {}",
                 path.display()
-            ))
+            ));
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -2928,7 +3177,7 @@ fn purge_organization_skills_root_unlocked() -> Result<(), String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(format!("inspect Skills root: {error}")),
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            return Err("Skills root must be a real directory".into())
+            return Err("Skills root must be a real directory".into());
         }
         Ok(_) => {}
     }
@@ -3606,6 +3855,8 @@ pub fn start_background_sync(app: AppHandle) {
             }
             if let Err(error) = update_bootstrap(&state.inner).await {
                 tracing::debug!(%error, "organization bootstrap refresh skipped");
+                crate::org_mcp::reconcile_all_sessions(&app).await;
+                notify_session_changed(&app, "background-unavailable").await;
                 enforce_skill_lease();
                 notify_skills_changed(&app, "lease-check");
                 let removed = enforce_model_for_current_session(&state.inner).await;
@@ -3618,6 +3869,8 @@ pub fn start_background_sync(app: AppHandle) {
                 }
                 continue;
             }
+            crate::org_mcp::reconcile_all_sessions(&app).await;
+            notify_session_changed(&app, "background-restored").await;
             match sync_organization_model_config(&state.inner).await {
                 Ok(_) => notify_models_changed(&app, "background-sync"),
                 Err(error) => {
@@ -3877,6 +4130,44 @@ mod tests {
         let mut invalid = valid;
         invalid.username = "x".repeat(MAX_PROFILE_FIELD_CHARS + 1);
         assert!(validate_profile(&invalid).is_err());
+    }
+
+    #[test]
+    fn organization_memory_requires_a_shared_scope() {
+        assert!(!bootstrap_enables_organization_memory(
+            &json!({ "scopes": [] })
+        ));
+        assert!(!bootstrap_enables_organization_memory(&json!({
+            "scopes": [{ "id": "personal-1", "kind": "personal" }]
+        })));
+        assert!(bootstrap_enables_organization_memory(&json!({
+            "scopes": [{ "id": "team-1", "kind": "team" }]
+        })));
+        assert!(bootstrap_enables_organization_memory(&json!({
+            "scopes": [{ "id": "org-1", "kind": "org" }]
+        })));
+    }
+
+    #[test]
+    fn only_connectivity_and_auth_failures_trip_the_optional_capability() {
+        assert!(is_organization_capability_failure(
+            "organization server unreachable: offline"
+        ));
+        assert!(is_organization_capability_failure(
+            "organization session expired"
+        ));
+        assert!(is_organization_capability_failure(
+            "read knowledge answer: connection reset"
+        ));
+        assert!(is_organization_capability_failure(
+            "knowledge ask: HTTP 503 Service Unavailable"
+        ));
+        assert!(!is_organization_capability_failure(
+            "target_scope is required"
+        ));
+        assert!(!is_organization_capability_failure(
+            "knowledge ask: HTTP 400 Bad Request"
+        ));
     }
 
     #[test]
