@@ -178,6 +178,15 @@ impl AppState {
             .ok_or_else(|| "当前会话尚未建立可信工作区绑定，请重新打开会话".to_string())
     }
 
+    pub(crate) fn session_ids(&self) -> Vec<String> {
+        self.session_workspaces
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     pub(crate) fn forget_session_workspace(&self, session_id: &str) {
         self.session_workspaces.lock().unwrap().remove(session_id);
     }
@@ -737,10 +746,7 @@ pub async fn agent_init(
     if let Some(scheduler) = state.automation_scheduler.lock().unwrap().take() {
         scheduler.abort();
     }
-    if let Some(previous) = state.handle.lock().unwrap().take() {
-        previous.cancel.cancel();
-    }
-    state.tx.lock().unwrap().take();
+    stop_agent_runtime(&state).await;
     crate::automations::clear_runtime_sessions();
     state.clear_orphaned_sessions();
     state.clear_session_workspaces();
@@ -769,6 +775,7 @@ pub async fn agent_init(
         tx,
         rx,
         cancel,
+        shutdown_complete,
         thread,
     } = tokio::task::spawn_blocking(move || agent_runtime::spawn_agent_runtime(spawn_cwd))
         .await
@@ -800,6 +807,7 @@ pub async fn agent_init(
         // Unused placeholder rx — the real rx lives in the dispatcher.
         rx: placeholder_rx,
         cancel: cancel.clone(),
+        shutdown_complete,
         thread: None,
     });
 
@@ -936,7 +944,7 @@ pub async fn agent_new_session(
         tracing::info!(%session_id, "adopting session created by a timed-out request");
         state.record_session_workspace(&session_id, Path::new(&cwd));
         crate::team_mcp::persist_registration(&tx, &session_id);
-        crate::org_mcp::persist_registration(&tx, &session_id);
+        crate::org_mcp::reconcile_registration(&tx, &session_id);
         return Ok(session_id);
     }
 
@@ -976,7 +984,7 @@ pub async fn agent_new_session(
                     "new_session completed after its caller timed out; reclaiming"
                 );
                 crate::team_mcp::persist_registration(&task_tx, &session_id);
-                crate::org_mcp::persist_registration(&task_tx, &session_id);
+                crate::org_mcp::reconcile_registration(&task_tx, &session_id);
                 task_app
                     .state::<AppState>()
                     .record_session_workspace(&session_id, Path::new(&task_cwd));
@@ -1025,10 +1033,10 @@ pub async fn agent_new_session(
     }
     tracing::info!(%session_id, "agent new_session command OK");
     state.record_session_workspace(&session_id, Path::new(&cwd));
-    // Team MCP server 已随 new_session 参数注入本会话；这里再异步持久化到
-    // config.toml（一次即可），让 load_session 恢复的会话也能用。
+    // Team MCP remains a durable local tool. Organization memory is reconciled
+    // per session so signed-out/offline users never inherit a global connector.
     crate::team_mcp::persist_registration(&tx, &session_id);
-    crate::org_mcp::persist_registration(&tx, &session_id);
+    crate::org_mcp::reconcile_registration(&tx, &session_id);
     Ok(session_id)
 }
 
@@ -1064,10 +1072,10 @@ pub async fn agent_load_session(
         .await
         .map_err(|e| e.to_string())?;
     state.record_session_workspace(&session_id, Path::new(&cwd));
-    // 恢复的会话从 config.toml 读 MCP 列表 —— 若端口较上次运行漂移，这里
-    // 的 upsert 会用当前 URL 刷新并 live 重连（EchoAgent 的 toggle 路径）。
+    // Restore durable local MCP tools, then attach/detach the optional
+    // organization bridge from this live session according to current auth.
     crate::team_mcp::persist_registration(&tx, &session_id);
-    crate::org_mcp::persist_registration(&tx, &session_id);
+    crate::org_mcp::reconcile_registration(&tx, &session_id);
     Ok(())
 }
 
@@ -1162,10 +1170,7 @@ pub async fn agent_shutdown(
     folder_trusts: State<'_, FolderTrusts>,
 ) -> Result<(), String> {
     // Trigger the cancel token so the agent thread's `cancelled().await` resolves.
-    if let Some(handle) = state.handle.lock().unwrap().take() {
-        handle.cancel.cancel();
-    }
-    state.tx.lock().unwrap().take();
+    stop_agent_runtime(&state).await;
     if let Some(scheduler) = state.automation_scheduler.lock().unwrap().take() {
         scheduler.abort();
     }
@@ -1183,6 +1188,27 @@ pub async fn agent_shutdown(
     state.mark_runtime_models_initializing();
     tracing::info!("EchoAgent agent shut down (ready for re-init)");
     Ok(())
+}
+
+/// Stop the embedded Runtime without dropping session-end persistence hooks.
+/// Shared by the frontend restart command and the native tray Quit action.
+pub(crate) async fn stop_agent_runtime(state: &AppState) {
+    let handle = state.handle.lock().unwrap().take();
+    state.tx.lock().unwrap().take();
+    if let Some(mut handle) = handle {
+        handle.cancel.cancel();
+        let wait = async {
+            if !*handle.shutdown_complete.borrow() {
+                let _ = handle.shutdown_complete.wait_for(|done| *done).await;
+            }
+        };
+        if tokio::time::timeout(std::time::Duration::from_secs(12), wait)
+            .await
+            .is_err()
+        {
+            tracing::warn!("agent graceful shutdown timed out after 12 seconds");
+        }
+    }
 }
 
 /// Resolve a pending permission request from the frontend.

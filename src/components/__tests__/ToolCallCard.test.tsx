@@ -73,4 +73,41 @@ describe("ToolCallCard", () => {
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent("已拦截不安全");
   });
+
+  it("组织上下文按证据与经验卡片展示而不是原始 JSON", () => {
+    render(
+      <ToolCallDetailBody
+        tc={{
+          ...base,
+          kind: "echoagent_organization_memory__knowledge_context",
+          title: "读取组织上下文",
+          content: [{ type: "text", text: JSON.stringify({
+            sufficient: false,
+            confidence: 0.62,
+            missingFacts: ["确认当前生效版本"],
+            memories: [{ id: "m1", kind: "pitfall", content: "不要跳过灰度验证", stale: false }],
+            evidence: [{ chunkId: "c1", docTitle: "发布规范", text: "所有发布必须先灰度。", citation: { heading: "上线流程", page: 3 } }],
+          }) }],
+        }}
+      />,
+    );
+    expect(screen.getByText("证据有缺口")).toBeInTheDocument();
+    expect(screen.getByText("不要跳过灰度验证")).toBeInTheDocument();
+    expect(screen.getByText("发布规范")).toBeInTheDocument();
+    expect(screen.queryByText(/\"sufficient\"/)).not.toBeInTheDocument();
+  });
+
+  it("组织能力静默降级时不在对话中显示工具卡片", () => {
+    const { container } = render(
+      <ToolCallCard
+        tc={{
+          ...base,
+          kind: "echoagent_organization_memory__knowledge_context",
+          title: "读取组织上下文",
+          content: [{ type: "text", text: JSON.stringify({ available: false, skipped: true }) }],
+        }}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
 });

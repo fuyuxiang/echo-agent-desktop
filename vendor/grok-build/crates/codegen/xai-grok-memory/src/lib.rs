@@ -56,6 +56,14 @@ pub async fn embed_missing_chunks(
     index: &MemoryIndex,
     provider: &dyn embedding::EmbeddingProvider,
 ) -> usize {
+    if let Err(error) = index.ensure_embedding_fingerprint(&provider.fingerprint()) {
+        tracing::warn!(
+            target: MEMORY_LOG_TARGET,
+            %error,
+            "failed to validate embedding cache identity"
+        );
+        return 0;
+    }
     let chunks = match index.chunks_without_embeddings() {
         Ok(c) if c.is_empty() => return 0,
         Ok(c) => c,
@@ -77,6 +85,18 @@ pub async fn embed_missing_chunks(
         let texts: Vec<&str> = batch.iter().map(|(_, text)| text.as_str()).collect();
         match provider.embed_batch(&texts).await {
             Ok(embeddings) => {
+                if let Err(error) = embedding::validate_embedding_batch(
+                    &embeddings,
+                    batch.len(),
+                    provider.dimensions(),
+                ) {
+                    tracing::warn!(
+                        target: MEMORY_LOG_TARGET,
+                        %error,
+                        "embedding provider returned an invalid batch"
+                    );
+                    continue;
+                }
                 for ((chunk_id, _), embedding) in batch.iter().zip(embeddings.iter()) {
                     if let Err(e) = index.upsert_embedding(chunk_id, embedding) {
                         tracing::warn!(

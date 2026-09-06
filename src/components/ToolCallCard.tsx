@@ -44,6 +44,12 @@ function toolImageSource(image: ImageToolContent): string | null {
  * Details (command/diff/output) open in the side drawer via `onOpen`.
  */
 export function ToolCallCard({ tc, onOpen }: ToolCallCardProps) {
+  // Organization memory is an optional enhancement. If a credential expires
+  // or the server drops while a turn is running, the native bridge returns a
+  // successful silent skip and detaches itself. Do not turn that internal
+  // fallback into a conspicuous transcript row.
+  if (isSilentOrganizationSkip(tc)) return null;
+
   const statusCls =
     tc.status === "completed"
       ? "toolcall--ok"
@@ -94,6 +100,15 @@ export function ToolCallCard({ tc, onOpen }: ToolCallCardProps) {
   );
 }
 
+function isSilentOrganizationSkip(tc: ToolCallView): boolean {
+  if (!isOrganizationKnowledgeTool(tc.kind) || tc.status !== "completed") return false;
+  return tc.content.some((content) => {
+    if (content.type !== "text") return false;
+    const value = parseOrganizationResult(content.text);
+    return value?.available === false && value.skipped === true;
+  });
+}
+
 function prettyKind(kind: string): string {
   const k = (kind || "tool").toLowerCase();
   if (k.includes("edit") || k === "write" || k === "write_file") return "edit";
@@ -140,6 +155,13 @@ export function ToolCallDetailBody({
     type: "text";
     text: string;
   }>;
+  const parsedOrganizationResult = isOrganizationKnowledgeTool(tc.kind)
+    ? parseOrganizationResult(texts[0]?.text)
+    : null;
+  const organizationResult = parsedOrganizationResult
+    && isKnowledgeContextResult(parsedOrganizationResult)
+    ? parsedOrganizationResult
+    : null;
 
   return (
     <div className="tool-detail">
@@ -193,7 +215,8 @@ export function ToolCallDetailBody({
           })}
         </div>
       )}
-      {texts.map((t, i) => (
+      {organizationResult && <OrganizationKnowledgeResult value={organizationResult} />}
+      {!organizationResult && texts.map((t, i) => (
         <pre key={i} className="toolcall__text">
           {t.text}
         </pre>
@@ -210,6 +233,74 @@ export function ToolCallDetailBody({
       )}
     </div>
   );
+}
+
+function isOrganizationKnowledgeTool(kind: string): boolean {
+  return /knowledge_(context|ask|feedback|search|fetch|list|who|submit)|organization_memory/i.test(kind);
+}
+
+function isKnowledgeContextResult(value: Record<string, unknown>): boolean {
+  return [
+    "answer", "evidence", "chunks", "citations", "memories",
+    "missingFacts", "confidence", "sufficient", "insufficient",
+  ].some((key) => key in value);
+}
+
+function parseOrganizationResult(text: string | undefined): Record<string, unknown> | null {
+  if (!text?.trim().startsWith("{")) return null;
+  try {
+    const value: unknown = JSON.parse(text);
+    return value !== null && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function OrganizationKnowledgeResult({ value }: { value: Record<string, unknown> }) {
+  const evidence = Array.isArray(value.evidence)
+    ? value.evidence
+    : Array.isArray(value.chunks)
+      ? value.chunks
+      : Array.isArray(value.citations)
+        ? value.citations
+        : [];
+  const memories = Array.isArray(value.memories) ? value.memories : [];
+  const missingFacts = Array.isArray(value.missingFacts) ? value.missingFacts : [];
+  const confidence = typeof value.confidence === "number" ? value.confidence : null;
+  const sufficient = typeof value.sufficient === "boolean"
+    ? value.sufficient
+    : typeof value.insufficient === "boolean"
+      ? !value.insufficient
+      : null;
+  return <div className="org-tool-result">
+    <div className="org-tool-result__summary">
+      {sufficient !== null && <span className={sufficient ? "is-good" : "is-warning"}>{sufficient ? "证据充分" : "证据有缺口"}</span>}
+      {confidence !== null && <span>置信度 {Math.round(confidence * 100)}%</span>}
+      <span>{evidence.length} 条依据</span><span>{memories.length} 条经验</span>
+    </div>
+    {typeof value.answer === "string" && value.answer && <p className="org-tool-result__answer">{value.answer}</p>}
+    {missingFacts.length > 0 && <div className="org-tool-result__missing"><strong>仍需确认</strong>{missingFacts.slice(0, 5).map((item, index) => <span key={index}>{String(item)}</span>)}</div>}
+    {memories.length > 0 && <div className="org-tool-result__section"><strong>相关经验与规则</strong>{memories.slice(0, 8).map((item, index) => {
+      const memory = item as Record<string, unknown>;
+      return <article key={String(memory.id ?? index)}><header><span>{memoryKindName(memory.kind)}</span>{memory.stale === true && <em>已过期</em>}</header><p>{String(memory.content ?? "")}</p>{typeof memory.rationale === "string" && memory.rationale && <small>{memory.rationale}</small>}</article>;
+    })}</div>}
+    {evidence.length > 0 && <div className="org-tool-result__section"><strong>文档依据</strong>{evidence.slice(0, 12).map((item, index) => {
+      const source = item as Record<string, unknown>;
+      const citation = source.citation && typeof source.citation === "object" ? source.citation as Record<string, unknown> : {};
+      return <article key={String(source.chunkId ?? source.id ?? index)}><header><span>{String(source.docTitle ?? source.title ?? source.doc ?? `依据 ${index + 1}`)}</span>{(source.stale === true) && <em>可能过时</em>}</header><small>{String(citation.heading ?? source.heading ?? "")}{citation.page != null || source.page != null ? ` · 第 ${String(citation.page ?? source.page)} 页` : ""}</small><p>{clipEvidence(String(source.text ?? source.quote ?? ""))}</p></article>;
+    })}</div>}
+  </div>;
+}
+
+function memoryKindName(value: unknown): string {
+  return ({ fact: "事实", decision: "决策", convention: "规范", pitfall: "踩坑", howto: "操作手册" } as Record<string, string>)[String(value)] ?? "经验";
+}
+
+function clipEvidence(value: string): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > 600 ? `${compact.slice(0, 597)}…` : compact;
 }
 
 /**

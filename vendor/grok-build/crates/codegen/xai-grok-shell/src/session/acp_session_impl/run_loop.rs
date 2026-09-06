@@ -358,14 +358,15 @@ pub(super) async fn run_session(
                     if current_len > last_len {
                         tracing::info!(target: xai_grok_telemetry::memory_log::TARGET,
                             "MEMORY_IDLE_FLUSH: timer fired (conversation {last_len} → {current_len})");
-                        session.last_idle_flush_conversation_len
-                            .store(current_len, std::sync::atomic::Ordering::Relaxed);
                         tokio::task::spawn_local({
                             let session = session.clone();
                             async move {
-                                if !session.run_memory_flush("interval", None).await {
+                                if session.run_memory_flush("interval", None).await {
+                                    session.last_idle_flush_conversation_len
+                                        .store(current_len, std::sync::atomic::Ordering::Relaxed);
+                                } else {
                                     tracing::info!(target: xai_grok_telemetry::memory_log::TARGET,
-                                        "MEMORY_IDLE_FLUSH: skipped — another flush already in progress");
+                                        "MEMORY_IDLE_FLUSH: incomplete — retaining checkpoint for retry");
                                 }
                             }
                         });
@@ -545,6 +546,11 @@ pub(super) async fn run_session(
                             session.set_tool_overrides(overrides);
                         }
                         SessionCommand::Prompt { prompt_id, prompt_blocks, prompt_mode, artifact_upload_ctx, client_identifier, screen_mode, verbatim, traceparent, json_schema, send_now, admission, tool_overrides_update, respond_to, persist_ack, parsed_prompt_tx } => {
+                            // This is an idle timer, not a fixed polling interval:
+                            // every real user prompt starts a new quiet period.
+                            if let Some(timeout) = session.idle_flush_timeout {
+                                idle_flush_sleep.as_mut().reset(tokio::time::Instant::now() + timeout);
+                            }
                             let origin = super::PromptOrigin::from_prompt_id(&prompt_id);
                             let (actor_admitted, task_wake_fallback) = match admission {
                                 Some(admission) => {
@@ -1334,7 +1340,7 @@ pub(super) async fn run_session(
                                 let _ = respond_to.send(Ok(()));
                             });
                         }
-                        SessionCommand::ToggleMcpServer { server_name, enabled, server_config, respond_to } => {
+                        SessionCommand::ToggleMcpServer { server_name, enabled, persist_enabled_state, server_config, respond_to } => {
                             session.events.emit(xai_grok_session_events::Event::McpServerToggled {
                                 server_name: server_name.clone(),
                                 enabled,
@@ -1421,18 +1427,20 @@ pub(super) async fn run_session(
                             let session_cwd = session.session_info.cwd.clone();
                             tokio::task::spawn_local(async move {
                                 session_for_mcp.ensure_mcp_tools_initialized().await;
-                                if let Err(e) = crate::util::config::save_mcp_server_enabled_in(
-                                    &sname,
-                                    enabled,
-                                    std::path::Path::new(&session_cwd),
-                                )
-                                .await
-                                {
-                                    tracing::warn!(
-                                        server = sname.as_str(),
-                                        error = %e,
-                                        "Failed to persist server enabled state to config"
-                                    );
+                                if persist_enabled_state {
+                                    if let Err(e) = crate::util::config::save_mcp_server_enabled_in(
+                                        &sname,
+                                        enabled,
+                                        std::path::Path::new(&session_cwd),
+                                    )
+                                    .await
+                                    {
+                                        tracing::warn!(
+                                            server = sname.as_str(),
+                                            error = %e,
+                                            "Failed to persist server enabled state to config"
+                                        );
+                                    }
                                 }
                                 let _ = respond_to.send(Ok(()));
                             });

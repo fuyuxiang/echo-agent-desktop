@@ -29,6 +29,8 @@ export interface OrgBootstrap {
 
 export interface OrgSession {
   loggedIn: boolean;
+  /** Whether Agent sessions currently receive organization-memory tools. */
+  organizationMemoryEnabled?: boolean;
   serverUrl?: string;
   user?: OrgUser;
   bootstrap?: OrgBootstrap;
@@ -92,6 +94,42 @@ export interface OrgSkill {
   updatedAt: number;
 }
 
+export type OrgMemoryKind = "fact" | "decision" | "convention" | "pitfall" | "howto";
+
+export interface OrgMemory {
+  id: string;
+  kind: OrgMemoryKind;
+  content: string;
+  rationale?: string | null;
+  evidence: Array<{ type?: string; id?: string; loc?: string }>;
+  confidence: number;
+  observedAt?: number | null;
+  validFrom?: number | null;
+  validUntil?: number | null;
+  workspaceRef?: string | null;
+  outcome?: string | null;
+  trust: "reported" | "reviewed" | "verified";
+  stale: boolean;
+  status: "active" | "superseded" | "retired";
+  scopeId: string;
+  scopeKind: OrgScopeKind;
+  scopeName: string;
+  authorName?: string | null;
+  updatedAt: number;
+}
+
+export interface MemoryPromotion {
+  id: string;
+  payloadType: "memory" | "document";
+  payload: Partial<OrgMemory> & { kind?: OrgMemoryKind; content?: string };
+  source: string;
+  state: "pending" | "approved" | "rejected" | "withdrawn";
+  scopeName: string;
+  scopeKind: OrgScopeKind;
+  reviewNote?: string | null;
+  createdAt: number;
+}
+
 export interface SkillSyncResult {
   cursor: string;
   leaseUntil: number;
@@ -149,6 +187,31 @@ export const orgLogout = () => invoke<void>("org_logout");
 export const orgListScopes = () => invoke<OrgScope[]>("org_list_scopes");
 export const orgListDocuments = (scopeId?: string, query?: string) =>
   invoke<DocumentPage>("org_list_documents", { scopeId: scopeId ?? null, query: query ?? null });
+export const orgListMemories = (scopeId?: string, kind?: OrgMemoryKind, query?: string) =>
+  invoke<OrgMemory[]>("org_list_memories", {
+    scopeId: scopeId ?? null,
+    kind: kind ?? null,
+    query: query ?? null,
+  });
+export const orgMemoryPromotionsMine = () =>
+  invoke<MemoryPromotion[]>("org_memory_promotions_mine");
+export const orgSubmitMemoryCandidate = (input: {
+  targetScopeId: string;
+  kind: OrgMemoryKind;
+  content: string;
+  rationale?: string;
+  outcome?: string;
+  workspaceRef?: string;
+  validUntil?: number;
+  sensitivity?: number;
+}) => invoke<{ promotionId: string; state: string }>("org_submit_memory_candidate", {
+  ...input,
+  rationale: input.rationale || null,
+  outcome: input.outcome || null,
+  workspaceRef: input.workspaceRef || null,
+  validUntil: input.validUntil ?? null,
+  sensitivity: input.sensitivity ?? 0,
+});
 export const orgSubmitDocument = (filePath: string, scopeId: string, title?: string, tags?: string[]) =>
   invoke<{ submissionId?: string | null; docId?: string | null; state: string; documentStatus?: string }>(
     "org_submit_document",
@@ -200,3 +263,14 @@ export const listenOrgSkillsChanged = (handler: () => void): Promise<UnlistenFn>
 
 export const listenOrgModelsChanged = (handler: () => void): Promise<UnlistenFn> =>
   listen("org://models-changed", handler);
+
+export interface OrgSessionChangedEvent {
+  reason: string;
+  session: OrgSession;
+}
+
+/** Native auth/health changes, including silent Agent-context degradation. */
+export const listenOrgSessionChanged = (
+  handler: (event: OrgSessionChangedEvent) => void,
+): Promise<UnlistenFn> =>
+  listen<OrgSessionChangedEvent>("org://session-changed", ({ payload }) => handler(payload));

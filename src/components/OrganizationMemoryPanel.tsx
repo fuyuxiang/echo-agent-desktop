@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
+  Archive,
+  BookOpenCheck,
+  BrainCircuit,
   Building2,
   CheckCircle2,
   FileText,
@@ -7,11 +11,11 @@ import {
   LockKeyhole,
   LogOut,
   RefreshCw,
-  Archive,
   History,
   ThumbsDown,
   ThumbsUp,
   Send,
+  Plus,
   Upload,
   UserRound,
   UsersRound,
@@ -27,13 +31,16 @@ import {
   orgArchiveDocument,
   orgFetchDocument,
   orgListDocuments,
+  orgListMemories,
   orgListScopes,
   orgListSkills,
   orgLogin,
   orgLogout,
+  orgMemoryPromotionsMine,
   orgSession,
   orgSkillSubmissionsMine,
   orgSubmitDocument,
+  orgSubmitMemoryCandidate,
   orgNewDocumentVersion,
   orgPublishDocument,
   orgPublishSkill,
@@ -44,15 +51,26 @@ import {
   type AskCitation,
   type AskFinal,
   type OrgDocument,
+  type OrgMemory,
+  type OrgMemoryKind,
   type OrgScope,
   type OrgSession,
   type OrgSkill,
+  type MemoryPromotion,
   type Submission,
 } from "@/lib/org-client";
 import { useOrgSessionStore } from "@/stores/org-session-store";
 import { filesystemPickFiles } from "@/lib/agent-client";
 
-type Tab = "ask" | "documents" | "skills";
+type Tab = "ask" | "memories" | "documents" | "skills";
+
+const memoryKindLabel: Record<OrgMemoryKind, string> = {
+  fact: "事实",
+  decision: "决策",
+  convention: "规范",
+  pitfall: "踩坑",
+  howto: "操作手册",
+};
 
 const scopeLabel = (kind: OrgScope["kind"]) =>
   kind === "personal" ? "仅自己" : kind === "team" ? "团队" : "全组织";
@@ -86,8 +104,15 @@ function ScopeIcon({ kind }: { kind: OrgScope["kind"] }) {
   return <Building2 size={14} />;
 }
 
-export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: string) => void }) {
+export function OrganizationMemoryPanel({
+  onToast,
+  cwd,
+}: {
+  onToast?: (message: string) => void;
+  cwd?: string;
+}) {
   const [session, setSession] = useState<OrgSession | null>(null);
+  const mirroredSession = useOrgSessionStore((state) => state.session);
   const mirrorOrgSession = useOrgSessionStore((state) => state.setSession);
   const clearMirroredOrgSession = useOrgSessionStore((state) => state.clearSession);
   const [loading, setLoading] = useState(true);
@@ -101,6 +126,8 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
   const [selectedScope, setSelectedScope] = useState("");
   const [publishScope, setPublishScope] = useState("");
   const [documents, setDocuments] = useState<OrgDocument[]>([]);
+  const [memories, setMemories] = useState<OrgMemory[]>([]);
+  const [memoryPromotions, setMemoryPromotions] = useState<MemoryPromotion[]>([]);
   const [documentSubmissions, setDocumentSubmissions] = useState<Submission[]>([]);
   const [skills, setSkills] = useState<OrgSkill[]>([]);
   const [skillSubmissions, setSkillSubmissions] = useState<Submission[]>([]);
@@ -112,22 +139,37 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
   const [askStatus, setAskStatus] = useState("");
   const [asking, setAsking] = useState(false);
   const [feedbackSent, setFeedbackSent] = useState(false);
+  const [showMemoryForm, setShowMemoryForm] = useState(false);
+  const [memoryKind, setMemoryKind] = useState<OrgMemoryKind>("howto");
+  const [memoryContent, setMemoryContent] = useState("");
+  const [memoryRationale, setMemoryRationale] = useState("");
+  const [memoryOutcome, setMemoryOutcome] = useState("");
+  const [memoryWorkspace, setMemoryWorkspace] = useState("");
+  const [memoryValidUntil, setMemoryValidUntil] = useState("");
   const activeRequest = useRef<string | null>(null);
   const ignoredRequests = useRef(new Set<string>());
 
+  useEffect(() => {
+    if (mirroredSession) setSession(mirroredSession);
+  }, [mirroredSession]);
+
   const loadWorkspace = useCallback(async () => {
-    const [nextScopes, docs, nextSkills, docSubs, skillSubs] = await Promise.all([
+    const [nextScopes, docs, nextSkills, docSubs, skillSubs, nextMemories, promotions] = await Promise.all([
       orgListScopes(),
       orgListDocuments(),
       orgListSkills(),
       orgDocumentSubmissionsMine(),
       orgSkillSubmissionsMine(),
+      orgListMemories(),
+      orgMemoryPromotionsMine(),
     ]);
     setScopes(nextScopes);
     setDocuments(docs.items);
     setSkills(nextSkills);
     setDocumentSubmissions(docSubs);
     setSkillSubmissions(skillSubs);
+    setMemories(nextMemories);
+    setMemoryPromotions(promotions.filter((item) => item.payloadType === "memory"));
     setSelectedScope((current) => nextScopes.some((scope) => scope.id === current)
       ? current
       : nextScopes.find((scope) => scope.kind === "personal")?.id || nextScopes[0]?.id || "");
@@ -213,6 +255,10 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     () => selectedScope ? documents.filter((document) => document.scopeId === selectedScope) : documents,
     [documents, selectedScope],
   );
+  const visibleMemories = useMemo(
+    () => selectedScope ? memories.filter((memory) => memory.scopeId === selectedScope) : memories,
+    [memories, selectedScope],
+  );
   const visibleSkills = useMemo(
     () => selectedScope ? skills.filter((skill) => skill.scopeId === selectedScope) : skills,
     [skills, selectedScope],
@@ -248,6 +294,13 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     setBusy(true);
     setError(null);
     try {
+      const nextSession = await orgSession();
+      setSession(nextSession);
+      mirrorOrgSession(nextSession);
+      if (!nextSession.loggedIn) {
+        resetWorkspace();
+        return;
+      }
       await loadWorkspace();
     } catch (reason) {
       setError(String(reason));
@@ -265,6 +318,8 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     setSelectedScope("");
     setPublishScope("");
     setDocuments([]);
+    setMemories([]);
+    setMemoryPromotions([]);
     setDocumentSubmissions([]);
     setSkills([]);
     setSkillSubmissions([]);
@@ -340,6 +395,38 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
     try {
       const result = await orgSubmitDocument(path, uploadScope.id);
       onToast?.(result.state === "pending" ? "文档已提交，等待组织审核" : "文档已提交，正在建立索引");
+      await loadWorkspace();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitMemoryCandidate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selectedScope || !memoryContent.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await orgSubmitMemoryCandidate({
+        targetScopeId: selectedScope,
+        kind: memoryKind,
+        content: memoryContent.trim(),
+        rationale: memoryRationale.trim(),
+        outcome: memoryOutcome.trim(),
+        workspaceRef: memoryWorkspace.trim(),
+        validUntil: memoryValidUntil
+          ? new Date(`${memoryValidUntil}T23:59:59`).getTime()
+          : undefined,
+      });
+      setMemoryContent("");
+      setMemoryRationale("");
+      setMemoryOutcome("");
+      setMemoryWorkspace("");
+      setMemoryValidUntil("");
+      setShowMemoryForm(false);
+      onToast?.("经验候选已提交，审核通过后会进入 Agent 工作上下文");
       await loadWorkspace();
     } catch (reason) {
       setError(String(reason));
@@ -458,7 +545,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
         <div className="org-login-card">
           <div className="org-login-card__mark"><Building2 size={28} /></div>
           <h1>连接组织</h1>
-          <p>登录企业服务器后，可在授权范围内共享文档、Skills，并基于组织知识进行可追溯问答。</p>
+          <p>登录企业服务器后，可在授权范围内共享文档、Skills 和经验；Agent 会在执行前自动召回规则、手册与踩坑记录。</p>
           <form onSubmit={handleLogin}>
             <label>服务器地址<input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://memory.company.com" required /></label>
             <label>账号<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required /></label>
@@ -479,6 +566,13 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
           <div className="org-memory__eyebrow">ENTERPRISE MEMORY</div>
           <h1>组织</h1>
           <p>{session.user?.displayName ?? session.user?.username} · {session.serverUrl}</p>
+          <span className={`org-memory__capability ${session.organizationMemoryEnabled ? "is-active" : ""}`}>
+            <i />{session.organizationMemoryEnabled
+              ? "Agent 组织上下文已启用"
+              : session.bootstrap?.scopes?.some((scope) => scope.kind === "team" || scope.kind === "org")
+                ? "Agent 组织上下文暂不可用"
+                : "未加入共享组织范围"}
+          </span>
         </div>
         <div className="org-memory__header-actions">
           <button onClick={() => void refreshWorkspace()} disabled={busy}><RefreshCw size={15} />刷新</button>
@@ -497,6 +591,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
 
       <nav className="org-memory__tabs">
         <button className={tab === "ask" ? "active" : ""} onClick={() => setTab("ask")}><WandSparkles size={16} />组织问答</button>
+        <button className={tab === "memories" ? "active" : ""} onClick={() => setTab("memories")}><BrainCircuit size={16} />经验 <span>{visibleMemories.length}</span></button>
         <button className={tab === "documents" ? "active" : ""} onClick={() => setTab("documents")}><FileText size={16} />文档 <span>{visibleDocuments.length}</span></button>
         <button className={tab === "skills" ? "active" : ""} onClick={() => setTab("skills")}><CheckCircle2 size={16} />Skills <span>{visibleSkills.length}</span></button>
       </nav>
@@ -507,7 +602,7 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
         <section className="org-ask">
           <div className="org-ask__intro">
             <h2>向组织知识提问</h2>
-            <p>答案只使用你有权限查看的当前版本文档；每个结论都带原文引用。个人空间内容不会被同事检索。</p>
+            <p>答案只使用你有权限查看的当前文档和已审核经验；结论保留原文引用与时效信息。个人空间内容不会被同事检索。</p>
           </div>
           <form className="org-ask__composer" onSubmit={handleAsk}>
             <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：公司的差旅住宿标准是什么？" rows={4} />
@@ -534,6 +629,38 @@ export function OrganizationMemoryPanel({ onToast }: { onToast?: (message: strin
               {answer.qaEventId && <div className="org-library__actions">{feedbackSent ? <span>已记录反馈</span> : <><button onClick={() => void sendFeedback("helpful")}><ThumbsUp size={13} />有帮助</button><button onClick={() => void sendFeedback("not_helpful")}><ThumbsDown size={13} />没帮助</button><button onClick={() => void sendFeedback("wrong")}>引用有误</button></>}</div>}
             </article>
           )}
+        </section>
+      )}
+
+      {tab === "memories" && (
+        <section className="org-library">
+          <div className="org-library__toolbar">
+            <div><h2>组织经验</h2><p>决策、规范、操作手册和踩坑记录会在 Agent 执行相关任务前自动召回；每条都保留来源、时效和审核状态。</p></div>
+            <button className="org-memory__primary" onClick={() => {
+              setMemoryWorkspace((value) => value || cwd || "");
+              setShowMemoryForm((value) => !value);
+            }} disabled={!selectedScope}><Plus size={15} />提交经验</button>
+          </div>
+          {showMemoryForm && (
+            <form className="org-memory-form" onSubmit={submitMemoryCandidate}>
+              <label>类型<select value={memoryKind} onChange={(event) => setMemoryKind(event.target.value as OrgMemoryKind)}>{Object.entries(memoryKindLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <label className="org-memory-form__wide">经验内容<textarea required maxLength={2000} rows={4} value={memoryContent} onChange={(event) => setMemoryContent(event.target.value)} placeholder="写成可直接指导下一次任务的明确结论或步骤" /></label>
+              <label className="org-memory-form__wide">为什么有效<textarea maxLength={2000} rows={2} value={memoryRationale} onChange={(event) => setMemoryRationale(event.target.value)} placeholder="背景、适用条件或决策依据（建议填写）" /></label>
+              <label>结果<input maxLength={2000} value={memoryOutcome} onChange={(event) => setMemoryOutcome(event.target.value)} placeholder="例如：构建时间下降 30%" /></label>
+              <label>项目/工作空间<input maxLength={1000} value={memoryWorkspace} onChange={(event) => setMemoryWorkspace(event.target.value)} placeholder="可选，用于项目定向召回" /></label>
+              <label>有效期<input type="date" value={memoryValidUntil} onChange={(event) => setMemoryValidUntil(event.target.value)} /></label>
+              <div className="org-memory-form__actions"><button type="button" onClick={() => setShowMemoryForm(false)}>取消</button><button className="org-memory__primary" disabled={busy || !memoryContent.trim()}>{busy && <Loader2 className="org-memory__spin" size={14} />}提交审核</button></div>
+            </form>
+          )}
+          <div className="org-library__list">
+            {visibleMemories.length === 0 && <div className="org-library__empty">当前范围还没有可用于任务的组织经验</div>}
+            {visibleMemories.map((memory) => <div className="org-library__row org-memory-row" key={memory.id}>
+              <div className="org-library__icon">{memory.kind === "pitfall" ? <AlertTriangle size={18} /> : memory.kind === "howto" ? <BookOpenCheck size={18} /> : <BrainCircuit size={18} />}</div>
+              <div className="org-library__main"><strong>{memory.content}</strong><span>{memory.scopeName} · {memoryKindLabel[memory.kind]} · 置信度 {Math.round(memory.confidence * 100)}% · {memory.trust === "verified" ? "已验证" : "已审核"}{memory.workspaceRef ? ` · ${memory.workspaceRef}` : ""}</span>{memory.rationale && <p>{memory.rationale}</p>}{memory.outcome && <em className="org-memory-row__outcome">结果：{memory.outcome}</em>}</div>
+              <div className="org-library__actions">{memory.stale ? <span className="org-state org-state--failed">已过期，仅供参考</span> : <span className="org-state org-state--ready">可召回</span>}</div>
+            </div>)}
+          </div>
+          <MemoryPromotionList promotions={memoryPromotions} />
         </section>
       )}
 
@@ -619,4 +746,9 @@ function CitationList({ citations }: { citations: AskCitation[] }) {
 function SubmissionList({ title, submissions }: { title: string; submissions: Submission[] }) {
   if (submissions.length === 0) return null;
   return <div className="org-submissions"><h3>{title}</h3>{submissions.slice(0, 8).map((submission) => <div key={submission.id ?? submission.submissionId}><span>{submission.title ?? submission.name} {submission.version ? `v${submission.version}` : ""}</span><small>{submission.scopeName}</small>{submission.scanStatus && <span className={`org-state org-state--${submission.scanStatus}`}>扫描：{stateLabel(submission.scanStatus)}</span>}<span className={`org-state org-state--${submission.state}`}>{stateLabel(submission.state)}</span>{submission.reviewNote && <em>{submission.reviewNote}</em>}{submission.scanReport?.findings.filter((item) => item.severity !== "info").map((item) => <em key={`${item.code}-${item.path ?? ""}`}>{item.code}：{item.message}{item.path ? ` (${item.path})` : ""}</em>)}</div>)}</div>;
+}
+
+function MemoryPromotionList({ promotions }: { promotions: MemoryPromotion[] }) {
+  if (promotions.length === 0) return null;
+  return <div className="org-submissions"><h3>我的经验提交</h3>{promotions.slice(0, 8).map((item) => <div key={item.id}><span>{item.payload.content ?? "经验候选"}</span><small>{item.scopeName} · {item.payload.kind ? memoryKindLabel[item.payload.kind] : "经验"}</small><span className={`org-state org-state--${item.state}`}>{stateLabel(item.state)}</span>{item.reviewNote && <em>{item.reviewNote}</em>}</div>)}</div>;
 }

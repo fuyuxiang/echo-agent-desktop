@@ -1540,6 +1540,15 @@ fn apply_mcp_document(
     Ok(())
 }
 
+/// Remove a reserved, application-owned MCP bridge from the durable Runtime
+/// configuration without touching the user's standalone `mcp.json` mirror.
+/// Internal bridges are session capabilities, not user connectors; this also
+/// cleans registrations written by older desktop releases at startup.
+pub(crate) fn remove_internal_server_registration(name: &str) -> Result<(), String> {
+    validate_server_name(name)?;
+    crate::providers::update_config(|root| apply_mcp_document(root, &[], &[name.to_string()]))
+}
+
 fn apply_mcp_toggle(root: &mut toml::Value, name: &str, enabled: bool) -> Result<(), String> {
     let table = root
         .as_table_mut()

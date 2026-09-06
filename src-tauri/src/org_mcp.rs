@@ -20,7 +20,11 @@ use std::collections::VecDeque;
 use std::io::{Cursor, Read};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    OnceLock,
+};
+use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 pub const MCP_SERVER_NAME: &str = "echoagent_organization_memory";
@@ -38,15 +42,16 @@ const MAX_LOCAL_FILES: usize = 500;
 
 static BOUND_PORT: OnceLock<u16> = OnceLock::new();
 static PROCESS_TOKEN: OnceLock<String> = OnceLock::new();
-static PERSISTED: Mutex<bool> = Mutex::new(false);
+static CAPABILITY_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 struct ServerState {
     token: String,
     expected_host: String,
+    app: Option<AppHandle>,
 }
 
-pub fn serve() {
+pub fn serve(app: AppHandle) {
     static SERVED: OnceLock<()> = OnceLock::new();
     if SERVED.set(()).is_err() {
         return;
@@ -88,6 +93,7 @@ pub fn serve() {
             .with_state(ServerState {
                 token,
                 expected_host: address.to_string(),
+                app: Some(app),
             });
         if let Err(error) = axum::serve(listener, app).await {
             tracing::error!(%error, "organization MCP server stopped");
@@ -104,6 +110,25 @@ pub fn server_config() -> Option<(String, String)> {
         format!("http://127.0.0.1:{}/mcp", BOUND_PORT.get()?),
         PROCESS_TOKEN.get()?.clone(),
     ))
+}
+
+pub fn active_server_config() -> Option<(String, String)> {
+    capability_enabled().then(server_config).flatten()
+}
+
+pub fn capability_enabled() -> bool {
+    CAPABILITY_ENABLED.load(Ordering::SeqCst)
+}
+
+pub(crate) fn set_capability_enabled(enabled: bool) -> bool {
+    CAPABILITY_ENABLED.swap(enabled, Ordering::SeqCst) != enabled
+}
+
+/// Older releases persisted this internal bridge as though it were a user MCP
+/// connector. Remove that stale registration before the Agent Runtime reads
+/// config.toml; authenticated sessions are attached live instead.
+pub fn clear_persisted_registration() -> Result<(), String> {
+    crate::mcp::remove_internal_server_registration(MCP_SERVER_NAME)
 }
 
 async fn method_not_allowed() -> Response {
@@ -133,12 +158,27 @@ async fn handle_post(
     let Some(id) = request.id else {
         return StatusCode::ACCEPTED.into_response();
     };
+    let available = capability_enabled();
     let result = match request.method.as_str() {
-        "initialize" => initialize_result(&request.params),
+        "initialize" => initialize_result_for(&request.params, available),
         "ping" => json!({}),
-        "tools/list" => tools_list_result(),
+        "tools/list" => tools_list_result_for(available),
+        "tools/call" if !available => unavailable_tool_result(),
         "tools/call" => match tools_call(&request.params).await {
             Ok(result) => result,
+            Err(_) if !capability_enabled() => {
+                if let Some(app) = state.app.clone() {
+                    // Return the in-flight MCP response before asking the same
+                    // Runtime session to detach this server. Waiting here can
+                    // deadlock runtimes that serialize MCP and extension RPCs.
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                        reconcile_all_sessions(&app).await;
+                        crate::org::notify_session_changed(&app, "agent-context-unavailable").await;
+                    });
+                }
+                unavailable_tool_result()
+            }
             Err(message) => tool_result(Value::String(message), true),
         },
         other => return rpc_error(id, -32601, format!("method not found: {other}")),
@@ -187,20 +227,44 @@ fn validate_request_headers(headers: &HeaderMap, state: &ServerState) -> Result<
     Ok(())
 }
 
-fn initialize_result(params: &Value) -> Value {
+fn initialize_result_for(params: &Value, available: bool) -> Value {
     let protocol = params
         .get("protocolVersion")
         .and_then(Value::as_str)
         .unwrap_or("2025-03-26");
-    json!({
+    let mut result = json!({
         "protocolVersion": protocol,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": MCP_SERVER_NAME, "version": env!("CARGO_PKG_VERSION") }
-    })
+    });
+    if available {
+        result["instructions"] = Value::String("Before planning or executing work whose rules, prior decisions, runbooks, owners, or pitfalls may depend on organization knowledge, call knowledge_context with the concrete task and workspace_ref when available. Use only returned authorized evidence, respect sufficient=false and missing facts, and cite provenance when presenting material claims. After the task, call knowledge_feedback when the context was applied or its quality can be assessed. Never call knowledge_submit unless the user explicitly asks or confirms that the proposed experience may be published; prefer submitting reusable outcomes rather than raw conversation content. If this capability becomes unavailable, silently continue with local context and mention the limitation only when the user explicitly requested organization-backed information.".into());
+    }
+    result
 }
 
-fn tools_list_result() -> Value {
+fn tools_list_result_for(available: bool) -> Value {
+    if !available {
+        return json!({ "tools": [] });
+    }
     json!({ "tools": [
+        {
+            "name": "knowledge_context",
+            "description": "Retrieve task-ready authorized context before planning or executing organization-sensitive work. Returns grounded evidence, current rules, prior decisions, runbooks, pitfalls, missing facts, and provenance. Prefer this over knowledge_ask when the knowledge will guide an action.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                    "task": { "type": "string", "minLength": 1 },
+                    "mode": { "type": "string", "enum": ["auto", "fast", "deep"], "default": "auto" },
+                    "workspace_ref": { "type": "string" },
+                    "task_id": { "type": "string" },
+                    "session_id": { "type": "string" },
+                    "scope_kinds": { "type": "array", "items": { "type": "string", "enum": ["personal", "team", "org"] } },
+                    "scope_ids": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["task"]
+            }
+        },
         {
             "name": "knowledge_ask",
             "description": "Answer a question from the signed-in user's authorized personal, team, and organization knowledge. Returns grounded citations; use this for synthesized answers.",
@@ -213,6 +277,25 @@ fn tools_list_result() -> Value {
                     "scope_ids": { "type": "array", "items": { "type": "string" } }
                 },
                 "required": ["question"]
+            }
+        },
+        {
+            "name": "knowledge_feedback",
+            "description": "Record whether a knowledge_context result was applied, helpful, or failed. Call after the related task so organization memory quality can improve; this records outcome metadata and does not publish knowledge.",
+            "inputSchema": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                    "trace_id": { "type": "string", "format": "uuid" },
+                    "action": { "type": "string", "enum": ["apply", "feedback"], "default": "feedback" },
+                    "outcome": { "type": "string", "enum": ["unknown", "helpful", "unhelpful", "applied", "failed"] },
+                    "task_id": { "type": "string" },
+                    "session_id": { "type": "string" },
+                    "workspace_ref": { "type": "string" },
+                    "result_ids": { "type": "array", "items": { "type": "string" } },
+                    "citation_ids": { "type": "array", "items": { "type": "string" } },
+                    "feedback": { "type": "string", "maxLength": 2000 }
+                },
+                "required": ["trace_id", "outcome"]
             }
         },
         {
@@ -284,13 +367,22 @@ fn tools_list_result() -> Value {
         },
         {
             "name": "knowledge_submit",
-            "description": "Submit a candidate memory to an authorized team or organization review queue. It never publishes directly.",
+            "description": "Submit a candidate experience to an authorized review queue; it never publishes directly. Call only after the user explicitly asks or confirms sharing this information.",
             "inputSchema": {
                 "type": "object", "additionalProperties": false,
                 "properties": {
                     "kind": { "type": "string", "enum": ["fact", "decision", "convention", "pitfall", "howto"] },
                     "content": { "type": "string", "minLength": 1, "maxLength": 2000 },
                     "rationale": { "type": "string", "maxLength": 2000 },
+                    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "observed_at": { "type": "integer" },
+                    "valid_from": { "type": "integer" },
+                    "valid_until": { "type": "integer" },
+                    "source_session_id": { "type": "string" },
+                    "source_task_id": { "type": "string" },
+                    "workspace_ref": { "type": "string" },
+                    "outcome": { "type": "string", "maxLength": 2000 },
+                    "sensitivity": { "type": "integer", "minimum": 0, "maximum": 3 },
                     "target_scope": { "type": "string", "minLength": 1 }
                 },
                 "required": ["kind", "content", "target_scope"]
@@ -320,6 +412,17 @@ fn tools_list_result() -> Value {
     ] })
 }
 
+fn unavailable_tool_result() -> Value {
+    tool_result(
+        json!({
+            "available": false,
+            "skipped": true,
+            "instruction": "Continue with local context. Do not mention this skipped optional capability unless the user explicitly requested organization-backed information."
+        }),
+        false,
+    )
+}
+
 async fn tools_call(params: &Value) -> Result<Value, String> {
     let name = required_string_bounded(params, "name", 128)?;
     let arguments = match params.get("arguments") {
@@ -328,6 +431,42 @@ async fn tools_call(params: &Value) -> Result<Value, String> {
         Some(_) => return Err("tool arguments must be an object".into()),
     };
     let data = match name {
+        "knowledge_context" => {
+            let task = required_string_bounded(&arguments, "task", MAX_TOOL_TEXT_CHARS)?;
+            let mode = optional_string_bounded(&arguments, "mode", 16)?.unwrap_or("auto");
+            if !matches!(mode, "auto" | "fast" | "deep") {
+                return Err("mode must be auto, fast, or deep".into());
+            }
+            let mut input = json!({ "task": task, "mode": mode });
+            for (source, target, max) in [
+                ("workspace_ref", "workspaceRef", 1_000),
+                ("task_id", "taskId", MAX_IDENTIFIER_CHARS),
+                ("session_id", "sessionId", MAX_IDENTIFIER_CHARS),
+            ] {
+                if let Some(value) = optional_string_bounded(&arguments, source, max)? {
+                    input[target] = json!(value);
+                }
+            }
+            if let Some(kinds) = validated_string_array(
+                &arguments,
+                "scope_kinds",
+                MAX_SCOPE_ITEMS,
+                16,
+                Some(&["personal", "team", "org"]),
+            )? {
+                input["scopeKinds"] = kinds.clone();
+            }
+            if let Some(ids) = validated_string_array(
+                &arguments,
+                "scope_ids",
+                MAX_SCOPE_ITEMS,
+                MAX_IDENTIFIER_CHARS,
+                None,
+            )? {
+                input["scopeIds"] = ids.clone();
+            }
+            crate::org::mcp_json(Method::POST, "/api/v1/knowledge/context", Some(input)).await?
+        }
         "knowledge_ask" => {
             let question = required_string_bounded(&arguments, "question", MAX_TOOL_TEXT_CHARS)?;
             let mode = optional_string_bounded(&arguments, "mode", 16)?.unwrap_or("auto");
@@ -357,6 +496,44 @@ async fn tools_call(params: &Value) -> Result<Value, String> {
                 input["scopeIds"] = ids.clone();
             }
             crate::org::mcp_ask(input).await?
+        }
+        "knowledge_feedback" => {
+            let trace_id = required_string_bounded(&arguments, "trace_id", MAX_IDENTIFIER_CHARS)?;
+            Uuid::parse_str(trace_id).map_err(|_| "trace_id must be a UUID")?;
+            let action = optional_string_bounded(&arguments, "action", 16)?.unwrap_or("feedback");
+            if !matches!(action, "apply" | "feedback") {
+                return Err("action must be apply or feedback".into());
+            }
+            let outcome = required_string_bounded(&arguments, "outcome", 16)?;
+            if !matches!(
+                outcome,
+                "unknown" | "helpful" | "unhelpful" | "applied" | "failed"
+            ) {
+                return Err("unsupported knowledge outcome".into());
+            }
+            let mut input = json!({ "traceId": trace_id, "action": action, "outcome": outcome });
+            for (source, target, max) in [
+                ("task_id", "taskId", MAX_IDENTIFIER_CHARS),
+                ("session_id", "sessionId", MAX_IDENTIFIER_CHARS),
+                ("workspace_ref", "workspaceRef", 1_000),
+                ("feedback", "feedback", 2_000),
+            ] {
+                if let Some(value) = optional_string_bounded(&arguments, source, max)? {
+                    input[target] = json!(value);
+                }
+            }
+            for (source, target) in [("result_ids", "resultIds"), ("citation_ids", "citationIds")] {
+                if let Some(values) = validated_string_array(
+                    &arguments,
+                    source,
+                    MAX_SCOPE_ITEMS,
+                    MAX_IDENTIFIER_CHARS,
+                    None,
+                )? {
+                    input[target] = values.clone();
+                }
+            }
+            crate::org::mcp_json(Method::POST, "/api/v1/knowledge/events", Some(input)).await?
         }
         "knowledge_search" => {
             let query = required_string_bounded(&arguments, "query", MAX_TOOL_TEXT_CHARS)?;
@@ -489,6 +666,31 @@ async fn tools_call(params: &Value) -> Result<Value, String> {
             let mut payload = json!({ "kind": kind, "content": content });
             if let Some(rationale) = optional_string_bounded(&arguments, "rationale", 2_000)? {
                 payload["rationale"] = json!(rationale);
+            }
+            for (source, target, max) in [
+                ("source_session_id", "sourceSessionId", MAX_IDENTIFIER_CHARS),
+                ("source_task_id", "sourceTaskId", MAX_IDENTIFIER_CHARS),
+                ("workspace_ref", "workspaceRef", 1_000),
+                ("outcome", "outcome", 2_000),
+            ] {
+                if let Some(value) = optional_string_bounded(&arguments, source, max)? {
+                    payload[target] = json!(value);
+                }
+            }
+            for (source, target) in [
+                ("observed_at", "observedAt"),
+                ("valid_from", "validFrom"),
+                ("valid_until", "validUntil"),
+            ] {
+                if let Some(value) = optional_i64(&arguments, source)? {
+                    payload[target] = json!(value);
+                }
+            }
+            if let Some(value) = optional_f64_range(&arguments, "confidence", 0.0, 1.0)? {
+                payload["confidence"] = json!(value);
+            }
+            if let Some(value) = optional_u64_range(&arguments, "sensitivity", 0, 3)? {
+                payload["sensitivity"] = json!(value);
             }
             crate::org::mcp_json(
                 Method::POST,
@@ -878,13 +1080,69 @@ fn validated_page(value: &Value) -> Result<Option<u64>, String> {
     }
 }
 
+fn optional_i64(value: &Value, key: &str) -> Result<Option<i64>, String> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(raw) => raw
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| format!("{key} must be an integer")),
+    }
+}
+
+fn optional_f64_range(
+    value: &Value,
+    key: &str,
+    minimum: f64,
+    maximum: f64,
+) -> Result<Option<f64>, String> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(raw) => raw
+            .as_f64()
+            .filter(|number| number.is_finite() && (*number >= minimum) && (*number <= maximum))
+            .map(Some)
+            .ok_or_else(|| format!("{key} must be a number from {minimum} to {maximum}")),
+    }
+}
+
+fn optional_u64_range(
+    value: &Value,
+    key: &str,
+    minimum: u64,
+    maximum: u64,
+) -> Result<Option<u64>, String> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(raw) => raw
+            .as_u64()
+            .filter(|number| (*number >= minimum) && (*number <= maximum))
+            .map(Some)
+            .ok_or_else(|| format!("{key} must be an integer from {minimum} to {maximum}")),
+    }
+}
+
 fn tool_result(value: Value, is_error: bool) -> Value {
     let text = if let Some(text) = value.as_str() {
         text.to_string()
     } else {
         serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
     };
-    json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+    let structured = if value.is_object() {
+        Some(value)
+    } else if value.is_array() {
+        Some(json!({ "items": value }))
+    } else {
+        None
+    };
+    let mut result = json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": is_error
+    });
+    if let Some(structured) = structured {
+        result["structuredContent"] = structured;
+    }
+    result
 }
 
 fn rpc_result(id: Value, result: Value) -> Response {
@@ -904,44 +1162,64 @@ fn rpc_error(id: Value, code: i64, message: String) -> Response {
         .into_response()
 }
 
-/// Persist the bridge through EchoAgent's own extension API so restored
-/// sessions reconnect after an application restart or loopback port change.
-pub fn persist_registration(tx: &xai_acp_lib::AcpAgentTx, session_id: &str) {
-    {
-        let mut done = PERSISTED.lock().unwrap();
-        if *done {
-            return;
-        }
-        *done = true;
-    }
-    let Some((url, token)) = server_config() else {
-        *PERSISTED.lock().unwrap() = false;
-        return;
-    };
+/// Reconcile one live Agent session with the current authenticated
+/// organization capability. This is intentionally session-scoped: a logout,
+/// expired credential, missing shared scope, or offline server removes the
+/// tools without leaving a connector behind in config.toml.
+pub fn reconcile_registration(tx: &xai_acp_lib::AcpAgentTx, session_id: &str) {
     let tx = tx.clone();
     let session_id = session_id.to_string();
     tokio::spawn(async move {
-        let payload = json!({
-            "session_id": session_id,
-            "server_name": MCP_SERVER_NAME,
-            "url": url,
-            "headers": { AUTH_HEADER: token },
-            "enabled": true
-        });
-        match crate::ext::call_ext_value(
-            &tx,
-            "echo.agent/mcp/upsert",
-            crate::ext::raw_params(&payload),
-        )
-        .await
-        {
-            Ok(_) => tracing::info!("organization MCP server persisted to config.toml"),
-            Err(error) => {
-                tracing::warn!(?error, "organization MCP persistence failed");
-                *PERSISTED.lock().unwrap() = false;
-            }
+        if let Err(error) = reconcile_session(&tx, &session_id).await {
+            tracing::debug!(?error, %session_id, "organization MCP session reconciliation skipped");
         }
     });
+}
+
+async fn reconcile_session(tx: &xai_acp_lib::AcpAgentTx, session_id: &str) -> Result<(), String> {
+    let (method, payload) = if let Some((url, token)) = active_server_config() {
+        (
+            "echo.agent/mcp/upsert",
+            json!({
+                "session_id": session_id,
+                "server_name": MCP_SERVER_NAME,
+                "persist": false,
+                "url": url,
+                "headers": { AUTH_HEADER: token },
+                "enabled": true
+            }),
+        )
+    } else {
+        (
+            "echo.agent/mcp/delete",
+            json!({
+                "session_id": session_id,
+                "server_name": MCP_SERVER_NAME,
+                "persist": false
+            }),
+        )
+    };
+    crate::ext::call_ext_value(tx, method, crate::ext::raw_params(&payload))
+        .await
+        .map(|_| ())
+        .map_err(|error| format!("{error:?}"))
+}
+
+pub(crate) async fn reconcile_all_sessions(app: &AppHandle) {
+    let (tx, sessions) = {
+        let runtime = app.state::<crate::commands::AppState>();
+        let tx = runtime.tx.lock().unwrap().clone();
+        let sessions = runtime.session_ids();
+        (tx, sessions)
+    };
+    let Some(tx) = tx else {
+        return;
+    };
+    for session_id in sessions {
+        if let Err(error) = reconcile_session(&tx, &session_id).await {
+            tracing::debug!(%error, %session_id, "organization MCP session reconciliation failed");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -950,6 +1228,7 @@ mod tests {
 
     #[tokio::test]
     async fn requires_process_token_and_lists_tools() {
+        set_capability_enabled(true);
         let std_listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = std_listener.local_addr().unwrap();
         std_listener.set_nonblocking(true).unwrap();
@@ -961,6 +1240,7 @@ mod tests {
                 .with_state(ServerState {
                     token: "test-secret".into(),
                     expected_host: address.to_string(),
+                    app: None,
                 });
             let _ = axum::serve(listener, app).await;
         });
@@ -987,7 +1267,39 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 10);
+        let tools = response["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 12);
+        let names: Vec<_> = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.contains(&"knowledge_context"));
+        assert!(names.contains(&"knowledge_feedback"));
+        assert!(names.contains(&"knowledge_submit"));
+        set_capability_enabled(false);
+    }
+
+    #[test]
+    fn initialize_explains_the_context_and_consent_lifecycle() {
+        let result = initialize_result_for(&json!({ "protocolVersion": "2025-03-26" }), true);
+        let instructions = result["instructions"].as_str().unwrap();
+        assert!(instructions.contains("knowledge_context"));
+        assert!(instructions.contains("knowledge_feedback"));
+        assert!(instructions.contains("explicitly asks or confirms"));
+    }
+
+    #[test]
+    fn unavailable_capability_has_no_tools_or_agent_instructions() {
+        assert_eq!(
+            tools_list_result_for(false)["tools"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        let result = initialize_result_for(&json!({ "protocolVersion": "2025-03-26" }), false);
+        assert!(result.get("instructions").is_none());
+        assert_eq!(unavailable_tool_result()["isError"], false);
     }
 
     #[test]
@@ -995,6 +1307,7 @@ mod tests {
         let state = ServerState {
             token: "secret".into(),
             expected_host: "127.0.0.1:1234".into(),
+            app: None,
         };
         let mut headers = HeaderMap::new();
         headers.insert(AUTH_HEADER, "secret".parse().unwrap());

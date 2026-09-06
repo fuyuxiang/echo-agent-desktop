@@ -146,7 +146,8 @@ impl Default for MemoryIndexConfig {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct MemoryEmbeddingConfig {
-    /// Provider type: `"api"`, `"local"`, or `"auto"`.
+    /// Provider type: `"api"` or `"auto"`. `"local"` explicitly disables
+    /// network embedding calls and currently falls back to on-device FTS.
     pub provider: String,
     /// Model name for the embedding API. `None` disables vector embeddings.
     pub model: Option<String>,

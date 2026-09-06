@@ -429,8 +429,9 @@ impl SessionActor {
     ///
     /// Flush failure is non-fatal; compaction proceeds regardless.
     ///
-    /// Returns `true` if a flush was executed, `false` if skipped because
-    /// another flush is already in progress.
+    /// Returns `true` only when the flush completed successfully (including a
+    /// valid nothing-to-store/duplicate result). Failures return `false` so
+    /// idle and pre-compaction callers retry instead of advancing checkpoints.
     pub(super) async fn run_memory_flush(
         &self,
         trigger: &str,
@@ -481,7 +482,7 @@ impl SessionActor {
             );
             let recent = crate::session::helpers::memory_flush_window::select_flush_window(
                 chat_history,
-                20,
+                80,
             );
 
             let flush_count = self.memory.flush_count.load(std::sync::atomic::Ordering::Relaxed);
@@ -705,13 +706,14 @@ impl SessionActor {
             response_length: response_len,
         });
 
+        let completed = matches!(flush_outcome, "written" | "nothing_to_store");
         self.memory.release_flush_lock();
         self.send_xai_notification(XaiSessionUpdate::MemoryFlushCompleted {
             result: outcome,
             path: flush_path,
         })
         .await;
-        true
+        completed
     }
 
     /// Capture the flush inputs before compaction mutates conversation history.

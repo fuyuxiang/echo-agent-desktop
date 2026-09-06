@@ -160,7 +160,15 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
-            "quit" => app.exit(0),
+            "quit" => {
+                use tauri::Manager;
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app.state::<AppState>();
+                    commands::stop_agent_runtime(&state).await;
+                    app.exit(0);
+                });
+            }
             _ => {}
         });
     if let Some(icon) = app.default_window_icon() {
@@ -178,9 +186,16 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
             }
             WindowEvent::CloseRequested { api, .. } => {
                 save_desktop_window_state(&app_handle, &close_window);
+                api.prevent_close();
                 if automations::should_keep_app_alive() {
-                    api.prevent_close();
                     let _ = close_window.hide();
+                } else {
+                    let app = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let state = app.state::<AppState>();
+                        commands::stop_agent_runtime(&state).await;
+                        app.exit(0);
+                    });
                 }
             }
             _ => {}
@@ -216,7 +231,9 @@ pub fn run() {
     // Team MCP server（127.0.0.1 streamable-http）：同步 bind 后台 accept。
     // 必须在任何 new_session 之前 —— 端口即刻写入 BOUND_PORT 供传参。
     team_mcp::serve();
-    org_mcp::serve();
+    if let Err(error) = org_mcp::clear_persisted_registration() {
+        tracing::warn!(%error, "failed to remove legacy organization MCP registration");
+    }
 
     let builder = tauri::Builder::default();
     // Tauri requires single-instance to be the first registered plugin. A
@@ -231,6 +248,10 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            // The organization bridge is reachable on loopback throughout the
+            // process lifetime, but is only attached to Agent sessions after a
+            // verified login and shared-scope bootstrap.
+            org_mcp::serve(app.handle().clone());
             org::start_background_sync(app.handle().clone());
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             setup_desktop_lifecycle(app)?;
@@ -327,6 +348,9 @@ pub fn run() {
             org::org_submit_document,
             org::org_document_submissions_mine,
             org::org_list_documents,
+            org::org_list_memories,
+            org::org_memory_promotions_mine,
+            org::org_submit_memory_candidate,
             org::org_document_status,
             org::org_fetch_document,
             org::org_archive_document,

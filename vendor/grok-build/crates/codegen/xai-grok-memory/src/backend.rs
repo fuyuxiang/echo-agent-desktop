@@ -170,6 +170,24 @@ async fn build_embedding_provider(
     if config.model.as_ref().is_none_or(|m| m.is_empty()) {
         return None;
     }
+    match config.provider.trim().to_ascii_lowercase().as_str() {
+        "api" | "auto" => {}
+        "local" => {
+            tracing::warn!(
+                target: crate::MEMORY_LOG_TARGET,
+                "memory embedding provider 'local' is not bundled; using private on-device FTS only"
+            );
+            return None;
+        }
+        provider => {
+            tracing::warn!(
+                target: crate::MEMORY_LOG_TARGET,
+                provider,
+                "unknown memory embedding provider; using FTS only"
+            );
+            return None;
+        }
+    }
 
     // Enforce at runtime, in release too: a `debug_assert` would compile out of
     // shipped binaries and let a scoped credential reach an unapproved URL.
@@ -394,7 +412,13 @@ impl MemoryBackend for MemoryBackendImpl {
             // called and the old `reindexed_count` would stay at 0).
             let mut changed_chunk_count: usize = 0;
             for file in &dirty_files {
-                if file.exists() {
+                if !self.storage.is_indexable_memory_file(file) {
+                    // Also clean up paths that an older, broader watcher may
+                    // already have indexed (other projects, history, archive).
+                    if let Ok(n) = index.delete_path(file) {
+                        changed_chunk_count += n;
+                    }
+                } else if file.exists() {
                     // File was created or modified — reindex it.
                     let source = self.storage.classify_source(file);
                     if let Ok(stats) = index.reindex_file(file, source) {
@@ -418,6 +442,19 @@ impl MemoryBackend for MemoryBackendImpl {
 
         // ── Async phase: embed missing chunks (no &index borrow) ──
         let provider = self.make_embedding_provider().await;
+        if let Some(ref provider) = provider {
+            match index.ensure_embedding_fingerprint(&provider.fingerprint()) {
+                Ok(true) => {
+                    reindex_chunks = index.chunks_without_embeddings().unwrap_or_default();
+                }
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    target: crate::MEMORY_LOG_TARGET,
+                    %error,
+                    "failed to validate embedding cache identity"
+                ),
+            }
+        }
         let mut embedded_count: usize = 0;
         if !reindex_chunks.is_empty()
             && let Some(ref provider) = provider
@@ -427,6 +464,18 @@ impl MemoryBackend for MemoryBackendImpl {
                 let texts: Vec<&str> = batch.iter().map(|(_, t)| t.as_str()).collect();
                 match provider.embed_batch(&texts).await {
                     Ok(embeddings) => {
+                        if let Err(error) = super::embedding::validate_embedding_batch(
+                            &embeddings,
+                            batch.len(),
+                            provider.dimensions(),
+                        ) {
+                            tracing::warn!(
+                                target: crate::MEMORY_LOG_TARGET,
+                                %error,
+                                "embedding provider returned an invalid sync batch"
+                            );
+                            continue;
+                        }
                         for ((chunk_id, _), emb) in batch.iter().zip(embeddings.into_iter()) {
                             upserts.push((chunk_id.clone(), emb));
                         }
@@ -489,6 +538,7 @@ impl MemoryBackend for MemoryBackendImpl {
         // ── Sync phase 3: vector search + scoring + merge (borrows &index) ──
         let merged = super::search::hybrid_search_merge(
             &index,
+            query,
             fts_results,
             query_embedding.embedding(),
             &search_config,
@@ -1382,7 +1432,8 @@ mod tests {
             ..Default::default()
         };
         let provider =
-            build_embedding_provider(Some(&config), &scoped, None, "https://api.echo.agent/v1").await;
+            build_embedding_provider(Some(&config), &scoped, None, "https://api.echo.agent/v1")
+                .await;
         assert!(
             provider.is_some(),
             "trusted endpoint must build a provider from the session credential"
