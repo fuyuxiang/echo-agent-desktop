@@ -19,9 +19,11 @@
 //! cwd and sends the prompt; a run record (running → success/failed) is
 //! written so the 运行记录 tab can render history.
 //!
-//! The scheduler runs in-process (tokio task), polling every minute.
+//! The scheduler runs in-process (tokio task). A short polling interval keeps
+//! minute-precision schedules responsive while the persisted occurrence claim
+//! still guarantees that a due run is dispatched only once.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -29,7 +31,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, NaiveTime, Weekday};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 use tauri_plugin_autostart::ManagerExt;
@@ -47,6 +49,7 @@ use std::os::windows::fs::OpenOptionsExt;
 /// tool process that forgot to terminate.
 const AUTOMATION_RUN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 const MAX_CONCURRENT_AUTOMATION_RUNS: usize = 3;
+const AUTOMATION_SCHEDULER_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 // ---------- models ----------
 
@@ -229,6 +232,72 @@ pub struct AutomationSnapshot {
     pub records: Vec<AutomationRunRecord>,
 }
 
+/// Small push event used to invalidate renderer snapshots and immediately
+/// hydrate a newly-created background session in the sidebar.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationUpdateEvent {
+    pub phase: String,
+    pub automation_id: String,
+    pub automation_name: String,
+    pub record_id: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+pub(crate) fn emit_automation_update(app: &AppHandle, event: AutomationUpdateEvent) {
+    if let Err(error) = app.emit("agent://automation-update", &event) {
+        tracing::warn!(%error, record_id = %event.record_id, "failed to emit automation lifecycle update");
+    }
+}
+
+enum RunUpdate<'a> {
+    Queued,
+    Running,
+    SessionCreated(&'a str),
+    Success(&'a str),
+    Failed {
+        session_id: Option<&'a str>,
+        error: &'a str,
+    },
+}
+
+fn emit_run_update(
+    app: &AppHandle,
+    automation: &Automation,
+    record_id: &str,
+    cwd: &Path,
+    update: RunUpdate<'_>,
+) {
+    let (phase, status, session_id, error) = match update {
+        RunUpdate::Queued => ("queued", "queued", None, None),
+        RunUpdate::Running => ("running", "running", None, None),
+        RunUpdate::SessionCreated(session_id) => {
+            ("sessionCreated", "running", Some(session_id), None)
+        }
+        RunUpdate::Success(session_id) => ("finished", "success", Some(session_id), None),
+        RunUpdate::Failed { session_id, error } => ("finished", "failed", session_id, Some(error)),
+    };
+    emit_automation_update(
+        app,
+        AutomationUpdateEvent {
+            phase: phase.into(),
+            automation_id: automation.id.clone(),
+            automation_name: automation.name.clone(),
+            record_id: record_id.into(),
+            status: status.into(),
+            session_id: session_id.map(str::to_string),
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            error: error.map(str::to_string),
+        },
+    );
+}
+
 // ---------- persistence ----------
 
 fn store_path() -> PathBuf {
@@ -258,6 +327,25 @@ fn full_access_sessions() -> &'static Mutex<HashSet<String>> {
 fn automation_run_slots() -> &'static Arc<tokio::sync::Semaphore> {
     AUTOMATION_RUN_SLOTS
         .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_AUTOMATION_RUNS)))
+}
+
+/// Serialize occurrences of the same automation while still allowing the
+/// scheduler to persist and display a due occurrence immediately. Weak values
+/// keep deleted automation ids from accumulating for the lifetime of the app.
+fn automation_run_lock(automation_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>> =
+        OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    if let Some(lock) = locks.get(automation_id).and_then(std::sync::Weak::upgrade) {
+        return lock;
+    }
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(automation_id.to_string(), Arc::downgrade(&lock));
+    lock
 }
 
 pub fn has_active_automations() -> bool {
@@ -659,16 +747,22 @@ fn finalize_record(
 }
 
 /// Finalize a record as success/failed. The session was linked at dispatch time.
-fn record_run_finished(record_id: &str, ok: bool, session_id: Option<&str>, error: Option<&str>) {
+fn record_run_finished(
+    record_id: &str,
+    ok: bool,
+    session_id: Option<&str>,
+    error: Option<&str>,
+) -> bool {
     let _guard = record_access().lock().unwrap();
     let mut records = match read_records() {
         Ok(records) => records,
         Err(error) => {
             tracing::error!(%error, %record_id, "failed to read automation records for completion");
-            return;
+            return false;
         }
     };
     let now = Local::now().to_rfc3339();
+    let mut changed = false;
     for record in &mut records.records {
         // `prompt_complete` is the authoritative source for abnormal stop
         // reasons, while the ACP PromptResponse only says that the request
@@ -676,18 +770,23 @@ fn record_run_finished(record_id: &str, ok: bool, session_id: Option<&str>, erro
         // before the dispatch future resumes. Never let that later fallback
         // invert an already-persisted terminal outcome.
         if record.id == record_id {
-            finalize_record(record, ok, &now, session_id, error);
+            changed |= finalize_record(record, ok, &now, session_id, error);
         }
     }
-    if let Err(error) = write_records(&mut records) {
-        tracing::error!(%error, %record_id, "failed to persist automation completion");
+    if changed {
+        if let Err(error) = write_records(&mut records) {
+            tracing::error!(%error, %record_id, "failed to persist automation completion");
+            return false;
+        }
     }
+    changed
 }
 
 #[derive(Debug, Clone)]
 pub struct AutomationCompletion {
     pub push: bool,
     pub automation_name: String,
+    pub event: AutomationUpdateEvent,
 }
 
 /// Finalize an automation run when the bridge receives prompt_complete.
@@ -714,7 +813,12 @@ pub fn complete_run_for_session(
                 r.finished_at = Some(now.clone());
                 r.error = (!ok).then(|| error.unwrap_or("Agent 执行失败").to_string());
                 r.automation_snapshot = None;
-                automation_identity = Some((r.automation_id.clone(), r.automation_name.clone()));
+                automation_identity = Some((
+                    r.automation_id.clone(),
+                    r.automation_name.clone(),
+                    r.id.clone(),
+                    r.cwd.clone(),
+                ));
             }
         }
         if automation_identity.is_some() {
@@ -725,7 +829,7 @@ pub fn complete_run_for_session(
         automation_identity
     };
     full_access_sessions().lock().unwrap().remove(session_id);
-    automation_identity.map(|(id, recorded_name)| {
+    automation_identity.map(|(id, recorded_name, record_id, cwd)| {
         let _guard = store_access().lock().unwrap();
         let current = match read_store() {
             Ok(store) => store
@@ -737,15 +841,23 @@ pub fn complete_run_for_session(
                 None
             }
         };
-        current
-            .map(|automation| AutomationCompletion {
-                push: automation.push_to_we_chat,
-                automation_name: automation.name,
-            })
-            .unwrap_or(AutomationCompletion {
-                push: false,
-                automation_name: recorded_name,
-            })
+        let (push, automation_name) = current
+            .map(|automation| (automation.push_to_we_chat, automation.name))
+            .unwrap_or((false, recorded_name));
+        AutomationCompletion {
+            push,
+            event: AutomationUpdateEvent {
+                phase: "finished".into(),
+                automation_id: id,
+                automation_name: automation_name.clone(),
+                record_id,
+                status: if ok { "success" } else { "failed" }.into(),
+                session_id: Some(session_id.into()),
+                cwd,
+                error: (!ok).then(|| error.unwrap_or("Agent 执行失败").to_string()),
+            },
+            automation_name,
+        }
     })
 }
 
@@ -998,9 +1110,22 @@ struct ClaimedAutomation {
     scheduled_for: String,
 }
 
+fn scheduled_runs_in_flight(records: &RunRecordStore) -> HashSet<String> {
+    records
+        .records
+        .iter()
+        .filter(|record| {
+            record.scheduled_for.is_some() && matches!(record.status.as_str(), "queued" | "running")
+        })
+        .map(|record| record.automation_id.clone())
+        .collect()
+}
+
 /// Claim persisted due tasks using a fire-once misfire policy. Automations in
-/// `blocked` already have an active run and are deliberately left due; the next
-/// scheduler tick coalesces the missed occurrence instead of overlapping it.
+/// `blocked` already have a scheduled occurrence in flight and are deliberately
+/// left due; the next scheduler tick coalesces the missed occurrence instead of
+/// building an unbounded backlog. A manual test run does not block the first
+/// due occurrence: it is persisted as queued immediately and serialized later.
 fn claim_due_unblocked(
     store: &mut AutomationStore,
     now: DateTime<Local>,
@@ -1418,9 +1543,21 @@ pub async fn automations_run(
         write_store(&store)
     })();
     if let Err(error) = update_result {
-        record_run_finished(&record_id, false, None, Some(&error));
+        if record_run_finished(&record_id, false, None, Some(&error)) {
+            emit_run_update(
+                &app,
+                &automation,
+                &record_id,
+                &cwd,
+                RunUpdate::Failed {
+                    session_id: None,
+                    error: &error,
+                },
+            );
+        }
         return Err(error);
     }
+    emit_run_update(&app, &automation, &record_id, &cwd, RunUpdate::Queued);
     let task_record_id = record_id.clone();
     tauri::async_runtime::spawn(execute_automation_run(
         app,
@@ -1464,11 +1601,23 @@ async fn execute_automation_run(
     cwd: PathBuf,
     record_id: String,
 ) {
+    let _automation_guard = automation_run_lock(&automation.id).lock_owned().await;
     let _slot = match automation_run_slots().clone().acquire_owned().await {
         Ok(slot) => slot,
         Err(error) => {
             let error = format!("自动化执行队列已关闭：{error}");
-            record_run_finished(&record_id, false, None, Some(&error));
+            if record_run_finished(&record_id, false, None, Some(&error)) {
+                emit_run_update(
+                    &app,
+                    &automation,
+                    &record_id,
+                    &cwd,
+                    RunUpdate::Failed {
+                        session_id: None,
+                        error: &error,
+                    },
+                );
+            }
             notify_run_failure(&app, &automation, &error).await;
             return;
         }
@@ -1483,7 +1632,18 @@ async fn execute_automation_run(
         Ok(cwd) => cwd,
         Err(error) => {
             let error = format!("自动化工作区授权校验失败：{error}");
-            record_run_finished(&record_id, false, None, Some(&error));
+            if record_run_finished(&record_id, false, None, Some(&error)) {
+                emit_run_update(
+                    &app,
+                    &automation,
+                    &record_id,
+                    &cwd,
+                    RunUpdate::Failed {
+                        session_id: None,
+                        error: &error,
+                    },
+                );
+            }
             notify_run_failure(&app, &automation, &error).await;
             return;
         }
@@ -1509,7 +1669,10 @@ async fn execute_automation_run(
     }
     loop {
         match mark_record_running(&record_id) {
-            Ok(()) => break,
+            Ok(()) => {
+                emit_run_update(&app, &automation, &record_id, &cwd, RunUpdate::Running);
+                break;
+            }
             Err(error) if error.contains("not dispatchable") || error.contains("not found") => {
                 tracing::warn!(
                     %error,
@@ -1548,7 +1711,7 @@ async fn execute_automation_run(
         let state = app.state::<AppState>();
         tokio::time::timeout(
             AUTOMATION_RUN_TIMEOUT,
-            run_automation_once(&state, &tx, &automation, &cwd, &record_id),
+            run_automation_once(&app, &state, &tx, &automation, &cwd, &record_id),
         )
         .await
     };
@@ -1558,7 +1721,15 @@ async fn execute_automation_run(
             // prompt_complete normally wins this race in bridge.rs. Repeating
             // the terminal write makes completion durable even if that UI event
             // was unavailable during application startup.
-            record_run_finished(&record_id, true, Some(&session_id), None);
+            if record_run_finished(&record_id, true, Some(&session_id), None) {
+                emit_run_update(
+                    &app,
+                    &automation,
+                    &record_id,
+                    &cwd,
+                    RunUpdate::Success(&session_id),
+                );
+            }
             full_access_sessions().lock().unwrap().remove(&session_id);
         }
         Ok(Err(error)) => {
@@ -1573,7 +1744,19 @@ async fn execute_automation_run(
                     tracing::error!(error = %read_error, %record_id, "failed to read failed automation session");
                 }
             }
-            record_run_finished(&record_id, false, None, Some(&error));
+            let session_id = record_session_id(&record_id).ok().flatten();
+            if record_run_finished(&record_id, false, None, Some(&error)) {
+                emit_run_update(
+                    &app,
+                    &automation,
+                    &record_id,
+                    &cwd,
+                    RunUpdate::Failed {
+                        session_id: session_id.as_deref(),
+                        error: &error,
+                    },
+                );
+            }
             notify_run_failure(&app, &automation, &error).await;
         }
         Err(_) => {
@@ -1593,7 +1776,19 @@ async fn execute_automation_run(
                     tracing::error!(error = %read_error, %record_id, "failed to read timed-out automation session");
                 }
             }
-            record_run_finished(&record_id, false, None, Some(&error));
+            let session_id = record_session_id(&record_id).ok().flatten();
+            if record_run_finished(&record_id, false, None, Some(&error)) {
+                emit_run_update(
+                    &app,
+                    &automation,
+                    &record_id,
+                    &cwd,
+                    RunUpdate::Failed {
+                        session_id: session_id.as_deref(),
+                        error: &error,
+                    },
+                );
+            }
             notify_run_failure(&app, &automation, &error).await;
         }
     }
@@ -1602,6 +1797,7 @@ async fn execute_automation_run(
 /// Open a fresh EchoAgent session and send the automation prompt.
 /// Returns the new session id on success.
 async fn run_automation_once(
+    app: &AppHandle,
     state: &AppState,
     tx: &xai_acp_lib::AcpAgentTx,
     automation: &Automation,
@@ -1632,6 +1828,13 @@ async fn run_automation_once(
         state.forget_session_workspace(&session_id);
         return Err(error);
     }
+    emit_run_update(
+        app,
+        automation,
+        record_id,
+        cwd,
+        RunUpdate::SessionCreated(&session_id),
+    );
     if automation.permission_mode == "fullAccess" {
         full_access_sessions()
             .lock()
@@ -1953,12 +2156,7 @@ pub async fn scheduler_tick(app: &AppHandle, tx: &xai_acp_lib::AcpAgentTx, defau
                 return;
             }
         };
-        let blocked: HashSet<String> = records
-            .records
-            .iter()
-            .filter(|record| matches!(record.status.as_str(), "queued" | "running"))
-            .map(|record| record.automation_id.clone())
-            .collect();
+        let blocked = scheduled_runs_in_flight(&records);
         let _store_guard = store_access().lock().unwrap();
         let mut store = match read_store() {
             Ok(store) => store,
@@ -2050,6 +2248,13 @@ pub async fn scheduler_tick(app: &AppHandle, tx: &xai_acp_lib::AcpAgentTx, defau
         sync_autostart_enabled(app, has_active);
     }
     for dispatch in dispatches {
+        emit_run_update(
+            app,
+            &dispatch.automation,
+            &dispatch.record_id,
+            &dispatch.cwd,
+            RunUpdate::Queued,
+        );
         tauri::async_runtime::spawn(execute_automation_run(
             app.clone(),
             tx.clone(),
@@ -2089,7 +2294,7 @@ pub fn start_scheduler(
                 tracing::error!(%error, "failed to recover queued automation runs");
             }
         }
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut interval = tokio::time::interval(AUTOMATION_SCHEDULER_POLL_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
@@ -2494,7 +2699,7 @@ mod tests {
     }
 
     #[test]
-    fn claim_due_does_not_advance_an_automation_with_an_active_run() {
+    fn claim_due_does_not_advance_an_automation_with_a_scheduled_run_in_flight() {
         let now = local(2026, 7, 6, 10, 0);
         let scheduled_for = local(2026, 7, 6, 9, 0).to_rfc3339();
         let automation = Automation {
@@ -2643,6 +2848,49 @@ mod tests {
         assert!(legacy.model_id.is_none());
         assert!(legacy.automation_snapshot.is_none());
         assert!(legacy.scheduled_for.is_none());
+    }
+
+    #[test]
+    fn manual_run_does_not_hide_the_first_due_scheduled_occurrence() {
+        let mut records = RunRecordStore::default();
+        let manual = Automation {
+            id: "manual-active".into(),
+            ..test_automation()
+        };
+        let scheduled = Automation {
+            id: "scheduled-active".into(),
+            ..test_automation()
+        };
+        append_run_started(
+            &mut records,
+            &manual,
+            "2026-07-06T09:55:00+08:00",
+            Path::new("/workspace"),
+            None,
+        );
+        append_run_started(
+            &mut records,
+            &scheduled,
+            "2026-07-06T10:00:00+08:00",
+            Path::new("/workspace"),
+            Some("2026-07-06T10:00:00+08:00"),
+        );
+
+        let blocked = scheduled_runs_in_flight(&records);
+        assert!(!blocked.contains("manual-active"));
+        assert!(blocked.contains("scheduled-active"));
+    }
+
+    #[tokio::test]
+    async fn occurrences_of_the_same_automation_are_serialized() {
+        let first = automation_run_lock("serialization-test");
+        let second = automation_run_lock("serialization-test");
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let guard = first.lock().await;
+        assert!(second.try_lock().is_err());
+        drop(guard);
+        assert!(second.try_lock().is_ok());
     }
 
     #[test]

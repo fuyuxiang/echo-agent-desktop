@@ -178,6 +178,7 @@ function Shell() {
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
   const [trustRequest, setTrustRequest] = useState<{ cwd?: string; reason?: string } | null>(null);
   const [taskRefreshSignal, setTaskRefreshSignal] = useState(0);
+  const [automationRefreshSignal, setAutomationRefreshSignal] = useState(0);
   const [commandRefreshKey, setCommandRefreshKey] = useState(0);
   const [placeholderView, setPlaceholderView] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -602,6 +603,29 @@ function Shell() {
               undefined,
               "info",
             );
+          },
+          onAutomationUpdate: (event) => {
+            setAutomationRefreshSignal((value) => value + 1);
+            if (event.sessionId && event.cwd) {
+              const sessionStore = sessionsStore.getState();
+              const existing = sessionStore.independent.find(
+                (session) => session.sessionId === event.sessionId,
+              );
+              const status = event.status === "failed"
+                ? "failed"
+                : event.status === "success"
+                  ? "completed"
+                  : "working";
+              sessionStore.upsert({
+                sessionId: event.sessionId,
+                cwd: event.cwd,
+                // Use the automation name to hydrate a brand-new background
+                // row, but never replace a title already generated for it.
+                ...(existing ? {} : { title: event.automationName }),
+                status,
+                updatedAt: new Date().toISOString(),
+              });
+            }
           },
           onQuestion: (q) => {
             questionStore.getState().request(q);
@@ -1642,6 +1666,7 @@ function Shell() {
                   sessionId={currentSessionId ?? undefined}
                   onStartProject={handleStartProject}
                   onStartProjectConversation={handleStartProjectConversation}
+                  automationRefreshSignal={automationRefreshSignal}
                 />
               ) : currentSessionId ? (
                 <ChatView

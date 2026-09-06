@@ -1252,6 +1252,9 @@ async fn handle_client_message(
                     (stop_reason == "rate_limit" || stop_reason == "error")
                         .then_some(stop_reason.as_str()),
                 );
+                if let Some(completion) = automation_notification.as_ref() {
+                    crate::automations::emit_automation_update(app, completion.event.clone());
+                }
                 let _ = crate::notifications::append(
                     if stop_reason == "rate_limit" || stop_reason == "error" {
                         crate::notifications::NotificationKind::Error

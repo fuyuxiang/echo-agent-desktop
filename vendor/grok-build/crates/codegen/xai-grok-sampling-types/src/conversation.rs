@@ -787,10 +787,15 @@ impl From<Usage> for TokenUsage {
             .prompt_tokens_details
             .as_ref()
             .map_or(0, |d| d.cached_tokens);
+        let total_tokens = if u.total_tokens == 0 {
+            u.prompt_tokens.saturating_add(u.completion_tokens)
+        } else {
+            u.total_tokens
+        };
         Self {
             prompt_tokens: u.prompt_tokens,
             completion_tokens: u.completion_tokens,
-            total_tokens: u.total_tokens,
+            total_tokens,
             reasoning_tokens: u
                 .completion_tokens_details
                 .as_ref()

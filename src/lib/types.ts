@@ -849,6 +849,18 @@ export interface AutomationSnapshot {
   records: AutomationRunRecord[];
 }
 
+/** Live lifecycle notification emitted by the native automation scheduler. */
+export interface AutomationUpdateEvent {
+  phase: "queued" | "running" | "sessionCreated" | "finished" | string;
+  automationId: string;
+  automationName: string;
+  recordId: string;
+  status: AutomationRunRecord["status"];
+  sessionId?: string;
+  cwd?: string;
+  error?: string;
+}
+
 // ---------- connector marketplace (read live from a local data dir) ----------
 
 /** One connector category chip (mirrors the Rust `ConnectorCategory`). */
