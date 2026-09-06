@@ -142,7 +142,134 @@ fn user_echo_mode(prompt_id: &str, input_origin: &InputOrigin) -> UserEchoMode {
         UserEchoMode::Broadcast
     }
 }
+
+/// Some OpenAI-compatible providers occasionally omit `function.name` while
+/// preserving the JSON arguments (and may omit the call id as well).  The
+/// request still contained the complete tool catalogue, so recover only when
+/// the arguments unambiguously match one advertised tool.  The explicit
+/// shape hints cover the three meta-tools whose payloads are deliberately
+/// distinctive and avoid surfacing the confusing `Tool not found: ` error to
+/// users.
+fn provider_tool_name_hint(
+    arguments: &serde_json::Value,
+    advertised: &std::collections::HashSet<&str>,
+) -> Option<&'static str> {
+    let object = arguments.as_object()?;
+
+    if advertised.contains("use_tool")
+        && object.contains_key("tool_name")
+        && object.contains_key("tool_input")
+    {
+        return Some("use_tool");
+    }
+    if advertised.contains("search_tool") && object.contains_key("query") {
+        return Some("search_tool");
+    }
+    if advertised.contains("workflow") {
+        const WORKFLOW_FIELDS: &[&str] = &[
+            "name",
+            "script",
+            "script_path",
+            "args",
+            "agent_budget",
+            "validate_only",
+            "resume_from_run_id",
+        ];
+        let identifies_workflow = object.contains_key("script")
+            || object.contains_key("script_path")
+            || object.contains_key("resume_from_run_id")
+            || object.contains_key("name");
+        if identifies_workflow
+            && object
+                .keys()
+                .all(|key| WORKFLOW_FIELDS.contains(&key.as_str()))
+        {
+            return Some("workflow");
+        }
+    }
+
+    None
+}
+
 impl SessionActor {
+    /// Repair malformed but recoverable client-side tool calls returned by
+    /// third-party OpenAI-compatible endpoints.  Parsing through the actual
+    /// registered tools is safer than guessing from names or prompt text.
+    async fn repair_provider_tool_calls(
+        &self,
+        response: &mut ConversationResponse,
+        tool_definitions: &[ToolDefinition],
+    ) {
+        let original_calls = response.tool_calls().to_vec();
+        if !original_calls
+            .iter()
+            .any(|call| call.id.trim().is_empty() || call.name.trim().is_empty())
+        {
+            return;
+        }
+
+        let advertised: std::collections::HashSet<&str> = tool_definitions
+            .iter()
+            .map(|definition| definition.function.name.as_str())
+            .collect();
+        let bridge = self.agent.borrow().tool_bridge().clone();
+        let mut repairs = Vec::with_capacity(original_calls.len());
+
+        for call in &original_calls {
+            let id = if call.id.trim().is_empty() {
+                format!("provider-call-{}", uuid::Uuid::now_v7())
+            } else {
+                call.id.to_string()
+            };
+            let mut name = call.name.trim().to_string();
+
+            if name.is_empty()
+                && let Ok(arguments) = serde_json::from_str::<serde_json::Value>(&call.arguments)
+            {
+                let mut matches = Vec::new();
+                for definition in tool_definitions {
+                    let candidate = definition.function.name.as_str();
+                    if bridge.try_parse(candidate, arguments.clone()).await.is_ok() {
+                        matches.push(candidate);
+                    }
+                }
+                name = match matches.as_slice() {
+                    [only] => (*only).to_string(),
+                    _ => provider_tool_name_hint(&arguments, &advertised)
+                        .unwrap_or_default()
+                        .to_string(),
+                };
+            }
+
+            if call.id.trim().is_empty() {
+                tracing::warn!(
+                    recovered_call_id = %id,
+                    "provider omitted tool-call id; generated a stable local id"
+                );
+            }
+            if call.name.trim().is_empty() {
+                if name.is_empty() {
+                    tracing::error!(
+                        "provider omitted tool name and arguments did not match an advertised tool"
+                    );
+                } else {
+                    tracing::warn!(
+                        recovered_tool_name = %name,
+                        "provider omitted tool name; recovered it from the advertised schema"
+                    );
+                }
+            }
+            repairs.push((id, name));
+        }
+
+        if let Some(assistant) = response.assistant_mut() {
+            for (call, (id, name)) in assistant.tool_calls.iter_mut().zip(repairs) {
+                call.id = Arc::<str>::from(id);
+                call.name = name;
+            }
+        }
+    }
+
     /// Exactly once per turn: the cancel path and the turn's own post-loop both announce.
     pub(super) async fn notify_turn_abort(
         &self,
@@ -2353,7 +2480,7 @@ impl SessionActor {
                 })),
             );
             let model_timer = std::time::Instant::now();
-            let (response, latency) = match self
+            let (mut response, latency) = match self
                 .run_turn_via_sampler(request.clone(), &mut rate_limit_waits)
                 .await
             {
@@ -2494,6 +2621,8 @@ impl SessionActor {
                     }
                 }
             };
+            self.repair_provider_tool_calls(&mut response, &tool_definitions)
+                .await;
             auth_retry_schedule.reset_on_success();
             let model_elapsed_ms = model_timer.elapsed().as_millis() as u64;
             let usage = response.usage.as_ref();
@@ -3327,6 +3456,53 @@ mod user_echo_broadcast_tests {
                 &origin("interject-fallback-019e24b7")
             ),
             UserEchoMode::PersistOnly
+        );
+    }
+}
+#[cfg(test)]
+mod provider_tool_call_compat_tests {
+    use super::provider_tool_name_hint;
+    use std::collections::HashSet;
+
+    #[test]
+    fn recognizes_meta_tool_payloads_when_provider_omits_the_name() {
+        let advertised = HashSet::from(["workflow", "search_tool", "use_tool"]);
+        assert_eq!(
+            provider_tool_name_hint(
+                &serde_json::json!({"name": "deep-research", "args": {"query": "news"}}),
+                &advertised,
+            ),
+            Some("workflow")
+        );
+        assert_eq!(
+            provider_tool_name_hint(
+                &serde_json::json!({"query": "connected tools"}),
+                &advertised
+            ),
+            Some("search_tool")
+        );
+        assert_eq!(
+            provider_tool_name_hint(
+                &serde_json::json!({"tool_name": "echoagent_x", "tool_input": {}}),
+                &advertised,
+            ),
+            Some("use_tool")
+        );
+    }
+
+    #[test]
+    fn never_recovers_a_tool_that_was_not_advertised() {
+        let advertised = HashSet::from(["search_tool"]);
+        assert_eq!(
+            provider_tool_name_hint(
+                &serde_json::json!({"name": "deep-research", "args": {}}),
+                &advertised,
+            ),
+            None
+        );
+        assert_eq!(
+            provider_tool_name_hint(&serde_json::json!({"unrelated": true}), &advertised),
+            None
         );
     }
 }

@@ -343,4 +343,27 @@ describe("AutomationPanel（有任务/有记录）", () => {
     expect(screen.queryByText("旧快照任务")).not.toBeInTheDocument();
     expect(screen.getByText("新快照任务")).toBeInTheDocument();
   });
+
+  it("后台调度事件会立即刷新运行记录", async () => {
+    snapshot = { automations: [baseAutomation], records: [] };
+    const { rerender } = render(<AutomationPanel refreshSignal={0} />);
+    await waitFor(() => expect(automationsSnapshot).toHaveBeenCalledTimes(1));
+
+    snapshot = {
+      automations: [baseAutomation],
+      records: [{
+        id: "scheduled-run",
+        automationId: baseAutomation.id,
+        automationName: baseAutomation.name,
+        status: "running",
+        startedAt: new Date().toISOString(),
+        archived: false,
+      }],
+    };
+    rerender(<AutomationPanel refreshSignal={1} />);
+    fireEvent.click(screen.getByText("运行记录"));
+
+    expect(await screen.findByText("运行中")).toBeInTheDocument();
+    expect(automationsSnapshot).toHaveBeenCalledTimes(2);
+  });
 });
