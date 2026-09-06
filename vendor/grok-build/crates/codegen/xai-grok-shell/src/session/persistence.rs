@@ -102,6 +102,36 @@ impl PersistenceContentChunk {
     pub(crate) fn new(content_chunks: Vec<acp::ContentBlock>) -> Self {
         Self { content_chunks }
     }
+
+    /// Text that represents what the user actually typed. Desktop and skill
+    /// clients can attach a compact `displayText` while sending expanded model
+    /// context in the block body. Titles must use that display value or hidden
+    /// expert/skill instructions become user-facing session metadata.
+    fn title_source_text(self) -> String {
+        if let Some(display) = self.content_chunks.iter().find_map(|content_chunk| {
+            let acp::ContentBlock::Text(text) = content_chunk else {
+                return None;
+            };
+            text.meta
+                .as_ref()
+                .and_then(|meta| meta.get("displayText"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        }) {
+            return display;
+        }
+
+        self.content_chunks
+            .into_iter()
+            .filter_map(|content_chunk| match content_chunk {
+                acp::ContentBlock::Text(text) => Some(text.text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 /// Mirrors generated titles to the session registry after local persistence succeeds.
@@ -1029,18 +1059,22 @@ impl Summary {
             .filter(|t| !t.is_empty());
         if let Some(title) = generated
             && (self.title_is_manual
-                || !crate::session::helpers::session_summary::contains_internal_reasoning_markup(
+                || (!crate::session::helpers::session_summary::contains_internal_reasoning_markup(
                     title,
-                ))
+                ) && !crate::session::helpers::session_summary::contains_expert_persona_markup(
+                    title,
+                )))
         {
             return title;
         }
 
         let fallback = self.session_summary.trim();
         if !self.title_is_manual
-            && crate::session::helpers::session_summary::contains_internal_reasoning_markup(
+            && (crate::session::helpers::session_summary::contains_internal_reasoning_markup(
                 fallback,
-            )
+            ) || crate::session::helpers::session_summary::contains_expert_persona_markup(
+                fallback,
+            ))
         {
             ""
         } else {
@@ -1806,15 +1840,7 @@ impl SessionPersistence {
                     }
                 }
                 PersistenceMsg::ContentChunk(content_chunks) => {
-                    let content_part = content_chunks
-                        .content_chunks
-                        .into_iter()
-                        .filter_map(|content_chunk| match content_chunk {
-                            acp::ContentBlock::Text(text) => Some(text.text),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    let content_part = content_chunks.title_source_text();
                     self.summary.update(content_part);
 
                     // Notify session search index so this turn becomes searchable

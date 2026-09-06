@@ -388,6 +388,23 @@ pub(crate) fn read_regular_file_bounded(path: &Path, limit: u64) -> Result<Vec<u
     Ok(data)
 }
 
+/// Read at most `limit` bytes from the beginning of a regular file without
+/// following a final symlink. Unlike [`read_regular_file_bounded`], a larger
+/// file is allowed because callers only need an early bounded record.
+pub(crate) fn read_regular_file_prefix(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    let file = open_regular_file_no_follow(path)?;
+    let mut data = Vec::with_capacity(
+        file.metadata()
+            .map_err(|e| format!("读取失败：{e}"))?
+            .len()
+            .min(limit) as usize,
+    );
+    file.take(limit)
+        .read_to_end(&mut data)
+        .map_err(|e| format!("读取失败：{e}"))?;
+    Ok(data)
+}
+
 /// Read at most `limit + 1` bytes so truncation can be reported without ever
 /// allocating the whole file. `limit` is always one of the native hard caps.
 fn read_bounded_prefix(path: &Path, limit: usize) -> Result<(Vec<u8>, bool), String> {
@@ -1670,6 +1687,7 @@ mod tests {
         std::fs::write(&path, b"12345").unwrap();
         assert!(read_regular_file_bounded(&path, 4).is_err());
         assert_eq!(read_regular_file_bounded(&path, 5).unwrap(), b"12345");
+        assert_eq!(read_regular_file_prefix(&path, 4).unwrap(), b"1234");
     }
 
     #[cfg(unix)]
@@ -1683,5 +1701,6 @@ mod tests {
         std::fs::write(&target, "secret").unwrap();
         symlink(&target, &link).unwrap();
         assert!(read_regular_file_bounded(&link, 1024).is_err());
+        assert!(read_regular_file_prefix(&link, 1024).is_err());
     }
 }

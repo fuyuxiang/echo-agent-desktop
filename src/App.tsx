@@ -86,7 +86,11 @@ import { parseRememberArguments, type SlashCommandInvocation } from "./lib/slash
 import { useUpdateStore } from "./stores/update-store";
 import { useOrgSessionStore } from "./stores/org-session-store";
 import { indexTaskArtifacts } from "./lib/artifact-catalog";
-import { EXPERT_PERSONA_BEGIN, EXPERT_PERSONA_END } from "./lib/user-message";
+import {
+  EXPERT_PERSONA_BEGIN,
+  EXPERT_PERSONA_END,
+  stripInjectedUserContext,
+} from "./lib/user-message";
 import { beginAgentTurn } from "./lib/agent-turn";
 
 const ChatView = lazy(() => import("./components/ChatView").then((module) => ({ default: module.ChatView })));
@@ -118,11 +122,11 @@ function publishQuotaAlert(
  * take the first ~10 words, cap at 40 chars.
  */
 function deriveTitle(text: string): string {
-  // Strip <system-reminder>…</system-reminder> blocks (system-injected context).
-  let clean = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+  // Work from the same user-visible representation as transcript replay. In
+  // particular, an expert persona is transport context, never title text.
+  let clean = stripInjectedUserContext(text);
   // Strip skill XML markup (<command-name>…</command-name> etc.).
   clean = clean.replace(/<\/?command-(?:name|message|args)>/g, "").trim();
-  if (!clean) clean = text.trim();
   // Take first 10 whitespace-delimited words.
   const words = clean.split(/\s+/).slice(0, 10).join(" ");
   if (!words) return "新会话";

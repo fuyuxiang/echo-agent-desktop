@@ -1,4 +1,5 @@
-//! Defensive cleanup for model-generated conversation titles.
+//! Defensive cleanup for model-generated conversation titles and injected
+//! desktop context that must never reach user-facing metadata.
 //!
 //! Some OpenAI-compatible reasoning models return visible `<think>` (or
 //! equivalent) blocks in `assistant.content`. Session titles are user-facing,
@@ -6,6 +7,8 @@
 
 const INTERNAL_TAGS: [&str; 4] = ["think", "thinking", "reasoning", "analysis"];
 const MAX_TITLE_SCALARS: usize = 100;
+const EXPERT_PERSONA_BEGIN: &str = "<!--EXPERT_PERSONA_BEGIN-->";
+const EXPERT_PERSONA_END: &str = "<!--EXPERT_PERSONA_END-->";
 
 fn is_tag_boundary(byte: Option<u8>) -> bool {
     byte.is_some_and(|b| b == b'>' || b.is_ascii_whitespace())
@@ -69,12 +72,65 @@ fn strip_internal_blocks(raw: &str) -> String {
     output
 }
 
+fn contains_expert_persona_markup(raw: &str) -> bool {
+    raw.contains(EXPERT_PERSONA_BEGIN) || raw.contains(EXPERT_PERSONA_END)
+}
+
+fn strip_expert_persona_blocks(raw: &str) -> String {
+    let mut output = raw.to_string();
+    loop {
+        let Some(start) = output.find(EXPERT_PERSONA_BEGIN) else {
+            break;
+        };
+        let after_open = start + EXPERT_PERSONA_BEGIN.len();
+        let Some(relative_end) = output[after_open..].find(EXPERT_PERSONA_END) else {
+            output.truncate(start);
+            break;
+        };
+        let end = after_open + relative_end + EXPERT_PERSONA_END.len();
+        output.replace_range(start..end, "");
+    }
+    output
+}
+
+fn strip_system_reminder_blocks(raw: &str) -> String {
+    const OPEN: &str = "<system-reminder>";
+    const CLOSE: &str = "</system-reminder>";
+    let mut output = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(start) = rest.find(OPEN) {
+        output.push_str(&rest[..start]);
+        let after_open = &rest[start + OPEN.len()..];
+        let Some(end) = after_open.find(CLOSE) else {
+            return output;
+        };
+        rest = &after_open[end + CLOSE.len()..];
+    }
+    output.push_str(rest);
+    output
+}
+
+/// Recover the user-authored portion of a raw prompt persisted by an older
+/// desktop build. Reserved injected blocks are removed before any title logic.
+fn visible_user_text(raw: &str) -> String {
+    let without_persona = strip_expert_persona_blocks(raw);
+    if contains_expert_persona_markup(&without_persona) {
+        return String::new();
+    }
+    strip_system_reminder_blocks(&without_persona)
+        .trim()
+        .to_string()
+}
+
 /// Return a safe, single-line automatic title, or `None` when the model only
 /// produced reasoning/internal markup. Manual titles deliberately bypass this
 /// function so user-authored angle-bracket text remains untouched.
 pub(crate) fn clean_auto_title(raw: &str) -> Option<String> {
-    let stripped = strip_internal_blocks(raw);
+    let stripped = strip_expert_persona_blocks(&strip_internal_blocks(raw));
     if contains_internal_markup(&stripped) {
+        return None;
+    }
+    if contains_expert_persona_markup(&stripped) {
         return None;
     }
 
@@ -113,9 +169,26 @@ pub(crate) fn clean_auto_title(raw: &str) -> Option<String> {
     Some(title)
 }
 
+/// Produce the same compact fallback shape used for a first prompt. This is
+/// used only to recover historical automatic titles that consist of injected
+/// expert markup; manual user titles bypass it.
+pub(crate) fn fallback_title_from_user_text(raw: &str) -> Option<String> {
+    let visible = visible_user_text(raw);
+    let clause = visible
+        .split(['\n', '。', '！', '？', '；', '，'])
+        .map(str::trim)
+        .find(|part| !part.is_empty())?;
+    let words = clause
+        .split_whitespace()
+        .take(10)
+        .collect::<Vec<_>>()
+        .join(" ");
+    clean_auto_title(&words)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::clean_auto_title;
+    use super::{clean_auto_title, fallback_title_from_user_text};
 
     #[test]
     fn removes_closed_reasoning_before_title() {
@@ -146,5 +219,18 @@ mod tests {
     #[test]
     fn rejects_orphan_internal_closing_tag() {
         assert_eq!(clean_auto_title("reasoning</think>Final title"), None);
+    }
+
+    #[test]
+    fn removes_expert_context_and_rejects_orphan_markers() {
+        let raw =
+            "<!--EXPERT_PERSONA_BEGIN-->\nexpert\n<!--EXPERT_PERSONA_END-->\n\n帮我写秋天的文章";
+        assert_eq!(clean_auto_title(raw).as_deref(), Some("帮我写秋天的文章"));
+        assert_eq!(clean_auto_title("<!--EXPERT_PERSONA_BEGIN-->"), None);
+        assert_eq!(clean_auto_title("<!--EXPERT_PERSONA_END-->"), None);
+        assert_eq!(
+            fallback_title_from_user_text(raw).as_deref(),
+            Some("帮我写秋天的文章")
+        );
     }
 }

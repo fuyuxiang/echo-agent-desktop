@@ -17,6 +17,21 @@ use crate::session::helpers::{session_recap, session_summary};
 /// one-at-a-time refresh slot indefinitely.
 const TITLE_REFRESH_MODEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
+fn strip_expert_context_from_conversation(conversation: &mut [ConversationItem]) {
+    for item in conversation {
+        let ConversationItem::User(user) = item else {
+            continue;
+        };
+        for part in &mut user.content {
+            let ContentPart::Text { text } = part else {
+                continue;
+            };
+            let visible = session_summary::strip_expert_persona_blocks(text);
+            *text = Arc::<str>::from(visible);
+        }
+    }
+}
+
 impl SessionActor {
     /// Spawn a title refresh after a successful turn, unless the title is frozen
     /// or one is already running. No-op for subagents and when post-turn
@@ -133,8 +148,12 @@ impl SessionActor {
     /// or `None` on any setup/model failure or empty output.
     async fn generate_refreshed_title(
         &self,
-        conversation: Vec<ConversationItem>,
+        mut conversation: Vec<ConversationItem>,
     ) -> Option<String> {
+        // The conversation keeps model-visible expert instructions for replay,
+        // but title refresh is user-facing metadata. Remove that transport
+        // context from real user text before sending the side call.
+        strip_expert_context_from_conversation(&mut conversation);
         let setup = match self.prepare_side_call().await {
             Ok(s) => s,
             Err(e) => {
@@ -194,5 +213,19 @@ impl SessionActor {
             return None;
         }
         Some(title)
+    }
+}
+
+#[cfg(test)]
+mod expert_context_tests {
+    use super::*;
+
+    #[test]
+    fn title_refresh_conversation_uses_only_visible_user_text() {
+        let mut conversation = vec![ConversationItem::user(
+            "<!--EXPERT_PERSONA_BEGIN-->\nexpert\n<!--EXPERT_PERSONA_END-->\n\nuser task",
+        )];
+        strip_expert_context_from_conversation(&mut conversation);
+        assert_eq!(conversation[0].text_content(), "user task");
     }
 }

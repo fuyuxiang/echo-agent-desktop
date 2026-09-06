@@ -81,6 +81,29 @@ fn neutral_update(info: &Info, text: &str) -> SessionUpdate {
     SessionUpdate::Acp(Box::new(notification(info, text)))
 }
 
+#[test]
+fn title_source_prefers_display_text_over_injected_wire_context() {
+    let text = acp::TextContent::new(
+        "<!--EXPERT_PERSONA_BEGIN-->\nexpert\n<!--EXPERT_PERSONA_END-->\n\nuser task",
+    )
+    .meta(
+        serde_json::json!({ "displayText": "user task" })
+            .as_object()
+            .cloned(),
+    );
+    let chunk = PersistenceContentChunk::new(vec![acp::ContentBlock::Text(text)]);
+    assert_eq!(chunk.title_source_text(), "user task");
+}
+
+#[test]
+fn title_source_falls_back_to_joined_wire_text_without_display_text() {
+    let chunk = PersistenceContentChunk::new(vec![
+        acp::ContentBlock::Text(acp::TextContent::new("first")),
+        acp::ContentBlock::Text(acp::TextContent::new("second")),
+    ]);
+    assert_eq!(chunk.title_source_text(), "first\nsecond");
+}
+
 #[tokio::test]
 async fn writeback_backfill_is_fresh_only_and_acp_only() {
     let info = Info {
