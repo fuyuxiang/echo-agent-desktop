@@ -502,17 +502,21 @@ pub struct ChatResponseMessage {
     pub citations: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ToolCallResponse {
+    #[serde(default)]
     pub id: String,
-    #[serde(rename = "type")]
+    #[serde(default, rename = "type")]
     pub kind: String,
+    #[serde(default)]
     pub function: ToolCallFunction,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ToolCallFunction {
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub arguments: String,
 }
 
@@ -534,8 +538,11 @@ impl ToolCallFunction {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Usage {
+    #[serde(default, alias = "input_tokens")]
     pub prompt_tokens: u32,
+    #[serde(default, alias = "output_tokens")]
     pub completion_tokens: u32,
+    #[serde(default)]
     pub total_tokens: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
@@ -1479,6 +1486,32 @@ mod tests {
         assert_eq!(delta.role, Some(Role::Assistant));
         assert_eq!(delta.content, Some("".to_string()));
         assert!(delta.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn usage_accepts_partial_and_responses_style_token_fields() {
+        let partial: Usage = serde_json::from_str(r#"{"total_tokens":42}"#).unwrap();
+        assert_eq!(partial.prompt_tokens, 0);
+        assert_eq!(partial.completion_tokens, 0);
+        assert_eq!(partial.total_tokens, 42);
+
+        let aliased: Usage =
+            serde_json::from_str(r#"{"input_tokens":30,"output_tokens":12,"total_tokens":42}"#)
+                .unwrap();
+        assert_eq!(aliased.prompt_tokens, 30);
+        assert_eq!(aliased.completion_tokens, 12);
+        assert_eq!(aliased.total_tokens, 42);
+    }
+
+    #[test]
+    fn tool_call_response_accepts_missing_provider_identifiers() {
+        let call: ToolCallResponse = serde_json::from_str(
+            r#"{"type":"function","function":{"arguments":"{\"query\":\"news\"}"}}"#,
+        )
+        .unwrap();
+        assert!(call.id.is_empty());
+        assert!(call.function.name.is_empty());
+        assert_eq!(call.function.arguments, r#"{"query":"news"}"#);
     }
 
     /// Regression test: cloning `Box<dyn TraceContext>` must not infinitely recurse.

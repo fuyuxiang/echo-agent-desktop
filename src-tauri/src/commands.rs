@@ -81,6 +81,9 @@ pub struct AppState {
     /// Last model configuration positively acknowledged by the embedded
     /// Runtime. Disk configuration alone must never unlock message sending.
     pub(crate) runtime_models: Mutex<RuntimeModelState>,
+    /// Successful ACP initialize response for the installed Runtime. A WebView
+    /// reload reuses this generation instead of cancelling unattended work.
+    pub(crate) init_outcome: Mutex<Option<InitOutcome>>,
     /// Serialize Runtime model reloads. Organization sync, settings edits and
     /// startup can all request a reload at the same time; overlapping ACP
     /// reloads make it impossible to know which disk revision was applied.
@@ -280,6 +283,7 @@ impl AppState {
         self.clear_orphaned_sessions();
         self.clear_session_workspaces();
         crate::agent_admin::clear_runtime_capabilities();
+        self.init_outcome.lock().unwrap().take();
         self.mark_runtime_models_failed(error);
         true
     }
@@ -325,6 +329,20 @@ pub struct InitResult {
     /// diverge whenever a commit is built later than it was authored.
     pub build_commit_time: String,
     pub log_dir: String,
+}
+
+fn init_result(cwd: &Path, auth: AuthStatus, outcome: &InitOutcome) -> InitResult {
+    InitResult {
+        ok: true,
+        auth,
+        cwd: cwd.to_string_lossy().into_owned(),
+        agent_version: outcome.agent_version.clone(),
+        default_model_id: outcome.default_model_id.clone(),
+        build_commit: env!("ECHOAGENT_BUILD_COMMIT").to_string(),
+        build_time: env!("ECHOAGENT_BUILD_TIME").to_string(),
+        build_commit_time: env!("ECHOAGENT_BUILD_COMMIT_TIME").to_string(),
+        log_dir: crate::logging::log_dir().to_string_lossy().into_owned(),
+    }
 }
 
 fn auth_status(state: &AppState) -> AuthStatus {
@@ -499,6 +517,7 @@ fn clear_runtime_after_init_failure(state: &AppState, generation: u64) {
     state.clear_orphaned_sessions();
     state.clear_session_workspaces();
     crate::agent_admin::clear_runtime_capabilities();
+    state.init_outcome.lock().unwrap().take();
     state.mark_runtime_models_initializing();
 }
 
@@ -673,6 +692,34 @@ pub async fn agent_init(
     // once. Serializing the whole lifecycle keeps one initialization's spawn,
     // handshake and cleanup from interleaving with another's.
     let _init_guard = state.init_lock.lock().await;
+
+    // Renderer reloads recreate the React tree but not the native process. Keep
+    // the healthy Runtime and its in-flight automations alive; the dispatcher
+    // already emits Tauri events independently of any WebView subscription.
+    let reusable = {
+        let tx = state.tx.lock().unwrap().clone();
+        let outcome = state.init_outcome.lock().unwrap().clone();
+        let existing_cwd = state.cwd.lock().unwrap().clone();
+        match (tx, outcome, existing_cwd) {
+            (Some(_), Some(outcome), Some(existing_cwd)) => {
+                let same_cwd = match cwd.as_deref() {
+                    None => true,
+                    Some(requested) => {
+                        app.state::<crate::shell_fs::FilesystemAccess>()
+                            .require_workspace(requested)?
+                            == existing_cwd
+                    }
+                };
+                same_cwd.then_some((outcome, existing_cwd))
+            }
+            _ => None,
+        }
+    };
+    if let Some((outcome, existing_cwd)) = reusable {
+        tracing::info!("agent init reused the active Runtime");
+        return Ok(init_result(&existing_cwd, auth_status(&state), &outcome));
+    }
+
     let generation = state.begin_init_generation();
 
     // A renderer/runtime restart invalidates every outstanding reverse
@@ -698,6 +745,7 @@ pub async fn agent_init(
     state.clear_orphaned_sessions();
     state.clear_session_workspaces();
     crate::agent_admin::clear_runtime_capabilities();
+    state.init_outcome.lock().unwrap().take();
     state.mark_runtime_models_initializing();
 
     let cwd = match cwd {
@@ -829,6 +877,7 @@ pub async fn agent_init(
     if let Err(error) = reload_models_and_sync(&app, &state, &tx).await {
         tracing::error!(%error, "initial model reload failed");
     }
+    *state.init_outcome.lock().unwrap() = Some(init_outcome.clone());
     let auth = auth_status(&state);
 
     // Start the automations scheduler now that the agent channel is up.
@@ -848,17 +897,7 @@ pub async fn agent_init(
         }
     }
 
-    Ok(InitResult {
-        ok: true,
-        auth,
-        cwd: cwd.to_string_lossy().into_owned(),
-        agent_version: init_outcome.agent_version,
-        default_model_id: init_outcome.default_model_id,
-        build_commit: env!("ECHOAGENT_BUILD_COMMIT").to_string(),
-        build_time: env!("ECHOAGENT_BUILD_TIME").to_string(),
-        build_commit_time: env!("ECHOAGENT_BUILD_COMMIT_TIME").to_string(),
-        log_dir: crate::logging::log_dir().to_string_lossy().into_owned(),
-    })
+    Ok(init_result(&cwd, auth, &init_outcome))
 }
 
 #[tauri::command]
@@ -1134,6 +1173,7 @@ pub async fn agent_shutdown(
     state.clear_orphaned_sessions();
     state.clear_session_workspaces();
     crate::agent_admin::clear_runtime_capabilities();
+    state.init_outcome.lock().unwrap().take();
     tokio::join!(
         permissions.cancel_all(),
         questions.cancel_all(),

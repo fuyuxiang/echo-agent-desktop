@@ -74,6 +74,8 @@ interface PlaceholderPageProps {
   onStartProject?: (project: ProjectMeta) => void;
   /** 项目页：在项目中新建对话（创建真实 EchoAgent 会话）。 */
   onStartProjectConversation?: (projectId: string, message: string) => Promise<string | undefined>;
+  /** Native automation lifecycle refresh token. */
+  automationRefreshSignal?: number;
 }
 
 /** EchoAgent 功能面板（项目/组织/专家能力/自动化/个人记忆/插件市场）。 */
@@ -88,6 +90,7 @@ export function PlaceholderPage({
   sessionId,
   onStartProject,
   onStartProjectConversation,
+  automationRefreshSignal,
 }: PlaceholderPageProps) {
   if (label === "项目") {
     return (
@@ -121,7 +124,13 @@ export function PlaceholderPage({
   if (label === "自动化") {
     return (
       <DeferredPanel>
-        <AutomationPanel onToast={onToast} onNavigate={onNavigate} onOpenSession={onOpenSession} cwd={cwd} />
+        <AutomationPanel
+          onToast={onToast}
+          onNavigate={onNavigate}
+          onOpenSession={onOpenSession}
+          cwd={cwd}
+          refreshSignal={automationRefreshSignal}
+        />
       </DeferredPanel>
     );
   }

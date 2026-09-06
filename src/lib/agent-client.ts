@@ -12,6 +12,7 @@ import type {
   AgentDefaults,
   AgentEntry,
   Automation,
+  AutomationUpdateEvent,
   ExpertCatalog,
   AutomationSnapshot,
   AutomationStatus,
@@ -1484,6 +1485,8 @@ export async function subscribeAgentEvents(handlers: {
   onModelsUpdate?: (p: unknown) => void;
   /** Fired on background task lifecycle (`task_backgrounded`/`task_completed`). */
   onTaskUpdate?: (p: unknown) => void;
+  /** Fired whenever a native automation run changes lifecycle state. */
+  onAutomationUpdate?: (p: AutomationUpdateEvent) => void;
   /** Fired when the agent asks a question (`echo.agent/question`). */
   onQuestion?: (q: QuestionRequest) => void;
   /** Fired when a question's reverse-request closes, including timeout. */
@@ -1528,6 +1531,7 @@ export async function subscribeAgentEvents(handlers: {
   await wire("agent://git-head", handlers.onGitHead);
   await wire("agent://models-update", handlers.onModelsUpdate);
   await wire("agent://task-update", handlers.onTaskUpdate);
+  await wire<AutomationUpdateEvent>("agent://automation-update", handlers.onAutomationUpdate);
   await wire<QuestionRequest>("agent://question", handlers.onQuestion);
   await wire<QuestionClosedEvent>("agent://question-closed", handlers.onQuestionClosed);
   await wire<{ reason: string }>("agent://agent-died", handlers.onAgentDied);

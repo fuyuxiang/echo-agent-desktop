@@ -81,6 +81,8 @@ interface AutomationPanelProps {
   onNavigate?: (label: string) => void;
   onOpenSession?: (sessionId: string, cwd?: string) => void;
   cwd?: string;
+  /** Incremented when the native scheduler persists a lifecycle transition. */
+  refreshSignal?: number;
 }
 
 type TabKey = "tasks" | "records";
@@ -179,12 +181,19 @@ function ConfirmDialog({
   );
 }
 
-export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: AutomationPanelProps) {
+export function AutomationPanel({
+  onToast,
+  onNavigate,
+  onOpenSession,
+  cwd,
+  refreshSignal = 0,
+}: AutomationPanelProps) {
   // ---------- 数据 ----------
   const [snapshot, setSnapshot] = useState<AutomationSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const snapshotGenerationRef = useRef(0);
+  const lastRefreshSignalRef = useRef(refreshSignal);
   const [runStartingIds, setRunStartingIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<TabKey>("tasks");
   const [searchQuery, setSearchQuery] = useState("");
@@ -249,17 +258,36 @@ export function AutomationPanel({ onToast, onNavigate, onOpenSession, cwd }: Aut
     };
   }, [refresh]);
 
+  useEffect(() => {
+    if (lastRefreshSignalRef.current === refreshSignal) return;
+    lastRefreshSignalRef.current = refreshSignal;
+    void refresh(true, false);
+  }, [refresh, refreshSignal]);
+
   const hasUnfinishedRuns = snapshot?.records.some(
     (record) => record.status === "queued" || record.status === "running",
   ) ?? false;
 
   useEffect(() => {
-    if (!hasUnfinishedRuns) return;
+    // Lifecycle events are the fast path. Polling remains as recovery for an
+    // event emitted while the renderer was suspended or still subscribing.
     const timer = window.setInterval(() => {
       void refresh(true, false);
-    }, 2_000);
+    }, hasUnfinishedRuns ? 2_000 : 15_000);
     return () => window.clearInterval(timer);
   }, [hasUnfinishedRuns, refresh]);
+
+  useEffect(() => {
+    const refreshVisiblePanel = () => {
+      if (document.visibilityState === "visible") void refresh(true, false);
+    };
+    window.addEventListener("focus", refreshVisiblePanel);
+    document.addEventListener("visibilitychange", refreshVisiblePanel);
+    return () => {
+      window.removeEventListener("focus", refreshVisiblePanel);
+      document.removeEventListener("visibilitychange", refreshVisiblePanel);
+    };
+  }, [refresh]);
 
   const loadReferenceCatalogs = useCallback(async () => {
     const generation = ++referenceGenerationRef.current;
