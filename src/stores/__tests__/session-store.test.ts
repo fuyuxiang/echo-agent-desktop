@@ -316,6 +316,136 @@ describe("session-store transcripts", () => {
     expect(useSessionStore.getState().usage.totalTokens).toBe(42);
   });
 
+  it("prompt_complete 保留取消触发器、分类和错误详情", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.startStreaming();
+    s.applyUpdate(chunk("partial", "A"));
+    s.markComplete({
+      sessionId: "A",
+      promptId: "p-1",
+      stopReason: "cancelled",
+      cancelTrigger: "permission",
+      cancellationCategory: "PermissionRejected",
+      agentResult: "permission denied",
+    });
+
+    const assistant = useSessionStore.getState().messages[0];
+    expect(assistant).toMatchObject({
+      complete: true,
+      stopReason: "cancelled",
+      cancelTrigger: "permission",
+      cancellationCategory: "PermissionRejected",
+      agentResult: "permission denied",
+    });
+  });
+
+  it("历史 turn_completed 从持久化元数据恢复终止语义", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.startStreaming();
+    s.applyUpdate(chunk("partial", "A"));
+    s.applyUpdate({
+      sessionUpdate: "turn_completed",
+      stop_reason: "cancelled",
+      agent_result: "stopped by policy",
+      _meta: {
+        cancelTrigger: "hook",
+        cancellationCategory: "HookDenied",
+        agentTimestampMs: 123_456,
+      },
+      __sessionId: "A",
+    } as never);
+
+    expect(useSessionStore.getState().messages[0]).toMatchObject({
+      complete: true,
+      stopReason: "cancelled",
+      cancelTrigger: "hook",
+      cancellationCategory: "HookDenied",
+      agentResult: "stopped by policy",
+      completedAt: 123_456,
+    });
+  });
+
+  it("历史失败在没有助手 chunk 时仍保留可见终止记录", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.applyUpdate({
+      sessionUpdate: "turn_completed",
+      prompt_id: "p-empty",
+      stop_reason: "error",
+      agent_result: "connection reset",
+      __sessionId: "A",
+    } as never);
+
+    expect(useSessionStore.getState().messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        parts: [],
+        complete: true,
+        promptId: "p-empty",
+        stopReason: "error",
+        agentResult: "connection reset",
+      }),
+    ]);
+  });
+
+  it("持久终态与 prompt_complete 双轨到达时只保留一条记录", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.startStreaming();
+    s.applyUpdate(chunk("partial", "A"));
+    s.applyUpdate({
+      sessionUpdate: "turn_completed",
+      prompt_id: "p-1",
+      stop_reason: "error",
+      agent_result: "first detail",
+      __sessionId: "A",
+    } as never);
+    s.markComplete({
+      sessionId: "A",
+      promptId: "p-1",
+      stopReason: "error",
+      agentResult: "final detail",
+    });
+
+    expect(useSessionStore.getState().messages).toHaveLength(1);
+    expect(useSessionStore.getState().messages[0]).toMatchObject({
+      promptId: "p-1",
+      stopReason: "error",
+      agentResult: "final detail",
+    });
+  });
+
+  it("Agent 进程崩溃时终止所有前后台流并清理方案审批", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.startStreaming();
+    s.applyUpdate(chunk("A partial", "A"));
+    s.requestPlanApproval({
+      requestId: "approval-1",
+      sessionId: "A",
+      toolCallId: "tool-1",
+    });
+    s.setSession("B");
+    s.startStreaming();
+    s.applyUpdate(chunk("B partial", "B"));
+
+    s.failAllStreaming("error", "agent crashed");
+
+    const state = useSessionStore.getState();
+    expect(state.streaming).toBe(false);
+    expect(state.transcripts.A.streamingMessageId).toBeNull();
+    expect(state.transcripts.B.streamingMessageId).toBeNull();
+    expect(state.transcripts.A.planApprovals).toEqual([]);
+    expect(state.transcripts.A.messages[state.transcripts.A.messages.length - 1]?.stopReason)
+      .toBe("error");
+    expect(state.transcripts.B.messages[state.transcripts.B.messages.length - 1]?.stopReason)
+      .toBe("error");
+    expect(state.transcripts.A.messages[state.transcripts.A.messages.length - 1]?.agentResult)
+      .toBe("agent crashed");
+  });
+
   it("流式中切回(尚未 complete)→ streaming 仍为 true", () => {
     const s = useSessionStore.getState();
     s.setSession("A");
@@ -400,6 +530,19 @@ describe("session-store transcripts", () => {
     expect(useSessionStore.getState().messages[1].startedAt).toEqual(expect.any(Number));
     expect(useSessionStore.getState().messages[1].completedAt).toEqual(expect.any(Number));
     expect(useSessionStore.getState().messages[1].stopReason).toBe("cancelled");
+  });
+
+  it("错误提示不伪造终态，流式只由真实生命周期事件结束", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.startStreaming();
+    s.applyUpdate(chunk("still running", "A"));
+
+    s.setError("停止请求失败");
+
+    expect(useSessionStore.getState().error).toBe("停止请求失败");
+    expect(useSessionStore.getState().streaming).toBe(true);
+    expect(useSessionStore.getState().messages[0].complete).toBe(false);
   });
 
   it("stopStreaming 按 sessionId 终止后台会话，不污染当前会话", () => {

@@ -87,6 +87,14 @@ describe("permission-store", () => {
     usePermissionStore.getState().dismiss("r1", "no-such-session");
     expect(usePermissionStore.getState().queues["s1"]).toHaveLength(1);
   });
+
+  it("Agent 退出后清空所有失效请求", () => {
+    const s = usePermissionStore.getState();
+    s.request(makePerm("r1", "s1"));
+    s.request(makePerm("r2", "s2"));
+    s.clearAll();
+    expect(usePermissionStore.getState().queues).toEqual({});
+  });
 });
 
 describe("selectPermissionForSession", () => {

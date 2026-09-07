@@ -55,6 +55,8 @@ interface QueueState {
   /** Settle the oldest in-flight item for a terminal agent event. Consumed
    *  items leave the queue; retryable failures return to `queued`. */
   settleSending: (sessionId: string, settlement: SendingSettlement) => QueueItem | null;
+  /** Return all process-owned in-flight rows to a retryable state. */
+  retryAllSending: () => void;
   /** 取下一条 active(非 paused)项并从队列移除;无则返回 null。 */
   shiftNext: (sessionId: string) => QueueItem | null;
   /** 清空某会话的整个队列。 */
@@ -160,6 +162,21 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
     });
     return settled;
   },
+  retryAllSending: () =>
+    set((state) => {
+      let changed = false;
+      const queues = Object.fromEntries(
+        Object.entries(state.queues).map(([sessionId, items]) => [
+          sessionId,
+          items.map((item) => {
+            if (item.status !== "sending") return item;
+            changed = true;
+            return { ...item, status: "queued" as const };
+          }),
+        ]),
+      );
+      return changed ? { queues } : state;
+    }),
   shiftNext: (sessionId) => {
     const q = [...queueOf(get().queues, sessionId)];
     const idx = q.findIndex((it) => it.status === "queued");
@@ -191,11 +208,26 @@ export function hasActiveItems(q: QueueItem[]): boolean {
  *
  * Cancellation consumes an already-admitted queue item (its user bubble is
  * present in history) but deliberately does not launch the next item. Failed
- * requests remain editable/retryable. Other terminal reasons preserve the
- * existing queue contract and advance to the next item.
+ * requests remain editable/retryable. Only a normal/unknown successful
+ * terminal may advance to the next item.
  */
-export function queueTerminalPolicy(stopReason: string): QueueTerminalPolicy {
-  if (["rate_limit", "rate_limited", "error"].includes(stopReason)) {
+export function queueTerminalPolicy(
+  stopReason: string,
+  cancellationCategory?: string,
+): QueueTerminalPolicy {
+  if (
+    [
+      "rate_limit",
+      "rate_limited",
+      "error",
+      "refusal",
+      "content_filter",
+      "max_tokens",
+      "max_turns",
+    ].includes(stopReason)
+    || ["HookDenied", "max_turns_reached", "action_stationarity"]
+      .includes(cancellationCategory ?? "")
+  ) {
     return { settlement: "retry", autoAdvance: false, failed: true };
   }
   if (stopReason === "cancelled") {

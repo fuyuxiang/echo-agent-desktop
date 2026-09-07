@@ -77,10 +77,14 @@ describe("Sidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("s1", "");
   });
 
-  it("在侧栏直接展示运行、待处理与失败状态", () => {
+  it("在侧栏精确展示运行、等待用户、未开始、停止与失败", () => {
     useSessionsStore.getState().setIndependent([
       { sessionId: "running", title: "后台分析", cwd: "", status: "working" },
-      { sessionId: "pending", title: "等待确认", cwd: "", status: "pending" },
+      { sessionId: "permission", title: "等待确认", cwd: "", status: "awaiting_permission" },
+      { sessionId: "answer", title: "等待选项", cwd: "", status: "awaiting_answer" },
+      { sessionId: "approval", title: "等待方案", cwd: "", status: "awaiting_approval" },
+      { sessionId: "pending", title: "新建任务", cwd: "", status: "pending" },
+      { sessionId: "stopped", title: "已取消任务", cwd: "", status: "stopped" },
       { sessionId: "failed", title: "失败任务", cwd: "", status: "failed" },
       { sessionId: "done", title: "普通历史", cwd: "", status: "completed" },
     ]);
@@ -88,7 +92,11 @@ describe("Sidebar", () => {
     render(<Sidebar {...base} />);
 
     expect(screen.getByText("运行中")).toBeInTheDocument();
-    expect(screen.getByText("待处理")).toBeInTheDocument();
+    expect(screen.getByText("授权待确认")).toBeInTheDocument();
+    expect(screen.getByText("等待回答")).toBeInTheDocument();
+    expect(screen.getByText("方案待批准")).toBeInTheDocument();
+    expect(screen.getByText("未开始")).toBeInTheDocument();
+    expect(screen.getByText("已停止")).toBeInTheDocument();
     expect(screen.getByText("失败")).toBeInTheDocument();
     expect(screen.getByText("普通历史").closest(".sidebar__conv"))
       .not.toHaveTextContent("已完成");
