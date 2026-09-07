@@ -754,11 +754,18 @@ function Shell() {
         ? "此会话的模型未配置，请在右下角重新选择模型"
         : runtimeSetupHint;
 
-  const showToast = (message: string, durationMs = 2000) => {
+  const showToast = useCallback((message: string, durationMs = 2000) => {
     setToast(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), durationMs);
-  };
+    toastTimer.current = setTimeout(() => {
+      toastTimer.current = null;
+      setToast(null);
+    }, durationMs);
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+  }, []);
 
   const requireConfiguredModel = (): string | undefined => {
     if (!init?.auth.ready) {
