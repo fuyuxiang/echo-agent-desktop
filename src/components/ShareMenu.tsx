@@ -26,6 +26,7 @@ interface ShareMenuProps {
 
 export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) {
   const [open, setOpen] = useState(false);
+  const [includeProcess, setIncludeProcess] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,14 +39,14 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
   }, [open]);
 
   const exportAs = (format: ShareFormat) => {
-    const payload = buildSharePayload(messages, format, title);
+    const payload = buildSharePayload(messages, format, title, { includeProcess });
     triggerDownload(payload);
     setOpen(false);
     onDone?.(`已导出 ${payload.filename}`);
   };
 
   const shareMail = () => {
-    const payload = buildSharePayload(messages, "text", title);
+    const payload = buildSharePayload(messages, "text", title, { includeProcess });
     const url = buildMailtoUrl(title || "对话分享", payload.content);
     if (openUrl) {
       openUrl(url);
@@ -59,7 +60,7 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
   };
 
   const copyMarkdown = async () => {
-    const payload = buildSharePayload(messages, "markdown", title);
+    const payload = buildSharePayload(messages, "markdown", title, { includeProcess });
     try {
       if (!await copyShareText(payload.content)) throw new Error("当前环境不支持剪贴板");
       setOpen(false);
@@ -70,7 +71,7 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
   };
 
   const shareSystem = async () => {
-    const payload = buildSharePayload(messages, "text", title);
+    const payload = buildSharePayload(messages, "text", title, { includeProcess });
     try {
       if (!await systemShare(payload, title)) throw new Error("当前系统不支持原生分享");
       setOpen(false);
@@ -102,6 +103,18 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
       {open && (
         <div className="share-menu__popover" onClick={(e) => e.stopPropagation()}>
           <div className="share-menu__note">本地分享，不会自动上传会话</div>
+          <label className="share-menu__option">
+            <input
+              type="checkbox"
+              checked={includeProcess}
+              onChange={(event) => setIncludeProcess(event.target.checked)}
+            />
+            <span>
+              包含执行过程
+              <small>思考摘要与操作记录</small>
+            </span>
+          </label>
+          <div className="share-menu__divider" />
           <button type="button" className="share-menu__item" onClick={() => void copyMarkdown()}>
             复制 Markdown
           </button>

@@ -32,6 +32,11 @@ export interface ChatMessage {
   promptIndex?: number;
   /** False while the assistant is still streaming this message. */
   complete: boolean;
+  /** Local wall-clock metadata for live turns. Historical replay may omit it. */
+  startedAt?: number;
+  completedAt?: number;
+  /** Terminal reason when the bridge supplied one (for cancelled/error UX). */
+  stopReason?: string;
 }
 
 export type MessagePart =
@@ -386,10 +391,15 @@ function mergePaths(existing: string[] | undefined, incoming: string[]): string[
 
 function completeStreamingAssistant(transcript: SessionTranscript): SessionTranscript {
   if (!transcript.streamingMessageId) return transcript;
+  const completedAt = Date.now();
   const messages = transcript.messages
     .map((message) =>
       message.id === transcript.streamingMessageId
-        ? { ...message, complete: true }
+        ? {
+            ...message,
+            complete: true,
+            ...(message.startedAt != null ? { completedAt } : {}),
+          }
         : message
     )
     .filter((message) =>
@@ -615,6 +625,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
           role: "assistant",
           parts: [],
           complete: false,
+          startedAt: Date.now(),
         };
         return {
           ...t,
@@ -650,9 +661,17 @@ export const useSessionStore = create<SessionState>((set, get) => {
       // flag) instead of clobbering the focused one.
       const target = (p as { sessionId?: string }).sessionId ?? get().sessionId;
       applyToTranscript(target, (t) => {
+        const completedAt = Date.now();
         const messages = t.messages
           .map((m) =>
-            m.id === t.streamingMessageId ? { ...m, complete: true } : m
+            m.id === t.streamingMessageId
+              ? {
+                  ...m,
+                  complete: true,
+                  stopReason: p.stopReason,
+                  ...(m.startedAt != null ? { completedAt } : {}),
+                }
+              : m
           )
           // Drop the placeholder if nothing was ever streamed into it —
           // otherwise we'd be left with an empty avatar bubble.
@@ -673,13 +692,23 @@ export const useSessionStore = create<SessionState>((set, get) => {
       // empty placeholder so the spinner doesn't hang.
       const sid = get().sessionId;
       if (sid) {
-        applyToTranscript(sid, (t) => ({
-          ...t,
-          streamingMessageId: null,
-          messages: t.messages.filter(
-            (m) => !(m.id === t.streamingMessageId && m.parts.length === 0)
-          ),
-        }));
+        applyToTranscript(sid, (t) => {
+          if (!t.streamingMessageId) return t;
+          const completedAt = Date.now();
+          const messages = t.messages
+            .map((m) =>
+              m.id === t.streamingMessageId
+                ? {
+                    ...m,
+                    complete: true,
+                    stopReason: "error",
+                    ...(m.startedAt != null ? { completedAt } : {}),
+                  }
+                : m
+            )
+            .filter((m) => !(m.id === t.streamingMessageId && m.parts.length === 0));
+          return { ...t, streamingMessageId: null, messages };
+        });
       }
       set({ error: e });
     },
@@ -693,9 +722,17 @@ export const useSessionStore = create<SessionState>((set, get) => {
       }
       applyToTranscript(sid, (t) => {
         if (t.streamingMessageId == null) return t;
+        const completedAt = Date.now();
         const messages = t.messages
           .map((m) =>
-            m.id === t.streamingMessageId ? { ...m, complete: true } : m
+            m.id === t.streamingMessageId
+              ? {
+                  ...m,
+                  complete: true,
+                  stopReason: "cancelled",
+                  ...(m.startedAt != null ? { completedAt } : {}),
+                }
+              : m
           )
           .filter(
             (m) => !(m.id === t.streamingMessageId && m.parts.length === 0)

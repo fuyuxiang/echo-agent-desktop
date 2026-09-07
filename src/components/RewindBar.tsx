@@ -234,7 +234,7 @@ export function RewindBar({
             </div>
           )}
           {!loading && !loadError && points.length === 0 && (
-            <div className="rewind-bar__empty">无回溯点（会话刚创建）</div>
+            <div className="rewind-bar__empty">还没有回溯点，走几步再回头看。</div>
           )}
           <ul className="rewind-bar__timeline">
             {points.map((p) => (

@@ -45,6 +45,40 @@ describe("buildSharePayload", () => {
     const p = buildSharePayload(messages, "markdown", 'a<b>:"c/\\d?*e');
     expect(p.filename).not.toMatch(/[<>:"/\\|?*]/);
   });
+
+  it("默认只导出最终答复，执行过程需显式选择", () => {
+    const withProcess: ChatMessage[] = [{
+      id: "a-process",
+      role: "assistant",
+      complete: true,
+      parts: [
+        { kind: "thought", text: "不应默认导出的内部思考" },
+        {
+          kind: "tool_call",
+          toolCall: {
+            toolCallId: "t1",
+            title: "Run secret command",
+            kind: "bash",
+            status: "completed",
+            content: [],
+          },
+        },
+        { kind: "text", text: "用户需要的最终结论" },
+      ],
+    }];
+
+    const normal = buildSharePayload(withProcess, "markdown", "测试");
+    expect(normal.content).toContain("用户需要的最终结论");
+    expect(normal.content).not.toContain("内部思考");
+    expect(normal.content).not.toContain("Run secret command");
+
+    const detailed = buildSharePayload(withProcess, "markdown", "测试", {
+      includeProcess: true,
+    });
+    expect(detailed.content).toContain("### 执行过程");
+    expect(detailed.content).toContain("内部思考");
+    expect(detailed.content).toContain("Run secret command");
+  });
 });
 
 describe("buildShareHtml", () => {

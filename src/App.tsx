@@ -410,6 +410,14 @@ function Shell() {
           onUpdate: (u) => {
             const updateType = (u as { sessionUpdate?: string; type?: string }).sessionUpdate
               ?? (u as { type?: string }).type;
+            const updateSessionId = (u as { __sessionId?: string }).__sessionId;
+            if (
+              updateSessionId
+              && ["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update"].includes(updateType ?? "")
+              && findSessionSummary(updateSessionId)?.status === "pending"
+            ) {
+              sessionsStore.getState().upsert({ sessionId: updateSessionId, status: "working" });
+            }
             if (updateType === "available_commands_update") {
               setCommandRefreshKey((value) => value + 1);
             }
@@ -427,6 +435,11 @@ function Shell() {
           onPermission: (p) => {
             reportEvent("permission_request", "warn", { sessionId: p.sessionId });
             permissionStore.getState().request(p);
+            sessionsStore.getState().upsert({
+              sessionId: p.sessionId,
+              status: "pending",
+              updatedAt: new Date().toISOString(),
+            });
             void notificationAppend(
               "permission",
               p.options?.[0]?.title ?? "工具执行权限请求",
@@ -645,6 +658,11 @@ function Shell() {
           },
           onQuestion: (q) => {
             questionStore.getState().request(q);
+            sessionsStore.getState().upsert({
+              sessionId: q.sessionId,
+              status: "pending",
+              updatedAt: new Date().toISOString(),
+            });
           },
           onAgentDied: ({ reason }) => {
             console.error('[EchoAgent] Agent thread died:', reason);

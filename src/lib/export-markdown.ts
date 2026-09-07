@@ -5,11 +5,18 @@
  * 对齐 EchoAgent 的"导出对话"功能。
  */
 import type { ChatMessage } from "@/stores/session-store";
+import { partitionAssistantParts } from "@/lib/execution-process";
+
+export interface SessionExportOptions {
+  /** Include reasoning summaries and tool records. Defaults to final answers only. */
+  includeProcess?: boolean;
+}
 
 /** Build a Markdown document from a session's message list. */
 export function buildSessionMarkdown(
   messages: ChatMessage[],
   title?: string,
+  options: SessionExportOptions = {},
 ): string {
   const lines: string[] = [];
   lines.push(`# ${title || "对话导出"}`);
@@ -31,49 +38,57 @@ export function buildSessionMarkdown(
       lines.push(text);
       lines.push("");
     } else {
-      // Assistant message: text + thought + tool calls.
-      const textParts: string[] = [];
-      const thoughtParts: string[] = [];
-      const toolCalls: { title: string; status: string; kind: string }[] = [];
+      const groups = partitionAssistantParts(m.parts);
+      const fallbackTextParts = m.parts
+        .filter((part) => part.kind === "text")
+        .map((part) => part.text);
+      const responseText = (groups.responseParts.length > 0
+        ? groups.responseParts.map((part) => part.text)
+        : fallbackTextParts).filter((text) => text.trim());
+      const thoughtParts = groups.processParts
+        .filter((part) => part.kind === "thought")
+        .map((part) => part.text);
+      const processCommentary = groups.processParts
+        .filter((part) => part.kind === "text")
+        .map((part) => part.text);
+      const toolCalls = groups.processParts
+        .filter((part) => part.kind === "tool_call")
+        .map((part) => part.toolCall);
 
-      for (const p of m.parts) {
-        if (p.kind === "text") textParts.push(p.text);
-        else if (p.kind === "thought") thoughtParts.push(p.text);
-        else if (p.kind === "tool_call") {
-          toolCalls.push({
-            title: p.toolCall.title,
-            status: p.toolCall.status,
-            kind: p.toolCall.kind,
-          });
-        }
-      }
-
-      if (textParts.length === 0 && thoughtParts.length === 0 && toolCalls.length === 0) continue;
+      if (
+        responseText.length === 0
+        && (!options.includeProcess || groups.processParts.length === 0)
+      ) continue;
 
       lines.push("## 🤖 EchoAgent");
       lines.push("");
 
-      for (const t of thoughtParts) {
-        lines.push("> **深度思考**");
-        lines.push(">");
-        for (const line of t.split("\n")) {
-          lines.push(`> ${line}`);
-        }
+      if (options.includeProcess && groups.processParts.length > 0) {
+        lines.push("### 执行过程");
         lines.push("");
+        for (const commentary of processCommentary) {
+          for (const line of commentary.split("\n")) lines.push(`> ${line}`);
+          lines.push("");
+        }
+        for (const thought of thoughtParts) {
+          lines.push("> **思考摘要**");
+          lines.push(">");
+          for (const line of thought.split("\n")) lines.push(`> ${line}`);
+          lines.push("");
+        }
+        if (toolCalls.length > 0) {
+          lines.push("**操作记录：**");
+          lines.push("");
+          for (const tool of toolCalls) {
+            const icon = tool.status === "completed" ? "✅" : tool.status === "failed" ? "❌" : "⏳";
+            lines.push(`- ${icon} \`${tool.kind}\` — ${tool.title}`);
+          }
+          lines.push("");
+        }
       }
 
-      if (textParts.length > 0) {
-        lines.push(textParts.join("\n\n"));
-        lines.push("");
-      }
-
-      if (toolCalls.length > 0) {
-        lines.push("**工具调用：**");
-        lines.push("");
-        for (const tc of toolCalls) {
-          const icon = tc.status === "completed" ? "✅" : tc.status === "failed" ? "❌" : "⏳";
-          lines.push(`- ${icon} \`${tc.kind}\` — ${tc.title}`);
-        }
+      if (responseText.length > 0) {
+        lines.push(responseText.join("\n\n"));
         lines.push("");
       }
     }

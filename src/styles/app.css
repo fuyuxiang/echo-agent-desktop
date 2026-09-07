@@ -1265,6 +1265,33 @@
   font-size: 10px;
   line-height: 1.45;
 }
+.share-menu__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--echo-text-strong);
+  font-size: 12px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+.share-menu__option:hover {
+  background: var(--echo-bg-tertiary);
+}
+.share-menu__option input {
+  margin: 2px 0 0;
+  accent-color: var(--echo-brand);
+}
+.share-menu__option span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.share-menu__option small {
+  color: var(--echo-text-light);
+  font-size: 10px;
+}
 .share-menu__item {
   display: block;
   width: 100%;
@@ -1820,48 +1847,6 @@
   border-radius: 3px;
   padding: 0 4px;
 }
-/* 思考块：轻量样式 —— 无灰底，仅一行灰标题(带三角)，展开后内容用左侧细竖线收束，
-   对齐 EchoAgent 的「深度思考」观感。 */
-.msg__thought {
-  margin: 0 0 10px;
-  color: var(--echo-text-weak);
-}
-.msg__thought > summary {
-  cursor: pointer;
-  user-select: none;
-  list-style: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 0;
-  font-size: 13px;
-  color: var(--echo-text-weak);
-}
-.msg__thought > summary::-webkit-details-marker {
-  display: none;
-}
-/* 三角指示器：展开朝下，折叠朝右 */
-.msg__thought > summary::after {
-  content: "";
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid currentColor;
-  opacity: 0.55;
-  transition: transform 0.15s ease;
-}
-.msg__thought:not([open]) > summary::after {
-  transform: rotate(-90deg);
-}
-.msg__thought-body {
-  margin-top: 6px;
-  padding-left: 12px;
-  border-left: 2px solid var(--echo-border-subtle, rgba(127, 127, 127, 0.35));
-  max-height: 240px;
-  overflow-y: auto;
-  font-size: 13px;
-  line-height: 22px;
-  color: var(--echo-text-weak);
-}
 .msg__caret {
   display: inline-block;
   animation: blink 1s steps(2, start) infinite;
@@ -1872,18 +1857,58 @@
     opacity: 0;
   }
 }
-/* 「等待中」loading 行：扫光主文案 + 分隔符 + 轮播淡入 tip，
-   对齐 EchoAgent 的 pending-assistant 观感（avatar 行由其 header 渲染）。 */
+/* 「等待中」loading 行：只展示可验证的请求阶段与已等待时间。 */
 .msg__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  line-height: 25px;
+}
+.msg__loading-status {
   display: flex;
   align-items: baseline;
   min-width: 0;
-  line-height: 25px;
+  max-width: 100%;
 }
 .msg__loading-main {
   flex: 0 0 auto;
   font-size: 14px;
   font-weight: 500;
+}
+.msg__loading-context {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  margin-left: 8px;
+  color: var(--echo-text-weak);
+  font-size: 12px;
+}
+.msg__loading-background-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg__loading-tip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  margin-top: 2px;
+  color: var(--echo-text-tertiary);
+  font-size: 12px;
+  line-height: 20px;
+}
+.msg__loading-tip > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: companionCopyFade 0.35s ease;
+}
+@keyframes companionCopyFade {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 /* 文字扫光：横向渐变裁剪到文字，亮带随 background-position 左右扫过，
    形成「文字在 loading」的观感。移植自 echo-chat-ui 的 shining-text mixin
@@ -1915,42 +1940,180 @@
     background-position: -200% 0;
   }
 }
-/* 右侧轮播 tip：更浅的灰，切换时淡入上浮。 */
-.msg__loading-tip {
-  display: inline-flex;
-  align-items: baseline;
-  flex: 1 1 auto;
+/* One semantic process group per assistant turn. The center column stays
+   scannable; detailed command/output/diff content remains in the right panel. */
+.execution-process {
+  width: 100%;
+  max-width: 100%;
+  margin: 2px 0 14px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--echo-bg-secondary) 55%, var(--echo-bg-primary));
   overflow: hidden;
-  margin-left: 8px;
+  box-sizing: border-box;
+}
+.execution-process--running {
+  border-color: color-mix(in srgb, var(--echo-brand) 35%, var(--echo-border-default));
+}
+.execution-process--attention {
+  border-color: color-mix(in srgb, var(--echo-status-error, #e5484d) 38%, var(--echo-border-default));
+}
+.execution-process--stopped {
+  border-color: color-mix(in srgb, var(--echo-text-tertiary) 45%, var(--echo-border-default));
+}
+.execution-process__header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 42px;
+  margin: 0;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.execution-process__header:hover {
+  background: color-mix(in srgb, var(--echo-palette-black-100) 4%, transparent);
+}
+.execution-process__header:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--echo-brand) 55%, transparent);
+  outline-offset: -2px;
+}
+.execution-process__status {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--echo-text-tertiary);
+}
+.execution-process--running .execution-process__status {
+  background: var(--echo-brand);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--echo-brand) 12%, transparent);
+  animation: processStatusPulse 1.4s ease-in-out infinite;
+}
+.execution-process--complete .execution-process__status {
+  background: var(--echo-status-success, #1a7f37);
+}
+.execution-process--attention .execution-process__status {
+  background: var(--echo-status-error, #e5484d);
+}
+.execution-process--stopped .execution-process__status {
+  background: var(--echo-text-tertiary);
+}
+@keyframes processStatusPulse {
+  50% { opacity: 0.5; }
+}
+.execution-process__heading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
   min-width: 0;
-  color: var(--echo-text-weak, #999);
 }
-.msg__loading-sep {
-  flex: 0 0 auto;
-  margin: 0 8px;
-  opacity: 0.6;
-}
-.msg__loading-tip-text {
+.execution-process__title {
   flex: 0 1 auto;
   min-width: 0;
-  font-size: 13px;
-  opacity: 0.85;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  animation: echo-tip-fade-in 0.45s ease;
+  color: var(--echo-text-strong);
+  font-size: 13px;
+  font-weight: 500;
 }
-@keyframes echo-tip-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(3px);
-  }
-  to {
-    opacity: 0.85;
-    transform: translateY(0);
-  }
+.execution-process__meta {
+  flex: 0 1000 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--echo-text-tertiary);
+  font-size: 11px;
 }
-
+.execution-process__chevron {
+  flex: none;
+  color: var(--echo-text-tertiary);
+  font-size: 20px;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform 0.15s ease;
+}
+.execution-process__chevron--open {
+  transform: rotate(90deg);
+}
+.execution-process__body {
+  padding: 4px 8px 8px;
+  border-top: 1px solid var(--echo-border-subtle, var(--echo-border-default));
+}
+.execution-process__commentary {
+  padding: 6px 4px 2px;
+  color: var(--echo-text-medium);
+  font-size: 12px;
+  line-height: 20px;
+}
+.execution-process__commentary .markdown-body > :last-child,
+.execution-process__reasoning-body .markdown-body > :last-child {
+  margin-bottom: 0;
+}
+.execution-process .toolcall {
+  min-height: 34px;
+  height: auto;
+  margin: 2px 0;
+  border-color: transparent;
+  background: transparent;
+}
+.execution-process .toolcall:hover {
+  border-color: var(--echo-border-default);
+  background: var(--echo-bg-primary);
+}
+.execution-process__reasoning {
+  margin-top: 4px;
+  padding: 0 4px;
+  color: var(--echo-text-weak);
+  font-size: 12px;
+}
+.execution-process__reasoning > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.execution-process__reasoning > summary::-webkit-details-marker {
+  display: none;
+}
+.execution-process__reasoning > summary::before {
+  content: "›";
+  margin-right: 6px;
+  font-size: 16px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+.execution-process__reasoning[open] > summary::before {
+  transform: rotate(90deg);
+}
+.execution-process__reasoning-body {
+  margin: 2px 0 6px 6px;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--echo-border-subtle, var(--echo-border-default));
+  color: var(--echo-text-weak);
+  font-size: 12px;
+  line-height: 20px;
+}
+.execution-process__empty,
+.execution-process__hint {
+  margin: 5px 4px;
+  color: var(--echo-text-tertiary);
+  font-size: 11px;
+  line-height: 18px;
+}
+.execution-process__hint {
+  padding-top: 5px;
+  border-top: 1px solid var(--echo-border-subtle, var(--echo-border-default));
+}
 /* ---------- markdown body (EchoAgent-aligned) ---------- */
 :root {
   --md-hljs-comment: #008000;
@@ -6135,7 +6298,8 @@ button.diff__path {
   display: inline-flex;
 }
 .sidebar__conv:hover .sidebar__conv-time,
-.sidebar__conv:hover .sidebar__conv-pin {
+.sidebar__conv:hover .sidebar__conv-pin,
+.sidebar__conv:hover .sidebar__conv-status {
   display: none;
 }
 .sidebar__conv-action {
@@ -6625,6 +6789,50 @@ button.diff__path {
   margin-left: 6px;
   font-size: 11px;
   color: var(--echo-text-tertiary);
+}
+.sidebar__conv-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  margin-left: 6px;
+  color: var(--echo-text-tertiary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.sidebar__conv-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.sidebar__conv-status--working,
+.sidebar__conv-status--planning {
+  color: var(--echo-brand);
+}
+.sidebar__conv-status--working .sidebar__conv-status-dot {
+  animation: processStatusPulse 1.4s ease-in-out infinite;
+}
+.sidebar__conv-status--pending {
+  color: #b56a00;
+}
+.sidebar__conv-status--failed {
+  color: var(--echo-status-error, #e5484d);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .echo-shining-text,
+  .toolcall__status-mark--in_progress,
+  .execution-process--running .execution-process__status,
+  .sidebar__conv-status--working .sidebar__conv-status-dot,
+  .msg__loading-tip > span:last-child,
+  .msg__caret {
+    animation: none;
+  }
+  .execution-process__chevron,
+  .execution-process__reasoning > summary::before {
+    transition: none;
+  }
 }
 
 /* Project nodes in 空间 section — expandable with child conversations. */

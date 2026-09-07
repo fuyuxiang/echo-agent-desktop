@@ -77,6 +77,23 @@ describe("Sidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("s1", "");
   });
 
+  it("在侧栏直接展示运行、待处理与失败状态", () => {
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "running", title: "后台分析", cwd: "", status: "working" },
+      { sessionId: "pending", title: "等待确认", cwd: "", status: "pending" },
+      { sessionId: "failed", title: "失败任务", cwd: "", status: "failed" },
+      { sessionId: "done", title: "普通历史", cwd: "", status: "completed" },
+    ]);
+
+    render(<Sidebar {...base} />);
+
+    expect(screen.getByText("运行中")).toBeInTheDocument();
+    expect(screen.getByText("待处理")).toBeInTheDocument();
+    expect(screen.getByText("失败")).toBeInTheDocument();
+    expect(screen.getByText("普通历史").closest(".sidebar__conv"))
+      .not.toHaveTextContent("已完成");
+  });
+
   it("搜索按钮触发 onOpenSearch,设置按钮触发 onOpenSettings", () => {
     const onOpenSearch = vi.fn();
     const onOpenSettings = vi.fn();

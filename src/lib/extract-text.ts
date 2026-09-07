@@ -8,17 +8,20 @@
 import type { ChatMessage, ToolCallView } from "@/stores/session-store";
 
 /**
- * 从一条消息的全部 parts 拼出纯文本(供搜索索引)。
+ * 从一条消息的可见 parts 拼出纯文本(供搜索索引)。
  *  - text:取原文
- *  - thought:取原文(思考链同样可被检索)
+ *  - thought:默认不索引，避免搜索命中折叠的内部思考；可显式开启
  *  - tool_call:取 title + 命令 + 输出(截断)
  */
-export function extractPlainText(message: ChatMessage): string {
+export function extractPlainText(
+  message: ChatMessage,
+  options: { includeThoughts?: boolean } = {},
+): string {
   const segs: string[] = [];
   for (const p of message.parts) {
     if (p.kind === "text") {
       segs.push(p.text);
-    } else if (p.kind === "thought") {
+    } else if (p.kind === "thought" && options.includeThoughts) {
       segs.push(p.text);
     } else if (p.kind === "tool_call") {
       segs.push(extractToolCallText(p.toolCall));

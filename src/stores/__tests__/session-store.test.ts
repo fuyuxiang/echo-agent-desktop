@@ -397,6 +397,9 @@ describe("session-store transcripts", () => {
     // 已流出的文本保留,且该 assistant 消息被标记 complete。
     expect(textOf(1)).toBe("partial");
     expect(useSessionStore.getState().messages[1].complete).toBe(true);
+    expect(useSessionStore.getState().messages[1].startedAt).toEqual(expect.any(Number));
+    expect(useSessionStore.getState().messages[1].completedAt).toEqual(expect.any(Number));
+    expect(useSessionStore.getState().messages[1].stopReason).toBe("cancelled");
   });
 
   it("stopStreaming 按 sessionId 终止后台会话，不污染当前会话", () => {

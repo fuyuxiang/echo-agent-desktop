@@ -63,6 +63,25 @@ function relativeTime(iso: string): string {
   return `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
+const ACTIVE_STATUS_META: Partial<Record<SessionStatus, { label: string; className: string }>> = {
+  working: { label: "运行中", className: "working" },
+  planning: { label: "规划中", className: "planning" },
+  pending: { label: "待处理", className: "pending" },
+  failed: { label: "失败", className: "failed" },
+};
+
+/** Completed is the quiet default; only actionable/live states consume row width. */
+function SessionStatusBadge({ status }: { status?: SessionStatus }) {
+  const meta = status ? ACTIVE_STATUS_META[status] : undefined;
+  if (!meta) return null;
+  return (
+    <span className={`sidebar__conv-status sidebar__conv-status--${meta.className}`}>
+      <span className="sidebar__conv-status-dot" aria-hidden="true" />
+      {meta.label}
+    </span>
+  );
+}
+
 /** Pinned entries first; within a pin tier, most-recently-active first
  *  (by `updatedAt`) so a session you just chatted in rises to the top and its
  *  relative-time tail stays honest. Insertion order breaks remaining ties. */
@@ -892,6 +911,7 @@ export function Sidebar({
       >
         <span className="sidebar__conv-title">{s.title || "未命名会话"}</span>
         {s.pinned && <PinFilledIcon size="sm" className="sidebar__conv-pin" />}
+        <SessionStatusBadge status={s.status} />
         {s.updatedAt && <span className="sidebar__conv-time">{relativeTime(s.updatedAt)}</span>}
       </button>
       <button
@@ -927,6 +947,10 @@ export function Sidebar({
   const taskSessions = useMemo(
     () => independent.filter((session) => !projectSessionIds.has(session.sessionId)),
     [independent, projectSessionIds],
+  );
+  const sessionSummaryById = useMemo(
+    () => new Map(allSessions.map((session) => [session.sessionId, session])),
+    [allSessions],
   );
 
   // Apply status + date filters only to standalone tasks. Project conversations
@@ -1081,7 +1105,9 @@ export function Sidebar({
               <div className="sidebar__empty sidebar__empty--filter">无匹配筛选条件的任务</div>
             )}
             {filteredIndependent.length === 0 && scopedIndependentCount === 0 && !sessionsLoading && (
-              <div className="sidebar__empty">{filterArchived ? "暂无已归档任务" : "暂无任务"}</div>
+              <div className="sidebar__empty">
+                {filterArchived ? "归档里还空着" : "这里还没有任务，去完成第一件事吧"}
+              </div>
             )}
             {sortPinnedFirst(filteredIndependent).map(renderConv)}
           </div>
@@ -1104,7 +1130,7 @@ export function Sidebar({
         {projectsOpen && (
           <div id="sidebar-project-list" className="sidebar__group">
             {projects.length === 0 && (
-              <div className="sidebar__empty">暂无项目</div>
+              <div className="sidebar__empty">还没有项目，给下一件大事安个家吧</div>
             )}
             {projects.map((proj) => {
               const open = !!expandedProjects[proj.id];
@@ -1165,7 +1191,9 @@ export function Sidebar({
                   {open && (
                     <div className="sidebar__children">
                       {projectConversations.length === 0 && (
-                        <div className="sidebar__empty">{filterArchived ? "暂无已归档对话" : "暂无对话"}</div>
+                        <div className="sidebar__empty">
+                          {filterArchived ? "归档里还没有对话" : "还没有对话，从项目页开启第一轮吧"}
+                        </div>
                       )}
                       {projectConversations.map((conv) => (
                         <button
@@ -1178,6 +1206,7 @@ export function Sidebar({
                           title={conv.title}
                         >
                           <span className="sidebar__conv-title">{conv.title}</span>
+                          <SessionStatusBadge status={sessionSummaryById.get(conv.sessionId)?.status} />
                           <span className="sidebar__conv-time">{relativeTime(conv.createdAt)}</span>
                         </button>
                       ))}
