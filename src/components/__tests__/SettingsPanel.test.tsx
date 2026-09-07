@@ -234,7 +234,7 @@ describe("SettingsPanel", () => {
       </ThemeProvider>,
     );
 
-    const autoFlush = await screen.findByRole("checkbox", { name: "自动落盘" });
+    const autoFlush = await screen.findByRole("checkbox", { name: "自动提取" });
     expect(autoFlush).toBeChecked();
     fireEvent.click(autoFlush);
 

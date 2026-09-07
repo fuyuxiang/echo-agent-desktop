@@ -794,10 +794,13 @@ export function Sidebar({
     const session = allSessions.find(s => s.sessionId === sessionId);
     const cwd = session?.cwd;
     try {
-      await agentDeleteSession(sessionId, cwd);
+      const result = await agentDeleteSession(sessionId, cwd);
       removeSession(sessionId, cwd);
       useProjectsStore.getState().removeSessionReferences(sessionId);
       onSessionDeleted?.(sessionId);
+      if (result?.memoryCleanupWarning) {
+        onToast?.(`会话已删除，但自动摘要清理失败：${result.memoryCleanupWarning}`);
+      }
     } catch (e) {
       onToast?.(`删除失败：${String(e).replace(/^Error:\s*/, "")}`);
     }

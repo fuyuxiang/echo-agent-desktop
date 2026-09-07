@@ -234,8 +234,19 @@ export async function agentRenameSession(
  * Removes the on-disk session directory; the caller should drop the sidebar
  * entry on success.
  */
-export async function agentDeleteSession(sessionId: string, cwd?: string): Promise<void> {
-  await invoke<void>("agent_delete_session", { sessionId, cwd: cwd ?? null });
+export interface SessionDeleteResult {
+  memorySummariesDeleted: number;
+  memoryCleanupWarning?: string | null;
+}
+
+export async function agentDeleteSession(
+  sessionId: string,
+  cwd?: string,
+): Promise<SessionDeleteResult> {
+  return invoke<SessionDeleteResult>("agent_delete_session", {
+    sessionId,
+    cwd: cwd ?? null,
+  });
 }
 
 /**
@@ -990,6 +1001,11 @@ export async function memoryDelete(
   });
 }
 
+/** Delete generated session summaries, archives and index entries for a workspace. */
+export async function memoryClearSessionSummaries(cwd: string): Promise<number> {
+  return invoke<number>("memory_clear_session_summaries", { cwd });
+}
+
 /** Rewrite an editor buffer using the active session model; does not save it. */
 export async function memoryRewrite(
   sessionId: string,
@@ -1004,7 +1020,7 @@ export async function memoryFlush(sessionId: string): Promise<void> {
   await invoke<void>("memory_flush", { sessionId });
 }
 
-/** Consolidate session logs into long-term memory via the Runtime's `/dream`. */
+/** Consolidate generated session summaries into long-term memory via `/dream`. */
 export async function memoryDream(sessionId: string): Promise<void> {
   await invoke<void>("memory_dream", { sessionId });
 }
