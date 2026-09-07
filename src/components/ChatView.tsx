@@ -280,7 +280,12 @@ export function ChatView({
     [cwd, sessionId, onToast],
   );
 
-  const { scrollRef, contentRef } = useStickToBottom({
+  const {
+    scrollRef,
+    contentRef,
+    following,
+    scrollToBottom,
+  } = useStickToBottom({
     contentVersion: messages,
     streaming,
     sessionId,
@@ -507,66 +512,80 @@ export function ChatView({
           onActiveChange={setFindCurrent}
         />
 
-        <div className="chatview__scroll" ref={scrollRef}>
-          <div className="chatview__inner" ref={contentRef}>
-            {fileChangesOpen && (
-              <FileChangesPanel messages={messages} />
-            )}
-            {subagentsOpen && (
-              <SubagentPanel messages={messages} />
-            )}
-            {teamsOpen && (
-              <TeamStatusView messages={messages} />
-            )}
-            {buildTimeline(messages).map((node) => {
-              // 时间线分隔符(对齐 EchoAgent message-timeline):日期/模型切换分隔。
-              // 当前 ChatMessage 无 modelId/createdAt,无分隔符时仅渲染消息节点。
-              if (node.kind === "date-divider") {
+        <div className="chatview__scroll-shell">
+          <div className="chatview__scroll" ref={scrollRef}>
+            <div className="chatview__inner" ref={contentRef}>
+              {fileChangesOpen && (
+                <FileChangesPanel messages={messages} />
+              )}
+              {subagentsOpen && (
+                <SubagentPanel messages={messages} />
+              )}
+              {teamsOpen && (
+                <TeamStatusView messages={messages} />
+              )}
+              {buildTimeline(messages).map((node) => {
+                // 时间线分隔符(对齐 EchoAgent message-timeline):日期/模型切换分隔。
+                // 当前 ChatMessage 无 modelId/createdAt,无分隔符时仅渲染消息节点。
+                if (node.kind === "date-divider") {
+                  return (
+                    <div key={node.key} className="timeline-divider timeline-divider--date">
+                      {node.label}
+                    </div>
+                  );
+                }
+                if (node.kind === "model-divider") {
+                  return (
+                    <div key={node.key} className="timeline-divider timeline-divider--model">
+                      {node.label}
+                    </div>
+                  );
+                }
+                const m = node.message;
+                const idx = node.index;
+                // 重试只对最后一条 assistant 消息开放（重试中间消息没有语义）。
+                const isLastAssistant =
+                  m.role === "assistant" && idx === messages.length - 1;
+                // 会话内查找:命中容器高亮(当前命中更深一层)。
+                const findCls = findOpen && isFindHit(findHits, m.id)
+                  ? m.id === findCurrent
+                    ? " msg-wrap--find-current"
+                    : " msg-wrap--find-hit"
+                  : "";
                 return (
-                  <div key={node.key} className="timeline-divider timeline-divider--date">
-                    {node.label}
+                  <div key={m.id} className={"msg-wrap" + findCls} data-msg-id={m.id}>
+                    <MessageItem
+                      message={m}
+                      streaming={streaming && m.id === streamingMessageId}
+                      markdownConfig={markdownConfig}
+                      cwd={cwd}
+                      sessionId={sessionId ?? undefined}
+                      onToast={onToast}
+                      onOpenTool={handleOpenTool}
+                      onEditResend={handleEditResend}
+                      onRetry={
+                        isLastAssistant && !streaming && m.complete
+                          ? handleRetry
+                          : undefined
+                      }
+                    />
                   </div>
                 );
-              }
-              if (node.kind === "model-divider") {
-                return (
-                  <div key={node.key} className="timeline-divider timeline-divider--model">
-                    {node.label}
-                  </div>
-                );
-              }
-              const m = node.message;
-              const idx = node.index;
-              // 重试只对最后一条 assistant 消息开放（重试中间消息没有语义）。
-              const isLastAssistant =
-                m.role === "assistant" && idx === messages.length - 1;
-              // 会话内查找:命中容器高亮(当前命中更深一层)。
-              const findCls = findOpen && isFindHit(findHits, m.id)
-                ? m.id === findCurrent
-                  ? " msg-wrap--find-current"
-                  : " msg-wrap--find-hit"
-                : "";
-              return (
-                <div key={m.id} className={"msg-wrap" + findCls} data-msg-id={m.id}>
-                  <MessageItem
-                    message={m}
-                    streaming={streaming && m.id === streamingMessageId}
-                    markdownConfig={markdownConfig}
-                    cwd={cwd}
-                    sessionId={sessionId ?? undefined}
-                    onToast={onToast}
-                    onOpenTool={handleOpenTool}
-                    onEditResend={handleEditResend}
-                    onRetry={
-                      isLastAssistant && !streaming && m.complete
-                        ? handleRetry
-                        : undefined
-                    }
-                  />
-                </div>
-              );
-            })}
+              })}
+            </div>
           </div>
+          {streaming && !following && (
+            <button
+              type="button"
+              className="chatview__jump-latest"
+              onClick={scrollToBottom}
+              aria-label="回到最新消息并恢复自动跟随"
+              title="回到最新消息并恢复自动跟随"
+            >
+              <span aria-hidden="true">↓</span>
+              回到最新
+            </button>
+          )}
         </div>
         <div className="chatview__footer">
           {/* Inline permission / question cards: session-scoped, never block sidebar. */}

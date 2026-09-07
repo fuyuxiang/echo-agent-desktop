@@ -60,16 +60,31 @@ function Harness({
   streaming?: boolean;
   sessionId?: string;
 }) {
-  const { scrollRef, contentRef } = useStickToBottom({
+  const {
+    scrollRef,
+    contentRef,
+    following,
+    pauseFollowing,
+    scrollToBottom,
+  } = useStickToBottom({
     contentVersion: version,
     streaming,
     sessionId,
   });
 
   return (
-    <div ref={scrollRef} data-testid="scroll">
-      <div ref={contentRef} data-testid="content" />
-    </div>
+    <>
+      <div ref={scrollRef} data-testid="scroll">
+        <div ref={contentRef} data-testid="content">
+          <button type="button" data-chat-copy="true" data-testid="copy-action">
+            copy
+          </button>
+        </div>
+      </div>
+      <button type="button" data-testid="pause" onClick={pauseFollowing}>pause</button>
+      <button type="button" data-testid="resume" onClick={scrollToBottom}>resume</button>
+      <output data-testid="following">{String(following)}</output>
+    </>
   );
 }
 
@@ -202,6 +217,76 @@ describe("useStickToBottom", () => {
     act(flushAnimationFrames);
 
     expect(scroller.scrollTop).toBe(592);
+  });
+
+  it("copying from the transcript pauses following before streamed content grows", () => {
+    const { getByTestId, rerender } = render(<Harness version={1} streaming />);
+    const scroller = getByTestId("scroll");
+    setScrollMetrics(scroller, {
+      scrollHeight: 1_000,
+      clientHeight: 400,
+      scrollTop: 600,
+    });
+
+    fireEvent.pointerDown(getByTestId("copy-action"));
+    expect(getByTestId("following")).toHaveTextContent("false");
+
+    Object.defineProperty(scroller, "scrollHeight", {
+      configurable: true,
+      value: 1_200,
+    });
+    act(() => resizeObservers[0].trigger());
+    rerender(<Harness version={2} streaming />);
+    act(flushAnimationFrames);
+
+    expect(scroller.scrollTop).toBe(600);
+    expect(getByTestId("following")).toHaveTextContent("false");
+
+    fireEvent.click(getByTestId("resume"));
+    expect(scroller.scrollTop).toBe(800);
+    expect(getByTestId("following")).toHaveTextContent("true");
+  });
+
+  it("keyboard or context-menu copy of selected transcript text pauses following", () => {
+    const { getByTestId } = render(<Harness version={1} streaming />);
+    const scroller = getByTestId("scroll");
+    setScrollMetrics(scroller, {
+      scrollHeight: 1_000,
+      clientHeight: 400,
+      scrollTop: 600,
+    });
+
+    fireEvent.copy(getByTestId("content"));
+
+    expect(getByTestId("following")).toHaveTextContent("false");
+  });
+
+  it("keyboard activation of a transcript copy button pauses following", () => {
+    const { getByTestId } = render(<Harness version={1} streaming />);
+    const scroller = getByTestId("scroll");
+    setScrollMetrics(scroller, {
+      scrollHeight: 1_000,
+      clientHeight: 400,
+      scrollTop: 600,
+    });
+
+    fireEvent.click(getByTestId("copy-action"));
+
+    expect(getByTestId("following")).toHaveTextContent("false");
+  });
+
+  it("copying a completed conversation does not change future follow intent", () => {
+    const { getByTestId } = render(<Harness version={1} streaming={false} />);
+    const scroller = getByTestId("scroll");
+    setScrollMetrics(scroller, {
+      scrollHeight: 1_000,
+      clientHeight: 400,
+      scrollTop: 600,
+    });
+
+    fireEvent.pointerDown(getByTestId("copy-action"));
+
+    expect(getByTestId("following")).toHaveTextContent("true");
   });
 
   it("resumes following when the user returns near the bottom", () => {

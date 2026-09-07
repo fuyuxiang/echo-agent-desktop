@@ -13,6 +13,7 @@ import {
   isImageAttachment,
   stripInjectedUserContext,
 } from "@/lib/user-message";
+import { copyShareText } from "@/lib/share";
 const logoMarkUrl = "/app-icon.png";
 import {
   createWebSpeechTtsProvider,
@@ -88,22 +89,44 @@ export function MessageItem({
 }) {
   const { theme } = useTheme();
   const [speaking, setSpeaking] = useState(false);
+  const [copiedKind, setCopiedKind] = useState<"plain" | "markdown" | null>(null);
   const stopSpeakingRef = useRef<(() => void) | null>(null);
+  const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => () => stopSpeakingRef.current?.(), []);
+  useEffect(() => () => {
+    stopSpeakingRef.current?.();
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+  }, []);
+
+  const markCopied = useCallback((kind: "plain" | "markdown") => {
+    setCopiedKind(kind);
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+    copyResetTimerRef.current = setTimeout(() => {
+      copyResetTimerRef.current = null;
+      setCopiedKind(null);
+    }, 1600);
+  }, []);
 
   const copyText = useCallback(
-    (text: string, label: string) => {
-      if (navigator.clipboard?.writeText) {
-        navigator.clipboard
-          .writeText(text)
-          .then(() => onToast?.(label))
-          .catch(() => onToast?.("复制失败"));
-      } else {
-        onToast?.("当前环境不支持剪贴板");
+    async (text: string, kind: "plain" | "markdown") => {
+      try {
+        let copied: boolean;
+        try {
+          copied = await copyShareText(text);
+        } catch {
+          // Desktop webviews can expose Clipboard API while denying a write.
+          // Retry with the DOM fallback before surfacing an error.
+          copied = await copyShareText(text, { clipboard: null });
+        }
+        if (!copied) throw new Error("clipboard unavailable");
+        // Success feedback stays on the button. Avoid a global Shell update
+        // that re-renders the entire transcript and overlays the composer.
+        markCopied(kind);
+      } catch {
+        onToast?.("复制失败");
       }
     },
-    [onToast],
+    [markCopied, onToast],
   );
 
   /** Extract plain text from all text parts (for copy), stripping hidden persona. */
@@ -198,11 +221,14 @@ export function MessageItem({
           <div className="msg__actions">
             <button
               type="button"
-              className="msg__action-btn"
-              onClick={() => copyText(plainText, "已复制")}
-              title="复制"
+              className="msg__action-btn msg__action-btn--copy"
+              data-chat-copy="true"
+              onClick={() => void copyText(plainText, "plain")}
+              title={copiedKind === "plain" ? "已复制" : "复制"}
+              aria-label={copiedKind === "plain" ? "已复制" : "复制"}
+              aria-live="polite"
             >
-              复制
+              {copiedKind === "plain" ? "已复制" : "复制"}
             </button>
             {onEditResend && (
               <button
@@ -233,19 +259,25 @@ export function MessageItem({
             <div className="msg__actions msg__actions--inline">
               <button
                 type="button"
-                className="msg__action-btn"
-                onClick={() => copyText(plainText, "已复制")}
-                title="复制纯文本"
+                className="msg__action-btn msg__action-btn--copy"
+                data-chat-copy="true"
+                onClick={() => void copyText(plainText, "plain")}
+                title={copiedKind === "plain" ? "已复制" : "复制纯文本"}
+                aria-label={copiedKind === "plain" ? "已复制" : "复制纯文本"}
+                aria-live="polite"
               >
-                复制
+                {copiedKind === "plain" ? "已复制" : "复制"}
               </button>
               <button
                 type="button"
-                className="msg__action-btn"
-                onClick={() => copyText(markdownText, "已复制 Markdown")}
-                title="复制 Markdown 源码"
+                className="msg__action-btn msg__action-btn--copy"
+                data-chat-copy="true"
+                onClick={() => void copyText(markdownText, "markdown")}
+                title={copiedKind === "markdown" ? "已复制 Markdown" : "复制 Markdown 源码"}
+                aria-label={copiedKind === "markdown" ? "已复制 Markdown" : "复制 Markdown 源码"}
+                aria-live="polite"
               >
-                MD
+                {copiedKind === "markdown" ? "已复制" : "MD"}
               </button>
               <button
                 type="button"

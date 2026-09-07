@@ -70,6 +70,7 @@ export const CodeBlockActions = memo(function CodeBlockActions({
       <button
         type="button"
         className="md-code-action"
+        data-chat-copy="true"
         onClick={handleCopy}
         aria-label={copied ? "已复制" : "复制"}
         title={copied ? "已复制" : "复制"}

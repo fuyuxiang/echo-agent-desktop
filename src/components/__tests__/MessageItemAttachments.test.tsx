@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ThemeProvider } from "../ThemeProvider";
 import { MessageItem } from "../MessageItem";
@@ -9,6 +9,7 @@ const { openLocalPath, attachmentThumbnail } = vi.hoisted(() => ({
   attachmentThumbnail: vi.fn().mockResolvedValue("jpeg-base64"),
 }));
 vi.mock("@/lib/agent-client", () => ({ openLocalPath, attachmentThumbnail }));
+const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
 const message: ChatMessage = {
   id: "u1",
@@ -35,6 +36,14 @@ function renderMessage(onEditResend = vi.fn()) {
 }
 
 describe("MessageItem user attachments", () => {
+  afterEach(() => {
+    if (originalClipboardDescriptor) {
+      Object.defineProperty(navigator, "clipboard", originalClipboardDescriptor);
+    } else {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
   it("在用户气泡中展示文档名和类型", () => {
     renderMessage();
     expect(screen.getByText("AI数据集平台-数据回流方案.docx")).toBeInTheDocument();
@@ -103,5 +112,34 @@ describe("MessageItem user attachments", () => {
     expect(screen.getByText("WEBP 图片")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "打开附件 missing.webp" })).toBeEnabled();
     expect(document.querySelector(".msg__attachment-thumbnail")).toBeNull();
+  });
+
+  it("复制成功在原按钮反馈，不触发全局 Toast", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const onToast = vi.fn();
+    render(
+      <ThemeProvider>
+        <MessageItem
+          message={message}
+          streaming={false}
+          cwd="/tmp"
+          onToast={onToast}
+        />
+      </ThemeProvider>,
+    );
+
+    const copyButton = screen.getByRole("button", { name: "复制" });
+    expect(copyButton).toHaveAttribute("data-chat-copy", "true");
+    fireEvent.click(copyButton);
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("请优化这份方案");
+      expect(screen.getByRole("button", { name: "已复制" })).toBeInTheDocument();
+    });
+    expect(onToast).not.toHaveBeenCalled();
   });
 });

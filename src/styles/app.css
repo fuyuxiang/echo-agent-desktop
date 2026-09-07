@@ -290,10 +290,44 @@
   min-width: 0;
   position: relative;
 }
-.chatview__scroll {
+.chatview__scroll-shell {
   flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.chatview__scroll {
+  height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
+}
+.chatview__jump-latest {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 999px;
+  background: var(--echo-bg-primary);
+  color: var(--echo-text-medium);
+  box-shadow: var(--echo-shadow-md);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  transform: translateX(-50%);
+}
+.chatview__jump-latest:hover {
+  border-color: var(--echo-brand);
+  color: var(--echo-brand);
+}
+.chatview__jump-latest:focus-visible {
+  outline: 2px solid var(--echo-brand);
+  outline-offset: 2px;
 }
 .chatview__inner {
   max-width: 800px;
@@ -553,7 +587,8 @@
   transition: opacity 0.15s ease;
   justify-content: flex-end;
 }
-.msg:hover .msg__actions {
+.msg:hover .msg__actions,
+.msg:focus-within .msg__actions {
   opacity: 1;
 }
 .msg__actions--inline {
@@ -576,6 +611,10 @@
 }
 .msg__action-btn:active {
   transform: scale(0.96);
+}
+.msg__action-btn--copy {
+  min-width: 50px;
+  text-align: center;
 }
 /* 消息反馈(对齐 EchoAgent message-feedback):赞/踩,选中态高亮 */
 .msg__feedback {
@@ -4520,6 +4559,7 @@ button.diff__path {
   font-size: 13px;
   border-radius: var(--echo-radius-lg);
   box-shadow: var(--echo-shadow-lg);
+  pointer-events: none;
 }
 
 /* ===== PlaceholderPage ===== */

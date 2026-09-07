@@ -157,6 +157,23 @@ describe("ChatView pause/yield/resume 闭环", () => {
     expect(baseProps.onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it("流式时复制历史消息会暂停自动跟随，可手动回到最新", async () => {
+    setStore({ streaming: true, streamingMessageId: "a1" });
+    renderChat();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "复制" }));
+
+    const jumpButton = await screen.findByRole("button", {
+      name: "回到最新消息并恢复自动跟随",
+    });
+    fireEvent.click(jumpButton);
+    await waitFor(() => {
+      expect(screen.queryByRole("button", {
+        name: "回到最新消息并恢复自动跟随",
+      })).toBeNull();
+    });
+  });
+
   it("暂停 → 流式结束 → 显示「已暂停」横幅 + 两个恢复按钮", async () => {
     // 初始流式 → 点暂停。
     setStore({ streaming: true, streamingMessageId: "a1" });

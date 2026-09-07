@@ -3,6 +3,7 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
   type RefObject,
 } from "react";
 
@@ -36,6 +37,12 @@ interface UseStickToBottomOptions {
 interface StickToBottomRefs {
   scrollRef: RefObject<HTMLDivElement>;
   contentRef: RefObject<HTMLDivElement>;
+  /** Whether new transcript content is currently allowed to follow the bottom. */
+  following: boolean;
+  /** Preserve the reader's current viewport and cancel pending alignment. */
+  pauseFollowing: () => void;
+  /** Return to the latest content and resume automatic following. */
+  scrollToBottom: () => void;
 }
 
 /**
@@ -55,10 +62,13 @@ export function useStickToBottom({
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
+  const [following, setFollowing] = useState(true);
   const frameRef = useRef<number | null>(null);
   const lastScrollTopRef = useRef(0);
   const touchYRef = useRef<number | null>(null);
   const previousSessionRef = useRef(sessionId);
+  const streamingRef = useRef(streaming);
+  streamingRef.current = streaming;
 
   const cancelScheduledAlignment = useCallback(() => {
     if (frameRef.current === null) return;
@@ -66,9 +76,20 @@ export function useStickToBottom({
     frameRef.current = null;
   }, []);
 
+  const updateFollowing = useCallback((next: boolean) => {
+    if (followRef.current === next) return;
+    followRef.current = next;
+    setFollowing(next);
+  }, []);
+
+  const pauseFollowing = useCallback(() => {
+    updateFollowing(false);
+    cancelScheduledAlignment();
+  }, [cancelScheduledAlignment, updateFollowing]);
+
   const alignToBottom = useCallback(
     (force = false) => {
-      if (force) followRef.current = true;
+      if (force) updateFollowing(true);
       if (!followRef.current) return;
 
       const element = scrollRef.current;
@@ -92,8 +113,12 @@ export function useStickToBottom({
         lastScrollTopRef.current = element.scrollTop;
       });
     },
-    [cancelScheduledAlignment],
+    [cancelScheduledAlignment, updateFollowing],
   );
+
+  const scrollToBottom = useCallback(() => {
+    alignToBottom(true);
+  }, [alignToBottom]);
 
   // Run before paint so each streamed state update does not visibly flash at
   // the old position. Only switching conversations forces the view to the
@@ -112,10 +137,6 @@ export function useStickToBottom({
 
     lastScrollTopRef.current = scrollElement.scrollTop;
 
-    const pauseFollowing = () => {
-      followRef.current = false;
-      cancelScheduledAlignment();
-    };
     const handleScroll = () => {
       const nextScrollTop = scrollElement.scrollTop;
       // A decrease is an unambiguous attempt to inspect earlier content. Stop
@@ -124,7 +145,7 @@ export function useStickToBottom({
         pauseFollowing();
       } else if (isNearScrollBottom(scrollElement, threshold)) {
         // Following resumes naturally only after the user reaches the bottom.
-        followRef.current = true;
+        updateFollowing(true);
       }
       lastScrollTopRef.current = nextScrollTop;
     };
@@ -151,6 +172,29 @@ export function useStickToBottom({
     const handleTouchEnd = () => {
       touchYRef.current = null;
     };
+    const handleCopyAction = (event: Event) => {
+      // Clipboard writes do not emit a native `copy` event. Mark copy affordances
+      // explicitly and stop following before their async clipboard work or the
+      // next streamed layout update can move the view. `click` also covers
+      // keyboard activation; pointer-down handles mouse/touch at the earliest point.
+      if (!streamingRef.current) return;
+      const target = event.target as Element | null;
+      if (target?.closest?.("[data-chat-copy]")) pauseFollowing();
+    };
+    const handleCopy = (event: ClipboardEvent) => {
+      // Also cover keyboard/context-menu copying of selected transcript text,
+      // without pausing when the user copies from the composer or another pane.
+      if (!streamingRef.current) return;
+      const eventTarget = event.target as Node | null;
+      const selectionAnchor = scrollElement.ownerDocument.defaultView
+        ?.getSelection()?.anchorNode ?? null;
+      if (
+        (eventTarget && scrollElement.contains(eventTarget))
+        || (selectionAnchor && scrollElement.contains(selectionAnchor))
+      ) {
+        pauseFollowing();
+      }
+    };
     const handleLateLayout = () => alignToBottom();
 
     scrollElement.addEventListener("scroll", handleScroll, { passive: true });
@@ -161,6 +205,9 @@ export function useStickToBottom({
     scrollElement.addEventListener("touchmove", handleTouchMove, { passive: true });
     scrollElement.addEventListener("touchend", handleTouchEnd, { passive: true });
     scrollElement.addEventListener("touchcancel", handleTouchEnd, { passive: true });
+    scrollElement.addEventListener("pointerdown", handleCopyAction, { passive: true });
+    scrollElement.addEventListener("click", handleCopyAction, { passive: true });
+    scrollElement.ownerDocument.addEventListener("copy", handleCopy);
 
     // The content observer catches asynchronously expanding Markdown, images,
     // and tool cards. Observing the viewport catches footer/composer resizing.
@@ -181,12 +228,21 @@ export function useStickToBottom({
       scrollElement.removeEventListener("touchmove", handleTouchMove);
       scrollElement.removeEventListener("touchend", handleTouchEnd);
       scrollElement.removeEventListener("touchcancel", handleTouchEnd);
+      scrollElement.removeEventListener("pointerdown", handleCopyAction);
+      scrollElement.removeEventListener("click", handleCopyAction);
+      scrollElement.ownerDocument.removeEventListener("copy", handleCopy);
       contentElement.removeEventListener("load", handleLateLayout, true);
       resizeObserver?.disconnect();
     };
-  }, [alignToBottom, cancelScheduledAlignment, sessionId, threshold]);
+  }, [alignToBottom, pauseFollowing, sessionId, threshold, updateFollowing]);
 
   useEffect(() => cancelScheduledAlignment, [cancelScheduledAlignment]);
 
-  return { scrollRef, contentRef };
+  return {
+    scrollRef,
+    contentRef,
+    following,
+    pauseFollowing,
+    scrollToBottom,
+  };
 }
