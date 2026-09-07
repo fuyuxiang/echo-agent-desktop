@@ -1424,7 +1424,7 @@ computing gzip size...
    Compiling gix-hash v0.25.1
    Compiling sec1 v0.7.3
    Compiling group v0.13.0
-   Compiling xai-proto-build v0.0.0 (D:\a\echo-agent-desktop\echo-agent-desktop\vendor\grok-build\crates\build\xai-proto-build)
+   Compiling echo-agent-proto-build v0.0.0 (D:\a\echo-agent-desktop\echo-agent-desktop\vendor\echo-agent-build\crates\build\echo-agent-proto-build)
    Compiling windows-targets v0.48.5
    Compiling hkdf v0.12.4
    Compiling infer v0.19.0
@@ -1445,11 +1445,11 @@ computing gzip size...
    Compiling fastrace v0.7.18
    Compiling darling_macro v0.20.11
    Compiling elliptic-curve v0.13.8
-   Compiling xai-grok-tools-api v0.1.220-alpha.4 (D:\a\echo-agent-desktop\echo-agent-desktop\vendor\grok-build\crates\codegen\xai-grok-tools-api)
+   Compiling echo-agent-tools-api v0.1.220-alpha.4 (D:\a\echo-agent-desktop\echo-agent-desktop\vendor\echo-agent-build\crates\codegen\echo-agent-tools-api)
    Compiling windows-sys v0.48.0
    Compiling opentelemetry_sdk v0.32.1
    Compiling phf_codegen v0.11.3
-   Compiling xai-tool-types v0.1.0 (D:\a\echo-agent-desktop\echo-agent-desktop\vendor\grok-build\crates\common\xai-tool-types)
+   Compiling echo-agent-tool-types v0.1.0 (D:\a\echo-agent-desktop\echo-agent-desktop\vendor\echo-agent-build\crates\common\echo-agent-tool-types)
    Compiling hmac v0.13.0
    Compiling aws-smithy-observability v0.3.0
    Compiling serde_with_macros v3.21.0
@@ -1465,17 +1465,17 @@ computing gzip size...
    Compiling anstream v1.0.0
    Compiling aws-smithy-runtime v1.12.0
    Compiling aws-sigv4 v1.5.1
-   Compiling xai-tool-protocol v0.1.0 (D:\a\echo-agent-desktop\echo-agent-desktop\vendor\grok-build\crates\common\xai-tool-protocol)
+   Compiling echo-agent-tool-protocol v0.1.0 (D:\a\echo-agent-desktop\echo-agent-desktop\vendor\echo-agent-build\crates\common\echo-agent-tool-protocol)
    Compiling string_cache v0.9.0
    Compiling dirs-sys v0.4.1
-error: failed to run custom build command for `xai-grok-tools-api v0.1.220-alpha.4 (D:\a\echo-agent-desktop\echo-agent-desktop\vendor\grok-build\crates\codegen\xai-grok-tools-api)`
+error: failed to run custom build command for `echo-agent-tools-api v0.1.220-alpha.4 (D:\a\echo-agent-desktop\echo-agent-desktop\vendor\echo-agent-build\crates\codegen\echo-agent-tools-api)`
 
 Caused by:
-  process didn't exit successfully: `D:\a\echo-agent-desktop\echo-agent-desktop\src-tauri\target\release\build\xai-grok-tools-api-5aeb7b3365a29585\build-script-build` (exit code: 101)
+  process didn't exit successfully: `D:\a\echo-agent-desktop\echo-agent-desktop\src-tauri\target\release\build\echo-agent-tools-api-5aeb7b3365a29585\build-script-build` (exit code: 101)
   --- stderr
   bin/protoc found at `..\..\..\bin/protoc` but failed to execute: Failed to execute protoc: %1 is not a valid Win32 application. (os error 193); trying protoc from PATH as fallback
 
-  thread 'main' (1068) panicked at D:\a\echo-agent-desktop\echo-agent-desktop\vendor\grok-build\crates\codegen\xai-grok-tools-api\build.rs:49:10:
+  thread 'main' (1068) panicked at D:\a\echo-agent-desktop\echo-agent-desktop\vendor\echo-agent-build\crates\codegen\echo-agent-tools-api\build.rs:49:10:
   called `Result::unwrap()` on an `Err` value: `protoc` not found (checked $PROTOC env, bin/protoc, and PATH)
   note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 warning: build failed, waiting for other jobs to finish...

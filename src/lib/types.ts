@@ -5,7 +5,7 @@
  *
  * Source of truth: the `agent-client-protocol` 0.10.4 crate (used by EchoAgent)
  * and the echo.agent extensions documented in
- *   grok-build/crates/codegen/xai-grok-shell/src/extensions/notification.rs
+ *   echo-agent-build/crates/codegen/echo-agent-runtime/src/extensions/notification.rs
  *
  * The Rust backend serializes these with serde and emits them as the `payload`
  * of `agent://update` / `agent://permission` / `agent://complete` events.
@@ -65,7 +65,7 @@ export type ToolCallContent =
 
 export type ToolCallStatus = "in_progress" | "completed" | "failed";
 
-// Known EchoAgent tool kinds (from xai-grok-tools). The wire format allows unknown
+// Known EchoAgent tool kinds (from echo-agent-tools). The wire format allows unknown
 // kinds too — render them generically.
 export type ToolKind =
   | "read_file"
@@ -160,7 +160,7 @@ export interface TokenUsageCategory {
 
 /**
  * Context-window snapshot from EchoAgent's `echo.agent/session/info`
- * (`ContextInfo` in xai-grok-shell, camelCase on the wire).
+ * (`ContextInfo` in echo-agent-runtime, camelCase on the wire).
  * Note: skills/MCP category estimates overlap `messageTokens` (they're
  * injected as system-reminders in messages), so category percentages are
  * approximate — the UI clamps the "其他" remainder at 0.

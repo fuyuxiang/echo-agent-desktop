@@ -106,7 +106,7 @@ export async function agentAuthStatus(): Promise<AuthStatus> {
 // `const { sessionId } = ...` will silently get undefined.
 //
 // `modelId` is passed as `_meta.modelId` to EchoAgent so the session binds to
-// that model from the start (avoids the default `grok-build` model whose
+// that model from the start (avoids the default `echo-agent-build` model whose
 // sampling config has no key in a BYOK-only setup).
 export async function agentNewSession(cwd: string, modelId?: string): Promise<string> {
   const invocation = invoke<string>("agent_new_session", { cwd, modelId: modelId ?? null });

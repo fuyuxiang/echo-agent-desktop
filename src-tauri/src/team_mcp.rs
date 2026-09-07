@@ -1205,7 +1205,7 @@ static PERSISTED: Mutex<bool> = Mutex::new(false);
 /// 需要一个**已存在**的会话（EchoAgent 的 upsert handler 要求 session live）。
 /// 失败只 warn：new_session 传参路径仍然生效，只是 load_session 的旧会话
 /// 拿不到工具。
-pub fn persist_registration(tx: &xai_acp_lib::AcpAgentTx, session_id: &str) {
+pub fn persist_registration(tx: &echo_agent_acp::AcpAgentTx, session_id: &str) {
     {
         let mut done = PERSISTED.lock().unwrap();
         if *done {

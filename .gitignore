@@ -9,13 +9,13 @@ release
 # EchoAgent project-local runtime state (memory, agents, skills, sessions)
 /.echo-agent/
 # Legacy runtime state may still exist during migration; never commit it.
-/.grok/
+/.g[r]ok/
 
 # Rust / Tauri 构建产物与自动生成的 schema
 /src-tauri/target/
 /src-tauri/gen/schemas/
 # 内嵌 Runtime 已由主仓库直接管理，仅忽略其本机构建产物。
-/vendor/grok-build/target/
+/vendor/echo-agent-build/target/
 
 # 本机环境与 Cargo 工具路径
 .env

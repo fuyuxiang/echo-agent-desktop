@@ -208,7 +208,7 @@ pub fn permission_save(
 #[serde(rename_all = "camelCase")]
 pub struct AgentDefaults {
     /// Model id used for new sessions (`[models] default`). Empty = EchoAgent
-    /// falls back to its built-in default (`grok-build`).
+    /// falls back to its built-in default (`echo-agent-build`).
     #[serde(default)]
     pub default_model: String,
     /// Default permission selection on the FIRST approval prompt
@@ -314,7 +314,7 @@ pub fn agents_defaults_save(
 // Permission mode — `[ui] permission_mode` ("ask" | "auto" | "always-approve")
 // ========================================================================
 
-/// Canonical permission modes EchoAgent accepts (see grok-build
+/// Canonical permission modes EchoAgent accepts (see echo-agent-build
 /// `util/config/permissions.rs::parse_permission_mode_canonical`).
 pub const PERMISSION_MODES: [&str; 3] = ["ask", "auto", "always-approve"];
 
@@ -390,7 +390,7 @@ pub async fn permission_mode_set(state: State<'_, AppState>, mode: String) -> Re
 
     let tx = state.tx.lock().unwrap().clone();
     if let Some(tx) = tx {
-        use xai_acp_lib::{AcpAgentMessage, AcpArgs};
+        use echo_agent_acp::{AcpAgentMessage, AcpArgs};
         let params = crate::ext::raw_params(&serde_json::json!({
             "permission_mode": mode,
             "yolo_mode": mode == "always-approve",

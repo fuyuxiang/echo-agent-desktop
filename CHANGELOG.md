@@ -8,7 +8,7 @@
 ## 未发布
 
 ### 🧱 Runtime 源码统一管理
-- 将 `vendor/grok-build` 从外部 Git Submodule 转为主仓库直接管理的固定源码快照；普通克隆即可获得完整 Agent Runtime，不再依赖上游仓库在线可用。
+- 将 `vendor/echo-agent-build` 从外部 Git Submodule 转为主仓库直接管理的固定源码快照；普通克隆即可获得完整 Agent Runtime，不再依赖上游仓库在线可用。
 - 将既有兼容性修改和 `echo.agent` 协议命名空间结果固化进源码，同时保留上游版本、许可证、NOTICE 与后续升级流程。
 - 将 `async-openai` 和 `nucleo` 的锁定 Git 源码纳入 `vendor/`，改用仓库内 Path 依赖，新环境构建不再访问这两个 Git 仓库。
 - 初始化、macOS/Windows 打包和 Windows CI 改为校验 Vendored Runtime 完整性，不再隐式修改依赖源码。
@@ -23,12 +23,12 @@
 ## v0.3.8（2026-08-25）
 
 ### 🔧 内核升级
-- **grok-build 升级到 c2ad97f8**（0.14 的 5163763 → 上游 6 个同步批次；xai-grok-shell 维持 1.0.4）
-  - ACP 协议层（xai-acp-lib）零变化，EchoAgent 零适配直接通过编译与冒烟测试 —— 团队工具 MCP 化的红利
+- **Agent Runtime 升级到 c2ad97f8**（0.14 的 5163763 → 上游 6 个同步批次；`echo-agent-runtime` 维持 1.0.4）
+  - ACP 协议层（echo-agent-acp）零变化，EchoAgent 零适配直接通过编译与冒烟测试 —— 团队工具 MCP 化的红利
   - 上游亮点：auth 刷新链重构（refresh_chain）、子代理并发采样限制、worktree 自动 GC 策略增强
 
 ### 🖼️ 工具卡片支持图片输出
-- grok 读取图片 / PDF 文件时，工具卡片现在直接渲染图片（此前静默丢失为空白）
+- Runtime 读取图片 / PDF 文件时，工具卡片现在直接渲染图片（此前静默丢失为空白）
 - resource_link / 内嵌资源类输出降级为可读文本，不再无声丢弃；token 估算同步覆盖图片
 
 ### 🗂️ 切换工作目录即时刷新侧栏
@@ -47,13 +47,13 @@
 ## v0.14.0（2026-08-17）
 
 ### 🔧 内核升级
-- **grok-build 升级到 5163763**（xai-grok-shell 1.0.0 → 1.0.4，上游 8 个同步批次）
+- **Agent Runtime 升级到 5163763**（`echo-agent-runtime` 1.0.0 → 1.0.4，上游 8 个同步批次）
   - 新能力：ask_user_question 非交互模式优化、网页搜索域名过滤、工具协议帧扩展
   - 适配：内存开关配置项合并（`memory_enabled_override`），语义完全兼容
 
 ### 🏗️ 架构重构：团队工具零补丁化
-- `create_team` / `team_status` / `team_delete` 从「修改 grok 源码注入」迁移到**内嵌 MCP 服务器**
-  （标准协议、监听本机 127.0.0.1），对 grok 内核**零侵入** —— 以后升级 grok 不再需要运行时补丁
+- `create_team` / `team_status` / `team_delete` 从「修改 Runtime 源码注入」迁移到**内嵌 MCP 服务器**
+  （标准协议、监听本机 127.0.0.1），保持 Runtime 内核**零侵入**，后续升级无需重新应用团队工具补丁
 - 工具名称变为 `echoagent__create_team` 等（旧会话历史仍正常显示）
 - **团队数据持久化**到 `~/.echo-agent/echoagent-teams.json`：agent 崩溃重启、应用重启后团队不再丢失
 - 修复一个隐蔽的 Windows 网络问题（socket 未设非阻塞导致连接无响应）
@@ -63,7 +63,7 @@
 - 修复多个符号在 macOS 显示为方块/异常的问题（✓ ✗ ⏸ ⌄ ⌕ ▾ ● ○ ⚠ → 全部改为矢量图标/CSS 绘制）
 
 ### ✅ 质量
-- 新增端到端冒烟测试：启动 → 握手 → 建会话 → MCP 连接全链路验证（后续升级 grok 一条命令回归）
+- 新增端到端冒烟测试：启动 → 握手 → 建会话 → MCP 连接全链路验证（后续升级可通过一条命令完成回归）
 - 全量测试通过：Rust 105+ 单测 / 前端 813 测试
 
 ---
@@ -71,7 +71,7 @@
 ## v0.13.0（2026-08-16）
 
 - 修复团队工具注入（两步注册：实现 + 启用集，模型可真正调用）
-- grok-build 升级（0.2.120）
+- Agent Runtime 升级（0.2.120）
 - 子代理面板 / 网页搜索 GUI
 
 ## v0.12.0（2026-08-10）
@@ -82,7 +82,7 @@
 ## v0.11.0（2026-08-08）
 
 - 实时子代理运行时（live 进度面板）
-- BYOK 模型隔离（跳过 grok 内置模型，修复 401）
+- BYOK 模型隔离（跳过 Runtime 内置模型，修复 401）
 - 错误提示 UX
 
 ## v0.10.x（2026-08-06）

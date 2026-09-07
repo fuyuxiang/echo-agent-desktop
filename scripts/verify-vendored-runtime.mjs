@@ -1,22 +1,22 @@
 #!/usr/bin/env node
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const runtimeRoot = join(projectRoot, "vendor", "grok-build");
+const runtimeRoot = join(projectRoot, "vendor", "echo-agent-build");
 const manifestPath = join(runtimeRoot, "ECHOAGENT_VENDOR.json");
 const requiredFiles = [
   "Cargo.toml",
   "LICENSE",
   "third_party/NOTICE",
-  "crates/codegen/xai-acp-lib/Cargo.toml",
-  "crates/codegen/xai-grok-shell/Cargo.toml",
-  "crates/codegen/xai-grok-tools/Cargo.toml",
-  "crates/common/xai-tool-runtime/Cargo.toml",
-  "crates/common/xai-tool-protocol/Cargo.toml",
-  "crates/common/xai-tool-types/Cargo.toml",
+  "crates/codegen/echo-agent-acp/Cargo.toml",
+  "crates/codegen/echo-agent-runtime/Cargo.toml",
+  "crates/codegen/echo-agent-tools/Cargo.toml",
+  "crates/common/echo-agent-tool-runtime/Cargo.toml",
+  "crates/common/echo-agent-tool-protocol/Cargo.toml",
+  "crates/common/echo-agent-tool-types/Cargo.toml",
 ];
 const vendoredDependencies = [
   {
@@ -48,6 +48,23 @@ const vendoredDependencies = [
     ],
   },
 ];
+const approvedThirdPartyPackages = new Set([
+  "dagre_rust",
+  "graphlib_rust",
+  "mermaid-to-svg",
+  "ordered_hashmap",
+]);
+const legacyBrandTokens = [["g", "rok"].join(""), ["x", "ai"].join("")];
+const skippedTextExtensions = new Set([
+  ".gif",
+  ".icns",
+  ".ico",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".svg",
+  ".webp",
+]);
 
 function fail(message) {
   process.stderr.write(`[ERROR] ${message}\n`);
@@ -73,8 +90,70 @@ function verifyNoGitCargoSources(root) {
   }
 }
 
+function isProvenanceFile(relativePath) {
+  const normalized = relativePath.replaceAll("\\", "/");
+  const basename = normalized.split("/").at(-1) ?? "";
+  return (
+    basename === "LICENSE" ||
+    basename === "LICENCE" ||
+    basename === "NOTICE" ||
+    basename.startsWith("LICENSE.") ||
+    basename.startsWith("NOTICE.") ||
+    basename.includes("THIRD_PARTY") ||
+    basename.includes("THIRD-PARTY") ||
+    basename === "ECHOAGENT_VENDOR.json" ||
+    basename === "ECHOAGENT_VENDOR.md"
+  );
+}
+
+function verifyRuntimeBranding(root) {
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.name === ".git" || entry.name === "target") continue;
+    const path = join(root, entry.name);
+    const relativePath = relative(runtimeRoot, path).replaceAll("\\", "/");
+    const lowerPath = relativePath.toLowerCase();
+
+    if (legacyBrandTokens.some((token) => lowerPath.includes(token))) {
+      fail(`Vendored Runtime 路径仍包含旧品牌：${relativePath}`);
+    }
+    if (entry.isSymbolicLink()) {
+      fail(`Vendored Runtime 不得包含符号链接：${relativePath}`);
+    }
+    if (entry.isDirectory()) {
+      verifyRuntimeBranding(path);
+      continue;
+    }
+    if (isProvenanceFile(relativePath) || skippedTextExtensions.has(extname(entry.name))) {
+      continue;
+    }
+
+    const bytes = readFileSync(path);
+    if (bytes.includes(0)) continue;
+    const content = bytes.toString("utf8");
+    const legacyProduct = new RegExp(legacyBrandTokens[0], "i");
+    const legacyCompany = new RegExp(
+      `(?:^|[^a-z0-9])${legacyBrandTokens[1]}(?:$|[^a-z0-9])|space${legacyBrandTokens[1]}`,
+      "im",
+    );
+    if (legacyProduct.test(content) || legacyCompany.test(content)) {
+      fail(`Vendored Runtime 源码仍包含旧品牌：${relativePath}`);
+    }
+
+    if (entry.name === "Cargo.toml") {
+      const packageName = content.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1];
+      if (
+        packageName &&
+        !packageName.startsWith("echo-agent-") &&
+        !approvedThirdPartyPackages.has(packageName)
+      ) {
+        fail(`Vendored Runtime crate 未使用 echo-agent- 前缀：${packageName} (${relativePath})`);
+      }
+    }
+  }
+}
+
 if (!existsSync(manifestPath)) {
-  fail("Vendored Runtime 元数据缺失：vendor/grok-build/ECHOAGENT_VENDOR.json");
+  fail("Vendored Runtime 元数据缺失：vendor/echo-agent-build/ECHOAGENT_VENDOR.json");
 }
 
 let manifest;
@@ -96,8 +175,14 @@ if (manifest.license !== "Apache-2.0") {
 if (manifest.namespace !== "echo.agent") {
   fail("Vendored Runtime 协议命名空间元数据必须为 echo.agent");
 }
+if (manifest.localRoot !== "vendor/echo-agent-build") {
+  fail("Vendored Runtime localRoot 必须为 vendor/echo-agent-build");
+}
+if (manifest.packagePrefix !== "echo-agent-") {
+  fail("Vendored Runtime packagePrefix 必须为 echo-agent-");
+}
 if (existsSync(join(runtimeRoot, ".git"))) {
-  fail("vendor/grok-build 仍包含独立 Git 元数据，不能作为主仓库普通源码管理");
+  fail("vendor/echo-agent-build 仍包含独立 Git 元数据，不能作为主仓库普通源码管理");
 }
 
 for (const relativePath of requiredFiles) {
@@ -140,6 +225,7 @@ for (const dependency of vendoredDependencies) {
 
 verifyNoGitCargoSources(join(projectRoot, "src-tauri"));
 verifyNoGitCargoSources(join(projectRoot, "vendor"));
+verifyRuntimeBranding(runtimeRoot);
 
 process.stdout.write(
   `[OK] Vendored Runtime ${manifest.upstreamRevision.slice(0, 8)} 及 Git 源码依赖已就绪，由主仓库直接管理。\n`,

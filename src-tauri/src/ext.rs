@@ -1,7 +1,7 @@
 //! Generic helper for calling EchoAgent `echo.agent/*` ACP extension methods.
 //!
 //! EchoAgent exposes Skills, MCP, and session-admin operations as extension
-//! methods (see `xai-grok-shell/src/extensions/`). All of them go through the
+//! methods (see `echo-agent-runtime/src/extensions/`). All of them go through the
 //! same wire shape — `acp::ExtRequest { method, params: RawValue }` →
 //! `acp::ExtResponse(Arc<RawValue>)`. This module centralizes the send/parse
 //! so each feature module only has to declare its method + params + return type.
@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use agent_client_protocol as acp;
 use anyhow::{anyhow, Result};
+use echo_agent_acp::{acp_send, AcpAgentTx};
 use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
-use xai_acp_lib::{acp_send, AcpAgentTx};
 
 /// Build a `RawValue` from a serializable value. Used to construct the `params`
 /// payload for an ext request.

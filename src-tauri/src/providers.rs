@@ -286,15 +286,14 @@ pub(crate) fn read_config() -> Value {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = config_path();
-    let _shared_transaction = match xai_grok_shell::util::config::acquire_config_transaction_lock_at(
-        &path,
-    ) {
-        Ok(transaction) => transaction,
-        Err(error) => {
-            tracing::warn!(path = %path.display(), %error, "failed to lock Runtime config for read");
-            return Value::Table(Map::new());
-        }
-    };
+    let _shared_transaction =
+        match echo_agent_runtime::util::config::acquire_config_transaction_lock_at(&path) {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "failed to lock Runtime config for read");
+                return Value::Table(Map::new());
+            }
+        };
     read_config_unlocked()
 }
 
@@ -366,7 +365,7 @@ pub(crate) fn update_config<T>(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = config_path();
     let _shared_transaction =
-        xai_grok_shell::util::config::acquire_config_transaction_lock_at(&path)
+        echo_agent_runtime::util::config::acquire_config_transaction_lock_at(&path)
             .map_err(|error| format!("lock Runtime config: {error}"))?;
     let mut config = read_config_unlocked();
     let result = update(&mut config)?;

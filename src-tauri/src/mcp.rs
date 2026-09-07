@@ -1,7 +1,7 @@
 //! Connectors panel — drives EchoAgent's `echo.agent/mcp/*` extension methods.
 //!
 //! MCP server configs live in `~/.echo-agent/config.toml` as `[mcp_servers.<name>]`
-//! tables (see `xai-grok-config-types/src/mcp.rs` for the full schema). EchoAgent
+//! tables (see `echo-agent-config-types/src/mcp.rs` for the full schema). EchoAgent
 //! owns the canonical state. With an active session we use its ACP CRUD methods
 //! for hot start/stop; without a session we persist through the Runtime's public
 //! config helpers so connector setup remains fully usable offline. Health changes
@@ -51,7 +51,7 @@ fn validate_optional_session(state: &AppState, session_id: Option<&str>) -> Resu
 }
 
 /// One MCP server entry surfaced to the UI. Mirrors the fields of EchoAgent's
-/// `McpServerEntry` (`xai-grok-shell/src/inspect/mod.rs:227`) plus the live
+/// `McpServerEntry` (`echo-agent-runtime/src/inspect/mod.rs:227`) plus the live
 /// status that arrives via `echo.agent/mcp/server_status` notifications.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,7 +87,7 @@ pub struct McpServerEntry {
     #[serde(default)]
     pub setup_required: bool,
     #[serde(default)]
-    pub setup: Option<xai_grok_shell::util::config::McpSetupConfig>,
+    pub setup: Option<echo_agent_runtime::util::config::McpSetupConfig>,
     #[serde(default)]
     pub setup_values: HashMap<String, String>,
     #[serde(default)]
@@ -130,7 +130,7 @@ struct McpServerWire {
     #[serde(default)]
     source_label: Option<String>,
     #[serde(default)]
-    setup: Option<xai_grok_shell::util::config::McpSetupConfig>,
+    setup: Option<echo_agent_runtime::util::config::McpSetupConfig>,
     #[serde(default)]
     setup_values: Option<HashMap<String, String>>,
     #[serde(rename = "type", default)]
@@ -225,9 +225,9 @@ pub struct McpUpsertRequest {
     /// Full Runtime options retained by the raw editor. These matter for
     /// connector setup forms, nested OAuth declarations and large tool output.
     #[serde(default)]
-    pub oauth: Option<xai_grok_shell::util::config::McpJsonOAuthBlock>,
+    pub oauth: Option<echo_agent_runtime::util::config::McpJsonOAuthBlock>,
     #[serde(default)]
-    pub setup: Option<xai_grok_shell::util::config::McpSetupConfig>,
+    pub setup: Option<echo_agent_runtime::util::config::McpSetupConfig>,
     #[serde(default)]
     pub tool_timeouts: HashMap<String, u64>,
     #[serde(default)]
@@ -265,14 +265,14 @@ pub async fn mcp_list(
 /// Internal form used by automations to ensure every selected connector is
 /// configured and enabled before a background run is dispatched.
 pub async fn mcp_list_with_tx(
-    tx: &xai_acp_lib::AcpAgentTx,
+    tx: &echo_agent_acp::AcpAgentTx,
     session_id: Option<String>,
 ) -> Result<Vec<McpServerEntry>, String> {
     mcp_list_with_tx_cache(tx, session_id, true).await
 }
 
 async fn mcp_list_with_tx_cache(
-    tx: &xai_acp_lib::AcpAgentTx,
+    tx: &echo_agent_acp::AcpAgentTx,
     session_id: Option<String>,
     cache: bool,
 ) -> Result<Vec<McpServerEntry>, String> {
@@ -450,7 +450,7 @@ pub async fn mcp_toggle_tool(
 }
 
 async fn apply_upsert(
-    tx: Option<&xai_acp_lib::AcpAgentTx>,
+    tx: Option<&echo_agent_acp::AcpAgentTx>,
     session_id: Option<&str>,
     server: &McpUpsertRequest,
 ) -> Result<McpMutationResult, String> {
@@ -535,7 +535,7 @@ async fn apply_upsert(
 }
 
 async fn apply_delete(
-    tx: Option<&xai_acp_lib::AcpAgentTx>,
+    tx: Option<&echo_agent_acp::AcpAgentTx>,
     session_id: Option<&str>,
     name: &str,
 ) -> Result<McpMutationResult, String> {
@@ -577,7 +577,7 @@ async fn apply_delete(
 }
 
 async fn apply_toggle(
-    tx: Option<&xai_acp_lib::AcpAgentTx>,
+    tx: Option<&echo_agent_acp::AcpAgentTx>,
     session_id: Option<&str>,
     name: &str,
     enabled: bool,
@@ -615,7 +615,7 @@ async fn apply_toggle(
 
 /// Translate the frontend payload to the JSON EchoAgent's `echo.agent/mcp/upsert` expects.
 ///
-/// EchoAgent's `McpUpsertRequest` (`xai-grok-shell/src/extensions/mcp.rs`) is:
+/// EchoAgent's `McpUpsertRequest` (`echo-agent-runtime/src/extensions/mcp.rs`) is:
 /// ```json
 /// { "session_id": "...", "server_name": "...", <flattened McpServerConfig> }
 /// ```
@@ -985,8 +985,8 @@ fn runtime_config_path() -> PathBuf {
 
 fn request_to_runtime_config(
     server: &McpUpsertRequest,
-) -> xai_grok_shell::util::config::McpServerConfig {
-    use xai_grok_shell::util::config::{McpServerConfig, McpServerTransportConfig};
+) -> echo_agent_runtime::util::config::McpServerConfig {
+    use echo_agent_runtime::util::config::{McpServerConfig, McpServerTransportConfig};
     let transport = match server.transport.as_str() {
         "stdio" => McpServerTransportConfig::Stdio {
             command: server.target.clone(),
@@ -1098,7 +1098,7 @@ fn user_config_has_server(name: &str) -> Result<bool, String> {
 }
 
 fn read_user_config_requests() -> Result<Vec<McpUpsertRequest>, String> {
-    use xai_grok_shell::util::config::{McpServerConfig, McpServerTransportConfig};
+    use echo_agent_runtime::util::config::{McpServerConfig, McpServerTransportConfig};
     let content =
         match read_bounded_text(&runtime_config_path(), MAX_MCP_CONFIG_BYTES, "config.toml")? {
             Some(content) => content,
@@ -1425,7 +1425,7 @@ pub async fn mcp_config_save(
     // lets an unrelated Runtime settings write land between snapshots.
     persist_mcp_document(&requests, &removed)?;
     for name in &removed {
-        xai_grok_shell::util::config::remove_mcp_server_credentials(name);
+        echo_agent_runtime::util::config::remove_mcp_server_credentials(name);
     }
 
     let normalized = if trimmed.is_empty() {
@@ -2103,7 +2103,7 @@ struct McpAuthTriggerWire {
 
 /// Kick off the browser OAuth flow for one server. Long-running: resolves
 /// when the user finishes (or abandons) the browser flow. EchoAgent opens the
-/// system browser itself (`webbrowser::open` in xai-grok-mcp).
+/// system browser itself (`webbrowser::open` in echo-agent-mcp).
 #[tauri::command]
 pub async fn mcp_auth_trigger(
     state: State<'_, AppState>,

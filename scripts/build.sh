@@ -82,7 +82,7 @@ for cmd in pnpm cargo rustc; do
     log_info "$(printf '%-7s %s' "$cmd" "$("$cmd" --version 2>/dev/null | head -1)")"
 done
 
-# grok's build.rs invokes protoc; honor $PROTOC or a protoc on PATH.
+# echoagent's build.rs invokes protoc; honor $PROTOC or a protoc on PATH.
 if [[ -z "${PROTOC:-}" ]] && ! command -v protoc >/dev/null 2>&1; then
     log_err "protoc not found. Install protobuf (brew install protobuf) or set PROTOC=/path/to/protoc."
     exit 1
@@ -110,7 +110,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # 4. Vendored Runtime sanity check. Path dependencies in Cargo.toml resolve
-#    directly into vendor/grok-build, which is tracked by this repository.
+#    directly into vendor/echo-agent-build, which is tracked by this repository.
 # ---------------------------------------------------------------------------
 log_step "Checking vendored Runtime source"
 node "$PROJECT_ROOT/scripts/verify-vendored-runtime.mjs"

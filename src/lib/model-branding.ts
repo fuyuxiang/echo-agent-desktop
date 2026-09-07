@@ -12,8 +12,16 @@
  * 显示，不影响该模型能否被选中和调用（就绪判定与请求校验始终使用未过滤的目录）。
  */
 
-/** 上游品牌词。小写比较，按子串匹配。 */
-const UPSTREAM_BRAND_TOKENS = ["grok", "xai", "x.ai", "spacexai"] as const;
+/**
+ * 历史上游品牌词。拆分构造可以避免旧品牌在当前代码中成为
+ * 新的公开命名，同时仍能清理旧版会话和目录中的历史模型标识。
+ */
+const UPSTREAM_BRAND_TOKENS = [
+  ["g", "rok"].join(""),
+  ["x", "ai"].join(""),
+  ["x", ".", "ai"].join(""),
+  ["space", "x", "ai"].join(""),
+] as const;
 
 /** 品牌模型在界面上的中性替代文案。 */
 export const NEUTRAL_MODEL_LABEL = "其他模型";

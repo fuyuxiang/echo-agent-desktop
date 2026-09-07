@@ -1,0 +1,26 @@
+[package]
+license = "Apache-2.0"
+name = "echo-agent-http"
+version = "0.1.0"
+edition.workspace = true
+description = "Shared reqwest HTTP clients and User-Agent construction for the echoagent CLI."
+
+[dependencies]
+reqwest = { workspace = true, features = ["blocking", "rustls-tls-native-roots"] }
+reqwest-middleware = { workspace = true }
+# Same 0.23 as reqwest's rustls, so the certificate classifier's downcast resolves.
+rustls = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+echo-agent-auth = { workspace = true, features = ["middleware"] }
+echo-agent-extra-ca = { workspace = true }
+echo-agent-sampler = { path = "../echo-agent-sampler" }
+echo-agent-telemetry = { workspace = true }
+echo-agent-version = { workspace = true }
+echo-agent-workspace = { workspace = true }
+
+[dev-dependencies]
+rcgen = { workspace = true }
+
+[lints]
+workspace = true

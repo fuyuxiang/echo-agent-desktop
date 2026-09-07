@@ -1,0 +1,12 @@
+[package]
+license = "Apache-2.0"
+name = "echo-agent-version"
+version = "1.0.8"
+edition.workspace = true
+description = "Lockstepped echoagent CLI version."
+
+[dependencies]
+semver = { workspace = true }
+
+[lints]
+workspace = true

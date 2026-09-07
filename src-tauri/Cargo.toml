@@ -40,16 +40,16 @@ fs2 = "0.4"
 libc = "0.2"
 
 # EchoAgent's in-process runtime adapter. The Apache-2.0 Runtime source snapshot
-# is tracked directly at <repo>/vendor/grok-build (see ECHOAGENT_VENDOR.json and
+# is tracked directly at <repo>/vendor/echo-agent-build (see ECHOAGENT_VENDOR.json and
 # THIRD_PARTY_NOTICES.md); these are relative path dependencies into it. Cargo
 # resolves their `.workspace = true` fields against that root Cargo.toml. We do
 # not join that workspace (see the explicit [workspace] table below).
-xai-acp-lib = { path = "../vendor/grok-build/crates/codegen/xai-acp-lib" }
-xai-grok-shell = { path = "../vendor/grok-build/crates/codegen/xai-grok-shell" }
-xai-grok-tools = { path = "../vendor/grok-build/crates/codegen/xai-grok-tools" }
-xai-tool-runtime = { path = "../vendor/grok-build/crates/common/xai-tool-runtime" }
-xai-tool-protocol = { path = "../vendor/grok-build/crates/common/xai-tool-protocol" }
-xai-tool-types = { path = "../vendor/grok-build/crates/common/xai-tool-types" }
+echo-agent-acp = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-acp" }
+echo-agent-runtime = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-runtime" }
+echo-agent-tools = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-tools" }
+echo-agent-tool-runtime = { path = "../vendor/echo-agent-build/crates/common/echo-agent-tool-runtime" }
+echo-agent-tool-protocol = { path = "../vendor/echo-agent-build/crates/common/echo-agent-tool-protocol" }
+echo-agent-tool-types = { path = "../vendor/echo-agent-build/crates/common/echo-agent-tool-types" }
 futures = "0.3"
 schemars = "1"
 agent-client-protocol = { version = "0.10.4", features = ["unstable"] }

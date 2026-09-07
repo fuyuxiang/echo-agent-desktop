@@ -1,9 +1,9 @@
-use xai_grok_shell::util::config::load_effective_config;
+use echo_agent_runtime::util::config::load_effective_config;
 
 #[test]
 fn configured_default_model_is_loaded() {
     // Integration tests must not depend on the developer's real
-    // ~/.echo-agent/config.toml. Seed an isolated upstream home before its
+    // ~/.echo-agent/config.toml. Seed an isolated runtime home before its
     // process-global config path is initialized.
     let home = tempfile::tempdir().expect("temporary agent home");
     std::fs::write(
@@ -18,7 +18,7 @@ api_key = "test-only"
 "#,
     )
     .expect("seed config.toml");
-    std::env::set_var("GROK_HOME", home.path());
+    std::env::set_var("ECHO_AGENT_HOME", home.path());
 
     let raw = load_effective_config().expect("load_effective_config");
     let models_default = raw

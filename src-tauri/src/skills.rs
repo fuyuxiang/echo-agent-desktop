@@ -2,7 +2,7 @@
 //!
 //! EchoAgent discovers skills by recursively scanning `~/.echo-agent/skills/`,
 //! `<cwd>/.echo-agent/skills/`, and a few bundled/plugin dirs (see
-//! `xai-grok-tools/src/implementations/skills/discovery.rs`). Each skill is a
+//! `echo-agent-tools/src/implementations/skills/discovery.rs`). Each skill is a
 //! directory containing a `SKILL.md` with YAML frontmatter. EchoAgent exposes the
 //! full CRUD surface over ACP — we call those methods here rather than reading
 //! the filesystem ourselves, because EchoAgent holds the canonical enabled/disabled
@@ -54,7 +54,7 @@ fn command_cwd(
 }
 
 /// One discovered skill. Mirrors the relevant fields of EchoAgent's `SkillInfo`
-/// (`xai-grok-tools/src/implementations/skills/types.rs:40`). Unknown/missing
+/// (`echo-agent-tools/src/implementations/skills/types.rs:40`). Unknown/missing
 /// fields fall back to defaults — the shape is stable across EchoAgent versions but
 /// we stay defensive.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -169,7 +169,7 @@ pub async fn skills_list(
 
 /// Internal form used by automations for execution-time capability checks.
 pub async fn skills_list_with_tx(
-    tx: &xai_acp_lib::AcpAgentTx,
+    tx: &echo_agent_acp::AcpAgentTx,
     cwd: Option<String>,
 ) -> Result<Vec<SkillInfo>, String> {
     // Current EchoAgent builds require `cwd` and reject both null and a missing

@@ -1,0 +1,18 @@
+[package]
+license = "Apache-2.0"
+edition.workspace = true
+name = "echo-agent-home"
+version = "0.1.0"
+description = "Single source of truth for resolving the echoagent home directory ($ECHO_AGENT_HOME or <home>/.echo-agent)"
+
+[dependencies]
+dirs = { workspace = true }
+dunce = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

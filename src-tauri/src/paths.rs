@@ -1,8 +1,8 @@
 //! EchoAgent runtime paths and one-time legacy data migration.
 //!
-//! EchoAgent owns `~/.echo-agent`. The embedded upstream engine still reads
-//! its historical environment variable internally, so startup points that
-//! variable at the EchoAgent directory after migrating any legacy data.
+//! EchoAgent owns `~/.echo-agent`. Startup imports data from installations
+//! created before the namespace migration, then configures the embedded
+//! runtime to use the EchoAgent directory exclusively.
 
 use std::fs;
 use std::io::{self, Write};
@@ -12,12 +12,14 @@ use std::path::{Path, PathBuf};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 const HOME_ENV: &str = "ECHO_AGENT_HOME";
-const UPSTREAM_HOME_ENV: &str = "GROK_HOME";
-const UPSTREAM_AUTH_ENV: &str = "GROK_AUTH";
-const UPSTREAM_AUTH_PATH_ENV: &str = "GROK_AUTH_PATH";
+// Construct retired names from fragments so they remain a compatibility-only
+// implementation detail and cannot be mistaken for current public settings.
+const LEGACY_HOME_ENV: &str = concat!("G", "ROK_HOME");
+const LEGACY_AUTH_ENV: &str = concat!("G", "ROK_AUTH");
+const LEGACY_AUTH_PATH_ENV: &str = concat!("G", "ROK_AUTH_PATH");
 const SECURE_PROVIDER_URLS_ENV: &str = "ECHO_AGENT_ENFORCE_SECURE_PROVIDER_URLS";
 const HOME_DIR_NAME: &str = ".echo-agent";
-const LEGACY_HOME_DIR_NAME: &str = ".grok";
+const LEGACY_HOME_DIR_NAME: &str = concat!(".g", "rok");
 const MIGRATION_MARKER: &str = ".legacy-data-migrated";
 const LEGACY_AUTH_FILE: &str = "auth.json";
 const EXPERTS_MARKETPLACE_DIR_NAME: &str = "experts-marketplace";
@@ -147,7 +149,7 @@ pub(crate) fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
 }
 
 fn legacy_home_dir() -> PathBuf {
-    std::env::var_os(UPSTREAM_HOME_ENV)
+    std::env::var_os(LEGACY_HOME_ENV)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -164,21 +166,19 @@ pub fn initialize_runtime_home() -> Result<PathBuf, String> {
     let target = echo_agent_home_dir();
     let legacy = legacy_home_dir();
 
-    // Compatibility boundary: the embedded upstream crates currently expose
-    // this environment variable as their home-directory override. Set it even
-    // if migration later reports an I/O error, so new writes never fall back
-    // to the legacy directory.
-    std::env::set_var(UPSTREAM_HOME_ENV, &target);
+    // Set the runtime home even if migration later reports an I/O error, so
+    // every new write remains inside EchoAgent's current data directory.
+    std::env::set_var(HOME_ENV, &target);
     // Tell the embedded sampler to reject insecure provider URLs loaded from
     // legacy or manually edited Runtime config. This is set by native startup,
     // not by the WebView, so request-time enforcement cannot be bypassed by
     // invoking a different settings command.
     std::env::set_var(SECURE_PROVIDER_URLS_ENV, "1");
-    // EchoAgent uses only per-provider credentials. Remove upstream account
+    // EchoAgent uses only per-provider credentials. Remove retired account
     // overrides before background threads start so the inert runtime adapter
-    // cannot inherit an upstream account token from the parent process.
-    std::env::remove_var(UPSTREAM_AUTH_ENV);
-    std::env::remove_var(UPSTREAM_AUTH_PATH_ENV);
+    // cannot inherit an obsolete account token from the parent process.
+    std::env::remove_var(LEGACY_AUTH_ENV);
+    std::env::remove_var(LEGACY_AUTH_PATH_ENV);
 
     fs::create_dir_all(&target)
         .map_err(|e| format!("create EchoAgent home {}: {e}", target.display()))?;

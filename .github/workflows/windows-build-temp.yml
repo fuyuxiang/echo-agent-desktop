@@ -48,10 +48,10 @@ jobs:
         shell: pwsh
         run: |
           powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
-          if (-not (Test-Path "vendor\grok-build\crates\codegen\xai-grok-agent\Cargo.toml")) {
+          if (-not (Test-Path "vendor\echo-agent-build\crates\codegen\echo-agent-core\Cargo.toml")) {
             throw "Vendored Runtime source is incomplete"
           }
-          $runtimeChanges = git status --porcelain -- vendor/grok-build
+          $runtimeChanges = git status --porcelain -- vendor/echo-agent-build
           if ($runtimeChanges) { throw "Setup unexpectedly modified the vendored Runtime: $runtimeChanges" }
           $global:LASTEXITCODE = 0
 
