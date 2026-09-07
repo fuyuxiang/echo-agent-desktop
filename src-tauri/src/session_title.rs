@@ -78,10 +78,7 @@ fn contains_expert_persona_markup(raw: &str) -> bool {
 
 fn strip_expert_persona_blocks(raw: &str) -> String {
     let mut output = raw.to_string();
-    loop {
-        let Some(start) = output.find(EXPERT_PERSONA_BEGIN) else {
-            break;
-        };
+    while let Some(start) = output.find(EXPERT_PERSONA_BEGIN) {
         let after_open = start + EXPERT_PERSONA_BEGIN.len();
         let Some(relative_end) = output[after_open..].find(EXPERT_PERSONA_END) else {
             output.truncate(start);
