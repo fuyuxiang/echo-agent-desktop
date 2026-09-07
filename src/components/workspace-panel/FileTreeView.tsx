@@ -101,7 +101,7 @@ export function FileTreeView({
 
   const rootEntries = loaded.get(root) ?? [];
   if (rootEntries.length === 0 && rootLoaded !== undefined) {
-    return <div className="file-tree__empty">空目录。</div>;
+    return <div className="file-tree__empty">这里还是空的，放些文件进来再开始吧。</div>;
   }
 
   return (

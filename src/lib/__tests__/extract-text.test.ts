@@ -24,12 +24,13 @@ describe("extractPlainText", () => {
     expect(extractPlainText(m)).toBe("first\nsecond");
   });
 
-  it("thought part 同样纳入", () => {
+  it("默认不索引折叠的 thought part", () => {
     const m = msg([
       { kind: "text", text: "answer" },
       { kind: "thought", text: "thinking" },
     ]);
-    expect(extractPlainText(m)).toBe("answer\nthinking");
+    expect(extractPlainText(m)).toBe("answer");
+    expect(extractPlainText(m, { includeThoughts: true })).toBe("answer\nthinking");
   });
 
   it("tool_call 提取 title + command + output", () => {

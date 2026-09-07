@@ -28,7 +28,7 @@ export function FileChangesPanel({ messages }: FileChangesPanelProps) {
         )}
       </div>
       {summary.totalFiles === 0 ? (
-        <div className="runtime-panel-empty">当前会话尚未产生可识别的文件变更。</div>
+        <div className="runtime-panel-empty">还没有文件变更——需要动手时，结果会列在这里。</div>
       ) : (
         <ul className="file-changes__list">
           {summary.files.map((f) => (

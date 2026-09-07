@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Markdown, type MarkdownConfig } from "./markdown/index";
-import { ToolCallCard } from "./ToolCallCard";
 import { LoadingRow } from "./LoadingRow";
+import { ExecutionProcess } from "./ExecutionProcess";
 import { FeedbackDialog } from "./FeedbackDialog";
 import { AttachmentVisual } from "./AttachmentVisual";
 import { useTheme } from "./ThemeProvider";
@@ -14,6 +14,7 @@ import {
   stripInjectedUserContext,
 } from "@/lib/user-message";
 import { copyShareText } from "@/lib/share";
+import { partitionAssistantParts } from "@/lib/execution-process";
 const logoMarkUrl = "/app-icon.png";
 import {
   createWebSpeechTtsProvider,
@@ -129,21 +130,23 @@ export function MessageItem({
     [markCopied, onToast],
   );
 
-  /** Extract plain text from all text parts (for copy), stripping hidden persona. */
-  const plainText = message.parts
-    .filter((p) => p.kind === "text")
-    .map((p) => (message.role === "user" ? stripInjectedUserContext(p.text) : p.text))
+  const assistantGroups = message.role === "assistant"
+    ? partitionAssistantParts(message.parts)
+    : null;
+  const allTextParts = message.parts.filter(
+    (part): part is Extract<typeof part, { kind: "text" }> => part.kind === "text",
+  );
+  const answerParts = assistantGroups?.responseParts.length
+    ? assistantGroups.responseParts
+    : allTextParts;
+
+  /** Copy the user-visible answer by default; process details stay opt-in. */
+  const plainText = (message.role === "assistant" ? answerParts : allTextParts)
+    .map((part) => message.role === "user" ? stripInjectedUserContext(part.text) : part.text)
     .join("\n");
 
-  /** Extract markdown (text + thought) for "copy as markdown". */
-  const markdownText = message.parts
-    .map((p) => {
-      if (p.kind === "text") return p.text;
-      if (p.kind === "thought") return `<details>\n<summary>深度思考</summary>\n\n${p.text}\n\n</details>`;
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n\n");
+  /** Preserve Markdown syntax, but don't leak hidden process details into a normal copy. */
+  const markdownText = answerParts.map((part) => part.text).join("\n\n");
 
   const toggleSpeak = useCallback(() => {
     if (speaking) {
@@ -305,53 +308,34 @@ export function MessageItem({
           )}
         </div>
         <div className="msg__body">
-          {/* Placeholder state: the assistant message exists but no content
-              has streamed in yet. Render the avatar (header above) + the
-              shimmering "preparing / waiting for model" loading row with a
-              rotating tip — mirrors EchoAgent's pending-assistant view. */}
-          {message.parts.length === 0 && !message.complete && <LoadingRow />}
-          {message.parts.map((p, i) => {
-            if (p.kind === "text") {
-              return (
-                <Markdown
-                  key={i}
-                  complete={message.complete}
-                  markdownTheme="loose"
-                  theme={theme}
-                  config={markdownConfig}
-                >
-                  {p.text}
-                </Markdown>
-              );
-            }
-            if (p.kind === "thought") {
-              return (
-                <details key={i} className="msg__thought">
-                  <summary>深度思考</summary>
-                  <div className="msg__thought-body">
-                    <Markdown
-                      complete={message.complete}
-                      markdownTheme="reasoning"
-                      theme={theme}
-                      config={markdownConfig}
-                    >
-                      {p.text}
-                    </Markdown>
-                  </div>
-                </details>
-              );
-            }
-            return (
-              <ToolCallCard
-                key={p.toolCall.toolCallId || i}
-                tc={p.toolCall}
-                onOpen={onOpenTool}
-              />
-            );
-          })}
+          {message.parts.length === 0 && !message.complete && (
+            <LoadingRow startedAt={message.startedAt} />
+          )}
+          {assistantGroups && assistantGroups.processParts.length > 0 && (
+            <ExecutionProcess
+              parts={assistantGroups.processParts}
+              active={streaming && !message.complete}
+              startedAt={message.startedAt}
+              completedAt={message.completedAt}
+              stopReason={message.stopReason}
+              markdownConfig={markdownConfig}
+              onOpenTool={onOpenTool}
+            />
+          )}
+          {assistantGroups?.responseParts.map((part, index) => (
+            <Markdown
+              key={index}
+              complete={message.complete}
+              markdownTheme="loose"
+              theme={theme}
+              config={markdownConfig}
+            >
+              {part.text}
+            </Markdown>
+          ))}
           {streaming &&
             message.complete === false &&
-            message.parts.length > 0 && (
+            (assistantGroups?.responseParts.length ?? 0) > 0 && (
               <span className="msg__caret">▋</span>
             )}
         </div>
