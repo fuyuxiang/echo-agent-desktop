@@ -47,7 +47,7 @@ use std::os::windows::fs::OpenOptionsExt;
 const MAX_IMAGE_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 const MEMORY_EMBEDDING_ENDPOINT: &str = "https://api.siliconflow.cn/v1/embeddings";
 const MEMORY_EMBEDDING_MODEL: &str = "BAAI/bge-m3";
-const MEMORY_EMBEDDING_DIMENSIONS: usize = 1024;
+pub(crate) const MEMORY_EMBEDDING_DIMENSIONS: usize = 1024;
 const MEMORY_RERANK_ENDPOINT: &str = "https://api.siliconflow.cn/v1/rerank";
 const MEMORY_RERANK_MODEL: &str = "BAAI/bge-reranker-v2-m3";
 const MEMORY_SILICONFLOW_API_KEY: &str = "sk-perpdxeyiwcymvnnpvwnjbhavppnchxohcpwydulfkdwpvpv";

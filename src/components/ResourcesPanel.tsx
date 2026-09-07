@@ -11,6 +11,7 @@ import {
 } from "@/foundation/components/Icon/icons";
 import {
   memoryAppend,
+  memoryClearSessionSummaries,
   memoryDelete,
   memoryDream,
   memoryFlush,
@@ -44,14 +45,17 @@ function errorText(error: unknown): string {
 function scopeLabel(scope: MemoryEntry["scope"]): string {
   if (scope === "global") return "全局";
   if (scope === "workspace") return "工作区";
-  return "会话记录";
+  return "会话摘要";
 }
+
+type MemoryTab = "longTerm" | "summaries";
 
 export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps) {
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<MemoryTab>("longTerm");
   const [editing, setEditing] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
   const { requestConfirmation, dialog } = useAppDialog(JSON.stringify([cwd ?? null, sessionId ?? null]));
@@ -81,13 +85,17 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
     };
   }, [reload]);
 
+  useEffect(() => {
+    if (!cwd) setActiveTab("longTerm");
+  }, [cwd]);
+
   const handleSave = useCallback(async (draft: EditorState) => {
     if (!draft.content.trim()) {
       onToast?.("记忆内容不能为空");
       return;
     }
     if (draft.scope === "session") {
-      onToast?.("会话记忆由 Agent 自动生成，只能查看");
+      onToast?.("会话摘要由 Agent 自动生成，只能查看或删除");
       return;
     }
     setBusy(true);
@@ -115,11 +123,13 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
   }, [cwd, onToast, reload]);
 
   const handleDelete = useCallback((entry: MemoryEntry) => {
-    if (entry.readOnly) return;
+    const isSummary = entry.scope === "session";
     requestConfirmation({
-      title: `删除${scopeLabel(entry.scope)}记忆文件？`,
-      description: `将永久删除“${entry.path}”，此操作无法撤销。`,
-      confirmLabel: "删除记忆",
+      title: isSummary ? "删除这条会话摘要？" : `删除${scopeLabel(entry.scope)}记忆文件？`,
+      description: isSummary
+        ? `将永久删除“${entry.path}”及其检索索引，不会删除原会话。`
+        : `将永久删除“${entry.path}”，此操作无法撤销。`,
+      confirmLabel: isSummary ? "删除摘要" : "删除记忆",
       danger: true,
       action: async () => {
         setBusy(true);
@@ -128,13 +138,38 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
           setEntries((current) => current.filter((candidate) => !(
             candidate.scope === entry.scope && candidate.path === entry.path
           )));
-          onToast?.("已删除记忆文件");
+          onToast?.(isSummary ? "已删除会话摘要及检索索引" : "已删除记忆文件");
           await reload();
         } finally {
           setBusy(false);
         }
       },
       onError: (error) => onToast?.(`删除失败：${errorText(error)}`),
+    });
+  }, [cwd, onToast, reload, requestConfirmation]);
+
+  const handleClearSummaries = useCallback(() => {
+    if (!cwd) {
+      onToast?.("清空会话摘要需要当前工作区");
+      return;
+    }
+    requestConfirmation({
+      title: "清空当前工作区的会话摘要？",
+      description: "将删除所有自动摘要、已整理归档和对应检索索引。原会话和长期记忆不受影响。",
+      confirmLabel: "清空摘要",
+      danger: true,
+      action: async () => {
+        setBusy(true);
+        try {
+          const removed = await memoryClearSessionSummaries(cwd);
+          setEntries((current) => current.filter((entry) => entry.scope !== "session"));
+          onToast?.(removed > 0 ? `已清除 ${removed} 个会话摘要文件` : "没有需要清除的会话摘要");
+          await reload();
+        } finally {
+          setBusy(false);
+        }
+      },
+      onError: (error) => onToast?.(`清空失败：${errorText(error)}`),
     });
   }, [cwd, onToast, reload, requestConfirmation]);
 
@@ -160,8 +195,8 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
       return;
     }
     requestConfirmation({
-      title: "整理历史会话记忆？",
-      description: "Agent 会把历史会话记录归纳到长期记忆中，可能会修改现有记忆内容。",
+      title: "整理历史会话摘要？",
+      description: "Agent 会把历史会话摘要归纳到长期记忆中，可能会修改现有记忆内容。",
       confirmLabel: "开始整理",
       action: async () => {
         setBusy(true);
@@ -198,11 +233,14 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
   }, [onToast, sessionId]);
 
   const normalizedQuery = query.trim().toLowerCase();
-  const filtered = entries.filter((entry) =>
+  const visibleEntries = entries.filter((entry) => activeTab === "summaries"
+    ? entry.scope === "session"
+    : entry.scope !== "session");
+  const filtered = visibleEntries.filter((entry) => (
     !normalizedQuery
     || entry.path.toLowerCase().includes(normalizedQuery)
     || entry.content.toLowerCase().includes(normalizedQuery)
-  );
+  ));
   const globalCount = entries.filter((entry) => entry.scope === "global").length;
   const workspaceCount = entries.filter((entry) => entry.scope === "workspace").length;
   const sessionCount = entries.filter((entry) => entry.scope === "session").length;
@@ -212,7 +250,11 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
       <div className="resources-panel__header">
         <div>
           <h2 className="resources-panel__title">个人记忆</h2>
-          <p className="resources-panel__subtitle">管理跨会话偏好、项目上下文和 Agent 自动生成的会话记录</p>
+          <p className="resources-panel__subtitle">
+            {activeTab === "longTerm"
+              ? "管理跨会话复用的个人偏好和工作区上下文"
+              : "管理 Agent 从会话中自动提取的待整理摘要"}
+          </p>
           <div className="resources-panel__context" aria-label="当前记忆上下文">
             <span className="resources-panel__context-label">{cwd ? "当前工作区" : "全局记忆"}</span>
             {cwd && <code className="resources-panel__context-path" title={cwd}>{cwd}</code>}
@@ -225,27 +267,75 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
           </div>
         </div>
         <div className="resources-panel__header-actions">
-          <button className="resources-panel__action-btn" onClick={handleFlush} disabled={busy || !sessionId} title="提取当前会话中的可复用信息并写入会话记录">
-            落盘
-          </button>
-          <button className="resources-panel__action-btn" onClick={handleDream} disabled={busy || !sessionId} title="把历史会话记录归纳为长期记忆">
-            <SparklesIcon size="sm" /> 整理
-          </button>
+          {activeTab === "summaries" && (
+            <>
+              <button className="resources-panel__action-btn" onClick={handleFlush} disabled={busy || !sessionId} title="提取当前会话中的可复用信息并写入会话摘要">
+                立即提取
+              </button>
+              <button className="resources-panel__action-btn" onClick={handleDream} disabled={busy || !sessionId} title="把历史会话摘要归纳为长期记忆">
+                <SparklesIcon size="sm" /> 整理到长期记忆
+              </button>
+              <button className="resources-panel__action-btn resources-panel__action-btn--danger" onClick={handleClearSummaries} disabled={busy}>
+                清空摘要
+              </button>
+            </>
+          )}
           <button className="resources-panel__action-btn" onClick={() => void reload()} disabled={loading} title="刷新">
             <RefreshCwIcon size="sm" /> 刷新
           </button>
         </div>
       </div>
 
+      <div className="resources-panel__tabs" role="tablist" aria-label="记忆类型">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "longTerm"}
+          className={`resources-panel__tab${activeTab === "longTerm" ? " resources-panel__tab--active" : ""}`}
+          onClick={() => {
+            setActiveTab("longTerm");
+            setQuery("");
+          }}
+        >
+          长期记忆 <span>{globalCount + workspaceCount}</span>
+        </button>
+        {cwd && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "summaries"}
+            className={`resources-panel__tab${activeTab === "summaries" ? " resources-panel__tab--active" : ""}`}
+            onClick={() => {
+              setActiveTab("summaries");
+              setQuery("");
+            }}
+          >
+            会话摘要 <span>{sessionCount}</span>
+          </button>
+        )}
+      </div>
+
+      {activeTab === "summaries" && (
+        <div className="resources-panel__notice" role="note">
+          <strong>这里不是完整聊天记录。</strong>
+          <span>Agent 会自动提取可复用信息，用于后续检索和整理；可单独删除，删除原会话时也会自动清理。</span>
+        </div>
+      )}
+
       <div className="resources-panel__search">
         <SearchIcon size="md" className="resources-panel__search-icon" />
-        <input className="resources-panel__search-input" aria-label="搜索记忆" placeholder="搜索记忆…" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <input className="resources-panel__search-input" aria-label="搜索记忆" placeholder={activeTab === "summaries" ? "搜索会话摘要…" : "搜索长期记忆…"} value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
 
       <div className="resources-panel__stats">
-        <span>全局 {globalCount}</span>
-        {cwd && <span>· 工作区 {workspaceCount}</span>}
-        {cwd && <span>· 会话记录 {sessionCount}</span>}
+        {activeTab === "summaries" ? (
+          <span>{sessionCount} 条自动摘要</span>
+        ) : (
+          <>
+            <span>全局 {globalCount}</span>
+            {cwd && <span>· 工作区 {workspaceCount}</span>}
+          </>
+        )}
       </div>
 
       {loadError && (
@@ -257,28 +347,33 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
         </div>
       )}
 
-      <button
-        className="resources-panel__create-btn"
-        onClick={() => setEditing({
-          scope: cwd ? "workspace" : "global",
-          path: "MEMORY.md",
-          content: "",
-          revision: "",
-          isNew: true,
-          readOnly: false,
-        })}
-      >
-        <AddIcon size="sm" /> 添加一条记忆
-      </button>
+      {activeTab === "longTerm" && (
+        <button
+          className="resources-panel__create-btn"
+          onClick={() => setEditing({
+            scope: cwd ? "workspace" : "global",
+            path: "MEMORY.md",
+            content: "",
+            revision: "",
+            isNew: true,
+            readOnly: false,
+          })}
+        >
+          <AddIcon size="sm" /> 添加一条记忆
+        </button>
+      )}
 
       <div className="resources-panel__list">
         {!loading && !loadError && filtered.length === 0 && (
           <div className="resources-panel__empty">
             <BookIcon size="xl" color="var(--echo-text-tertiary)" />
-            <p>
-              暂无记忆文件。请确认已在“设置 → 记忆”中启用本地记忆并重启 Agent；
-              也可手动添加，或在对话中使用 <code>/remember</code> 保存。
-            </p>
+            {activeTab === "summaries" ? (
+              <p>暂无会话摘要。Agent 只会在会话中出现值得跨会话复用的信息时生成摘要。</p>
+            ) : (
+              <p>
+                暂无长期记忆。可手动添加，或在对话中使用 <code>/remember</code> 保存。
+              </p>
+            )}
           </div>
         )}
         {filtered.map((entry) => (
@@ -301,11 +396,9 @@ export function ResourcesPanel({ cwd, sessionId, onToast }: ResourcesPanelProps)
               >
                 <EditToolIcon size="sm" />
               </button>
-              {!entry.readOnly && (
-                <button className="resources-panel__icon-btn resources-panel__icon-btn--danger" onClick={() => void handleDelete(entry)} title="删除">
-                  <DeleteIcon size="sm" />
-                </button>
-              )}
+              <button className="resources-panel__icon-btn resources-panel__icon-btn--danger" onClick={() => void handleDelete(entry)} title={entry.scope === "session" ? "删除摘要" : "删除"}>
+                <DeleteIcon size="sm" />
+              </button>
             </div>
           </div>
         ))}
@@ -368,7 +461,7 @@ function MemoryEditor({
             >
               <option value="global">全局记忆</option>
               {cwd && <option value="workspace">当前工作区</option>}
-              {draft.scope === "session" && <option value="session">会话记录（只读）</option>}
+              {draft.scope === "session" && <option value="session">会话摘要（只读）</option>}
             </select>
           </label>
           <label>

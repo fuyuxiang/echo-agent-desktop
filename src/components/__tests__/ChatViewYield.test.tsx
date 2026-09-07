@@ -59,7 +59,7 @@ vi.mock("@/lib/agent-client", async () => {
     "providersList", "flattenModels", "notificationAppend", "subscribeAgentEvents",
     "commandsList", "promptHistory", "tasksList", "taskKill", "permissionList",
     "permissionSave", "permissionModeGet", "permissionModeSet", "memoryList",
-    "memoryGet", "memorySave", "memoryAppend", "memoryDelete", "memoryRewrite", "memoryFlush", "memoryDream",
+    "memoryGet", "memorySave", "memoryAppend", "memoryDelete", "memoryClearSessionSummaries", "memoryRewrite", "memoryFlush", "memoryDream",
     "memoryConfigGet", "memoryConfigSave",
     "sessionSearch", "sessionFork", "agentsList", "agentsGet", "agentsSave",
     "agentsDelete", "agentsTemplate", "mcpList", "mcpUpsert", "mcpDelete",
