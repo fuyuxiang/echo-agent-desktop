@@ -15,7 +15,7 @@ pnpm install --frozen-lockfile
 .\dev.bat
 ```
 
-`vendor/grok-build/` 已作为普通源码提交到主仓库，并直接包含 Windows 兼容性修改和 EchoAgent 协议命名空间迁移。`scripts/setup.ps1` 只检查源码快照是否完整，不会访问或修改其他 Git 仓库。
+`vendor/echo-agent-build/` 已作为普通源码提交到主仓库，并直接包含 Windows 兼容性修改和 EchoAgent 协议命名空间迁移。`scripts/setup.ps1` 只检查源码快照是否完整，不会访问或修改其他 Git 仓库。
 
 ### 1a. MSVC 工具链识别 ⚠️ 最容易漏
 
@@ -108,7 +108,7 @@ Release 构建会触发上游 Runtime 的 `build.rs` 下载 ripgrep，并触发 
 
 - **WiX**：MSI 打包要下 `wix314-binaries.zip`，GitHub 直连可能超时或 10054。走 ghproxy 断点续传下到 `%LOCALAPPDATA%\tauri\WixTools3.14.1\`（解压即用）。注意 Tauri 按版本号找目录，旧的无版本号 `WixTools` 缓存不会被复用。
 - **NSIS**：不额外下载，缓存在 `%LOCALAPPDATA%\tauri\NSIS`，复用即可。
-- **ripgrep**：若不想触发下载，可设置 `GROK_SHELL_BUNDLE_RG_PATH` 指向已安装的 `rg.exe`（如 ZCode 自带）。
+- **ripgrep**：若不想触发下载，可设置 `ECHO_AGENT_SHELL_BUNDLE_RG_PATH` 指向已安装的 `rg.exe`（如 ZCode 自带）。
 
 ## 6. 打包
 

@@ -1166,7 +1166,7 @@ fn rpc_error(id: Value, code: i64, message: String) -> Response {
 /// organization capability. This is intentionally session-scoped: a logout,
 /// expired credential, missing shared scope, or offline server removes the
 /// tools without leaving a connector behind in config.toml.
-pub fn reconcile_registration(tx: &xai_acp_lib::AcpAgentTx, session_id: &str) {
+pub fn reconcile_registration(tx: &echo_agent_acp::AcpAgentTx, session_id: &str) {
     let tx = tx.clone();
     let session_id = session_id.to_string();
     tokio::spawn(async move {
@@ -1176,7 +1176,10 @@ pub fn reconcile_registration(tx: &xai_acp_lib::AcpAgentTx, session_id: &str) {
     });
 }
 
-async fn reconcile_session(tx: &xai_acp_lib::AcpAgentTx, session_id: &str) -> Result<(), String> {
+async fn reconcile_session(
+    tx: &echo_agent_acp::AcpAgentTx,
+    session_id: &str,
+) -> Result<(), String> {
     let (method, payload) = if let Some((url, token)) = active_server_config() {
         (
             "echo.agent/mcp/upsert",

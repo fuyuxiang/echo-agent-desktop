@@ -2552,6 +2552,1415 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo-agent-acp"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "async-trait",
+ "derive_more 2.1.1",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-announcements"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "echo-agent-tools",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-auth"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "http 1.4.2",
+ "reqwest 0.12.28",
+ "reqwest-middleware 0.4.2",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-bundle"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "echo-agent-chat-proxy-types",
+ "echo-agent-config",
+ "flate2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+]
+
+[[package]]
+name = "echo-agent-chat-proxy-types"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "toml 0.9.12+spec-1.1.0",
+]
+
+[[package]]
+name = "echo-agent-chat-state"
+version = "0.1.0"
+dependencies = [
+ "echo-agent-compaction",
+ "echo-agent-compaction-transcript",
+ "echo-agent-sampling-types",
+ "echo-agent-token-estimation",
+ "indexmap 2.14.0",
+ "serde",
+ "serde_json",
+ "strum 0.27.2",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-circuit-breaker"
+version = "0.1.0"
+dependencies = [
+ "log",
+]
+
+[[package]]
+name = "echo-agent-codebase-graph"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "clap",
+ "crossbeam",
+ "dashmap",
+ "dunce",
+ "echo-agent-paths",
+ "git2",
+ "hashbrown 0.15.5",
+ "ignore",
+ "libc",
+ "mimalloc",
+ "nohash-hasher",
+ "num_cpus",
+ "once_cell",
+ "petgraph 0.6.5",
+ "rayon",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "tokio",
+ "tracing",
+ "tree-sitter",
+ "tree-sitter-go",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+]
+
+[[package]]
+name = "echo-agent-compaction"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-compaction-transcript"
+version = "0.1.0"
+dependencies = [
+ "echo-agent-sampling-types",
+ "regex",
+ "serde_json",
+ "strum 0.27.2",
+]
+
+[[package]]
+name = "echo-agent-computer-hub-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "echo-agent-tool-protocol",
+ "echo-agent-tool-runtime",
+ "echo-agent-tool-types",
+ "futures",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-computer-hub-mcp-adapter"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "echo-agent-computer-hub-sdk",
+ "echo-agent-tool-protocol",
+ "echo-agent-tool-runtime",
+ "echo-agent-tool-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-computer-hub-sdk"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dashmap",
+ "echo-agent-computer-hub-core",
+ "echo-agent-tool-protocol",
+ "echo-agent-tool-runtime",
+ "echo-agent-tool-types",
+ "echo-agent-tracing",
+ "fastrace",
+ "fastrace-opentelemetry",
+ "futures",
+ "http 1.4.2",
+ "indexmap 2.14.0",
+ "opentelemetry",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "parking_lot",
+ "prometheus",
+ "prometheus-parse",
+ "prost",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-tungstenite 0.27.0",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "echo-agent-config"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "core-foundation",
+ "dunce",
+ "echo-agent-chat-proxy-types",
+ "echo-agent-home",
+ "echo-agent-tty-utils",
+ "echo-agent-version",
+ "ring",
+ "semver",
+ "serde",
+ "serde_json",
+ "shellexpand",
+ "thiserror 2.0.19",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "urlencoding",
+ "which",
+]
+
+[[package]]
+name = "echo-agent-config-types"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "echo-agent-announcements",
+ "echo-agent-config",
+ "echo-agent-mcp",
+ "indexmap 2.14.0",
+ "serde",
+ "serde_json",
+ "strum 0.27.2",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dirs 6.0.0",
+ "dunce",
+ "echo-agent-config",
+ "echo-agent-hooks",
+ "echo-agent-sampling-types",
+ "echo-agent-token-estimation",
+ "echo-agent-tool-types",
+ "echo-agent-tools",
+ "echo-agent-tty-utils",
+ "git2",
+ "ignore",
+ "minijinja",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "strum 0.27.2",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "echo-agent-diag-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "echo-agent-version",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-env"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "echo-agent-extra-ca"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.28",
+ "rustls",
+ "rustls-native-certs",
+ "tracing",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "echo-agent-fast-worktree"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "clap",
+ "crossbeam",
+ "dashmap",
+ "dunce",
+ "echo-agent-gix-status",
+ "echo-agent-home",
+ "echo-agent-sqlite-journal",
+ "echo-agent-tty-utils",
+ "gix",
+ "gix-status",
+ "globset",
+ "ignore",
+ "libc",
+ "nix 0.30.1",
+ "num_cpus",
+ "rapidhash",
+ "reflink-copy",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "echo-agent-file-utils"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-compression",
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-smithy-http-client",
+ "base64 0.22.1",
+ "chrono",
+ "dirs 5.0.1",
+ "dunce",
+ "echo-agent-auth",
+ "echo-agent-chat-proxy-types",
+ "echo-agent-circuit-breaker",
+ "echo-agent-extra-ca",
+ "echo-agent-version",
+ "futures",
+ "gcloud-storage",
+ "indexmap 2.14.0",
+ "opentelemetry",
+ "reflink-copy",
+ "reqwest 0.12.28",
+ "reqwest-middleware 0.4.2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "tracing-opentelemetry",
+ "url",
+ "zstd",
+]
+
+[[package]]
+name = "echo-agent-foreign-sessions"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dirs 6.0.0",
+ "dunce",
+ "echo-agent-sqlite-journal",
+ "git2",
+ "libc",
+ "rusqlite",
+ "serde_json",
+ "uuid",
+ "zstd",
+]
+
+[[package]]
+name = "echo-agent-fsnotify"
+version = "0.1.0"
+dependencies = [
+ "dunce",
+ "git2",
+ "globset",
+ "ignore",
+ "notify",
+ "notify-debouncer-full",
+ "serde",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-fuzzy-file-search"
+version = "0.1.0"
+dependencies = [
+ "ignore",
+ "nucleo",
+ "serde",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-gix-status"
+version = "0.1.0"
+dependencies = [
+ "gix",
+ "libc",
+]
+
+[[package]]
+name = "echo-agent-home"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "dunce",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-hooks"
+version = "0.1.0"
+dependencies = [
+ "echo-agent-config",
+ "echo-agent-extra-ca",
+ "echo-agent-tools",
+ "fastrand",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "shellexpand",
+ "strum 0.27.2",
+ "thiserror 2.0.19",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "echo-agent-hooks-plugins-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "echo-agent-http"
+version = "0.1.0"
+dependencies = [
+ "echo-agent-auth",
+ "echo-agent-extra-ca",
+ "echo-agent-sampler",
+ "echo-agent-telemetry",
+ "echo-agent-version",
+ "echo-agent-workspace",
+ "reqwest 0.12.28",
+ "reqwest-middleware 0.4.2",
+ "rustls",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-hunk-tracker"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dunce",
+ "echo-agent-gix-status",
+ "gix",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "similar",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "echo-agent-interjection-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "echo-agent-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-mcp"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "async-trait",
+ "axum",
+ "echo-agent-config",
+ "echo-agent-extra-ca",
+ "echo-agent-session-events",
+ "echo-agent-telemetry",
+ "echo-agent-tool-protocol",
+ "echo-agent-tool-runtime",
+ "echo-agent-tool-types",
+ "echo-agent-tools",
+ "echo-agent-version",
+ "echo-agent-workspace-types",
+ "futures",
+ "http 1.4.2",
+ "libc",
+ "oauth2",
+ "parking_lot",
+ "regex",
+ "reqwest 0.13.4",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "sse-stream",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "webbrowser",
+ "which",
+]
+
+[[package]]
+name = "echo-agent-memory"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "blake3",
+ "chrono",
+ "dunce",
+ "echo-agent-auth",
+ "echo-agent-config-types",
+ "echo-agent-http",
+ "echo-agent-sqlite-journal",
+ "echo-agent-token-estimation",
+ "echo-agent-tools",
+ "echo-agent-version",
+ "flate2",
+ "git2",
+ "nix 0.30.1",
+ "notify",
+ "reqwest 0.12.28",
+ "reqwest-middleware 0.4.2",
+ "rusqlite",
+ "serde_json",
+ "sqlite-vec",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "windows",
+]
+
+[[package]]
+name = "echo-agent-mixpanel"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "echo-agent-secrets",
+ "reqwest 0.12.28",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "echo-agent-models"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "echo-agent-paths"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "serde",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "echo-agent-plugin-marketplace"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dirs 5.0.1",
+ "dunce",
+ "echo-agent-config",
+ "echo-agent-core",
+ "echo-agent-hooks-plugins-types",
+ "echo-agent-tty-utils",
+ "fs2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-prompt-queue"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "echo-agent-proto-build"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "pbjson-build",
+ "prost-build",
+ "prost-reflect",
+ "tempfile",
+ "tonic-prost-build",
+]
+
+[[package]]
+name = "echo-agent-runtime"
+version = "1.0.8"
+dependencies = [
+ "agent-client-protocol",
+ "anyhow",
+ "arc-swap",
+ "async-openai",
+ "async-trait",
+ "axum",
+ "backon",
+ "base64 0.22.1",
+ "blake3",
+ "bm25",
+ "bytes",
+ "chrono",
+ "clap",
+ "dashmap",
+ "dirs 6.0.0",
+ "dunce",
+ "echo-agent-acp",
+ "echo-agent-announcements",
+ "echo-agent-auth",
+ "echo-agent-bundle",
+ "echo-agent-chat-proxy-types",
+ "echo-agent-chat-state",
+ "echo-agent-codebase-graph",
+ "echo-agent-compaction",
+ "echo-agent-compaction-transcript",
+ "echo-agent-computer-hub-sdk",
+ "echo-agent-config",
+ "echo-agent-config-types",
+ "echo-agent-core",
+ "echo-agent-extra-ca",
+ "echo-agent-fast-worktree",
+ "echo-agent-file-utils",
+ "echo-agent-foreign-sessions",
+ "echo-agent-fsnotify",
+ "echo-agent-hooks",
+ "echo-agent-hooks-plugins-types",
+ "echo-agent-http",
+ "echo-agent-hunk-tracker",
+ "echo-agent-interjection-core",
+ "echo-agent-lifecycle",
+ "echo-agent-mcp",
+ "echo-agent-memory",
+ "echo-agent-models",
+ "echo-agent-paths",
+ "echo-agent-plugin-marketplace",
+ "echo-agent-prompt-queue",
+ "echo-agent-runtime-base",
+ "echo-agent-runtime-session-support",
+ "echo-agent-runtime-terminal",
+ "echo-agent-sampler",
+ "echo-agent-sampling-types",
+ "echo-agent-sandbox",
+ "echo-agent-session-events",
+ "echo-agent-session-search",
+ "echo-agent-shared",
+ "echo-agent-status-line",
+ "echo-agent-subagent-resolution",
+ "echo-agent-system-power",
+ "echo-agent-telemetry",
+ "echo-agent-token-estimation",
+ "echo-agent-tool-protocol",
+ "echo-agent-tool-runtime",
+ "echo-agent-tool-types",
+ "echo-agent-tools",
+ "echo-agent-tracing-macros",
+ "echo-agent-tty-utils",
+ "echo-agent-version",
+ "echo-agent-workflow",
+ "echo-agent-workspace",
+ "flate2",
+ "fs2",
+ "futures",
+ "futures-util",
+ "gcloud-storage",
+ "gethostname",
+ "git2",
+ "glob",
+ "globset",
+ "ignore",
+ "image",
+ "indexmap 2.14.0",
+ "infer 0.15.0",
+ "jsonschema",
+ "jsonwebtoken",
+ "kanal",
+ "libc",
+ "moka",
+ "nix 0.30.1",
+ "notify",
+ "notify-debouncer-mini",
+ "nucleo",
+ "obfstr",
+ "parking_lot",
+ "rand 0.9.5",
+ "regex",
+ "reqwest 0.12.28",
+ "reqwest-middleware 0.4.2",
+ "rustls",
+ "semver",
+ "serde",
+ "serde_ignored",
+ "serde_json",
+ "sha2 0.10.9",
+ "similar",
+ "siphasher",
+ "strum 0.27.2",
+ "tar",
+ "tdigests",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-retry",
+ "tokio-rustls",
+ "tokio-stream",
+ "tokio-tungstenite 0.27.0",
+ "tokio-util",
+ "toml 0.9.12+spec-1.1.0",
+ "toml_edit 0.22.27",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "urlencoding",
+ "uuid",
+ "walkdir",
+ "webbrowser",
+ "windows",
+ "zstd",
+]
+
+[[package]]
+name = "echo-agent-runtime-base"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "echo-agent-config",
+ "echo-agent-env",
+ "echo-agent-extra-ca",
+ "echo-agent-shared",
+ "echo-agent-tty-utils",
+ "echo-agent-version",
+ "libc",
+ "nix 0.30.1",
+ "pprof",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "url",
+ "windows",
+]
+
+[[package]]
+name = "echo-agent-runtime-session-support"
+version = "0.1.0"
+dependencies = [
+ "echo-agent-http",
+ "echo-agent-version",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-runtime-terminal"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "echo-agent-acp",
+ "echo-agent-config",
+ "echo-agent-paths",
+ "echo-agent-sandbox",
+ "echo-agent-tools",
+ "echo-agent-tty-utils",
+ "echo-agent-workspace",
+ "futures",
+ "libc",
+ "portable-pty",
+ "process-wrap",
+ "serde",
+ "serde_json",
+ "shlex 1.3.0",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "uuid",
+ "windows",
+]
+
+[[package]]
+name = "echo-agent-sampler"
+version = "0.1.0"
+dependencies = [
+ "async-openai",
+ "async-stream",
+ "chrono",
+ "echo-agent-auth",
+ "echo-agent-extra-ca",
+ "echo-agent-sampling-types",
+ "echo-agent-version",
+ "eventsource-stream",
+ "futures-util",
+ "indexmap 2.14.0",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "echo-agent-sampling-types"
+version = "0.1.0"
+dependencies = [
+ "async-openai",
+ "chrono",
+ "echo-agent-circuit-breaker",
+ "echo-agent-compaction",
+ "echo-agent-tools",
+ "indexmap 2.14.0",
+ "reqwest 0.12.28",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-sandbox"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs 5.0.1",
+ "dunce",
+ "echo-agent-config",
+ "globset",
+ "ignore",
+ "libc",
+ "nono",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "echo-agent-secrets"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "echo-agent-session-events"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "strum 0.27.2",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-session-search"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "chrono",
+ "echo-agent-config",
+ "echo-agent-sqlite-journal",
+ "echo-agent-telemetry",
+ "fs2",
+ "parking_lot",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "echo-agent-shared"
+version = "0.0.0"
+dependencies = [
+ "agent-client-protocol",
+ "anyhow",
+ "arboard",
+ "base64 0.22.1",
+ "dirs 6.0.0",
+ "dunce",
+ "echo-agent-chat-proxy-types",
+ "echo-agent-config-types",
+ "echo-agent-models",
+ "echo-agent-status-line",
+ "echo-agent-tools",
+ "echo-agent-tty-utils",
+ "image",
+ "libc",
+ "objc2",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tracing",
+ "urlencoding",
+ "wl-clipboard-rs",
+]
+
+[[package]]
+name = "echo-agent-sqlite-journal"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rusqlite",
+ "tracing",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "echo-agent-status-line"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "strum 0.27.2",
+]
+
+[[package]]
+name = "echo-agent-subagent-resolution"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "echo-agent-core",
+ "echo-agent-sampling-types",
+ "echo-agent-tool-types",
+ "echo-agent-tools",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-system-power"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.59.0",
+ "zbus",
+]
+
+[[package]]
+name = "echo-agent-telemetry"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "dirs 5.0.1",
+ "echo-agent-auth",
+ "echo-agent-config",
+ "echo-agent-env",
+ "echo-agent-extra-ca",
+ "echo-agent-file-utils",
+ "echo-agent-mixpanel",
+ "echo-agent-sampler",
+ "echo-agent-secrets",
+ "echo-agent-session-events",
+ "echo-agent-token-estimation",
+ "echo-agent-tty-utils",
+ "echo-agent-version",
+ "futures-executor",
+ "git2",
+ "http 1.4.2",
+ "mid",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "parking_lot",
+ "reqwest 0.12.28",
+ "sentry",
+ "serde",
+ "serde_json",
+ "strum 0.27.2",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-appender",
+ "tracing-chrome",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "webpki-roots 0.26.11",
+ "whoami",
+]
+
+[[package]]
+name = "echo-agent-token-estimation"
+version = "0.1.0"
+
+[[package]]
+name = "echo-agent-tool-protocol"
+version = "0.1.0"
+dependencies = [
+ "echo-agent-tool-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "echo-agent-tool-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "echo-agent-tool-protocol",
+ "echo-agent-tool-types",
+ "echo-agent-tools-api",
+ "futures",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "tokio-util",
+]
+
+[[package]]
+name = "echo-agent-tool-types"
+version = "0.1.0"
+dependencies = [
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "echo-agent-tools"
+version = "0.1.220-alpha.4"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-lsp",
+ "async-openai",
+ "async-stream",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "command-fds",
+ "crc32fast",
+ "derive_more 2.1.1",
+ "dirs 5.0.1",
+ "dunce",
+ "echo-agent-auth",
+ "echo-agent-computer-hub-core",
+ "echo-agent-computer-hub-sdk",
+ "echo-agent-config",
+ "echo-agent-env",
+ "echo-agent-extra-ca",
+ "echo-agent-file-utils",
+ "echo-agent-interjection-core",
+ "echo-agent-sandbox",
+ "echo-agent-token-estimation",
+ "echo-agent-tool-protocol",
+ "echo-agent-tool-runtime",
+ "echo-agent-tool-types",
+ "echo-agent-tools-api",
+ "echo-agent-tty-utils",
+ "echo-agent-version",
+ "echo-agent-workspace-types",
+ "educe",
+ "flate2",
+ "fs2",
+ "futures",
+ "futures-util",
+ "globset",
+ "htmd",
+ "ignore",
+ "image",
+ "indexmap 2.14.0",
+ "infer 0.19.0",
+ "libc",
+ "minijinja",
+ "nix 0.30.1",
+ "parking_lot",
+ "pdf_oxide",
+ "pulldown-cmark",
+ "quick-xml 0.38.4",
+ "regex",
+ "reqwest 0.12.28",
+ "schemars 1.2.1",
+ "scraper",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "shellexpand",
+ "similar",
+ "strip-ansi-escapes",
+ "strum 0.26.3",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tracing",
+ "url",
+ "uuid",
+ "which",
+ "wildmatch",
+ "windows",
+ "zip 3.0.0",
+]
+
+[[package]]
+name = "echo-agent-tools-api"
+version = "0.1.220-alpha.4"
+dependencies = [
+ "echo-agent-proto-build",
+ "echo-agent-tool-protocol",
+ "prost",
+ "serde",
+ "serde_json",
+ "tonic",
+ "tonic-prost",
+]
+
+[[package]]
+name = "echo-agent-tracing"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fastrace",
+ "fastrace-opentelemetry",
+ "fastrace-reqwest",
+ "fastrace-tonic",
+ "http 1.4.2",
+ "log",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "reqwest 0.12.28",
+ "reqwest-middleware 0.4.2",
+ "tokio",
+ "tonic",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-opentelemetry",
+ "uuid",
+]
+
+[[package]]
+name = "echo-agent-tracing-macros"
+version = "0.1.0"
+
+[[package]]
+name = "echo-agent-tty-utils"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "nix 0.30.1",
+ "tokio",
+ "windows",
+]
+
+[[package]]
+name = "echo-agent-version"
+version = "1.0.8"
+dependencies = [
+ "semver",
+]
+
+[[package]]
+name = "echo-agent-workflow"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rhai",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-workspace"
+version = "0.1.220-alpha.4"
+dependencies = [
+ "agent-client-protocol",
+ "anyhow",
+ "arc-swap",
+ "async-stream",
+ "async-trait",
+ "base64 0.22.1",
+ "bstr",
+ "chrono",
+ "clap",
+ "dashmap",
+ "dirs 6.0.0",
+ "dunce",
+ "echo-agent-acp",
+ "echo-agent-auth",
+ "echo-agent-codebase-graph",
+ "echo-agent-computer-hub-mcp-adapter",
+ "echo-agent-computer-hub-sdk",
+ "echo-agent-config",
+ "echo-agent-config-types",
+ "echo-agent-core",
+ "echo-agent-diag-server",
+ "echo-agent-env",
+ "echo-agent-extra-ca",
+ "echo-agent-fast-worktree",
+ "echo-agent-file-utils",
+ "echo-agent-fsnotify",
+ "echo-agent-fuzzy-file-search",
+ "echo-agent-hooks",
+ "echo-agent-hunk-tracker",
+ "echo-agent-mcp",
+ "echo-agent-paths",
+ "echo-agent-sandbox",
+ "echo-agent-session-events",
+ "echo-agent-telemetry",
+ "echo-agent-tool-protocol",
+ "echo-agent-tool-runtime",
+ "echo-agent-tool-types",
+ "echo-agent-tools",
+ "echo-agent-tools-api",
+ "echo-agent-tracing",
+ "echo-agent-tty-utils",
+ "echo-agent-version",
+ "echo-agent-workspace-client",
+ "echo-agent-workspace-daemon",
+ "echo-agent-workspace-types",
+ "fastrace",
+ "fs2",
+ "futures",
+ "git2",
+ "glob",
+ "hashbrown 0.16.1",
+ "humantime-serde",
+ "ignore",
+ "indexmap 2.14.0",
+ "infer 0.19.0",
+ "libc",
+ "nohash-hasher",
+ "parking_lot",
+ "prometheus",
+ "rand 0.9.5",
+ "regex",
+ "reqwest 0.12.28",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "smallvec",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-tungstenite 0.27.0",
+ "tokio-util",
+ "toml 0.9.12+spec-1.1.0",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "url",
+ "urlencoding",
+ "uuid",
+ "wait-timeout",
+ "zstd",
+]
+
+[[package]]
+name = "echo-agent-workspace-client"
+version = "0.1.0"
+dependencies = [
+ "echo-agent-computer-hub-sdk",
+ "echo-agent-tool-protocol",
+ "echo-agent-tool-runtime",
+ "echo-agent-workspace-types",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "echo-agent-workspace-daemon"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "echo-agent-computer-hub-sdk",
+ "echo-agent-tty-utils",
+ "fs2",
+ "libc",
+ "prometheus",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "windows",
+]
+
+[[package]]
+name = "echo-agent-workspace-types"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "echoagent"
 version = "0.3.10"
 dependencies = [
@@ -2561,6 +3970,12 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
+ "echo-agent-acp",
+ "echo-agent-runtime",
+ "echo-agent-tool-protocol",
+ "echo-agent-tool-runtime",
+ "echo-agent-tool-types",
+ "echo-agent-tools",
  "ed25519-dalek",
  "fs2",
  "futures",
@@ -2594,12 +4009,6 @@ dependencies = [
  "urlencoding",
  "uuid",
  "windows-sys 0.61.2",
- "xai-acp-lib",
- "xai-grok-shell",
- "xai-grok-tools",
- "xai-tool-protocol",
- "xai-tool-runtime",
- "xai-tool-types",
  "zip 3.0.0",
 ]
 
@@ -7750,16 +9159,6 @@ checksum = "239df02d8349b06fc07398a3a1697b06418223b1c7725085e801e7c0fc6a12ec"
 dependencies = [
  "bitflags 2.13.1",
  "hex",
-]
-
-[[package]]
-name = "prod-mc-cli-chat-proxy-types"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
@@ -12942,1405 +14341,6 @@ dependencies = [
  "cmpv2",
  "cms",
  "der",
-]
-
-[[package]]
-name = "xai-acp-lib"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "async-trait",
- "derive_more 2.1.1",
- "futures",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "xai-agent-lifecycle"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "tracing",
-]
-
-[[package]]
-name = "xai-chat-state"
-version = "0.1.0"
-dependencies = [
- "indexmap 2.14.0",
- "serde",
- "serde_json",
- "strum 0.27.2",
- "tokio",
- "tokio-util",
- "tracing",
- "xai-compaction-transcript",
- "xai-grok-compaction",
- "xai-grok-sampling-types",
- "xai-token-estimation",
-]
-
-[[package]]
-name = "xai-circuit-breaker"
-version = "0.1.0"
-dependencies = [
- "log",
-]
-
-[[package]]
-name = "xai-codebase-graph"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "clap",
- "crossbeam",
- "dashmap",
- "dunce",
- "git2",
- "hashbrown 0.15.5",
- "ignore",
- "libc",
- "mimalloc",
- "nohash-hasher",
- "num_cpus",
- "once_cell",
- "petgraph 0.6.5",
- "rayon",
- "rustc-hash",
- "serde",
- "serde_json",
- "smallvec",
- "tokio",
- "tracing",
- "tree-sitter",
- "tree-sitter-go",
- "tree-sitter-javascript",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
- "xai-grok-paths",
-]
-
-[[package]]
-name = "xai-compaction-transcript"
-version = "0.1.0"
-dependencies = [
- "regex",
- "serde_json",
- "strum 0.27.2",
- "xai-grok-sampling-types",
-]
-
-[[package]]
-name = "xai-computer-hub-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "futures",
- "serde_json",
- "tracing",
- "xai-tool-protocol",
- "xai-tool-runtime",
- "xai-tool-types",
-]
-
-[[package]]
-name = "xai-computer-hub-mcp-adapter"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
- "xai-computer-hub-sdk",
- "xai-tool-protocol",
- "xai-tool-runtime",
- "xai-tool-types",
-]
-
-[[package]]
-name = "xai-computer-hub-sdk"
-version = "0.1.0"
-dependencies = [
- "arc-swap",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "dashmap",
- "fastrace",
- "fastrace-opentelemetry",
- "futures",
- "http 1.4.2",
- "indexmap 2.14.0",
- "opentelemetry",
- "opentelemetry-proto",
- "opentelemetry_sdk",
- "parking_lot",
- "prometheus",
- "prometheus-parse",
- "prost",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
- "tokio-tungstenite 0.27.0",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
- "xai-computer-hub-core",
- "xai-tool-protocol",
- "xai-tool-runtime",
- "xai-tool-types",
- "xai-tracing",
-]
-
-[[package]]
-name = "xai-fast-worktree"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "clap",
- "crossbeam",
- "dashmap",
- "dunce",
- "gix",
- "gix-status",
- "globset",
- "ignore",
- "libc",
- "nix 0.30.1",
- "num_cpus",
- "rapidhash",
- "reflink-copy",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "xai-gix-status",
- "xai-grok-home",
- "xai-sqlite-journal",
- "xai-tty-utils",
-]
-
-[[package]]
-name = "xai-file-utils"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-compression",
- "aws-config",
- "aws-sdk-s3",
- "aws-smithy-http-client",
- "base64 0.22.1",
- "chrono",
- "dirs 5.0.1",
- "dunce",
- "futures",
- "gcloud-storage",
- "indexmap 2.14.0",
- "opentelemetry",
- "prod-mc-cli-chat-proxy-types",
- "reflink-copy",
- "reqwest 0.12.28",
- "reqwest-middleware 0.4.2",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tracing",
- "tracing-opentelemetry",
- "url",
- "xai-circuit-breaker",
- "xai-grok-auth",
- "xai-grok-extra-ca",
- "xai-grok-version",
- "zstd",
-]
-
-[[package]]
-name = "xai-fsnotify"
-version = "0.1.0"
-dependencies = [
- "dunce",
- "git2",
- "globset",
- "ignore",
- "notify",
- "notify-debouncer-full",
- "serde",
- "thiserror 2.0.19",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "xai-fuzzy-file-search"
-version = "0.1.0"
-dependencies = [
- "ignore",
- "nucleo",
- "serde",
- "tracing",
-]
-
-[[package]]
-name = "xai-gix-status"
-version = "0.1.0"
-dependencies = [
- "gix",
- "libc",
-]
-
-[[package]]
-name = "xai-grok-agent"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dirs 6.0.0",
- "dunce",
- "git2",
- "ignore",
- "minijinja",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2 0.10.9",
- "strum 0.27.2",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
- "xai-grok-config",
- "xai-grok-hooks",
- "xai-grok-sampling-types",
- "xai-grok-tools",
- "xai-token-estimation",
- "xai-tool-types",
- "xai-tty-utils",
- "zeroize",
-]
-
-[[package]]
-name = "xai-grok-announcements"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "xai-grok-tools",
-]
-
-[[package]]
-name = "xai-grok-auth"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "http 1.4.2",
- "reqwest 0.12.28",
- "reqwest-middleware 0.4.2",
- "tracing",
-]
-
-[[package]]
-name = "xai-grok-bundle"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "flate2",
- "prod-mc-cli-chat-proxy-types",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tar",
- "xai-grok-config",
-]
-
-[[package]]
-name = "xai-grok-compaction"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "serde",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "xai-grok-config"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "blake3",
- "core-foundation",
- "dunce",
- "prod-mc-cli-chat-proxy-types",
- "ring",
- "semver",
- "serde",
- "serde_json",
- "shellexpand",
- "thiserror 2.0.19",
- "toml 0.9.12+spec-1.1.0",
- "tracing",
- "urlencoding",
- "which",
- "xai-grok-home",
- "xai-grok-version",
- "xai-tty-utils",
-]
-
-[[package]]
-name = "xai-grok-config-types"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "indexmap 2.14.0",
- "serde",
- "serde_json",
- "strum 0.27.2",
- "toml 0.9.12+spec-1.1.0",
- "tracing",
- "xai-grok-announcements",
- "xai-grok-config",
- "xai-grok-mcp",
-]
-
-[[package]]
-name = "xai-grok-diag-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "serde",
- "tokio",
- "tracing",
- "xai-grok-version",
-]
-
-[[package]]
-name = "xai-grok-env"
-version = "0.1.0"
-dependencies = [
- "tracing",
- "url",
-]
-
-[[package]]
-name = "xai-grok-extra-ca"
-version = "0.1.0"
-dependencies = [
- "reqwest 0.12.28",
- "rustls",
- "rustls-native-certs",
- "tracing",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "xai-grok-foreign-sessions"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dirs 6.0.0",
- "dunce",
- "git2",
- "libc",
- "rusqlite",
- "serde_json",
- "uuid",
- "xai-sqlite-journal",
- "zstd",
-]
-
-[[package]]
-name = "xai-grok-home"
-version = "0.1.0"
-dependencies = [
- "dirs 5.0.1",
- "dunce",
- "tracing",
-]
-
-[[package]]
-name = "xai-grok-hooks"
-version = "0.1.0"
-dependencies = [
- "fastrand",
- "regex",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "shellexpand",
- "strum 0.27.2",
- "thiserror 2.0.19",
- "tokio",
- "toml 0.9.12+spec-1.1.0",
- "tracing",
- "url",
- "xai-grok-config",
- "xai-grok-extra-ca",
- "xai-grok-tools",
-]
-
-[[package]]
-name = "xai-grok-http"
-version = "0.1.0"
-dependencies = [
- "reqwest 0.12.28",
- "reqwest-middleware 0.4.2",
- "rustls",
- "serde_json",
- "tracing",
- "xai-grok-auth",
- "xai-grok-extra-ca",
- "xai-grok-sampler",
- "xai-grok-telemetry",
- "xai-grok-version",
- "xai-grok-workspace",
-]
-
-[[package]]
-name = "xai-grok-mcp"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "async-trait",
- "axum",
- "futures",
- "http 1.4.2",
- "libc",
- "oauth2",
- "parking_lot",
- "regex",
- "reqwest 0.13.4",
- "rmcp",
- "serde",
- "serde_json",
- "sse-stream",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
- "webbrowser",
- "which",
- "xai-grok-config",
- "xai-grok-extra-ca",
- "xai-grok-session-events",
- "xai-grok-telemetry",
- "xai-grok-tools",
- "xai-grok-version",
- "xai-grok-workspace-types",
- "xai-tool-protocol",
- "xai-tool-runtime",
- "xai-tool-types",
-]
-
-[[package]]
-name = "xai-grok-memory"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arc-swap",
- "async-trait",
- "blake3",
- "chrono",
- "dunce",
- "flate2",
- "git2",
- "nix 0.30.1",
- "notify",
- "reqwest 0.12.28",
- "reqwest-middleware 0.4.2",
- "rusqlite",
- "serde_json",
- "sqlite-vec",
- "tar",
- "tempfile",
- "tokio",
- "tracing",
- "windows",
- "xai-grok-auth",
- "xai-grok-config-types",
- "xai-grok-http",
- "xai-grok-tools",
- "xai-grok-version",
- "xai-sqlite-journal",
- "xai-token-estimation",
-]
-
-[[package]]
-name = "xai-grok-models"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "xai-grok-paths"
-version = "0.1.0"
-dependencies = [
- "camino",
- "serde",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "xai-grok-plugin-marketplace"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dirs 5.0.1",
- "dunce",
- "fs2",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "toml 0.9.12+spec-1.1.0",
- "tracing",
- "xai-grok-agent",
- "xai-grok-config",
- "xai-hooks-plugins-types",
- "xai-tty-utils",
-]
-
-[[package]]
-name = "xai-grok-sampler"
-version = "0.1.0"
-dependencies = [
- "async-openai",
- "async-stream",
- "chrono",
- "eventsource-stream",
- "futures-util",
- "indexmap 2.14.0",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
- "tracing",
- "uuid",
- "xai-grok-auth",
- "xai-grok-extra-ca",
- "xai-grok-sampling-types",
- "xai-grok-version",
-]
-
-[[package]]
-name = "xai-grok-sampling-types"
-version = "0.1.0"
-dependencies = [
- "async-openai",
- "chrono",
- "indexmap 2.14.0",
- "reqwest 0.12.28",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tracing",
- "xai-circuit-breaker",
- "xai-grok-compaction",
- "xai-grok-tools",
-]
-
-[[package]]
-name = "xai-grok-sandbox"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "dirs 5.0.1",
- "dunce",
- "globset",
- "ignore",
- "libc",
- "nono",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.19",
- "toml 0.9.12+spec-1.1.0",
- "tracing",
- "url",
- "xai-grok-config",
-]
-
-[[package]]
-name = "xai-grok-secrets"
-version = "0.1.0"
-dependencies = [
- "regex",
- "serde_json",
- "url",
-]
-
-[[package]]
-name = "xai-grok-session-events"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "strum 0.27.2",
- "tracing",
-]
-
-[[package]]
-name = "xai-grok-session-search"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "blake3",
- "chrono",
- "fs2",
- "parking_lot",
- "rusqlite",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
- "xai-grok-config",
- "xai-grok-telemetry",
- "xai-sqlite-journal",
-]
-
-[[package]]
-name = "xai-grok-shared"
-version = "0.0.0"
-dependencies = [
- "agent-client-protocol",
- "anyhow",
- "arboard",
- "base64 0.22.1",
- "dirs 6.0.0",
- "dunce",
- "image",
- "libc",
- "objc2",
- "parking_lot",
- "prod-mc-cli-chat-proxy-types",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.19",
- "tracing",
- "urlencoding",
- "wl-clipboard-rs",
- "xai-grok-config-types",
- "xai-grok-models",
- "xai-grok-status-line",
- "xai-grok-tools",
- "xai-tty-utils",
-]
-
-[[package]]
-name = "xai-grok-shell"
-version = "1.0.8"
-dependencies = [
- "agent-client-protocol",
- "anyhow",
- "arc-swap",
- "async-openai",
- "async-trait",
- "axum",
- "backon",
- "base64 0.22.1",
- "blake3",
- "bm25",
- "bytes",
- "chrono",
- "clap",
- "dashmap",
- "dirs 6.0.0",
- "dunce",
- "flate2",
- "fs2",
- "futures",
- "futures-util",
- "gcloud-storage",
- "gethostname",
- "git2",
- "glob",
- "globset",
- "ignore",
- "image",
- "indexmap 2.14.0",
- "infer 0.15.0",
- "jsonschema",
- "jsonwebtoken",
- "kanal",
- "libc",
- "moka",
- "nix 0.30.1",
- "notify",
- "notify-debouncer-mini",
- "nucleo",
- "obfstr",
- "parking_lot",
- "prod-mc-cli-chat-proxy-types",
- "rand 0.9.5",
- "regex",
- "reqwest 0.12.28",
- "reqwest-middleware 0.4.2",
- "rustls",
- "semver",
- "serde",
- "serde_ignored",
- "serde_json",
- "sha2 0.10.9",
- "similar",
- "siphasher",
- "strum 0.27.2",
- "tar",
- "tdigests",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "tokio-retry",
- "tokio-rustls",
- "tokio-stream",
- "tokio-tungstenite 0.27.0",
- "tokio-util",
- "toml 0.9.12+spec-1.1.0",
- "toml_edit 0.22.27",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
- "urlencoding",
- "uuid",
- "walkdir",
- "webbrowser",
- "windows",
- "xai-acp-lib",
- "xai-agent-lifecycle",
- "xai-chat-state",
- "xai-codebase-graph",
- "xai-compaction-transcript",
- "xai-computer-hub-sdk",
- "xai-fast-worktree",
- "xai-file-utils",
- "xai-fsnotify",
- "xai-grok-agent",
- "xai-grok-announcements",
- "xai-grok-auth",
- "xai-grok-bundle",
- "xai-grok-compaction",
- "xai-grok-config",
- "xai-grok-config-types",
- "xai-grok-extra-ca",
- "xai-grok-foreign-sessions",
- "xai-grok-hooks",
- "xai-grok-http",
- "xai-grok-mcp",
- "xai-grok-memory",
- "xai-grok-models",
- "xai-grok-paths",
- "xai-grok-plugin-marketplace",
- "xai-grok-sampler",
- "xai-grok-sampling-types",
- "xai-grok-sandbox",
- "xai-grok-session-events",
- "xai-grok-session-search",
- "xai-grok-shared",
- "xai-grok-shell-base",
- "xai-grok-shell-session-support",
- "xai-grok-shell-terminal",
- "xai-grok-status-line",
- "xai-grok-subagent-resolution",
- "xai-grok-telemetry",
- "xai-grok-tools",
- "xai-grok-version",
- "xai-grok-workspace",
- "xai-hooks-plugins-types",
- "xai-hunk-tracker",
- "xai-interjection-core",
- "xai-prompt-queue",
- "xai-system-power",
- "xai-token-estimation",
- "xai-tool-protocol",
- "xai-tool-runtime",
- "xai-tool-types",
- "xai-tracing-macros",
- "xai-tty-utils",
- "xai-workflow",
- "zstd",
-]
-
-[[package]]
-name = "xai-grok-shell-base"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "libc",
- "nix 0.30.1",
- "pprof",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
- "url",
- "windows",
- "xai-grok-config",
- "xai-grok-env",
- "xai-grok-extra-ca",
- "xai-grok-shared",
- "xai-grok-version",
- "xai-tty-utils",
-]
-
-[[package]]
-name = "xai-grok-shell-session-support"
-version = "0.1.0"
-dependencies = [
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
- "xai-grok-http",
- "xai-grok-version",
-]
-
-[[package]]
-name = "xai-grok-shell-terminal"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "futures",
- "libc",
- "portable-pty",
- "process-wrap",
- "serde",
- "serde_json",
- "shlex 1.3.0",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
- "uuid",
- "windows",
- "xai-acp-lib",
- "xai-grok-config",
- "xai-grok-paths",
- "xai-grok-sandbox",
- "xai-grok-tools",
- "xai-grok-workspace",
- "xai-tty-utils",
-]
-
-[[package]]
-name = "xai-grok-status-line"
-version = "0.1.0"
-dependencies = [
- "serde",
- "strum 0.27.2",
-]
-
-[[package]]
-name = "xai-grok-subagent-resolution"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tracing",
- "xai-grok-agent",
- "xai-grok-sampling-types",
- "xai-grok-tools",
- "xai-tool-types",
-]
-
-[[package]]
-name = "xai-grok-telemetry"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "bytes",
- "chrono",
- "dirs 5.0.1",
- "futures-executor",
- "git2",
- "http 1.4.2",
- "mid",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "parking_lot",
- "reqwest 0.12.28",
- "sentry",
- "serde",
- "serde_json",
- "strum 0.27.2",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-appender",
- "tracing-chrome",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "url",
- "uuid",
- "webpki-roots 0.26.11",
- "whoami",
- "xai-file-utils",
- "xai-grok-auth",
- "xai-grok-config",
- "xai-grok-env",
- "xai-grok-extra-ca",
- "xai-grok-sampler",
- "xai-grok-secrets",
- "xai-grok-session-events",
- "xai-grok-version",
- "xai-mixpanel",
- "xai-token-estimation",
- "xai-tty-utils",
-]
-
-[[package]]
-name = "xai-grok-tools"
-version = "0.1.220-alpha.4"
-dependencies = [
- "anyhow",
- "arc-swap",
- "async-lsp",
- "async-openai",
- "async-stream",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "command-fds",
- "crc32fast",
- "derive_more 2.1.1",
- "dirs 5.0.1",
- "dunce",
- "educe",
- "flate2",
- "fs2",
- "futures",
- "futures-util",
- "globset",
- "htmd",
- "ignore",
- "image",
- "indexmap 2.14.0",
- "infer 0.19.0",
- "libc",
- "minijinja",
- "nix 0.30.1",
- "parking_lot",
- "pdf_oxide",
- "pulldown-cmark",
- "quick-xml 0.38.4",
- "regex",
- "reqwest 0.12.28",
- "schemars 1.2.1",
- "scraper",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "serde_yaml",
- "sha2 0.10.9",
- "shellexpand",
- "similar",
- "strip-ansi-escapes",
- "strum 0.26.3",
- "tar",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "tokio-util",
- "tonic",
- "tracing",
- "url",
- "uuid",
- "which",
- "wildmatch",
- "windows",
- "xai-computer-hub-core",
- "xai-computer-hub-sdk",
- "xai-file-utils",
- "xai-grok-auth",
- "xai-grok-config",
- "xai-grok-env",
- "xai-grok-extra-ca",
- "xai-grok-sandbox",
- "xai-grok-tools-api",
- "xai-grok-version",
- "xai-grok-workspace-types",
- "xai-interjection-core",
- "xai-token-estimation",
- "xai-tool-protocol",
- "xai-tool-runtime",
- "xai-tool-types",
- "xai-tty-utils",
- "zip 3.0.0",
-]
-
-[[package]]
-name = "xai-grok-tools-api"
-version = "0.1.220-alpha.4"
-dependencies = [
- "prost",
- "serde",
- "serde_json",
- "tonic",
- "tonic-prost",
- "xai-proto-build",
- "xai-tool-protocol",
-]
-
-[[package]]
-name = "xai-grok-version"
-version = "1.0.8"
-dependencies = [
- "semver",
-]
-
-[[package]]
-name = "xai-grok-workspace"
-version = "0.1.220-alpha.4"
-dependencies = [
- "agent-client-protocol",
- "anyhow",
- "arc-swap",
- "async-stream",
- "async-trait",
- "base64 0.22.1",
- "bstr",
- "chrono",
- "clap",
- "dashmap",
- "dirs 6.0.0",
- "dunce",
- "fastrace",
- "fs2",
- "futures",
- "git2",
- "glob",
- "hashbrown 0.16.1",
- "humantime-serde",
- "ignore",
- "indexmap 2.14.0",
- "infer 0.19.0",
- "libc",
- "nohash-hasher",
- "parking_lot",
- "prometheus",
- "rand 0.9.5",
- "regex",
- "reqwest 0.12.28",
- "rustc-hash",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "smallvec",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "tokio-tungstenite 0.27.0",
- "tokio-util",
- "toml 0.9.12+spec-1.1.0",
- "tonic",
- "tracing",
- "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-bash",
- "url",
- "urlencoding",
- "uuid",
- "wait-timeout",
- "xai-acp-lib",
- "xai-codebase-graph",
- "xai-computer-hub-mcp-adapter",
- "xai-computer-hub-sdk",
- "xai-fast-worktree",
- "xai-file-utils",
- "xai-fsnotify",
- "xai-fuzzy-file-search",
- "xai-grok-agent",
- "xai-grok-auth",
- "xai-grok-config",
- "xai-grok-config-types",
- "xai-grok-diag-server",
- "xai-grok-env",
- "xai-grok-extra-ca",
- "xai-grok-hooks",
- "xai-grok-mcp",
- "xai-grok-paths",
- "xai-grok-sandbox",
- "xai-grok-session-events",
- "xai-grok-telemetry",
- "xai-grok-tools",
- "xai-grok-tools-api",
- "xai-grok-version",
- "xai-grok-workspace-client",
- "xai-grok-workspace-daemon",
- "xai-grok-workspace-types",
- "xai-hunk-tracker",
- "xai-tool-protocol",
- "xai-tool-runtime",
- "xai-tool-types",
- "xai-tracing",
- "xai-tty-utils",
- "zstd",
-]
-
-[[package]]
-name = "xai-grok-workspace-client"
-version = "0.1.0"
-dependencies = [
- "semver",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
- "xai-computer-hub-sdk",
- "xai-grok-workspace-types",
- "xai-tool-protocol",
- "xai-tool-runtime",
-]
-
-[[package]]
-name = "xai-grok-workspace-daemon"
-version = "0.1.0"
-dependencies = [
- "clap",
- "fs2",
- "libc",
- "prometheus",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "windows",
- "xai-computer-hub-sdk",
- "xai-tty-utils",
-]
-
-[[package]]
-name = "xai-grok-workspace-types"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "xai-hooks-plugins-types"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "xai-hunk-tracker"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dunce",
- "gix",
- "rustc-hash",
- "serde",
- "serde_json",
- "similar",
- "thiserror 2.0.19",
- "tokio",
- "tokio-util",
- "tracing",
- "uuid",
- "xai-gix-status",
-]
-
-[[package]]
-name = "xai-interjection-core"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "xai-mixpanel"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "reqwest 0.12.28",
- "serde_json",
- "thiserror 2.0.19",
- "xai-grok-secrets",
-]
-
-[[package]]
-name = "xai-prompt-queue"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "xai-proto-build"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "pbjson-build",
- "prost-build",
- "prost-reflect",
- "tempfile",
- "tonic-prost-build",
-]
-
-[[package]]
-name = "xai-sqlite-journal"
-version = "0.1.0"
-dependencies = [
- "libc",
- "rusqlite",
- "tracing",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "xai-system-power"
-version = "0.1.0"
-dependencies = [
- "windows-sys 0.59.0",
- "zbus",
-]
-
-[[package]]
-name = "xai-token-estimation"
-version = "0.1.0"
-
-[[package]]
-name = "xai-tool-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "uuid",
- "xai-tool-types",
-]
-
-[[package]]
-name = "xai-tool-runtime"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "futures",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "tokio-util",
- "xai-grok-tools-api",
- "xai-tool-protocol",
- "xai-tool-types",
-]
-
-[[package]]
-name = "xai-tool-types"
-version = "0.1.0"
-dependencies = [
- "schemars 1.2.1",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "xai-tracing"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "fastrace",
- "fastrace-opentelemetry",
- "fastrace-reqwest",
- "fastrace-tonic",
- "http 1.4.2",
- "log",
- "opentelemetry",
- "opentelemetry-http",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "reqwest 0.12.28",
- "reqwest-middleware 0.4.2",
- "tokio",
- "tonic",
- "tower",
- "tower-http",
- "tracing",
- "tracing-opentelemetry",
- "uuid",
-]
-
-[[package]]
-name = "xai-tracing-macros"
-version = "0.1.0"
-
-[[package]]
-name = "xai-tty-utils"
-version = "0.1.0"
-dependencies = [
- "libc",
- "nix 0.30.1",
- "tokio",
- "windows",
-]
-
-[[package]]
-name = "xai-workflow"
-version = "0.1.0"
-dependencies = [
- "libc",
- "rhai",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 2.0.19",
- "tokio",
- "tokio-util",
- "tracing",
 ]
 
 [[package]]

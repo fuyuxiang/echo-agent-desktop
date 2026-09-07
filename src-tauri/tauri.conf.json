@@ -45,8 +45,8 @@
     "resources": {
       "../LICENSE": "LICENSE",
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
-      "../vendor/grok-build/LICENSE": "licenses/grok-build-LICENSE",
-      "../vendor/grok-build/third_party/NOTICE": "licenses/grok-build-THIRD-PARTY-NOTICE"
+      "../vendor/echo-agent-build/LICENSE": "licenses/echo-agent-build-LICENSE",
+      "../vendor/echo-agent-build/third_party/NOTICE": "licenses/echo-agent-build-THIRD-PARTY-NOTICE"
     }
   },
   "plugins": {

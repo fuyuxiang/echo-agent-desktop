@@ -52,7 +52,7 @@ pub(crate) fn init() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let appender = tracing_appender::rolling::daily(&directory, "echoagent.log");
     let (file_writer, guard) = tracing_appender::non_blocking(appender);
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("echoagent=info,echoagent_lib=info,xai_grok_shell=info,warn")
+        EnvFilter::new("echoagent=info,echoagent_lib=info,echo_agent_runtime=info,warn")
     });
     let subscriber = tracing_subscriber::registry().with(filter).with(
         tracing_subscriber::fmt::layer()

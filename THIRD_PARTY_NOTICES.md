@@ -8,17 +8,18 @@ licenses.
 
 - Source: https://github.com/xai-org/grok-build
 - Pinned revision: `c2ad97f8`
-- Integration: source snapshot tracked directly under `vendor/grok-build/`
+- Integration: source snapshot tracked directly under `vendor/echo-agent-build/`
 - License: Apache License 2.0
 - Copyright: Copyright 2023-2026 SpaceXAI
-- Local license copy: `vendor/grok-build/LICENSE`
-- Upstream notices: `vendor/grok-build/third_party/NOTICE`
+- Local license copy: `vendor/echo-agent-build/LICENSE`
+- Upstream notices: `vendor/echo-agent-build/third_party/NOTICE`
 
 EchoAgent consumes selected Rust crates from this source snapshot as in-process
-path dependencies. The vendored files directly include EchoAgent compatibility
-changes and the `echo.agent` protocol namespace migration. Modified files are
-maintained by EchoAgent and are not endorsed by the upstream project. Upstream
-copyright, license, and NOTICE material remain intact.
+path dependencies. The maintained fork uses EchoAgent crate names, Rust module
+names, configuration keys, environment variables, protocol identifiers, and
+user-facing terminology throughout. Modified files are maintained by EchoAgent
+and are not endorsed by the upstream project. Upstream copyright, license, and
+NOTICE material remain intact.
 
 The names “Grok”, “xAI”, and related upstream crate and model identifiers remain
 the property of their respective owners. EchoAgent is an independent project

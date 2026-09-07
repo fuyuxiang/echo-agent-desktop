@@ -59,7 +59,7 @@ pub struct SessionSummary {
     pub expert_avatar: Option<String>,
 }
 
-/// Subset of EchoAgent's `Summary` struct (see `xai-grok-shell/src/session/persistence.rs:790`).
+/// Subset of EchoAgent's `Summary` struct (see `echo-agent-runtime/src/session/persistence.rs:790`).
 /// We only deserialize the fields we care about; unknown fields are ignored.
 ///
 /// Display priority for `title` matches EchoAgent's own `display_title`:
@@ -179,11 +179,14 @@ fn workspace_dir_matches_request(cwd_dir: &Path, raw_cwd: &str, canonical: Optio
     let Some(dirname) = cwd_dir.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    if dirname == xai_grok_shell::util::grok_home::encode_cwd_dirname(raw_cwd) {
+    if dirname == echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname(raw_cwd) {
         return true;
     }
     canonical.is_some_and(|path| {
-        dirname == xai_grok_shell::util::grok_home::encode_cwd_dirname(&path.to_string_lossy())
+        dirname
+            == echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname(
+                &path.to_string_lossy(),
+            )
     })
 }
 
@@ -778,11 +781,11 @@ mod tests {
     fn missing_summary_cwd_only_matches_its_authoritative_encoded_directory() {
         let requested = "/tmp/project-a";
         let matching = std::path::PathBuf::from(
-            xai_grok_shell::util::grok_home::encode_cwd_dirname(requested),
+            echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname(requested),
         );
-        let other = std::path::PathBuf::from(xai_grok_shell::util::grok_home::encode_cwd_dirname(
-            "/tmp/project-b",
-        ));
+        let other = std::path::PathBuf::from(
+            echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname("/tmp/project-b"),
+        );
         assert!(workspace_dir_matches_request(&matching, requested, None));
         assert!(!workspace_dir_matches_request(&other, requested, None));
     }
@@ -839,7 +842,7 @@ mod tests {
         ] {
             let cwd = cwd.canonicalize().unwrap().to_string_lossy().into_owned();
             let session_dir = sessions_root
-                .join(xai_grok_shell::util::grok_home::encode_cwd_dirname(&cwd))
+                .join(echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname(&cwd))
                 .join(id);
             std::fs::create_dir_all(&session_dir).unwrap();
             std::fs::write(
@@ -861,9 +864,7 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let no_cwd_dir = sessions_root
-            .join(xai_grok_shell::util::grok_home::encode_cwd_dirname(
-                &legacy_cwd_string,
-            ))
+            .join(echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname(&legacy_cwd_string))
             .join("legacy-without-cwd");
         std::fs::create_dir_all(&no_cwd_dir).unwrap();
         std::fs::write(

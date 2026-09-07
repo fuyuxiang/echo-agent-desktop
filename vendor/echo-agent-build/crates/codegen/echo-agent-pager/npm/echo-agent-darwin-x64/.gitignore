@@ -1,0 +1,4 @@
+bin/*.br
+bin/echoagent
+bin/echoagent.exe
+THIRD_PARTY_NOTICES.md
