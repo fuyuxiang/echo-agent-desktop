@@ -1,23 +1,22 @@
 <p align="center">
-  <img src="app-icon.png" width="112" height="112" alt="EchoAgent logo" />
+  <img src="app-icon.png" width="96" height="96" alt="EchoAgent logo" />
 </p>
 
 <h1 align="center">EchoAgent</h1>
 
 <p align="center">
-  <strong>An open-source desktop workspace for autonomous AI agents.</strong>
+  <strong>Give it a goal, not just a question.</strong>
   <br />
-  Bring your own model, connect MCP tools, and run agent workflows from a fast native shell.
+  An open-source, local-first desktop agent workspace that brings models, files, tools, memory, and automation into one native app.
 </p>
 
 <p align="center">
   <a href="README.md">中文</a>
-  · <a href="#overview">Overview</a>
-  · <a href="#features">Features</a>
+  · <a href="#product">Product</a>
   · <a href="#quick-start">Quick start</a>
+  · <a href="#capabilities">Capabilities</a>
+  · <a href="#security-and-data-boundaries">Security</a>
   · <a href="#architecture">Architecture</a>
-  · <a href="#development">Development</a>
-  · <a href="#roadmap">Roadmap</a>
 </p>
 
 <p align="center">
@@ -30,67 +29,73 @@
 </p>
 
 <p align="center">
-  <img src="src/assets/landing-hero.png" alt="EchoAgent — people and an AI agent working together" width="100%" />
+  <img src="docs/images/echoagent-workflow-hero.png" alt="EchoAgent coordinating models, files, tools, plans, memory, and automation" width="100%" />
 </p>
 
-## Overview
+## What is EchoAgent?
 
-EchoAgent turns model APIs into a practical desktop agent workspace. It combines conversations, files, tools, permissions, plans, sub-agents, and scheduled work in one application—without requiring an EchoAgent cloud account.
+EchoAgent turns model APIs into a desktop agent that can do real work. It understands a goal, reads and changes files inside a real workspace, builds a plan, invokes local or MCP tools, and keeps the process, approval requests, file changes, and deliverables in one traceable task flow.
 
-The core agent runtime is embedded directly in the Tauri process and communicates with the React interface through [Agent Client Protocol (ACP)](https://agentclientprotocol.com/). Streaming output, tool calls, approval requests, plan changes, and task lifecycle events therefore share one typed execution path.
+No EchoAgent cloud account is required. Bring your own OpenAI, Anthropic, DeepSeek, or Qwen credentials, or connect any compatible OpenAI- or Anthropic-style endpoint.
+
+| Beyond chat | The EchoAgent workflow |
+| --- | --- |
+| Produces suggestions | Reads context, plans, uses tools, and delivers results |
+| Accepts a one-off upload | Binds sessions to real directories and tracks changes and artifacts |
+| Locks you to one model | Supports BYOK, multiple providers, and custom endpoints |
+| Executes as a black box | Exposes folder trust, permission modes, approvals, and tool records |
+| Starts from zero | Reuses project context, local history, memory, and knowledge sources |
 
 > [!IMPORTANT]
-> EchoAgent is pre-1.0 software under active development. Windows and macOS source builds are supported; packaged builds are currently unsigned. Review every permission request before allowing an agent to execute commands or modify files.
+> EchoAgent is currently at `0.3.10` and is evolving quickly before 1.0. Building from source is recommended today. Generated Windows and macOS packages are not yet code-signed or notarized.
 
-### Design principles
+## Product
 
-| Principle | What it means in EchoAgent |
-| --- | --- |
-| **Provider-independent** | Use OpenAI, Anthropic, DeepSeek, Qwen, or a compatible custom endpoint with your own credentials. |
-| **Workspace-native** | Sessions are attached to real directories, with file context, changes, artifacts, and searchable local history. |
-| **Extensible by default** | Add capabilities through MCP servers, skills, reusable assistants, and sub-agent teams. |
-| **Explicitly controlled** | Folder trust, permission modes, allow/ask/deny rules, and visible tool calls keep execution inspectable. |
-| **Native and efficient** | Tauri, Rust, and the system webview provide a lightweight desktop shell around an in-process runtime. |
+<p align="center">
+  <img src="docs/images/echoagent-home.png" alt="EchoAgent desktop home with workspace, model, and permission controls" width="100%" />
+</p>
 
-## Features
+<p align="center"><sub>One task entry point: choose a workspace, model, and permission mode; attach files or capabilities; then describe the outcome.</sub></p>
 
-| Area | Capabilities |
-| --- | --- |
-| **Agent workflows** | Streaming conversations, editable plans, rewind and fork, prompt history, slash commands, live sub-agent tasks, cancellation, and team status. |
-| **Models** | Multiple provider profiles, multiple models per provider, context-window configuration, model discovery, and custom OpenAI- or Anthropic-compatible endpoints. |
-| **Tools and extensions** | MCP over stdio or HTTP, MCP OAuth flows, skills, plugins, reusable assistants, and local catalogs. |
-| **Workspace** | Directory-scoped sessions, pinning and archiving, full-text session search, file tree, previews, change tracking, and unified diffs. |
-| **Rich content** | Image attachments, drag and drop, native voice input, syntax highlighting, GitHub Flavored Markdown, KaTeX, Mermaid, and tool-result images. |
-| **Knowledge and memory** | Persisted memory management, local-folder knowledge sources, reusable project context, and assistant definitions. |
-| **Automation** | One-time and recurring local schedules, execution history, connector selection, and per-automation permission modes. |
-| **Integrations** | WebDAV storage plus desktop, Slack, Discord, and generic webhook notifications. |
-| **Notification inbox** | The agent mail panel aggregates permission requests, folder-trust prompts, task updates, plan-mode switches, MCP status, session completion, and other lifecycle events; entries can be browsed, filtered, marked read, or cleared. |
-| **Safety and policy** | Inline approvals, folder trust, permission rules, configurable execution modes, and policy controls for models and features. |
+### From goal to deliverable
+
+```mermaid
+flowchart LR
+    A[Choose workspace and model] --> B[Describe the goal and attach files]
+    B --> C[Agent plans and invokes tools]
+    C --> D{Approval needed?}
+    D -- Yes --> E[User approves]
+    D -- No --> F[Continue]
+    E --> F
+    F --> G[Review changes, artifacts, and task history]
+```
+
+While it works, you can inspect streaming output and tool cards, edit the plan, approve or reject sensitive actions, cancel execution, and rewind or fork from earlier points in a session.
+
+## Why EchoAgent?
+
+- **Workspace-native** — every session is attached to a real directory, with file trees, previews, unified diffs, artifacts, and history in one place.
+- **Your models, your choice** — built-in provider presets plus compatible endpoints, with credentials and the model catalog controlled by you.
+- **Composable capabilities** — MCP servers, skills, plugins, experts, and sub-agent teams can participate in both interactive tasks and automations.
+- **Visible execution boundaries** — folder grants, approval/auto/always-allow modes, and allow/ask/deny policy rules govern tool execution.
+- **Native without the bulk** — React handles interaction, Tauri and Rust provide native capabilities, and the agent runtime runs in-process.
+- **Built for ongoing work** — projects, memory, knowledge bases, schedules, run history, and notification channels turn one task into a durable workflow.
 
 ## Quick start
 
-### Packaged builds
-
-When a packaged build is available, download it from [GitHub Releases](https://github.com/fuyuxiang/echo-agent-desktop/releases). EchoAgent can produce a Windows NSIS installer and a macOS DMG.
-
-> [!WARNING]
-> Current packages are not code-signed or notarized. Only install artifacts from a release you trust and verify the release notes before running them.
-
-### Build from source
-
-#### Prerequisites
+### Prerequisites
 
 | Dependency | Requirement |
 | --- | --- |
-| Rust | Stable toolchain, Rust 1.92 or newer. `rust-toolchain.toml` installs `rustfmt` and `clippy`. |
-| Node.js | Node.js 20 or newer; CI uses Node.js 22. |
-| pnpm | pnpm 10. The repository pins the expected package-manager version in `package.json`. |
-| Protocol Buffers | A native `protoc` executable available on `PATH`, or through the `PROTOC` environment variable. |
-| Platform toolchain | macOS: Xcode Command Line Tools. Windows: Visual Studio 2022 Build Tools with **Desktop development with C++** and a Windows SDK. |
+| Node.js | 20 or newer; CI uses Node.js 22 |
+| pnpm | 10; the expected version is pinned in the repository |
+| Rust | Stable, minimum `1.92.0`, with `rustfmt` and `clippy` |
+| Protocol Buffers | A native `protoc` on `PATH`, or a `PROTOC` environment variable |
+| Platform toolchain | macOS: Xcode Command Line Tools. Windows: VS 2022 Build Tools with Desktop development with C++ and a Windows SDK |
 
-The embedded runtime is checked in as regular source under `vendor/grok-build/` and versioned atomically with the desktop application. Compatibility changes and the EchoAgent protocol namespace migration are integrated directly into that source, while the pinned `async-openai` and `nucleo` sources are also maintained under `vendor/`. A normal clone needs no submodule initialization and does not download source from those three Git repositories during a build. The setup script only verifies the integrity of the vendored source.
+Pinned sources for the core runtime, `async-openai`, and `nucleo` are committed under `vendor/`. A normal clone contains everything needed from those repositories; no Git submodule initialization is required.
 
-**macOS**
+### macOS
 
 ```bash
 git clone https://github.com/fuyuxiang/echo-agent-desktop.git
@@ -101,7 +106,7 @@ pnpm install --frozen-lockfile
 pnpm tauri dev
 ```
 
-**Windows (PowerShell)**
+### Windows (PowerShell)
 
 ```powershell
 git clone https://github.com/fuyuxiang/echo-agent-desktop.git
@@ -112,192 +117,169 @@ pnpm install --frozen-lockfile
 .\dev.bat
 ```
 
-The first build compiles the complete embedded Rust runtime and may take several minutes and substantial disk space. Incremental builds are considerably faster. See [Windows build notes](docs/WINDOWS_BUILD_NOTES.md) for MSVC, `protoc`, and environment troubleshooting.
+The first build compiles the complete embedded Rust runtime and will take longer than later incremental builds. See [Windows build notes](docs/WINDOWS_BUILD_NOTES.md) for MSVC, `protoc`, linker-memory, and packaging troubleshooting.
 
 ### Configure your first model
 
-1. Start EchoAgent and open **Settings → Models**.
-2. Add a provider and enter its API key and endpoint.
-3. Add at least one model under that provider.
-4. Select the model in the composer and start a task.
-
-Built-in presets are available for Anthropic, OpenAI, DeepSeek, and Qwen. Custom OpenAI-compatible and Anthropic-compatible endpoints are also supported.
+1. Start EchoAgent and open **Settings → Model**.
+2. Choose a provider and enter your API key. Custom services also need an endpoint and protocol.
+3. Add at least one model and optionally test the connection.
+4. Return home, select a workspace, model, and permission mode, then send your first task.
 
 <details>
-<summary><strong>Manual configuration</strong></summary>
+<summary><strong>Configure with TOML</strong></summary>
 
-The UI writes provider configuration to `~/.echo-agent/config.toml`. A minimal OpenAI-compatible configuration looks like this:
+The settings UI ultimately writes `~/.echo-agent/config.toml`. This is a minimal OpenAI-compatible example:
 
 ```toml
 [models]
-default = "gpt-4o"
+default = "your-model-id"
 
-[model_providers.openai]
-base_url = "https://api.openai.com/v1"
+[model_providers.my-provider]
+base_url = "https://your-endpoint.example/v1"
 api_key = "YOUR_API_KEY"
 api_backend = "chat_completions"
 auth_scheme = "bearer"
 context_window = 128000
 
-[model.gpt-4o]
-model_provider = "openai"
-name = "GPT-4o"
+[model.your-model-id]
+model_provider = "my-provider"
+name = "My Model"
 ```
 
-Restart EchoAgent after editing the file by hand. The settings UI is recommended because it validates provider fields and preserves unrelated configuration.
+Restart EchoAgent after editing the file manually. The settings UI is preferred for everyday use because it validates fields and preserves unrelated configuration.
 
 </details>
 
-## Data and security
+## Capabilities
 
-EchoAgent keeps its application state under `~/.echo-agent/` by default. Set `ECHO_AGENT_HOME` before launch to use a different directory.
+| Area | Implemented capabilities |
+| --- | --- |
+| **Agent workflows** | Streaming sessions, editable plans, slash commands, cancellation, rewind and fork, live sub-agent status, and teams |
+| **Models** | OpenAI, Anthropic, DeepSeek, and Qwen presets; multiple providers and models; discovery; OpenAI- and Anthropic-compatible endpoints |
+| **Tools and extensions** | MCP over stdio/HTTP, MCP OAuth, skills, plugins, connector catalogs, reusable experts, and local marketplaces |
+| **Workspace** | Directory-scoped sessions, full-text search, pinning and archiving, file tree, common-document previews, change tracking, unified diffs, and project artifacts |
+| **Projects** | Project instructions and templates, linked experts/skills/connectors, activity, plans, tasks, members, and deliverables |
+| **Knowledge and memory** | Personal long-term memory, session summaries, local-folder knowledge sources, retrieval/consolidation controls, and an optional organization service |
+| **Automation** | One-time and recurring schedules, manual test runs, execution history, workspace/model/expert/skill/connector selection, and per-task permissions |
+| **Content experience** | Image and file attachments, drag and drop, voice input, GFM, syntax highlighting, KaTeX, Mermaid, tool-result images, and file previews |
+| **Integrations** | WebDAV storage, desktop notifications, Slack, Discord, generic webhooks, and a unified notification center |
+| **Governance and observability** | Folder trust, permission rules, feature policy, token usage, log directories, update checks, and optional OTLP telemetry |
+
+## Security and data boundaries
+
+EchoAgent stores application state under `~/.echo-agent/` by default. Set `ECHO_AGENT_HOME` before launch to use another data root.
 
 | Data | Default location |
 | --- | --- |
-| Providers, permissions, UI defaults, MCP configuration | `~/.echo-agent/config.toml` and `~/.echo-agent/mcp.json` |
-| Conversations and workspace history | `~/.echo-agent/sessions/` |
-| Reusable assistants | `~/.echo-agent/agents/` |
-| Installed skills | `~/.echo-agent/skills/` |
-| Expert marketplace | `~/.echo-agent/experts-marketplace/` |
-| Connector marketplace and its skills | `~/.echo-agent/connectors-marketplace/` |
-| Built-in skill resources | `~/.echo-agent/resources/builtin-skills/` |
-| Memory and runtime state | `~/.echo-agent/memory/` and EchoAgent-owned JSON files |
+| Model, permission, and runtime configuration | `~/.echo-agent/config.toml` |
+| MCP configuration | `~/.echo-agent/mcp.json` |
+| Sessions and workspace history | `~/.echo-agent/sessions/` |
+| Agents and skills | `~/.echo-agent/agents/`, `~/.echo-agent/skills/` |
+| Memory and runtime state | `~/.echo-agent/memory/` and other EchoAgent JSON files |
+| Expert, connector, and built-in skill catalogs | `~/.echo-agent/experts-marketplace/`, `~/.echo-agent/connectors-marketplace/`, `~/.echo-agent/resources/builtin-skills/` |
 
-Every path in this table is rooted at `ECHO_AGENT_HOME`; `~/.echo-agent` is only the default when that variable is unset. The Experts, Skills, and Connectors panels persist only sources selected manually. Automatically discovered defaults always follow the active data home.
+Understand these boundaries before use:
 
-New tasks without an explicit directory use `EchoAgent` inside the system Documents directory by default (falling back to a same-named subdirectory of the user home when Documents is unavailable). EchoAgent does not grant the entire user home by default. To use another working directory or local knowledge source, grant it explicitly through the native directory picker.
+- Provider API keys are currently stored as plaintext in the local `config.toml`. EchoAgent tightens file permissions on Unix; Windows protection depends on the current user's ACL. Never commit, upload, or attach this file.
+- Agent tools can read files, change files, and execute commands. Use Approval mode for untrusted repositories, grant only required directories, and inspect risky actions individually.
+- “Local-first” describes application state and execution control, not full offline operation. Model, MCP, WebDAV, notification, and optional organization features contact their configured services.
+- Memory is enabled by default. The current embedded runtime uses preset SiliconFlow endpoints for `BAAI/bge-m3` embeddings and `BAAI/bge-reranker-v2-m3` reranking. Review that implementation before handling sensitive content, or disable memory under **Settings → Memory**.
+- Without an explicit workspace, EchoAgent creates and grants only an `EchoAgent` subdirectory under the operating system's Documents directory instead of implicitly authorizing the entire home directory.
 
-- API keys and endpoint credentials are stored locally in plaintext. On Unix, EchoAgent applies owner-only permissions to secret-bearing files and directories; on Windows, access depends on the current user's filesystem ACLs.
-- Model, MCP, WebDAV, and notification traffic is sent only to services you configure. No hosted EchoAgent account is required.
-- Tool execution may read files, modify files, or run commands. Use permission rules and restricted modes for repositories or data you do not fully trust.
-- Never commit `~/.echo-agent/config.toml`, copied credentials, or runtime state to version control.
-
-### Data migration
-
-On first launch, EchoAgent performs a one-time import from the legacy `~/.grok/` data directory: files or subdirectories missing under `~/.echo-agent/` are copied over, except for the retired `auth.json`, and a `.legacy-data-migrated` marker is written so the import never runs again. Existing files in `~/.echo-agent/` always win — the migration never overwrites them — and the legacy directory is left in place for rollback.
-
-The expert marketplace is also safely imported from the historical `~/EchoAgent/agents/` or `~/agents/` location into `experts-marketplace/` under the active data home. When `ECHO_AGENT_HOME` is customized, the connector marketplace and built-in skills under the old default data home follow the same rule. Each import is assembled in a staging directory and atomically moved into place; an existing target always wins and the legacy source is never deleted.
-
-When both `ECHO_AGENT_HOME` and `GROK_HOME` are set, the migration source follows `GROK_HOME`; the embedded runtime is also rewired at startup to use the `ECHO_AGENT_HOME` path so subsequent writes never land in the legacy location.
+On first launch, missing legacy data is copied safely from `~/.grok/`. Existing files in `~/.echo-agent/` are never overwritten, and the legacy directory is not removed.
 
 ## Architecture
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│ React 18 interface                                          │
-│ components · Zustand stores · Markdown · workspace views    │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ Tauri commands and events
-┌──────────────────────▼──────────────────────────────────────┐
-│ Tauri 2 / Rust application layer                            │
-│ commands · bridge · sessions · providers · policy · storage │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ typed ACP messages over mpsc channels
-┌──────────────────────▼──────────────────────────────────────┐
-│ In-process agent runtime                                    │
-│ session lifecycle · tools · plans · permissions · sub-agents│
-└──────────────┬──────────────────┬───────────────────────────┘
-               │                  │
-       Model providers        MCP servers / local tools
+```mermaid
+flowchart TB
+    UI[React 18 UI<br/>Sessions · Projects · Settings · Workspace] <-->|Tauri Commands / Events| HOST[Tauri 2 + Rust host<br/>Storage · Policy · Scheduler · Native APIs]
+    HOST <-->|Typed ACP channels| RUNTIME[In-process Agent Runtime<br/>Sessions · Plans · Tools · Permissions · Sub-agents]
+    RUNTIME --> MODELS[Model providers<br/>OpenAI / Anthropic / Compatible]
+    RUNTIME --> TOOLS[Local files and commands<br/>MCP · Skills · Plugins]
+    HOST --> DATA[(Local data root<br/>.echo-agent)]
+    HOST --> EXT[WebDAV · Notifications · Optional organization service]
 ```
 
-The runtime runs on a dedicated OS thread with a current-thread Tokio runtime and `LocalSet`. The Rust bridge translates ACP updates into Tauri events such as `agent://update`, `agent://permission`, and `agent://complete`; the frontend stores apply those events to the active session.
-
-### Repository layout
+The core runtime is not a separate sidecar. It lives on a dedicated OS thread backed by a current-thread Tokio runtime and `LocalSet`, communicating with the Rust bridge through in-memory ACP channels. The bridge converts streaming updates, permission requests, plan state, and completion events into Tauri events that frontend stores apply to the correct session.
 
 ```text
-src/
-├── components/             React views and feature panels
-├── foundation/             Shared icons and UI primitives
-├── lib/                    ACP client, domain logic, and utilities
-├── stores/                 Zustand application stores
-└── styles/                 Design tokens and application styles
-
-src-tauri/
-├── src/agent_runtime.rs     Embedded runtime lifecycle
-├── src/bridge.rs            ACP-to-Tauri event bridge
-├── src/commands.rs          Session command surface
-├── src/lib.rs               Tauri setup and command registration
-└── src/*.rs                 Providers, MCP, skills, policy, storage, and more
-
-vendor/grok-build/           Apache-2.0 Runtime source maintained in this repository
-vendor/async-openai/         Vendored OpenAI-compatible Rust client source
-vendor/nucleo/               Vendored fuzzy-matching Rust source
-scripts/                     Setup and packaging scripts
-docs/                        Platform-specific documentation
-.github/workflows/           Continuous integration
+src/                       React UI, Zustand stores, and frontend domain logic
+src-tauri/src/             Tauri commands, ACP bridge, policy, storage, scheduler
+vendor/grok-build/         Pinned source snapshot of the embedded agent runtime
+vendor/async-openai/       Vendored OpenAI-compatible Rust client
+vendor/nucleo/             Vendored fuzzy-matching library
+scripts/                   Setup, verification, build, and release scripts
+docs/                      Platform build and desktop-update documentation
 ```
 
-## Development
-
-### Commands
+## Development and verification
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm tauri dev` | Run the complete desktop application in development mode. |
-| `pnpm dev` | Run the Vite frontend only. Tauri APIs are unavailable in a normal browser. |
-| `pnpm test` | Run the Vitest frontend test suite. |
-| `pnpm build` | Type-check TypeScript and create the production frontend bundle. |
-| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | Run Rust unit tests. |
-| `cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored spawn_smoke` | Run the opt-in embedded-runtime smoke test. |
-| `pnpm dist:mac` | Build an unsigned DMG on macOS. |
-| `pnpm dist:win` | Build an unsigned NSIS installer on Windows. |
+| `pnpm tauri dev` | Run the complete desktop application |
+| `pnpm dev` | Start only the Vite frontend; native Tauri capabilities are unavailable in a normal browser |
+| `pnpm test` | Run frontend Vitest tests |
+| `pnpm build` | Type-check TypeScript and build the frontend |
+| `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -j 2` | Run Rust unit tests |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | Check Rust formatting |
+| `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings` | Run Clippy |
 
-CI runs TypeScript type-checking, frontend unit tests, the production frontend build, and Rust formatting, Clippy, and unit-test checks on every pull request. Running focused tests locally before pushing is still recommended for faster feedback.
+CI runs frontend type checking, unit tests, the production build, Rust formatting, Clippy, and Rust unit tests for pushes to `main` and pull requests.
 
-### Contributing
-
-Contributions are welcome, from focused fixes to new runtime capabilities.
-
-1. Fork and clone the repository normally; the embedded Runtime is already included.
-2. Create a branch from `main`.
-3. Add tests for behavioral changes and run the relevant checks above.
-4. Keep changes scoped and update documentation when behavior changes.
-5. Open a pull request with the motivation, implementation notes, and verification results.
-
-For substantial features or architecture changes, open an issue first so the design and compatibility impact can be discussed before implementation.
+See [desktop updates](docs/desktop-updates.md) for the maintainer packaging and update workflow.
 
 ## Roadmap
 
-- Linux development support and distributable packages
-- Signed and notarized Windows/macOS releases
-- Automated release publishing and artifact checksums
-- A first-party connector and skill catalog
-- End-to-end desktop tests and visual-regression coverage
-- Expanded user documentation and interface localization
+- [ ] Signed, notarized, and automatically published Windows and macOS packages
+- [ ] Validated Linux development and distribution support
+- [ ] Officially maintained connector, skill, and plugin catalogs
+- [ ] Desktop end-to-end tests and visual regression coverage
+- [ ] Broader user documentation and UI internationalization
 
-Roadmap items are directional rather than release commitments. Follow the [issue tracker](https://github.com/fuyuxiang/echo-agent-desktop/issues) for current priorities.
+The roadmap is directional, not a release commitment. Follow the [issue tracker](https://github.com/fuyuxiang/echo-agent-desktop/issues) for current priorities.
 
 ## FAQ
 
 <details>
 <summary><strong>Can I use a local model?</strong></summary>
 
-Yes, when the local server exposes a compatible OpenAI or Anthropic API. Add it as a custom provider and point `base_url` at the local endpoint. Tool-calling and multimodal behavior depend on the model and server implementation.
+Yes, when the local service exposes an OpenAI- or Anthropic-compatible HTTP API. Add it as a custom provider and point the endpoint to the local service. Tool calling and multimodal support still depend on the specific model and server.
 
 </details>
 
 <details>
-<summary><strong>Does EchoAgent work on Linux?</strong></summary>
+<summary><strong>Do I need an EchoAgent account?</strong></summary>
 
-Linux packages are not currently maintained. The frontend and most of the Rust code are already portable — `tauri-plugin-autostart` and other core dependencies are enabled on macOS, Windows, and Linux simultaneously, and the build scripts and configuration layer are written with Linux in mind. File dialogs, system notifications, and the packaging pipeline still need platform-specific work, however; contributions from anyone with a Linux environment are welcome.
+No for personal use. Models use your own credentials and primary state remains local. Organization features are an optional external-service integration.
 
 </details>
 
 <details>
-<summary><strong>Where are my API keys stored?</strong></summary>
+<summary><strong>Does EchoAgent support Linux?</strong></summary>
 
-Provider keys are stored in `~/.echo-agent/config.toml`. They are not placed in the repository, but they are plaintext secrets on your local disk. Protect that file and never include it in bug reports or commits.
+No maintained Linux package is available yet. The frontend and most Rust modules are portable, but file dialogs, system notifications, and packaging still need platform adaptation and verification.
 
 </details>
+
+## Contributing
+
+Contributions are welcome across bug fixes, tests, documentation, UI improvements, provider/MCP compatibility, and runtime capabilities.
+
+1. Fork the repository and create a focused branch from `main`.
+2. Keep changes scoped, and add tests and documentation for behavior changes.
+3. Run the relevant frontend and Rust checks.
+4. Open a pull request describing motivation, implementation, risk, and verification.
+
+For larger features or architecture changes, open an issue first to discuss UX, compatibility, and security boundaries.
 
 ## Acknowledgements
 
-- [xai-org/grok-build](https://github.com/xai-org/grok-build) provides the original Apache-2.0 Runtime source; EchoAgent maintains its compatible source snapshot in this repository.
-- [Tauri](https://tauri.app/), [React](https://react.dev/), and [Vite](https://vite.dev/) provide the core application stack.
+- [xai-org/grok-build](https://github.com/xai-org/grok-build) provided the original Apache-2.0 runtime source. EchoAgent maintains a pinned, compatibility-modified snapshot in this repository.
+- [Tauri](https://tauri.app/), [React](https://react.dev/), and [Vite](https://vite.dev/) form the core desktop application stack.
 
-EchoAgent is an independent community project. It is not affiliated with, endorsed by, or sponsored by xAI.
+EchoAgent is an independent community open-source project and is not affiliated with, endorsed by, or sponsored by xAI.
 
 ## License
 
-EchoAgent application code is available under the [MIT License](LICENSE). Vendored and third-party components retain their original licenses; see [Third-Party Notices](THIRD_PARTY_NOTICES.md).
+EchoAgent application code is released under the [MIT License](LICENSE). Vendored components and other third-party dependencies remain under their respective licenses; see [Third-Party Notices](THIRD_PARTY_NOTICES.md).
