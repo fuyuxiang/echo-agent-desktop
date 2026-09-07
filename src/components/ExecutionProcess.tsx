@@ -15,6 +15,9 @@ interface ExecutionProcessProps {
   startedAt?: number;
   completedAt?: number;
   stopReason?: string;
+  cancelTrigger?: string;
+  cancellationCategory?: string;
+  agentResult?: string;
   markdownConfig?: MarkdownConfig;
   onOpenTool?: (tool: ToolCallView) => void;
 }
@@ -30,6 +33,9 @@ export function ExecutionProcess({
   startedAt,
   completedAt,
   stopReason,
+  cancelTrigger,
+  cancellationCategory,
+  agentResult,
   markdownConfig,
   onOpenTool,
 }: ExecutionProcessProps) {
@@ -41,8 +47,14 @@ export function ExecutionProcess({
   const previousActive = useRef(active);
   const userToggled = useRef(false);
   const summary = useMemo(
-    () => summarizeExecutionProcess(parts, active, stopReason),
-    [active, parts, stopReason],
+    () => summarizeExecutionProcess(
+      parts,
+      active,
+      stopReason,
+      cancellationCategory,
+      cancelTrigger,
+    ),
+    [active, cancellationCategory, cancelTrigger, parts, stopReason],
   );
 
   useEffect(() => {
@@ -76,7 +88,7 @@ export function ExecutionProcess({
       ? `${summary.completedToolCount}/${summary.toolCount} 项`
       : `${summary.toolCount} 项操作`);
   } else if (summary.thoughtCount > 0) {
-    meta.push(`${summary.thoughtCount} 段思考摘要`);
+    meta.push(`${summary.thoughtCount} 段思考过程`);
   }
   if (summary.changedFiles.length > 0) meta.push(`${summary.changedFiles.length} 个文件`);
   if (duration) meta.push(duration);
@@ -112,11 +124,16 @@ export function ExecutionProcess({
 
       {open && (
         <div className="execution-process__body" id={bodyId}>
+          {!active && agentResult && (
+            <p className="execution-process__terminal-detail" role="alert">
+              {agentResult}
+            </p>
+          )}
           {visibleParts.length === 0 && thoughtParts.length > 0 && (
             <p className="execution-process__empty">
               {active
                 ? thinkingCompanion
-                : "本轮没有调用外部操作，可展开查看思考摘要。"}
+                : "本轮没有调用外部操作，可展开查看思考过程。"}
             </p>
           )}
           {visibleParts.map((part, index) => {
@@ -149,7 +166,7 @@ export function ExecutionProcess({
           {thoughtParts.length > 0 && (
             <details className="execution-process__reasoning">
               <summary>
-                思考摘要{thoughtParts.length > 1 ? ` · ${thoughtParts.length} 段` : ""}
+                思考过程{thoughtParts.length > 1 ? ` · ${thoughtParts.length} 段` : ""}
               </summary>
               <div className="execution-process__reasoning-body">
                 {thoughtParts.map((part, index) => (

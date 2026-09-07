@@ -93,6 +93,11 @@ import {
   stripInjectedUserContext,
 } from "./lib/user-message";
 import { beginAgentTurn } from "./lib/agent-turn";
+import {
+  isAgentOwnedActiveStatus,
+  isWaitingForUser,
+  terminalSessionStatus,
+} from "./lib/turn-status";
 
 const ChatView = lazy(() => import("./components/ChatView").then((module) => ({ default: module.ChatView })));
 const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((module) => ({ default: module.SettingsPanel })));
@@ -411,12 +416,25 @@ function Shell() {
             const updateType = (u as { sessionUpdate?: string; type?: string }).sessionUpdate
               ?? (u as { type?: string }).type;
             const updateSessionId = (u as { __sessionId?: string }).__sessionId;
+            const currentStatus = updateSessionId
+              ? findSessionSummary(updateSessionId)?.status
+              : undefined;
             if (
               updateSessionId
               && ["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update"].includes(updateType ?? "")
-              && findSessionSummary(updateSessionId)?.status === "pending"
+              && (currentStatus === "pending" || isWaitingForUser(currentStatus))
             ) {
-              sessionsStore.getState().upsert({ sessionId: updateSessionId, status: "working" });
+              sessionsStore.getState().upsert({
+                sessionId: updateSessionId,
+                status: "working",
+                updatedAt: new Date().toISOString(),
+              });
+            } else if (updateSessionId && updateType === "plan_approval_request") {
+              sessionsStore.getState().upsert({
+                sessionId: updateSessionId,
+                status: "awaiting_approval",
+                updatedAt: new Date().toISOString(),
+              });
             }
             if (updateType === "available_commands_update") {
               setCommandRefreshKey((value) => value + 1);
@@ -437,7 +455,7 @@ function Shell() {
             permissionStore.getState().request(p);
             sessionsStore.getState().upsert({
               sessionId: p.sessionId,
-              status: "pending",
+              status: "awaiting_permission",
               updatedAt: new Date().toISOString(),
             });
             void notificationAppend(
@@ -457,9 +475,18 @@ function Shell() {
             void refreshSessionCatalog();
           },
           onComplete: (p) => {
-            reportEvent("session_complete", "info", { sessionId: p.sessionId, stopReason: p.stopReason });
+            const terminalStatus = terminalSessionStatus(p);
+            reportEvent(
+              "session_complete",
+              terminalStatus === "failed" ? "error" : terminalStatus === "stopped" ? "warn" : "info",
+              {
+                sessionId: p.sessionId,
+                stopReason: p.stopReason,
+                cancellationCategory: p.cancellationCategory,
+              },
+            );
             const summary = findSessionSummary(p.sessionId);
-            const queuePolicy = queueTerminalPolicy(p.stopReason);
+            const queuePolicy = queueTerminalPolicy(p.stopReason, p.cancellationCategory);
             // prompt_complete is the authoritative terminal signal and arrives
             // before PromptRequest resolves. Settle the in-flight queue row now
             // so it cannot remain visually stuck while post-turn work finishes.
@@ -475,7 +502,7 @@ function Shell() {
             if (summary) {
               sessionsStore.getState().upsert({
                 sessionId: p.sessionId,
-                status: queuePolicy.failed ? "failed" : "completed",
+                status: terminalStatus,
               });
               const transcript = sessionStore.getState().transcripts[p.sessionId];
               if (transcript) {
@@ -521,6 +548,7 @@ function Shell() {
                 agentSend(p.sessionId, next.text, next.attachments, next.text).then(() => {
                   useMessageQueueStore.getState().remove(p.sessionId, next.id);
                 }).catch((e) => {
+                  const detail = friendlyError(e);
                   // Preserve a rejected queued message for retry and finalize
                   // the placeholder in the transcript it actually belongs to.
                   useMessageQueueStore.getState().setStatus(p.sessionId, next.id, "queued");
@@ -528,9 +556,10 @@ function Shell() {
                     sessionId: p.sessionId,
                     promptId: "",
                     stopReason: "error",
+                    agentResult: detail,
                   });
                   if (sessionStore.getState().sessionId === p.sessionId) {
-                    sessionStore.getState().setError(friendlyError(e));
+                    sessionStore.getState().setError(detail);
                   }
                   sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "failed" });
                 });
@@ -660,7 +689,7 @@ function Shell() {
             questionStore.getState().request(q);
             sessionsStore.getState().upsert({
               sessionId: q.sessionId,
-              status: "pending",
+              status: "awaiting_answer",
               updatedAt: new Date().toISOString(),
             });
           },
@@ -683,7 +712,21 @@ function Shell() {
               }
               : previous);
             authReadyRef.current = false;
+            sessionStore.getState().failAllStreaming("error", message);
             sessionStore.getState().setError(message);
+            useMessageQueueStore.getState().retryAllSending();
+            permissionStore.getState().clearAll();
+            questionStore.getState().clearAll();
+            const failedAt = new Date().toISOString();
+            for (const session of sessionsStore.getState().independent) {
+              if (isAgentOwnedActiveStatus(session.status)) {
+                sessionsStore.getState().upsert({
+                  sessionId: session.sessionId,
+                  status: "failed",
+                  updatedAt: failedAt,
+                });
+              }
+            }
             // Keep the detailed native error local: provider/runtime errors can
             // contain endpoints or filesystem paths and must not be forwarded
             // to an optional telemetry collector.

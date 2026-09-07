@@ -292,8 +292,16 @@ describe("queueTerminalPolicy", () => {
     });
   });
 
-  it("错误与限流保留队列项供重试", () => {
-    for (const reason of ["error", "rate_limit", "rate_limited"]) {
+  it("所有异常终态保留队列项供重试且不自动续发", () => {
+    for (const reason of [
+      "error",
+      "rate_limit",
+      "rate_limited",
+      "refusal",
+      "content_filter",
+      "max_tokens",
+      "max_turns",
+    ]) {
       expect(queueTerminalPolicy(reason)).toEqual({
         settlement: "retry",
         autoAdvance: false,
@@ -302,10 +310,39 @@ describe("queueTerminalPolicy", () => {
     }
   });
 
-  it("其它 ACP 终态保持原有自动续发契约", () => {
-    expect(queueTerminalPolicy("refusal").autoAdvance).toBe(true);
-    expect(queueTerminalPolicy("max_tokens").autoAdvance).toBe(true);
-    expect(queueTerminalPolicy("max_turns").autoAdvance).toBe(true);
+  it("取消类别可进一步识别安全规则失败", () => {
+    expect(queueTerminalPolicy("cancelled", "HookDenied")).toEqual({
+      settlement: "retry",
+      autoAdvance: false,
+      failed: true,
+    });
+    expect(queueTerminalPolicy("cancelled", "PermissionRejected")).toEqual({
+      settlement: "consume",
+      autoAdvance: false,
+      failed: false,
+    });
+  });
+});
+
+describe("message-queue-store — 进程级故障恢复", () => {
+  beforeEach(resetStore);
+
+  it("把所有会话的 sending 项恢复为可重试队列，保留其它状态", () => {
+    const s = useMessageQueueStore.getState();
+    s.enqueue("s1", "one");
+    const pausedId = s.enqueue("s1", "paused");
+    s.setStatus("s1", pausedId, "paused");
+    s.enqueue("s2", "two");
+    s.claimNext("s1");
+    s.claimNext("s2");
+
+    s.retryAllSending();
+
+    expect(store().getQueue("s1").map((item) => item.status)).toEqual([
+      "queued",
+      "paused",
+    ]);
+    expect(store().getQueue("s2")[0].status).toBe("queued");
   });
 });
 

@@ -111,7 +111,7 @@ export function ShareMenu({ messages, title, openUrl, onDone }: ShareMenuProps) 
             />
             <span>
               包含执行过程
-              <small>思考摘要与操作记录</small>
+              <small>思考过程与操作记录</small>
             </span>
           </label>
           <div className="share-menu__divider" />

@@ -282,6 +282,10 @@ export interface PromptComplete {
   turnId?: number;
   stopReason: StopReason;
   cancelTrigger?: string;
+  /** Structured reason supplied by EchoAgent for cancelled/stationary turns. */
+  cancellationCategory?: string;
+  /** Provider/runtime detail for terminal failures, when safe to surface. */
+  agentResult?: string;
   usage?: {
     promptTokens?: number;
     completionTokens?: number;
@@ -291,13 +295,24 @@ export interface PromptComplete {
 
 // ---------- session metadata ----------
 
-/** Lifecycle status for sidebar filtering, aligned with EchoAgent's task filter.
+/** Lifecycle status for sidebar filtering and user-action visibility.
  *  - "working": actively streaming a response
  *  - "completed": finished normally
  *  - "failed": errored during send/stream
  *  - "pending": created but no message sent yet
- *  - "planning": in plan mode / awaiting plan approval */
-export type SessionStatus = "working" | "completed" | "failed" | "pending" | "planning";
+ *  - "planning": actively producing or revising a plan
+ *  - "awaiting_*": paused for a specific user interaction
+ *  - "stopped": cancelled by the user or by a non-error external trigger */
+export type SessionStatus =
+  | "working"
+  | "completed"
+  | "failed"
+  | "pending"
+  | "planning"
+  | "awaiting_permission"
+  | "awaiting_answer"
+  | "awaiting_approval"
+  | "stopped";
 
 export interface SessionSummary {
   sessionId: string;

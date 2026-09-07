@@ -39,17 +39,11 @@ export function buildSessionMarkdown(
       lines.push("");
     } else {
       const groups = partitionAssistantParts(m.parts);
-      const fallbackTextParts = m.parts
-        .filter((part) => part.kind === "text")
-        .map((part) => part.text);
-      const responseText = (groups.responseParts.length > 0
-        ? groups.responseParts.map((part) => part.text)
-        : fallbackTextParts).filter((text) => text.trim());
+      const responseText = groups.responseParts
+        .map((part) => part.text)
+        .filter((text) => text.trim());
       const thoughtParts = groups.processParts
         .filter((part) => part.kind === "thought")
-        .map((part) => part.text);
-      const processCommentary = groups.processParts
-        .filter((part) => part.kind === "text")
         .map((part) => part.text);
       const toolCalls = groups.processParts
         .filter((part) => part.kind === "tool_call")
@@ -66,12 +60,8 @@ export function buildSessionMarkdown(
       if (options.includeProcess && groups.processParts.length > 0) {
         lines.push("### 执行过程");
         lines.push("");
-        for (const commentary of processCommentary) {
-          for (const line of commentary.split("\n")) lines.push(`> ${line}`);
-          lines.push("");
-        }
         for (const thought of thoughtParts) {
-          lines.push("> **思考摘要**");
+          lines.push("> **思考过程**");
           lines.push(">");
           for (const line of thought.split("\n")) lines.push(`> ${line}`);
           lines.push("");

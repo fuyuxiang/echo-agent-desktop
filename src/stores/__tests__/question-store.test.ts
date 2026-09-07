@@ -91,6 +91,14 @@ describe("question-store", () => {
     useQuestionStore.getState().dismiss("r1", "no-such");
     expect(useQuestionStore.getState().queues["s1"]).toHaveLength(1);
   });
+
+  it("Agent 退出后清空所有失效提问", () => {
+    const s = useQuestionStore.getState();
+    s.request(makeQuestion("r1", "s1"));
+    s.request(makeQuestion("r2", "s2"));
+    s.clearAll();
+    expect(useQuestionStore.getState().queues).toEqual({});
+  });
 });
 
 describe("selectQuestionForSession", () => {

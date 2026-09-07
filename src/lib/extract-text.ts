@@ -11,19 +11,19 @@ import type { ChatMessage, ToolCallView } from "@/stores/session-store";
  * 从一条消息的可见 parts 拼出纯文本(供搜索索引)。
  *  - text:取原文
  *  - thought:默认不索引，避免搜索命中折叠的内部思考；可显式开启
- *  - tool_call:取 title + 命令 + 输出(截断)
+ *  - tool_call:默认不索引，避免命中折叠的工具详情；可显式开启
  */
 export function extractPlainText(
   message: ChatMessage,
-  options: { includeThoughts?: boolean } = {},
+  options: { includeThoughts?: boolean; includeProcess?: boolean } = {},
 ): string {
   const segs: string[] = [];
   for (const p of message.parts) {
     if (p.kind === "text") {
       segs.push(p.text);
-    } else if (p.kind === "thought" && options.includeThoughts) {
+    } else if (p.kind === "thought" && (options.includeThoughts || options.includeProcess)) {
       segs.push(p.text);
-    } else if (p.kind === "tool_call") {
+    } else if (p.kind === "tool_call" && options.includeProcess) {
       segs.push(extractToolCallText(p.toolCall));
     }
   }

@@ -4,41 +4,22 @@ import { detectToolRenderer } from "@/lib/tool-renderers";
 export type TextMessagePart = Extract<MessagePart, { kind: "text" }>;
 
 export interface AssistantPartGroups {
-  /** Reasoning, tool calls, and any preamble text before the final answer. */
+  /** Reasoning and tool calls that may be folded without hiding assistant text. */
   processParts: MessagePart[];
-  /** Text that belongs to the user-facing final answer. */
+  /** Every user-visible assistant text chunk, in protocol order. */
   responseParts: TextMessagePart[];
 }
 
 /**
  * Split one assistant turn into a compact execution process and its final answer.
  *
- * ACP streams preambles, reasoning and tools into one ordered parts array. The
- * last run of text after the last process event is the final answer. If a turn
- * ends without trailing text, keep all text visible as the answer so an unusual
- * provider ordering can never hide user-facing content inside a collapsed card.
+ * ACP distinguishes assistant text from reasoning, but does not distinguish a
+ * textual "preamble" from a "final answer". Reasoning may legally be interleaved
+ * between two assistant-text chunks. Therefore positional inference is unsafe:
+ * every text part remains visible/copyable/exportable and only explicit process
+ * events (thoughts and tools) are folded.
  */
 export function partitionAssistantParts(parts: MessagePart[]): AssistantPartGroups {
-  let lastProcessIndex = -1;
-  for (let index = 0; index < parts.length; index += 1) {
-    if (parts[index].kind !== "text") lastProcessIndex = index;
-  }
-
-  if (lastProcessIndex === -1) {
-    return {
-      processParts: [],
-      responseParts: parts.filter(isTextPart),
-    };
-  }
-
-  const trailingResponse = parts.slice(lastProcessIndex + 1).filter(isTextPart);
-  if (trailingResponse.some((part) => part.text.trim().length > 0)) {
-    return {
-      processParts: parts.slice(0, lastProcessIndex + 1),
-      responseParts: trailingResponse,
-    };
-  }
-
   return {
     processParts: parts.filter((part) => part.kind !== "text"),
     responseParts: parts.filter(isTextPart),
@@ -60,6 +41,8 @@ export function summarizeExecutionProcess(
   parts: MessagePart[],
   active: boolean,
   stopReason?: string,
+  cancellationCategory?: string,
+  cancelTrigger?: string,
 ): ExecutionProcessSummary {
   const tools = parts
     .filter((part): part is Extract<MessagePart, { kind: "tool_call" }> => part.kind === "tool_call")
@@ -67,13 +50,30 @@ export function summarizeExecutionProcess(
   const thoughts = parts.filter((part) => part.kind === "thought");
   const failedToolCount = tools.filter((tool) => tool.status === "failed").length;
   const completedToolCount = tools.filter((tool) => tool.status === "completed").length;
+  const unfinishedToolCount = tools.filter((tool) => tool.status === "in_progress").length;
   const currentTool = [...tools].reverse().find((tool) => tool.status === "in_progress");
-  const changedFiles = [...new Set(tools.flatMap(toolDiffPaths))];
+  const changedFiles = [...new Set(
+    tools.filter((tool) => tool.status === "completed").flatMap(toolDiffPaths),
+  )];
 
-  const abnormalStop = ["error", "rate_limit", "rate_limited"].includes(stopReason ?? "");
-  const state = !active && stopReason === "cancelled"
+  const abnormalStop = [
+    "error",
+    "rate_limit",
+    "rate_limited",
+    "refusal",
+    "content_filter",
+    "max_tokens",
+    "max_turns",
+  ].includes(stopReason ?? "");
+  const abnormalCancellation = [
+    "HookDenied",
+    "max_turns_reached",
+    "action_stationarity",
+  ].includes(cancellationCategory ?? "");
+  const state = !active && stopReason === "cancelled" && !abnormalCancellation
     ? "stopped"
-    : failedToolCount > 0 || (!active && abnormalStop)
+    : failedToolCount > 0
+        || (!active && (abnormalStop || abnormalCancellation || unfinishedToolCount > 0))
       ? "attention"
     : active
       ? "running"
@@ -81,13 +81,17 @@ export function summarizeExecutionProcess(
 
   let title: string;
   if (state === "stopped") {
-    title = "已停止执行";
+    title = cancelledProcessTitle(cancellationCategory, cancelTrigger);
   } else if (state === "attention") {
     title = active
       ? "执行遇到问题，正在继续处理"
+      : abnormalCancellation
+        ? cancelledProcessTitle(cancellationCategory)
       : abnormalStop
-        ? "执行未正常完成"
-        : "执行过程有失败项";
+        ? abnormalProcessTitle(stopReason)
+        : unfinishedToolCount > 0
+          ? "执行已结束，但有操作未收尾"
+          : "执行过程有失败项";
   } else if (active) {
     title = currentTool ? activeToolLabel(currentTool) : "正在分析任务";
   } else if (tools.length > 0) {
@@ -105,6 +109,33 @@ export function summarizeExecutionProcess(
     thoughtCount: thoughts.length,
     changedFiles,
   };
+}
+
+function cancelledProcessTitle(category?: string, trigger?: string): string {
+  if (trigger === "send_now") return "已切换到新请求";
+  switch (category) {
+    case "max_turns_reached":
+      return "已达到执行轮数上限";
+    case "PermissionRejected":
+      return "权限未批准，执行已停止";
+    case "PermissionCancelled":
+      return "权限请求已取消";
+    case "HookDenied":
+      return "执行被安全规则阻止";
+    case "action_stationarity":
+      return "执行因无进展而停止";
+    default:
+      return "已停止执行";
+  }
+}
+
+function abnormalProcessTitle(stopReason?: string): string {
+  if (stopReason === "refusal" || stopReason === "content_filter") {
+    return "模型未能处理本次请求";
+  }
+  if (stopReason === "max_tokens") return "回复达到长度上限";
+  if (stopReason === "max_turns") return "已达到执行轮数上限";
+  return "执行未正常完成";
 }
 
 export function formatProcessDuration(milliseconds: number): string {

@@ -147,6 +147,13 @@ export function MessageItem({
 
   /** Preserve Markdown syntax, but don't leak hidden process details into a normal copy. */
   const markdownText = answerParts.map((part) => part.text).join("\n\n");
+  const hasAnswerText = plainText.trim().length > 0;
+  const hasTerminalProcessStatus = Boolean(
+    message.complete
+      && message.stopReason
+      && message.cancelTrigger !== "send_now"
+      && (message.stopReason !== "end_turn" || message.cancellationCategory),
+  );
 
   const toggleSpeak = useCallback(() => {
     if (speaking) {
@@ -260,37 +267,41 @@ export function MessageItem({
           {/* Hover actions — inline in header for assistant messages */}
           {message.complete && (
             <div className="msg__actions msg__actions--inline">
-              <button
-                type="button"
-                className="msg__action-btn msg__action-btn--copy"
-                data-chat-copy="true"
-                onClick={() => void copyText(plainText, "plain")}
-                title={copiedKind === "plain" ? "已复制" : "复制纯文本"}
-                aria-label={copiedKind === "plain" ? "已复制" : "复制纯文本"}
-                aria-live="polite"
-              >
-                {copiedKind === "plain" ? "已复制" : "复制"}
-              </button>
-              <button
-                type="button"
-                className="msg__action-btn msg__action-btn--copy"
-                data-chat-copy="true"
-                onClick={() => void copyText(markdownText, "markdown")}
-                title={copiedKind === "markdown" ? "已复制 Markdown" : "复制 Markdown 源码"}
-                aria-label={copiedKind === "markdown" ? "已复制 Markdown" : "复制 Markdown 源码"}
-                aria-live="polite"
-              >
-                {copiedKind === "markdown" ? "已复制" : "MD"}
-              </button>
-              <button
-                type="button"
-                className="msg__action-btn"
-                onClick={toggleSpeak}
-                title={speaking ? "停止朗读" : "朗读回复"}
-                aria-pressed={speaking}
-              >
-                {speaking ? "停止" : "朗读"}
-              </button>
+              {hasAnswerText && (
+                <>
+                  <button
+                    type="button"
+                    className="msg__action-btn msg__action-btn--copy"
+                    data-chat-copy="true"
+                    onClick={() => void copyText(plainText, "plain")}
+                    title={copiedKind === "plain" ? "已复制" : "复制纯文本"}
+                    aria-label={copiedKind === "plain" ? "已复制" : "复制纯文本"}
+                    aria-live="polite"
+                  >
+                    {copiedKind === "plain" ? "已复制" : "复制"}
+                  </button>
+                  <button
+                    type="button"
+                    className="msg__action-btn msg__action-btn--copy"
+                    data-chat-copy="true"
+                    onClick={() => void copyText(markdownText, "markdown")}
+                    title={copiedKind === "markdown" ? "已复制 Markdown" : "复制 Markdown 源码"}
+                    aria-label={copiedKind === "markdown" ? "已复制 Markdown" : "复制 Markdown 源码"}
+                    aria-live="polite"
+                  >
+                    {copiedKind === "markdown" ? "已复制" : "MD"}
+                  </button>
+                  <button
+                    type="button"
+                    className="msg__action-btn"
+                    onClick={toggleSpeak}
+                    title={speaking ? "停止朗读" : "朗读回复"}
+                    aria-pressed={speaking}
+                  >
+                    {speaking ? "停止" : "朗读"}
+                  </button>
+                </>
+              )}
               {onRetry && (
                 <button
                   type="button"
@@ -301,7 +312,7 @@ export function MessageItem({
                   重试
                 </button>
               )}
-              {sessionId && (
+              {sessionId && hasAnswerText && (
                 <FeedbackButtons sessionId={sessionId} messageId={message.id} />
               )}
             </div>
@@ -311,17 +322,22 @@ export function MessageItem({
           {message.parts.length === 0 && !message.complete && (
             <LoadingRow startedAt={message.startedAt} />
           )}
-          {assistantGroups && assistantGroups.processParts.length > 0 && (
-            <ExecutionProcess
-              parts={assistantGroups.processParts}
-              active={streaming && !message.complete}
-              startedAt={message.startedAt}
-              completedAt={message.completedAt}
-              stopReason={message.stopReason}
-              markdownConfig={markdownConfig}
-              onOpenTool={onOpenTool}
-            />
-          )}
+          {assistantGroups
+            && (assistantGroups.processParts.length > 0 || hasTerminalProcessStatus)
+            && (
+              <ExecutionProcess
+                parts={assistantGroups.processParts}
+                active={streaming && !message.complete}
+                startedAt={message.startedAt}
+                completedAt={message.completedAt}
+                stopReason={message.stopReason}
+                cancelTrigger={message.cancelTrigger}
+                cancellationCategory={message.cancellationCategory}
+                agentResult={message.agentResult}
+                markdownConfig={markdownConfig}
+                onOpenTool={onOpenTool}
+              />
+            )}
           {assistantGroups?.responseParts.map((part, index) => (
             <Markdown
               key={index}

@@ -42,15 +42,17 @@ export function beginAgentTurn(
 
   void send(sessionId, promptText, attachments, displayText).catch((error) => {
     const latest = useSessionStore.getState();
+    const detail = friendlyError(error);
     latest.markComplete({
       sessionId,
       promptId: "",
       stopReason: "error",
+      agentResult: detail,
     });
     // Error banners belong to the focused conversation. A late failure from a
     // background turn must not stop or overwrite whichever session is active.
     if (latest.sessionId === sessionId) {
-      latest.setError(friendlyError(error));
+      latest.setError(detail);
     }
     useSessionsStore.getState().upsert({ sessionId, status: "failed" });
   });

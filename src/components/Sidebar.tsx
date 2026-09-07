@@ -10,6 +10,7 @@ import {
   agentSetSessionArchived,
 } from "@/lib/agent-client";
 import type { SessionSummary, SessionStatus } from "@/lib/types";
+import { isWaitingForUser } from "@/lib/turn-status";
 import {
   EchoNewTaskIcon,
   EchoProjectNavIcon,
@@ -66,7 +67,11 @@ function relativeTime(iso: string): string {
 const ACTIVE_STATUS_META: Partial<Record<SessionStatus, { label: string; className: string }>> = {
   working: { label: "运行中", className: "working" },
   planning: { label: "规划中", className: "planning" },
-  pending: { label: "待处理", className: "pending" },
+  pending: { label: "未开始", className: "pending" },
+  awaiting_permission: { label: "授权待确认", className: "awaiting" },
+  awaiting_answer: { label: "等待回答", className: "awaiting" },
+  awaiting_approval: { label: "方案待批准", className: "awaiting" },
+  stopped: { label: "已停止", className: "stopped" },
   failed: { label: "失败", className: "failed" },
 };
 
@@ -118,7 +123,9 @@ const STATUS_OPTIONS: { value: SessionStatus | null; label: string }[] = [
   { value: "working",   label: "进行中" },
   { value: "completed", label: "已完成" },
   { value: "failed",    label: "失败" },
-  { value: "pending",   label: "待处理" },
+  { value: "stopped",   label: "已停止" },
+  { value: "awaiting_permission", label: "等待确认" },
+  { value: "pending",   label: "未开始" },
   { value: "planning",  label: "规划中" },
 ];
 
@@ -152,6 +159,7 @@ function getDateStart(date: string | null): number | null {
 function statusMatches(sessionStatus: SessionStatus | undefined, filter: SessionStatus): boolean {
   const s = sessionStatus ?? "completed";
   if (filter === "working") return s === "working" || s === "planning";
+  if (filter === "awaiting_permission") return isWaitingForUser(s);
   return s === filter;
 }
 
