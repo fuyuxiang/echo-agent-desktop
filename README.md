@@ -1,23 +1,22 @@
 <p align="center">
-  <img src="app-icon.png" width="112" height="112" alt="EchoAgent Logo" />
+  <img src="app-icon.png" width="96" height="96" alt="EchoAgent Logo" />
 </p>
 
 <h1 align="center">EchoAgent</h1>
 
 <p align="center">
-  <strong>面向自主 AI Agent 的开源桌面工作台。</strong>
+  <strong>让 AI Agent 从目标出发，持续推进到交付。</strong>
   <br />
-  自带模型、连接 MCP 工具，在轻量原生应用中规划、执行与自动化复杂任务。
+  一款开源、本地优先的桌面 Agent 工作台，把模型、文件、工具、记忆与自动化放进同一个原生应用。
 </p>
 
 <p align="center">
   <a href="README.en.md">English</a>
-  · <a href="#项目概览">项目概览</a>
-  · <a href="#核心能力">核心能力</a>
+  · <a href="#产品界面">产品界面</a>
   · <a href="#快速开始">快速开始</a>
+  · <a href="#核心能力">核心能力</a>
+  · <a href="#安全与数据边界">安全与数据边界</a>
   · <a href="#技术架构">技术架构</a>
-  · <a href="#开发指南">开发指南</a>
-  · <a href="#路线图">路线图</a>
 </p>
 
 <p align="center">
@@ -30,67 +29,71 @@
 </p>
 
 <p align="center">
-  <img src="src/assets/landing-hero.png" alt="EchoAgent——人与 AI Agent 协同工作" width="100%" />
+  <img src="docs/images/echoagent-workflow-hero.png" alt="EchoAgent 协调模型、文件、工具、计划、记忆与自动化" width="100%" />
 </p>
 
-## 项目概览
+## EchoAgent 是什么？
 
-EchoAgent 将模型 API 转化为真正可落地的桌面 Agent 工作环境。它把对话、文件、工具、权限、计划、子 Agent 与定时任务整合在同一个应用中，无需注册或依赖 EchoAgent 云端账户。
+EchoAgent 将模型 API 接入真实工作空间，让 Agent 可以理解目标、读写文件、拆解计划、调用本地工具或 MCP，并将执行过程、权限请求、文件变更和最终产物汇总到一条可追踪的任务链中。
 
-核心 Agent Runtime 直接嵌入 Tauri 进程，并通过 [Agent Client Protocol（ACP）](https://agentclientprotocol.com/)与 React 界面通信。流式输出、工具调用、权限审批、计划更新和任务生命周期因此共享同一条类型安全的执行链路。
+个人使用采用 BYOK 模式，可直接接入 OpenAI、Anthropic、DeepSeek、通义千问，也可连接兼容 OpenAI 或 Anthropic 协议的服务。
+
+| 使用环节 | EchoAgent 工作闭环 |
+| --- | --- |
+| 目标理解 | 读取上下文、制定计划、调用工具并交付结果 |
+| 文件协作 | 会话绑定真实目录，持续跟踪文件、变更与产物 |
+| 模型连接 | BYOK、多 Provider、多模型与自定义 Endpoint |
+| 执行控制 | 文件夹信任、权限模式、行内审批与工具调用记录 |
+| 持续协作 | 复用项目上下文、本地历史、个人记忆与知识源 |
 
 > [!IMPORTANT]
-> EchoAgent 目前仍处于 1.0 之前的快速迭代阶段。项目支持在 Windows 与 macOS 上从源码构建，现阶段安装包尚未进行代码签名或公证。允许 Agent 执行命令或修改文件前，请认真核对每一项权限请求。
+> EchoAgent 当前版本为 `0.3.10`，仍处于 1.0 之前的快速迭代期。现阶段推荐从源码体验；Windows/macOS 安装包的代码签名与公证仍在准备中。
 
-### 设计原则
+## 产品界面
 
-| 原则 | EchoAgent 的实现方式 |
-| --- | --- |
-| **供应商无关** | 使用自己的凭证接入 OpenAI、Anthropic、DeepSeek、通义千问或兼容的自定义服务。 |
-| **以工作空间为核心** | 会话绑定真实目录，并提供文件上下文、变更、产物与可搜索的本地历史。 |
-| **默认可扩展** | 通过 MCP Server、Skills、可复用助理和子 Agent 团队扩展能力。 |
-| **控制边界清晰** | 文件夹信任、权限模式、允许/询问/拒绝规则和可见的工具调用让执行过程可检查。 |
-| **原生且轻量** | 以 Tauri、Rust 和系统 WebView 构建桌面外壳，并在进程内运行 Agent Runtime。 |
+<p align="center">
+  <img src="docs/images/echoagent-home.png" alt="EchoAgent 桌面端首页：统一选择工作目录、模型和权限模式并发起任务" width="100%" />
+</p>
 
-## 核心能力
+<p align="center"><sub>统一任务入口：选择工作空间、模型与权限模式，附加文件或能力，然后直接描述目标。</sub></p>
 
-| 领域 | 能力 |
-| --- | --- |
-| **Agent 工作流** | 流式会话、可编辑计划、回溯与分叉、Prompt 历史、斜杠命令、子 Agent 实时任务、取消执行和团队状态。 |
-| **模型接入** | 多 Provider、多模型、上下文窗口配置、模型列表发现，以及兼容 OpenAI 或 Anthropic 协议的自定义 Endpoint。 |
-| **工具与扩展** | 基于 stdio 或 HTTP 的 MCP、MCP OAuth、Skills、Plugins、可复用助理和本地能力目录。 |
-| **工作空间** | 按目录组织会话、置顶与归档、全文检索、文件树、文件预览、变更跟踪和 Unified Diff。 |
-| **富内容交互** | 图片附件、拖拽输入、原生语音输入、代码高亮、GFM、KaTeX、Mermaid 和工具结果图片。 |
-| **知识与记忆** | 持久化记忆管理、本地文件夹知识源、可复用项目上下文和助理定义。 |
-| **自动化** | 单次或周期性本地调度、执行记录、连接器选择，以及自动化任务级权限模式。 |
-| **外部集成** | WebDAV 存储，以及系统桌面、Slack、Discord 和通用 Webhook 通知。 |
-| **通知中心** | 智能体邮箱聚合权限请求、文件夹信任、任务更新、计划模式、MCP 状态、会话完成等所有事件，支持浏览、筛选、标记已读与清空。 |
-| **安全与策略** | 行内权限审批、文件夹信任、权限规则、可配置执行模式，以及模型和功能策略控制。 |
+### 从目标到交付
+
+```mermaid
+flowchart LR
+    A[选择工作空间与模型] --> B[描述目标并附加文件]
+    B --> C[Agent 拆解计划并调用工具]
+    C --> D{需要授权?}
+    D -- 是 --> E[用户审批]
+    D -- 否 --> F[继续执行]
+    E --> F
+    F --> G[检查变更、产物与任务记录]
+```
+
+整个过程中，你可以查看流式输出和工具卡片、调整计划、批准或拒绝敏感操作、取消任务，并从历史节点回溯或分叉会话。
+
+## 为什么选择 EchoAgent？
+
+- **工作空间原生**：每个会话都绑定真实目录；文件树、预览、Unified Diff、产物与历史在同一界面中完成闭环。
+- **模型由你决定**：内置常见 Provider 预设，同时保留兼容 Endpoint；凭证和模型目录由用户自己管理。
+- **能力可以组合**：MCP、Skills、Plugins、专家和子 Agent 团队可统一加入交互任务与自动化流程。
+- **执行边界可见**：工作目录授权、审批/自动/始终允许三种权限模式，以及允许/询问/拒绝规则共同控制工具执行。
+- **原生且轻量**：React 负责交互，Tauri 与 Rust 承担原生能力，Agent Runtime 直接运行在应用进程中。
+- **为持续工作设计**：项目、记忆、知识库、定时任务、运行记录和通知渠道让一次任务能够发展为长期工作流。
 
 ## 快速开始
 
-### 使用安装包
-
-项目发布安装包后，可从 [GitHub Releases](https://github.com/fuyuxiang/echo-agent-desktop/releases) 下载。EchoAgent 支持生成 Windows NSIS 安装程序和 macOS DMG。
-
-> [!WARNING]
-> 当前安装包尚未进行代码签名或公证。请仅安装来自可信 Release 的产物，并在运行前核对对应的发布说明。
-
-### 从源码构建
-
-#### 环境要求
+### 环境要求
 
 | 依赖 | 要求 |
 | --- | --- |
-| Rust | Stable 工具链，Rust 1.92 或更高版本。`rust-toolchain.toml` 会安装 `rustfmt` 和 `clippy`。 |
-| Node.js | Node.js 20 或更高版本；CI 使用 Node.js 22。 |
-| pnpm | pnpm 10。项目在 `package.json` 中固定了期望的包管理器版本。 |
-| Protocol Buffers | 系统 `PATH` 中可用的原生 `protoc`，或通过 `PROTOC` 环境变量指定。 |
-| 平台工具链 | macOS：Xcode Command Line Tools。Windows：Visual Studio 2022 Build Tools，并安装 **Desktop development with C++** 工作负载和 Windows SDK。 |
+| Node.js | 20 或更高版本；CI 使用 Node.js 22 |
+| pnpm | 10；仓库已固定期望版本 |
+| Rust | Stable，最低 `1.92.0`；包含 `rustfmt` 与 `clippy` |
+| Protocol Buffers | 系统 `PATH` 中可用的原生 `protoc`，或设置 `PROTOC` |
+| 平台工具链 | macOS：Xcode Command Line Tools；Windows：VS 2022 Build Tools、C++ 桌面工作负载和 Windows SDK |
 
-内嵌 Runtime 已作为普通源码完整收录在 `vendor/grok-build/`，与桌面应用由同一仓库、同一提交统一管理。兼容性修改和 EchoAgent 协议命名空间迁移都已直接融入该源码；`async-openai` 与 `nucleo` 的锁定源码也由 `vendor/` 直接管理。克隆主仓库后无需初始化子模块，构建不会从这三个 Git 仓库下载源码。Setup 脚本仅负责检查 Vendored 源码是否完整。
-
-**macOS**
+### macOS
 
 ```bash
 git clone https://github.com/fuyuxiang/echo-agent-desktop.git
@@ -101,7 +104,7 @@ pnpm install --frozen-lockfile
 pnpm tauri dev
 ```
 
-**Windows（PowerShell）**
+### Windows（PowerShell）
 
 ```powershell
 git clone https://github.com/fuyuxiang/echo-agent-desktop.git
@@ -112,191 +115,149 @@ pnpm install --frozen-lockfile
 .\dev.bat
 ```
 
-首次构建需要编译完整的内嵌 Rust Runtime，可能耗时数分钟并占用较多磁盘空间，后续增量构建会明显更快。MSVC、`protoc` 和环境配置问题请参阅 [Windows 构建说明](docs/WINDOWS_BUILD_NOTES.md)。
+首次构建会编译完整的内嵌 Rust Runtime，通常比后续增量构建耗时更长。Windows 上遇到 MSVC、`protoc`、链接器内存或打包工具问题，请查看 [Windows 构建说明](docs/WINDOWS_BUILD_NOTES.md)。
 
 ### 配置第一个模型
 
 1. 启动 EchoAgent，打开「设置 → 模型」。
-2. 添加 Provider，填写 API Key 和 Endpoint。
-3. 在该 Provider 下至少添加一个模型。
-4. 在输入区选择模型并开始任务。
-
-项目内置 Anthropic、OpenAI、DeepSeek 和通义千问配置预设，同时支持兼容 OpenAI 或 Anthropic 协议的自定义服务。
+2. 选择 Provider，填写自己的 API Key；自定义服务还需填写 Endpoint 与协议。
+3. 添加至少一个模型，并可先测试连接。
+4. 返回首页，选择工作目录、模型和权限模式，然后发送第一个任务。
 
 <details>
-<summary><strong>手动配置</strong></summary>
+<summary><strong>使用 TOML 手动配置</strong></summary>
 
-界面会将 Provider 配置写入 `~/.echo-agent/config.toml`。以下是一个最小的 OpenAI 兼容配置：
+设置界面最终写入 `~/.echo-agent/config.toml`。下面是一个最小的 OpenAI 兼容示例：
 
 ```toml
 [models]
-default = "gpt-4o"
+default = "your-model-id"
 
-[model_providers.openai]
-base_url = "https://api.openai.com/v1"
+[model_providers.my-provider]
+base_url = "https://your-endpoint.example/v1"
 api_key = "YOUR_API_KEY"
 api_backend = "chat_completions"
 auth_scheme = "bearer"
 context_window = 128000
 
-[model.gpt-4o]
-model_provider = "openai"
-name = "GPT-4o"
+[model.your-model-id]
+model_provider = "my-provider"
+name = "My Model"
 ```
 
-手动编辑后请重启 EchoAgent。建议优先使用设置界面，因为它会校验 Provider 字段，并在更新时保留无关配置。
+手动修改后请重启 EchoAgent。日常使用更推荐设置界面，因为它会校验字段并在更新时保留无关配置。
 
 </details>
 
-## 数据与安全
+## 核心能力
 
-EchoAgent 默认将应用状态保存在 `~/.echo-agent/`。如需修改数据目录，请在启动前设置 `ECHO_AGENT_HOME`。
+| 领域 | 已实现能力 |
+| --- | --- |
+| **Agent 工作流** | 流式会话、可编辑计划、斜杠命令、取消执行、回溯与分叉、子 Agent 实时状态和团队协作 |
+| **模型接入** | OpenAI、Anthropic、DeepSeek、通义千问预设，多 Provider、多模型、模型发现，以及 OpenAI/Anthropic 兼容 Endpoint |
+| **工具与扩展** | MCP stdio/HTTP、MCP OAuth、Skills、Plugins、连接器目录、可复用专家和本地能力市场 |
+| **工作空间** | 目录级会话、全文检索、置顶与归档、文件树、常见文档预览、变更跟踪、Unified Diff 与项目资产 |
+| **项目管理** | 项目指令、模板、关联专家/技能/连接器、动态、计划、任务、成员和交付资产 |
+| **知识与记忆** | 个人长期记忆、会话摘要、本地文件夹知识源、记忆检索/落盘/整理，以及可选组织知识服务 |
+| **自动化** | 单次或周期调度、手动试运行、执行记录、工作空间/模型/专家/技能/连接器选择和任务级权限模式 |
+| **内容体验** | 图片与文件附件、拖拽、语音输入、GFM、语法高亮、KaTeX、Mermaid、工具结果图片和文件预览 |
+| **集成与通知** | WebDAV 云存储、桌面通知、Slack、Discord、通用 Webhook 和统一通知中心 |
+| **治理与可观测** | 文件夹信任、权限规则、功能策略、Token 用量、日志目录、更新检查与可选 OTLP 遥测 |
+
+## 安全与数据边界
+
+EchoAgent 默认把状态放在 `~/.echo-agent/`。启动前设置 `ECHO_AGENT_HOME` 可以切换数据根目录。
 
 | 数据 | 默认位置 |
 | --- | --- |
-| Provider、权限、界面默认值和 MCP 配置 | `~/.echo-agent/config.toml` 与 `~/.echo-agent/mcp.json` |
+| 模型、权限与运行配置 | `~/.echo-agent/config.toml` |
+| MCP 配置 | `~/.echo-agent/mcp.json` |
 | 会话与工作空间历史 | `~/.echo-agent/sessions/` |
-| 可复用助理 | `~/.echo-agent/agents/` |
-| 已安装技能 | `~/.echo-agent/skills/` |
-| 专家市场 | `~/.echo-agent/experts-marketplace/` |
-| 连接器市场及其技能 | `~/.echo-agent/connectors-marketplace/` |
-| 内置技能资源 | `~/.echo-agent/resources/builtin-skills/` |
-| 记忆与 Runtime 状态 | `~/.echo-agent/memory/` 及 EchoAgent 自有 JSON 文件 |
+| Agents 与 Skills | `~/.echo-agent/agents/`、`~/.echo-agent/skills/` |
+| 记忆与 Runtime 状态 | `~/.echo-agent/memory/` 及其他 EchoAgent JSON 文件 |
+| 专家、连接器与内置技能目录 | `~/.echo-agent/experts-marketplace/`、`~/.echo-agent/connectors-marketplace/`、`~/.echo-agent/resources/builtin-skills/` |
 
-上表所有路径都以 `ECHO_AGENT_HOME` 为根；表中使用 `~/.echo-agent` 只是未设置该变量时的默认值。专家、技能和连接器面板只会持久化用户手动选择的来源；自动发现的默认来源会始终跟随当前数据根。
+请在使用前了解这些边界：
 
-未指定目录的新任务默认使用系统“文稿”目录下的 `EchoAgent` （无“文稿”目录时回退到用户目录下的同名子目录）。出于安全考虑，EchoAgent 不会默认授权整个用户目录；如需使用其他工作目录或本地知识库，请通过系统目录选择器明确授权。
-
-- API Key 和 Endpoint 凭证以明文形式保存在本机。Unix 系统下，EchoAgent 会为包含密钥的文件和目录设置仅所有者可访问的权限；Windows 下的访问边界取决于当前用户的文件系统 ACL。
-- 模型、MCP、WebDAV 和通知流量只会发往你主动配置的服务，使用项目无需 EchoAgent 托管账户。
-- 工具执行可能读取文件、修改文件或运行命令。处理不完全可信的仓库或数据时，请使用权限规则和受限模式。
-- 不要将 `~/.echo-agent/config.toml`、复制出的凭证或 Runtime 状态提交到版本控制。
-
-### 数据迁移
-
-首次启动时，EchoAgent 会一次性从旧版数据目录 `~/.grok/` 把缺失的文件和目录（已废弃的 `auth.json` 除外）复制到 `~/.echo-agent/`，再写入 `.legacy-data-migrated` 标记避免重复执行。整个过程只会复制新位置还没有的文件，**绝不会覆盖** `~/.echo-agent/` 中已有的内容，旧目录也保持原样，便于回滚。
-
-专家市场也会从历史的 `~/EchoAgent/agents/` 或 `~/agents/` 安全导入到当前数据根的 `experts-marketplace/`。当使用自定义 `ECHO_AGENT_HOME` 时，旧默认数据根中的连接器市场和内置技能也会以相同规则导入。导入通过临时目录完成后再原子切换，已存在的目标目录始终优先，旧目录不会删除。
-
-如果同时设置了 `ECHO_AGENT_HOME` 和 `GROK_HOME`，迁移源会指向 `GROK_HOME` 指向的目录；嵌入式 Runtime 启动时也会被改写为使用 `ECHO_AGENT_HOME` 对应的路径，避免后续写入落到旧位置。
+- Provider API Key 当前以明文写入本机 `config.toml`。Unix 系统会尽量收紧文件权限；Windows 的边界取决于当前用户 ACL。请将该文件排除在版本控制、Issue 附件和公开日志之外。
+- Agent 工具可以读取文件、修改文件和运行命令。处理来源未知的仓库时，建议使用「审批模式」，限定授权目录，并逐项检查风险操作。
+- “本地优先”覆盖应用状态与执行控制。模型、MCP、WebDAV、通知和可选组织能力仍会访问各自配置的服务。
+- 记忆功能默认开启；当前内嵌 Runtime 会使用预设的 SiliconFlow Endpoint 完成 `BAAI/bge-m3` 向量化和 `BAAI/bge-reranker-v2-m3` 重排。处理敏感内容前请审查该实现，或在「设置 → 记忆」中关闭记忆能力。
+- 未指定工作目录时，默认授权范围限定为系统“文稿”目录下的 `EchoAgent` 子目录。
 
 ## 技术架构
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│ React 18 界面                                               │
-│ Components · Zustand Stores · Markdown · Workspace Views    │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ Tauri Commands 与 Events
-┌──────────────────────▼──────────────────────────────────────┐
-│ Tauri 2 / Rust 应用层                                       │
-│ Commands · Bridge · Sessions · Providers · Policy · Storage │
-└──────────────────────┬──────────────────────────────────────┘
-                       │ 基于 mpsc Channel 的类型化 ACP 消息
-┌──────────────────────▼──────────────────────────────────────┐
-│ 进程内 Agent Runtime                                        │
-│ 会话生命周期 · 工具 · 计划 · 权限 · 子 Agent                │
-└──────────────┬──────────────────┬───────────────────────────┘
-               │                  │
-          模型 Provider       MCP Server / 本地工具
+```mermaid
+flowchart TB
+    UI[React 18 界面<br/>会话 · 项目 · 设置 · 工作空间] <-->|Tauri Commands / Events| HOST[Tauri 2 + Rust 应用层<br/>存储 · 策略 · 调度 · 原生能力]
+    HOST <-->|类型化 ACP Channel| RUNTIME[进程内 Agent Runtime<br/>会话 · 计划 · 工具 · 权限 · 子 Agent]
+    RUNTIME --> MODELS[模型 Provider<br/>OpenAI / Anthropic / Compatible]
+    RUNTIME --> TOOLS[本地文件与命令<br/>MCP · Skills · Plugins]
+    HOST --> DATA[(本地数据根<br/>.echo-agent)]
+    HOST --> EXT[WebDAV · 通知 · 可选组织服务]
 ```
 
-Runtime 运行在独立 OS 线程上，由 current-thread Tokio Runtime 和 `LocalSet` 驱动。Rust Bridge 将 ACP 更新转换为 `agent://update`、`agent://permission`、`agent://complete` 等 Tauri Event，前端 Store 再将事件应用到对应会话。
+核心 Runtime 直接嵌入桌面进程，运行在独立 OS 线程上的 current-thread Tokio Runtime 与 `LocalSet` 中，并通过内存内 ACP Channel 与 Rust Bridge 通信。Bridge 将流式更新、权限请求、计划状态和完成事件转换成 Tauri Event，再由前端 Store 分发到对应会话。
 
-### 目录结构
-
-```text
-src/
-├── components/             React 视图与功能面板
-├── foundation/             通用图标与 UI 基础组件
-├── lib/                    ACP Client、领域逻辑与工具函数
-├── stores/                 Zustand 应用状态
-└── styles/                 Design Tokens 与应用样式
-
-src-tauri/
-├── src/agent_runtime.rs     内嵌 Runtime 生命周期
-├── src/bridge.rs            ACP 到 Tauri 的事件桥接
-├── src/commands.rs          会话命令入口
-├── src/lib.rs               Tauri 初始化与命令注册
-└── src/*.rs                 Provider、MCP、Skills、Policy、Storage 等模块
-
-vendor/grok-build/           主仓库直接管理的 Apache-2.0 Runtime 源码快照
-vendor/async-openai/         内置的 OpenAI 兼容 Rust 客户端源码
-vendor/nucleo/               内置的模糊匹配 Rust 源码
-scripts/                     初始化与打包脚本
-docs/                        平台专项文档
-.github/workflows/           持续集成配置
-```
-
-## 开发指南
-
-### 常用命令
+## 开发与验证
 
 | 命令 | 用途 |
 | --- | --- |
-| `pnpm tauri dev` | 以开发模式运行完整桌面应用。 |
-| `pnpm dev` | 仅运行 Vite 前端；普通浏览器环境无法使用 Tauri API。 |
-| `pnpm test` | 运行 Vitest 前端测试。 |
-| `pnpm build` | 执行 TypeScript 类型检查并生成生产环境前端产物。 |
-| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | 运行 Rust 单元测试。 |
-| `cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored spawn_smoke` | 运行需主动启用的内嵌 Runtime 冒烟测试。 |
-| `pnpm dist:mac` | 在 macOS 上构建未签名 DMG。 |
-| `pnpm dist:win` | 在 Windows 上构建未签名 NSIS 安装程序。 |
+| `pnpm tauri dev` | 运行完整桌面应用 |
+| `pnpm dev` | 仅启动 Vite 前端；Tauri 原生能力需在桌面容器中运行 |
+| `pnpm test` | 运行 Vitest 前端测试 |
+| `pnpm build` | TypeScript 类型检查并构建前端 |
+| `cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -j 2` | 运行 Rust 单元测试 |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 检查 Rust 格式 |
+| `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings` | 运行 Clippy |
 
-CI 会在每个 Pull Request 上执行 TypeScript 类型检查、前端单元测试、生产环境前端构建，以及 Rust 格式、Clippy 和单元测试检查。提交前仍建议在本地运行与改动相关的定向测试，以便更快发现问题。
+CI 会对 `main` 推送和 Pull Request 执行前端类型检查、单元测试、生产构建，以及 Rust 格式、Clippy 和单元测试检查。
 
-### 参与贡献
-
-欢迎从小范围修复到 Runtime 新能力等各种形式的贡献。
-
-1. Fork 仓库，并正常克隆到本地；内嵌 Runtime 已包含在主仓库中。
-2. 从 `main` 创建独立分支。
-3. 为行为变更补充测试，并运行上方对应检查。
-4. 保持变更范围清晰；行为发生变化时同步更新文档。
-5. 创建 Pull Request，说明变更动机、实现要点和验证结果。
-
-对于影响较大的功能或架构调整，请先创建 Issue，以便在编码前讨论设计方案与兼容性影响。
+桌面更新与维护者发版流程见 [桌面更新文档](docs/desktop-updates.md)。
 
 ## 路线图
 
-- Linux 开发支持与可分发安装包
-- 已签名并完成公证的 Windows/macOS Release
-- 自动化发布流程与产物校验和
-- 官方维护的 Connector 与 Skill 目录
-- 桌面端端到端测试与视觉回归测试
-- 更完整的用户文档与界面国际化
+- [ ] Windows 与 macOS 安装包签名、公证和自动发布
+- [ ] Linux 开发验证与正式分发
+- [ ] 官方维护的 Connector、Skill 与 Plugin 目录
+- [ ] 桌面端到端测试和视觉回归测试
+- [ ] 更完整的用户文档与界面国际化
 
-路线图代表方向，不构成版本承诺。当前优先级请以 [Issue Tracker](https://github.com/fuyuxiang/echo-agent-desktop/issues) 为准。
+路线图用于说明项目方向，具体交付与当前优先级以 [Issue Tracker](https://github.com/fuyuxiang/echo-agent-desktop/issues) 为准。
 
 ## 常见问题
 
 <details>
-<summary><strong>是否支持本地模型？</strong></summary>
+<summary><strong>支持本地模型吗？</strong></summary>
 
-支持，但本地服务需要提供兼容 OpenAI 或 Anthropic 的 API。将其添加为自定义 Provider，并把 `base_url` 指向本地 Endpoint 即可。工具调用和多模态能力取决于具体模型与服务实现。
-
-</details>
-
-<details>
-<summary><strong>是否支持 Linux？</strong></summary>
-
-项目目前尚未维护 Linux 安装包。前端和大部分 Rust 代码已具备可移植性 —— `tauri-plugin-autostart` 等核心依赖在 macOS、Windows、Linux 三个目标上同时启用，构建脚本与配置层也已对 Linux 做好准备。但文件对话框、系统通知与打包流水线仍需要针对 Linux 完成适配和验证，欢迎在具备环境后提交补丁。
+可以。本地服务需提供兼容 OpenAI 或 Anthropic 的 HTTP API。将其添加为自定义 Provider，并把 Endpoint 指向本地地址即可。工具调用与多模态能力取决于具体模型和服务实现。
 
 </details>
 
 <details>
-<summary><strong>API Key 保存在什么位置？</strong></summary>
+<summary><strong>需要 EchoAgent 账户吗？</strong></summary>
 
-Provider Key 保存在 `~/.echo-agent/config.toml`。它不会写入项目仓库，但仍属于本机磁盘上的明文密钥。请妥善保护该文件，且不要将其附在 Issue、日志或 Commit 中。
+个人使用采用 BYOK 模式，可直接配置自己的模型凭证，主要状态保存在本机；“组织”能力作为可选的外部服务入口提供。
 
 </details>
 
-## 致谢
+<details>
+<summary><strong>支持 Linux 吗？</strong></summary>
 
-- [xai-org/grok-build](https://github.com/xai-org/grok-build) 提供最初的 Apache-2.0 Runtime 源码；EchoAgent 在主仓库中维护经过兼容性修改的固定源码快照。
-- [Tauri](https://tauri.app/)、[React](https://react.dev/) 和 [Vite](https://vite.dev/) 构成项目的核心应用技术栈。
+Linux 支持目前处于适配阶段。前端和多数 Rust 模块已经具备可移植性，后续工作集中在文件对话框、系统通知、打包流程和平台验证。
 
-EchoAgent 是独立的社区开源项目，与 xAI 不存在隶属、背书或赞助关系。
+</details>
+
+## 参与贡献
+
+欢迎提交 Bug 修复、测试、文档、界面改进、Provider/MCP 兼容性和 Runtime 能力增强。
+
+1. Fork 仓库，并从 `main` 创建独立分支。
+2. 保持改动聚焦，为行为变化补充测试和文档。
+3. 运行与改动相关的前端/Rust 检查。
+4. 创建 Pull Request，说明动机、实现、风险与验证结果。
+
+较大的功能或架构调整建议先创建 Issue，提前讨论交互、兼容性和安全边界。
 
 ## 许可证
 
