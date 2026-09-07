@@ -614,9 +614,10 @@ fn agent_sessions_root() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_SUMMARY_BYTES, MAX_TITLE_CHARS, SessionSummary, SummaryFile, apply_archive_visibility,
-        authoritative_session_id, display_title, list_all_sessions_from_root, read_summary_file,
-        recover_title_from_updates, summary_cwd, to_session_summary, workspace_dir_matches_request,
+        apply_archive_visibility, authoritative_session_id, display_title,
+        list_all_sessions_from_root, read_summary_file, recover_title_from_updates, summary_cwd,
+        to_session_summary, workspace_dir_matches_request, SessionSummary, SummaryFile,
+        MAX_SUMMARY_BYTES, MAX_TITLE_CHARS,
     };
 
     fn summary(json: &str) -> SummaryFile {
