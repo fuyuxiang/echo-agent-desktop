@@ -503,8 +503,14 @@ pub(crate) async fn spawn_session_actor(
         tracing::warn!("web_search disabled: configured model could not be resolved");
         xai_grok_tools::implementations::WebSearchConfig::Disabled
     };
-    let embed_base_url = sampling_config.base_url.clone();
-    let embed_api_key = sampling_config.api_key.clone();
+    let embed_base_url = memory_config
+        .as_ref()
+        .and_then(|config| config.embedding.endpoint.clone())
+        .unwrap_or_else(|| sampling_config.base_url.clone());
+    let embed_api_key = memory_config
+        .as_ref()
+        .and_then(|config| config.embedding.api_key.clone())
+        .or_else(|| sampling_config.api_key.clone());
     let session_pruning_config: crate::config::PruningConfig = memory_config.as_ref().map_or_else(
         || crate::config::PruningConfig {
             enabled: false,

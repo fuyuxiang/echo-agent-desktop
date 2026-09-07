@@ -143,7 +143,7 @@ impl Default for MemoryIndexConfig {
 }
 
 /// Embedding provider configuration (`[memory.embedding]`).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct MemoryEmbeddingConfig {
     /// Provider type: `"api"` or `"auto"`. `"local"` explicitly disables
@@ -153,6 +153,31 @@ pub struct MemoryEmbeddingConfig {
     pub model: Option<String>,
     /// Embedding vector dimensions.
     pub dimensions: usize,
+    /// Host-injected embedding endpoint. This is runtime-only so credentials
+    /// and provider routing cannot be overridden through upstream config.
+    #[serde(skip)]
+    pub endpoint: Option<String>,
+    /// Host-injected API key for the embedding endpoint.
+    #[serde(skip)]
+    pub api_key: Option<String>,
+    /// Whether the provider accepts OpenAI's optional `dimensions` request
+    /// field. Fixed-dimension providers can require this to be omitted.
+    #[serde(skip)]
+    pub send_dimensions: bool,
+}
+
+impl std::fmt::Debug for MemoryEmbeddingConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MemoryEmbeddingConfig")
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("dimensions", &self.dimensions)
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("send_dimensions", &self.send_dimensions)
+            .finish()
+    }
 }
 
 impl Default for MemoryEmbeddingConfig {
@@ -161,7 +186,49 @@ impl Default for MemoryEmbeddingConfig {
             provider: "api".to_string(),
             model: None,
             dimensions: 1024,
+            endpoint: None,
+            api_key: None,
+            send_dimensions: true,
         }
+    }
+}
+
+/// Optional API-backed relevance re-ranker applied after coarse memory
+/// retrieval. Hosts inject this at runtime; it is intentionally not part of
+/// the upstream TOML surface.
+#[derive(Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct MemoryRerankerConfig {
+    pub enabled: bool,
+    #[serde(skip)]
+    pub endpoint: Option<String>,
+    #[serde(skip)]
+    pub model: Option<String>,
+    #[serde(skip)]
+    pub api_key: Option<String>,
+}
+
+impl MemoryRerankerConfig {
+    pub fn is_configured(&self) -> bool {
+        self.enabled
+            && self
+                .endpoint
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
+            && self.model.as_ref().is_some_and(|value| !value.is_empty())
+            && self.api_key.as_ref().is_some_and(|value| !value.is_empty())
+    }
+}
+
+impl std::fmt::Debug for MemoryRerankerConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MemoryRerankerConfig")
+            .field("enabled", &self.enabled)
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .finish()
     }
 }
 
@@ -189,6 +256,10 @@ pub struct MemorySearchConfig {
     pub temporal_decay: TemporalDecayConfig,
     /// MMR diversity re-ranking configuration (enabled by default).
     pub mmr: MmrConfig,
+    /// Optional host-provided model re-ranker. When configured, it replaces
+    /// MMR as the final ordering stage.
+    #[serde(skip)]
+    pub reranker: MemoryRerankerConfig,
     /// Source-type weight multipliers: all default to 1.0.
     pub source_weights: std::collections::HashMap<String, f32>,
 }
@@ -208,6 +279,7 @@ impl Default for MemorySearchConfig {
             recency_decay: DEFAULT_RECENCY_DECAY,
             temporal_decay: TemporalDecayConfig::default(),
             mmr: MmrConfig::default(),
+            reranker: MemoryRerankerConfig::default(),
             source_weights,
         }
     }
@@ -637,6 +709,9 @@ impl MemoryConfig {
                             .map(|value| value as usize)
                     })
                     .unwrap_or(defaults.embedding.dimensions),
+                endpoint: None,
+                api_key: None,
+                send_dimensions: true,
             },
             search: MemorySearchConfig {
                 max_results: search
@@ -686,6 +761,7 @@ impl MemoryConfig {
                         .unwrap_or(defaults.search.mmr.lambda)
                         .clamp(0.0, 1.0),
                 },
+                reranker: MemoryRerankerConfig::default(),
                 source_weights: search
                     .and_then(|settings| settings.source_weights.clone())
                     .unwrap_or(defaults.search.source_weights),

@@ -45,6 +45,33 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::windows::fs::OpenOptionsExt;
 
 const MAX_IMAGE_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
+const MEMORY_EMBEDDING_ENDPOINT: &str = "https://api.siliconflow.cn/v1/embeddings";
+const MEMORY_EMBEDDING_MODEL: &str = "BAAI/bge-m3";
+const MEMORY_EMBEDDING_DIMENSIONS: usize = 1024;
+const MEMORY_RERANK_ENDPOINT: &str = "https://api.siliconflow.cn/v1/rerank";
+const MEMORY_RERANK_MODEL: &str = "BAAI/bge-reranker-v2-m3";
+const MEMORY_SILICONFLOW_API_KEY: &str = "sk-perpdxeyiwcymvnnpvwnjbhavppnchxohcpwydulfkdwpvpv";
+
+fn configure_memory_retrieval(cfg: &mut AgentConfig) {
+    let Some(memory) = cfg.memory_config.as_mut() else {
+        return;
+    };
+
+    memory.embedding.provider = "api".to_owned();
+    memory.embedding.model = Some(MEMORY_EMBEDDING_MODEL.to_owned());
+    memory.embedding.dimensions = MEMORY_EMBEDDING_DIMENSIONS;
+    memory.embedding.endpoint = Some(MEMORY_EMBEDDING_ENDPOINT.to_owned());
+    memory.embedding.api_key = Some(MEMORY_SILICONFLOW_API_KEY.to_owned());
+    memory.embedding.send_dimensions = false;
+
+    // The model-based reranker becomes the final ordering stage. The runtime's
+    // lightweight Jaccard MMR remains available as the network-failure fallback
+    // ordering but is not applied before a successful model rerank.
+    memory.search.reranker.enabled = true;
+    memory.search.reranker.endpoint = Some(MEMORY_RERANK_ENDPOINT.to_owned());
+    memory.search.reranker.model = Some(MEMORY_RERANK_MODEL.to_owned());
+    memory.search.reranker.api_key = Some(MEMORY_SILICONFLOW_API_KEY.to_owned());
+}
 
 /// One end of the ACP channel pair that lives on the Tauri (multi-thread) side.
 /// The client sends requests to the agent via `tx` (`AcpAgentTx`) and receives
@@ -154,6 +181,7 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
         laziness_debug_log: None,
         storage_mode: None,
     });
+    configure_memory_retrieval(&mut cfg);
 
     // Skip bootstrap's shell-level remote_settings fallback fetch
     // (`start_early_prefetch` + thread join). See module comment above.

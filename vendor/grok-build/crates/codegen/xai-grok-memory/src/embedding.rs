@@ -71,6 +71,7 @@ pub struct ApiEmbeddingProvider {
     dimensions: usize,
     client: reqwest_middleware::ClientWithMiddleware,
     max_batch_size: usize,
+    send_dimensions: bool,
 }
 
 impl ApiEmbeddingProvider {
@@ -86,6 +87,7 @@ impl ApiEmbeddingProvider {
             dimensions,
             client,
             max_batch_size: 32,
+            send_dimensions: true,
         }
     }
 
@@ -95,7 +97,9 @@ impl ApiEmbeddingProvider {
         client: reqwest_middleware::ClientWithMiddleware,
     ) -> Option<Self> {
         let model = config.model.clone().filter(|m| !m.is_empty())?;
-        Some(Self::new(api_base, model, config.dimensions, client))
+        let mut provider = Self::new(api_base, model, config.dimensions, client);
+        provider.send_dimensions = config.send_dimensions;
+        Some(provider)
     }
 
     pub fn from_session(
@@ -105,6 +109,26 @@ impl ApiEmbeddingProvider {
     ) -> Option<Self> {
         let client = build_static_middleware_client(Some(auth_key));
         Self::from_config(config, proxy_base_url, client)
+    }
+
+    fn endpoint_url(&self) -> String {
+        let base = self.api_base.trim_end_matches('/');
+        if base.ends_with("/embeddings") {
+            base.to_owned()
+        } else {
+            format!("{base}/embeddings")
+        }
+    }
+
+    fn request_body(&self, input: Vec<&str>) -> serde_json::Value {
+        let mut body = serde_json::json!({
+            "model": self.model,
+            "input": input,
+        });
+        if self.send_dimensions {
+            body["dimensions"] = serde_json::json!(self.dimensions);
+        }
+        body
     }
 }
 
@@ -147,11 +171,7 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
         // Process in batches to respect API payload limits
         for batch in texts.chunks(self.max_batch_size) {
             let input: Vec<&str> = batch.to_vec();
-            let body_json = serde_json::json!({
-                "model": self.model,
-                "input": input,
-                "dimensions": self.dimensions,
-            });
+            let body_json = self.request_body(input);
 
             // Retry with exponential backoff on transient errors (429, 5xx)
             let mut last_err = String::new();
@@ -168,7 +188,7 @@ impl EmbeddingProvider for ApiEmbeddingProvider {
                 }
 
                 let request = xai_grok_http::shared_client()
-                    .post(format!("{}/embeddings", self.api_base))
+                    .post(self.endpoint_url())
                     .json(&body_json)
                     .header("X-XAI-Token-Auth", "xai-grok-cli")
                     .header("x-grok-client-version", xai_grok_version::VERSION);
@@ -339,6 +359,47 @@ mod tests {
         let provider = MockEmbeddingProvider { dimensions: 4 };
         let results = provider.embed_batch(&[]).await.unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn embedding_endpoint_accepts_base_or_full_url() {
+        let client = build_static_middleware_client(Some("test-key".to_owned()));
+        let from_base = ApiEmbeddingProvider::new(
+            "https://example.com/v1/".to_owned(),
+            "test-model".to_owned(),
+            4,
+            client.clone(),
+        );
+        let full = ApiEmbeddingProvider::new(
+            "https://example.com/v1/embeddings".to_owned(),
+            "test-model".to_owned(),
+            4,
+            client,
+        );
+
+        assert_eq!(
+            from_base.endpoint_url(),
+            "https://example.com/v1/embeddings"
+        );
+        assert_eq!(full.endpoint_url(), "https://example.com/v1/embeddings");
+    }
+
+    #[test]
+    fn fixed_dimension_provider_omits_dimensions_parameter() {
+        let config = xai_grok_config_types::MemoryEmbeddingConfig {
+            model: Some("fixed-dimension-model".to_owned()),
+            send_dimensions: false,
+            ..Default::default()
+        };
+        let provider = ApiEmbeddingProvider::from_config(
+            &config,
+            "https://example.com/v1/embeddings".to_owned(),
+            build_static_middleware_client(Some("test-key".to_owned())),
+        )
+        .unwrap();
+
+        let body = provider.request_body(vec!["test"]);
+        assert!(body.get("dimensions").is_none());
     }
 
     #[tokio::test]
