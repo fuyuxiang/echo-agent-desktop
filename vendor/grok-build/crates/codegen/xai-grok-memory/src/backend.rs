@@ -511,8 +511,22 @@ impl MemoryBackend for MemoryBackendImpl {
 
         // ── Sync phase 2: FTS search ──
         let mut search_config = self.search_config.clone();
-        search_config.max_results = max_results;
+        let mmr_fallback_config = search_config.mmr.clone();
+        let reranker = super::reranker::ApiReranker::from_config(&search_config.reranker);
+        search_config.max_results = if reranker.is_some() {
+            // Feed the model a broader coarse-retrieval pool than the final
+            // result count. hybrid_search_merge truncates to this value.
+            max_results.saturating_mul(3).max(max_results)
+        } else {
+            max_results
+        };
         search_config.min_score = min_score as f32;
+        if reranker.is_some() {
+            // The relevance model is the final ordering stage. Running MMR
+            // first would discard its coarse-rank alignment and reduce the
+            // quality of the candidate pool presented to the model.
+            search_config.mmr.enabled = false;
+        }
 
         let candidate_limit = search_config.max_results * 3;
         let primary = index.search_fts(query, candidate_limit);
@@ -553,7 +567,24 @@ impl MemoryBackend for MemoryBackendImpl {
             query_embedding.mode()
         };
         let error_class = select_search_error_class(fts_error_class, merged.is_vector_degraded);
-        let results = merged.results;
+        let mut results = merged.results;
+        if let Some(reranker) = reranker.filter(|_| results.len() > 1) {
+            match reranker.rerank(query, &results, max_results).await {
+                Ok(reranked) => results = reranked,
+                Err(error) => {
+                    tracing::warn!(
+                        target: crate::MEMORY_LOG_TARGET,
+                        %error,
+                        "API reranking failed; using coarse memory ranking"
+                    );
+                    let relevance: Vec<f64> = results.iter().map(|result| result.score).collect();
+                    super::mmr::mmr_rerank(&mut results, &relevance, &mmr_fallback_config);
+                    results.truncate(max_results);
+                }
+            }
+        } else {
+            results.truncate(max_results);
+        }
 
         // Record accesses for the returned chunks so access_count and
         // last_accessed stay current.  Non-fatal: a failed write is a no-op
