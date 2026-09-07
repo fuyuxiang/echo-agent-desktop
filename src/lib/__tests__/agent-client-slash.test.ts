@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   agentSend,
   commandsList,
+  memoryClearSessionSummaries,
   memoryDelete,
   memoryFlush,
   memoryRewrite,
@@ -98,6 +99,14 @@ describe("memory command contract", () => {
       path: "MEMORY.md",
       cwd: "/repo",
       expectedRevision: "revision-2",
+    });
+  });
+
+  it("清空会话摘要时传递工作区", async () => {
+    invokeMock.mockResolvedValueOnce(3);
+    await expect(memoryClearSessionSummaries("/repo")).resolves.toBe(3);
+    expect(invokeMock).toHaveBeenCalledWith("memory_clear_session_summaries", {
+      cwd: "/repo",
     });
   });
 });

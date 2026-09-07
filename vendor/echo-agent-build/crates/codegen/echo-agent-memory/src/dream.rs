@@ -81,7 +81,7 @@ pub fn check_dream_gates(
 // Dream prompt, response processing, and execution
 // ---------------------------------------------------------------------------
 
-use super::text_utils::{has_markdown_headers, is_no_reply};
+use super::text_utils::{has_markdown_headers, is_no_reply, strip_reasoning_blocks};
 
 const LOG: &str = "echo_agent_memory";
 
@@ -275,7 +275,8 @@ const MAX_DREAM_CHARS: usize = 128_000;
 /// Rejects content exceeding [`MAX_DREAM_CHARS`] so a partial markdown
 /// document can never replace the complete durable memory.
 pub fn process_dream_response(response: &str) -> Option<String> {
-    let trimmed = response.trim();
+    let cleaned = strip_reasoning_blocks(response);
+    let trimmed = cleaned.trim();
     if trimmed.is_empty() {
         tracing::info!(target: LOG, "DREAM_RESPONSE: empty");
         return None;
@@ -829,6 +830,7 @@ mod tests {
         assert!(process_dream_response("no reply").is_none());
         assert!(process_dream_response("No-Reply").is_none());
         assert!(process_dream_response("  NO_REPLY  ").is_none());
+        assert!(process_dream_response("<think>private ## notes</think>\nNO_REPLY").is_none());
     }
 
     #[test]
@@ -836,6 +838,15 @@ mod tests {
         let input = "## Topic A\n\nSome insight.\n\n## Topic B\n\nAnother insight.";
         let result = process_dream_response(input).unwrap();
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn process_strips_reasoning_before_accepting_markdown() {
+        let input = "<think>private reasoning</think>\n## Topic\n\nDurable fact.";
+        assert_eq!(
+            process_dream_response(input).unwrap(),
+            "## Topic\n\nDurable fact."
+        );
     }
 
     #[test]

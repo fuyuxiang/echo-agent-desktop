@@ -314,7 +314,7 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
     setBusy(true);
     try {
       await memoryFlush(sessionId);
-      setMsg("当前会话记忆已落盘。");
+      setMsg("当前会话摘要已提取。");
     } catch (e) {
       setMsg(`失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
@@ -328,8 +328,8 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
       return;
     }
     requestConfirmation({
-      title: "整理历史会话记忆？",
-      description: "Agent 会把历史会话记录归纳到长期记忆中，可能会修改现有记忆内容。",
+      title: "整理历史会话摘要？",
+      description: "Agent 会把历史会话摘要归纳到长期记忆中，可能会修改现有记忆内容。",
       confirmLabel: "开始整理",
       action: async () => {
         setBusy(true);
@@ -351,16 +351,16 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
   }> = [
     { key: "enabled", name: "启用本地记忆", description: "为新会话启用记忆检索、写入和整理能力" },
     { key: "initialInjectionEnabled", name: "会话开始时检索", description: "首轮对话自动注入相关长期记忆" },
-    { key: "saveOnEnd", name: "会话结束时保存", description: "将有效会话的摘要保存为可检索记录" },
+    { key: "saveOnEnd", name: "会话结束时保存", description: "有可复用信息时生成可检索的会话摘要" },
     { key: "watcherEnabled", name: "监听外部修改", description: "手动编辑记忆文件后自动同步索引" },
-    { key: "autoFlushEnabled", name: "自动落盘", description: "空闲或上下文压缩前提取信息并写入会话记录" },
-    { key: "dreamEnabled", name: "自动整理", description: "定期将会话记录合并为结构化长期记忆" },
+    { key: "autoFlushEnabled", name: "自动提取", description: "空闲或上下文压缩前提取信息并写入会话摘要" },
+    { key: "dreamEnabled", name: "自动整理", description: "定期将会话摘要合并为结构化长期记忆" },
   ];
 
   return (
     <SectionShell
       title="记忆"
-      desc="本地、可审阅的跨会话记忆，包括全局偏好、工作区上下文和会话记录。"
+      desc="本地、可审阅的跨会话记忆。会话摘要是自动提取的中间资料，不是完整聊天记录。"
     >
       <SettingsGroup title="记忆能力" desc="修改后会原子写入本地配置，重启 Agent 后对新会话生效。">
         {toggles.map((toggle) => (
@@ -394,17 +394,17 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
       <SettingsGroup title="当前会话维护" desc={sessionId ? "通常无需手动执行。" : "请先打开一个会话。"}>
         <div className="settings-action-row">
           <div className="settings-action-row__content">
-            <strong>立即写入磁盘</strong>
-            <span>从当前会话提取长期信息并立即保存。</span>
+            <strong>立即提取摘要</strong>
+            <span>从当前会话提取可复用信息，不保存完整聊天。</span>
           </div>
           <button className="settings-btn" onClick={handleFlush} disabled={busy || !sessionId || !config.enabled}>
-            <Database size={15} /> 立即落盘
+            <Database size={15} /> 立即提取
           </button>
         </div>
         <div className="settings-action-row">
           <div className="settings-action-row__content">
             <strong>整理长期记忆</strong>
-            <span>将历史会话记录归纳到主题化长期记忆中。</span>
+            <span>将历史会话摘要归纳到主题化长期记忆中。</span>
           </div>
           <button className="settings-btn" onClick={handleDream} disabled={busy || !sessionId || !config.enabled}>
             <RefreshCw size={15} /> 立即整理

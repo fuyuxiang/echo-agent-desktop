@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 
 const api = vi.hoisted(() => ({
   memoryList: vi.fn(),
   memoryAppend: vi.fn(),
+  memoryClearSessionSummaries: vi.fn(),
   memorySave: vi.fn(),
   memoryDelete: vi.fn(),
   memoryFlush: vi.fn(),
@@ -44,18 +45,24 @@ describe("ResourcesPanel", () => {
     api.memoryList.mockResolvedValue([GLOBAL_ENTRY, SESSION_ENTRY]);
     api.memoryAppend.mockResolvedValue(GLOBAL_ENTRY);
     api.memorySave.mockResolvedValue(GLOBAL_ENTRY);
+    api.memoryDelete.mockResolvedValue(undefined);
+    api.memoryClearSessionSummaries.mockResolvedValue(2);
     api.memoryFlush.mockResolvedValue(undefined);
     api.memoryDream.mockResolvedValue(undefined);
     api.memoryRewrite.mockResolvedValue("# Global\n\nRewritten");
   });
 
-  it("列出 Runtime 记忆，会话日志只读", async () => {
+  it("将长期记忆与会话摘要分开呈现，摘要只读但可删除", async () => {
+    const user = userEvent.setup();
     render(<ResourcesPanel cwd="/repo" sessionId="session-1" />);
 
-    expect(await screen.findByText("2026-08-31-session.md")).toBeInTheDocument();
+    expect(await screen.findByText("MEMORY.md")).toBeInTheDocument();
+    expect(screen.queryByText("2026-08-31-session.md")).not.toBeInTheDocument();
     expect(screen.getByLabelText("当前记忆上下文")).toHaveTextContent("当前工作区/repo已连接当前会话");
-    expect(screen.getByText("会话记录")).toBeInTheDocument();
-    expect(screen.getAllByTitle("删除")).toHaveLength(1);
+    await user.click(screen.getByRole("tab", { name: /会话摘要/ }));
+    expect(screen.getByText("2026-08-31-session.md")).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("不是完整聊天记录");
+    expect(screen.getByTitle("删除摘要")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTitle("查看"));
     expect(screen.getByDisplayValue("# Session log")).toHaveAttribute("readonly");
@@ -66,7 +73,8 @@ describe("ResourcesPanel", () => {
     render(<ResourcesPanel cwd="/repo" sessionId="session-1" />);
     await screen.findByText("MEMORY.md");
 
-    fireEvent.click(screen.getByRole("button", { name: "落盘" }));
+    fireEvent.click(screen.getByRole("tab", { name: /会话摘要/ }));
+    fireEvent.click(screen.getByRole("button", { name: "立即提取" }));
     await waitFor(() => expect(api.memoryFlush).toHaveBeenCalledWith("session-1"));
   });
 
@@ -75,8 +83,9 @@ describe("ResourcesPanel", () => {
     await screen.findByText("MEMORY.md");
 
     expect(screen.getByLabelText("当前记忆上下文")).toHaveTextContent("未连接会话");
-    expect(screen.getByRole("button", { name: "落盘" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "整理" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("tab", { name: /会话摘要/ }));
+    expect(screen.getByRole("button", { name: "立即提取" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /整理到长期记忆/ })).toBeDisabled();
   });
 
   it("新建记忆追加到工作区主文件", async () => {
@@ -120,6 +129,37 @@ describe("ResourcesPanel", () => {
         "/repo",
         "rev-global",
       );
+    });
+  });
+
+  it("单独删除会话摘要", async () => {
+    const user = userEvent.setup();
+    render(<ResourcesPanel cwd="/repo" sessionId="session-1" />);
+    await screen.findByText("MEMORY.md");
+    await user.click(screen.getByRole("tab", { name: /会话摘要/ }));
+    await user.click(screen.getByTitle("删除摘要"));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "删除摘要" }));
+
+    await waitFor(() => {
+      expect(api.memoryDelete).toHaveBeenCalledWith(
+        "session",
+        "2026-08-31-session.md",
+        "/repo",
+        "rev-session",
+      );
+    });
+  });
+
+  it("可一次清空工作区摘要与归档", async () => {
+    const user = userEvent.setup();
+    render(<ResourcesPanel cwd="/repo" sessionId="session-1" />);
+    await screen.findByText("MEMORY.md");
+    await user.click(screen.getByRole("tab", { name: /会话摘要/ }));
+    await user.click(screen.getByRole("button", { name: "清空摘要" }));
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "清空摘要" }));
+
+    await waitFor(() => {
+      expect(api.memoryClearSessionSummaries).toHaveBeenCalledWith("/repo");
     });
   });
 });

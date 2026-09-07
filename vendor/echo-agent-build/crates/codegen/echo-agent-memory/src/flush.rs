@@ -3,7 +3,7 @@
 use crate::{
     MemoryIndex,
     embedding::EmbeddingProvider,
-    text_utils::{has_markdown_headers, is_no_reply},
+    text_utils::{has_markdown_headers, is_no_reply, strip_reasoning_blocks},
 };
 use echo_agent_config_types::MemoryFlushConfig;
 
@@ -129,7 +129,8 @@ pub enum FlushResult {
 /// 3. Exceeds `max_flush_write_chars` → truncated
 /// 4. Must contain at least one markdown header (`##`) → `Rejected` if not
 pub fn process_flush_response(response: &str, config: &MemoryFlushConfig) -> FlushResult {
-    let trimmed = response.trim();
+    let cleaned = strip_reasoning_blocks(response);
+    let trimmed = cleaned.trim();
     let len = trimmed.len();
     let preview: String = trimmed.chars().take(200).collect();
 
@@ -412,6 +413,10 @@ mod tests {
             process_flush_response("  NO_REPLY  ", &config),
             FlushResult::NothingToStore
         );
+        assert_eq!(
+            process_flush_response("<think>private ## notes</think>\nNO_REPLY", &config),
+            FlushResult::NothingToStore
+        );
     }
 
     #[test]
@@ -421,6 +426,18 @@ mod tests {
         assert_eq!(
             process_flush_response(content, &config),
             FlushResult::Accepted(content.to_string())
+        );
+    }
+
+    #[test]
+    fn test_flush_response_strips_reasoning_before_accepting() {
+        let config = default_flush_config();
+        assert_eq!(
+            process_flush_response(
+                "<think>private reasoning</think>\n## Key Decisions\n\nUse Rust.",
+                &config,
+            ),
+            FlushResult::Accepted("## Key Decisions\n\nUse Rust.".to_string())
         );
     }
 

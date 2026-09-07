@@ -1528,15 +1528,22 @@ pub async fn agent_rename_session(
 }
 
 /// Delete a session's persisted history via EchoAgent's `echo.agent/session/delete`.
-/// Removes the on-disk session directory; the frontend drops its sidebar
-/// entry on success.
+/// The generated memory summaries and their search-index chunks are removed
+/// as a cascade so deleting a chat has one predictable privacy boundary.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionDeleteResult {
+    pub memory_summaries_deleted: usize,
+    pub memory_cleanup_warning: Option<String>,
+}
+
 #[tauri::command]
 pub async fn agent_delete_session(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: String,
     cwd: Option<String>,
-) -> Result<(), String> {
+) -> Result<SessionDeleteResult, String> {
     if !valid_session_id(&session_id) {
         return Err("会话 ID 无效或过长".into());
     }
@@ -1552,12 +1559,27 @@ pub async fn agent_delete_session(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let workspace = workspace.to_string_lossy().into_owned();
-    agent_runtime::delete_session(&tx, &session_id, Some(&workspace))
+    let workspace_arg = workspace.to_string_lossy().into_owned();
+    agent_runtime::delete_session(&tx, &session_id, Some(&workspace_arg))
         .await
         .map_err(|e| e.to_string())?;
+    let (memory_summaries_deleted, memory_cleanup_warning) =
+        match crate::agent_admin::delete_session_memory_artifacts(&workspace, &session_id) {
+            Ok(count) => (count, None),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    %session_id,
+                    "session deleted but generated memory cleanup failed"
+                );
+                (0, Some(error))
+            }
+        };
     state.forget_session_workspace(&session_id);
-    Ok(())
+    Ok(SessionDeleteResult {
+        memory_summaries_deleted,
+        memory_cleanup_warning,
+    })
 }
 
 /// Pin or unpin a session. EchoAgent's `Summary` has no `pinned` field, so this is

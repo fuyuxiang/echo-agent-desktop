@@ -419,6 +419,7 @@ pub fn run() {
             agent_admin::memory_save,
             agent_admin::memory_append,
             agent_admin::memory_delete,
+            agent_admin::memory_clear_session_summaries,
             agent_admin::memory_rewrite,
             agent_admin::memory_flush,
             agent_admin::memory_dream,

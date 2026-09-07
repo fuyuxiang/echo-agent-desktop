@@ -14,6 +14,6 @@ pub mod hooks;
 pub use echo_agent_memory::{
     EndpointScopedCredentials, MemoryBackendImpl, MemoryBackendParams, MemoryIndex, MemoryScope,
     MemorySearchSource, MemoryStorage, archive, backend, chunker, dream, dream_lock,
-    embed_missing_chunks, embedding, index, init_sqlite_vec, mmr, noop_memory_observation_sink,
-    query_expansion, schema, search, storage, text_utils, watcher,
+    embed_missing_chunks, embedding, flush, index, init_sqlite_vec, mmr,
+    noop_memory_observation_sink, query_expansion, schema, search, storage, text_utils, watcher,
 };
