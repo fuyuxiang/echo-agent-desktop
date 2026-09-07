@@ -41,6 +41,7 @@ describe("assistant execution process", () => {
   it("完成后默认收起过程并始终展示最终答复", () => {
     renderMessage();
 
+    expect(screen.getByText("我先检查代码。")).toBeInTheDocument();
     expect(screen.getByText("最终修复结果")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /已完成执行过程/ })).toHaveAttribute(
       "aria-expanded",
@@ -59,7 +60,7 @@ describe("assistant execution process", () => {
       expect.objectContaining({ toolCallId: "tool-1" }),
     );
 
-    fireEvent.click(screen.getByText("思考摘要"));
+    fireEvent.click(screen.getByText("思考过程"));
     expect(screen.getByText("需要从客户端交互状态入手。")).toBeInTheDocument();
   });
 
@@ -89,5 +90,28 @@ describe("assistant execution process", () => {
     );
     await waitFor(() => expect(screen.getByRole("button", { name: /已完成执行过程/ }))
       .toHaveAttribute("aria-expanded", "false"));
+  });
+
+  it("没有回复文本的失败仍显示终止原因，不提供空复制", () => {
+    render(
+      <ThemeProvider>
+        <MessageItem
+          message={{
+            id: "failed-empty",
+            role: "assistant",
+            parts: [],
+            complete: true,
+            stopReason: "error",
+            agentResult: "provider disconnected",
+          }}
+          streaming={false}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: /执行未正常完成/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制纯文本" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /执行未正常完成/ }));
+    expect(screen.getByRole("alert")).toHaveTextContent("provider disconnected");
   });
 });

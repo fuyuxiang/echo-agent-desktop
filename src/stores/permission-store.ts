@@ -13,6 +13,8 @@ interface PermissionState {
   request: (p: PermissionRequest) => void;
   /** Remove a request from its session's queue (without resolving the agent). */
   dismiss: (requestId: string, sessionId?: string) => void;
+  /** Drop every stale request after the shared agent process exits. */
+  clearAll: () => void;
 }
 
 export const usePermissionStore = create<PermissionState>((set) => ({
@@ -43,6 +45,7 @@ export const usePermissionStore = create<PermissionState>((set) => ({
       }
       return { queues };
     }),
+  clearAll: () => set({ queues: {} }),
 }));
 
 /** Select the first pending permission for a given session. */

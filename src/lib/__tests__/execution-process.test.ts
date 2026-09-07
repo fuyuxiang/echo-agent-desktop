@@ -24,7 +24,7 @@ const tool = (
 });
 
 describe("partitionAssistantParts", () => {
-  it("把工具前说明归入过程，把最后文本保留为答复", () => {
+  it("保留思考前后的所有助手文本，只折叠显式过程事件", () => {
     const result = partitionAssistantParts([
       { kind: "text", text: "我先检查项目。" },
       { kind: "thought", text: "需要确认入口。" },
@@ -32,8 +32,11 @@ describe("partitionAssistantParts", () => {
       { kind: "text", text: "修复已经完成。" },
     ]);
 
-    expect(result.processParts).toHaveLength(3);
-    expect(result.responseParts.map((part) => part.text)).toEqual(["修复已经完成。"]);
+    expect(result.processParts).toHaveLength(2);
+    expect(result.responseParts.map((part) => part.text)).toEqual([
+      "我先检查项目。",
+      "修复已经完成。",
+    ]);
   });
 
   it("没有尾部答复时不把已有文本藏进折叠过程", () => {
@@ -78,6 +81,24 @@ describe("summarizeExecutionProcess", () => {
     const summary = summarizeExecutionProcess([tool("completed", "bash")], false, "cancelled");
     expect(summary.state).toBe("stopped");
     expect(summary.title).toBe("已停止执行");
+  });
+
+  it("区分权限拒绝与安全规则阻止", () => {
+    const rejected = summarizeExecutionProcess([], false, "cancelled", "PermissionRejected");
+    const blocked = summarizeExecutionProcess([], false, "cancelled", "HookDenied");
+    expect(rejected.state).toBe("stopped");
+    expect(rejected.title)
+      .toBe("权限未批准，执行已停止");
+    expect(blocked).toMatchObject({
+      state: "attention",
+      title: "执行被安全规则阻止",
+    });
+  });
+
+  it("终止时仍有未收尾操作会标记为需要注意", () => {
+    const summary = summarizeExecutionProcess([tool("in_progress", "bash")], false, "end_turn");
+    expect(summary.state).toBe("attention");
+    expect(summary.title).toContain("未收尾");
   });
 });
 

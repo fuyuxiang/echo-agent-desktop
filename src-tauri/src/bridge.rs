@@ -876,6 +876,9 @@ pub struct UpdateEvent {
     /// checks it against the current session before applying.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Preserve ACP metadata needed for replay-aware timing and terminal copy.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "_meta")]
+    pub meta: Option<Value>,
     #[serde(flatten)]
     pub update: Value,
 }
@@ -885,7 +888,16 @@ pub struct UpdateEvent {
 #[serde(rename_all = "camelCase")]
 pub struct CompleteEvent {
     pub session_id: String,
+    pub prompt_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<u64>,
     pub stop_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancel_trigger: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancellation_category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_result: Option<String>,
 }
 
 /// Exact per-prompt usage carried by EchoAgent's durable `TurnCompleted`
@@ -1030,6 +1042,11 @@ async fn handle_client_message(
                 "agent://update",
                 UpdateEvent {
                     session_id: Some(sid),
+                    meta: b
+                        .request
+                        .meta
+                        .as_ref()
+                        .and_then(|meta| serde_json::to_value(meta).ok()),
                     update,
                 },
             );
@@ -1208,17 +1225,15 @@ async fn handle_client_message(
             let raw_str = b.request.params.get();
             let params: Value = serde_json::from_str(raw_str).unwrap_or(Value::Null);
             if method == "echo.agent/session/prompt_complete" {
-                // Prompt finished: surface sessionId / stopReason to the frontend.
-                let session_id = params
-                    .get("sessionId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let stop_reason = params
-                    .get("stopReason")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("end_turn")
-                    .to_string();
+                // Prompt finished: preserve its full terminal semantics. In
+                // particular, several distinct outcomes share stopReason
+                // "cancelled" and can only be explained by their category.
+                let complete = parse_complete_event(&params);
+                let session_id = complete.session_id.clone();
+                let stop_reason = complete.stop_reason.clone();
+                let disposition = completion_disposition(&complete);
+                let failed = disposition == CompletionDisposition::Failed;
+                let stopped = disposition == CompletionDisposition::Stopped;
                 // EchoAgent reports mid-turn failures (429 hit while a tool was
                 // running, connection reset, etc.) via prompt_complete with
                 // stopReason "rate_limit" or "error" — NOT as a thrown error.
@@ -1226,11 +1241,11 @@ async fn handle_client_message(
                 // generic errors (null/absent for rate_limit). Forward both as
                 // a dedicated `agent://turn-error` so the UI can surface a
                 // friendly message instead of silently marking the turn done.
-                if stop_reason == "rate_limit" || stop_reason == "error" {
-                    let detail = params
-                        .get("agent_result")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                if failed {
+                    let detail = complete
+                        .agent_result
+                        .clone()
+                        .or_else(|| complete.cancellation_category.clone());
                     tracing::info!(
                         session_id = %session_id,
                         stop_reason = %stop_reason,
@@ -1246,87 +1261,108 @@ async fn handle_client_message(
                         },
                     );
                 }
-                let automation_notification = crate::automations::complete_run_for_session(
-                    &session_id,
-                    stop_reason != "rate_limit" && stop_reason != "error",
-                    (stop_reason == "rate_limit" || stop_reason == "error")
-                        .then_some(stop_reason.as_str()),
-                );
-                if let Some(completion) = automation_notification.as_ref() {
-                    crate::automations::emit_automation_update(app, completion.event.clone());
-                }
-                let _ = crate::notifications::append(
-                    if stop_reason == "rate_limit" || stop_reason == "error" {
-                        crate::notifications::NotificationKind::Error
-                    } else {
-                        crate::notifications::NotificationKind::SessionComplete
-                    },
-                    if stop_reason == "rate_limit" || stop_reason == "error" {
-                        "会话执行失败"
-                    } else {
-                        "会话完成"
-                    },
-                    Some(&stop_reason),
-                    Some(&session_id),
-                    if stop_reason == "rate_limit" || stop_reason == "error" {
-                        "error"
-                    } else {
-                        "info"
-                    },
-                );
-                if automation_notification
-                    .as_ref()
-                    .is_none_or(|completion| completion.push)
-                {
-                    let notify_app = app.clone();
-                    let notify_session = session_id.clone();
-                    let notify_reason = stop_reason.clone();
-                    let automation_name =
-                        automation_notification.map(|completion| completion.automation_name);
-                    tokio::spawn(async move {
-                        let failed = notify_reason == "rate_limit" || notify_reason == "error";
-                        let is_automation = automation_name.is_some();
-                        let message = crate::notifications::NotifyMessage {
-                            title: if let Some(name) = &automation_name {
-                                if failed {
-                                    format!("自动化失败：{name}")
-                                } else {
-                                    format!("自动化完成：{name}")
-                                }
-                            } else if failed {
-                                "EchoAgent 会话失败".into()
-                            } else {
-                                "EchoAgent 会话完成".into()
-                            },
-                            body: Some(format!(
-                                "会话 {}（{}）",
-                                &notify_session[..notify_session.len().min(8)],
-                                notify_reason
-                            )),
-                            level: if failed {
-                                "error".into()
-                            } else {
-                                "info".into()
-                            },
-                            session_id: Some(notify_session),
-                        };
-                        if is_automation {
-                            let _ = crate::notifications::dispatch_automation(&notify_app, message)
-                                .await;
+                // `send_now` ends the old turn only so a replacement prompt can
+                // take over. It must not finish an automation or notify the user
+                // that the whole session stopped.
+                if disposition != CompletionDisposition::Superseded {
+                    let automation_notification = crate::automations::complete_run_for_session(
+                        &session_id,
+                        disposition == CompletionDisposition::Success,
+                        (disposition != CompletionDisposition::Success).then_some(
+                            complete
+                                .cancellation_category
+                                .as_deref()
+                                .unwrap_or(stop_reason.as_str()),
+                        ),
+                    );
+                    if let Some(completion) = automation_notification.as_ref() {
+                        crate::automations::emit_automation_update(app, completion.event.clone());
+                    }
+                    let _ = crate::notifications::append(
+                        if failed {
+                            crate::notifications::NotificationKind::Error
                         } else {
-                            let _ =
-                                crate::notifications::dispatch_external(&notify_app, message, None)
-                                    .await;
-                        }
-                    });
+                            crate::notifications::NotificationKind::SessionComplete
+                        },
+                        if failed {
+                            "会话执行失败"
+                        } else if stopped {
+                            "会话已停止"
+                        } else {
+                            "会话完成"
+                        },
+                        complete
+                            .cancellation_category
+                            .as_deref()
+                            .or(Some(&stop_reason)),
+                        Some(&session_id),
+                        if failed {
+                            "error"
+                        } else if stopped {
+                            "warn"
+                        } else {
+                            "info"
+                        },
+                    );
+                    if automation_notification
+                        .as_ref()
+                        .is_none_or(|completion| completion.push)
+                    {
+                        let notify_app = app.clone();
+                        let notify_session = session_id.clone();
+                        let notify_reason = stop_reason.clone();
+                        let notify_failed = failed;
+                        let notify_stopped = stopped;
+                        let automation_name =
+                            automation_notification.map(|completion| completion.automation_name);
+                        tokio::spawn(async move {
+                            let is_automation = automation_name.is_some();
+                            let message = crate::notifications::NotifyMessage {
+                                title: if let Some(name) = &automation_name {
+                                    if notify_failed {
+                                        format!("自动化失败：{name}")
+                                    } else if notify_stopped {
+                                        format!("自动化已停止：{name}")
+                                    } else {
+                                        format!("自动化完成：{name}")
+                                    }
+                                } else if notify_failed {
+                                    "EchoAgent 会话失败".into()
+                                } else if notify_stopped {
+                                    "EchoAgent 会话已停止".into()
+                                } else {
+                                    "EchoAgent 会话完成".into()
+                                },
+                                body: Some(format!(
+                                    "会话 {}（{}）",
+                                    &notify_session[..notify_session.len().min(8)],
+                                    notify_reason
+                                )),
+                                level: if notify_failed {
+                                    "error".into()
+                                } else if notify_stopped {
+                                    "warn".into()
+                                } else {
+                                    "info".into()
+                                },
+                                session_id: Some(notify_session),
+                            };
+                            if is_automation {
+                                let _ =
+                                    crate::notifications::dispatch_automation(&notify_app, message)
+                                        .await;
+                            } else {
+                                let _ = crate::notifications::dispatch_external(
+                                    &notify_app,
+                                    message,
+                                    None,
+                                )
+                                .await;
+                            }
+                        });
+                    }
                 }
-                let _ = app.emit(
-                    "agent://complete",
-                    CompleteEvent {
-                        session_id,
-                        stop_reason,
-                    },
-                );
+                let _ = app.emit("agent://complete", complete);
             } else if method == "echo.agent/session_notification" {
                 // Session-scoped notification: EchoAgent uses this to push
                 // `SessionSummaryGenerated` after the first user prompt (the
@@ -1667,6 +1703,7 @@ fn emit_plan_approval(app: &AppHandle, update_kind: &str, request: &PlanApproval
         "agent://update",
         UpdateEvent {
             session_id: Some(request.session_id.clone()),
+            meta: None,
             update,
         },
     );
@@ -1677,12 +1714,69 @@ fn emit_plan_approval_closed(app: &AppHandle, session_id: &str, request_id: &str
         "agent://update",
         UpdateEvent {
             session_id: Some(session_id.to_string()),
+            meta: None,
             update: serde_json::json!({
                 "sessionUpdate": "plan_approval_resolved",
                 "requestId": request_id,
             }),
         },
     );
+}
+
+fn parse_complete_event(params: &Value) -> CompleteEvent {
+    let meta = params.get("_meta").and_then(Value::as_object);
+    let string_field = |camel: &str, snake: &str| {
+        params
+            .get(camel)
+            .or_else(|| params.get(snake))
+            .or_else(|| meta.and_then(|fields| fields.get(camel)))
+            .or_else(|| meta.and_then(|fields| fields.get(snake)))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    CompleteEvent {
+        session_id: string_field("sessionId", "session_id").unwrap_or_default(),
+        prompt_id: string_field("promptId", "prompt_id").unwrap_or_default(),
+        turn_id: params
+            .get("turnId")
+            .or_else(|| params.get("turn_id"))
+            .and_then(Value::as_u64),
+        stop_reason: string_field("stopReason", "stop_reason")
+            .unwrap_or_else(|| "end_turn".to_string()),
+        cancel_trigger: string_field("cancelTrigger", "cancel_trigger"),
+        cancellation_category: string_field("cancellationCategory", "cancellation_category"),
+        agent_result: string_field("agentResult", "agent_result"),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CompletionDisposition {
+    Success,
+    Stopped,
+    Failed,
+    Superseded,
+}
+
+/// Keep desktop lifecycle, notifications, and automation records aligned with
+/// EchoAgent's richer terminal metadata. Several failure modes intentionally
+/// use `stopReason: "cancelled"`, so stop reason alone is insufficient.
+fn completion_disposition(complete: &CompleteEvent) -> CompletionDisposition {
+    if complete.stop_reason == "cancelled" && complete.cancel_trigger.as_deref() == Some("send_now")
+    {
+        return CompletionDisposition::Superseded;
+    }
+    if matches!(
+        complete.cancellation_category.as_deref(),
+        Some("HookDenied" | "max_turns_reached" | "action_stationarity")
+    ) {
+        return CompletionDisposition::Failed;
+    }
+    match complete.stop_reason.as_str() {
+        "error" | "rate_limit" | "rate_limited" | "refusal" | "content_filter" | "max_tokens"
+        | "max_turns" => CompletionDisposition::Failed,
+        "cancelled" => CompletionDisposition::Stopped,
+        _ => CompletionDisposition::Success,
+    }
 }
 
 /// Parse an `echo.agent/session_notification` payload and, if it carries a freshly
@@ -2086,6 +2180,78 @@ mod tests {
         assert_eq!(event.occurred_at, Some(1_788_000_000_000));
         assert_eq!(event.event_id.as_deref(), Some("evt-1"));
         assert_eq!(event.usage["modelCalls"], 2);
+    }
+
+    #[test]
+    fn complete_event_preserves_terminal_metadata_and_camel_agent_result() {
+        let event = parse_complete_event(&serde_json::json!({
+            "sessionId": "s-1",
+            "promptId": "p-1",
+            "turnId": 7,
+            "stopReason": "cancelled",
+            "cancelTrigger": "permission",
+            "cancellationCategory": "PermissionRejected",
+            "agentResult": "permission denied"
+        }));
+        assert_eq!(event.session_id, "s-1");
+        assert_eq!(event.prompt_id, "p-1");
+        assert_eq!(event.turn_id, Some(7));
+        assert_eq!(event.stop_reason, "cancelled");
+        assert_eq!(event.cancel_trigger.as_deref(), Some("permission"));
+        assert_eq!(
+            event.cancellation_category.as_deref(),
+            Some("PermissionRejected")
+        );
+        assert_eq!(event.agent_result.as_deref(), Some("permission denied"));
+        assert_eq!(
+            completion_disposition(&event),
+            CompletionDisposition::Stopped
+        );
+    }
+
+    #[test]
+    fn complete_event_accepts_terminal_metadata_from_legacy_meta_envelope() {
+        let event = parse_complete_event(&serde_json::json!({
+            "sessionId": "s-1",
+            "stopReason": "cancelled",
+            "_meta": {
+                "cancelTrigger": "send_now",
+                "cancellationCategory": "MidTurnAbort"
+            }
+        }));
+        assert_eq!(event.cancel_trigger.as_deref(), Some("send_now"));
+        assert_eq!(event.cancellation_category.as_deref(), Some("MidTurnAbort"));
+        assert_eq!(
+            completion_disposition(&event),
+            CompletionDisposition::Superseded
+        );
+    }
+
+    #[test]
+    fn terminal_disposition_treats_policy_cancellation_as_failure() {
+        let event = parse_complete_event(&serde_json::json!({
+            "session_id": "s-1",
+            "prompt_id": "p-1",
+            "stop_reason": "cancelled",
+            "cancellation_category": "HookDenied"
+        }));
+        assert_eq!(
+            completion_disposition(&event),
+            CompletionDisposition::Failed
+        );
+    }
+
+    #[test]
+    fn update_event_serializes_replay_metadata_without_renaming_meta() {
+        let event = UpdateEvent {
+            session_id: Some("s-1".into()),
+            meta: Some(serde_json::json!({ "agentTimestampMs": 123 })),
+            update: serde_json::json!({ "sessionUpdate": "turn_completed" }),
+        };
+        let value = serde_json::to_value(event).expect("serializable update event");
+        assert_eq!(value["sessionId"], "s-1");
+        assert_eq!(value["_meta"]["agentTimestampMs"], 123);
+        assert_eq!(value["sessionUpdate"], "turn_completed");
     }
 
     #[test]

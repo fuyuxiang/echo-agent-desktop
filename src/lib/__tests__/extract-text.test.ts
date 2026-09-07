@@ -33,7 +33,7 @@ describe("extractPlainText", () => {
     expect(extractPlainText(m, { includeThoughts: true })).toBe("answer\nthinking");
   });
 
-  it("tool_call 提取 title + command + output", () => {
+  it("默认不索引折叠的 tool_call，显式开启时提取详情", () => {
     const m = msg([
       {
         kind: "tool_call",
@@ -48,7 +48,9 @@ describe("extractPlainText", () => {
         },
       },
     ]);
-    expect(extractPlainText(m)).toBe("Run ls\nls -la\nfile1\nfile2");
+    expect(extractPlainText(m)).toBe("");
+    expect(extractPlainText(m, { includeProcess: true }))
+      .toBe("Run ls\nls -la\nfile1\nfile2");
   });
 
   it("tool_call 提取 diff path", () => {
@@ -69,7 +71,9 @@ describe("extractPlainText", () => {
         },
       },
     ]);
-    expect(extractPlainText(m)).toBe("Edit src/app.ts\nsrc/app.ts");
+    expect(extractPlainText(m)).toBe("");
+    expect(extractPlainText(m, { includeProcess: true }))
+      .toBe("Edit src/app.ts\nsrc/app.ts");
   });
 
   it("空消息返回空串", () => {

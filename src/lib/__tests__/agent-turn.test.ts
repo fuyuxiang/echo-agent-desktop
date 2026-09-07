@@ -80,8 +80,14 @@ describe("beginAgentTurn", () => {
 
     await waitFor(() => expect(useSessionStore.getState().streaming).toBe(false));
     const state = useSessionStore.getState();
-    expect(state.messages).toHaveLength(1);
+    expect(state.messages).toHaveLength(2);
     expect(state.messages[0].attachments).toEqual(["/tmp/方案.docx"]);
+    expect(state.messages[1]).toMatchObject({
+      role: "assistant",
+      complete: true,
+      stopReason: "error",
+      agentResult: expect.stringContaining("附件读取失败"),
+    });
     expect(state.error).toContain("附件读取失败");
     expect(useSessionsStore.getState().independent[0].status).toBe("failed");
   });

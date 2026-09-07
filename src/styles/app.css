@@ -2110,6 +2110,16 @@
   font-size: 11px;
   line-height: 18px;
 }
+.execution-process__terminal-detail {
+  max-height: 160px;
+  margin: 6px 4px;
+  overflow: auto;
+  color: var(--echo-status-error, #e5484d);
+  font-size: 11px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .execution-process__hint {
   padding-top: 5px;
   border-top: 1px solid var(--echo-border-subtle, var(--echo-border-default));
@@ -6813,8 +6823,12 @@ button.diff__path {
 .sidebar__conv-status--working .sidebar__conv-status-dot {
   animation: processStatusPulse 1.4s ease-in-out infinite;
 }
-.sidebar__conv-status--pending {
+.sidebar__conv-status--awaiting {
   color: #b56a00;
+}
+.sidebar__conv-status--pending,
+.sidebar__conv-status--stopped {
+  color: var(--echo-text-tertiary);
 }
 .sidebar__conv-status--failed {
   color: var(--echo-status-error, #e5484d);

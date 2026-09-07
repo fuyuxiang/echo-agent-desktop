@@ -30,6 +30,8 @@ export interface ChatMessage {
   attachments?: string[];
   /** ACP prompt index used to merge replayed text/image chunks into one turn. */
   promptIndex?: number;
+  /** Stable terminal id used to deduplicate live and durable completion rails. */
+  promptId?: string;
   /** False while the assistant is still streaming this message. */
   complete: boolean;
   /** Local wall-clock metadata for live turns. Historical replay may omit it. */
@@ -37,6 +39,9 @@ export interface ChatMessage {
   completedAt?: number;
   /** Terminal reason when the bridge supplied one (for cancelled/error UX). */
   stopReason?: string;
+  cancelTrigger?: string;
+  cancellationCategory?: string;
+  agentResult?: string;
 }
 
 export type MessagePart =
@@ -125,6 +130,8 @@ interface SessionState {
    *  focused conversation for ordinary composer sends. */
   startStreaming: (sessionId?: string) => void;
   markComplete: (p: PromptComplete) => void;
+  /** Finalize every in-flight transcript after a process-wide agent failure. */
+  failAllStreaming: (reason?: string, agentResult?: string) => void;
   setError: (e: string | null) => void;
   /** Stop a session's stream locally (cancel button): keep any text already
    *  streamed, mark the in-flight message complete, and clear its streaming
@@ -389,21 +396,84 @@ function mergePaths(existing: string[] | undefined, incoming: string[]): string[
   return [...new Set([...(existing ?? []), ...incoming])];
 }
 
-function completeStreamingAssistant(transcript: SessionTranscript): SessionTranscript {
-  if (!transcript.streamingMessageId) return transcript;
-  const completedAt = Date.now();
+interface CompletionMetadata {
+  promptId?: string;
+  stopReason?: string;
+  cancelTrigger?: string;
+  cancellationCategory?: string;
+  agentResult?: string;
+  completedAt?: number;
+}
+
+function completeStreamingAssistant(
+  transcript: SessionTranscript,
+  completion: CompletionMetadata = {},
+): SessionTranscript {
+  const completedAt = completion.completedAt ?? Date.now();
+  const preserveEmptyTerminal = Boolean(
+    completion.stopReason
+      && completion.cancelTrigger !== "send_now"
+      && (completion.stopReason !== "end_turn" || completion.cancellationCategory),
+  );
+  const terminalMetadata = {
+    ...(completion.promptId ? { promptId: completion.promptId } : {}),
+    ...(completion.stopReason ? { stopReason: completion.stopReason } : {}),
+    ...(completion.cancelTrigger ? { cancelTrigger: completion.cancelTrigger } : {}),
+    ...(completion.cancellationCategory
+      ? { cancellationCategory: completion.cancellationCategory }
+      : {}),
+    ...(completion.agentResult ? { agentResult: completion.agentResult } : {}),
+  };
+  if (!transcript.streamingMessageId) {
+    const lastIndex = transcript.messages.length - 1;
+    const last = transcript.messages[lastIndex];
+    if (
+      completion.promptId
+      && last?.role === "assistant"
+      && last.complete
+      && last.promptId === completion.promptId
+    ) {
+      const messages = [...transcript.messages];
+      messages[lastIndex] = {
+        ...last,
+        ...terminalMetadata,
+        ...(completion.completedAt != null ? { completedAt } : {}),
+      };
+      return { ...transcript, messages };
+    }
+    if (!preserveEmptyTerminal) return transcript;
+    return {
+      ...transcript,
+      messages: [
+        ...transcript.messages,
+        {
+          id: nextId(),
+          role: "assistant",
+          parts: [],
+          complete: true,
+          ...terminalMetadata,
+          ...(completion.completedAt != null ? { completedAt } : {}),
+        },
+      ],
+    };
+  }
   const messages = transcript.messages
     .map((message) =>
       message.id === transcript.streamingMessageId
         ? {
             ...message,
             complete: true,
+            ...terminalMetadata,
             ...(message.startedAt != null ? { completedAt } : {}),
           }
         : message
     )
     .filter((message) =>
-      !(message.id === transcript.streamingMessageId && message.parts.length === 0)
+      !(
+        message.id === transcript.streamingMessageId
+        && message.parts.length === 0
+        && !preserveEmptyTerminal
+      )
     );
   return { ...transcript, messages, streamingMessageId: null };
 }
@@ -661,57 +731,51 @@ export const useSessionStore = create<SessionState>((set, get) => {
       // flag) instead of clobbering the focused one.
       const target = (p as { sessionId?: string }).sessionId ?? get().sessionId;
       applyToTranscript(target, (t) => {
-        const completedAt = Date.now();
-        const messages = t.messages
-          .map((m) =>
-            m.id === t.streamingMessageId
-              ? {
-                  ...m,
-                  complete: true,
-                  stopReason: p.stopReason,
-                  ...(m.startedAt != null ? { completedAt } : {}),
-                }
-              : m
-          )
-          // Drop the placeholder if nothing was ever streamed into it —
-          // otherwise we'd be left with an empty avatar bubble.
-          .filter(
-            (m) => !(m.id === t.streamingMessageId && m.parts.length === 0)
-          );
+        const completed = completeStreamingAssistant(t, {
+          promptId: p.promptId,
+          stopReason: p.stopReason,
+          cancelTrigger: p.cancelTrigger,
+          cancellationCategory: p.cancellationCategory,
+          agentResult: p.agentResult,
+        });
         return {
-          ...t,
-          messages,
-          streamingMessageId: null,
+          ...completed,
           usage: { ...t.usage, ...p.usage },
         };
       });
     },
 
-    setError: (e) => {
-      // Error is a global UI banner; also finalize the focused transcript's
-      // empty placeholder so the spinner doesn't hang.
-      const sid = get().sessionId;
-      if (sid) {
-        applyToTranscript(sid, (t) => {
-          if (!t.streamingMessageId) return t;
-          const completedAt = Date.now();
-          const messages = t.messages
-            .map((m) =>
-              m.id === t.streamingMessageId
-                ? {
-                    ...m,
-                    complete: true,
-                    stopReason: "error",
-                    ...(m.startedAt != null ? { completedAt } : {}),
-                  }
-                : m
-            )
-            .filter((m) => !(m.id === t.streamingMessageId && m.parts.length === 0));
-          return { ...t, streamingMessageId: null, messages };
-        });
-      }
-      set({ error: e });
-    },
+    failAllStreaming: (reason = "error", agentResult) =>
+      set((state) => {
+        let changed = false;
+        const transcripts: Record<string, SessionTranscript> = Object.fromEntries(
+          Object.entries(state.transcripts).map(([sessionId, transcript]) => {
+            if (!transcript.streamingMessageId && transcript.planApprovals.length === 0) {
+              return [sessionId, transcript];
+            }
+            changed = true;
+            return [
+              sessionId,
+              {
+                ...completeStreamingAssistant(transcript, {
+                  stopReason: reason,
+                  agentResult,
+                }),
+                planApprovals: [],
+              },
+            ];
+          }),
+        );
+        if (!changed) return state;
+        const focused = state.sessionId ? transcripts[state.sessionId] : undefined;
+        return { transcripts, ...mirrorOf(focused) };
+      }),
+
+    // A banner is presentation state, not a lifecycle signal. Callers must use
+    // markComplete/failAllStreaming/stopStreaming for an actual turn boundary;
+    // otherwise a failed cancel request or an early turn-error notification
+    // would incorrectly kill a stream that is still owned by the agent.
+    setError: (error) => set({ error }),
 
     stopStreaming: (sessionId) => {
       // Cancel button: keep whatever already streamed, just close the turn.
@@ -989,7 +1053,23 @@ export const useSessionStore = create<SessionState>((set, get) => {
             };
           }
           case "turn_completed":
-            return completeStreamingAssistant(tr);
+            {
+              const raw = u as unknown as Record<string, unknown>;
+              const meta = raw._meta && typeof raw._meta === "object"
+                ? raw._meta as Record<string, unknown>
+                : {};
+              const completedAt = typeof meta.agentTimestampMs === "number"
+                ? meta.agentTimestampMs
+                : undefined;
+              return completeStreamingAssistant(tr, {
+                promptId: boundedString(raw.prompt_id ?? raw.promptId, 4_096),
+                stopReason: boundedString(raw.stop_reason ?? raw.stopReason, 128),
+                cancelTrigger: boundedString(meta.cancelTrigger, 128),
+                cancellationCategory: boundedString(meta.cancellationCategory, 128),
+                agentResult: boundedString(raw.agent_result ?? raw.agentResult, MAX_MESSAGE_TEXT_CHARS),
+                completedAt,
+              });
+            }
           default:
             return tr;
         }
