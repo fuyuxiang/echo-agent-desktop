@@ -1,0 +1,19 @@
+{
+    "name": "@echo-agent-official/echo-agent-darwin-arm64",
+    "version": "0.2.0-dev",
+    "description": "darwin-arm64 binary for @echo-agent-official/echoagent. Do not install directly; install @echo-agent-official/echoagent instead.",
+    "license": "Apache-2.0",
+    "files": [
+        "bin/",
+        "THIRD_PARTY_NOTICES.md"
+    ],
+    "os": [
+        "darwin"
+    ],
+    "cpu": [
+        "arm64"
+    ],
+    "publishConfig": {
+        "access": "public"
+    }
+}

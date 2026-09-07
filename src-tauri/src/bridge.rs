@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
 
-use xai_acp_lib::AcpClientMessage;
+use echo_agent_acp::AcpClientMessage;
 
 const MAX_PENDING_INTERACTIONS: usize = 64;
 const MAX_EXT_METHOD_PARAMS_BYTES: usize = 256 * 1024;

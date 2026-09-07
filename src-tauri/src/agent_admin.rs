@@ -20,12 +20,12 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use echo_agent_runtime::session::memory::{
+    storage::normalize_memory_content, MemoryScope, MemoryStorage,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
-use xai_grok_shell::session::memory::{
-    storage::normalize_memory_content, MemoryScope, MemoryStorage,
-};
 
 use crate::bridge::{FolderTrustOutcome, FolderTrusts};
 use crate::commands::AppState;
@@ -1291,7 +1291,7 @@ fn parse_running_tasks(
 }
 
 async fn list_running_tasks(
-    tx: &xai_acp_lib::AcpAgentTx,
+    tx: &echo_agent_acp::AcpAgentTx,
     session_id: &str,
 ) -> Result<Vec<RunningTask>, String> {
     let params = raw_params(&serde_json::json!({ "sessionId": session_id }));
@@ -1363,7 +1363,7 @@ pub async fn tasks_list(
 }
 
 async fn kill_running_task(
-    tx: &xai_acp_lib::AcpAgentTx,
+    tx: &echo_agent_acp::AcpAgentTx,
     session_id: String,
     task_id: String,
     source: RunningTaskSource,
@@ -1522,13 +1522,13 @@ fn internal_reload_request(kind: &str) -> Result<agent_client_protocol::ExtReque
 /// actually applied it. The gateway executes requests concurrently, so merely
 /// enqueueing this message does not order a following `session/new` behind it.
 pub(crate) async fn request_internal_reload_and_wait(
-    tx: &xai_acp_lib::AcpAgentTx,
+    tx: &echo_agent_acp::AcpAgentTx,
     kind: &str,
 ) -> Result<(), String> {
     let request = internal_reload_request(kind)?;
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(60),
-        xai_acp_lib::acp_send(request, tx),
+        echo_agent_acp::acp_send(request, tx),
     )
     .await
     .map_err(|_| format!("reload {kind} timed out after 60 seconds"))?;
@@ -1542,7 +1542,7 @@ pub(crate) async fn request_internal_reload_and_wait(
 /// tighten or expand every resident session immediately after its signed
 /// server directory set changes.
 pub(crate) fn request_internal_reload(state: &AppState, kind: &str) -> Result<(), String> {
-    use xai_acp_lib::{AcpAgentMessage, AcpArgs};
+    use echo_agent_acp::{AcpAgentMessage, AcpArgs};
     let tx = state
         .tx
         .lock()
@@ -2048,7 +2048,7 @@ mod tests {
     };
 
     fn assert_session_params(
-        arguments: &xai_acp_lib::AcpArgs<agent_client_protocol::ExtRequest>,
+        arguments: &echo_agent_acp::AcpArgs<agent_client_protocol::ExtRequest>,
         expected: &str,
     ) {
         let params: serde_json::Value =
@@ -2058,11 +2058,11 @@ mod tests {
 
     #[tokio::test]
     async fn running_tasks_send_session_id_to_both_endpoints_and_merge_live_rows() {
-        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let (client, mut agent) = echo_agent_acp::acp_channels();
         let task = tokio::spawn(async move { list_running_tasks(&client.tx, "session-1").await });
 
         let first = agent.rx.recv().await.expect("task/list request");
-        let xai_acp_lib::AcpAgentMessage::ExtMethod(first) = first else {
+        let echo_agent_acp::AcpAgentMessage::ExtMethod(first) = first else {
             panic!("expected task/list ExtMethod");
         };
         assert_eq!(first.request.method.as_ref(), "echo.agent/task/list");
@@ -2103,7 +2103,7 @@ mod tests {
             .recv()
             .await
             .expect("subagent/list_running request");
-        let xai_acp_lib::AcpAgentMessage::ExtMethod(second) = second else {
+        let echo_agent_acp::AcpAgentMessage::ExtMethod(second) = second else {
             panic!("expected subagent/list_running ExtMethod");
         };
         assert_eq!(
@@ -2139,7 +2139,7 @@ mod tests {
 
     #[tokio::test]
     async fn running_task_kill_uses_the_owning_endpoint_contract() {
-        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let (client, mut agent) = echo_agent_acp::acp_channels();
         let task = tokio::spawn(async move {
             kill_running_task(
                 &client.tx,
@@ -2151,7 +2151,7 @@ mod tests {
         });
 
         let message = agent.rx.recv().await.expect("task/kill request");
-        let xai_acp_lib::AcpAgentMessage::ExtMethod(arguments) = message else {
+        let echo_agent_acp::AcpAgentMessage::ExtMethod(arguments) = message else {
             panic!("expected task/kill ExtMethod");
         };
         assert_eq!(arguments.request.method.as_ref(), "echo.agent/task/kill");
@@ -2169,7 +2169,7 @@ mod tests {
             .expect("task/kill response");
         assert_eq!(task.await.expect("join kill task"), Ok(()));
 
-        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let (client, mut agent) = echo_agent_acp::acp_channels();
         let subagent = tokio::spawn(async move {
             kill_running_task(
                 &client.tx,
@@ -2180,7 +2180,7 @@ mod tests {
             .await
         });
         let message = agent.rx.recv().await.expect("subagent/cancel request");
-        let xai_acp_lib::AcpAgentMessage::ExtMethod(arguments) = message else {
+        let echo_agent_acp::AcpAgentMessage::ExtMethod(arguments) = message else {
             panic!("expected subagent/cancel ExtMethod");
         };
         assert_eq!(
@@ -2207,14 +2207,14 @@ mod tests {
 
     #[tokio::test]
     async fn awaited_reload_completes_only_after_runtime_acknowledges_it() {
-        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let (client, mut agent) = echo_agent_acp::acp_channels();
         let tx = client.tx;
         let task =
             tokio::spawn(async move { request_internal_reload_and_wait(&tx, "models").await });
 
         let message = agent.rx.recv().await.expect("reload request");
         assert!(!task.is_finished());
-        let xai_acp_lib::AcpAgentMessage::ExtMethod(arguments) = message else {
+        let echo_agent_acp::AcpAgentMessage::ExtMethod(arguments) = message else {
             panic!("expected ExtMethod");
         };
         assert_eq!(
@@ -2233,7 +2233,7 @@ mod tests {
 
     #[tokio::test]
     async fn awaited_reload_rejects_unknown_kinds_without_sending() {
-        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let (client, mut agent) = echo_agent_acp::acp_channels();
         let error = request_internal_reload_and_wait(&client.tx, "unknown")
             .await
             .expect_err("unknown kind must fail");

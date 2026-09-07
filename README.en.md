@@ -187,7 +187,7 @@ Understand these boundaries before use:
 - Memory is enabled by default. The current embedded runtime uses preset SiliconFlow endpoints for `BAAI/bge-m3` embeddings and `BAAI/bge-reranker-v2-m3` reranking. Review that implementation before handling sensitive content, or disable memory under **Settings → Memory**.
 - Without an explicit workspace, EchoAgent creates and grants only an `EchoAgent` subdirectory under the operating system's Documents directory instead of implicitly authorizing the entire home directory.
 
-On first launch, missing legacy data is copied safely from `~/.grok/`. Existing files in `~/.echo-agent/` are never overwritten, and the legacy directory is not removed.
+On first launch, files from the retired runtime data directory are copied safely into `~/.echo-agent/`. Existing files are never overwritten, and the legacy directory is not removed.
 
 ## Architecture
 
@@ -206,7 +206,7 @@ The core runtime is not a separate sidecar. It lives on a dedicated OS thread ba
 ```text
 src/                       React UI, Zustand stores, and frontend domain logic
 src-tauri/src/             Tauri commands, ACP bridge, policy, storage, scheduler
-vendor/grok-build/         Pinned source snapshot of the embedded agent runtime
+vendor/echo-agent-build/  Pinned source snapshot of the embedded agent runtime
 vendor/async-openai/       Vendored OpenAI-compatible Rust client
 vendor/nucleo/             Vendored fuzzy-matching library
 scripts/                   Setup, verification, build, and release scripts
@@ -275,10 +275,10 @@ For larger features or architecture changes, open an issue first to discuss UX, 
 
 ## Acknowledgements
 
-- [xai-org/grok-build](https://github.com/xai-org/grok-build) provided the original Apache-2.0 runtime source. EchoAgent maintains a pinned, compatibility-modified snapshot in this repository.
+- The embedded Agent Runtime is derived from Apache-2.0 upstream source and maintained as a pinned, compatibility-modified snapshot. Revision details and attribution are recorded in [Third-party notices](THIRD_PARTY_NOTICES.md).
 - [Tauri](https://tauri.app/), [React](https://react.dev/), and [Vite](https://vite.dev/) form the core desktop application stack.
 
-EchoAgent is an independent community open-source project and is not affiliated with, endorsed by, or sponsored by xAI.
+EchoAgent is an independent community open-source project. Upstream attribution and modification details are preserved in the repository's legal notices.
 
 ## License
 

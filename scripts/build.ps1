@@ -31,8 +31,8 @@ function Log-Warn([string]$msg) { Write-Host "  [WARN] $msg" -ForegroundColor Ye
 function Log-Err([string]$msg)  { Write-Host "  [ERR]  $msg" -ForegroundColor Red }
 function Log-Info([string]$msg) { Write-Host "         $msg" -ForegroundColor DarkGray }
 
-# Track paths we reference. grok-build path dependencies resolve directly to
-# the source snapshot committed under vendor/grok-build.
+# Track paths we reference. echo-agent-build path dependencies resolve directly to
+# the source snapshot committed under vendor/echo-agent-build.
 $script:CargoTomlPath = Join-Path $ProjectRoot "src-tauri\Cargo.toml"
 $script:RustToolchainPath = Join-Path $ProjectRoot "rust-toolchain.toml"
 $script:RustToolchainBackup = $null
@@ -146,7 +146,7 @@ Log-Ok "MSVC link.exe available: $((Get-Command link.exe).Source)"
 
 # ---------------------------------------------------------------------------
 # 4. Vendored Runtime sanity check. Path dependencies in Cargo.toml resolve
-#    directly into vendor/grok-build, which is tracked by this repository.
+#    directly into vendor/echo-agent-build, which is tracked by this repository.
 # ---------------------------------------------------------------------------
 Log-Step "Checking vendored Runtime source"
 & node (Join-Path $ProjectRoot "scripts\verify-vendored-runtime.mjs")

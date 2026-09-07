@@ -1596,7 +1596,7 @@ async fn notify_run_failure(app: &AppHandle, automation: &Automation, error: &st
 
 async fn execute_automation_run(
     app: AppHandle,
-    tx: xai_acp_lib::AcpAgentTx,
+    tx: echo_agent_acp::AcpAgentTx,
     automation: Automation,
     cwd: PathBuf,
     record_id: String,
@@ -1799,7 +1799,7 @@ async fn execute_automation_run(
 async fn run_automation_once(
     app: &AppHandle,
     state: &AppState,
-    tx: &xai_acp_lib::AcpAgentTx,
+    tx: &echo_agent_acp::AcpAgentTx,
     automation: &Automation,
     cwd: &Path,
     record_id: &str,
@@ -1871,7 +1871,7 @@ struct AutomationExecutionContext {
 }
 
 async fn resolve_execution_context(
-    tx: &xai_acp_lib::AcpAgentTx,
+    tx: &echo_agent_acp::AcpAgentTx,
     automation: &Automation,
     cwd: &Path,
 ) -> Result<AutomationExecutionContext, String> {
@@ -2138,7 +2138,7 @@ fn recover_queued_dispatches(
 }
 
 /// Scheduler tick. Fires any automation whose `next_run_at` has passed.
-pub async fn scheduler_tick(app: &AppHandle, tx: &xai_acp_lib::AcpAgentTx, default_cwd: &Path) {
+pub async fn scheduler_tick(app: &AppHandle, tx: &echo_agent_acp::AcpAgentTx, default_cwd: &Path) {
     let state = app.state::<AppState>();
     if let Err(error) = crate::commands::require_runtime_ready(&state, None) {
         tracing::debug!(%error, "automation scheduler paused while Agent Runtime is not ready");
@@ -2269,7 +2269,7 @@ pub async fn scheduler_tick(app: &AppHandle, tx: &xai_acp_lib::AcpAgentTx, defau
 /// returned handle when the runtime restarts.
 pub fn start_scheduler(
     app: AppHandle,
-    tx: xai_acp_lib::AcpAgentTx,
+    tx: echo_agent_acp::AcpAgentTx,
     default_cwd: PathBuf,
 ) -> tokio::task::JoinHandle<()> {
     fail_stale_running_records();

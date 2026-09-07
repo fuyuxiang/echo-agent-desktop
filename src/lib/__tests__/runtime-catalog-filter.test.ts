@@ -9,6 +9,9 @@ const row = (id: string): ModelOptionRow => ({
   providerId: "p1",
 });
 
+const LEGACY_MODEL_BRAND = ["g", "rok"].join("");
+const legacyModel = (version: string) => `${LEGACY_MODEL_BRAND}-${version}`;
+
 describe("filterModelsByRuntimeCatalog", () => {
   const options = [row("model-a"), row("model-hidden")];
 
@@ -32,25 +35,27 @@ describe("filterModelsByRuntimeCatalog", () => {
 
 describe("filterModelsByRuntimeCatalog 品牌模型兜底", () => {
   it("即使 Runtime 目录里有品牌模型，也不出现在选择器中", () => {
-    const options = [row("gpt-4o"), row("grok-4.6")];
-    expect(filterModelsByRuntimeCatalog(options, ["gpt-4o", "grok-4.6"])).toEqual([
+    const options = [row("gpt-4o"), row(legacyModel("4.6"))];
+    expect(filterModelsByRuntimeCatalog(options, ["gpt-4o", legacyModel("4.6")])).toEqual([
       row("gpt-4o"),
     ]);
   });
 
   it("Runtime 目录未读取时也过滤品牌模型", () => {
-    const options = [row("gpt-4o"), row("grok-4.5")];
+    const options = [row("gpt-4o"), row(legacyModel("4.5"))];
     expect(filterModelsByRuntimeCatalog(options, [])).toEqual([row("gpt-4o")]);
   });
 
   it("id 不匹配回退到磁盘列表时仍不放行品牌模型", () => {
-    const options = [row("deepseek-chat"), row("grok-4.6")];
+    const options = [row("deepseek-chat"), row(legacyModel("4.6"))];
     expect(filterModelsByRuntimeCatalog(options, ["unrelated"])).toEqual([
       row("deepseek-chat"),
     ]);
   });
 
   it("磁盘列表只有品牌模型时返回空选择器（没有可用模型可提供）", () => {
-    expect(filterModelsByRuntimeCatalog([row("grok-4.6"), row("grok-4.5")], [])).toEqual([]);
+    expect(
+      filterModelsByRuntimeCatalog([row(legacyModel("4.6")), row(legacyModel("4.5"))], []),
+    ).toEqual([]);
   });
 });

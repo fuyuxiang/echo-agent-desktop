@@ -1,12 +1,12 @@
 //! In-process EchoAgent runtime bridge.
 //!
-//! The agent (`MvpAgent` from `xai-grok-shell`) is `!Send` (all fields are
+//! The agent (`MvpAgent` from `echo-agent-runtime`) is `!Send` (all fields are
 //! `Rc`/`RefCell`), so it must live on one OS thread driven by a
 //! current-thread tokio runtime + `LocalSet`. We spawn that thread once at
 //! app startup and communicate with the agent purely through the typed ACP
-//! mpsc channels from `xai-acp-lib::acp_channels()`.
+//! mpsc channels from `echo-agent-acp::acp_channels()`.
 //!
-//! Pattern A (direct dispatch) from `xai-grok-pager/src/acp/spawn.rs`: the
+//! Pattern A (direct dispatch) from `echo-agent-pager/src/acp/spawn.rs`: the
 //! gateway receiver calls `MvpAgent`'s `acp::Agent` methods directly over
 //! `Rc<MvpAgent>` — no byte streams, no line framing, no WebSocket.
 //!
@@ -27,16 +27,16 @@ use base64::Engine;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use xai_acp_lib::{
+use echo_agent_acp::{
     acp_channels, acp_send, AcpAgentGatewaySender, AcpAgentTx, AcpClientRx, AcpGatewayReceiver,
 };
-use xai_grok_shell::agent::init::bootstrap;
-use xai_grok_shell::agent::mvp_agent::MvpAgent;
-use xai_grok_shell::auth::{AuthManager, GrokComConfig};
-use xai_grok_shell::util::config::load_effective_config;
+use echo_agent_runtime::agent::init::bootstrap;
+use echo_agent_runtime::agent::mvp_agent::MvpAgent;
+use echo_agent_runtime::auth::{AuthManager, EchoAgentComConfig};
+use echo_agent_runtime::util::config::load_effective_config;
 
 // Re-aliased to mirror EchoAgent's own internal import style.
-use xai_grok_shell::agent::config::{Config as AgentConfig, RuntimeResolutionContext};
+use echo_agent_runtime::agent::config::{Config as AgentConfig, RuntimeResolutionContext};
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -167,7 +167,7 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
         .unwrap_or(true);
     // Empty remote settings: local defaults only. Must be set both here (runtime
     // resolution) and on `cfg.remote_settings` before bootstrap (see below).
-    let local_remote_settings = xai_grok_shell::util::config::RemoteSettings::default();
+    let local_remote_settings = echo_agent_runtime::util::config::RemoteSettings::default();
     cfg.resolve_runtime_fields(&RuntimeResolutionContext {
         raw_config: &raw,
         remote_settings: Some(&local_remote_settings),
@@ -221,7 +221,7 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
     let provider_runtime_home = crate::paths::echo_agent_home_dir().join(".provider-runtime");
     let auth_manager = Arc::new(AuthManager::new(
         &provider_runtime_home,
-        GrokComConfig::default(),
+        EchoAgentComConfig::default(),
     ));
 
     // 3. Bootstrap: telemetry, bundled files, ModelsManager.
@@ -262,7 +262,7 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
                 let agent_rc = Rc::new(agent);
 
                 // Direct dispatch: the receiver calls MvpAgent's `acp::Agent`
-                // methods directly (Pattern A from spawn_grok_shell). Use the
+                // methods directly (Pattern A from spawn_echo_agent_shell). Use the
                 // generic AcpGatewayReceiver (not the AcpAgentGatewayReceiver
                 // alias, which fixes C = AgentSideConnection).
                 let shutdown_agent = agent_rc.clone();
@@ -368,7 +368,7 @@ fn desktop_client_capabilities() -> acp::ClientCapabilities {
 /// If `model_id` is supplied, it is passed as `_meta.modelId` so EchoAgent binds
 /// the session to that model from the very start. This avoids the
 /// new_session → set_session_model two-step, which could leave the session's
-/// sampling config pinned to EchoAgent's default model (`grok-build`, which has
+/// sampling config pinned to EchoAgent's default model (`echo-agent-build`, which has
 /// no key in a BYOK-only setup) before the switch lands.
 ///
 /// The in-process team MCP server (team_mcp.rs) rides along as a client-side
@@ -645,7 +645,7 @@ pub async fn set_session_mode(tx: &AcpAgentTx, session_id: &str, enabled: bool) 
 /// dispatches it to `MvpAgent::cancel`. A throwaway oneshot satisfies the
 /// `AcpArgs.response_tx` shape; the agent may or may not send on it.
 pub async fn cancel(tx: &AcpAgentTx, session_id: &str) -> Result<()> {
-    use xai_acp_lib::{AcpAgentMessage, AcpArgs};
+    use echo_agent_acp::{AcpAgentMessage, AcpArgs};
     let notif = acp::CancelNotification::new(acp::SessionId::new(session_id.to_string()));
     let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
     let msg = AcpAgentMessage::Cancel(AcpArgs {
@@ -658,7 +658,7 @@ pub async fn cancel(tx: &AcpAgentTx, session_id: &str) -> Result<()> {
 
 /// Rename a session by calling EchoAgent's `echo.agent/session/rename` extension method.
 ///
-/// This is the canonical path (see `xai-grok-shell/src/extensions/session_admin.rs:60`):
+/// This is the canonical path (see `echo-agent-runtime/src/extensions/session_admin.rs:60`):
 /// it writes `summary.json`'s `generated_title` with `title_is_manual=true`,
 /// refreshes the FTS search index, and broadcasts `SessionSummaryGenerated`.
 /// **Do not** edit `summary.json` directly — the agent holds the Summary in
@@ -739,7 +739,7 @@ mod tests {
     //! spawn the agent thread, run the ACP `initialize` handshake, create a
     //! session, and verify EchoAgent connects to the team MCP server. `new_session`
     //! exercises the full `AgentBuilder::build` path — including the client
-    //! side MCP merge (team_mcp.rs) — so a grok-build upgrade that breaks
+    //! side MCP merge (team_mcp.rs) — so an echo-agent-build upgrade that breaks
     //! toolset assembly or the MCP handshake fails here rather than at first
     //! chat in the GUI. Marked `#[ignore]`: it spawns a real agent thread
     //! against the user's `~/.echo-agent` config (~10s). Run with
@@ -771,10 +771,10 @@ mod tests {
 
     #[tokio::test]
     async fn set_session_mode_sends_idempotent_standard_acp_request() {
-        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let (client, mut agent) = echo_agent_acp::acp_channels();
         let task = tokio::spawn(async move { set_session_mode(&client.tx, "s-1", true).await });
         let message = agent.rx.recv().await.expect("set mode request");
-        let xai_acp_lib::AcpAgentMessage::SetSessionMode(arguments) = message else {
+        let echo_agent_acp::AcpAgentMessage::SetSessionMode(arguments) = message else {
             panic!("expected SetSessionMode request")
         };
         assert_eq!(arguments.request.session_id.0.as_ref(), "s-1");
@@ -790,14 +790,14 @@ mod tests {
 
     #[tokio::test]
     async fn prompt_rate_limit_does_not_resubmit_the_whole_user_turn() {
-        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let (client, mut agent) = echo_agent_acp::acp_channels();
         let tx = client.tx;
         let task = tokio::spawn(async move {
             prompt_with_attachments(&tx, "session-1", "hello", &[], None).await
         });
 
         let message = agent.rx.recv().await.expect("prompt request");
-        let xai_acp_lib::AcpAgentMessage::Prompt(arguments) = message else {
+        let echo_agent_acp::AcpAgentMessage::Prompt(arguments) = message else {
             panic!("expected Prompt request");
         };
         arguments
@@ -820,11 +820,11 @@ mod tests {
 
     #[tokio::test]
     async fn model_ids_reads_the_runtime_catalog() {
-        let (client, mut agent) = xai_acp_lib::acp_channels();
+        let (client, mut agent) = echo_agent_acp::acp_channels();
         let task = tokio::spawn(async move { model_ids(&client.tx).await });
 
         let message = agent.rx.recv().await.expect("models/list request");
-        let xai_acp_lib::AcpAgentMessage::ExtMethod(arguments) = message else {
+        let echo_agent_acp::AcpAgentMessage::ExtMethod(arguments) = message else {
             panic!("expected ExtMethod");
         };
         assert_eq!(arguments.request.method.as_ref(), "echo.agent/models/list");

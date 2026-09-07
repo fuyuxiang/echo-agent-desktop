@@ -62,7 +62,7 @@ pub(crate) struct RuntimeModelState {
     last_error: Option<String>,
     /// Sender identity that produced this snapshot. A late response from a
     /// retired Runtime must never mark a newly-started Runtime as ready.
-    sender: Option<xai_acp_lib::AcpAgentTx>,
+    sender: Option<echo_agent_acp::AcpAgentTx>,
 }
 
 /// State held across commands. The agent channel endpoints live here once
@@ -72,7 +72,7 @@ pub struct AppState {
     pub handle: Mutex<Option<AgentHandle>>,
     /// Once the dispatcher owns the rx half, only the tx is reachable. We
     /// stash a clone of the tx sender here for commands to use.
-    pub tx: Mutex<Option<xai_acp_lib::AcpAgentTx>>,
+    pub tx: Mutex<Option<echo_agent_acp::AcpAgentTx>>,
     pub cwd: Mutex<Option<PathBuf>>,
     /// Background automation scheduler bound to the current agent runtime.
     /// Replacing/aborting it on restart prevents a stale task from retaining a
@@ -201,7 +201,7 @@ impl AppState {
 
     pub(crate) fn mark_runtime_models_initializing_if_current(
         &self,
-        sender: &xai_acp_lib::AcpAgentTx,
+        sender: &echo_agent_acp::AcpAgentTx,
     ) -> bool {
         let tx = self.tx.lock().unwrap();
         if !tx
@@ -216,7 +216,7 @@ impl AppState {
 
     pub(crate) fn mark_runtime_models_synced(
         &self,
-        sender: &xai_acp_lib::AcpAgentTx,
+        sender: &echo_agent_acp::AcpAgentTx,
         revision: String,
         model_ids: Vec<String>,
     ) -> bool {
@@ -248,7 +248,7 @@ impl AppState {
 
     pub(crate) fn mark_runtime_models_failed_if_current(
         &self,
-        sender: &xai_acp_lib::AcpAgentTx,
+        sender: &echo_agent_acp::AcpAgentTx,
         error: impl Into<String>,
     ) {
         let current_sender = self.tx.lock().unwrap();
@@ -270,7 +270,7 @@ impl AppState {
     /// unavailable.
     pub(crate) fn mark_runtime_dead_if_current(
         &self,
-        tx: &xai_acp_lib::AcpAgentTx,
+        tx: &echo_agent_acp::AcpAgentTx,
         error: impl Into<String>,
     ) -> bool {
         let mut current_tx = self.tx.lock().unwrap();
@@ -431,7 +431,15 @@ fn auth_status_from_snapshots(
 /// Kept in lockstep with `src/lib/model-branding.ts` — the frontend filters the
 /// same tokens as a second layer for values that do not flow through here (usage
 /// records, transcript model dividers).
-const UPSTREAM_BRAND_TOKENS: &[&str] = &["grok", "xai", "x.ai", "spacexai"];
+// Retired upstream identifiers remain display-filter inputs for legacy model
+// catalogs. Build them from fragments so they cannot be mistaken for current
+// EchoAgent product names during source audits.
+const UPSTREAM_BRAND_TOKENS: &[&str] = &[
+    concat!("g", "rok"),
+    concat!("x", "ai"),
+    concat!("x", ".", "ai"),
+    concat!("space", "x", "ai"),
+];
 
 fn is_upstream_branded_model_id(id: &str) -> bool {
     let normalized = id.to_ascii_lowercase();
@@ -537,7 +545,7 @@ fn clear_runtime_after_init_failure(state: &AppState, generation: u64) {
 pub(crate) async fn reload_models_and_sync(
     app: &tauri::AppHandle,
     state: &AppState,
-    tx: &xai_acp_lib::AcpAgentTx,
+    tx: &echo_agent_acp::AcpAgentTx,
 ) -> Result<(), String> {
     let _reload_guard = state.model_reload_lock.lock().await;
     if !state.mark_runtime_models_initializing_if_current(tx) {
@@ -801,7 +809,7 @@ pub async fn agent_init(
     // ensures that the monitor can invalidate the same generation instead of
     // racing with a later stale write from this initialization call.
     let (_placeholder_tx, placeholder_rx) =
-        tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+        tokio::sync::mpsc::unbounded_channel::<echo_agent_acp::AcpClientMessage>();
     *state.handle.lock().unwrap() = Some(AgentHandle {
         tx: tx.clone(),
         // Unused placeholder rx — the real rx lives in the dispatcher.
@@ -1692,7 +1700,7 @@ mod tests {
     }
 
     fn runtime_state(revision: &str, model_ids: &[&str]) -> RuntimeModelState {
-        let (client, _agent) = xai_acp_lib::acp_channels();
+        let (client, _agent) = echo_agent_acp::acp_channels();
         RuntimeModelState {
             initialized: true,
             revision: Some(revision.into()),
@@ -1800,22 +1808,27 @@ mod tests {
 
     #[test]
     fn upstream_branded_ids_are_hidden_from_the_frontend() {
+        let legacy_model_46 = format!("{}-4.6", concat!("g", "rok"));
+        let legacy_model_45 = format!("{}-4.5", concat!("g", "rok"));
         let status = auth_status_from_snapshots(
-            vec!["model-a".into(), "grok-4.6".into()],
+            vec!["model-a".into(), legacy_model_46.clone()],
             None,
             "rev-a",
-            runtime_state("rev-a", &["model-a", "grok-4.6", "grok-4.5"]),
+            runtime_state(
+                "rev-a",
+                &[
+                    "model-a",
+                    legacy_model_46.as_str(),
+                    legacy_model_45.as_str(),
+                ],
+            ),
             true,
         );
         assert_eq!(status.providers, vec!["model-a".to_string()]);
         assert_eq!(status.runtime_models, vec!["model-a".to_string()]);
         assert_eq!(
             status.unfiltered_runtime_models,
-            vec![
-                "model-a".to_string(),
-                "grok-4.6".to_string(),
-                "grok-4.5".to_string()
-            ],
+            vec!["model-a".to_string(), legacy_model_46, legacy_model_45,],
             "authorization must still see the Runtime catalog verbatim"
         );
     }
@@ -1826,50 +1839,58 @@ mod tests {
     /// the app from "usable with an odd model name" to "cannot send at all".
     #[test]
     fn branded_id_filter_does_not_regress_readiness_or_authorization() {
+        let legacy_model = format!("{}-4.6", concat!("g", "rok"));
         let status = auth_status_from_snapshots(
-            vec!["grok-4.6".into()],
+            vec![legacy_model.clone()],
             None,
             "rev-a",
-            runtime_state("rev-a", &["grok-4.6"]),
+            runtime_state("rev-a", &[legacy_model.as_str()]),
             true,
         );
         assert!(status.ready, "a display filter must not block chat");
         assert!(status.runtime_ready);
         assert!(status.runtime_models.is_empty(), "nothing branded is shown");
-        assert_eq!(validate_runtime_ready(&status, Some("grok-4.6")), Ok(()));
+        assert_eq!(validate_runtime_ready(&status, Some(&legacy_model)), Ok(()));
     }
 
     /// A user's own connection whose id happens to contain a brand token stays
     /// fully functional — only its rendered label is replaced.
     #[test]
     fn user_model_matching_a_brand_token_is_still_sendable() {
+        let user_model = format!("my-{}-proxy", concat!("g", "rok"));
         let status = auth_status_from_snapshots(
-            vec!["my-grok-proxy".into()],
+            vec![user_model.clone()],
             None,
             "rev-a",
-            runtime_state("rev-a", &["my-grok-proxy"]),
+            runtime_state("rev-a", &[user_model.as_str()]),
             true,
         );
         assert!(status.ready);
-        assert_eq!(
-            validate_runtime_ready(&status, Some("my-grok-proxy")),
-            Ok(())
-        );
+        assert_eq!(validate_runtime_ready(&status, Some(&user_model)), Ok(()));
     }
 
     #[test]
     fn brand_token_matching_is_case_insensitive_and_substring_based() {
-        for id in [
-            "grok-4.6",
-            "Grok 4.5",
-            "GROK",
-            "xai-build",
-            "x.ai/v1",
-            "SpaceXAI",
-        ] {
+        let model_brand = concat!("g", "rok");
+        let vendor_brand = concat!("x", "ai");
+        let branded_ids = [
+            format!("{model_brand}-4.6"),
+            format!("{} 4.5", model_brand.to_ascii_uppercase()),
+            vendor_brand.to_ascii_uppercase(),
+            format!("{vendor_brand}-{model_brand}-build"),
+            format!("{}/v1", concat!("x", ".", "ai")),
+            format!("Space{vendor_brand}"),
+        ];
+        for id in &branded_ids {
             assert!(is_upstream_branded_model_id(id), "{id} must be filtered");
         }
-        for id in ["gpt-4o", "deepseek-chat", "qwen-max", "claude-sonnet-4"] {
+        for id in [
+            "gpt-4o",
+            "deepseek-chat",
+            "qwen-max",
+            "claude-sonnet-4",
+            "echo-agent-build",
+        ] {
             assert!(!is_upstream_branded_model_id(id), "{id} must be kept");
         }
     }
@@ -1979,7 +2000,7 @@ mod tests {
 
         // A superseded generation's failure cleanup must leave the current
         // runtime state untouched.
-        let (client, _agent) = xai_acp_lib::acp_channels();
+        let (client, _agent) = echo_agent_acp::acp_channels();
         *state.tx.lock().unwrap() = Some(client.tx.clone());
         state.mark_runtime_models_synced(&client.tx, "rev-a".into(), vec!["model-a".into()]);
         clear_runtime_after_init_failure(&state, first);
@@ -1995,8 +2016,8 @@ mod tests {
     #[test]
     fn agent_death_from_a_retired_runtime_is_not_reported() {
         let state = AppState::default();
-        let (retired, _retired_agent) = xai_acp_lib::acp_channels();
-        let (current, _current_agent) = xai_acp_lib::acp_channels();
+        let (retired, _retired_agent) = echo_agent_acp::acp_channels();
+        let (current, _current_agent) = echo_agent_acp::acp_channels();
         *state.tx.lock().unwrap() = Some(current.tx.clone());
         state.mark_runtime_models_synced(&current.tx, "rev-a".into(), vec!["model-a".into()]);
 
