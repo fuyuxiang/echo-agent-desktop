@@ -32,6 +32,7 @@ pub mod index;
 pub mod mmr;
 pub mod observation;
 pub mod query_expansion;
+pub mod reranker;
 pub mod schema;
 pub mod search;
 pub mod storage;
