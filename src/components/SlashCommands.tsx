@@ -157,7 +157,7 @@ export const SlashCommands = forwardRef<SlashCommandsHandle, SlashCommandsProps>
           </li>
         ))}
         {!loading && matches.length === 0 && !loadError && (
-          <li className="slash-commands__empty">没有匹配的命令</li>
+          <li className="slash-commands__empty">没找到这个命令，换个关键词试试</li>
         )}
         {loading && <li className="slash-commands__empty">正在加载命令…</li>}
         {loadError && (

@@ -7,7 +7,11 @@
  * 不上传任何内容(对应 EchoAgent `share:uploadFile/createLink` 的云上传部分不移植)。
  * 纯函数 + 依赖注入(URL / navigator),便于单测。
  */
-import { buildSessionMarkdown, sanitizeFilename } from "./export-markdown";
+import {
+  buildSessionMarkdown,
+  sanitizeFilename,
+  type SessionExportOptions,
+} from "./export-markdown";
 import type { ChatMessage } from "@/stores/session-store";
 
 /** 分享载荷格式。 */
@@ -30,10 +34,11 @@ export function buildSharePayload(
   messages: ChatMessage[],
   format: ShareFormat,
   title?: string,
+  options: SessionExportOptions = {},
 ): SharePayload {
   const base = sanitizeFilename(title || "对话导出");
   if (format === "markdown") {
-    const content = buildSessionMarkdown(messages, title);
+    const content = buildSessionMarkdown(messages, title, options);
     return {
       filename: `${base}.md`,
       mime: "text/markdown;charset=utf-8",
@@ -42,7 +47,7 @@ export function buildSharePayload(
     };
   }
   if (format === "html") {
-    const content = buildShareHtml(messages, title);
+    const content = buildShareHtml(messages, title, options);
     return {
       filename: `${base}.html`,
       mime: "text/html;charset=utf-8",
@@ -51,7 +56,7 @@ export function buildSharePayload(
     };
   }
   // text:剥离 markdown 标记的纯文本。
-  const content = buildSessionMarkdown(messages, title).replace(/^[#>*_`-]+/gm, "").trim();
+  const content = buildSessionMarkdown(messages, title, options).replace(/^[#>*_`-]+/gm, "").trim();
   return {
     filename: `${base}.txt`,
     mime: "text/plain;charset=utf-8",
@@ -61,8 +66,12 @@ export function buildSharePayload(
 }
 
 /** 构造自包含 HTML(内联 markdown 正文,可在浏览器直接打开)。 */
-export function buildShareHtml(messages: ChatMessage[], title?: string): string {
-  const md = buildSessionMarkdown(messages, title);
+export function buildShareHtml(
+  messages: ChatMessage[],
+  title?: string,
+  options: SessionExportOptions = {},
+): string {
+  const md = buildSessionMarkdown(messages, title, options);
   const escaped = htmlEscape(md);
   return `<!DOCTYPE html>
 <html lang="zh-CN">

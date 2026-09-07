@@ -1,0 +1,93 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { MessageItem } from "../MessageItem";
+import { ThemeProvider } from "../ThemeProvider";
+import type { ChatMessage, ToolCallView } from "@/stores/session-store";
+
+describe("assistant execution process", () => {
+  const renderMessage = (onOpenTool?: (tool: ToolCallView) => void) => render(
+    <ThemeProvider>
+      <MessageItem
+        message={message}
+        streaming={false}
+        onOpenTool={onOpenTool}
+      />
+    </ThemeProvider>,
+  );
+
+  const message: ChatMessage = {
+    id: "assistant-1",
+    role: "assistant",
+    complete: true,
+    startedAt: 1_000,
+    completedAt: 9_000,
+    parts: [
+      { kind: "text", text: "我先检查代码。" },
+      { kind: "thought", text: "需要从客户端交互状态入手。" },
+      {
+        kind: "tool_call",
+        toolCall: {
+          toolCallId: "tool-1",
+          title: "Edit src/App.tsx",
+          kind: "edit_file",
+          status: "completed",
+          content: [],
+        },
+      },
+      { kind: "text", text: "最终修复结果" },
+    ],
+  };
+
+  it("完成后默认收起过程并始终展示最终答复", () => {
+    renderMessage();
+
+    expect(screen.getByText("最终修复结果")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /已完成执行过程/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByText("需要从客户端交互状态入手。")).toBeNull();
+  });
+
+  it("展开后可查看操作并打开右侧详情", () => {
+    const onOpenTool = vi.fn();
+    renderMessage(onOpenTool);
+
+    fireEvent.click(screen.getByRole("button", { name: /已完成执行过程/ }));
+    fireEvent.click(screen.getByRole("button", { name: /edit_file/i }));
+    expect(onOpenTool).toHaveBeenCalledWith(
+      expect.objectContaining({ toolCallId: "tool-1" }),
+    );
+
+    fireEvent.click(screen.getByText("思考摘要"));
+    expect(screen.getByText("需要从客户端交互状态入手。")).toBeInTheDocument();
+  });
+
+  it("运行时展开，完成后自动收起", async () => {
+    const liveMessage: ChatMessage = {
+      ...message,
+      complete: false,
+      completedAt: undefined,
+      parts: message.parts.map((part) =>
+        part.kind === "tool_call"
+          ? { ...part, toolCall: { ...part.toolCall, status: "in_progress" as const } }
+          : part,
+      ),
+    };
+    const { rerender } = render(
+      <ThemeProvider>
+        <MessageItem message={liveMessage} streaming />
+      </ThemeProvider>,
+    );
+    expect(screen.getByRole("button", { name: /正在修改文件/ }))
+      .toHaveAttribute("aria-expanded", "true");
+
+    rerender(
+      <ThemeProvider>
+        <MessageItem message={message} streaming={false} />
+      </ThemeProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: /已完成执行过程/ }))
+      .toHaveAttribute("aria-expanded", "false"));
+  });
+});
