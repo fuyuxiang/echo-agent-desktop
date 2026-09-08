@@ -513,7 +513,7 @@ pub async fn model_ids(tx: &AcpAgentTx) -> Result<Vec<String>> {
 /// whole ACP PromptRequest here is not idempotent: each attempt is persisted as
 /// a new user turn before sampling starts.
 pub async fn prompt(tx: &AcpAgentTx, session_id: &str, text: &str) -> Result<()> {
-    prompt_with_attachments(tx, session_id, text, &[], None).await
+    prompt_with_attachments(tx, session_id, text, &[], None, None, false).await
 }
 
 fn image_mime(path: &Path) -> Option<&'static str> {
@@ -623,15 +623,28 @@ pub async fn prompt_with_attachments(
     text: &str,
     attachments: &[String],
     display_text: Option<&str>,
+    prompt_id: Option<&str>,
+    send_now: bool,
 ) -> Result<()> {
     let blocks = build_prompt_blocks(text, attachments, display_text)?;
-    tracing::info!(session_id, text_len = text.len(), "echoagent: prompt send");
-    let req = acp::PromptRequest::new(session_id.to_string(), blocks);
+    let prompt_id = prompt_id
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
+    let mut meta = acp::Meta::new();
+    meta.insert(
+        "promptId".into(),
+        serde_json::Value::String(prompt_id.clone()),
+    );
+    if send_now {
+        meta.insert("sendNow".into(), serde_json::Value::Bool(true));
+    }
+    tracing::info!(session_id, %prompt_id, text_len = text.len(), send_now, "echoagent: prompt send");
+    let req = acp::PromptRequest::new(session_id.to_string(), blocks).meta(Some(meta));
     let _: acp::PromptResponse = acp_send(req, tx).await.map_err(|e| {
         tracing::error!(session_id, error = ?e, "echoagent: prompt acp_send FAILED");
         anyhow!("prompt: {e:?}")
     })?;
-    tracing::info!(session_id, "echoagent: prompt turn completed");
+    tracing::info!(session_id, %prompt_id, "echoagent: prompt turn completed");
     Ok(())
 }
 
@@ -853,7 +866,7 @@ mod tests {
         let (client, mut agent) = echo_agent_acp::acp_channels();
         let tx = client.tx;
         let task = tokio::spawn(async move {
-            prompt_with_attachments(&tx, "session-1", "hello", &[], None).await
+            prompt_with_attachments(&tx, "session-1", "hello", &[], None, None, false).await
         });
 
         let message = agent.rx.recv().await.expect("prompt request");
@@ -876,6 +889,43 @@ mod tests {
             agent.rx.try_recv().is_err(),
             "prompt must be sent exactly once"
         );
+    }
+
+    #[tokio::test]
+    async fn prompt_send_now_stamps_atomic_replacement_metadata() {
+        let (client, mut agent) = echo_agent_acp::acp_channels();
+        let tx = client.tx;
+        let task = tokio::spawn(async move {
+            prompt_with_attachments(
+                &tx,
+                "session-1",
+                "2",
+                &[],
+                Some("2"),
+                Some("01990f7d-0000-7000-8000-000000000001"),
+                true,
+            )
+            .await
+        });
+
+        let message = agent.rx.recv().await.expect("prompt request");
+        let echo_agent_acp::AcpAgentMessage::Prompt(arguments) = message else {
+            panic!("expected Prompt request");
+        };
+        let meta = arguments.request.meta.as_ref().expect("prompt metadata");
+        assert_eq!(
+            meta.get("promptId").and_then(serde_json::Value::as_str),
+            Some("01990f7d-0000-7000-8000-000000000001")
+        );
+        assert_eq!(
+            meta.get("sendNow").and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        arguments
+            .response_tx
+            .send(Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)))
+            .expect("prompt response");
+        task.await.expect("prompt task").expect("prompt success");
     }
 
     #[tokio::test]
