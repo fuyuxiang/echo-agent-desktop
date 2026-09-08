@@ -370,7 +370,25 @@ fn auth_status(state: &AppState) -> AuthStatus {
         });
         (runtime, sender_current)
     };
-    auth_status_from_snapshots(model_ids, disk_reason, &revision, runtime, sender_current)
+    let mut status =
+        auth_status_from_snapshots(model_ids, disk_reason, &revision, runtime, sender_current);
+    let codex_models = crate::codex_app_server::configured_model_ids();
+    if !codex_models.is_empty() {
+        status.providers.extend(codex_models.iter().cloned());
+        status.runtime_models.extend(codex_models.iter().cloned());
+        status.unfiltered_runtime_models.extend(codex_models);
+        status.providers.sort();
+        status.providers.dedup();
+        status.runtime_models.sort();
+        status.runtime_models.dedup();
+        status.unfiltered_runtime_models.sort();
+        status.unfiltered_runtime_models.dedup();
+        status.ready = true;
+        status.runtime_ready = true;
+        status.synchronized = true;
+        status.reason = None;
+    }
+    status
 }
 
 fn auth_status_from_snapshots(
@@ -697,6 +715,41 @@ fn trusted_existing_session_cwd(
     Ok(canonical)
 }
 
+async fn trusted_codex_session_cwd(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    filesystem: &crate::shell_fs::FilesystemAccess,
+    codex: &crate::codex_app_server::CodexAppServer,
+    permissions: Permissions,
+    session_id: &str,
+    claimed: Option<&str>,
+) -> Result<PathBuf, String> {
+    if let Ok(bound) = state.session_workspace(session_id) {
+        if let Some(claimed) = claimed.filter(|value| !value.trim().is_empty()) {
+            let claimed = filesystem.require_workspace(claimed)?;
+            if claimed != bound {
+                return Err("会话工作区与后端绑定不一致".into());
+            }
+        }
+        return Ok(bound);
+    }
+    let claimed = claimed
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("历史会话操作必须提供工作区")?;
+    let canonical = filesystem.require_workspace(claimed)?;
+    let canonical_text = canonical.to_string_lossy();
+    let belongs = codex
+        .list_threads(app, permissions, Some(&canonical_text), true)
+        .await?
+        .iter()
+        .any(|summary| summary.session_id == session_id);
+    if !belongs {
+        return Err("会话不属于声明的工作区".into());
+    }
+    state.record_session_workspace(session_id, &canonical);
+    Ok(canonical)
+}
+
 /// Initialize the in-process EchoAgent runtime. Spawns the agent thread, runs
 /// `initialize`, and starts the dispatcher.
 #[tauri::command]
@@ -941,6 +994,8 @@ pub fn agent_auth_status(state: State<'_, AppState>) -> AuthStatus {
 pub async fn agent_new_session(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    codex: State<'_, crate::codex_app_server::CodexAppServer>,
+    permissions: State<'_, Permissions>,
     cwd: String,
     model_id: Option<String>,
 ) -> Result<String, String> {
@@ -952,6 +1007,16 @@ pub async fn agent_new_session(
     };
     if let Some(model_id) = model_id.as_deref() {
         crate::policy::require_model(model_id)?;
+    }
+    if let Some(remote_model) = model_id
+        .as_deref()
+        .and_then(crate::codex_app_server::remote_model_id)
+    {
+        let session_id = codex
+            .new_thread(&app, permissions.share(), Path::new(&cwd), remote_model)
+            .await?;
+        state.record_session_workspace(&session_id, Path::new(&cwd));
+        return Ok(session_id);
     }
     require_runtime_ready(&state, model_id.as_deref())?;
     let tx = state
@@ -1068,6 +1133,8 @@ pub async fn agent_new_session(
 pub async fn agent_load_session(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    codex: State<'_, crate::codex_app_server::CodexAppServer>,
+    permissions: State<'_, Permissions>,
     session_id: String,
     cwd: String,
 ) -> Result<(), String> {
@@ -1078,7 +1145,16 @@ pub async fn agent_load_session(
     let cwd = {
         let filesystem = app.state::<crate::shell_fs::FilesystemAccess>();
         let cwd = authorized_session_cwd(&filesystem, &cwd)?;
-        if !sessions::list_sessions(&cwd, true)
+        if crate::codex_app_server::is_codex_session(&session_id) {
+            let belongs = codex
+                .list_threads(&app, permissions.share(), Some(&cwd), true)
+                .await?
+                .iter()
+                .any(|summary| summary.session_id == session_id);
+            if !belongs {
+                return Err("会话不属于声明的工作区".into());
+            }
+        } else if !sessions::list_sessions(&cwd, true)
             .iter()
             .any(|summary| summary.session_id == session_id)
         {
@@ -1086,6 +1162,13 @@ pub async fn agent_load_session(
         }
         cwd
     };
+    if crate::codex_app_server::is_codex_session(&session_id) {
+        codex
+            .resume_thread(&app, permissions.share(), &session_id, Path::new(&cwd))
+            .await?;
+        state.record_session_workspace(&session_id, Path::new(&cwd));
+        return Ok(());
+    }
     let tx = state
         .tx
         .lock()
@@ -1104,39 +1187,69 @@ pub async fn agent_load_session(
 }
 
 #[tauri::command]
-pub fn agent_list_sessions(
+pub async fn agent_list_sessions(
+    app: tauri::AppHandle,
     filesystem: State<'_, crate::shell_fs::FilesystemAccess>,
+    codex: State<'_, crate::codex_app_server::CodexAppServer>,
+    permissions: State<'_, Permissions>,
     cwd: String,
     include_archived: Option<bool>,
 ) -> Result<Vec<SessionSummary>, String> {
     let cwd = filesystem.require_workspace(&cwd)?;
-    Ok(sessions::list_sessions(
-        &cwd.to_string_lossy(),
-        include_archived.unwrap_or(false),
-    ))
+    let include_archived = include_archived.unwrap_or(false);
+    let mut rows = sessions::list_sessions(&cwd.to_string_lossy(), include_archived);
+    match codex
+        .list_threads(
+            &app,
+            permissions.share(),
+            Some(&cwd.to_string_lossy()),
+            include_archived,
+        )
+        .await
+    {
+        Ok(mut codex_rows) => rows.append(&mut codex_rows),
+        Err(error) => tracing::warn!(%error, "failed to list Codex threads"),
+    }
+    sessions::apply_metadata_and_sort(&mut rows, include_archived);
+    Ok(rows)
 }
 
 /// Return the complete persisted session catalog across working directories.
 /// The cwd in each row is execution context only; the frontend decides whether
 /// a session belongs to a project from explicit project references.
 #[tauri::command]
-pub fn agent_list_all_sessions(
+pub async fn agent_list_all_sessions(
+    app: tauri::AppHandle,
+    codex: State<'_, crate::codex_app_server::CodexAppServer>,
+    permissions: State<'_, Permissions>,
     include_archived: Option<bool>,
 ) -> Result<Vec<SessionSummary>, String> {
-    sessions::list_all_sessions(include_archived.unwrap_or(false))
+    let include_archived = include_archived.unwrap_or(false);
+    let mut rows = sessions::list_all_sessions(include_archived)?;
+    match codex
+        .list_threads(&app, permissions.share(), None, include_archived)
+        .await
+    {
+        Ok(mut codex_rows) => rows.append(&mut codex_rows),
+        Err(error) => tracing::warn!(%error, "failed to list all Codex threads"),
+    }
+    sessions::apply_metadata_and_sort(&mut rows, include_archived);
+    Ok(rows)
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_send(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    codex: State<'_, crate::codex_app_server::CodexAppServer>,
+    permissions: State<'_, Permissions>,
     session_id: String,
     text: String,
     attachments: Option<Vec<String>>,
     display_text: Option<String>,
 ) -> Result<(), String> {
     validate_send_payload(&session_id, &text, display_text.as_deref())?;
-    require_runtime_ready(&state, None)?;
     let workspace = state.session_workspace(&session_id)?;
     let attachments = attachments.unwrap_or_default();
     let attachments = if attachments.is_empty() {
@@ -1145,6 +1258,12 @@ pub async fn agent_send(
         app.state::<crate::shell_fs::FilesystemAccess>()
             .validate_session_attachments(&workspace, &attachments)?
     };
+    if crate::codex_app_server::is_codex_session(&session_id) {
+        return codex
+            .send(&app, permissions.share(), &session_id, &text, &attachments)
+            .await;
+    }
+    require_runtime_ready(&state, None)?;
     let tx = state
         .tx
         .lock()
@@ -1167,11 +1286,20 @@ pub async fn agent_send(
 }
 
 #[tauri::command]
-pub async fn agent_cancel(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+pub async fn agent_cancel(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    codex: State<'_, crate::codex_app_server::CodexAppServer>,
+    permissions: State<'_, Permissions>,
+    session_id: String,
+) -> Result<(), String> {
     if !valid_session_id(&session_id) {
         return Err("会话 ID 无效或过长".into());
     }
     state.session_workspace(&session_id)?;
+    if crate::codex_app_server::is_codex_session(&session_id) {
+        return codex.cancel(&app, permissions.share(), &session_id).await;
+    }
     let tx = state
         .tx
         .lock()
@@ -1478,6 +1606,7 @@ fn validate_question_payload(
 #[tauri::command]
 pub async fn agent_set_model(
     state: State<'_, AppState>,
+    codex: State<'_, crate::codex_app_server::CodexAppServer>,
     session_id: String,
     model_id: String,
 ) -> Result<(), String> {
@@ -1486,6 +1615,14 @@ pub async fn agent_set_model(
     }
     state.session_workspace(&session_id)?;
     crate::policy::require_model(&model_id)?;
+    if crate::codex_app_server::is_codex_session(&session_id) {
+        return codex.set_model(&session_id, &model_id).await;
+    }
+    if crate::codex_app_server::is_codex_model(&model_id) {
+        return Err(
+            "MODEL_SWITCH_INCOMPATIBLE_AGENT：当前会话不能切换到 Codex 运行时，请新建对话。".into(),
+        );
+    }
     require_runtime_ready(&state, Some(&model_id))?;
     let tx = state
         .tx
@@ -1501,16 +1638,38 @@ pub async fn agent_set_model(
 /// List every working directory EchoAgent has seen (deduplicated), with a session
 /// count per cwd. Used to populate the Composer's workspace picker.
 #[tauri::command]
-pub fn agent_list_workspaces(
+pub async fn agent_list_workspaces(
+    app: tauri::AppHandle,
     filesystem: State<'_, crate::shell_fs::FilesystemAccess>,
-) -> Vec<WorkspaceInfo> {
-    let workspaces = sessions::list_workspaces();
+    codex: State<'_, crate::codex_app_server::CodexAppServer>,
+    permissions: State<'_, Permissions>,
+) -> Result<Vec<WorkspaceInfo>, String> {
+    let mut workspaces = sessions::list_workspaces();
+    if let Ok(rows) = codex
+        .list_threads(&app, permissions.share(), None, true)
+        .await
+    {
+        for row in rows {
+            if let Some(existing) = workspaces.iter_mut().find(|item| item.cwd == row.cwd) {
+                existing.session_count += 1;
+                if existing.last_title.is_none() {
+                    existing.last_title = Some(row.title);
+                }
+            } else {
+                workspaces.push(WorkspaceInfo {
+                    cwd: row.cwd,
+                    session_count: 1,
+                    last_title: Some(row.title),
+                });
+            }
+        }
+    }
     for workspace in &workspaces {
         if let Err(error) = filesystem.authorize_workspace(&workspace.cwd) {
             tracing::warn!(%error, cwd = %workspace.cwd, "persisted workspace was not added to filesystem allow-list");
         }
     }
-    workspaces
+    Ok(workspaces)
 }
 
 /// Rename a session via EchoAgent's `echo.agent/session/rename` extension method. On
@@ -1522,6 +1681,8 @@ pub fn agent_list_workspaces(
 pub async fn agent_rename_session(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    codex: State<'_, crate::codex_app_server::CodexAppServer>,
+    permissions: State<'_, Permissions>,
     session_id: String,
     title: String,
     cwd: Option<String>,
@@ -1535,12 +1696,28 @@ pub async fn agent_rename_session(
     {
         return Err("会话标题为空、过长或包含非法字符".into());
     }
-    let workspace = trusted_existing_session_cwd(
-        &state,
-        &app.state::<crate::shell_fs::FilesystemAccess>(),
-        &session_id,
-        cwd.as_deref(),
-    )?;
+    let is_codex = crate::codex_app_server::is_codex_session(&session_id);
+    let filesystem = app.state::<crate::shell_fs::FilesystemAccess>();
+    let workspace = if is_codex {
+        trusted_codex_session_cwd(
+            &app,
+            &state,
+            &filesystem,
+            &codex,
+            permissions.share(),
+            &session_id,
+            cwd.as_deref(),
+        )
+        .await?
+    } else {
+        trusted_existing_session_cwd(&state, &filesystem, &session_id, cwd.as_deref())?
+    };
+    if is_codex {
+        codex
+            .rename_thread(&app, permissions.share(), &session_id, &title)
+            .await?;
+        return Ok(());
+    }
     let tx = state
         .tx
         .lock()
@@ -1567,18 +1744,40 @@ pub struct SessionDeleteResult {
 pub async fn agent_delete_session(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
+    codex: State<'_, crate::codex_app_server::CodexAppServer>,
+    permissions: State<'_, Permissions>,
     session_id: String,
     cwd: Option<String>,
 ) -> Result<SessionDeleteResult, String> {
     if !valid_session_id(&session_id) {
         return Err("会话 ID 无效或过长".into());
     }
-    let workspace = trusted_existing_session_cwd(
-        &state,
-        &app.state::<crate::shell_fs::FilesystemAccess>(),
-        &session_id,
-        cwd.as_deref(),
-    )?;
+    let is_codex = crate::codex_app_server::is_codex_session(&session_id);
+    let filesystem = app.state::<crate::shell_fs::FilesystemAccess>();
+    let workspace = if is_codex {
+        trusted_codex_session_cwd(
+            &app,
+            &state,
+            &filesystem,
+            &codex,
+            permissions.share(),
+            &session_id,
+            cwd.as_deref(),
+        )
+        .await?
+    } else {
+        trusted_existing_session_cwd(&state, &filesystem, &session_id, cwd.as_deref())?
+    };
+    if is_codex {
+        codex
+            .delete_thread(&app, permissions.share(), &session_id)
+            .await?;
+        state.forget_session_workspace(&session_id);
+        return Ok(SessionDeleteResult {
+            memory_summaries_deleted: 0,
+            memory_cleanup_warning: None,
+        });
+    }
     let tx = state
         .tx
         .lock()
@@ -1629,6 +1828,9 @@ pub async fn agent_session_info(
         return Err("会话 ID 无效或过长".into());
     }
     state.session_workspace(&session_id)?;
+    if crate::codex_app_server::is_codex_session(&session_id) {
+        return Err("Codex 会话的上下文用量由 ChatGPT 账号额度管理".into());
+    }
     let tx = state
         .tx
         .lock()
@@ -1651,6 +1853,9 @@ pub async fn agent_session_usage(
         return Err("会话 ID 无效或过长".into());
     }
     state.session_workspace(&session_id)?;
+    if crate::codex_app_server::is_codex_session(&session_id) {
+        return Err("Codex 会话使用 ChatGPT 套餐额度".into());
+    }
     let tx = state
         .tx
         .lock()
@@ -1667,7 +1872,18 @@ pub async fn agent_session_usage(
 /// Archived sessions are filtered out of `list_sessions`. Returns the new
 /// archived value so the frontend can update without a re-fetch.
 #[tauri::command]
-pub fn agent_set_session_archived(session_id: String, archived: bool) -> Result<bool, String> {
+pub async fn agent_set_session_archived(
+    app: tauri::AppHandle,
+    codex: State<'_, crate::codex_app_server::CodexAppServer>,
+    permissions: State<'_, Permissions>,
+    session_id: String,
+    archived: bool,
+) -> Result<bool, String> {
+    if crate::codex_app_server::is_codex_session(&session_id) {
+        codex
+            .set_archived(&app, permissions.share(), &session_id, archived)
+            .await?;
+    }
     crate::meta::set_archived(&session_id, archived)
 }
 

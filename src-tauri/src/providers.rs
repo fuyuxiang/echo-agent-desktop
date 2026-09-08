@@ -419,6 +419,13 @@ pub struct ModelProviderEntry {
     /// Original provider type sent by the organization server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub organization_provider: Option<String>,
+    /// ChatGPT account display metadata. Tokens remain owned by Codex App Server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limits: Option<serde_json::Value>,
 }
 
 /// One model catalog entry as the frontend sees it. Written to
@@ -549,6 +556,9 @@ fn provider_from_table(id: &str, table: &Map<String, Value>) -> ModelProviderEnt
             .get("organization_provider")
             .and_then(Value::as_str)
             .map(String::from),
+        account_email: None,
+        plan_type: None,
+        rate_limits: None,
     }
 }
 
@@ -647,6 +657,9 @@ fn group_legacy_models(
             credential_configured: first_table.and_then(masked_key).is_some(),
             synced_at: None,
             organization_provider: None,
+            account_email: None,
+            plan_type: None,
+            rate_limits: None,
         });
         for mid in &members[&gk] {
             let table = models
@@ -1075,6 +1088,9 @@ fn apply_organization_model_config(
         credential_configured: true,
         synced_at: Some(synced_at),
         organization_provider: Some(provider.into()),
+        account_email: None,
+        plan_type: None,
+        rate_limits: None,
     };
     {
         let providers = ensure_table(config, "model_providers")?;
@@ -1290,6 +1306,14 @@ pub fn providers_list() -> ProviderListModel {
         let (mut synth_p, mut synth_m) = group_legacy_models(mdls, &mut taken_ids);
         providers.append(&mut synth_p);
         models.append(&mut synth_m);
+    }
+
+    // 4) ChatGPT is an ordinary personal connection in the UI, but is backed by
+    // Codex App Server instead of an HTTP API provider. Only non-secret cached
+    // account/model metadata is merged here.
+    if let Some((provider, mut codex_models)) = crate::codex_app_server::catalog_entries() {
+        providers.push(provider);
+        models.append(&mut codex_models);
     }
 
     ProviderListModel { providers, models }

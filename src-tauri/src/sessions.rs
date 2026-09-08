@@ -310,7 +310,7 @@ fn to_session_summary(
     })
 }
 
-fn apply_metadata_and_sort(out: &mut Vec<SessionSummary>, include_archived: bool) {
+pub(crate) fn apply_metadata_and_sort(out: &mut Vec<SessionSummary>, include_archived: bool) {
     // Merge EchoAgent-only pinned/archived state (sidecar file, since EchoAgent's
     // Summary has no such fields and would clobber any we tried to add).
     let state = crate::meta::read_state();
