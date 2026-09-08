@@ -400,7 +400,12 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
           </aside>
 
           {selectedProvider && (
-            <section className="model-connections__detail">
+            <section
+              key={selectedProvider.id}
+              className="model-connections__detail"
+              aria-label={`${connectionName(selectedProvider)}连接详情`}
+              tabIndex={0}
+            >
               <header className="model-connections__detail-header">
                 <div>
                   <div className="model-connections__title-row">
