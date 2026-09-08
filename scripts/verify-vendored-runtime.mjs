@@ -166,8 +166,14 @@ try {
 if (manifest.integrationMode !== "vendored-source") {
   fail("Vendored Runtime integrationMode 必须为 vendored-source");
 }
-if (!/^[0-9a-f]{40}$/i.test(manifest.upstreamRevision ?? "")) {
-  fail("Vendored Runtime upstreamRevision 必须是完整的 40 位 Git 提交哈希");
+if (manifest.runtimeName !== "echo-agent") {
+  fail("Vendored Runtime runtimeName 必须为 echo-agent");
+}
+if (manifest.sourceRepository !== "https://github.com/fuyuxiang/echo-agent.git") {
+  fail("Vendored Runtime sourceRepository 必须指向 fuyuxiang/echo-agent");
+}
+if (!/^[0-9a-f]{40}$/i.test(manifest.sourceRevision ?? "")) {
+  fail("Vendored Runtime sourceRevision 必须是完整的 40 位 Git 提交哈希");
 }
 if (manifest.license !== "Apache-2.0") {
   fail("Vendored Runtime 许可证元数据必须为 Apache-2.0");
@@ -228,5 +234,5 @@ verifyNoGitCargoSources(join(projectRoot, "vendor"));
 verifyRuntimeBranding(runtimeRoot);
 
 process.stdout.write(
-  `[OK] Vendored Runtime ${manifest.upstreamRevision.slice(0, 8)} 及 Git 源码依赖已就绪，由主仓库直接管理。\n`,
+  `[OK] Vendored Runtime ${manifest.sourceRevision.slice(0, 8)} 及 Git 源码依赖已就绪，由主仓库直接管理。\n`,
 );
