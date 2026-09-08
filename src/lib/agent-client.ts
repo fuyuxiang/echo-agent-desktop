@@ -353,8 +353,7 @@ export type ProviderKind =
   | "deepseek"
   | "qwen"
   | "custom"
-  | "custom_anthropic"
-  | "codex_chatgpt";
+  | "custom_anthropic";
 
 /** API wire protocol. Mirrors EchoAgent's ApiBackend enum (snake_case). */
 export type ApiBackend = "chat_completions" | "responses" | "messages";
@@ -385,67 +384,6 @@ export interface ModelProviderEntry {
   credentialConfigured?: boolean;
   syncedAt?: number;
   organizationProvider?: string;
-  /** Non-secret ChatGPT account metadata supplied by Codex App Server. */
-  accountEmail?: string;
-  planType?: string;
-  rateLimits?: CodexRateLimitSnapshot;
-}
-
-export interface CodexRateLimitWindow {
-  usedPercent: number;
-  windowDurationMins?: number | null;
-  resetsAt?: number | null;
-}
-
-export interface CodexRateLimitSnapshot {
-  primary?: CodexRateLimitWindow | null;
-  secondary?: CodexRateLimitWindow | null;
-  planType?: string | null;
-  rateLimitReachedType?: string | null;
-  credits?: { hasCredits: boolean; unlimited: boolean; balance?: string | null } | null;
-}
-
-export interface CodexModel {
-  id: string;
-  displayName: string;
-  isDefault: boolean;
-}
-
-export interface CodexAccountStatus {
-  available: boolean;
-  connected: boolean;
-  loggedIn: boolean;
-  email?: string;
-  planType?: string;
-  models: CodexModel[];
-  rateLimits?: CodexRateLimitSnapshot;
-  syncedAt?: number;
-  error?: string;
-}
-
-export interface CodexLoginStartResult {
-  loginId: string;
-  authUrl: string;
-}
-
-export async function codexAccountStatus(): Promise<CodexAccountStatus> {
-  return invoke<CodexAccountStatus>("codex_account_status");
-}
-
-export async function codexLoginStart(): Promise<CodexLoginStartResult> {
-  return invoke<CodexLoginStartResult>("codex_login_start");
-}
-
-export async function codexLoginCancel(loginId: string): Promise<void> {
-  await invoke<void>("codex_login_cancel", { loginId });
-}
-
-export async function codexConnect(label?: string): Promise<SaveConnectionResult> {
-  return invoke<SaveConnectionResult>("codex_connect", { label: label ?? null });
-}
-
-export async function codexLogout(): Promise<void> {
-  await invoke<void>("codex_logout");
 }
 
 /**
