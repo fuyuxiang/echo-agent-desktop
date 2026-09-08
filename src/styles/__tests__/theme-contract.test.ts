@@ -6,6 +6,7 @@ const stylesDir = resolve(process.cwd(), "src/styles");
 const appCss = readFileSync(resolve(stylesDir, "app.css"), "utf8");
 const globalCss = readFileSync(resolve(stylesDir, "global.css"), "utf8");
 const tokensCss = readFileSync(resolve(stylesDir, "tokens.css"), "utf8");
+const visualPolishCss = readFileSync(resolve(stylesDir, "visual-polish.css"), "utf8");
 
 function darkBlocks(css: string): string[] {
   return [...css.matchAll(/\[data-theme=dark\],[\s\S]*?\n\}/g)].map((match) => match[0]);
@@ -77,5 +78,21 @@ describe("theme token contract", () => {
     );
 
     expect([...references].filter((token) => !definitions.has(token)).sort()).toEqual([]);
+  });
+
+  it("通知筛选的激活态在浅色背景上保持可见", () => {
+    const baseRule = visualPolishCss.indexOf(".notification-filter {");
+    const activeRule = visualPolishCss.indexOf(
+      ".notification-filter.notification-filter--active {",
+    );
+    const activeBlock = visualPolishCss.slice(
+      activeRule,
+      visualPolishCss.indexOf("}", activeRule) + 1,
+    );
+
+    expect(baseRule).toBeGreaterThanOrEqual(0);
+    expect(activeRule).toBeGreaterThan(baseRule);
+    expect(activeBlock).toContain("background: var(--echo-brand);");
+    expect(activeBlock).toContain("color: var(--echo-text-on-primary, #fff);");
   });
 });

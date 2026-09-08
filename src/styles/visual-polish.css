@@ -3294,7 +3294,18 @@ a.help-card:hover {
   border-color: var(--ui-line);
   border-radius: 999px;
   background: var(--ui-surface);
+  color: var(--echo-text-medium);
   font-size: 11px;
+}
+
+/* Keep the selected-state colors together in the last-loaded stylesheet.
+ * Otherwise the base rule above overrides app.css's brand background while
+ * leaving its white foreground in place, producing white-on-white in light
+ * mode. */
+.notification-filter.notification-filter--active {
+  border-color: var(--echo-brand);
+  background: var(--echo-brand);
+  color: var(--echo-text-on-primary, #fff);
 }
 
 .notification-list {
