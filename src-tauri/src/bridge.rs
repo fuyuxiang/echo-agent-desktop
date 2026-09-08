@@ -1244,7 +1244,7 @@ async fn handle_client_message(
                     .resolve(&request_id, PermissionOutcome::Selected(option_id))
                     .await
                 {
-                    emit_permission_closed(&app, notice);
+                    emit_permission_closed(app, notice);
                 }
                 tracing::info!(session_id = %session_id_str, "auto-approved permission after mode-switch race");
             } else {
@@ -1256,7 +1256,7 @@ async fn handle_client_message(
                         .resolve(&request_id, PermissionOutcome::Cancelled)
                         .await
                     {
-                        emit_permission_closed(&app, notice);
+                        emit_permission_closed(app, notice);
                     }
                 }
                 let notify_app = app.clone();
