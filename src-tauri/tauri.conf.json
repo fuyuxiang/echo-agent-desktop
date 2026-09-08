@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "node scripts/prepare-codex-sidecar.mjs && pnpm dev",
-    "beforeBuildCommand": "node scripts/prepare-codex-sidecar.mjs && pnpm build"
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
   },
   "app": {
     "windows": [
@@ -34,7 +34,6 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "externalBin": ["binaries/codex"],
     "targets": ["msi", "nsis"],
     "icon": [
       "icons/32x32.png",

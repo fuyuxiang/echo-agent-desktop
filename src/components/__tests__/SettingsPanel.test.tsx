@@ -111,7 +111,7 @@ describe("SettingsPanel", () => {
     expect(screen.getByRole("button", { name: "Token 用量" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "模型" })).toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("heading", { name: "模型与连接", level: 2 })).toBeInTheDocument();
-    expect(screen.getByText("组织模型自动同步；个人连接可使用 API Key，也可登录 ChatGPT 使用 Codex 额度。"))
+    expect(screen.getByText("组织模型自动同步；个人 API 连接保存在本机并可挂载多个模型。"))
       .toBeInTheDocument();
   });
 

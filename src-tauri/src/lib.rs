@@ -12,7 +12,6 @@ mod app_updater;
 mod attachment_preview;
 mod automations;
 mod bridge;
-mod codex_app_server;
 mod commands;
 mod connector_cli;
 mod connectors_catalog;
@@ -262,7 +261,6 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
-        .manage(codex_app_server::CodexAppServer::default())
         .manage(Permissions::new())
         .manage(Questions::new())
         .manage(PlanApprovals::new())
@@ -292,12 +290,6 @@ pub fn run() {
             commands::agent_set_session_archived,
             commands::agent_set_session_expert,
             commands::agent_clear_session_expert,
-            // Codex App Server (ChatGPT OAuth + plan-backed Codex runtime)
-            codex_app_server::codex_account_status,
-            codex_app_server::codex_login_start,
-            codex_app_server::codex_login_cancel,
-            codex_app_server::codex_connect,
-            codex_app_server::codex_logout,
             // signed desktop application updates (private organization CA)
             app_updater::app_update_check,
             app_updater::app_update_install,
