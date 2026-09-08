@@ -15,6 +15,11 @@ const mocks = vi.hoisted(() => ({
   providersSaveModel: vi.fn(),
   providersTestConnection: vi.fn(),
   providersTestModelConnection: vi.fn(),
+  codexAccountStatus: vi.fn(),
+  codexConnect: vi.fn(),
+  codexLoginCancel: vi.fn(),
+  codexLoginStart: vi.fn(),
+  codexLogout: vi.fn(),
   orgSession: vi.fn(),
   orgSyncModelConfig: vi.fn(),
   listenOrgModelsChanged: vi.fn(),
@@ -46,6 +51,13 @@ describe("ModelConnectionsPanel", () => {
     mocks.providersList.mockResolvedValue({ providers: [], models: [] });
     mocks.agentsDefaultsGet.mockResolvedValue(defaults);
     mocks.internalReload.mockResolvedValue(undefined);
+    mocks.codexAccountStatus.mockResolvedValue({
+      available: true,
+      connected: false,
+      loggedIn: false,
+      models: [],
+    });
+    mocks.codexLoginCancel.mockResolvedValue(undefined);
     mocks.orgSession.mockResolvedValue({ loggedIn: false });
     mocks.listenOrgModelsChanged.mockResolvedValue(() => {});
   });
@@ -149,6 +161,47 @@ describe("ModelConnectionsPanel", () => {
       );
     });
     expect(mocks.internalReload).toHaveBeenCalledWith("models");
+  });
+
+  it("在添加个人连接的服务类型中完成 ChatGPT 登录并自动同步模型", async () => {
+    mocks.codexAccountStatus
+      .mockResolvedValueOnce({ available: true, connected: false, loggedIn: false, models: [] })
+      .mockResolvedValueOnce({ available: true, connected: false, loggedIn: false, models: [] })
+      .mockResolvedValue({
+        available: true,
+        connected: false,
+        loggedIn: true,
+        email: "user@example.com",
+        planType: "plus",
+        models: [],
+      });
+    mocks.codexLoginStart.mockResolvedValue({
+      loginId: "login-1",
+      authUrl: "https://auth.openai.com/example",
+    });
+    mocks.codexConnect.mockResolvedValue({
+      providerId: "codex-chatgpt",
+      modelIds: ["codex/gpt-5.3-codex"],
+    });
+
+    render(<ModelConnectionsPanel />);
+    await screen.findByText("还没有可用模型");
+    fireEvent.click(screen.getAllByRole("button", { name: "添加个人连接" })[0]);
+
+    const dialog = screen.getByRole("dialog", { name: "添加个人连接" });
+    fireEvent.change(within(dialog).getByLabelText("服务类型"), {
+      target: { value: "codex_chatgpt" },
+    });
+
+    expect(within(dialog).getByText("使用 ChatGPT 账号连接")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("API Key")).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Base URL")).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "使用 ChatGPT 登录" }));
+
+    await waitFor(() => expect(mocks.codexLoginStart).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.codexConnect).toHaveBeenCalledWith("ChatGPT"), { timeout: 2_500 });
+    expect(mocks.codexLoginCancel).not.toHaveBeenCalled();
+    expect(await screen.findByText("连接已添加，已配置 1 个模型。")).toBeInTheDocument();
   });
 
   it("连接编辑器具有初始焦点、Tab 圈定、Escape 与触发器恢复", async () => {
