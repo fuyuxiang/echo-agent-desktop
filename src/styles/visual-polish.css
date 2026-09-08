@@ -31,9 +31,11 @@
 /* Model connections: source-aware organization + personal configuration. */
 .model-connections {
   display: flex;
+  height: 100%;
   min-height: 0;
   flex-direction: column;
   gap: 14px;
+  overflow: hidden;
 }
 
 .model-connections__header {
@@ -125,8 +127,9 @@
 }
 
 .model-connections__workspace {
+  flex: 1 1 0;
   display: grid;
-  min-height: 420px;
+  min-height: 0;
   grid-template-columns: 210px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--echo-border-default);
@@ -135,9 +138,14 @@
 }
 
 .model-connections__source-list {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 11px;
   border-right: 1px solid var(--echo-border-default);
   background: var(--echo-bg-secondary, var(--echo-bg-tertiary));
+  scrollbar-gutter: stable;
 }
 
 .model-connections__source-group + .model-connections__source-group {
@@ -214,7 +222,11 @@
 
 .model-connections__detail {
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 20px;
+  scrollbar-gutter: stable;
 }
 
 .model-connections__detail-header {
@@ -695,7 +707,14 @@
 }
 
 @media (max-width: 760px) {
+  .model-connections {
+    height: auto;
+    overflow-y: auto;
+  }
+
   .model-connections__workspace {
+    flex: 0 0 auto;
+    min-height: 420px;
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -703,8 +722,17 @@
     display: flex;
     gap: 10px;
     overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior: contain;
     border-right: 0;
     border-bottom: 1px solid var(--echo-border-default);
+    scrollbar-gutter: auto;
+  }
+
+  .model-connections__detail {
+    overflow-y: visible;
+    overscroll-behavior: auto;
+    scrollbar-gutter: auto;
   }
 
   .model-connections__source-group {
