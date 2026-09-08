@@ -79,7 +79,11 @@ import { friendlyError } from "./lib/error-format";
 import { applySessionScopedFailure } from "./lib/session-scoped-failure";
 import { isGlobalShortcutBlocked } from "./lib/keyboard-scope";
 import { hydrateKnowledgeSources } from "./lib/kb-source-storage";
-import { permissionModeFromEvent, usePermissionModeStore } from "./stores/permission-mode-store";
+import {
+  permissionModeFromEvent,
+  permissionModeStatusFromEvent,
+  usePermissionModeStore,
+} from "./stores/permission-mode-store";
 import { buildProjectPrompt } from "./lib/project-context";
 import { migrateCatalogRootStorage } from "./lib/catalog-root-storage";
 import { parseRememberArguments, type SlashCommandInvocation } from "./lib/slash-commands";
@@ -485,6 +489,11 @@ function Shell() {
             }
           },
           onPermissionMode: (payload) => {
+            const status = permissionModeStatusFromEvent(payload);
+            if (status) {
+              usePermissionModeStore.getState().setStatus(status);
+              return;
+            }
             const mode = permissionModeFromEvent(payload);
             if (mode) usePermissionModeStore.getState().setMode(mode);
           },

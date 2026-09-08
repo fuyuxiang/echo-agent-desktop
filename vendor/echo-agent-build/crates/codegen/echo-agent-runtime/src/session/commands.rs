@@ -434,6 +434,13 @@ pub enum SessionCommand {
     SetAutoMode {
         enabled: bool,
     },
+    /// Atomically apply a mutually-exclusive permission mode and report the
+    /// state actually accepted by feature gates and managed policy.
+    SetPermissionMode {
+        yolo_mode: bool,
+        auto_mode: bool,
+        respond_to: oneshot::Sender<(bool, bool)>,
+    },
     ResetPermissionState,
     Rewind {
         request: RewindRequest,

@@ -828,7 +828,6 @@ pub fn complete_run_for_session(
         }
         automation_identity
     };
-    full_access_sessions().lock().unwrap().remove(session_id);
     automation_identity.map(|(id, recorded_name, record_id, cwd)| {
         let _guard = store_access().lock().unwrap();
         let current = match read_store() {
@@ -865,6 +864,55 @@ pub fn complete_run_for_session(
 /// without changing the user's global permission mode.
 pub fn is_full_access_session(session_id: &str) -> bool {
     full_access_sessions().lock().unwrap().contains(session_id)
+}
+
+pub(crate) fn full_access_session_ids() -> Vec<String> {
+    full_access_sessions()
+        .lock()
+        .unwrap()
+        .iter()
+        .cloned()
+        .collect()
+}
+
+async fn release_full_access_session(
+    app: &AppHandle,
+    tx: &echo_agent_acp::AcpAgentTx,
+    session_id: &str,
+) {
+    let _guard = crate::permission_config::permission_transition_lock()
+        .lock()
+        .await;
+    if !is_full_access_session(session_id) {
+        return;
+    }
+    let target_mode = crate::permission_config::permission_mode_for_session();
+    let mut reset = Ok(());
+    for _ in 0..2 {
+        reset = crate::permission_config::sync_runtime_session_permission_mode(
+            tx,
+            session_id,
+            &target_mode,
+        )
+        .await;
+        if reset.is_ok() {
+            break;
+        }
+    }
+    if let Err(error) = reset {
+        tracing::warn!(%error, %session_id, "failed to restore automation session permission mode");
+        let reason = format!(
+            "自动化会话权限恢复失败（{error}）；为避免残留全权限会话，Agent 已安全停止，请重新启动"
+        );
+        let state = app.state::<AppState>();
+        if state.mark_runtime_dead_if_current(tx, &reason) {
+            let _ = app.emit(
+                "agent://agent-died",
+                serde_json::json!({ "reason": reason }),
+            );
+        }
+    }
+    full_access_sessions().lock().unwrap().remove(session_id);
 }
 
 pub fn clear_runtime_sessions() {
@@ -1236,6 +1284,9 @@ fn validate_automation_at(a: &Automation, now: DateTime<Local>) -> Result<(), St
     }
     if !matches!(a.permission_mode.as_str(), "default" | "fullAccess") {
         return Err("自动化权限模式无效".into());
+    }
+    if a.permission_mode == "fullAccess" {
+        crate::permission_config::ensure_always_approve_available()?;
     }
     if !matches!(a.schedule_type.as_str(), "recurring" | "once") {
         return Err("自动化调度类型无效".into());
@@ -1730,12 +1781,12 @@ async fn execute_automation_run(
                     RunUpdate::Success(&session_id),
                 );
             }
-            full_access_sessions().lock().unwrap().remove(&session_id);
+            release_full_access_session(&app, &tx, &session_id).await;
         }
         Ok(Err(error)) => {
             match record_session_id(&record_id) {
                 Ok(Some(session_id)) => {
-                    full_access_sessions().lock().unwrap().remove(&session_id);
+                    release_full_access_session(&app, &tx, &session_id).await;
                     app.state::<AppState>()
                         .forget_session_workspace(&session_id);
                 }
@@ -1767,7 +1818,7 @@ async fn execute_automation_run(
             match record_session_id(&record_id) {
                 Ok(Some(session_id)) => {
                     let _ = crate::agent_runtime::cancel(&tx, &session_id).await;
-                    full_access_sessions().lock().unwrap().remove(&session_id);
+                    release_full_access_session(&app, &tx, &session_id).await;
                     app.state::<AppState>()
                         .forget_session_workspace(&session_id);
                 }
@@ -1814,16 +1865,54 @@ async fn run_automation_once(
     }
     let context = resolve_execution_context(tx, automation, cwd).await?;
     let reasoning_effort = automation.model_is_thinking.then_some("high");
+    let full_access = automation.permission_mode == "fullAccess";
+    let permission_guard = if full_access {
+        crate::permission_config::ensure_always_approve_available()?;
+        Some(
+            crate::permission_config::permission_transition_lock()
+                .lock()
+                .await,
+        )
+    } else {
+        None
+    };
     let session_id = crate::agent_runtime::new_session_with_options(
         tx,
         cwd,
         automation.model_id.as_deref(),
         reasoning_effort,
+        full_access.then_some("always-approve"),
     )
     .await
     .map_err(|e| e.to_string())?;
     state.record_session_workspace(&session_id, cwd);
     if let Err(error) = record_run_session(record_id, &session_id) {
+        if full_access {
+            let target_mode = crate::permission_config::permission_mode_for_session();
+            let mut reset = Ok(());
+            for _ in 0..2 {
+                reset = crate::permission_config::sync_runtime_session_permission_mode(
+                    tx,
+                    &session_id,
+                    &target_mode,
+                )
+                .await;
+                if reset.is_ok() {
+                    break;
+                }
+            }
+            if let Err(reset_error) = reset {
+                let reason = format!(
+                    "自动化会话创建失败后无法恢复权限（{reset_error}）；为避免残留全权限会话，Agent 已安全停止，请重新启动"
+                );
+                if state.mark_runtime_dead_if_current(tx, &reason) {
+                    let _ = app.emit(
+                        "agent://agent-died",
+                        serde_json::json!({ "reason": reason }),
+                    );
+                }
+            }
+        }
         let _ = crate::agent_runtime::cancel(tx, &session_id).await;
         state.forget_session_workspace(&session_id);
         return Err(error);
@@ -1835,12 +1924,13 @@ async fn run_automation_once(
         cwd,
         RunUpdate::SessionCreated(&session_id),
     );
-    if automation.permission_mode == "fullAccess" {
+    if full_access {
         full_access_sessions()
             .lock()
             .unwrap()
             .insert(session_id.clone());
     }
+    drop(permission_guard);
     if let (Some(expert_id), Some(expert_name)) = (&automation.expert_id, &automation.expert_name) {
         let _ = crate::meta::set_expert(
             &session_id,
@@ -1856,7 +1946,6 @@ async fn run_automation_once(
     crate::agent_runtime::prompt(tx, &session_id, &prompt)
         .await
         .map_err(|e| {
-            full_access_sessions().lock().unwrap().remove(&session_id);
             state.forget_session_workspace(&session_id);
             e.to_string()
         })?;
