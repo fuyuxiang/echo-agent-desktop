@@ -132,10 +132,12 @@ export function TitleBar({
   onPlaceholder,
   onShowAbout,
   onCheckForUpdates,
+  hideMenus = false,
 }: {
   onPlaceholder: (label: string) => void;
   onShowAbout?: () => void;
   onCheckForUpdates?: () => void;
+  hideMenus?: boolean;
 }) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -229,83 +231,85 @@ export function TitleBar({
 
   return (
     <div className="titlebar" data-tauri-drag-region>
-      <div className="titlebar__menus" data-tauri-drag-region>
-        <button
-          className="titlebar__brand"
-          onClick={() => onShowAbout?.()}
-          aria-label="EchoAgent"
-          title="关于 EchoAgent"
-        >
-          <img
-            src={logoMarkUrl}
-            alt=""
-            width={18}
-            height={18}
-            className="titlebar__brand-logo"
-          />
-          <span>EchoAgent</span>
-        </button>
-        {Object.keys(MENUS).map((name) => (
-          <div key={name} className="titlebar__menu-wrap">
-            <button
-              ref={(element) => {
-                menuButtonRefs.current[name] = element;
-              }}
-              type="button"
-              className={"titlebar__menu" + (openMenu === name ? " titlebar__menu--open" : "")}
-              onClick={() => setOpenMenu(openMenu === name ? null : name)}
-              aria-label={name}
-              aria-haspopup="menu"
-              aria-expanded={openMenu === name}
-              aria-controls={openMenu === name ? `titlebar-menu-${name}` : undefined}
-              onKeyDown={(event) => {
-                if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
-                  event.preventDefault();
-                  openMenuFromKeyboard(name, event.key === "ArrowUp" ? "last" : "first");
-                } else if (event.key === "Escape" && openMenu === name) {
-                  event.preventDefault();
-                  setOpenMenu(null);
-                }
-              }}
-            >
-              {name}
-            </button>
-            {openMenu === name && (
-              <>
-                <div
-                  className="titlebar__backdrop"
-                  onClick={() => closeMenuAndRestoreFocus(name)}
-                />
-                <div
-                  ref={(element) => {
-                    dropdownRefs.current[name] = element;
-                  }}
-                  id={`titlebar-menu-${name}`}
-                  className="titlebar__dropdown"
-                  role="menu"
-                  aria-label={`${name}菜单`}
-                  onKeyDown={(event) => handleDropdownKeyDown(
-                    event,
-                    () => closeMenuAndRestoreFocus(name),
-                  )}
-                >
-                  {MENUS[name].map((item) => (
-                    <button
-                      key={item.label}
-                      type="button"
-                      role="menuitem"
-                      className="titlebar__dropdown-item"
-                      onClick={() => runItem(item)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        ))}
-      </div>
+      {!hideMenus && (
+        <div className="titlebar__menus" data-tauri-drag-region>
+          <button
+            className="titlebar__brand"
+            onClick={() => onShowAbout?.()}
+            aria-label="EchoAgent"
+            title="关于 EchoAgent"
+          >
+            <img
+              src={logoMarkUrl}
+              alt=""
+              width={18}
+              height={18}
+              className="titlebar__brand-logo"
+            />
+            <span>EchoAgent</span>
+          </button>
+          {Object.keys(MENUS).map((name) => (
+            <div key={name} className="titlebar__menu-wrap">
+              <button
+                ref={(element) => {
+                  menuButtonRefs.current[name] = element;
+                }}
+                type="button"
+                className={"titlebar__menu" + (openMenu === name ? " titlebar__menu--open" : "")}
+                onClick={() => setOpenMenu(openMenu === name ? null : name)}
+                aria-label={name}
+                aria-haspopup="menu"
+                aria-expanded={openMenu === name}
+                aria-controls={openMenu === name ? `titlebar-menu-${name}` : undefined}
+                onKeyDown={(event) => {
+                  if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
+                    event.preventDefault();
+                    openMenuFromKeyboard(name, event.key === "ArrowUp" ? "last" : "first");
+                  } else if (event.key === "Escape" && openMenu === name) {
+                    event.preventDefault();
+                    setOpenMenu(null);
+                  }
+                }}
+              >
+                {name}
+              </button>
+              {openMenu === name && (
+                <>
+                  <div
+                    className="titlebar__backdrop"
+                    onClick={() => closeMenuAndRestoreFocus(name)}
+                  />
+                  <div
+                    ref={(element) => {
+                      dropdownRefs.current[name] = element;
+                    }}
+                    id={`titlebar-menu-${name}`}
+                    className="titlebar__dropdown"
+                    role="menu"
+                    aria-label={`${name}菜单`}
+                    onKeyDown={(event) => handleDropdownKeyDown(
+                      event,
+                      () => closeMenuAndRestoreFocus(name),
+                    )}
+                  >
+                    {MENUS[name].map((item) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        role="menuitem"
+                        className="titlebar__dropdown-item"
+                        onClick={() => runItem(item)}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* 弹性空间 - 用于拖拽 */}
       <div className="titlebar__spacer" data-tauri-drag-region />
