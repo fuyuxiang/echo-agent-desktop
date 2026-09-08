@@ -8369,6 +8369,14 @@ button.diff__path {
   font-weight: 600;
   color: var(--echo-text-strong);
 }
+.permission-picker__status {
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--echo-warning-soft, rgba(245, 158, 11, 0.12));
+  color: var(--echo-warning, #b45309);
+  font-size: 11px;
+  line-height: 1.45;
+}
 /* 模式选择弹层(窄) */
 .permission-picker__popover--modes {
   width: 260px;

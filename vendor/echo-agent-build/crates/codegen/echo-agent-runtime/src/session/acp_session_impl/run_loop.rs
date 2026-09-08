@@ -1084,6 +1084,37 @@ pub(super) async fn run_session(
                                 session.permissions.set_llm_side_query_wired(false);
                             }
                         }
+                        SessionCommand::SetPermissionMode {
+                            yolo_mode,
+                            auto_mode,
+                            respond_to,
+                        } => {
+                            let auto_mode = auto_mode
+                                && !yolo_mode
+                                && crate::util::config::auto_permission_mode_enabled_from_disk();
+                            let was_yolo = session.permissions.is_yolo_mode();
+                            // Clear both modes first so observers never see two
+                            // mutually-exclusive bypass mechanisms enabled.
+                            session.permissions.set_auto_mode(false);
+                            session.permissions.set_llm_side_query_wired(false);
+                            session.permissions.set_yolo_mode(false);
+                            if yolo_mode {
+                                session.permissions.set_yolo_mode(true);
+                            } else if auto_mode {
+                                session.permissions.set_auto_mode(true);
+                                session.wire_permission_auto_llm_classifier().await;
+                            } else {
+                                session.permissions.set_llm_side_query_wired(false);
+                            }
+                            let actual_yolo = session.permissions.is_yolo_mode();
+                            let actual_auto = session.permissions.is_auto_mode();
+                            if let Some(enabled) = yolo_toggle_report(was_yolo, actual_yolo) {
+                                session.emit_event(
+                                    crate::session::events::Event::YoloToggled { enabled },
+                                );
+                            }
+                            let _ = respond_to.send((actual_yolo, actual_auto));
+                        }
                         SessionCommand::ResetPermissionState => {
                             session.permissions.reset_state();
                             tracing::info!(

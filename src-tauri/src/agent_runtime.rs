@@ -403,7 +403,7 @@ fn desktop_client_capabilities() -> acp::ClientCapabilities {
 /// session exists; organization-memory tools remain session-scoped and are
 /// hot-attached only while a verified shared organization scope is available.
 pub async fn new_session(tx: &AcpAgentTx, cwd: &Path, model_id: Option<&str>) -> Result<String> {
-    new_session_with_options(tx, cwd, model_id, None).await
+    new_session_with_options(tx, cwd, model_id, None, None).await
 }
 
 /// Create a session with optional per-session reasoning effort. Automations
@@ -414,6 +414,7 @@ pub async fn new_session_with_options(
     cwd: &Path,
     model_id: Option<&str>,
     reasoning_effort: Option<&str>,
+    permission_mode_override: Option<&str>,
 ) -> Result<String> {
     tracing::info!(cwd = %cwd.display(), model_id, "echoagent: new_session send");
     let mut servers = Vec::new();
@@ -431,7 +432,9 @@ pub async fn new_session_with_options(
         ));
     }
     let mut req = acp::NewSessionRequest::new(cwd.to_path_buf()).mcp_servers(servers);
-    let permission_mode = crate::permission_config::read_permission_mode();
+    let permission_mode = permission_mode_override
+        .map(str::to_string)
+        .unwrap_or_else(crate::permission_config::permission_mode_for_session);
     let mut meta = permission_mode_meta(&permission_mode);
     if let Some(mid) = model_id.filter(|s| !s.is_empty()) {
         meta.insert("modelId".into(), serde_json::Value::String(mid.into()));
@@ -461,7 +464,7 @@ fn authenticated_team_mcp_server(url: String, authorization: String) -> acp::Mcp
 
 /// Resume an existing session by replaying its persisted history.
 pub async fn load_session(tx: &AcpAgentTx, session_id: &str, cwd: &Path) -> Result<()> {
-    let permission_mode = crate::permission_config::read_permission_mode();
+    let permission_mode = crate::permission_config::permission_mode_for_session();
     let req = acp::LoadSessionRequest::new(
         acp::SessionId::new(session_id.to_string()),
         cwd.to_path_buf(),

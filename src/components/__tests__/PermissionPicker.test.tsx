@@ -38,7 +38,7 @@ describe("PermissionPicker", () => {
       autoModeAvailable: true,
     });
     mocks.permissionModeSet.mockReset();
-    usePermissionModeStore.setState({ mode: "ask" });
+    usePermissionModeStore.setState({ mode: "ask", status: null });
     usePermissionStore.setState({ queues: {}, closedRequestIds: [] });
     useSessionsStore.setState({ independent: [], pendingSessionPatches: {} });
   });
@@ -54,6 +54,12 @@ describe("PermissionPicker", () => {
     });
     mocks.permissionModeSet.mockResolvedValue({
       permissionMode: "always-approve",
+      configuredPermissionMode: "always-approve",
+      autoModeAvailable: true,
+      alwaysApproveAvailable: true,
+      locked: false,
+      runtimeSyncState: "synced",
+      runtimeAppliedMode: "always-approve",
       agentRunning: true,
       runtimeSynced: true,
       resolvedPending: 1,
@@ -85,6 +91,13 @@ describe("PermissionPicker", () => {
   it("运行时同步未确认时给出非阻断提示", async () => {
     mocks.permissionModeSet.mockResolvedValue({
       permissionMode: "always-approve",
+      configuredPermissionMode: "always-approve",
+      autoModeAvailable: true,
+      alwaysApproveAvailable: true,
+      locked: false,
+      runtimeSyncState: "failed",
+      runtimeAppliedMode: "ask",
+      runtimeSyncError: "运行中的 Agent 权限同步超时",
       agentRunning: true,
       runtimeSynced: false,
       resolvedPending: 0,
@@ -100,7 +113,7 @@ describe("PermissionPicker", () => {
 
     await waitFor(() =>
       expect(onToast).toHaveBeenCalledWith(
-        "已切换为“始终允许”，运行时未确认同步，桌面端仍会自动处理审批",
+        "已保存为“始终允许”，运行中会话仍为“审批模式”，请点击“始终允许”重试",
       ),
     );
   });
@@ -129,6 +142,12 @@ describe("PermissionPicker", () => {
   it("切换自动模式时说明已等待的授权仍需确认", async () => {
     mocks.permissionModeSet.mockResolvedValue({
       permissionMode: "auto",
+      configuredPermissionMode: "auto",
+      autoModeAvailable: true,
+      alwaysApproveAvailable: true,
+      locked: false,
+      runtimeSyncState: "synced",
+      runtimeAppliedMode: "auto",
       agentRunning: true,
       runtimeSynced: true,
       resolvedPending: 0,
@@ -154,6 +173,13 @@ describe("PermissionPicker", () => {
   it("自动模式未获得运行时确认时不误报当前会话已生效", async () => {
     mocks.permissionModeSet.mockResolvedValue({
       permissionMode: "auto",
+      configuredPermissionMode: "auto",
+      autoModeAvailable: true,
+      alwaysApproveAvailable: true,
+      locked: false,
+      runtimeSyncState: "failed",
+      runtimeAppliedMode: "ask",
+      runtimeSyncError: "运行中的 Agent 权限同步超时",
       agentRunning: true,
       runtimeSynced: false,
       resolvedPending: 0,
@@ -170,7 +196,7 @@ describe("PermissionPicker", () => {
 
     await waitFor(() =>
       expect(onToast).toHaveBeenCalledWith(
-        "已保存为“自动模式”，运行中会话未确认切换，新建或重新打开会话后生效",
+        "已保存为“自动模式”，运行中会话仍为“审批模式”，请点击“自动模式”重试",
       ),
     );
   });
@@ -193,6 +219,66 @@ describe("PermissionPicker", () => {
       expect(onToast).toHaveBeenCalledWith(
         "权限模式切换失败：自动模式已被本机配置、环境设置或组织策略关闭",
       );
+    });
+  });
+
+  it("始终允许被安全策略关闭时显示原因并禁止选择", async () => {
+    mocks.permissionModeGet.mockResolvedValue({
+      permissionMode: "ask",
+      configuredPermissionMode: "always-approve",
+      autoModeAvailable: true,
+      alwaysApproveAvailable: false,
+      alwaysApproveUnavailableReason: "始终允许已被组织策略禁用",
+    });
+    const user = userEvent.setup();
+    render(<PermissionPicker />);
+
+    await waitFor(() => expect(usePermissionModeStore.getState().mode).toBe("ask"));
+    await user.click(screen.getByRole("button", { name: /审批模式/ }));
+
+    const alwaysOption = await screen.findByRole("menuitemradio", {
+      name: /始终允许（不可用）/,
+    });
+    expect(alwaysOption).toBeDisabled();
+    expect(screen.getByText("始终允许已被组织策略禁用")).toBeInTheDocument();
+    expect(mocks.permissionModeSet).not.toHaveBeenCalled();
+  });
+
+  it("相同目标模式上次同步失败时允许再次点击重试", async () => {
+    mocks.permissionModeGet.mockResolvedValue({
+      permissionMode: "auto",
+      configuredPermissionMode: "auto",
+      autoModeAvailable: true,
+      alwaysApproveAvailable: true,
+      locked: false,
+      runtimeSyncState: "failed",
+      runtimeAppliedMode: "ask",
+      runtimeSyncError: "运行中的 Agent 权限同步超时",
+    });
+    mocks.permissionModeSet.mockResolvedValue({
+      permissionMode: "auto",
+      configuredPermissionMode: "auto",
+      autoModeAvailable: true,
+      alwaysApproveAvailable: true,
+      locked: false,
+      runtimeSyncState: "synced",
+      runtimeAppliedMode: "auto",
+      agentRunning: true,
+      runtimeSynced: true,
+      resolvedPending: 0,
+      remainingPending: 0,
+      resolvedPermissions: [],
+    });
+    const user = userEvent.setup();
+    render(<PermissionPicker />);
+
+    await waitFor(() => expect(usePermissionModeStore.getState().mode).toBe("ask"));
+    await user.click(screen.getByRole("button", { name: /审批模式/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^自动模式/ }));
+
+    await waitFor(() => {
+      expect(mocks.permissionModeSet).toHaveBeenCalledWith("auto");
+      expect(usePermissionModeStore.getState().mode).toBe("auto");
     });
   });
 

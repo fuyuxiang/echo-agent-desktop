@@ -294,6 +294,7 @@ impl AppState {
         crate::agent_admin::clear_runtime_capabilities();
         self.init_outcome.lock().unwrap().take();
         self.mark_runtime_models_failed(error);
+        crate::permission_config::mark_runtime_permission_mode_offline(None);
         true
     }
 }
@@ -536,6 +537,9 @@ fn clear_runtime_after_init_failure(state: &AppState, generation: u64) {
     crate::agent_admin::clear_runtime_capabilities();
     state.init_outcome.lock().unwrap().take();
     state.mark_runtime_models_initializing();
+    crate::permission_config::mark_runtime_permission_mode_offline(Some(
+        "Agent Runtime 初始化失败".into(),
+    ));
 }
 
 /// Reload model configuration and acknowledge it only when the file stayed
@@ -709,6 +713,9 @@ pub async fn agent_init(
     // once. Serializing the whole lifecycle keeps one initialization's spawn,
     // handshake and cleanup from interleaving with another's.
     let _init_guard = state.init_lock.lock().await;
+    let _permission_transition_guard = crate::permission_config::permission_transition_lock()
+        .lock()
+        .await;
 
     // Renderer reloads recreate the React tree but not the native process. Keep
     // the healthy Runtime and its in-flight automations alive; the dispatcher
@@ -733,8 +740,11 @@ pub async fn agent_init(
         }
     };
     if let Some((outcome, existing_cwd)) = reusable {
-        tracing::info!("agent init reused the active Runtime");
-        return Ok(init_result(&existing_cwd, auth_status(&state), &outcome));
+        if crate::permission_config::runtime_permission_mode_is_current() {
+            tracing::info!("agent init reused the active Runtime");
+            return Ok(init_result(&existing_cwd, auth_status(&state), &outcome));
+        }
+        tracing::warn!("active Runtime permission mode is stale; restarting instead of reusing");
     }
 
     let generation = state.begin_init_generation();
@@ -742,12 +752,15 @@ pub async fn agent_init(
     // A renderer/runtime restart invalidates every outstanding reverse
     // request. Resolve all of them conservatively before installing the new
     // runtime so an old request can never approve work in a new generation.
-    tokio::join!(
+    let (closed_permissions, _, _, _) = tokio::join!(
         permissions.cancel_all(),
         questions.cancel_all(),
         plan_approvals.cancel_all(),
         folder_trusts.cancel_all(),
     );
+    for notice in closed_permissions {
+        crate::bridge::emit_permission_closed(&app, notice);
+    }
 
     // A retry/re-init must retire the prior runtime and its scheduler before a
     // replacement is spawned; dropping the handle alone does not cancel it.
@@ -779,6 +792,7 @@ pub async fn agent_init(
     // (config load, first-run bundled extract under ~/.echo-agent). Running it
     // inline would stall Tauri's tokio workers and freeze the UI.
     let spawn_cwd = cwd.clone();
+    let launch_permission_mode = crate::permission_config::read_permission_mode();
     let agent_runtime::AgentHandle {
         tx,
         rx,
@@ -789,6 +803,7 @@ pub async fn agent_init(
         .await
         .map_err(|e| format!("spawn EchoAgent task: {e}"))?
         .map_err(|e| format!("spawn EchoAgent runtime: {e}"))?;
+    crate::permission_config::mark_runtime_permission_mode_starting(&launch_permission_mode);
 
     // Stash tx for later commands; move rx into the dispatcher.
     *state.tx.lock().unwrap() = Some(tx.clone());
@@ -887,6 +902,7 @@ pub async fn agent_init(
         }
     };
     tracing::info!("agent initialize OK");
+    crate::permission_config::mark_runtime_permission_mode_synced(&launch_permission_mode);
 
     // Close the startup race with settings/org writes: the Runtime explicitly
     // reloads the latest disk model config before it is advertised as ready.
@@ -1171,6 +1187,7 @@ pub async fn agent_cancel(state: State<'_, AppState>, session_id: String) -> Res
 /// can call `agent_init` again to restart. Used after `agent://agent-died`.
 #[tauri::command]
 pub async fn agent_shutdown(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     permissions: State<'_, Permissions>,
     questions: State<'_, Questions>,
@@ -1187,12 +1204,15 @@ pub async fn agent_shutdown(
     state.clear_session_workspaces();
     crate::agent_admin::clear_runtime_capabilities();
     state.init_outcome.lock().unwrap().take();
-    tokio::join!(
+    let (closed_permissions, _, _, _) = tokio::join!(
         permissions.cancel_all(),
         questions.cancel_all(),
         plan_approvals.cancel_all(),
         folder_trusts.cancel_all(),
     );
+    for notice in closed_permissions {
+        crate::bridge::emit_permission_closed(&app, notice);
+    }
     state.mark_runtime_models_initializing();
     tracing::info!("EchoAgent agent shut down (ready for re-init)");
     Ok(())
@@ -1217,11 +1237,13 @@ pub(crate) async fn stop_agent_runtime(state: &AppState) {
             tracing::warn!("agent graceful shutdown timed out after 12 seconds");
         }
     }
+    crate::permission_config::mark_runtime_permission_mode_offline(None);
 }
 
 /// Resolve a pending permission request from the frontend.
 #[tauri::command]
 pub async fn agent_resolve_permission(
+    app: tauri::AppHandle,
     permissions: State<'_, Permissions>,
     request_id: String,
     option_id: Option<String>,
@@ -1232,7 +1254,11 @@ pub async fn agent_resolve_permission(
         (false, Some(id)) => PermissionOutcome::Selected(id),
         (false, None) => PermissionOutcome::Cancelled,
     };
-    Ok(permissions.resolve(&request_id, outcome).await)
+    let notice = permissions.resolve(&request_id, outcome).await;
+    if let Some(notice) = notice.as_ref().cloned() {
+        crate::bridge::emit_permission_closed(&app, notice);
+    }
+    Ok(notice.is_some())
 }
 
 /// Return all currently parked agent→client interactions. The frontend calls

@@ -17,7 +17,10 @@ import {
 } from "@/foundation/components/Icon/icons";
 import { permissionModeGet, permissionModeSet } from "@/lib/agent-client";
 import type { PermissionMode } from "@/lib/agent-client";
-import { usePermissionModeStore } from "@/stores/permission-mode-store";
+import {
+  permissionModeStatusFromEvent,
+  usePermissionModeStore,
+} from "@/stores/permission-mode-store";
 import { usePermissionStore } from "@/stores/permission-store";
 import { useSessionsStore } from "@/stores/sessions-store";
 
@@ -49,10 +52,10 @@ export function PermissionPicker({
 }) {
   const [open, setOpen] = useState(false);
   const mode = usePermissionModeStore((state) => state.mode);
+  const status = usePermissionModeStore((state) => state.status);
   const setMode = usePermissionModeStore((state) => state.setMode);
+  const setStatus = usePermissionModeStore((state) => state.setStatus);
   const [busy, setBusy] = useState(false);
-  const [autoModeAvailable, setAutoModeAvailable] = useState<boolean | null>(null);
-  const [autoModeUnavailableReason, setAutoModeUnavailableReason] = useState<string | null>(null);
   const popRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -67,18 +70,16 @@ export function PermissionPicker({
           }
           return;
         }
-        setAutoModeAvailable(status.autoModeAvailable);
-        setAutoModeUnavailableReason(status.autoModeUnavailableReason ?? null);
         // Do not let a slow initial read overwrite a newer mode delivered by
         // the user's selection or the backend permission-mode event.
         if (usePermissionModeStore.getState().mode === modeAtStart) {
-          setMode(status.permissionMode);
+          setStatus(status);
         }
       })
       .catch(() => {
         /* 读不到就用默认 ask */
       });
-  }, [setMode]);
+  }, [setMode, setStatus]);
 
   // Close on outside click.
   useEffect(() => {
@@ -94,14 +95,28 @@ export function PermissionPicker({
 
   const select = useCallback(
     async (next: PermissionMode) => {
-      if (next === mode) {
+      const desiredMode = status?.configuredPermissionMode ?? mode;
+      if (
+        next === desiredMode &&
+        status?.runtimeSyncState !== "failed" &&
+        status?.runtimeSyncState !== "syncing"
+      ) {
         setOpen(false);
         return;
       }
       setBusy(true);
       try {
         const result = await permissionModeSet(next);
-        const appliedMode = result?.permissionMode ?? next;
+        const normalizedStatus = permissionModeStatusFromEvent(result);
+        if (normalizedStatus) setStatus(normalizedStatus);
+        else setMode(result?.permissionMode ?? next);
+        const appliedMode =
+          normalizedStatus &&
+          (normalizedStatus.runtimeSyncState === "failed" ||
+            normalizedStatus.runtimeSyncState === "syncing") &&
+          normalizedStatus.runtimeAppliedMode
+            ? normalizedStatus.runtimeAppliedMode
+            : (result?.permissionMode ?? next);
         // The backend also emits permission-closed events. Applying the command
         // result is an idempotent fallback for the tiny listener-registration
         // window during application startup.
@@ -123,31 +138,27 @@ export function PermissionPicker({
             });
           }
         });
-        setMode(appliedMode);
         setOpen(false);
-        const applied = MODES.find((item) => item.id === appliedMode) ?? MODES[0];
+        const selected = MODES.find((item) => item.id === next) ?? MODES[0];
+        const actual = MODES.find((item) => item.id === appliedMode) ?? MODES[0];
         const resolved = result?.resolvedPending ?? 0;
         const remaining = result?.remainingPending ?? 0;
-        const runtimeUnconfirmed = Boolean(
-          result?.agentRunning && !result.runtimeSynced && appliedMode !== "always-approve",
-        );
+        const runtimeUnconfirmed = Boolean(result?.agentRunning && !result.runtimeSynced);
         const parts = [
           runtimeUnconfirmed
-            ? `已保存为“${applied.label}”`
-            : `已切换为“${applied.label}”`,
+            ? `已保存为“${selected.label}”`
+            : `已切换为“${selected.label}”`,
         ];
         if (resolved > 0) parts.push(`并自动处理 ${resolved} 个等待授权操作`);
-        if (appliedMode === "auto" && remaining > 0) {
+        if (next === "auto" && remaining > 0) {
           parts.push(`将应用于后续操作，当前 ${remaining} 个等待授权操作仍需你确认`);
-        } else if (appliedMode === "always-approve" && remaining > 0) {
+        } else if (next === "always-approve" && remaining > 0) {
           parts.push(`另有 ${remaining} 个操作没有可自动允许选项，仍需你确认`);
         }
         if (result?.agentRunning && !result.runtimeSynced) {
-          parts.push(
-            appliedMode === "always-approve"
-              ? "运行时未确认同步，桌面端仍会自动处理审批"
-              : "运行中会话未确认切换，新建或重新打开会话后生效",
-          );
+          parts.push(`运行中会话仍为“${actual.label}”，请点击“${selected.label}”重试`);
+        } else if (!result?.agentRunning && result?.runtimeSyncError) {
+          parts.push("旧权限状态已安全停止，重启 Agent 后生效");
         }
         onToast?.(parts.join("，"));
       } catch (e) {
@@ -156,15 +167,28 @@ export function PermissionPicker({
         setBusy(false);
       }
     },
-    [mode, onToast, setMode],
+    [mode, onToast, setMode, setStatus, status],
   );
 
   const current = MODES.find((m) => m.id === mode) ?? MODES[0];
-  const autoUnavailable = autoModeAvailable === false;
-  const modeDescription = (item: (typeof MODES)[number]) =>
-    item.id === "auto" && autoUnavailable
-      ? (autoModeUnavailableReason ?? "自动模式当前不可用")
-      : item.desc;
+  const autoUnavailable = status?.autoModeAvailable === false;
+  const alwaysUnavailable = status?.alwaysApproveAvailable === false;
+  const syncWarning = status?.runtimeSyncError ??
+    (status?.runtimeSyncState === "syncing" ? "权限模式正在同步" : null);
+  const modeDescription = (item: (typeof MODES)[number]) => {
+    if (item.id === "auto" && autoUnavailable) {
+      return status?.autoModeUnavailableReason ?? "自动模式当前不可用";
+    }
+    if (item.id === "always-approve" && alwaysUnavailable) {
+      return status?.alwaysApproveUnavailableReason ?? "始终允许当前不可用";
+    }
+    return item.desc;
+  };
+  const modeDisabled = (item: (typeof MODES)[number]) =>
+    busy ||
+    (item.id === "auto" && autoUnavailable) ||
+    (item.id === "always-approve" && alwaysUnavailable) ||
+    Boolean(status?.locked);
 
   return (
     <div className="permission-picker" ref={popRef}>
@@ -172,7 +196,7 @@ export function PermissionPicker({
         type="button"
         className="echo-composer-meta__btn"
         onClick={() => setOpen((v) => !v)}
-        title={`权限模式 · ${modeDescription(current)}`}
+        title={`权限模式 · ${modeDescription(current)}${syncWarning ? ` · ${syncWarning}` : ""}`}
       >
         <ShieldCheckIcon size="sm" />
         {triggerLabel ?? current.label}
@@ -181,6 +205,12 @@ export function PermissionPicker({
       {open && (
         <div className="permission-picker__popover permission-picker__popover--modes" role="menu">
           <div className="permission-picker__header">权限模式</div>
+          {(syncWarning || status?.lockedReason) && (
+            <div className="permission-picker__status" role="status">
+              {syncWarning ?? status?.lockedReason}
+              {status?.runtimeSyncState === "failed" ? "，选择目标模式可重试" : ""}
+            </div>
+          )}
           <div className="permission-picker__modes">
             {MODES.map((m) => (
               <button
@@ -191,12 +221,14 @@ export function PermissionPicker({
                   (m.id === mode ? " permission-picker__mode--active" : "")
                 }
                 onClick={() => select(m.id)}
-                disabled={busy || (m.id === "auto" && autoUnavailable)}
+                disabled={modeDisabled(m)}
                 role="menuitemradio"
                 aria-checked={m.id === mode}
               >
                 <span className="permission-picker__mode-label">
-                  {m.label}{m.id === "auto" && autoUnavailable ? "（不可用）" : ""}
+                  {m.label}
+                  {((m.id === "auto" && autoUnavailable) ||
+                    (m.id === "always-approve" && alwaysUnavailable)) ? "（不可用）" : ""}
                 </span>
                 <span className="permission-picker__mode-desc">{modeDescription(m)}</span>
                 {m.id === mode && <CheckIcon size="sm" className="permission-picker__mode-check" />}

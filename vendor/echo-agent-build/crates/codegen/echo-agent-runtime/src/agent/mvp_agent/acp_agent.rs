@@ -2588,6 +2588,123 @@ impl acp::Agent for MvpAgent {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let yolo_signal = params.get("yolo_mode").and_then(|v| v.as_bool());
+            let auto_signal = params.get("auto_mode").and_then(|v| v.as_bool());
+            let desired = match permission_mode {
+                "always-approve" => Some((true, false)),
+                "auto" => Some((false, true)),
+                "ask" | "default" => Some((false, false)),
+                _ => yolo_signal.or(auto_signal).map(|_| {
+                    let yolo = yolo_signal.unwrap_or(false);
+                    (yolo, !yolo && auto_signal.unwrap_or(false))
+                }),
+            };
+            if let Some((yolo_mode, auto_mode)) = desired {
+                let parse_session_filter = |key: &str| -> Result<
+                    Option<std::collections::HashSet<String>>,
+                    acp::Error,
+                > {
+                    let Some(value) = params.get(key) else {
+                        return Ok(None);
+                    };
+                    let values = value.as_array().ok_or_else(|| {
+                        acp::Error::invalid_params().data(format!("{key} must be an array"))
+                    })?;
+                    if values.len() > 1_024 {
+                        return Err(acp::Error::invalid_params()
+                            .data(format!("{key} contains too many session ids")));
+                    }
+                    let mut parsed = std::collections::HashSet::with_capacity(values.len());
+                    for value in values {
+                        let id = value.as_str().filter(|id| {
+                            !id.is_empty()
+                                && id.len() <= 512
+                                && !id.chars().any(char::is_control)
+                        });
+                        let Some(id) = id else {
+                            return Err(acp::Error::invalid_params()
+                                .data(format!("{key} contains an invalid session id")));
+                        };
+                        parsed.insert(id.to_string());
+                    }
+                    Ok(Some(parsed))
+                };
+                let included = parse_session_filter("sessionIds")?;
+                let excluded = parse_session_filter("excludeSessionIds")?.unwrap_or_default();
+                let mut pending = Vec::new();
+                let mut failed_sends = Vec::new();
+                self.session_registry.for_each_resident(|id, handle| {
+                    let id_text = id.0.as_ref();
+                    let matches_sender = sender_id.is_none()
+                        || handle.origin_client.as_ref().map(|c| c.product.as_str())
+                            == sender_id;
+                    let matches_include = included
+                        .as_ref()
+                        .is_none_or(|ids| ids.contains(id_text));
+                    if !matches_sender || !matches_include || excluded.contains(id_text) {
+                        return;
+                    }
+                    let (respond_to, response) = tokio::sync::oneshot::channel();
+                    if handle
+                        .cmd_tx
+                        .send(crate::session::SessionCommand::SetPermissionMode {
+                            yolo_mode,
+                            auto_mode,
+                            respond_to,
+                        })
+                        .is_ok()
+                    {
+                        pending.push((id.clone(), response));
+                    } else {
+                        failed_sends.push(id.0.to_string());
+                    }
+                });
+                if !failed_sends.is_empty() {
+                    return Err(acp::Error::internal_error().data(format!(
+                        "permission mode command channel closed for sessions: {}",
+                        failed_sends.join(", ")
+                    )));
+                }
+                let applied = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    async {
+                        let mut applied = Vec::with_capacity(pending.len());
+                        for (id, response) in pending {
+                            let actual = response.await.map_err(|_| ())?;
+                            applied.push((id, actual));
+                        }
+                        Ok::<_, ()>(applied)
+                    },
+                )
+                .await
+                .map_err(|_| {
+                    acp::Error::internal_error()
+                        .data("permission mode session acknowledgement timed out")
+                })?
+                .map_err(|_| {
+                    acp::Error::internal_error()
+                        .data("permission mode session acknowledgement closed")
+                })?;
+                for (id, (actual_yolo, actual_auto)) in &applied {
+                    self.session_registry.with_resident_mut(id, |handle| {
+                        handle.yolo_mode = *actual_yolo;
+                    });
+                    if (*actual_yolo, *actual_auto) != (yolo_mode, auto_mode) {
+                        return Err(acp::Error::invalid_params().data(format!(
+                            "permission mode was rejected for session {}",
+                            id.0
+                        )));
+                    }
+                }
+                tracing::info!(
+                    yolo_mode,
+                    auto_mode,
+                    sender = ?sender_id,
+                    target_sessions = applied.len(),
+                    total_sessions = self.resident_count(),
+                    "Applied permission mode to matching sessions"
+                );
+                return Ok(());
+            }
             if let Some(yolo_mode) = yolo_signal {
                 let mut updated_sessions = 0;
                 self.session_registry

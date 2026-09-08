@@ -20,6 +20,7 @@
 //! restart to take effect (EchoAgent loads config once at agent init).
 
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, State};
 use toml::map::Map;
 use toml::Value;
@@ -319,6 +320,7 @@ pub fn agents_defaults_save(
 /// `util/config/permissions.rs::parse_permission_mode_canonical`).
 pub const PERMISSION_MODES: [&str; 3] = ["ask", "auto", "always-approve"];
 const AUTO_MODE_UNAVAILABLE_REASON: &str = "自动模式已被本机配置、环境设置或组织策略关闭";
+const ALWAYS_APPROVE_UNAVAILABLE_REASON: &str = "始终允许已被本机要求或组织策略禁用";
 
 /// Runtime flags corresponding to the canonical desktop permission mode.
 /// Keeping this mapping in one place prevents launch defaults and per-session
@@ -331,30 +333,55 @@ fn auto_mode_available() -> bool {
     echo_agent_runtime::util::config::auto_permission_mode_enabled_from_disk()
 }
 
-fn effective_permission_mode(configured_mode: &str, auto_available: bool) -> String {
-    if configured_mode == "auto" && !auto_available {
-        "ask".into()
-    } else {
-        configured_mode.into()
+fn always_approve_policy_block() -> Option<String> {
+    let effective = echo_agent_runtime::util::config::effective_yolo_for_launch(
+        false,
+        Some("always-approve"),
+        None,
+    );
+    (!effective.yolo).then(|| ALWAYS_APPROVE_UNAVAILABLE_REASON.to_string())
+}
+
+pub(crate) fn ensure_always_approve_available() -> Result<(), String> {
+    match always_approve_policy_block() {
+        Some(reason) => Err(reason),
+        None => Ok(()),
     }
 }
 
-fn validate_permission_mode_selection(mode: &str, auto_available: bool) -> Result<(), String> {
+fn effective_permission_mode(
+    configured_mode: &str,
+    auto_available: bool,
+    always_approve_available: bool,
+) -> String {
+    match configured_mode {
+        "auto" if !auto_available => "ask".into(),
+        "always-approve" if !always_approve_available => "ask".into(),
+        _ => configured_mode.into(),
+    }
+}
+
+fn validate_permission_mode_selection(
+    mode: &str,
+    auto_available: bool,
+    always_approve_available: bool,
+) -> Result<(), String> {
     if !PERMISSION_MODES.contains(&mode) {
         return Err(format!("unknown permission mode: {mode}"));
     }
     if mode == "auto" && !auto_available {
         return Err(AUTO_MODE_UNAVAILABLE_REASON.into());
     }
+    if mode == "always-approve" && !always_approve_available {
+        return Err(always_approve_policy_block()
+            .unwrap_or_else(|| ALWAYS_APPROVE_UNAVAILABLE_REASON.into()));
+    }
     Ok(())
 }
 
-/// Read the configured permission mode. Mirrors EchoAgent's precedence:
+/// Read the user's persisted permission preference. Mirrors EchoAgent's precedence:
 /// `permission_mode` > legacy `approval_mode` > legacy `yolo`; default "ask".
-pub fn read_permission_mode() -> String {
-    if let Some(mode) = crate::policy::locked_permission_mode() {
-        return mode;
-    }
+fn read_user_configured_permission_mode() -> String {
     let config = crate::providers::read_config();
     let Some(ui) = config.get("ui").and_then(Value::as_table) else {
         return "ask".into();
@@ -378,6 +405,39 @@ pub fn read_permission_mode() -> String {
         return "always-approve".into();
     }
     "ask".into()
+}
+
+/// Read the mode that can actually be honored by the current machine and
+/// organization policy. Every launch/session entry point uses this resolver,
+/// so the desktop bridge can never bypass a Runtime hard pin.
+pub fn read_permission_mode() -> String {
+    let configured = crate::policy::locked_permission_mode()
+        .unwrap_or_else(read_user_configured_permission_mode);
+    effective_permission_mode(
+        &configured,
+        auto_mode_available(),
+        always_approve_policy_block().is_none(),
+    )
+}
+
+/// Mode inherited by a newly created or reloaded session. While a live
+/// transition is unconfirmed, keep new sessions on the last acknowledged
+/// mode instead of creating a mixed-permission Runtime.
+pub(crate) fn permission_mode_for_session() -> String {
+    let desired_mode = read_permission_mode();
+    let runtime = runtime_permission_sync().lock().unwrap();
+    if runtime.state != PermissionRuntimeSyncState::Offline {
+        if let Some(mode) = runtime.applied_mode.as_ref() {
+            if matches!(
+                runtime.state,
+                PermissionRuntimeSyncState::Syncing | PermissionRuntimeSyncState::Failed
+            ) || mode != &desired_mode
+            {
+                return mode.clone();
+            }
+        }
+    }
+    desired_mode
 }
 
 /// Persist the mode to `[ui] permission_mode`. Other `[ui]` keys are preserved;
@@ -410,33 +470,162 @@ pub struct PermissionModeStatus {
     pub auto_mode_available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_mode_unavailable_reason: Option<String>,
+    pub always_approve_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub always_approve_unavailable_reason: Option<String>,
+    pub locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locked_reason: Option<String>,
+    pub runtime_sync_state: PermissionRuntimeSyncState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_applied_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_sync_error: Option<String>,
 }
 
-fn permission_mode_status() -> PermissionModeStatus {
-    let configured_permission_mode = read_permission_mode();
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionRuntimeSyncState {
+    #[default]
+    Offline,
+    Syncing,
+    Synced,
+    Failed,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RuntimePermissionSync {
+    state: PermissionRuntimeSyncState,
+    applied_mode: Option<String>,
+    error: Option<String>,
+}
+
+fn runtime_permission_sync() -> &'static Mutex<RuntimePermissionSync> {
+    static STATE: OnceLock<Mutex<RuntimePermissionSync>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(RuntimePermissionSync::default()))
+}
+
+pub(crate) fn permission_transition_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+pub(crate) fn mark_runtime_permission_mode_syncing() {
+    let mut runtime = runtime_permission_sync().lock().unwrap();
+    runtime.state = PermissionRuntimeSyncState::Syncing;
+    runtime.error = None;
+}
+
+pub(crate) fn mark_runtime_permission_mode_starting(mode: &str) {
+    *runtime_permission_sync().lock().unwrap() = RuntimePermissionSync {
+        state: PermissionRuntimeSyncState::Syncing,
+        applied_mode: Some(mode.into()),
+        error: None,
+    };
+}
+
+pub(crate) fn mark_runtime_permission_mode_synced(mode: &str) {
+    *runtime_permission_sync().lock().unwrap() = RuntimePermissionSync {
+        state: PermissionRuntimeSyncState::Synced,
+        applied_mode: Some(mode.into()),
+        error: None,
+    };
+}
+
+pub(crate) fn mark_runtime_permission_mode_failed(error: impl Into<String>) {
+    let mut runtime = runtime_permission_sync().lock().unwrap();
+    runtime.state = PermissionRuntimeSyncState::Failed;
+    runtime.error = Some(error.into());
+}
+
+pub(crate) fn mark_runtime_permission_mode_offline(error: Option<String>) {
+    *runtime_permission_sync().lock().unwrap() = RuntimePermissionSync {
+        state: PermissionRuntimeSyncState::Offline,
+        applied_mode: None,
+        error,
+    };
+}
+
+/// Bridge-side automatic approval is allowed only after the running Runtime
+/// positively acknowledged the same effective mode. Disk config alone is not
+/// evidence that already-resident sessions changed.
+pub(crate) fn is_runtime_permission_mode_active(mode: &str) -> bool {
+    // Re-evaluate the current disk/organization policy on every bridge
+    // decision. If policy became stricter after Runtime startup, stale
+    // in-memory acknowledgement must never authorize automatic approval.
+    if read_permission_mode() != mode {
+        return false;
+    }
+    let runtime = runtime_permission_sync().lock().unwrap();
+    runtime.state == PermissionRuntimeSyncState::Synced
+        && runtime.applied_mode.as_deref() == Some(mode)
+}
+
+pub(crate) fn runtime_permission_mode_is_current() -> bool {
+    let desired_mode = read_permission_mode();
+    let runtime = runtime_permission_sync().lock().unwrap();
+    runtime.state == PermissionRuntimeSyncState::Synced
+        && runtime.applied_mode.as_deref() == Some(desired_mode.as_str())
+}
+
+pub(crate) fn permission_mode_status(agent_running: bool) -> PermissionModeStatus {
+    let policy_mode = crate::policy::locked_permission_mode();
+    let configured_permission_mode = policy_mode
+        .clone()
+        .unwrap_or_else(read_user_configured_permission_mode);
     let auto_mode_available = auto_mode_available();
+    let always_approve_unavailable_reason = always_approve_policy_block();
+    let always_approve_available = always_approve_unavailable_reason.is_none();
+    let permission_mode = effective_permission_mode(
+        &configured_permission_mode,
+        auto_mode_available,
+        always_approve_available,
+    );
+    let mut runtime = runtime_permission_sync().lock().unwrap().clone();
+    if agent_running
+        && runtime.state == PermissionRuntimeSyncState::Synced
+        && runtime
+            .applied_mode
+            .as_deref()
+            .is_some_and(|applied| applied != permission_mode)
+    {
+        runtime.state = PermissionRuntimeSyncState::Failed;
+        runtime.error = Some(
+            "权限配置或组织策略已变化，但运行中的 Agent 尚未应用；请重试同步或重启 Agent".into(),
+        );
+    }
     PermissionModeStatus {
-        permission_mode: effective_permission_mode(
-            &configured_permission_mode,
-            auto_mode_available,
-        ),
+        permission_mode,
         configured_permission_mode,
         auto_mode_available,
         auto_mode_unavailable_reason: (!auto_mode_available)
             .then(|| AUTO_MODE_UNAVAILABLE_REASON.to_string()),
+        always_approve_available,
+        always_approve_unavailable_reason,
+        locked: policy_mode.is_some(),
+        locked_reason: policy_mode.map(|mode| format!("权限模式已被组织策略锁定为 {mode}")),
+        runtime_sync_state: if agent_running {
+            runtime.state
+        } else {
+            PermissionRuntimeSyncState::Offline
+        },
+        runtime_applied_mode: agent_running.then_some(runtime.applied_mode).flatten(),
+        runtime_sync_error: runtime.error,
     }
 }
 
 /// Current effective permission mode and Auto-mode availability.
 #[tauri::command]
-pub fn permission_mode_get(_state: State<'_, AppState>) -> PermissionModeStatus {
-    permission_mode_status()
+pub fn permission_mode_get(state: State<'_, AppState>) -> PermissionModeStatus {
+    let agent_running = state.tx.lock().unwrap().is_some();
+    permission_mode_status(agent_running)
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionModeSetResult {
-    pub permission_mode: String,
+    #[serde(flatten)]
+    pub status: PermissionModeStatus,
     pub agent_running: bool,
     pub runtime_synced: bool,
     pub resolved_pending: usize,
@@ -447,9 +636,11 @@ pub struct PermissionModeSetResult {
 async fn notify_runtime_permission_mode(
     tx: &echo_agent_acp::AcpAgentTx,
     mode: &str,
+    session_ids: Option<&[String]>,
+    exclude_session_ids: Option<&[String]>,
 ) -> Result<(), String> {
     let (yolo_mode, auto_mode) = permission_mode_flags(mode);
-    let params = crate::ext::raw_params(&serde_json::json!({
+    let mut params = serde_json::json!({
         "permission_mode": mode,
         "yolo_mode": yolo_mode,
         "auto_mode": auto_mode,
@@ -457,7 +648,14 @@ async fn notify_runtime_permission_mode(
         // an explicit sender the Runtime intentionally updates every resident
         // session, including sessions belonging to another leader client.
         "clientIdentifier": crate::agent_runtime::DESKTOP_CLIENT_IDENTIFIER,
-    }));
+    });
+    if let Some(session_ids) = session_ids {
+        params["sessionIds"] = serde_json::json!(session_ids);
+    }
+    if let Some(exclude_session_ids) = exclude_session_ids {
+        params["excludeSessionIds"] = serde_json::json!(exclude_session_ids);
+    }
+    let params = crate::ext::raw_params(&params);
     let notification =
         agent_client_protocol::ExtNotification::new("echo.agent/yolo_mode_changed", params);
     let response = tokio::time::timeout(
@@ -467,6 +665,22 @@ async fn notify_runtime_permission_mode(
     .await
     .map_err(|_| "运行中的 Agent 权限同步超时".to_string())?;
     response.map_err(|error| format!("运行中的 Agent 权限同步失败：{error:?}"))
+}
+
+pub(crate) async fn sync_runtime_session_permission_mode(
+    tx: &echo_agent_acp::AcpAgentTx,
+    session_id: &str,
+    mode: &str,
+) -> Result<(), String> {
+    notify_runtime_permission_mode(tx, mode, Some(&[session_id.to_string()]), None).await
+}
+
+fn permission_mode_rank(mode: &str) -> u8 {
+    match mode {
+        "always-approve" => 2,
+        "auto" => 1,
+        _ => 0,
+    }
 }
 
 /// Set the permission mode: persist to config.toml (for future launches) AND
@@ -480,18 +694,111 @@ pub async fn permission_mode_set(
     permissions: State<'_, Permissions>,
     mode: String,
 ) -> Result<PermissionModeSetResult, String> {
-    validate_permission_mode_selection(&mode, auto_mode_available())?;
+    let _transition_guard = permission_transition_lock().lock().await;
+    let auto_available = auto_mode_available();
+    let always_available = always_approve_policy_block().is_none();
+    validate_permission_mode_selection(&mode, auto_available, always_available)?;
     if let Some(locked) = crate::policy::locked_permission_mode() {
         if locked != mode {
             return Err(format!("权限模式已被策略锁定为 {locked}"));
         }
+    } else {
+        write_permission_mode(&mode)?;
     }
-    write_permission_mode(&mode)?;
 
-    // A permission request can already be parked by the time the picker is
-    // changed. Resolve those requests immediately; otherwise the UI would say
-    // "always allow" while an old approval card remained blocked on a oneshot.
-    let closed = if mode == "always-approve" {
+    let tx = state.tx.lock().unwrap().clone();
+    let mut agent_running = tx.is_some();
+    let previous_runtime = runtime_permission_sync().lock().unwrap().clone();
+    let mut runtime_synced = false;
+    if let Some(tx) = tx.as_ref() {
+        mark_runtime_permission_mode_syncing();
+        let excluded_sessions = crate::automations::full_access_session_ids();
+        let mut sync_error = None;
+        for attempt in 1..=2 {
+            match notify_runtime_permission_mode(tx, &mode, None, Some(&excluded_sessions)).await {
+                Ok(()) => {
+                    runtime_synced = true;
+                    break;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, attempt, permission_mode = %mode, "permission mode runtime sync was not acknowledged");
+                    sync_error = Some(error);
+                }
+            }
+        }
+        if runtime_synced {
+            mark_runtime_permission_mode_synced(&mode);
+        } else {
+            let mut error =
+                sync_error.unwrap_or_else(|| "运行中的 Agent 未确认权限同步".to_string());
+            let lowering = previous_runtime
+                .applied_mode
+                .as_deref()
+                .is_some_and(|applied| permission_mode_rank(&mode) < permission_mode_rank(applied));
+            let mut rollback_synced = false;
+            if !lowering {
+                if let Some(previous_mode) = previous_runtime.applied_mode.as_deref() {
+                    let mut rollback_error = None;
+                    for attempt in 1..=2 {
+                        match notify_runtime_permission_mode(
+                            tx,
+                            previous_mode,
+                            None,
+                            Some(&excluded_sessions),
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                rollback_synced = true;
+                                break;
+                            }
+                            Err(rollback_failure) => {
+                                tracing::warn!(
+                                    %rollback_failure,
+                                    attempt,
+                                    permission_mode = %previous_mode,
+                                    "permission mode rollback was not acknowledged"
+                                );
+                                rollback_error = Some(rollback_failure);
+                            }
+                        }
+                    }
+                    if rollback_synced {
+                        if previous_mode == mode {
+                            runtime_synced = true;
+                            mark_runtime_permission_mode_synced(&mode);
+                        } else {
+                            error = format!(
+                                "{error}；运行中会话已安全恢复为上次确认的权限模式 {previous_mode}"
+                            );
+                            mark_runtime_permission_mode_failed(error.clone());
+                        }
+                    } else if let Some(rollback_error) = rollback_error {
+                        error = format!("{error}；回滚也未获确认：{rollback_error}");
+                    }
+                }
+            }
+            if !runtime_synced && !rollback_synced {
+                mark_runtime_permission_mode_failed(error.clone());
+            }
+            if !runtime_synced
+                && !rollback_synced
+                && state.mark_runtime_dead_if_current(tx, error.clone())
+            {
+                agent_running = false;
+                mark_runtime_permission_mode_offline(Some(format!(
+                    "{error}；为避免继续使用未确认的权限状态，Agent 已安全停止"
+                )));
+                let _ = app.emit("agent://agent-died", serde_json::json!({ "reason": error }));
+            }
+        }
+    } else {
+        mark_runtime_permission_mode_offline(None);
+    }
+
+    // Resolve already parked requests only after the Runtime acknowledged the
+    // transition; persisted configuration alone is not an applied mode.
+    let closed = if mode == "always-approve" && runtime_synced {
         permissions.approve_all_pending().await
     } else {
         Vec::new()
@@ -500,23 +807,8 @@ pub async fn permission_mode_set(
         emit_permission_closed(&app, notice);
     }
     let remaining_pending = permissions.list(None).await.len();
-
-    let tx = state.tx.lock().unwrap().clone();
-    let agent_running = tx.is_some();
-    let runtime_synced = match tx.as_ref() {
-        Some(tx) => match notify_runtime_permission_mode(tx, &mode).await {
-            Ok(()) => true,
-            Err(error) => {
-                // The persisted mode and bridge-side auto-approval remain
-                // authoritative even if a dying Runtime cannot acknowledge.
-                tracing::warn!(%error, permission_mode = %mode, "permission mode runtime sync was not acknowledged");
-                false
-            }
-        },
-        None => false,
-    };
     let result = PermissionModeSetResult {
-        permission_mode: mode,
+        status: permission_mode_status(agent_running),
         agent_running,
         runtime_synced,
         resolved_pending: closed.len(),
@@ -660,31 +952,32 @@ mod tests {
 
     #[test]
     fn unavailable_auto_mode_falls_back_to_effective_ask_without_losing_configuration() {
-        assert_eq!(effective_permission_mode("auto", false), "ask");
-        assert_eq!(effective_permission_mode("auto", true), "auto");
+        assert_eq!(effective_permission_mode("auto", false, true), "ask");
+        assert_eq!(effective_permission_mode("auto", true, true), "auto");
         assert_eq!(
-            effective_permission_mode("always-approve", false),
-            "always-approve"
+            effective_permission_mode("always-approve", true, false),
+            "ask"
         );
     }
 
     #[test]
     fn unavailable_auto_mode_is_rejected_before_persistence() {
         assert_eq!(
-            validate_permission_mode_selection("auto", false),
+            validate_permission_mode_selection("auto", false, true),
             Err(AUTO_MODE_UNAVAILABLE_REASON.into())
         );
-        assert!(validate_permission_mode_selection("auto", true).is_ok());
-        assert!(validate_permission_mode_selection("ask", false).is_ok());
-        assert!(validate_permission_mode_selection("always-approve", false).is_ok());
-        assert!(validate_permission_mode_selection("invalid", true).is_err());
+        assert!(validate_permission_mode_selection("auto", true, true).is_ok());
+        assert!(validate_permission_mode_selection("ask", false, false).is_ok());
+        assert!(validate_permission_mode_selection("always-approve", true, true).is_ok());
+        assert!(validate_permission_mode_selection("always-approve", true, false).is_err());
+        assert!(validate_permission_mode_selection("invalid", true, true).is_err());
     }
 
     #[tokio::test]
     async fn runtime_notification_carries_mode_flags_and_waits_for_ack() {
         let (client, mut agent) = echo_agent_acp::acp_channels();
         let task = tokio::spawn(async move {
-            notify_runtime_permission_mode(&client.tx, "always-approve").await
+            notify_runtime_permission_mode(&client.tx, "always-approve", None, None).await
         });
         let message = agent.rx.recv().await.expect("permission mode notification");
         let echo_agent_acp::AcpAgentMessage::ExtNotification(arguments) = message else {
@@ -702,6 +995,33 @@ mod tests {
         assert_eq!(
             params["clientIdentifier"],
             crate::agent_runtime::DESKTOP_CLIENT_IDENTIFIER
+        );
+        arguments.response_tx.send(Ok(())).expect("send ack");
+        assert!(task.await.expect("notification task").is_ok());
+    }
+
+    #[tokio::test]
+    async fn runtime_notification_preserves_session_scope() {
+        let (client, mut agent) = echo_agent_acp::acp_channels();
+        let task = tokio::spawn(async move {
+            let included = vec!["automation-session".to_string()];
+            let excluded = vec!["interactive-session".to_string()];
+            notify_runtime_permission_mode(&client.tx, "ask", Some(&included), Some(&excluded))
+                .await
+        });
+        let message = agent.rx.recv().await.expect("permission mode notification");
+        let echo_agent_acp::AcpAgentMessage::ExtNotification(arguments) = message else {
+            panic!("expected ExtNotification")
+        };
+        let params: serde_json::Value =
+            serde_json::from_str(arguments.request.params.get()).expect("notification params");
+        assert_eq!(
+            params["sessionIds"],
+            serde_json::json!(["automation-session"])
+        );
+        assert_eq!(
+            params["excludeSessionIds"],
+            serde_json::json!(["interactive-session"])
         );
         arguments.response_tx.send(Ok(())).expect("send ack");
         assert!(task.await.expect("notification task").is_ok());

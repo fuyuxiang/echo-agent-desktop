@@ -927,10 +927,16 @@ export interface PermissionModeStatus {
   configuredPermissionMode: PermissionMode;
   autoModeAvailable: boolean;
   autoModeUnavailableReason?: string;
+  alwaysApproveAvailable: boolean;
+  alwaysApproveUnavailableReason?: string;
+  locked: boolean;
+  lockedReason?: string;
+  runtimeSyncState: "offline" | "syncing" | "synced" | "failed";
+  runtimeAppliedMode?: PermissionMode;
+  runtimeSyncError?: string;
 }
 
-export interface PermissionModeSetResult {
-  permissionMode: PermissionMode;
+export interface PermissionModeSetResult extends PermissionModeStatus {
   agentRunning: boolean;
   runtimeSynced: boolean;
   resolvedPending: number;
