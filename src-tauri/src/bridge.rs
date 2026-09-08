@@ -332,25 +332,38 @@ impl Permissions {
     }
 
     /// Called by the `agent_resolve_permission` command.
-    pub async fn resolve(&self, id: &str, outcome: PermissionOutcome) -> bool {
+    pub async fn resolve(
+        &self,
+        id: &str,
+        outcome: PermissionOutcome,
+    ) -> Option<PermissionClosedFrontend> {
         let mut pending = self.inner.lock().await;
         if let Some(index) = pending
             .iter()
             .position(|entry| entry.request.request_id == id)
         {
             let entry = pending.remove(index);
+            let notice = PermissionClosedFrontend {
+                request_id: entry.request.request_id.clone(),
+                session_id: entry.request.session_id.clone(),
+            };
             let _ = entry.response_tx.send(outcome);
-            true
+            Some(notice)
         } else {
-            false
+            None
         }
     }
 
-    pub async fn discard(&self, id: &str) {
-        self.inner
-            .lock()
-            .await
-            .retain(|entry| entry.request.request_id != id);
+    pub async fn discard(&self, id: &str) -> Option<PermissionClosedFrontend> {
+        let mut pending = self.inner.lock().await;
+        let index = pending
+            .iter()
+            .position(|entry| entry.request.request_id == id)?;
+        let entry = pending.remove(index);
+        Some(PermissionClosedFrontend {
+            request_id: entry.request.request_id,
+            session_id: entry.request.session_id,
+        })
     }
 
     pub async fn list(&self, session_id: Option<&str>) -> Vec<PermissionFrontend> {
@@ -394,11 +407,17 @@ impl Permissions {
         approved
     }
 
-    pub async fn cancel_all(&self) {
+    pub async fn cancel_all(&self) -> Vec<PermissionClosedFrontend> {
         let entries = std::mem::take(&mut *self.inner.lock().await);
+        let mut closed = Vec::with_capacity(entries.len());
         for entry in entries {
+            closed.push(PermissionClosedFrontend {
+                request_id: entry.request.request_id.clone(),
+                session_id: entry.request.session_id.clone(),
+            });
             let _ = entry.response_tx.send(PermissionOutcome::Cancelled);
         }
+        closed
     }
 }
 
@@ -1133,10 +1152,12 @@ async fn handle_client_message(
 
             // Auto-approve: if the permission mode is "always-approve", pick the
             // first allow/allow_always option and respond immediately.
-            let perm_mode = crate::permission_config::read_permission_mode();
-            if perm_mode == "always-approve"
-                || crate::automations::is_full_access_session(&session_id_str)
-            {
+            let global_always =
+                crate::permission_config::is_runtime_permission_mode_active("always-approve");
+            let automation_full_access =
+                crate::automations::is_full_access_session(&session_id_str)
+                    && crate::permission_config::ensure_always_approve_available().is_ok();
+            if global_always || automation_full_access {
                 let auto_option = preferred_allow_option(&options);
                 if let Some(opt) = auto_option {
                     let response = acp::RequestPermissionResponse::new(
@@ -1210,24 +1231,33 @@ async fn handle_client_message(
             // Once registered, a second read makes either this handler or the
             // switch command responsible for resolving the request.
             let late_auto_option =
-                if crate::permission_config::read_permission_mode() == "always-approve" {
+                if crate::permission_config::is_runtime_permission_mode_active("always-approve")
+                    || (crate::automations::is_full_access_session(&session_id_str)
+                        && crate::permission_config::ensure_always_approve_available().is_ok())
+                {
                     preferred_allow_option(&frontend.options).map(|option| option.option_id.clone())
                 } else {
                     None
                 };
             if let Some(option_id) = late_auto_option {
-                let _ = perms
+                if let Some(notice) = perms
                     .resolve(&request_id, PermissionOutcome::Selected(option_id))
-                    .await;
+                    .await
+                {
+                    emit_permission_closed(&app, notice);
+                }
                 tracing::info!(session_id = %session_id_str, "auto-approved permission after mode-switch race");
             } else {
                 let emitted = app.emit("agent://permission", frontend).is_ok();
                 if !emitted {
                     // If the native event channel itself is unavailable, never
                     // leave the agent parked on an interaction nobody can see.
-                    let _ = perms
+                    if let Some(notice) = perms
                         .resolve(&request_id, PermissionOutcome::Cancelled)
-                        .await;
+                        .await
+                    {
+                        emit_permission_closed(&app, notice);
+                    }
                 }
                 let notify_app = app.clone();
                 let notify_session = session_id_str.clone();
@@ -1249,12 +1279,15 @@ async fn handle_client_message(
             // Do not block the dispatcher: another session's updates and
             // interactions must continue flowing while this decision is open.
             let registry = perms.clone();
+            let close_app = app.clone();
             let mut response_tx = b.response_tx;
             tokio::spawn(async move {
                 let outcome = tokio::select! {
                     result = rx => result.unwrap_or(PermissionOutcome::Cancelled),
                     () = response_tx.closed() => {
-                        registry.discard(&request_id).await;
+                        if let Some(notice) = registry.discard(&request_id).await {
+                            emit_permission_closed(&close_app, notice);
+                        }
                         return;
                     }
                 };
@@ -1437,8 +1470,14 @@ async fn handle_client_message(
                 // Plan mode toggled (either by us or by EchoAgent). Mirror to frontend.
                 let _ = app.emit("agent://plan-mode", &params);
             } else if method == "echo.agent/yolo_mode_changed" {
-                // Permission mode (auto/yolo) changed.
-                let _ = app.emit("agent://permission-mode", &params);
+                // A Runtime notification can describe one automation session
+                // rather than the desktop-wide default. Never project its raw
+                // yolo/auto flags onto the global picker; publish the desktop's
+                // acknowledged aggregate state instead.
+                let _ = app.emit(
+                    "agent://permission-mode",
+                    crate::permission_config::permission_mode_status(true),
+                );
             } else if method == "echo.agent/models/update" {
                 // Model list updated (e.g. after config reload).
                 let _ = app.emit("agent://models-update", &params);
@@ -2150,6 +2189,56 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["deny-only"]
         );
+    }
+
+    #[tokio::test]
+    async fn permission_terminal_paths_return_authoritative_closure_notices() {
+        let registry = Permissions::new();
+        let resolved_rx = registry
+            .register(permission_request(
+                "resolved",
+                vec![permission_option("once", "allow")],
+            ))
+            .await
+            .expect("register resolved request");
+        let resolved = registry
+            .resolve("resolved", PermissionOutcome::Selected("once".into()))
+            .await
+            .expect("resolved closure notice");
+        assert_eq!(resolved.request_id, "resolved");
+        assert!(matches!(
+            resolved_rx.await.expect("resolved outcome"),
+            PermissionOutcome::Selected(option_id) if option_id == "once"
+        ));
+
+        let discarded_rx = registry
+            .register(permission_request(
+                "discarded",
+                vec![permission_option("once", "allow")],
+            ))
+            .await
+            .expect("register discarded request");
+        let discarded = registry
+            .discard("discarded")
+            .await
+            .expect("discard closure notice");
+        assert_eq!(discarded.request_id, "discarded");
+        assert!(discarded_rx.await.is_err());
+
+        let cancelled_rx = registry
+            .register(permission_request(
+                "cancelled",
+                vec![permission_option("once", "allow")],
+            ))
+            .await
+            .expect("register cancelled request");
+        let closed = registry.cancel_all().await;
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].request_id, "cancelled");
+        assert!(matches!(
+            cancelled_rx.await.expect("cancelled outcome"),
+            PermissionOutcome::Cancelled
+        ));
     }
 
     #[test]

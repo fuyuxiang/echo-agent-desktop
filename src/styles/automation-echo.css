@@ -1795,6 +1795,8 @@
   box-sizing: border-box;
 }
 .automation-permission-picker__item:hover { background: var(--atm-surface-hover); }
+.automation-permission-picker__item--disabled { opacity: 0.5; cursor: not-allowed; }
+.automation-permission-picker__item--disabled:hover { background: transparent; }
 .automation-permission-picker__item--divider { border-top: 1px solid var(--atm-border-soft); }
 .automation-permission-picker__check-col {
   display: inline-flex;

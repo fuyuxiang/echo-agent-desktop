@@ -6,6 +6,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::{AppHandle, Emitter, State};
+
+use crate::commands::AppState;
 
 const MAX_POLICY_BYTES: u64 = 1024 * 1024;
 const MAX_POLICY_ARRAY_ITEMS: usize = 512;
@@ -189,8 +192,39 @@ pub fn policy_get() -> PolicySet {
 }
 
 #[tauri::command]
-pub fn policy_save(policy: PolicySet) -> Result<PolicySet, String> {
-    write_policy(normalize_local_policy(policy))
+pub async fn policy_save(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    policy: PolicySet,
+) -> Result<PolicySet, String> {
+    let _transition_guard = crate::permission_config::permission_transition_lock()
+        .lock()
+        .await;
+    let previous_locked_mode = locked_permission_mode();
+    let previous_effective_mode = crate::permission_config::read_permission_mode();
+    let saved = write_policy(normalize_local_policy(policy))?;
+    let current_locked_mode = locked_permission_mode();
+    let current_effective_mode = crate::permission_config::read_permission_mode();
+    if previous_effective_mode != current_effective_mode {
+        let tx = state.tx.lock().unwrap().clone();
+        if let Some(tx) = tx {
+            let reason = "权限策略已变更；为确保新策略立即成为安全边界，Agent 已停止，请重新启动";
+            if state.mark_runtime_dead_if_current(&tx, reason) {
+                let _ = app.emit(
+                    "agent://agent-died",
+                    serde_json::json!({ "reason": reason }),
+                );
+            }
+        }
+    }
+    if previous_locked_mode != current_locked_mode {
+        let agent_running = state.tx.lock().unwrap().is_some();
+        let _ = app.emit(
+            "agent://permission-mode",
+            crate::permission_config::permission_mode_status(agent_running),
+        );
+    }
+    Ok(saved)
 }
 
 fn normalize_local_policy(mut policy: PolicySet) -> PolicySet {
