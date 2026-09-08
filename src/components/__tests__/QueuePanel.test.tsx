@@ -89,15 +89,33 @@ describe("QueuePanel", () => {
     });
   });
 
-  it("流式回复时发送操作改为置顶，不删除消息", () => {
+  it("流式回复时立即发送调用原子 sendNow 并移除已接纳条目", async () => {
     const s = useMessageQueueStore.getState();
     s.enqueue("s1", "a");
     s.enqueue("s1", "b");
     const onSendNow = vi.fn();
     render(<QueuePanel sessionId="s1" streaming onSendNow={onSendNow} />);
-    fireEvent.click(screen.getByRole("button", { name: "设为下一条自动发送" }));
-    expect(onSendNow).not.toHaveBeenCalled();
-    expect(useMessageQueueStore.getState().getQueue("s1").map((item) => item.text)).toEqual(["b", "a"]);
+    const actions = screen.getAllByRole("button", { name: "中断当前回复并立即发送这条" });
+    fireEvent.click(actions[1]);
+    expect(onSendNow).toHaveBeenCalledWith("b", []);
+    await waitFor(() => {
+      expect(useMessageQueueStore.getState().getQueue("s1").map((item) => item.text)).toEqual(["a"]);
+    });
+  });
+
+  it("sendNow 交接中禁用重复立即发送", () => {
+    useMessageQueueStore.getState().enqueue("s1", "a");
+    render(
+      <QueuePanel
+        sessionId="s1"
+        streaming
+        sendNowPending
+        onSendNow={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "中断当前回复并立即发送这条" }),
+    ).toBeDisabled();
   });
 
   it("paused 条目的立即发送按钮禁用", () => {

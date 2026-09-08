@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { invoke } from "@tauri-apps/api/core";
 import {
   agentSend,
+  agentSendNow,
   commandsList,
   memoryClearSessionSummaries,
   memoryDelete,
@@ -35,6 +36,20 @@ describe("agentSend attachment contract", () => {
       text: "<system-reminder>hidden</system-reminder>\n\n请优化",
       attachments: ["/tmp/方案.docx"],
       displayText: "请优化",
+      promptId: null,
+      sendNow: false,
+    });
+  });
+
+  it("立即发送通过同一 ACP prompt 传递 sendNow 和 promptId", async () => {
+    await agentSendNow("session-1", "2", [], "2", "prompt-2");
+    expect(invokeMock).toHaveBeenCalledWith("agent_send", {
+      sessionId: "session-1",
+      text: "2",
+      attachments: [],
+      displayText: "2",
+      promptId: "prompt-2",
+      sendNow: true,
     });
   });
 });

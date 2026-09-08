@@ -10,6 +10,7 @@ function resetStores() {
     transcripts: {},
     messages: [],
     streaming: false,
+    sendNowPending: false,
     streamingMessageId: null,
     usage: {},
     plan: null,
@@ -56,6 +57,7 @@ describe("beginAgentTurn", () => {
       "模型完整提示",
       ["/tmp/数据回流方案.docx"],
       "请优化文档",
+      expect.any(String),
     );
 
     // The unresolved model turn is deliberately left pending until after all

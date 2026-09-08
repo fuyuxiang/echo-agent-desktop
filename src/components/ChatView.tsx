@@ -24,6 +24,7 @@ import { ShareMenu } from "./ShareMenu";
 import { QueuePanel } from "./QueuePanel";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { useMessageQueueStore } from "@/stores/message-queue-store";
+import { selectQuestionForSession, useQuestionStore } from "@/stores/question-store";
 import { buildTimeline } from "@/lib/timeline-utils";
 import { formatAgentError } from "@/lib/error-format";
 import { useSubagentStore } from "@/stores/subagent-store";
@@ -44,6 +45,7 @@ import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
 /** Center chat column: scrollable message list + composer pinned at bottom. */
 export function ChatView({
   onSend,
+  onSendNow,
   onCancel,
   modelId,
   models,
@@ -66,6 +68,8 @@ export function ChatView({
   title,
 }: {
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
+  /** Atomically replace the active turn with this user message. */
+  onSendNow?: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onCancel: () => boolean | void | Promise<boolean | void>;
   modelId?: string;
   models?: ModelOption[];
@@ -97,10 +101,12 @@ export function ChatView({
 }) {
   const messages = useSessionStore((s) => s.messages);
   const streaming = useSessionStore((s) => s.streaming);
+  const sendNowPending = useSessionStore((s) => s.sendNowPending);
   const streamingMessageId = useSessionStore((s) => s.streamingMessageId);
   const error = useSessionStore((s) => s.error);
   const plan = useSessionStore((s) => s.plan);
   const sessionId = useSessionStore((s) => s.sessionId);
+  const awaitingQuestion = Boolean(useQuestionStore(selectQuestionForSession(sessionId)));
   // 会话内查找(对齐 EchoAgent chat-search)。
   const [findOpen, setFindOpen] = useState(false);
   const [findHits, setFindHits] = useState<string[]>([]);
@@ -642,7 +648,8 @@ export function ChatView({
             <QueuePanel
               sessionId={sessionId}
               streaming={streaming}
-              onSendNow={(text, attachments) => onSend(text, attachments)}
+              sendNowPending={sendNowPending}
+              onSendNow={streaming ? onSendNow : onSend}
             />
           )}
           <Composer
@@ -651,6 +658,9 @@ export function ChatView({
             setupHint={setupHint}
             onOpenSettings={onOpenSettings}
             onSend={onSend}
+            onSendNow={onSendNow}
+            sendNowPending={sendNowPending}
+            awaitingQuestion={awaitingQuestion}
             onEnqueue={
               sessionId
                 ? (text, attachments) => {

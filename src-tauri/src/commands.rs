@@ -1134,8 +1134,16 @@ pub async fn agent_send(
     text: String,
     attachments: Option<Vec<String>>,
     display_text: Option<String>,
+    prompt_id: Option<String>,
+    send_now: Option<bool>,
 ) -> Result<(), String> {
     validate_send_payload(&session_id, &text, display_text.as_deref())?;
+    if prompt_id
+        .as_deref()
+        .is_some_and(|value| !valid_session_id(value))
+    {
+        return Err("消息 ID 无效或过长".into());
+    }
     require_runtime_ready(&state, None)?;
     let workspace = state.session_workspace(&session_id)?;
     let attachments = attachments.unwrap_or_default();
@@ -1151,13 +1159,16 @@ pub async fn agent_send(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    tracing::info!(%session_id, attachment_count = attachments.len(), "agent prompt send");
+    let send_now = send_now.unwrap_or(false);
+    tracing::info!(%session_id, attachment_count = attachments.len(), send_now, "agent prompt send");
     agent_runtime::prompt_with_attachments(
         &tx,
         &session_id,
         &text,
         &attachments,
         display_text.as_deref(),
+        prompt_id.as_deref(),
+        send_now,
     )
     .await
     .map_err(|error| {

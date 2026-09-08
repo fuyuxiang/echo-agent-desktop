@@ -18,6 +18,7 @@ const resetStore = () =>
     transcripts: {},
     messages: [],
     streaming: false,
+    sendNowPending: false,
     streamingMessageId: null,
     usage: {},
     plan: null,
@@ -338,6 +339,115 @@ describe("session-store transcripts", () => {
       cancellationCategory: "PermissionRejected",
       agentResult: "permission denied",
     });
+  });
+
+  it("sendNow 在旧轮取消和新轮开始之间保持运行态", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.pushUser("原任务");
+    s.startStreaming(undefined, "prompt-old");
+    s.applyUpdate(chunk("请选择 1/2/3", "A"));
+    s.requestSendNow("prompt-new");
+
+    s.markComplete({
+      sessionId: "A",
+      promptId: "prompt-old",
+      stopReason: "cancelled",
+      cancelTrigger: "send_now",
+    });
+
+    const handoff = useSessionStore.getState();
+    expect(handoff.streaming).toBe(true);
+    expect(handoff.sendNowPending).toBe(true);
+    expect(handoff.streamingMessageId).toBeNull();
+    expect(handoff.messages[1]).toMatchObject({
+      promptId: "prompt-old",
+      complete: true,
+      cancelTrigger: "send_now",
+    });
+
+    s.applyUpdate(userChunk({ type: "text", text: "2" }, "A", 2));
+    const replacement = useSessionStore.getState();
+    expect(replacement.messages.map((message) => message.role)).toEqual([
+      "user", "assistant", "user", "assistant",
+    ]);
+    expect(replacement.messages[3]).toMatchObject({
+      promptId: "prompt-new",
+      complete: false,
+    });
+    expect(replacement.sendNowPending).toBe(false);
+    expect(replacement.streaming).toBe(true);
+  });
+
+  it("sendNow 旧轮的迟到重复终态不会关闭新轮", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.pushUser("原任务");
+    s.startStreaming(undefined, "prompt-old");
+    s.applyUpdate(chunk("partial", "A"));
+    s.requestSendNow("prompt-new");
+    s.markComplete({
+      sessionId: "A",
+      promptId: "prompt-old",
+      stopReason: "cancelled",
+      cancelTrigger: "send_now",
+    });
+    s.applyUpdate(userChunk({ type: "text", text: "选择 2" }, "A", 2));
+    s.applyUpdate(chunk("新任务回复", "A"));
+
+    // Durable replay for the old completion may arrive after new chunks.
+    s.applyUpdate({
+      sessionUpdate: "turn_completed",
+      prompt_id: "prompt-old",
+      stop_reason: "cancelled",
+      _meta: { cancelTrigger: "send_now" },
+      __sessionId: "A",
+    } as never);
+
+    expect(useSessionStore.getState().streaming).toBe(true);
+    expect(useSessionStore.getState().messages[3]).toMatchObject({
+      promptId: "prompt-new",
+      complete: false,
+    });
+    // Legacy duplicate without prompt_id is equally unable to close new work.
+    s.applyUpdate({
+      sessionUpdate: "turn_completed",
+      stop_reason: "cancelled",
+      _meta: { cancelTrigger: "send_now" },
+      __sessionId: "A",
+    } as never);
+    expect(useSessionStore.getState().streaming).toBe(true);
+    s.markComplete({ sessionId: "A", promptId: "prompt-new", stopReason: "end_turn" });
+    expect(useSessionStore.getState().streaming).toBe(false);
+    expect(useSessionStore.getState().messages[3].complete).toBe(true);
+  });
+
+  it("sendNow 新轮 chunk 先于旧轮终态到达时仍分开两个助手消息", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.pushUser("原任务");
+    s.startStreaming(undefined, "prompt-old");
+    s.applyUpdate(chunk("旧回复", "A"));
+    s.requestSendNow("prompt-new");
+
+    // Defensive ordering: a transport may expose the replacement chunk just
+    // before the durable cancellation event for the old prompt.
+    s.applyUpdate(chunk("新回复", "A"));
+    let state = useSessionStore.getState();
+    expect(state.messages.filter((message) => message.role === "assistant")).toHaveLength(2);
+    expect(state.messages[1]).toMatchObject({ promptId: "prompt-old", complete: false });
+    expect(state.messages[2]).toMatchObject({ promptId: "prompt-new", complete: false });
+
+    s.markComplete({
+      sessionId: "A",
+      promptId: "prompt-old",
+      stopReason: "cancelled",
+      cancelTrigger: "send_now",
+    });
+    state = useSessionStore.getState();
+    expect(state.streaming).toBe(true);
+    expect(state.messages[1].complete).toBe(true);
+    expect(state.messages[2]).toMatchObject({ promptId: "prompt-new", complete: false });
   });
 
   it("历史 turn_completed 从持久化元数据恢复终止语义", () => {

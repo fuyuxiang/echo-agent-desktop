@@ -44,8 +44,11 @@ import { filesystemPickFiles, type WorkspaceInfo } from "@/lib/agent-client";
 export function Composer({
   streaming,
   cancelling = false,
+  sendNowPending = false,
+  awaitingQuestion = false,
   disabled,
   onSend,
+  onSendNow,
   onCancel,
   placeholder,
   apiReady = true,
@@ -85,8 +88,7 @@ export function Composer({
   commandSessionId,
   commandRefreshKey,
   onClientSlashCommand,
-  /** 流式时把「发送」改为「加入待发送队列」(对齐 EchoAgent message-queue)。
-   *  传入后:流式且文本非空时,在停止按钮左侧显示「入队」按钮。 */
+  /** 流式时额外提供「加入待发送队列」，不会替代立即发送。 */
   onEnqueue,
   /** Name of the expert currently bound to this session (shown as badge in footer). */
   activeExpertName,
@@ -99,8 +101,13 @@ export function Composer({
   streaming: boolean;
   /** A cancellation request is in flight; keep the stop action single-shot. */
   cancelling?: boolean;
+  /** Runtime is cancelling the old turn and admitting its replacement. */
+  sendNowPending?: boolean;
+  /** A structured AskUserQuestion card owns input until it is resolved. */
+  awaitingQuestion?: boolean;
   disabled?: boolean;
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
+  onSendNow?: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onCancel: () => boolean | void | Promise<boolean | void>;
   placeholder?: string;
   apiReady?: boolean;
@@ -163,7 +170,7 @@ export function Composer({
   onClientSlashCommand?: (
     invocation: SlashCommandInvocation,
   ) => boolean | void | Promise<boolean | void>;
-  /** 流式时把「发送」改为「加入待发送队列」(对齐 EchoAgent message-queue)。 */
+  /** 流式时额外提供「加入待发送队列」。 */
   onEnqueue?: (text: string, attachments?: string[]) => void;
   /** Name of the expert currently bound to this session (shown as badge in footer). */
   activeExpertName?: string;
@@ -443,10 +450,47 @@ export function Composer({
     finishAcceptedSubmission(body);
   };
 
+  /** Atomically replace the active turn; no manual stop round-trip required. */
+  const sendNow = async () => {
+    const t = text.trim();
+    if (
+      (!t && attachments.length === 0)
+      || !streaming
+      || !onSendNow
+      || sending
+      || sendNowPending
+      || awaitingQuestion
+      || disabled
+      || !apiReady
+    ) return;
+
+    const invocation = parseSlashInvocation(t);
+    if (invocation && isClientSlashCommand(invocation.name)) {
+      onToast?.(`当前任务执行中，无法使用 /${invocation.name}`);
+      return;
+    }
+
+    let body = t;
+    if (sceneTag) body = body ? `【${sceneTag.label}】${body}` : `【${sceneTag.label}】`;
+    setSending(true);
+    try {
+      const result = onSendNow(body || "请分析附件。", attachments);
+      const accepted = result && typeof (result as PromiseLike<boolean | void>).then === "function"
+        ? await result
+        : result;
+      if (accepted === false) return;
+      finishAcceptedSubmission(body);
+    } catch (error) {
+      onToast?.(`立即发送失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      if (mountedRef.current) setSending(false);
+    }
+  };
+
   /** 流式时入队(对齐 EchoAgent message-queue):文本或附件任一非空即可入队。 */
   const enqueue = () => {
     const t = text.trim();
-    if ((!t && attachments.length === 0) || disabled || !apiReady) return;
+    if ((!t && attachments.length === 0) || awaitingQuestion || disabled || !apiReady) return;
     let body = t;
     if (sceneTag) body = body ? `【${sceneTag.label}】${body}` : `【${sceneTag.label}】`;
     onEnqueue?.(body || "请分析附件。", attachments);
@@ -579,9 +623,11 @@ export function Composer({
           className="echo-composer__input"
           rows={1}
           value={text}
-          disabled={!apiReady}
+          disabled={!apiReady || awaitingQuestion || disabled}
           placeholder={
-            apiReady
+            awaitingQuestion
+              ? "请在上方问题卡片中选择或输入答案"
+              : apiReady
               ? sceneTag
                 ? "" // 有操作类型标签时不显示占位文案(匹配 EchoAgent)
                 : placeholder ?? "今天帮你做些什么? @ 引用对话文件,/ 调用技能与指令"
@@ -611,7 +657,8 @@ export function Composer({
             }
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              void send();
+              if (streaming) void sendNow();
+              else void send();
               return;
             }
             // 输入历史 arrow-key recall(对齐 EchoAgent use-input-history)。
@@ -669,6 +716,7 @@ export function Composer({
         )}
         <div className="echo-composer__footer">
           <InputAddMenu
+            disabled={!apiReady || awaitingQuestion || disabled}
             onPickFiles={pickFiles}
             onSelectExpert={onSelectExpert}
             onSelectSkill={(name) => {
@@ -731,6 +779,7 @@ export function Composer({
               e.stopPropagation();
               void toggleVoice();
             }}
+            disabled={!apiReady || awaitingQuestion || disabled}
             aria-label="语音输入"
             title={listening ? "正在聆听…点击停止" : "语音输入"}
           >
@@ -765,6 +814,20 @@ export function Composer({
               >
                 ■
               </button>
+              {onSendNow && !awaitingQuestion && (text.trim() !== "" || attachments.length > 0) && (
+                <button
+                  className="echo-composer__send echo-composer__send--now"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void sendNow();
+                  }}
+                  disabled={disabled || !apiReady || sending || sendNowPending}
+                  aria-label={sendNowPending ? "正在立即发送" : "中断当前回复并立即发送"}
+                  title={sendNowPending ? "正在切换到新消息…" : "中断当前回复并立即发送 (Enter)"}
+                >
+                  <SendPlaneIcon size="md" />
+                </button>
+              )}
             </>
           ) : (
             <button

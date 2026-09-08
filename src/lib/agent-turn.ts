@@ -8,6 +8,7 @@ export type AgentTurnSender = (
   promptText: string,
   attachments: string[],
   displayText: string,
+  promptId: string,
 ) => Promise<void>;
 
 export interface AgentTurnInput {
@@ -15,6 +16,16 @@ export interface AgentTurnInput {
   promptText: string;
   displayText: string;
   attachments?: string[];
+}
+
+let promptSequence = 0;
+
+/** Stable across the optimistic placeholder and both completion event rails. */
+export function createAgentPromptId(): string {
+  const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+  if (randomUUID) return randomUUID();
+  promptSequence += 1;
+  return `desktop-${Date.now()}-${promptSequence}`;
 }
 
 /**
@@ -31,6 +42,7 @@ export function beginAgentTurn(
 ): boolean {
   const { sessionId, promptText, displayText } = input;
   const attachments = input.attachments ?? [];
+  const promptId = createAgentPromptId();
   const transcript = useSessionStore.getState();
   if (transcript.sessionId !== sessionId) {
     return false;
@@ -38,14 +50,14 @@ export function beginAgentTurn(
 
   useSessionsStore.getState().upsert({ sessionId, status: "working" });
   transcript.pushUser(displayText, attachments);
-  transcript.startStreaming();
+  transcript.startStreaming(undefined, promptId);
 
-  void send(sessionId, promptText, attachments, displayText).catch((error) => {
+  void send(sessionId, promptText, attachments, displayText, promptId).catch((error) => {
     const latest = useSessionStore.getState();
     const detail = friendlyError(error);
     latest.markComplete({
       sessionId,
-      promptId: "",
+      promptId,
       stopReason: "error",
       agentResult: detail,
     });
