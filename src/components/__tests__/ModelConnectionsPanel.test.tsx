@@ -83,6 +83,33 @@ describe("ModelConnectionsPanel", () => {
     expect(screen.getByText("远端模型 ID：MiniMax-M3")).toBeInTheDocument();
   });
 
+  it("展示连接返回的全部模型而不截断列表", async () => {
+    const provider = {
+      id: "custom",
+      providerKind: "custom" as const,
+      label: "工作用",
+      source: "personal" as const,
+      credentialConfigured: true,
+      baseUrl: "https://api.example.com/v1",
+      apiBackend: "chat_completions" as const,
+      authScheme: "bearer" as const,
+    };
+    const models = Array.from({ length: 7 }, (_, index) => ({
+      modelId: `codex/model-${index + 1}`,
+      remoteModelId: `model-${index + 1}`,
+      providerId: provider.id,
+      name: `Model ${index + 1}`,
+    }));
+    mocks.providersList.mockResolvedValue({ providers: [provider], models });
+
+    render(<ModelConnectionsPanel />);
+
+    const detail = await screen.findByRole("region", { name: "工作用连接详情" });
+    expect(within(detail).getByText("7 个")).toBeInTheDocument();
+    expect(within(detail).getAllByRole("listitem")).toHaveLength(7);
+    expect(within(detail).getByText("远端模型 ID：model-7")).toBeInTheDocument();
+  });
+
   it("直接填写 Model ID 后测试实际模型并保存个人连接", async () => {
     mocks.providersTestModelConnection.mockResolvedValue(undefined);
     mocks.providersSaveConnection.mockResolvedValue({
