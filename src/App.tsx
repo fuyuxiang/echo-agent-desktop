@@ -74,7 +74,7 @@ import {
   type TelemetryProvider,
 } from "./lib/telemetry-contract";
 import { defaultHttpSender, exportEventsBatch, type OtlpConfig } from "./lib/otlp-exporter";
-import { IS_MACOS } from "./lib/platform";
+import { IS_MACOS, IS_WINDOWS } from "./lib/platform";
 import { friendlyError } from "./lib/error-format";
 import { applySessionScopedFailure } from "./lib/session-scoped-failure";
 import { isGlobalShortcutBlocked } from "./lib/keyboard-scope";
@@ -1605,12 +1605,13 @@ function Shell() {
   return (
     <div className={"app" + (IS_MACOS ? " app--macos" : "")}>
       {/* macOS 使用系统原生 Overlay 标题栏(红绿灯 + 原生菜单栏),
-          不再渲染自绘 TitleBar;Windows/Linux 保持自绘。 */}
+          不再渲染自绘 TitleBar;Windows 保留窗口控制但隐藏左侧菜单区。 */}
       {!IS_MACOS && (
         <TitleBar
           onPlaceholder={handlePlaceholder}
           onShowAbout={() => setAboutOpen(true)}
           onCheckForUpdates={handleCheckForUpdates}
+          hideMenus={IS_WINDOWS}
         />
       )}
       <div className={"app__body" + (sidebarCollapsed ? " app__body--collapsed" : "")}>
