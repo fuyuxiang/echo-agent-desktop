@@ -26,6 +26,19 @@ and NOTICE material remain intact.
 Additional dependency notices remain available in the embedded runtime source
 tree and its crate-specific license files.
 
+## OpenAI Codex Runtime (`@openai/codex`)
+
+- Source: https://github.com/openai/codex
+- Version: `0.153.4`
+- Integration: platform-specific native sidecar staged from the official npm package
+- License: Apache License 2.0
+- Copyright: Copyright OpenAI
+- Bundled Apache 2.0 license text: `licenses/echo-agent-build-LICENSE`
+
+The Codex Runtime is used only for the optional ChatGPT account connection. It
+owns the browser sign-in flow, token persistence and Codex App Server protocol;
+EchoAgent Desktop does not read or copy its authentication tokens.
+
 ## async-openai
 
 - Source: https://github.com/our-forks/async-openai
