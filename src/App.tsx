@@ -451,8 +451,12 @@ function Shell() {
             sessionStore.getState().applyUpdate(u);
           },
           onPermission: (p) => {
+            const permissionState = permissionStore.getState();
+            // A mode switch may close a backend request while its earlier
+            // Tauri event is still queued for the renderer. Never resurrect it.
+            if (permissionState.closedRequestIds.includes(p.requestId)) return;
             reportEvent("permission_request", "warn", { sessionId: p.sessionId });
-            permissionStore.getState().request(p);
+            permissionState.request(p);
             sessionsStore.getState().upsert({
               sessionId: p.sessionId,
               status: "awaiting_permission",
@@ -465,6 +469,20 @@ function Shell() {
               p.sessionId,
               "warn",
             );
+          },
+          onPermissionClosed: ({ requestId, sessionId }) => {
+            permissionStore.getState().close(requestId, sessionId);
+            const stillPending = permissionStore.getState().queues[sessionId]?.length ?? 0;
+            if (
+              stillPending === 0 &&
+              findSessionSummary(sessionId)?.status === "awaiting_permission"
+            ) {
+              sessionsStore.getState().upsert({
+                sessionId,
+                status: "working",
+                updatedAt: new Date().toISOString(),
+              });
+            }
           },
           onPermissionMode: (payload) => {
             const mode = permissionModeFromEvent(payload);

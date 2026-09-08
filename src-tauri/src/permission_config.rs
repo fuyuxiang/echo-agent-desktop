@@ -20,10 +20,11 @@
 //! restart to take effect (EchoAgent loads config once at agent init).
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use toml::map::Map;
 use toml::Value;
 
+use crate::bridge::{emit_permission_closed, Permissions};
 use crate::commands::AppState;
 
 /// One permission rule. `action` is one of "allow" | "deny" | "ask";
@@ -317,6 +318,36 @@ pub fn agents_defaults_save(
 /// Canonical permission modes EchoAgent accepts (see echo-agent-build
 /// `util/config/permissions.rs::parse_permission_mode_canonical`).
 pub const PERMISSION_MODES: [&str; 3] = ["ask", "auto", "always-approve"];
+const AUTO_MODE_UNAVAILABLE_REASON: &str = "自动模式已被本机配置、环境设置或组织策略关闭";
+
+/// Runtime flags corresponding to the canonical desktop permission mode.
+/// Keeping this mapping in one place prevents launch defaults and per-session
+/// metadata from drifting apart.
+pub(crate) fn permission_mode_flags(mode: &str) -> (bool, bool) {
+    (mode == "always-approve", mode == "auto")
+}
+
+fn auto_mode_available() -> bool {
+    echo_agent_runtime::util::config::auto_permission_mode_enabled_from_disk()
+}
+
+fn effective_permission_mode(configured_mode: &str, auto_available: bool) -> String {
+    if configured_mode == "auto" && !auto_available {
+        "ask".into()
+    } else {
+        configured_mode.into()
+    }
+}
+
+fn validate_permission_mode_selection(mode: &str, auto_available: bool) -> Result<(), String> {
+    if !PERMISSION_MODES.contains(&mode) {
+        return Err(format!("unknown permission mode: {mode}"));
+    }
+    if mode == "auto" && !auto_available {
+        return Err(AUTO_MODE_UNAVAILABLE_REASON.into());
+    }
+    Ok(())
+}
 
 /// Read the configured permission mode. Mirrors EchoAgent's precedence:
 /// `permission_mode` > legacy `approval_mode` > legacy `yolo`; default "ask".
@@ -369,18 +400,87 @@ pub fn write_permission_mode(mode: &str) -> Result<(), String> {
     })
 }
 
-/// Current permission mode ("ask" | "auto" | "always-approve").
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionModeStatus {
+    /// Effective mode the Runtime can honor now.
+    pub permission_mode: String,
+    /// Configured or policy-selected mode before the Auto capability clamp.
+    pub configured_permission_mode: String,
+    pub auto_mode_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_mode_unavailable_reason: Option<String>,
+}
+
+fn permission_mode_status() -> PermissionModeStatus {
+    let configured_permission_mode = read_permission_mode();
+    let auto_mode_available = auto_mode_available();
+    PermissionModeStatus {
+        permission_mode: effective_permission_mode(
+            &configured_permission_mode,
+            auto_mode_available,
+        ),
+        configured_permission_mode,
+        auto_mode_available,
+        auto_mode_unavailable_reason: (!auto_mode_available)
+            .then(|| AUTO_MODE_UNAVAILABLE_REASON.to_string()),
+    }
+}
+
+/// Current effective permission mode and Auto-mode availability.
 #[tauri::command]
-pub fn permission_mode_get(_state: State<'_, AppState>) -> String {
-    read_permission_mode()
+pub fn permission_mode_get(_state: State<'_, AppState>) -> PermissionModeStatus {
+    permission_mode_status()
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionModeSetResult {
+    pub permission_mode: String,
+    pub agent_running: bool,
+    pub runtime_synced: bool,
+    pub resolved_pending: usize,
+    pub remaining_pending: usize,
+    pub resolved_permissions: Vec<crate::bridge::PermissionClosedFrontend>,
+}
+
+async fn notify_runtime_permission_mode(
+    tx: &echo_agent_acp::AcpAgentTx,
+    mode: &str,
+) -> Result<(), String> {
+    let (yolo_mode, auto_mode) = permission_mode_flags(mode);
+    let params = crate::ext::raw_params(&serde_json::json!({
+        "permission_mode": mode,
+        "yolo_mode": yolo_mode,
+        "auto_mode": auto_mode,
+        // Scope the update to sessions owned by this desktop client. Without
+        // an explicit sender the Runtime intentionally updates every resident
+        // session, including sessions belonging to another leader client.
+        "clientIdentifier": crate::agent_runtime::DESKTOP_CLIENT_IDENTIFIER,
+    }));
+    let notification =
+        agent_client_protocol::ExtNotification::new("echo.agent/yolo_mode_changed", params);
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        echo_agent_acp::acp_send(notification, tx),
+    )
+    .await
+    .map_err(|_| "运行中的 Agent 权限同步超时".to_string())?;
+    response.map_err(|error| format!("运行中的 Agent 权限同步失败：{error:?}"))
 }
 
 /// Set the permission mode: persist to config.toml (for future launches) AND
 /// notify the running agent via EchoAgent's `echo.agent/yolo_mode_changed` extension
-/// notification so existing sessions switch immediately. The notification is
-/// best-effort — if the agent isn't up yet, the config write alone suffices.
+/// notification so existing sessions switch immediately. Switching to
+/// always-approve also resolves requests that were parked before the switch.
 #[tauri::command]
-pub async fn permission_mode_set(state: State<'_, AppState>, mode: String) -> Result<(), String> {
+pub async fn permission_mode_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    permissions: State<'_, Permissions>,
+    mode: String,
+) -> Result<PermissionModeSetResult, String> {
+    validate_permission_mode_selection(&mode, auto_mode_available())?;
     if let Some(locked) = crate::policy::locked_permission_mode() {
         if locked != mode {
             return Err(format!("权限模式已被策略锁定为 {locked}"));
@@ -388,24 +488,43 @@ pub async fn permission_mode_set(state: State<'_, AppState>, mode: String) -> Re
     }
     write_permission_mode(&mode)?;
 
-    let tx = state.tx.lock().unwrap().clone();
-    if let Some(tx) = tx {
-        use echo_agent_acp::{AcpAgentMessage, AcpArgs};
-        let params = crate::ext::raw_params(&serde_json::json!({
-            "permission_mode": mode,
-            "yolo_mode": mode == "always-approve",
-            "auto_mode": mode == "auto",
-        }));
-        let notif =
-            agent_client_protocol::ExtNotification::new("echo.agent/yolo_mode_changed", params);
-        let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
-        // Fire-and-forget: a send error only means the agent went away mid-call.
-        let _ = tx.send(AcpAgentMessage::ExtNotification(AcpArgs {
-            request: notif,
-            response_tx,
-        }));
+    // A permission request can already be parked by the time the picker is
+    // changed. Resolve those requests immediately; otherwise the UI would say
+    // "always allow" while an old approval card remained blocked on a oneshot.
+    let closed = if mode == "always-approve" {
+        permissions.approve_all_pending().await
+    } else {
+        Vec::new()
+    };
+    for notice in closed.iter().cloned() {
+        emit_permission_closed(&app, notice);
     }
-    Ok(())
+    let remaining_pending = permissions.list(None).await.len();
+
+    let tx = state.tx.lock().unwrap().clone();
+    let agent_running = tx.is_some();
+    let runtime_synced = match tx.as_ref() {
+        Some(tx) => match notify_runtime_permission_mode(tx, &mode).await {
+            Ok(()) => true,
+            Err(error) => {
+                // The persisted mode and bridge-side auto-approval remain
+                // authoritative even if a dying Runtime cannot acknowledge.
+                tracing::warn!(%error, permission_mode = %mode, "permission mode runtime sync was not acknowledged");
+                false
+            }
+        },
+        None => false,
+    };
+    let result = PermissionModeSetResult {
+        permission_mode: mode,
+        agent_running,
+        runtime_synced,
+        resolved_pending: closed.len(),
+        remaining_pending,
+        resolved_permissions: closed,
+    };
+    let _ = app.emit("agent://permission-mode", &result);
+    Ok(result)
 }
 
 // ---------- unit tests ----------
@@ -530,5 +649,61 @@ mod tests {
     #[test]
     fn permission_modes_constant() {
         assert_eq!(PERMISSION_MODES, ["ask", "auto", "always-approve"]);
+    }
+
+    #[test]
+    fn permission_mode_flags_are_mutually_exclusive() {
+        assert_eq!(permission_mode_flags("ask"), (false, false));
+        assert_eq!(permission_mode_flags("auto"), (false, true));
+        assert_eq!(permission_mode_flags("always-approve"), (true, false));
+    }
+
+    #[test]
+    fn unavailable_auto_mode_falls_back_to_effective_ask_without_losing_configuration() {
+        assert_eq!(effective_permission_mode("auto", false), "ask");
+        assert_eq!(effective_permission_mode("auto", true), "auto");
+        assert_eq!(
+            effective_permission_mode("always-approve", false),
+            "always-approve"
+        );
+    }
+
+    #[test]
+    fn unavailable_auto_mode_is_rejected_before_persistence() {
+        assert_eq!(
+            validate_permission_mode_selection("auto", false),
+            Err(AUTO_MODE_UNAVAILABLE_REASON.into())
+        );
+        assert!(validate_permission_mode_selection("auto", true).is_ok());
+        assert!(validate_permission_mode_selection("ask", false).is_ok());
+        assert!(validate_permission_mode_selection("always-approve", false).is_ok());
+        assert!(validate_permission_mode_selection("invalid", true).is_err());
+    }
+
+    #[tokio::test]
+    async fn runtime_notification_carries_mode_flags_and_waits_for_ack() {
+        let (client, mut agent) = echo_agent_acp::acp_channels();
+        let task = tokio::spawn(async move {
+            notify_runtime_permission_mode(&client.tx, "always-approve").await
+        });
+        let message = agent.rx.recv().await.expect("permission mode notification");
+        let echo_agent_acp::AcpAgentMessage::ExtNotification(arguments) = message else {
+            panic!("expected ExtNotification")
+        };
+        assert_eq!(
+            arguments.request.method.as_ref(),
+            "echo.agent/yolo_mode_changed"
+        );
+        let params: serde_json::Value =
+            serde_json::from_str(arguments.request.params.get()).expect("notification params");
+        assert_eq!(params["permission_mode"], "always-approve");
+        assert_eq!(params["yolo_mode"], true);
+        assert_eq!(params["auto_mode"], false);
+        assert_eq!(
+            params["clientIdentifier"],
+            crate::agent_runtime::DESKTOP_CLIENT_IDENTIFIER
+        );
+        arguments.response_tx.send(Ok(())).expect("send ack");
+        assert!(task.await.expect("notification task").is_ok());
     }
 }

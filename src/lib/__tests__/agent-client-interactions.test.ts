@@ -11,6 +11,8 @@ import {
   agentResolveQuestion,
   automationsRun,
   folderTrustRespond,
+  permissionModeGet,
+  permissionModeSet,
   setPlanMode,
   taskKill,
   tasksList,
@@ -87,6 +89,52 @@ describe("agent interaction command contracts", () => {
       cwd: "/repo",
       includeArchived: true,
     });
+  });
+
+  it("returns the permission-mode synchronization result", async () => {
+    invokeMock.mockResolvedValue({
+      permissionMode: "always-approve",
+      agentRunning: true,
+      runtimeSynced: true,
+      resolvedPending: 2,
+      remainingPending: 0,
+      resolvedPermissions: [
+        { requestId: "permission-1", sessionId: "session-1" },
+        { requestId: "permission-2", sessionId: "session-1" },
+      ],
+    });
+
+    await expect(permissionModeSet("always-approve")).resolves.toEqual({
+      permissionMode: "always-approve",
+      agentRunning: true,
+      runtimeSynced: true,
+      resolvedPending: 2,
+      remainingPending: 0,
+      resolvedPermissions: [
+        { requestId: "permission-1", sessionId: "session-1" },
+        { requestId: "permission-2", sessionId: "session-1" },
+      ],
+    });
+    expect(invokeMock).toHaveBeenCalledWith("permission_mode_set", {
+      mode: "always-approve",
+    });
+  });
+
+  it("returns effective permission mode capability instead of only persisted text", async () => {
+    invokeMock.mockResolvedValue({
+      permissionMode: "ask",
+      configuredPermissionMode: "auto",
+      autoModeAvailable: false,
+      autoModeUnavailableReason: "disabled by policy",
+    });
+
+    await expect(permissionModeGet()).resolves.toEqual({
+      permissionMode: "ask",
+      configuredPermissionMode: "auto",
+      autoModeAvailable: false,
+      autoModeUnavailableReason: "disabled by policy",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("permission_mode_get");
   });
 
   it("returns the durable automation run record id", async () => {

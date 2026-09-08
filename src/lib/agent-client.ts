@@ -920,15 +920,33 @@ export async function permissionSave(rules: PermissionRule[]): Promise<void> {
 /** EchoAgent 的权限模式:审批(ask)/自动(auto)/始终允许(always-approve)。 */
 export type PermissionMode = "ask" | "auto" | "always-approve";
 
-/** Read the configured permission mode (default "ask"). */
-export async function permissionModeGet(): Promise<PermissionMode> {
-  return invoke<PermissionMode>("permission_mode_get");
+export interface PermissionModeStatus {
+  /** Effective mode the Runtime can honor now. */
+  permissionMode: PermissionMode;
+  /** Configured or policy-selected mode before Auto is clamped to Ask. */
+  configuredPermissionMode: PermissionMode;
+  autoModeAvailable: boolean;
+  autoModeUnavailableReason?: string;
+}
+
+export interface PermissionModeSetResult {
+  permissionMode: PermissionMode;
+  agentRunning: boolean;
+  runtimeSynced: boolean;
+  resolvedPending: number;
+  remainingPending: number;
+  resolvedPermissions: PermissionClosedEvent[];
+}
+
+/** Read the effective permission mode and Auto-mode capability. */
+export async function permissionModeGet(): Promise<PermissionModeStatus> {
+  return invoke<PermissionModeStatus>("permission_mode_get");
 }
 
 /** Set the permission mode: persists to config.toml and live-notifies the
  *  running agent via EchoAgent's `echo.agent/yolo_mode_changed` extension notification. */
-export async function permissionModeSet(mode: PermissionMode): Promise<void> {
-  await invoke<void>("permission_mode_set", { mode });
+export async function permissionModeSet(mode: PermissionMode): Promise<PermissionModeSetResult> {
+  return invoke<PermissionModeSetResult>("permission_mode_set", { mode });
 }
 
 // ---------- memory (资料库 — Runtime canonical storage) ----------
@@ -1129,6 +1147,11 @@ export interface PendingInteractions {
 }
 
 export interface QuestionClosedEvent {
+  requestId: string;
+  sessionId: string;
+}
+
+export interface PermissionClosedEvent {
   requestId: string;
   sessionId: string;
 }
@@ -1479,6 +1502,8 @@ export interface AgentEventListeners {
 export async function subscribeAgentEvents(handlers: {
   onUpdate?: (u: SessionUpdate & { __sessionId?: string }) => void;
   onPermission?: (p: PermissionRequest) => void;
+  /** Fired when a backend-side mode switch resolves an already parked permission. */
+  onPermissionClosed?: (event: PermissionClosedEvent) => void;
   onComplete?: (p: PromptComplete) => void;
   /** Exact, replayable per-prompt token/cost usage from TurnCompleted. */
   onTurnUsage?: (p: TurnUsageEvent) => void;
@@ -1536,6 +1561,7 @@ export async function subscribeAgentEvents(handlers: {
     );
   }
   await wire<PermissionRequest>("agent://permission", handlers.onPermission);
+  await wire<PermissionClosedEvent>("agent://permission-closed", handlers.onPermissionClosed);
   await wire<PromptComplete>("agent://complete", handlers.onComplete);
   await wire<SessionSummaryEvent>("agent://summary", handlers.onSummary);
   await wire<TurnUsageEvent>("agent://turn-usage", handlers.onTurnUsage);
