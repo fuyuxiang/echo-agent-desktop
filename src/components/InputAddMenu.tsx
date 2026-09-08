@@ -11,6 +11,7 @@ import type { AgentEntry, McpServerEntry, SkillInfo } from "@/lib/types";
 
 interface InputAddMenuProps {
   onPickFiles: () => void;
+  disabled?: boolean;
   onSelectExpert?: (agent: AgentEntry) => void;
   onSelectSkill?: (skillName: string) => void;
   onNavigateConnectors?: () => void;
@@ -38,6 +39,7 @@ const MENU_GROUPS: MenuItem[][] = [
 
 export function InputAddMenu({
   onPickFiles,
+  disabled = false,
   onSelectExpert,
   onSelectSkill,
   onNavigateConnectors,
@@ -107,6 +109,12 @@ export function InputAddMenu({
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
+
+  useEffect(() => {
+    if (!disabled) return;
+    setOpen(false);
+    setHoveredItem(null);
+  }, [disabled]);
 
   // Close on Escape
   useEffect(() => {
@@ -387,6 +395,7 @@ export function InputAddMenu({
       <button
         className="echo-composer__add"
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        disabled={disabled}
         aria-label="添加"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -397,7 +406,7 @@ export function InputAddMenu({
         <AddIcon size="md" />
       </button>
 
-      {open && (
+      {open && !disabled && (
         <div className="iam-popover" id="composer-add-menu" role="menu" aria-label="添加内容">
           {MENU_GROUPS.map((group, gi) => (
             <div key={gi}>

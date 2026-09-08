@@ -28,6 +28,7 @@ import {
   agentInit,
   agentNewSession,
   agentSend,
+  agentSendNow,
   agentCancel,
   agentLoadSession,
   agentListAllSessions,
@@ -96,7 +97,7 @@ import {
   EXPERT_PERSONA_END,
   stripInjectedUserContext,
 } from "./lib/user-message";
-import { beginAgentTurn } from "./lib/agent-turn";
+import { beginAgentTurn, createAgentPromptId } from "./lib/agent-turn";
 import {
   isAgentOwnedActiveStatus,
   isWaitingForUser,
@@ -570,9 +571,16 @@ function Shell() {
                 // item before sending so the completion event cannot dispatch
                 // this same item again while that promise is still pending.
                 sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "working" });
+                const queuedPromptId = createAgentPromptId();
                 sessionStore.getState().pushUser(next.text, next.attachments, p.sessionId);
-                sessionStore.getState().startStreaming(p.sessionId);
-                agentSend(p.sessionId, next.text, next.attachments, next.text).then(() => {
+                sessionStore.getState().startStreaming(p.sessionId, queuedPromptId);
+                agentSend(
+                  p.sessionId,
+                  next.text,
+                  next.attachments,
+                  next.text,
+                  queuedPromptId,
+                ).then(() => {
                   useMessageQueueStore.getState().remove(p.sessionId, next.id);
                 }).catch((e) => {
                   const detail = friendlyError(e);
@@ -581,7 +589,7 @@ function Shell() {
                   useMessageQueueStore.getState().setStatus(p.sessionId, next.id, "queued");
                   sessionStore.getState().markComplete({
                     sessionId: p.sessionId,
-                    promptId: "",
+                    promptId: queuedPromptId,
                     stopReason: "error",
                     agentResult: detail,
                   });
@@ -719,6 +727,20 @@ function Shell() {
               status: "awaiting_answer",
               updatedAt: new Date().toISOString(),
             });
+          },
+          onQuestionClosed: ({ requestId, sessionId }) => {
+            questionStore.getState().dismiss(requestId, sessionId);
+            const stillPending = questionStore.getState().queues[sessionId]?.length ?? 0;
+            if (
+              stillPending === 0
+              && findSessionSummary(sessionId)?.status === "awaiting_answer"
+            ) {
+              sessionsStore.getState().upsert({
+                sessionId,
+                status: "working",
+                updatedAt: new Date().toISOString(),
+              });
+            }
           },
           onAgentDied: ({ reason }) => {
             console.error('[EchoAgent] Agent thread died:', reason);
@@ -1023,6 +1045,63 @@ function Shell() {
       sessionsStore.getState().upsert({ sessionId: currentSessionId, status: "failed" });
       return false;
     }
+  };
+
+  /**
+   * Replace the active turn without making the user press Stop first. Runtime
+   * owns this as one atomic sendNow operation, so the cancelled completion of
+   * the old turn cannot race a separate follow-up send.
+   */
+  const handleSendNowCurrent = (text: string, attachments: string[] = []): boolean => {
+    if ((!text.trim() && attachments.length === 0) || !currentSessionId) return false;
+    const sessionId = currentSessionId;
+    const transcript = sessionStore.getState();
+    if (!transcript.streaming || transcript.sendNowPending) return false;
+    if (modelSwitching) {
+      showToast("正在切换模型，请稍候");
+      return false;
+    }
+    if (!init?.auth.ready) {
+      showToast(runtimeSetupHint, 5000);
+      openSettings("model");
+      return false;
+    }
+    if (!activeSessionModelId) {
+      showToast("当前会话的模型未配置，请先在输入框右下角重新选择模型");
+      return false;
+    }
+    if (!ensureQuotaAllowsSend()) return false;
+
+    const promptId = createAgentPromptId();
+    transcript.requestSendNow(promptId, sessionId);
+    sessionsStore.getState().upsert({ sessionId, status: "working" });
+
+    // PromptRequest resolves only after the replacement turn ends. Detach it
+    // so the composer can clear immediately, just like a normal admitted turn.
+    void agentSendNow(sessionId, text, attachments, text, promptId).catch((error) => {
+      const detail = friendlyError(error);
+      const latest = sessionStore.getState();
+      latest.rejectSendNow(promptId, sessionId);
+      latest.markComplete({
+        sessionId,
+        promptId,
+        stopReason: "error",
+        agentResult: detail,
+      });
+      // Never discard a choice or attachment if native admission fails.
+      useMessageQueueStore.getState().enqueue(sessionId, text, attachments);
+      if (latest.sessionId === sessionId) latest.setError(detail);
+      const stillWorking = useSessionStore.getState().transcripts[sessionId];
+      sessionsStore.getState().upsert({
+        sessionId,
+        status:
+          stillWorking?.streamingMessageId || stillWorking?.pendingSendNowPromptId
+            ? "working"
+            : "failed",
+      });
+      showToast(`立即发送失败，内容已保留在待发送队列：${detail}`, 6000);
+    });
+    return true;
   };
 
   const handleCancel = async (): Promise<boolean> => {
@@ -1550,9 +1629,10 @@ function Shell() {
         createdAt: new Date().toISOString(),
       });
       const seed = `开始「${project.name}」项目，请先根据项目配置确认目标、约束和下一步。`;
+      const promptId = createAgentPromptId();
       sessionStore.getState().pushUser(seed);
-      sessionStore.getState().startStreaming();
-      await agentSend(sessionId, buildProjectPrompt(project, seed), [], seed);
+      sessionStore.getState().startStreaming(undefined, promptId);
+      await agentSend(sessionId, buildProjectPrompt(project, seed), [], seed, promptId);
     } catch (e) {
       if (startedSessionId) {
         applySessionScopedFailure({
@@ -1607,9 +1687,10 @@ function Shell() {
         // Every new runtime session needs the project contract; previous
         // project conversations do not share an ACP context window.
         const prompt = buildProjectPrompt(project, message);
+        const promptId = createAgentPromptId();
         sessionStore.getState().pushUser(message);
-        sessionStore.getState().startStreaming();
-        await agentSend(sessionId, prompt, [], message);
+        sessionStore.getState().startStreaming(undefined, promptId);
+        await agentSend(sessionId, prompt, [], message, promptId);
       }
       return sessionId;
     } catch (e) {
@@ -1784,6 +1865,7 @@ function Shell() {
                 <ChatView
                   title={currentTitle}
                   onSend={handleSendCurrent}
+                  onSendNow={handleSendNowCurrent}
                   onCancel={handleCancel}
                   cancelling={cancellingSessionId === currentSessionId}
                   apiReady={chatReady}

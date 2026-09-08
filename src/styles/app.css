@@ -5134,6 +5134,13 @@ button.diff__path {
   background: var(--echo-bg-pill-active);
   font-size: 10px;
 }
+.echo-composer__send--now {
+  background: var(--echo-brand);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--echo-brand) 14%, transparent);
+}
+.echo-composer__send--now:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
 .echo-composer-meta {
   display: flex;
   align-items: center;

@@ -82,6 +82,36 @@ describe("Composer", () => {
     expect(onCancel).toHaveBeenCalled();
   });
 
+  it("streaming 时可用 Enter 中断当前回复并立即发送", async () => {
+    const onSend = vi.fn();
+    const onSendNow = vi.fn();
+    render(<Composer {...base} streaming onSend={onSend} onSendNow={onSendNow} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "选择 2" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
+    await waitFor(() => expect(onSendNow).toHaveBeenCalledWith("选择 2", []));
+    expect(onSend).not.toHaveBeenCalled();
+    expect((input as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("结构化提问待回答时由问题卡片独占交互", () => {
+    const onSendNow = vi.fn();
+    render(
+      <Composer
+        {...base}
+        streaming
+        awaitingQuestion
+        onSendNow={onSendNow}
+        draft="保留的草稿"
+        draftKey="s1"
+      />,
+    );
+    const input = screen.getByRole("textbox");
+    expect(input).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "中断当前回复并立即发送" })).toBeNull();
+    expect((input as HTMLTextAreaElement).value).toBe("保留的草稿");
+  });
+
   it("取消请求进行中禁用停止按钮，避免重复提交", () => {
     const onCancel = vi.fn();
     render(<Composer {...base} streaming cancelling onCancel={onCancel} />);

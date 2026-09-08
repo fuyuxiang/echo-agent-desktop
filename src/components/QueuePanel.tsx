@@ -18,13 +18,19 @@ import {
 
 interface QueuePanelProps {
   sessionId: string;
-  /** agent 正在回复时，「发送」改为安全的「置顶」，不会丢失队列项。 */
+  /** agent 正在回复时，「立即发送」使用 Runtime 的原子 sendNow。 */
   streaming?: boolean;
+  sendNowPending?: boolean;
   /** 手动发送一条；返回 false 表示未接受，队列项必须保留。 */
   onSendNow?: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
 }
 
-export function QueuePanel({ sessionId, streaming = false, onSendNow }: QueuePanelProps) {
+export function QueuePanel({
+  sessionId,
+  streaming = false,
+  sendNowPending = false,
+  onSendNow,
+}: QueuePanelProps) {
   const queue = useMessageQueueStore((s) => s.queues[sessionId] ?? []);
   const remove = useMessageQueueStore((s) => s.remove);
   const reorder = useMessageQueueStore((s) => s.reorder);
@@ -54,14 +60,25 @@ export function QueuePanel({ sessionId, streaming = false, onSendNow }: QueuePan
             setStatus(sessionId, item.id, item.status === "paused" ? "queued" : "paused")
           }
           onCommitEdit={(text) => update(sessionId, item.id, text)}
-          sendLabel={streaming ? (idx === 0 ? "已置顶" : "置顶") : (sendingId === item.id ? "发送中" : "发送")}
-          sendTitle={streaming ? (idx === 0 ? "已是下一条" : "设为下一条自动发送") : "立即发送"}
-          sendDisabled={item.status === "paused" || sendingId !== null || (streaming && idx === 0) || (!streaming && !onSendNow)}
+          sendLabel={
+            sendingId === item.id || (streaming && sendNowPending)
+              ? "发送中"
+              : streaming
+                ? "立即发送"
+                : "发送"
+          }
+          sendTitle={
+            streaming
+              ? "中断当前回复并立即发送这条"
+              : "立即发送"
+          }
+          sendDisabled={
+            item.status === "paused"
+            || sendingId !== null
+            || sendNowPending
+            || !onSendNow
+          }
           onSendNow={async () => {
-            if (streaming) {
-              reorder(sessionId, idx, 0);
-              return;
-            }
             if (!onSendNow || sendingId !== null) return;
             setSendingId(item.id);
             try {

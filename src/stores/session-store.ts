@@ -94,6 +94,10 @@ export interface SessionTranscript {
   /** Non-null while this session has an in-flight assistant message. Doubles
    *  as the per-session "is streaming" flag. */
   streamingMessageId: string | null;
+  /** A replacement prompt accepted by the desktop while the previous turn is
+   *  being cancelled atomically. It becomes the next streaming assistant as
+   *  soon as the runtime echoes the replacement turn. */
+  pendingSendNowPromptId: string | null;
   usage: Usage;
   plan: Plan | null;
   /** Authoritative mode from ACP CurrentModeUpdate. */
@@ -113,6 +117,8 @@ interface SessionState {
   messages: ChatMessage[];
   /** True between `agent_send` and `agent://complete` for the focused session. */
   streaming: boolean;
+  /** True during the short cancel-and-replace hand-off between two turns. */
+  sendNowPending: boolean;
   /** Last assistant message id being streamed in the focused session. */
   streamingMessageId: string | null;
   usage: Usage;
@@ -128,7 +134,11 @@ interface SessionState {
   reset: () => void;
   /** Start an assistant placeholder in a specific transcript. Defaults to the
    *  focused conversation for ordinary composer sends. */
-  startStreaming: (sessionId?: string) => void;
+  startStreaming: (sessionId?: string, promptId?: string) => void;
+  /** Keep the current assistant attached while Runtime atomically replaces it. */
+  requestSendNow: (promptId: string, sessionId?: string) => void;
+  /** Roll back a replacement request rejected before Runtime accepted it. */
+  rejectSendNow: (promptId: string, sessionId?: string) => void;
   markComplete: (p: PromptComplete) => void;
   /** Finalize every in-flight transcript after a process-wide agent failure. */
   failAllStreaming: (reason?: string, agentResult?: string) => void;
@@ -172,6 +182,7 @@ const nextId = () => `m${Date.now()}_${seq++}`;
 const EMPTY_TRANSCRIPT: SessionTranscript = {
   messages: [],
   streamingMessageId: null,
+  pendingSendNowPromptId: null,
   usage: {},
   plan: null,
   planMode: false,
@@ -341,13 +352,18 @@ function normalizeToolCallContent(raw: unknown): ToolCallContent[] {
 
 function ensureStreamingAssistant(
   messages: ChatMessage[],
-  streamingMessageId: string | null
+  streamingMessageId: string | null,
+  promptId?: string,
 ): { messages: ChatMessage[]; id: string } {
   // Reuse the existing streaming assistant message if it's still incomplete
   // and its last part isn't a terminal tool_call.
   if (streamingMessageId) {
     const idx = messages.findIndex((m) => m.id === streamingMessageId);
-    if (idx !== -1 && !messages[idx].complete) {
+    if (
+      idx !== -1
+      && !messages[idx].complete
+      && (!promptId || messages[idx].promptId === promptId)
+    ) {
       return { messages, id: streamingMessageId };
     }
   }
@@ -356,7 +372,9 @@ function ensureStreamingAssistant(
     id,
     role: "assistant",
     parts: [],
+    ...(promptId ? { promptId } : {}),
     complete: false,
+    startedAt: Date.now(),
   };
   return { messages: [...messages, asst], id };
 }
@@ -424,23 +442,73 @@ function completeStreamingAssistant(
       : {}),
     ...(completion.agentResult ? { agentResult: completion.agentResult } : {}),
   };
-  if (!transcript.streamingMessageId) {
-    const lastIndex = transcript.messages.length - 1;
-    const last = transcript.messages[lastIndex];
-    if (
-      completion.promptId
-      && last?.role === "assistant"
-      && last.complete
-      && last.promptId === completion.promptId
-    ) {
-      const messages = [...transcript.messages];
-      messages[lastIndex] = {
-        ...last,
-        ...terminalMetadata,
-        ...(completion.completedAt != null ? { completedAt } : {}),
-      };
-      return { ...transcript, messages };
+  const activeIndex = transcript.streamingMessageId
+    ? transcript.messages.findIndex((message) => message.id === transcript.streamingMessageId)
+    : -1;
+  let targetIndex = activeIndex;
+
+  // The bridge can deliver both live `prompt_complete` and durable
+  // `turn_completed` notifications. Match by prompt id before touching the
+  // currently-streaming bubble: a late duplicate for the superseded turn must
+  // never close the replacement turn that has already started.
+  if (completion.promptId) {
+    const matchingIncomplete = transcript.messages.findIndex(
+      (message) =>
+        message.role === "assistant"
+        && !message.complete
+        && message.promptId === completion.promptId,
+    );
+    if (matchingIncomplete !== -1) {
+      targetIndex = matchingIncomplete;
+    } else {
+      let matchingCompleted = -1;
+      for (let index = transcript.messages.length - 1; index >= 0; index -= 1) {
+        const message = transcript.messages[index];
+        if (
+          message.role === "assistant"
+          && message.complete
+          && message.promptId === completion.promptId
+        ) {
+          matchingCompleted = index;
+          break;
+        }
+      }
+      if (matchingCompleted !== -1) {
+        const messages = [...transcript.messages];
+        messages[matchingCompleted] = {
+          ...messages[matchingCompleted],
+          ...terminalMetadata,
+          ...(completion.completedAt != null ? { completedAt } : {}),
+        };
+        return { ...transcript, messages };
+      }
+
+      const active = activeIndex >= 0 ? transcript.messages[activeIndex] : undefined;
+      if (active?.promptId && active.promptId !== completion.promptId) {
+        targetIndex = -1;
+      }
     }
+  } else if (
+    completion.cancelTrigger === "send_now"
+    && !transcript.pendingSendNowPromptId
+    && activeIndex >= 0
+    && transcript.messages[activeIndex].promptId
+  ) {
+    // A legacy durable cancellation may omit promptId. Once the replacement
+    // has an identified active bubble, that cancellation necessarily belongs
+    // to the superseded turn. Complete an older unfinished bubble if present;
+    // otherwise treat it as a duplicate instead of closing the replacement.
+    targetIndex = -1;
+    for (let index = activeIndex - 1; index >= 0; index -= 1) {
+      const message = transcript.messages[index];
+      if (message.role === "assistant" && !message.complete) {
+        targetIndex = index;
+        break;
+      }
+    }
+  }
+
+  if (targetIndex < 0) {
     if (!preserveEmptyTerminal) return transcript;
     return {
       ...transcript,
@@ -457,25 +525,26 @@ function completeStreamingAssistant(
       ],
     };
   }
-  const messages = transcript.messages
-    .map((message) =>
-      message.id === transcript.streamingMessageId
-        ? {
-            ...message,
-            complete: true,
-            ...terminalMetadata,
-            ...(message.startedAt != null ? { completedAt } : {}),
-          }
-        : message
-    )
-    .filter((message) =>
-      !(
-        message.id === transcript.streamingMessageId
-        && message.parts.length === 0
-        && !preserveEmptyTerminal
-      )
-    );
-  return { ...transcript, messages, streamingMessageId: null };
+
+  const targetId = transcript.messages[targetIndex].id;
+  const completedMessage: ChatMessage = {
+    ...transcript.messages[targetIndex],
+    complete: true,
+    ...terminalMetadata,
+    ...(transcript.messages[targetIndex].startedAt != null ? { completedAt } : {}),
+  };
+  const messages = [...transcript.messages];
+  if (completedMessage.parts.length === 0 && !preserveEmptyTerminal) {
+    messages.splice(targetIndex, 1);
+  } else {
+    messages[targetIndex] = completedMessage;
+  }
+  return {
+    ...transcript,
+    messages,
+    streamingMessageId:
+      transcript.streamingMessageId === targetId ? null : transcript.streamingMessageId,
+  };
 }
 
 interface ReplayedUserChunk {
@@ -555,6 +624,8 @@ function applyUserChunk(transcript: SessionTranscript, chunk: ReplayedUserChunk)
   const optimisticIndex = placeholderIndex > 0 ? placeholderIndex - 1 : -1;
   const optimistic = optimisticIndex >= 0 ? messages[optimisticIndex] : undefined;
   if (
+    !transcript.pendingSendNowPromptId
+    &&
     optimistic?.role === "user"
     && optimistic.promptIndex === undefined
     && (!chunk.hasText || userMessageText(optimistic) === chunk.text)
@@ -581,6 +652,23 @@ function applyUserChunk(transcript: SessionTranscript, chunk: ReplayedUserChunk)
   return { ...completed, messages: [...completed.messages, user] };
 }
 
+/** Turn an admitted send-now hand-off into the next assistant placeholder. */
+function activatePendingSendNow(transcript: SessionTranscript): SessionTranscript {
+  const promptId = transcript.pendingSendNowPromptId;
+  if (!promptId) return transcript;
+  const { messages, id } = ensureStreamingAssistant(
+    transcript.messages,
+    transcript.streamingMessageId,
+    promptId,
+  );
+  return {
+    ...transcript,
+    messages,
+    streamingMessageId: id,
+    pendingSendNowPromptId: null,
+  };
+}
+
 function upsertToolCall(msg: ChatMessage, tc: ToolCallView): ChatMessage {
   const parts = [...msg.parts];
   const idx = parts.findIndex(
@@ -599,7 +687,10 @@ function mirrorOf(t: SessionTranscript | undefined) {
   return {
     messages: t?.messages ?? [],
     streamingMessageId: t?.streamingMessageId ?? null,
-    streaming: (t?.streamingMessageId ?? null) != null,
+    streaming:
+      (t?.streamingMessageId ?? null) != null
+      || (t?.pendingSendNowPromptId ?? null) != null,
+    sendNowPending: (t?.pendingSendNowPromptId ?? null) != null,
     usage: t?.usage ?? {},
     plan: t?.plan ?? null,
     planMode: t?.planMode ?? false,
@@ -635,6 +726,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
     transcripts: {},
     messages: [],
     streaming: false,
+    sendNowPending: false,
     streamingMessageId: null,
     usage: {},
     plan: null,
@@ -682,7 +774,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
         error: null,
       })),
 
-    startStreaming: (sessionId) => {
+    startStreaming: (sessionId, promptId) => {
       // Optimistically insert an empty assistant placeholder so the avatar +
       // "preparing" loading row appears immediately after the user message,
       // instead of a blank gap until the first streamed chunk arrives.
@@ -694,6 +786,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
           id,
           role: "assistant",
           parts: [],
+          ...(promptId ? { promptId } : {}),
           complete: false,
           startedAt: Date.now(),
         };
@@ -705,6 +798,26 @@ export const useSessionStore = create<SessionState>((set, get) => {
       });
       // Local error banner doesn't belong to the transcript; clear it globally.
       set({ error: null });
+    },
+
+    requestSendNow: (promptId, sessionId) => {
+      const sid = sessionId ?? get().sessionId;
+      if (!sid || !promptId) return;
+      applyToTranscript(sid, (t) => ({
+        ...t,
+        pendingSendNowPromptId: promptId,
+      }));
+      set({ error: null });
+    },
+
+    rejectSendNow: (promptId, sessionId) => {
+      const sid = sessionId ?? get().sessionId;
+      if (!sid) return;
+      applyToTranscript(sid, (t) =>
+        t.pendingSendNowPromptId === promptId
+          ? { ...t, pendingSendNowPromptId: null }
+          : t
+      );
     },
 
     rollbackPendingTurn: () => {
@@ -740,6 +853,10 @@ export const useSessionStore = create<SessionState>((set, get) => {
         });
         return {
           ...completed,
+          pendingSendNowPromptId:
+            p.stopReason === "cancelled" && p.cancelTrigger === "send_now"
+              ? completed.pendingSendNowPromptId
+              : null,
           usage: { ...t.usage, ...p.usage },
         };
       });
@@ -750,7 +867,11 @@ export const useSessionStore = create<SessionState>((set, get) => {
         let changed = false;
         const transcripts: Record<string, SessionTranscript> = Object.fromEntries(
           Object.entries(state.transcripts).map(([sessionId, transcript]) => {
-            if (!transcript.streamingMessageId && transcript.planApprovals.length === 0) {
+            if (
+              !transcript.streamingMessageId
+              && !transcript.pendingSendNowPromptId
+              && transcript.planApprovals.length === 0
+            ) {
               return [sessionId, transcript];
             }
             changed = true;
@@ -761,6 +882,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
                   stopReason: reason,
                   agentResult,
                 }),
+                pendingSendNowPromptId: null,
                 planApprovals: [],
               },
             ];
@@ -785,7 +907,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
         return;
       }
       applyToTranscript(sid, (t) => {
-        if (t.streamingMessageId == null) return t;
+        if (t.streamingMessageId == null && t.pendingSendNowPromptId == null) return t;
         const completedAt = Date.now();
         const messages = t.messages
           .map((m) =>
@@ -801,7 +923,12 @@ export const useSessionStore = create<SessionState>((set, get) => {
           .filter(
             (m) => !(m.id === t.streamingMessageId && m.parts.length === 0)
           );
-        return { ...t, messages, streamingMessageId: null };
+        return {
+          ...t,
+          messages,
+          streamingMessageId: null,
+          pendingSendNowPromptId: null,
+        };
       });
     },
 
@@ -850,6 +977,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       applyToTranscript(sid, (t) => ({
         ...t,
         streamingMessageId: null,
+        pendingSendNowPromptId: null,
         messages: [
           ...t.messages,
           {
@@ -930,35 +1058,48 @@ export const useSessionStore = create<SessionState>((set, get) => {
           case "user_message_chunk": {
             const chunk = normalizeUserChunk(u as unknown as Record<string, unknown>);
             if (chunk.hidden || (!chunk.text && chunk.attachments.length === 0)) return tr;
-            return applyUserChunk(tr, chunk);
+            return activatePendingSendNow(applyUserChunk(tr, chunk));
           }
           case "agent_message_chunk": {
             const delta = extractDelta((u as { content?: unknown }).content);
             if (!delta) return tr;
             const { messages, id } = ensureStreamingAssistant(
               tr.messages,
-              tr.streamingMessageId
+              tr.streamingMessageId,
+              tr.pendingSendNowPromptId ?? undefined,
             );
             const idx = messages.findIndex((m) => m.id === id);
             messages[idx] = appendText(messages[idx], "text", delta);
-            return { ...tr, messages: [...messages], streamingMessageId: id };
+            return {
+              ...tr,
+              messages: [...messages],
+              streamingMessageId: id,
+              pendingSendNowPromptId: null,
+            };
           }
           case "agent_thought_chunk": {
             const delta = extractDelta((u as { content?: unknown }).content);
             if (!delta) return tr;
             const { messages, id } = ensureStreamingAssistant(
               tr.messages,
-              tr.streamingMessageId
+              tr.streamingMessageId,
+              tr.pendingSendNowPromptId ?? undefined,
             );
             const idx = messages.findIndex((m) => m.id === id);
             messages[idx] = appendText(messages[idx], "thought", delta);
-            return { ...tr, messages: [...messages], streamingMessageId: id };
+            return {
+              ...tr,
+              messages: [...messages],
+              streamingMessageId: id,
+              pendingSendNowPromptId: null,
+            };
           }
           case "tool_call": {
             const raw = u as unknown as Record<string, unknown>;
             const { messages, id } = ensureStreamingAssistant(
               tr.messages,
-              tr.streamingMessageId
+              tr.streamingMessageId,
+              tr.pendingSendNowPromptId ?? undefined,
             );
             const idx = messages.findIndex((m) => m.id === id);
             // ACP omits `kind` when it's "other" and `status` when it's
@@ -976,7 +1117,12 @@ export const useSessionStore = create<SessionState>((set, get) => {
               rawInput: boundedRawInput(raw.rawInput ?? raw.raw_input),
             };
             messages[idx] = upsertToolCall(messages[idx], view);
-            return { ...tr, messages: [...messages], streamingMessageId: id };
+            return {
+              ...tr,
+              messages: [...messages],
+              streamingMessageId: id,
+              pendingSendNowPromptId: null,
+            };
           }
           case "tool_call_update": {
             // ACP serializes ToolCallUpdate with `#[serde(flatten)]` on the
@@ -1061,7 +1207,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
               const completedAt = typeof meta.agentTimestampMs === "number"
                 ? meta.agentTimestampMs
                 : undefined;
-              return completeStreamingAssistant(tr, {
+              const completed = completeStreamingAssistant(tr, {
                 promptId: boundedString(raw.prompt_id ?? raw.promptId, 4_096),
                 stopReason: boundedString(raw.stop_reason ?? raw.stopReason, 128),
                 cancelTrigger: boundedString(meta.cancelTrigger, 128),
@@ -1069,6 +1215,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
                 agentResult: boundedString(raw.agent_result ?? raw.agentResult, MAX_MESSAGE_TEXT_CHARS),
                 completedAt,
               });
+              return {
+                ...completed,
+                pendingSendNowPromptId:
+                  (raw.stop_reason ?? raw.stopReason) === "cancelled"
+                  && meta.cancelTrigger === "send_now"
+                    ? completed.pendingSendNowPromptId
+                    : null,
+              };
             }
           default:
             return tr;

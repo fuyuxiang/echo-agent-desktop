@@ -199,8 +199,34 @@ export async function agentSend(
   text: string,
   attachments: string[] = [],
   displayText: string = text,
+  promptId?: string,
 ): Promise<void> {
-  await invoke<void>("agent_send", { sessionId, text, attachments, displayText });
+  await invoke<void>("agent_send", {
+    sessionId,
+    text,
+    attachments,
+    displayText,
+    promptId: promptId ?? null,
+    sendNow: false,
+  });
+}
+
+/** Atomically cancel the active turn and submit its replacement. */
+export async function agentSendNow(
+  sessionId: string,
+  text: string,
+  attachments: string[] = [],
+  displayText: string = text,
+  promptId?: string,
+): Promise<void> {
+  await invoke<void>("agent_send", {
+    sessionId,
+    text,
+    attachments,
+    displayText,
+    promptId: promptId ?? null,
+    sendNow: true,
+  });
 }
 
 export async function agentCancel(sessionId: string): Promise<void> {
