@@ -45,6 +45,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::windows::fs::OpenOptionsExt;
 
 const MAX_IMAGE_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
+pub(crate) const DESKTOP_CLIENT_IDENTIFIER: &str = "echo-agent-desktop";
 const MEMORY_EMBEDDING_ENDPOINT: &str = "https://api.siliconflow.cn/v1/embeddings";
 const MEMORY_EMBEDDING_MODEL: &str = "BAAI/bge-m3";
 pub(crate) const MEMORY_EMBEDDING_DIMENSIONS: usize = 1024;
@@ -154,6 +155,15 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
     // 1. Load + resolve config (~/.echo-agent/config.toml; defaults if absent).
     let raw = load_effective_config().map_err(|e| anyhow!("load config: {e}"))?;
     let mut cfg = AgentConfig::new_from_toml_cfg(&raw).map_err(|e| anyhow!("parse config: {e}"))?;
+    // `default_yolo_mode` is a launch-only field (`serde(skip)`) and
+    // `default_auto_mode` is not derived by `new_from_toml_cfg`. Seed both from
+    // the desktop's canonical permission reader before runtime resolution so
+    // managed requirements can still clamp them in the safe direction.
+    let permission_mode = crate::permission_config::read_permission_mode();
+    let (default_yolo_mode, default_auto_mode) =
+        crate::permission_config::permission_mode_flags(&permission_mode);
+    cfg.default_yolo_mode = default_yolo_mode;
+    cfg.default_auto_mode = default_auto_mode;
     // The embedded Runtime ships memory as an opt-in feature. EchoAgent is a
     // local Agent workspace, so memory is a first-class feature and defaults
     // on unless the user explicitly disables `[memory].enabled`.
@@ -182,6 +192,12 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
         storage_mode: None,
     });
     configure_memory_retrieval(&mut cfg);
+    tracing::info!(
+        permission_mode,
+        default_yolo_mode = cfg.default_yolo_mode,
+        default_auto_mode = cfg.default_auto_mode,
+        "resolved desktop permission mode for agent launch"
+    );
 
     // Skip bootstrap's shell-level remote_settings fallback fetch
     // (`start_early_prefetch` + thread join). See module comment above.
@@ -316,10 +332,6 @@ pub struct InitOutcome {
 /// Run `initialize` against the agent. Advertises NO fs/terminal capability
 /// so the agent runs its own tools.
 pub async fn initialize(tx: &AcpAgentTx) -> Result<InitOutcome> {
-    let meta = serde_json::json!({
-        "clientType": "echoagent",
-        "clientVersion": env!("CARGO_PKG_VERSION"),
-    });
     let req = acp::InitializeRequest::new(acp::ProtocolVersion::V1)
         .client_capabilities(
             // Advertise NO fs and NO terminal capability → the agent uses its
@@ -329,7 +341,7 @@ pub async fn initialize(tx: &AcpAgentTx) -> Result<InitOutcome> {
             // and must live under clientCapabilities._meta.)
             desktop_client_capabilities(),
         )
-        .meta(meta.as_object().cloned());
+        .meta(Some(desktop_client_meta()));
     let resp: acp::InitializeResponse = acp_send(req, tx)
         .await
         .map_err(|e| anyhow!("initialize: {e:?}"))?;
@@ -352,6 +364,19 @@ pub async fn initialize(tx: &AcpAgentTx) -> Result<InitOutcome> {
             .and_then(|v| v.as_str())
             .map(String::from),
     })
+}
+
+fn desktop_client_meta() -> serde_json::Map<String, serde_json::Value> {
+    serde_json::json!({
+        // Runtime's ClientType serde spelling is underscored; the stable
+        // product identifier is also supplied for origin/session scoping.
+        "clientType": "echo_agent_desktop",
+        "clientIdentifier": DESKTOP_CLIENT_IDENTIFIER,
+        "clientVersion": env!("CARGO_PKG_VERSION"),
+    })
+    .as_object()
+    .cloned()
+    .expect("desktop client metadata is an object")
 }
 
 fn desktop_client_capabilities() -> acp::ClientCapabilities {
@@ -406,7 +431,8 @@ pub async fn new_session_with_options(
         ));
     }
     let mut req = acp::NewSessionRequest::new(cwd.to_path_buf()).mcp_servers(servers);
-    let mut meta = serde_json::Map::new();
+    let permission_mode = crate::permission_config::read_permission_mode();
+    let mut meta = permission_mode_meta(&permission_mode);
     if let Some(mid) = model_id.filter(|s| !s.is_empty()) {
         meta.insert("modelId".into(), serde_json::Value::String(mid.into()));
     }
@@ -416,9 +442,7 @@ pub async fn new_session_with_options(
             serde_json::Value::String(effort.into()),
         );
     }
-    if !meta.is_empty() {
-        req = req.meta(Some(meta));
-    }
+    req = req.meta(Some(meta));
     let resp: acp::NewSessionResponse = acp_send(req, tx).await.map_err(|e| {
         tracing::error!(error = ?e, "echoagent: new_session FAILED");
         anyhow!("new_session: {e:?}")
@@ -437,14 +461,24 @@ fn authenticated_team_mcp_server(url: String, authorization: String) -> acp::Mcp
 
 /// Resume an existing session by replaying its persisted history.
 pub async fn load_session(tx: &AcpAgentTx, session_id: &str, cwd: &Path) -> Result<()> {
+    let permission_mode = crate::permission_config::read_permission_mode();
     let req = acp::LoadSessionRequest::new(
         acp::SessionId::new(session_id.to_string()),
         cwd.to_path_buf(),
-    );
+    )
+    .meta(Some(permission_mode_meta(&permission_mode)));
     let _: acp::LoadSessionResponse = acp_send(req, tx)
         .await
         .map_err(|e| anyhow!("load_session: {e:?}"))?;
     Ok(())
+}
+
+fn permission_mode_meta(mode: &str) -> serde_json::Map<String, serde_json::Value> {
+    let (yolo_mode, auto_mode) = crate::permission_config::permission_mode_flags(mode);
+    serde_json::Map::from_iter([
+        ("yoloMode".into(), serde_json::Value::Bool(yolo_mode)),
+        ("autoMode".into(), serde_json::Value::Bool(auto_mode)),
+    ])
 }
 
 /// Ask the embedded Runtime for the model catalog it currently exposes over
@@ -755,6 +789,29 @@ mod tests {
             true
         );
         assert_eq!(value["terminal"], false);
+    }
+
+    #[test]
+    fn desktop_initialize_identity_matches_runtime_client_type() {
+        let meta = desktop_client_meta();
+        assert_eq!(meta["clientType"], "echo_agent_desktop");
+        assert_eq!(meta["clientIdentifier"], DESKTOP_CLIENT_IDENTIFIER);
+        assert_eq!(meta["clientVersion"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn session_permission_meta_explicitly_covers_every_mode() {
+        let ask = permission_mode_meta("ask");
+        assert_eq!(ask["yoloMode"], false);
+        assert_eq!(ask["autoMode"], false);
+
+        let auto = permission_mode_meta("auto");
+        assert_eq!(auto["yoloMode"], false);
+        assert_eq!(auto["autoMode"], true);
+
+        let always = permission_mode_meta("always-approve");
+        assert_eq!(always["yoloMode"], true);
+        assert_eq!(always["autoMode"], false);
     }
 
     #[test]
