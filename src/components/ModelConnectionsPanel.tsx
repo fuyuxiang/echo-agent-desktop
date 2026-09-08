@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Building2,
   Check,
@@ -6,11 +6,9 @@ import {
   ChevronDown,
   CircleAlert,
   CloudDownload,
-  CircleUserRound,
   Eye,
   EyeOff,
   KeyRound,
-  LogIn,
   Loader2,
   LockKeyhole,
   Pencil,
@@ -24,11 +22,6 @@ import {
 import {
   agentsDefaultsGet,
   agentsDefaultsSave,
-  codexAccountStatus,
-  codexConnect,
-  codexLoginCancel,
-  codexLoginStart,
-  codexLogout,
   internalReload,
   providersDeleteModel,
   providersDeleteProvider,
@@ -39,7 +32,6 @@ import {
   providersTestModelConnection,
   type ApiBackend,
   type AuthScheme,
-  type CodexAccountStatus,
   type FetchedModel,
   type ModelEntry,
   type ModelProviderEntry,
@@ -66,7 +58,6 @@ interface ProviderPreset {
 }
 
 const PROVIDER_KINDS: ProviderKind[] = [
-  "codex_chatgpt",
   "openai",
   "anthropic",
   "deepseek",
@@ -76,19 +67,11 @@ const PROVIDER_KINDS: ProviderKind[] = [
 ];
 
 const PROVIDER_PRESETS: Record<ProviderKind, ProviderPreset> = {
-  codex_chatgpt: {
-    label: "Codex（ChatGPT 登录）",
-    shortLabel: "ChatGPT",
-    baseUrl: "",
-    apiBackend: "responses",
-    authScheme: "bearer",
-    placeholderKey: "",
-  },
   openai: {
-    label: "OpenAI 官方接口",
+    label: "OpenAI API（GPT 模型）",
     shortLabel: "OpenAI",
     baseUrl: "https://api.openai.com/v1",
-    apiBackend: "chat_completions",
+    apiBackend: "responses",
     authScheme: "bearer",
     placeholderKey: "sk-...",
   },
@@ -162,34 +145,9 @@ function formatSyncTime(value?: number): string {
 }
 
 function protocolLabel(provider: ModelProviderEntry): string {
-  if (provider.providerKind === "codex_chatgpt") return "Codex App Server";
   if (provider.apiBackend === "messages") return "Anthropic Messages";
   if (provider.apiBackend === "responses") return "OpenAI Responses";
   return "OpenAI Chat Completions";
-}
-
-function planLabel(value?: string): string {
-  if (!value) return "未知套餐";
-  const labels: Record<string, string> = {
-    free: "Free",
-    go: "Go",
-    plus: "Plus",
-    pro: "Pro",
-    team: "Team",
-    business: "Business",
-    enterprise: "Enterprise",
-    edu: "Edu",
-  };
-  return labels[value] ?? value.replaceAll("_", " ");
-}
-
-function rateLimitLabel(provider: ModelProviderEntry): string {
-  const primary = provider.rateLimits?.primary;
-  if (!primary) return "暂无额度数据";
-  const reset = primary.resetsAt
-    ? ` · ${new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(primary.resetsAt * 1000))} 重置`
-    : "";
-  return `已使用 ${primary.usedPercent}%${reset}`;
 }
 
 function modelRemoteId(model: ModelEntry): string {
@@ -267,10 +225,8 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
     ? catalog.models.filter((model) => model.providerId === selectedProvider.id)
     : [];
 
-  const finishMutation = async (success: string, reloadAgentRuntime = true) => {
-    // Codex has its own App Server process; reloading the API-key Runtime is
-    // unnecessary and can produce a misleading error for Codex-only users.
-    const reloadError = reloadAgentRuntime ? await reloadRuntime() : null;
+  const finishMutation = async (success: string) => {
+    const reloadError = await reloadRuntime();
     const catalogError = await reload();
     // Always refresh the shell's authoritative status. On Runtime failure the
     // backend reports ready=false, so the Composer stays locked even though
@@ -299,20 +255,14 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
     const count = catalog.models.filter((model) => model.providerId === provider.id).length;
     requestConfirmation({
       title: `删除连接“${connectionName(provider)}”？`,
-      description: provider.providerKind === "codex_chatgpt"
-        ? "将从本机移除该连接并退出 EchoAgent 中的 ChatGPT 账号；不会影响浏览器或独立 Codex 客户端。"
-        : count
+      description: count
         ? `该连接下的 ${count} 个模型也会同时删除。此操作无法撤销。`
         : "该连接将从本机删除，此操作无法撤销。",
       confirmLabel: "删除连接",
       danger: true,
       action: async () => {
-        if (provider.providerKind === "codex_chatgpt") {
-          await codexLogout();
-        } else {
-          await providersDeleteProvider(provider.id);
-        }
-        await finishMutation("连接及其模型已删除。", provider.providerKind !== "codex_chatgpt");
+        await providersDeleteProvider(provider.id);
+        await finishMutation("连接及其模型已删除。");
       },
       onError: (error) => setMessage({ kind: "err", text: `删除失败：${String(error)}` }),
     });
@@ -338,10 +288,7 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
     try {
       const current = defaults ?? await agentsDefaultsGet();
       await agentsDefaultsSave({ ...current, defaultModel: model.modelId });
-      await finishMutation(
-        `已将「${model.name || modelRemoteId(model)}」设为默认模型。`,
-        !model.modelId.startsWith("codex/"),
-      );
+      await finishMutation(`已将「${model.name || modelRemoteId(model)}」设为默认模型。`);
     } catch (error) {
       setMessage({ kind: "err", text: `设置默认模型失败：${String(error)}` });
     }
@@ -364,19 +311,6 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
   };
 
   const handleTestSaved = async (provider: ModelProviderEntry) => {
-    if (provider.providerKind === "codex_chatgpt") {
-      setTestingProviderId(provider.id);
-      setMessage(null);
-      try {
-        const result = await codexConnect(provider.label);
-        await finishMutation(`ChatGPT 账号已同步，共 ${result.modelIds.length} 个可用模型。`, false);
-      } catch (error) {
-        setMessage({ kind: "err", text: `ChatGPT 账号同步失败：${String(error)}` });
-      } finally {
-        setTestingProviderId(null);
-      }
-      return;
-    }
     const model = catalog.models.find((entry) => entry.providerId === provider.id);
     if (!model) {
       setMessage({ kind: "warn", text: "请先为该连接添加一个 Model ID，再测试实际模型调用。" });
@@ -402,7 +336,7 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
       <header className="model-connections__header">
         <div>
           <h2>模型与连接</h2>
-          <p>组织模型自动同步；个人连接可使用 API Key，也可登录 ChatGPT 使用 Codex 额度。</p>
+          <p>组织模型自动同步；个人 API 连接保存在本机并可挂载多个模型。</p>
         </div>
         <button className="echo-button echo-button--primary echo-button--medium" onClick={() => setConnectionEditor("new")}>
           <span className="echo-button__content"><Plus size={15} />添加个人连接</span>
@@ -439,7 +373,7 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
         <div className="model-connections__empty">
           <Server size={24} />
           <strong>还没有可用模型</strong>
-          <span>添加个人连接，可选择 ChatGPT 登录或 API Key 接入。</span>
+          <span>添加个人连接，填写 Base URL、API Key 和 Model ID 后即可使用。</span>
           <button className="echo-button echo-button--primary echo-button--medium" onClick={() => setConnectionEditor("new")}>添加个人连接</button>
         </div>
       ) : (
@@ -488,8 +422,8 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
                 <div className="model-connections__detail-actions">
                   <button className="echo-button echo-button--secondary echo-button--small" onClick={() => void handleTestSaved(selectedProvider)} disabled={testingProviderId === selectedProvider.id}>
                     <span className="echo-button__content">
-                      {testingProviderId === selectedProvider.id ? <Loader2 className="models-settings-panel__spin" size={13} /> : selectedProvider.providerKind === "codex_chatgpt" ? <RefreshCw size={13} /> : <Check size={13} />}
-                      {selectedProvider.providerKind === "codex_chatgpt" ? "同步账号" : "测试模型"}
+                      {testingProviderId === selectedProvider.id ? <Loader2 className="models-settings-panel__spin" size={13} /> : <Check size={13} />}
+                      测试模型
                     </span>
                   </button>
                   {!selectedProvider.managed && (
@@ -501,25 +435,16 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
                 </div>
               </header>
 
-              {selectedProvider.providerKind === "codex_chatgpt" ? (
-                <dl className="model-connections__facts">
-                  <div><dt>登录方式</dt><dd>ChatGPT 账号</dd></div>
-                  <div><dt>账号</dt><dd title={selectedProvider.accountEmail}>{selectedProvider.accountEmail || "已登录"}</dd></div>
-                  <div><dt>套餐</dt><dd>ChatGPT {planLabel(selectedProvider.planType)}</dd></div>
-                  <div><dt>Codex 额度</dt><dd>{rateLimitLabel(selectedProvider)}</dd></div>
-                </dl>
-              ) : (
-                <dl className="model-connections__facts">
-                  <div><dt>接口协议</dt><dd>{protocolLabel(selectedProvider)}</dd></div>
-                  <div><dt>API Key</dt><dd>{selectedProvider.managed ? "由组织安全配置 · 不可查看" : selectedProvider.credentialConfigured ? "已保存在本机" : "未配置"}</dd></div>
-                  <div><dt>Base URL</dt><dd title={selectedProvider.baseUrl}>{selectedProvider.baseUrl || "—"}{selectedProvider.managed && <span> · 只读</span>}</dd></div>
-                  <div><dt>上下文窗口</dt><dd>{selectedProvider.contextWindow ? `${selectedProvider.contextWindow.toLocaleString()} tokens` : "使用模型默认值"}</dd></div>
-                </dl>
-              )}
+              <dl className="model-connections__facts">
+                <div><dt>接口协议</dt><dd>{protocolLabel(selectedProvider)}</dd></div>
+                <div><dt>API Key</dt><dd>{selectedProvider.managed ? "由组织安全配置 · 不可查看" : selectedProvider.credentialConfigured ? "已保存在本机" : "未配置"}</dd></div>
+                <div><dt>Base URL</dt><dd title={selectedProvider.baseUrl}>{selectedProvider.baseUrl || "—"}{selectedProvider.managed && <span> · 只读</span>}</dd></div>
+                <div><dt>上下文窗口</dt><dd>{selectedProvider.contextWindow ? `${selectedProvider.contextWindow.toLocaleString()} tokens` : "使用模型默认值"}</dd></div>
+              </dl>
 
               <div className="model-connections__models-header">
                 <div><strong>可用模型</strong><span>{selectedModels.length} 个</span></div>
-                {!selectedProvider.managed && selectedProvider.providerKind !== "codex_chatgpt" && (
+                {!selectedProvider.managed && (
                   <div>
                     <button className="echo-button echo-button--ghost echo-button--small" onClick={() => setModelEditor({ provider: selectedProvider })}><span className="echo-button__content"><Plus size={13} />手动添加</span></button>
                     <button className="echo-button echo-button--secondary echo-button--small" onClick={() => setImportProvider(selectedProvider)}><span className="echo-button__content"><CloudDownload size={13} />同步模型</span></button>
@@ -570,10 +495,7 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
           onSaved={async (providerId, count) => {
             setConnectionEditor(null);
             setSelectedProviderId(providerId);
-            await finishMutation(
-              `${connectionEditor === "new" ? "连接已添加" : "连接已更新"}${count ? `，已配置 ${count} 个模型` : ""}。`,
-              providerId !== "codex-chatgpt",
-            );
+            await finishMutation(`${connectionEditor === "new" ? "连接已添加" : "连接已更新"}${count ? `，已配置 ${count} 个模型` : ""}。`);
           }}
         />
       )}
@@ -632,8 +554,8 @@ function ConnectionGroup({
             onClick={() => onSelect(provider.id)}
             aria-current={provider.id === selectedProviderId ? "true" : undefined}
           >
-            <span className="model-connections__source-icon">{provider.managed ? <Building2 size={15} /> : provider.providerKind === "codex_chatgpt" ? <CircleUserRound size={15} /> : <Server size={15} />}</span>
-            <span><strong>{connectionName(provider)}</strong><small>{count} 个模型 · {provider.providerKind === "codex_chatgpt" ? "ChatGPT" : provider.managed ? "只读" : "个人"}</small></span>
+            <span className="model-connections__source-icon">{provider.managed ? <Building2 size={15} /> : <Server size={15} />}</span>
+            <span><strong>{connectionName(provider)}</strong><small>{count} 个模型 · {provider.managed ? "只读" : "个人"}</small></span>
           </button>
         );
       })}
@@ -690,31 +612,8 @@ function ConnectionEditor({
   const [modelInput, setModelInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [discoveryMessage, setDiscoveryMessage] = useState<PanelMessage | null>(null);
-  const [codexStatus, setCodexStatus] = useState<CodexAccountStatus | null>(null);
-  const [loginPending, setLoginPending] = useState(false);
-  const loginIdRef = useRef<string | null>(null);
-  const mountedRef = useRef(true);
   const preset = PROVIDER_PRESETS[draft.providerKind];
-  const isCodex = draft.providerKind === "codex_chatgpt";
   const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
-
-  useEffect(() => {
-    if (!isCodex) return;
-    setError(null);
-    void codexAccountStatus()
-      .then((status) => {
-        if (mountedRef.current) setCodexStatus(status);
-      })
-      .catch((statusError) => {
-        if (mountedRef.current) setError(String(statusError));
-      });
-  }, [isCodex]);
-
-  useEffect(() => () => {
-    mountedRef.current = false;
-    const loginId = loginIdRef.current;
-    if (loginId) void codexLoginCancel(loginId).catch(() => {});
-  }, []);
 
   const handleKindChange = (providerKind: ProviderKind) => {
     const next = PROVIDER_PRESETS[providerKind];
@@ -729,7 +628,6 @@ function ConnectionEditor({
   };
 
   const validate = (): string | null => {
-    if (isCodex) return null;
     if (!draft.baseUrl.trim()) return "请填写 Base URL。";
     try {
       const url = new URL(draft.baseUrl);
@@ -740,62 +638,6 @@ function ConnectionEditor({
     if (!original && !draft.apiKey.trim()) return "请填写 API Key。";
     if (draft.contextWindow && Number(draft.contextWindow) <= 0) return "上下文窗口必须大于 0。";
     return null;
-  };
-
-  const saveCodexConnection = async (status?: CodexAccountStatus) => {
-    setSaving(true);
-    setError(null);
-    try {
-      const result = await codexConnect(draft.label.trim() || "ChatGPT");
-      loginIdRef.current = null;
-      if (status && mountedRef.current) setCodexStatus(status);
-      await onSaved(result.providerId, result.modelIds.length);
-    } catch (saveError) {
-      if (mountedRef.current) setError(String(saveError));
-    } finally {
-      if (mountedRef.current) setSaving(false);
-    }
-  };
-
-  const handleCodexLogin = async () => {
-    if (loginPending || saving) return;
-    setLoginPending(true);
-    setError(null);
-    try {
-      // Re-read before opening a browser. If the user completed an earlier
-      // login just after the polling window, the next click continues directly.
-      const latestStatus = await codexAccountStatus();
-      if (!mountedRef.current) return;
-      setCodexStatus(latestStatus);
-      if (latestStatus.loggedIn) {
-        setLoginPending(false);
-        await saveCodexConnection(latestStatus);
-        return;
-      }
-      if (loginIdRef.current) {
-        await codexLoginCancel(loginIdRef.current).catch(() => {});
-        loginIdRef.current = null;
-      }
-      const login = await codexLoginStart();
-      loginIdRef.current = login.loginId;
-      for (let attempt = 0; attempt < 150 && mountedRef.current; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 800));
-        const status = await codexAccountStatus();
-        if (!mountedRef.current) return;
-        setCodexStatus(status);
-        if (status.loggedIn) {
-          loginIdRef.current = null;
-          setLoginPending(false);
-          await saveCodexConnection(status);
-          return;
-        }
-      }
-      if (mountedRef.current) setError("登录等待已超时。完成浏览器登录后，可再次点击下方按钮继续。");
-    } catch (loginError) {
-      if (mountedRef.current) setError(String(loginError));
-    } finally {
-      if (mountedRef.current) setLoginPending(false);
-    }
   };
 
   const parsedInputModels = () => modelInput
@@ -921,49 +763,26 @@ function ConnectionEditor({
     <div ref={dialogRef} className="models-settings-panel__editor-overlay" role="dialog" aria-modal="true" aria-label={original ? "编辑连接" : "添加个人连接"} tabIndex={-1}>
       <div className="model-connection-editor">
         <header className="models-settings-panel__editor-header">
-          <div><div className="models-settings-panel__editor-title">{original ? "编辑个人连接" : "添加个人连接"}</div><div className="models-settings-panel__editor-note">{isCodex ? "登录 ChatGPT，使用套餐包含的 Codex 额度" : "填写 Base URL、API Key 和 Model ID 即可使用"}</div></div>
+          <div><div className="models-settings-panel__editor-title">{original ? "编辑个人连接" : "添加个人连接"}</div><div className="models-settings-panel__editor-note">填写 Base URL、API Key 和 Model ID 即可使用</div></div>
           <button className="echo-button echo-button--ghost echo-button--small echo-button--icon-only" onClick={onCancel} aria-label="关闭"><X size={14} /></button>
         </header>
 
         <div className="model-connection-editor__body">
           <section className="model-connection-editor__section">
-            <div className="model-connection-editor__section-title"><span>连接信息</span><small>{isCodex ? "凭证由 Codex Runtime 安全管理" : original?.credentialConfigured ? "Base URL 必填 · API Key 可留空复用" : "Base URL 与 API Key 必填"}</small></div>
+            <div className="model-connection-editor__section-title"><span>连接信息</span><small>{original?.credentialConfigured ? "Base URL 必填 · API Key 可留空复用" : "Base URL 与 API Key 必填"}</small></div>
             <div className="models-settings-panel__field">
-              <label className="models-settings-panel__label" htmlFor="model-provider-kind">服务类型</label>
+              <label className="models-settings-panel__label" htmlFor="model-provider-kind">接口类型</label>
               <div className="models-settings-panel__select-shell">
-                <select id="model-provider-kind" className="models-settings-panel__select" value={draft.providerKind} onChange={(event) => handleKindChange(event.target.value as ProviderKind)} disabled={Boolean(original)}>
+                <select id="model-provider-kind" className="models-settings-panel__select" value={draft.providerKind} onChange={(event) => handleKindChange(event.target.value as ProviderKind)}>
                   {PROVIDER_KINDS.map((kind) => <option key={kind} value={kind}>{PROVIDER_PRESETS[kind].label}</option>)}
                 </select>
                 <ChevronDown className="models-settings-panel__select-arrow" size={14} />
               </div>
             </div>
             <div className="models-settings-panel__field">
-              <label className="models-settings-panel__label" htmlFor="model-connection-label">连接名称 <span className="model-connection-editor__hint">可选，用于区分多个连接</span></label>
+              <label className="models-settings-panel__label" htmlFor="model-connection-label">连接名称 <span className="model-connection-editor__hint">可选，用于区分多个接口</span></label>
               <input id="model-connection-label" className="models-settings-panel__input" value={draft.label} onChange={(event) => setDraft((current) => ({ ...current, label: event.target.value }))} placeholder={`例如：工作用 ${preset.shortLabel}`} data-modal-initial-focus />
             </div>
-            {isCodex ? (
-              <div className={`model-connection-editor__codex-auth${codexStatus?.loggedIn ? " model-connection-editor__codex-auth--ready" : ""}`}>
-                <div className="model-connection-editor__codex-auth-icon">{codexStatus?.loggedIn ? <CheckCircle2 size={20} /> : <LogIn size={20} />}</div>
-                <div>
-                  <strong>{loginPending ? "等待浏览器完成登录…" : codexStatus?.loggedIn ? "ChatGPT 账号已就绪" : "使用 ChatGPT 账号连接"}</strong>
-                  <span>{loginPending
-                    ? "请在系统浏览器中完成授权，返回本页后会自动继续。"
-                    : codexStatus?.loggedIn
-                      ? `${codexStatus.email || "已登录账号"} · ChatGPT ${planLabel(codexStatus.planType)}`
-                      : "不需要 API Key；模型与额度会在登录成功后自动同步。"}</span>
-                  {!codexStatus?.loggedIn && !loginPending && (
-                    <ul>
-                      <li>使用 ChatGPT 套餐内包含的 Codex 额度</li>
-                      <li>登录凭证与独立 Codex 客户端隔离保存</li>
-                      <li>授权页仅在系统浏览器中打开</li>
-                    </ul>
-                  )}
-                  {codexStatus && !codexStatus.available && codexStatus.error && (
-                    <em>{codexStatus.error}</em>
-                  )}
-                </div>
-              </div>
-            ) : <>
             <div className="models-settings-panel__field">
               <label className="models-settings-panel__label" htmlFor="model-base-url">Base URL</label>
               <input id="model-base-url" className="models-settings-panel__input" value={draft.baseUrl} onChange={(event) => setDraft((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://api.example.com/v1" inputMode="url" />
@@ -975,12 +794,15 @@ function ConnectionEditor({
                 <input id="model-api-key" className="models-settings-panel__input models-settings-panel__input--with-trailing-icon" type={showKey ? "text" : "password"} value={draft.apiKey} onChange={(event) => setDraft((current) => ({ ...current, apiKey: event.target.value }))} placeholder={original?.credentialConfigured ? "已保存；留空表示不更换" : preset.placeholderKey} autoComplete="off" />
                 <button className="echo-button echo-button--ghost echo-button--small echo-button--icon-only models-settings-panel__input-toggle" onClick={() => setShowKey((current) => !current)} type="button" aria-label={showKey ? "隐藏 API Key" : "显示 API Key"}>{showKey ? <EyeOff size={14} /> : <Eye size={14} />}</button>
               </div>
-              <span className="model-connection-editor__help"><KeyRound size={11} />保存在本机私有配置中；编辑时无需重复输入。</span>
+              <span className="model-connection-editor__help">
+                <KeyRound size={11} />
+                {draft.providerKind === "openai"
+                  ? "使用 OpenAI Platform API Key；ChatGPT 订阅登录不能作为模型 API 凭据。"
+                  : "保存在本机私有配置中；编辑时无需重复输入。"}
+              </span>
             </div>
-            </>}
           </section>
 
-          {!isCodex && <>
           <section className="model-connection-editor__section model-connection-editor__section--model">
             <div className="model-connection-editor__section-title"><span>Model ID</span><small>必填 · 不依赖模型列表</small></div>
             <div className="models-settings-panel__field">
@@ -1032,23 +854,14 @@ function ConnectionEditor({
           )}
           {error && <div className="models-settings-panel__editor-error">{error}</div>}
           <p className="model-connection-editor__test-note">测试会向所选模型发送一条极短请求，可能产生少量 API 用量；直接保存不会发起请求。</p>
-          </>}
-          {isCodex && error && <div className="models-settings-panel__editor-error">{error}</div>}
         </div>
 
         <footer className="models-settings-panel__editor-footer">
           <button className="echo-button echo-button--secondary echo-button--medium" onClick={onCancel}>取消</button>
-          {isCodex ? (
-            <button className="echo-button echo-button--primary echo-button--medium" onClick={() => void handleCodexLogin()} disabled={saving || loginPending}>
-              <span className="echo-button__content">
-                {saving || loginPending ? <Loader2 className="models-settings-panel__spin" size={13} /> : codexStatus?.loggedIn ? <RefreshCw size={13} /> : <LogIn size={13} />}
-                {saving ? "正在同步账号与模型…" : loginPending ? "等待登录…" : codexStatus?.loggedIn ? original ? "同步并保存" : "添加连接" : "使用 ChatGPT 登录"}
-              </span>
-            </button>
-          ) : <div className="model-connection-editor__footer-actions">
+          <div className="model-connection-editor__footer-actions">
             <button className="echo-button echo-button--secondary echo-button--medium" onClick={() => void handleSave()} disabled={saving || testing}>{saving ? "保存中…" : "直接保存"}</button>
             <button className="echo-button echo-button--primary echo-button--medium" onClick={() => void handleTestAndSave()} disabled={saving || testing}><span className="echo-button__content">{testing || saving ? <Loader2 className="models-settings-panel__spin" size={13} /> : <Check size={13} />}{testing ? "正在测试模型…" : saving ? "保存中…" : "测试并保存"}</span></button>
-          </div>}
+          </div>
         </footer>
       </div>
     </div>

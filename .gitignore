@@ -14,8 +14,6 @@ release
 # Rust / Tauri 构建产物与自动生成的 schema
 /src-tauri/target/
 /src-tauri/gen/schemas/
-# Platform Codex sidecars are staged from the pinned official npm package.
-/src-tauri/binaries/codex-*
 # 内嵌 Runtime 已由主仓库直接管理，仅忽略其本机构建产物。
 /vendor/echo-agent-build/target/
 
