@@ -173,6 +173,13 @@ pub struct PermissionFrontend {
     pub options: Vec<PermissionOptionFrontend>,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionClosedFrontend {
+    pub request_id: String,
+    pub session_id: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionOptionFrontend {
@@ -354,6 +361,37 @@ impl Permissions {
             .filter(|entry| session_id.is_none_or(|sid| entry.request.session_id == sid))
             .map(|entry| entry.request.clone())
             .collect()
+    }
+
+    /// Approve every currently parked request that offers an allow outcome.
+    ///
+    /// Global always-approve is transient policy state, so prefer AllowOnce.
+    /// Selecting AllowAlways here would persist a narrower tool/session grant
+    /// that survives after the user switches the global mode back to Ask.
+    /// Requests without an allow option remain parked and fail safe.
+    pub async fn approve_all_pending(&self) -> Vec<PermissionClosedFrontend> {
+        let mut pending = self.inner.lock().await;
+        let entries = std::mem::take(&mut *pending);
+        let mut unresolved = Vec::new();
+        let mut approved = Vec::new();
+
+        for entry in entries {
+            let Some(option) = preferred_allow_option(&entry.request.options) else {
+                unresolved.push(entry);
+                continue;
+            };
+            let notice = PermissionClosedFrontend {
+                request_id: entry.request.request_id.clone(),
+                session_id: entry.request.session_id.clone(),
+            };
+            let _ = entry
+                .response_tx
+                .send(PermissionOutcome::Selected(option.option_id.clone()));
+            approved.push(notice);
+        }
+
+        *pending = unresolved;
+        approved
     }
 
     pub async fn cancel_all(&self) {
@@ -1099,9 +1137,7 @@ async fn handle_client_message(
             if perm_mode == "always-approve"
                 || crate::automations::is_full_access_session(&session_id_str)
             {
-                let auto_option = options
-                    .iter()
-                    .find(|o| o.kind == "allow" || o.kind == "allow_always");
+                let auto_option = preferred_allow_option(&options);
                 if let Some(opt) = auto_option {
                     let response = acp::RequestPermissionResponse::new(
                         acp::RequestPermissionOutcome::Selected(
@@ -1168,29 +1204,47 @@ async fn handle_client_message(
                     return;
                 }
             };
-            let emitted = app.emit("agent://permission", frontend).is_ok();
-            if !emitted {
-                // If the native event channel itself is unavailable, never
-                // leave the agent parked on an interaction nobody can see.
+            // Close the race where this handler observed Ask immediately
+            // before permission_mode_set persisted Always, while the mode
+            // switch drained the registry immediately before this register.
+            // Once registered, a second read makes either this handler or the
+            // switch command responsible for resolving the request.
+            let late_auto_option =
+                if crate::permission_config::read_permission_mode() == "always-approve" {
+                    preferred_allow_option(&frontend.options).map(|option| option.option_id.clone())
+                } else {
+                    None
+                };
+            if let Some(option_id) = late_auto_option {
                 let _ = perms
-                    .resolve(&request_id, PermissionOutcome::Cancelled)
+                    .resolve(&request_id, PermissionOutcome::Selected(option_id))
                     .await;
+                tracing::info!(session_id = %session_id_str, "auto-approved permission after mode-switch race");
+            } else {
+                let emitted = app.emit("agent://permission", frontend).is_ok();
+                if !emitted {
+                    // If the native event channel itself is unavailable, never
+                    // leave the agent parked on an interaction nobody can see.
+                    let _ = perms
+                        .resolve(&request_id, PermissionOutcome::Cancelled)
+                        .await;
+                }
+                let notify_app = app.clone();
+                let notify_session = session_id_str.clone();
+                tokio::spawn(async move {
+                    let _ = crate::notifications::dispatch_external(
+                        &notify_app,
+                        crate::notifications::NotifyMessage {
+                            title: "EchoAgent 权限请求".into(),
+                            body: Some("有工具等待你的授权".into()),
+                            level: "warn".into(),
+                            session_id: Some(notify_session),
+                        },
+                        None,
+                    )
+                    .await;
+                });
             }
-            let notify_app = app.clone();
-            let notify_session = session_id_str.clone();
-            tokio::spawn(async move {
-                let _ = crate::notifications::dispatch_external(
-                    &notify_app,
-                    crate::notifications::NotifyMessage {
-                        title: "EchoAgent 权限请求".into(),
-                        body: Some("有工具等待你的授权".into()),
-                        level: "warn".into(),
-                        session_id: Some(notify_session),
-                    },
-                    None,
-                )
-                .await;
-            });
 
             // Do not block the dispatcher: another session's updates and
             // interactions must continue flowing while this decision is open.
@@ -2000,9 +2054,103 @@ fn permission_kind_str(k: &acp::PermissionOptionKind) -> &'static str {
     }
 }
 
+/// Choose the least-persistent successful outcome. Global always-approve
+/// already supplies the policy; it must not create an extra remembered grant.
+fn preferred_allow_option(
+    options: &[PermissionOptionFrontend],
+) -> Option<&PermissionOptionFrontend> {
+    options
+        .iter()
+        .find(|option| option.kind == "allow")
+        .or_else(|| options.iter().find(|option| option.kind == "allow_always"))
+}
+
+pub(crate) fn emit_permission_closed(app: &AppHandle, notice: PermissionClosedFrontend) {
+    let _ = app.emit("agent://permission-closed", notice);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn permission_option(id: &str, kind: &str) -> PermissionOptionFrontend {
+        PermissionOptionFrontend {
+            option_id: id.into(),
+            kind: kind.into(),
+            title: id.into(),
+        }
+    }
+
+    fn permission_request(
+        request_id: &str,
+        options: Vec<PermissionOptionFrontend>,
+    ) -> PermissionFrontend {
+        PermissionFrontend {
+            request_id: request_id.into(),
+            session_id: "session-1".into(),
+            tool_call_id: format!("tool-{request_id}"),
+            tool_kind: "edit".into(),
+            title: "Edit file".into(),
+            raw_input: None,
+            options,
+        }
+    }
+
+    #[test]
+    fn always_approve_prefers_allow_once_over_remembered_grant() {
+        let options = vec![
+            permission_option("remember", "allow_always"),
+            permission_option("once", "allow"),
+        ];
+        assert_eq!(
+            preferred_allow_option(&options).map(|option| option.option_id.as_str()),
+            Some("once")
+        );
+    }
+
+    #[tokio::test]
+    async fn always_approve_drains_allowable_requests_and_keeps_fail_closed_requests() {
+        let registry = Permissions::new();
+        let allowable_rx = registry
+            .register(permission_request(
+                "allowable",
+                vec![
+                    permission_option("remember", "allow_always"),
+                    permission_option("once", "allow"),
+                ],
+            ))
+            .await
+            .expect("register allowable request");
+        let _deny_only_rx = registry
+            .register(permission_request(
+                "deny-only",
+                vec![permission_option("deny", "deny")],
+            ))
+            .await
+            .expect("register deny-only request");
+
+        let closed = registry.approve_all_pending().await;
+        assert_eq!(
+            closed,
+            vec![PermissionClosedFrontend {
+                request_id: "allowable".into(),
+                session_id: "session-1".into(),
+            }]
+        );
+        assert!(matches!(
+            allowable_rx.await.expect("approval outcome"),
+            PermissionOutcome::Selected(option_id) if option_id == "once"
+        ));
+        assert_eq!(
+            registry
+                .list(None)
+                .await
+                .into_iter()
+                .map(|request| request.request_id)
+                .collect::<Vec<_>>(),
+            vec!["deny-only"]
+        );
+    }
 
     #[test]
     fn question_wire_preserves_mode_multiselect_description_and_preview() {

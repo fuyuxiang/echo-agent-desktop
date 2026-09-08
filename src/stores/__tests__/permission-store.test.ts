@@ -6,7 +6,7 @@ import {
 } from "../permission-store";
 import type { PermissionRequest } from "@/lib/types";
 
-const resetStore = () => usePermissionStore.setState({ queues: {} });
+const resetStore = () => usePermissionStore.setState({ queues: {}, closedRequestIds: [] });
 
 function makePerm(requestId: string, sessionId: string): PermissionRequest {
   return {
@@ -88,12 +88,28 @@ describe("permission-store", () => {
     expect(usePermissionStore.getState().queues["s1"]).toHaveLength(1);
   });
 
+  it("后端关闭请求后延迟的入队事件不会让审批卡复活", () => {
+    const store = usePermissionStore.getState();
+    store.close("r1", "s1");
+    usePermissionStore.getState().request(makePerm("r1", "s1"));
+    expect(usePermissionStore.getState().queues["s1"]).toBeUndefined();
+    expect(usePermissionStore.getState().closedRequestIds).toContain("r1");
+  });
+
+  it("后端关闭会立即移除已显示的审批卡", () => {
+    const store = usePermissionStore.getState();
+    store.request(makePerm("r1", "s1"));
+    usePermissionStore.getState().close("r1", "s1");
+    expect(usePermissionStore.getState().queues["s1"]).toHaveLength(0);
+  });
+
   it("Agent 退出后清空所有失效请求", () => {
     const s = usePermissionStore.getState();
     s.request(makePerm("r1", "s1"));
     s.request(makePerm("r2", "s2"));
     s.clearAll();
     expect(usePermissionStore.getState().queues).toEqual({});
+    expect(usePermissionStore.getState().closedRequestIds).toEqual([]);
   });
 });
 
