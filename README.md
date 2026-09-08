@@ -187,17 +187,19 @@ EchoAgent 默认把状态放在 `~/.echo-agent/`。启动前设置 `ECHO_AGENT_H
 
 ## 技术架构
 
+本项目的 Agent Runtime 为 [**`echo-agent`**](https://github.com/fuyuxiang/echo-agent)，Rust 入口 crate 为 `echo-agent-runtime`，源码快照位于 `vendor/echo-agent-build/`。
+
 ```mermaid
 flowchart TB
     UI[React 18 界面<br/>会话 · 项目 · 设置 · 工作空间] <-->|Tauri Commands / Events| HOST[Tauri 2 + Rust 应用层<br/>存储 · 策略 · 调度 · 原生能力]
-    HOST <-->|类型化 ACP Channel| RUNTIME[进程内 Agent Runtime<br/>会话 · 计划 · 工具 · 权限 · 子 Agent]
+    HOST <-->|类型化 ACP Channel| RUNTIME[进程内 echo-agent Runtime<br/>会话 · 计划 · 工具 · 权限 · 子 Agent]
     RUNTIME --> MODELS[模型 Provider<br/>OpenAI / Anthropic / Compatible]
     RUNTIME --> TOOLS[本地文件与命令<br/>MCP · Skills · Plugins]
     HOST --> DATA[(本地数据根<br/>.echo-agent)]
     HOST --> EXT[WebDAV · 通知 · 可选组织服务]
 ```
 
-核心 Runtime 直接嵌入桌面进程，运行在独立 OS 线程上的 current-thread Tokio Runtime 与 `LocalSet` 中，并通过内存内 ACP Channel 与 Rust Bridge 通信。Bridge 将流式更新、权限请求、计划状态和完成事件转换成 Tauri Event，再由前端 Store 分发到对应会话。
+`echo-agent` 核心 Runtime 直接嵌入桌面进程，运行在独立 OS 线程上的 current-thread Tokio Runtime 与 `LocalSet` 中，并通过内存内 ACP Channel 与 Rust Bridge 通信。Bridge 将流式更新、权限请求、计划状态和完成事件转换成 Tauri Event，再由前端 Store 分发到对应会话。
 
 ## 开发与验证
 

@@ -191,17 +191,19 @@ On first launch, files from the retired runtime data directory are copied safely
 
 ## Architecture
 
+The project's Agent Runtime is [**`echo-agent`**](https://github.com/fuyuxiang/echo-agent). Its Rust entry crate is `echo-agent-runtime`, and its pinned source snapshot lives under `vendor/echo-agent-build/`.
+
 ```mermaid
 flowchart TB
     UI[React 18 UI<br/>Sessions · Projects · Settings · Workspace] <-->|Tauri Commands / Events| HOST[Tauri 2 + Rust host<br/>Storage · Policy · Scheduler · Native APIs]
-    HOST <-->|Typed ACP channels| RUNTIME[In-process Agent Runtime<br/>Sessions · Plans · Tools · Permissions · Sub-agents]
+    HOST <-->|Typed ACP channels| RUNTIME[In-process echo-agent Runtime<br/>Sessions · Plans · Tools · Permissions · Sub-agents]
     RUNTIME --> MODELS[Model providers<br/>OpenAI / Anthropic / Compatible]
     RUNTIME --> TOOLS[Local files and commands<br/>MCP · Skills · Plugins]
     HOST --> DATA[(Local data root<br/>.echo-agent)]
     HOST --> EXT[WebDAV · Notifications · Optional organization service]
 ```
 
-The core runtime is not a separate sidecar. It lives on a dedicated OS thread backed by a current-thread Tokio runtime and `LocalSet`, communicating with the Rust bridge through in-memory ACP channels. The bridge converts streaming updates, permission requests, plan state, and completion events into Tauri events that frontend stores apply to the correct session.
+The `echo-agent` core runtime is not a separate sidecar. It lives on a dedicated OS thread backed by a current-thread Tokio runtime and `LocalSet`, communicating with the Rust bridge through in-memory ACP channels. The bridge converts streaming updates, permission requests, plan state, and completion events into Tauri events that frontend stores apply to the correct session.
 
 ```text
 src/                       React UI, Zustand stores, and frontend domain logic
@@ -275,10 +277,10 @@ For larger features or architecture changes, open an issue first to discuss UX, 
 
 ## Acknowledgements
 
-- The embedded Agent Runtime is derived from Apache-2.0 upstream source and maintained as a pinned, compatibility-modified snapshot. Revision details and attribution are recorded in [Third-party notices](THIRD_PARTY_NOTICES.md).
+- The embedded `echo-agent` Agent Runtime is maintained as a pinned, compatibility-modified Apache-2.0 source snapshot. Revision details are recorded in [Third-party notices](THIRD_PARTY_NOTICES.md).
 - [Tauri](https://tauri.app/), [React](https://react.dev/), and [Vite](https://vite.dev/) form the core desktop application stack.
 
-EchoAgent is an independent community open-source project. Upstream attribution and modification details are preserved in the repository's legal notices.
+EchoAgent is an independent community open-source project. Runtime source and modification details are preserved in the repository's legal notices.
 
 ## License
 
