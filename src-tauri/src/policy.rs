@@ -221,7 +221,7 @@ pub async fn policy_save(
         let agent_running = state.tx.lock().unwrap().is_some();
         let _ = app.emit(
             "agent://permission-mode",
-            crate::permission_config::permission_mode_status(agent_running),
+            crate::permission_config::permission_mode_status(agent_running, None),
         );
     }
     Ok(saved)

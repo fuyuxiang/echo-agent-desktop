@@ -2,23 +2,32 @@ import { create } from "zustand";
 import type { PermissionMode, PermissionModeStatus } from "@/lib/agent-client";
 
 interface PermissionModeState {
-  mode: PermissionMode;
-  status: PermissionModeStatus | null;
-  setMode: (mode: PermissionMode) => void;
+  /** Selection for the one unsent task draft on Home; reset after creation. */
+  homeMode: PermissionMode;
+  /** Runtime/capability state keyed by existing task session id. */
+  statuses: Record<string, PermissionModeStatus>;
+  /** Organization/device capability envelope used by a new-task draft. */
+  capabilityStatus: PermissionModeStatus | null;
+  setHomeMode: (mode: PermissionMode) => void;
+  resetHomeMode: () => void;
   setStatus: (status: PermissionModeStatus) => void;
+  clearSession: (sessionId: string) => void;
 }
 
 export const usePermissionModeStore = create<PermissionModeState>((set) => ({
-  mode: "ask",
-  status: null,
-  setMode: (mode) => set({ mode }),
-  setStatus: (status) => set({
-    status,
-    mode:
-      (status.runtimeSyncState === "failed" || status.runtimeSyncState === "syncing") &&
-      status.runtimeAppliedMode
-        ? status.runtimeAppliedMode
-        : status.permissionMode,
+  homeMode: "ask",
+  statuses: {},
+  capabilityStatus: null,
+  setHomeMode: (homeMode) => set({ homeMode }),
+  resetHomeMode: () => set({ homeMode: "ask" }),
+  setStatus: (status) => set((state) => status.sessionId
+    ? { statuses: { ...state.statuses, [status.sessionId]: status } }
+    : { capabilityStatus: status }),
+  clearSession: (sessionId) => set((state) => {
+    if (!(sessionId in state.statuses)) return {};
+    const statuses = { ...state.statuses };
+    delete statuses[sessionId];
+    return { statuses };
   }),
 }));
 
@@ -60,7 +69,16 @@ export function permissionModeStatusFromEvent(payload: unknown): PermissionModeS
     rawSyncState === "synced" || rawSyncState === "failed"
       ? rawSyncState
       : "offline";
+  const rawSessionId = value.sessionId ?? value.session_id;
+  const sessionId = typeof rawSessionId === "string" &&
+      rawSessionId.trim() !== "" &&
+      rawSessionId.length <= 256 &&
+      !Array.from(rawSessionId).some((char) => /[\u0000-\u001f\u007f]/.test(char))
+    ? rawSessionId
+    : undefined;
+  if (rawSessionId != null && !sessionId) return null;
   return {
+    sessionId,
     permissionMode,
     configuredPermissionMode,
     autoModeAvailable: (value.autoModeAvailable ?? value.auto_mode_available) !== false,

@@ -8347,7 +8347,7 @@ button.diff__path {
 .update-dialog__actions .settings-btn { display: inline-flex; align-items: center; gap: 6px; }
 
 /* ========================================================================
- * PermissionPicker — Composer meta 行的默认权限下拉
+ * PermissionPicker — Composer meta 行的任务权限下拉
  * ===================================================================== */
 .permission-picker {
   position: relative;
@@ -8375,6 +8375,12 @@ button.diff__path {
   font-size: 13px;
   font-weight: 600;
   color: var(--echo-text-strong);
+}
+.permission-picker__scope {
+  margin-top: -4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--echo-text-weak);
 }
 .permission-picker__status {
   padding: 7px 9px;
@@ -8427,6 +8433,33 @@ button.diff__path {
 .permission-picker__mode-check {
   grid-area: check;
   color: var(--echo-color-text-brand-default);
+}
+.permission-picker__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 4px;
+  padding: 10px;
+  border: 1px solid var(--echo-warning, #b45309);
+  border-radius: var(--echo-radius-lg, 8px);
+  background: var(--echo-warning-soft, rgba(245, 158, 11, 0.1));
+  color: var(--echo-text-strong);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.permission-picker__confirm strong {
+  font-size: 13px;
+}
+.permission-picker__confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+}
+.permission-picker__confirm-actions .btn {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 12px;
 }
 
 
