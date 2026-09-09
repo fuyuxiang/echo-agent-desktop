@@ -34,6 +34,10 @@ import {
 } from "@/lib/voice-contract";
 import type { AgentEntry } from "@/lib/types";
 import { filesystemPickFiles, type WorkspaceInfo } from "@/lib/agent-client";
+import {
+  parseSessionControlIntent,
+  type SessionControlAction,
+} from "@/lib/session-control";
 
 /**
  * EchoAgent 风格输入卡片(圆角16):左下 +,右下 Auto 下拉/麦克风/发送;
@@ -50,6 +54,7 @@ export function Composer({
   onSend,
   onSendNow,
   onCancel,
+  onControl,
   placeholder,
   apiReady = true,
   setupHint = "请先配置 API Key 开始使用",
@@ -110,6 +115,10 @@ export function Composer({
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onSendNow?: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onCancel: () => boolean | void | Promise<boolean | void>;
+  /** Exact local pause/stop commands are handled without sending them to AI. */
+  onControl?: (
+    action: SessionControlAction,
+  ) => boolean | void | Promise<boolean | void>;
   placeholder?: string;
   apiReady?: boolean;
   /** Message shown when the composer is unavailable. */
@@ -401,11 +410,35 @@ export function Composer({
     onClearSceneTag?.();
   };
 
+  const dispatchControlIntent = async (submittedText: string): Promise<boolean> => {
+    if (attachments.length > 0 || !onControl) return false;
+    const action = parseSessionControlIntent(submittedText);
+    if (!action) return false;
+    setSending(true);
+    try {
+      const result = onControl(action);
+      const accepted = result && typeof (result as PromiseLike<boolean | void>).then === "function"
+        ? await result
+        : result;
+      if (accepted !== false) finishAcceptedSubmission(submittedText);
+    } catch (error) {
+      onToast?.(`${action === "pause" ? "暂停" : "停止"}失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      if (mountedRef.current) setSending(false);
+    }
+    return true;
+  };
+
   const send = async () => {
     const t = text.trim();
     // A scene tag is contextual metadata, not a user prompt. Require actual
     // text or at least one attachment for every submission path.
-    if ((!t && attachments.length === 0) || streaming || sending || disabled || !apiReady) return;
+    if ((!t && attachments.length === 0) || sending || disabled) return;
+    if (t && attachments.length === 0 && onControl && parseSessionControlIntent(t)) {
+      await dispatchControlIntent(t);
+      return;
+    }
+    if (streaming || !apiReady) return;
 
     // Desktop-owned slash commands never enter the model transcript. Runtime
     // commands and Skills deliberately fall through to onSend/ACP unchanged.
@@ -455,11 +488,14 @@ export function Composer({
   /** Atomically replace the active turn; no manual stop round-trip required. */
   const sendNow = async () => {
     const t = text.trim();
+    if ((!t && attachments.length === 0) || sending || disabled) return;
+    if (t && attachments.length === 0 && onControl && parseSessionControlIntent(t)) {
+      await dispatchControlIntent(t);
+      return;
+    }
     if (
-      (!t && attachments.length === 0)
-      || !streaming
+      !streaming
       || !onSendNow
-      || sending
       || sendNowPending
       || awaitingQuestion
       || disabled
@@ -493,6 +529,10 @@ export function Composer({
   const enqueue = () => {
     const t = text.trim();
     if ((!t && attachments.length === 0) || awaitingQuestion || disabled || !apiReady) return;
+    if (attachments.length === 0 && parseSessionControlIntent(t) && onControl) {
+      void dispatchControlIntent(t);
+      return;
+    }
     let body = t;
     if (sceneTag) body = body ? `【${sceneTag.label}】${body}` : `【${sceneTag.label}】`;
     onEnqueue?.(body || "请分析附件。", attachments);

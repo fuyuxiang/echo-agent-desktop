@@ -15,6 +15,11 @@ describe("terminalSessionStatus", () => {
       stopReason: "cancelled",
       cancelTrigger: "send_now",
     })).toBe("working");
+    expect(terminalSessionStatus({
+      stopReason: "cancelled",
+      cancelTrigger: "pause",
+    })).toBe("paused");
+    expect(terminalSessionStatus({ stopReason: "cancelled" }, "pause")).toBe("paused");
   });
 
   it("使用 cancellationCategory 识别伪装成 cancelled 的失败", () => {

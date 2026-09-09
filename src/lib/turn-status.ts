@@ -19,10 +19,12 @@ const FAILURE_CANCELLATION_CATEGORIES = new Set([
 /** Translate a terminal protocol outcome into an honest sidebar lifecycle. */
 export function terminalSessionStatus(
   outcome: Pick<PromptComplete, "stopReason" | "cancelTrigger" | "cancellationCategory">,
+  requestedAction?: "pause" | "stop",
 ): SessionStatus {
   if (FAILURE_STOP_REASONS.has(outcome.stopReason)) return "failed";
   if (outcome.stopReason === "cancelled") {
     if (outcome.cancelTrigger === "send_now") return "working";
+    if (outcome.cancelTrigger === "pause" || requestedAction === "pause") return "paused";
     return FAILURE_CANCELLATION_CATEGORIES.has(outcome.cancellationCategory ?? "")
       ? "failed"
       : "stopped";

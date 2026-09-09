@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import {
+  agentCancel,
   agentSend,
   agentSendNow,
   commandsList,
@@ -50,6 +51,15 @@ describe("agentSend attachment contract", () => {
       displayText: "2",
       promptId: "prompt-2",
       sendNow: true,
+    });
+  });
+
+  it("暂停取消携带动作和当前 promptId", async () => {
+    await agentCancel("session-1", "pause", "prompt-1");
+    expect(invokeMock).toHaveBeenCalledWith("agent_cancel", {
+      sessionId: "session-1",
+      cancelAction: "pause",
+      promptId: "prompt-1",
     });
   });
 });

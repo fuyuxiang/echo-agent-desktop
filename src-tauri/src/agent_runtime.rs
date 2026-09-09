@@ -696,9 +696,26 @@ pub async fn set_session_mode(tx: &AcpAgentTx, session_id: &str, enabled: bool) 
 /// variant directly and send it on the channel — the agent's gateway receiver
 /// dispatches it to `MvpAgent::cancel`. A throwaway oneshot satisfies the
 /// `AcpArgs.response_tx` shape; the agent may or may not send on it.
-pub async fn cancel(tx: &AcpAgentTx, session_id: &str) -> Result<()> {
+pub async fn cancel(
+    tx: &AcpAgentTx,
+    session_id: &str,
+    cancel_trigger: &str,
+    prompt_id: Option<&str>,
+) -> Result<()> {
     use echo_agent_acp::{AcpAgentMessage, AcpArgs};
-    let notif = acp::CancelNotification::new(acp::SessionId::new(session_id.to_string()));
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        "cancelTrigger".to_string(),
+        serde_json::Value::String(cancel_trigger.to_string()),
+    );
+    if let Some(prompt_id) = prompt_id {
+        meta.insert(
+            "promptId".to_string(),
+            serde_json::Value::String(prompt_id.to_string()),
+        );
+    }
+    let notif =
+        acp::CancelNotification::new(acp::SessionId::new(session_id.to_string())).meta(Some(meta));
     let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
     let msg = AcpAgentMessage::Cancel(AcpArgs {
         request: notif,

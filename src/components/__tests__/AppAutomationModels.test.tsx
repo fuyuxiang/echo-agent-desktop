@@ -67,6 +67,22 @@ beforeEach(() => {
 });
 
 describe("自动化会话模型同步", () => {
+  it("定时任务运行事件不会把用户已暂停的会话改回运行中", async () => {
+    await start();
+    act(() => useSessionsStore.getState().upsert({
+      sessionId: "auto-1",
+      cwd: "/workspace",
+      title: "已暂停任务",
+      status: "paused",
+    }));
+    created("model-a");
+    expect(useSessionsStore.getState().independent[0]).toMatchObject({
+      sessionId: "auto-1",
+      status: "paused",
+      currentModelId: "model-a",
+    });
+  });
+
   it("自动化事件保存本次实际模型，打开后可以追问，不改用当前默认模型", async () => {
     await start();
     created("model-a");
