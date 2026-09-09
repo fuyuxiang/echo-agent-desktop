@@ -30,6 +30,8 @@ export interface QueueItem {
   /** Local paths that must travel with this queued prompt. */
   attachments?: string[];
   status: QueueItemStatus;
+  /** Prompt correlation id while this exact row is owned by an Agent turn. */
+  promptId?: string;
   /** 入队时间戳(ms)。 */
   createdAt: number;
 }
@@ -51,10 +53,16 @@ interface QueueState {
   setStatus: (sessionId: string, id: string, status: EditableQueueItemStatus) => void;
   /** Atomically reserve the first queued item so completion events cannot
    *  dispatch the same long-running request twice. */
-  claimNext: (sessionId: string) => QueueItem | null;
-  /** Settle the oldest in-flight item for a terminal agent event. Consumed
-   *  items leave the queue; retryable failures return to `queued`. */
-  settleSending: (sessionId: string, settlement: SendingSettlement) => QueueItem | null;
+  claimNext: (sessionId: string, promptId?: string) => QueueItem | null;
+  /** Atomically reserve a specific row selected by the user. */
+  claimById: (sessionId: string, id: string, promptId: string) => QueueItem | null;
+  /** Settle the in-flight row owned by a terminal Agent event. Consumed items
+   *  leave the queue; retryable failures return to `queued`. */
+  settleSending: (
+    sessionId: string,
+    settlement: SendingSettlement,
+    promptId?: string,
+  ) => QueueItem | null;
   /** Return all process-owned in-flight rows to a retryable state. */
   retryAllSending: () => void;
   /** 取下一条 active(非 paused)项并从队列移除;无则返回 null。 */
@@ -128,32 +136,51 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
       return {
         queues: {
           ...s.queues,
-          [sessionId]: q.map((it) => (it.id === id ? { ...it, status } : it)),
+          [sessionId]: q.map((it) => (
+            it.id === id ? { ...it, status, promptId: undefined } : it
+          )),
         },
       };
     }),
-  claimNext: (sessionId) => {
+  claimNext: (sessionId, promptId) => {
     let claimed: QueueItem | null = null;
     set((s) => {
       const q = queueOf(s.queues, sessionId);
       const idx = q.findIndex((it) => it.status === "queued");
       if (idx === -1) return s;
       const next = [...q];
-      claimed = { ...next[idx], status: "sending" };
+      claimed = { ...next[idx], status: "sending", ...(promptId ? { promptId } : {}) };
       next[idx] = claimed;
       return { queues: { ...s.queues, [sessionId]: next } };
     });
     return claimed;
   },
-  settleSending: (sessionId, settlement) => {
+  claimById: (sessionId, id, promptId) => {
+    let claimed: QueueItem | null = null;
+    set((s) => {
+      const q = queueOf(s.queues, sessionId);
+      const idx = q.findIndex((it) => it.id === id && it.status === "queued");
+      if (idx === -1) return s;
+      const next = [...q];
+      claimed = { ...next[idx], status: "sending", promptId };
+      next[idx] = claimed;
+      return { queues: { ...s.queues, [sessionId]: next } };
+    });
+    return claimed;
+  },
+  settleSending: (sessionId, settlement, promptId) => {
     let settled: QueueItem | null = null;
     set((s) => {
       const q = queueOf(s.queues, sessionId);
-      const idx = q.findIndex((it) => it.status === "sending");
+      const idx = q.findIndex((it) => (
+        it.status === "sending" && (!promptId || it.promptId === promptId)
+      ));
       if (idx === -1) return s;
       settled = q[idx];
       const next = settlement === "retry"
-        ? q.map((it, itemIndex) => itemIndex === idx ? { ...it, status: "queued" as const } : it)
+        ? q.map((it, itemIndex) => itemIndex === idx
+          ? { ...it, status: "queued" as const, promptId: undefined }
+          : it)
         : q.filter((_, itemIndex) => itemIndex !== idx);
       const queues = { ...s.queues };
       if (next.length === 0) delete queues[sessionId];
@@ -171,7 +198,7 @@ export const useMessageQueueStore = create<QueueState>((set, get) => ({
           items.map((item) => {
             if (item.status !== "sending") return item;
             changed = true;
-            return { ...item, status: "queued" as const };
+            return { ...item, status: "queued" as const, promptId: undefined };
           }),
         ]),
       );

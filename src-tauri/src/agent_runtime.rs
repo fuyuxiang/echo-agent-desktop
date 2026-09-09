@@ -459,13 +459,17 @@ fn authenticated_team_mcp_server(url: String, authorization: String) -> acp::Mcp
 }
 
 /// Resume an existing session by replaying its persisted history.
-pub async fn load_session(tx: &AcpAgentTx, session_id: &str, cwd: &Path) -> Result<()> {
-    let permission_mode = crate::permission_config::effective_session_permission_mode(session_id);
+pub async fn load_session(
+    tx: &AcpAgentTx,
+    session_id: &str,
+    cwd: &Path,
+    permission_mode: &str,
+) -> Result<()> {
     let req = acp::LoadSessionRequest::new(
         acp::SessionId::new(session_id.to_string()),
         cwd.to_path_buf(),
     )
-    .meta(Some(permission_mode_meta(&permission_mode)));
+    .meta(Some(permission_mode_meta(permission_mode)));
     let _: acp::LoadSessionResponse = acp_send(req, tx)
         .await
         .map_err(|e| anyhow!("load_session: {e:?}"))?;
