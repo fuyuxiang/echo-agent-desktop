@@ -73,10 +73,12 @@ function ToolbarDropdown({
   trigger,
   children,
   disabled,
+  closeOnSelect = false,
 }: {
   trigger: React.ReactNode;
   children: React.ReactNode;
   disabled?: boolean;
+  closeOnSelect?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -100,7 +102,16 @@ function ToolbarDropdown({
       >
         {trigger}
       </button>
-      {isOpen && <div className="atm-chip-dropdown__menu">{children}</div>}
+      {isOpen && (
+        <div
+          className="atm-chip-dropdown__menu"
+          onClick={(event) => {
+            if (closeOnSelect && (event.target as HTMLElement).closest("button")) setIsOpen(false);
+          }}
+        >
+          {children}
+        </div>
+      )}
     </div>
   );
 }
@@ -108,30 +119,43 @@ function ToolbarDropdown({
 function ModelChip({
   models,
   value,
+  autoModelId,
   onChange,
   disabled,
 }: {
   models: ModelOption[];
   value?: string;
+  autoModelId?: string;
   onChange: (id?: string) => void;
   disabled?: boolean;
 }) {
   const selected = models.find((m) => m.id === value);
+  const autoModel = models.find((m) => m.id === autoModelId);
+  const invalidSelection = !!value && !selected;
   return (
     <ToolbarDropdown
       disabled={disabled}
+      closeOnSelect
       trigger={
         <>
           <GlobeIcon size="sm" />
-          <span className="atm-prompt-chip-label">{selected?.label ?? "Auto"}</span>
+          <span className={`atm-prompt-chip-label${invalidSelection ? " atm-prompt-chip-label--invalid" : ""}`}>
+            {selected?.label ?? (invalidSelection ? `模型不可用：${value}` : `Auto${autoModel ? ` · ${autoModel.label}` : ""}`)}
+          </span>
           <ChevronDownIcon size="sm" className="atm-prompt-chip-caret" />
         </>
       }
     >
       <button type="button" className={`atm-chip-option${!value ? " active" : ""}`} onClick={() => onChange(undefined)}>
         <span className="atm-chip-option-check">{!value && <CheckIcon size="sm" />}</span>
-        <span>Auto</span>
+        <span className="atm-chip-option-copy">
+          <span>Auto</span>
+          <small>{autoModel ? `每次运行使用当前默认模型：${autoModel.label}` : "当前没有可用的默认模型"}</small>
+        </span>
       </button>
+      {invalidSelection && (
+        <div className="atm-chip-invalid">原模型“{value}”已移除或不可用，请重新选择。</div>
+      )}
       {models.map((m) => (
         <button
           key={m.id}
@@ -319,11 +343,15 @@ function RunStatusIcon({ status }: { status: string }) {
 
 function RunHistory({
   records,
+  retrying,
+  onRetry,
   onArchive,
   onDelete,
   onOpenSession,
 }: {
   records: AutomationRunRecord[];
+  retrying?: boolean;
+  onRetry: (automationId: string) => void;
   onArchive: (id: string) => void;
   onDelete: (id: string) => void;
   onOpenSession?: (sessionId: string) => void;
@@ -391,7 +419,8 @@ function RunHistory({
       <div className="atm-detail-run-history-list">
         {filtered.length === 0 && <div className="atm-panel-empty">暂无运行记录</div>}
         {filtered.map((item) => {
-          const canArchive = !item.archived && item.status !== "running";
+          const canArchive = !item.archived && item.status !== "queued" && item.status !== "running";
+          const canRetry = !item.archived && item.status === "failed";
           return (
             <div
               key={item.id}
@@ -422,6 +451,21 @@ function RunHistory({
                     <RunStatusIcon status={item.status} />
                   )}
                 </span>
+                {canRetry && (
+                  <button
+                    type="button"
+                    className="atm-run-history-item-retry"
+                    title={retrying ? "正在重新运行" : "使用当前任务配置重新运行"}
+                    aria-label={`重新运行“${item.automationName}”`}
+                    disabled={retrying}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onRetry(item.automationId);
+                    }}
+                  >
+                    <PlayIcon width={16} height={16} />
+                  </button>
+                )}
                 {canArchive && (
                   <button
                     type="button"
@@ -474,8 +518,10 @@ export function AutomationEditPage({
   draft,
   setDraft,
   saving,
+  retrying,
   workspaces,
   models,
+  autoModelId,
   skills,
   experts,
   connectors,
@@ -487,15 +533,18 @@ export function AutomationEditPage({
   onDelete,
   onOpenConnectorSettings,
   onArchiveRecord,
+  onRetryRecord,
   onDeleteRecord,
   onOpenSession,
 }: {
   mode: "create" | "edit";
   draft: AutomationDraft;
-  setDraft: (next: AutomationDraft) => void;
+  setDraft: (next: AutomationDraft | ((current: AutomationDraft) => AutomationDraft)) => void;
   saving: boolean;
+  retrying?: boolean;
   workspaces: WorkspaceInfo[];
   models: ModelOption[];
+  autoModelId?: string;
   skills: SkillInfo[];
   experts: AgentEntry[];
   connectors: ConnectorOption[];
@@ -507,13 +556,18 @@ export function AutomationEditPage({
   onDelete?: () => void;
   onOpenConnectorSettings?: () => void;
   onArchiveRecord: (id: string) => void;
+  onRetryRecord: (automationId: string) => void;
   onDeleteRecord: (id: string) => void;
   onOpenSession?: (sessionId: string) => void;
 }) {
   const isEditMode = mode === "edit";
-  const set = (patch: Partial<AutomationDraft>) => setDraft({ ...draft, ...patch });
+  const set = (patch: Partial<AutomationDraft>) =>
+    setDraft((current) => ({ ...current, ...patch }));
   const setSchedule = (patch: Partial<AutomationSchedule>) =>
-    setDraft({ ...draft, schedule: { ...draft.schedule, ...patch } });
+    setDraft((current) => ({
+      ...current,
+      schedule: { ...current.schedule, ...patch },
+    }));
 
   const scheduleMode: ScheduleMode = scheduleModeOf(draft);
   const periodicMode = inferPeriodicMode(draft.schedule);
@@ -699,6 +753,7 @@ export function AutomationEditPage({
               <ModelChip
                 models={models}
                 value={draft.modelId}
+                autoModelId={autoModelId}
                 disabled={saving}
                 onChange={(id) => set({ modelId: id })}
               />
@@ -931,6 +986,8 @@ export function AutomationEditPage({
         {isEditMode && (
           <RunHistory
             records={records}
+            retrying={retrying}
+            onRetry={onRetryRecord}
             onArchive={onArchiveRecord}
             onDelete={onDeleteRecord}
             onOpenSession={onOpenSession}
