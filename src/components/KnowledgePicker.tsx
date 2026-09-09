@@ -1,26 +1,54 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Check, ChevronDown } from "lucide-react";
+import { BookOpen, Building2, Check, ChevronDown, FolderOpen } from "lucide-react";
+import { agentSetKnowledgeSources } from "@/lib/agent-client";
 import { listKbProviders } from "@/lib/knowledge-base";
-import { openLocalPath } from "@/lib/agent-client";
-import { useKnowledgeStore, type KnowledgeMode } from "@/stores/knowledge-store";
+import { useKnowledgeStore, type KnowledgeSource } from "@/stores/knowledge-store";
+import { useOrgSessionStore } from "@/stores/org-session-store";
+
+function sourceLabel(sources: KnowledgeSource[]): string {
+  if (sources.length === 0) return "知识来源";
+  if (sources.length === 2) return "知识来源 2";
+  return sources[0] === "personal" ? "个人知识" : "组织知识";
+}
 
 export function KnowledgePicker({
   sessionId,
   disabled = false,
   onManage,
+  onOpenOrganization,
+  onToast,
 }: {
   sessionId?: string;
   disabled?: boolean;
   onManage?: () => void;
+  onOpenOrganization?: () => void;
+  onToast?: (message: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const sourceCount = useKnowledgeStore((state) => state.sourceCount);
-  const defaultMode = useKnowledgeStore((state) => state.defaultMode);
-  const sessionMode = useKnowledgeStore((state) => sessionId ? state.sessionModes[sessionId] : undefined);
-  const retrieval = useKnowledgeStore((state) => sessionId ? state.retrievals[sessionId] : undefined);
-  const mode = sessionMode ?? defaultMode;
-  const sources = useMemo(() => listKbProviders(), [sourceCount]);
+  const defaultSources = useKnowledgeStore((state) => state.defaultSources);
+  const sessionSources = useKnowledgeStore((state) => sessionId ? state.sessionSources[sessionId] : undefined);
+  const selected = sessionId ? sessionSources ?? [] : defaultSources;
+  const providers = useMemo(() => listKbProviders(), [sourceCount]);
+  const orgSession = useOrgSessionStore((state) => state.session);
+  const orgHydrated = useOrgSessionStore((state) => state.hydrated);
+  const hasSharedScope = Boolean(orgSession?.bootstrap?.scopes.some(
+    (scope) => scope.kind === "team" || scope.kind === "org",
+  ));
+  const organizationAvailable = orgHydrated
+    && orgSession?.loggedIn === true
+    && hasSharedScope
+    && orgSession.organizationMemoryEnabled === true;
+  const organizationReason = !orgHydrated
+    ? "正在检查组织连接状态"
+    : !orgSession?.loggedIn
+      ? "登录组织后可用"
+      : !hasSharedScope
+        ? "当前账号暂无团队或组织知识权限"
+        : !orgSession.organizationMemoryEnabled
+          ? "组织服务不可连接或登录已过期"
+          : "使用组织账号中你有权限的知识";
 
   useEffect(() => {
     if (!open) return;
@@ -38,104 +66,136 @@ export function KnowledgePicker({
     };
   }, [open]);
 
-  const setMode = (next: KnowledgeMode) => {
+  const applySelection = (next: KnowledgeSource[]) => {
     const state = useKnowledgeStore.getState();
-    if (sessionId) state.setSessionMode(sessionId, next);
-    else state.setDefaultMode(next);
+    if (sessionId) {
+      state.setSessionSources(sessionId, next);
+      void agentSetKnowledgeSources(sessionId, next).catch((error) => {
+        onToast?.(`知识来源同步失败：${String(error).replace(/^Error:\s*/, "")}`);
+      });
+    } else {
+      state.setDefaultSources(next);
+    }
   };
 
-  const status = (() => {
-    if (mode === "off") return { label: "知识库已关闭", detail: "当前任务不会检索个人知识库" };
-    if (sourceCount === 0) return { label: "添加知识库", detail: "添加本地文件夹后可在任务中自动检索" };
-    if (retrieval?.state === "searching") return { label: "正在检索", detail: `正在搜索 ${sourceCount} 个个人知识源` };
-    if (retrieval?.state === "used") return {
-      label: `已引用 ${retrieval.resultCount} 条`,
-      detail: `本次回答检索到：${retrieval.titles.join("、")}`,
-    };
-    if (retrieval?.state === "no-match") return { label: "知识库未命中", detail: `已搜索 ${retrieval.sourceCount} 个知识源，未找到相关内容` };
-    if (retrieval?.state === "blocked") return { label: "知识库不可用", detail: retrieval.message };
-    if (retrieval?.state === "error") return { label: "知识库检索失败", detail: retrieval.message };
-    return { label: `知识库 ${sourceCount}`, detail: "发送时使用关键词与语义混合检索，并对结果重新排序" };
-  })();
+  const toggle = (source: KnowledgeSource) => {
+    const active = selected.includes(source);
+    if (!active && source === "personal" && sourceCount === 0) {
+      setOpen(false);
+      onManage?.();
+      return;
+    }
+    if (!active && source === "organization" && !organizationAvailable) {
+      return;
+    }
+    applySelection(active
+      ? selected.filter((item) => item !== source)
+      : [...selected, source]);
+  };
+
+  const personalSelected = selected.includes("personal");
+  const organizationSelected = selected.includes("organization");
+  const hasUnavailableSelection = (personalSelected && sourceCount === 0)
+    || (organizationSelected && !organizationAvailable);
+  const label = sourceLabel(selected);
+  const detail = selected.length === 0
+    ? "未选择知识来源，本次任务不会读取个人或组织知识库"
+    : `已选择：${[
+        personalSelected ? "个人知识库" : null,
+        organizationSelected ? "组织知识库" : null,
+      ].filter(Boolean).join("、")}`;
 
   return (
     <div className="knowledge-picker" ref={rootRef}>
       <button
         type="button"
-        className={`knowledge-picker__trigger${mode === "auto" && sourceCount > 0 ? " is-active" : ""}${retrieval?.state === "error" || retrieval?.state === "blocked" ? " is-error" : ""}`}
+        className={`knowledge-picker__trigger${selected.length > 0 ? " is-active" : ""}${hasUnavailableSelection ? " is-error" : ""}`}
         onClick={(event) => {
           event.stopPropagation();
-          if (sourceCount === 0 && onManage) {
-            onManage();
-            return;
-          }
           setOpen((value) => !value);
         }}
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={status.label}
-        title={status.detail}
+        aria-label={`${label}${selected.length === 0 ? "，未选择" : ""}`}
+        title={detail}
       >
         <BookOpen size={15} />
-        <span>{status.label}</span>
-        {sourceCount > 0 && <ChevronDown size={13} />}
+        <span>{label}</span>
+        <ChevronDown size={13} />
       </button>
-      {open && sourceCount > 0 && (
-        <div className="knowledge-picker__menu" role="menu" aria-label="个人知识库设置">
-          <div className="knowledge-picker__heading">个人知识库</div>
+
+      {open && (
+        <div className="knowledge-picker__menu" role="menu" aria-label="选择知识来源">
+          <div className="knowledge-picker__heading">知识来源</div>
           <div className="knowledge-picker__hint">
-            自动进行关键词与语义混合检索并重新排序，命中的片段会随问题发送给当前模型并标注来源。
+            可多选。未选择时不会读取任何知识库；选择只作用于当前任务。
           </div>
-          {([
-            ["auto", "自动使用", "从相关文件中检索，未命中时正常回答"],
-            ["off", "本次关闭", "当前任务不读取个人知识库"],
-          ] as const).map(([value, label, description]) => (
-            <button
-              key={value}
-              type="button"
-              role="menuitemradio"
-              aria-checked={mode === value}
-              className="knowledge-picker__option"
-              onClick={() => {
-                setMode(value);
-                setOpen(false);
-              }}
-            >
-              <span className="knowledge-picker__check">{mode === value && <Check size={15} />}</span>
-              <span>
-                <strong>{label}</strong>
-                <small>{description}</small>
+
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={personalSelected}
+            aria-disabled={!personalSelected && sourceCount === 0}
+            className={`knowledge-picker__source-option${personalSelected ? " is-selected" : ""}${sourceCount === 0 ? " is-unavailable" : ""}`}
+            onClick={() => toggle("personal")}
+          >
+            <span className="knowledge-picker__source-icon"><FolderOpen size={16} /></span>
+            <span className="knowledge-picker__source-copy">
+              <span className="knowledge-picker__source-title">
+                <strong>个人知识库</strong>
+                <span className="knowledge-picker__availability">
+                  {sourceCount > 0 ? `${sourceCount} 个来源` : "未配置"}
+                </span>
               </span>
-            </button>
-          ))}
-          <div className="knowledge-picker__sources" title={sources.map((source) => source.label).join("\n")}>
-            已连接 {sourceCount} 个知识源
-          </div>
-          {retrieval?.state === "used" && (
-            <div className="knowledge-picker__last-results">
-              <strong>上次回答引用</strong>
-              {retrieval.items.map((item, index) => item.path ? (
-                <button
-                  key={`${item.path}-${index}`}
-                  type="button"
-                  title={item.path}
-                  onClick={() => void openLocalPath(item.path!).catch(() => {})}
-                >
-                  {item.title}
-                </button>
-              ) : <span key={`${item.title}-${index}`}>{item.title}</span>)}
+              <small>{sourceCount > 0 ? "来自「更多 → 个人知识库」中的本地文件夹" : "先添加本地文件夹后即可选择"}</small>
+            </span>
+            <span className="knowledge-picker__checkbox" aria-hidden="true">
+              {personalSelected && <Check size={13} />}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={organizationSelected}
+            aria-disabled={!organizationSelected && !organizationAvailable}
+            className={`knowledge-picker__source-option${organizationSelected ? " is-selected" : ""}${!organizationAvailable ? " is-unavailable" : ""}`}
+            onClick={() => toggle("organization")}
+          >
+            <span className="knowledge-picker__source-icon"><Building2 size={16} /></span>
+            <span className="knowledge-picker__source-copy">
+              <span className="knowledge-picker__source-title">
+                <strong>组织知识库</strong>
+                <span className={`knowledge-picker__availability${organizationAvailable ? " is-ready" : ""}`}>
+                  {organizationAvailable ? "可用" : "不可用"}
+                </span>
+              </span>
+              <small>{organizationReason}</small>
+            </span>
+            <span className="knowledge-picker__checkbox" aria-hidden="true">
+              {organizationSelected && <Check size={13} />}
+            </span>
+          </button>
+
+          {providers.length > 0 && (
+            <div className="knowledge-picker__connected" title={providers.map((source) => source.label).join("\n")}>
+              个人知识已连接：{providers.map((source) => source.label).join("、")}
             </div>
           )}
-          {onManage && (
-            <button
-              type="button"
-              className="knowledge-picker__manage"
-              onClick={() => { setOpen(false); onManage(); }}
-            >
-              管理个人知识库
-            </button>
-          )}
+
+          <div className="knowledge-picker__actions">
+            {onManage && (
+              <button type="button" onClick={() => { setOpen(false); onManage(); }}>
+                管理个人知识库
+              </button>
+            )}
+            {!organizationAvailable && onOpenOrganization && (
+              <button type="button" onClick={() => { setOpen(false); onOpenOrganization(); }}>
+                {orgSession?.loggedIn ? "查看组织连接" : "登录组织"}
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

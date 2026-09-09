@@ -323,6 +323,14 @@ function PersonalKnowledgeResult({
       const path = typeof item.path === "string" ? item.path : "";
       const title = typeof item.title === "string" ? item.title : `知识条目 ${index + 1}`;
       const snippet = typeof item.snippet === "string" ? item.snippet : "";
+      const sourceLabel = typeof item.sourceLabel === "string" ? item.sourceLabel : "";
+      const startLine = typeof item.startLine === "number" ? item.startLine : null;
+      const endLine = typeof item.endLine === "number" ? item.endLine : null;
+      const location = startLine
+        ? startLine === endLine || endLine === null
+          ? `第 ${startLine} 行`
+          : `第 ${startLine}–${endLine} 行`
+        : "";
       return <button
         key={path || `${title}-${index}`}
         type="button"
@@ -332,6 +340,7 @@ function PersonalKnowledgeResult({
         title={path || title}
       >
         <strong>{title}</strong>
+        {(sourceLabel || location) && <small>{[sourceLabel, location].filter(Boolean).join(" · ")}</small>}
         {snippet && <span>{snippet}</span>}
         {path && <small>{path}</small>}
       </button>;

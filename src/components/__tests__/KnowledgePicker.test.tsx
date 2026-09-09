@@ -3,58 +3,92 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { KnowledgePicker } from "../KnowledgePicker";
 import { registerKbProvider, resetKbRegistry } from "@/lib/knowledge-base";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
+import { resetOrgSessionMirror, useOrgSessionStore } from "@/stores/org-session-store";
+
+const setKnowledgeSourcesMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/agent-client", () => ({
+  agentSetKnowledgeSources: setKnowledgeSourcesMock,
+}));
 
 describe("KnowledgePicker", () => {
   beforeEach(() => {
     resetKbRegistry();
+    resetOrgSessionMirror();
+    setKnowledgeSourcesMock.mockReset();
+    setKnowledgeSourcesMock.mockResolvedValue({
+      personalSelected: false,
+      organizationSelected: false,
+      personalAttached: false,
+      organizationAttached: false,
+    });
     useKnowledgeStore.setState({
-      defaultMode: "auto",
-      sessionModes: {},
+      defaultSources: [],
+      sessionSources: {},
       sourceCount: 0,
       retrievals: {},
+      turnTraces: {},
     });
   });
 
-  it("未配置知识源时直接进入管理页", () => {
+  it("未配置个人知识时解释原因并进入管理页", () => {
     const onManage = vi.fn();
     render(<KnowledgePicker onManage={onManage} />);
-    fireEvent.click(screen.getByRole("button", { name: "添加知识库" }));
+    fireEvent.click(screen.getByRole("button", { name: "知识来源，未选择" }));
+    const personal = screen.getByRole("menuitemcheckbox", { name: /个人知识库/ });
+    expect(personal).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(personal);
     expect(onManage).toHaveBeenCalledOnce();
   });
 
-  it("支持按会话关闭并重新开启自动检索", () => {
+  it("支持为当前任务多选和取消知识来源", () => {
     registerKbProvider({ id: "local", label: "本地：notes", isEnabled: () => true, list: () => [] });
     useKnowledgeStore.getState().setSourceCount(1);
-    render(<KnowledgePicker sessionId="session-1" onManage={vi.fn()} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "知识库 1" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /本次关闭/ }));
-    expect(useKnowledgeStore.getState().sessionModes["session-1"]).toBe("off");
-    expect(screen.getByRole("button", { name: "知识库已关闭" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "知识库已关闭" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /自动使用/ }));
-    expect(useKnowledgeStore.getState().sessionModes["session-1"]).toBe("auto");
-  });
-
-  it("显示本轮实际引用结果", () => {
-    registerKbProvider({ id: "local", label: "本地：notes", isEnabled: () => true, list: () => [] });
-    useKnowledgeStore.setState({
-      sourceCount: 1,
-      retrievals: {
-        "session-1": {
-          state: "used",
-          resultCount: 2,
-          sourceCount: 1,
-          titles: ["制度", "流程"],
-          items: [{ title: "制度", path: "/notes/policy.md" }, { title: "流程" }],
+    useOrgSessionStore.setState({
+      hydrated: true,
+      session: {
+        loggedIn: true,
+        organizationMemoryEnabled: true,
+        bootstrap: {
+          apiVersion: 1,
+          user: { id: "u1", username: "u1", displayName: "用户", role: "member", clearance: 1 },
+          scopes: [{ id: "team-1", kind: "team", name: "产品团队" }],
+          policy: {},
+          serverTime: Date.now(),
         },
       },
     });
     render(<KnowledgePicker sessionId="session-1" />);
-    expect(screen.getByRole("button", { name: "已引用 2 条" })).toHaveAttribute(
-      "title",
-      expect.stringContaining("制度、流程"),
-    );
+
+    fireEvent.click(screen.getByRole("button", { name: "知识来源，未选择" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /个人知识库/ }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /组织知识库/ }));
+
+    expect(useKnowledgeStore.getState().sessionSources["session-1"]).toEqual([
+      "personal",
+      "organization",
+    ]);
+    expect(screen.getByRole("button", { name: "知识来源 2" })).toBeInTheDocument();
+    expect(setKnowledgeSourcesMock).toHaveBeenLastCalledWith("session-1", [
+      "personal",
+      "organization",
+    ]);
+
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /个人知识库/ }));
+    expect(useKnowledgeStore.getState().sessionSources["session-1"]).toEqual(["organization"]);
+  });
+
+  it("组织未登录时不可选择，并提供明确入口", () => {
+    const onOpenOrganization = vi.fn();
+    useOrgSessionStore.setState({ hydrated: true, session: { loggedIn: false } });
+    render(<KnowledgePicker onOpenOrganization={onOpenOrganization} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "知识来源，未选择" }));
+    const organization = screen.getByRole("menuitemcheckbox", { name: /组织知识库/ });
+    expect(organization).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("登录组织后可用")).toBeInTheDocument();
+    fireEvent.click(organization);
+    expect(useKnowledgeStore.getState().defaultSources).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "登录组织" }));
+    expect(onOpenOrganization).toHaveBeenCalledOnce();
   });
 });

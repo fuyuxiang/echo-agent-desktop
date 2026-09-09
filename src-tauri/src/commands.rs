@@ -1199,9 +1199,8 @@ pub async fn agent_new_session(
     }
     crate::permission_config::mark_session_permission_mode_synced(&session_id, &permission_mode);
     state.record_session_workspace(&session_id, Path::new(&cwd));
-    // Team MCP remains a durable local tool. The knowledge bridge is reconciled
-    // per session: local folders work signed out, while organization tools stay
-    // gated by the authenticated capability.
+    // Team MCP remains a durable local tool. Knowledge tools are attached only
+    // after the user explicitly selects sources for this task.
     crate::team_mcp::persist_registration(&tx, &session_id);
     crate::org_mcp::reconcile_registration(&tx, &session_id);
     Ok(session_id)
@@ -1249,8 +1248,8 @@ pub async fn agent_load_session(
         crate::permission_config::permission_mode_status(true, Some(&session_id)),
     );
     state.record_session_workspace(&session_id, Path::new(&cwd));
-    // Restore durable local MCP tools, then reconcile personal and optional
-    // organization knowledge for this live session.
+    // Restore durable local MCP tools, then reapply this task's explicit
+    // knowledge-source choice against the capabilities currently available.
     crate::team_mcp::persist_registration(&tx, &session_id);
     crate::org_mcp::reconcile_registration(&tx, &session_id);
     Ok(current_model_id)
@@ -1277,6 +1276,46 @@ pub fn agent_list_all_sessions(
     include_archived: Option<bool>,
 ) -> Result<Vec<SessionSummary>, String> {
     sessions::list_all_sessions(include_archived.unwrap_or(false))
+}
+
+#[tauri::command]
+pub async fn agent_set_knowledge_sources(
+    state: State<'_, AppState>,
+    session_id: String,
+    personal: bool,
+    organization: bool,
+) -> Result<KnowledgeSourcesView, String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    state.session_workspace(&session_id)?;
+    let tx = state
+        .tx
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("agent not initialized")?;
+    crate::org_mcp::set_session_selection(&session_id, personal, organization);
+    crate::org_mcp::reconcile_session(&tx, &session_id).await?;
+    let active = crate::org_mcp::effective_selection(crate::org_mcp::KnowledgeSourceSelection {
+        personal,
+        organization,
+    });
+    Ok(KnowledgeSourcesView {
+        personal_selected: personal,
+        organization_selected: organization,
+        personal_attached: active.personal,
+        organization_attached: active.organization,
+    })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeSourcesView {
+    personal_selected: bool,
+    organization_selected: bool,
+    personal_attached: bool,
+    organization_attached: bool,
 }
 
 #[tauri::command]
@@ -1374,6 +1413,7 @@ pub async fn agent_shutdown(
         scheduler.abort();
     }
     crate::automations::clear_runtime_sessions();
+    crate::org_mcp::clear_session_selections();
     state.clear_orphaned_sessions();
     state.clear_session_workspaces();
     crate::agent_admin::clear_runtime_capabilities();
@@ -1776,6 +1816,7 @@ pub async fn agent_delete_session(
             }
         };
     state.forget_session_workspace(&session_id);
+    crate::org_mcp::forget_session_selection(&session_id);
     crate::permission_config::forget_session_permission_mode(&session_id);
     if let Err(error) = crate::meta::clear_permission_mode(&session_id) {
         tracing::warn!(%error, %session_id, "session deleted but permission metadata cleanup failed");

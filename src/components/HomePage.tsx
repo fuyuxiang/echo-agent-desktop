@@ -26,6 +26,7 @@ export function HomePage({
   onSelectExpert,
   onNavigateConnectors,
   onOpenKnowledgeBase,
+  onOpenOrganization,
   commandRefreshKey,
   onClientSlashCommand,
 }: {
@@ -46,6 +47,7 @@ export function HomePage({
   onSelectExpert?: (agent: AgentEntry) => void;
   onNavigateConnectors?: () => void;
   onOpenKnowledgeBase?: () => void;
+  onOpenOrganization?: () => void;
   commandRefreshKey?: number;
   onClientSlashCommand?: (
     invocation: SlashCommandInvocation,
@@ -116,6 +118,7 @@ export function HomePage({
             onSelectExpert={onSelectExpert}
             onNavigateConnectors={onNavigateConnectors}
             onOpenKnowledgeBase={onOpenKnowledgeBase}
+            onOpenOrganization={onOpenOrganization}
             commandRefreshKey={commandRefreshKey}
             onClientSlashCommand={onClientSlashCommand}
             activeExpertName={pendingExpert?.name}

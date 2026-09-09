@@ -92,6 +92,7 @@ import { migrateCatalogRootStorage } from "./lib/catalog-root-storage";
 import { parseRememberArguments, type SlashCommandInvocation } from "./lib/slash-commands";
 import { useUpdateStore } from "./stores/update-store";
 import { useOrgSessionStore } from "./stores/org-session-store";
+import { useKnowledgeStore } from "./stores/knowledge-store";
 import { listenOrgSessionChanged } from "./lib/org-client";
 import { indexTaskArtifacts } from "./lib/artifact-catalog";
 import {
@@ -995,6 +996,7 @@ function Shell() {
         ? permissionState.capabilityStatus.permissionMode
         : permissionState.homeMode;
       const sessionId = await agentNewSession(cwd, modelId, draftPermissionMode);
+      useKnowledgeStore.getState().bindSessionSources(sessionId, true);
       setCurrentModelId(modelId);
       sessionsStore.getState().setCurrent(sessionId);
       setPlaceholderView(null);
@@ -2078,6 +2080,7 @@ function Shell() {
                   onSelectExpert={handleStartWithExpert}
                   onNavigateConnectors={() => setPlaceholderView("专家·技能·连接器")}
                   onOpenKnowledgeBase={() => handleNavigate("知识库")}
+                  onOpenOrganization={() => handleNavigate("组织")}
                   commandRefreshKey={commandRefreshKey}
                   onClientSlashCommand={handleClientSlashCommand}
                 />
@@ -2100,6 +2103,7 @@ function Shell() {
                   onSelectExpert={handleStartWithExpert}
                   onNavigateConnectors={() => setPlaceholderView("专家·技能·连接器")}
                   onOpenKnowledgeBase={() => handleNavigate("知识库")}
+                  onOpenOrganization={() => handleNavigate("组织")}
                   commandRefreshKey={commandRefreshKey}
                   onClientSlashCommand={handleClientSlashCommand}
                 />
