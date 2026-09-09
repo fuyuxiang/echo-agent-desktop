@@ -95,4 +95,33 @@ describe("theme token contract", () => {
     expect(activeBlock).toContain("background: var(--echo-brand);");
     expect(activeBlock).toContain("color: var(--echo-text-on-primary, #fff);");
   });
+
+  it("插件市场主操作在最后样式层保持主题对比度", () => {
+    const genericRule = visualPolishCss.indexOf(
+      ".resources-panel__action-btn,\n.plugins-panel__action-btn,\n.marketplace-panel__action-btn {",
+    );
+    const primarySelector =
+      ".marketplace-panel__action-btn.marketplace-panel__action-btn--primary {";
+    const primaryRule = visualPolishCss.indexOf(primarySelector);
+    const primaryBlock = visualPolishCss.slice(
+      primaryRule,
+      visualPolishCss.indexOf("}", primaryRule) + 1,
+    );
+    const disabledSelector =
+      ".marketplace-panel__action-btn.marketplace-panel__action-btn--primary:disabled {";
+    const disabledRule = visualPolishCss.indexOf(disabledSelector);
+    const disabledBlock = visualPolishCss.slice(
+      disabledRule,
+      visualPolishCss.indexOf("}", disabledRule) + 1,
+    );
+
+    expect(genericRule).toBeGreaterThanOrEqual(0);
+    expect(primaryRule).toBeGreaterThan(genericRule);
+    expect(primaryBlock).toContain("background: var(--echo-button-primary-bg);");
+    expect(primaryBlock).toContain("color: var(--echo-button-primary-fg);");
+    expect(disabledRule).toBeGreaterThan(primaryRule);
+    expect(disabledBlock).toContain("background: var(--echo-button-primary-bg-disabled);");
+    expect(disabledBlock).toContain("color: var(--echo-button-primary-fg-disabled);");
+    expect(disabledBlock).toContain("opacity: 1;");
+  });
 });

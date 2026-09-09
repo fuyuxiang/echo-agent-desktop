@@ -11509,9 +11509,23 @@ button.diff__path {
   opacity: 0.5;
 }
 .marketplace-panel__action-btn--primary {
-  background: var(--echo-brand);
-  border-color: var(--echo-brand);
-  color: #fff;
+  background: var(--echo-button-primary-bg);
+  border-color: var(--echo-button-primary-bg);
+  color: var(--echo-button-primary-fg);
+}
+.marketplace-panel__action-btn--primary:hover:not(:disabled) {
+  background: var(--echo-button-primary-bg-hover);
+  border-color: var(--echo-button-primary-bg-hover);
+}
+.marketplace-panel__action-btn--primary:active:not(:disabled) {
+  background: var(--echo-button-primary-bg-active);
+  border-color: var(--echo-button-primary-bg-active);
+}
+.marketplace-panel__action-btn--primary:disabled {
+  border-color: var(--echo-button-primary-bg-disabled);
+  background: var(--echo-button-primary-bg-disabled);
+  color: var(--echo-button-primary-fg-disabled);
+  opacity: 1;
 }
 .marketplace-panel__actions {
   display: flex;
