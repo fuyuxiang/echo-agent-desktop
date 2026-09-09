@@ -106,6 +106,7 @@ export function Composer({
   usageMsgCount,
   knowledgeSessionId,
   onOpenKnowledgeBase,
+  onOpenOrganization,
 }: {
   streaming: boolean;
   /** A cancellation request is in flight; keep the stop action single-shot. */
@@ -198,6 +199,8 @@ export function Composer({
   knowledgeSessionId?: string;
   /** Opens the personal knowledge management page. */
   onOpenKnowledgeBase?: () => void;
+  /** Opens organization login/connection management. */
+  onOpenOrganization?: () => void;
 }) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -801,8 +804,10 @@ export function Composer({
           )}
           <KnowledgePicker
             sessionId={knowledgeSessionId}
-            disabled={!apiReady || awaitingQuestion || disabled}
+            disabled={!apiReady || awaitingQuestion || disabled || streaming}
             onManage={onOpenKnowledgeBase}
+            onOpenOrganization={onOpenOrganization}
+            onToast={onToast}
           />
           <div className="echo-composer__spacer" />
           {/* 发送前成本预估徽章(对齐 EchoAgent credit-estimate):纯本地 token 估算,

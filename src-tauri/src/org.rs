@@ -504,8 +504,8 @@ pub async fn org_local_kb_sources_set(
     }
     write_json_private(&local_kb_sources_path(), &normalized)?;
     // Personal knowledge availability is session-scoped. Reconcile every live
-    // session immediately so a newly added folder works without restarting or
-    // creating another task, and removing the final folder detaches the bridge.
+    // session so tasks that selected it see folder changes without restarting;
+    // tasks that did not select it remain detached.
     crate::org_mcp::reconcile_all_sessions(&app).await;
     crate::personal_knowledge::schedule_rebuild(app, false);
     Ok(())

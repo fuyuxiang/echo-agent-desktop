@@ -279,6 +279,7 @@ pub fn run() {
             commands::agent_list_all_sessions,
             commands::agent_set_model,
             commands::agent_list_workspaces,
+            commands::agent_set_knowledge_sources,
             commands::agent_send,
             commands::agent_cancel,
             commands::agent_shutdown,

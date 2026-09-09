@@ -15,6 +15,7 @@ import {
 } from "@/lib/user-message";
 import { copyShareText } from "@/lib/share";
 import { partitionAssistantParts } from "@/lib/execution-process";
+import { useKnowledgeStore } from "@/stores/knowledge-store";
 const logoMarkUrl = "/app-icon.png";
 import {
   createWebSpeechTtsProvider,
@@ -91,6 +92,11 @@ export function MessageItem({
   const { theme } = useTheme();
   const [speaking, setSpeaking] = useState(false);
   const [copiedKind, setCopiedKind] = useState<"plain" | "markdown" | null>(null);
+  const knowledgeTrace = useKnowledgeStore((state) => (
+    sessionId && message.promptId
+      ? state.turnTraces[sessionId]?.[message.promptId]
+      : undefined
+  ));
   const stopSpeakingRef = useRef<(() => void) | null>(null);
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -153,6 +159,10 @@ export function MessageItem({
       && message.stopReason
       && message.cancelTrigger !== "send_now"
       && (message.stopReason !== "end_turn" || message.cancellationCategory),
+  );
+  const hasKnowledgeTrace = Boolean(
+    knowledgeTrace?.personal && knowledgeTrace.personal.state !== "idle"
+      || knowledgeTrace?.organization?.state === "unavailable",
   );
 
   const toggleSpeak = useCallback(() => {
@@ -323,7 +333,7 @@ export function MessageItem({
             <LoadingRow startedAt={message.startedAt} />
           )}
           {assistantGroups
-            && (assistantGroups.processParts.length > 0 || hasTerminalProcessStatus)
+            && (assistantGroups.processParts.length > 0 || hasTerminalProcessStatus || hasKnowledgeTrace)
             && (
               <ExecutionProcess
                 parts={assistantGroups.processParts}
@@ -336,6 +346,12 @@ export function MessageItem({
                 agentResult={message.agentResult}
                 markdownConfig={markdownConfig}
                 onOpenTool={onOpenTool}
+                knowledgeTrace={knowledgeTrace}
+                onOpenKnowledgePath={(path) => {
+                  void openLocalPath(path, cwd).catch((error) => {
+                    onToast?.(`打开知识文件失败：${String(error).replace(/^Error:\s*/, "")}`);
+                  });
+                }}
               />
             )}
           {assistantGroups?.responseParts.map((part, index) => (

@@ -1,5 +1,8 @@
 import { listKbProviders, searchKbWithDiagnostics, type KbEntry } from "./knowledge-base";
-import { searchPersonalKnowledge } from "./personal-knowledge";
+import {
+  searchPersonalKnowledge,
+  type PersonalKnowledgeSearchItem,
+} from "./personal-knowledge";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauriAvailable } from "./tauri-kb-reader";
@@ -78,23 +81,22 @@ async function retrieveLexical(query: string): Promise<{ entries: KbEntry[]; fai
   };
 }
 
-async function retrieve(query: string): Promise<{ entries: KbEntry[]; failures: string[] }> {
-  let semanticFailure: string | null = null;
-  try {
-    const semantic = await withTimeout(searchPersonalKnowledge(query, MAX_RESULTS), 12_000);
-    if (semantic) {
-      return {
-        entries: semantic.items,
-        failures: [],
-      };
-    }
-  } catch (error) {
-    semanticFailure = String(error).replace(/^Error:\s*/, "");
+async function retrieve(
+  query: string,
+): Promise<{ entries: Array<KbEntry | PersonalKnowledgeSearchItem>; failures: string[] }> {
+  const semantic = await withTimeout(searchPersonalKnowledge(query, MAX_RESULTS), 12_000);
+  if (semantic) {
+    return {
+      entries: semantic.items,
+      failures: [],
+    };
   }
+  // Browser-only/legacy fallback. A Tauri semantic failure must fail closed
+  // instead of reading the same folders again through a second JS path.
   const lexical = await retrieveLexical(query);
   return {
     entries: lexical.entries,
-    failures: semanticFailure ? [semanticFailure, ...lexical.failures] : lexical.failures,
+    failures: lexical.failures,
   };
 }
 
@@ -132,35 +134,43 @@ export async function preparePromptWithPersonalKnowledge(
   sessionId: string,
   promptText: string,
   displayText: string,
+  promptId?: string,
 ): Promise<PreparedKnowledgePrompt> {
   const store = useKnowledgeStore.getState();
-  const mode = store.bindSessionMode(sessionId);
+  const selectedSources = store.bindSessionSources(sessionId);
   const sources = listKbProviders();
   store.setSourceCount(sources.length);
   const query = displayText.trim();
   const shouldSearch = query.length >= 2
     && !query.startsWith("/")
     && !NON_SEARCH_PROMPTS.has(query);
-  if (mode === "off" || sources.length === 0 || !shouldSearch || promptText.includes(KNOWLEDGE_BEGIN)) {
-    store.setRetrieval(sessionId, { state: "idle" });
+  if (selectedSources.includes("personal") && sources.length === 0) {
+    store.setRetrieval(sessionId, {
+      state: "blocked",
+      message: "尚未添加个人知识源，本次任务未读取本地文件",
+    }, promptId);
+    return { promptText, resultCount: 0, sourceCount: 0 };
+  }
+  if (!selectedSources.includes("personal") || !shouldSearch || promptText.includes(KNOWLEDGE_BEGIN)) {
+    store.setRetrieval(sessionId, { state: "idle" }, promptId);
     return { promptText, resultCount: 0, sourceCount: sources.length };
   }
 
-  store.setRetrieval(sessionId, { state: "searching" });
+  store.setRetrieval(sessionId, { state: "searching" }, promptId);
   try {
     if (!await personalKnowledgeAllowed()) {
       store.setRetrieval(sessionId, {
         state: "blocked",
         message: "当前组织策略或连接状态不允许读取个人知识库",
-      });
+      }, promptId);
       return { promptText, resultCount: 0, sourceCount: sources.length };
     }
     const { entries, failures } = await withTimeout(retrieve(query), SEARCH_TIMEOUT_MS);
     if (entries.length === 0) {
       if (failures.length >= sources.length) {
-        store.setRetrieval(sessionId, { state: "error", message: failures.join("；") });
+        store.setRetrieval(sessionId, { state: "error", message: failures.join("；") }, promptId);
       } else {
-        store.setRetrieval(sessionId, { state: "no-match", sourceCount: sources.length });
+        store.setRetrieval(sessionId, { state: "no-match", sourceCount: sources.length }, promptId);
       }
       return { promptText, resultCount: 0, sourceCount: sources.length };
     }
@@ -170,8 +180,15 @@ export async function preparePromptWithPersonalKnowledge(
       resultCount: entries.length,
       sourceCount: usedSources.size,
       titles: entries.map((entry) => entry.title),
-      items: entries.map((entry) => ({ title: entry.title, path: entry.url })),
-    });
+      items: entries.map((entry) => ({
+        title: entry.title,
+        path: entry.url,
+        sourceLabel: "sourceLabel" in entry ? entry.sourceLabel : undefined,
+        snippet: entry.snippet,
+        startLine: "startLine" in entry ? entry.startLine : undefined,
+        endLine: "endLine" in entry ? entry.endLine : undefined,
+      })),
+    }, promptId);
     return {
       promptText: `${contextBlock(entries)}\n\n${promptText}`,
       resultCount: entries.length,
@@ -181,7 +198,7 @@ export async function preparePromptWithPersonalKnowledge(
     store.setRetrieval(sessionId, {
       state: "error",
       message: String(error).replace(/^Error:\s*/, ""),
-    });
+    }, promptId);
     // Knowledge is optional context. A broken source must not lose the task.
     return { promptText, resultCount: 0, sourceCount: sources.length };
   }

@@ -188,6 +188,8 @@ function activeToolLabel(tool: ToolCallView): string {
       return "正在查找专家";
     case "knowledge":
       return "正在检索组织知识";
+    case "personal-knowledge":
+      return "正在检索个人知识";
     default:
       return "正在执行操作";
   }
