@@ -25,10 +25,7 @@ import {
   SettingsIcon,
   ChevronDownIcon,
   PinFilledIcon,
-  DeleteIcon,
-  EditToolIcon,
   MoreDotsIcon,
-  ArchiveIcon,
   AddIcon,
   MyFilesIconV2,
   MoreMenuImaKnowledgeIcon,
@@ -38,6 +35,8 @@ import {
   CloudToolIcon,
   PluginsIcon,
 } from "@/foundation/components/Icon/icons";
+import { SessionContextMenu } from "./SessionContextMenu";
+import { useAppDialog } from "./AppDialog";
 const logoMarkUrl = "/app-icon.png";
 
 const NAV = [
@@ -337,106 +336,6 @@ function handleMenuKeyDown(
   }
 }
 
-interface ContextMenuProps {
-  x: number;
-  y: number;
-  sessionId: string;
-  sessionTitle: string;
-  isPinned: boolean;
-  isArchived: boolean;
-  onClose: () => void;
-  onRename: (sessionId: string, newTitle: string) => void;
-  onDelete: (sessionId: string) => void;
-  onPin: (sessionId: string, pinned: boolean) => void;
-  onArchive: (sessionId: string, archived: boolean) => void;
-}
-
-function SessionContextMenu({ x, y, sessionId, sessionTitle, isPinned, isArchived, onClose, onRename, onDelete, onPin, onArchive }: ContextMenuProps) {
-  const [renaming, setRenaming] = useState(false);
-  const [newTitle, setNewTitle] = useState(sessionTitle);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    menuRef.current?.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
-  }, []);
-
-  useEffect(() => {
-    if (renaming && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [renaming]);
-
-  useEffect(() => {
-    const handleClick = () => onClose();
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("click", handleClick);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("click", handleClick);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [onClose]);
-
-  const handleRename = () => {
-    if (newTitle.trim() && newTitle !== sessionTitle) {
-      onRename(sessionId, newTitle.trim());
-    }
-    setRenaming(false);
-    onClose();
-  };
-
-  return (
-    <div
-      ref={menuRef}
-      className="context-menu"
-      role="menu"
-      aria-label={`${sessionTitle} 会话操作`}
-      style={{ position: "fixed", left: x, top: y, zIndex: 1000 }}
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={(event) => handleMenuKeyDown(event, onClose)}
-    >
-      {renaming ? (
-        <div className="context-menu__rename">
-          <input
-            ref={inputRef}
-            type="text"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleRename();
-              if (e.key === "Escape") setRenaming(false);
-            }}
-            className="context-menu__rename-input"
-          />
-        </div>
-      ) : (
-        <>
-          <button type="button" role="menuitem" className="context-menu__item" onClick={() => setRenaming(true)}>
-            <EditToolIcon size="sm" />
-            <span>重命名</span>
-          </button>
-          <button type="button" role="menuitem" className="context-menu__item" onClick={() => { onPin(sessionId, !isPinned); onClose(); }}>
-            <PinFilledIcon size="sm" />
-            <span>{isPinned ? "取消置顶" : "置顶"}</span>
-          </button>
-          <button type="button" role="menuitem" className="context-menu__item" onClick={() => { onArchive(sessionId, !isArchived); onClose(); }}>
-            <ArchiveIcon size="sm" />
-            <span>{isArchived ? "恢复会话" : "归档"}</span>
-          </button>
-          <button type="button" role="menuitem" className="context-menu__item context-menu__item--danger" onClick={() => { onDelete(sessionId); onClose(); }}>
-            <DeleteIcon size="sm" />
-            <span>删除</span>
-          </button>
-        </>
-      )}
-    </div>
-  );
-}
-
 /**
  * "更多" 侧栏按钮的弹出菜单 — 对齐 EchoAgent：
  * - hover 打开，向右浮出（不向下盖住会话列表）
@@ -685,6 +584,9 @@ export function Sidebar({
   onToast,
   onOpenProject,
   onStartProjectConversation,
+  onRenameSession,
+  onArchiveSession,
+  onDeleteSession,
   onSessionArchived,
   onSessionDeleted,
   onRetrySessions,
@@ -705,6 +607,10 @@ export function Sidebar({
   onOpenProject?: (projectId: string) => void;
   /** Start a new conversation within a project. */
   onStartProjectConversation?: (projectId: string) => void;
+  /** Application-owned session lifecycle actions shared by every session surface. */
+  onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;
+  onArchiveSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
+  onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
   /** Keep App's focused transcript and project references in sync. */
   onSessionArchived?: (sessionId: string, archived: boolean) => void;
   onSessionDeleted?: (sessionId: string) => void;
@@ -790,12 +696,15 @@ export function Sidebar({
     sessionTitle: string;
     isPinned: boolean;
     isArchived: boolean;
+    projectId?: string;
     returnFocus?: HTMLElement;
   } | null>(null);
+  const skipMenuFocusRestoreRef = useRef(false);
+  const { requestConfirmation, dialog } = useAppDialog("sidebar-session-actions");
 
   const allSessions = independent;
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean, isArchived: boolean) => {
+  const handleContextMenu = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean, isArchived: boolean, projectId?: string) => {
     e.preventDefault();
     e.stopPropagation();
     const focused = document.activeElement instanceof HTMLElement
@@ -804,40 +713,58 @@ export function Sidebar({
     const returnFocus = focused && e.currentTarget.contains(focused)
       ? focused
       : e.currentTarget.querySelector<HTMLElement>("button") ?? undefined;
-    setContextMenu({ x: e.clientX, y: e.clientY, sessionId, sessionTitle, isPinned, isArchived, returnFocus });
+    setContextMenu({ x: e.clientX, y: e.clientY, sessionId, sessionTitle, isPinned, isArchived, projectId, returnFocus });
   }, []);
+
+  const resolveSessionCwd = useCallback((sessionId: string) => (
+    allSessions.find((session) => session.sessionId === sessionId)?.cwd
+    ?? projects.find((project) => (
+      project.conversations.some((conversation) => conversation.sessionId === sessionId)
+      || project.plans.some((plan) => plan.sessionId === sessionId)
+      || project.tasks.some((task) => task.sessionId === sessionId)
+    ))?.cwd
+  ), [allSessions, projects]);
 
   // Rename via EchoAgent's `echo.agent/session/rename`. EchoAgent broadcasts
   // SessionSummaryGenerated on success (agent://summary → store upsert); we also
   // update optimistically to avoid flicker.
   const handleRename = useCallback(async (sessionId: string, newTitle: string) => {
     const session = allSessions.find(s => s.sessionId === sessionId);
-    if (!session) return;
+    const cwd = resolveSessionCwd(sessionId);
     try {
-      await agentRenameSession(sessionId, newTitle, session.cwd);
-      upsertSession({ ...session, title: newTitle });
+      if (onRenameSession) await onRenameSession(sessionId, newTitle, cwd);
+      else {
+        await agentRenameSession(sessionId, newTitle, cwd);
+        if (session) upsertSession({ ...session, title: newTitle });
+        for (const project of useProjectsStore.getState().projects) {
+          useProjectsStore.getState().updateConversationTitle(project.id, sessionId, newTitle);
+        }
+      }
     } catch (e) {
       onToast?.(`重命名失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
-  }, [allSessions, upsertSession, onToast]);
+  }, [allSessions, onRenameSession, onToast, resolveSessionCwd, upsertSession]);
 
   // Delete via EchoAgent's `echo.agent/session/delete` — removes the on-disk session
   // directory. Only drop the sidebar entry once the backend confirms.
   const handleDelete = useCallback(async (sessionId: string) => {
-    const session = allSessions.find(s => s.sessionId === sessionId);
-    const cwd = session?.cwd;
+    const cwd = resolveSessionCwd(sessionId);
     try {
-      const result = await agentDeleteSession(sessionId, cwd);
-      removeSession(sessionId, cwd);
-      useProjectsStore.getState().removeSessionReferences(sessionId);
-      onSessionDeleted?.(sessionId);
-      if (result?.memoryCleanupWarning) {
-        onToast?.(`会话已删除，但自动摘要清理失败：${result.memoryCleanupWarning}`);
+      if (onDeleteSession) await onDeleteSession(sessionId, cwd);
+      else {
+        const result = await agentDeleteSession(sessionId, cwd);
+        onSessionDeleted?.(sessionId);
+        removeSession(sessionId, cwd);
+        useProjectsStore.getState().removeSessionReferences(sessionId);
+        if (result?.memoryCleanupWarning) {
+          onToast?.(`会话已删除，但自动摘要清理失败：${result.memoryCleanupWarning}`);
+        }
       }
     } catch (e) {
       onToast?.(`删除失败：${String(e).replace(/^Error:\s*/, "")}`);
+      throw e;
     }
-  }, [allSessions, removeSession, onSessionDeleted, onToast]);
+  }, [onDeleteSession, onSessionDeleted, onToast, removeSession, resolveSessionCwd]);
 
   // Pin/unpin — EchoAgent-only state (~/.echo-agent/echoagent-state.json).
   const handlePin = useCallback(async (sessionId: string, pinned: boolean) => {
@@ -855,20 +782,49 @@ export function Sidebar({
   // list_sessions, so drop the sidebar entry immediately on success.
   const handleArchive = useCallback(async (sessionId: string, archived: boolean) => {
     const session = allSessions.find((entry) => entry.sessionId === sessionId);
-    if (!session) return;
+    const cwd = resolveSessionCwd(sessionId);
     try {
-      const next = await agentSetSessionArchived(sessionId, archived);
-      upsertSession({ ...session, archived: next });
-      useProjectsStore.getState().setSessionArchived(sessionId, next);
-      onSessionArchived?.(sessionId, next);
-      onToast?.(next ? "已归档，可在筛选中恢复" : "已恢复会话");
+      if (onArchiveSession) await onArchiveSession(sessionId, archived, cwd);
+      else {
+        const next = await agentSetSessionArchived(sessionId, archived);
+        if (session) upsertSession({ ...session, archived: next });
+        useProjectsStore.getState().setSessionArchived(sessionId, next);
+        onSessionArchived?.(sessionId, next);
+        onToast?.(next ? "已归档，可在筛选中恢复" : "已恢复会话");
+      }
     } catch (e) {
       onToast?.(`${archived ? "归档" : "恢复"}失败：${String(e).replace(/^Error:\s*/, "")}`);
     }
-  }, [allSessions, onSessionArchived, onToast, upsertSession]);
+  }, [allSessions, onArchiveSession, onSessionArchived, onToast, resolveSessionCwd, upsertSession]);
+
+  const requestDeleteSession = useCallback((sessionId: string) => {
+    const title = contextMenu?.sessionId === sessionId
+      ? contextMenu.sessionTitle
+      : allSessions.find((session) => session.sessionId === sessionId)?.title || "未命名会话";
+    // The confirmation dialog owns focus next; do not return it behind the modal.
+    skipMenuFocusRestoreRef.current = true;
+    requestConfirmation({
+      title: `永久删除对话“${title}”？`,
+      description: (
+        <>
+          该对话的全部历史记录和自动生成的会话摘要将被永久删除，且无法恢复。
+          项目资产和工作区原始文件不会被删除。
+        </>
+      ),
+      confirmLabel: "永久删除",
+      danger: true,
+      returnFocus: contextMenu?.returnFocus,
+      action: () => handleDelete(sessionId),
+    });
+  }, [allSessions, contextMenu, handleDelete, requestConfirmation]);
+
+  const detachFromProject = useCallback((projectId: string, sessionId: string) => {
+    useProjectsStore.getState().detachSessionFromProject(projectId, sessionId);
+    onToast?.("已移出项目，对话历史仍可在“任务”中查看");
+  }, [onToast]);
 
   // Open the row's context menu anchored to its 更多 hover button.
-  const openMenuFromButton = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean, isArchived: boolean) => {
+  const openMenuFromButton = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean, isArchived: boolean, projectId?: string) => {
     e.preventDefault();
     e.stopPropagation();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -879,6 +835,7 @@ export function Sidebar({
       sessionTitle,
       isPinned,
       isArchived,
+      projectId,
       returnFocus: e.currentTarget as HTMLElement,
     });
   }, []);
@@ -887,7 +844,7 @@ export function Sidebar({
   // The selectable surface and action button are siblings. Nesting click-only
   // spans inside a button made pin/archive unreachable to keyboard users and
   // produced invalid interactive markup.
-  const renderConv = (s: SessionSummary) => (
+  const renderConv = (s: SessionSummary, projectId?: string) => (
     <div
       key={s.sessionId}
       className={
@@ -901,6 +858,7 @@ export function Sidebar({
         s.title || "未命名会话",
         s.pinned || false,
         s.archived || false,
+        projectId,
       )}
     >
       <button
@@ -941,6 +899,7 @@ export function Sidebar({
           s.title || "未命名会话",
           s.pinned || false,
           s.archived || false,
+          projectId,
         )}
         style={{ border: 0, padding: 0, background: "transparent", flex: "none" }}
       >
@@ -1123,7 +1082,7 @@ export function Sidebar({
                 {filterArchived ? "归档里还空着" : "这里还没有任务，去完成第一件事吧"}
               </div>
             )}
-            {sortPinnedFirst(filteredIndependent).map(renderConv)}
+            {sortPinnedFirst(filteredIndependent).map((session) => renderConv(session))}
           </div>
         )}
 
@@ -1209,21 +1168,18 @@ export function Sidebar({
                           {filterArchived ? "归档里还没有对话" : "还没有对话，从项目页开启第一轮吧"}
                         </div>
                       )}
-                      {projectConversations.map((conv) => (
-                        <button
-                          key={conv.sessionId}
-                          className={
-                            "sidebar__conv" +
-                            (conv.sessionId === currentSessionId ? " sidebar__conv--active" : "")
-                          }
-                          onClick={() => onSelect(conv.sessionId, proj.cwd)}
-                          title={conv.title}
-                        >
-                          <span className="sidebar__conv-title">{conv.title}</span>
-                          <SessionStatusBadge status={sessionSummaryById.get(conv.sessionId)?.status} />
-                          <span className="sidebar__conv-time">{relativeTime(conv.createdAt)}</span>
-                        </button>
-                      ))}
+                      {projectConversations.map((conversation) => {
+                        const summary = sessionSummaryById.get(conversation.sessionId);
+                        return renderConv({
+                          sessionId: conversation.sessionId,
+                          title: conversation.title || summary?.title || "未命名会话",
+                          cwd: summary?.cwd || proj.cwd || "",
+                          updatedAt: summary?.updatedAt || conversation.createdAt,
+                          pinned: summary?.pinned,
+                          archived: conversation.archived,
+                          status: summary?.status,
+                        }, proj.id);
+                      })}
                     </div>
                   )}
                 </div>
@@ -1263,15 +1219,21 @@ export function Sidebar({
           isArchived={contextMenu.isArchived}
           onClose={() => {
             const returnFocus = contextMenu.returnFocus;
+            const shouldRestoreFocus = !skipMenuFocusRestoreRef.current;
+            skipMenuFocusRestoreRef.current = false;
             setContextMenu(null);
-            requestAnimationFrame(() => returnFocus?.focus());
+            if (shouldRestoreFocus) requestAnimationFrame(() => returnFocus?.focus());
           }}
           onRename={handleRename}
-          onDelete={handleDelete}
+          onDelete={requestDeleteSession}
           onPin={handlePin}
           onArchive={handleArchive}
+          onDetach={contextMenu.projectId
+            ? (sessionId) => detachFromProject(contextMenu.projectId!, sessionId)
+            : undefined}
         />
       )}
+      {dialog}
     </aside>
   );
 }
