@@ -1533,6 +1533,32 @@ button,
   box-shadow: var(--ui-shadow-xs);
 }
 
+/* This stylesheet loads after app.css. Keep every primary-state color paired
+ * here so the generic surface rule above can never produce white-on-white in
+ * light mode or erase the visual hierarchy between Refresh and Add source. */
+.marketplace-panel__action-btn.marketplace-panel__action-btn--primary {
+  border-color: var(--echo-button-primary-bg);
+  background: var(--echo-button-primary-bg);
+  color: var(--echo-button-primary-fg);
+}
+
+.marketplace-panel__action-btn.marketplace-panel__action-btn--primary:hover:not(:disabled) {
+  border-color: var(--echo-button-primary-bg-hover);
+  background: var(--echo-button-primary-bg-hover);
+}
+
+.marketplace-panel__action-btn.marketplace-panel__action-btn--primary:active:not(:disabled) {
+  border-color: var(--echo-button-primary-bg-active);
+  background: var(--echo-button-primary-bg-active);
+}
+
+.marketplace-panel__action-btn.marketplace-panel__action-btn--primary:disabled {
+  border-color: var(--echo-button-primary-bg-disabled);
+  background: var(--echo-button-primary-bg-disabled);
+  color: var(--echo-button-primary-fg-disabled);
+  opacity: 1;
+}
+
 .resources-panel__resource,
 .plugins-panel__item,
 .marketplace-source,
