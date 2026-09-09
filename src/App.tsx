@@ -20,7 +20,10 @@ import {
 import { useSessionStore } from "./stores/session-store";
 import { useSessionsStore } from "./stores/sessions-store";
 import { usePermissionStore } from "./stores/permission-store";
-import { useQuestionStore } from "./stores/question-store";
+import {
+  hasPendingQuestionForSession,
+  useQuestionStore,
+} from "./stores/question-store";
 import { usePendingExpertStore } from "./stores/pending-expert-store";
 import { TopbarTitle } from "./components/TopbarTitle";
 import { ThumbImg } from "./components/experts-panel/shared/ThumbImg";
@@ -96,7 +99,11 @@ import {
   EXPERT_PERSONA_END,
   stripInjectedUserContext,
 } from "./lib/user-message";
-import { beginAgentTurn, createAgentPromptId } from "./lib/agent-turn";
+import {
+  beginAgentTurn,
+  createAgentPromptId,
+  isAgentPromptSettled,
+} from "./lib/agent-turn";
 import {
   isAgentOwnedActiveStatus,
   isWaitingForUser,
@@ -525,6 +532,7 @@ function Shell() {
             useMessageQueueStore.getState().settleSending(
               p.sessionId,
               queuePolicy.settlement,
+              p.promptId || undefined,
             );
             // Completion is routed by session id in the transcript store. This
             // also finalizes a background conversation after the user switches
@@ -548,7 +556,11 @@ function Shell() {
             // A user cancellation/pause and every non-success terminal reason
             // intentionally stop queue progression. In particular, cancelled
             // must never make a paused conversation start the next prompt.
-            if (!summary || !queuePolicy.autoAdvance) return;
+            if (
+              !summary
+              || !queuePolicy.autoAdvance
+              || hasPendingQuestionForSession(p.sessionId)
+            ) return;
             // Refresh the composer context-usage pill after each turn.
             // Internal/external notifications are dispatched by the Rust bridge
             // for every session (including background automation sessions).
@@ -569,28 +581,34 @@ function Shell() {
                 sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "failed" });
                 return;
               }
-              const next = useMessageQueueStore.getState().claimNext(p.sessionId);
+              const queuedPromptId = createAgentPromptId();
+              const next = useMessageQueueStore.getState().claimNext(
+                p.sessionId,
+                queuedPromptId,
+              );
               if (next) {
                 // PromptRequest resolves after the full model turn. Claim the
                 // item before sending so the completion event cannot dispatch
                 // this same item again while that promise is still pending.
                 sessionsStore.getState().upsert({ sessionId: p.sessionId, status: "working" });
-                const queuedPromptId = createAgentPromptId();
                 sessionStore.getState().pushUser(next.text, next.attachments, p.sessionId);
                 sessionStore.getState().startStreaming(p.sessionId, queuedPromptId);
-                agentSend(
+                void agentSend(
                   p.sessionId,
                   next.text,
                   next.attachments,
                   next.text,
                   queuedPromptId,
-                ).then(() => {
-                  useMessageQueueStore.getState().remove(p.sessionId, next.id);
-                }).catch((e) => {
+                ).catch((e) => {
+                  if (isAgentPromptSettled(p.sessionId, queuedPromptId)) return;
                   const detail = friendlyError(e);
                   // Preserve a rejected queued message for retry and finalize
                   // the placeholder in the transcript it actually belongs to.
-                  useMessageQueueStore.getState().setStatus(p.sessionId, next.id, "queued");
+                  useMessageQueueStore.getState().settleSending(
+                    p.sessionId,
+                    "retry",
+                    queuedPromptId,
+                  );
                   sessionStore.getState().markComplete({
                     sessionId: p.sessionId,
                     promptId: queuedPromptId,
@@ -1003,9 +1021,18 @@ function Shell() {
     }
   };
 
-  const handleSendCurrent = async (text: string, attachments: string[] = []): Promise<boolean> => {
+  const handleSendCurrent = async (
+    text: string,
+    attachments: string[] = [],
+    queueItemId?: string,
+  ): Promise<boolean> => {
     if (!text.trim() && attachments.length === 0) return false;
     if (!currentSessionId) return handleSendNew(text, attachments);
+    const sessionId = currentSessionId;
+    if (hasPendingQuestionForSession(sessionId)) {
+      showToast("请先回答当前问题");
+      return false;
+    }
     // Guard against double-send / send-during-streaming. Composer also guards
     // via its `streaming` prop, but that value can be stale within the same
     // render tick; the store flag is the source of truth. A second pushUser +
@@ -1025,34 +1052,71 @@ function Shell() {
       return false;
     }
     if (!ensureQuotaAllowsSend()) return false;
+    const queuePromptId = queueItemId ? createAgentPromptId() : undefined;
+    let sendText = text;
+    let sendAttachments = attachments;
+    if (queueItemId && queuePromptId) {
+      const claimed = useMessageQueueStore.getState().claimById(
+        sessionId,
+        queueItemId,
+        queuePromptId,
+      );
+      if (!claimed) return false;
+      sendText = claimed.text;
+      sendAttachments = claimed.attachments ?? [];
+    }
     try {
       // A conversation created from the project node may intentionally be
       // empty. Bind the project contract to its first real user turn so the
       // session does not silently behave like an ordinary workspace chat.
       const project = useProjectsStore.getState().projects.find((item) =>
-        item.conversations.some((conversation) => conversation.sessionId === currentSessionId),
+        item.conversations.some((conversation) => conversation.sessionId === sessionId),
       );
       const isFirstUserTurn = !sessionStore.getState().messages.some(
         (message) => message.role === "user",
       );
       const textForAgent = project && isFirstUserTurn
-        ? buildProjectPrompt(project, text)
-        : text;
+        ? buildProjectPrompt(project, sendText)
+        : sendText;
       const accepted = beginAgentTurn({
-        sessionId: currentSessionId,
+        sessionId,
         promptText: textForAgent,
-        displayText: text,
-        attachments,
+        displayText: sendText,
+        attachments: sendAttachments,
+        promptId: queuePromptId,
+        onRejected: queuePromptId
+          ? () => {
+              useMessageQueueStore.getState().settleSending(
+                sessionId,
+                "retry",
+                queuePromptId,
+              );
+            }
+          : undefined,
       });
       if (!accepted) {
+        if (queuePromptId) {
+          useMessageQueueStore.getState().settleSending(
+            sessionId,
+            "retry",
+            queuePromptId,
+          );
+        }
         showToast("当前会话已切换，请重新发送");
         return false;
       }
       return true;
     } catch (e) {
+      if (queuePromptId) {
+        useMessageQueueStore.getState().settleSending(
+          sessionId,
+          "retry",
+          queuePromptId,
+        );
+      }
       sessionStore.getState().rollbackPendingTurn();
       sessionStore.getState().setError(friendlyError(e));
-      sessionsStore.getState().upsert({ sessionId: currentSessionId, status: "failed" });
+      sessionsStore.getState().upsert({ sessionId, status: "failed" });
       return false;
     }
   };
@@ -1062,9 +1126,17 @@ function Shell() {
    * owns this as one atomic sendNow operation, so the cancelled completion of
    * the old turn cannot race a separate follow-up send.
    */
-  const handleSendNowCurrent = (text: string, attachments: string[] = []): boolean => {
+  const handleSendNowCurrent = (
+    text: string,
+    attachments: string[] = [],
+    queueItemId?: string,
+  ): boolean => {
     if ((!text.trim() && attachments.length === 0) || !currentSessionId) return false;
     const sessionId = currentSessionId;
+    if (hasPendingQuestionForSession(sessionId)) {
+      showToast("请先回答当前问题");
+      return false;
+    }
     const transcript = sessionStore.getState();
     if (!transcript.streaming || transcript.sendNowPending) return false;
     if (modelSwitching) {
@@ -1083,14 +1155,37 @@ function Shell() {
     if (!ensureQuotaAllowsSend()) return false;
 
     const promptId = createAgentPromptId();
+    let sendText = text;
+    let sendAttachments = attachments;
+    if (queueItemId) {
+      const claimed = useMessageQueueStore.getState().claimById(
+        sessionId,
+        queueItemId,
+        promptId,
+      );
+      if (!claimed) return false;
+      sendText = claimed.text;
+      sendAttachments = claimed.attachments ?? [];
+    }
     transcript.requestSendNow(promptId, sessionId);
     sessionsStore.getState().upsert({ sessionId, status: "working" });
 
     // PromptRequest resolves only after the replacement turn ends. Detach it
     // so the composer can clear immediately, just like a normal admitted turn.
-    void agentSendNow(sessionId, text, attachments, text, promptId).catch((error) => {
+    void agentSendNow(
+      sessionId,
+      sendText,
+      sendAttachments,
+      sendText,
+      promptId,
+    ).catch((error) => {
+      if (isAgentPromptSettled(sessionId, promptId)) return;
       const detail = friendlyError(error);
       const latest = sessionStore.getState();
+      const targetTranscript = latest.transcripts[sessionId];
+      const promptWasAdmitted = targetTranscript?.messages.some(
+        (message) => message.role === "assistant" && message.promptId === promptId,
+      ) ?? false;
       latest.rejectSendNow(promptId, sessionId);
       latest.markComplete({
         sessionId,
@@ -1098,8 +1193,14 @@ function Shell() {
         stopReason: "error",
         agentResult: detail,
       });
-      // Never discard a choice or attachment if native admission fails.
-      useMessageQueueStore.getState().enqueue(sessionId, text, attachments);
+      if (queueItemId) {
+        // Restore the same row in place: its id and relative order are stable.
+        useMessageQueueStore.getState().settleSending(sessionId, "retry", promptId);
+      } else if (!promptWasAdmitted) {
+        // A direct composer send that never reached Runtime still needs a safe
+        // retry path. Once admitted, duplicating it would repeat side effects.
+        useMessageQueueStore.getState().enqueue(sessionId, sendText, sendAttachments);
+      }
       if (latest.sessionId === sessionId) latest.setError(detail);
       const stillWorking = useSessionStore.getState().transcripts[sessionId];
       sessionsStore.getState().upsert({
@@ -1109,7 +1210,10 @@ function Shell() {
             ? "working"
             : "failed",
       });
-      showToast(`立即发送失败，内容已保留在待发送队列：${detail}`, 6000);
+      const preservation = queueItemId || !promptWasAdmitted
+        ? "，内容已保留在待发送队列"
+        : "";
+      showToast(`立即发送失败${preservation}：${detail}`, 6000);
     });
     return true;
   };
@@ -1117,13 +1221,22 @@ function Shell() {
   const handleCancel = async (): Promise<boolean> => {
     if (!currentSessionId || cancellingSessionId) return false;
     const sessionId = currentSessionId;
+    const beforeCancel = sessionStore.getState().transcripts[sessionId];
+    const activeMessage = beforeCancel?.messages.find(
+      (message) => message.id === beforeCancel.streamingMessageId,
+    );
+    const activePromptId = beforeCancel?.pendingSendNowPromptId ?? activeMessage?.promptId;
     setCancellingSessionId(sessionId);
     try {
       await agentCancel(sessionId);
       // Don't rely on the backend emitting a terminal event for a fast cancel.
       // Only finalize locally after the cancel request was actually accepted.
       sessionStore.getState().stopStreaming(sessionId);
-      useMessageQueueStore.getState().settleSending(sessionId, "consume");
+      useMessageQueueStore.getState().settleSending(
+        sessionId,
+        "consume",
+        activePromptId,
+      );
       return true;
     } catch (e) {
       if (sessionStore.getState().sessionId === sessionId) {

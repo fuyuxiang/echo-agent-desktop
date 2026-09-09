@@ -109,4 +109,65 @@ describe("beginAgentTurn", () => {
     expect(send).not.toHaveBeenCalled();
     expect(useSessionStore.getState().messages).toEqual([]);
   });
+
+  it("队列轮次复用认领时的 promptId，并在原生拒绝时精确通知调用方", async () => {
+    useSessionsStore.getState().upsert({ sessionId: "s1", cwd: "/tmp", title: "test" });
+    useSessionStore.getState().setSession("s1");
+    const send = vi.fn(() => Promise.reject(new Error("native rejected"))) as AgentTurnSender;
+    const onRejected = vi.fn();
+
+    beginAgentTurn({
+      sessionId: "s1",
+      promptText: "queued",
+      displayText: "queued",
+      promptId: "queue-prompt-1",
+      onRejected,
+    }, send);
+
+    await waitFor(() => expect(onRejected).toHaveBeenCalledWith(
+      expect.any(Error),
+      "queue-prompt-1",
+    ));
+    expect(send).toHaveBeenCalledWith(
+      "s1",
+      "queued",
+      [],
+      "queued",
+      "queue-prompt-1",
+    );
+  });
+
+  it("prompt_complete 已落地后忽略请求通道的迟到失败", async () => {
+    useSessionsStore.getState().upsert({ sessionId: "s1", cwd: "/tmp", title: "test" });
+    useSessionStore.getState().setSession("s1");
+    let rejectSend!: (error: Error) => void;
+    const send = vi.fn(() => new Promise<void>((_resolve, reject) => {
+      rejectSend = reject;
+    })) as AgentTurnSender;
+    const onRejected = vi.fn();
+
+    beginAgentTurn({
+      sessionId: "s1",
+      promptText: "hello",
+      displayText: "hello",
+      promptId: "completed-prompt",
+      onRejected,
+    }, send);
+    useSessionStore.getState().markComplete({
+      sessionId: "s1",
+      promptId: "completed-prompt",
+      stopReason: "end_turn",
+    });
+    rejectSend(new Error("late transport failure"));
+
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(onRejected).not.toHaveBeenCalled();
+    expect(useSessionStore.getState().error).toBeNull();
+    const messages = useSessionStore.getState().messages;
+    expect(messages[messages.length - 1]).toMatchObject({
+      role: "user",
+      parts: [{ kind: "text", text: "hello" }],
+    });
+  });
 });

@@ -21,14 +21,21 @@ interface QueuePanelProps {
   /** agent 正在回复时，「立即发送」使用 Runtime 的原子 sendNow。 */
   streaming?: boolean;
   sendNowPending?: boolean;
-  /** 手动发送一条；返回 false 表示未接受，队列项必须保留。 */
-  onSendNow?: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
+  /** A structured Runtime question must be answered before any new turn. */
+  awaitingQuestion?: boolean;
+  /** 手动发送一条；处理器按 queueItemId 认领，面板不自行删除。 */
+  onSendNow?: (
+    text: string,
+    attachments?: string[],
+    queueItemId?: string,
+  ) => boolean | void | Promise<boolean | void>;
 }
 
 export function QueuePanel({
   sessionId,
   streaming = false,
   sendNowPending = false,
+  awaitingQuestion = false,
   onSendNow,
 }: QueuePanelProps) {
   const queue = useMessageQueueStore((s) => s.queues[sessionId] ?? []);
@@ -76,14 +83,14 @@ export function QueuePanel({
             item.status === "paused"
             || sendingId !== null
             || sendNowPending
+            || awaitingQuestion
             || !onSendNow
           }
           onSendNow={async () => {
             if (!onSendNow || sendingId !== null) return;
             setSendingId(item.id);
             try {
-              const accepted = await onSendNow(item.text, item.attachments ?? []);
-              if (accepted !== false) remove(sessionId, item.id);
+              await onSendNow(item.text, item.attachments ?? [], item.id);
             } catch {
               // Sending failed: retain the item so the user can retry or edit it.
             } finally {

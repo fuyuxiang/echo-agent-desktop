@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueuePanel } from "../QueuePanel";
 import { useMessageQueueStore } from "@/stores/message-queue-store";
 
@@ -67,16 +67,27 @@ describe("QueuePanel", () => {
     ).toEqual(["b", "a"]);
   });
 
-  it("立即发送:运行时接受后才移除条目", async () => {
+  it("立即发送:接纳后保留原条目，直到对应轮次完成", async () => {
     const s = useMessageQueueStore.getState();
-    s.enqueue("s1", "马上发");
-    const onSendNow = vi.fn();
+    const id = s.enqueue("s1", "马上发");
+    const onSendNow = vi.fn((_text: string, _attachments?: string[], queueItemId?: string) => {
+      useMessageQueueStore.getState().claimById("s1", queueItemId!, "prompt-1");
+      return true;
+    });
     render(<QueuePanel sessionId="s1" onSendNow={onSendNow} />);
     fireEvent.click(screen.getByRole("button", { name: "立即发送" }));
-    expect(onSendNow).toHaveBeenCalledWith("马上发", []);
+    expect(onSendNow).toHaveBeenCalledWith("马上发", [], id);
     await waitFor(() => {
-      expect(useMessageQueueStore.getState().getQueue("s1")).toHaveLength(0);
+      expect(useMessageQueueStore.getState().getQueue("s1")[0]).toMatchObject({
+        id,
+        status: "sending",
+        promptId: "prompt-1",
+      });
     });
+    act(() => {
+      useMessageQueueStore.getState().settleSending("s1", "consume", "prompt-1");
+    });
+    expect(useMessageQueueStore.getState().getQueue("s1")).toHaveLength(0);
   });
 
   it("运行时拒绝或发送失败时保留队列项", async () => {
@@ -89,17 +100,23 @@ describe("QueuePanel", () => {
     });
   });
 
-  it("流式回复时立即发送调用原子 sendNow 并移除已接纳条目", async () => {
+  it("流式回复时立即发送精确认领用户选择的条目", async () => {
     const s = useMessageQueueStore.getState();
     s.enqueue("s1", "a");
-    s.enqueue("s1", "b");
-    const onSendNow = vi.fn();
+    const secondId = s.enqueue("s1", "b");
+    const onSendNow = vi.fn((_text: string, _attachments?: string[], queueItemId?: string) => {
+      useMessageQueueStore.getState().claimById("s1", queueItemId!, "prompt-b");
+      return true;
+    });
     render(<QueuePanel sessionId="s1" streaming onSendNow={onSendNow} />);
     const actions = screen.getAllByRole("button", { name: "中断当前回复并立即发送这条" });
     fireEvent.click(actions[1]);
-    expect(onSendNow).toHaveBeenCalledWith("b", []);
+    expect(onSendNow).toHaveBeenCalledWith("b", [], secondId);
     await waitFor(() => {
-      expect(useMessageQueueStore.getState().getQueue("s1").map((item) => item.text)).toEqual(["a"]);
+      expect(useMessageQueueStore.getState().getQueue("s1")).toMatchObject([
+        { text: "a", status: "queued" },
+        { text: "b", status: "sending", promptId: "prompt-b" },
+      ]);
     });
   });
 
@@ -116,6 +133,12 @@ describe("QueuePanel", () => {
     expect(
       screen.getByRole("button", { name: "中断当前回复并立即发送这条" }),
     ).toBeDisabled();
+  });
+
+  it("存在结构化提问时禁用队列发送", () => {
+    useMessageQueueStore.getState().enqueue("s1", "稍后发送");
+    render(<QueuePanel sessionId="s1" awaitingQuestion onSendNow={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "立即发送" })).toBeDisabled();
   });
 
   it("paused 条目的立即发送按钮禁用", () => {
@@ -139,12 +162,16 @@ describe("QueuePanel", () => {
   });
 
   it("展示队列附件并在发送时保留", async () => {
-    useMessageQueueStore.getState().enqueue("s1", "请优化", ["/tmp/方案.docx"]);
-    const onSendNow = vi.fn();
+    const id = useMessageQueueStore.getState().enqueue("s1", "请优化", ["/tmp/方案.docx"]);
+    const onSendNow = vi.fn((_text: string, _attachments?: string[], queueItemId?: string) => {
+      useMessageQueueStore.getState().claimById("s1", queueItemId!, "prompt-attachment");
+      return true;
+    });
     render(<QueuePanel sessionId="s1" onSendNow={onSendNow} />);
     expect(screen.getByText("📎 方案.docx")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "立即发送" }));
-    expect(onSendNow).toHaveBeenCalledWith("请优化", ["/tmp/方案.docx"]);
-    await waitFor(() => expect(useMessageQueueStore.getState().getQueue("s1")).toHaveLength(0));
+    expect(onSendNow).toHaveBeenCalledWith("请优化", ["/tmp/方案.docx"], id);
+    await waitFor(() => expect(useMessageQueueStore.getState().getQueue("s1")[0])
+      .toMatchObject({ id, attachments: ["/tmp/方案.docx"], status: "sending" }));
   });
 });

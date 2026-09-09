@@ -132,6 +132,14 @@ impl AppState {
             == generation
     }
 
+    pub(crate) fn is_runtime_current(&self, sender: &echo_agent_acp::AcpAgentTx) -> bool {
+        self.tx
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|current| current.same_channel(sender))
+    }
+
     /// Record a session that arrived after its caller stopped waiting. The
     /// Runtime already persisted it, so the id is kept for reclamation.
     pub(crate) fn record_orphaned_session(&self, orphan: OrphanedSession) {
@@ -962,6 +970,9 @@ pub async fn agent_new_session(
     if let Some(model_id) = model_id.as_deref() {
         crate::policy::require_model(model_id)?;
     }
+    let _permission_transition_guard = crate::permission_config::permission_transition_lock()
+        .lock()
+        .await;
     let permission_mode =
         crate::permission_config::resolve_new_session_permission_mode(permission_mode.as_deref())?;
     require_runtime_ready(&state, model_id.as_deref())?;
@@ -1042,6 +1053,18 @@ pub async fn agent_new_session(
                     %session_id,
                     "new_session completed after its caller timed out; reclaiming"
                 );
+                // The caller released its transition guard when it timed out.
+                // Re-enter the same transaction before publishing a late
+                // result, then reject it if policy/restart retired this Runtime.
+                let _permission_transition_guard =
+                    crate::permission_config::permission_transition_lock()
+                        .lock()
+                        .await;
+                let task_state = task_app.state::<AppState>();
+                if !task_state.is_runtime_current(&task_tx) {
+                    tracing::warn!(%session_id, "discarding late session from a retired Runtime");
+                    return;
+                }
                 crate::team_mcp::persist_registration(&task_tx, &session_id);
                 crate::org_mcp::reconcile_registration(&task_tx, &session_id);
                 if crate::policy::locked_permission_mode().is_none() {
@@ -1055,17 +1078,13 @@ pub async fn agent_new_session(
                     &session_id,
                     &task_permission_mode,
                 );
-                task_app
-                    .state::<AppState>()
-                    .record_session_workspace(&session_id, Path::new(&task_cwd));
-                task_app
-                    .state::<AppState>()
-                    .record_orphaned_session(OrphanedSession {
-                        session_id: session_id.clone(),
-                        cwd: task_cwd,
-                        model_id: task_model,
-                        permission_mode: task_permission_mode,
-                    });
+                task_state.record_session_workspace(&session_id, Path::new(&task_cwd));
+                task_state.record_orphaned_session(OrphanedSession {
+                    session_id: session_id.clone(),
+                    cwd: task_cwd,
+                    model_id: task_model,
+                    permission_mode: task_permission_mode,
+                });
                 let _ = task_app.emit(
                     "agent://session-reclaimed",
                     serde_json::json!({ "sessionId": session_id }),
@@ -1149,16 +1168,19 @@ pub async fn agent_load_session(
         }
         cwd
     };
+    let _permission_transition_guard = crate::permission_config::permission_transition_lock()
+        .lock()
+        .await;
+    let permission_mode = crate::permission_config::effective_session_permission_mode(&session_id);
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    agent_runtime::load_session(&tx, &session_id, &PathBuf::from(&cwd))
+    agent_runtime::load_session(&tx, &session_id, &PathBuf::from(&cwd), &permission_mode)
         .await
         .map_err(|e| e.to_string())?;
-    let permission_mode = crate::permission_config::effective_session_permission_mode(&session_id);
     crate::permission_config::mark_session_permission_mode_synced(&session_id, &permission_mode);
     let _ = app.emit(
         "agent://permission-mode",
