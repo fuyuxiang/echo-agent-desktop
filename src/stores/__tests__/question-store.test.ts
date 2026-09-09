@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   useQuestionStore,
   selectQuestionForSession,
+  hasPendingQuestionForSession,
   type QuestionRequest,
 } from "../question-store";
 
@@ -119,5 +120,12 @@ describe("selectQuestionForSession", () => {
   it("sessionId 为 null 返回 null", () => {
     useQuestionStore.getState().request(makeQuestion("r1", "s1"));
     expect(selectQuestionForSession(null)(useQuestionStore.getState())).toBeNull();
+  });
+
+  it("事件处理器可同步检查当前任务是否仍有待回答问题", () => {
+    expect(hasPendingQuestionForSession("s1")).toBe(false);
+    useQuestionStore.getState().request(makeQuestion("r1", "s1"));
+    expect(hasPendingQuestionForSession("s1")).toBe(true);
+    expect(hasPendingQuestionForSession("s2")).toBe(false);
   });
 });

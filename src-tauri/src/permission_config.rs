@@ -716,9 +716,9 @@ async fn notify_runtime_permission_mode(
         "permission_mode": mode,
         "yolo_mode": yolo_mode,
         "auto_mode": auto_mode,
-        // Scope the update to sessions owned by this desktop client. Without
-        // an explicit sender the Runtime intentionally updates every resident
-        // session, including sessions belonging to another leader client.
+        // Scope the generic Runtime API to sessions created by this desktop
+        // integration. The shipped product has one desktop client, while the
+        // embedded Runtime still requires an explicit origin boundary.
         "clientIdentifier": crate::agent_runtime::DESKTOP_CLIENT_IDENTIFIER,
     });
     if let Some(session_ids) = session_ids {
@@ -762,10 +762,12 @@ pub async fn permission_mode_set(
     if !valid_session_id(&session_id) {
         return Err("会话 ID 无效或过长".into());
     }
+    let _transition_guard = permission_transition_lock().lock().await;
     // Only sessions admitted into this Runtime generation may be mutated.
+    // Revalidate after acquiring the transition lock: session load/create and
+    // policy changes use the same lock, so this cannot race a Runtime change.
     // A renderer-provided id is not an authorization boundary by itself.
     state.session_workspace(&session_id)?;
-    let _transition_guard = permission_transition_lock().lock().await;
     let auto_available = auto_mode_available();
     let always_available = always_approve_policy_block().is_none();
     validate_permission_mode_selection(&mode, auto_available, always_available)?;

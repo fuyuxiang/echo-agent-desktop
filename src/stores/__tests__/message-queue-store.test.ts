@@ -204,6 +204,24 @@ describe("message-queue-store — claimNext", () => {
 
     expect(s.claimNext("s1")?.id).toBe(id);
   });
+
+  it("按 id 认领用户选择的条目并绑定 promptId", () => {
+    const s = useMessageQueueStore.getState();
+    s.enqueue("s1", "a");
+    const second = s.enqueue("s1", "b");
+
+    expect(s.claimById("s1", second, "prompt-b")).toMatchObject({
+      id: second,
+      text: "b",
+      status: "sending",
+      promptId: "prompt-b",
+    });
+    expect(store().getQueue("s1").map((item) => item.status)).toEqual([
+      "queued",
+      "sending",
+    ]);
+    expect(s.claimById("s1", second, "duplicate")).toBeNull();
+  });
 });
 
 describe("message-queue-store — settleSending", () => {
@@ -234,6 +252,35 @@ describe("message-queue-store — settleSending", () => {
 
     expect(s.settleSending("s1", "consume")).toBeNull();
     expect(store().getQueue("s1").map((item) => item.text)).toEqual(["a"]);
+  });
+
+  it("只结算匹配 promptId 的发送项，迟到完成不会删除新轮次", () => {
+    const s = useMessageQueueStore.getState();
+    const first = s.enqueue("s1", "a");
+    const second = s.enqueue("s1", "b");
+    s.claimById("s1", first, "old-prompt");
+    s.claimById("s1", second, "new-prompt");
+
+    expect(s.settleSending("s1", "consume", "unknown-prompt")).toBeNull();
+    expect(store().getQueue("s1")).toHaveLength(2);
+    expect(s.settleSending("s1", "consume", "old-prompt")?.id).toBe(first);
+    expect(store().getQueue("s1")[0]).toMatchObject({
+      id: second,
+      status: "sending",
+      promptId: "new-prompt",
+    });
+  });
+
+  it("失败原位恢复同一条目并清除旧 promptId", () => {
+    const s = useMessageQueueStore.getState();
+    const first = s.enqueue("s1", "a");
+    const second = s.enqueue("s1", "b");
+    s.claimById("s1", second, "prompt-b");
+
+    expect(s.settleSending("s1", "retry", "prompt-b")?.id).toBe(second);
+    expect(store().getQueue("s1").map((item) => item.id)).toEqual([first, second]);
+    expect(store().getQueue("s1")[1]).toMatchObject({ status: "queued" });
+    expect(store().getQueue("s1")[1].promptId).toBeUndefined();
   });
 });
 

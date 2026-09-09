@@ -16,6 +16,10 @@ export interface AgentTurnInput {
   promptText: string;
   displayText: string;
   attachments?: string[];
+  /** Reuse the id assigned while atomically claiming a queued row. */
+  promptId?: string;
+  /** Observe asynchronous native rejection without delaying local admission. */
+  onRejected?: (error: unknown, promptId: string) => void;
 }
 
 let promptSequence = 0;
@@ -26,6 +30,22 @@ export function createAgentPromptId(): string {
   if (randomUUID) return randomUUID();
   promptSequence += 1;
   return `desktop-${Date.now()}-${promptSequence}`;
+}
+
+/**
+ * `prompt_complete` is delivered before the long-running ACP request settles.
+ * A later transport rejection must not overwrite that authoritative terminal
+ * event or cause an already-executed queue row to be sent again.
+ */
+export function isAgentPromptSettled(sessionId: string, promptId: string): boolean {
+  const transcript = useSessionStore.getState().transcripts[sessionId];
+  if (!transcript) return true;
+  const matching = transcript.messages.filter(
+    (message) => message.role === "assistant" && message.promptId === promptId,
+  );
+  if (matching.some((message) => message.complete)) return true;
+  return transcript.pendingSendNowPromptId !== promptId
+    && !matching.some((message) => !message.complete);
 }
 
 /**
@@ -42,7 +62,7 @@ export function beginAgentTurn(
 ): boolean {
   const { sessionId, promptText, displayText } = input;
   const attachments = input.attachments ?? [];
-  const promptId = createAgentPromptId();
+  const promptId = input.promptId ?? createAgentPromptId();
   const transcript = useSessionStore.getState();
   if (transcript.sessionId !== sessionId) {
     return false;
@@ -53,6 +73,7 @@ export function beginAgentTurn(
   transcript.startStreaming(undefined, promptId);
 
   void send(sessionId, promptText, attachments, displayText, promptId).catch((error) => {
+    if (isAgentPromptSettled(sessionId, promptId)) return;
     const latest = useSessionStore.getState();
     const detail = friendlyError(error);
     latest.markComplete({
@@ -67,6 +88,7 @@ export function beginAgentTurn(
       latest.setError(detail);
     }
     useSessionsStore.getState().upsert({ sessionId, status: "failed" });
+    input.onRejected?.(error, promptId);
   });
   return true;
 }

@@ -67,9 +67,17 @@ export function ChatView({
   onClientSlashCommand,
   title,
 }: {
-  onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
+  onSend: (
+    text: string,
+    attachments?: string[],
+    queueItemId?: string,
+  ) => boolean | void | Promise<boolean | void>;
   /** Atomically replace the active turn with this user message. */
-  onSendNow?: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
+  onSendNow?: (
+    text: string,
+    attachments?: string[],
+    queueItemId?: string,
+  ) => boolean | void | Promise<boolean | void>;
   onCancel: () => boolean | void | Promise<boolean | void>;
   modelId?: string;
   models?: ModelOption[];
@@ -649,6 +657,7 @@ export function ChatView({
               sessionId={sessionId}
               streaming={streaming}
               sendNowPending={sendNowPending}
+              awaitingQuestion={awaitingQuestion}
               onSendNow={streaming ? onSendNow : onSend}
             />
           )}

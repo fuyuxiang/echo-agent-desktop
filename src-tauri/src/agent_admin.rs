@@ -1181,6 +1181,9 @@ pub async fn session_fork(
     if !valid_admin_id(&session_id) {
         return Err("会话 ID 无效或过长".into());
     }
+    let _permission_transition_guard = crate::permission_config::permission_transition_lock()
+        .lock()
+        .await;
     let trusted_cwd = state.session_workspace(&session_id)?;
     if let Some(claimed) = cwd.as_deref() {
         let claimed = std::path::PathBuf::from(claimed)
@@ -1217,14 +1220,13 @@ pub async fn session_fork(
     // source task's permission mode without affecting either task afterwards.
     if crate::policy::locked_permission_mode().is_none() {
         let source_mode = crate::meta::permission_mode(&session_id);
-        // The fork already exists in the Runtime. If sidecar persistence is
-        // unavailable, keep the usable fork and fail closed to Ask after a
-        // restart instead of reporting failure while leaving a hidden task.
+        // Forking creates a persisted continuation, but does not make it a
+        // resident Runtime session. If sidecar persistence is unavailable,
+        // fail closed to Ask when the fork is loaded.
         if let Err(error) = crate::meta::set_permission_mode(&forked_id, &source_mode) {
             tracing::warn!(%error, %forked_id, "fork created but task permission metadata could not be persisted");
         }
     }
-    state.record_session_workspace(&forked_id, &trusted_cwd);
     Ok(forked_id)
 }
 

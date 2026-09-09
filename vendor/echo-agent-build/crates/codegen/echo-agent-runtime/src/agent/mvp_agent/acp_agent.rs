@@ -2630,8 +2630,7 @@ impl acp::Agent for MvpAgent {
                 };
                 let included = parse_session_filter("sessionIds")?;
                 let excluded = parse_session_filter("excludeSessionIds")?.unwrap_or_default();
-                let mut pending = Vec::new();
-                let mut failed_sends = Vec::new();
+                let mut eligible_sessions = std::collections::HashSet::new();
                 self.session_registry.for_each_resident(|id, handle| {
                     let id_text = id.0.as_ref();
                     let matches_sender = sender_id.is_none()
@@ -2641,6 +2640,31 @@ impl acp::Agent for MvpAgent {
                         .as_ref()
                         .is_none_or(|ids| ids.contains(id_text));
                     if !matches_sender || !matches_include || excluded.contains(id_text) {
+                        return;
+                    }
+                    eligible_sessions.insert(id.0.to_string());
+                });
+                if let Some(included) = included.as_ref() {
+                    let mut missing = included
+                        .iter()
+                        .filter(|id| {
+                            !excluded.contains(id.as_str())
+                                && !eligible_sessions.contains(id.as_str())
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !missing.is_empty() {
+                        missing.sort();
+                        return Err(acp::Error::invalid_params().data(format!(
+                            "permission mode target sessions are not resident: {}",
+                            missing.join(", ")
+                        )));
+                    }
+                }
+                let mut pending = Vec::new();
+                let mut failed_sends = Vec::new();
+                self.session_registry.for_each_resident(|id, handle| {
+                    if !eligible_sessions.contains(id.0.as_ref()) {
                         return;
                     }
                     let (respond_to, response) = tokio::sync::oneshot::channel();
@@ -2684,6 +2708,26 @@ impl acp::Agent for MvpAgent {
                     acp::Error::internal_error()
                         .data("permission mode session acknowledgement closed")
                 })?;
+                if let Some(included) = included.as_ref() {
+                    let applied_ids = applied
+                        .iter()
+                        .map(|(id, _)| id.0.to_string())
+                        .collect::<std::collections::HashSet<_>>();
+                    let mut missing = included
+                        .iter()
+                        .filter(|id| {
+                            !excluded.contains(id.as_str()) && !applied_ids.contains(id.as_str())
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !missing.is_empty() {
+                        missing.sort();
+                        return Err(acp::Error::invalid_params().data(format!(
+                            "permission mode target sessions are not resident: {}",
+                            missing.join(", ")
+                        )));
+                    }
+                }
                 for (id, (actual_yolo, actual_auto)) in &applied {
                     self.session_registry.with_resident_mut(id, |handle| {
                         handle.yolo_mode = *actual_yolo;

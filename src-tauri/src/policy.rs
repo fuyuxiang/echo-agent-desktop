@@ -186,6 +186,15 @@ pub fn locked_permission_mode() -> Option<String> {
         .filter(|m| ["ask", "auto", "always-approve"].contains(&m.as_str()))
 }
 
+fn permission_policy_requires_runtime_restart(
+    previous_locked_mode: Option<&str>,
+    current_locked_mode: Option<&str>,
+    previous_effective_mode: &str,
+    current_effective_mode: &str,
+) -> bool {
+    previous_locked_mode != current_locked_mode || previous_effective_mode != current_effective_mode
+}
+
 #[tauri::command]
 pub fn policy_get() -> PolicySet {
     read_policy()
@@ -205,7 +214,12 @@ pub async fn policy_save(
     let saved = write_policy(normalize_local_policy(policy))?;
     let current_locked_mode = locked_permission_mode();
     let current_effective_mode = crate::permission_config::read_permission_mode();
-    if previous_effective_mode != current_effective_mode {
+    if permission_policy_requires_runtime_restart(
+        previous_locked_mode.as_deref(),
+        current_locked_mode.as_deref(),
+        &previous_effective_mode,
+        &current_effective_mode,
+    ) {
         let tx = state.tx.lock().unwrap().clone();
         if let Some(tx) = tx {
             let reason = "权限策略已变更；为确保新策略立即成为安全边界，Agent 已停止，请重新启动";
@@ -240,6 +254,26 @@ fn normalize_local_policy(mut policy: PolicySet) -> PolicySet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adding_permission_lock_restarts_runtime_even_when_effective_mode_is_unchanged() {
+        assert!(permission_policy_requires_runtime_restart(
+            None,
+            Some("ask"),
+            "ask",
+            "ask"
+        ));
+    }
+
+    #[test]
+    fn unchanged_permission_policy_does_not_restart_runtime() {
+        assert!(!permission_policy_requires_runtime_restart(
+            Some("auto"),
+            Some("auto"),
+            "auto",
+            "auto"
+        ));
+    }
 
     #[test]
     fn merge_uses_priority_then_last_value() {

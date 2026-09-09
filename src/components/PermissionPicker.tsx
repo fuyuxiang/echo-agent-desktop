@@ -194,8 +194,13 @@ export function PermissionPicker({
   const current = MODES.find((m) => m.id === mode) ?? MODES[0];
   const autoUnavailable = status?.autoModeAvailable === false;
   const alwaysUnavailable = status?.alwaysApproveAvailable === false;
+  const runtimeUnavailable = Boolean(sessionId) && status?.runtimeSyncState === "offline";
   const syncWarning = status?.runtimeSyncError ??
-    (status?.runtimeSyncState === "syncing" ? "权限模式正在同步" : null);
+    (status?.runtimeSyncState === "syncing"
+      ? "权限模式正在同步"
+      : runtimeUnavailable
+        ? "当前任务正在加载，权限模式暂不可切换"
+        : null);
   const modeDescription = (item: (typeof MODES)[number]) => {
     if (item.id === "auto" && autoUnavailable) {
       return status?.autoModeUnavailableReason ?? "自动模式当前不可用";
@@ -207,6 +212,7 @@ export function PermissionPicker({
   };
   const modeDisabled = (item: (typeof MODES)[number]) =>
     busy ||
+    runtimeUnavailable ||
     (item.id === "auto" && autoUnavailable) ||
     (item.id === "always-approve" && alwaysUnavailable) ||
     Boolean(status?.locked);

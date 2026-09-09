@@ -73,3 +73,8 @@ export const selectQuestionForSession =
     if (!sessionId) return null;
     return s.queues[sessionId]?.[0] ?? null;
   };
+
+/** Imperative guard for event handlers that may run with stale React props. */
+export function hasPendingQuestionForSession(sessionId: string): boolean {
+  return (useQuestionStore.getState().queues[sessionId]?.length ?? 0) > 0;
+}

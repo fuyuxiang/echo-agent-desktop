@@ -1,4 +1,62 @@
 use super::*;
+
+#[tokio::test(flavor = "current_thread")]
+async fn targeted_permission_update_rejects_a_missing_resident_session() {
+    use acp::Agent as _;
+    let agent = build_minimal_agent_for_tests();
+    let params = serde_json::value::to_raw_value(&serde_json::json!({
+        "permission_mode": "ask",
+        "sessionIds": ["not-resident"],
+    }))
+    .expect("serialize permission update");
+
+    let error = agent
+        .ext_notification(acp::ExtNotification::new(
+            "echo.agent/yolo_mode_changed",
+            params.into(),
+        ))
+        .await
+        .expect_err("a targeted update must not acknowledge an absent Runtime session");
+
+    assert!(
+        error
+            .data
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|message| message.contains("not-resident")),
+        "missing target must be named in the error: {error:?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn targeted_permission_update_is_atomic_when_any_target_is_missing() {
+    use acp::Agent as _;
+    let agent = build_minimal_agent_for_tests();
+    let resident_id = acp::SessionId::new("resident");
+    let (handle, _cmd_tx, mut commands) = make_live_session_handle(&resident_id, None);
+    agent.insert_resident(&resident_id, handle);
+    let params = serde_json::value::to_raw_value(&serde_json::json!({
+        "permission_mode": "auto",
+        "sessionIds": ["resident", "not-resident"],
+    }))
+    .expect("serialize permission update");
+
+    agent
+        .ext_notification(acp::ExtNotification::new(
+            "echo.agent/yolo_mode_changed",
+            params.into(),
+        ))
+        .await
+        .expect_err("the whole targeted update must fail before mutating a partial target set");
+
+    assert!(
+        matches!(
+            commands.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ),
+        "a missing target must prevent updates to every otherwise matching session"
+    );
+}
 /// Build an unsigned JWT with a `tier` claim (header.payload.sig base64url).
 fn jwt_with_tier(tier: u64) -> String {
     use base64::Engine;

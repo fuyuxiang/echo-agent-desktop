@@ -186,6 +186,26 @@ describe("PermissionPicker", () => {
     expect(mocks.permissionModeSet).not.toHaveBeenCalled();
   });
 
+  it("任务尚未加载进 Runtime 时展示状态并禁止权限切换", async () => {
+    useSessionsStore.setState({ independent: [session("session-1")] });
+    mocks.permissionModeGet.mockResolvedValue(modeStatus("session-1", {
+      runtimeSyncState: "offline",
+      runtimeAppliedMode: undefined,
+    }));
+    const user = userEvent.setup();
+    render(<PermissionPicker sessionId="session-1" />);
+
+    await waitFor(() => expect(usePermissionModeStore.getState().statuses["session-1"])
+      .toBeDefined());
+    await user.click(screen.getByRole("button", { name: /审批模式/ }));
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "当前任务正在加载，权限模式暂不可切换",
+    );
+    expect(screen.getByRole("menuitemradio", { name: /^自动模式/ })).toBeDisabled();
+    expect(mocks.permissionModeSet).not.toHaveBeenCalled();
+  });
+
   it("能力变化会将首页不再可用的草稿权限安全回退为审批模式", async () => {
     usePermissionModeStore.setState({ homeMode: "auto" });
     mocks.permissionModeGet.mockResolvedValue(modeStatus(undefined, {
