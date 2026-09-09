@@ -28,13 +28,7 @@ import { selectQuestionForSession, useQuestionStore } from "@/stores/question-st
 import { buildTimeline } from "@/lib/timeline-utils";
 import { formatAgentError } from "@/lib/error-format";
 import { useSubagentStore } from "@/stores/subagent-store";
-import {
-  requestYield,
-  confirmYielded,
-  clearYield,
-  isYielded,
-  createYieldStore,
-} from "@/lib/yield-state";
+import type { SessionControlAction } from "@/lib/session-control";
 import type { ModelOption } from "./ModelSelector";
 import type { AgentEntry } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
@@ -79,7 +73,7 @@ export function ChatView({
     attachments?: string[],
     queueItemId?: string,
   ) => boolean | void | Promise<boolean | void>;
-  onCancel: () => boolean | void | Promise<boolean | void>;
+  onCancel: (action?: SessionControlAction) => boolean | void | Promise<boolean | void>;
   modelId?: string;
   modelLoading?: boolean;
   models?: ModelOption[];
@@ -116,6 +110,8 @@ export function ChatView({
   const error = useSessionStore((s) => s.error);
   const plan = useSessionStore((s) => s.plan);
   const sessionId = useSessionStore((s) => s.sessionId);
+  const control = useSessionStore((s) => s.control);
+  const resumeSession = useSessionStore((s) => s.resumeSession);
   const awaitingQuestion = Boolean(useQuestionStore(selectQuestionForSession(sessionId)));
   // 会话内查找(对齐 EchoAgent chat-search)。
   const [findOpen, setFindOpen] = useState(false);
@@ -126,38 +122,30 @@ export function ChatView({
   // 子代理运行时面板(对齐 EchoAgent team-runtime)。
   const [subagentsOpen, setSubagentsOpen] = useState(false);
   const [teamsOpen, setTeamsOpen] = useState(false);
-  // pause/yield(对齐 EchoAgent session:requestYield):软暂停,保留会话上下文。
-  const [yieldStore, setYieldStore] = useState<Record<string, ReturnType<typeof createYieldStore>>["k"]>(() => createYieldStore());
-  const yielded = sessionId ? isYielded(yieldStore, sessionId) : false;
   const handlePause = useCallback(async () => {
     if (!sessionId || !streaming) return;
-    const targetSessionId = sessionId;
-    setYieldStore((s) => requestYield(s, targetSessionId));
-    // EchoAgent 无原生 yield,用 cancel 软停止(保留会话);yield 状态在 complete 后确认。
-    try {
-      const accepted = await onCancel();
-      if (accepted === false) {
-        setYieldStore((state) => clearYield(state, targetSessionId));
-        onToast?.("暂停失败，Agent 仍在运行");
-      }
-    } catch {
-      setYieldStore((state) => clearYield(state, targetSessionId));
-      onToast?.("暂停失败，Agent 仍在运行");
-    }
-  }, [sessionId, streaming, onCancel, onToast]);
+    await onCancel("pause");
+  }, [sessionId, streaming, onCancel]);
   const handleResume = useCallback(() => {
     if (!sessionId) return;
-    setYieldStore((s) => clearYield(s, sessionId));
-    onToast?.("已恢复(可继续发送消息)");
-  }, [sessionId, onToast]);
-  /** 恢复并重新触发 agent:清除 yield 状态 + 发送「请继续」让 agent 接着生成。
-   *  形成完整闭环(暂停 → 显式恢复并续跑),区别于仅清状态的「恢复」。 */
+    resumeSession(sessionId);
+    useSessionsStore.getState().upsert({ sessionId, status: "completed" });
+    onToast?.("已恢复，可继续发送消息");
+  }, [sessionId, resumeSession, onToast]);
   const handleResumeAndContinue = useCallback(() => {
     if (!sessionId) return;
-    setYieldStore((s) => clearYield(s, sessionId));
-    onSend("请继续。");
-    onToast?.("已恢复并继续生成");
-  }, [sessionId, onSend, onToast]);
+    resumeSession(sessionId);
+    void onSend("请继续。");
+  }, [sessionId, resumeSession, onSend]);
+  const handleTextControl = useCallback(async (action: SessionControlAction) => {
+    if (!streaming) {
+      if (control?.phase === "paused") onToast?.("当前任务已暂停");
+      else if (control?.phase === "stopped") onToast?.("当前任务已停止");
+      else onToast?.("当前任务没有正在运行的内容");
+      return true;
+    }
+    return onCancel(action);
+  }, [control?.phase, onCancel, onToast, streaming]);
   // 按会话持久化的输入草稿:切到本会话时回填,每次输入回写 store。
   // 选 setDraft 的稳定引用做回调,避免 sessionId 变化时让 Composer 收到新函数。
   const setDraft = useSessionsStore((s) => s.setDraft);
@@ -346,14 +334,6 @@ export function ChatView({
     );
     node?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [findCurrent]);
-  // 流式结束后确认 yield(yielding → yielded,显示「已暂停」横幅)。
-  useEffect(() => {
-    if (!sessionId) return;
-    if (!streaming) {
-      setYieldStore((s) => confirmYielded(s, sessionId));
-    }
-  }, [sessionId, streaming]);
-
   return (
     <div className={"chatview" + (panelOpen ? " chatview--with-panel" : "")}>
       <div className="chatview__main">
@@ -625,32 +605,40 @@ export function ChatView({
           {/* Inline permission / question cards: session-scoped, never block sidebar. */}
           <PermissionInlineCard sessionId={sessionId} />
           <QuestionInlineCard sessionId={sessionId} />
-          {/* pause/yield:已暂停横幅 + 恢复按钮(对齐 EchoAgent session:requestYield)。 */}
-          {yielded && (
+          {control && (
             <div className="yield-banner" role="status">
-              <span>已暂停(会话上下文已保留)</span>
-              <div className="yield-banner__actions">
-                <button
-                  type="button"
-                  className="yield-banner__resume"
-                  onClick={handleResume}
-                  title="仅恢复,不触发新回复(可继续输入)"
-                >
-                  恢复
-                </button>
-                <button
-                  type="button"
-                  className="yield-banner__resume yield-banner__resume--primary"
-                  onClick={handleResumeAndContinue}
-                  title="恢复并发送「请继续」让 agent 接着生成"
-                >
-                  恢复并继续
-                </button>
-              </div>
+              <span>
+                {control.phase === "pausing" && "正在暂停任务…"}
+                {control.phase === "paused" && "已暂停（会话上下文已保留）"}
+                {control.phase === "stopping" && "正在停止任务…"}
+                {control.phase === "stopped" && "已停止（发送新消息可继续此任务）"}
+              </span>
+              {(control.phase === "paused" || control.phase === "stopped") && (
+                <div className="yield-banner__actions">
+                  <button
+                    type="button"
+                    className="yield-banner__resume"
+                    onClick={handleResume}
+                    title="恢复会话，等待你发送下一条消息"
+                  >
+                    {control.phase === "paused" ? "恢复" : "继续此任务"}
+                  </button>
+                  {control.phase === "paused" && (
+                    <button
+                      type="button"
+                      className="yield-banner__resume yield-banner__resume--primary"
+                      onClick={handleResumeAndContinue}
+                      title="恢复并发送「请继续」让 Agent 接着生成"
+                    >
+                      恢复并继续
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
           {/* 流式时提供「暂停」按钮(软停止,区别于停止按钮的硬取消)。 */}
-          {sessionId && streaming && !yielded && (
+          {sessionId && streaming && !control && (
             <button
               type="button"
               className="chatview__pause-btn"
@@ -683,6 +671,7 @@ export function ChatView({
           )}
           <Composer
             streaming={streaming}
+            disabled={control?.phase === "pausing" || control?.phase === "paused" || control?.phase === "stopping"}
             apiReady={apiReady}
             setupHint={setupHint}
             onOpenSettings={onOpenSettings}
@@ -698,7 +687,8 @@ export function ChatView({
                   }
                 : undefined
             }
-            onCancel={onCancel}
+            onCancel={() => onCancel("stop")}
+            onControl={handleTextControl}
             cancelling={cancelling}
             modelId={modelId}
               modelLoading={modelLoading}

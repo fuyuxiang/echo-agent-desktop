@@ -96,6 +96,25 @@ describe("Composer", () => {
     expect(onCancel).toHaveBeenCalled();
   });
 
+  it("streaming 时输入“中止”会执行本地停止，不会作为新 prompt 发送", async () => {
+    const onControl = vi.fn().mockResolvedValue(true);
+    const onSendNow = vi.fn();
+    render(
+      <Composer
+        {...base}
+        streaming
+        onControl={onControl}
+        onSendNow={onSendNow}
+      />,
+    );
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "中止" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
+    await waitFor(() => expect(onControl).toHaveBeenCalledWith("stop"));
+    expect(onSendNow).not.toHaveBeenCalled();
+    expect((input as HTMLTextAreaElement).value).toBe("");
+  });
+
   it("streaming 时可用 Enter 中断当前回复并立即发送", async () => {
     const onSend = vi.fn();
     const onSendNow = vi.fn();

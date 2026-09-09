@@ -1238,9 +1238,10 @@ pub async fn agent_load_session(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let current_model_id = agent_runtime::load_session(&tx, &session_id, &PathBuf::from(&cwd), &permission_mode)
-        .await
-        .map_err(|e| e.to_string())?;
+    let current_model_id =
+        agent_runtime::load_session(&tx, &session_id, &PathBuf::from(&cwd), &permission_mode)
+            .await
+            .map_err(|e| e.to_string())?;
     crate::permission_config::mark_session_permission_mode_synced(&session_id, &permission_mode);
     let _ = app.emit(
         "agent://permission-mode",
@@ -1329,7 +1330,12 @@ pub async fn agent_send(
 }
 
 #[tauri::command]
-pub async fn agent_cancel(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+pub async fn agent_cancel(
+    state: State<'_, AppState>,
+    session_id: String,
+    cancel_action: Option<String>,
+    prompt_id: Option<String>,
+) -> Result<(), String> {
     if !valid_session_id(&session_id) {
         return Err("会话 ID 无效或过长".into());
     }
@@ -1340,7 +1346,12 @@ pub async fn agent_cancel(state: State<'_, AppState>, session_id: String) -> Res
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    agent_runtime::cancel(&tx, &session_id)
+    let cancel_trigger = match cancel_action.as_deref().unwrap_or("stop") {
+        "pause" => "pause",
+        "stop" => "stop",
+        _ => return Err("无效的取消动作".into()),
+    };
+    agent_runtime::cancel(&tx, &session_id, cancel_trigger, prompt_id.as_deref())
         .await
         .map_err(|e| e.to_string())
 }

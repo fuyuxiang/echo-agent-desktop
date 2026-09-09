@@ -1896,7 +1896,7 @@ async fn execute_automation_run(
             );
             match record_session_id(&record_id) {
                 Ok(Some(session_id)) => {
-                    let _ = crate::agent_runtime::cancel(&tx, &session_id).await;
+                    let _ = crate::agent_runtime::cancel(&tx, &session_id, "stop", None).await;
                     release_full_access_session(&app, &tx, &session_id).await;
                     app.state::<AppState>()
                         .forget_session_workspace(&session_id);
@@ -1991,7 +1991,7 @@ async fn run_automation_once(
                 }
             }
         }
-        let _ = crate::agent_runtime::cancel(tx, &session_id).await;
+        let _ = crate::agent_runtime::cancel(tx, &session_id, "stop", None).await;
         state.forget_session_workspace(&session_id);
         return Err(error);
     }

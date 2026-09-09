@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import type { SessionSummary, SessionStatus } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
+import {
+  persistSessionControl,
+  readPersistedSessionControls,
+  sessionControlStatus,
+} from "@/lib/session-control";
 
 /**
  * Sentinel draft keys for sessions that don't have a real sessionId yet.
@@ -107,11 +112,22 @@ export const useSessionsStore = create<SessionsState>((set) => ({
   setIndependent: (incoming) =>
     set((state) => {
       const pendingSessionPatches = { ...state.pendingSessionPatches };
+      const existingById = new Map(
+        state.independent.map((entry) => [entry.sessionId, entry]),
+      );
+      const persistedControls = readPersistedSessionControls();
       const independent = incoming.map((entry) => {
         const patch = pendingSessionPatches[entry.sessionId];
-        if (!patch) return entry;
-        delete pendingSessionPatches[entry.sessionId];
-        return { ...entry, ...patch, cwd: entry.cwd };
+        const existingStatus = existingById.get(entry.sessionId)?.status;
+        const persistedControl = persistedControls[entry.sessionId];
+        if (patch) delete pendingSessionPatches[entry.sessionId];
+        return {
+          ...entry,
+          ...(entry.status == null && existingStatus ? { status: existingStatus } : {}),
+          ...(patch ?? {}),
+          ...(persistedControl ? { status: sessionControlStatus(persistedControl) } : {}),
+          cwd: entry.cwd,
+        };
       });
       return { independent, pendingSessionPatches };
     }),
@@ -119,12 +135,17 @@ export const useSessionsStore = create<SessionsState>((set) => ({
     set((state) => {
       const independent = [...state.independent];
       const pendingSessionPatches = { ...state.pendingSessionPatches };
+      const persistedControls = readPersistedSessionControls();
       for (const entry of incoming) {
         const patch = pendingSessionPatches[entry.sessionId];
         delete pendingSessionPatches[entry.sessionId];
-        const merged = patch
+        let merged = patch
           ? { ...entry, ...patch, cwd: entry.cwd }
           : entry;
+        const persistedControl = persistedControls[entry.sessionId];
+        if (persistedControl) {
+          merged = { ...merged, status: sessionControlStatus(persistedControl) };
+        }
         const index = independent.findIndex((item) => item.sessionId === entry.sessionId);
         if (index === -1) independent.unshift(merged);
         else independent[index] = { ...independent[index], ...merged };
@@ -214,6 +235,7 @@ export const useSessionsStore = create<SessionsState>((set) => ({
 
   remove: (id, explicitCwd) =>
     set((state) => {
+      persistSessionControl(id);
       const removed = state.independent.find((x) => x.sessionId === id);
       const independent = state.independent.filter((x) => x.sessionId !== id);
 

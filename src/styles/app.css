@@ -1325,7 +1325,7 @@
   background: var(--echo-border-default);
   margin: 4px 0;
 }
-/* pause/yield(对齐 EchoAgent session:requestYield) */
+/* Session-scoped pause/stop banner. */
 .yield-banner {
   display: flex;
   align-items: center;
@@ -6847,6 +6847,9 @@ button.diff__path {
   color: #b56a00;
 }
 .sidebar__conv-status--pending,
+.sidebar__conv-status--paused,
+.sidebar__conv-status--pausing,
+.sidebar__conv-status--stopping,
 .sidebar__conv-status--stopped {
   color: var(--echo-text-tertiary);
 }

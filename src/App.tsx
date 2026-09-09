@@ -109,6 +109,10 @@ import {
   isWaitingForUser,
   terminalSessionStatus,
 } from "./lib/turn-status";
+import {
+  isControlledSessionStatus,
+  type SessionControlAction,
+} from "./lib/session-control";
 
 const ChatView = lazy(() => import("./components/ChatView").then((module) => ({ default: module.ChatView })));
 const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((module) => ({ default: module.SettingsPanel })));
@@ -441,7 +445,11 @@ function Shell() {
                 status: "working",
                 updatedAt: new Date().toISOString(),
               });
-            } else if (updateSessionId && updateType === "plan_approval_request") {
+            } else if (
+              updateSessionId
+              && updateType === "plan_approval_request"
+              && !sessionStore.getState().transcripts[updateSessionId]?.control
+            ) {
               sessionsStore.getState().upsert({
                 sessionId: updateSessionId,
                 status: "awaiting_approval",
@@ -463,6 +471,7 @@ function Shell() {
             sessionStore.getState().applyUpdate(u);
           },
           onPermission: (p) => {
+            if (sessionStore.getState().transcripts[p.sessionId]?.control) return;
             const permissionState = permissionStore.getState();
             // A mode switch may close a backend request while its earlier
             // Tauri event is still queued for the renderer. Never resurrect it.
@@ -515,7 +524,8 @@ function Shell() {
             void refreshSessionCatalog();
           },
           onComplete: (p) => {
-            const terminalStatus = terminalSessionStatus(p);
+            const requestedAction = sessionStore.getState().transcripts[p.sessionId]?.control?.action;
+            const terminalStatus = terminalSessionStatus(p, requestedAction);
             reportEvent(
               "session_complete",
               terminalStatus === "failed" ? "error" : terminalStatus === "stopped" ? "warn" : "info",
@@ -741,12 +751,16 @@ function Shell() {
                 // Use the automation name to hydrate a brand-new background
                 // row, but never replace a title already generated for it.
                 ...(existing ? {} : { title: event.automationName }),
-                status,
+                // A background schedule is not permission to revive a task the
+                // user explicitly paused or stopped. Its own automation status
+                // remains visible in AutomationPanel.
+                ...(!isControlledSessionStatus(existing?.status) ? { status } : {}),
                 updatedAt: new Date().toISOString(),
               });
             }
           },
           onQuestion: (q) => {
+            if (sessionStore.getState().transcripts[q.sessionId]?.control) return;
             questionStore.getState().request(q);
             sessionsStore.getState().upsert({
               sessionId: q.sessionId,
@@ -1227,7 +1241,9 @@ function Shell() {
     return true;
   };
 
-  const handleCancel = async (): Promise<boolean> => {
+  const handleCancel = async (
+    action: SessionControlAction = "stop",
+  ): Promise<boolean> => {
     if (!currentSessionId || cancellingSessionId) return false;
     const sessionId = currentSessionId;
     const beforeCancel = sessionStore.getState().transcripts[sessionId];
@@ -1235,12 +1251,42 @@ function Shell() {
       (message) => message.id === beforeCancel.streamingMessageId,
     );
     const activePromptId = beforeCancel?.pendingSendNowPromptId ?? activeMessage?.promptId;
+    if (!beforeCancel?.streamingMessageId && !beforeCancel?.pendingSendNowPromptId) {
+      showToast(action === "pause" ? "当前任务没有正在运行的内容" : "当前任务已停止");
+      return false;
+    }
+    sessionStore.getState().requestControl(sessionId, action, activePromptId);
+    sessionsStore.getState().upsert({
+      sessionId,
+      status: action === "pause" ? "pausing" : "stopping",
+      updatedAt: new Date().toISOString(),
+    });
     setCancellingSessionId(sessionId);
     try {
-      await agentCancel(sessionId);
-      // Don't rely on the backend emitting a terminal event for a fast cancel.
-      // Only finalize locally after the cancel request was actually accepted.
-      sessionStore.getState().stopStreaming(sessionId);
+      await agentCancel(sessionId, action, activePromptId);
+      // prompt_complete is the authoritative acknowledgement and normally
+      // moves pausing/stopping to its stable state immediately. Keep a bounded
+      // fallback for an older/broken runtime that accepts Cancel but omits the
+      // terminal extension event.
+      globalThis.setTimeout(() => {
+        const pending = sessionStore.getState().transcripts[sessionId]?.control;
+        if (!pending || pending.action !== action) return;
+        if (pending.phase !== "pausing" && pending.phase !== "stopping") return;
+        sessionStore.getState().confirmControl(sessionId, action);
+        sessionsStore.getState().upsert({
+          sessionId,
+          status: action === "pause" ? "paused" : "stopped",
+          updatedAt: new Date().toISOString(),
+        });
+      }, 5_000);
+      const permissionState = permissionStore.getState();
+      for (const request of permissionState.queues[sessionId] ?? []) {
+        permissionState.close(request.requestId, sessionId);
+      }
+      const questionState = questionStore.getState();
+      for (const request of questionState.queues[sessionId] ?? []) {
+        questionState.dismiss(request.requestId, sessionId);
+      }
       useMessageQueueStore.getState().settleSending(
         sessionId,
         "consume",
@@ -1248,10 +1294,18 @@ function Shell() {
       );
       return true;
     } catch (e) {
+      sessionStore.getState().rejectControl(sessionId, action);
+      const transcript = sessionStore.getState().transcripts[sessionId];
+      sessionsStore.getState().upsert({
+        sessionId,
+        status: transcript?.streamingMessageId || transcript?.pendingSendNowPromptId
+          ? "working"
+          : "failed",
+      });
       if (sessionStore.getState().sessionId === sessionId) {
         sessionStore.getState().setError(friendlyError(e));
       }
-      showToast(`停止失败：${friendlyError(e)}`, 5000);
+      showToast(`${action === "pause" ? "暂停" : "停止"}失败：${friendlyError(e)}`, 5000);
       return false;
     } finally {
       setCancellingSessionId((pending) => pending === sessionId ? null : pending);

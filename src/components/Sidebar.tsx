@@ -71,6 +71,9 @@ const ACTIVE_STATUS_META: Partial<Record<SessionStatus, { label: string; classNa
   awaiting_permission: { label: "授权待确认", className: "awaiting" },
   awaiting_answer: { label: "等待回答", className: "awaiting" },
   awaiting_approval: { label: "方案待批准", className: "awaiting" },
+  pausing: { label: "正在暂停", className: "pausing" },
+  paused: { label: "已暂停", className: "paused" },
+  stopping: { label: "正在停止", className: "stopping" },
   stopped: { label: "已停止", className: "stopped" },
   failed: { label: "失败", className: "failed" },
 };
@@ -123,6 +126,7 @@ const STATUS_OPTIONS: { value: SessionStatus | null; label: string }[] = [
   { value: "working",   label: "进行中" },
   { value: "completed", label: "已完成" },
   { value: "failed",    label: "失败" },
+  { value: "paused",    label: "已暂停" },
   { value: "stopped",   label: "已停止" },
   { value: "awaiting_permission", label: "等待确认" },
   { value: "pending",   label: "未开始" },
@@ -159,6 +163,8 @@ function getDateStart(date: string | null): number | null {
 function statusMatches(sessionStatus: SessionStatus | undefined, filter: SessionStatus): boolean {
   const s = sessionStatus ?? "completed";
   if (filter === "working") return s === "working" || s === "planning";
+  if (filter === "paused") return s === "pausing" || s === "paused";
+  if (filter === "stopped") return s === "stopping" || s === "stopped";
   if (filter === "awaiting_permission") return isWaitingForUser(s);
   return s === filter;
 }

@@ -235,8 +235,16 @@ export async function agentSendNow(
   });
 }
 
-export async function agentCancel(sessionId: string): Promise<void> {
-  await invoke<void>("agent_cancel", { sessionId });
+export async function agentCancel(
+  sessionId: string,
+  cancelAction: "pause" | "stop" = "stop",
+  promptId?: string,
+): Promise<void> {
+  await invoke<void>("agent_cancel", {
+    sessionId,
+    cancelAction,
+    promptId: promptId ?? null,
+  });
 }
 
 /** Cleanly shut down the agent so `agentInit` can be called again to restart. */

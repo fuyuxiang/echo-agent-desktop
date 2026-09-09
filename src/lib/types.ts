@@ -302,6 +302,8 @@ export interface PromptComplete {
  *  - "pending": created but no message sent yet
  *  - "planning": actively producing or revising a plan
  *  - "awaiting_*": paused for a specific user interaction
+ *  - "pausing"/"stopping": a session-scoped control request is being sent
+ *  - "paused": user paused the turn and explicitly retained its context
  *  - "stopped": cancelled by the user or by a non-error external trigger */
 export type SessionStatus =
   | "working"
@@ -312,6 +314,9 @@ export type SessionStatus =
   | "awaiting_permission"
   | "awaiting_answer"
   | "awaiting_approval"
+  | "pausing"
+  | "paused"
+  | "stopping"
   | "stopped";
 
 export interface SessionSummary {

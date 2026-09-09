@@ -14,6 +14,13 @@ import {
   parseLegacyAttachmentPrompt,
   stripInjectedUserContext,
 } from "@/lib/user-message";
+import {
+  persistSessionControl,
+  readPersistedSessionControl,
+  type SessionControl,
+  type SessionControlAction,
+} from "@/lib/session-control";
+import { terminalSessionStatus } from "@/lib/turn-status";
 
 /**
  * A single chat message in the transcript the UI renders.
@@ -105,6 +112,12 @@ export interface SessionTranscript {
   /** Ordered, replayable approvals owned by this session. */
   planApprovals: PlanApprovalRequest[];
   suppressReplay: boolean;
+  /** Prompt ids whose pause/stop was explicitly resumed. Late duplicate
+   * terminal events for these turns must not re-arm the control state. */
+  dismissedControlPromptIds: string[];
+  /** Session-scoped pause/stop barrier. While present, late live chunks cannot
+   * recreate a streaming assistant after the user ended the turn. */
+  control?: SessionControl;
 }
 
 interface SessionState {
@@ -124,6 +137,9 @@ interface SessionState {
   usage: Usage;
   plan: Plan | null;
   planApproval: PlanApprovalRequest | null;
+  /** Focused session's pause/stop state. Kept outside ChatView so navigation
+   * and background automation cannot discard or overwrite it. */
+  control?: SessionControl;
 
   error: string | null;
   /** Plan mode on/off — mirror of the focused session's authoritative mode. */
@@ -140,6 +156,18 @@ interface SessionState {
   /** Roll back a replacement request rejected before Runtime accepted it. */
   rejectSendNow: (promptId: string, sessionId?: string) => void;
   markComplete: (p: PromptComplete) => void;
+  /** Arm a pause/stop barrier before sending the native cancel notification. */
+  requestControl: (
+    sessionId: string,
+    action: SessionControlAction,
+    promptId?: string,
+  ) => void;
+  /** Finalize an accepted control request locally; prompt_complete may follow. */
+  confirmControl: (sessionId: string, action: SessionControlAction) => void;
+  /** Roll back the barrier when the native request could not be sent. */
+  rejectControl: (sessionId: string, action: SessionControlAction) => void;
+  /** Explicitly restore a paused/stopped session for a future turn. */
+  resumeSession: (sessionId: string) => void;
   /** Finalize every in-flight transcript after a process-wide agent failure. */
   failAllStreaming: (reason?: string, agentResult?: string) => void;
   setError: (e: string | null) => void;
@@ -188,6 +216,7 @@ const EMPTY_TRANSCRIPT: SessionTranscript = {
   planMode: false,
   planApprovals: [],
   suppressReplay: false,
+  dismissedControlPromptIds: [],
 };
 
 const MAX_MESSAGE_TEXT_CHARS = 2_000_000;
@@ -669,6 +698,46 @@ function activatePendingSendNow(transcript: SessionTranscript): SessionTranscrip
   };
 }
 
+/** Close the visible turn after a pause/stop request was accepted. The control
+ * barrier remains, so a queued late chunk cannot reopen this transcript. */
+function finalizeControlledTranscript(
+  transcript: SessionTranscript,
+  control: SessionControl,
+): SessionTranscript {
+  const completedAt = Date.now();
+  const messages = transcript.messages
+    .map((message) =>
+      message.id === transcript.streamingMessageId
+        ? {
+            ...message,
+            complete: true,
+            stopReason: "cancelled",
+            cancelTrigger: control.action,
+            ...(message.startedAt != null ? { completedAt } : {}),
+          }
+        : message
+    )
+    .filter(
+      (message) => !(message.id === transcript.streamingMessageId && message.parts.length === 0),
+    );
+  return {
+    ...transcript,
+    control,
+    messages,
+    streamingMessageId: null,
+    pendingSendNowPromptId: null,
+    planApprovals: [],
+  };
+}
+
+function rememberDismissedControlPrompt(transcript: SessionTranscript): string[] {
+  const promptId = transcript.control?.promptId;
+  if (!promptId || transcript.dismissedControlPromptIds.includes(promptId)) {
+    return transcript.dismissedControlPromptIds;
+  }
+  return [...transcript.dismissedControlPromptIds, promptId].slice(-32);
+}
+
 function upsertToolCall(msg: ChatMessage, tc: ToolCallView): ChatMessage {
   const parts = [...msg.parts];
   const idx = parts.findIndex(
@@ -687,14 +756,16 @@ function mirrorOf(t: SessionTranscript | undefined) {
   return {
     messages: t?.messages ?? [],
     streamingMessageId: t?.streamingMessageId ?? null,
-    streaming:
+    streaming: !t?.control && (
       (t?.streamingMessageId ?? null) != null
-      || (t?.pendingSendNowPromptId ?? null) != null,
+      || (t?.pendingSendNowPromptId ?? null) != null
+    ),
     sendNowPending: (t?.pendingSendNowPromptId ?? null) != null,
     usage: t?.usage ?? {},
     plan: t?.plan ?? null,
     planMode: t?.planMode ?? false,
     planApproval: t?.planApprovals?.[0] ?? null,
+    control: t?.control,
   };
 }
 
@@ -710,7 +781,10 @@ export const useSessionStore = create<SessionState>((set, get) => {
   ) =>
     set((s) => {
       if (!sid) return s; // nowhere to route — drop
-      const prev = s.transcripts[sid] ?? { ...EMPTY_TRANSCRIPT };
+      const prev = s.transcripts[sid] ?? {
+        ...EMPTY_TRANSCRIPT,
+        control: readPersistedSessionControl(sid),
+      };
       const next = reducer(prev);
       if (next === prev) return s;
       const transcripts = { ...s.transcripts, [sid]: next };
@@ -731,6 +805,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
     usage: {},
     plan: null,
     planApproval: null,
+    control: undefined,
     error: null,
     planMode: false,
 
@@ -746,7 +821,13 @@ export const useSessionStore = create<SessionState>((set, get) => {
           id != null && Object.prototype.hasOwnProperty.call(s.transcripts, id);
         let transcripts = s.transcripts;
         if (id != null && !hasCache) {
-          transcripts = { ...s.transcripts, [id]: { ...EMPTY_TRANSCRIPT } };
+          transcripts = {
+            ...s.transcripts,
+            [id]: {
+              ...EMPTY_TRANSCRIPT,
+              control: readPersistedSessionControl(id),
+            },
+          };
         } else if (id != null && hasCache) {
           const t = s.transcripts[id];
           if (!t.suppressReplay) {
@@ -780,6 +861,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
       // instead of a blank gap until the first streamed chunk arrives.
       const sid = sessionId ?? get().sessionId;
       if (!sid) return;
+      // A new prompt is an explicit user action to continue this session.
+      persistSessionControl(sid);
       applyToTranscript(sid, (t) => {
         const id = nextId();
         const placeholder: ChatMessage = {
@@ -792,6 +875,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
         };
         return {
           ...t,
+          dismissedControlPromptIds: rememberDismissedControlPrompt(t),
+          control: undefined,
           streamingMessageId: id,
           messages: [...t.messages, placeholder],
         };
@@ -820,6 +905,58 @@ export const useSessionStore = create<SessionState>((set, get) => {
       );
     },
 
+    requestControl: (sessionId, action, promptId) => {
+      applyToTranscript(sessionId, (transcript) => ({
+        ...transcript,
+        control: {
+          action,
+          phase: action === "pause" ? "pausing" : "stopping",
+          ...(promptId ? { promptId } : {}),
+          requestedAt: Date.now(),
+        },
+      }));
+      set({ error: null });
+    },
+
+    confirmControl: (sessionId, action) => {
+      const current = get().transcripts[sessionId]?.control;
+      // A terminal event may have won the race and cleared this request.
+      if (!current || current.action !== action) return;
+      const stable: SessionControl = {
+        ...current,
+        phase: action === "pause" ? "paused" : "stopped",
+      };
+      persistSessionControl(sessionId, stable);
+      applyToTranscript(sessionId, (transcript) =>
+        transcript.control?.action === action
+          ? finalizeControlledTranscript(transcript, stable)
+          : transcript
+      );
+    },
+
+    rejectControl: (sessionId, action) => {
+      const current = get().transcripts[sessionId]?.control;
+      if (!current || current.action !== action) return;
+      persistSessionControl(sessionId);
+      applyToTranscript(sessionId, (transcript) => ({
+        ...transcript,
+        control: undefined,
+      }));
+    },
+
+    resumeSession: (sessionId) => {
+      persistSessionControl(sessionId);
+      applyToTranscript(sessionId, (transcript) =>
+        transcript.control
+          ? {
+              ...transcript,
+              dismissedControlPromptIds: rememberDismissedControlPrompt(transcript),
+              control: undefined,
+            }
+          : transcript
+      );
+    },
+
     rollbackPendingTurn: () => {
       const sid = get().sessionId;
       if (!sid) return;
@@ -843,6 +980,34 @@ export const useSessionStore = create<SessionState>((set, get) => {
       // after we switched away finalizes ITS transcript (clearing its streaming
       // flag) instead of clobbering the focused one.
       const target = (p as { sessionId?: string }).sessionId ?? get().sessionId;
+      const targetTranscript = target ? get().transcripts[target] : undefined;
+      const requested = targetTranscript?.control;
+      const requestedAction = p.stopReason === "cancelled" ? requested?.action : undefined;
+      const activeMessage = targetTranscript?.messages.find(
+        (message) => message.id === targetTranscript.streamingMessageId,
+      );
+      const activePromptId = targetTranscript?.pendingSendNowPromptId ?? activeMessage?.promptId;
+      const isDismissedControl = !!p.promptId
+        && !!targetTranscript?.dismissedControlPromptIds.includes(p.promptId);
+      const targetsOlderTurn = !!p.promptId && !!activePromptId && p.promptId !== activePromptId;
+      const preserveCurrentControl = isDismissedControl || targetsOlderTurn;
+      const terminalAction = preserveCurrentControl
+        ? undefined
+        : p.cancelTrigger === "pause" || p.cancelTrigger === "stop"
+          ? p.cancelTrigger
+          : requestedAction ?? (terminalSessionStatus(p) === "stopped" ? "stop" : undefined);
+      if (target && !preserveCurrentControl) {
+        if (terminalAction) {
+          persistSessionControl(target, {
+            action: terminalAction,
+            phase: terminalAction === "pause" ? "paused" : "stopped",
+            ...(p.promptId ? { promptId: p.promptId } : {}),
+            requestedAt: requested?.requestedAt ?? Date.now(),
+          });
+        } else if (p.cancelTrigger !== "send_now") {
+          persistSessionControl(target);
+        }
+      }
       applyToTranscript(target, (t) => {
         const completed = completeStreamingAssistant(t, {
           promptId: p.promptId,
@@ -851,12 +1016,26 @@ export const useSessionStore = create<SessionState>((set, get) => {
           cancellationCategory: p.cancellationCategory,
           agentResult: p.agentResult,
         });
+        const control: SessionControl | undefined = preserveCurrentControl
+          ? completed.control
+          : terminalAction
+            ? {
+                action: terminalAction,
+                phase: terminalAction === "pause" ? "paused" : "stopped",
+                ...(p.promptId ? { promptId: p.promptId } : {}),
+                requestedAt: requested?.requestedAt ?? Date.now(),
+              }
+            : p.cancelTrigger === "send_now"
+              ? completed.control
+              : undefined;
+        const preservePendingSendNow = preserveCurrentControl
+          || (p.stopReason === "cancelled" && p.cancelTrigger === "send_now");
         return {
           ...completed,
-          pendingSendNowPromptId:
-            p.stopReason === "cancelled" && p.cancelTrigger === "send_now"
-              ? completed.pendingSendNowPromptId
-              : null,
+          control,
+          pendingSendNowPromptId: preservePendingSendNow
+            ? completed.pendingSendNowPromptId
+            : null,
           usage: { ...t.usage, ...p.usage },
         };
       });
@@ -1021,9 +1200,37 @@ export const useSessionStore = create<SessionState>((set, get) => {
         "plan",
         "turn_completed",
       ]);
+      const CONTROL_SUPPRESSED = new Set([
+        "user_message_chunk",
+        "agent_message_chunk",
+        "agent_thought_chunk",
+        "tool_call",
+        "tool_call_update",
+        "usage_update",
+        "plan",
+        "plan_approval_request",
+      ]);
+      const updateMeta = (u as unknown as { _meta?: Record<string, unknown> })._meta;
+      const isReplay = updateMeta?.isReplay === true;
+      const updatePromptId = typeof updateMeta?.promptId === "string"
+        ? updateMeta.promptId
+        : undefined;
 
       applyToTranscript(target, (tr) => {
         if (tr.suppressReplay && REPLAY_SUPPRESSED.has(t)) return tr;
+        if (
+          !isReplay
+          && updatePromptId
+          && tr.dismissedControlPromptIds.includes(updatePromptId)
+          && CONTROL_SUPPRESSED.has(t)
+        ) {
+          return tr;
+        }
+        // Pause/stop is a session-level event fence. EchoAgent can still have
+        // already-buffered live updates in the renderer queue after cancel;
+        // those must never recreate a streaming message. Historical replay is
+        // allowed so reopening a controlled session can still show its history.
+        if (tr.control && !isReplay && CONTROL_SUPPRESSED.has(t)) return tr;
 
         // Extract text delta from a content field that may be a single
         // TextContent object ({type:"text",text:"..."}) OR an array of them.
