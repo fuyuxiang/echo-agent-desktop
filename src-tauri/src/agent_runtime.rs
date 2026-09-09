@@ -464,16 +464,18 @@ pub async fn load_session(
     session_id: &str,
     cwd: &Path,
     permission_mode: &str,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let req = acp::LoadSessionRequest::new(
         acp::SessionId::new(session_id.to_string()),
         cwd.to_path_buf(),
     )
     .meta(Some(permission_mode_meta(permission_mode)));
-    let _: acp::LoadSessionResponse = acp_send(req, tx)
+    let response: acp::LoadSessionResponse = acp_send(req, tx)
         .await
         .map_err(|e| anyhow!("load_session: {e:?}"))?;
-    Ok(())
+    Ok(response
+        .models
+        .map(|models| models.current_model_id.0.to_string()))
 }
 
 fn permission_mode_meta(mode: &str) -> serde_json::Map<String, serde_json::Value> {
