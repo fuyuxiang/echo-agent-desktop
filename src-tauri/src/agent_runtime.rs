@@ -400,8 +400,8 @@ fn desktop_client_capabilities() -> acp::ClientCapabilities {
 /// `mcp_servers` entry — EchoAgent's merge gives the client layer top priority,
 /// so the team tools (`echoagent__create_team` etc.) are live from this
 /// session's first turn. Team tools are persisted separately after the
-/// session exists; organization-memory tools remain session-scoped and are
-/// hot-attached only while a verified shared organization scope is available.
+/// session exists; the knowledge bridge is attached for configured personal
+/// folders, while its organization tools remain gated by verified shared scope.
 /// Reasoning effort and permission mode are also session-owned. Automations
 /// persist the legacy `modelIsThinking` switch; mapping it to `high` makes that
 /// switch affect the actual runtime instead of being dead metadata.

@@ -25,6 +25,7 @@ export function HomePage({
   onSelectWorkspace,
   onSelectExpert,
   onNavigateConnectors,
+  onOpenKnowledgeBase,
   commandRefreshKey,
   onClientSlashCommand,
 }: {
@@ -44,6 +45,7 @@ export function HomePage({
   onSelectWorkspace?: (cwd: string) => void;
   onSelectExpert?: (agent: AgentEntry) => void;
   onNavigateConnectors?: () => void;
+  onOpenKnowledgeBase?: () => void;
   commandRefreshKey?: number;
   onClientSlashCommand?: (
     invocation: SlashCommandInvocation,
@@ -113,6 +115,7 @@ export function HomePage({
             onDraftChange={(t) => setDraft(HOME_DRAFT_KEY, t)}
             onSelectExpert={onSelectExpert}
             onNavigateConnectors={onNavigateConnectors}
+            onOpenKnowledgeBase={onOpenKnowledgeBase}
             commandRefreshKey={commandRefreshKey}
             onClientSlashCommand={onClientSlashCommand}
             activeExpertName={pendingExpert?.name}

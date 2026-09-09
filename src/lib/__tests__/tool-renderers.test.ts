@@ -35,6 +35,8 @@ describe("detectToolRenderer", () => {
     expect(detectToolRenderer("team_status")).toBe("team-status");
     expect(detectToolRenderer("agent_mail")).toBe("agent-mail");
     expect(detectToolRenderer("specialist")).toBe("specialist");
+    expect(detectToolRenderer("echoagent_organization_memory__local_knowledge_search")).toBe("personal-knowledge");
+    expect(detectToolRenderer("echoagent_organization_memory__knowledge_context")).toBe("knowledge");
   });
   it("EchoAgent task 工具 → task 渲染器（优先于 defer 的子串匹配）", () => {
     expect(detectToolRenderer("task")).toBe("task");
@@ -54,6 +56,7 @@ describe("rendererLabel / rendererIcon", () => {
     expect(rendererLabel("command")).toBe("终端命令");
     expect(rendererLabel("image-gen")).toBe("图像生成");
     expect(rendererLabel("team-create")).toBe("创建团队");
+    expect(rendererLabel("personal-knowledge")).toBe("个人知识");
     expect(rendererLabel("default")).toBe("工具");
     expect(rendererLabel("unknown")).toBe("未知工具");
     expect(typeof rendererIcon("image-gen")).toBe("string");

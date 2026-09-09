@@ -54,6 +54,7 @@ export function ChatView({
   onToast,
   onSelectExpert,
   onNavigateConnectors,
+  onOpenKnowledgeBase,
   apiReady = true,
   setupHint,
   onOpenSettings,
@@ -91,6 +92,7 @@ export function ChatView({
   onToast?: (msg: string) => void;
   onSelectExpert?: (agent: AgentEntry) => void;
   onNavigateConnectors?: () => void;
+  onOpenKnowledgeBase?: () => void;
   /** False when this session has no configured model or usable credential. */
   apiReady?: boolean;
   setupHint?: string;
@@ -710,6 +712,8 @@ export function ChatView({
             externalTextNonce={resendNonce}
             onSelectExpert={onSelectExpert}
             onNavigateConnectors={onNavigateConnectors}
+            knowledgeSessionId={sessionId ?? undefined}
+            onOpenKnowledgeBase={onOpenKnowledgeBase}
             commandSessionId={sessionId ?? undefined}
             commandRefreshKey={commandRefreshKey}
             onClientSlashCommand={onClientSlashCommand}

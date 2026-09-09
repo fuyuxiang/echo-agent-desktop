@@ -2,6 +2,7 @@ import { listKbProviders, registerKbProvider, unregisterKbProvider } from "./kno
 import { createLocalKbProvider } from "./local-kb-provider";
 import { createTauriDirectoryReader, isTauriAvailable } from "./tauri-kb-reader";
 import { invoke } from "@tauri-apps/api/core";
+import { useKnowledgeStore } from "@/stores/knowledge-store";
 
 const STORAGE_KEY = "echoagent.knowledge-sources.v1";
 let hydrationPromise: Promise<KnowledgeSourceDescriptor[]> | null = null;
@@ -112,6 +113,7 @@ export function hydrateKnowledgeSources(): Promise<KnowledgeSourceDescriptor[]> 
     for (const descriptor of descriptors) {
       if (!registered.has(descriptor.id)) registerDescriptor(descriptor);
     }
+    useKnowledgeStore.getState().setSourceCount(listKbProviders().length);
     return descriptors;
   })().catch((error) => {
     hydrationPromise = null;
@@ -130,6 +132,7 @@ export async function addLocalKnowledgeSource(root: string): Promise<{ descripto
   }
   await saveKnowledgeSourceDescriptors([...items, descriptor]);
   registerDescriptor(descriptor);
+  useKnowledgeStore.getState().setSourceCount(listKbProviders().length);
   return { descriptor, added: true };
 }
 
@@ -138,5 +141,7 @@ export async function removeKnowledgeSource(id: string): Promise<boolean> {
   const items = loadKnowledgeSourceDescriptors();
   const next = items.filter((item) => item.id !== id);
   if (next.length !== items.length) await saveKnowledgeSourceDescriptors(next);
-  return unregisterKbProvider(id) || next.length !== items.length;
+  const removed = unregisterKbProvider(id) || next.length !== items.length;
+  useKnowledgeStore.getState().setSourceCount(listKbProviders().length);
+  return removed;
 }

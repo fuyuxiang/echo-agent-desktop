@@ -162,6 +162,9 @@ export function ToolCallDetailBody({
     && isKnowledgeContextResult(parsedOrganizationResult)
     ? parsedOrganizationResult
     : null;
+  const personalResult = isPersonalKnowledgeTool(tc.kind)
+    ? parseOrganizationResult(texts[0]?.text)
+    : null;
 
   return (
     <div className="tool-detail">
@@ -216,7 +219,8 @@ export function ToolCallDetailBody({
         </div>
       )}
       {organizationResult && <OrganizationKnowledgeResult value={organizationResult} />}
-      {!organizationResult && texts.map((t, i) => (
+      {personalResult && <PersonalKnowledgeResult value={personalResult} onOpenPath={onOpenPath} />}
+      {!organizationResult && !personalResult && texts.map((t, i) => (
         <pre key={i} className="toolcall__text">
           {t.text}
         </pre>
@@ -236,7 +240,12 @@ export function ToolCallDetailBody({
 }
 
 function isOrganizationKnowledgeTool(kind: string): boolean {
+  if (/local_knowledge_(search|fetch)/i.test(kind)) return false;
   return /knowledge_(context|ask|feedback|search|fetch|list|who|submit)|organization_memory/i.test(kind);
+}
+
+function isPersonalKnowledgeTool(kind: string): boolean {
+  return /local_knowledge_(search|fetch)/i.test(kind);
 }
 
 function isKnowledgeContextResult(value: Record<string, unknown>): boolean {
@@ -291,6 +300,44 @@ function OrganizationKnowledgeResult({ value }: { value: Record<string, unknown>
       const citation = source.citation && typeof source.citation === "object" ? source.citation as Record<string, unknown> : {};
       return <article key={String(source.chunkId ?? source.id ?? index)}><header><span>{String(source.docTitle ?? source.title ?? source.doc ?? `依据 ${index + 1}`)}</span>{(source.stale === true) && <em>可能过时</em>}</header><small>{String(citation.heading ?? source.heading ?? "")}{citation.page != null || source.page != null ? ` · 第 ${String(citation.page ?? source.page)} 页` : ""}</small><p>{clipEvidence(String(source.text ?? source.quote ?? ""))}</p></article>;
     })}</div>}
+  </div>;
+}
+
+function PersonalKnowledgeResult({
+  value,
+  onOpenPath,
+}: {
+  value: Record<string, unknown>;
+  onOpenPath?: (path: string) => void;
+}) {
+  const items = Array.isArray(value.items)
+    ? value.items.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    : [];
+  const fetchedPath = typeof value.path === "string" ? value.path : null;
+  const fetchedText = typeof value.text === "string" ? value.text : null;
+  if (items.length === 0 && !fetchedPath && !fetchedText) {
+    return <p className="tool-detail__empty">个人知识库未找到匹配内容</p>;
+  }
+  return <div className="personal-kb-tool-result">
+    {items.map((item, index) => {
+      const path = typeof item.path === "string" ? item.path : "";
+      const title = typeof item.title === "string" ? item.title : `知识条目 ${index + 1}`;
+      const snippet = typeof item.snippet === "string" ? item.snippet : "";
+      return <button
+        key={path || `${title}-${index}`}
+        type="button"
+        className="personal-kb-tool-result__item"
+        onClick={() => path && onOpenPath?.(path)}
+        disabled={!path || !onOpenPath}
+        title={path || title}
+      >
+        <strong>{title}</strong>
+        {snippet && <span>{snippet}</span>}
+        {path && <small>{path}</small>}
+      </button>;
+    })}
+    {fetchedPath && <div className="personal-kb-tool-result__path">{fetchedPath}</div>}
+    {fetchedText && <pre className="toolcall__text">{fetchedText}</pre>}
   </div>;
 }
 

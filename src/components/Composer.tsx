@@ -27,6 +27,7 @@ import {
   type SlashCommandInvocation,
 } from "@/lib/slash-commands";
 import { InputAddMenu } from "./InputAddMenu";
+import { KnowledgePicker } from "./KnowledgePicker";
 import {
   registerAsrProvider,
   getActiveAsr,
@@ -103,6 +104,8 @@ export function Composer({
   /** Session id powering the context-usage pill (omit on the home page). */
   usageSessionId,
   usageMsgCount,
+  knowledgeSessionId,
+  onOpenKnowledgeBase,
 }: {
   streaming: boolean;
   /** A cancellation request is in flight; keep the stop action single-shot. */
@@ -191,6 +194,10 @@ export function Composer({
   usageSessionId?: string;
   /** Triggers pill re-fetch when messages change. */
   usageMsgCount?: number;
+  /** Existing session scope for per-task knowledge preferences. Omit on Home. */
+  knowledgeSessionId?: string;
+  /** Opens the personal knowledge management page. */
+  onOpenKnowledgeBase?: () => void;
 }) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -792,6 +799,11 @@ export function Composer({
           {permissionInline && (
             <PermissionPicker onToast={onToast} sessionId={commandSessionId} />
           )}
+          <KnowledgePicker
+            sessionId={knowledgeSessionId}
+            disabled={!apiReady || awaitingQuestion || disabled}
+            onManage={onOpenKnowledgeBase}
+          />
           <div className="echo-composer__spacer" />
           {/* 发送前成本预估徽章(对齐 EchoAgent credit-estimate):纯本地 token 估算,
               仅在文本非空时显示。不依赖计费后端(BYOK 无计费通道)。 */}

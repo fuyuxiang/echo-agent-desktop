@@ -1199,8 +1199,9 @@ pub async fn agent_new_session(
     }
     crate::permission_config::mark_session_permission_mode_synced(&session_id, &permission_mode);
     state.record_session_workspace(&session_id, Path::new(&cwd));
-    // Team MCP remains a durable local tool. Organization memory is reconciled
-    // per session so signed-out/offline users never inherit a global connector.
+    // Team MCP remains a durable local tool. The knowledge bridge is reconciled
+    // per session: local folders work signed out, while organization tools stay
+    // gated by the authenticated capability.
     crate::team_mcp::persist_registration(&tx, &session_id);
     crate::org_mcp::reconcile_registration(&tx, &session_id);
     Ok(session_id)
@@ -1248,8 +1249,8 @@ pub async fn agent_load_session(
         crate::permission_config::permission_mode_status(true, Some(&session_id)),
     );
     state.record_session_workspace(&session_id, Path::new(&cwd));
-    // Restore durable local MCP tools, then attach/detach the optional
-    // organization bridge from this live session according to current auth.
+    // Restore durable local MCP tools, then reconcile personal and optional
+    // organization knowledge for this live session.
     crate::team_mcp::persist_registration(&tx, &session_id);
     crate::org_mcp::reconcile_registration(&tx, &session_id);
     Ok(current_model_id)

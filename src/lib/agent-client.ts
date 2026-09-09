@@ -54,6 +54,7 @@ import type {
 import type { QuestionRequest } from "@/stores/question-store";
 import type { PlanApprovalRequest } from "@/stores/session-store";
 import { isUpstreamBrandedModelId } from "@/lib/model-branding";
+import { preparePromptWithPersonalKnowledge } from "@/lib/knowledge-context";
 
 // ---------- commands ----------
 
@@ -207,9 +208,10 @@ export async function agentSend(
   displayText: string = text,
   promptId?: string,
 ): Promise<void> {
+  const prepared = await preparePromptWithPersonalKnowledge(sessionId, text, displayText);
   await invoke<void>("agent_send", {
     sessionId,
-    text,
+    text: prepared.promptText,
     attachments,
     displayText,
     promptId: promptId ?? null,
@@ -225,9 +227,10 @@ export async function agentSendNow(
   displayText: string = text,
   promptId?: string,
 ): Promise<void> {
+  const prepared = await preparePromptWithPersonalKnowledge(sessionId, text, displayText);
   await invoke<void>("agent_send", {
     sessionId,
-    text,
+    text: prepared.promptText,
     attachments,
     displayText,
     promptId: promptId ?? null,
