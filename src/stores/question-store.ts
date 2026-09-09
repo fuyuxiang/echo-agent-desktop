@@ -34,6 +34,8 @@ interface QuestionState {
   dismiss: (requestId: string, sessionId?: string) => void;
   /** Drop every stale request after the shared agent process exits. */
   clearAll: () => void;
+  /** Drop stale questions owned by a session after that session is deleted. */
+  clearSession: (sessionId: string) => void;
 }
 
 export const useQuestionStore = create<QuestionState>((set) => ({
@@ -64,6 +66,13 @@ export const useQuestionStore = create<QuestionState>((set) => ({
       return { queues };
     }),
   clearAll: () => set({ queues: {} }),
+  clearSession: (sessionId) =>
+    set((state) => {
+      if (!state.queues[sessionId]) return state;
+      const queues = { ...state.queues };
+      delete queues[sessionId];
+      return { queues };
+    }),
 }));
 
 /** Select the first pending question for a given session. */

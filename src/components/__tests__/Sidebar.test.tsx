@@ -216,6 +216,39 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: /^\u4efb\u52a1/ })).toHaveTextContent("任务 (0)");
   });
 
+  it("侧栏项目对话提供移出、归档和经确认的永久删除", async () => {
+    useSessionsStore.setState({
+      independent: [{ sessionId: "project-session", title: "过期对话", cwd: "/workspace" }],
+    });
+    useProjectsStore.setState({
+      projects: [{
+        id: "project-1",
+        name: "客户项目",
+        cwd: "/workspace",
+        createdAt: "2026-09-05T00:00:00.000Z",
+        connectors: [], experts: [], skills: [], plans: [], tasks: [], assets: [], members: [],
+        conversations: [{
+          sessionId: "project-session",
+          title: "过期对话",
+          createdAt: "2026-09-05T00:00:00.000Z",
+        }],
+      }],
+    });
+    const onDeleteSession = vi.fn().mockResolvedValue(undefined);
+    render(<Sidebar {...base} onDeleteSession={onDeleteSession} />);
+    fireEvent.click(screen.getByRole("button", { name: "展开客户项目对话" }));
+    fireEvent.click(screen.getByRole("button", { name: "过期对话的会话操作" }));
+
+    const menu = screen.getByRole("menu", { name: "过期对话 会话操作" });
+    expect(within(menu).getByRole("menuitem", { name: "归档" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "移出项目" })).toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "永久删除" }));
+
+    expect(onDeleteSession).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
+    await waitFor(() => expect(onDeleteSession).toHaveBeenCalledWith("project-session", "/workspace"));
+  });
+
   it("hover「更多」只展示保留的功能入口", () => {
     const onNavigate = vi.fn();
     render(<Sidebar {...base} onNavigate={onNavigate} />);

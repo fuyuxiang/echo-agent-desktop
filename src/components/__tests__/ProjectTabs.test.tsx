@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { ActivityTab, AssetsTab, PlanTab, TaskTab } from "../project-tabs";
 import { ProjectDetailView } from "../ProjectDetailView";
 import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
+import { useSessionsStore } from "@/stores/sessions-store";
 import { filesystemPickFiles, projectAssetsImport } from "@/lib/agent-client";
 
 vi.mock("@/lib/agent-client", () => ({
@@ -26,7 +27,12 @@ const project: ProjectMeta = {
 };
 
 describe("项目计划/任务与 Agent 会话闭环", () => {
-  beforeEach(() => useProjectsStore.setState({ projects: [structuredClone(project)] }));
+  beforeEach(() => {
+    useProjectsStore.setState({ projects: [structuredClone(project)] });
+    useSessionsStore.setState({
+      independent: [{ sessionId: "existing", title: "历史会话", cwd: "/workspace" }],
+    });
+  });
 
   it("计划交给 Agent 后进入进行中并关联会话", async () => {
     const onRun = vi.fn().mockResolvedValue("session-plan");
@@ -90,6 +96,77 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
     render(<ActivityTab projectId="p1" onOpenSession={vi.fn()} />);
     expect(screen.queryByText("已归档")).toBeNull();
     expect(screen.getByText(/1 个已归档/)).toBeInTheDocument();
+  });
+
+  it("项目动态可查看已归档对话并直接恢复", async () => {
+    useProjectsStore.setState({
+      projects: [{
+        ...structuredClone(project),
+        conversations: [{
+          sessionId: "archived",
+          title: "已归档对话",
+          createdAt: new Date().toISOString(),
+          archived: true,
+        }],
+      }],
+    });
+    const onArchiveSession = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ActivityTab
+        projectId="p1"
+        onOpenSession={vi.fn()}
+        onArchiveSession={onArchiveSession}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "1 个已归档" }));
+    expect(screen.getByText("已归档对话")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "已归档对话的会话操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "恢复会话" }));
+
+    await waitFor(() => expect(onArchiveSession).toHaveBeenCalledWith("archived", false, "/workspace"));
+  });
+
+  it("项目对话永久删除必须二次确认，取消不触发后端", async () => {
+    const onDeleteSession = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <ActivityTab projectId="p1" onOpenSession={vi.fn()} onDeleteSession={onDeleteSession} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "历史会话的会话操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "永久删除" }));
+
+    const dialog = screen.getByRole("alertdialog", { name: "永久删除对话“历史会话”？" });
+    expect(dialog).toHaveTextContent("无法恢复");
+    expect(dialog).toHaveTextContent("项目资产和工作区原始文件不会被删除");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(onDeleteSession).not.toHaveBeenCalled();
+
+    rerender(<ActivityTab projectId="p1" onOpenSession={vi.fn()} onDeleteSession={onDeleteSession} />);
+    fireEvent.click(screen.getByRole("button", { name: "历史会话的会话操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "永久删除" }));
+    fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
+    await waitFor(() => expect(onDeleteSession).toHaveBeenCalledWith("existing", "/workspace"));
+  });
+
+  it("移出项目仅解除当前项目引用，不删除对话历史", () => {
+    useProjectsStore.setState({
+      projects: [{
+        ...structuredClone(project),
+        plans: [{ ...project.plans[0], sessionId: "existing" }],
+        tasks: [{ ...project.tasks[0], sessionId: "existing" }],
+      }],
+    });
+    render(<ActivityTab projectId="p1" onOpenSession={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "历史会话的会话操作" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "移出项目" }));
+
+    const updated = useProjectsStore.getState().projects[0];
+    expect(updated.conversations).toHaveLength(0);
+    expect(updated.plans[0].sessionId).toBeUndefined();
+    expect(updated.tasks[0].sessionId).toBeUndefined();
+    expect(useSessionsStore.getState().independent).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: "existing" }),
+    ]));
   });
 
   it("归档和删除会话同步所有项目引用", () => {

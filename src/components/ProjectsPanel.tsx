@@ -42,6 +42,9 @@ interface ProjectsPanelProps {
   /** Start a new conversation within a project (creates a real EchoAgent session). */
   onStartProjectConversation?: (projectId: string, message: string) => Promise<string | undefined>;
   onOpenSession?: (sessionId: string, cwd?: string) => void;
+  onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;
+  onArchiveSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
+  onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
   onOpenAutomation?: () => void;
 }
 
@@ -60,7 +63,7 @@ interface ProjectMenuPosition {
   placement: "top" | "bottom";
 }
 
-export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConversation, onOpenSession, onOpenAutomation }: ProjectsPanelProps) {
+export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConversation, onOpenSession, onRenameSession, onArchiveSession, onDeleteSession, onOpenAutomation }: ProjectsPanelProps) {
   const projects = useProjectsStore((s) => s.projects);
   const persisting = useProjectsStore((s) => s.persisting);
   const persistError = useProjectsStore((s) => s.persistError);
@@ -100,6 +103,9 @@ export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConv
           onToast={onToast}
           onStartConversation={onStartProjectConversation}
           onOpenSession={onOpenSession}
+          onRenameSession={onRenameSession}
+          onArchiveSession={onArchiveSession}
+          onDeleteSession={onDeleteSession}
           picker={picker}
           onOpenAutomation={onOpenAutomation}
         />

@@ -198,6 +198,8 @@ interface ProjectsState {
   addMember: (id: string, name: string) => void;
   addConversation: (id: string, conv: ProjectConversation) => void;
   removeConversation: (id: string, sessionId: string) => void;
+  /** Remove a session from one project without deleting the underlying history. */
+  detachSessionFromProject: (id: string, sessionId: string) => void;
   updateConversationTitle: (id: string, sessionId: string, title: string) => void;
   /** Mirror archive state into every project reference to this session. */
   setSessionArchived: (sessionId: string, archived: boolean) => void;
@@ -336,6 +338,31 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         ...p,
         conversations: p.conversations.filter((c) => c.sessionId !== sessionId),
       })),
+    detachSessionFromProject: (id, sessionId) =>
+      patch(id, (project) => {
+        const plans = project.plans.map((plan) => {
+          if (plan.sessionId !== sessionId) return plan;
+          const nextPlan: PlanCard = { ...plan };
+          delete nextPlan.sessionId;
+          delete nextPlan.sessionArchived;
+          return nextPlan;
+        });
+        const tasks = project.tasks.map((task) => {
+          if (task.sessionId !== sessionId) return task;
+          const nextTask: TaskItem = { ...task };
+          delete nextTask.sessionId;
+          delete nextTask.sessionArchived;
+          return nextTask;
+        });
+        return {
+          ...project,
+          conversations: project.conversations.filter(
+            (conversation) => conversation.sessionId !== sessionId,
+          ),
+          plans,
+          tasks,
+        };
+      }),
     updateConversationTitle: (id, sessionId, title) =>
       patch(id, (p) => ({
         ...p,

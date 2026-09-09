@@ -19,6 +19,8 @@ interface PermissionState {
   close: (requestId: string, sessionId?: string) => void;
   /** Drop every stale request after the shared agent process exits. */
   clearAll: () => void;
+  /** Drop stale requests owned by a session after that session is deleted. */
+  clearSession: (sessionId: string) => void;
 }
 
 const MAX_CLOSED_REQUEST_IDS = 256;
@@ -63,6 +65,13 @@ export const usePermissionStore = create<PermissionState>((set) => ({
       ].slice(-MAX_CLOSED_REQUEST_IDS),
     })),
   clearAll: () => set({ queues: {}, closedRequestIds: [] }),
+  clearSession: (sessionId) =>
+    set((state) => {
+      if (!state.queues[sessionId]) return state;
+      const queues = { ...state.queues };
+      delete queues[sessionId];
+      return { queues };
+    }),
 }));
 
 /** Select the first pending permission for a given session. */
