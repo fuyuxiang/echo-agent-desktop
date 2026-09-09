@@ -62,4 +62,37 @@ describe("MarketplacePanel 外部链接", () => {
     expect(await screen.findByText("Demo Plugin")).toBeInTheDocument();
     expect(mocks.list).toHaveBeenCalledTimes(2);
   });
+
+  it("添加源入口与提交按钮共用可见的主操作状态", async () => {
+    mocks.list.mockResolvedValue({ sources: [] });
+    mocks.action.mockResolvedValue({ ok: true });
+    const onToast = vi.fn();
+    render(<MarketplacePanel sessionId="session-1" onToast={onToast} />);
+
+    const openButton = await screen.findByRole("button", { name: "添加源" });
+    expect(openButton).toHaveClass("marketplace-panel__action-btn--primary");
+
+    fireEvent.click(openButton);
+    const urlInput = screen.getByRole("textbox", { name: "市场源 Git URL" });
+    const addButton = screen.getByRole("button", { name: "添加" });
+    expect(addButton).toHaveClass("marketplace-panel__action-btn--primary");
+    expect(addButton).toBeDisabled();
+
+    fireEvent.change(urlInput, {
+      target: { value: "https://github.com/example/marketplace.git" },
+    });
+    expect(addButton).toBeEnabled();
+    fireEvent.click(addButton);
+
+    await waitFor(() => expect(mocks.action).toHaveBeenCalledWith("session-1", {
+      type: "add_source",
+      url: "https://github.com/example/marketplace.git",
+    }));
+    expect(onToast).toHaveBeenCalledWith(
+      "已添加源 https://github.com/example/marketplace.git",
+    );
+    await waitFor(() => expect(
+      screen.queryByRole("textbox", { name: "市场源 Git URL" }),
+    ).toBeNull());
+  });
 });
