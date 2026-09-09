@@ -246,6 +246,9 @@ pub struct AutomationUpdateEvent {
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// Concrete model bound to this newly created session, never the Auto sentinel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_model_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -259,7 +262,7 @@ pub(crate) fn emit_automation_update(app: &AppHandle, event: AutomationUpdateEve
 enum RunUpdate<'a> {
     Queued,
     Running,
-    SessionCreated(&'a str),
+    SessionCreated(&'a str, &'a str),
     Success(&'a str),
     Failed {
         session_id: Option<&'a str>,
@@ -274,28 +277,39 @@ fn emit_run_update(
     cwd: &Path,
     update: RunUpdate<'_>,
 ) {
+    emit_automation_update(app, run_update_event(automation, record_id, cwd, update));
+}
+
+fn run_update_event(
+    automation: &Automation,
+    record_id: &str,
+    cwd: &Path,
+    update: RunUpdate<'_>,
+) -> AutomationUpdateEvent {
+    let current_model_id = match &update {
+        RunUpdate::SessionCreated(_, model_id) => Some((*model_id).to_string()),
+        _ => None,
+    };
     let (phase, status, session_id, error) = match update {
         RunUpdate::Queued => ("queued", "queued", None, None),
         RunUpdate::Running => ("running", "running", None, None),
-        RunUpdate::SessionCreated(session_id) => {
+        RunUpdate::SessionCreated(session_id, _) => {
             ("sessionCreated", "running", Some(session_id), None)
         }
         RunUpdate::Success(session_id) => ("finished", "success", Some(session_id), None),
         RunUpdate::Failed { session_id, error } => ("finished", "failed", session_id, Some(error)),
     };
-    emit_automation_update(
-        app,
-        AutomationUpdateEvent {
-            phase: phase.into(),
-            automation_id: automation.id.clone(),
-            automation_name: automation.name.clone(),
-            record_id: record_id.into(),
-            status: status.into(),
-            session_id: session_id.map(str::to_string),
-            cwd: Some(cwd.to_string_lossy().into_owned()),
-            error: error.map(str::to_string),
-        },
-    );
+    AutomationUpdateEvent {
+        current_model_id,
+        phase: phase.into(),
+        automation_id: automation.id.clone(),
+        automation_name: automation.name.clone(),
+        record_id: record_id.into(),
+        status: status.into(),
+        session_id: session_id.map(str::to_string),
+        cwd: Some(cwd.to_string_lossy().into_owned()),
+        error: error.map(str::to_string),
+    }
 }
 
 // ---------- persistence ----------
@@ -862,6 +876,7 @@ pub fn complete_run_for_session(
         AutomationCompletion {
             push,
             event: AutomationUpdateEvent {
+                current_model_id: None,
                 phase: "finished".into(),
                 automation_id: id,
                 automation_name: automation_name.clone(),
@@ -1985,7 +2000,7 @@ async fn run_automation_once(
         automation,
         record_id,
         cwd,
-        RunUpdate::SessionCreated(&session_id),
+        RunUpdate::SessionCreated(&session_id, resolved_model_id),
     );
     if full_access {
         full_access_sessions()
@@ -3392,7 +3407,34 @@ mod tests {
         );
     }
 
-    // --- helper ---
+    #[test]
+    fn session_created_event_carries_resolved_model_for_auto_and_explicit_selection() {
+        for configured in [None, Some("explicit-model".to_string())] {
+            let mut automation = test_automation();
+            automation.model_id = configured;
+            let event = run_update_event(
+                &automation,
+                "record",
+                Path::new("/workspace"),
+                RunUpdate::SessionCreated("session", "actual-model"),
+            );
+            let json = serde_json::to_value(event).unwrap();
+            assert_eq!(json["currentModelId"], "actual-model");
+            assert_eq!(json["sessionId"], "session");
+            assert_eq!(json["phase"], "sessionCreated");
+        }
+        // Completion must not overwrite a model changed later by the user.
+        let finished = run_update_event(
+            &test_automation(),
+            "record",
+            Path::new("/workspace"),
+            RunUpdate::Success("session"),
+        );
+        assert!(serde_json::to_value(finished)
+            .unwrap()
+            .get("currentModelId")
+            .is_none());
+    }
 
     fn test_automation() -> Automation {
         Automation {

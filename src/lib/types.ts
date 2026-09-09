@@ -874,6 +874,7 @@ export interface AutomationUpdateEvent {
   recordId: string;
   status: AutomationRunRecord["status"];
   sessionId?: string;
+  currentModelId?: string;
   cwd?: string;
   error?: string;
 }

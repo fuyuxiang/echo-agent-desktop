@@ -32,6 +32,21 @@ describe("Composer", () => {
     expect(onOpenSettings).toHaveBeenCalled();
   });
 
+  it("会话加载只显示一处状态提示，不引导用户配置模型", () => {
+    render(<Composer {...base} apiReady={false} setupHint="正在加载会话信息…" modelLoading models={[{ id: "model-a" }]} onModelChange={vi.fn()} />);
+    expect(screen.getAllByText("正在加载会话信息…")).toHaveLength(1);
+    expect(screen.getByRole("textbox")).toHaveAttribute("placeholder", "");
+    expect(screen.getByRole("button", { name: "正在同步模型…" })).toBeDisabled();
+    expect(screen.queryByText("请选择模型")).toBeNull();
+  });
+
+  it("配置提示支持键盘打开设置", () => {
+    const onOpenSettings = vi.fn();
+    render(<Composer {...base} apiReady={false} onOpenSettings={onOpenSettings} />);
+    fireEvent.keyDown(screen.getByRole("button", { name: "请先配置 API Key 开始使用" }), { key: "Enter" });
+    expect(onOpenSettings).toHaveBeenCalledOnce();
+  });
+
   it("支持在未配置模型时显示定制引导", () => {
     render(
       <Composer

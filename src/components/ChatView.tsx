@@ -48,6 +48,7 @@ export function ChatView({
   onSendNow,
   onCancel,
   modelId,
+  modelLoading = false,
   models,
   onModelChange,
   cwd,
@@ -80,6 +81,7 @@ export function ChatView({
   ) => boolean | void | Promise<boolean | void>;
   onCancel: () => boolean | void | Promise<boolean | void>;
   modelId?: string;
+  modelLoading?: boolean;
   models?: ModelOption[];
   onModelChange?: (id: string) => void;
   cwd?: string;
@@ -699,6 +701,7 @@ export function ChatView({
             onCancel={onCancel}
             cancelling={cancelling}
             modelId={modelId}
+              modelLoading={modelLoading}
             models={models}
             onModelChange={onModelChange}
             cwd={newSessionTargetCwd ?? cwd}

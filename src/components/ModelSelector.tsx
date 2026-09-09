@@ -17,11 +17,13 @@ export interface ModelOption {
 
 export function ModelSelector({
   modelId,
+  modelLoading = false,
   models,
   onModelChange,
 }: {
   /** Currently selected model id (displayed on the trigger). */
   modelId?: string;
+  modelLoading?: boolean;
   models: ModelOption[];
   onModelChange: (id: string) => void;
 }) {
@@ -89,7 +91,9 @@ export function ModelSelector({
 
   const current = models.find((m) => m.id === modelId);
   const hasModels = models.length > 0;
-  const triggerLabel = hasModels
+  const triggerLabel = modelLoading
+    ? "正在同步模型…"
+    : hasModels
     ? current?.label || current?.id || "请选择模型"
     : "未配置模型";
 
@@ -102,7 +106,8 @@ export function ModelSelector({
           setOpen((o) => !o);
         }}
         type="button"
-        disabled={!hasModels}
+        disabled={modelLoading || !hasModels}
+        aria-busy={modelLoading}
         title={!hasModels ? "请先在设置中配置模型" : undefined}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -118,7 +123,7 @@ export function ModelSelector({
         <span className="model-selector__label">{triggerLabel}</span>
         <ChevronDown size={14} strokeWidth={1.75} className="model-selector__arrow" />
       </button>
-      {open && (
+      {open && !modelLoading && (
         <ul
           className="model-selector__menu"
           id="composer-model-listbox"

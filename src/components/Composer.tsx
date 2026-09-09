@@ -60,6 +60,7 @@ export function Composer({
   permissionInline = false,
   // Model picker
   modelId,
+  modelLoading = false,
   models,
   onModelChange,
   // Workspace picker
@@ -124,6 +125,7 @@ export function Composer({
   permissionInline?: boolean;
   /** Currently selected model id (shown on the model trigger). */
   modelId?: string;
+  modelLoading?: boolean;
   /** Available models for the picker. */
   models?: ModelOption[];
   onModelChange?: (id: string) => void;
@@ -557,7 +559,17 @@ export function Composer({
         }}
       >
         {!apiReady && (
-          <div className="echo-composer__setup-hint" role="button" tabIndex={0}>
+          <div
+            className="echo-composer__setup-hint"
+            role={onOpenSettings ? "button" : "status"}
+            tabIndex={onOpenSettings ? 0 : undefined}
+            onKeyDown={(event) => {
+              if (onOpenSettings && (event.key === "Enter" || event.key === " ")) {
+                event.preventDefault();
+                onOpenSettings();
+              }
+            }}
+          >
             {setupHint}
           </div>
         )}
@@ -631,7 +643,7 @@ export function Composer({
               ? sceneTag
                 ? "" // 有操作类型标签时不显示占位文案(匹配 EchoAgent)
                 : placeholder ?? "今天帮你做些什么? @ 引用对话文件,/ 调用技能与指令"
-              : setupHint
+              : ""
           }
           onChange={(e) => {
             updateText(e.target.value);
@@ -757,6 +769,7 @@ export function Composer({
           {showModelPicker ? (
             <ModelSelector
               modelId={modelId}
+              modelLoading={modelLoading}
               models={models!}
               onModelChange={onModelChange!}
             />
