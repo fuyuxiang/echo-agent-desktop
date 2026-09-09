@@ -86,8 +86,8 @@ vi.mock("@/lib/agent-client", async () => {
     mod[name] = name.startsWith("on") ? handler : asyncArr;
   }
   // 个别需要特定返回。
-  mod.rewindExecute = asyncEmpty;
-  mod.rewindPoints = asyncArr;
+  mod.rewindExecute = vi.fn(asyncEmpty);
+  mod.rewindPoints = vi.fn(asyncArr);
   mod.providersList = async () => ({ providers: [], models: [] });
   mod.flattenModels = () => [];
   mod.agentAuthStatus = async () => ({ ready: true, providers: [] });
@@ -104,6 +104,7 @@ vi.mock("@/lib/agent-client", async () => {
 
 import { ChatView } from "../ChatView";
 import { ThemeProvider } from "../ThemeProvider";
+import { rewindPoints } from "@/lib/agent-client";
 
 /** 用 ThemeProvider 包裹(ChatView 内的 MessageItem/Markdown 需要 useTheme)。 */
 function renderChat() {
@@ -138,6 +139,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     baseProps.onSend.mockClear();
     baseProps.onCancel.mockClear();
     baseProps.onToast.mockClear();
+    vi.mocked(rewindPoints).mockReset().mockResolvedValue([]);
   });
 
   it("会话工具入口统一位于响应式工具栏内", () => {
@@ -248,5 +250,37 @@ describe("ChatView pause/yield/resume 闭环", () => {
     await waitFor(() =>
       expect(screen.queryByText("已暂停(会话上下文已保留)")).toBeNull(),
     );
+  });
+
+  it("模型初始化失败且没有回溯点时，安全重发原始消息", async () => {
+    setStore({
+      messages: [
+        { id: "u1", role: "user", complete: true, parts: [{ kind: "text", text: "生成每日报告" }] },
+        { id: "a1", role: "assistant", complete: true, parts: [] },
+      ],
+      error: "未选择模型，请选择模型",
+    });
+    renderChat();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => expect(baseProps.onSend).toHaveBeenCalledWith("生成每日报告", []));
+    expect(baseProps.onToast).toHaveBeenCalledWith("已使用当前模型重新发送");
+  });
+
+  it("没有回溯点但已产生回复时，不会冒险重复执行", async () => {
+    setStore({
+      messages: [
+        { id: "u1", role: "user", complete: true, parts: [{ kind: "text", text: "执行任务" }] },
+        { id: "a1", role: "assistant", complete: true, parts: [{ kind: "text", text: "已执行一部分" }] },
+      ],
+    });
+    renderChat();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => expect(rewindPoints).toHaveBeenCalledWith("s1"));
+    expect(baseProps.onSend).not.toHaveBeenCalled();
+    expect(baseProps.onToast).toHaveBeenCalledWith("该轮没有可回溯点，为避免重复执行工具无法自动重试。");
   });
 });

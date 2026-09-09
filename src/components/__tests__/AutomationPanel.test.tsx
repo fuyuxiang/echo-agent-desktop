@@ -17,16 +17,27 @@ vi.mock("@/lib/agent-client", () => ({
   automationRecordsArchive: vi.fn(async () => {}),
   automationRecordsDelete: vi.fn(async () => {}),
   agentListWorkspaces: vi.fn(async () => []),
+  agentAuthStatus: vi.fn(async () => ({
+    ready: true,
+    providers: [],
+    runtimeReady: true,
+    synchronized: true,
+    runtimeModels: [],
+  })),
   providersList: vi.fn(async () => ({ providers: [], models: [] })),
   skillsList: vi.fn(async () => []),
   agentsList: vi.fn(async () => []),
   mcpList: vi.fn(async () => []),
   flattenModels: vi.fn((catalog: { models?: unknown[] }) => catalog.models ?? []),
+  filterModelsByRuntimeCatalog: vi.fn((options: unknown[]) => options),
 }));
 
 import {
   agentListWorkspaces,
+  agentAuthStatus,
   agentsList,
+  automationsRun,
+  automationsSave,
   automationsSnapshot,
   mcpList,
   providersList,
@@ -37,6 +48,15 @@ beforeEach(() => {
   snapshot = emptySnapshot;
   vi.mocked(automationsSnapshot).mockReset().mockImplementation(async () => snapshot);
   vi.mocked(agentListWorkspaces).mockReset().mockResolvedValue([]);
+  vi.mocked(agentAuthStatus).mockReset().mockResolvedValue({
+    ready: true,
+    providers: [],
+    runtimeReady: true,
+    synchronized: true,
+    runtimeModels: [],
+  });
+  vi.mocked(automationsSave).mockClear();
+  vi.mocked(automationsRun).mockClear();
   vi.mocked(providersList).mockReset().mockResolvedValue({ providers: [], models: [] });
   vi.mocked(skillsList).mockReset().mockResolvedValue([]);
   vi.mocked(agentsList).mockReset().mockResolvedValue([]);
@@ -95,7 +115,7 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
     expect(screen.getByText("取消")).toBeInTheDocument();
     expect(screen.getByText("保存")).toBeInTheDocument();
     // 提示词工具条 chips
-    expect(screen.getByText("Auto")).toBeInTheDocument();
+    expect(screen.getByText(/Auto/)).toBeInTheDocument();
     expect(screen.getByText(/技能/)).toBeInTheDocument();
     expect(screen.getByText("召唤专家")).toBeInTheDocument();
     expect(screen.getByText("默认权限")).toBeInTheDocument();
@@ -117,6 +137,76 @@ describe("AutomationPanel（截图 1/3 空态）", () => {
 
     fireEvent.click(within(alert).getByRole("button", { name: "重试" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  it("显式选择的模型会写入保存请求，不会回退到 Auto", async () => {
+    vi.mocked(providersList).mockResolvedValueOnce({
+      providers: [],
+      models: [{ id: "minimax-m3", label: "MiniMax-M3" }],
+    } as never);
+    vi.mocked(agentAuthStatus).mockResolvedValueOnce({
+      ready: true,
+      providers: ["minimax-m3"],
+      runtimeReady: true,
+      synchronized: true,
+      runtimeModels: ["minimax-m3"],
+      defaultModelId: "minimax-m3",
+    });
+    render(<AutomationPanel />);
+    fireEvent.click(await screen.findByText("+ 添加自动化"));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Auto.*MiniMax-M3/ }));
+    fireEvent.click(screen.getByRole("button", { name: "MiniMax-M3" }));
+    expect(screen.getByRole("button", { name: /MiniMax-M3/ })).toBeInTheDocument();
+
+    fireEvent.change(document.querySelector(".atm-modal-input") as HTMLInputElement, { target: { value: "每日报告" } });
+    fireEvent.change(document.querySelector(".atm-prompt-textarea") as HTMLTextAreaElement, { target: { value: "生成报告" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(automationsSave).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(automationsSave).mock.calls[0][0]).toMatchObject({
+      name: "每日报告",
+      prompt: "生成报告",
+      modelId: "minimax-m3",
+    });
+  });
+
+  it("Auto 显示实际默认模型并保持自动选择语义", async () => {
+    vi.mocked(providersList).mockResolvedValueOnce({
+      providers: [],
+      models: [{ id: "minimax-m3", label: "MiniMax-M3" }],
+    } as never);
+    vi.mocked(agentAuthStatus).mockResolvedValueOnce({
+      ready: true,
+      providers: ["minimax-m3"],
+      runtimeReady: true,
+      synchronized: true,
+      runtimeModels: ["minimax-m3"],
+      defaultModelId: "minimax-m3",
+    });
+    render(<AutomationPanel />);
+    fireEvent.click(await screen.findByText("+ 添加自动化"));
+
+    expect(await screen.findByRole("button", { name: /Auto.*MiniMax-M3/ })).toBeInTheDocument();
+    fireEvent.change(document.querySelector(".atm-modal-input") as HTMLInputElement, { target: { value: "Auto 报告" } });
+    fireEvent.change(document.querySelector(".atm-prompt-textarea") as HTMLTextAreaElement, { target: { value: "执行任务" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(automationsSave).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(automationsSave).mock.calls[0][0].modelId).toBeUndefined();
+  });
+
+  it("Auto 没有可用默认模型时阻止保存并给出可操作提示", async () => {
+    const onToast = vi.fn();
+    render(<AutomationPanel onToast={onToast} />);
+    fireEvent.click(await screen.findByText("+ 添加自动化"));
+
+    fireEvent.change(document.querySelector(".atm-modal-input") as HTMLInputElement, { target: { value: "Auto 报告" } });
+    fireEvent.change(document.querySelector(".atm-prompt-textarea") as HTMLTextAreaElement, { target: { value: "执行任务" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    expect(automationsSave).not.toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledWith("Auto 当前没有可用模型，请先在“设置 → 模型与连接”配置模型。");
   });
 
   it("点击模板卡片预填进入创建表单", async () => {
@@ -291,6 +381,27 @@ describe("AutomationPanel（有任务/有记录）", () => {
     const row = await screen.findByRole("button", { name: /可查看结果的任务/ });
     fireEvent.click(row);
     expect(onOpenSession).toHaveBeenCalledWith("session-123", "/workspace/project");
+  });
+
+  it("失败记录可使用当前自动化配置重新运行", async () => {
+    snapshot = {
+      automations: [baseAutomation],
+      records: [{
+        id: "r-failed",
+        automationId: "a1",
+        automationName: "失败的任务",
+        status: "failed",
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        error: "旧模型不可用",
+        archived: false,
+      }],
+    };
+    render(<AutomationPanel />);
+    fireEvent.click(screen.getByText("运行记录"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "重新运行“失败的任务”" }));
+    await waitFor(() => expect(automationsRun).toHaveBeenCalledWith("a1"));
   });
 
   it("排队中的任务展示真实状态并防止重复运行或删除记录", async () => {

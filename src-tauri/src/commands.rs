@@ -325,6 +325,10 @@ pub struct AuthStatus {
     pub synchronized: bool,
     /// Runtime catalog as shown to the frontend: upstream-branded ids removed.
     pub runtime_models: Vec<String>,
+    /// Concrete configured model used when a caller requests automatic model
+    /// selection. Unlike the Runtime's bundled fallback, this id is guaranteed
+    /// to exist in both the user's usable configuration and the live catalog.
+    pub default_model_id: Option<String>,
     pub last_runtime_error: Option<String>,
     /// The Runtime's catalog verbatim, used for authorization decisions only.
     ///
@@ -382,7 +386,36 @@ fn auth_status(state: &AppState) -> AuthStatus {
         });
         (runtime, sender_current)
     };
-    auth_status_from_snapshots(model_ids, disk_reason, &revision, runtime, sender_current)
+    let preferred = crate::permission_config::read_defaults().default_model;
+    let visible_model_ids = strip_upstream_branded_ids(model_ids.clone());
+    let visible_runtime_models = strip_upstream_branded_ids(runtime.model_ids.clone());
+    let default_model_id = effective_configured_model_id(
+        &visible_model_ids,
+        &visible_runtime_models,
+        (!preferred.trim().is_empty()).then_some(preferred.as_str()),
+    );
+    let mut status =
+        auth_status_from_snapshots(model_ids, disk_reason, &revision, runtime, sender_current);
+    status.default_model_id = default_model_id;
+    status
+}
+
+/// Resolve Auto to a real BYOK/organization model, never to the Runtime's
+/// credential-less bundled fallback. The configured default wins when it is
+/// live; otherwise the first configured model in stable id order is used.
+fn effective_configured_model_id(
+    configured: &[String],
+    runtime: &[String],
+    preferred: Option<&str>,
+) -> Option<String> {
+    let available = |id: &str| {
+        configured.iter().any(|configured_id| configured_id == id)
+            && runtime.iter().any(|runtime_id| runtime_id == id)
+    };
+    preferred
+        .filter(|id| available(id))
+        .map(str::to_string)
+        .or_else(|| configured.iter().find(|id| available(id)).cloned())
 }
 
 fn auth_status_from_snapshots(
@@ -434,6 +467,7 @@ fn auth_status_from_snapshots(
         runtime_ready,
         synchronized,
         runtime_models: strip_upstream_branded_ids(runtime.model_ids.clone()),
+        default_model_id: None,
         last_runtime_error: runtime.last_error,
         unfiltered_runtime_models: runtime.model_ids,
     }
@@ -477,6 +511,32 @@ pub(crate) fn require_runtime_ready(
 ) -> Result<(), String> {
     let status = auth_status(state);
     validate_runtime_ready(&status, requested_model)
+}
+
+/// Return the concrete model that must be bound to a new automation session.
+/// `None` means Auto at the storage/UI boundary, but is never forwarded as None
+/// to the Runtime because that would select its internal fallback model.
+pub(crate) fn resolve_automation_model_id(
+    state: &AppState,
+    requested_model: Option<&str>,
+) -> Result<String, String> {
+    let status = auth_status(state);
+    validate_runtime_ready(&status, requested_model)?;
+    if let Some(model_id) = requested_model {
+        let (configured, _) = crate::providers::usable_model_ids();
+        if !configured
+            .iter()
+            .any(|configured_id| configured_id == model_id)
+        {
+            return Err(format!(
+                "自动化任务选择的模型“{model_id}”已不在可用配置中，请重新选择模型后保存。"
+            ));
+        }
+        return Ok(model_id.to_string());
+    }
+    status
+        .default_model_id
+        .ok_or_else(|| "自动化任务没有可用的默认模型，请先在“设置 → 模型与连接”配置模型。".into())
 }
 
 fn validate_runtime_ready(
@@ -1862,6 +1922,30 @@ mod tests {
             last_error: None,
             sender: Some(client.tx),
         }
+    }
+
+    #[test]
+    fn automatic_model_resolution_uses_only_configured_live_models() {
+        let configured = vec!["model-a".to_string(), "model-b".to_string()];
+        let runtime = vec![
+            "bundled-default".to_string(),
+            "model-a".to_string(),
+            "model-b".to_string(),
+        ];
+
+        assert_eq!(
+            effective_configured_model_id(&configured, &runtime, Some("model-b")).as_deref(),
+            Some("model-b")
+        );
+        assert_eq!(
+            effective_configured_model_id(&configured, &runtime, Some("bundled-default"))
+                .as_deref(),
+            Some("model-a")
+        );
+        assert_eq!(
+            effective_configured_model_id(&configured, &["bundled-default".into()], None),
+            None
+        );
     }
 
     #[test]
