@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MessageItem } from "../MessageItem";
 import { ThemeProvider } from "../ThemeProvider";
 import type { ChatMessage, ToolCallView } from "@/stores/session-store";
+import { useKnowledgeStore } from "@/stores/knowledge-store";
 
 describe("assistant execution process", () => {
   const renderMessage = (onOpenTool?: (tool: ToolCallView) => void) => render(
@@ -113,5 +114,52 @@ describe("assistant execution process", () => {
     expect(screen.queryByRole("button", { name: "复制纯文本" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /执行未正常完成/ }));
     expect(screen.getByRole("alert")).toHaveTextContent("provider disconnected");
+  });
+
+  it("在对应回复的执行过程中展示个人知识文件、行号和片段", () => {
+    useKnowledgeStore.setState({
+      turnTraces: {
+        "session-kb": {
+          "prompt-kb": {
+            selectedSources: ["personal"],
+            personal: {
+              state: "used",
+              resultCount: 1,
+              sourceCount: 1,
+              titles: ["差旅制度"],
+              items: [{
+                title: "差旅制度",
+                path: "/notes/travel.md",
+                sourceLabel: "本地笔记",
+                snippet: "住宿标准为每晚 500 元。",
+                startLine: 8,
+                endLine: 10,
+              }],
+            },
+          },
+        },
+      },
+    });
+
+    render(
+      <ThemeProvider>
+        <MessageItem
+          message={{
+            id: "assistant-kb",
+            role: "assistant",
+            promptId: "prompt-kb",
+            parts: [{ kind: "text", text: "根据制度回答。" }],
+            complete: true,
+          }}
+          streaming={false}
+          sessionId="session-kb"
+        />
+      </ThemeProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /知识检索完成/ }));
+    expect(screen.getByText("已向模型提供 1 个相关片段")).toBeInTheDocument();
+    expect(screen.getByText("本地笔记 · 第 8–10 行")).toBeInTheDocument();
+    expect(screen.getByText("住宿标准为每晚 500 元。")).toBeInTheDocument();
   });
 });

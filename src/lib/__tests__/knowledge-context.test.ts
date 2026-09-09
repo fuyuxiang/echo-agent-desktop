@@ -14,14 +14,16 @@ describe("personal knowledge prompt preparation", () => {
     semanticSearchMock.mockReset();
     semanticSearchMock.mockResolvedValue(null);
     useKnowledgeStore.setState({
-      defaultMode: "auto",
-      sessionModes: {},
+      defaultSources: [],
+      sessionSources: {},
       sourceCount: 0,
       retrievals: {},
+      turnTraces: {},
     });
   });
 
   it("优先使用语义检索结果注入任务，不再重复扫描 provider", async () => {
+    useKnowledgeStore.getState().setSessionSources("session-semantic", ["personal"]);
     const legacyList = vi.fn(() => [{ id: "legacy", title: "旧结果" }]);
     registerKbProvider({
       id: "local-notes",
@@ -59,6 +61,7 @@ describe("personal knowledge prompt preparation", () => {
       "session-semantic",
       "请回答差旅标准",
       "出差住宿可以报销多少？",
+      "prompt-semantic",
     );
 
     expect(semanticSearchMock).toHaveBeenCalledWith("出差住宿可以报销多少？", 5);
@@ -70,9 +73,23 @@ describe("personal knowledge prompt preparation", () => {
       resultCount: 1,
       titles: ["差旅制度"],
     });
+    expect(useKnowledgeStore.getState().turnTraces["session-semantic"]["prompt-semantic"])
+      .toMatchObject({
+        personal: {
+          state: "used",
+          items: [{
+            title: "差旅制度",
+            path: "/notes/travel.md",
+            sourceLabel: "本地笔记",
+            startLine: 8,
+            endLine: 10,
+          }],
+        },
+      });
   });
 
   it("自然语言问题命中关键词后注入带来源的知识片段", async () => {
+    useKnowledgeStore.getState().setSessionSources("session-1", ["personal"]);
     registerKbProvider({
       id: "handbook",
       label: "员工手册",
@@ -105,7 +122,7 @@ describe("personal knowledge prompt preparation", () => {
   it("会话关闭知识库后完全跳过检索", async () => {
     const list = vi.fn(() => [{ id: "x", title: "不应读取" }]);
     registerKbProvider({ id: "local", label: "本地", isEnabled: () => true, list });
-    useKnowledgeStore.getState().setSessionMode("session-off", "off");
+    useKnowledgeStore.getState().setSessionSources("session-off", []);
 
     const result = await preparePromptWithPersonalKnowledge("session-off", "原始提示", "用户问题");
 
@@ -114,6 +131,7 @@ describe("personal knowledge prompt preparation", () => {
   });
 
   it("知识源失败不会阻止原任务发送，并留下可见错误状态", async () => {
+    useKnowledgeStore.getState().setSessionSources("session-2", ["personal"]);
     registerKbProvider({
       id: "broken",
       label: "失效目录",
@@ -127,6 +145,26 @@ describe("personal knowledge prompt preparation", () => {
     expect(useKnowledgeStore.getState().retrievals["session-2"]).toMatchObject({
       state: "error",
       message: expect.stringContaining("目录不可读"),
+    });
+  });
+
+  it("原生语义检索失败后不通过第二条 JS 路径重复读取文件", async () => {
+    const legacyList = vi.fn(() => [{ id: "x", title: "不应读取" }]);
+    registerKbProvider({ id: "local", label: "本地", isEnabled: () => true, list: legacyList });
+    useKnowledgeStore.getState().setSessionSources("session-native-error", ["personal"]);
+    semanticSearchMock.mockRejectedValue(new Error("原生索引不可用"));
+
+    const result = await preparePromptWithPersonalKnowledge(
+      "session-native-error",
+      "原始提示",
+      "查询内部制度",
+    );
+
+    expect(result.promptText).toBe("原始提示");
+    expect(legacyList).not.toHaveBeenCalled();
+    expect(useKnowledgeStore.getState().retrievals["session-native-error"]).toMatchObject({
+      state: "error",
+      message: "原生索引不可用",
     });
   });
 });

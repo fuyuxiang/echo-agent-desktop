@@ -401,8 +401,8 @@ fn desktop_client_capabilities() -> acp::ClientCapabilities {
 /// `mcp_servers` entry — EchoAgent's merge gives the client layer top priority,
 /// so the team tools (`echoagent__create_team` etc.) are live from this
 /// session's first turn. Team tools are persisted separately after the
-/// session exists; the knowledge bridge is attached for configured personal
-/// folders, while its organization tools remain gated by verified shared scope.
+/// session exists. Knowledge is intentionally not attached here: the desktop
+/// synchronizes the user's explicit per-task source selection before sending.
 /// Reasoning effort and permission mode are also session-owned. Automations
 /// persist the legacy `modelIsThinking` switch; mapping it to `high` makes that
 /// switch affect the actual runtime instead of being dead metadata.
@@ -420,13 +420,6 @@ pub async fn new_session_with_options(
         crate::team_mcp::authorization_header(),
     ) {
         servers.push(authenticated_team_mcp_server(url, authorization));
-    }
-    if let Some((url, token)) = crate::org_mcp::active_server_config() {
-        servers.push(acp::McpServer::Http(
-            acp::McpServerHttp::new(crate::org_mcp::MCP_SERVER_NAME, url).headers(vec![
-                acp::HttpHeader::new(crate::org_mcp::AUTH_HEADER, token),
-            ]),
-        ));
     }
     let mut req = acp::NewSessionRequest::new(cwd.to_path_buf()).mcp_servers(servers);
     let permission_mode = permission_mode_override

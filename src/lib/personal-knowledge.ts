@@ -74,13 +74,17 @@ function parseSearchResponse(value: unknown): PersonalKnowledgeSearchResponse | 
   };
 }
 
-/** Returns null outside Tauri and for legacy/mock backends that do not expose semantic search yet. */
+/** Returns null outside Tauri or when a legacy/mock bridge has no payload. */
 export async function searchPersonalKnowledge(
   query: string,
   limit = 5,
 ): Promise<PersonalKnowledgeSearchResponse | null> {
   if (!isTauriAvailable()) return null;
-  return parseSearchResponse(await invoke<unknown>("personal_knowledge_search", { query, limit }));
+  const raw = await invoke<unknown>("personal_knowledge_search", { query, limit });
+  if (raw == null) return null;
+  const response = parseSearchResponse(raw);
+  if (!response) throw new Error("个人知识库返回了无效的检索结果");
+  return response;
 }
 
 export async function rebuildPersonalKnowledgeIndex(): Promise<PersonalKnowledgeIndexStatus | null> {

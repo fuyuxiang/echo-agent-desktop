@@ -55,6 +55,10 @@ import type { QuestionRequest } from "@/stores/question-store";
 import type { PlanApprovalRequest } from "@/stores/session-store";
 import { isUpstreamBrandedModelId } from "@/lib/model-branding";
 import { preparePromptWithPersonalKnowledge } from "@/lib/knowledge-context";
+import {
+  useKnowledgeStore,
+  type KnowledgeSource,
+} from "@/stores/knowledge-store";
 
 // ---------- commands ----------
 
@@ -200,6 +204,48 @@ export async function agentSetModel(sessionId: string, modelId: string): Promise
   await invoke<void>("agent_set_model", { sessionId, modelId });
 }
 
+export interface AgentKnowledgeSourcesResult {
+  personalSelected: boolean;
+  organizationSelected: boolean;
+  personalAttached: boolean;
+  organizationAttached: boolean;
+}
+
+/** Make the Runtime's MCP catalog match the task-owned source selection. */
+export async function agentSetKnowledgeSources(
+  sessionId: string,
+  sources: KnowledgeSource[],
+): Promise<AgentKnowledgeSourcesResult> {
+  return invoke<AgentKnowledgeSourcesResult>("agent_set_knowledge_sources", {
+    sessionId,
+    personal: sources.includes("personal"),
+    organization: sources.includes("organization"),
+  });
+}
+
+async function synchronizeKnowledgeSources(
+  sessionId: string,
+  promptId?: string,
+): Promise<KnowledgeSource[]> {
+  const store = useKnowledgeStore.getState();
+  const sources = store.bindSessionSources(sessionId);
+  const result = await agentSetKnowledgeSources(sessionId, sources);
+  store.beginTurnTrace(
+    sessionId,
+    promptId,
+    sources,
+    sources.includes("organization")
+      ? result.organizationAttached
+        ? { state: "available" }
+        : {
+            state: "unavailable",
+            message: "组织知识库当前不可用，本次任务未使用该来源",
+          }
+      : undefined,
+  );
+  return sources;
+}
+
 /** Send a user prompt; streamed updates arrive via the events below. */
 export async function agentSend(
   sessionId: string,
@@ -208,7 +254,13 @@ export async function agentSend(
   displayText: string = text,
   promptId?: string,
 ): Promise<void> {
-  const prepared = await preparePromptWithPersonalKnowledge(sessionId, text, displayText);
+  await synchronizeKnowledgeSources(sessionId, promptId);
+  const prepared = await preparePromptWithPersonalKnowledge(
+    sessionId,
+    text,
+    displayText,
+    promptId,
+  );
   await invoke<void>("agent_send", {
     sessionId,
     text: prepared.promptText,
@@ -227,7 +279,13 @@ export async function agentSendNow(
   displayText: string = text,
   promptId?: string,
 ): Promise<void> {
-  const prepared = await preparePromptWithPersonalKnowledge(sessionId, text, displayText);
+  await synchronizeKnowledgeSources(sessionId, promptId);
+  const prepared = await preparePromptWithPersonalKnowledge(
+    sessionId,
+    text,
+    displayText,
+    promptId,
+  );
   await invoke<void>("agent_send", {
     sessionId,
     text: prepared.promptText,
@@ -286,10 +344,12 @@ export async function agentDeleteSession(
   sessionId: string,
   cwd?: string,
 ): Promise<SessionDeleteResult> {
-  return invoke<SessionDeleteResult>("agent_delete_session", {
+  const result = await invoke<SessionDeleteResult>("agent_delete_session", {
     sessionId,
     cwd: cwd ?? null,
   });
+  useKnowledgeStore.getState().forgetSession(sessionId);
+  return result;
 }
 
 /**

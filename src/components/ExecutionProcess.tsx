@@ -8,6 +8,7 @@ import {
   summarizeExecutionProcess,
 } from "@/lib/execution-process";
 import { pickThinkingCompanion } from "@/lib/loading-tips";
+import type { KnowledgeTurnTrace } from "@/stores/knowledge-store";
 
 interface ExecutionProcessProps {
   parts: MessagePart[];
@@ -20,6 +21,8 @@ interface ExecutionProcessProps {
   agentResult?: string;
   markdownConfig?: MarkdownConfig;
   onOpenTool?: (tool: ToolCallView) => void;
+  knowledgeTrace?: KnowledgeTurnTrace;
+  onOpenKnowledgePath?: (path: string) => void;
 }
 
 /**
@@ -38,6 +41,8 @@ export function ExecutionProcess({
   agentResult,
   markdownConfig,
   onOpenTool,
+  knowledgeTrace,
+  onOpenKnowledgePath,
 }: ExecutionProcessProps) {
   const { theme } = useTheme();
   const bodyId = useId();
@@ -92,6 +97,17 @@ export function ExecutionProcess({
   }
   if (summary.changedFiles.length > 0) meta.push(`${summary.changedFiles.length} 个文件`);
   if (duration) meta.push(duration);
+  if (knowledgeTrace?.personal?.state === "used") {
+    meta.unshift(`${knowledgeTrace.personal.resultCount} 个知识片段`);
+  }
+  const knowledgeOnly = visibleParts.length === 0
+    && thoughtParts.length === 0
+    && Boolean(knowledgeTrace);
+  const title = knowledgeTrace?.personal?.state === "searching"
+    ? "正在检索个人知识库"
+    : knowledgeOnly && !active
+      ? "知识检索完成"
+      : summary.title;
 
   return (
     <section className={`execution-process execution-process--${summary.state}`}>
@@ -108,7 +124,7 @@ export function ExecutionProcess({
         <span className="execution-process__status" aria-hidden="true" />
         <span className="execution-process__heading">
           <span className="execution-process__title" role="status" aria-live="polite">
-            {summary.title}
+            {title}
           </span>
           {meta.length > 0 && (
             <span className="execution-process__meta">{meta.join(" · ")}</span>
@@ -128,6 +144,12 @@ export function ExecutionProcess({
             <p className="execution-process__terminal-detail" role="alert">
               {agentResult}
             </p>
+          )}
+          {knowledgeTrace && (
+            <KnowledgeTrace
+              trace={knowledgeTrace}
+              onOpenPath={onOpenKnowledgePath}
+            />
           )}
           {visibleParts.length === 0 && thoughtParts.length > 0 && (
             <p className="execution-process__empty">
@@ -190,5 +212,85 @@ export function ExecutionProcess({
         </div>
       )}
     </section>
+  );
+}
+
+function KnowledgeTrace({
+  trace,
+  onOpenPath,
+}: {
+  trace: KnowledgeTurnTrace;
+  onOpenPath?: (path: string) => void;
+}) {
+  const personal = trace.personal;
+  const personalVisible = personal && personal.state !== "idle";
+  const organizationUnavailable = trace.organization?.state === "unavailable";
+  if (!personalVisible && !organizationUnavailable) return null;
+
+  return (
+    <div className="knowledge-trace" aria-label="知识检索过程">
+      {personal?.state === "searching" && (
+        <div className="knowledge-trace__status is-searching">
+          <span aria-hidden="true" />
+          正在从个人知识库检索相关片段…
+        </div>
+      )}
+      {personal?.state === "no-match" && (
+        <div className="knowledge-trace__status">
+          已搜索 {personal.sourceCount} 个个人知识源，未找到相关内容
+        </div>
+      )}
+      {personal?.state === "blocked" && (
+        <div className="knowledge-trace__status is-warning">个人知识未使用：{personal.message}</div>
+      )}
+      {personal?.state === "error" && (
+        <div className="knowledge-trace__status is-warning">个人知识检索失败：{personal.message}</div>
+      )}
+      {personal?.state === "used" && (
+        <details className="knowledge-trace__results" open>
+          <summary>
+            已向模型提供 {personal.resultCount} 个相关片段
+            <small>来自 {personal.sourceCount} 个知识源</small>
+          </summary>
+          <div className="knowledge-trace__items">
+            {personal.items.map((item, index) => {
+              const lineRange = item.startLine
+                ? item.startLine === item.endLine || !item.endLine
+                  ? `第 ${item.startLine} 行`
+                  : `第 ${item.startLine}–${item.endLine} 行`
+                : null;
+              const body = (
+                <>
+                  <strong>{item.title}</strong>
+                  {(item.sourceLabel || lineRange) && (
+                    <small>{[item.sourceLabel, lineRange].filter(Boolean).join(" · ")}</small>
+                  )}
+                  {item.snippet && <span>{item.snippet}</span>}
+                  {item.path && <code>{item.path}</code>}
+                </>
+              );
+              return item.path && onOpenPath ? (
+                <button
+                  key={`${item.path}-${index}`}
+                  type="button"
+                  className="knowledge-trace__item"
+                  title={`打开 ${item.path}`}
+                  onClick={() => onOpenPath(item.path!)}
+                >
+                  {body}
+                </button>
+              ) : (
+                <div className="knowledge-trace__item" key={`${item.title}-${index}`}>{body}</div>
+              );
+            })}
+          </div>
+        </details>
+      )}
+      {organizationUnavailable && (
+        <div className="knowledge-trace__status is-warning">
+          {trace.organization?.message ?? "组织知识库当前不可用，本次未使用"}
+        </div>
+      )}
+    </div>
   );
 }
