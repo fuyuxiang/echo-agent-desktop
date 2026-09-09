@@ -7,6 +7,7 @@ import {
   agentListPendingInteractions,
   agentListAllSessions,
   agentListSessions,
+  agentNewSession,
   agentResolvePlanApproval,
   agentResolveQuestion,
   automationsRun,
@@ -93,6 +94,7 @@ describe("agent interaction command contracts", () => {
 
   it("returns the permission-mode synchronization result", async () => {
     invokeMock.mockResolvedValue({
+      sessionId: "session-1",
       permissionMode: "always-approve",
       agentRunning: true,
       runtimeSynced: true,
@@ -104,7 +106,8 @@ describe("agent interaction command contracts", () => {
       ],
     });
 
-    await expect(permissionModeSet("always-approve")).resolves.toEqual({
+    await expect(permissionModeSet("session-1", "always-approve")).resolves.toEqual({
+      sessionId: "session-1",
       permissionMode: "always-approve",
       agentRunning: true,
       runtimeSynced: true,
@@ -116,6 +119,7 @@ describe("agent interaction command contracts", () => {
       ],
     });
     expect(invokeMock).toHaveBeenCalledWith("permission_mode_set", {
+      sessionId: "session-1",
       mode: "always-approve",
     });
   });
@@ -128,13 +132,27 @@ describe("agent interaction command contracts", () => {
       autoModeUnavailableReason: "disabled by policy",
     });
 
-    await expect(permissionModeGet()).resolves.toEqual({
+    await expect(permissionModeGet("session-1")).resolves.toEqual({
       permissionMode: "ask",
       configuredPermissionMode: "auto",
       autoModeAvailable: false,
       autoModeUnavailableReason: "disabled by policy",
     });
-    expect(invokeMock).toHaveBeenCalledWith("permission_mode_get");
+    expect(invokeMock).toHaveBeenCalledWith("permission_mode_get", {
+      sessionId: "session-1",
+    });
+  });
+
+  it("passes the new task's explicit permission draft at creation", async () => {
+    invokeMock.mockResolvedValue("session-1");
+
+    await expect(agentNewSession("/repo", "model-1", "auto"))
+      .resolves.toBe("session-1");
+    expect(invokeMock).toHaveBeenCalledWith("agent_new_session", {
+      cwd: "/repo",
+      modelId: "model-1",
+      permissionMode: "auto",
+    });
   });
 
   it("returns the durable automation run record id", async () => {

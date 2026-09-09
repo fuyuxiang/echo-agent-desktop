@@ -336,6 +336,8 @@ export interface SessionSummary {
   archived?: boolean;
   /** Model id bound to this session, if recorded in summary.json. */
   currentModelId?: string;
+  /** Permission mode owned and persisted by this task/session. */
+  permissionMode?: "ask" | "auto" | "always-approve";
   /** Expert id bound to this session (EchoAgent-only state). */
   expertId?: string;
   /** Expert display name (EchoAgent-only state). */

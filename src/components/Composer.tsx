@@ -738,7 +738,7 @@ export function Composer({
             </span>
           )}
           {permissionInline && (
-            <PermissionPicker onToast={onToast} />
+            <PermissionPicker onToast={onToast} sessionId={commandSessionId} />
           )}
           <div className="echo-composer__spacer" />
           {/* 发送前成本预估徽章(对齐 EchoAgent credit-estimate):纯本地 token 估算,
@@ -860,7 +860,7 @@ export function Composer({
               onSelectWorkspace={onSelectWorkspace!}
             />
           ) : null}
-          <PermissionPicker onToast={onToast} />
+          <PermissionPicker onToast={onToast} sessionId={commandSessionId} />
         </div>
       )}
       {showDisclaimer && (

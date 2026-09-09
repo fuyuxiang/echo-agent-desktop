@@ -376,37 +376,6 @@ impl Permissions {
             .collect()
     }
 
-    /// Approve every currently parked request that offers an allow outcome.
-    ///
-    /// Global always-approve is transient policy state, so prefer AllowOnce.
-    /// Selecting AllowAlways here would persist a narrower tool/session grant
-    /// that survives after the user switches the global mode back to Ask.
-    /// Requests without an allow option remain parked and fail safe.
-    pub async fn approve_all_pending(&self) -> Vec<PermissionClosedFrontend> {
-        let mut pending = self.inner.lock().await;
-        let entries = std::mem::take(&mut *pending);
-        let mut unresolved = Vec::new();
-        let mut approved = Vec::new();
-
-        for entry in entries {
-            let Some(option) = preferred_allow_option(&entry.request.options) else {
-                unresolved.push(entry);
-                continue;
-            };
-            let notice = PermissionClosedFrontend {
-                request_id: entry.request.request_id.clone(),
-                session_id: entry.request.session_id.clone(),
-            };
-            let _ = entry
-                .response_tx
-                .send(PermissionOutcome::Selected(option.option_id.clone()));
-            approved.push(notice);
-        }
-
-        *pending = unresolved;
-        approved
-    }
-
     pub async fn cancel_all(&self) -> Vec<PermissionClosedFrontend> {
         let entries = std::mem::take(&mut *self.inner.lock().await);
         let mut closed = Vec::with_capacity(entries.len());
@@ -1152,12 +1121,14 @@ async fn handle_client_message(
 
             // Auto-approve: if the permission mode is "always-approve", pick the
             // first allow/allow_always option and respond immediately.
-            let global_always =
-                crate::permission_config::is_runtime_permission_mode_active("always-approve");
+            let task_always = crate::permission_config::is_session_permission_mode_active(
+                &session_id_str,
+                "always-approve",
+            );
             let automation_full_access =
                 crate::automations::is_full_access_session(&session_id_str)
                     && crate::permission_config::ensure_always_approve_available().is_ok();
-            if global_always || automation_full_access {
+            if task_always || automation_full_access {
                 let auto_option = preferred_allow_option(&options);
                 if let Some(opt) = auto_option {
                     let response = acp::RequestPermissionResponse::new(
@@ -1226,14 +1197,15 @@ async fn handle_client_message(
                 }
             };
             // Close the race where this handler observed Ask immediately
-            // before permission_mode_set persisted Always, while the mode
-            // switch drained the registry immediately before this register.
-            // Once registered, a second read makes either this handler or the
-            // switch command responsible for resolving the request.
+            // before this exact session acknowledged Always. Once registered,
+            // re-check the task-owned mode; requests created before the switch
+            // stay parked because the switch itself never drains the queue.
             let late_auto_option =
-                if crate::permission_config::is_runtime_permission_mode_active("always-approve")
-                    || (crate::automations::is_full_access_session(&session_id_str)
-                        && crate::permission_config::ensure_always_approve_available().is_ok())
+                if crate::permission_config::is_session_permission_mode_active(
+                    &session_id_str,
+                    "always-approve",
+                ) || (crate::automations::is_full_access_session(&session_id_str)
+                    && crate::permission_config::ensure_always_approve_available().is_ok())
                 {
                     preferred_allow_option(&frontend.options).map(|option| option.option_id.clone())
                 } else {
@@ -1470,13 +1442,12 @@ async fn handle_client_message(
                 // Plan mode toggled (either by us or by EchoAgent). Mirror to frontend.
                 let _ = app.emit("agent://plan-mode", &params);
             } else if method == "echo.agent/yolo_mode_changed" {
-                // A Runtime notification can describe one automation session
-                // rather than the desktop-wide default. Never project its raw
-                // yolo/auto flags onto the global picker; publish the desktop's
-                // acknowledged aggregate state instead.
+                // Runtime policy/capability changes may be client-wide. Publish
+                // only the safe new-task capability envelope here; task pickers
+                // continue to read their own persisted and acknowledged state.
                 let _ = app.emit(
                     "agent://permission-mode",
-                    crate::permission_config::permission_mode_status(true),
+                    crate::permission_config::permission_mode_status(true, None),
                 );
             } else if method == "echo.agent/models/update" {
                 // Model list updated (e.g. after config reload).
@@ -2144,50 +2115,6 @@ mod tests {
         assert_eq!(
             preferred_allow_option(&options).map(|option| option.option_id.as_str()),
             Some("once")
-        );
-    }
-
-    #[tokio::test]
-    async fn always_approve_drains_allowable_requests_and_keeps_fail_closed_requests() {
-        let registry = Permissions::new();
-        let allowable_rx = registry
-            .register(permission_request(
-                "allowable",
-                vec![
-                    permission_option("remember", "allow_always"),
-                    permission_option("once", "allow"),
-                ],
-            ))
-            .await
-            .expect("register allowable request");
-        let _deny_only_rx = registry
-            .register(permission_request(
-                "deny-only",
-                vec![permission_option("deny", "deny")],
-            ))
-            .await
-            .expect("register deny-only request");
-
-        let closed = registry.approve_all_pending().await;
-        assert_eq!(
-            closed,
-            vec![PermissionClosedFrontend {
-                request_id: "allowable".into(),
-                session_id: "session-1".into(),
-            }]
-        );
-        assert!(matches!(
-            allowable_rx.await.expect("approval outcome"),
-            PermissionOutcome::Selected(option_id) if option_id == "once"
-        ));
-        assert_eq!(
-            registry
-                .list(None)
-                .await
-                .into_iter()
-                .map(|request| request.request_id)
-                .collect::<Vec<_>>(),
-            vec!["deny-only"]
         );
     }
 

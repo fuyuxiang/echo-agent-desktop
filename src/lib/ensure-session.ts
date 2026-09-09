@@ -36,6 +36,7 @@ export async function ensureSession(): Promise<string> {
     cwd,
     status: "completed",
     currentModelId: modelId,
+    permissionMode: "ask",
   });
   useSessionStore.getState().setSession(sessionId);
   return sessionId;

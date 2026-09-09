@@ -107,13 +107,14 @@ pub struct AppState {
 }
 
 /// A session the Runtime finished creating after its caller stopped waiting.
-/// `cwd` and `model_id` are kept so a retry only adopts a session that matches
-/// what it would have asked for.
+/// `cwd`, model and permission mode are kept so a retry only adopts a session
+/// that matches what it would have asked for.
 #[derive(Debug, Clone)]
 pub(crate) struct OrphanedSession {
     pub(crate) session_id: String,
     pub(crate) cwd: String,
     pub(crate) model_id: Option<String>,
+    pub(crate) permission_mode: String,
 }
 
 impl AppState {
@@ -150,10 +151,13 @@ impl AppState {
         &self,
         cwd: &str,
         model_id: Option<&str>,
+        permission_mode: &str,
     ) -> Option<String> {
         let mut orphaned = self.orphaned_sessions.lock().unwrap();
         let index = orphaned.iter().position(|candidate| {
-            candidate.cwd == cwd && candidate.model_id.as_deref() == model_id
+            candidate.cwd == cwd
+                && candidate.model_id.as_deref() == model_id
+                && candidate.permission_mode == permission_mode
         })?;
         Some(orphaned.remove(index).session_id)
     }
@@ -717,6 +721,10 @@ pub async fn agent_init(
         .lock()
         .await;
 
+    // Permission choices are task-owned. Remove obsolete global preference
+    // keys before launch so no Runtime fallback can broaden another task.
+    crate::permission_config::clear_global_permission_mode()?;
+
     // Renderer reloads recreate the React tree but not the native process. Keep
     // the healthy Runtime and its in-flight automations alive; the dispatcher
     // already emits Tauri events independently of any WebView subscription.
@@ -943,6 +951,7 @@ pub async fn agent_new_session(
     state: State<'_, AppState>,
     cwd: String,
     model_id: Option<String>,
+    permission_mode: Option<String>,
 ) -> Result<String, String> {
     crate::policy::require_feature("sessions")?;
     crate::org::enforce_skill_lease();
@@ -953,6 +962,8 @@ pub async fn agent_new_session(
     if let Some(model_id) = model_id.as_deref() {
         crate::policy::require_model(model_id)?;
     }
+    let permission_mode =
+        crate::permission_config::resolve_new_session_permission_mode(permission_mode.as_deref())?;
     require_runtime_ready(&state, model_id.as_deref())?;
     let tx = state
         .tx
@@ -964,8 +975,29 @@ pub async fn agent_new_session(
     // A previous attempt may have timed out while the Runtime went on to create
     // and persist the session. Adopting it keeps a retry from stacking up ghost
     // sessions the UI never learned about.
-    if let Some(session_id) = state.take_orphaned_session(&cwd, model_id.as_deref()) {
+    if let Some(session_id) =
+        state.take_orphaned_session(&cwd, model_id.as_deref(), &permission_mode)
+    {
         tracing::info!(%session_id, "adopting session created by a timed-out request");
+        if crate::policy::locked_permission_mode().is_none() {
+            if let Err(error) = crate::meta::set_permission_mode(&session_id, &permission_mode) {
+                // The Runtime session already exists. Put it back so a retry
+                // can reclaim the same task rather than creating duplicates.
+                state.record_orphaned_session(OrphanedSession {
+                    session_id: session_id.clone(),
+                    cwd: cwd.clone(),
+                    model_id: model_id.clone(),
+                    permission_mode: permission_mode.clone(),
+                });
+                return Err(format!(
+                    "无法保存当前任务的权限模式：{error}；重试不会重复创建任务"
+                ));
+            }
+        }
+        crate::permission_config::mark_session_permission_mode_synced(
+            &session_id,
+            &permission_mode,
+        );
         state.record_session_workspace(&session_id, Path::new(&cwd));
         crate::team_mcp::persist_registration(&tx, &session_id);
         crate::org_mcp::reconcile_registration(&tx, &session_id);
@@ -986,11 +1018,14 @@ pub async fn agent_new_session(
     let task_tx = tx.clone();
     let task_cwd = cwd.clone();
     let task_model = model_id.clone();
+    let task_permission_mode = permission_mode.clone();
     tokio::spawn(async move {
-        let result = agent_runtime::new_session(
+        let result = agent_runtime::new_session_with_options(
             &task_tx,
             &PathBuf::from(task_cwd.clone()),
             task_model.as_deref(),
+            None,
+            Some(&task_permission_mode),
         )
         .await
         .map_err(|error| error.to_string());
@@ -1009,6 +1044,17 @@ pub async fn agent_new_session(
                 );
                 crate::team_mcp::persist_registration(&task_tx, &session_id);
                 crate::org_mcp::reconcile_registration(&task_tx, &session_id);
+                if crate::policy::locked_permission_mode().is_none() {
+                    if let Err(error) =
+                        crate::meta::set_permission_mode(&session_id, &task_permission_mode)
+                    {
+                        tracing::error!(%error, %session_id, "failed to persist orphaned task permission mode");
+                    }
+                }
+                crate::permission_config::mark_session_permission_mode_synced(
+                    &session_id,
+                    &task_permission_mode,
+                );
                 task_app
                     .state::<AppState>()
                     .record_session_workspace(&session_id, Path::new(&task_cwd));
@@ -1018,6 +1064,7 @@ pub async fn agent_new_session(
                         session_id: session_id.clone(),
                         cwd: task_cwd,
                         model_id: task_model,
+                        permission_mode: task_permission_mode,
                     });
                 let _ = task_app.emit(
                     "agent://session-reclaimed",
@@ -1056,6 +1103,22 @@ pub async fn agent_new_session(
         return Err("Agent Runtime 返回的会话 ID 无效".into());
     }
     tracing::info!(%session_id, "agent new_session command OK");
+    if crate::policy::locked_permission_mode().is_none() {
+        if let Err(error) = crate::meta::set_permission_mode(&session_id, &permission_mode) {
+            // Creation succeeded remotely but the local transaction did not.
+            // Keep the id reclaimable so the next attempt is idempotent.
+            state.record_orphaned_session(OrphanedSession {
+                session_id: session_id.clone(),
+                cwd: cwd.clone(),
+                model_id: model_id.clone(),
+                permission_mode: permission_mode.clone(),
+            });
+            return Err(format!(
+                "无法保存当前任务的权限模式：{error}；重试不会重复创建任务"
+            ));
+        }
+    }
+    crate::permission_config::mark_session_permission_mode_synced(&session_id, &permission_mode);
     state.record_session_workspace(&session_id, Path::new(&cwd));
     // Team MCP remains a durable local tool. Organization memory is reconciled
     // per session so signed-out/offline users never inherit a global connector.
@@ -1095,6 +1158,12 @@ pub async fn agent_load_session(
     agent_runtime::load_session(&tx, &session_id, &PathBuf::from(&cwd))
         .await
         .map_err(|e| e.to_string())?;
+    let permission_mode = crate::permission_config::effective_session_permission_mode(&session_id);
+    crate::permission_config::mark_session_permission_mode_synced(&session_id, &permission_mode);
+    let _ = app.emit(
+        "agent://permission-mode",
+        crate::permission_config::permission_mode_status(true, Some(&session_id)),
+    );
     state.record_session_workspace(&session_id, Path::new(&cwd));
     // Restore durable local MCP tools, then attach/detach the optional
     // organization bridge from this live session according to current auth.
@@ -1613,6 +1682,10 @@ pub async fn agent_delete_session(
             }
         };
     state.forget_session_workspace(&session_id);
+    crate::permission_config::forget_session_permission_mode(&session_id);
+    if let Err(error) = crate::meta::clear_permission_mode(&session_id) {
+        tracing::warn!(%error, %session_id, "session deleted but permission metadata cleanup failed");
+    }
     Ok(SessionDeleteResult {
         memory_summaries_deleted,
         memory_cleanup_warning,
@@ -1981,23 +2054,38 @@ mod tests {
             session_id: "session-1".into(),
             cwd: "/work".into(),
             model_id: Some("model-a".into()),
+            permission_mode: "auto".into(),
         });
         // Recording the same session twice must not duplicate it.
         state.record_orphaned_session(OrphanedSession {
             session_id: "session-1".into(),
             cwd: "/work".into(),
             model_id: Some("model-a".into()),
+            permission_mode: "auto".into(),
         });
 
-        assert_eq!(state.take_orphaned_session("/other", Some("model-a")), None);
-        assert_eq!(state.take_orphaned_session("/work", Some("model-b")), None);
-        assert_eq!(state.take_orphaned_session("/work", None), None);
         assert_eq!(
-            state.take_orphaned_session("/work", Some("model-a")),
+            state.take_orphaned_session("/other", Some("model-a"), "auto"),
+            None
+        );
+        assert_eq!(
+            state.take_orphaned_session("/work", Some("model-b"), "auto"),
+            None
+        );
+        assert_eq!(state.take_orphaned_session("/work", None, "auto"), None);
+        assert_eq!(
+            state.take_orphaned_session("/work", Some("model-a"), "ask"),
+            None
+        );
+        assert_eq!(
+            state.take_orphaned_session("/work", Some("model-a"), "auto"),
             Some("session-1".to_string())
         );
         // Adopted once only.
-        assert_eq!(state.take_orphaned_session("/work", Some("model-a")), None);
+        assert_eq!(
+            state.take_orphaned_session("/work", Some("model-a"), "auto"),
+            None
+        );
     }
 
     #[test]

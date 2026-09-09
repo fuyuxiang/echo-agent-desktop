@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const mocks = vi.hoisted(() => ({
@@ -13,13 +13,65 @@ vi.mock("@/lib/agent-client", () => ({
 }));
 
 import { PermissionPicker } from "../PermissionPicker";
+import type {
+  PermissionMode,
+  PermissionModeSetResult,
+  PermissionModeStatus,
+} from "@/lib/agent-client";
+import type { PermissionRequest, SessionSummary } from "@/lib/types";
 import { usePermissionModeStore } from "@/stores/permission-mode-store";
 import { usePermissionStore } from "@/stores/permission-store";
 import { useSessionsStore } from "@/stores/sessions-store";
-import type { PermissionRequest } from "@/lib/types";
-import type { SessionSummary } from "@/lib/types";
 
-function makePermission(requestId: string, sessionId: string): PermissionRequest {
+function modeStatus(
+  sessionId?: string,
+  overrides: Partial<PermissionModeStatus> = {},
+): PermissionModeStatus {
+  return {
+    sessionId,
+    permissionMode: "ask",
+    configuredPermissionMode: "ask",
+    autoModeAvailable: true,
+    alwaysApproveAvailable: true,
+    locked: false,
+    runtimeSyncState: sessionId ? "synced" : "offline",
+    runtimeAppliedMode: sessionId ? "ask" : undefined,
+    ...overrides,
+  };
+}
+
+function setResult(
+  sessionId: string,
+  mode: PermissionMode,
+  overrides: Partial<PermissionModeSetResult> = {},
+): PermissionModeSetResult {
+  return {
+    ...modeStatus(sessionId, {
+      permissionMode: mode,
+      configuredPermissionMode: mode,
+      runtimeSyncState: "synced",
+      runtimeAppliedMode: mode,
+    }),
+    agentRunning: true,
+    runtimeSynced: true,
+    resolvedPending: 0,
+    remainingPending: 0,
+    resolvedPermissions: [],
+    ...overrides,
+  };
+}
+
+function session(sessionId: string, permissionMode: PermissionMode = "ask"): SessionSummary {
+  return {
+    sessionId,
+    title: sessionId,
+    cwd: "/workspace",
+    status: "pending",
+    permissionMode,
+  };
+}
+
+function permission(requestId: string, sessionId: string): PermissionRequest {
   return {
     requestId,
     sessionId,
@@ -32,287 +84,155 @@ function makePermission(requestId: string, sessionId: string): PermissionRequest
 
 describe("PermissionPicker", () => {
   beforeEach(() => {
-    mocks.permissionModeGet.mockReset().mockResolvedValue({
-      permissionMode: "ask",
-      configuredPermissionMode: "ask",
-      autoModeAvailable: true,
-    });
+    mocks.permissionModeGet.mockReset().mockResolvedValue(modeStatus());
     mocks.permissionModeSet.mockReset();
-    usePermissionModeStore.setState({ mode: "ask", status: null });
+    usePermissionModeStore.setState({
+      homeMode: "ask",
+      statuses: {},
+      capabilityStatus: null,
+    });
     usePermissionStore.setState({ queues: {}, closedRequestIds: [] });
     useSessionsStore.setState({ independent: [], pendingSessionPatches: {} });
   });
 
-  it("切换始终允许后使用后端确认的模式并告知已处理审批", async () => {
-    usePermissionStore.getState().request(makePermission("permission-1", "session-1"));
-    useSessionsStore.setState({
-      independent: [{
-        sessionId: "session-1",
-        status: "awaiting_permission",
-        cwd: "/workspace",
-      } as SessionSummary],
-    });
-    mocks.permissionModeSet.mockResolvedValue({
+  it("首页选择只修改待创建任务，不调用后端也不改其他任务", async () => {
+    usePermissionModeStore.getState().setStatus(modeStatus("other", {
       permissionMode: "always-approve",
       configuredPermissionMode: "always-approve",
-      autoModeAvailable: true,
-      alwaysApproveAvailable: true,
-      locked: false,
-      runtimeSyncState: "synced",
       runtimeAppliedMode: "always-approve",
-      agentRunning: true,
-      runtimeSynced: true,
-      resolvedPending: 1,
-      remainingPending: 0,
-      resolvedPermissions: [
-        { requestId: "permission-1", sessionId: "session-1" },
-      ],
-    });
+    }));
     const onToast = vi.fn();
     const user = userEvent.setup();
     render(<PermissionPicker onToast={onToast} />);
 
-    await waitFor(() => expect(mocks.permissionModeGet).toHaveBeenCalledOnce());
+    await waitFor(() => expect(mocks.permissionModeGet).toHaveBeenCalledWith(undefined));
     await user.click(screen.getByRole("button", { name: /审批模式/ }));
-    await user.click(screen.getByRole("menuitemradio", { name: /始终允许/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^自动模式/ }));
 
-    await waitFor(() => {
-      expect(mocks.permissionModeSet).toHaveBeenCalledWith("always-approve");
-      expect(usePermissionModeStore.getState().mode).toBe("always-approve");
-      expect(usePermissionStore.getState().queues["session-1"]).toHaveLength(0);
-      expect(usePermissionStore.getState().closedRequestIds).toContain("permission-1");
-      expect(useSessionsStore.getState().independent[0].status).toBe("working");
-    });
+    expect(usePermissionModeStore.getState().homeMode).toBe("auto");
+    expect(usePermissionModeStore.getState().statuses.other.permissionMode)
+      .toBe("always-approve");
+    expect(mocks.permissionModeSet).not.toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledWith("本任务将使用“自动模式”");
+  });
+
+  it("已有任务仅定向切换当前 session，已弹出的审批保持待处理", async () => {
+    useSessionsStore.setState({ independent: [session("session-1"), session("session-2")] });
+    usePermissionModeStore.getState().setStatus(modeStatus("session-2"));
+    usePermissionStore.getState().request(permission("permission-1", "session-1"));
+    mocks.permissionModeGet.mockResolvedValue(modeStatus("session-1"));
+    mocks.permissionModeSet.mockResolvedValue(setResult("session-1", "auto", {
+      remainingPending: 1,
+    }));
+    const onToast = vi.fn();
+    const user = userEvent.setup();
+    render(<PermissionPicker sessionId="session-1" onToast={onToast} />);
+
+    await waitFor(() => expect(mocks.permissionModeGet).toHaveBeenCalledWith("session-1"));
+    await user.click(screen.getByRole("button", { name: /审批模式/ }));
+    expect(screen.getByText("仅影响当前任务，其他任务保持不变")).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitemradio", { name: /^自动模式/ }));
+
+    await waitFor(() => expect(mocks.permissionModeSet)
+      .toHaveBeenCalledWith("session-1", "auto"));
+    expect(usePermissionModeStore.getState().statuses["session-1"].permissionMode).toBe("auto");
+    expect(usePermissionModeStore.getState().statuses["session-2"].permissionMode).toBe("ask");
+    expect(useSessionsStore.getState().independent.find((item) => item.sessionId === "session-1")?.permissionMode)
+      .toBe("auto");
+    expect(useSessionsStore.getState().independent.find((item) => item.sessionId === "session-2")?.permissionMode)
+      .toBe("ask");
+    expect(usePermissionStore.getState().queues["session-1"]).toHaveLength(1);
+    expect(usePermissionStore.getState().closedRequestIds).toEqual([]);
     expect(onToast).toHaveBeenCalledWith(
-      "已切换为“始终允许”，并自动处理 1 个等待授权操作",
+      "当前任务已切换为“自动模式”，当前 1 个待审批操作仍需你确认",
     );
   });
 
-  it("运行时同步未确认时给出非阻断提示", async () => {
-    mocks.permissionModeSet.mockResolvedValue({
-      permissionMode: "always-approve",
-      configuredPermissionMode: "always-approve",
-      autoModeAvailable: true,
-      alwaysApproveAvailable: true,
-      locked: false,
-      runtimeSyncState: "failed",
-      runtimeAppliedMode: "ask",
-      runtimeSyncError: "运行中的 Agent 权限同步超时",
-      agentRunning: true,
-      runtimeSynced: false,
-      resolvedPending: 0,
-      remainingPending: 0,
-      resolvedPermissions: [],
-    });
-    const onToast = vi.fn();
+  it("提高为本任务始终允许前要求明确确认", async () => {
+    useSessionsStore.setState({ independent: [session("session-1")] });
+    mocks.permissionModeGet.mockResolvedValue(modeStatus("session-1"));
+    mocks.permissionModeSet.mockResolvedValue(setResult("session-1", "always-approve"));
     const user = userEvent.setup();
-    render(<PermissionPicker onToast={onToast} />);
+    render(<PermissionPicker sessionId="session-1" />);
 
     await user.click(await screen.findByRole("button", { name: /审批模式/ }));
-    await user.click(screen.getByRole("menuitemradio", { name: /始终允许/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^本任务始终允许/ }));
 
-    await waitFor(() =>
-      expect(onToast).toHaveBeenCalledWith(
-        "已保存为“始终允许”，运行中会话仍为“审批模式”，请点击“始终允许”重试",
-      ),
-    );
+    const dialog = screen.getByRole("alertdialog", { name: "确认本任务始终允许" });
+    expect(within(dialog).getByText(/已经弹出的待审批操作不会被自动批准/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "取消" })).toHaveFocus();
+    expect(mocks.permissionModeSet).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole("button", { name: "仅当前任务始终允许" }));
+    await waitFor(() => expect(mocks.permissionModeSet)
+      .toHaveBeenCalledWith("session-1", "always-approve"));
   });
 
-  it("自动模式被策略关闭时显示原因并禁止伪切换", async () => {
-    mocks.permissionModeGet.mockResolvedValue({
-      permissionMode: "ask",
-      configuredPermissionMode: "auto",
+  it("组织策略锁定时展示原因并禁止任务修改", async () => {
+    useSessionsStore.setState({ independent: [session("session-1")] });
+    mocks.permissionModeGet.mockResolvedValue(modeStatus("session-1", {
+      locked: true,
+      lockedReason: "权限模式已被组织策略锁定为 ask",
+    }));
+    const user = userEvent.setup();
+    render(<PermissionPicker sessionId="session-1" />);
+
+    await waitFor(() => expect(usePermissionModeStore.getState().statuses["session-1"]?.locked)
+      .toBe(true));
+    await user.click(screen.getByRole("button", { name: /审批模式/ }));
+
+    expect(screen.getByText("权限模式已被组织策略锁定为 ask")).toBeInTheDocument();
+    expect(screen.getByRole("menuitemradio", { name: /^自动模式/ })).toBeDisabled();
+    expect(mocks.permissionModeSet).not.toHaveBeenCalled();
+  });
+
+  it("能力变化会将首页不再可用的草稿权限安全回退为审批模式", async () => {
+    usePermissionModeStore.setState({ homeMode: "auto" });
+    mocks.permissionModeGet.mockResolvedValue(modeStatus(undefined, {
       autoModeAvailable: false,
       autoModeUnavailableReason: "自动模式已被组织策略关闭",
-    });
-    const user = userEvent.setup();
-    render(<PermissionPicker />);
-
-    await waitFor(() => expect(usePermissionModeStore.getState().mode).toBe("ask"));
-    await user.click(screen.getByRole("button", { name: /审批模式/ }));
-
-    const autoOption = await screen.findByRole("menuitemradio", {
-      name: /自动模式（不可用）/,
-    });
-    expect(autoOption).toBeDisabled();
-    expect(screen.getByText("自动模式已被组织策略关闭")).toBeInTheDocument();
-    expect(mocks.permissionModeSet).not.toHaveBeenCalled();
-  });
-
-  it("切换自动模式时说明已等待的授权仍需确认", async () => {
-    mocks.permissionModeSet.mockResolvedValue({
-      permissionMode: "auto",
-      configuredPermissionMode: "auto",
-      autoModeAvailable: true,
-      alwaysApproveAvailable: true,
-      locked: false,
-      runtimeSyncState: "synced",
-      runtimeAppliedMode: "auto",
-      agentRunning: true,
-      runtimeSynced: true,
-      resolvedPending: 0,
-      remainingPending: 1,
-      resolvedPermissions: [],
-    });
-    const onToast = vi.fn();
-    const user = userEvent.setup();
-    render(<PermissionPicker onToast={onToast} />);
-
-    await waitFor(() => expect(mocks.permissionModeGet).toHaveBeenCalledOnce());
-    await user.click(screen.getByRole("button", { name: /审批模式/ }));
-    await user.click(screen.getByRole("menuitemradio", { name: /^自动模式/ }));
-
-    await waitFor(() => {
-      expect(usePermissionModeStore.getState().mode).toBe("auto");
-      expect(onToast).toHaveBeenCalledWith(
-        "已切换为“自动模式”，将应用于后续操作，当前 1 个等待授权操作仍需你确认",
-      );
-    });
-  });
-
-  it("自动模式未获得运行时确认时不误报当前会话已生效", async () => {
-    mocks.permissionModeSet.mockResolvedValue({
-      permissionMode: "auto",
-      configuredPermissionMode: "auto",
-      autoModeAvailable: true,
-      alwaysApproveAvailable: true,
-      locked: false,
-      runtimeSyncState: "failed",
-      runtimeAppliedMode: "ask",
-      runtimeSyncError: "运行中的 Agent 权限同步超时",
-      agentRunning: true,
-      runtimeSynced: false,
-      resolvedPending: 0,
-      remainingPending: 0,
-      resolvedPermissions: [],
-    });
-    const onToast = vi.fn();
-    const user = userEvent.setup();
-    render(<PermissionPicker onToast={onToast} />);
-
-    await waitFor(() => expect(mocks.permissionModeGet).toHaveBeenCalledOnce());
-    await user.click(screen.getByRole("button", { name: /审批模式/ }));
-    await user.click(screen.getByRole("menuitemradio", { name: /^自动模式/ }));
-
-    await waitFor(() =>
-      expect(onToast).toHaveBeenCalledWith(
-        "已保存为“自动模式”，运行中会话仍为“审批模式”，请点击“自动模式”重试",
-      ),
-    );
-  });
-
-  it("能力读取失败时仍由后端阻止不可用的自动模式", async () => {
-    mocks.permissionModeGet.mockRejectedValue(new Error("temporary read failure"));
-    mocks.permissionModeSet.mockRejectedValue(
-      new Error("自动模式已被本机配置、环境设置或组织策略关闭"),
-    );
-    const onToast = vi.fn();
-    const user = userEvent.setup();
-    render(<PermissionPicker onToast={onToast} />);
-
-    await waitFor(() => expect(mocks.permissionModeGet).toHaveBeenCalledOnce());
-    await user.click(screen.getByRole("button", { name: /审批模式/ }));
-    await user.click(screen.getByRole("menuitemradio", { name: /^自动模式/ }));
-
-    await waitFor(() => {
-      expect(usePermissionModeStore.getState().mode).toBe("ask");
-      expect(onToast).toHaveBeenCalledWith(
-        "权限模式切换失败：自动模式已被本机配置、环境设置或组织策略关闭",
-      );
-    });
-  });
-
-  it("始终允许被安全策略关闭时显示原因并禁止选择", async () => {
-    mocks.permissionModeGet.mockResolvedValue({
-      permissionMode: "ask",
-      configuredPermissionMode: "always-approve",
-      autoModeAvailable: true,
-      alwaysApproveAvailable: false,
-      alwaysApproveUnavailableReason: "始终允许已被组织策略禁用",
-    });
-    const user = userEvent.setup();
-    render(<PermissionPicker />);
-
-    await waitFor(() => expect(usePermissionModeStore.getState().mode).toBe("ask"));
-    await user.click(screen.getByRole("button", { name: /审批模式/ }));
-
-    const alwaysOption = await screen.findByRole("menuitemradio", {
-      name: /始终允许（不可用）/,
-    });
-    expect(alwaysOption).toBeDisabled();
-    expect(screen.getByText("始终允许已被组织策略禁用")).toBeInTheDocument();
-    expect(mocks.permissionModeSet).not.toHaveBeenCalled();
-  });
-
-  it("相同目标模式上次同步失败时允许再次点击重试", async () => {
-    mocks.permissionModeGet.mockResolvedValue({
-      permissionMode: "auto",
-      configuredPermissionMode: "auto",
-      autoModeAvailable: true,
-      alwaysApproveAvailable: true,
-      locked: false,
-      runtimeSyncState: "failed",
-      runtimeAppliedMode: "ask",
-      runtimeSyncError: "运行中的 Agent 权限同步超时",
-    });
-    mocks.permissionModeSet.mockResolvedValue({
-      permissionMode: "auto",
-      configuredPermissionMode: "auto",
-      autoModeAvailable: true,
-      alwaysApproveAvailable: true,
-      locked: false,
-      runtimeSyncState: "synced",
-      runtimeAppliedMode: "auto",
-      agentRunning: true,
-      runtimeSynced: true,
-      resolvedPending: 0,
-      remainingPending: 0,
-      resolvedPermissions: [],
-    });
-    const user = userEvent.setup();
-    render(<PermissionPicker />);
-
-    await waitFor(() => expect(usePermissionModeStore.getState().mode).toBe("ask"));
-    await user.click(screen.getByRole("button", { name: /审批模式/ }));
-    await user.click(screen.getByRole("menuitemradio", { name: /^自动模式/ }));
-
-    await waitFor(() => {
-      expect(mocks.permissionModeSet).toHaveBeenCalledWith("auto");
-      expect(usePermissionModeStore.getState().mode).toBe("auto");
-    });
-  });
-
-  it("延迟的初始读取不会覆盖用户刚完成的切换", async () => {
-    let resolveInitialRead: ((status: {
-      permissionMode: "ask";
-      configuredPermissionMode: "ask";
-      autoModeAvailable: true;
-    }) => void) | undefined;
-    mocks.permissionModeGet.mockImplementation(
-      () => new Promise((resolve) => { resolveInitialRead = resolve; }),
-    );
-    mocks.permissionModeSet.mockResolvedValue({
-      permissionMode: "always-approve",
-      agentRunning: true,
-      runtimeSynced: true,
-      resolvedPending: 0,
-      remainingPending: 0,
-      resolvedPermissions: [],
-    });
-    const user = userEvent.setup();
-    render(<PermissionPicker />);
-
-    await user.click(screen.getByRole("button", { name: /审批模式/ }));
-    await user.click(screen.getByRole("menuitemradio", { name: /始终允许/ }));
-    await waitFor(() =>
-      expect(usePermissionModeStore.getState().mode).toBe("always-approve"),
-    );
-
-    await act(async () => resolveInitialRead?.({
-      permissionMode: "ask",
-      configuredPermissionMode: "ask",
-      autoModeAvailable: true,
     }));
-    expect(usePermissionModeStore.getState().mode).toBe("always-approve");
+    render(<PermissionPicker />);
+
+    await waitFor(() => expect(usePermissionModeStore.getState().homeMode).toBe("ask"));
+    expect(screen.getByRole("button", { name: /审批模式/ })).toBeInTheDocument();
+  });
+
+  it("延迟的初始读取不会覆盖用户刚完成的任务切换", async () => {
+    let resolveInitialRead: ((value: PermissionModeStatus) => void) | undefined;
+    useSessionsStore.setState({ independent: [session("session-1")] });
+    mocks.permissionModeGet.mockImplementation(() => new Promise((resolve) => {
+      resolveInitialRead = resolve;
+    }));
+    mocks.permissionModeSet.mockResolvedValue(setResult("session-1", "auto"));
+    const user = userEvent.setup();
+    render(<PermissionPicker sessionId="session-1" />);
+
+    await user.click(screen.getByRole("button", { name: /审批模式/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^自动模式/ }));
+    await waitFor(() => expect(usePermissionModeStore.getState().statuses["session-1"]?.permissionMode)
+      .toBe("auto"));
+
+    await act(async () => resolveInitialRead?.(modeStatus("session-1")));
+    expect(usePermissionModeStore.getState().statuses["session-1"].permissionMode).toBe("auto");
+  });
+
+  it("后端拒绝切换时保留原权限并给出可理解的错误", async () => {
+    useSessionsStore.setState({ independent: [session("session-1")] });
+    mocks.permissionModeGet.mockResolvedValue(modeStatus("session-1"));
+    mocks.permissionModeSet.mockRejectedValue(new Error("自动模式已被组织策略关闭"));
+    const onToast = vi.fn();
+    const user = userEvent.setup();
+    render(<PermissionPicker sessionId="session-1" onToast={onToast} />);
+
+    await waitFor(() => expect(usePermissionModeStore.getState().statuses["session-1"])
+      .toBeDefined());
+    await user.click(screen.getByRole("button", { name: /审批模式/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^自动模式/ }));
+
+    await waitFor(() => expect(onToast)
+      .toHaveBeenCalledWith("权限模式切换失败：自动模式已被组织策略关闭"));
+    expect(useSessionsStore.getState().independent[0].permissionMode).toBe("ask");
+    expect(usePermissionModeStore.getState().statuses["session-1"].permissionMode).toBe("ask");
   });
 });

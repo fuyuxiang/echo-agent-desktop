@@ -313,7 +313,7 @@ pub fn run() {
             // default permission rules (~/.echo-agent/config.toml [permission])
             permission_config::permission_list,
             permission_config::permission_save,
-            // permission mode (~/.echo-agent/config.toml [ui].permission_mode + live notify)
+            // task-scoped permission mode (sidecar metadata + targeted live notify)
             permission_config::permission_mode_get,
             permission_config::permission_mode_set,
             // agent/assistant defaults (~/.echo-agent/config.toml [models].default + [ui].default_selected_permission)
