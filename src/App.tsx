@@ -2077,6 +2077,7 @@ function Shell() {
                   onToast={showToast}
                   onSelectExpert={handleStartWithExpert}
                   onNavigateConnectors={() => setPlaceholderView("专家·技能·连接器")}
+                  onOpenKnowledgeBase={() => handleNavigate("知识库")}
                   commandRefreshKey={commandRefreshKey}
                   onClientSlashCommand={handleClientSlashCommand}
                 />
@@ -2098,6 +2099,7 @@ function Shell() {
                   onSelectWorkspace={handleSelectWorkspace}
                   onSelectExpert={handleStartWithExpert}
                   onNavigateConnectors={() => setPlaceholderView("专家·技能·连接器")}
+                  onOpenKnowledgeBase={() => handleNavigate("知识库")}
                   commandRefreshKey={commandRefreshKey}
                   onClientSlashCommand={handleClientSlashCommand}
                 />

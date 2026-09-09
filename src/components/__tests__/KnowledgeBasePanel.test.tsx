@@ -238,8 +238,8 @@ describe("KnowledgeBasePanel", () => {
       getStats: async () => ({}),
     });
     render(<KnowledgeBasePanel onToast={vi.fn()} />);
-    // fileCount 未定义 → 显示 0(求和默认)。
-    await waitFor(() => expect(screen.getByText(/已索引 0 个文件/)).toBeInTheDocument());
+    // fileCount 未定义代表尚未扫描，不能误报为知识源中没有文件。
+    await waitFor(() => expect(screen.getByText(/等待首次扫描/)).toBeInTheDocument());
     // 无时间。
     expect(screen.queryByText(/分钟前|小时前|刚刚|天前/)).toBeNull();
   });

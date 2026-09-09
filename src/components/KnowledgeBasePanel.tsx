@@ -127,6 +127,9 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
       .then(({ entries, failures, successfulProviders }) => {
         if (!cancelled) {
           setResults(entries);
+          // The first search lazily builds local indexes. Refresh the displayed
+          // coverage so “waiting for scan” immediately becomes a real count.
+          setRefreshKey((key) => key + 1);
           if (failures.length === 0) {
             setSearchError(null);
           } else {
@@ -186,6 +189,9 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
           )}
         </div>
       </div>
+      <div className="kb-panel__index-status" role="note">
+        <span>这里连接的是本地文件夹，不会复制文件。任务输入框开启“知识库”后，会自动检索相关片段并在回答中标注来源。</span>
+      </div>
       {sourcesError && (
         <div className="kb-panel__index-status" role="alert">
           <span>知识源读取失败：{sourcesError}</span>
@@ -217,7 +223,9 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
       {sources.length > 0 && (
         <div className="kb-panel__index-status" aria-live="polite">
           <span className="kb-panel__index-count">
-            已索引 {sources.reduce((sum, s) => sum + (s.stats.fileCount ?? 0), 0)} 个文件
+            {sources.some((source) => typeof source.stats.fileCount === "number")
+              ? `已索引 ${sources.reduce((sum, source) => sum + (source.stats.fileCount ?? 0), 0)} 个文件`
+              : "等待首次扫描，可直接搜索或刷新索引"}
           </span>
           {(() => {
             const ts = sources
