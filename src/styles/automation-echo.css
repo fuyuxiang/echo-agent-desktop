@@ -1042,6 +1042,7 @@
 .atm-prompt-chip:hover:not(:disabled) { background: var(--echo-bg-hover); }
 .atm-prompt-chip:disabled { opacity: 0.5; cursor: not-allowed; }
 .atm-prompt-chip-label { line-height: 1; }
+.atm-prompt-chip-label--invalid { color: var(--atm-result-failed-text); }
 .atm-prompt-chip-caret { display: inline-flex; align-items: center; margin-left: 1px; }
 .atm-chip-dropdown { display: inline-flex; align-items: center; position: relative; }
 .atm-chip-dropdown__menu {
@@ -1079,6 +1080,25 @@
 }
 .atm-chip-option:hover { background: var(--atm-surface-hover); }
 .atm-chip-option.active { font-weight: 500; }
+.atm-chip-option-copy { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
+.atm-chip-option-copy small {
+  overflow: hidden;
+  color: var(--atm-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+  text-overflow: ellipsis;
+}
+.atm-chip-invalid {
+  margin: 2px 6px 4px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--atm-result-failed-text) 8%, transparent);
+  color: var(--atm-result-failed-text);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: normal;
+}
 .atm-chip-option-check {
   width: 16px;
   min-width: 16px;
@@ -1634,6 +1654,7 @@
 .atm-run-history-item-status.success { color: var(--atm-result-success-text); }
 .atm-run-history-item-status.failed { color: var(--atm-result-failed-text); }
 .atm-run-history-item-archive,
+.atm-run-history-item-retry,
 .atm-run-history-item-delete {
   display: none;
   align-items: center;
@@ -1648,10 +1669,13 @@
 }
 .atm-run-history-item-archive svg path { opacity: 1; }
 .atm-run-history-item-archive:hover,
+.atm-run-history-item-retry:hover:not(:disabled),
 .atm-run-history-item-delete:hover { color: var(--echo-color-text-primary); }
+.atm-run-history-item-retry:disabled { color: var(--echo-color-text-disabled); cursor: wait; }
 .atm-run-history-item--archived .atm-run-history-item-status { color: var(--atm-text-secondary); }
 .atm-run-history-item--archivable:hover .atm-run-history-item-status { display: none; }
 .atm-run-history-item--archivable:hover .atm-run-history-item-archive { display: flex; }
+.atm-run-history-item:hover .atm-run-history-item-retry { display: flex; }
 .atm-run-history-item--archived:hover .atm-run-history-item-status { display: none; }
 .atm-run-history-item--archived:hover .atm-run-history-item-delete { display: flex; }
 

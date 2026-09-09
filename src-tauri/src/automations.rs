@@ -645,6 +645,7 @@ fn append_run_started(
     started_at: &str,
     cwd: &Path,
     scheduled_for: Option<&str>,
+    resolved_model_id: Option<&str>,
 ) -> String {
     let id = uuid::Uuid::now_v7().to_string();
     records.records.push(AutomationRunRecord {
@@ -656,7 +657,9 @@ fn append_run_started(
         finished_at: None,
         session_id: None,
         cwd: Some(cwd.to_string_lossy().into_owned()),
-        model_id: automation.model_id.clone(),
+        model_id: resolved_model_id
+            .map(str::to_string)
+            .or_else(|| automation.model_id.clone()),
         automation_snapshot: Some(automation.clone()),
         scheduled_for: scheduled_for.map(str::to_string),
         error: None,
@@ -671,6 +674,7 @@ fn record_run_started(
     started_at: &str,
     cwd: &Path,
     scheduled_for: Option<&str>,
+    resolved_model_id: &str,
 ) -> Result<String, String> {
     let _guard = record_access().lock().unwrap();
     let mut records = read_records()?;
@@ -680,7 +684,14 @@ fn record_run_started(
     }) {
         return Err("该自动化任务已在运行，请等待完成后再试".into());
     }
-    let id = append_run_started(&mut records, automation, started_at, cwd, scheduled_for);
+    let id = append_run_started(
+        &mut records,
+        automation,
+        started_at,
+        cwd,
+        scheduled_for,
+        Some(resolved_model_id),
+    );
     write_records(&mut records)?;
     Ok(id)
 }
@@ -698,7 +709,7 @@ fn record_run_session(record_id: &str, session_id: &str) -> Result<(), String> {
     write_records(&mut records)
 }
 
-fn mark_record_running(record_id: &str) -> Result<(), String> {
+fn mark_record_running(record_id: &str, resolved_model_id: &str) -> Result<(), String> {
     let _guard = record_access().lock().unwrap();
     let mut records = read_records()?;
     let record = records
@@ -707,7 +718,12 @@ fn mark_record_running(record_id: &str) -> Result<(), String> {
         .find(|record| record.id == record_id)
         .ok_or_else(|| format!("automation record {record_id} not found"))?;
     match record.status.as_str() {
-        "queued" => record.status = "running".into(),
+        "queued" => {
+            record.status = "running".into();
+            // Auto is resolved at dispatch time. Persist the concrete id so the
+            // history row remains an accurate audit record after defaults change.
+            record.model_id = Some(resolved_model_id.to_string());
+        }
         status => {
             return Err(format!(
                 "automation record {record_id} is not dispatchable ({status})"
@@ -1428,10 +1444,24 @@ fn blank_to_none(value: &mut Option<String>) {
 }
 
 #[tauri::command]
-pub fn automations_save(app: AppHandle, automation: Automation) -> Result<Automation, String> {
+pub fn automations_save(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mut automation: Automation,
+) -> Result<Automation, String> {
     crate::policy::require_feature("automations")?;
+    // Normalize before validation so an empty renderer field has exactly the
+    // same Auto semantics as an omitted field.
+    blank_to_none(&mut automation.model_id);
     if let Some(model_id) = automation.model_id.as_deref() {
         crate::policy::require_model(model_id)?;
+    }
+    // Saving an ACTIVE-looking task that can never run is a product bug. Auto
+    // and fixed selections must both resolve against the live Runtime now; the
+    // same check is repeated at dispatch because configuration can later change.
+    // Paused tasks remain editable while offline and are validated on resume/run.
+    if automation.status.eq_ignore_ascii_case("ACTIVE") {
+        crate::commands::resolve_automation_model_id(&state, automation.model_id.as_deref())?;
     }
     let _guard = store_access().lock().unwrap();
     let mut store = read_store()?;
@@ -1448,7 +1478,6 @@ pub fn automations_save(app: AppHandle, automation: Automation) -> Result<Automa
     }
     final_automation.status = final_automation.status.to_uppercase();
     // Frontend sends "" for unset optionals; normalize to None.
-    blank_to_none(&mut final_automation.model_id);
     blank_to_none(&mut final_automation.expert_id);
     blank_to_none(&mut final_automation.expert_name);
     blank_to_none(&mut final_automation.scheduled_date);
@@ -1514,10 +1543,23 @@ pub fn automations_delete(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn automations_set_status(app: AppHandle, id: String, status: String) -> Result<(), String> {
+pub fn automations_set_status(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    status: String,
+) -> Result<(), String> {
     crate::policy::require_feature("automations")?;
     let _guard = store_access().lock().unwrap();
     let mut store = read_store()?;
+    if status.eq_ignore_ascii_case("ACTIVE") {
+        let automation = store
+            .automations
+            .iter()
+            .find(|automation| automation.id == id)
+            .ok_or_else(|| format!("automation {id} not found"))?;
+        crate::commands::resolve_automation_model_id(&state, automation.model_id.as_deref())?;
+    }
     set_status_at(&mut store, &id, &status, now_local())?;
     write_store(&store)?;
     let has_active = store
@@ -1567,10 +1609,11 @@ pub async fn automations_run(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    crate::commands::require_runtime_ready(&state, automation.model_id.as_deref())?;
+    let resolved_model_id =
+        crate::commands::resolve_automation_model_id(&state, automation.model_id.as_deref())?;
 
     let started = now_local().to_rfc3339();
-    let record_id = record_run_started(&automation, &started, &cwd, None)?;
+    let record_id = record_run_started(&automation, &started, &cwd, None, &resolved_model_id)?;
 
     // Mark last-run.
     let update_result = (|| {
@@ -1709,8 +1752,30 @@ async fn execute_automation_run(
         );
         return;
     }
+    let resolved_model_id = match crate::commands::resolve_automation_model_id(
+        &app.state::<AppState>(),
+        automation.model_id.as_deref(),
+    ) {
+        Ok(model_id) => model_id,
+        Err(error) => {
+            if record_run_finished(&record_id, false, None, Some(&error)) {
+                emit_run_update(
+                    &app,
+                    &automation,
+                    &record_id,
+                    &cwd,
+                    RunUpdate::Failed {
+                        session_id: None,
+                        error: &error,
+                    },
+                );
+            }
+            notify_run_failure(&app, &automation, &error).await;
+            return;
+        }
+    };
     loop {
-        match mark_record_running(&record_id) {
+        match mark_record_running(&record_id, &resolved_model_id) {
             Ok(()) => {
                 emit_run_update(&app, &automation, &record_id, &cwd, RunUpdate::Running);
                 break;
@@ -1753,7 +1818,15 @@ async fn execute_automation_run(
         let state = app.state::<AppState>();
         tokio::time::timeout(
             AUTOMATION_RUN_TIMEOUT,
-            run_automation_once(&app, &state, &tx, &automation, &cwd, &record_id),
+            run_automation_once(
+                &app,
+                &state,
+                &tx,
+                &automation,
+                &cwd,
+                &record_id,
+                &resolved_model_id,
+            ),
         )
         .await
     };
@@ -1845,12 +1918,11 @@ async fn run_automation_once(
     automation: &Automation,
     cwd: &Path,
     record_id: &str,
+    resolved_model_id: &str,
 ) -> Result<String, String> {
     crate::policy::require_feature("automations")?;
-    if let Some(model_id) = automation.model_id.as_deref() {
-        crate::policy::require_model(model_id)?;
-    }
-    crate::commands::require_runtime_ready(state, automation.model_id.as_deref())?;
+    crate::policy::require_model(resolved_model_id)?;
+    crate::commands::require_runtime_ready(state, Some(resolved_model_id))?;
     if !cwd.is_dir() {
         return Err(format!("自动化工作空间不存在：{}", cwd.display()));
     }
@@ -1870,7 +1942,7 @@ async fn run_automation_once(
     let session_id = crate::agent_runtime::new_session_with_options(
         tx,
         cwd,
-        automation.model_id.as_deref(),
+        Some(resolved_model_id),
         reasoning_effort,
         full_access.then_some("always-approve"),
     )
@@ -2257,13 +2329,28 @@ pub async fn scheduler_tick(app: &AppHandle, tx: &echo_agent_acp::AcpAgentTx, de
             let claimed_cwd = first_cwd(&claim.automation)
                 .map(PathBuf::from)
                 .unwrap_or_else(|| default_cwd.to_path_buf());
+            let resolved_model_id = crate::commands::resolve_automation_model_id(
+                &state,
+                claim.automation.model_id.as_deref(),
+            );
             let record_id = append_run_started(
                 &mut records,
                 &claim.automation,
                 &started,
                 &claimed_cwd,
                 Some(&claim.scheduled_for),
+                resolved_model_id.as_deref().ok(),
             );
+            if let Err(error) = resolved_model_id {
+                if let Some(record) = records
+                    .records
+                    .iter_mut()
+                    .find(|record| record.id == record_id)
+                {
+                    finalize_record(record, false, &started, None, Some(&error));
+                }
+                continue;
+            }
             let cwd = match app
                 .state::<crate::shell_fs::FilesystemAccess>()
                 .require_workspace(&claimed_cwd.to_string_lossy())
@@ -2891,7 +2978,7 @@ mod tests {
         let automation = Automation {
             id: "automation".into(),
             name: "daily report".into(),
-            model_id: Some("model".into()),
+            model_id: None,
             ..test_automation()
         };
         let scheduled_for = "2026-07-06T09:00:00+08:00";
@@ -2901,12 +2988,13 @@ mod tests {
             "2026-07-06T10:00:00+08:00",
             Path::new("/workspace"),
             Some(scheduled_for),
+            Some("resolved-model"),
         );
         let record = records.records.first().unwrap();
         assert_eq!(record.id, id);
         assert_eq!(record.status, "queued");
         assert_eq!(record.cwd.as_deref(), Some("/workspace"));
-        assert_eq!(record.model_id.as_deref(), Some("model"));
+        assert_eq!(record.model_id.as_deref(), Some("resolved-model"));
         assert_eq!(
             record
                 .automation_snapshot
@@ -2914,6 +3002,11 @@ mod tests {
                 .map(|item| item.id.as_str()),
             Some("automation")
         );
+        assert!(record
+            .automation_snapshot
+            .as_ref()
+            .and_then(|item| item.model_id.as_deref())
+            .is_none());
         assert_eq!(record.scheduled_for.as_deref(), Some(scheduled_for));
 
         let legacy: AutomationRunRecord = serde_json::from_value(serde_json::json!({
@@ -2947,6 +3040,7 @@ mod tests {
             "2026-07-06T09:55:00+08:00",
             Path::new("/workspace"),
             None,
+            Some("model"),
         );
         append_run_started(
             &mut records,
@@ -2954,6 +3048,7 @@ mod tests {
             "2026-07-06T10:00:00+08:00",
             Path::new("/workspace"),
             Some("2026-07-06T10:00:00+08:00"),
+            Some("model"),
         );
 
         let blocked = scheduled_runs_in_flight(&records);
@@ -2987,6 +3082,7 @@ mod tests {
             "2026-07-06T10:00:00+08:00",
             Path::new("/workspace"),
             None,
+            Some("model"),
         );
         let record = records.records.first_mut().unwrap();
         assert!(finalize_record(

@@ -39,7 +39,9 @@ import {
   automationsSave,
   automationsSetStatus,
   automationsSnapshot,
+  agentAuthStatus,
   agentListWorkspaces,
+  filterModelsByRuntimeCatalog,
   mcpList,
   providersList,
   flattenModels,
@@ -111,6 +113,27 @@ function recordStatusLabel(item: AutomationRunRecord): string {
   if (item.status === "success") return "成功";
   if (item.status === "failed") return "失败";
   return item.status;
+}
+
+function automationModelError(
+  draft: AutomationDraft,
+  models: ModelOption[],
+  autoModelId?: string,
+  runtimeError?: string,
+  requireRunnable = draft.status === "ACTIVE",
+): string | null {
+  // Paused tasks remain editable while the Runtime is offline. The same task
+  // is checked again before it is resumed or manually executed.
+  if (!requireRunnable) return null;
+  if (runtimeError) return runtimeError;
+  if (!draft.modelId) {
+    return autoModelId
+      ? null
+      : "Auto 当前没有可用模型，请先在“设置 → 模型与连接”配置模型。";
+  }
+  return models.some((model) => model.id === draft.modelId)
+    ? null
+    : `已选模型“${draft.modelId}”当前不可用，请重新选择模型。`;
 }
 
 function RecordStatusIcon({ item }: { item: AutomationRunRecord }) {
@@ -215,6 +238,8 @@ export function AutomationPanel({
   // ---------- 引用数据（工作空间/模型/技能/专家/连接器） ----------
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [autoModelId, setAutoModelId] = useState<string>();
+  const [modelRuntimeError, setModelRuntimeError] = useState<string>();
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [experts, setExperts] = useState<AgentEntry[]>([]);
   const [connectors, setConnectors] = useState<ConnectorOption[]>([]);
@@ -294,7 +319,7 @@ export function AutomationPanel({
     setReferencesLoading(true);
     const [workspaceResult, modelResult, skillResult, expertResult, connectorResult] = await Promise.allSettled([
       agentListWorkspaces(),
-      providersList(),
+      Promise.all([providersList(), agentAuthStatus()]),
       skillsList(cwd),
       agentsList(cwd),
       mcpList(),
@@ -307,8 +332,17 @@ export function AutomationPanel({
     };
     if (workspaceResult.status === "fulfilled") setWorkspaces(workspaceResult.value);
     else captureError("workspaces", workspaceResult.reason);
-    if (modelResult.status === "fulfilled") setModels(flattenModels(modelResult.value));
-    else captureError("models", modelResult.reason);
+    if (modelResult.status === "fulfilled") {
+      const [catalog, auth] = modelResult.value;
+      const options = filterModelsByRuntimeCatalog(flattenModels(catalog), auth.runtimeModels);
+      setModels(options);
+      setModelRuntimeError(auth.ready ? undefined : (auth.reason ?? "Agent Runtime 模型尚未就绪，请稍后重试。"));
+      setAutoModelId(
+        auth.ready && options.some((model) => model.id === auth.defaultModelId)
+          ? auth.defaultModelId
+          : undefined,
+      );
+    } else captureError("models", modelResult.reason);
     if (skillResult.status === "fulfilled") setSkills(skillResult.value.filter((skill) => skill.enabled));
     else captureError("skills", skillResult.reason);
     if (expertResult.status === "fulfilled") setExperts(expertResult.value);
@@ -375,6 +409,11 @@ export function AutomationPanel({
       onToast?.(message);
       return;
     }
+    const modelMessage = automationModelError(draft, models, autoModelId, modelRuntimeError);
+    if (modelMessage) {
+      onToast?.(modelMessage);
+      return;
+    }
     setSaving(true);
     try {
       await automationsSave(automationFromDraft(draft, editingAutomation ?? undefined));
@@ -386,7 +425,7 @@ export function AutomationPanel({
     } finally {
       setSaving(false);
     }
-  }, [draft, isCreating, editingAutomation, handleCloseModal, onToast, refresh]);
+  }, [draft, isCreating, editingAutomation, models, autoModelId, modelRuntimeError, handleCloseModal, onToast, refresh]);
 
   const handleFallbackToDefault = useCallback(() => {
     setDraft((current) => (current ? { ...current, permissionMode: "default" } : current));
@@ -488,6 +527,11 @@ export function AutomationPanel({
       onToast?.(message);
       return;
     }
+    const modelMessage = automationModelError(draft, models, autoModelId, modelRuntimeError, true);
+    if (modelMessage) {
+      onToast?.(modelMessage);
+      return;
+    }
     requestActionWithPermissionCheck(() => {
       void (async () => {
         setSaving(true);
@@ -501,7 +545,7 @@ export function AutomationPanel({
         }
       })();
     });
-  }, [editingAutomation, draft, saving, onToast, requestActionWithPermissionCheck, handleRunTest]);
+  }, [editingAutomation, draft, saving, models, autoModelId, modelRuntimeError, onToast, requestActionWithPermissionCheck, handleRunTest]);
 
   // ---------- 运行记录 ----------
   const handleArchiveRecord = useCallback(
@@ -688,10 +732,15 @@ export function AutomationPanel({
         <AutomationEditPage
           mode={isCreating ? "create" : "edit"}
           draft={draft}
-          setDraft={setDraft}
+          setDraft={(next) => setDraft((current) => {
+            if (!current) return current;
+            return typeof next === "function" ? next(current) : next;
+          })}
           saving={saving}
+          retrying={!!editingAutomation && runStartingIds.has(editingAutomation.id)}
           workspaces={workspaces}
           models={models}
+          autoModelId={autoModelId}
           skills={skills}
           experts={experts}
           connectors={connectors}
@@ -707,6 +756,7 @@ export function AutomationPanel({
           onDelete={isCreating ? undefined : handleDelete}
           onOpenConnectorSettings={() => onNavigate?.("专家·技能·连接器")}
           onArchiveRecord={handleArchiveRecord}
+          onRetryRecord={handleRunTest}
           onDeleteRecord={handleDeleteRecord}
           onOpenSession={onOpenSession}
         />
@@ -1017,7 +1067,9 @@ export function AutomationPanel({
                     <InboxRow
                       key={item.id}
                       item={item}
+                      retrying={runStartingIds.has(item.automationId)}
                       onArchive={handleArchiveRecord}
+                      onRetry={handleRunTest}
                       onDelete={handleDeleteRecord}
                       onOpenSession={onOpenSession}
                     />
@@ -1046,7 +1098,9 @@ export function AutomationPanel({
                     key={item.id}
                     item={item}
                     archived
+                    retrying={runStartingIds.has(item.automationId)}
                     onArchive={handleArchiveRecord}
+                    onRetry={handleRunTest}
                     onDelete={handleDeleteRecord}
                     onOpenSession={onOpenSession}
                   />
@@ -1246,13 +1300,17 @@ function AutomationRow({
 function InboxRow({
   item,
   archived = false,
+  retrying = false,
   onArchive,
+  onRetry,
   onDelete,
   onOpenSession,
 }: {
   item: AutomationRunRecord;
   archived?: boolean;
+  retrying?: boolean;
   onArchive: (id: string) => void;
+  onRetry: (automationId: string) => void;
   onDelete: (id: string) => void;
   onOpenSession?: (sessionId: string, cwd?: string) => void;
 }) {
@@ -1297,6 +1355,21 @@ function InboxRow({
         </span>
         {!isUnfinished && (
           <div className="atm-row-hover-actions">
+            {!archived && item.status === "failed" && (
+              <button
+                type="button"
+                className="atm-row-action-btn"
+                title={retrying ? "正在重新运行" : "使用当前任务配置重新运行"}
+                aria-label={`重新运行“${item.automationName}”`}
+                disabled={retrying}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRetry(item.automationId);
+                }}
+              >
+                <PlayIcon width={14} height={14} />
+              </button>
+            )}
             {!archived && (
               <button
                 type="button"

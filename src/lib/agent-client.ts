@@ -69,6 +69,8 @@ export interface AuthStatus {
   synchronized: boolean;
   /** Model ids in the last Runtime-acknowledged configuration. */
   runtimeModels: string[];
+  /** Concrete configured model used by automatic model selection. */
+  defaultModelId?: string;
   lastRuntimeError?: string;
 }
 

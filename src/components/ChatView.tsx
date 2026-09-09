@@ -192,7 +192,8 @@ export function ChatView({
     if (!sessionId || streaming || retrying) return;
     const targetSessionId = sessionId;
     // Find the last user message text.
-    const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+    const lastUserIndex = messages.map((message) => message.role).lastIndexOf("user");
+    const lastUserMsg = lastUserIndex >= 0 ? messages[lastUserIndex] : undefined;
     if (!lastUserMsg) {
       onToast?.("没有可重试的消息");
       return;
@@ -210,9 +211,26 @@ export function ChatView({
       // don't touch files), which drops the assistant turn we're regenerating.
       const points = await rewindPoints(targetSessionId);
       if (points.length === 0) {
-        // Nothing to rewind — bailing here is important: without a rewind we
-        // would just append a duplicate user turn on top of the old one.
-        onToast?.("没有可回退的点，无法重试");
+        // A setup/model failure can happen before the Runtime creates its first
+        // rewind checkpoint. Retrying is safe only when that failed turn emitted
+        // no answer and invoked no tools; otherwise a blind resend could repeat
+        // side effects.
+        const hasObservableWork = messages.slice(lastUserIndex + 1).some((message) =>
+          message.parts.some((part) =>
+            part.kind === "tool_call"
+            || (part.kind === "text" && part.text.trim().length > 0),
+          ),
+        );
+        if (hasObservableWork) {
+          onToast?.("该轮没有可回溯点，为避免重复执行工具无法自动重试。");
+          return;
+        }
+        const accepted = await onSend(userText || "请分析附件。", userAttachments);
+        if (accepted === false) {
+          onToast?.("消息未能重新发送，请确认当前模型可用后再试。");
+          return;
+        }
+        onToast?.("已使用当前模型重新发送");
         return;
       }
       // Pick the latest point explicitly by promptIndex — don't rely on the
