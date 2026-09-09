@@ -2,8 +2,8 @@
  * ChatView pause/yield/resume 闭环集成测试。
  *
  * 验证:
- *  - 流式时显示「暂停」按钮,点击 → onCancel + 进入 yielding。
- *  - 流式结束(yielding → yielded)显示「已暂停」横幅 + 「恢复」/「恢复并继续」两按钮。
+ *  - 流式时显示「暂停」按钮并发送明确的 pause 动作。
+ *  - 会话级 control 显示「已暂停」横幅 + 「恢复」/「恢复并继续」两按钮。
  *  - 「恢复」:仅清状态(不触发 onSend)。
  *  - 「恢复并继续」:清状态 + onSend("请继续。")。
  *
@@ -20,7 +20,12 @@ let storeState: {
   error: string | null;
   plan: null;
   sessionId: string | null;
-  setDraft: () => void;
+  control?: {
+    action: "pause" | "stop";
+    phase: "pausing" | "paused" | "stopping" | "stopped";
+    requestedAt: number;
+  };
+  resumeSession: (sessionId: string) => void;
 } = {
   messages: [],
   streaming: false,
@@ -28,24 +33,27 @@ let storeState: {
   error: null,
   plan: null,
   sessionId: "s1",
-  setDraft: () => {},
+  control: undefined,
+  resumeSession: () => {
+    storeState = { ...storeState, control: undefined };
+  },
 };
 vi.mock("@/stores/session-store", () => ({
   useSessionStore: (sel: (s: typeof storeState) => unknown) => sel(storeState),
 }));
-vi.mock("@/stores/sessions-store", () => ({
-  useSessionsStore: (sel: (s: {
-    drafts: Record<string, string>;
-    setDraft: () => void;
-    independent: unknown[];
-  }) => unknown) =>
-    sel({
-      drafts: {},
-      setDraft: () => {},
-      independent: [],
-    }),
-  HOME_DRAFT_KEY: "home",
-}));
+vi.mock("@/stores/sessions-store", () => {
+  const value = {
+    drafts: {} as Record<string, string>,
+    setDraft: () => {},
+    independent: [] as unknown[],
+    upsert: vi.fn(),
+  };
+  const useSessionsStore = Object.assign(
+    (sel: (s: typeof value) => unknown) => sel(value),
+    { getState: () => value },
+  );
+  return { useSessionsStore, HOME_DRAFT_KEY: "home" };
+});
 vi.mock("@/lib/agent-client", async () => {
   // 用空实现铺满所有被引用的导出,避免「No export defined」。
   const mod: Record<string, unknown> = {};
@@ -135,6 +143,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
       error: null,
       plan: null,
       sessionId: "s1",
+      control: undefined,
     });
     baseProps.onSend.mockClear();
     baseProps.onCancel.mockClear();
@@ -156,7 +165,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     renderChat();
     const pauseBtn = screen.getByTitle("暂停生成(保留会话,可继续)");
     fireEvent.click(pauseBtn);
-    expect(baseProps.onCancel).toHaveBeenCalledTimes(1);
+    expect(baseProps.onCancel).toHaveBeenCalledWith("pause");
   });
 
   it("流式时复制历史消息会暂停自动跟随，可手动回到最新", async () => {
@@ -176,79 +185,92 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
   });
 
-  it("暂停 → 流式结束 → 显示「已暂停」横幅 + 两个恢复按钮", async () => {
-    // 初始流式 → 点暂停。
+  it("会话进入 paused 后显示横幅 + 两个恢复按钮", async () => {
     setStore({ streaming: true, streamingMessageId: "a1" });
     const { rerender } = renderChat();
     fireEvent.click(screen.getByTitle("暂停生成(保留会话,可继续)"));
-    expect(baseProps.onCancel).toHaveBeenCalled();
-    // 模拟 EchoAgent complete:streaming → false。yield 状态在 streaming 结束后确认。
-    setStore({ streaming: false, streamingMessageId: null });
+    setStore({
+      streaming: false,
+      streamingMessageId: null,
+      control: { action: "pause", phase: "paused", requestedAt: 1 },
+    });
     rerender(
       <ThemeProvider>
         <ChatView {...baseProps} />
       </ThemeProvider>,
     );
-    await waitFor(() => expect(screen.getByText("已暂停(会话上下文已保留)")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("已暂停（会话上下文已保留）")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "恢复" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "恢复并继续" })).toBeInTheDocument();
   });
 
-  it("取消失败时不会伪装成已暂停", async () => {
+  it("过渡态禁止重复输入，已停止后允许用新消息继续", () => {
+    setStore({
+      streaming: false,
+      streamingMessageId: null,
+      control: { action: "stop", phase: "stopping", requestedAt: 1 },
+    });
+    const { rerender } = renderChat();
+    expect(screen.getByText("正在停止任务…")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toBeDisabled();
+
+    setStore({
+      control: { action: "stop", phase: "stopped", requestedAt: 1 },
+    });
+    rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
+    expect(screen.getByText("已停止（发送新消息可继续此任务）")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "继续此任务" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toBeEnabled();
+  });
+
+  it("取消失败且没有 control 时不会伪装成已暂停", async () => {
     setStore({ streaming: true, streamingMessageId: "a1" });
     baseProps.onCancel.mockResolvedValueOnce(false);
     const { rerender } = renderChat();
     fireEvent.click(screen.getByTitle("暂停生成(保留会话,可继续)"));
-    await waitFor(() => expect(baseProps.onToast).toHaveBeenCalledWith(
-      "暂停失败，Agent 仍在运行",
-    ));
-
-    setStore({ streaming: false, streamingMessageId: null });
+    await waitFor(() => expect(baseProps.onCancel).toHaveBeenCalledWith("pause"));
+    setStore({ streaming: true, streamingMessageId: "a1", control: undefined });
     rerender(
       <ThemeProvider>
         <ChatView {...baseProps} />
       </ThemeProvider>,
     );
-    expect(screen.queryByText("已暂停(会话上下文已保留)")).toBeNull();
+    expect(screen.queryByText("已暂停（会话上下文已保留）")).toBeNull();
   });
 
   it("「恢复」仅清状态,不触发 onSend", async () => {
-    setStore({ streaming: true, streamingMessageId: "a1" });
+    setStore({
+      streaming: false,
+      streamingMessageId: null,
+      control: { action: "pause", phase: "paused", requestedAt: 1 },
+    });
     const { rerender } = renderChat();
-    fireEvent.click(screen.getByTitle("暂停生成(保留会话,可继续)"));
-    setStore({ streaming: false, streamingMessageId: null });
-    rerender(
-      <ThemeProvider>
-        <ChatView {...baseProps} />
-      </ThemeProvider>,
-    );
-    await waitFor(() => expect(screen.getByText("已暂停(会话上下文已保留)")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("已暂停（会话上下文已保留）")).toBeInTheDocument());
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "恢复" }));
     });
     expect(baseProps.onSend).not.toHaveBeenCalled();
+    rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
     await waitFor(() =>
-      expect(screen.queryByText("已暂停(会话上下文已保留)")).toBeNull(),
+      expect(screen.queryByText("已暂停（会话上下文已保留）")).toBeNull(),
     );
   });
 
   it("「恢复并继续」清状态 + onSend(\"请继续。\")", async () => {
-    setStore({ streaming: true, streamingMessageId: "a1" });
+    setStore({
+      streaming: false,
+      streamingMessageId: null,
+      control: { action: "pause", phase: "paused", requestedAt: 1 },
+    });
     const { rerender } = renderChat();
-    fireEvent.click(screen.getByTitle("暂停生成(保留会话,可继续)"));
-    setStore({ streaming: false, streamingMessageId: null });
-    rerender(
-      <ThemeProvider>
-        <ChatView {...baseProps} />
-      </ThemeProvider>,
-    );
-    await waitFor(() => expect(screen.getByText("已暂停(会话上下文已保留)")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("已暂停（会话上下文已保留）")).toBeInTheDocument());
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "恢复并继续" }));
     });
     expect(baseProps.onSend).toHaveBeenCalledWith("请继续。");
+    rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
     await waitFor(() =>
-      expect(screen.queryByText("已暂停(会话上下文已保留)")).toBeNull(),
+      expect(screen.queryByText("已暂停（会话上下文已保留）")).toBeNull(),
     );
   });
 

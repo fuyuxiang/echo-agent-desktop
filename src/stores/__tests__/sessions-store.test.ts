@@ -15,6 +15,7 @@ import {
  */
 describe("sessions-store drafts", () => {
   beforeEach(() => {
+    localStorage.removeItem("echoagent.session-controls.v1");
     // Reset the whole store between tests so drafts don't bleed across cases.
     useSessionsStore.setState({
       independent: [],
@@ -32,6 +33,19 @@ describe("sessions-store drafts", () => {
       pendingSessionPatches: {},
       drafts: {},
     });
+  });
+
+  it("目录刷新不会把暂停/停止状态覆盖掉", () => {
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "paused", title: "暂停任务", cwd: "/workspace", status: "paused" },
+      { sessionId: "stopped", title: "停止任务", cwd: "/workspace", status: "stopped" },
+    ]);
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "paused", title: "暂停任务", cwd: "/workspace" },
+      { sessionId: "stopped", title: "停止任务", cwd: "/workspace" },
+    ]);
+    expect(useSessionsStore.getState().independent.map((entry) => entry.status))
+      .toEqual(["paused", "stopped"]);
   });
 
   it("setDraft 写入后可通过 drafts[id] 读回", () => {

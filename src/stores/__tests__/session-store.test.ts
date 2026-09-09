@@ -12,7 +12,8 @@ import { useSessionStore } from "../session-store";
  * the bridge attaches.
  */
 
-const resetStore = () =>
+const resetStore = () => {
+  localStorage.removeItem("echoagent.session-controls.v1");
   useSessionStore.setState({
     sessionId: null,
     transcripts: {},
@@ -23,9 +24,11 @@ const resetStore = () =>
     usage: {},
     plan: null,
     planApproval: null,
+    control: undefined,
     error: null,
     planMode: false,
   });
+};
 
 // Wire-shaped payloads; cast loosely — we only care about runtime routing here.
 const chunk = (text: string, sid: string) =>
@@ -73,6 +76,112 @@ const userMessageTextForTest = (m: ReturnType<typeof useSessionStore.getState>["
 
 describe("session-store transcripts", () => {
   beforeEach(resetStore);
+
+  it("暂停建立会话屏障，切换任务后仍保留且迟到增量不能复活", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    store.startStreaming("A", "prompt-a");
+    store.applyUpdate(chunk("已生成", "A"));
+    store.requestControl("A", "pause", "prompt-a");
+    expect(useSessionStore.getState()).toMatchObject({
+      streaming: false,
+      control: { action: "pause", phase: "pausing" },
+    });
+
+    useSessionStore.getState().confirmControl("A", "pause");
+    useSessionStore.getState().setSession("B");
+    useSessionStore.getState().setSession("A");
+    expect(useSessionStore.getState().control).toMatchObject({
+      action: "pause",
+      phase: "paused",
+    });
+
+    useSessionStore.getState().applyUpdate(chunk("不应出现", "A"));
+    const assistant = useSessionStore.getState().messages.find((message) => message.role === "assistant");
+    expect(assistant?.parts).toEqual([{ kind: "text", text: "已生成" }]);
+    expect(useSessionStore.getState().streaming).toBe(false);
+  });
+
+  it("取消请求发送失败会撤销屏障并恢复原流", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    store.startStreaming("A", "prompt-a");
+    store.requestControl("A", "stop", "prompt-a");
+    expect(useSessionStore.getState().streaming).toBe(false);
+    useSessionStore.getState().rejectControl("A", "stop");
+    expect(useSessionStore.getState().streaming).toBe(true);
+    expect(useSessionStore.getState().control).toBeUndefined();
+  });
+
+  it("稳定的暂停状态在 renderer 重载后按 session 恢复", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    store.startStreaming("A", "prompt-a");
+    store.requestControl("A", "pause", "prompt-a");
+    store.confirmControl("A", "pause");
+
+    useSessionStore.setState({
+      sessionId: null,
+      transcripts: {},
+      messages: [],
+      streaming: false,
+      sendNowPending: false,
+      streamingMessageId: null,
+      control: undefined,
+    });
+    useSessionStore.getState().setSession("A");
+    expect(useSessionStore.getState().control).toMatchObject({
+      action: "pause",
+      phase: "paused",
+      promptId: "prompt-a",
+    });
+  });
+
+  it("用户显式发送新轮次会解除已停止状态并重新接收增量", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    store.startStreaming("A", "prompt-a");
+    store.requestControl("A", "stop", "prompt-a");
+    store.confirmControl("A", "stop");
+    useSessionStore.getState().startStreaming("A", "prompt-b");
+    useSessionStore.getState().applyUpdate(chunk("新轮次", "A"));
+    expect(useSessionStore.getState().control).toBeUndefined();
+    expect(useSessionStore.getState().streaming).toBe(true);
+    const messages = useSessionStore.getState().messages;
+    expect(messages[messages.length - 1]?.parts).toEqual([
+      { kind: "text", text: "新轮次" },
+    ]);
+  });
+
+  it("恢复后的旧取消终态不会再次暂停新轮次", () => {
+    const store = useSessionStore.getState();
+    store.setSession("A");
+    store.startStreaming("A", "prompt-old");
+    store.requestControl("A", "pause", "prompt-old");
+    store.confirmControl("A", "pause");
+    store.resumeSession("A");
+    store.startStreaming("A", "prompt-new");
+
+    store.applyUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { text: "旧轮迟到内容" },
+      _meta: { promptId: "prompt-old" },
+      __sessionId: "A",
+    } as never);
+
+    store.markComplete({
+      sessionId: "A",
+      promptId: "prompt-old",
+      stopReason: "cancelled",
+      cancelTrigger: "pause",
+    });
+
+    expect(useSessionStore.getState().control).toBeUndefined();
+    expect(useSessionStore.getState().streaming).toBe(true);
+    expect(useSessionStore.getState().messages.find(
+      (message) => message.promptId === "prompt-new",
+    )).toMatchObject({ complete: false, parts: [] });
+  });
 
   it("plan mode 按会话隔离并消费权威 current_mode_update", () => {
     const store = useSessionStore.getState();
