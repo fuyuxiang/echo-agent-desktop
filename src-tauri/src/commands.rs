@@ -1212,7 +1212,7 @@ pub async fn agent_load_session(
     state: State<'_, AppState>,
     session_id: String,
     cwd: String,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     if !valid_session_id(&session_id) {
         return Err("会话 ID 无效或过长".into());
     }
@@ -1238,7 +1238,7 @@ pub async fn agent_load_session(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    agent_runtime::load_session(&tx, &session_id, &PathBuf::from(&cwd), &permission_mode)
+    let current_model_id = agent_runtime::load_session(&tx, &session_id, &PathBuf::from(&cwd), &permission_mode)
         .await
         .map_err(|e| e.to_string())?;
     crate::permission_config::mark_session_permission_mode_synced(&session_id, &permission_mode);
@@ -1251,7 +1251,7 @@ pub async fn agent_load_session(
     // organization bridge from this live session according to current auth.
     crate::team_mcp::persist_registration(&tx, &session_id);
     crate::org_mcp::reconcile_registration(&tx, &session_id);
-    Ok(())
+    Ok(current_model_id)
 }
 
 #[tauri::command]

@@ -136,14 +136,10 @@ export async function agentNewSession(
   }
 }
 
-// `agent_load_session` triggers a history replay on the agent side: EchoAgent
-// re-emits the persisted transcript as a stream of SessionUpdate messages,
-// which our existing `agent://update` listener already funnels into the
-// session store. So this command returns nothing — callers just need to
-// clear the local transcript first, then await this to confirm the agent
-// accepted the load.
-export async function agentLoadSession(sessionId: string, cwd: string): Promise<void> {
-  await invoke<void>("agent_load_session", { sessionId, cwd });
+// Loading replays history through agent://update and returns the runtime's
+// actual session model. Never substitute the global default for this value.
+export async function agentLoadSession(sessionId: string, cwd: string): Promise<string | null> {
+  return invoke<string | null>("agent_load_session", { sessionId, cwd });
 }
 
 export async function agentListSessions(

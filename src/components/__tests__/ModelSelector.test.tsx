@@ -3,6 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import { ModelSelector } from "../ModelSelector";
 
 describe("ModelSelector", () => {
+  it("加载模型信息时不显示未选择，恢复后显示实际模型", () => {
+    const onModelChange = vi.fn();
+    const { rerender } = render(<ModelSelector models={[{ id: "model-a", label: "模型 A" }]} modelLoading onModelChange={onModelChange} />);
+    expect(screen.getByRole("button", { name: "正在同步模型…" })).toBeDisabled();
+    expect(screen.queryByText("请选择模型")).toBeNull();
+    rerender(<ModelSelector models={[{ id: "model-a", label: "模型 A" }]} modelId="model-a" onModelChange={onModelChange} />);
+    expect(screen.getByRole("button", { name: "模型 A" })).toBeEnabled();
+  });
+
   it("空配置时显示未配置模型，不显示 Runtime 默认 id", () => {
     render(
       <ModelSelector

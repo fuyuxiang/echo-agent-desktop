@@ -204,6 +204,7 @@ function Shell() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelCatalogError, setModelCatalogError] = useState<string | null>(null);
   const [modelSwitching, setModelSwitching] = useState(false);
+  const [loadingSession, setLoadingSession] = useState<{ sessionId: string; generation: number } | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
   const [homeSendError, setHomeSendError] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
@@ -734,6 +735,9 @@ function Shell() {
               sessionStore.upsert({
                 sessionId: event.sessionId,
                 cwd: event.cwd,
+                ...(event.currentModelId && !existing?.currentModelId
+                  ? { currentModelId: event.currentModelId }
+                  : {}),
                 // Use the automation name to hydrate a brand-new background
                 // row, but never replace a title already generated for it.
                 ...(existing ? {} : { title: event.automationName }),
@@ -872,18 +876,23 @@ function Shell() {
   const activeSessionCwd = currentEntry?.cwd;
   const streaming = sessionStore((s) => s.streaming);
   const newSessionModelId = resolveConfiguredModelId(models, currentModelId);
-  const activeSessionModelId = resolveSessionModelId(models, currentModelId);
+  const activeSessionModelId = resolveSessionModelId(models, currentEntry?.currentModelId);
+  const sessionLoading = !!currentSessionId && loadingSession?.sessionId === currentSessionId;
   const modelConfigured = currentSessionId
     ? activeSessionModelId !== undefined
     : newSessionModelId !== undefined;
-  const chatReady = !!init?.auth.ready && !!activeSessionModelId && !modelSwitching;
+  const chatReady = !!init?.auth.ready && !!activeSessionModelId && !modelSwitching && !sessionLoading;
   const runtimeSetupHint = init?.auth.reason ?? "请先在「设置 → 模型」配置 API Key";
-  const chatSetupHint = modelSwitching
+  const chatSetupHint = sessionLoading
+    ? "正在加载会话信息…"
+    : modelSwitching
     ? "正在切换模型…"
     : models.length === 0
       ? "请先在「设置 → 模型」配置模型"
       : !activeSessionModelId
-        ? "此会话的模型未配置，请在右下角重新选择模型"
+        ? currentEntry?.currentModelId
+          ? `此会话使用的模型「${currentEntry.currentModelId}」当前不可用，请在右下角选择模型`
+          : "未能获取此会话的模型信息，请重新打开任务，或在右下角选择模型"
         : runtimeSetupHint;
 
   const showToast = useCallback((message: string, durationMs = 2000) => {
@@ -1038,8 +1047,8 @@ function Shell() {
     // render tick; the store flag is the source of truth. A second pushUser +
     // startStreaming would orphan an empty placeholder that never completes.
     if (sessionStore.getState().streaming) return false;
-    if (modelSwitching) {
-      showToast("正在切换模型，请稍候");
+    if (modelSwitching || sessionLoading) {
+      showToast(sessionLoading ? "正在加载会话，请稍候" : "正在切换模型，请稍候");
       return false;
     }
     if (!init?.auth.ready) {
@@ -1139,8 +1148,8 @@ function Shell() {
     }
     const transcript = sessionStore.getState();
     if (!transcript.streaming || transcript.sendNowPending) return false;
-    if (modelSwitching) {
-      showToast("正在切换模型，请稍候");
+    if (modelSwitching || sessionLoading) {
+      showToast(sessionLoading ? "正在加载会话，请稍候" : "正在切换模型，请稍候");
       return false;
     }
     if (!init?.auth.ready) {
@@ -1279,7 +1288,7 @@ function Shell() {
       setCurrentModelId(modelId);
       return;
     }
-    if (modelSwitching) return;
+    if (modelSwitching || sessionLoading) return;
 
     const sessionId = currentSessionId;
     const commit = () => {
@@ -1450,6 +1459,7 @@ function Shell() {
       showToast("请先在会话操作菜单中恢复该归档会话");
       return;
     }
+    setLoadingSession({ sessionId, generation });
     const persistedModelId = entry.currentModelId;
     const selectedModelId = resolveSessionModelId(models, persistedModelId);
     setPlaceholderView(null);
@@ -1467,8 +1477,13 @@ function Shell() {
     try {
       // Load with the session's own cwd. Opening history must not re-aim the
       // working directory selected for the next new task.
-      await agentLoadSession(sessionId, entry.cwd);
+      const loadedModelId = await agentLoadSession(sessionId, entry.cwd);
+      if (selectionGenerationRef.current !== generation) return;
+      // The load response is authoritative; older runtimes may omit models.
+      const actualModelId = loadedModelId || findSessionSummary(sessionId)?.currentModelId;
+      sessionsStore.getState().upsert({ sessionId, currentModelId: actualModelId });
       if (sessionsStore.getState().currentSessionId === sessionId) {
+        setCurrentModelId(resolveSessionModelId(modelsRef.current, actualModelId));
         setTaskRefreshSignal((value) => value + 1);
       }
       const transcript = sessionStore.getState().transcripts[sessionId];
@@ -1480,19 +1495,13 @@ function Shell() {
           transcript.messages,
         );
       }
-      if (!selectedModelId && sessionsStore.getState().currentSessionId === sessionId) {
-        sessionStore.getState().setError(
-          persistedModelId
-            ? `⚠️ 此会话绑定的模型「${persistedModelId}」尚未配置。请在输入框右下角选择已配置模型后再发送。`
-            : "⚠️ 无法确定此会话的模型。请在输入框右下角重新选择模型后再发送。",
-        );
-      }
       // Populate the context-usage pill for the freshly loaded session.
     } catch (e) {
-      if (sessionsStore.getState().currentSessionId === sessionId) {
+      if (selectionGenerationRef.current === generation && sessionsStore.getState().currentSessionId === sessionId) {
         sessionStore.getState().setError(friendlyError(e));
       }
     } finally {
+      setLoadingSession((pending) => pending?.generation === generation ? null : pending);
       // Replay window is over: a *new* turn's updates for this session must be
       // ingested again. (No-op when there was no cached transcript to suppress.)
       sessionStore.getState().clearReplaySuppression(sessionId);
@@ -1998,8 +2007,11 @@ function Shell() {
                   cancelling={cancellingSessionId === currentSessionId}
                   apiReady={chatReady}
                   setupHint={chatSetupHint}
-                  onOpenSettings={() => openSettings("model")}
-                  modelId={currentModelId}
+                  onOpenSettings={!sessionLoading && !modelSwitching && (!init.auth.ready || models.length === 0)
+                    ? () => openSettings("model")
+                    : undefined}
+                  modelId={activeSessionModelId}
+                  modelLoading={sessionLoading || modelSwitching}
                   models={models}
                   onModelChange={handleModelChange}
                   cwd={activeSessionCwd}
