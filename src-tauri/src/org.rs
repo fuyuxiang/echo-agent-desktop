@@ -461,7 +461,8 @@ pub fn org_local_kb_sources_get() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn org_local_kb_sources_set(
+pub async fn org_local_kb_sources_set(
+    app: AppHandle,
     filesystem: State<'_, crate::shell_fs::FilesystemAccess>,
     sources: Value,
 ) -> Result<(), String> {
@@ -501,7 +502,12 @@ pub fn org_local_kb_sources_set(
             "enabled": item.get("enabled").and_then(Value::as_bool).unwrap_or(true)
         }));
     }
-    write_json_private(&local_kb_sources_path(), &normalized)
+    write_json_private(&local_kb_sources_path(), &normalized)?;
+    // Personal knowledge availability is session-scoped. Reconcile every live
+    // session immediately so a newly added folder works without restarting or
+    // creating another task, and removing the final folder detaches the bridge.
+    crate::org_mcp::reconcile_all_sessions(&app).await;
+    Ok(())
 }
 
 pub(crate) async fn local_knowledge_allowed() -> bool {
@@ -517,6 +523,11 @@ pub(crate) async fn local_knowledge_allowed() -> bool {
             .unwrap_or(false),
         Err(_) => false,
     }
+}
+
+#[tauri::command]
+pub async fn personal_knowledge_allowed() -> bool {
+    local_knowledge_allowed().await
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]

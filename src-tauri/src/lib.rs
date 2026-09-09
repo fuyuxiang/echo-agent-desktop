@@ -248,9 +248,9 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            // The organization bridge is reachable on loopback throughout the
-            // process lifetime, but is only attached to Agent sessions after a
-            // verified login and shared-scope bootstrap.
+            // The authenticated knowledge bridge is reachable on loopback for
+            // personal local knowledge. Organization tools are added only after
+            // a verified login and shared-scope bootstrap.
             org_mcp::serve(app.handle().clone());
             org::start_background_sync(app.handle().clone());
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -368,6 +368,7 @@ pub fn run() {
             org::org_qa_feedback,
             org::org_local_kb_sources_get,
             org::org_local_kb_sources_set,
+            org::personal_knowledge_allowed,
             // connectors / MCP (echo.agent/mcp/*)
             mcp::mcp_list,
             mcp::mcp_upsert,
