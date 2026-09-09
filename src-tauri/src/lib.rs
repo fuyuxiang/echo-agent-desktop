@@ -25,6 +25,7 @@ mod org;
 mod org_mcp;
 mod paths;
 mod permission_config;
+mod personal_knowledge;
 mod policy;
 mod projects;
 mod providers;
@@ -253,6 +254,7 @@ pub fn run() {
             // a verified login and shared-scope bootstrap.
             org_mcp::serve(app.handle().clone());
             org::start_background_sync(app.handle().clone());
+            personal_knowledge::start_background_index(app.handle().clone());
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             setup_desktop_lifecycle(app)?;
             Ok(())
@@ -369,6 +371,9 @@ pub fn run() {
             org::org_local_kb_sources_get,
             org::org_local_kb_sources_set,
             org::personal_knowledge_allowed,
+            personal_knowledge::personal_knowledge_search,
+            personal_knowledge::personal_knowledge_rebuild,
+            personal_knowledge::personal_knowledge_index_status,
             // connectors / MCP (echo.agent/mcp/*)
             mcp::mcp_list,
             mcp::mcp_upsert,

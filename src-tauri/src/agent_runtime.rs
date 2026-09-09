@@ -46,12 +46,13 @@ use std::os::windows::fs::OpenOptionsExt;
 
 const MAX_IMAGE_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) const DESKTOP_CLIENT_IDENTIFIER: &str = "echo-agent-desktop";
-const MEMORY_EMBEDDING_ENDPOINT: &str = "https://api.siliconflow.cn/v1/embeddings";
-const MEMORY_EMBEDDING_MODEL: &str = "BAAI/bge-m3";
+pub(crate) const MEMORY_EMBEDDING_ENDPOINT: &str = "https://api.siliconflow.cn/v1/embeddings";
+pub(crate) const MEMORY_EMBEDDING_MODEL: &str = "BAAI/bge-m3";
 pub(crate) const MEMORY_EMBEDDING_DIMENSIONS: usize = 1024;
-const MEMORY_RERANK_ENDPOINT: &str = "https://api.siliconflow.cn/v1/rerank";
-const MEMORY_RERANK_MODEL: &str = "BAAI/bge-reranker-v2-m3";
-const MEMORY_SILICONFLOW_API_KEY: &str = "sk-perpdxeyiwcymvnnpvwnjbhavppnchxohcpwydulfkdwpvpv";
+pub(crate) const MEMORY_RERANK_ENDPOINT: &str = "https://api.siliconflow.cn/v1/rerank";
+pub(crate) const MEMORY_RERANK_MODEL: &str = "BAAI/bge-reranker-v2-m3";
+pub(crate) const MEMORY_SILICONFLOW_API_KEY: &str =
+    "sk-perpdxeyiwcymvnnpvwnjbhavppnchxohcpwydulfkdwpvpv";
 
 fn configure_memory_retrieval(cfg: &mut AgentConfig) {
     let Some(memory) = cfg.memory_config.as_mut() else {

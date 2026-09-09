@@ -55,7 +55,7 @@ export function KnowledgePicker({
     if (retrieval?.state === "no-match") return { label: "知识库未命中", detail: `已搜索 ${retrieval.sourceCount} 个知识源，未找到相关内容` };
     if (retrieval?.state === "blocked") return { label: "知识库不可用", detail: retrieval.message };
     if (retrieval?.state === "error") return { label: "知识库检索失败", detail: retrieval.message };
-    return { label: `知识库 ${sourceCount}`, detail: "发送时自动检索相关内容，并要求回答标注来源" };
+    return { label: `知识库 ${sourceCount}`, detail: "发送时使用关键词与语义混合检索，并对结果重新排序" };
   })();
 
   return (
@@ -85,7 +85,7 @@ export function KnowledgePicker({
         <div className="knowledge-picker__menu" role="menu" aria-label="个人知识库设置">
           <div className="knowledge-picker__heading">个人知识库</div>
           <div className="knowledge-picker__hint">
-            在本机检索，命中的片段会随问题发送给当前模型，并要求回答标注来源。
+            自动进行关键词与语义混合检索并重新排序，命中的片段会随问题发送给当前模型并标注来源。
           </div>
           {([
             ["auto", "自动使用", "从相关文件中检索，未命中时正常回答"],

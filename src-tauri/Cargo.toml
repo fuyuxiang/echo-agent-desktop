@@ -46,6 +46,7 @@ libc = "0.2"
 # not join that workspace (see the explicit [workspace] table below).
 echo-agent-acp = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-acp" }
 echo-agent-runtime = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-runtime" }
+echo-agent-memory = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-memory" }
 echo-agent-tools = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-tools" }
 echo-agent-tool-runtime = { path = "../vendor/echo-agent-build/crates/common/echo-agent-tool-runtime" }
 echo-agent-tool-protocol = { path = "../vendor/echo-agent-build/crates/common/echo-agent-tool-protocol" }
