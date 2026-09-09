@@ -19,6 +19,8 @@ interface DialogBaseOptions {
   danger?: boolean;
   /** Also surfaces the failure elsewhere (for example in the app toast). */
   onError?: (error: unknown) => void;
+  /** Focus target when the dialog was opened from a menu that immediately unmounts. */
+  returnFocus?: HTMLElement | null;
 }
 
 export interface ConfirmationOptions extends DialogBaseOptions {
@@ -117,7 +119,7 @@ function AppActionDialog({ request, onClose }: { request: DialogRequest; onClose
   const cancel = useCallback(() => {
     if (!submittingRef.current) onClose();
   }, [onClose]);
-  const dialogRef = useModalFocus<HTMLDivElement>(true, cancel);
+  const dialogRef = useModalFocus<HTMLDivElement>(true, cancel, request.returnFocus);
 
   const execute = async () => {
     if (submittingRef.current) return;

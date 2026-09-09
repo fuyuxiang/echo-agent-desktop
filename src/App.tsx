@@ -38,6 +38,8 @@ import {
   agentListSessions,
   agentListWorkspaces,
   agentRenameSession,
+  agentDeleteSession,
+  agentSetSessionArchived,
   agentSetModel,
   agentSetSessionExpert,
   agentAuthStatus,
@@ -1442,16 +1444,60 @@ function Shell() {
     setCurrentModelId((previous) => resolveConfiguredModelId(models, previous));
   };
 
-  const handleSessionArchived = (sessionId: string, archived: boolean) => {
+  const clearDeletedSessionState = (sessionId: string) => {
+    useProjectsStore.getState().removeSessionReferences(sessionId);
+    usePermissionModeStore.getState().clearSession(sessionId);
+    usePermissionStore.getState().clearSession(sessionId);
+    useQuestionStore.getState().clearSession(sessionId);
+    useMessageQueueStore.getState().clear(sessionId);
+    useSubagentStore.getState().clearSession(sessionId);
+    leaveSessionIfCurrent(sessionId);
+    // Permanent deletion must also forget any parked, in-memory transcript.
+    sessionStore.getState().dropSessionCache(sessionId);
+  };
+
+  const syncArchivedSessionState = (sessionId: string, archived: boolean) => {
     sessionsStore.getState().upsert({ sessionId, archived });
     useProjectsStore.getState().setSessionArchived(sessionId, archived);
     if (archived) leaveSessionIfCurrent(sessionId);
   };
 
-  const handleSessionDeleted = (sessionId: string) => {
-    useProjectsStore.getState().removeSessionReferences(sessionId);
-    usePermissionModeStore.getState().clearSession(sessionId);
-    leaveSessionIfCurrent(sessionId);
+  /** One lifecycle implementation is shared by the task list and every project surface. */
+  const handleRenameSession = async (sessionId: string, title: string, explicitCwd?: string) => {
+    const summary = findSessionSummary(sessionId);
+    const cwd = summary?.cwd || explicitCwd;
+    await agentRenameSession(sessionId, title, cwd);
+    sessionsStore.getState().upsert({ sessionId, title });
+    const projectStore = useProjectsStore.getState();
+    for (const project of projectStore.projects) {
+      if (project.conversations.some((conversation) => conversation.sessionId === sessionId)) {
+        projectStore.updateConversationTitle(project.id, sessionId, title);
+      }
+    }
+    showToast("已重命名对话");
+  };
+
+  const handleArchiveSession = async (sessionId: string, archived: boolean, _explicitCwd?: string) => {
+    const next = await agentSetSessionArchived(sessionId, archived);
+    sessionsStore.getState().upsert({ sessionId, archived: next });
+    useProjectsStore.getState().setSessionArchived(sessionId, next);
+    if (next) leaveSessionIfCurrent(sessionId);
+    showToast(next ? "已归档，可在“已归档”中恢复" : "已恢复会话");
+  };
+
+  const handleDeleteSession = async (sessionId: string, explicitCwd?: string) => {
+    const summary = findSessionSummary(sessionId);
+    const cwd = summary?.cwd || explicitCwd;
+    const result = await agentDeleteSession(sessionId, cwd);
+    // Leave while the catalog still identifies this as the current session;
+    // `remove` also clears currentSessionId and would otherwise strand its transcript.
+    clearDeletedSessionState(sessionId);
+    sessionsStore.getState().remove(sessionId, cwd);
+    if (result?.memoryCleanupWarning) {
+      showToast(`对话已删除，但自动摘要清理失败：${result.memoryCleanupWarning}`, 6000);
+    } else {
+      showToast("对话已永久删除");
+    }
   };
 
   // Application-level shortcuts shown in Settings. Composer-specific Enter,
@@ -1927,8 +1973,9 @@ function Shell() {
           onToast={showToast}
           onOpenProject={handleOpenProjectFromSidebar}
           onStartProjectConversation={handleStartProjectConversation}
-          onSessionArchived={handleSessionArchived}
-          onSessionDeleted={handleSessionDeleted}
+          onRenameSession={handleRenameSession}
+          onArchiveSession={handleArchiveSession}
+          onDeleteSession={handleDeleteSession}
           onRetrySessions={() => void refreshSessionCatalog()}
           activeNav={activeNav}
         />
@@ -1977,7 +2024,7 @@ function Shell() {
                     onSessionsChanged={(patch) => {
                       if (patch) sessionsStore.getState().upsert({ sessionId: currentSessionId, ...patch });
                     }}
-                    onArchived={(archived) => handleSessionArchived(currentSessionId, archived)}
+                    onArchived={(archived) => syncArchivedSessionState(currentSessionId, archived)}
                   />
                 )}
               </div>
@@ -2052,6 +2099,9 @@ function Shell() {
                   sessionId={currentSessionId ?? undefined}
                   onStartProject={handleStartProject}
                   onStartProjectConversation={handleStartProjectConversation}
+                  onRenameSession={handleRenameSession}
+                  onArchiveSession={handleArchiveSession}
+                  onDeleteSession={handleDeleteSession}
                   automationRefreshSignal={automationRefreshSignal}
                 />
               ) : currentSessionId ? (

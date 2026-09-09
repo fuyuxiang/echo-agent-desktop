@@ -100,6 +100,15 @@ describe("question-store", () => {
     s.clearAll();
     expect(useQuestionStore.getState().queues).toEqual({});
   });
+
+  it("删除会话时只清理该会话的待回答问题", () => {
+    const store = useQuestionStore.getState();
+    store.request(makeQuestion("r1", "s1"));
+    store.request(makeQuestion("r2", "s2"));
+    store.clearSession("s1");
+    expect(useQuestionStore.getState().queues.s1).toBeUndefined();
+    expect(useQuestionStore.getState().queues.s2).toHaveLength(1);
+  });
 });
 
 describe("selectQuestionForSession", () => {

@@ -29,6 +29,8 @@ function focusableElements(container: HTMLElement): HTMLElement[] {
 export function useModalFocus<T extends HTMLElement>(
   open: boolean,
   onEscape: () => void,
+  /** Explicit invoker for actions launched from a short-lived portalled menu. */
+  returnFocus?: HTMLElement | null,
 ): RefObject<T> {
   const containerRef = useRef<T>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -40,9 +42,11 @@ export function useModalFocus<T extends HTMLElement>(
 
     const container = containerRef.current;
     if (!container) return;
-    returnFocusRef.current = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
+    returnFocusRef.current = returnFocus?.isConnected
+      ? returnFocus
+      : document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
 
     modalStack.push(container);
     const initialItems = focusableElements(container);

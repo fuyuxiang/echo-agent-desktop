@@ -74,6 +74,9 @@ interface PlaceholderPageProps {
   onStartProject?: (project: ProjectMeta) => void;
   /** 项目页：在项目中新建对话（创建真实 EchoAgent 会话）。 */
   onStartProjectConversation?: (projectId: string, message: string) => Promise<string | undefined>;
+  onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;
+  onArchiveSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
+  onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
   /** Native automation lifecycle refresh token. */
   automationRefreshSignal?: number;
 }
@@ -90,6 +93,9 @@ export function PlaceholderPage({
   sessionId,
   onStartProject,
   onStartProjectConversation,
+  onRenameSession,
+  onArchiveSession,
+  onDeleteSession,
   automationRefreshSignal,
 }: PlaceholderPageProps) {
   if (label === "项目") {
@@ -102,6 +108,9 @@ export function PlaceholderPage({
           onStartProject={onStartProject}
           onStartProjectConversation={onStartProjectConversation}
           onOpenSession={onOpenSession}
+          onRenameSession={onRenameSession}
+          onArchiveSession={onArchiveSession}
+          onDeleteSession={onDeleteSession}
           onOpenAutomation={() => onNavigate?.("自动化")}
         />
       </DeferredPanel>

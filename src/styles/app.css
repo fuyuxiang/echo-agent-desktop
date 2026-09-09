@@ -5891,9 +5891,12 @@ button.diff__path {
 .pd-search-inline { height: 32px; padding: 0 12px; border: 1px solid var(--echo-border-default, #e8e8e8); border-radius: 8px; font-size: 13px; min-width: 160px; background: var(--echo-bg-primary, #fff); color: var(--echo-text-strong); }
 .pd-search-inline:focus { outline: none; border-color: var(--echo-brand); }
 /* 动态 */
-.pd-activity-switch { display: flex; gap: 8px; margin-bottom: 8px; }
-.pd-pill { height: 32px; padding: 0 16px; border: none; border-radius: 8px; background: var(--echo-bg-tertiary, #f3f3f3); color: var(--echo-text-medium); font-size: 13px; cursor: pointer; }
+.pd-activity-switch { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.pd-pill { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 16px; border: none; border-radius: 8px; background: var(--echo-bg-tertiary, #f3f3f3); color: var(--echo-text-medium); font: inherit; font-size: 13px; cursor: pointer; }
 .pd-pill--on { background: #1f1f1f; color: #fff; }
+.pd-pill:not(.pd-pill--stat):hover { background: var(--echo-bg-hover); }
+.pd-pill--on:not(.pd-pill--stat):hover { background: #333; }
+.pd-pill--stat { cursor: default; }
 /* 看板 */
 .pd-board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; flex: 1; min-height: 0; }
 .pd-board-col { background: #f0f0f0; border-radius: 10px; padding: 10px; display: flex; flex-direction: column; min-height: 200px; }
@@ -5922,6 +5925,76 @@ button.diff__path {
 .pd-task-item__actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .pd-task-item__actions + .pd-task-item__del { margin-left: 0; }
 .pd-task-item__actions select { height: 28px; border: 1px solid var(--echo-border-default); border-radius: 6px; background: var(--echo-bg-primary); color: var(--echo-text-medium); font-size: 11px; }
+.pd-conversation-row {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid var(--echo-border-default, #ececec);
+  border-radius: 10px;
+  background: var(--echo-bg-primary, #fff);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.pd-conversation-row:hover,
+.pd-conversation-row:focus-within {
+  background: var(--echo-bg-hover);
+  border-color: color-mix(in srgb, var(--echo-border-default) 70%, var(--echo-text-tertiary));
+}
+.pd-conversation-row .pd-conversation-row__open {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  border: 0;
+  border-radius: 10px 0 0 10px;
+  background: transparent;
+  text-align: left;
+  overflow: hidden;
+}
+.pd-conversation-row__open .pd-task-item__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pd-conversation-row__open .pd-task-item__meta { flex: none; }
+.pd-conversation-row .pd-conversation-row__open:hover { background: transparent; }
+.pd-conversation-row__open:disabled { cursor: default; }
+.pd-conversation-row__action {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  margin-right: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--echo-text-tertiary);
+  cursor: pointer;
+  opacity: 0.64;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+.pd-conversation-row:hover .pd-conversation-row__action,
+.pd-conversation-row__action:focus-visible,
+.pd-conversation-row__action[aria-expanded="true"] { opacity: 1; }
+.pd-conversation-row__action:hover {
+  background: color-mix(in srgb, var(--echo-text-strong) 8%, transparent);
+  color: var(--echo-text-strong);
+}
+.pd-conversation-more {
+  align-self: center;
+  margin-top: 12px;
+  padding: 7px 14px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 8px;
+  background: var(--echo-bg-primary);
+  color: var(--echo-text-medium);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pd-conversation-more:hover { background: var(--echo-bg-hover); color: var(--echo-text-strong); }
 .pd-btn--small { height: 28px; padding: 0 8px; font-size: 11px; }
 /* 资产 */
 .pd-asset-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -7050,6 +7123,15 @@ button.diff__path {
 .context-menu__item:hover {
   background: var(--echo-bg-hover);
 }
+.context-menu__item:focus-visible {
+  outline: 2px solid var(--echo-border-focus, var(--echo-color-text-brand-default));
+  outline-offset: -2px;
+}
+.context-menu__divider {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--echo-border-default);
+}
 .context-menu__item--danger {
   color: var(--echo-status-error, #e5484d);
 }
@@ -7057,6 +7139,7 @@ button.diff__path {
   background: var(--echo-status-error-soft, rgba(229, 72, 77, 0.1));
 }
 .context-menu__rename {
+  width: 224px;
   padding: 4px;
 }
 .context-menu__rename-input {
@@ -7074,6 +7157,30 @@ button.diff__path {
 .context-menu__rename-input:focus {
   border-color: var(--echo-border-focus, var(--echo-color-text-brand-default));
 }
+.context-menu__rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 7px;
+}
+.context-menu__rename-actions button {
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 6px;
+  background: var(--echo-bg-primary);
+  color: var(--echo-text-medium);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.context-menu__rename-actions button:hover { background: var(--echo-bg-hover); }
+.context-menu__rename-actions .context-menu__rename-save {
+  border-color: var(--echo-bg-pill-active, #1f1f1f);
+  background: var(--echo-bg-pill-active, #1f1f1f);
+  color: var(--echo-text-white, #fff);
+}
+.context-menu__rename-actions button:disabled { opacity: 0.5; cursor: default; }
 
 /* ========================================================================
  * Sidebar Session Item — pinned state

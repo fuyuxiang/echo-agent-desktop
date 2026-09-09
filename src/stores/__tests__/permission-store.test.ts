@@ -111,6 +111,15 @@ describe("permission-store", () => {
     expect(usePermissionStore.getState().queues).toEqual({});
     expect(usePermissionStore.getState().closedRequestIds).toEqual([]);
   });
+
+  it("删除会话时只清理该会话的待决权限", () => {
+    const store = usePermissionStore.getState();
+    store.request(makePerm("r1", "s1"));
+    store.request(makePerm("r2", "s2"));
+    store.clearSession("s1");
+    expect(usePermissionStore.getState().queues.s1).toBeUndefined();
+    expect(usePermissionStore.getState().queues.s2).toHaveLength(1);
+  });
 });
 
 describe("selectPermissionForSession", () => {

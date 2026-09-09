@@ -5,11 +5,14 @@
  *  - 计划/任务: 持久化看板与列表，支持新建、流转和删除
  *  - 资产: 从用户选择的文件复制到项目私有目录，支持打开、新建目录和删除
  */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useProjectsStore, PLAN_COLUMNS, type PlanStatus, type AssetItem } from "@/stores/projects-store";
+import { useSessionsStore } from "@/stores/sessions-store";
 import { filesystemPickFiles, openLocalPath, projectAssetMakeDir, projectAssetRemove, projectAssetsImport } from "@/lib/agent-client";
 import { formatFileSize } from "@/lib/file-utils";
 import { useAppDialog } from "./AppDialog";
+import { SessionContextMenu } from "./SessionContextMenu";
+import { MoreDotsIcon } from "@/foundation/components/Icon/icons";
 
 // ============================================================
 // 动态
@@ -18,46 +21,221 @@ import { useAppDialog } from "./AppDialog";
 export function ActivityTab({
   projectId,
   onOpenSession,
+  onRenameSession,
+  onArchiveSession,
+  onDeleteSession,
+  onToast,
 }: {
   projectId: string;
   onOpenSession?: (sessionId: string, cwd?: string) => void;
+  onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;
+  onArchiveSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
+  onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
+  onToast?: (message: string) => void;
 }) {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
-  const conversations = (project?.conversations ?? []).filter((conversation) => !conversation.archived);
-  const archivedCount = (project?.conversations ?? []).length - conversations.length;
+  const sessionSummaries = useSessionsStore((s) => s.independent);
+  const [view, setView] = useState<"active" | "archived">("active");
+  const [visibleCount, setVisibleCount] = useState(20);
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    sessionId: string;
+    title: string;
+    archived: boolean;
+    returnFocus?: HTMLElement;
+  } | null>(null);
+  const skipMenuFocusRestoreRef = useRef(false);
+  const { requestConfirmation, dialog } = useAppDialog(projectId);
+  const summaryById = useMemo(
+    () => new Map(sessionSummaries.map((summary) => [summary.sessionId, summary])),
+    [sessionSummaries],
+  );
+  const allConversations = project?.conversations ?? [];
+  const activeCount = allConversations.filter((conversation) => !conversation.archived).length;
+  const archivedCount = allConversations.length - activeCount;
+  const conversations = allConversations.filter(
+    (conversation) => !!conversation.archived === (view === "archived"),
+  );
+  const visibleConversations = conversations.slice(0, visibleCount);
+
+  const switchView = (next: "active" | "archived") => {
+    setView(next);
+    setVisibleCount(20);
+    setMenu(null);
+  };
+
+  const openMenu = (
+    event: ReactMouseEvent<HTMLElement>,
+    conversation: (typeof allConversations)[number],
+    fromPointer: boolean,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const focused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : undefined;
+    setMenu({
+      x: fromPointer ? event.clientX : rect.right - 160,
+      y: fromPointer ? event.clientY : rect.bottom + 4,
+      sessionId: conversation.sessionId,
+      title: conversation.title || "未命名会话",
+      archived: !!conversation.archived,
+      returnFocus: focused && event.currentTarget.contains(focused)
+        ? focused
+        : event.currentTarget.querySelector<HTMLElement>("button") ?? undefined,
+    });
+  };
+
+  const closeMenu = () => {
+    const returnFocus = menu?.returnFocus;
+    const shouldRestoreFocus = !skipMenuFocusRestoreRef.current;
+    skipMenuFocusRestoreRef.current = false;
+    setMenu(null);
+    if (shouldRestoreFocus) requestAnimationFrame(() => returnFocus?.focus());
+  };
+
+  const detachFromProject = (sessionId: string) => {
+    useProjectsStore.getState().detachSessionFromProject(projectId, sessionId);
+    onToast?.("已移出项目，对话历史仍可在“任务”中查看");
+  };
+
+  const requestDelete = (sessionId: string) => {
+    const title = menu?.sessionId === sessionId ? menu.title : "未命名会话";
+    skipMenuFocusRestoreRef.current = true;
+    requestConfirmation({
+      title: `永久删除对话“${title}”？`,
+      description: (
+        <>
+          该对话的全部历史记录和自动生成的会话摘要将被永久删除，且无法恢复。
+          项目资产和工作区原始文件不会被删除。
+        </>
+      ),
+      confirmLabel: "永久删除",
+      danger: true,
+      returnFocus: menu?.returnFocus,
+      action: () => onDeleteSession?.(
+        sessionId,
+        summaryById.get(sessionId)?.cwd || project?.cwd,
+      ),
+      onError: (error) => onToast?.(`删除失败：${String(error).replace(/^Error:\s*/, "")}`),
+    });
+  };
+
+  const renameSession = async (sessionId: string, title: string) => {
+    try {
+      await onRenameSession?.(sessionId, title, summaryById.get(sessionId)?.cwd || project?.cwd);
+    } catch (error) {
+      onToast?.(`重命名失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  };
+
+  const archiveSession = async (sessionId: string, archived: boolean) => {
+    try {
+      await onArchiveSession?.(
+        sessionId,
+        archived,
+        summaryById.get(sessionId)?.cwd || project?.cwd,
+      );
+    } catch (error) {
+      onToast?.(`${archived ? "归档" : "恢复"}失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  };
+
   return (
     <div className="pd-tab">
-      <div className="pd-activity-switch" aria-label="项目概览">
-        <span className="pd-pill pd-pill--on">{conversations.length} 个对话</span>
-        {archivedCount > 0 && <span className="pd-pill">{archivedCount} 个已归档</span>}
-        <span className="pd-pill">{project?.plans.length ?? 0} 项计划</span>
-        <span className="pd-pill">{project?.tasks.length ?? 0} 项任务</span>
-        <span className="pd-pill">{project?.assets.length ?? 0} 个资产</span>
+      <div className="pd-activity-switch" aria-label="项目对话筛选与概览">
+        <button
+          type="button"
+          className={`pd-pill${view === "active" ? " pd-pill--on" : ""}`}
+          aria-pressed={view === "active"}
+          onClick={() => switchView("active")}
+        >
+          {activeCount} 个对话
+        </button>
+        <button
+          type="button"
+          className={`pd-pill${view === "archived" ? " pd-pill--on" : ""}`}
+          aria-pressed={view === "archived"}
+          onClick={() => switchView("archived")}
+        >
+          {archivedCount} 个已归档
+        </button>
+        <span className="pd-pill pd-pill--stat">{project?.plans.length ?? 0} 项计划</span>
+        <span className="pd-pill pd-pill--stat">{project?.tasks.length ?? 0} 项任务</span>
+        <span className="pd-pill pd-pill--stat">{project?.assets.length ?? 0} 个资产</span>
       </div>
       {conversations.length === 0 ? (
         <div className="pd-empty">
-          {archivedCount > 0
-            ? "所有项目对话均已归档，可在侧栏的归档筛选中恢复。"
-            : "暂无真实运行记录，从下方输入框启动第一个项目对话。"}
+          {view === "archived"
+            ? "还没有已归档的项目对话。"
+            : archivedCount > 0
+              ? "当前项目对话均已归档，可切换到“已归档”查看或恢复。"
+              : "暂无真实运行记录，从下方输入框启动第一个项目对话。"}
         </div>
       ) : (
-        <ul className="pd-task-list" aria-label="最近项目对话">
-          {conversations.slice(0, 20).map((conversation) => (
-            <li key={conversation.sessionId}>
-              <button
-                type="button"
-                className={`pd-task-item${onOpenSession ? " pd-task-item--clickable" : ""}`}
-                style={{ width: "100%", textAlign: "left" }}
-                onClick={() => onOpenSession?.(conversation.sessionId, project?.cwd)}
-                disabled={!onOpenSession}
+        <>
+          <ul className="pd-task-list" aria-label={view === "archived" ? "已归档项目对话" : "最近项目对话"}>
+            {visibleConversations.map((conversation) => (
+              <li
+                key={conversation.sessionId}
+                className="pd-conversation-row"
+                onContextMenu={(event) => openMenu(event, conversation, true)}
               >
-                <span className="pd-task-item__title">{conversation.title}</span>
-                <span className="pd-task-item__meta">对话 · {relTime(conversation.createdAt)}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
+                <button
+                  type="button"
+                  className={`pd-task-item pd-conversation-row__open${onOpenSession ? " pd-task-item--clickable" : ""}`}
+                  onClick={() => onOpenSession?.(
+                    conversation.sessionId,
+                    summaryById.get(conversation.sessionId)?.cwd || project?.cwd,
+                  )}
+                  disabled={!onOpenSession}
+                >
+                  <span className="pd-task-item__title">{conversation.title}</span>
+                  <span className="pd-task-item__meta">
+                    {conversation.archived ? "已归档" : "对话"} · {relTime(conversation.createdAt)}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="pd-conversation-row__action"
+                  aria-label={`${conversation.title || "未命名会话"}的会话操作`}
+                  aria-haspopup="menu"
+                  aria-expanded={menu?.sessionId === conversation.sessionId}
+                  onClick={(event) => openMenu(event, conversation, false)}
+                >
+                  <MoreDotsIcon size="sm" />
+                </button>
+              </li>
+            ))}
+          </ul>
+          {visibleCount < conversations.length && (
+            <button
+              type="button"
+              className="pd-conversation-more"
+              onClick={() => setVisibleCount((count) => count + 20)}
+            >
+              显示更多（还有 {conversations.length - visibleCount} 个）
+            </button>
+          )}
+        </>
       )}
+      {menu && (
+        <SessionContextMenu
+          x={menu.x}
+          y={menu.y}
+          sessionId={menu.sessionId}
+          sessionTitle={menu.title}
+          isArchived={menu.archived}
+          onClose={closeMenu}
+          onRename={onRenameSession ? renameSession : undefined}
+          onArchive={onArchiveSession ? archiveSession : undefined}
+          onDetach={detachFromProject}
+          onDelete={onDeleteSession ? requestDelete : undefined}
+        />
+      )}
+      {dialog}
     </div>
   );
 }

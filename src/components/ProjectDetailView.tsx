@@ -46,6 +46,9 @@ export function ProjectDetailView({
   onToast,
   onStartConversation,
   onOpenSession,
+  onRenameSession,
+  onArchiveSession,
+  onDeleteSession,
   picker,
   onOpenAutomation,
 }: {
@@ -55,6 +58,9 @@ export function ProjectDetailView({
   /** Start a new conversation within this project (creates a real EchoAgent session). */
   onStartConversation?: (projectId: string, message: string) => Promise<string | undefined>;
   onOpenSession?: (sessionId: string, cwd?: string) => void;
+  onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;
+  onArchiveSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
+  onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
   picker: { options: ProjectPickerOptions; loading: boolean; error: string | null };
   onOpenAutomation?: () => void;
 }) {
@@ -147,7 +153,16 @@ export function ProjectDetailView({
           </div>
 
           <div className="pd-tab-content">
-            {tab === "activity" && <ActivityTab projectId={live.id} onOpenSession={onOpenSession} />}
+            {tab === "activity" && (
+              <ActivityTab
+                projectId={live.id}
+                onOpenSession={onOpenSession}
+                onRenameSession={onRenameSession}
+                onArchiveSession={onArchiveSession}
+                onDeleteSession={onDeleteSession}
+                onToast={onToast}
+              />
+            )}
             {tab === "plan" && <PlanTab projectId={live.id} onRun={onStartConversation ? (message) => onStartConversation(live.id, message) : undefined} onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined} />}
             {tab === "task" && <TaskTab projectId={live.id} onRun={onStartConversation ? (message) => onStartConversation(live.id, message) : undefined} onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined} />}
             {tab === "asset" && <AssetsTab projectId={live.id} onToast={onToast} />}
