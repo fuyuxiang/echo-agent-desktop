@@ -3971,6 +3971,7 @@ dependencies = [
  "chrono",
  "dirs 6.0.0",
  "echo-agent-acp",
+ "echo-agent-memory",
  "echo-agent-runtime",
  "echo-agent-tool-protocol",
  "echo-agent-tool-runtime",

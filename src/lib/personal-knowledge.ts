@@ -1,0 +1,94 @@
+import { invoke } from "@tauri-apps/api/core";
+import type { KbEntry } from "./knowledge-base";
+import { isTauriAvailable } from "./tauri-kb-reader";
+
+export type PersonalKnowledgeIndexState = "idle" | "indexing" | "ready" | "degraded" | "error";
+
+export interface PersonalKnowledgeIndexStatus {
+  state: PersonalKnowledgeIndexState;
+  message?: string | null;
+  fileCount: number;
+  chunkCount: number;
+  embeddedChunkCount: number;
+  pendingEmbeddingCount: number;
+  lastUpdatedAt?: number | null;
+  embeddingModel: string;
+  rerankModel: string;
+}
+
+export interface PersonalKnowledgeSearchItem extends KbEntry {
+  sourceLabel: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  score: number;
+}
+
+export interface PersonalKnowledgeSearchResponse {
+  items: PersonalKnowledgeSearchItem[];
+  retrievalMode: "none" | "keyword" | "keyword-reranked" | "hybrid" | "hybrid-reranked";
+  degradedReason?: string | null;
+  index: PersonalKnowledgeIndexStatus;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseStatus(value: unknown): PersonalKnowledgeIndexStatus | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.state !== "string"
+    || typeof value.fileCount !== "number"
+    || typeof value.chunkCount !== "number"
+    || typeof value.embeddedChunkCount !== "number"
+    || typeof value.pendingEmbeddingCount !== "number"
+    || typeof value.embeddingModel !== "string"
+    || typeof value.rerankModel !== "string"
+  ) return null;
+  return value as unknown as PersonalKnowledgeIndexStatus;
+}
+
+function parseSearchResponse(value: unknown): PersonalKnowledgeSearchResponse | null {
+  if (!isRecord(value) || !Array.isArray(value.items)) return null;
+  const index = parseStatus(value.index);
+  if (!index) return null;
+  const items = value.items.filter((item): item is PersonalKnowledgeSearchItem => {
+    if (!isRecord(item)) return false;
+    return typeof item.id === "string"
+      && typeof item.title === "string"
+      && typeof item.snippet === "string"
+      && typeof item.source === "string"
+      && typeof item.url === "string";
+  });
+  return {
+    items,
+    retrievalMode: value.retrievalMode === "hybrid-reranked"
+      || value.retrievalMode === "hybrid"
+      || value.retrievalMode === "keyword-reranked"
+      || value.retrievalMode === "keyword"
+      ? value.retrievalMode
+      : "none",
+    degradedReason: typeof value.degradedReason === "string" ? value.degradedReason : null,
+    index,
+  };
+}
+
+/** Returns null outside Tauri and for legacy/mock backends that do not expose semantic search yet. */
+export async function searchPersonalKnowledge(
+  query: string,
+  limit = 5,
+): Promise<PersonalKnowledgeSearchResponse | null> {
+  if (!isTauriAvailable()) return null;
+  return parseSearchResponse(await invoke<unknown>("personal_knowledge_search", { query, limit }));
+}
+
+export async function rebuildPersonalKnowledgeIndex(): Promise<PersonalKnowledgeIndexStatus | null> {
+  if (!isTauriAvailable()) return null;
+  return parseStatus(await invoke<unknown>("personal_knowledge_rebuild"));
+}
+
+export async function getPersonalKnowledgeIndexStatus(): Promise<PersonalKnowledgeIndexStatus | null> {
+  if (!isTauriAvailable()) return null;
+  return parseStatus(await invoke<unknown>("personal_knowledge_index_status"));
+}

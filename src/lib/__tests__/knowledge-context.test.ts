@@ -3,14 +3,72 @@ import { preparePromptWithPersonalKnowledge } from "../knowledge-context";
 import { registerKbProvider, resetKbRegistry } from "../knowledge-base";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
 
+const semanticSearchMock = vi.hoisted(() => vi.fn());
+vi.mock("../personal-knowledge", () => ({
+  searchPersonalKnowledge: semanticSearchMock,
+}));
+
 describe("personal knowledge prompt preparation", () => {
   beforeEach(() => {
     resetKbRegistry();
+    semanticSearchMock.mockReset();
+    semanticSearchMock.mockResolvedValue(null);
     useKnowledgeStore.setState({
       defaultMode: "auto",
       sessionModes: {},
       sourceCount: 0,
       retrievals: {},
+    });
+  });
+
+  it("优先使用语义检索结果注入任务，不再重复扫描 provider", async () => {
+    const legacyList = vi.fn(() => [{ id: "legacy", title: "旧结果" }]);
+    registerKbProvider({
+      id: "local-notes",
+      label: "本地笔记",
+      isEnabled: () => true,
+      list: legacyList,
+    });
+    semanticSearchMock.mockResolvedValue({
+      items: [{
+        id: "/notes/travel.md#L8",
+        title: "差旅制度",
+        snippet: "住宿标准为每晚 500 元。",
+        source: "local-notes",
+        sourceLabel: "本地笔记",
+        url: "/notes/travel.md",
+        path: "/notes/travel.md",
+        startLine: 8,
+        endLine: 10,
+        score: 0.96,
+      }],
+      retrievalMode: "hybrid-reranked",
+      degradedReason: null,
+      index: {
+        state: "ready",
+        fileCount: 1,
+        chunkCount: 1,
+        embeddedChunkCount: 1,
+        pendingEmbeddingCount: 0,
+        embeddingModel: "BAAI/bge-m3",
+        rerankModel: "BAAI/bge-reranker-v2-m3",
+      },
+    });
+
+    const result = await preparePromptWithPersonalKnowledge(
+      "session-semantic",
+      "请回答差旅标准",
+      "出差住宿可以报销多少？",
+    );
+
+    expect(semanticSearchMock).toHaveBeenCalledWith("出差住宿可以报销多少？", 5);
+    expect(legacyList).not.toHaveBeenCalled();
+    expect(result.promptText).toContain("住宿标准为每晚 500 元");
+    expect(result.promptText).toContain("来源：本地笔记 · /notes/travel.md");
+    expect(useKnowledgeStore.getState().retrievals["session-semantic"]).toMatchObject({
+      state: "used",
+      resultCount: 1,
+      titles: ["差旅制度"],
     });
   });
 

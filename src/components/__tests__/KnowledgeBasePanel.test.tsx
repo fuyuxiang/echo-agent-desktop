@@ -66,6 +66,63 @@ describe("KnowledgeBasePanel", () => {
     expect(screen.getByText("docs")).toBeInTheDocument();
   });
 
+  it("桌面端优先展示向量混合检索与 rerank 结果", async () => {
+    registerKbProvider({
+      id: "notes",
+      label: "个人笔记",
+      isEnabled: () => true,
+      list: vi.fn(() => [{ id: "legacy", title: "不应出现的旧结果" }]),
+    });
+    const status = {
+      state: "ready",
+      message: "语义索引已就绪",
+      fileCount: 1,
+      chunkCount: 3,
+      embeddedChunkCount: 3,
+      pendingEmbeddingCount: 0,
+      lastUpdatedAt: Date.now(),
+      embeddingModel: "BAAI/bge-m3",
+      rerankModel: "BAAI/bge-reranker-v2-m3",
+    };
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "personal_knowledge_index_status") return Promise.resolve(status);
+      if (command === "personal_knowledge_search") {
+        return Promise.resolve({
+          items: [{
+            id: "/notes/policy.md#L4",
+            title: "差旅政策",
+            snippet: "高铁出行可报销二等座。",
+            source: "notes",
+            sourceLabel: "个人笔记",
+            url: "/notes/policy.md",
+            path: "/notes/policy.md",
+            startLine: 4,
+            endLine: 6,
+            score: 0.97,
+          }],
+          retrievalMode: "hybrid-reranked",
+          degradedReason: null,
+          index: status,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<KnowledgeBasePanel />);
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索知识库" }), {
+      target: { value: "出差坐高铁能报销吗" },
+    });
+
+    expect(await screen.findByRole("button", { name: "打开知识条目：差旅政策" })).toBeInTheDocument();
+    expect(screen.queryByText("不应出现的旧结果")).toBeNull();
+    expect(screen.getByText("已使用关键词、向量检索和相关性重排")).toBeInTheDocument();
+    expect(screen.getByText(/BAAI\/bge-m3 · BAAI\/bge-reranker-v2-m3/)).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("personal_knowledge_search", {
+      query: "出差坐高铁能报销吗",
+      limit: 20,
+    });
+  });
+
   it("搜索无匹配显示空态", async () => {
     registerKbProvider({
       id: "docs",

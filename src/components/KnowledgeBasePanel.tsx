@@ -15,6 +15,12 @@ import {
 import { isTauriAvailable } from "@/lib/tauri-kb-reader";
 import { addLocalKnowledgeSource, hydrateKnowledgeSources, removeKnowledgeSource } from "@/lib/kb-source-storage";
 import { filesystemPickDirectory } from "@/lib/agent-client";
+import {
+  getPersonalKnowledgeIndexStatus,
+  rebuildPersonalKnowledgeIndex,
+  searchPersonalKnowledge,
+  type PersonalKnowledgeIndexStatus,
+} from "@/lib/personal-knowledge";
 
 interface KnowledgeBasePanelProps {
   /** 打开条目回调(可选)。 */
@@ -32,6 +38,8 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
   const [sources, setSources] = useState<Array<{ id: string; label: string; stats: KbIndexStats }>>([]);
   const [sourcesError, setSourcesError] = useState<string | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchNotice, setSearchNotice] = useState<string | null>(null);
+  const [semanticStatus, setSemanticStatus] = useState<PersonalKnowledgeIndexStatus | null>(null);
   const [searchRetryKey, setSearchRetryKey] = useState(0);
   const q = debouncedQuery.trim();
   useEffect(() => {
@@ -68,6 +76,23 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
     };
   }, [refreshKey, onToast]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const refreshStatus = () => void getPersonalKnowledgeIndexStatus()
+      .then((status) => {
+        if (!cancelled && status) setSemanticStatus(status);
+      })
+      .catch(() => {});
+    refreshStatus();
+    const timer = semanticStatus?.state === "indexing"
+      ? window.setInterval(refreshStatus, 1_000)
+      : undefined;
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearInterval(timer);
+    };
+  }, [refreshKey, semanticStatus?.state]);
+
   /** 添加本地文件夹知识源:弹出原生目录选择 → 注册 local KbProvider。 */
   const addLocalFolder = async () => {
     if (!isTauriAvailable()) {
@@ -103,9 +128,13 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
     setRebuilding(true);
     try {
       const res = await rebuildAllKbProviders();
+      const semantic = await rebuildPersonalKnowledgeIndex();
+      if (semantic) setSemanticStatus(semantic);
       setRefreshKey((k) => k + 1);
       const total = res.reduce((s, r) => s + (r.count ?? 0), 0);
-      onToast?.(res.length > 0 ? `已重建索引(${total} 项)` : "无可重建的知识源");
+      onToast?.(semantic
+        ? `语义索引已更新：${semantic.fileCount} 个文件、${semantic.chunkCount} 个片段`
+        : res.length > 0 ? `已重建索引(${total} 项)` : "无可重建的知识源");
     } catch (e) {
       onToast?.(`重建失败：${String(e).replace(/^Error:\s*/, "")}`);
     } finally {
@@ -117,16 +146,42 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
     if (!q) {
       setResults([]);
       setSearchError(null);
+      setSearchNotice(null);
       setSearching(false);
       return;
     }
     let cancelled = false;
     setSearching(true);
     setSearchError(null);
-    void searchKbWithDiagnostics(q)
-      .then(({ entries, failures, successfulProviders }) => {
+    setSearchNotice(null);
+    void (async () => {
+      const semantic = await searchPersonalKnowledge(q, 20);
+      if (semantic) {
+        return {
+          entries: semantic.items,
+          failures: [],
+          successfulProviders: 1,
+          notice: semantic.degradedReason
+            ? `语义检索暂时降级：${semantic.degradedReason}`
+            : semantic.retrievalMode === "hybrid-reranked"
+              ? "已使用关键词、向量检索和相关性重排"
+              : semantic.retrievalMode === "hybrid"
+                ? "已使用关键词与向量混合检索"
+                : semantic.retrievalMode === "keyword-reranked"
+                  ? "已使用关键词检索和相关性重排（向量召回本次未参与）"
+                  : semantic.retrievalMode === "keyword"
+                    ? "已使用关键词扩展检索（向量召回本次未参与）"
+                    : null,
+          semanticStatus: semantic.index,
+        };
+      }
+      return { ...(await searchKbWithDiagnostics(q)), notice: null, semanticStatus: null };
+    })()
+      .then(({ entries, failures, successfulProviders, notice, semanticStatus: nextStatus }) => {
         if (!cancelled) {
           setResults(entries);
+          setSearchNotice(notice);
+          if (nextStatus) setSemanticStatus(nextStatus);
           // The first search lazily builds local indexes. Refresh the displayed
           // coverage so “waiting for scan” immediately becomes a real count.
           setRefreshKey((key) => key + 1);
@@ -190,7 +245,7 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
         </div>
       </div>
       <div className="kb-panel__index-status" role="note">
-        <span>这里连接的是本地文件夹，不会复制文件。任务输入框开启“知识库”后，会自动检索相关片段并在回答中标注来源。</span>
+        <span>原文件保留在所选目录；文本片段会发送到语义模型服务生成向量并进行相关性排序，索引保存在本机。任务回答会标注来源。</span>
       </div>
       {sourcesError && (
         <div className="kb-panel__index-status" role="alert">
@@ -238,6 +293,26 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
           })()}
         </div>
       )}
+      {sources.length > 0 && semanticStatus && (
+        <div
+          className="kb-panel__index-status"
+          role={semanticStatus.state === "error" ? "alert" : "status"}
+          title={`Embedding：${semanticStatus.embeddingModel}；Rerank：${semanticStatus.rerankModel}`}
+        >
+          <span>
+            {semanticStatus.state === "indexing"
+              ? semanticStatus.message ?? "正在建立语义索引…"
+              : semanticStatus.state === "error"
+                ? `语义索引失败：${semanticStatus.message ?? "未知错误"}`
+                : semanticStatus.state === "degraded"
+                  ? semanticStatus.message ?? "语义索引部分可用"
+                  : `语义索引 ${semanticStatus.embeddedChunkCount}/${semanticStatus.chunkCount} 个片段`}
+          </span>
+          <span className="kb-panel__index-time">
+            {semanticStatus.embeddingModel} · {semanticStatus.rerankModel}
+          </span>
+        </div>
+      )}
       <input
         className="kb-panel__input"
         type="text"
@@ -258,6 +333,11 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
               >
                 重试搜索
               </button>
+            </div>
+          )}
+          {searchNotice && !searching && (
+            <div className="kb-panel__index-status" role="status">
+              <span>{searchNotice}</span>
             </div>
           )}
           <ul className="kb-panel__list" aria-label="知识库搜索结果" aria-busy={searching}>
