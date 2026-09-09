@@ -1,4 +1,5 @@
 import { listKbProviders, searchKbWithDiagnostics, type KbEntry } from "./knowledge-base";
+import { searchPersonalKnowledge } from "./personal-knowledge";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauriAvailable } from "./tauri-kb-reader";
@@ -7,7 +8,7 @@ const KNOWLEDGE_BEGIN = "<echoagent_personal_knowledge>";
 const KNOWLEDGE_END = "</echoagent_personal_knowledge>";
 const MAX_RESULTS = 5;
 const MAX_CONTEXT_CHARS = 8_000;
-const SEARCH_TIMEOUT_MS = 8_000;
+const SEARCH_TIMEOUT_MS = 15_000;
 const NON_SEARCH_PROMPTS = new Set(["请继续。", "继续。", "请分析附件。"]);
 
 export interface PreparedKnowledgePrompt {
@@ -51,7 +52,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
-async function retrieve(query: string): Promise<{ entries: KbEntry[]; failures: string[] }> {
+async function retrieveLexical(query: string): Promise<{ entries: KbEntry[]; failures: string[] }> {
   const byId = new Map<string, { entry: KbEntry; score: number }>();
   const failures = new Set<string>();
   const terms = searchTerms(query);
@@ -74,6 +75,26 @@ async function retrieve(query: string): Promise<{ entries: KbEntry[]; failures: 
       .slice(0, MAX_RESULTS)
       .map(({ entry }) => entry),
     failures: [...failures],
+  };
+}
+
+async function retrieve(query: string): Promise<{ entries: KbEntry[]; failures: string[] }> {
+  let semanticFailure: string | null = null;
+  try {
+    const semantic = await withTimeout(searchPersonalKnowledge(query, MAX_RESULTS), 12_000);
+    if (semantic) {
+      return {
+        entries: semantic.items,
+        failures: [],
+      };
+    }
+  } catch (error) {
+    semanticFailure = String(error).replace(/^Error:\s*/, "");
+  }
+  const lexical = await retrieveLexical(query);
+  return {
+    entries: lexical.entries,
+    failures: semanticFailure ? [semanticFailure, ...lexical.failures] : lexical.failures,
   };
 }
 
