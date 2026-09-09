@@ -861,18 +861,9 @@ pub fn complete_run_for_session(
 }
 
 /// Whether permission requests for this automation session may be approved
-/// without changing the user's global permission mode.
+/// without changing any interactive task's permission mode.
 pub fn is_full_access_session(session_id: &str) -> bool {
     full_access_sessions().lock().unwrap().contains(session_id)
-}
-
-pub(crate) fn full_access_session_ids() -> Vec<String> {
-    full_access_sessions()
-        .lock()
-        .unwrap()
-        .iter()
-        .cloned()
-        .collect()
 }
 
 async fn release_full_access_session(

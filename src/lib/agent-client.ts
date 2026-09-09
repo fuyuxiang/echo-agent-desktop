@@ -108,8 +108,16 @@ export async function agentAuthStatus(): Promise<AuthStatus> {
 // `modelId` is passed as `_meta.modelId` to EchoAgent so the session binds to
 // that model from the start (avoids the default `echo-agent-build` model whose
 // sampling config has no key in a BYOK-only setup).
-export async function agentNewSession(cwd: string, modelId?: string): Promise<string> {
-  const invocation = invoke<string>("agent_new_session", { cwd, modelId: modelId ?? null });
+export async function agentNewSession(
+  cwd: string,
+  modelId?: string,
+  permissionMode: PermissionMode = "ask",
+): Promise<string> {
+  const invocation = invoke<string>("agent_new_session", {
+    cwd,
+    modelId: modelId ?? null,
+    permissionMode,
+  });
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
@@ -941,12 +949,14 @@ export async function permissionSave(rules: PermissionRule[]): Promise<void> {
   await invoke<void>("permission_save", { rules });
 }
 
-// ---------- permission mode (~/.echo-agent/config.toml [ui].permission_mode) ----------
+// ---------- task-scoped permission mode ----------
 
 /** EchoAgent 的权限模式:审批(ask)/自动(auto)/始终允许(always-approve)。 */
 export type PermissionMode = "ask" | "auto" | "always-approve";
 
 export interface PermissionModeStatus {
+  /** Present for an existing task; absent for the home/new-task capability read. */
+  sessionId?: string;
   /** Effective mode the Runtime can honor now. */
   permissionMode: PermissionMode;
   /** Configured or policy-selected mode before Auto is clamped to Ask. */
@@ -970,15 +980,17 @@ export interface PermissionModeSetResult extends PermissionModeStatus {
   resolvedPermissions: PermissionClosedEvent[];
 }
 
-/** Read the effective permission mode and Auto-mode capability. */
-export async function permissionModeGet(): Promise<PermissionModeStatus> {
-  return invoke<PermissionModeStatus>("permission_mode_get");
+/** Read one task's mode, or safe new-task capabilities when no id is supplied. */
+export async function permissionModeGet(sessionId?: string): Promise<PermissionModeStatus> {
+  return invoke<PermissionModeStatus>("permission_mode_get", { sessionId: sessionId ?? null });
 }
 
-/** Set the permission mode: persists to config.toml and live-notifies the
- *  running agent via EchoAgent's `echo.agent/yolo_mode_changed` extension notification. */
-export async function permissionModeSet(mode: PermissionMode): Promise<PermissionModeSetResult> {
-  return invoke<PermissionModeSetResult>("permission_mode_set", { mode });
+/** Set one existing task's mode and live-notify only that Runtime session. */
+export async function permissionModeSet(
+  sessionId: string,
+  mode: PermissionMode,
+): Promise<PermissionModeSetResult> {
+  return invoke<PermissionModeSetResult>("permission_mode_set", { sessionId, mode });
 }
 
 // ---------- memory (资料库 — Runtime canonical storage) ----------

@@ -57,6 +57,8 @@ pub struct SessionSummary {
     /// Expert local avatar path (EchoAgent-only state).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expert_avatar: Option<String>,
+    /// Permission mode owned by this task. Legacy sessions default to Ask.
+    pub permission_mode: String,
 }
 
 /// Subset of EchoAgent's `Summary` struct (see `echo-agent-runtime/src/session/persistence.rs:790`).
@@ -307,6 +309,7 @@ fn to_session_summary(
         expert_id: None,
         expert_name: None,
         expert_avatar: None,
+        permission_mode: "ask".into(),
     })
 }
 
@@ -333,6 +336,11 @@ fn apply_metadata_and_sort(out: &mut Vec<SessionSummary>, include_archived: bool
                 .clone()
                 .map(|value| bounded_text(value, MAX_EXPERT_AVATAR_CHARS));
         }
+        entry.permission_mode = state
+            .permission_mode_map()
+            .get(&entry.session_id)
+            .cloned()
+            .unwrap_or_else(|| "ask".into());
     }
     // Sort: pinned first, then by updated_at descending (falling back to the
     // session_id, which is a UUIDv7 — roughly chronological).
@@ -640,6 +648,7 @@ mod tests {
             expert_id: None,
             expert_name: None,
             expert_avatar: None,
+            permission_mode: "ask".into(),
         }
     }
 

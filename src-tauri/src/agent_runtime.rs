@@ -402,11 +402,7 @@ fn desktop_client_capabilities() -> acp::ClientCapabilities {
 /// session's first turn. Team tools are persisted separately after the
 /// session exists; organization-memory tools remain session-scoped and are
 /// hot-attached only while a verified shared organization scope is available.
-pub async fn new_session(tx: &AcpAgentTx, cwd: &Path, model_id: Option<&str>) -> Result<String> {
-    new_session_with_options(tx, cwd, model_id, None, None).await
-}
-
-/// Create a session with optional per-session reasoning effort. Automations
+/// Reasoning effort and permission mode are also session-owned. Automations
 /// persist the legacy `modelIsThinking` switch; mapping it to `high` makes that
 /// switch affect the actual runtime instead of being dead metadata.
 pub async fn new_session_with_options(
@@ -464,7 +460,7 @@ fn authenticated_team_mcp_server(url: String, authorization: String) -> acp::Mcp
 
 /// Resume an existing session by replaying its persisted history.
 pub async fn load_session(tx: &AcpAgentTx, session_id: &str, cwd: &Path) -> Result<()> {
-    let permission_mode = crate::permission_config::permission_mode_for_session();
+    let permission_mode = crate::permission_config::effective_session_permission_mode(session_id);
     let req = acp::LoadSessionRequest::new(
         acp::SessionId::new(session_id.to_string()),
         cwd.to_path_buf(),
@@ -1043,7 +1039,13 @@ mod tests {
         //    MCP server entry (team tools live as echoagent__* now).
         let session_id = tokio::time::timeout(
             std::time::Duration::from_secs(60),
-            new_session(&handle.tx, &cwd, init.default_model_id.as_deref()),
+            new_session_with_options(
+                &handle.tx,
+                &cwd,
+                init.default_model_id.as_deref(),
+                None,
+                None,
+            ),
         )
         .await
         .expect("new_session timed out (60s)")

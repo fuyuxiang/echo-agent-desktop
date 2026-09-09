@@ -81,7 +81,6 @@ import { applySessionScopedFailure } from "./lib/session-scoped-failure";
 import { isGlobalShortcutBlocked } from "./lib/keyboard-scope";
 import { hydrateKnowledgeSources } from "./lib/kb-source-storage";
 import {
-  permissionModeFromEvent,
   permissionModeStatusFromEvent,
   usePermissionModeStore,
 } from "./stores/permission-mode-store";
@@ -493,10 +492,15 @@ function Shell() {
             const status = permissionModeStatusFromEvent(payload);
             if (status) {
               usePermissionModeStore.getState().setStatus(status);
+              if (status.sessionId) {
+                sessionsStore.getState().upsert({
+                  sessionId: status.sessionId,
+                  permissionMode: status.permissionMode,
+                });
+              }
               return;
             }
-            const mode = permissionModeFromEvent(payload);
-            if (mode) usePermissionModeStore.getState().setMode(mode);
+            // Unscoped legacy Runtime events must never overwrite a task mode.
           },
           onGitHead: (payload) => {
             void payload;
@@ -945,7 +949,11 @@ function Shell() {
     setHomeSendError(null);
     try {
       const cwd = newSessionTargetCwd;
-      const sessionId = await agentNewSession(cwd, modelId);
+      const permissionState = usePermissionModeStore.getState();
+      const draftPermissionMode = permissionState.capabilityStatus?.locked
+        ? permissionState.capabilityStatus.permissionMode
+        : permissionState.homeMode;
+      const sessionId = await agentNewSession(cwd, modelId, draftPermissionMode);
       setCurrentModelId(modelId);
       sessionsStore.getState().setCurrent(sessionId);
       setPlaceholderView(null);
@@ -955,7 +963,9 @@ function Shell() {
         cwd,
         status: "working",
         currentModelId: modelId,
+        permissionMode: draftPermissionMode,
       });
+      usePermissionModeStore.getState().resetHomeMode();
       sessionStore.getState().setSession(sessionId);
 
       // Check for pending expert — inject persona invisibly.
@@ -1233,6 +1243,7 @@ function Shell() {
     setPlaceholderView(null);
     sessionsStore.getState().setCurrent(null);
     sessionStore.getState().reset();
+    usePermissionModeStore.getState().resetHomeMode();
     setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
   };
 
@@ -1261,6 +1272,7 @@ function Shell() {
 
   const handleSessionDeleted = (sessionId: string) => {
     useProjectsStore.getState().removeSessionReferences(sessionId);
+    usePermissionModeStore.getState().clearSession(sessionId);
     leaveSessionIfCurrent(sessionId);
   };
 
@@ -1415,6 +1427,7 @@ function Shell() {
       title: source?.title ? `${source.title}（分叉）` : "分叉会话",
       cwd,
       currentModelId: modelId,
+      permissionMode: source?.permissionMode ?? "ask",
     });
     // A slow fork must not hijack a conversation the user selected meanwhile.
     if (sessionsStore.getState().currentSessionId !== sourceSessionId) return;
@@ -1620,6 +1633,7 @@ function Shell() {
         cwd,
         status: "working",
         currentModelId: modelId,
+        permissionMode: "ask",
       });
       sessionStore.getState().setSession(sessionId);
       // Register the session as a project conversation.
@@ -1680,6 +1694,7 @@ function Shell() {
         cwd,
         status: message ? "working" : "pending",
         currentModelId: modelId,
+        permissionMode: "ask",
       });
       sessionStore.getState().setSession(sessionId);
 

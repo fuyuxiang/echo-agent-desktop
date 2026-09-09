@@ -3,7 +3,8 @@
 //! EchoAgent's `summary.json` (and the in-memory `Summary` it serializes) does NOT
 //! support a `pinned` field — it only knows its own schema, and writing an
 //! unknown key would be clobbered the next time EchoAgent flushes. So we keep
-//! EchoAgent-only state (currently: pinned + archived sessions) in a separate file:
+//! EchoAgent-only state (pinned, archived, expert and per-session permission
+//! bindings) in a separate file:
 //! `~/.echo-agent/echoagent-state.json`.
 //!
 //! Read on every `list_sessions` call and merged into the per-session
@@ -27,6 +28,7 @@ const MAX_EXPERT_ID_CHARS: usize = 256;
 const MAX_EXPERT_NAME_CHARS: usize = 512;
 const MAX_EXPERT_SOURCE_CHARS: usize = 64;
 const MAX_EXPERT_AVATAR_CHARS: usize = 4_096;
+const PERMISSION_MODES: [&str; 3] = ["ask", "auto", "always-approve"];
 
 static STATE_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -62,6 +64,10 @@ pub struct EchoAgentState {
     /// Expert bindings: session_id → ExpertBinding.
     #[serde(default)]
     pub expert_sessions: HashMap<String, ExpertBinding>,
+    /// Permission mode owned by each task/session. Missing entries fail closed
+    /// to `ask`; there is intentionally no user-selectable global fallback.
+    #[serde(default)]
+    pub session_permission_modes: HashMap<String, String>,
 }
 
 impl Default for EchoAgentState {
@@ -71,6 +77,7 @@ impl Default for EchoAgentState {
             pinned_sessions: Vec::new(),
             archived_sessions: Vec::new(),
             expert_sessions: HashMap::new(),
+            session_permission_modes: HashMap::new(),
         }
     }
 }
@@ -91,6 +98,10 @@ impl EchoAgentState {
     /// Expert bindings map for merging into the session list.
     pub fn expert_map(&self) -> &HashMap<String, ExpertBinding> {
         &self.expert_sessions
+    }
+
+    pub fn permission_mode_map(&self) -> &HashMap<String, String> {
+        &self.session_permission_modes
     }
 }
 
@@ -138,6 +149,7 @@ fn validate_state(state: &EchoAgentState) -> Result<(), String> {
     if state.pinned_sessions.len() > MAX_SESSION_ENTRIES
         || state.archived_sessions.len() > MAX_SESSION_ENTRIES
         || state.expert_sessions.len() > MAX_SESSION_ENTRIES
+        || state.session_permission_modes.len() > MAX_SESSION_ENTRIES
     {
         return Err("会话元数据条目超过安全上限".into());
     }
@@ -154,6 +166,11 @@ fn validate_state(state: &EchoAgentState) -> Result<(), String> {
             return Err("专家绑定包含无效会话 ID".into());
         }
         validate_binding(binding)?;
+    }
+    for (session_id, mode) in &state.session_permission_modes {
+        if !valid_session_id(session_id) || !PERMISSION_MODES.contains(&mode.as_str()) {
+            return Err("会话权限模式包含无效数据".into());
+        }
     }
     Ok(())
 }
@@ -182,6 +199,20 @@ fn sanitize_state(mut state: EchoAgentState) -> EchoAgentState {
         keys.sort();
         for key in keys.into_iter().skip(MAX_SESSION_ENTRIES) {
             state.expert_sessions.remove(&key);
+        }
+    }
+    state.session_permission_modes.retain(|session_id, mode| {
+        valid_session_id(session_id) && PERMISSION_MODES.contains(&mode.as_str())
+    });
+    if state.session_permission_modes.len() > MAX_SESSION_ENTRIES {
+        let mut keys = state
+            .session_permission_modes
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        for key in keys.into_iter().skip(MAX_SESSION_ENTRIES) {
+            state.session_permission_modes.remove(&key);
         }
     }
     state
@@ -412,6 +443,61 @@ pub fn clear_expert(session_id: &str) -> Result<bool, String> {
     })
 }
 
+/// Return the task-owned permission mode. Legacy sessions deliberately fall
+/// back to Ask instead of inheriting a former global Always/Auto preference.
+pub fn permission_mode(session_id: &str) -> String {
+    if !valid_session_id(session_id) {
+        return "ask".into();
+    }
+    read_state()
+        .session_permission_modes
+        .get(session_id)
+        .cloned()
+        .unwrap_or_else(|| "ask".into())
+}
+
+fn set_permission_mode_at(path: &Path, session_id: &str, mode: &str) -> Result<String, String> {
+    if !valid_session_id(session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    if !PERMISSION_MODES.contains(&mode) {
+        return Err(format!("unknown permission mode: {mode}"));
+    }
+    update_state_at(path, |state| {
+        if !state.session_permission_modes.contains_key(session_id)
+            && state.session_permission_modes.len() >= MAX_SESSION_ENTRIES
+        {
+            return Err("会话权限模式数量超过安全上限".into());
+        }
+        let changed = state
+            .session_permission_modes
+            .get(session_id)
+            .is_none_or(|current| current != mode);
+        state
+            .session_permission_modes
+            .insert(session_id.to_string(), mode.to_string());
+        Ok((mode.to_string(), changed))
+    })
+}
+
+pub fn set_permission_mode(session_id: &str, mode: &str) -> Result<String, String> {
+    set_permission_mode_at(&state_path(), session_id, mode)
+}
+
+fn clear_permission_mode_at(path: &Path, session_id: &str) -> Result<bool, String> {
+    if !valid_session_id(session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    update_state_at(path, |state| {
+        let removed = state.session_permission_modes.remove(session_id).is_some();
+        Ok((removed, removed))
+    })
+}
+
+pub fn clear_permission_mode(session_id: &str) -> Result<bool, String> {
+    clear_permission_mode_at(&state_path(), session_id)
+}
+
 // ---------- unit tests ----------
 
 #[cfg(test)]
@@ -426,6 +512,7 @@ mod tests {
         assert_eq!(state.version, 1);
         assert!(state.pinned_sessions.is_empty());
         assert!(state.archived_sessions.is_empty());
+        assert!(state.session_permission_modes.is_empty());
     }
 
     // --- pinned_set / archived_set ---
@@ -437,6 +524,7 @@ mod tests {
             pinned_sessions: vec!["s1".into(), "s2".into(), "s1".into()],
             archived_sessions: vec![],
             expert_sessions: HashMap::new(),
+            session_permission_modes: HashMap::new(),
         };
         let set = state.pinned_set();
         assert_eq!(set.len(), 2); // deduplicated
@@ -451,6 +539,7 @@ mod tests {
             pinned_sessions: vec![],
             archived_sessions: vec!["a1".into(), "a2".into()],
             expert_sessions: HashMap::new(),
+            session_permission_modes: HashMap::new(),
         };
         let set = state.archived_set();
         assert_eq!(set.len(), 2);
@@ -474,12 +563,20 @@ mod tests {
             pinned_sessions: vec!["s1".into()],
             archived_sessions: vec!["a1".into(), "a2".into()],
             expert_sessions: HashMap::new(),
+            session_permission_modes: HashMap::from([("s1".into(), "auto".into())]),
         };
         let json = serde_json::to_string(&state).unwrap();
         let parsed: EchoAgentState = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.version, 1);
         assert_eq!(parsed.pinned_sessions, vec!["s1"]);
         assert_eq!(parsed.archived_sessions, vec!["a1", "a2"]);
+        assert_eq!(
+            parsed
+                .session_permission_modes
+                .get("s1")
+                .map(String::as_str),
+            Some("auto")
+        );
     }
 
     #[test]
@@ -489,6 +586,69 @@ mod tests {
         let state: EchoAgentState = serde_json::from_str(json).unwrap();
         assert!(state.pinned_sessions.is_empty());
         assert!(state.archived_sessions.is_empty());
+        assert!(state.session_permission_modes.is_empty());
+    }
+
+    #[test]
+    fn permission_modes_are_persisted_and_cleared_per_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("echoagent-state.json");
+
+        assert_eq!(
+            set_permission_mode_at(&path, "session-a", "auto").unwrap(),
+            "auto"
+        );
+        assert_eq!(
+            set_permission_mode_at(&path, "session-b", "always-approve").unwrap(),
+            "always-approve"
+        );
+
+        let state = read_state_from(&path, true).unwrap();
+        assert_eq!(
+            state
+                .session_permission_modes
+                .get("session-a")
+                .map(String::as_str),
+            Some("auto")
+        );
+        assert_eq!(
+            state
+                .session_permission_modes
+                .get("session-b")
+                .map(String::as_str),
+            Some("always-approve")
+        );
+
+        assert!(clear_permission_mode_at(&path, "session-a").unwrap());
+        let state = read_state_from(&path, true).unwrap();
+        assert!(!state.session_permission_modes.contains_key("session-a"));
+        assert_eq!(
+            state
+                .session_permission_modes
+                .get("session-b")
+                .map(String::as_str),
+            Some("always-approve")
+        );
+    }
+
+    #[test]
+    fn permission_mode_metadata_rejects_invalid_values_without_mutating_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("echoagent-state.json");
+
+        set_permission_mode_at(&path, "session-a", "ask").unwrap();
+        assert!(set_permission_mode_at(&path, "session-b", "unsafe").is_err());
+        assert!(set_permission_mode_at(&path, "\n", "auto").is_err());
+
+        let state = read_state_from(&path, true).unwrap();
+        assert_eq!(state.session_permission_modes.len(), 1);
+        assert_eq!(
+            state
+                .session_permission_modes
+                .get("session-a")
+                .map(String::as_str),
+            Some("ask")
+        );
     }
 
     #[test]

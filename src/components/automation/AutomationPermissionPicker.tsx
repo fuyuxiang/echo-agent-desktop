@@ -26,7 +26,7 @@ export function AutomationPermissionPicker({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const permissionStatus = usePermissionModeStore((state) => state.status);
+  const permissionStatus = usePermissionModeStore((state) => state.capabilityStatus);
 
   useEffect(() => {
     if (!isOpen) return;

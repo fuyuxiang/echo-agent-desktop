@@ -1213,6 +1213,17 @@ pub async fn session_fork(
     if !valid_admin_id(&forked_id) {
         return Err("Agent Runtime 返回的分叉会话 ID 无效".into());
     }
+    // A fork is a continuation of the same task context, so it inherits the
+    // source task's permission mode without affecting either task afterwards.
+    if crate::policy::locked_permission_mode().is_none() {
+        let source_mode = crate::meta::permission_mode(&session_id);
+        // The fork already exists in the Runtime. If sidecar persistence is
+        // unavailable, keep the usable fork and fail closed to Ask after a
+        // restart instead of reporting failure while leaving a hidden task.
+        if let Err(error) = crate::meta::set_permission_mode(&forked_id, &source_mode) {
+            tracing::warn!(%error, %forked_id, "fork created but task permission metadata could not be persisted");
+        }
+    }
     state.record_session_workspace(&forked_id, &trusted_cwd);
     Ok(forked_id)
 }
