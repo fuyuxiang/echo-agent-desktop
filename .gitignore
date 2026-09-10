@@ -1,4 +1,5 @@
 node_modules
+.pnpm-store/
 out
 dist
 release
@@ -11,9 +12,9 @@ release
 # Legacy runtime state may still exist during migration; never commit it.
 /.g[r]ok/
 
-# Rust / Tauri 构建产物与自动生成的 schema
+# Rust / Tauri 构建产物与自动生成内容
 /src-tauri/target/
-/src-tauri/gen/schemas/
+/src-tauri/gen/
 # 内嵌 Runtime 已由主仓库直接管理，仅忽略其本机构建产物。
 /vendor/echo-agent-build/target/
 
@@ -31,6 +32,9 @@ release
 coverage/
 .idea/
 .vscode/
+
+# 临时 CI 构建日志与安装包
+/ci-artifacts/
 
 # 规划与设计文档、SDD 工作文件不入库
 .superpowers/
