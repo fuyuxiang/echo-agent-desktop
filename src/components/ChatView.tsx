@@ -592,6 +592,8 @@ export function ChatView({
                       onToast={onToast}
                       onOpenTool={handleOpenTool}
                       onEditResend={handleEditResend}
+                      latest={isLastAssistant}
+                      retrying={isLastAssistant && retrying}
                       onRetry={
                         isLastAssistant && !streaming && m.complete
                           ? handleRetry

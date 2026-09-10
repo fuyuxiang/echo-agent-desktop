@@ -591,7 +591,7 @@
   margin-bottom: 4px;
 }
 
-/* ---- Message hover actions (复制 / 编辑 / MD) ---- */
+/* ---- Message actions ---- */
 .msg__actions {
   display: flex;
   gap: 4px;
@@ -607,6 +607,26 @@
 .msg__actions--inline {
   margin-top: 0;
   margin-left: auto;
+}
+.msg__actions--footer {
+  position: relative;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 28px;
+  margin-top: 10px;
+  opacity: 0.5;
+}
+.msg__actions--footer.msg__actions--latest {
+  opacity: 0.82;
+}
+.msg__action-cluster {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  min-width: 0;
 }
 .msg__action-btn {
   padding: 2px 8px;
@@ -625,24 +645,149 @@
 .msg__action-btn:active {
   transform: scale(0.96);
 }
+.msg__action-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+  transform: none;
+}
+.msg__action-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--echo-brand) 55%, transparent);
+  outline-offset: 2px;
+}
 .msg__action-btn--copy {
   min-width: 50px;
   text-align: center;
+}
+.msg__actions--footer .msg__action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 7px;
+  border-color: transparent;
+  background: transparent;
+  border-radius: 7px;
+  color: var(--echo-text-weak);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.msg__actions--footer .msg__action-btn:hover:not(:disabled),
+.msg__actions--footer .msg__action-btn:focus-visible {
+  border-color: var(--echo-border-default);
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-strong);
+}
+.msg__copy-split {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+.msg__copy-main {
+  border-radius: 7px 0 0 7px !important;
+}
+.msg__copy-menu-trigger {
+  min-width: 22px !important;
+  margin-left: -1px;
+  padding-right: 4px !important;
+  padding-left: 4px !important;
+  border-radius: 0 7px 7px 0 !important;
+}
+.msg__copy-menu-trigger::before {
+  position: absolute;
+  left: 0;
+  width: 1px;
+  height: 14px;
+  background: var(--echo-border-default);
+  content: "";
+}
+.msg__copy-menu {
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  width: max-content;
+  min-width: 156px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid var(--echo-border-default);
+  background: var(--echo-bg-primary);
+  border-radius: 9px;
+  box-shadow: 0 10px 28px rgba(18, 30, 28, 0.14), 0 2px 8px rgba(18, 30, 28, 0.08);
+}
+.msg__copy-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--echo-text-medium);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.msg__copy-menu button:hover,
+.msg__copy-menu button:focus-visible {
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-strong);
+  outline: none;
+}
+.msg__action-spin {
+  animation: msg-action-spin 0.85s linear infinite;
+}
+@keyframes msg-action-spin {
+  to { transform: rotate(360deg); }
 }
 /* 消息反馈(对齐 EchoAgent message-feedback):赞/踩,选中态高亮 */
 .msg__feedback {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  padding-left: 8px;
+  border-left: 1px solid var(--echo-border-default);
 }
 .msg__feedback-btn {
-  padding: 2px 6px;
+  min-width: 28px;
+  padding: 4px 6px;
   line-height: 1;
-  font-size: 13px;
 }
 .msg__feedback-btn--active {
   border-color: var(--echo-brand);
   background: rgba(0, 122, 255, 0.1);
+  color: var(--echo-brand) !important;
+}
+@media (hover: none), (pointer: coarse) {
+  .msg .msg__actions {
+    opacity: 1;
+  }
+  .msg__actions--footer .msg__action-btn,
+  .msg__copy-menu button {
+    min-height: 36px;
+  }
+}
+@media (max-width: 560px) {
+  .msg__actions--footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .msg__feedback {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg__action-spin {
+    animation: none;
+  }
 }
 /* 消息反馈完整评分弹窗(对齐 EchoAgent message-feedback rating dialog) */
 .feedback-dialog__overlay {
@@ -1823,12 +1968,12 @@
   /* EchoAgent: assistantMessage padding 0 12px 作用于整条消息(含头像行) */
   padding: 0 12px;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 .msg--assistant > div {
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
+  overflow: visible;
 }
 .msg--assistant .msg__name {
   font-size: 13px;
@@ -1851,6 +1996,7 @@
 .msg--assistant .msg__body {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
   font-size: 14px;
   line-height: 25px;
   color: var(--echo-text-strong);
