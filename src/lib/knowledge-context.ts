@@ -1,5 +1,7 @@
 import { listKbProviders, searchKbWithDiagnostics, type KbEntry } from "./knowledge-base";
 import {
+  cancelPersonalKnowledgeSearch,
+  createPersonalKnowledgeSearchRequestId,
   searchPersonalKnowledge,
   type PersonalKnowledgeSearchItem,
 } from "./personal-knowledge";
@@ -45,9 +47,16 @@ function searchTerms(query: string): string[] {
     .slice(0, 8);
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  onTimeout?: () => void,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error("个人知识库检索超时")), timeoutMs);
+    const timer = window.setTimeout(() => {
+      onTimeout?.();
+      reject(new Error("个人知识库检索超时"));
+    }, timeoutMs);
     promise.then(
       (value) => { window.clearTimeout(timer); resolve(value); },
       (error) => { window.clearTimeout(timer); reject(error); },
@@ -84,7 +93,12 @@ async function retrieveLexical(query: string): Promise<{ entries: KbEntry[]; fai
 async function retrieve(
   query: string,
 ): Promise<{ entries: Array<KbEntry | PersonalKnowledgeSearchItem>; failures: string[] }> {
-  const semantic = await withTimeout(searchPersonalKnowledge(query, MAX_RESULTS), 12_000);
+  const requestId = createPersonalKnowledgeSearchRequestId();
+  const semantic = await withTimeout(
+    searchPersonalKnowledge(query, MAX_RESULTS, requestId),
+    12_000,
+    () => { void cancelPersonalKnowledgeSearch(requestId).catch(() => {}); },
+  );
   if (semantic) {
     return {
       entries: semantic.items,

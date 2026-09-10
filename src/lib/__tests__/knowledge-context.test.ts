@@ -4,8 +4,11 @@ import { registerKbProvider, resetKbRegistry } from "../knowledge-base";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
 
 const semanticSearchMock = vi.hoisted(() => vi.fn());
+const cancelSemanticSearchMock = vi.hoisted(() => vi.fn());
 vi.mock("../personal-knowledge", () => ({
   searchPersonalKnowledge: semanticSearchMock,
+  cancelPersonalKnowledgeSearch: cancelSemanticSearchMock,
+  createPersonalKnowledgeSearchRequestId: () => "personal-search-test",
 }));
 
 describe("personal knowledge prompt preparation", () => {
@@ -13,6 +16,8 @@ describe("personal knowledge prompt preparation", () => {
     resetKbRegistry();
     semanticSearchMock.mockReset();
     semanticSearchMock.mockResolvedValue(null);
+    cancelSemanticSearchMock.mockReset();
+    cancelSemanticSearchMock.mockResolvedValue(true);
     useKnowledgeStore.setState({
       defaultSources: [],
       sessionSources: {},
@@ -64,7 +69,11 @@ describe("personal knowledge prompt preparation", () => {
       "prompt-semantic",
     );
 
-    expect(semanticSearchMock).toHaveBeenCalledWith("出差住宿可以报销多少？", 5);
+    expect(semanticSearchMock).toHaveBeenCalledWith(
+      "出差住宿可以报销多少？",
+      5,
+      "personal-search-test",
+    );
     expect(legacyList).not.toHaveBeenCalled();
     expect(result.promptText).toContain("住宿标准为每晚 500 元");
     expect(result.promptText).toContain("来源：本地笔记 · /notes/travel.md");
@@ -166,5 +175,36 @@ describe("personal knowledge prompt preparation", () => {
       state: "error",
       message: "原生索引不可用",
     });
+  });
+
+  it("语义检索超时时取消原生任务，且仍保留原提示词", async () => {
+    vi.useFakeTimers();
+    try {
+      useKnowledgeStore.getState().setSessionSources("session-timeout", ["personal"]);
+      registerKbProvider({
+        id: "local",
+        label: "本地文档",
+        isEnabled: () => true,
+        list: () => [],
+      });
+      semanticSearchMock.mockReturnValue(new Promise(() => {}));
+
+      const pending = preparePromptWithPersonalKnowledge(
+        "session-timeout",
+        "原始任务",
+        "查询内部制度",
+        "prompt-timeout",
+      );
+      await vi.advanceTimersByTimeAsync(12_000);
+
+      await expect(pending).resolves.toMatchObject({ promptText: "原始任务", resultCount: 0 });
+      expect(cancelSemanticSearchMock).toHaveBeenCalledWith("personal-search-test");
+      expect(useKnowledgeStore.getState().retrievals["session-timeout"]).toMatchObject({
+        state: "error",
+        message: "个人知识库检索超时",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -120,6 +120,7 @@ describe("KnowledgeBasePanel", () => {
     expect(invokeMock).toHaveBeenCalledWith("personal_knowledge_search", {
       query: "出差坐高铁能报销吗",
       limit: 20,
+      requestId: expect.any(String),
     });
   });
 

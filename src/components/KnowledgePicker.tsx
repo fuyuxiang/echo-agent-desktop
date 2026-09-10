@@ -25,6 +25,8 @@ export function KnowledgePicker({
   onToast?: (message: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const syncingRef = useRef(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const sourceCount = useKnowledgeStore((state) => state.sourceCount);
   const defaultSources = useKnowledgeStore((state) => state.defaultSources);
@@ -67,12 +69,25 @@ export function KnowledgePicker({
   }, [open]);
 
   const applySelection = (next: KnowledgeSource[]) => {
+    if (syncingRef.current) return;
     const state = useKnowledgeStore.getState();
     if (sessionId) {
+      const previous = [...selected];
       state.setSessionSources(sessionId, next);
-      void agentSetKnowledgeSources(sessionId, next).catch((error) => {
-        onToast?.(`知识来源同步失败：${String(error).replace(/^Error:\s*/, "")}`);
-      });
+      syncingRef.current = true;
+      setSyncing(true);
+      void agentSetKnowledgeSources(sessionId, next)
+        .catch((error) => {
+          // Native reconciliation is transactional; mirror that behaviour in
+          // the picker so the checkmarks always describe the capabilities the
+          // Runtime actually owns.
+          useKnowledgeStore.getState().setSessionSources(sessionId, previous);
+          onToast?.(`知识来源同步失败，已恢复上一选择：${String(error).replace(/^Error:\s*/, "")}`);
+        })
+        .finally(() => {
+          syncingRef.current = false;
+          setSyncing(false);
+        });
     } else {
       state.setDefaultSources(next);
     }
@@ -115,6 +130,7 @@ export function KnowledgePicker({
           setOpen((value) => !value);
         }}
         disabled={disabled}
+        aria-busy={syncing}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`${label}${selected.length === 0 ? "，未选择" : ""}`}
@@ -126,7 +142,7 @@ export function KnowledgePicker({
       </button>
 
       {open && (
-        <div className="knowledge-picker__menu" role="menu" aria-label="选择知识来源">
+        <div className="knowledge-picker__menu" role="menu" aria-label="选择知识来源" aria-busy={syncing}>
           <div className="knowledge-picker__heading">知识来源</div>
           <div className="knowledge-picker__hint">
             可多选。未选择时不会读取任何知识库；选择只作用于当前任务。
@@ -137,6 +153,7 @@ export function KnowledgePicker({
             role="menuitemcheckbox"
             aria-checked={personalSelected}
             aria-disabled={!personalSelected && sourceCount === 0}
+            disabled={syncing}
             className={`knowledge-picker__source-option${personalSelected ? " is-selected" : ""}${sourceCount === 0 ? " is-unavailable" : ""}`}
             onClick={() => toggle("personal")}
           >
@@ -160,6 +177,7 @@ export function KnowledgePicker({
             role="menuitemcheckbox"
             aria-checked={organizationSelected}
             aria-disabled={!organizationSelected && !organizationAvailable}
+            disabled={syncing}
             className={`knowledge-picker__source-option${organizationSelected ? " is-selected" : ""}${!organizationAvailable ? " is-unavailable" : ""}`}
             onClick={() => toggle("organization")}
           >
@@ -178,6 +196,12 @@ export function KnowledgePicker({
             </span>
           </button>
 
+          {syncing && (
+            <div className="knowledge-picker__connected" role="status" aria-live="polite">
+              正在为当前任务同步知识来源…
+            </div>
+          )}
+
           {providers.length > 0 && (
             <div className="knowledge-picker__connected" title={providers.map((source) => source.label).join("\n")}>
               个人知识已连接：{providers.map((source) => source.label).join("、")}
@@ -186,12 +210,12 @@ export function KnowledgePicker({
 
           <div className="knowledge-picker__actions">
             {onManage && (
-              <button type="button" onClick={() => { setOpen(false); onManage(); }}>
+              <button type="button" disabled={syncing} onClick={() => { setOpen(false); onManage(); }}>
                 管理个人知识库
               </button>
             )}
             {!organizationAvailable && onOpenOrganization && (
-              <button type="button" onClick={() => { setOpen(false); onOpenOrganization(); }}>
+              <button type="button" disabled={syncing} onClick={() => { setOpen(false); onOpenOrganization(); }}>
                 {orgSession?.loggedIn ? "查看组织连接" : "登录组织"}
               </button>
             )}

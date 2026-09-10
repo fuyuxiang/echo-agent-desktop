@@ -21,9 +21,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
+use tokio_util::sync::CancellationToken;
 
 const INDEX_VERSION: u32 = 1;
 const INDEX_DIR: &str = "personal-knowledge";
@@ -38,13 +39,17 @@ const MAX_LOCAL_FILES: usize = 500;
 const MAX_INDEXED_CONTENT_CHARS: usize = 512 * 1024;
 const MAX_QUERY_CHARS: usize = 8_192;
 const MAX_SEARCH_RESULTS: usize = 20;
-const FOREGROUND_EMBED_BATCHES: usize = 2;
-const SEARCH_TIMEOUT: Duration = Duration::from_secs(20);
-const RERANK_TIMEOUT: Duration = Duration::from_secs(12);
+const SEARCH_TIMEOUT: Duration = Duration::from_secs(6);
+const RERANK_TIMEOUT: Duration = Duration::from_secs(4);
 const EMBED_BATCH_TIMEOUT: Duration = Duration::from_secs(45);
+const SEARCH_CANCELLED: &str = "personal knowledge search cancelled";
+const BACKGROUND_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const MAX_SEARCH_REQUEST_ID_CHARS: usize = 128;
 
 static INDEX_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 static RUNTIME_STATUS: OnceLock<Mutex<RuntimeIndexStatus>> = OnceLock::new();
+static REBUILD_SCHEDULE: OnceLock<Mutex<RebuildScheduleState>> = OnceLock::new();
+static ACTIVE_SEARCHES: OnceLock<Mutex<HashMap<String, Arc<CancellationToken>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,6 +149,14 @@ struct SyncResult {
     vec_available: bool,
 }
 
+#[derive(Debug, Default)]
+struct RebuildScheduleState {
+    running: bool,
+    pending: bool,
+    force: bool,
+    last_finished_at: Option<Instant>,
+}
+
 fn index_lock() -> &'static tokio::sync::Mutex<()> {
     INDEX_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
@@ -155,6 +168,14 @@ fn runtime_status() -> &'static Mutex<RuntimeIndexStatus> {
             ..RuntimeIndexStatus::default()
         })
     })
+}
+
+fn rebuild_schedule() -> &'static Mutex<RebuildScheduleState> {
+    REBUILD_SCHEDULE.get_or_init(|| Mutex::new(RebuildScheduleState::default()))
+}
+
+fn active_searches() -> &'static Mutex<HashMap<String, Arc<CancellationToken>>> {
+    ACTIVE_SEARCHES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn update_runtime_status(update: impl FnOnce(&mut RuntimeIndexStatus)) {
@@ -778,7 +799,6 @@ fn emit_status(app: &AppHandle) {
 async fn rebuild_inner(
     app: Option<&AppHandle>,
     force: bool,
-    foreground: bool,
 ) -> Result<PersonalKnowledgeIndexStatus, String> {
     let _guard = index_lock().lock().await;
     update_runtime_status(|status| {
@@ -791,9 +811,23 @@ async fn rebuild_inner(
     if let Some(app) = app {
         emit_status(app);
     }
-    let synced = match sync_index(force) {
-        Ok(synced) => synced,
+    // Directory walking, Office extraction and SQLite indexing are blocking
+    // work. Keep them off Tauri's async workers; the mutex only serializes
+    // rebuild jobs and is never consulted by prompt-time search.
+    let synced = match tokio::task::spawn_blocking(move || sync_index(force)).await {
+        Ok(Ok(synced)) => synced,
+        Ok(Err(error)) => {
+            update_runtime_status(|status| {
+                status.state = "error".to_owned();
+                status.message = Some(error.clone());
+            });
+            if let Some(app) = app {
+                emit_status(app);
+            }
+            return Err(error);
+        }
         Err(error) => {
+            let error = format!("personal knowledge indexing worker failed: {error}");
             update_runtime_status(|status| {
                 status.state = "error".to_owned();
                 status.message = Some(error.clone());
@@ -822,7 +856,7 @@ async fn rebuild_inner(
     }
 
     let embedding_result = if synced.vec_available && synced.pending_embedding_count > 0 {
-        embed_pending(foreground.then_some(FOREGROUND_EMBED_BATCHES)).await
+        embed_pending(None).await
     } else {
         Ok((0, 0))
     };
@@ -874,12 +908,34 @@ async fn rebuild_inner(
 }
 
 pub(crate) fn schedule_rebuild(app: AppHandle, force: bool) {
-    tauri::async_runtime::spawn(async move {
-        if !crate::org::local_knowledge_allowed().await {
+    {
+        let mut schedule = rebuild_schedule().lock().unwrap();
+        schedule.pending = true;
+        schedule.force |= force;
+        if schedule.running {
             return;
         }
-        if let Err(error) = rebuild_inner(Some(&app), force, false).await {
-            tracing::warn!(%error, "personal knowledge background indexing failed");
+        schedule.running = true;
+    }
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let force = {
+                let mut schedule = rebuild_schedule().lock().unwrap();
+                schedule.pending = false;
+                std::mem::take(&mut schedule.force)
+            };
+            if crate::org::local_knowledge_allowed().await {
+                if let Err(error) = rebuild_inner(Some(&app), force).await {
+                    tracing::warn!(%error, "personal knowledge background indexing failed");
+                }
+            }
+            let mut schedule = rebuild_schedule().lock().unwrap();
+            schedule.last_finished_at = Some(Instant::now());
+            if schedule.pending {
+                continue;
+            }
+            schedule.running = false;
+            break;
         }
     });
 }
@@ -933,20 +989,26 @@ async fn rerank_candidates(
     query: &str,
     candidates: Vec<SearchResult>,
     limit: usize,
+    cancellation: &CancellationToken,
 ) -> Result<Vec<SearchResult>, String> {
     let config = reranker_config();
     let reranker = ApiReranker::from_config(&config.reranker)
         .ok_or_else(|| "personal knowledge reranker is not configured".to_owned())?;
-    tokio::time::timeout(RERANK_TIMEOUT, reranker.rerank(query, &candidates, limit))
-        .await
-        .map_err(|_| "personal knowledge rerank request timed out".to_owned())?
-        .map_err(|error| format!("personal knowledge rerank request failed: {error}"))
+    tokio::select! {
+        _ = cancellation.cancelled() => Err(SEARCH_CANCELLED.to_owned()),
+        result = tokio::time::timeout(RERANK_TIMEOUT, reranker.rerank(query, &candidates, limit)) => {
+            result
+                .map_err(|_| "personal knowledge rerank request timed out".to_owned())?
+                .map_err(|error| format!("personal knowledge rerank request failed: {error}"))
+        }
+    }
 }
 
 async fn search_hybrid(
     query: &str,
     limit: usize,
     manifest: &IndexManifest,
+    cancellation: &CancellationToken,
 ) -> Result<(Vec<PersonalKnowledgeEntry>, bool, Option<String>), String> {
     let candidate_count = limit.saturating_mul(5).clamp(limit, 60);
     let config = coarse_search_config(candidate_count);
@@ -957,10 +1019,14 @@ async fn search_hybrid(
             Some(crate::agent_runtime::MEMORY_SILICONFLOW_API_KEY.to_owned()),
         )
         .with_search_config(config);
-    let coarse = tokio::time::timeout(SEARCH_TIMEOUT, backend.search(query, candidate_count, 0.1))
-        .await
-        .map_err(|_| "personal knowledge hybrid search timed out".to_owned())?
-        .map_err(|error| format!("personal knowledge hybrid search failed: {error}"))?;
+    let coarse = tokio::select! {
+        _ = cancellation.cancelled() => return Err(SEARCH_CANCELLED.to_owned()),
+        result = tokio::time::timeout(SEARCH_TIMEOUT, backend.search(query, candidate_count, 0.1)) => {
+            result
+                .map_err(|_| "personal knowledge hybrid search timed out".to_owned())?
+                .map_err(|error| format!("personal knowledge hybrid search failed: {error}"))?
+        }
+    };
     let candidates = coarse
         .into_iter()
         .map(|result| SearchResult {
@@ -977,8 +1043,9 @@ async fn search_hybrid(
     if candidates.len() <= 1 {
         return Ok((map_results(candidates, manifest), false, None));
     }
-    match rerank_candidates(query, candidates.clone(), limit).await {
+    match rerank_candidates(query, candidates.clone(), limit, cancellation).await {
         Ok(reranked) => Ok((map_results(reranked, manifest), true, None)),
+        Err(error) if error == SEARCH_CANCELLED => Err(error),
         Err(error) => {
             tracing::warn!(%error, "personal knowledge reranking degraded to hybrid ordering");
             Ok((
@@ -1073,47 +1140,70 @@ fn snippet_around(text: &str, byte_position: usize, max_chars: usize) -> String 
     )
 }
 
-fn lexical_search(query: &str, limit: usize) -> Result<Vec<PersonalKnowledgeEntry>, String> {
+/// Fast degradation path backed by the already-built SQLite FTS index.
+/// Prompt-time retrieval must never rescan and reread the user's source tree.
+fn indexed_lexical_search(
+    query: &str,
+    limit: usize,
+    manifest: &IndexManifest,
+) -> Result<Vec<PersonalKnowledgeEntry>, String> {
+    if !database_path().is_file() {
+        return Ok(Vec::new());
+    }
+    let index = open_index()?;
     let terms = search_terms(query);
-    let mut results = Vec::new();
-    for source_file in scan_files()? {
-        let title = title_for(&source_file.path);
-        let title_lower = title.to_lowercase();
-        let Ok(text) = read_source_file(&source_file.path) else {
-            continue;
-        };
-        let lower = text.to_lowercase();
-        let mut best: Option<(usize, usize, f64)> = None;
-        for (term_index, term) in terms.iter().enumerate() {
-            let title_hit = title_lower.contains(term);
-            let position = lower.find(term).or_else(|| title_hit.then_some(0));
-            let Some(position) = position else {
+    let by_cache = manifest
+        .entries
+        .iter()
+        .map(|entry| (entry.cache_path.as_str(), entry))
+        .collect::<HashMap<_, _>>();
+    let mut by_id: HashMap<String, PersonalKnowledgeEntry> = HashMap::new();
+    let candidate_limit = limit.saturating_mul(4).clamp(limit, 80);
+    for (term_index, term) in terms.iter().enumerate() {
+        let hits = index
+            .search_fts(term, candidate_limit)
+            .map_err(|error| format!("search personal knowledge FTS index: {error}"))?;
+        for hit in hits {
+            let Some(chunk) = index
+                .get_chunk(&hit.chunk_id)
+                .map_err(|error| format!("read personal knowledge FTS result: {error}"))?
+            else {
                 continue;
             };
+            let Some(source) = by_cache.get(chunk.path.as_str()) else {
+                continue;
+            };
+            let start_line = chunk.start_line.saturating_sub(2) + 1;
+            let end_line = chunk.end_line.saturating_sub(2).max(start_line);
+            let id = format!("{}#L{}", source.original_path, start_line);
+            let title_hit = source.title.to_lowercase().contains(term);
+            let rank_quality = 1.0 / (1.0 + hit.rank.abs());
             let score = (terms.len().saturating_sub(term_index) * 10 + term.chars().count() * 2)
                 as f64
-                + if title_hit { 20.0 } else { 0.0 };
-            if best.is_none_or(|(_, _, previous)| score > previous) {
-                best = Some((position, term_index, score));
+                + if title_hit { 20.0 } else { 0.0 }
+                + rank_quality;
+            let text = strip_cached_heading(&chunk.text, &source.title);
+            let candidate = PersonalKnowledgeEntry {
+                id: id.clone(),
+                title: source.title.clone(),
+                snippet: snippet_around(&text, 0, 640),
+                source: source.source_id.clone(),
+                source_label: source.source_label.clone(),
+                url: source.original_path.clone(),
+                path: source.original_path.clone(),
+                start_line,
+                end_line,
+                score,
+            };
+            if by_id
+                .get(&id)
+                .is_none_or(|previous| candidate.score > previous.score)
+            {
+                by_id.insert(id, candidate);
             }
         }
-        let Some((position, _, score)) = best else {
-            continue;
-        };
-        let path = source_file.path.to_string_lossy().into_owned();
-        results.push(PersonalKnowledgeEntry {
-            id: path.clone(),
-            title,
-            snippet: snippet_around(&text, position, 640),
-            source: source_file.source_id,
-            source_label: source_file.source_label,
-            url: path.clone(),
-            path,
-            start_line: 1,
-            end_line: 1,
-            score,
-        });
     }
+    let mut results = by_id.into_values().collect::<Vec<_>>();
     results.sort_by(|left, right| {
         right
             .score
@@ -1125,10 +1215,85 @@ fn lexical_search(query: &str, limit: usize) -> Result<Vec<PersonalKnowledgeEntr
     Ok(results)
 }
 
+async fn indexed_lexical_search_async(
+    query: &str,
+    limit: usize,
+    manifest: &IndexManifest,
+    cancellation: &CancellationToken,
+) -> Result<Vec<PersonalKnowledgeEntry>, String> {
+    let query = query.to_owned();
+    let manifest = manifest.clone();
+    let mut task =
+        tokio::task::spawn_blocking(move || indexed_lexical_search(&query, limit, &manifest));
+    tokio::select! {
+        _ = cancellation.cancelled() => {
+            task.abort();
+            Err(SEARCH_CANCELLED.to_owned())
+        }
+        result = &mut task => result
+            .map_err(|error| format!("personal knowledge keyword search worker failed: {error}"))?,
+    }
+}
+
+fn should_refresh_in_background(manifest: &IndexManifest) -> bool {
+    if let Ok(schedule) = rebuild_schedule().lock() {
+        if schedule.running
+            || schedule
+                .last_finished_at
+                .is_some_and(|finished| finished.elapsed() < BACKGROUND_REFRESH_INTERVAL)
+        {
+            return false;
+        }
+    }
+    let Some(last_updated_at) = manifest.last_updated_at else {
+        return true;
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    now.saturating_sub(Duration::from_millis(last_updated_at)) >= BACKGROUND_REFRESH_INTERVAL
+}
+
+fn validate_search_request_id(request_id: &str) -> Result<(), String> {
+    let request_id = request_id.trim();
+    if request_id.is_empty()
+        || request_id.chars().count() > MAX_SEARCH_REQUEST_ID_CHARS
+        || request_id.chars().any(char::is_control)
+    {
+        return Err("personal knowledge search request id is invalid".to_owned());
+    }
+    Ok(())
+}
+
+fn register_search(request_id: &str) -> Result<Arc<CancellationToken>, String> {
+    validate_search_request_id(request_id)?;
+    let token = Arc::new(CancellationToken::new());
+    let previous = active_searches()
+        .lock()
+        .map_err(|_| "personal knowledge search registry is unavailable".to_owned())?
+        .insert(request_id.to_owned(), token.clone());
+    if let Some(previous) = previous {
+        previous.cancel();
+    }
+    Ok(token)
+}
+
+fn unregister_search(request_id: &str, token: &Arc<CancellationToken>) {
+    if let Ok(mut searches) = active_searches().lock() {
+        if searches
+            .get(request_id)
+            .is_some_and(|current| Arc::ptr_eq(current, token))
+        {
+            searches.remove(request_id);
+        }
+    }
+}
+
 pub(crate) async fn search(
     query: &str,
     limit: usize,
     app: Option<&AppHandle>,
+    cancellation: &CancellationToken,
 ) -> Result<PersonalKnowledgeSearchResponse, String> {
     let query = query.trim();
     if query.is_empty() {
@@ -1151,110 +1316,57 @@ pub(crate) async fn search(
             index: index_status_snapshot(),
         });
     }
+    if cancellation.is_cancelled() {
+        return Err(SEARCH_CANCELLED.to_owned());
+    }
 
-    let Ok(_guard) = index_lock().try_lock() else {
-        let items = lexical_search(query, limit)?;
-        return Ok(PersonalKnowledgeSearchResponse {
-            items,
-            retrieval_mode: "keyword".to_owned(),
-            degraded_reason: Some("语义索引正在更新，本次已使用关键词检索".to_owned()),
-            index: index_status_snapshot(),
-        });
-    };
-
-    update_runtime_status(|status| {
-        status.state = "indexing".to_owned();
-        status.message = Some("正在检查个人知识索引".to_owned());
-    });
-    if let Some(app) = app {
-        emit_status(app);
-    }
-    let synced = match sync_index(false) {
-        Ok(synced) => synced,
-        Err(error) => {
-            tracing::warn!(%error, "personal knowledge index sync failed; using keyword retrieval");
-            let items = lexical_search(query, limit)?;
-            update_runtime_status(|status| {
-                status.state = "degraded".to_owned();
-                status.message = Some(format!("语义索引不可用，已使用关键词检索：{error}"));
-            });
-            return Ok(PersonalKnowledgeSearchResponse {
-                items,
-                retrieval_mode: "keyword".to_owned(),
-                degraded_reason: Some(error),
-                index: index_status_snapshot(),
-            });
-        }
-    };
-    update_runtime_status(|status| {
-        status.file_count = synced.manifest.entries.len();
-        status.chunk_count = synced.chunk_count;
-        status.embedded_chunk_count = synced
-            .chunk_count
-            .saturating_sub(synced.pending_embedding_count);
-        status.pending_embedding_count = synced.pending_embedding_count;
-    });
-    let mut degraded_reason = None;
-    if synced.vec_available && synced.pending_embedding_count > 0 {
-        if let Err(error) = embed_pending(Some(FOREGROUND_EMBED_BATCHES)).await {
-            degraded_reason = Some(error);
-        }
-    }
-    let remaining = if synced.vec_available {
-        open_index()
-            .and_then(|index| {
-                index
-                    .chunks_without_embeddings()
-                    .map_err(|error| format!("read personal knowledge embedding state: {error}"))
-            })
-            .map(|pending| pending.len())
-            .unwrap_or(synced.pending_embedding_count)
-    } else {
-        synced.chunk_count
-    };
-    let embedded_chunk_count = synced.chunk_count.saturating_sub(remaining);
-    let (items, retrieval_mode) = match search_hybrid(query, limit, &synced.manifest).await {
-        Ok((items, reranked, rerank_error)) if !items.is_empty() => {
-            if let Some(error) = rerank_error {
-                degraded_reason = Some(match degraded_reason.take() {
-                    Some(previous) => format!("{previous}; {error}"),
-                    None => error,
-                });
-            }
-            let vectors_used = synced.vec_available && embedded_chunk_count > 0;
-            let mode = match (vectors_used, reranked) {
-                (true, true) => "hybrid-reranked",
-                (true, false) => "hybrid",
-                (false, true) => "keyword-reranked",
-                (false, false) => "keyword",
-            };
-            (items, mode)
-        }
-        Ok(_) => (lexical_search(query, limit)?, "keyword"),
-        Err(error) => {
-            degraded_reason = Some(error);
-            (lexical_search(query, limit)?, "keyword")
-        }
-    };
-    update_runtime_status(|status| {
-        status.pending_embedding_count = remaining;
-        status.embedded_chunk_count = status.chunk_count.saturating_sub(remaining);
-        if remaining == 0 {
-            status.state = "ready".to_owned();
-            status.message = Some("语义索引已就绪".to_owned());
-        } else {
-            status.state = "degraded".to_owned();
-            status.message = Some("部分内容正在后台生成向量，当前结果可能不完整".to_owned());
-        }
-    });
-    if let Some(app) = app {
-        emit_status(app);
-    }
-    if remaining > 0 {
+    // Prompt-time retrieval reads only the last committed index snapshot. File
+    // walking, document extraction and embeddings are always background work.
+    let manifest = load_manifest();
+    if should_refresh_in_background(&manifest) {
         if let Some(app) = app {
             schedule_rebuild(app.clone(), false);
         }
     }
+    let status = index_status_snapshot();
+    if manifest.entries.is_empty() || !database_path().is_file() {
+        return Ok(PersonalKnowledgeSearchResponse {
+            items: Vec::new(),
+            retrieval_mode: "keyword".to_owned(),
+            degraded_reason: Some("个人知识索引正在后台建立，本次暂无可检索内容".to_owned()),
+            index: status,
+        });
+    }
+
+    let mut degraded_reason = (status.state == "indexing")
+        .then(|| "个人知识索引正在后台更新，本次使用上一版完整索引".to_owned());
+    let mut retrieval_mode = "keyword";
+    let items = if status.embedded_chunk_count > 0 {
+        match search_hybrid(query, limit, &manifest, cancellation).await {
+            Ok((items, reranked, rerank_error)) if !items.is_empty() => {
+                if let Some(error) = rerank_error {
+                    degraded_reason = Some(format!("相关性重排暂不可用：{error}"));
+                }
+                retrieval_mode = if reranked {
+                    "hybrid-reranked"
+                } else {
+                    "hybrid"
+                };
+                items
+            }
+            Ok(_) => indexed_lexical_search_async(query, limit, &manifest, cancellation).await?,
+            Err(error) if error == SEARCH_CANCELLED => return Err(error),
+            Err(error) => {
+                tracing::warn!(%error, "personal knowledge semantic search degraded to indexed keyword retrieval");
+                degraded_reason = Some(format!("语义检索暂不可用，本次已使用本地索引：{error}"));
+                indexed_lexical_search_async(query, limit, &manifest, cancellation).await?
+            }
+        }
+    } else {
+        degraded_reason
+            .get_or_insert_with(|| "语义索引正在后台生成，本次已使用关键词索引".to_owned());
+        indexed_lexical_search_async(query, limit, &manifest, cancellation).await?
+    };
     Ok(PersonalKnowledgeSearchResponse {
         items,
         retrieval_mode: retrieval_mode.to_owned(),
@@ -1268,8 +1380,36 @@ pub async fn personal_knowledge_search(
     app: AppHandle,
     query: String,
     limit: Option<usize>,
+    request_id: Option<String>,
 ) -> Result<PersonalKnowledgeSearchResponse, String> {
-    search(&query, limit.unwrap_or(5), Some(&app)).await
+    let request_id = request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|request_id| !request_id.is_empty());
+    let token = match request_id {
+        Some(request_id) => register_search(request_id)?,
+        None => Arc::new(CancellationToken::new()),
+    };
+    let result = search(&query, limit.unwrap_or(5), Some(&app), token.as_ref()).await;
+    if let Some(request_id) = request_id {
+        unregister_search(request_id, &token);
+    }
+    result
+}
+
+#[tauri::command]
+pub fn personal_knowledge_cancel_search(request_id: String) -> Result<bool, String> {
+    validate_search_request_id(&request_id)?;
+    let token = active_searches()
+        .lock()
+        .map_err(|_| "personal knowledge search registry is unavailable".to_owned())?
+        .remove(request_id.trim());
+    if let Some(token) = token {
+        token.cancel();
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }
 
 #[tauri::command]
@@ -1279,7 +1419,11 @@ pub async fn personal_knowledge_rebuild(
     if !crate::org::local_knowledge_allowed().await {
         return Err("当前组织策略或连接状态不允许读取个人知识库".into());
     }
-    rebuild_inner(Some(&app), true, false).await
+    let result = rebuild_inner(Some(&app), true).await;
+    if let Ok(mut schedule) = rebuild_schedule().lock() {
+        schedule.last_finished_at = Some(Instant::now());
+    }
+    result
 }
 
 #[tauri::command]
@@ -1320,6 +1464,23 @@ mod tests {
             strip_cached_heading("# 休假制度\n\n员工每年享有十天年假。", "休假制度"),
             "员工每年享有十天年假。"
         );
+    }
+
+    #[test]
+    fn cancelling_registered_search_reaches_its_native_token() {
+        let request_id = "personal-search-cancel-test";
+        let token = register_search(request_id).expect("register search");
+
+        assert!(personal_knowledge_cancel_search(request_id.to_owned()).expect("cancel search"));
+        assert!(token.is_cancelled());
+        assert!(!personal_knowledge_cancel_search(request_id.to_owned()).expect("cancel again"));
+    }
+
+    #[test]
+    fn search_request_ids_are_bounded() {
+        assert!(validate_search_request_id("request-1").is_ok());
+        assert!(validate_search_request_id("  ").is_err());
+        assert!(validate_search_request_id(&"x".repeat(MAX_SEARCH_REQUEST_ID_CHARS + 1)).is_err());
     }
 
     #[test]

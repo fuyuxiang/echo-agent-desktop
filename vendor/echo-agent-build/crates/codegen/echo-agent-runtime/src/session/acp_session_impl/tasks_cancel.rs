@@ -375,6 +375,7 @@ impl SessionActor {
             history,
             trigger,
             user_initiated,
+            acknowledged: _,
         } = options;
         let rewind_requested = matches!(
             history,

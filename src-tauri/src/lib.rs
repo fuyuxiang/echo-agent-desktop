@@ -373,6 +373,7 @@ pub fn run() {
             org::org_local_kb_sources_set,
             org::personal_knowledge_allowed,
             personal_knowledge::personal_knowledge_search,
+            personal_knowledge::personal_knowledge_cancel_search,
             personal_knowledge::personal_knowledge_rebuild,
             personal_knowledge::personal_knowledge_index_status,
             // connectors / MCP (echo.agent/mcp/*)

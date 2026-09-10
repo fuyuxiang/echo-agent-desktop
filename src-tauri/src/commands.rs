@@ -1295,8 +1295,24 @@ pub async fn agent_set_knowledge_sources(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
+    let previous = crate::org_mcp::session_selection(&session_id);
     crate::org_mcp::set_session_selection(&session_id, personal, organization);
-    crate::org_mcp::reconcile_session(&tx, &session_id).await?;
+    if let Err(error) = crate::org_mcp::reconcile_session(&tx, &session_id).await {
+        // Selection changes are transactional. In particular, a failed detach
+        // must never let a prompt proceed while a source the user deselected is
+        // still attached to the resident Runtime session.
+        crate::org_mcp::set_session_selection(
+            &session_id,
+            previous.personal,
+            previous.organization,
+        );
+        if let Err(rollback_error) = crate::org_mcp::reconcile_session(&tx, &session_id).await {
+            return Err(format!(
+                "知识来源同步失败：{error}；恢复上一状态也失败：{rollback_error}"
+            ));
+        }
+        return Err(format!("知识来源同步失败，已恢复上一状态：{error}"));
+    }
     let active = crate::org_mcp::effective_selection(crate::org_mcp::KnowledgeSourceSelection {
         personal,
         organization,
