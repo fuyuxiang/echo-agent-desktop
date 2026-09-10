@@ -1,4 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Check,
+  ChevronDown,
+  Copy,
+  FileCode2,
+  RefreshCw,
+  Square,
+  ThumbsDown,
+  ThumbsUp,
+  Volume2,
+} from "lucide-react";
 import { Markdown, type MarkdownConfig } from "./markdown/index";
 import { LoadingRow } from "./LoadingRow";
 import { ExecutionProcess } from "./ExecutionProcess";
@@ -58,9 +69,10 @@ function speechText(markdown: string): string {
  * Renders one chat message. Assistant messages are left-aligned with avatar +
  * name row; user messages are right-aligned bubbles with no avatar / name.
  *
- * Hover action bar (对齐 EchoAgent):
+ * Message action bar (对齐 EchoAgent):
  *  - user: 复制 / 编辑重发
- *  - assistant: 复制 / 复制 Markdown
+ *  - assistant: rendered after the complete answer, so read-then-act follows
+ *    the visual and keyboard order.
  */
 export function MessageItem({
   message,
@@ -71,6 +83,8 @@ export function MessageItem({
   onOpenTool,
   onEditResend,
   onRetry,
+  retrying = false,
+  latest = false,
   onToast,
 }: {
   message: ChatMessage;
@@ -88,10 +102,15 @@ export function MessageItem({
   /** Regenerate this response (last assistant message only): rewinds the
    *  conversation to the preceding user prompt and resends it. */
   onRetry?: () => void;
+  /** Prevent duplicate retry gestures and expose progress in the local action. */
+  retrying?: boolean;
+  /** The latest completed assistant reply keeps its actions more discoverable. */
+  latest?: boolean;
 }) {
   const { theme } = useTheme();
   const [speaking, setSpeaking] = useState(false);
   const [copiedKind, setCopiedKind] = useState<"plain" | "markdown" | null>(null);
+  const [copyMenuOpen, setCopyMenuOpen] = useState(false);
   const knowledgeTrace = useKnowledgeStore((state) => (
     sessionId && message.promptId
       ? state.turnTraces[sessionId]?.[message.promptId]
@@ -99,11 +118,39 @@ export function MessageItem({
   ));
   const stopSpeakingRef = useRef<(() => void) | null>(null);
   const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyMenuRef = useRef<HTMLDivElement>(null);
+  const copyMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const copyMenuListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => () => {
     stopSpeakingRef.current?.();
     if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
   }, []);
+
+  const closeCopyMenu = useCallback((restoreFocus = false) => {
+    setCopyMenuOpen(false);
+    if (restoreFocus) copyMenuTriggerRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (!copyMenuOpen) return;
+    copyMenuListRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+
+    const closeOnOutside = (event: PointerEvent) => {
+      if (!copyMenuRef.current?.contains(event.target as Node)) closeCopyMenu();
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeCopyMenu(true);
+    };
+    document.addEventListener("pointerdown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [closeCopyMenu, copyMenuOpen]);
 
   const markCopied = useCallback((kind: "plain" | "markdown") => {
     setCopiedKind(kind);
@@ -164,6 +211,18 @@ export function MessageItem({
     knowledgeTrace?.personal && knowledgeTrace.personal.state !== "idle"
       || knowledgeTrace?.organization?.state === "unavailable",
   );
+  const hasFailedTool = message.parts.some(
+    (part) => part.kind === "tool_call" && part.toolCall.status === "failed",
+  );
+  const retryIsExecution = hasFailedTool || hasTerminalProcessStatus || !hasAnswerText;
+  const retryLabel = retrying
+    ? retryIsExecution ? "正在重新执行…" : "正在重新生成…"
+    : retryIsExecution ? "重新执行" : "重新生成";
+  const copyMainLabel = copiedKind === "plain"
+    ? "已复制"
+    : copiedKind === "markdown"
+      ? "已复制 Markdown"
+      : "复制纯文本";
 
   const toggleSpeak = useCallback(() => {
     if (speaking) {
@@ -274,59 +333,6 @@ export function MessageItem({
             <img src={logoMarkUrl} alt="" aria-hidden="true" draggable={false} />
           </span>
           <span className="msg__name">EchoAgent</span>
-          {/* Hover actions — inline in header for assistant messages */}
-          {message.complete && (
-            <div className="msg__actions msg__actions--inline">
-              {hasAnswerText && (
-                <>
-                  <button
-                    type="button"
-                    className="msg__action-btn msg__action-btn--copy"
-                    data-chat-copy="true"
-                    onClick={() => void copyText(plainText, "plain")}
-                    title={copiedKind === "plain" ? "已复制" : "复制纯文本"}
-                    aria-label={copiedKind === "plain" ? "已复制" : "复制纯文本"}
-                    aria-live="polite"
-                  >
-                    {copiedKind === "plain" ? "已复制" : "复制"}
-                  </button>
-                  <button
-                    type="button"
-                    className="msg__action-btn msg__action-btn--copy"
-                    data-chat-copy="true"
-                    onClick={() => void copyText(markdownText, "markdown")}
-                    title={copiedKind === "markdown" ? "已复制 Markdown" : "复制 Markdown 源码"}
-                    aria-label={copiedKind === "markdown" ? "已复制 Markdown" : "复制 Markdown 源码"}
-                    aria-live="polite"
-                  >
-                    {copiedKind === "markdown" ? "已复制" : "MD"}
-                  </button>
-                  <button
-                    type="button"
-                    className="msg__action-btn"
-                    onClick={toggleSpeak}
-                    title={speaking ? "停止朗读" : "朗读回复"}
-                    aria-pressed={speaking}
-                  >
-                    {speaking ? "停止" : "朗读"}
-                  </button>
-                </>
-              )}
-              {onRetry && (
-                <button
-                  type="button"
-                  className="msg__action-btn"
-                  onClick={onRetry}
-                  title="重新生成回复（回溯后重发）"
-                >
-                  重试
-                </button>
-              )}
-              {sessionId && hasAnswerText && (
-                <FeedbackButtons sessionId={sessionId} messageId={message.id} />
-              )}
-            </div>
-          )}
         </div>
         <div className="msg__body">
           {message.parts.length === 0 && !message.complete && (
@@ -371,6 +377,138 @@ export function MessageItem({
               <span className="msg__caret">▋</span>
             )}
         </div>
+        {message.complete && (hasAnswerText || onRetry) && (
+          <div
+            className={
+              "msg__actions msg__actions--footer" +
+              (latest ? " msg__actions--latest" : "")
+            }
+            role="group"
+            aria-label="回复操作"
+          >
+            <div className="msg__action-cluster">
+              {hasAnswerText && (
+                <>
+                  <div
+                    className="msg__copy-split"
+                    ref={copyMenuRef}
+                    onBlur={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) closeCopyMenu();
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="msg__action-btn msg__copy-main"
+                      data-chat-copy="true"
+                      onClick={() => {
+                        closeCopyMenu();
+                        void copyText(plainText, "plain");
+                      }}
+                      title={copyMainLabel}
+                      aria-label={copyMainLabel}
+                      aria-live="polite"
+                    >
+                      {copiedKind ? <Check size={14} /> : <Copy size={14} />}
+                      <span>{copiedKind ? "已复制" : "复制"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="msg__action-btn msg__copy-menu-trigger"
+                      ref={copyMenuTriggerRef}
+                      aria-label="更多复制选项"
+                      aria-haspopup="menu"
+                      aria-expanded={copyMenuOpen}
+                      title="更多复制选项"
+                      onClick={() => setCopyMenuOpen((open) => !open)}
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                          event.preventDefault();
+                          setCopyMenuOpen(true);
+                        }
+                      }}
+                    >
+                      <ChevronDown size={13} />
+                    </button>
+                    {copyMenuOpen && (
+                      <div
+                        className="msg__copy-menu"
+                        role="menu"
+                        aria-label="选择复制格式"
+                        ref={copyMenuListRef}
+                        onKeyDown={(event) => {
+                          const items = Array.from(
+                            copyMenuListRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+                          );
+                          const index = items.indexOf(document.activeElement as HTMLButtonElement);
+                          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                            event.preventDefault();
+                            const delta = event.key === "ArrowDown" ? 1 : -1;
+                            items[(index + delta + items.length) % items.length]?.focus();
+                          } else if (event.key === "Home" || event.key === "End") {
+                            event.preventDefault();
+                            items[event.key === "Home" ? 0 : items.length - 1]?.focus();
+                          }
+                        }}
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-chat-copy="true"
+                          onClick={() => {
+                            closeCopyMenu();
+                            void copyText(plainText, "plain");
+                          }}
+                        >
+                          <Copy size={14} />
+                          <span>复制纯文本</span>
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-chat-copy="true"
+                          onClick={() => {
+                            closeCopyMenu();
+                            void copyText(markdownText, "markdown");
+                          }}
+                        >
+                          <FileCode2 size={14} />
+                          <span>复制 Markdown</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="msg__action-btn"
+                    onClick={toggleSpeak}
+                    title={speaking ? "停止朗读" : "朗读回复"}
+                    aria-label={speaking ? "停止朗读" : "朗读回复"}
+                    aria-pressed={speaking}
+                  >
+                    {speaking ? <Square size={13} /> : <Volume2 size={14} />}
+                    <span>{speaking ? "停止" : "朗读"}</span>
+                  </button>
+                </>
+              )}
+              {onRetry && (
+                <button
+                  type="button"
+                  className="msg__action-btn"
+                  onClick={onRetry}
+                  title={retryIsExecution ? "回溯对话并重新执行本轮" : "回溯对话并重新生成回复"}
+                  disabled={retrying}
+                  aria-busy={retrying}
+                >
+                  <RefreshCw size={14} className={retrying ? "msg__action-spin" : undefined} />
+                  <span>{retryLabel}</span>
+                </button>
+              )}
+            </div>
+            {sessionId && hasAnswerText && (
+              <FeedbackButtons sessionId={sessionId} messageId={message.id} />
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -415,10 +553,10 @@ function FeedbackButtons({
         }
         onClick={() => click("up")}
         title={current === "up" ? "取消赞" : "赞"}
-        aria-label="赞"
+        aria-label={current === "up" ? "取消赞" : "赞"}
         aria-pressed={current === "up"}
       >
-        👍
+        <ThumbsUp size={14} fill={current === "up" ? "currentColor" : "none"} />
       </button>
       <button
         type="button"
@@ -428,10 +566,10 @@ function FeedbackButtons({
         }
         onClick={() => click("down")}
         title={current === "down" ? "取消踩" : "踩"}
-        aria-label="踩"
+        aria-label={current === "down" ? "取消踩" : "踩"}
         aria-pressed={current === "down"}
       >
-        👎
+        <ThumbsDown size={14} fill={current === "down" ? "currentColor" : "none"} />
       </button>
       {dialogOpen && (
         <FeedbackDialog
