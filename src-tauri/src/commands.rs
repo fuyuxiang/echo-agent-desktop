@@ -1335,6 +1335,8 @@ pub struct KnowledgeSourcesView {
 }
 
 #[tauri::command]
+// Keep these arguments flat to preserve the existing Tauri IPC payload contract.
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_send(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
