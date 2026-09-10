@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { KnowledgePicker } from "../KnowledgePicker";
 import { registerKbProvider, resetKbRegistry } from "@/lib/knowledge-base";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
@@ -40,7 +40,7 @@ describe("KnowledgePicker", () => {
     expect(onManage).toHaveBeenCalledOnce();
   });
 
-  it("支持为当前任务多选和取消知识来源", () => {
+  it("支持为当前任务多选和取消知识来源", async () => {
     registerKbProvider({ id: "local", label: "本地：notes", isEnabled: () => true, list: () => [] });
     useKnowledgeStore.getState().setSourceCount(1);
     useOrgSessionStore.setState({
@@ -61,12 +61,12 @@ describe("KnowledgePicker", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "知识来源，未选择" }));
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /个人知识库/ }));
+    await waitFor(() => expect(screen.getByRole("menuitemcheckbox", { name: /组织知识库/ })).toBeEnabled());
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /组织知识库/ }));
 
-    expect(useKnowledgeStore.getState().sessionSources["session-1"]).toEqual([
-      "personal",
-      "organization",
-    ]);
+    await waitFor(() => expect(useKnowledgeStore.getState().sessionSources["session-1"]).toEqual([
+      "personal", "organization",
+    ]));
     expect(screen.getByRole("button", { name: "知识来源 2" })).toBeInTheDocument();
     expect(setKnowledgeSourcesMock).toHaveBeenLastCalledWith("session-1", [
       "personal",
@@ -74,7 +74,23 @@ describe("KnowledgePicker", () => {
     ]);
 
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /个人知识库/ }));
-    expect(useKnowledgeStore.getState().sessionSources["session-1"]).toEqual(["organization"]);
+    await waitFor(() => expect(useKnowledgeStore.getState().sessionSources["session-1"])
+      .toEqual(["organization"]));
+  });
+
+  it("原生同步失败时回滚勾选并告知用户", async () => {
+    const onToast = vi.fn();
+    registerKbProvider({ id: "local", label: "本地：notes", isEnabled: () => true, list: () => [] });
+    useKnowledgeStore.getState().setSourceCount(1);
+    setKnowledgeSourcesMock.mockRejectedValueOnce(new Error("MCP 连接超时"));
+    render(<KnowledgePicker sessionId="session-failed" onToast={onToast} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "知识来源，未选择" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /个人知识库/ }));
+
+    await waitFor(() => expect(useKnowledgeStore.getState().sessionSources["session-failed"])
+      .toEqual([]));
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("已恢复上一选择"));
   });
 
   it("组织未登录时不可选择，并提供明确入口", () => {

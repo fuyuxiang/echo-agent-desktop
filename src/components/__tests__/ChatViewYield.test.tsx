@@ -264,7 +264,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
     const { rerender } = renderChat();
     await waitFor(() => expect(screen.getByText("已暂停（会话上下文已保留）")).toBeInTheDocument());
-    act(() => {
+    await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "恢复并继续" }));
     });
     expect(baseProps.onSend).toHaveBeenCalledWith("请继续。");
@@ -272,6 +272,24 @@ describe("ChatView pause/yield/resume 闭环", () => {
     await waitFor(() =>
       expect(screen.queryByText("已暂停（会话上下文已保留）")).toBeNull(),
     );
+  });
+
+  it("「恢复并继续」未被接纳时保留暂停闸门", async () => {
+    setStore({
+      streaming: false,
+      streamingMessageId: null,
+      control: { action: "pause", phase: "paused", requestedAt: 1 },
+    });
+    baseProps.onSend.mockResolvedValueOnce(false);
+    const { rerender } = renderChat();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "恢复并继续" }));
+    });
+
+    rerender(<ThemeProvider><ChatView {...baseProps} /></ThemeProvider>);
+    expect(screen.getByText("已暂停（会话上下文已保留）")).toBeInTheDocument();
+    expect(baseProps.onToast).toHaveBeenCalledWith(expect.stringContaining("任务仍保持暂停"));
   });
 
   it("模型初始化失败且没有回溯点时，安全重发原始消息", async () => {

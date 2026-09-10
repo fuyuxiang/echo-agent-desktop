@@ -245,6 +245,10 @@ pub struct CancelOptions {
     pub trigger: Option<CancelTrigger>,
     /// Drives the cancel-rate metric, and marks an untriggered cancel as the user's.
     pub user_initiated: bool,
+    /// Optional acknowledgement for clients that must know the session actor has
+    /// actually applied the cancellation before presenting a stable stopped state.
+    /// Internal fire-and-forget cancellation paths leave this unset.
+    pub acknowledged: Option<std::sync::Arc<tokio::sync::Notify>>,
 }
 pub enum SessionCommand {
     Initialize {

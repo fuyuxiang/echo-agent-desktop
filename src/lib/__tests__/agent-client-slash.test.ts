@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
 import {
   agentCancel,
+  invalidateAgentKnowledgeSourceSync,
   agentSend,
   agentSendNow,
   commandsList,
@@ -22,6 +23,7 @@ const invokeMock = vi.mocked(invoke);
 
 describe("agentSend attachment contract", () => {
   beforeEach(() => {
+    invalidateAgentKnowledgeSourceSync();
     invokeMock.mockReset();
     invokeMock.mockImplementation((command) => Promise.resolve(
       command === "agent_set_knowledge_sources"
@@ -82,6 +84,40 @@ describe("agentSend attachment contract", () => {
       cancelAction: "pause",
       promptId: "prompt-1",
     });
+  });
+
+  it("知识来源未变化时复用原生同步结果", async () => {
+    await agentSend("session-cache", "第一条");
+    await agentSend("session-cache", "第二条");
+
+    expect(invokeMock.mock.calls.filter(([command]) => (
+      command === "agent_set_knowledge_sources"
+    ))).toHaveLength(1);
+    expect(invokeMock.mock.calls.filter(([command]) => command === "agent_send")).toHaveLength(2);
+  });
+
+  it("知识来源同步失败不会丢失用户任务", async () => {
+    useKnowledgeStore.getState().setSessionSources("session-org", ["organization"]);
+    invokeMock.mockImplementation((command) => (
+      command === "agent_set_knowledge_sources"
+        ? Promise.reject(new Error("组织连接超时"))
+        : Promise.resolve(undefined)
+    ));
+
+    await expect(agentSend("session-org", "继续原任务", [], "继续原任务", "prompt-org"))
+      .resolves.toBeUndefined();
+
+    expect(invokeMock).toHaveBeenCalledWith("agent_send", expect.objectContaining({
+      sessionId: "session-org",
+      text: "继续原任务",
+    }));
+    expect(useKnowledgeStore.getState().turnTraces["session-org"]["prompt-org"])
+      .toMatchObject({
+        organization: {
+          state: "unavailable",
+          message: expect.stringContaining("组织连接超时"),
+        },
+      });
   });
 });
 

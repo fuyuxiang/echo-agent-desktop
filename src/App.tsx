@@ -1268,21 +1268,16 @@ function Shell() {
     setCancellingSessionId(sessionId);
     try {
       await agentCancel(sessionId, action, activePromptId);
-      // prompt_complete is the authoritative acknowledgement and normally
-      // moves pausing/stopping to its stable state immediately. Keep a bounded
-      // fallback for an older/broken runtime that accepts Cancel but omits the
-      // terminal extension event.
-      globalThis.setTimeout(() => {
-        const pending = sessionStore.getState().transcripts[sessionId]?.control;
-        if (!pending || pending.action !== action) return;
-        if (pending.phase !== "pausing" && pending.phase !== "stopping") return;
-        sessionStore.getState().confirmControl(sessionId, action);
-        sessionsStore.getState().upsert({
-          sessionId,
-          status: action === "pause" ? "paused" : "stopped",
-          updatedAt: new Date().toISOString(),
-        });
-      }, 5_000);
+      // Native resolves only after the session actor has applied cancellation.
+      // prompt_complete may reach the renderer just before or just after this
+      // acknowledgement; both paths are idempotent and represent real stopped
+      // work, so the UI can settle immediately without a speculative timer.
+      sessionStore.getState().confirmControl(sessionId, action);
+      sessionsStore.getState().upsert({
+        sessionId,
+        status: action === "pause" ? "paused" : "stopped",
+        updatedAt: new Date().toISOString(),
+      });
       const permissionState = permissionStore.getState();
       for (const request of permissionState.queues[sessionId] ?? []) {
         permissionState.close(request.requestId, sessionId);

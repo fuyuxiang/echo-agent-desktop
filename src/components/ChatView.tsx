@@ -136,11 +136,22 @@ export function ChatView({
     useSessionsStore.getState().upsert({ sessionId, status: "completed" });
     onToast?.("已恢复，可继续发送消息");
   }, [sessionId, resumeSession, onToast]);
-  const handleResumeAndContinue = useCallback(() => {
+  const handleResumeAndContinue = useCallback(async () => {
     if (!sessionId) return;
-    resumeSession(sessionId);
-    void onSend("请继续。");
-  }, [sessionId, resumeSession, onSend]);
+    try {
+      // Keep the persisted pause barrier until the new turn is admitted. The
+      // send path clears it atomically with the optimistic assistant turn; the
+      // explicit resume below also supports embedders whose onSend returns void.
+      const accepted = await onSend("请继续。");
+      if (accepted === false) {
+        onToast?.("暂未能继续，任务仍保持暂停，请检查模型、额度或待回答问题");
+        return;
+      }
+      resumeSession(sessionId);
+    } catch (error) {
+      onToast?.(`继续任务失败，已保持暂停：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  }, [sessionId, resumeSession, onSend, onToast]);
   const handleTextControl = useCallback(async (action: SessionControlAction) => {
     if (!streaming) {
       if (control?.phase === "paused") onToast?.("当前任务已暂停");

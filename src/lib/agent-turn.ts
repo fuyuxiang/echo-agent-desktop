@@ -1,5 +1,6 @@
 import { agentSend } from "@/lib/agent-client";
 import { friendlyError } from "@/lib/error-format";
+import { sessionControlStatus } from "@/lib/session-control";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { useSessionStore } from "@/stores/session-store";
 
@@ -67,6 +68,10 @@ export function beginAgentTurn(
   if (transcript.sessionId !== sessionId) {
     return false;
   }
+  // startStreaming deliberately clears a paused/stopped barrier because a new
+  // prompt is an explicit continue action. Keep the prior value until native
+  // admission succeeds so an asynchronous rejection can restore honest UI.
+  const previousControl = transcript.transcripts[sessionId]?.control;
 
   useSessionsStore.getState().upsert({ sessionId, status: "working" });
   transcript.pushUser(displayText, attachments);
@@ -82,12 +87,18 @@ export function beginAgentTurn(
       stopReason: "error",
       agentResult: detail,
     });
+    if (previousControl) {
+      latest.restoreControl(sessionId, previousControl);
+    }
     // Error banners belong to the focused conversation. A late failure from a
     // background turn must not stop or overwrite whichever session is active.
     if (latest.sessionId === sessionId) {
       latest.setError(detail);
     }
-    useSessionsStore.getState().upsert({ sessionId, status: "failed" });
+    useSessionsStore.getState().upsert({
+      sessionId,
+      status: previousControl ? sessionControlStatus(previousControl) : "failed",
+    });
     input.onRejected?.(error, promptId);
   });
   return true;

@@ -32,6 +32,7 @@ const MAX_MCP_BODY_BYTES: usize = 256 * 1024;
 const MAX_TOOL_TEXT_CHARS: usize = 8_192;
 const MAX_IDENTIFIER_CHARS: usize = 256;
 const MAX_SCOPE_ITEMS: usize = 64;
+const RECONCILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 static BOUND_PORT: OnceLock<u16> = OnceLock::new();
 static PROCESS_TOKEN: OnceLock<String> = OnceLock::new();
@@ -69,7 +70,7 @@ pub(crate) fn clear_session_selections() {
     session_selections().lock().unwrap().clear();
 }
 
-fn session_selection(session_id: &str) -> KnowledgeSourceSelection {
+pub(crate) fn session_selection(session_id: &str) -> KnowledgeSourceSelection {
     session_selections()
         .lock()
         .unwrap()
@@ -811,8 +812,11 @@ async fn tools_call(params: &Value, app: Option<&AppHandle>) -> Result<Value, St
         "local_knowledge_search" => {
             let query = required_string_bounded(&arguments, "query", MAX_TOOL_TEXT_CHARS)?;
             let limit = validated_limit(&arguments)? as usize;
-            serde_json::to_value(crate::personal_knowledge::search(query, limit, app).await?)
-                .map_err(|error| format!("encode personal knowledge results: {error}"))?
+            let cancellation = tokio_util::sync::CancellationToken::new();
+            serde_json::to_value(
+                crate::personal_knowledge::search(query, limit, app, &cancellation).await?,
+            )
+            .map_err(|error| format!("encode personal knowledge results: {error}"))?
         }
         "local_knowledge_fetch" => {
             if !crate::org::local_knowledge_allowed().await {
@@ -1068,10 +1072,14 @@ pub(crate) async fn reconcile_session(
             }),
         )
     };
-    crate::ext::call_ext_value(tx, method, crate::ext::raw_params(&payload))
-        .await
-        .map(|_| ())
-        .map_err(|error| format!("{error:?}"))
+    tokio::time::timeout(
+        RECONCILE_TIMEOUT,
+        crate::ext::call_ext_value(tx, method, crate::ext::raw_params(&payload)),
+    )
+    .await
+    .map_err(|_| "knowledge source Runtime synchronization timed out".to_owned())?
+    .map(|_| ())
+    .map_err(|error| format!("{error:?}"))
 }
 
 pub(crate) async fn reconcile_all_sessions(app: &AppHandle) {

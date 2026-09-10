@@ -168,6 +168,9 @@ interface SessionState {
   rejectControl: (sessionId: string, action: SessionControlAction) => void;
   /** Explicitly restore a paused/stopped session for a future turn. */
   resumeSession: (sessionId: string) => void;
+  /** Reinstate the exact control barrier when optimistic prompt admission is
+   *  rejected by the native runtime. */
+  restoreControl: (sessionId: string, control: SessionControl) => void;
   /** Finalize every in-flight transcript after a process-wide agent failure. */
   failAllStreaming: (reason?: string, agentResult?: string) => void;
   setError: (e: string | null) => void;
@@ -955,6 +958,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
             }
           : transcript
       );
+    },
+
+    restoreControl: (sessionId, control) => {
+      persistSessionControl(sessionId, control);
+      applyToTranscript(sessionId, (transcript) => ({
+        ...transcript,
+        control,
+      }));
     },
 
     rollbackPendingTurn: () => {

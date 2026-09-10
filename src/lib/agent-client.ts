@@ -100,6 +100,7 @@ export interface InitResult {
  * uses EchoAgent's dedicated default working directory.
  */
 export async function agentInit(cwd?: string): Promise<InitResult> {
+  invalidateAgentKnowledgeSourceSync();
   return invoke<InitResult>("agent_init", { cwd: cwd ?? null });
 }
 
@@ -144,6 +145,9 @@ export async function agentNewSession(
 // Loading replays history through agent://update and returns the runtime's
 // actual session model. Never substitute the global default for this value.
 export async function agentLoadSession(sessionId: string, cwd: string): Promise<string | null> {
+  // A load can recreate the resident Runtime session, so any renderer-side MCP
+  // acknowledgement for the previous resident instance is stale.
+  invalidateAgentKnowledgeSourceSync(sessionId);
   return invoke<string | null>("agent_load_session", { sessionId, cwd });
 }
 
@@ -211,16 +215,38 @@ export interface AgentKnowledgeSourcesResult {
   organizationAttached: boolean;
 }
 
+interface AppliedKnowledgeSources {
+  key: string;
+  result: AgentKnowledgeSourcesResult;
+}
+
+const appliedKnowledgeSources = new Map<string, AppliedKnowledgeSources>();
+
+function knowledgeSourcesKey(sources: KnowledgeSource[]): string {
+  return `${sources.includes("personal") ? "1" : "0"}:${sources.includes("organization") ? "1" : "0"}`;
+}
+
+/** Invalidate MCP reconciliation acknowledgements after a Runtime/session lifecycle boundary. */
+export function invalidateAgentKnowledgeSourceSync(sessionId?: string): void {
+  if (sessionId) appliedKnowledgeSources.delete(sessionId);
+  else appliedKnowledgeSources.clear();
+}
+
 /** Make the Runtime's MCP catalog match the task-owned source selection. */
 export async function agentSetKnowledgeSources(
   sessionId: string,
   sources: KnowledgeSource[],
 ): Promise<AgentKnowledgeSourcesResult> {
-  return invoke<AgentKnowledgeSourcesResult>("agent_set_knowledge_sources", {
+  const result = await invoke<AgentKnowledgeSourcesResult>("agent_set_knowledge_sources", {
     sessionId,
     personal: sources.includes("personal"),
     organization: sources.includes("organization"),
   });
+  appliedKnowledgeSources.set(sessionId, {
+    key: knowledgeSourcesKey(sources),
+    result,
+  });
+  return result;
 }
 
 async function synchronizeKnowledgeSources(
@@ -229,17 +255,34 @@ async function synchronizeKnowledgeSources(
 ): Promise<KnowledgeSource[]> {
   const store = useKnowledgeStore.getState();
   const sources = store.bindSessionSources(sessionId);
-  const result = await agentSetKnowledgeSources(sessionId, sources);
+  const key = knowledgeSourcesKey(sources);
+  let result = appliedKnowledgeSources.get(sessionId)?.key === key
+    ? appliedKnowledgeSources.get(sessionId)?.result
+    : undefined;
+  let synchronizationError: string | undefined;
+  if (!result) {
+    try {
+      result = await agentSetKnowledgeSources(sessionId, sources);
+    } catch (error) {
+      // Knowledge augments a task; it is not an admission dependency. The
+      // backend rolls a failed selection change back to its last applied state,
+      // so continuing cannot accidentally expose a newly deselected source.
+      synchronizationError = String(error).replace(/^Error:\s*/, "");
+      console.warn("[EchoAgent] Knowledge source synchronization skipped:", error);
+    }
+  }
   store.beginTurnTrace(
     sessionId,
     promptId,
     sources,
     sources.includes("organization")
-      ? result.organizationAttached
+      ? result?.organizationAttached
         ? { state: "available" }
         : {
             state: "unavailable",
-            message: "组织知识库当前不可用，本次任务未使用该来源",
+            message: synchronizationError
+              ? `知识来源同步失败，本次任务已不使用组织知识：${synchronizationError}`
+              : "组织知识库当前不可用，本次任务未使用该来源",
           }
       : undefined,
   );
@@ -310,6 +353,7 @@ export async function agentCancel(
 
 /** Cleanly shut down the agent so `agentInit` can be called again to restart. */
 export async function agentShutdown(): Promise<void> {
+  invalidateAgentKnowledgeSourceSync();
   await invoke<void>("agent_shutdown");
 }
 
@@ -348,6 +392,7 @@ export async function agentDeleteSession(
     sessionId,
     cwd: cwd ?? null,
   });
+  invalidateAgentKnowledgeSourceSync(sessionId);
   useKnowledgeStore.getState().forgetSession(sessionId);
   return result;
 }

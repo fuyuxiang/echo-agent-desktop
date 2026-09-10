@@ -31,6 +31,15 @@ export interface PersonalKnowledgeSearchResponse {
   index: PersonalKnowledgeIndexStatus;
 }
 
+let searchRequestSequence = 0;
+
+export function createPersonalKnowledgeSearchRequestId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return `personal-knowledge-${uuid}`;
+  searchRequestSequence = (searchRequestSequence + 1) % Number.MAX_SAFE_INTEGER;
+  return `personal-knowledge-${Date.now()}-${searchRequestSequence}`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -78,13 +87,23 @@ function parseSearchResponse(value: unknown): PersonalKnowledgeSearchResponse | 
 export async function searchPersonalKnowledge(
   query: string,
   limit = 5,
+  requestId?: string,
 ): Promise<PersonalKnowledgeSearchResponse | null> {
   if (!isTauriAvailable()) return null;
-  const raw = await invoke<unknown>("personal_knowledge_search", { query, limit });
+  const raw = await invoke<unknown>("personal_knowledge_search", {
+    query,
+    limit,
+    requestId: requestId ?? null,
+  });
   if (raw == null) return null;
   const response = parseSearchResponse(raw);
   if (!response) throw new Error("个人知识库返回了无效的检索结果");
   return response;
+}
+
+export async function cancelPersonalKnowledgeSearch(requestId: string): Promise<boolean> {
+  if (!isTauriAvailable()) return false;
+  return invoke<boolean>("personal_knowledge_cancel_search", { requestId });
 }
 
 export async function rebuildPersonalKnowledgeIndex(): Promise<PersonalKnowledgeIndexStatus | null> {
