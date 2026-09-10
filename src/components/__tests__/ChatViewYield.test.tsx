@@ -302,7 +302,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
     renderChat();
 
-    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新执行" }));
 
     await waitFor(() => expect(baseProps.onSend).toHaveBeenCalledWith("生成每日报告", []));
     expect(baseProps.onToast).toHaveBeenCalledWith("已使用当前模型重新发送");
@@ -317,7 +317,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
     renderChat();
 
-    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
 
     await waitFor(() => expect(rewindPoints).toHaveBeenCalledWith("s1"));
     expect(baseProps.onSend).not.toHaveBeenCalled();
