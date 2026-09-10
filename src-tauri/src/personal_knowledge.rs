@@ -206,22 +206,24 @@ fn memory_storage() -> MemoryStorage {
 }
 
 fn embedding_config() -> MemoryEmbeddingConfig {
-    let mut config = MemoryEmbeddingConfig::default();
-    config.provider = "api".to_owned();
-    config.model = Some(crate::agent_runtime::MEMORY_EMBEDDING_MODEL.to_owned());
-    config.dimensions = crate::agent_runtime::MEMORY_EMBEDDING_DIMENSIONS;
-    config.endpoint = Some(crate::agent_runtime::MEMORY_EMBEDDING_ENDPOINT.to_owned());
-    config.api_key = Some(crate::agent_runtime::MEMORY_SILICONFLOW_API_KEY.to_owned());
-    config.send_dimensions = false;
-    config
+    MemoryEmbeddingConfig {
+        provider: "api".to_owned(),
+        model: Some(crate::agent_runtime::MEMORY_EMBEDDING_MODEL.to_owned()),
+        dimensions: crate::agent_runtime::MEMORY_EMBEDDING_DIMENSIONS,
+        endpoint: Some(crate::agent_runtime::MEMORY_EMBEDDING_ENDPOINT.to_owned()),
+        api_key: Some(crate::agent_runtime::MEMORY_SILICONFLOW_API_KEY.to_owned()),
+        send_dimensions: false,
+    }
 }
 
 fn coarse_search_config(candidate_count: usize) -> MemorySearchConfig {
-    let mut config = MemorySearchConfig::default();
-    config.max_results = candidate_count;
-    config.min_score = 0.1;
-    config.vector_weight = 0.7;
-    config.text_weight = 0.3;
+    let mut config = MemorySearchConfig {
+        max_results: candidate_count,
+        min_score: 0.1,
+        vector_weight: 0.7,
+        text_weight: 0.3,
+        ..Default::default()
+    };
     config.temporal_decay.enabled = false;
     config.mmr.enabled = false;
     config.reranker.enabled = false;
