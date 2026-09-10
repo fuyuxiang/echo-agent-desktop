@@ -14,6 +14,7 @@ function resetStores() {
     streamingMessageId: null,
     usage: {},
     plan: null,
+    control: undefined,
     error: null,
     planMode: false,
   });
@@ -92,6 +93,32 @@ describe("beginAgentTurn", () => {
     });
     expect(state.error).toContain("附件读取失败");
     expect(useSessionsStore.getState().independent[0].status).toBe("failed");
+  });
+
+  it("暂停会话的新轮次被原生层拒绝时恢复控制状态", async () => {
+    useSessionsStore.getState().upsert({ sessionId: "s1", cwd: "/tmp", title: "test" });
+    const store = useSessionStore.getState();
+    store.setSession("s1");
+    store.startStreaming("s1", "paused-prompt");
+    store.requestControl("s1", "pause", "paused-prompt");
+    store.confirmControl("s1", "pause");
+    const pausedControl = useSessionStore.getState().control;
+    expect(pausedControl).toMatchObject({ action: "pause", phase: "paused" });
+
+    const send = vi.fn(() => Promise.reject(new Error("原生会话不可用"))) as AgentTurnSender;
+    const accepted = beginAgentTurn({
+      sessionId: "s1",
+      promptText: "请继续。",
+      displayText: "请继续。",
+      promptId: "resume-prompt",
+    }, send);
+
+    expect(accepted).toBe(true);
+    expect(useSessionStore.getState().control).toBeUndefined();
+    await waitFor(() => expect(useSessionStore.getState().control).toEqual(pausedControl));
+    expect(useSessionStore.getState().streaming).toBe(false);
+    expect(useSessionStore.getState().error).toContain("原生会话不可用");
+    expect(useSessionsStore.getState().independent[0].status).toBe("paused");
   });
 
   it("会话已切换时拒绝旧界面的迟到提交", () => {

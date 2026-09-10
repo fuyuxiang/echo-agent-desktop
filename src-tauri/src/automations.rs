@@ -2182,6 +2182,14 @@ struct AutomationDispatch {
     record_id: String,
 }
 
+#[derive(Debug)]
+struct RejectedAutomationDispatch {
+    automation: Automation,
+    cwd: PathBuf,
+    record_id: String,
+    error: String,
+}
+
 fn advance_recovered_occurrence(
     automation: &mut Automation,
     scheduled_for: &str,
@@ -2312,7 +2320,7 @@ pub async fn scheduler_tick(app: &AppHandle, tx: &echo_agent_acp::AcpAgentTx, de
         return;
     }
     let now = now_local();
-    let (dispatches, active_state_changed, has_active) = {
+    let (dispatches, rejected_dispatches, active_state_changed, has_active) = {
         // Always acquire records before the automation store. Keeping one lock
         // order prevents a completion and a scheduler tick from deadlocking.
         let _record_guard = record_access().lock().unwrap();
@@ -2340,6 +2348,7 @@ pub async fn scheduler_tick(app: &AppHandle, tx: &echo_agent_acp::AcpAgentTx, de
         let had_claims = !claimed.is_empty();
         let started = now.to_rfc3339();
         let mut dispatches = Vec::with_capacity(claimed.len());
+        let mut rejected_dispatches = Vec::new();
         for claim in claimed {
             let claimed_cwd = first_cwd(&claim.automation)
                 .map(PathBuf::from)
@@ -2364,6 +2373,12 @@ pub async fn scheduler_tick(app: &AppHandle, tx: &echo_agent_acp::AcpAgentTx, de
                 {
                     finalize_record(record, false, &started, None, Some(&error));
                 }
+                rejected_dispatches.push(RejectedAutomationDispatch {
+                    automation: claim.automation,
+                    cwd: claimed_cwd,
+                    record_id,
+                    error,
+                });
                 continue;
             }
             let cwd = match app
@@ -2372,19 +2387,20 @@ pub async fn scheduler_tick(app: &AppHandle, tx: &echo_agent_acp::AcpAgentTx, de
             {
                 Ok(cwd) => cwd,
                 Err(error) => {
+                    let error = format!("自动化工作区未授权：{error}");
                     if let Some(record) = records
                         .records
                         .iter_mut()
                         .find(|record| record.id == record_id)
                     {
-                        finalize_record(
-                            record,
-                            false,
-                            &started,
-                            None,
-                            Some(&format!("自动化工作区未授权：{error}")),
-                        );
+                        finalize_record(record, false, &started, None, Some(&error));
                     }
+                    rejected_dispatches.push(RejectedAutomationDispatch {
+                        automation: claim.automation,
+                        cwd: claimed_cwd,
+                        record_id,
+                        error,
+                    });
                     continue;
                 }
             };
@@ -2424,10 +2440,32 @@ pub async fn scheduler_tick(app: &AppHandle, tx: &echo_agent_acp::AcpAgentTx, de
             tracing::error!(%error, "failed to persist automation schedule claim");
             return;
         }
-        (dispatches, had_active != has_active, has_active)
+        (
+            dispatches,
+            rejected_dispatches,
+            had_active != has_active,
+            has_active,
+        )
     };
     if active_state_changed {
         sync_autostart_enabled(app, has_active);
+    }
+    // Pre-dispatch failures are just as user-visible as execution failures.
+    // Emit only after releasing the persistence locks: notification delivery
+    // can await network IO (for example WeChat push) and must not stall the
+    // scheduler's durable state.
+    for rejected in rejected_dispatches {
+        emit_run_update(
+            app,
+            &rejected.automation,
+            &rejected.record_id,
+            &rejected.cwd,
+            RunUpdate::Failed {
+                session_id: None,
+                error: &rejected.error,
+            },
+        );
+        notify_run_failure(app, &rejected.automation, &rejected.error).await;
     }
     for dispatch in dispatches {
         emit_run_update(
@@ -3434,6 +3472,25 @@ mod tests {
             .unwrap()
             .get("currentModelId")
             .is_none());
+    }
+
+    #[test]
+    fn pre_dispatch_failure_event_is_terminal_and_keeps_the_reason() {
+        let automation = test_automation();
+        let event = run_update_event(
+            &automation,
+            "record-failed",
+            Path::new("/workspace"),
+            RunUpdate::Failed {
+                session_id: None,
+                error: "Auto 模型当前不可用",
+            },
+        );
+        let json = serde_json::to_value(event).unwrap();
+        assert_eq!(json["phase"], "finished");
+        assert_eq!(json["status"], "failed");
+        assert_eq!(json["error"], "Auto 模型当前不可用");
+        assert!(json.get("sessionId").is_none());
     }
 
     fn test_automation() -> Automation {

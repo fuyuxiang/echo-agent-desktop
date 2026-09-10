@@ -16,6 +16,8 @@ import { isTauriAvailable } from "@/lib/tauri-kb-reader";
 import { addLocalKnowledgeSource, hydrateKnowledgeSources, removeKnowledgeSource } from "@/lib/kb-source-storage";
 import { filesystemPickDirectory } from "@/lib/agent-client";
 import {
+  cancelPersonalKnowledgeSearch,
+  createPersonalKnowledgeSearchRequestId,
   getPersonalKnowledgeIndexStatus,
   rebuildPersonalKnowledgeIndex,
   searchPersonalKnowledge,
@@ -151,11 +153,13 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
       return;
     }
     let cancelled = false;
+    let settled = false;
+    const requestId = createPersonalKnowledgeSearchRequestId();
     setSearching(true);
     setSearchError(null);
     setSearchNotice(null);
     void (async () => {
-      const semantic = await searchPersonalKnowledge(q, 20);
+      const semantic = await searchPersonalKnowledge(q, 20, requestId);
       if (semantic) {
         return {
           entries: semantic.items,
@@ -208,10 +212,14 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
         }
       })
       .finally(() => {
+        settled = true;
         if (!cancelled) setSearching(false);
       });
     return () => {
       cancelled = true;
+      if (!settled) {
+        void cancelPersonalKnowledgeSearch(requestId).catch(() => {});
+      }
     };
   }, [q, searchRetryKey]);
 

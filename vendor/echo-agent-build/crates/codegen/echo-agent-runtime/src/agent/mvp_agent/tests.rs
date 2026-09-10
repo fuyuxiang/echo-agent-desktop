@@ -4255,19 +4255,23 @@ fn cancel_does_not_forward_to_bridge_in_local_mode() {
         let sid = acp::SessionId::new("sess-cancel-local");
         let (handle, _tx, mut cmd_rx) = make_live_session_handle(&sid, None);
         agent.insert_resident(&sid, handle);
+        let driver = tokio::task::spawn_local(async move {
+            let Some(SessionCommand::Cancel(options)) = cmd_rx.recv().await else {
+                return false;
+            };
+            let Some(acknowledged) = options.acknowledged else {
+                return false;
+            };
+            acknowledged.notify_one();
+            true
+        });
         agent
             .cancel(acp::CancelNotification::new(sid.clone()))
             .await
             .expect("cancel must succeed");
-        let mut saw_local_cancel = false;
-        while let Ok(cmd) = cmd_rx.try_recv() {
-            if let SessionCommand::Cancel(..) = cmd {
-                saw_local_cancel = true;
-            }
-        }
         assert!(
-            saw_local_cancel,
-            "local-mode cancel dispatches the local SessionCommand::Cancel with no bridge attached"
+            driver.await.expect("cancel driver must finish"),
+            "local-mode cancel dispatches locally and waits for the actor acknowledgement"
         );
     });
 }
@@ -4298,7 +4302,12 @@ fn cancel_never_overtakes_in_flight_prompt_intake() {
                         }
                     }
                     SessionCommand::Prompt { .. } => driver_order.borrow_mut().push("prompt"),
-                    SessionCommand::Cancel(..) => driver_order.borrow_mut().push("cancel"),
+                    SessionCommand::Cancel(options) => {
+                        driver_order.borrow_mut().push("cancel");
+                        if let Some(acknowledged) = options.acknowledged {
+                            acknowledged.notify_one();
+                        }
+                    }
                     _ => {}
                 }
             }

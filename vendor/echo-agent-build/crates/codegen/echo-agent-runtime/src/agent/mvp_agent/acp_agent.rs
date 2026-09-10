@@ -2057,7 +2057,10 @@ impl acp::Agent for MvpAgent {
     }
     async fn cancel(&self, args: acp::CancelNotification) -> Result<(), acp::Error> {
         tracing::info!("Received cancel request {args:?}");
-        let handle = self.session_handle_waiting_for_load(&args.session_id).await;
+        let handle = self
+            .session_handle_waiting_for_load(&args.session_id)
+            .await
+            .ok_or_else(|| acp::Error::resource_not_found(None).data("session not found"))?;
         let cancel_trigger = args
             .meta
             .as_ref()
@@ -2069,53 +2072,58 @@ impl acp::Agent for MvpAgent {
             Some(args.session_id.0.as_ref()),
             Some(
                 serde_json::json!({
-                "session_found": handle.is_some(),
+                "session_found": true,
                 "trigger": cancel_trigger.as_ref().map(crate::session::CancelTrigger::as_str),
             }),
             ),
         );
-        if let Some(handle) = handle {
-            let cancel_subagents = args
-                .meta
-                .as_ref()
-                .and_then(|m| m.get("cancelSubagents"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            let rewind_if_no_output = args
-                .meta
-                .as_ref()
-                .and_then(|m| {
-                    m.get("rewindIfNoOutput").or_else(|| m.get("rewindIfPristine"))
-                })
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let rewind_prompt_id = args
-                .meta
-                .as_ref()
-                .and_then(|m| m.get("promptId"))
-                .and_then(|v| v.as_str())
-                .map(str::to_owned);
-            let history = if rewind_if_no_output {
-                crate::session::CancelHistoryDisposition::RewindIfNoOutput {
-                    prompt_id: rewind_prompt_id,
-                }
-            } else {
-                crate::session::CancelHistoryDisposition::Keep
-            };
-            let dispatch_lock = self.dispatch_lock(&args.session_id);
-            let _dispatch_guard = dispatch_lock.lock().await;
-            let _ = handle
-                .cmd_tx
-                .send(
-                    SessionCommand::Cancel(crate::session::CancelOptions {
-                        cancel_subagents,
-                        history,
-                        trigger: cancel_trigger,
-                        user_initiated: true,
-                        ..Default::default()
-                    }),
-                );
-        }
+        let cancel_subagents = args
+            .meta
+            .as_ref()
+            .and_then(|m| m.get("cancelSubagents"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let rewind_if_no_output = args
+            .meta
+            .as_ref()
+            .and_then(|m| m.get("rewindIfNoOutput").or_else(|| m.get("rewindIfPristine")))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let rewind_prompt_id = args
+            .meta
+            .as_ref()
+            .and_then(|m| m.get("promptId"))
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        let history = if rewind_if_no_output {
+            crate::session::CancelHistoryDisposition::RewindIfNoOutput {
+                prompt_id: rewind_prompt_id,
+            }
+        } else {
+            crate::session::CancelHistoryDisposition::Keep
+        };
+        let acknowledged = std::sync::Arc::new(tokio::sync::Notify::new());
+        let dispatch_lock = self.dispatch_lock(&args.session_id);
+        let _dispatch_guard = dispatch_lock.lock().await;
+        handle
+            .cmd_tx
+            .send(
+                SessionCommand::Cancel(crate::session::CancelOptions {
+                    cancel_subagents,
+                    history,
+                    trigger: cancel_trigger,
+                    user_initiated: true,
+                    acknowledged: Some(acknowledged.clone()),
+                    ..Default::default()
+                }),
+            )
+            .map_err(|_| acp::Error::internal_error().data("session closed"))?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            acknowledged.notified(),
+        )
+        .await
+        .map_err(|_| acp::Error::internal_error().data("cancel acknowledgement timed out"))?;
         Ok(())
     }
     async fn set_session_mode(

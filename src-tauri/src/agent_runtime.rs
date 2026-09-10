@@ -686,10 +686,12 @@ pub async fn set_session_mode(tx: &AcpAgentTx, session_id: &str, enabled: bool) 
 
 /// Cancel the in-flight prompt for a session.
 ///
-/// Cancel is a *notification* (no response). We build the `AcpAgentMessage::Cancel`
-/// variant directly and send it on the channel — the agent's gateway receiver
-/// dispatches it to `MvpAgent::cancel`. A throwaway oneshot satisfies the
-/// `AcpArgs.response_tx` shape; the agent may or may not send on it.
+/// Cancel the active turn and wait until the session actor has applied it.
+///
+/// ACP models cancel as a notification, but the in-process gateway still owns a
+/// response channel. EchoAgent completes that channel only after the session
+/// actor has torn down the running turn, giving the desktop a trustworthy UI
+/// boundary instead of merely acknowledging channel enqueue.
 pub async fn cancel(
     tx: &AcpAgentTx,
     session_id: &str,
@@ -710,12 +712,17 @@ pub async fn cancel(
     }
     let notif =
         acp::CancelNotification::new(acp::SessionId::new(session_id.to_string())).meta(Some(meta));
-    let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+    let (response_tx, response_rx) = tokio::sync::oneshot::channel();
     let msg = AcpAgentMessage::Cancel(AcpArgs {
         request: notif,
         response_tx,
     });
     tx.send(msg).map_err(|e| anyhow!("cancel send: {e}"))?;
+    let response = tokio::time::timeout(std::time::Duration::from_secs(12), response_rx)
+        .await
+        .map_err(|_| anyhow!("cancel acknowledgement timed out"))?
+        .map_err(|_| anyhow!("cancel acknowledgement channel closed"))?;
+    response.map_err(|error| anyhow!("cancel: {error:?}"))?;
     Ok(())
 }
 

@@ -938,6 +938,7 @@ pub(super) async fn run_session(
                             SessionActor::maybe_start_running_task(session.clone(), completion_tx.clone()).await;
                         }
                         SessionCommand::Cancel(options) => {
+                            let cancellation_ack = options.acknowledged.clone();
                             // Flush the actor-owned replay buffer before tearing
                             // down the running turn so any streamed chunks
                             // (notably AgentThoughtChunk reasoning text) still
@@ -984,6 +985,12 @@ pub(super) async fn run_session(
                             }
                             if cancel.turn_stopped {
                                 session.emit_session_idle_if_idle().await;
+                            }
+                            // This is deliberately last: an ACP caller receiving
+                            // the acknowledgement may now close local interaction
+                            // UI and fence late events without hiding live work.
+                            if let Some(acknowledged) = cancellation_ack {
+                                acknowledged.notify_one();
                             }
                         }
                         SessionCommand::CompactSession { user_context, respond_to } => {
@@ -2142,6 +2149,7 @@ pub(super) async fn run_session(
                                         history: crate::session::CancelHistoryDisposition::Keep,
                                         trigger: Some(crate::session::CancelTrigger::Shutdown),
                                         user_initiated: false,
+                                        acknowledged: None,
                                     })
                                     .await;
                             }
