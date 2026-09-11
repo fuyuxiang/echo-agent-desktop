@@ -5,3 +5,4 @@
 pub mod changeset;
 pub mod store;
 pub mod task;
+pub mod verification;
