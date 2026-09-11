@@ -1793,7 +1793,9 @@ function AgentModeSwitcher({
     <div className={`coding-mode-switcher${compact ? " is-compact" : ""}`} role="radiogroup" aria-label="Agent 编程模式">
       {(Object.keys(CODING_MODE_INFO) as CodingAgentRole[]).map((entry) => {
         const info = CODING_MODE_INFO[entry];
-        const Icon = entry === "ask" ? MessageCircleQuestion : entry === "plan" ? ListChecks : entry === "debug" ? Search : Code2;
+        // Plan is an execution strategy, not a role, so only the three roles
+        // in CODING_MODE_INFO can appear here.
+        const Icon = entry === "ask" ? MessageCircleQuestion : entry === "debug" ? Search : Code2;
         return (
           <button
             type="button"
