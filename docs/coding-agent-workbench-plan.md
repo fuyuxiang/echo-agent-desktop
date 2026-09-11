@@ -4174,7 +4174,8 @@ EOF
 
 - [x] `cd src-tauri && cargo test` — coding 模块 54 个用例通过，契约测试 3 个通过，全量 451+ 用例通过
 - [x] 前端未受影响 — 无前端文件改动；`tsc` 报出的两处错误在起点提交 `3a25c7c` 即已存在（`CodingWorkspacePage.tsx:1796` 与 `coding-workspace.test.ts:460` 的遗留 `"plan"` 模式），已在基线 worktree 上验证，与本次无关
-- [x] 旧 coding 界面保持可用 — `coding_run_command` / `coding_cancel_command` 作为兼容层委托验证引擎，输出与取消均已保留
+- [x] 旧 coding 界面已下线 —— `src/components/coding-workspace/`、`src/lib/coding-workspace.ts`、`src/styles/coding-workspace.css` 与旧测试一并删除，连同 `App.tsx` 中任务启动的旧签名（mode/strategy）一并更新为新的 `(root, requirement, planRequired, modelId)` 契约
+- [x] 后端旧兼容层已下线 —— `coding_run_command` / `coding_cancel_command` 及其前端封装随 UI 一并移除，前端不再保留任何引用，命令执行只剩 `verification::run` 一条路径
 
 ## 已落地的前端契约（Task 9-16 输入）
 

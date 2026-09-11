@@ -27,10 +27,9 @@ async fn blocking_scan_does_not_starve_the_runtime() {
     assert_eq!(ticks, 8);
 }
 
-/// The verification engine must be the only place that spawns a command. The
-/// legacy `coding_run_command` / `coding_cancel_command` entry points stay
-/// registered while the pre-workbench coding UI still ships, but they must be
-/// thin shims that delegate rather than a second execution path.
+/// The verification engine must be the only place that spawns a command for a
+/// coding task. The legacy `coding_run_command` / `coding_cancel_command` entry
+/// points were retired together with the pre-workbench UI.
 #[test]
 fn command_execution_has_a_single_implementation() {
     let lib_source = include_str!("../src/lib.rs");
@@ -38,20 +37,25 @@ fn command_execution_has_a_single_implementation() {
         lib_source.contains("coding::verification::coding_verification_run"),
         "验证引擎命令必须已注册"
     );
-
-    let workspace_source = include_str!("../src/coding_workspace.rs");
-    let shim_start = workspace_source
-        .find("pub async fn coding_run_command")
-        .expect("兼容入口应仍然存在，直到旧版界面下线");
-    let shim = &workspace_source[shim_start..];
-    let shim_body = &shim[..shim.find("\n}\n").expect("函数应有结尾")];
     assert!(
-        shim_body.contains("coding::verification::run"),
-        "旧入口必须委托给验证引擎，不得自行执行命令"
+        !lib_source.contains("coding_workspace::coding_run_command"),
+        "旧的命令执行入口应已随旧界面下线"
     );
     assert!(
-        !shim_body.contains("Command::new"),
-        "旧入口不得再自行创建子进程"
+        !lib_source.contains("coding_workspace::coding_cancel_command"),
+        "旧的命令取消入口应已随旧界面下线"
+    );
+
+    let workspace_source = include_str!("../src/coding_workspace.rs");
+    assert!(
+        !workspace_source.contains("pub async fn coding_run_command"),
+        "旧的命令执行实现不应再存在"
+    );
+    // The terminal is a separate concern and legitimately spawns its own shell;
+    // what must not come back is a second *verification* execution path.
+    assert!(
+        !workspace_source.contains("CodingRunCommandRequest"),
+        "旧的命令请求结构应已移除"
     );
 }
 
