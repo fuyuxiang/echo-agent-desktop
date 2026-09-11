@@ -12,6 +12,7 @@ mod app_updater;
 mod attachment_preview;
 mod automations;
 mod bridge;
+mod coding;
 mod coding_workspace;
 mod commands;
 mod connector_cli;
