@@ -2,5 +2,6 @@
 //! verification, diagnostics and delivery. Kept separate from the legacy
 //! `coding_workspace` module so the workbench owns its own state.
 
+pub mod changeset;
 pub mod store;
 pub mod task;
