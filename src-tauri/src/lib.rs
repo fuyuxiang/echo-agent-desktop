@@ -12,6 +12,7 @@ mod app_updater;
 mod attachment_preview;
 mod automations;
 mod bridge;
+mod coding_workspace;
 mod commands;
 mod connector_cli;
 mod connectors_catalog;
@@ -268,6 +269,7 @@ pub fn run() {
         .manage(PlanApprovals::new())
         .manage(FolderTrusts::new())
         .manage(shell_fs::FilesystemAccess::new())
+        .manage(coding_workspace::CodingProcesses::new())
         .manage(org::shared_state())
         .invoke_handler(tauri::generate_handler![
             // session lifecycle
@@ -483,6 +485,22 @@ pub fn run() {
             shell_fs::browse_directory,
             shell_fs::echo_agent_data_dir,
             shell_fs::open_echo_agent_data_dir,
+            // dedicated Coding Workspace: bounded repository analysis and
+            // user-initiated validation commands inside an authorized root
+            coding_workspace::coding_analyze_workspace,
+            coding_workspace::coding_git_snapshot,
+            coding_workspace::coding_git_diff,
+            coding_workspace::coding_git_set_staged,
+            coding_workspace::coding_read_document,
+            coding_workspace::coding_write_document,
+            coding_workspace::coding_create_entry,
+            coding_workspace::coding_search_workspace,
+            coding_workspace::coding_run_command,
+            coding_workspace::coding_cancel_command,
+            coding_workspace::coding_terminal_create,
+            coding_workspace::coding_terminal_write,
+            coding_workspace::coding_terminal_resize,
+            coding_workspace::coding_terminal_close,
             // durable local project metadata (renderer localStorage is only a cache)
             projects::projects_load,
             projects::projects_save,

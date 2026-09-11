@@ -288,6 +288,17 @@ describe("Sidebar", () => {
     expect(onNavigate).toHaveBeenCalledWith("知识库");
   });
 
+  it("「更多」菜单可进入代码开发工作台", async () => {
+    const onNavigate = vi.fn();
+    const user = userEvent.setup();
+    render(<Sidebar {...base} onNavigate={onNavigate} />);
+
+    await user.hover(screen.getByText("更多"));
+    fireEvent.click(screen.getByText("代码开发"));
+
+    expect(onNavigate).toHaveBeenCalledWith("代码开发");
+  });
+
   it("「更多」菜单支持方向键、Home/End 和 Escape 焦点回退", async () => {
     const user = userEvent.setup();
     render(<Sidebar {...base} />);
