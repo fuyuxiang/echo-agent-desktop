@@ -2,7 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const invoke = vi.fn(async (command: string, _args?: unknown) => {
+const invoke = vi.fn(async (command: string, _args?: unknown): Promise<unknown> => {
   if (command === "coding_task_list") return [];
   if (command === "coding_verification_detect") return [];
   return null;
@@ -46,6 +46,27 @@ vi.mock("@/lib/agent-client", () => ({
 
 vi.mock("../main/CodingEditor", () => ({
   CodingEditor: ({ value }: { value: string }) => <div data-testid="editor">{value}</div>,
+}));
+
+// These shared components reach for session/permission plumbing that is out of
+// scope here; the workbench only needs to render them.
+vi.mock("@/components/PermissionPicker", () => ({
+  PermissionPicker: () => <div data-testid="permission-picker" />,
+}));
+vi.mock("@/components/ModelSelector", () => ({
+  ModelSelector: () => <div data-testid="model-selector" />,
+}));
+vi.mock("@/components/PermissionDialog", () => ({
+  PermissionInlineCard: () => <div data-testid="permission-card" />,
+}));
+vi.mock("@/components/QuestionInlineCard", () => ({
+  QuestionInlineCard: () => <div data-testid="question-card" />,
+}));
+vi.mock("@/components/ExecutionProcess", () => ({
+  ExecutionProcess: () => <div data-testid="execution" />,
+}));
+vi.mock("@/components/Markdown", () => ({
+  Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 
 import { CodingWorkbench } from "../CodingWorkbench";
@@ -228,6 +249,55 @@ describe("CodingWorkbench skeleton", () => {
 
     await user.click(screen.getByRole("button", { name: "移除 src/a.ts" }));
     expect(screen.getByText(/未选定时由 Agent 自行检索/)).toBeInTheDocument();
+  });
+
+  it("creates a task, records the baseline and submits it to the orchestrator", async () => {
+    const user = userEvent.setup();
+    const onStartRun = vi.fn(async () => "session-1");
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "coding_task_create") {
+        return {
+          id: "t1",
+          name: "增加登录审计",
+          requirement: "增加登录审计",
+          phase: "idle",
+          acceptanceCriteria: [],
+          taskNodes: [],
+          planRequired: false,
+          createdAt: "",
+          updatedAt: "",
+        };
+      }
+      if (command === "coding_task_list") return [];
+      return null;
+    });
+
+    render(
+      <CodingWorkbench
+        cwd="/repo"
+        models={[{ id: "m1" }]}
+        defaultModelId="m1"
+        apiReady
+        onStartRun={onStartRun}
+      />,
+    );
+    await screen.findByLabelText("开发需求");
+
+    await user.type(screen.getByLabelText("开发需求"), "增加登录审计");
+    await user.click(screen.getByRole("button", { name: "开始开发任务" }));
+
+    const invoked = invoke.mock.calls.map((call) => call[0]);
+    expect(invoked).toContain("coding_task_create");
+    // The baseline must be captured before the Agent starts writing.
+    expect(invoked).toContain("coding_changeset_capture_baseline");
+    expect(invoked).toContain("coding_task_submit_requirement");
+    expect(onStartRun).toHaveBeenCalledWith("/repo", "增加登录审计", false, "m1");
+  });
+
+  it("offers the task starter until a task exists", async () => {
+    render(<CodingWorkbench cwd="/repo" models={[{ id: "m1" }]} defaultModelId="m1" apiReady />);
+    expect(await screen.findByLabelText("开发需求")).toBeInTheDocument();
+    expect(screen.queryByLabelText("给 Agent 的补充要求")).not.toBeInTheDocument();
   });
 
   it("clears open tabs when the workspace changes", async () => {
