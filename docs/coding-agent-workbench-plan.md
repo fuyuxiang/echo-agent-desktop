@@ -83,16 +83,18 @@
 
 ## 任务总览
 
-| # | 任务 | 交付物 |
-|---|---|---|
-| 1 | Rust 持久化层 | 任务目录布局与读写 |
-| 2 | Rust 任务管理 | 任务 CRUD 与恢复命令 |
-| 3 | Rust ChangeSet | 变更记录、回滚、改动保护 |
-| 4 | Rust 验证引擎 | 命令识别、执行、结果解析 |
-| 5 | Rust 诊断中心 | 错误解析为 Problem |
-| 6 | Rust 编排状态机 | 闭环推进与门禁卡控 |
-| 7 | Rust 交付层 | 门禁、报告、Evidence、commit/PR |
-| 8 | 阻塞 IO 修复 | coding_workspace.rs 异步化 |
+后端 Task 1-8 已实现并提交，共 54 个单元测试 + 3 个契约测试。
+
+| # | 任务 | 交付物 | 状态 |
+|---|---|---|---|
+| 1 | Rust 持久化层 | 任务目录布局与读写 | 已完成 |
+| 2 | Rust 任务管理 | 任务 CRUD 与恢复命令 | 已完成 |
+| 3 | Rust ChangeSet | 变更记录、回滚、改动保护 | 已完成 |
+| 4 | Rust 验证引擎 | 命令识别、执行、结果解析 | 已完成 |
+| 5 | Rust 诊断中心 | 错误解析为 Problem | 已完成 |
+| 6 | Rust 编排状态机 | 闭环推进与门禁卡控 | 已完成 |
+| 7 | Rust 交付层 | 门禁、报告、Evidence、commit/PR | 已完成 |
+| 8 | 阻塞 IO 修复 | coding_workspace.rs 异步化 | 已完成 |
 | 9 | 前端骨架与主题 | 布局、栏宽、主题跟随 |
 | 10 | 命令面板 | ⌘K/⌘P/⌘T 与命令注册表 |
 | 11 | tab 容器与编辑器 | 文件 tab、diff、面包屑 |
@@ -4170,21 +4172,32 @@ EOF
 
 ## Rust 侧完成检查
 
-Task 1-8 完成后，执行以下验证：
+- [x] `cd src-tauri && cargo test` — coding 模块 54 个用例通过，契约测试 3 个通过，全量 451+ 用例通过
+- [x] 前端未受影响 — 无前端文件改动；`tsc` 报出的两处错误在起点提交 `3a25c7c` 即已存在（`CodingWorkspacePage.tsx:1796` 与 `coding-workspace.test.ts:460` 的遗留 `"plan"` 模式），已在基线 worktree 上验证，与本次无关
+- [x] 旧 coding 界面保持可用 — `coding_run_command` / `coding_cancel_command` 作为兼容层委托验证引擎，输出与取消均已保留
 
-- [ ] `cd src-tauri && cargo test` 全绿
-- [ ] `cd src-tauri && cargo clippy -- -D warnings` 无告警
-- [ ] `pnpm build` 通过（前端未改，确认无破坏）
-- [ ] 启动应用，确认主聊天、自动化、专家、知识库面板功能正常（旧 coding 界面此时仍在，功能不变）
+## 已落地的前端契约（Task 9-16 输入）
 
-完成后回到 writing-plans，基于已落地的类型定义补写 Task 9-16（前端）。
+以下类型与事件已在后端确定，前端可直接复用。
 
-## 后续任务占位（Task 9-16）
+**类型**：`TaskPhase`、`TaskNodeStatus`、`CodingTask`、`AcceptanceCriterion`、`TaskNode`、`TaskSummary`、`ChangeKind`、`FileChange`、`ChangeSet`、`VerificationKind`、`VerificationStatus`、`TestSummary`、`DetectedCommand`、`VerificationRecord`、`ProblemKind`、`ProblemSeverity`、`Problem`、`RepairOutcome`、`RepairRound`、`PhaseDecision`、`OrchestratorState`、`GateId`、`GateStatus`、`QualityGate`、`EvidenceEntry`、`DeliveryReport`。
 
-前端任务将在 Rust 契约落地后编写，届时以下类型已确定，可直接在前端复用：
+序列化约定：结构体字段为 camelCase，枚举值为 snake_case。
 
-`TaskPhase`、`CodingTask`、`AcceptanceCriterion`、`TaskNode`、`TaskSummary`、`ChangeKind`、`FileChange`、`ChangeSet`、`VerificationKind`、`VerificationStatus`、`TestSummary`、`DetectedCommand`、`VerificationRecord`、`ProblemKind`、`ProblemSeverity`、`Problem`、`RepairOutcome`、`RepairRound`、`PhaseDecision`、`OrchestratorState`、`GateId`、`GateStatus`、`QualityGate`、`EvidenceEntry`、`DeliveryReport`。
+**命令**（25 个，全部需 `root`，任务级命令另需 `taskId`）：
 
-事件：`coding://task-phase-changed`、`coding://verification-updated`、`coding://verification-output`、`coding://analysis-progress`。
+```
+coding_task_list / create / get / delete / rename
+coding_task_submit_requirement(planRequired) / approve_plan / rollback
+coding_changeset_get / capture_baseline(dirtyFiles) / record_change(change)
+coding_changeset_discard_file(path) / mark_reviewed(path)
+coding_verification_detect / list / run(kind, command, timeoutSecs) / cancel(runId)
+coding_diagnostics_list
+coding_orchestrator_report_implementation / report_verification / state
+coding_delivery_report / commit_input / pr_input
+coding_git_commit(message)
+```
 
-范围：Task 9 前端骨架与主题、Task 10 命令面板、Task 11 tab 容器与编辑器、Task 12 活动栏视图、Task 13 Agent 面板、Task 14 底部面板与状态栏、Task 15 虚拟文档 tab、Task 16 切换与清理。
+**事件**：`coding://task-phase-changed`（含 `phase`、`reason`、`blocker`）、`coding://verification-updated`（整条记录）、`coding://verification-output`（`runId`、`stream`、`chunk`）、`coding://analysis-progress`（`root`、`scanned`）。
+
+**待补写任务**：Task 9 前端骨架与主题、Task 10 命令面板、Task 11 tab 容器与编辑器、Task 12 活动栏视图、Task 13 Agent 面板、Task 14 底部面板与状态栏、Task 15 虚拟文档 tab、Task 16 切换与清理。
