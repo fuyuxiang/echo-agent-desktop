@@ -10,16 +10,15 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use base64::Engine as _;
 use echo_agent_pty::pty::{PtyChild, PtyConfig, PtyHandle, PtyMaster};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::shell_fs::FilesystemAccess;
@@ -27,12 +26,39 @@ use crate::shell_fs::FilesystemAccess;
 const MAX_SCANNED_FILES: usize = 12_000;
 const MAX_SCAN_DEPTH: usize = 18;
 const MAX_MANIFEST_BYTES: u64 = 512 * 1024;
-const MAX_COMMAND_CHARS: usize = 4_096;
-const MAX_COMMAND_OUTPUT_BYTES: usize = 768 * 1024;
 const MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_GIT_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SEARCH_RESULTS: usize = 300;
 const MAX_SEARCH_PREVIEW_CHARS: usize = 600;
+/// How often a long workspace scan reports progress to the UI.
+const PROGRESS_EVERY_FILES: usize = 2_000;
+
+/// Legacy request shape kept for the pre-workbench coding UI, which is still
+/// shipped until the new workbench replaces it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingRunCommandRequest {
+    run_id: Option<String>,
+    root: String,
+    command: String,
+    timeout_secs: Option<u64>,
+}
+
+/// Legacy result shape for the same UI. Produced by translating a
+/// `VerificationRecord`, so both UIs share one execution path.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingCommandResult {
+    run_id: String,
+    command: String,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    duration_ms: u64,
+    timed_out: bool,
+    cancelled: bool,
+    truncated: bool,
+}
 
 const IGNORED_DIRECTORIES: &[&str] = &[
     ".git",
@@ -147,37 +173,6 @@ pub struct CodingCreateEntryRequest {
     parent: Option<String>,
     name: String,
     directory: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodingRunCommandRequest {
-    run_id: Option<String>,
-    root: String,
-    command: String,
-    timeout_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodingCommandResult {
-    run_id: String,
-    command: String,
-    stdout: String,
-    stderr: String,
-    exit_code: Option<i32>,
-    duration_ms: u128,
-    timed_out: bool,
-    cancelled: bool,
-    truncated: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CodingCommandOutputEvent {
-    run_id: String,
-    stream: String,
-    data: String,
 }
 
 #[derive(Default)]
@@ -696,8 +691,9 @@ pub async fn coding_git_diff(
             let candidate = root.join(path);
             if !tracked && candidate.is_file() {
                 let safe = resolve_coding_document_path(&root, path)?;
-                let bytes =
-                    std::fs::read(&safe).map_err(|error| format!("无法读取未跟踪文件：{error}"))?;
+                let bytes = tokio::fs::read(&safe)
+                    .await
+                    .map_err(|error| format!("无法读取未跟踪文件：{error}"))?;
                 truncated = bytes.len() > MAX_GIT_DIFF_BYTES;
                 if bytes.contains(&0) {
                     text =
@@ -906,7 +902,9 @@ pub async fn coding_read_document(
     path: String,
 ) -> Result<CodingDocument, String> {
     let root = access.require_workspace(&root)?;
-    read_coding_document(&root, &path)
+    tokio::task::spawn_blocking(move || read_coding_document(&root, &path))
+        .await
+        .map_err(|error| format!("读取文件失败：{error}"))?
 }
 
 #[tauri::command]
@@ -918,7 +916,18 @@ pub async fn coding_write_document(
         return Err("写入内容超过 4 MB 安全上限".into());
     }
     let root = access.require_workspace(&request.root)?;
-    let path = resolve_coding_document_path(&root, &request.path)?;
+    // The staged write, permission copy and atomic replace form one synchronous
+    // unit; keep them together on the blocking pool.
+    tokio::task::spawn_blocking(move || write_coding_document_blocking(&root, request))
+        .await
+        .map_err(|error| format!("保存文件失败：{error}"))?
+}
+
+fn write_coding_document_blocking(
+    root: &Path,
+    request: CodingWriteDocumentRequest,
+) -> Result<CodingDocument, String> {
+    let path = resolve_coding_document_path(root, &request.path)?;
     let current = std::fs::read(&path).map_err(|error| format!("保存前无法读取文件：{error}"))?;
     if document_hash(&current) != request.expected_hash {
         return Err("保存冲突：文件已被 Agent 或其他程序修改，请重新加载后合并改动".into());
@@ -952,7 +961,7 @@ pub async fn coding_write_document(
         let _ = std::fs::remove_file(&staging);
     }
     result?;
-    read_coding_document(&root, &path.to_string_lossy())
+    read_coding_document(root, &path.to_string_lossy())
 }
 
 fn safe_new_entry_name(name: &str) -> Result<&str, String> {
@@ -1006,7 +1015,13 @@ pub async fn coding_create_entry(
     request: CodingCreateEntryRequest,
 ) -> Result<String, String> {
     let root = access.require_workspace(&request.root)?;
-    let parent = resolve_coding_directory_path(&root, request.parent.as_deref())?;
+    tokio::task::spawn_blocking(move || create_entry_blocking(&root, request))
+        .await
+        .map_err(|error| format!("创建失败：{error}"))?
+}
+
+fn create_entry_blocking(root: &Path, request: CodingCreateEntryRequest) -> Result<String, String> {
+    let parent = resolve_coding_directory_path(root, request.parent.as_deref())?;
     let name = safe_new_entry_name(&request.name)?;
     let target = parent.join(name);
     if target.exists() {
@@ -1325,7 +1340,15 @@ pub async fn coding_search_workspace(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(fallback_code_search(&root, query));
+            // No ripgrep on this machine: fall back to a synchronous walk, which
+            // must run on the blocking pool rather than a tokio worker.
+            let root = root.clone();
+            let owned_query = query.to_string();
+            return tokio::task::spawn_blocking(move || {
+                fallback_code_search(&root, &owned_query)
+            })
+            .await
+            .map_err(|error| format!("代码搜索失败：{error}"));
         }
         Err(error) => return Err(format!("无法启动代码搜索：{error}")),
     };
@@ -1403,18 +1426,37 @@ pub async fn coding_search_workspace(
     Ok(hits)
 }
 
-#[tauri::command]
-pub async fn coding_analyze_workspace(
-    access: State<'_, FilesystemAccess>,
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AnalysisProgress {
     root: String,
-) -> Result<CodingWorkspaceAnalysis, String> {
-    let root = access.require_workspace(&root)?;
-    let mut stack = vec![(root.clone(), 0usize)];
+    scanned: usize,
+}
+
+/// Result of the synchronous half of a workspace scan.
+struct WorkspaceScan {
+    file_count: usize,
+    truncated: bool,
+    language_counts: BTreeMap<String, usize>,
+    manifests: Vec<ManifestCandidate>,
+    instruction_files: Vec<String>,
+    modules: Vec<CodingModule>,
+}
+
+/// Walk the repository and derive languages, manifests, rule files and modules.
+///
+/// This touches up to `MAX_SCANNED_FILES` entries with synchronous IO, so it
+/// must never run on a tokio worker thread — `coding_analyze_workspace` hands it
+/// to the blocking pool. Progress is emitted as it goes so a large repository
+/// shows movement instead of appearing frozen.
+fn scan_workspace_blocking(app: &AppHandle, root: &Path) -> WorkspaceScan {
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
     let mut file_count = 0usize;
     let mut truncated = false;
     let mut language_counts = BTreeMap::<String, usize>::new();
     let mut manifests = Vec::<ManifestCandidate>::new();
     let mut instruction_files = Vec::<String>::new();
+    let mut next_progress_at = PROGRESS_EVERY_FILES;
 
     while let Some((directory, depth)) = stack.pop() {
         if file_count >= MAX_SCANNED_FILES {
@@ -1451,12 +1493,22 @@ pub async fn coding_analyze_workspace(
                 continue;
             }
             file_count += 1;
+            if file_count >= next_progress_at {
+                next_progress_at += PROGRESS_EVERY_FILES;
+                let _ = app.emit(
+                    "coding://analysis-progress",
+                    AnalysisProgress {
+                        root: root.to_string_lossy().into_owned(),
+                        scanned: file_count,
+                    },
+                );
+            }
             if matches!(
                 name.to_ascii_lowercase().as_str(),
                 "agents.md" | "claude.md" | "copilot-instructions.md" | ".cursorrules"
-            ) || relative_display(&root, &path).starts_with(".echoagent/rules/")
+            ) || relative_display(root, &path).starts_with(".echoagent/rules/")
             {
-                instruction_files.push(relative_display(&root, &path));
+                instruction_files.push(relative_display(root, &path));
             }
             if let Some(kind) = manifest_kind(&name) {
                 manifests.push(ManifestCandidate {
@@ -1487,7 +1539,7 @@ pub async fn coding_analyze_workspace(
         }
         modules.push(CodingModule {
             name: module_name(manifest, module_root),
-            path: relative_display(&root, module_root),
+            path: relative_display(root, module_root),
             kind: manifest.kind.to_string(),
             dependencies: Vec::new(),
         });
@@ -1532,6 +1584,41 @@ pub async fn coding_analyze_workspace(
         module.dependencies.dedup();
     }
     modules.sort_by(|left, right| left.path.cmp(&right.path));
+
+    WorkspaceScan {
+        file_count,
+        truncated,
+        language_counts,
+        manifests,
+        instruction_files,
+        modules,
+    }
+}
+
+#[tauri::command]
+pub async fn coding_analyze_workspace(
+    app: AppHandle,
+    access: State<'_, FilesystemAccess>,
+    root: String,
+) -> Result<CodingWorkspaceAnalysis, String> {
+    let root = access.require_workspace(&root)?;
+    // The directory walk is synchronous and unbounded in time; running it on a
+    // worker thread would freeze every other Tauri command until it finished.
+    let scan = {
+        let app = app.clone();
+        let root = root.clone();
+        tokio::task::spawn_blocking(move || scan_workspace_blocking(&app, &root))
+            .await
+            .map_err(|error| format!("工程分析失败：{error}"))?
+    };
+    let WorkspaceScan {
+        file_count,
+        truncated,
+        language_counts,
+        manifests,
+        mut instruction_files,
+        modules,
+    } = scan;
 
     let mut languages = language_counts
         .into_iter()
@@ -1597,66 +1684,11 @@ pub async fn coding_analyze_workspace(
     })
 }
 
-fn strip_ansi(value: String) -> String {
+/// Public so the verification engine reuses the same escape-sequence cleanup
+/// instead of storing raw terminal control codes in its records.
+pub fn strip_ansi(value: String) -> String {
     let expression = regex::Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").expect("valid ANSI regex");
     expression.replace_all(&value, "").into_owned()
-}
-
-async fn collect_bounded_output<R>(
-    app: Option<AppHandle>,
-    run_id: String,
-    stream: &'static str,
-    mut reader: R,
-) -> std::io::Result<(String, bool)>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    let mut retained = Vec::with_capacity(MAX_COMMAND_OUTPUT_BYTES.min(64 * 1024));
-    let mut truncated = false;
-    let mut chunk = [0u8; 8 * 1024];
-    loop {
-        let count = reader.read(&mut chunk).await?;
-        if count == 0 {
-            break;
-        }
-        let visible = strip_ansi(String::from_utf8_lossy(&chunk[..count]).into_owned());
-        if let Some(app) = app.as_ref() {
-            let _ = app.emit(
-                "coding://command-output",
-                CodingCommandOutputEvent {
-                    run_id: run_id.clone(),
-                    stream: stream.to_string(),
-                    data: visible,
-                },
-            );
-        }
-        let remaining = MAX_COMMAND_OUTPUT_BYTES.saturating_sub(retained.len());
-        if remaining > 0 {
-            retained.extend_from_slice(&chunk[..count.min(remaining)]);
-        }
-        if count > remaining {
-            truncated = true;
-        }
-    }
-    let mut output = strip_ansi(String::from_utf8_lossy(&retained).into_owned());
-    if truncated {
-        output.push_str("\n…输出已达到安全上限，后续内容省略…");
-    }
-    Ok((output, truncated))
-}
-
-async fn finish_output_capture(
-    mut handle: JoinHandle<std::io::Result<(String, bool)>>,
-) -> (String, bool) {
-    match tokio::time::timeout(std::time::Duration::from_secs(2), &mut handle).await {
-        Ok(Ok(Ok(capture))) => capture,
-        Ok(Ok(Err(error))) => (format!("无法读取命令输出：{error}"), true),
-        Ok(Err(error)) => (format!("命令输出任务失败：{error}"), true),
-        Err(_) => {
-            handle.abort();
-            ("命令输出管道未及时关闭，已停止采集".into(), true)
-        }
-    }
 }
 
 fn dangerous_delete_target(raw: &str, workspace_root: &Path) -> bool {
@@ -1784,39 +1816,11 @@ pub fn high_risk_command_reason(command: &str, workspace_root: &Path) -> Option<
     None
 }
 
-async fn terminate_command_tree(process: &mut tokio::process::Child) {
-    let pid = process.id();
-    #[cfg(unix)]
-    if let Some(pid) = pid {
-        // The command is spawned in its own process group below. Terminating
-        // the group also stops grandchildren such as pnpm/node test workers.
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGTERM);
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(180)).await;
-        if process.try_wait().ok().flatten().is_none() {
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
-        }
-    }
-    #[cfg(target_os = "windows")]
-    if let Some(pid) = pid {
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status(),
-        )
-        .await;
-    }
-    let _ = process.kill().await;
-    let _ = process.wait().await;
-}
-
+/// Compatibility shim for the pre-workbench coding UI. Delegates to the
+/// verification engine so command execution, timeout and cancellation policy
+/// live in exactly one place; this wrapper only reshapes the result.
+///
+/// Retire this together with the old UI once the workbench replaces it.
 #[tauri::command]
 pub async fn coding_run_command(
     app: AppHandle,
@@ -1825,168 +1829,45 @@ pub async fn coding_run_command(
     request: CodingRunCommandRequest,
 ) -> Result<CodingCommandResult, String> {
     let root = access.require_workspace(&request.root)?;
-    let command_text = request.command.trim();
-    if command_text.is_empty() {
-        return Err("命令不能为空".into());
-    }
-    if command_text.chars().count() > MAX_COMMAND_CHARS
-        || command_text.contains('\0')
-        || command_text
-            .chars()
-            .any(|character| character == '\r' || character == '\n')
-    {
-        return Err("命令过长或包含不支持的控制字符".into());
-    }
-    if let Some(reason) = high_risk_command_reason(command_text, &root) {
-        return Err(format!("命令被原生安全策略拒绝：{reason}"));
-    }
-    let timeout_secs = request.timeout_secs.unwrap_or(180).clamp(5, 300);
     let run_id = request
         .run_id
-        .filter(|value| {
-            !value.is_empty()
-                && value.len() <= 100
-                && value.chars().all(|character| {
-                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
-                })
-        })
+        .clone()
         .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
-    let cancellation = CancellationToken::new();
-    let started = Instant::now();
-
-    #[cfg(target_os = "windows")]
-    let mut child = {
-        let mut command = Command::new("cmd");
-        command.args(["/D", "/S", "/C", command_text]);
-        command
-    };
-    #[cfg(not(target_os = "windows"))]
-    let mut child = {
-        let mut command = Command::new("sh");
-        command.args(["-lc", command_text]);
-        command
-    };
-    child
-        .current_dir(&root)
-        .env("CI", "true")
-        .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    child.process_group(0);
-
-    let mut process = child
-        .spawn()
-        .map_err(|error| format!("无法执行命令：{error}"))?;
-    let stdout = process
-        .stdout
-        .take()
-        .ok_or_else(|| "无法捕获命令标准输出".to_string())?;
-    let stderr = process
-        .stderr
-        .take()
-        .ok_or_else(|| "无法捕获命令错误输出".to_string())?;
-    {
-        let mut commands = processes
-            .commands
-            .lock()
-            .map_err(|_| "命令运行状态已损坏".to_string())?;
-        if commands.contains_key(&run_id) {
-            return Err("命令运行标识已存在".into());
-        }
-        commands.insert(run_id.clone(), cancellation.clone());
-    }
-    let stdout_task = tokio::spawn(collect_bounded_output(
-        Some(app.clone()),
-        run_id.clone(),
-        "stdout",
-        stdout,
-    ));
-    let stderr_task = tokio::spawn(collect_bounded_output(
-        Some(app),
-        run_id.clone(),
-        "stderr",
-        stderr,
-    ));
-    enum ProcessOutcome {
-        Exited(std::io::Result<std::process::ExitStatus>),
-        TimedOut,
-        Cancelled,
-    }
-    let outcome = tokio::select! {
-        status = process.wait() => ProcessOutcome::Exited(status),
-        _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)) => ProcessOutcome::TimedOut,
-        _ = cancellation.cancelled() => ProcessOutcome::Cancelled,
-    };
-    let duration_ms = started.elapsed().as_millis();
-    let (exit_code, timed_out, cancelled, termination_notice) = match outcome {
-        ProcessOutcome::TimedOut => {
-            terminate_command_tree(&mut process).await;
-            (
-                None,
-                true,
-                false,
-                Some(format!("命令运行超过 {timeout_secs} 秒，已终止")),
-            )
-        }
-        ProcessOutcome::Cancelled => {
-            terminate_command_tree(&mut process).await;
-            (None, false, true, Some("命令已由用户停止".to_string()))
-        }
-        ProcessOutcome::Exited(Err(error)) => {
-            terminate_command_tree(&mut process).await;
-            if let Ok(mut commands) = processes.commands.lock() {
-                commands.remove(&run_id);
-            }
-            return Err(format!("无法等待命令结果：{error}"));
-        }
-        ProcessOutcome::Exited(Ok(status)) => (status.code(), false, false, None),
-    };
-    let (stdout, stdout_truncated) = finish_output_capture(stdout_task).await;
-    let (mut stderr, stderr_truncated) = finish_output_capture(stderr_task).await;
-    if let Some(notice) = termination_notice {
-        if !stderr.is_empty() {
-            stderr.push('\n');
-        }
-        stderr.push_str(&notice);
-    }
-    processes
-        .commands
-        .lock()
-        .map_err(|_| "命令运行状态已损坏".to_string())?
-        .remove(&run_id);
+    let record = crate::coding::verification::run(
+        app,
+        &processes,
+        root,
+        // The legacy UI has no task concept; its runs are not attributed to one.
+        "legacy".to_string(),
+        crate::coding::verification::VerificationKind::Custom,
+        request.command,
+        request.timeout_secs,
+        // Register under the id the caller will cancel by.
+        Some(run_id.clone()),
+    )
+    .await?;
+    let truncated = record.stdout.starts_with("…较早输出已省略…")
+        || record.stderr.starts_with("…较早输出已省略…");
     Ok(CodingCommandResult {
         run_id,
-        command: command_text.to_string(),
-        stdout,
-        stderr,
-        exit_code,
-        duration_ms,
-        timed_out,
-        cancelled,
-        truncated: stdout_truncated || stderr_truncated,
+        command: record.command,
+        stdout: record.stdout,
+        stderr: record.stderr,
+        exit_code: record.exit_code,
+        duration_ms: record.duration_ms,
+        timed_out: record.status == crate::coding::verification::VerificationStatus::TimedOut,
+        cancelled: record.status == crate::coding::verification::VerificationStatus::Cancelled,
+        truncated,
     })
 }
 
+/// Compatibility shim; see `coding_run_command`.
 #[tauri::command]
 pub async fn coding_cancel_command(
     processes: State<'_, CodingProcesses>,
     run_id: String,
 ) -> Result<bool, String> {
-    let token = processes
-        .commands
-        .lock()
-        .map_err(|_| "命令运行状态已损坏".to_string())?
-        .get(&run_id)
-        .cloned();
-    if let Some(token) = token {
-        token.cancel();
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    Ok(processes.cancel(&run_id).is_ok())
 }
 
 #[cfg(test)]
@@ -2202,25 +2083,4 @@ mod tests {
         assert!(output.contains(temp.path().to_string_lossy().as_ref()));
     }
 
-    #[tokio::test]
-    async fn command_output_is_drained_but_retained_memory_is_capped() {
-        use tokio::io::AsyncWriteExt;
-
-        let (mut writer, reader) = tokio::io::duplex(32 * 1024);
-        let write_task = tokio::spawn(async move {
-            writer
-                .write_all(&vec![b'x'; MAX_COMMAND_OUTPUT_BYTES + 8 * 1024])
-                .await
-                .unwrap();
-        });
-        let (output, truncated) = collect_bounded_output(None, "test".into(), "stdout", reader)
-            .await
-            .unwrap();
-        write_task.await.unwrap();
-
-        assert!(truncated);
-        assert!(output.starts_with("xxx"));
-        assert!(output.len() < MAX_COMMAND_OUTPUT_BYTES + 100);
-        assert!(output.ends_with("后续内容省略…"));
-    }
 }
