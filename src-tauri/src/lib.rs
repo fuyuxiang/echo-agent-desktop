@@ -498,6 +498,7 @@ pub fn run() {
             coding::changeset::coding_changeset_record_change,
             coding::changeset::coding_changeset_discard_file,
             coding::changeset::coding_changeset_mark_reviewed,
+            coding::changeset::coding_changeset_sync_from_git,
             coding::changeset::coding_task_rollback,
             coding::verification::coding_verification_detect,
             coding::verification::coding_verification_list,

@@ -51,6 +51,8 @@ export const codingApi = {
     invoke<ChangeSet>("coding_changeset_discard_file", { root, taskId, path }),
   markReviewed: (root: string, taskId: string, path: string) =>
     invoke<ChangeSet>("coding_changeset_mark_reviewed", { root, taskId, path }),
+  syncFromGit: (root: string, taskId: string) =>
+    invoke<ChangeSet>("coding_changeset_sync_from_git", { root, taskId }),
 
   detectCommands: (root: string) =>
     invoke<DetectedCommand[]>("coding_verification_detect", { root }),
