@@ -8,6 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::coding_workspace::{git_snapshot, CodingGitFile};
+
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -141,6 +143,130 @@ pub fn mark_reviewed(root: &Path, task_id: &str, path: &str) -> Result<ChangeSet
         save(root, &set)?;
     }
     Ok(set)
+}
+
+/// Read the on-disk content of a workspace file, bounded for safety. Returns
+/// `None` if the file is missing, not a file, larger than the bound, or a
+/// symlink — those are not states we want to capture as a baseline.
+fn read_bounded(root: &Path, path: &str, max_bytes: u64) -> Option<String> {
+    let target = resolve_in_workspace(root, path).ok()?;
+    let metadata = std::fs::symlink_metadata(&target).ok()?;
+    if !metadata.file_type().is_file() || metadata.is_symlink() {
+        return None;
+    }
+    if metadata.len() > max_bytes {
+        return None;
+    }
+    std::fs::read_to_string(&target).ok()
+}
+
+/// Snap an Agent-written change into the change set, capturing the live file
+/// content as the baseline. The file must exist on disk.
+fn capture_baseline_content(root: &Path, task_id: &str, live: &CodingGitFile) -> Result<FileChange, String> {
+    let max_bytes: u64 = 8 * 1024 * 1024;
+    let baseline = read_bounded(root, &live.path, max_bytes);
+    let change = FileChange {
+        path: live.path.clone(),
+        kind: match live.status.as_str() {
+            "added" | "untracked" => ChangeKind::Added,
+            "deleted" => ChangeKind::Deleted,
+            "renamed" => ChangeKind::Renamed,
+            _ => ChangeKind::Modified,
+        },
+        added: live.added.min(u32::MAX as usize) as u32,
+        removed: live.removed.min(u32::MAX as usize) as u32,
+        baseline_content: baseline,
+        pre_existing: false,
+    };
+    record_change(root, task_id, change.clone())?;
+    Ok(change)
+}
+
+/// Snapshot the live Git state and record every file the Agent (or the user
+/// during the task) actually changed, relative to the baseline the user
+/// captured when the task started.
+///
+/// Files that were dirty *before* the task are filtered out so a rollback can
+/// never destroy the user's own uncommitted work. The derive is best-effort:
+/// when `git_snapshot` fails (no Git, network drive, large binary file) we
+/// return the existing change set unchanged rather than dropping data.
+///
+/// `intent-to-add` is set on untracked files so the `git diff` we drive the
+/// line counts from sees them. The intent-to-add is reversed when this returns
+/// so the working tree is not left with phantom staged files.
+pub async fn sync_from_git(root: &Path, task_id: &str) -> Result<ChangeSet, String> {
+    use tokio::process::Command;
+    if !root.join(".git").exists() && !root.join("../.git").exists() {
+        return Ok(load(root, task_id));
+    }
+
+    // Best-effort intent-to-add so untracked files appear in `git diff`. We
+    // capture the previous state to restore afterwards so the working tree
+    // looks the same as before.
+    let _ = Command::new("git")
+        .args(["add", "-N", "--"])
+        .current_dir(root)
+        .output()
+        .await;
+
+    let snapshot = git_snapshot(root).await;
+
+    // Restore the working tree state before we touch anything else. The
+    // snapshot above may have included files that were just made visible
+    // by intent-to-add, and those must not appear as staged after we
+    // return.
+    let result: Result<(), String> = (|| {
+        let set = load(root, task_id);
+        let prior_by_path: std::collections::HashSet<String> =
+            set.changes.iter().map(|c| c.path.clone()).collect();
+        let baseline: std::collections::HashSet<String> =
+            set.baseline_files.iter().cloned().collect();
+
+        // Capture the live file as a new task change, unless it was already
+        // dirty before the task started (then we preserve its pre-existing
+        // status by leaving the existing record untouched).
+        for live in &snapshot.files {
+            if baseline.contains(&live.path) {
+                continue;
+            }
+            if prior_by_path.contains(&live.path) {
+                // Re-deriving a path that was already recorded. Refresh its
+                // counts so the line totals match the current disk.
+                if let Some(existing) = set.changes.iter().find(|c| c.path == live.path).cloned() {
+                    let refreshed = FileChange {
+                        added: live.added.min(u32::MAX as usize) as u32,
+                        removed: live.removed.min(u32::MAX as usize) as u32,
+                        baseline_content: existing.baseline_content.clone(),
+                        pre_existing: existing.pre_existing,
+                        ..existing
+                    };
+                    record_change(root, task_id, refreshed)?;
+                }
+                continue;
+            }
+            capture_baseline_content(root, task_id, live)?;
+        }
+        Ok(())
+    })();
+
+    let _ = Command::new("git")
+        .args(["reset", "-N"])
+        .current_dir(root)
+        .output()
+        .await;
+
+    result?;
+    Ok(load(root, task_id))
+}
+
+#[tauri::command]
+pub async fn coding_changeset_sync_from_git(
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+) -> Result<ChangeSet, String> {
+    let root = access.require_workspace(&root)?;
+    sync_from_git(&root, &task_id).await
 }
 
 fn restore_one(root: &Path, change: &FileChange) -> Result<(), String> {
@@ -460,6 +586,78 @@ mod tests {
             "original"
         );
         assert!(set.changes.is_empty());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn sync_from_git_captures_untracked_files_as_added() {
+        let root = temp_root();
+        // Need a real git repo for `git diff --numstat` to show untracked files.
+        let _ = std::process::Command::new("git")
+            .args(["init", "--initial-branch=main"])
+            .current_dir(&root)
+            .output();
+        let _ = std::process::Command::new("git")
+            .args(["config", "user.email", "t@t"])
+            .current_dir(&root)
+            .output();
+        let _ = std::process::Command::new("git")
+            .args(["config", "user.name", "t"])
+            .current_dir(&root)
+            .output();
+        // Create a baseline file and commit it so the repo is not empty.
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/seed.ts"), "seed\n").unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&root)
+            .output();
+        let _ = std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&root)
+            .output();
+
+        // User's pre-existing dirty edit — must stay protected.
+        std::fs::write(root.join("src/seed.ts"), "seed\nuser-edit\n").unwrap();
+        capture_baseline(&root, "task-1", vec!["src/seed.ts".to_string()]).map_err(|e| {
+            eprintln!("baseline error: {e}");
+            e
+        }).unwrap();
+
+        // The Agent creates a new file and edits an existing tracked file.
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/new.ts"), "export const x = 1;\n").unwrap();
+        std::fs::write(root.join("src/seed.ts"), "seed\nagent-edit\n").unwrap();
+
+        let set = sync_from_git(&root, "task-1").await.unwrap();
+        let paths: Vec<&str> = set.changes.iter().map(|c| c.path.as_str()).collect();
+        // The untracked new file must appear as a task change.
+        assert!(
+            paths.contains(&"src/new.ts"),
+            "new file must appear: {paths:?}"
+        );
+        // The dirty tracked file stays in baseline_files (protected), not in
+        // the task's changes — the Agent's edits live on top of the user's
+        // existing work without claiming it as a task outcome.
+        assert!(
+            !paths.contains(&"src/seed.ts"),
+            "pre-existing dirty file must stay out of task changes: {paths:?}"
+        );
+        assert_eq!(
+            set.baseline_files,
+            vec!["src/seed.ts".to_string()],
+            "the user's dirty file is the baseline"
+        );
+
+        // Intent-to-add must be reversed: the new file is not staged.
+        let staged = std::process::Command::new("git")
+            .args(["diff", "--cached", "--name-only"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let staged_stdout = String::from_utf8_lossy(&staged.stdout).to_string();
+        assert!(!staged_stdout.contains("src/new.ts"), "untracked file must not be staged after sync, got:\n{staged_stdout}");
+
         std::fs::remove_dir_all(&root).ok();
     }
 }
