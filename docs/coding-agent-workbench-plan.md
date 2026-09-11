@@ -1160,9 +1160,30 @@ pub async fn coding_changeset_mark_reviewed(
 ```rust
             coding::changeset::coding_changeset_get,
             coding::changeset::coding_changeset_capture_baseline,
+            coding::changeset::coding_changeset_record_change,
             coding::changeset::coding_changeset_discard_file,
             coding::changeset::coding_changeset_mark_reviewed,
             coding::changeset::coding_task_rollback,
+```
+
+`record_change` 还需要一个对应的命令 `coding_changeset_record_change`（参数 `root`、`task_id`、`change: FileChange`），供前端在编辑落盘时记录变更，否则该函数在第一期没有调用方：
+
+```rust
+/// Record one file the Agent (or the user's own editor) just changed. The
+/// frontend calls this as edits land so the change set stays authoritative
+/// without polling Git.
+#[tauri::command]
+pub async fn coding_changeset_record_change(
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+    change: FileChange,
+) -> Result<ChangeSet, String> {
+    let root = access.require_workspace(&root)?;
+    tokio::task::spawn_blocking(move || record_change(&root, &task_id, change))
+        .await
+        .map_err(|error| format!("记录文件变更失败：{error}"))?
+}
 ```
 
 - [ ] **Step 4: 跑测试确认通过**
@@ -4109,7 +4130,13 @@ pub async fn coding_search_workspace(
 
 - [ ] **Step 5: 下线旧命令**
 
-从 `coding_workspace.rs` 删除 `coding_run_command` 与 `coding_cancel_command` 两个函数（保留 `CodingProcesses`、`high_risk_command_reason`、`collect_bounded_output`，验证引擎在用）。从 `lib.rs` 的 `invoke_handler` 删除这两行：
+从 `coding_workspace.rs` 删除 `coding_run_command` 与 `coding_cancel_command`，以及随之变成孤儿的 `CodingRunCommandRequest`、`CodingCommandResult`、`CodingCommandOutputEvent`、`collect_bounded_output`、`finish_output_capture`、`terminate_command_tree` 和常量 `MAX_COMMAND_CHARS`、`MAX_COMMAND_OUTPUT_BYTES`。
+
+保留 `CodingProcesses`、`high_risk_command_reason`，并把 `strip_ansi` 改为 `pub` — 验证引擎需要它。
+
+**实施时发现的偏差（已修正）**：被删除的 `collect_bounded_output` 带有两项 Task 4 遗漏的行为——ANSI 转义清理，以及**增量**内存上限（Task 4 原实现先全量缓冲再截断，冗长构建会把整份输出读进内存）。删除前必须先把这两项补进 `verification.rs`：新增 `push_bounded` 逐行裁剪、`label_dropped` 标注省略，并复用 `strip_ansi`。对应新增两个测试：`retained_output_is_capped_while_keeping_the_tail`、`short_output_is_not_labelled_as_dropped`。`coding_workspace.rs` 里原有的 `command_output_is_drained_but_retained_memory_is_capped` 测试随之删除，其覆盖已由上述两个测试承担。
+
+从 `lib.rs` 的 `invoke_handler` 删除这两行：
 
 ```rust
             coding_workspace::coding_run_command,

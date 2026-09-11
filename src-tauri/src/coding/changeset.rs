@@ -233,6 +233,22 @@ pub async fn coding_changeset_discard_file(
         .map_err(|error| format!("丢弃文件改动失败：{error}"))?
 }
 
+/// Record one file the Agent (or the user's own editor) just changed. The
+/// frontend calls this as edits land so the change set stays authoritative
+/// without polling Git.
+#[tauri::command]
+pub async fn coding_changeset_record_change(
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+    change: FileChange,
+) -> Result<ChangeSet, String> {
+    let root = access.require_workspace(&root)?;
+    tokio::task::spawn_blocking(move || record_change(&root, &task_id, change))
+        .await
+        .map_err(|error| format!("记录文件变更失败：{error}"))?
+}
+
 #[tauri::command]
 pub async fn coding_changeset_mark_reviewed(
     access: State<'_, FilesystemAccess>,
