@@ -3,6 +3,7 @@
 //! `coding_workspace` module so the workbench owns its own state.
 
 pub mod changeset;
+pub mod diagnostics;
 pub mod store;
 pub mod task;
 pub mod verification;
