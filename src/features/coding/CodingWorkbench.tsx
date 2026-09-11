@@ -40,6 +40,7 @@ import {
   onVerificationUpdated,
 } from "./lib/tauri-api";
 import type { DetectedCommand, Problem } from "./lib/types";
+import { useTaskLifecycle } from "./lib/task-lifecycle";
 import { DeliveryReportTab } from "./main/docs/DeliveryReportTab";
 import { ProjectProfileTab } from "./main/docs/ProjectProfileTab";
 import { TaskDagTab } from "./main/docs/TaskDagTab";
@@ -140,6 +141,9 @@ export function CodingWorkbench({
   onSendMessage,
   onCancelRun,
 }: CodingWorkbenchProps) {
+  // Drive the change set, the baseline and the phase transition off the
+  // session's streaming signal — see lib/task-lifecycle for the rationale.
+  useTaskLifecycle(cwd);
   // Live transcript for the task's session, read straight from the shared store.
   const transcript = useSessionStore((state) =>
     sessionId ? state.transcripts[sessionId] : undefined,

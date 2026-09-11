@@ -86,14 +86,14 @@ pub struct CodingWorkspaceAnalysis {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodingGitFile {
-    path: String,
-    old_path: Option<String>,
-    status: String,
-    staged: bool,
-    unstaged: bool,
-    untracked: bool,
-    added: usize,
-    removed: usize,
+    pub path: String,
+    pub old_path: Option<String>,
+    pub status: String,
+    pub staged: bool,
+    pub unstaged: bool,
+    pub untracked: bool,
+    pub added: usize,
+    pub removed: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -102,7 +102,7 @@ pub struct CodingGitSnapshot {
     has_git: bool,
     branch: Option<String>,
     head: Option<String>,
-    files: Vec<CodingGitFile>,
+    pub files: Vec<CodingGitFile>,
     total_added: usize,
     total_removed: usize,
     captured_at: String,
@@ -577,7 +577,9 @@ fn parse_git_status(output: &[u8], stats: &HashMap<String, (usize, usize)>) -> V
     files
 }
 
-async fn git_snapshot(root: &Path) -> CodingGitSnapshot {
+/// Public so the changeset module can derive a per-task change set from the
+/// live Git state after the Agent finishes.
+pub async fn git_snapshot(root: &Path) -> CodingGitSnapshot {
     let has_git = git_output(root, &["rev-parse", "--is-inside-work-tree"])
         .await
         .as_deref()
