@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -298,6 +298,34 @@ describe("CodingWorkbench skeleton", () => {
     render(<CodingWorkbench cwd="/repo" models={[{ id: "m1" }]} defaultModelId="m1" apiReady />);
     expect(await screen.findByLabelText("开发需求")).toBeInTheDocument();
     expect(screen.queryByLabelText("给 Agent 的补充要求")).not.toBeInTheDocument();
+  });
+
+  it("toggles the bottom panel with its shortcut", async () => {
+    const user = userEvent.setup();
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    expect(screen.queryByRole("tablist", { name: "开发工具面板" })).not.toBeInTheDocument();
+
+    await user.keyboard("{Meta>}j{/Meta}");
+    expect(screen.getByRole("tablist", { name: "开发工具面板" })).toBeInTheDocument();
+
+    await user.keyboard("{Meta>}j{/Meta}");
+    expect(screen.queryByRole("tablist", { name: "开发工具面板" })).not.toBeInTheDocument();
+  });
+
+  it("detects the project's verification commands on open", async () => {
+    invoke.mockImplementation(async (command: string): Promise<unknown> => {
+      if (command === "coding_verification_detect") {
+        return [{ kind: "test", command: "pnpm test", label: "测试" }];
+      }
+      if (command === "coding_task_list") return [];
+      return null;
+    });
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    await waitFor(() =>
+      expect(invoke.mock.calls.map((call) => call[0])).toContain("coding_verification_detect"),
+    );
   });
 
   it("clears open tabs when the workspace changes", async () => {

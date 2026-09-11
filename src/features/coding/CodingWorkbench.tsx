@@ -31,7 +31,14 @@ import { buildCommands, type CommandContext } from "./lib/commands";
 import { buildFileIndex } from "./lib/file-index";
 import { countOccurrences, describeReplacePlan, replaceAll } from "./lib/replace";
 import { isBusyPhase, statusSummary } from "./lib/phase";
-import { codingApi, onPhaseChanged, onVerificationUpdated } from "./lib/tauri-api";
+import {
+  codingApi,
+  onPhaseChanged,
+  onVerificationOutput,
+  onVerificationUpdated,
+} from "./lib/tauri-api";
+import type { DetectedCommand, Problem } from "./lib/types";
+import { BottomPanel } from "./panels/BottomPanel";
 import { TabContainer } from "./main/TabContainer";
 import { ActivityBar } from "./shell/ActivityBar";
 import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/CommandPalette";
@@ -140,6 +147,8 @@ export function CodingWorkbench({
   const agentWidth = useWorkbenchStore((state) => state.agentWidth);
   const bottomHeight = useWorkbenchStore((state) => state.bottomHeight);
   const bottomOpen = useWorkbenchStore((state) => state.bottomOpen);
+  const bottomView = useWorkbenchStore((state) => state.bottomView);
+  const setBottomHeight = useWorkbenchStore((state) => state.setBottomHeight);
   const setExplorerWidth = useWorkbenchStore((state) => state.setExplorerWidth);
   const setAgentWidth = useWorkbenchStore((state) => state.setAgentWidth);
   const hydrateLayout = useWorkbenchStore((state) => state.hydrateLayout);
@@ -168,11 +177,16 @@ export function CodingWorkbench({
   const [blocker, setBlocker] = useState<string | null>(null);
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
+  const [detected, setDetected] = useState<DetectedCommand[]>([]);
+  const [runningVerification, setRunningVerification] = useState(false);
+  const [commandOutput, setCommandOutput] = useState("");
+  const [terminalActivated, setTerminalActivated] = useState(false);
 
   const task = useTaskStore((state) => state.task);
   const summaries = useTaskStore((state) => state.summaries);
   const changeSet = useTaskStore((state) => state.changeSet);
   const problems = useTaskStore((state) => state.problems);
+  const verifications = useTaskStore((state) => state.verifications);
   const orchestrator = useTaskStore((state) => state.orchestrator);
 
   useEffect(() => setModelId(defaultModelId), [defaultModelId]);
@@ -208,9 +222,40 @@ export function CodingWorkbench({
       if (disposed) unlisten();
       else unlisteners.push(unlisten);
     });
+    void onVerificationOutput((event) => {
+      if (disposed) return;
+      // Cap retained output so a verbose build cannot grow the renderer's memory.
+      setCommandOutput((current) => {
+        const next = current + event.chunk;
+        return next.length > 400_000 ? `…较早输出已省略…\n${next.slice(-400_000)}` : next;
+      });
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    });
     return () => {
       disposed = true;
       for (const unlisten of unlisteners) unlisten();
+    };
+  }, [cwd]);
+
+  // Detect the project's real verification commands once per workspace.
+  useEffect(() => {
+    if (!cwd) {
+      setDetected([]);
+      return;
+    }
+    let cancelled = false;
+    void codingApi
+      .detectCommands(cwd)
+      .then((commands) => {
+        if (!cancelled) setDetected(commands);
+      })
+      .catch(() => {
+        if (!cancelled) setDetected([]);
+      });
+    return () => {
+      cancelled = true;
     };
   }, [cwd]);
 
@@ -513,6 +558,51 @@ export function CodingWorkbench({
     [cwd, onToast, task],
   );
 
+  /**
+   * Run verifications, then let the orchestrator decide what the results mean.
+   * The workbench never derives a phase from the records itself.
+   */
+  const runVerifications = useCallback(
+    async (commands: DetectedCommand[]) => {
+      if (!cwd || !task || commands.length === 0) return;
+      setRunningVerification(true);
+      setCommandOutput("");
+      setBottomView("output");
+      try {
+        for (const command of commands) {
+          try {
+            const record = await codingApi.runVerification(
+              cwd,
+              task.id,
+              command.kind,
+              command.command,
+            );
+            // Stop the batch at the first genuine failure; a later command would
+            // only add noise to the diagnosis.
+            if (record.status !== "passed") break;
+          } catch (error) {
+            onToast?.(`执行 ${command.command} 失败：${String(error).replace(/^Error:\s*/, "")}`);
+            break;
+          }
+        }
+        await codingApi.reportVerification(cwd, task.id);
+        await useTaskStore.getState().refreshTaskState();
+      } finally {
+        setRunningVerification(false);
+      }
+    },
+    [cwd, onToast, setBottomView, task],
+  );
+
+  const openProblem = useCallback(
+    (problem: Problem) => {
+      if (!problem.file) return;
+      void openFile(workspaceFilePath(cwd, problem.file));
+      setReveal({ line: problem.line ?? 1, column: problem.column ?? 1, key: Date.now() });
+    },
+    [cwd, openFile],
+  );
+
   const commitChanges = useCallback(async () => {
     if (!cwd || !task) return;
     setCommitting(true);
@@ -548,8 +638,8 @@ export function CodingWorkbench({
       setActivityView,
       setBottomView,
       openDocTab: (kind) => useTabStore.getState().openDoc(kind),
-      runAllVerifications: () => notImplemented("验证执行"),
-      rerunVerification: () => notImplemented("验证执行"),
+      runAllVerifications: () => void runVerifications(detected),
+      rerunVerification: () => void runVerifications(detected),
       approvePlan: () => void approvePlan(),
       rollbackTask: () => void rollbackTask(),
       newTask: () => useTaskStore.setState({ task: null }),
@@ -562,9 +652,11 @@ export function CodingWorkbench({
       approvePlan,
       commitChanges,
       cwd,
+      detected,
       notImplemented,
       problems.length,
       rollbackTask,
+      runVerifications,
       setActivityView,
       setBottomView,
       streaming,
@@ -859,6 +951,30 @@ export function CodingWorkbench({
           />
         )}
       </aside>
+
+      {bottomOpen && (
+        <BottomPanel
+          root={cwd}
+          view={bottomView}
+          height={bottomHeight}
+          onViewChange={setBottomView}
+          onCollapse={() => toggleBottom(false)}
+          onResize={setBottomHeight}
+          problems={problems}
+          records={verifications}
+          detected={detected}
+          running={runningVerification}
+          hasTask={Boolean(task)}
+          output={commandOutput}
+          messages={messages}
+          terminalActivated={terminalActivated}
+          onActivateTerminal={() => setTerminalActivated(true)}
+          onOpenProblem={openProblem}
+          onRun={(command) => void runVerifications([command])}
+          onRunAll={() => void runVerifications(detected)}
+          onToast={onToast}
+        />
+      )}
 
       <footer className="coding-workbench__status" role="status" aria-label="工作台状态">
         {task && (

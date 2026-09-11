@@ -193,6 +193,244 @@
   white-space: nowrap;
 }
 
+/* ---------- bottom panel ---------- */
+
+.coding-bottom {
+  grid-column: 2 / -1;
+  grid-row: 3 / 4;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--echo-border-subtle);
+  background: var(--echo-bg-primary);
+}
+
+.coding-bottom__resizer {
+  height: 4px;
+  margin-top: -4px;
+  cursor: row-resize;
+  background: transparent;
+}
+
+.coding-bottom__resizer:hover,
+.coding-bottom__resizer:focus-visible {
+  background: var(--echo-border-focus);
+  outline: none;
+}
+
+.coding-bottom__tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--echo-border-subtle);
+  background: var(--echo-bg-secondary);
+}
+
+.coding-bottom__tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--echo-text-weak);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.coding-bottom__tabs button:hover {
+  color: var(--echo-text-strong);
+}
+
+.coding-bottom__tabs button.is-active {
+  background: var(--echo-bg-active);
+  color: var(--echo-text-strong);
+}
+
+.coding-bottom__tabs b {
+  padding: 0 4px;
+  border-radius: 7px;
+  background: var(--echo-bg-tertiary);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.coding-bottom__collapse {
+  margin-left: auto;
+}
+
+.coding-bottom__body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.coding-bottom__output {
+  height: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  color: var(--echo-text-medium);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.coding-bottom__terminal {
+  height: 100%;
+}
+
+.coding-bottom__terminal[hidden] {
+  display: none;
+}
+
+.coding-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.coding-panel__summary,
+.coding-panel__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--echo-border-subtle);
+  color: var(--echo-text-weak);
+  font-size: 11px;
+}
+
+.coding-panel__actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 6px;
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-strong);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.coding-panel__actions button:disabled {
+  color: var(--echo-text-disable);
+  cursor: default;
+}
+
+.coding-panel__hint {
+  color: var(--echo-text-weak);
+}
+
+.coding-panel__list {
+  flex: 1;
+  overflow: auto;
+  padding: 4px;
+}
+
+.coding-panel__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  color: var(--echo-text-weak);
+  font-size: 11px;
+}
+
+.coding-problem,
+.coding-verification,
+.coding-trace {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--echo-text-medium);
+  font-size: 11px;
+  text-align: left;
+}
+
+.coding-problem:hover:not(:disabled),
+.coding-verification:hover {
+  background: var(--echo-bg-hover);
+  cursor: pointer;
+}
+
+.coding-problem:disabled {
+  cursor: default;
+}
+
+.coding-problem em,
+.coding-verification em {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-weak);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.coding-problem > span,
+.coding-verification > span,
+.coding-trace > span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coding-problem code,
+.coding-verification code,
+.coding-trace code {
+  overflow: hidden;
+  max-width: 220px;
+  color: var(--echo-text-weak);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.coding-problem small,
+.coding-verification small,
+.coding-trace small {
+  flex: 0 0 auto;
+  color: var(--echo-text-weak);
+  font-size: 10px;
+}
+
+.coding-verification b {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-weak);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.coding-verification.is-passed > svg {
+  color: var(--echo-text-link);
+}
+
+.coding-trace b {
+  flex: 0 0 18px;
+  color: var(--echo-text-weak);
+  font-size: 10px;
+  font-weight: 500;
+  text-align: right;
+}
+
 /* ---------- task switcher ---------- */
 
 .coding-task-switcher {
