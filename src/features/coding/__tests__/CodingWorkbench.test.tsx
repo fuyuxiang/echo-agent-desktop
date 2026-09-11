@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,17 +15,49 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 vi.mock("@/components/workspace-panel/FileTreeView", () => ({
   FileTreeView: () => <div data-testid="file-tree" />,
 }));
+const readDocument = vi.fn(async (_root: string, path: string) => ({
+  path,
+  relativePath: path.replace("/repo/", ""),
+  content: "disk content",
+  hash: "h1",
+  size: 12,
+  modifiedAt: 0,
+  language: "typescript",
+  lineEnding: "LF" as const,
+}));
+const writeDocument = vi.fn(async (_root: string, path: string, content: string, _hash?: string) => ({
+  path,
+  relativePath: path.replace("/repo/", ""),
+  content,
+  hash: "h2",
+  size: content.length,
+  modifiedAt: 0,
+  language: "typescript",
+  lineEnding: "LF" as const,
+}));
+
 vi.mock("@/lib/agent-client", () => ({
   filesystemPickDirectory: vi.fn(async () => "/picked"),
   listDir: vi.fn(async () => []),
+  codingReadDocument: (root: string, path: string) => readDocument(root, path),
+  codingWriteDocument: (root: string, path: string, content: string, hash: string) =>
+    writeDocument(root, path, content, hash),
+}));
+
+vi.mock("../main/CodingEditor", () => ({
+  CodingEditor: ({ value }: { value: string }) => <div data-testid="editor">{value}</div>,
 }));
 
 import { CodingWorkbench } from "../CodingWorkbench";
+import { useTabStore } from "../store/tab-store";
 
 describe("CodingWorkbench skeleton", () => {
   beforeEach(() => {
     localStorage.clear();
     invoke.mockClear();
+    readDocument.mockClear();
+    writeDocument.mockClear();
+    useTabStore.getState().closeAll();
   });
 
   it("prompts to open a folder when no workspace is selected", () => {
@@ -85,6 +117,95 @@ describe("CodingWorkbench skeleton", () => {
     render(<CodingWorkbench cwd="" models={[]} />);
     await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
     expect(screen.queryByRole("dialog", { name: "命令面板" })).not.toBeInTheDocument();
+  });
+
+  it("reads a file and shows its content in a tab", async () => {
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/src/a.ts",
+        relativePath: "src/a.ts",
+        name: "a.ts",
+        language: "typescript",
+        original: "disk content",
+        draft: "disk content",
+        hash: "h1",
+        loading: false,
+      });
+    });
+
+    expect(await screen.findByRole("tab", { name: /a\.ts/ })).toBeInTheDocument();
+    expect(screen.getByTestId("editor")).toHaveTextContent("disk content");
+  });
+
+  it("flags a save conflict instead of overwriting another writer", async () => {
+    writeDocument.mockRejectedValueOnce(
+      new Error("保存冲突：文件已被 Agent 或其他程序修改，请重新加载后合并改动"),
+    );
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/src/a.ts",
+        relativePath: "src/a.ts",
+        name: "a.ts",
+        language: "typescript",
+        original: "disk content",
+        draft: "disk content",
+        hash: "stale",
+        loading: false,
+      });
+      useTabStore.getState().updateDraft("/repo/src/a.ts", "my edit");
+      useTabStore.getState().markConflict("/repo/src/a.ts");
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/已被 Agent 或其他程序修改/);
+  });
+
+  it("shows an error in the tab when a file cannot be read", async () => {
+    readDocument.mockRejectedValueOnce(new Error("读取文件失败"));
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/src/a.ts",
+        relativePath: "src/a.ts",
+        name: "a.ts",
+        language: "typescript",
+        original: "",
+        draft: "",
+        hash: "",
+        loading: false,
+      });
+      useTabStore.getState().setError("/repo/src/a.ts", "打开失败：读取文件失败");
+    });
+
+    expect(await screen.findByText(/打开失败：读取文件失败/)).toBeInTheDocument();
+  });
+
+  it("clears open tabs when the workspace changes", async () => {
+    const { rerender } = render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/src/a.ts",
+        relativePath: "src/a.ts",
+        name: "a.ts",
+        language: "typescript",
+        original: "x",
+        draft: "x",
+        hash: "h1",
+        loading: false,
+      });
+    });
+    expect(useTabStore.getState().tabs).toHaveLength(1);
+
+    rerender(<CodingWorkbench cwd="/other" models={[]} />);
+    expect(useTabStore.getState().tabs).toHaveLength(0);
   });
 
   it("applies persisted pane widths as CSS variables", async () => {

@@ -11,13 +11,19 @@ import { ArrowLeft, Code2, FolderGit2, Search, Settings2 } from "lucide-react";
 
 import type { ModelOption } from "@/components/ModelSelector";
 import { FileTreeView } from "@/components/workspace-panel/FileTreeView";
-import { filesystemPickDirectory } from "@/lib/agent-client";
+import {
+  codingReadDocument,
+  codingWriteDocument,
+  filesystemPickDirectory,
+} from "@/lib/agent-client";
 import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
 import "@/styles/coding-workbench.css";
 
 import { buildCommands, type CommandContext } from "./lib/commands";
 import { buildFileIndex } from "./lib/file-index";
+import { TabContainer } from "./main/TabContainer";
 import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/CommandPalette";
+import { isFileTab, useTabStore } from "./store/tab-store";
 import { useWorkbenchStore } from "./store/workbench-store";
 
 interface CodingWorkbenchProps {
@@ -34,6 +40,12 @@ interface CodingWorkbenchProps {
 function basename(path: string): string {
   const segments = path.replace(/\\/g, "/").split("/").filter(Boolean);
   return segments[segments.length - 1] ?? path;
+}
+
+/** Resolve a workspace-relative path against the repository root. */
+function workspaceFilePath(root: string, path: string): string {
+  if (/^(?:[a-z]:[\\/]|[\\/]{2}|\/)/i.test(path)) return path;
+  return `${root.replace(/[\\/]+$/, "")}/${path.replace(/^[\\/]+/, "")}`;
 }
 
 /**
@@ -83,11 +95,98 @@ export function CodingWorkbench({
   const setBottomView = useWorkbenchStore((state) => state.setBottomView);
   const toggleBottom = useWorkbenchStore((state) => state.toggleBottom);
 
+  const tabs = useTabStore((state) => state.tabs);
+  const activeTabId = useTabStore((state) => state.activeId);
+
   const [selectedDirectory, setSelectedDirectory] = useState(cwd);
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
   const [filePaths, setFilePaths] = useState<string[]>([]);
   const [indexing, setIndexing] = useState(false);
-  const [symbols] = useState<PaletteSymbol[]>([]);
+  const [symbolsByPath, setSymbolsByPath] = useState<Record<string, PaletteSymbol[]>>({});
+  const [reveal, setReveal] = useState<{ line: number; column: number; key: number }>();
+
+  const symbols = useMemo(() => {
+    const activeTab = tabs.find((tab) => tab.id === activeTabId);
+    if (!activeTab || !isFileTab(activeTab)) return [];
+    return symbolsByPath[activeTab.id] ?? [];
+  }, [activeTabId, symbolsByPath, tabs]);
+
+  /** Load a file into a tab, reusing the tab if it is already open. */
+  const openFile = useCallback(
+    async (absolutePath: string) => {
+      const store = useTabStore.getState();
+      const existing = store.tabs.find((tab) => tab.id === absolutePath);
+      if (existing) {
+        store.setActive(absolutePath);
+        return;
+      }
+      const name = basename(absolutePath);
+      store.openFile({
+        id: absolutePath,
+        relativePath: absolutePath,
+        name,
+        language: "plaintext",
+        original: "",
+        draft: "",
+        hash: "",
+        loading: true,
+      });
+      try {
+        const document = await codingReadDocument(cwd, absolutePath);
+        const current = useTabStore.getState();
+        // The tab may have been closed while the read was in flight.
+        if (!current.tabs.some((tab) => tab.id === absolutePath)) return;
+        current.closeTab(absolutePath);
+        current.openFile({
+          id: absolutePath,
+          relativePath: document.relativePath,
+          name,
+          language: document.language,
+          original: document.content,
+          draft: document.content,
+          hash: document.hash,
+          loading: false,
+        });
+      } catch (error) {
+        useTabStore
+          .getState()
+          .setError(absolutePath, `打开失败：${String(error).replace(/^Error:\s*/, "")}`);
+      }
+    },
+    [cwd],
+  );
+
+  /**
+   * Save a tab. The backend compares the hash we loaded against what is on disk
+   * and refuses the write when they differ, which is how a concurrent Agent edit
+   * is caught instead of silently overwritten.
+   */
+  const saveFile = useCallback(
+    async (id: string) => {
+      const tab = useTabStore.getState().tabs.find((entry) => entry.id === id);
+      if (!tab || !isFileTab(tab)) return;
+      try {
+        const saved = await codingWriteDocument(cwd, id, tab.draft, tab.hash);
+        useTabStore.getState().markSaved(id, saved.content, saved.hash);
+        onToast?.(`已保存 ${tab.name}`);
+      } catch (error) {
+        const message = String(error).replace(/^Error:\s*/, "");
+        if (message.includes("保存冲突")) {
+          useTabStore.getState().markConflict(id);
+          onToast?.(message);
+          return;
+        }
+        onToast?.(`保存失败：${message}`);
+      }
+    },
+    [cwd, onToast],
+  );
+
+  // Close every tab when the workspace changes; their paths no longer apply.
+  useEffect(() => {
+    useTabStore.getState().closeAll();
+    setSymbolsByPath({});
+  }, [cwd]);
 
   useEffect(() => {
     hydrateLayout();
@@ -290,8 +389,9 @@ export function CodingWorkbench({
       <aside className="coding-workbench__explorer" aria-label="资源管理器">
         <FileTreeView
           rootPath={cwd}
+          selectedPath={activeTabId ?? undefined}
           selectedDirectoryPath={selectedDirectory}
-          onFileSelect={() => {}}
+          onFileSelect={(path) => void openFile(path)}
           onDirectorySelect={setSelectedDirectory}
           onToast={onToast}
         />
@@ -310,7 +410,33 @@ export function CodingWorkbench({
         }}
       />
 
-      <main className="coding-workbench__main" />
+      <main className="coding-workbench__main">
+        <TabContainer
+          tabs={tabs}
+          activeId={activeTabId}
+          reveal={reveal}
+          onSelect={(id) => useTabStore.getState().setActive(id)}
+          onClose={(id) => useTabStore.getState().closeTab(id)}
+          onDraftChange={(id, draft) => useTabStore.getState().updateDraft(id, draft)}
+          onSave={(id) => void saveFile(id)}
+          onViewChange={(id, view) => useTabStore.getState().setView(id, view)}
+          onSymbols={(path, list) =>
+            setSymbolsByPath((current) => ({
+              ...current,
+              [path]: list.map((symbol) => ({ ...symbol, path })),
+            }))
+          }
+          renderDoc={(kind) => (
+            <div className="coding-tabs__empty-body">
+              {kind === "delivery"
+                ? "交付报告将在后续版本接入"
+                : kind === "taskDag"
+                  ? "任务进度将在后续版本接入"
+                  : "工程画像将在后续版本接入"}
+            </div>
+          )}
+        />
+      </main>
 
       <div
         className="coding-workbench__vsplit"
@@ -342,8 +468,11 @@ export function CodingWorkbench({
           pathsLoading={indexing}
           onClose={() => setPaletteMode(null)}
           onModeChange={setPaletteMode}
-          onOpenPath={(path) => notImplemented(`打开文件 ${path}`)}
-          onOpenSymbol={(symbol) => notImplemented(`跳转符号 ${symbol.name}`)}
+          onOpenPath={(path) => void openFile(workspaceFilePath(cwd, path))}
+          onOpenSymbol={(symbol) => {
+            void openFile(symbol.path);
+            setReveal({ line: symbol.line, column: 1, key: Date.now() });
+          }}
         />
       )}
     </div>
