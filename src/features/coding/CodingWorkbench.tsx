@@ -11,6 +11,7 @@ import { ArrowLeft, Code2, FolderGit2, Search, Settings2 } from "lucide-react";
 
 import type { ModelOption } from "@/components/ModelSelector";
 import { FileTreeView } from "@/components/workspace-panel/FileTreeView";
+import type { ChatMessage } from "@/stores/session-store";
 import {
   codingReadDocument,
   codingWriteDocument,
@@ -20,6 +21,8 @@ import {
 import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
 import "@/styles/coding-workbench.css";
 
+import { AgentPane } from "./agent/AgentPane";
+import { TaskStarter } from "./agent/TaskStarter";
 import { ChangeSetView } from "./explorer/ChangeSetView";
 import { ContextPackView } from "./explorer/ContextPackView";
 import { SearchView } from "./explorer/SearchView";
@@ -27,10 +30,14 @@ import { SymbolView } from "./explorer/SymbolView";
 import { buildCommands, type CommandContext } from "./lib/commands";
 import { buildFileIndex } from "./lib/file-index";
 import { countOccurrences, describeReplacePlan, replaceAll } from "./lib/replace";
+import { isBusyPhase, statusSummary } from "./lib/phase";
+import { codingApi, onPhaseChanged, onVerificationUpdated } from "./lib/tauri-api";
 import { TabContainer } from "./main/TabContainer";
 import { ActivityBar } from "./shell/ActivityBar";
 import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/CommandPalette";
+import { TaskSwitcher } from "./shell/TaskSwitcher";
 import { isFileTab, useTabStore } from "./store/tab-store";
+import { useTaskStore } from "./store/task-store";
 import { useWorkbenchStore } from "./store/workbench-store";
 
 interface CodingWorkbenchProps {
@@ -42,6 +49,26 @@ interface CodingWorkbenchProps {
   onOpenSettings?: () => void;
   models?: ModelOption[];
   defaultModelId?: string;
+  /** True once a model and credentials are configured. */
+  apiReady?: boolean;
+  /**
+   * Session plumbing owned by the host (App.tsx). The workbench drives a session
+   * through these rather than creating one itself, so session lifecycle stays in
+   * one place for the whole application.
+   */
+  sessionId?: string | null;
+  messages?: ChatMessage[];
+  streaming?: boolean;
+  awaitingPermission?: boolean;
+  awaitingQuestion?: boolean;
+  onStartRun?: (
+    root: string,
+    requirement: string,
+    planRequired: boolean,
+    modelId?: string,
+  ) => Promise<string | undefined>;
+  onSendMessage?: (text: string) => void;
+  onCancelRun?: () => void;
 }
 
 function basename(path: string): string {
@@ -97,6 +124,17 @@ export function CodingWorkbench({
   onToast,
   onExit,
   onOpenSettings,
+  models = [],
+  defaultModelId,
+  apiReady = false,
+  sessionId = null,
+  messages = [],
+  streaming = false,
+  awaitingPermission = false,
+  awaitingQuestion = false,
+  onStartRun,
+  onSendMessage,
+  onCancelRun,
 }: CodingWorkbenchProps) {
   const explorerWidth = useWorkbenchStore((state) => state.explorerWidth);
   const agentWidth = useWorkbenchStore((state) => state.agentWidth);
@@ -122,6 +160,59 @@ export function CodingWorkbench({
   const [reveal, setReveal] = useState<{ line: number; column: number; key: number }>();
   const [contextPaths, setContextPaths] = useState<string[]>([]);
   const [replacing, setReplacing] = useState(false);
+  const [modelId, setModelId] = useState(defaultModelId);
+  const [startError, setStartError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [phaseReason, setPhaseReason] = useState<string>();
+  const [blocker, setBlocker] = useState<string | null>(null);
+  const [busyPath, setBusyPath] = useState<string | null>(null);
+  const [committing, setCommitting] = useState(false);
+
+  const task = useTaskStore((state) => state.task);
+  const summaries = useTaskStore((state) => state.summaries);
+  const changeSet = useTaskStore((state) => state.changeSet);
+  const problems = useTaskStore((state) => state.problems);
+  const orchestrator = useTaskStore((state) => state.orchestrator);
+
+  useEffect(() => setModelId(defaultModelId), [defaultModelId]);
+
+  // Bind the task store to this workspace and load its task list.
+  useEffect(() => {
+    useTaskStore.getState().setRoot(cwd);
+    if (cwd) void useTaskStore.getState().refreshSummaries();
+  }, [cwd]);
+
+  /**
+   * The orchestrator is the only authority on phase, so the UI reacts to its
+   * events instead of inferring progress from the message stream.
+   */
+  useEffect(() => {
+    if (!cwd) return;
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    void onPhaseChanged((event) => {
+      if (disposed) return;
+      useTaskStore.getState().applyPhase(event.taskId, event.phase);
+      setPhaseReason(event.reason);
+      setBlocker(event.blocker ?? null);
+      void useTaskStore.getState().refreshTaskState();
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    });
+    void onVerificationUpdated((record) => {
+      if (disposed) return;
+      useTaskStore.getState().applyVerification(record);
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    });
+    return () => {
+      disposed = true;
+      for (const unlisten of unlisteners) unlisten();
+    };
+  }, [cwd]);
 
   const activeFileTab = useMemo(() => {
     const found = tabs.find((tab) => tab.id === activeTabId);
@@ -321,31 +412,166 @@ export function CodingWorkbench({
     [onToast],
   );
 
+  /** Derive a task name from the requirement's first clause. */
+  const deriveName = useCallback((requirement: string) => {
+    const firstLine = requirement.split(/[\n。；;]/)[0]?.trim() ?? requirement.trim();
+    return firstLine.length > 24 ? `${firstLine.slice(0, 24)}…` : firstLine || "开发任务";
+  }, []);
+
+  /**
+   * Create the task, then hand the requirement to the host so it can open an
+   * Agent session. The orchestrator records the phase transition; the workbench
+   * never decides it locally.
+   */
+  const startTask = useCallback(
+    async (requirement: string, planRequired: boolean) => {
+      if (!cwd || !onStartRun) return;
+      setStarting(true);
+      setStartError(null);
+      try {
+        const created = await useTaskStore.getState().createTask(deriveName(requirement), requirement);
+        if (!created) {
+          setStartError(useTaskStore.getState().error ?? "创建任务失败");
+          return;
+        }
+        // Record the baseline so pre-existing user edits stay protected.
+        const dirty = changeSet?.changes.map((change) => change.path) ?? [];
+        await codingApi.captureBaseline(cwd, created.id, dirty).catch(() => undefined);
+        await codingApi.submitRequirement(cwd, created.id, planRequired);
+        const session = await onStartRun(cwd, requirement, planRequired, modelId);
+        if (!session) {
+          setStartError("未能启动 Agent 会话");
+          return;
+        }
+        await useTaskStore.getState().selectTask(created.id);
+      } catch (error) {
+        setStartError(String(error).replace(/^Error:\s*/, ""));
+      } finally {
+        setStarting(false);
+      }
+    },
+    [changeSet?.changes, cwd, deriveName, modelId, onStartRun],
+  );
+
+  const sendFollowup = useCallback(
+    (text: string) => {
+      if (!onSendMessage) return;
+      setSending(true);
+      try {
+        onSendMessage(text);
+      } finally {
+        setSending(false);
+      }
+    },
+    [onSendMessage],
+  );
+
+  const approvePlan = useCallback(async () => {
+    if (!cwd || !task) return;
+    try {
+      await codingApi.approvePlan(cwd, task.id);
+      await useTaskStore.getState().refreshTaskState();
+    } catch (error) {
+      onToast?.(`批准计划失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  }, [cwd, onToast, task]);
+
+  const rollbackTask = useCallback(async () => {
+    if (!cwd || !task) return;
+    const count = changeSet?.changes.filter((change) => !change.preExisting).length ?? 0;
+    if (
+      !window.confirm(
+        `将撤销本任务产生的 ${count} 个文件改动，任务开始前你自己的改动不受影响。确认回滚？`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const restored = await codingApi.rollbackTask(cwd, task.id);
+      await useTaskStore.getState().refreshTaskState();
+      useTabStore.getState().closeAll();
+      onToast?.(`已回滚 ${restored.length} 个文件`);
+    } catch (error) {
+      onToast?.(`回滚失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  }, [changeSet?.changes, cwd, onToast, task]);
+
+  const discardChange = useCallback(
+    async (path: string) => {
+      if (!cwd || !task) return;
+      if (!window.confirm(`将丢弃 ${path} 的全部改动，确认继续？`)) return;
+      setBusyPath(path);
+      try {
+        await codingApi.discardFile(cwd, task.id, path);
+        await useTaskStore.getState().refreshTaskState();
+      } catch (error) {
+        onToast?.(`丢弃失败：${String(error).replace(/^Error:\s*/, "")}`);
+      } finally {
+        setBusyPath(null);
+      }
+    },
+    [cwd, onToast, task],
+  );
+
+  const commitChanges = useCallback(async () => {
+    if (!cwd || !task) return;
+    setCommitting(true);
+    try {
+      const input = await codingApi.commitInput(cwd, task.id);
+      const message = window.prompt("提交信息", input.split("\n")[0]?.replace(/^任务名称：/, "") ?? "");
+      if (!message?.trim()) return;
+      const hash = await codingApi.commit(cwd, task.id, message.trim());
+      await useTaskStore.getState().refreshTaskState();
+      onToast?.(`已提交 ${hash.slice(0, 8)}`);
+    } catch (error) {
+      onToast?.(`提交失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setCommitting(false);
+    }
+  }, [cwd, onToast, task]);
+
   /**
    * Commands available right now. Later tasks replace the placeholder handlers
    * with real task, verification and delivery actions.
    */
+  const taskChangeCount =
+    changeSet?.changes.filter((change) => !change.preExisting).length ?? 0;
+
   const commandContext = useMemo<CommandContext>(
     () => ({
       hasWorkspace: Boolean(cwd),
-      hasTask: false,
-      busy: false,
-      problemCount: 0,
-      changedFileCount: 0,
+      hasTask: Boolean(task),
+      busy: streaming || isBusyPhase(task?.phase),
+      taskPhase: task?.phase,
+      problemCount: problems.length,
+      changedFileCount: taskChangeCount,
       setActivityView,
       setBottomView,
-      openDocTab: () => notImplemented("报告与图表标签页"),
+      openDocTab: (kind) => useTabStore.getState().openDoc(kind),
       runAllVerifications: () => notImplemented("验证执行"),
       rerunVerification: () => notImplemented("验证执行"),
-      approvePlan: () => notImplemented("计划批准"),
-      rollbackTask: () => notImplemented("任务回滚"),
-      newTask: () => notImplemented("新建开发任务"),
-      commitChanges: () => notImplemented("提交变更"),
+      approvePlan: () => void approvePlan(),
+      rollbackTask: () => void rollbackTask(),
+      newTask: () => useTaskStore.setState({ task: null }),
+      commitChanges: () => void commitChanges(),
       explain: () => notImplemented("代码解释"),
       generateComments: () => notImplemented("注释生成"),
       toggleBottom: () => toggleBottom(),
     }),
-    [cwd, notImplemented, setActivityView, setBottomView, toggleBottom],
+    [
+      approvePlan,
+      commitChanges,
+      cwd,
+      notImplemented,
+      problems.length,
+      rollbackTask,
+      setActivityView,
+      setBottomView,
+      streaming,
+      task,
+      taskChangeCount,
+      toggleBottom,
+    ],
   );
 
   const commands = useMemo(() => buildCommands(commandContext), [commandContext]);
@@ -446,6 +672,12 @@ export function CodingWorkbench({
         <span className="coding-workbench__repo" title={cwd}>
           {basename(cwd)}
         </span>
+        <TaskSwitcher
+          tasks={summaries}
+          activeId={task?.id}
+          onSelect={(taskId) => void useTaskStore.getState().selectTask(taskId)}
+          onNew={() => useTaskStore.setState({ task: null })}
+        />
         <button
           type="button"
           className="coding-workbench__palette-btn"
@@ -500,12 +732,18 @@ export function CodingWorkbench({
         )}
         {activityView === "changes" && (
           <ChangeSetView
-            changeSet={null}
-            hasTask={false}
-            onOpenDiff={() => notImplemented("变更差异")}
-            onDiscard={() => notImplemented("丢弃改动")}
-            onCommit={() => notImplemented("提交变更")}
-            onRollback={() => notImplemented("任务回滚")}
+            changeSet={changeSet}
+            hasTask={Boolean(task)}
+            busyPath={busyPath}
+            committing={committing}
+            onOpenDiff={(change) => {
+              void openFile(workspaceFilePath(cwd, change.path));
+              useTabStore.getState().setView(workspaceFilePath(cwd, change.path), "diff");
+              if (task) void codingApi.markReviewed(cwd, task.id, change.path).catch(() => undefined);
+            }}
+            onDiscard={(change) => void discardChange(change.path)}
+            onCommit={() => void commitChanges()}
+            onRollback={() => void rollbackTask()}
           />
         )}
         {activityView === "symbols" && (
@@ -585,11 +823,63 @@ export function CodingWorkbench({
         }}
       />
 
-      <aside className="coding-workbench__agent" aria-label="Agent 面板" />
+      <aside className="coding-workbench__agent" aria-label="Agent 面板">
+        {task ? (
+          <AgentPane
+            task={task}
+            sessionId={sessionId}
+            messages={messages}
+            streaming={streaming}
+            phaseReason={phaseReason}
+            blocker={blocker}
+            awaitingPermission={awaitingPermission}
+            awaitingQuestion={awaitingQuestion}
+            models={models}
+            modelId={modelId}
+            sending={sending}
+            onModelChange={setModelId}
+            onSend={sendFollowup}
+            onCancel={() => onCancelRun?.()}
+            onApprovePlan={() => void approvePlan()}
+            onOpenReport={() => useTabStore.getState().openDoc("delivery")}
+            onToast={onToast}
+          />
+        ) : (
+          <TaskStarter
+            models={models}
+            modelId={modelId}
+            onModelChange={setModelId}
+            starting={starting}
+            error={startError}
+            apiReady={apiReady}
+            contextPaths={contextPaths}
+            onStart={(requirement, planRequired) => void startTask(requirement, planRequired)}
+            onOpenSettings={onOpenSettings}
+            onToast={onToast}
+          />
+        )}
+      </aside>
 
       <footer className="coding-workbench__status" role="status" aria-label="工作台状态">
-        <span>{basename(cwd)}</span>
+        {task && (
+          <span>
+            {statusSummary({
+              phase: task.phase,
+              changedFileCount: taskChangeCount,
+              problemCount: problems.length,
+              repairRound: orchestrator?.repairRounds.length,
+              maxRepairRounds: orchestrator?.maxRepairRounds,
+            })}
+          </span>
+        )}
+        {problems.length > 0 && (
+          <button type="button" onClick={() => setBottomView("problems")}>
+            {problems.length} 个问题
+          </button>
+        )}
+        <span className="coding-workbench__status-spacer" />
         {indexing && <span>正在建立文件索引…</span>}
+        <span>{basename(cwd)}</span>
       </footer>
 
       {paletteMode && (
