@@ -4,7 +4,6 @@ import type { ProjectMeta } from "@/stores/projects-store";
 import { openExternalUrl, openLocalPath } from "@/lib/agent-client";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { ModelOption } from "./ModelSelector";
-import type { CodingAgentRole, CodingExecutionStrategy } from "@/lib/coding-workspace";
 
 const ProjectsPanel = lazy(() =>
   import("./ProjectsPanel").then((module) => ({ default: module.ProjectsPanel })),
@@ -42,8 +41,10 @@ const CloudStoragePanel = lazy(() =>
 const OrganizationMemoryPanel = lazy(() =>
   import("./OrganizationMemoryPanel").then((module) => ({ default: module.OrganizationMemoryPanel })),
 );
-const CodingWorkspacePage = lazy(() =>
-  import("./coding-workspace/CodingWorkspacePage").then((module) => ({ default: module.CodingWorkspacePage })),
+const CodingWorkbench = lazy(() =>
+  import("@/features/coding/CodingWorkbench").then((module) => ({
+    default: module.CodingWorkbench,
+  })),
 );
 
 function DeferredPanel({ children }: { children: ReactNode }) {
@@ -82,14 +83,14 @@ interface PlaceholderPageProps {
   codingModelId?: string;
   onOpenModelSettings?: () => void;
   onExitCodingWorkspace?: () => void;
+  /** Start an Agent session for a coding task. Returns the new session id. */
   onStartCodingRun?: (
     root: string,
-    prompt: string,
-    displayText: string,
-    options: { mode: CodingAgentRole; strategy: CodingExecutionStrategy; modelId?: string },
+    requirement: string,
+    planRequired: boolean,
+    modelId?: string,
   ) => Promise<string | undefined>;
-  onResumeCodingRun?: (sessionId: string, root: string) => Promise<boolean>;
-  onSendCodingMessage?: (promptText: string, displayText?: string) => boolean | void | Promise<boolean | void>;
+  onSendCodingMessage?: (text: string) => void;
   onCancelCodingRun?: () => void;
   /** Current session id (for plugins/marketplace actions that need a session). */
   sessionId?: string;
@@ -120,7 +121,6 @@ export function PlaceholderPage({
   onOpenModelSettings,
   onExitCodingWorkspace,
   onStartCodingRun,
-  onResumeCodingRun,
   onSendCodingMessage,
   onCancelCodingRun,
   sessionId,
@@ -180,7 +180,7 @@ export function PlaceholderPage({
   if (label === "代码开发") {
     return (
       <DeferredPanel>
-        <CodingWorkspacePage
+        <CodingWorkbench
           cwd={cwd}
           workspaces={workspaces}
           onSelectWorkspace={onSelectWorkspace}
@@ -190,10 +190,10 @@ export function PlaceholderPage({
           defaultModelId={codingModelId}
           onOpenSettings={onOpenModelSettings}
           onExit={onExitCodingWorkspace}
+          sessionId={sessionId}
           onStartRun={onStartCodingRun}
-          onResumeRun={onResumeCodingRun}
-          onSend={onSendCodingMessage}
-          onCancel={onCancelCodingRun}
+          onSendMessage={onSendCodingMessage}
+          onCancelRun={onCancelCodingRun}
         />
       </DeferredPanel>
     );

@@ -1631,24 +1631,6 @@ export interface CodingSearchHit {
   preview: string;
 }
 
-export interface CodingCommandResult {
-  runId?: string;
-  command: string;
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  durationMs: number;
-  timedOut: boolean;
-  cancelled?: boolean;
-  truncated: boolean;
-}
-
-export interface CodingCommandOutputEvent {
-  runId: string;
-  stream: "stdout" | "stderr";
-  data: string;
-}
-
 export interface CodingTerminalEvent {
   terminalId: string;
   dataBase64: string;
@@ -1702,27 +1684,6 @@ export async function codingCreateEntry(
 
 export async function codingSearchWorkspace(root: string, query: string): Promise<CodingSearchHit[]> {
   return invoke<CodingSearchHit[]>("coding_search_workspace", { root, query });
-}
-
-export async function codingRunCommand(
-  root: string,
-  command: string,
-  runId?: string,
-  timeoutSecs = 180,
-): Promise<CodingCommandResult> {
-  return invoke<CodingCommandResult>("coding_run_command", {
-    request: { root, command, runId: runId ?? null, timeoutSecs },
-  });
-}
-
-export async function codingCancelCommand(runId: string): Promise<boolean> {
-  return invoke<boolean>("coding_cancel_command", { runId });
-}
-
-export function codingListenCommandOutput(
-  callback: (event: CodingCommandOutputEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<CodingCommandOutputEvent>("coding://command-output", (event) => callback(event.payload));
 }
 
 export async function codingTerminalCreate(

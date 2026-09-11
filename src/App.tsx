@@ -107,7 +107,6 @@ import {
   createAgentPromptId,
   isAgentPromptSettled,
 } from "./lib/agent-turn";
-import type { CodingAgentRole, CodingExecutionStrategy } from "./lib/coding-workspace";
 import {
   isAgentOwnedActiveStatus,
   isWaitingForUser,
@@ -1162,25 +1161,29 @@ function Shell() {
     }
   };
 
-  /** Start an Agent session without leaving the dedicated Coding Workspace. */
+  /**
+   * Open an Agent session for a coding-workbench task.
+   *
+   * The workbench owns the task itself (requirement, phase, change set); this
+   * only creates the session it runs in, so session lifecycle stays with the
+   * rest of the application. Role no longer affects permission mode — read-only
+   * safety comes from the configured mode rather than from guessing intent.
+   */
   const handleStartCodingRun = async (
     root: string,
-    prompt: string,
-    displayText: string,
-    options: { mode: CodingAgentRole; strategy: CodingExecutionStrategy; modelId?: string },
+    requirement: string,
+    planRequired: boolean,
+    requestedModelId?: string,
   ): Promise<string | undefined> => {
     setCodingWorkspaceCwd(root);
-    const modelId = isConfiguredModelId(models, options.modelId)
-      ? options.modelId
+    const modelId = isConfiguredModelId(models, requestedModelId)
+      ? requestedModelId
       : requireConfiguredModel();
     if (!modelId || !ensureQuotaAllowsSend()) return undefined;
     const permissionState = usePermissionModeStore.getState();
-    const configuredPermissionMode = permissionState.capabilityStatus?.locked
+    const permissionMode = permissionState.capabilityStatus?.locked
       ? permissionState.capabilityStatus.permissionMode
       : permissionState.homeMode;
-    // Ask is a read-oriented coding mode. Keeping permission mode at `ask`
-    // gives it a native safety boundary if a model ignores the read-only prompt.
-    const permissionMode = options.mode === "ask" ? "ask" : configuredPermissionMode;
     let sessionId: string | undefined;
     try {
       sessionId = await agentNewSession(root, modelId, permissionMode);
@@ -1189,7 +1192,7 @@ function Shell() {
       sessionsStore.getState().setCurrent(sessionId);
       sessionsStore.getState().upsert({
         sessionId,
-        title: `${options.mode === "ask" ? "代码问答" : options.mode === "debug" ? options.strategy === "plan" ? "调试计划" : "问题调试" : options.strategy === "plan" ? "开发计划" : "代码开发"}：${deriveTitle(displayText)}`,
+        title: `代码开发：${deriveTitle(requirement)}`,
         cwd: root,
         status: "planning",
         currentModelId: modelId,
@@ -1197,13 +1200,12 @@ function Shell() {
       });
       sessionStore.getState().setSession(sessionId);
       setPlaceholderView("代码开发");
-      // Planning is an execution strategy independent from the Agent's role.
-      // It keeps the native approval boundary for both Code and Debug work.
-      await togglePlanMode(sessionId, options.strategy === "plan");
+      // Plan mode keeps the native approval boundary before any file is written.
+      await togglePlanMode(sessionId, planRequired);
       const accepted = beginAgentTurn({
         sessionId,
-        promptText: prompt,
-        displayText,
+        promptText: requirement,
+        displayText: requirement,
       });
       if (!accepted) throw new Error("代码开发会话未能获得前台焦点");
       usePermissionModeStore.getState().resetHomeMode();
@@ -1685,22 +1687,6 @@ function Shell() {
       // ingested again. (No-op when there was no cached transcript to suppress.)
       sessionStore.getState().clearReplaySuppression(sessionId);
     }
-  };
-
-  /** Reload a persisted coding run, then return to the workspace shell. */
-  const handleResumeCodingRun = async (sessionId: string, root: string): Promise<boolean> => {
-    setCodingWorkspaceCwd(root);
-    await handleSelectSession(sessionId, root);
-    const loaded = sessionsStore.getState().currentSessionId === sessionId;
-    if (loaded) {
-      // History replay can legitimately end at an unterminated tool_call when
-      // the previous app process exited mid-turn. Close only that replay-built
-      // tail; cached live sessions remain untouched by the store guard.
-      sessionStore.getState().finalizeIncompleteReplay(sessionId);
-      setPlaceholderView("代码开发");
-      setSidebarCollapsed(true);
-    }
-    return loaded;
   };
 
   // Rewind rewrites the backend history, so our cached transcript is stale —
@@ -2206,9 +2192,9 @@ function Shell() {
                     setSidebarCollapsed(false);
                   }}
                   onStartCodingRun={handleStartCodingRun}
-                  onResumeCodingRun={handleResumeCodingRun}
-                  onSendCodingMessage={(promptText, displayText) =>
-                    handleSendCurrent(displayText ?? promptText, [], undefined, promptText)}
+                  onSendCodingMessage={(text) => {
+                    void handleSendCurrent(text);
+                  }}
                   onCancelCodingRun={() => void handleCancel("stop")}
                   onStartProject={handleStartProject}
                   onStartProjectConversation={handleStartProjectConversation}

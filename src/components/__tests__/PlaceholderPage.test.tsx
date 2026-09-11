@@ -12,8 +12,8 @@ vi.mock("../PluginsPanel", () => ({
 vi.mock("../MarketplacePanel", () => ({
   MarketplacePanel: () => <div>plugin marketplace</div>,
 }));
-vi.mock("../coding-workspace/CodingWorkspacePage", () => ({
-  CodingWorkspacePage: () => <div>coding workspace</div>,
+vi.mock("@/features/coding/CodingWorkbench", () => ({
+  CodingWorkbench: () => <div>coding workbench</div>,
 }));
 
 import { PlaceholderPage } from "../PlaceholderPage";
@@ -52,6 +52,6 @@ describe("PlaceholderPage", () => {
 
   it("代码开发路由加载专属工作台", async () => {
     render(<PlaceholderPage label="代码开发" />);
-    expect(await screen.findByText("coding workspace")).toBeInTheDocument();
+    expect(await screen.findByText("coding workbench")).toBeInTheDocument();
   });
 });

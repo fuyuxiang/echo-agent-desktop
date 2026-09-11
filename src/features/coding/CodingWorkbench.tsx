@@ -11,7 +11,9 @@ import { ArrowLeft, Code2, FolderGit2, Search, Settings2 } from "lucide-react";
 
 import type { ModelOption } from "@/components/ModelSelector";
 import { FileTreeView } from "@/components/workspace-panel/FileTreeView";
-import type { ChatMessage } from "@/stores/session-store";
+import { usePermissionStore } from "@/stores/permission-store";
+import { useQuestionStore } from "@/stores/question-store";
+import { useSessionStore } from "@/stores/session-store";
 import {
   codingReadDocument,
   codingWriteDocument,
@@ -62,15 +64,11 @@ interface CodingWorkbenchProps {
   /** True once a model and credentials are configured. */
   apiReady?: boolean;
   /**
-   * Session plumbing owned by the host (App.tsx). The workbench drives a session
-   * through these rather than creating one itself, so session lifecycle stays in
-   * one place for the whole application.
+   * Session lifecycle stays with the host (App.tsx) so the whole application
+   * creates and cancels Agent sessions in one place. Live transcript state is
+   * read from the shared stores rather than threaded through props.
    */
   sessionId?: string | null;
-  messages?: ChatMessage[];
-  streaming?: boolean;
-  awaitingPermission?: boolean;
-  awaitingQuestion?: boolean;
   onStartRun?: (
     root: string,
     requirement: string,
@@ -138,14 +136,22 @@ export function CodingWorkbench({
   defaultModelId,
   apiReady = false,
   sessionId = null,
-  messages = [],
-  streaming = false,
-  awaitingPermission = false,
-  awaitingQuestion = false,
   onStartRun,
   onSendMessage,
   onCancelRun,
 }: CodingWorkbenchProps) {
+  // Live transcript for the task's session, read straight from the shared store.
+  const transcript = useSessionStore((state) =>
+    sessionId ? state.transcripts[sessionId] : undefined,
+  );
+  const messages = transcript?.messages ?? [];
+  const streaming = useSessionStore((state) => state.streaming);
+  const awaitingPermission = usePermissionStore(
+    (state) => (sessionId ? (state.queues[sessionId]?.length ?? 0) > 0 : false),
+  );
+  const awaitingQuestion = useQuestionStore(
+    (state) => (sessionId ? (state.queues[sessionId]?.length ?? 0) > 0 : false),
+  );
   const explorerWidth = useWorkbenchStore((state) => state.explorerWidth);
   const agentWidth = useWorkbenchStore((state) => state.agentWidth);
   const bottomHeight = useWorkbenchStore((state) => state.bottomHeight);

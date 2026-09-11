@@ -33,33 +33,6 @@ const MAX_SEARCH_PREVIEW_CHARS: usize = 600;
 /// How often a long workspace scan reports progress to the UI.
 const PROGRESS_EVERY_FILES: usize = 2_000;
 
-/// Legacy request shape kept for the pre-workbench coding UI, which is still
-/// shipped until the new workbench replaces it.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodingRunCommandRequest {
-    run_id: Option<String>,
-    root: String,
-    command: String,
-    timeout_secs: Option<u64>,
-}
-
-/// Legacy result shape for the same UI. Produced by translating a
-/// `VerificationRecord`, so both UIs share one execution path.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CodingCommandResult {
-    run_id: String,
-    command: String,
-    stdout: String,
-    stderr: String,
-    exit_code: Option<i32>,
-    duration_ms: u64,
-    timed_out: bool,
-    cancelled: bool,
-    truncated: bool,
-}
-
 const IGNORED_DIRECTORIES: &[&str] = &[
     ".git",
     ".idea",
@@ -1814,60 +1787,6 @@ pub fn high_risk_command_reason(command: &str, workspace_root: &Path) -> Option<
         }
     }
     None
-}
-
-/// Compatibility shim for the pre-workbench coding UI. Delegates to the
-/// verification engine so command execution, timeout and cancellation policy
-/// live in exactly one place; this wrapper only reshapes the result.
-///
-/// Retire this together with the old UI once the workbench replaces it.
-#[tauri::command]
-pub async fn coding_run_command(
-    app: AppHandle,
-    access: State<'_, FilesystemAccess>,
-    processes: State<'_, CodingProcesses>,
-    request: CodingRunCommandRequest,
-) -> Result<CodingCommandResult, String> {
-    let root = access.require_workspace(&request.root)?;
-    let run_id = request
-        .run_id
-        .clone()
-        .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
-    let record = crate::coding::verification::run(
-        app,
-        &processes,
-        root,
-        // The legacy UI has no task concept; its runs are not attributed to one.
-        "legacy".to_string(),
-        crate::coding::verification::VerificationKind::Custom,
-        request.command,
-        request.timeout_secs,
-        // Register under the id the caller will cancel by.
-        Some(run_id.clone()),
-    )
-    .await?;
-    let truncated = record.stdout.starts_with("…较早输出已省略…")
-        || record.stderr.starts_with("…较早输出已省略…");
-    Ok(CodingCommandResult {
-        run_id,
-        command: record.command,
-        stdout: record.stdout,
-        stderr: record.stderr,
-        exit_code: record.exit_code,
-        duration_ms: record.duration_ms,
-        timed_out: record.status == crate::coding::verification::VerificationStatus::TimedOut,
-        cancelled: record.status == crate::coding::verification::VerificationStatus::Cancelled,
-        truncated,
-    })
-}
-
-/// Compatibility shim; see `coding_run_command`.
-#[tauri::command]
-pub async fn coding_cancel_command(
-    processes: State<'_, CodingProcesses>,
-    run_id: String,
-) -> Result<bool, String> {
-    Ok(processes.cancel(&run_id).is_ok())
 }
 
 #[cfg(test)]
