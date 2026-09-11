@@ -495,6 +495,7 @@ pub fn run() {
             coding::task::coding_task_rename,
             coding::changeset::coding_changeset_get,
             coding::changeset::coding_changeset_capture_baseline,
+            coding::changeset::coding_changeset_record_change,
             coding::changeset::coding_changeset_discard_file,
             coding::changeset::coding_changeset_mark_reviewed,
             coding::changeset::coding_task_rollback,

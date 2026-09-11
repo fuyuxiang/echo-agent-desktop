@@ -16,11 +16,31 @@ use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
 use crate::coding::store;
-use crate::coding_workspace::{high_risk_command_reason, CodingProcesses};
+use crate::coding_workspace::{high_risk_command_reason, strip_ansi, CodingProcesses};
 use crate::shell_fs::FilesystemAccess;
 
 const MAX_OUTPUT_BYTES: usize = 512 * 1024;
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
+
+/// Append a line while holding the retained buffer at the cap. A verbose build
+/// can emit hundreds of megabytes; the process must still be drained (or it
+/// blocks on a full pipe) but memory must not grow with it.
+fn push_bounded(buffer: &mut String, line: &str, dropped_early_output: &mut bool) {
+    buffer.push_str(line);
+    buffer.push('\n');
+    if buffer.len() <= MAX_OUTPUT_BYTES {
+        return;
+    }
+    *dropped_early_output = true;
+    let overflow = buffer.len() - MAX_OUTPUT_BYTES;
+    // Cut on a char boundary at or after the overflow point.
+    let cut = buffer
+        .char_indices()
+        .map(|(index, _)| index)
+        .find(|index| *index >= overflow)
+        .unwrap_or(buffer.len());
+    buffer.drain(..cut);
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
@@ -106,7 +126,7 @@ fn label_for(kind: VerificationKind) -> &'static str {
 /// a script the project does not define.
 pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
     let mut detected: Vec<DetectedCommand> = Vec::new();
-    let mut push = |detected: &mut Vec<DetectedCommand>, kind: VerificationKind, command: String| {
+    let push = |detected: &mut Vec<DetectedCommand>, kind: VerificationKind, command: String| {
         if !detected.iter().any(|entry| entry.command == command) {
             detected.push(DetectedCommand {
                 kind,
@@ -285,12 +305,12 @@ pub fn record_from_parts(
     }
 }
 
-fn truncate_output(mut text: String) -> String {
-    if text.len() > MAX_OUTPUT_BYTES {
-        let tail = text.split_off(text.len() - MAX_OUTPUT_BYTES);
-        return format!("…较早输出已省略…\n{tail}");
+fn label_dropped(text: String, dropped_early_output: bool) -> String {
+    if dropped_early_output {
+        format!("…较早输出已省略…\n{text}")
+    } else {
+        text
     }
-    text
 }
 
 #[derive(Serialize, Clone)]
@@ -301,8 +321,44 @@ struct VerificationChunk {
     chunk: String,
 }
 
+/// Payload shape the pre-workbench coding UI listens for on
+/// `coding://command-output`. Emitted alongside the workbench event so both UIs
+/// see live output from the single execution path.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LegacyChunk {
+    run_id: String,
+    stream: &'static str,
+    data: String,
+}
+
+fn emit_output(app: &AppHandle, run_id: &str, stream: &'static str, line: &str) {
+    let chunk = format!("{line}\n");
+    let _ = app.emit(
+        "coding://verification-output",
+        VerificationChunk {
+            run_id: run_id.to_string(),
+            stream,
+            chunk: chunk.clone(),
+        },
+    );
+    let _ = app.emit(
+        "coding://command-output",
+        LegacyChunk {
+            run_id: run_id.to_string(),
+            stream,
+            data: chunk,
+        },
+    );
+}
+
 /// Run one verification command inside the workspace. Streams output to the UI
 /// and honours the same native high-risk command policy as the rest of the app.
+///
+/// `requested_run_id` lets a caller supply the id the run registers under: the
+/// legacy coding UI generates its own id up front and cancels by it, so that id
+/// has to be the one we track. Pass `None` to have one generated.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     app: AppHandle,
     processes: &CodingProcesses,
@@ -311,6 +367,7 @@ pub async fn run(
     kind: VerificationKind,
     command: String,
     timeout_secs: Option<u64>,
+    requested_run_id: Option<String>,
 ) -> Result<VerificationRecord, String> {
     let command_text = command.trim().to_string();
     if command_text.is_empty() {
@@ -319,7 +376,15 @@ pub async fn run(
     if let Some(reason) = high_risk_command_reason(&command_text, &root) {
         return Err(format!("命令被原生安全策略拒绝：{reason}"));
     }
-    let run_id = uuid::Uuid::now_v7().to_string();
+    let run_id = requested_run_id
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 100
+                && value
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        })
+        .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
     let cancellation = CancellationToken::new();
     processes.register(&run_id, cancellation.clone())?;
 
@@ -357,19 +422,13 @@ pub async fn run(
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             let mut buffer = String::new();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = app.emit(
-                    "coding://verification-output",
-                    VerificationChunk {
-                        run_id: run_id.clone(),
-                        stream: "stdout",
-                        chunk: format!("{line}\n"),
-                    },
-                );
-                buffer.push_str(&line);
-                buffer.push('\n');
+            let mut dropped = false;
+            while let Ok(Some(raw)) = lines.next_line().await {
+                let line = strip_ansi(raw);
+                emit_output(&app, &run_id, "stdout", &line);
+                push_bounded(&mut buffer, &line, &mut dropped);
             }
-            buffer
+            (buffer, dropped)
         })
     };
     let stderr_task = {
@@ -378,19 +437,13 @@ pub async fn run(
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
             let mut buffer = String::new();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = app.emit(
-                    "coding://verification-output",
-                    VerificationChunk {
-                        run_id: run_id.clone(),
-                        stream: "stderr",
-                        chunk: format!("{line}\n"),
-                    },
-                );
-                buffer.push_str(&line);
-                buffer.push('\n');
+            let mut dropped = false;
+            while let Ok(Some(raw)) = lines.next_line().await {
+                let line = strip_ansi(raw);
+                emit_output(&app, &run_id, "stderr", &line);
+                push_bounded(&mut buffer, &line, &mut dropped);
             }
-            buffer
+            (buffer, dropped)
         })
     };
 
@@ -414,8 +467,10 @@ pub async fn run(
     };
 
     processes.unregister(&run_id);
-    let stdout_text = truncate_output(stdout_task.await.unwrap_or_default());
-    let stderr_text = truncate_output(stderr_task.await.unwrap_or_default());
+    let (stdout_buffer, stdout_dropped) = stdout_task.await.unwrap_or_default();
+    let (stderr_buffer, stderr_dropped) = stderr_task.await.unwrap_or_default();
+    let stdout_text = label_dropped(stdout_buffer, stdout_dropped);
+    let stderr_text = label_dropped(stderr_buffer, stderr_dropped);
     let record = record_from_parts(
         &task_id,
         kind,
@@ -471,7 +526,17 @@ pub async fn coding_verification_run(
     timeout_secs: Option<u64>,
 ) -> Result<VerificationRecord, String> {
     let root = access.require_workspace(&root)?;
-    run(app, &processes, root, task_id, kind, command, timeout_secs).await
+    run(
+        app,
+        &processes,
+        root,
+        task_id,
+        kind,
+        command,
+        timeout_secs,
+        None,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -632,6 +697,31 @@ mod tests {
             true,
         );
         assert_eq!(cancelled.status, VerificationStatus::Cancelled);
+    }
+
+    #[test]
+    fn retained_output_is_capped_while_keeping_the_tail() {
+        // A verbose build must be drained without letting memory grow with it,
+        // and the tail matters more than the head for diagnosing a failure.
+        let mut buffer = String::new();
+        let mut dropped = false;
+        for index in 0..20_000 {
+            push_bounded(&mut buffer, &format!("line {index} {}", "x".repeat(80)), &mut dropped);
+        }
+        assert!(dropped);
+        assert!(buffer.len() <= MAX_OUTPUT_BYTES);
+        assert!(buffer.contains("line 19999"));
+        assert!(!buffer.contains("line 0 "));
+        assert!(label_dropped(buffer, dropped).starts_with("…较早输出已省略…"));
+    }
+
+    #[test]
+    fn short_output_is_not_labelled_as_dropped() {
+        let mut buffer = String::new();
+        let mut dropped = false;
+        push_bounded(&mut buffer, "hello", &mut dropped);
+        assert!(!dropped);
+        assert_eq!(label_dropped(buffer, dropped), "hello\n");
     }
 
     #[test]
