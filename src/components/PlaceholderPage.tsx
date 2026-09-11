@@ -4,7 +4,7 @@ import type { ProjectMeta } from "@/stores/projects-store";
 import { openExternalUrl, openLocalPath } from "@/lib/agent-client";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { ModelOption } from "./ModelSelector";
-import type { CodingAgentMode } from "@/lib/coding-workspace";
+import type { CodingAgentRole, CodingExecutionStrategy } from "@/lib/coding-workspace";
 
 const ProjectsPanel = lazy(() =>
   import("./ProjectsPanel").then((module) => ({ default: module.ProjectsPanel })),
@@ -86,7 +86,7 @@ interface PlaceholderPageProps {
     root: string,
     prompt: string,
     displayText: string,
-    options: { mode: CodingAgentMode; modelId?: string },
+    options: { mode: CodingAgentRole; strategy: CodingExecutionStrategy; modelId?: string },
   ) => Promise<string | undefined>;
   onResumeCodingRun?: (sessionId: string, root: string) => Promise<boolean>;
   onSendCodingMessage?: (promptText: string, displayText?: string) => boolean | void | Promise<boolean | void>;

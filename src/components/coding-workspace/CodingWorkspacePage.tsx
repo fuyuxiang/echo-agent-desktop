@@ -19,7 +19,6 @@ import {
   Circle,
   CircleDot,
   Code2,
-  Download,
   FileCode2,
   FileDiff,
   FilePlus2,
@@ -44,6 +43,7 @@ import {
   Send,
   Settings2,
   ShieldCheck,
+  Sparkles,
   Square,
   TerminalSquare,
   TestTube2,
@@ -70,7 +70,6 @@ import {
   codingRunCommand,
   codingSearchWorkspace,
   codingWriteDocument,
-  exportTextFile,
   filesystemPickDirectory,
   readTextFile,
   setPlanMode as setAgentPlanMode,
@@ -96,13 +95,11 @@ import {
   buildCodingAgentPrompt,
   buildCodingFollowupPrompt,
   buildDocumentationPrompt,
-  buildVerificationReport,
   checkCodingCommandRisk,
   collectAgentValidations,
   codingChangedFilesSinceBaseline,
   codingProtocolFailureCount,
   createAcceptanceCriteria,
-  deriveQualityGates,
   deriveTaskNodes,
   isDocumentationLevelSatisfied,
   inspectCodingRun,
@@ -111,18 +108,18 @@ import {
   saveCodingSnapshot,
   validationFromResult,
   type AcceptanceCriterion,
-  type CodingAgentMode,
+  type CodingAgentRole,
+  type CodingExecutionStrategy,
   type CodingRunHealth,
-  type QualityGate,
   type CodingDocLevel,
   type CodingRunSnapshot,
   type ValidationRecord,
 } from "@/lib/coding-workspace";
 
 type ExplorerView = "files" | "search" | "changes" | "context";
-type AgentView = "tasks" | "chat" | "acceptance";
-type BottomView = "terminal" | "validation" | "problems" | "tests" | "report" | "trace";
-type CenterView = "editor" | "evidence";
+type AgentView = "tasks" | "chat";
+type BottomView = "terminal" | "output" | "problems" | "tests" | "trace";
+type CenterView = "editor" | "review";
 
 interface OpenFile {
   path: string;
@@ -162,7 +159,7 @@ interface CodingWorkspacePageProps {
     root: string,
     prompt: string,
     displayText: string,
-    options: { mode: CodingAgentMode; modelId?: string },
+    options: { mode: CodingAgentRole; strategy: CodingExecutionStrategy; modelId?: string },
   ) => Promise<string | undefined>;
   onResumeRun?: (sessionId: string, root: string) => Promise<boolean>;
   onSend?: (promptText: string, displayText?: string) => boolean | void | Promise<boolean | void>;
@@ -177,6 +174,7 @@ const EMPTY_SNAPSHOT = (root: string): CodingRunSnapshot => ({
   validationRecords: [],
   docLevels: [],
   mode: "craft",
+  strategy: "direct",
   contextPaths: [],
   reviewedFiles: [],
 });
@@ -189,12 +187,6 @@ function basename(path: string): string {
 function workspaceFilePath(root: string, path: string): string {
   if (/^(?:[a-z]:[\\/]|[\\/]{2}|\/)/i.test(path)) return path;
   return `${root.replace(/[\\/]+$/, "")}/${path.replace(/^[\\/]+/, "")}`;
-}
-
-function statusLabel(status: QualityGate["status"]): string {
-  if (status === "satisfied") return "已满足";
-  if (status === "in_progress") return "验证中";
-  return "未满足";
 }
 
 function formatDuration(durationMs: number): string {
@@ -294,16 +286,17 @@ export function CodingWorkspacePage({
   const [scanRevision, setScanRevision] = useState(0);
   const [fileTreeRevision, setFileTreeRevision] = useState(0);
   const [explorerView, setExplorerView] = useState<ExplorerView>("files");
-  const [agentView, setAgentView] = useState<AgentView>("tasks");
-  const [bottomView, setBottomView] = useState<BottomView>("validation");
+  const [agentView, setAgentView] = useState<AgentView>("chat");
+  const [bottomView, setBottomView] = useState<BottomView>("output");
   const [centerView, setCenterView] = useState<CenterView>("editor");
-  const [bottomOpen, setBottomOpen] = useState(true);
+  const [bottomOpen, setBottomOpen] = useState(false);
   const [bottomHeight, setBottomHeight] = useState(188);
   const [terminalActivated, setTerminalActivated] = useState(false);
   const [snapshot, setSnapshotState] = useState<CodingRunSnapshot>(() => EMPTY_SNAPSHOT(root));
   const [requirementDraft, setRequirementDraft] = useState("");
   const [criteriaDraft, setCriteriaDraft] = useState("");
-  const [agentMode, setAgentMode] = useState<CodingAgentMode>("craft");
+  const [agentMode, setAgentMode] = useState<CodingAgentRole>("craft");
+  const [executionStrategy, setExecutionStrategy] = useState<CodingExecutionStrategy>("direct");
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(defaultModelId);
   const [contextPaths, setContextPaths] = useState<string[]>([]);
   const [startingRun, setStartingRun] = useState(false);
@@ -322,7 +315,6 @@ export function CodingWorkspacePage({
   const [activeCommandRunId, setActiveCommandRunId] = useState<string | null>(null);
   const [riskConfirmation, setRiskConfirmation] = useState<string | null>(null);
   const [terminalOutput, setTerminalOutput] = useState("请选择检测命令，或输入需要在当前工作区执行的命令。\n");
-  const [evidenceSelection, setEvidenceSelection] = useState<QualityGate["id"]>("change_review");
   const [clock, setClock] = useState(() => Date.now());
   const transcript = useSessionStore((state) => snapshot.sessionId
     ? state.transcripts[snapshot.sessionId]
@@ -388,6 +380,7 @@ export function CodingWorkspacePage({
     setRequirementDraft(next.requirement);
     setCriteriaDraft(next.acceptanceCriteria.map((criterion) => criterion.content).join("\n"));
     setAgentMode(next.mode);
+    setExecutionStrategy(next.strategy);
     setSelectedModelId(next.modelId ?? defaultModelId);
     setContextPaths(next.contextPaths);
     setSelectedDirectoryPath(root);
@@ -580,6 +573,7 @@ export function CodingWorkspacePage({
     messages,
     streaming,
     mode: snapshot.mode,
+    strategy: snapshot.strategy,
     plan,
     awaitingQuestion: Boolean(pendingQuestion),
     awaitingPermission: Boolean(pendingPermission),
@@ -607,17 +601,6 @@ export function CodingWorkspacePage({
     [...snapshot.validationRecords, ...agentValidations].forEach((record) => byId.set(record.id, record));
     return [...byId.values()].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
   }, [agentValidations, snapshot.validationRecords]);
-  const evidence = useMemo(() => deriveQualityGates({
-    analysis,
-    plan,
-    messages,
-    validations: snapshot.validationRecords,
-    git: gitState,
-    criteria: snapshot.acceptanceCriteria,
-    reviewedFiles: snapshot.reviewedFiles,
-    mode: snapshot.mode,
-  }), [analysis, gitState, messages, plan, snapshot.acceptanceCriteria, snapshot.mode, snapshot.reviewedFiles, snapshot.validationRecords]);
-  const activeEvidence = evidence.find((item) => item.id === evidenceSelection) ?? evidence[0];
   const activeFile = openFiles.find((file) => file.path === activeFilePath) ?? null;
   const hasUnsavedFiles = useMemo(
     () => openFiles.some((file) => !file.loading && file.draft !== file.original),
@@ -907,7 +890,8 @@ export function CodingWorkspacePage({
   const launchRun = useCallback(async (
     requirement: string,
     displayText: string,
-    mode: CodingAgentMode,
+    mode: CodingAgentRole,
+    strategy: CodingExecutionStrategy,
     acceptanceCriteria: AcceptanceCriterion[],
   ): Promise<boolean> => {
     const normalizedRequirement = requirement.trim();
@@ -929,6 +913,7 @@ export function CodingWorkspacePage({
     }
     const prompt = buildCodingAgentPrompt(normalizedRequirement, acceptanceCriteria, analysis, {
       mode,
+      strategy,
       contextPaths,
       baselineGit: gitState,
     });
@@ -941,6 +926,7 @@ export function CodingWorkspacePage({
       docLevels: [],
       startedAt: new Date().toISOString(),
       mode,
+      strategy,
       modelId: selectedModelId,
       contextPaths,
       reviewedFiles: [],
@@ -951,6 +937,7 @@ export function CodingWorkspacePage({
     try {
       const sessionId = await onStartRun?.(root, prompt, displayText.trim() || normalizedRequirement, {
         mode,
+        strategy,
         modelId: selectedModelId,
       });
       if (sessionId) {
@@ -958,15 +945,17 @@ export function CodingWorkspacePage({
         setRequirementDraft(normalizedRequirement);
         setCriteriaDraft(acceptanceCriteria.map((criterion) => criterion.content).join("\n"));
         setAgentMode(mode);
-        setAgentView(mode === "ask" ? "chat" : "tasks");
+        setAgentView("chat");
         setFreshSessionReason(null);
         protocolStopRef.current = null;
         useSessionStore.getState().setError(null);
-        onToast?.(mode === "plan"
-          ? "Plan 任务已启动，Agent 正在分析工程"
-          : mode === "craft"
-            ? "Craft 任务已启动，Agent 将直接完成修改和验证"
-            : "Ask 会话已启动，Agent 将只读分析代码库");
+        onToast?.(strategy === "plan"
+          ? `${mode === "debug" ? "Debug" : "Code"} 任务已启动，Agent 将先提交实施计划`
+          : mode === "debug"
+            ? "Debug 任务已启动，Agent 将从复现和根因定位开始"
+            : mode === "craft"
+              ? "Code 任务已启动，Agent 将直接完成实现和检查"
+              : "Ask 会话已启动，Agent 将只读分析代码库");
         return true;
       } else {
         const message = "未能创建代码开发会话，请检查模型配置、额度或 Agent Runtime 状态后重试。";
@@ -994,9 +983,10 @@ export function CodingWorkspacePage({
       requirement,
       requirement,
       resolution.mode,
+      resolution.mode === "ask" ? "direct" : executionStrategy,
       createAcceptanceCriteria(criteriaDraft),
     );
-  }, [agentMode, criteriaDraft, launchRun, onToast, requirementDraft]);
+  }, [agentMode, criteriaDraft, executionStrategy, launchRun, onToast, requirementDraft]);
 
   const resumeRun = useCallback(async () => {
     if (!snapshot.sessionId || !onResumeRun) return;
@@ -1044,11 +1034,11 @@ export function CodingWorkspacePage({
         const criteria = snapshot.acceptanceCriteria.length > 0
           ? snapshot.acceptanceCriteria.map((criterion) => ({ ...criterion, verified: false }))
           : createAcceptanceCriteria("");
-        const launched = await launchRun(combinedRequirement, displayText, freshResolution.mode, criteria);
+        const launched = await launchRun(combinedRequirement, displayText, freshResolution.mode, freshResolution.mode === "ask" ? "direct" : snapshot.strategy, criteria);
         if (launched) setFollowup("");
         return;
       }
-      const promptText = buildCodingFollowupPrompt(displayText, resolution.mode, contextPaths);
+      const promptText = buildCodingFollowupPrompt(displayText, resolution.mode, contextPaths, snapshot.strategy);
       const accepted = await onSend(promptText, displayText);
       if (accepted !== false) {
         setFollowup("");
@@ -1059,22 +1049,21 @@ export function CodingWorkspacePage({
     }
   }, [contextPaths, followup, freshSessionReason, historicalProtocolFailures, launchRun, onSend, onToast, sessionFocused, snapshot.acceptanceCriteria, snapshot.mode, snapshot.requirement]);
 
-  const changeAgentMode = useCallback(async (next: CodingAgentMode) => {
+  const changeAgentMode = useCallback(async (next: CodingAgentRole) => {
     if (next === agentMode) return;
     if (streaming) {
       onToast?.("请先等待当前执行结束，或停止后再切换模式");
       return;
     }
-    if (snapshot.sessionId && sessionFocused) {
-      try {
-        await setAgentPlanMode(snapshot.sessionId, next === "plan");
-      } catch (error) {
+    if (next === "ask" && executionStrategy === "plan" && snapshot.sessionId && sessionFocused) {
+      try { await setAgentPlanMode(snapshot.sessionId, false); } catch (error) {
         onToast?.(`切换模式失败：${String(error).replace(/^Error:\s*/, "")}`);
         return;
       }
     }
     setAgentMode(next);
-    setSnapshot((previous) => ({ ...previous, mode: next }));
+    if (next === "ask") setExecutionStrategy("direct");
+    setSnapshot((previous) => ({ ...previous, mode: next, strategy: next === "ask" ? "direct" : previous.strategy }));
     if (next === "ask" && snapshot.mode !== "ask") {
       setFreshSessionReason("下次发送将创建只读 Ask 会话，确保不沿用开发任务的写入权限");
     } else if (historicalProtocolFailures >= 3) {
@@ -1082,8 +1071,30 @@ export function CodingWorkspacePage({
     } else {
       setFreshSessionReason(null);
     }
-    onToast?.(`已切换到 ${next === "ask" ? "Ask" : next === "craft" ? "Craft" : "Plan"} 模式`);
-  }, [agentMode, historicalProtocolFailures, onToast, sessionFocused, setSnapshot, snapshot.mode, snapshot.sessionId, streaming]);
+    onToast?.(`已切换到 ${next === "ask" ? "Ask" : next === "debug" ? "Debug" : "Code"} Agent`);
+  }, [agentMode, executionStrategy, historicalProtocolFailures, onToast, sessionFocused, setSnapshot, snapshot.mode, snapshot.sessionId, streaming]);
+
+  const changeExecutionStrategy = useCallback(async (next: CodingExecutionStrategy) => {
+    if (next === executionStrategy) return;
+    if (agentMode === "ask") {
+      onToast?.("Ask 是只读会话，不需要实施计划");
+      return;
+    }
+    if (streaming) {
+      onToast?.("请先等待当前执行结束，或停止后再切换执行方式");
+      return;
+    }
+    if (snapshot.sessionId && sessionFocused) {
+      try { await setAgentPlanMode(snapshot.sessionId, next === "plan"); } catch (error) {
+        onToast?.(`切换执行方式失败：${String(error).replace(/^Error:\s*/, "")}`);
+        return;
+      }
+    }
+    setExecutionStrategy(next);
+    setSnapshot((previous) => ({ ...previous, strategy: next }));
+    if (next === "plan") setAgentView("tasks");
+    onToast?.(next === "plan" ? "已启用先制定计划，批准后才会写入文件" : "已切换为直接执行");
+  }, [agentMode, executionStrategy, onToast, sessionFocused, setSnapshot, snapshot.sessionId, streaming]);
 
   const selectCodingModel = useCallback(async (modelId: string) => {
     if (streaming) {
@@ -1150,7 +1161,7 @@ export function CodingWorkspacePage({
     activeCommandRunIdRef.current = runId;
     commandStreamedRef.current = false;
     setBottomOpen(true);
-    setBottomView("validation");
+    setBottomView("output");
     const startedAt = new Date().toISOString();
     setTerminalOutput((previous) => appendTerminalOutput(previous, `\n$ ${normalized}\n`));
     try {
@@ -1204,26 +1215,6 @@ export function CodingWorkspacePage({
     }
   }, [analysis?.validationCommands, executeCommand, onToast]);
 
-  const exportReport = useCallback(async () => {
-    const content = buildVerificationReport({
-      snapshot: { ...snapshot, validationRecords: allValidations },
-      analysis,
-      evidence,
-      tasks,
-      changedFiles: gitState,
-    });
-    try {
-      const output = await exportTextFile(
-        `${analysis?.name ?? "workspace"}-代码开发验收报告.md`,
-        content,
-        "md",
-      );
-      if (output) onToast?.("验收报告已导出");
-    } catch (error) {
-      onToast?.(`导出失败：${String(error).replace(/^Error:\s*/, "")}`);
-    }
-  }, [allValidations, analysis, evidence, gitState, onToast, snapshot, tasks]);
-
   const resetRun = useCallback(() => {
     if (snapshot.requirement && !window.confirm("确认新建代码开发任务？当前工作区文件不会被修改，但本地验收状态将重置。")) return;
     const next = EMPTY_SNAPSHOT(root);
@@ -1231,9 +1222,10 @@ export function CodingWorkspacePage({
     setRequirementDraft("");
     setCriteriaDraft("");
     setAgentMode("craft");
+    setExecutionStrategy("direct");
     setContextPaths([]);
     setFreshSessionReason(null);
-    setAgentView("tasks");
+    setAgentView("chat");
     autoResumeAttemptRef.current = null;
   }, [root, setSnapshot, snapshot.requirement]);
 
@@ -1257,7 +1249,7 @@ export function CodingWorkspacePage({
           <div className="coding-empty__icon"><FolderGit2 size={34} /></div>
           <span className="coding-empty__eyebrow">AI-NATIVE DEVELOPMENT</span>
           <h1>打开代码库，开始工程级开发</h1>
-          <p>在同一个工作台中分析代码、制定计划、编辑文件、运行终端并验证变更。</p>
+          <p>在同一个工作台中理解代码、制定计划、编辑文件、运行终端并审阅变更。</p>
           <button type="button" className="coding-primary-btn" onClick={selectWorkspace}>
             <FolderGit2 size={16} /> 选择代码文件夹
           </button>
@@ -1301,8 +1293,8 @@ export function CodingWorkspacePage({
         </div>
         <div className="coding-workspace__top-actions">
           <div className="coding-workspace__view-switch" role="group" aria-label="代码工作台视图">
-            <button type="button" className={centerView === "editor" ? "is-active" : ""} onClick={() => setCenterView("editor")}>开发视图</button>
-            <button type="button" className={centerView === "evidence" ? "is-active" : ""} onClick={() => setCenterView("evidence")}>验收视图</button>
+            <button type="button" className={centerView === "editor" ? "is-active" : ""} onClick={() => setCenterView("editor")}>编辑器</button>
+            <button type="button" className={centerView === "review" ? "is-active" : ""} onClick={() => setCenterView("review")}>变更审阅</button>
           </div>
           {analysis && <span className="coding-workspace__runtime"><ShieldCheck size={14} /> {analysis.projectType || "通用工程"} · 已授权</span>}
           <button type="button" className="coding-icon-btn" onClick={() => { setScanRevision((value) => value + 1); setGitRevision((value) => value + 1); }} aria-label="刷新代码库" title="刷新工程上下文和 Git 状态" disabled={analysisLoading || gitLoading}>
@@ -1411,7 +1403,7 @@ export function CodingWorkspacePage({
                 {analysis?.languages.slice(0, 6).map((item) => <div key={item.language}><span>{item.language}</span><b>{item.files}</b></div>)}
               </section>
               <section>
-                <strong>验证策略</strong>
+                <strong>项目命令</strong>
                 {analysis?.validationCommands.length
                   ? analysis.validationCommands.map((command) => <code key={command}>{command}</code>)
                   : <p>未从构建清单识别到命令</p>}
@@ -1523,57 +1515,63 @@ export function CodingWorkspacePage({
               <div className="coding-editor-welcome">
                 <div className="coding-editor-welcome__mark"><Code2 size={33} /></div>
                 <h1>Echo Code</h1>
-                <p>从右侧 Code Agent 输入开发需求，或从左侧资源管理器打开文件。</p>
+                <p>描述一个任务，让 Agent 理解代码、完成修改并把每一步留在可审查的工作流里。</p>
                 <div className="coding-editor-welcome__actions">
                   <button type="button" onClick={() => setExplorerView("files")}><Files size={15} /><span><strong>浏览项目文件</strong><small>资源管理器</small></span></button>
                   <button type="button" onClick={() => setExplorerView("search")}><Search size={15} /><span><strong>全局搜索代码</strong><small>搜索</small></span></button>
+                  <button type="button" onClick={() => setCenterView("review")}><GitCompareArrows size={15} /><span><strong>审阅工作区变更</strong><small>{gitState?.files.length ?? 0} 个文件</small></span></button>
                   <button type="button" onClick={() => { setBottomOpen(true); setBottomView("terminal"); setTerminalActivated(true); }}><TerminalSquare size={15} /><span><strong>打开集成终端</strong><small>终端</small></span></button>
                 </div>
               </div>
             )}
           </>
         ) : (
-          <EvidenceCenter
-            evidence={evidence}
-            selected={activeEvidence}
+          <ReviewCenter
             analysis={analysis}
             changes={gitState}
-            tasks={tasks}
-            validations={allValidations}
-            onSelect={setEvidenceSelection}
-            onExport={exportReport}
+            taskChanges={snapshot.sessionId ? changedScope.agent : []}
+            reviewedFiles={snapshot.reviewedFiles}
+            busyPath={gitActionPath}
+            onOpen={openGitChange}
+            onSetStaged={setFileStaged}
+            onRefresh={() => setGitRevision((value) => value + 1)}
           />
         )}
       </main>
 
       <aside className="coding-agent-panel">
         <div className="coding-agent-panel__title">
-          <span><Bot size={16} /><strong>Code Agent</strong></span>
+          <span><span className={`coding-agent-panel__pulse${streaming ? " is-active" : ""}`} /><strong>Echo Agent</strong><small>{streaming ? runHealth.label : `${CODING_MODE_INFO[agentMode].label} · ${executionStrategy === "plan" ? "先计划" : "直接执行"}`}</small></span>
           <button type="button" onClick={resetRun} disabled={streaming} aria-label="新建开发任务" title="新建开发任务"><Plus size={16} /></button>
         </div>
         <div className="coding-agent-panel__tabs" role="tablist" aria-label="Coding Agent 面板">
+          <button type="button" role="tab" aria-selected={agentView === "chat"} className={agentView === "chat" ? "is-active" : ""} onClick={() => setAgentView("chat")}><Sparkles size={14} />会话</button>
           <button type="button" role="tab" aria-selected={agentView === "tasks"} className={agentView === "tasks" ? "is-active" : ""} onClick={() => setAgentView("tasks")}><ListChecks size={14} />任务 {tasks.length > 0 && <span>{tasks.filter((task) => task.status === "completed").length}/{tasks.length}</span>}</button>
-          <button type="button" role="tab" aria-selected={agentView === "chat"} className={agentView === "chat" ? "is-active" : ""} onClick={() => setAgentView("chat")}><Code2 size={14} />Agent</button>
-          <button type="button" role="tab" aria-selected={agentView === "acceptance"} className={agentView === "acceptance" ? "is-active" : ""} onClick={() => setAgentView("acceptance")}><CheckCircle2 size={14} />验收</button>
         </div>
         <div className="coding-agent-panel__body">
           {!snapshot.sessionId ? (
             <div className="coding-agent-onboarding">
               <div className="coding-agent-onboarding__mark"><Code2 size={24} /></div>
-              <strong>准备好开始开发</strong>
-              <p>在下方描述需求，Agent 会先读取工程规则和相关代码，再按所选模式执行。</p>
+              <strong>今天想构建什么？</strong>
+              <p>用自然语言描述目标。Echo 会读取工程规则和相关代码，并在当前工作区完成任务。</p>
               {analysisLoading ? (
                 <span className="coding-agent-onboarding__loading"><LoaderCircle size={13} className="is-spinning" />正在建立工程索引…</span>
               ) : analysis ? (
                 <div className="coding-agent-onboarding__facts">
                   <span><b>{analysis.fileCount.toLocaleString()}</b>代码文件</span>
                   <span><b>{analysis.modules.length}</b>识别模块</span>
-                  <span><b>{analysis.validationCommands.length}</b>验证命令</span>
+                  <span><b>{analysis.validationCommands.length}</b>项目命令</span>
                   <span><b>{analysis.instructionFiles.length}</b>工程规则</span>
                 </div>
               ) : null}
               {analysisError && <div className="coding-agent-onboarding__error"><AlertTriangle size={13} />{analysisError}</div>}
-              <small><ShieldCheck size={12} />写文件和高风险命令继续遵循当前权限策略</small>
+              <div className="coding-agent-onboarding__suggestions">
+                <button type="button" onClick={() => { setAgentMode("ask"); setRequirementDraft("解释这个项目的核心架构、入口和关键数据流"); }}><MessageCircleQuestion size={14} /><span><strong>理解代码库</strong><small>梳理架构与数据流</small></span></button>
+                <button type="button" onClick={() => { setAgentMode("craft"); setRequirementDraft("实现一个新功能，并沿用现有架构、交互和测试约定"); }}><Code2 size={14} /><span><strong>实现新功能</strong><small>直接编码并交付</small></span></button>
+                <button type="button" onClick={() => { setAgentMode("debug"); setRequirementDraft("复现并定位当前问题的根因，完成最小修复"); }}><Wrench size={14} /><span><strong>调试问题</strong><small>复现、定位、修复</small></span></button>
+                <button type="button" onClick={() => { setAgentMode("craft"); setExecutionStrategy("plan"); setRequirementDraft("分析这项复杂改造，给出可审批的实施计划"); }}><ListChecks size={14} /><span><strong>规划复杂任务</strong><small>先计划再执行</small></span></button>
+              </div>
+              <small><ShieldCheck size={12} />文件与命令操作遵循当前权限策略</small>
             </div>
           ) : !sessionFocused ? (
             <div className="coding-agent-empty">
@@ -1605,13 +1603,14 @@ export function CodingWorkspacePage({
               {agentView === "tasks" ? (
                 <div className="coding-tasks-view">
                   <div className="coding-goal-card"><span>开发目标</span><strong>{snapshot.requirement}</strong></div>
-                  <TaskDag tasks={tasks} health={runHealth} mode={snapshot.mode} />
-                  {snapshot.mode === "plan" && <PlanPanel sessionId={snapshot.sessionId} onSend={onSend} onToast={onToast} />}
+                  <TaskDag tasks={tasks} health={runHealth} mode={snapshot.mode} strategy={snapshot.strategy} />
+                  <TaskChecklist criteria={snapshot.acceptanceCriteria} onChange={(acceptanceCriteria) => setSnapshot({ acceptanceCriteria })} />
+                  {snapshot.strategy === "plan" && <PlanPanel sessionId={snapshot.sessionId} onSend={onSend} onToast={onToast} />}
                 </div>
               ) : agentView === "chat" ? (
                 <div className="coding-agent-chat">
               {messages.length === 0 && <div className="coding-muted-row">Agent 正在准备工程上下文…</div>}
-              {messages.slice(-10).map((message) => message.role === "user" ? (
+              {messages.map((message) => message.role === "user" ? (
                 <div className="coding-agent-chat__user" key={message.id}>
                   {message.parts.filter((part) => part.kind === "text").map((part, index) => part.kind === "text" && <Markdown key={index} complete>{part.text}</Markdown>)}
                 </div>
@@ -1629,9 +1628,7 @@ export function CodingWorkspacePage({
                 />
               ))}
                 </div>
-              ) : (
-                <AcceptanceView criteria={snapshot.acceptanceCriteria} evidence={evidence} onChange={(acceptanceCriteria) => setSnapshot({ acceptanceCriteria })} />
-              )}
+              ) : null}
             </>
           )}
         </div>
@@ -1643,6 +1640,7 @@ export function CodingWorkspacePage({
             startError={runStartError}
             apiReady={apiReady}
             mode={agentMode}
+            strategy={executionStrategy}
             models={models}
             modelId={selectedModelId}
             contextPaths={contextPaths}
@@ -1650,6 +1648,7 @@ export function CodingWorkspacePage({
             onRequirementChange={setRequirementDraft}
             onCriteriaChange={setCriteriaDraft}
             onModeChange={(mode) => void changeAgentMode(mode)}
+            onStrategyChange={(strategy) => void changeExecutionStrategy(strategy)}
             onModelChange={(modelId) => void selectCodingModel(modelId)}
             onRemoveContext={toggleContextPath}
             onStart={startRun}
@@ -1662,6 +1661,7 @@ export function CodingWorkspacePage({
               <AgentModeSwitcher mode={agentMode} onChange={(mode) => void changeAgentMode(mode)} disabled={streaming} compact />
               <ModelSelector modelId={selectedModelId} models={models} onModelChange={(modelId) => void selectCodingModel(modelId)} />
             </div>
+            <ExecutionStrategyPicker strategy={executionStrategy} onChange={(strategy) => void changeExecutionStrategy(strategy)} disabled={streaming || agentMode === "ask"} />
             {contextPaths.length > 0 && (
               <div className="coding-context-chips" aria-label="Agent 上下文">
                 {contextPaths.map((path) => <button type="button" key={path} onClick={() => toggleContextPath(path)} title="移除上下文"><FileCode2 size={11} />{path}<X size={10} /></button>)}
@@ -1673,17 +1673,17 @@ export function CodingWorkspacePage({
                 <span>{freshSessionReason}</span>
               </div>
             )}
-            {agentMode === "plan" && (
+            {executionStrategy === "plan" && (
               <div className="coding-agent-panel__mode-guidance">
                 <ListChecks size={13} />
-                <span>Plan 会先澄清需求并等待计划批准；要直接生成文件，请使用 Craft。</span>
+                <span>Plan 会先澄清需求并等待计划批准；要直接生成文件，请使用 Code。</span>
               </div>
             )}
-            <textarea aria-label="给 Coding Agent 的补充要求" value={followup} onChange={(event) => setFollowup(event.target.value)} placeholder="继续当前任务；新需求请点击右上角 + 新建开发任务…" rows={2} disabled={sendingFollowup || streaming} />
+            <textarea aria-label="给 Coding Agent 的补充要求" value={followup} onChange={(event) => setFollowup(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void sendFollowup(); } }} placeholder="继续当前任务，@ 引用文件；⌘ Enter 发送…" rows={2} disabled={sendingFollowup || streaming} />
             <div>
               <span className="coding-agent-panel__composer-tools">
                 <PermissionPicker onToast={onToast} sessionId={snapshot.sessionId} />
-                <button type="button" onClick={() => void requestDocumentation()} disabled={streaming || sendingFollowup}><FileText size={13} />生成变更文档</button>
+                <button type="button" onClick={() => void requestDocumentation()} disabled={streaming || sendingFollowup}><FileText size={13} />生成文档</button>
               </span>
               <button type="button" className="coding-send-btn" onClick={() => void sendFollowup()} disabled={!followup.trim() || sendingFollowup || streaming} aria-label="发送给 Coding Agent"><Send size={15} /></button>
             </div>
@@ -1695,7 +1695,7 @@ export function CodingWorkspacePage({
         <div
           className="coding-bottom-panel__resizer"
           role="separator"
-          aria-label="调整终端与验证面板高度"
+          aria-label="调整开发工具面板高度"
           aria-orientation="horizontal"
           aria-valuemin={120}
           aria-valuemax={Math.round(window.innerHeight * 0.65)}
@@ -1708,15 +1708,14 @@ export function CodingWorkspacePage({
             setBottomHeight((value) => Math.min(Math.round(window.innerHeight * 0.65), Math.max(120, value + (event.key === "ArrowUp" ? 16 : -16))));
           }}
         />
-        <div className="coding-bottom-panel__tabs" role="tablist" aria-label="执行与验证中心">
+        <div className="coding-bottom-panel__tabs" role="tablist" aria-label="开发工具面板">
           <button type="button" role="tab" aria-selected={bottomView === "terminal"} className={bottomView === "terminal" ? "is-active" : ""} onClick={() => { setTerminalActivated(true); setBottomOpen(true); setBottomView("terminal"); }}><TerminalSquare size={14} />终端</button>
-          <button type="button" role="tab" aria-selected={bottomView === "validation"} className={bottomView === "validation" ? "is-active" : ""} onClick={() => { setBottomOpen(true); setBottomView("validation"); }}><Play size={13} />验证命令</button>
+          <button type="button" role="tab" aria-label="验证命令" aria-selected={bottomView === "output"} className={bottomView === "output" ? "is-active" : ""} onClick={() => { setBottomOpen(true); setBottomView("output"); }}><Play size={13} />运行输出</button>
           <button type="button" role="tab" aria-selected={bottomView === "problems"} className={bottomView === "problems" ? "is-active" : ""} onClick={() => { setBottomOpen(true); setBottomView("problems"); }}>问题 <span>{problems.length}</span></button>
           <button type="button" role="tab" aria-selected={bottomView === "tests"} className={bottomView === "tests" ? "is-active" : ""} onClick={() => { setBottomOpen(true); setBottomView("tests"); }}><TestTube2 size={14} />测试 <span>{allValidations.length}</span></button>
-          <button type="button" role="tab" aria-selected={bottomView === "report"} className={bottomView === "report" ? "is-active" : ""} onClick={() => { setBottomOpen(true); setBottomView("report"); }}>验证报告</button>
-          <button type="button" role="tab" aria-selected={bottomView === "trace"} className={bottomView === "trace" ? "is-active" : ""} onClick={() => { setBottomOpen(true); setBottomView("trace"); }}>执行轨迹</button>
+          <button type="button" role="tab" aria-selected={bottomView === "trace"} className={bottomView === "trace" ? "is-active" : ""} onClick={() => { setBottomOpen(true); setBottomView("trace"); }}>操作记录</button>
           <div className="coding-bottom-panel__actions">
-            <button type="button" onClick={() => void runValidationSuite()} disabled={Boolean(runningCommand) || !analysis?.validationCommands.length}><Play size={13} />运行全部验证</button>
+            <button type="button" onClick={() => void runValidationSuite()} disabled={Boolean(runningCommand) || !analysis?.validationCommands.length}><Play size={13} />运行项目检查</button>
             <button type="button" onClick={() => setBottomOpen((value) => !value)} aria-label={bottomOpen ? "收起底部面板" : "展开底部面板"}><ChevronDown size={14} className={!bottomOpen ? "is-collapsed" : ""} /></button>
           </div>
         </div>
@@ -1726,7 +1725,7 @@ export function CodingWorkspacePage({
               <CodingTerminal root={root} onToast={onToast} />
               </div>
             )}
-            {bottomView === "validation" && (
+            {bottomView === "output" && (
               <div className="coding-terminal-view">
                 <div className="coding-terminal-view__main">
                   <pre role="log" aria-label="终端输出">{terminalOutput}</pre>
@@ -1738,7 +1737,7 @@ export function CodingWorkspacePage({
                   </form>
                 </div>
                 <div className="coding-validation-presets">
-                  <strong>工程验证</strong>
+                  <strong>项目命令</strong>
                   {analysis?.validationCommands.length ? analysis.validationCommands.map((command) => (
                     <button type="button" key={command} onClick={() => { setTerminalCommand(command); void executeCommand(command); }} disabled={Boolean(runningCommand)}><Play size={13} /><code>{command}</code></button>
                   )) : <span>未自动识别命令</span>}
@@ -1754,7 +1753,6 @@ export function CodingWorkspacePage({
               void openFile(problem.path);
             }} />}
             {bottomView === "tests" && <ValidationsView records={allValidations} />}
-            {bottomView === "report" && <CompactReport evidence={evidence} onOpenFull={() => setCenterView("evidence")} onExport={exportReport} />}
             {bottomView === "trace" && <TraceView messages={messages} />}
         </div>
       </section>
@@ -1763,21 +1761,21 @@ export function CodingWorkspacePage({
         <span><GitBranch size={12} />{gitState?.branch || "无 Git 分支"}</span>
         <span>{analysis?.fileCount.toLocaleString() ?? 0} 个文件</span>
         <span>{analysis?.modules.length ?? 0} 个模块</span>
-        {snapshot.sessionId && <span>{snapshot.mode === "ask" ? "Ask" : snapshot.mode === "craft" ? "Craft" : "Plan"}</span>}
+        {snapshot.sessionId && <span>{CODING_MODE_INFO[snapshot.mode].label} · {snapshot.strategy === "plan" ? "先计划" : "直接执行"}</span>}
         {changedScope.preExisting.length > 0 && <span title={changedScope.preExisting.join("\n")}>基线变更 {changedScope.preExisting.length}</span>}
         {changedScope.agent.length > 0 && <span title={changedScope.agent.join("\n")}>任务变更 {changedScope.agent.length}</span>}
         <span className="coding-workspace__statusbar-spacer" />
-        {runHealth.phase === "failed" ? <span className="is-error"><AlertTriangle size={12} />{runHealth.label}</span> : ["awaiting_input", "awaiting_approval"].includes(runHealth.phase) ? <span className="is-waiting"><MessageCircleQuestion size={12} />{runHealth.label}</span> : streaming ? <span className="is-running"><LoaderCircle size={12} className="is-spinning" />{runHealth.label}</span> : runningCommand ? <span className="is-running"><LoaderCircle size={12} className="is-spinning" />验证执行中</span> : <span><Circle size={10} />Agent 空闲</span>}
+        {runHealth.phase === "failed" ? <span className="is-error"><AlertTriangle size={12} />{runHealth.label}</span> : ["awaiting_input", "awaiting_approval"].includes(runHealth.phase) ? <span className="is-waiting"><MessageCircleQuestion size={12} />{runHealth.label}</span> : streaming ? <span className="is-running"><LoaderCircle size={12} className="is-spinning" />{runHealth.label}</span> : runningCommand ? <span className="is-running"><LoaderCircle size={12} className="is-spinning" />命令执行中</span> : <span><Circle size={10} />Agent 空闲</span>}
         <button type="button" onClick={resetRun} disabled={streaming} title={streaming ? "Agent 执行期间请先停止当前任务" : undefined}><Plus size={12} />新开发任务</button>
       </footer>
     </div>
   );
 }
 
-const CODING_MODE_INFO: Record<CodingAgentMode, { label: string; title: string; description: string }> = {
+const CODING_MODE_INFO: Record<CodingAgentRole, { label: string; title: string; description: string }> = {
   ask: { label: "Ask", title: "理解与问答", description: "只读分析代码、解释实现和定位问题" },
-  craft: { label: "Craft", title: "快速开发", description: "目标明确时直接修改并运行验证" },
-  plan: { label: "Plan", title: "工程任务", description: "先生成计划，批准后执行跨文件开发" },
+  craft: { label: "Code", title: "代码开发", description: "理解上下文后直接实现、修改和运行检查" },
+  debug: { label: "Debug", title: "问题调试", description: "复现问题、定位根因并完成最小修复" },
 };
 
 function AgentModeSwitcher({
@@ -1786,16 +1784,16 @@ function AgentModeSwitcher({
   disabled = false,
   compact = false,
 }: {
-  mode: CodingAgentMode;
-  onChange: (mode: CodingAgentMode) => void;
+  mode: CodingAgentRole;
+  onChange: (mode: CodingAgentRole) => void;
   disabled?: boolean;
   compact?: boolean;
 }) {
   return (
     <div className={`coding-mode-switcher${compact ? " is-compact" : ""}`} role="radiogroup" aria-label="Agent 编程模式">
-      {(Object.keys(CODING_MODE_INFO) as CodingAgentMode[]).map((entry) => {
+      {(Object.keys(CODING_MODE_INFO) as CodingAgentRole[]).map((entry) => {
         const info = CODING_MODE_INFO[entry];
-        const Icon = entry === "ask" ? MessageCircleQuestion : entry === "craft" ? Wrench : ListChecks;
+        const Icon = entry === "ask" ? MessageCircleQuestion : entry === "plan" ? ListChecks : entry === "debug" ? Search : Code2;
         return (
           <button
             type="button"
@@ -1812,6 +1810,26 @@ function AgentModeSwitcher({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function ExecutionStrategyPicker({
+  strategy,
+  onChange,
+  disabled = false,
+}: {
+  strategy: CodingExecutionStrategy;
+  onChange: (strategy: CodingExecutionStrategy) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="coding-execution-strategy">
+      <span><GitCompareArrows size={12} />执行方式</span>
+      <div role="radiogroup" aria-label="执行方式">
+        <button type="button" role="radio" aria-checked={strategy === "direct"} className={strategy === "direct" ? "is-active" : ""} onClick={() => onChange("direct")} disabled={disabled}><Play size={11} />直接执行</button>
+        <button type="button" role="radio" aria-checked={strategy === "plan"} className={strategy === "plan" ? "is-active" : ""} onClick={() => onChange("plan")} disabled={disabled}><ListChecks size={11} />先制定计划</button>
+      </div>
     </div>
   );
 }
@@ -1865,6 +1883,7 @@ function CodeAgentStarter({
   startError,
   apiReady,
   mode,
+  strategy,
   models,
   modelId,
   contextPaths,
@@ -1872,6 +1891,7 @@ function CodeAgentStarter({
   onRequirementChange,
   onCriteriaChange,
   onModeChange,
+  onStrategyChange,
   onModelChange,
   onRemoveContext,
   onStart,
@@ -1883,14 +1903,16 @@ function CodeAgentStarter({
   starting: boolean;
   startError: string | null;
   apiReady: boolean;
-  mode: CodingAgentMode;
+  mode: CodingAgentRole;
+  strategy: CodingExecutionStrategy;
   models: ModelOption[];
   modelId?: string;
   contextPaths: string[];
   preExistingChanges: number;
   onRequirementChange: (value: string) => void;
   onCriteriaChange: (value: string) => void;
-  onModeChange: (mode: CodingAgentMode) => void;
+  onModeChange: (mode: CodingAgentRole) => void;
+  onStrategyChange: (strategy: CodingExecutionStrategy) => void;
   onModelChange: (modelId: string) => void;
   onRemoveContext: (path: string) => void;
   onStart: () => void;
@@ -1898,11 +1920,15 @@ function CodeAgentStarter({
   onToast?: (message: string) => void;
 }) {
   const resolution = resolveCodingModeForRequest(mode, requirement);
-  const actionLabel = resolution.mode === "ask"
+  const actionLabel = strategy === "plan" && resolution.mode !== "ask"
+    ? "研究并制定计划"
+    : resolution.mode === "ask"
     ? "开始只读分析"
-    : resolution.mode === "craft"
-      ? "开始快速开发"
-      : "分析并生成计划";
+    : resolution.mode === "debug"
+      ? "开始问题调试"
+      : resolution.mode === "craft"
+        ? "开始快速开发"
+        : "分析并生成计划";
 
   return (
     <div className="coding-agent-starter">
@@ -1913,27 +1939,29 @@ function CodeAgentStarter({
         aria-label="开发需求"
         value={requirement}
         onChange={(event) => onRequirementChange(event.target.value)}
+        onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); onStart(); } }}
         rows={4}
-        placeholder="描述开发需求，@ 引用文件，/ 使用命令…"
+        placeholder="让 Echo 实现功能、修复问题，或解释代码库…"
       />
       <details className="coding-agent-starter__criteria">
-        <summary><ListChecks size={13} /><span>验收标准</span><small>{criteria.trim() ? "已填写" : "可选"}</small><ChevronDown size={13} /></summary>
+        <summary><ListChecks size={13} /><span>完成条件</span><small>{criteria.trim() ? "已填写" : "可选"}</small><ChevronDown size={13} /></summary>
         <textarea
           aria-label="验收标准"
           value={criteria}
           onChange={(event) => onCriteriaChange(event.target.value)}
           rows={3}
-          placeholder={"每行一条，例如：\n关键流程可正常使用\n自动化测试全部通过"}
+          placeholder={"每行一条，例如：\n关键流程可正常使用\n相关检查通过"}
         />
       </details>
       {preExistingChanges > 0 && <div className="coding-agent-starter__notice"><GitCompareArrows size={13} />已保护任务前的 {preExistingChanges} 个 Git 变更</div>}
-      {resolution.autoAdjusted && <div className="coding-agent-starter__notice is-mode-suggestion"><Wrench size={13} />检测到代码实施要求，发送时将使用 Craft 模式真正写入并验证文件</div>}
+      {resolution.autoAdjusted && <div className="coding-agent-starter__notice is-mode-suggestion"><Wrench size={13} />检测到实施型需求，将切换到 Code（Craft 模式真正写入并检查文件）</div>}
       {!apiReady && <div className="coding-agent-starter__warning"><AlertTriangle size={13} />尚未配置可用模型。<button type="button" onClick={onOpenSettings}>前往设置</button></div>}
       {startError && <div className="coding-agent-starter__warning" role="alert"><AlertTriangle size={13} />{startError}</div>}
       <div className="coding-agent-starter__controls">
         <AgentModeSwitcher mode={mode} onChange={onModeChange} disabled={starting} compact />
         <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} />
       </div>
+      <ExecutionStrategyPicker strategy={strategy} onChange={onStrategyChange} disabled={starting || mode === "ask"} />
       <div className="coding-agent-starter__toolbar">
         <PermissionPicker onToast={onToast} />
         <span className="coding-agent-starter__skills" title="自动使用已启用的编程 Skill"><Wrench size={13} />Coding Skills</span>
@@ -1957,10 +1985,12 @@ function TaskDag({
   tasks,
   health,
   mode,
+  strategy,
 }: {
   tasks: ReturnType<typeof deriveTaskNodes>;
   health: CodingRunHealth;
-  mode: CodingAgentMode;
+  mode: CodingAgentRole;
+  strategy: CodingExecutionStrategy;
 }) {
   const completed = tasks.filter((task) => task.status === "completed").length;
   const progress = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
@@ -1976,9 +2006,13 @@ function TaskDag({
           ? health.label
           : mode === "ask"
             ? active ? "Agent 正在只读分析代码库…" : "Ask 模式结果会显示在 Agent 页签"
+            : strategy === "plan"
+              ? active ? health.label : "等待 Agent 提交可审批的实施计划"
             : mode === "craft"
-              ? active ? health.label : "Craft 模式会直接实施，不强制生成任务计划"
-              : active ? health.label : "等待 Agent 提交任务计划"}</span>
+              ? active ? health.label : "Code 模式会直接实施，不强制生成任务计划"
+              : mode === "debug"
+                ? active ? health.label : "Debug 模式会围绕复现、根因和修复展开"
+                : health.label}</span>
       </div>
     );
   }
@@ -1996,71 +2030,83 @@ function TaskDag({
   );
 }
 
-function AcceptanceView({
+function TaskChecklist({
   criteria,
-  evidence,
   onChange,
 }: {
   criteria: AcceptanceCriterion[];
-  evidence: QualityGate[];
   onChange: (criteria: AcceptanceCriterion[]) => void;
 }) {
+  if (criteria.length === 0) return null;
   return (
-    <div className="coding-acceptance-view">
-      <div className="coding-acceptance-view__heading"><strong>需求验收标准</strong><span>{criteria.filter((item) => item.verified).length}/{criteria.length}</span></div>
+    <section className="coding-task-checklist">
+      <div className="coding-task-checklist__heading"><span><CheckCircle2 size={14} /><strong>完成条件</strong></span><b>{criteria.filter((item) => item.verified).length}/{criteria.length}</b></div>
       {criteria.map((criterion) => (
         <label key={criterion.id}>
           <input type="checkbox" checked={criterion.verified} onChange={(event) => onChange(criteria.map((item) => item.id === criterion.id ? { ...item, verified: event.target.checked } : item))} />
           <span>{criterion.content}</span>
         </label>
       ))}
-      <hr />
-      <div className="coding-acceptance-view__heading"><strong>交付质量门禁</strong><span>{evidence.filter((item) => item.status === "satisfied").length}/{evidence.length}</span></div>
-      {evidence.map((item) => <div className={`coding-gate is-${item.status}`} key={item.id}>{item.status === "satisfied" ? <CheckCircle2 size={15} /> : item.status === "in_progress" ? <LoaderCircle size={15} /> : <Circle size={15} />}<span><strong>{item.title}</strong><small>{item.summary}</small></span></div>)}
-      <p className="coding-acceptance-view__note"><ShieldCheck size={13} />自动门禁只依据 Git、计划和真实命令结果；业务验收由你逐条确认。</p>
-    </div>
+    </section>
   );
 }
 
-function EvidenceCenter({
-  evidence,
-  selected,
+function ReviewCenter({
   analysis,
   changes,
-  tasks,
-  validations,
-  onSelect,
-  onExport,
+  taskChanges,
+  reviewedFiles,
+  busyPath,
+  onOpen,
+  onSetStaged,
+  onRefresh,
 }: {
-  evidence: QualityGate[];
-  selected: QualityGate;
   analysis: CodingWorkspaceAnalysis | null;
   changes: CodingGitSnapshot | null;
-  tasks: ReturnType<typeof deriveTaskNodes>;
-  validations: ValidationRecord[];
-  onSelect: (id: QualityGate["id"]) => void;
-  onExport: () => void;
+  taskChanges: string[];
+  reviewedFiles: string[];
+  busyPath: string | null;
+  onOpen: (file: CodingGitFile) => void;
+  onSetStaged: (file: CodingGitFile, staged: boolean) => void;
+  onRefresh: () => void;
 }) {
+  const files = changes?.files ?? [];
+  const taskChangeSet = new Set(taskChanges);
+  const reviewedCount = files.filter((file) => reviewedFiles.includes(file.path)).length;
   return (
-    <div className="coding-evidence-center">
-      <div className="coding-evidence-center__head"><span><h1>代码交付质量</h1><p>{analysis?.name ?? "当前工作区"} · 所有结论均关联当前工程的真实证据</p></span><button type="button" className="coding-primary-btn" onClick={onExport}><Download size={14} />导出报告</button></div>
-      <div className="coding-evidence-center__summary">
-        <div><span>质量门禁</span><strong>{evidence.filter((item) => item.status === "satisfied").length}/{evidence.length}</strong></div>
-        <div><span>任务</span><strong>{tasks.filter((task) => task.status === "completed").length}/{tasks.length}</strong></div>
-        <div><span>Git 变更</span><strong>{changes?.files.length ?? 0}</strong></div>
-        <div><span>验证通过</span><strong>{validations.filter((record) => record.status === "passed").length}/{validations.length}</strong></div>
+    <div className="coding-review-center">
+      <header className="coding-review-center__head">
+        <span><GitCompareArrows size={20} /><span><h1>变更审阅</h1><p>{analysis?.name ?? "当前工作区"} · 检查 Agent 和本地编辑产生的真实 Git Diff</p></span></span>
+        <button type="button" onClick={onRefresh}><RefreshCw size={14} />刷新</button>
+      </header>
+      <div className="coding-review-center__summary">
+        <div><span>变更文件</span><strong>{files.length}</strong></div>
+        <div><span>新增</span><strong className="is-added">+{changes?.totalAdded ?? 0}</strong></div>
+        <div><span>删除</span><strong className="is-removed">-{changes?.totalRemoved ?? 0}</strong></div>
+        <div><span>已查看</span><strong>{reviewedCount}/{files.length}</strong></div>
       </div>
-      <div className="coding-evidence-center__grid">
-        {evidence.map((item, index) => (
-          <button type="button" key={item.id} className={`${item.id === selected.id ? "is-selected" : ""} is-${item.status}`} onClick={() => onSelect(item.id)}>
-            <span>{String(index + 1).padStart(2, "0")}</span><strong>{item.title}</strong><b>{item.status === "satisfied" ? <Check size={13} /> : item.status === "in_progress" ? <LoaderCircle size={13} /> : <Circle size={13} />}{statusLabel(item.status)}</b><small>{item.summary}</small>
-          </button>
+      <div className="coding-review-center__section-head"><span>工作区更改</span><small>{changes?.branch || "无 Git 分支"}</small></div>
+      <div className="coding-review-center__files">
+        {!changes?.hasGit ? (
+          <div className="coding-review-center__empty"><FolderGit2 size={24} /><strong>当前目录不是 Git 仓库</strong><p>你仍可使用编辑器和终端，初始化 Git 后即可集中审阅变更。</p></div>
+        ) : files.length === 0 ? (
+          <div className="coding-review-center__empty"><CheckCircle2 size={24} /><strong>工作区没有未提交变更</strong><p>Agent 完成文件修改后，变更会自动出现在这里。</p></div>
+        ) : files.map((file) => (
+          <div className={`coding-review-file${reviewedFiles.includes(file.path) ? " is-reviewed" : ""}`} key={file.path}>
+            <button type="button" className="coding-review-file__main" onClick={() => onOpen(file)}>
+              <span className={`coding-review-file__status is-${file.status}`}>{file.status === "untracked" ? "U" : file.status === "added" ? "A" : file.status === "deleted" ? "D" : file.status === "renamed" ? "R" : file.status === "conflict" ? "!" : "M"}</span>
+              <span><strong>{basename(file.path)}</strong><small>{file.path}</small></span>
+              {taskChangeSet.has(file.path) && <em>本次任务</em>}
+              <b><span>+{file.added}</span><span>-{file.removed}</span></b>
+              <ChevronRight size={15} />
+            </button>
+            <button type="button" className="coding-review-file__stage" disabled={busyPath === file.path} onClick={() => onSetStaged(file, !(file.staged && !file.unstaged))}>
+              {busyPath === file.path ? <LoaderCircle size={13} className="is-spinning" /> : file.staged && !file.unstaged ? <RotateCcw size={13} /> : <Check size={13} />}
+              {file.staged && !file.unstaged ? "取消暂存" : "暂存"}
+            </button>
+          </div>
         ))}
       </div>
-      <section className="coding-evidence-detail">
-        <div><span>证据详情</span><strong>{selected.title}</strong><p>{selected.summary}</p></div>
-        {selected.evidence.length > 0 ? <ul>{selected.evidence.map((entry, index) => <li key={`${entry}:${index}`}><CheckCircle2 size={14} /><code>{entry}</code></li>)}</ul> : <div className="coding-evidence-detail__empty">当前还没有足以完成此能力门禁的真实证据。</div>}
-      </section>
     </div>
   );
 }
@@ -2071,12 +2117,8 @@ function ProblemsView({ problems, onOpen }: { problems: WorkspaceProblem[]; onOp
 }
 
 function ValidationsView({ records }: { records: ValidationRecord[] }) {
-  if (records.length === 0) return <div className="coding-bottom-empty"><TestTube2 size={20} />尚未执行编译或测试验证</div>;
+  if (records.length === 0) return <div className="coding-bottom-empty"><TestTube2 size={20} />尚未运行编译或测试</div>;
   return <div className="coding-validations">{[...records].reverse().map((record) => <div key={record.id} className={`is-${record.status}`}><span>{record.status === "passed" ? <CheckCircle2 size={15} /> : record.status === "running" ? <LoaderCircle size={15} className="is-spinning" /> : <AlertTriangle size={15} />}<strong>{record.label}</strong><code>{record.command}</code></span><span><b>{record.testSummary ?? (record.status === "passed" ? "通过" : "失败")}</b><small>退出码 {record.exitCode ?? "无"} · {formatDuration(record.durationMs)}</small></span></div>)}</div>;
-}
-
-function CompactReport({ evidence, onOpenFull, onExport }: { evidence: QualityGate[]; onOpenFull: () => void; onExport: () => void }) {
-  return <div className="coding-compact-report"><div>{evidence.map((item) => <span key={item.id} className={`is-${item.status}`}>{item.status === "satisfied" ? <CheckCircle2 size={14} /> : <Circle size={14} />}{item.title}<b>{statusLabel(item.status)}</b></span>)}</div><section><strong>{evidence.filter((item) => item.status === "satisfied").length}/{evidence.length} 项质量门禁已通过</strong><p>未满足项不会被报告为通过；请完成计划、审查 Git Diff、运行工程验证并逐条验收需求。</p><button type="button" onClick={onOpenFull}>打开完整质量视图</button><button type="button" onClick={onExport}><Download size={13} />导出报告</button></section></div>;
 }
 
 function TraceView({ messages }: { messages: ReturnType<typeof useSessionStore.getState>["messages"] }) {
