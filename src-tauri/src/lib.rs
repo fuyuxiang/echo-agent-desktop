@@ -502,6 +502,7 @@ pub fn run() {
             coding::verification::coding_verification_list,
             coding::verification::coding_verification_run,
             coding::verification::coding_verification_cancel,
+            coding::diagnostics::coding_diagnostics_list,
             coding_workspace::coding_analyze_workspace,
             coding_workspace::coding_git_snapshot,
             coding_workspace::coding_git_diff,
