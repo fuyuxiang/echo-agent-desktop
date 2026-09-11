@@ -6,7 +6,7 @@ import "./styles/global.css";
 import "./styles/app.css";
 import "./styles/automation-echo.css";
 import "./styles/visual-polish.css";
-import "./styles/coding-workspace.css";
+import "./styles/coding-workbench.css";
 
 initializeTheme();
 

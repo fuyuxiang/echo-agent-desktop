@@ -521,8 +521,6 @@ pub fn run() {
             coding_workspace::coding_write_document,
             coding_workspace::coding_create_entry,
             coding_workspace::coding_search_workspace,
-            coding_workspace::coding_run_command,
-            coding_workspace::coding_cancel_command,
             coding_workspace::coding_terminal_create,
             coding_workspace::coding_terminal_write,
             coding_workspace::coding_terminal_resize,
