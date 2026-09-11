@@ -187,6 +187,49 @@ describe("CodingWorkbench skeleton", () => {
     expect(await screen.findByText(/打开失败：读取文件失败/)).toBeInTheDocument();
   });
 
+  it("switches the explorer pane from the activity bar", async () => {
+    const user = userEvent.setup();
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByTestId("file-tree");
+
+    await user.click(screen.getByRole("button", { name: "搜索" }));
+    expect(screen.getByLabelText("搜索代码")).toBeInTheDocument();
+    expect(screen.queryByTestId("file-tree")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "上下文包" }));
+    expect(screen.getByText(/未选定时由 Agent 自行检索/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "资源管理器" }));
+    expect(screen.getByTestId("file-tree")).toBeInTheDocument();
+  });
+
+  it("pins and unpins the open file as task context", async () => {
+    const user = userEvent.setup();
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByTestId("file-tree");
+
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/src/a.ts",
+        relativePath: "src/a.ts",
+        name: "a.ts",
+        language: "typescript",
+        original: "x",
+        draft: "x",
+        hash: "h1",
+        loading: false,
+      });
+    });
+
+    await user.click(screen.getByRole("button", { name: "上下文包" }));
+    await user.click(screen.getByRole("button", { name: /将当前文件加入上下文/ }));
+    // The remove control only exists once the path is pinned.
+    expect(screen.getByRole("button", { name: "移除 src/a.ts" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "移除 src/a.ts" }));
+    expect(screen.getByText(/未选定时由 Agent 自行检索/)).toBeInTheDocument();
+  });
+
   it("clears open tabs when the workspace changes", async () => {
     const { rerender } = render(<CodingWorkbench cwd="/repo" models={[]} />);
     await screen.findByRole("navigation", { name: "活动栏" });

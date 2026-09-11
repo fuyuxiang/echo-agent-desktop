@@ -15,13 +15,20 @@ import {
   codingReadDocument,
   codingWriteDocument,
   filesystemPickDirectory,
+  type CodingSearchHit,
 } from "@/lib/agent-client";
 import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
 import "@/styles/coding-workbench.css";
 
+import { ChangeSetView } from "./explorer/ChangeSetView";
+import { ContextPackView } from "./explorer/ContextPackView";
+import { SearchView } from "./explorer/SearchView";
+import { SymbolView } from "./explorer/SymbolView";
 import { buildCommands, type CommandContext } from "./lib/commands";
 import { buildFileIndex } from "./lib/file-index";
+import { countOccurrences, describeReplacePlan, replaceAll } from "./lib/replace";
 import { TabContainer } from "./main/TabContainer";
+import { ActivityBar } from "./shell/ActivityBar";
 import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/CommandPalette";
 import { isFileTab, useTabStore } from "./store/tab-store";
 import { useWorkbenchStore } from "./store/workbench-store";
@@ -41,6 +48,14 @@ function basename(path: string): string {
   const segments = path.replace(/\\/g, "/").split("/").filter(Boolean);
   return segments[segments.length - 1] ?? path;
 }
+
+const EXPLORER_TITLES: Record<string, string> = {
+  files: "资源管理器",
+  search: "搜索",
+  changes: "变更集",
+  symbols: "符号",
+  context: "上下文包",
+};
 
 /** Resolve a workspace-relative path against the repository root. */
 function workspaceFilePath(root: string, path: string): string {
@@ -91,6 +106,7 @@ export function CodingWorkbench({
   const setAgentWidth = useWorkbenchStore((state) => state.setAgentWidth);
   const hydrateLayout = useWorkbenchStore((state) => state.hydrateLayout);
 
+  const activityView = useWorkbenchStore((state) => state.activityView);
   const setActivityView = useWorkbenchStore((state) => state.setActivityView);
   const setBottomView = useWorkbenchStore((state) => state.setBottomView);
   const toggleBottom = useWorkbenchStore((state) => state.toggleBottom);
@@ -104,12 +120,17 @@ export function CodingWorkbench({
   const [indexing, setIndexing] = useState(false);
   const [symbolsByPath, setSymbolsByPath] = useState<Record<string, PaletteSymbol[]>>({});
   const [reveal, setReveal] = useState<{ line: number; column: number; key: number }>();
+  const [contextPaths, setContextPaths] = useState<string[]>([]);
+  const [replacing, setReplacing] = useState(false);
 
-  const symbols = useMemo(() => {
-    const activeTab = tabs.find((tab) => tab.id === activeTabId);
-    if (!activeTab || !isFileTab(activeTab)) return [];
-    return symbolsByPath[activeTab.id] ?? [];
-  }, [activeTabId, symbolsByPath, tabs]);
+  const activeFileTab = useMemo(() => {
+    const found = tabs.find((tab) => tab.id === activeTabId);
+    return found && isFileTab(found) ? found : null;
+  }, [activeTabId, tabs]);
+
+  const symbols = activeFileTab ? (symbolsByPath[activeFileTab.id] ?? []) : [];
+  const activeFileName = activeFileTab?.name;
+  const activeRelativePath = activeFileTab?.relativePath;
 
   /** Load a file into a tab, reusing the tab if it is already open. */
   const openFile = useCallback(
@@ -182,10 +203,72 @@ export function CodingWorkbench({
     [cwd, onToast],
   );
 
+  /**
+   * Replace across the files a search matched.
+   *
+   * This edits files the user has not necessarily opened, so it always confirms
+   * first and reports how many files a hash conflict caused it to skip rather
+   * than reporting a clean success.
+   */
+  const replaceAcrossHits = useCallback(
+    async (query: string, replacement: string, hits: CodingSearchHit[]) => {
+      const uniquePaths = [...new Set(hits.map((hit) => hit.path))];
+      const plans: Array<{ path: string; count: number; content: string; hash: string }> = [];
+      for (const relative of uniquePaths) {
+        try {
+          const document = await codingReadDocument(cwd, workspaceFilePath(cwd, relative));
+          const count = countOccurrences(document.content, query);
+          if (count > 0) {
+            plans.push({ path: relative, count, content: document.content, hash: document.hash });
+          }
+        } catch {
+          // An unreadable file is skipped; the summary reports the shortfall.
+        }
+      }
+
+      const summary = describeReplacePlan(plans.map(({ path, count }) => ({ path, count })));
+      if (plans.length === 0) {
+        onToast?.(summary);
+        return;
+      }
+      if (!window.confirm(`${summary}。确认执行？`)) return;
+
+      setReplacing(true);
+      let changed = 0;
+      let skipped = 0;
+      try {
+        for (const plan of plans) {
+          const next = replaceAll(plan.content, query, replacement);
+          try {
+            await codingWriteDocument(
+              cwd,
+              workspaceFilePath(cwd, plan.path),
+              next.content,
+              plan.hash,
+            );
+            changed += 1;
+          } catch {
+            // A hash mismatch means someone else wrote the file first.
+            skipped += 1;
+          }
+        }
+      } finally {
+        setReplacing(false);
+      }
+      onToast?.(
+        skipped > 0
+          ? `已替换 ${changed} 个文件，${skipped} 个因期间被其他程序修改而跳过`
+          : `已替换 ${changed} 个文件`,
+      );
+    },
+    [cwd, onToast],
+  );
+
   // Close every tab when the workspace changes; their paths no longer apply.
   useEffect(() => {
     useTabStore.getState().closeAll();
     setSymbolsByPath({});
+    setContextPaths([]);
   }, [cwd]);
 
   useEffect(() => {
@@ -384,17 +467,67 @@ export function CodingWorkbench({
         </button>
       </header>
 
-      <nav className="coding-workbench__activity" aria-label="活动栏" />
+      <div className="coding-workbench__activity">
+        <ActivityBar
+          active={activityView}
+          onChange={setActivityView}
+          contextCount={contextPaths.length}
+        />
+      </div>
 
       <aside className="coding-workbench__explorer" aria-label="资源管理器">
-        <FileTreeView
-          rootPath={cwd}
-          selectedPath={activeTabId ?? undefined}
-          selectedDirectoryPath={selectedDirectory}
-          onFileSelect={(path) => void openFile(path)}
-          onDirectorySelect={setSelectedDirectory}
-          onToast={onToast}
-        />
+        <div className="coding-explorer__heading">{EXPLORER_TITLES[activityView]}</div>
+        {activityView === "files" && (
+          <FileTreeView
+            rootPath={cwd}
+            selectedPath={activeTabId ?? undefined}
+            selectedDirectoryPath={selectedDirectory}
+            onFileSelect={(path) => void openFile(path)}
+            onDirectorySelect={setSelectedDirectory}
+            onToast={onToast}
+          />
+        )}
+        {activityView === "search" && (
+          <SearchView
+            root={cwd}
+            busy={replacing}
+            onOpenHit={(hit) => {
+              void openFile(workspaceFilePath(cwd, hit.path));
+              setReveal({ line: hit.line, column: hit.column, key: Date.now() });
+            }}
+            onReplaceAll={replaceAcrossHits}
+          />
+        )}
+        {activityView === "changes" && (
+          <ChangeSetView
+            changeSet={null}
+            hasTask={false}
+            onOpenDiff={() => notImplemented("变更差异")}
+            onDiscard={() => notImplemented("丢弃改动")}
+            onCommit={() => notImplemented("提交变更")}
+            onRollback={() => notImplemented("任务回滚")}
+          />
+        )}
+        {activityView === "symbols" && (
+          <SymbolView
+            symbols={symbols}
+            activeFileName={activeFileName}
+            onOpenSymbol={(symbol) => {
+              void openFile(symbol.path);
+              setReveal({ line: symbol.line, column: 1, key: Date.now() });
+            }}
+          />
+        )}
+        {activityView === "context" && (
+          <ContextPackView
+            paths={contextPaths}
+            activePath={activeRelativePath}
+            onAdd={(path) => setContextPaths((current) => [...new Set([...current, path])])}
+            onRemove={(path) =>
+              setContextPaths((current) => current.filter((entry) => entry !== path))
+            }
+          />
+        )}
       </aside>
 
       <div
