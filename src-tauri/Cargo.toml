@@ -48,6 +48,7 @@ echo-agent-acp = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-
 echo-agent-runtime = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-runtime" }
 echo-agent-memory = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-memory" }
 echo-agent-tools = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-tools" }
+echo-agent-pty = { path = "../vendor/echo-agent-build/crates/codegen/echo-agent-pty" }
 echo-agent-tool-runtime = { path = "../vendor/echo-agent-build/crates/common/echo-agent-tool-runtime" }
 echo-agent-tool-protocol = { path = "../vendor/echo-agent-build/crates/common/echo-agent-tool-protocol" }
 echo-agent-tool-types = { path = "../vendor/echo-agent-build/crates/common/echo-agent-tool-types" }

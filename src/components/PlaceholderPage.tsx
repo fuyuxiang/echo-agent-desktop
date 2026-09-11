@@ -2,6 +2,9 @@ import { lazy, Suspense, useState, type ReactNode } from "react";
 import { AgentToolIcon } from "@/foundation/components/Icon/icons";
 import type { ProjectMeta } from "@/stores/projects-store";
 import { openExternalUrl, openLocalPath } from "@/lib/agent-client";
+import type { WorkspaceInfo } from "@/lib/agent-client";
+import type { ModelOption } from "./ModelSelector";
+import type { CodingAgentMode } from "@/lib/coding-workspace";
 
 const ProjectsPanel = lazy(() =>
   import("./ProjectsPanel").then((module) => ({ default: module.ProjectsPanel })),
@@ -39,6 +42,9 @@ const CloudStoragePanel = lazy(() =>
 const OrganizationMemoryPanel = lazy(() =>
   import("./OrganizationMemoryPanel").then((module) => ({ default: module.OrganizationMemoryPanel })),
 );
+const CodingWorkspacePage = lazy(() =>
+  import("./coding-workspace/CodingWorkspacePage").then((module) => ({ default: module.CodingWorkspacePage })),
+);
 
 function DeferredPanel({ children }: { children: ReactNode }) {
   return (
@@ -68,6 +74,23 @@ interface PlaceholderPageProps {
   cwd?: string;
   /** Switch the active workspace (projects panel). */
   onSelectWorkspace?: (cwd: string) => void;
+  /** Known working directories for the Coding Workspace picker. */
+  workspaces?: WorkspaceInfo[];
+  /** Coding Workspace Agent/runtime integration. */
+  codingApiReady?: boolean;
+  codingModels?: ModelOption[];
+  codingModelId?: string;
+  onOpenModelSettings?: () => void;
+  onExitCodingWorkspace?: () => void;
+  onStartCodingRun?: (
+    root: string,
+    prompt: string,
+    displayText: string,
+    options: { mode: CodingAgentMode; modelId?: string },
+  ) => Promise<string | undefined>;
+  onResumeCodingRun?: (sessionId: string, root: string) => Promise<boolean>;
+  onSendCodingMessage?: (promptText: string, displayText?: string) => boolean | void | Promise<boolean | void>;
+  onCancelCodingRun?: () => void;
   /** Current session id (for plugins/marketplace actions that need a session). */
   sessionId?: string;
   /** 项目页：进入项目（新建会话并注入说明）。 */
@@ -90,6 +113,16 @@ export function PlaceholderPage({
   onToast,
   cwd,
   onSelectWorkspace,
+  workspaces,
+  codingApiReady,
+  codingModels,
+  codingModelId,
+  onOpenModelSettings,
+  onExitCodingWorkspace,
+  onStartCodingRun,
+  onResumeCodingRun,
+  onSendCodingMessage,
+  onCancelCodingRun,
   sessionId,
   onStartProject,
   onStartProjectConversation,
@@ -139,6 +172,28 @@ export function PlaceholderPage({
           onOpenSession={onOpenSession}
           cwd={cwd}
           refreshSignal={automationRefreshSignal}
+        />
+      </DeferredPanel>
+    );
+  }
+
+  if (label === "代码开发") {
+    return (
+      <DeferredPanel>
+        <CodingWorkspacePage
+          cwd={cwd}
+          workspaces={workspaces}
+          onSelectWorkspace={onSelectWorkspace}
+          onToast={onToast}
+          apiReady={codingApiReady}
+          models={codingModels}
+          defaultModelId={codingModelId}
+          onOpenSettings={onOpenModelSettings}
+          onExit={onExitCodingWorkspace}
+          onStartRun={onStartCodingRun}
+          onResumeRun={onResumeCodingRun}
+          onSend={onSendCodingMessage}
+          onCancel={onCancelCodingRun}
         />
       </DeferredPanel>
     );

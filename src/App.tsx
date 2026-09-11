@@ -107,6 +107,7 @@ import {
   createAgentPromptId,
   isAgentPromptSettled,
 } from "./lib/agent-turn";
+import type { CodingAgentMode } from "./lib/coding-workspace";
 import {
   isAgentOwnedActiveStatus,
   isWaitingForUser,
@@ -217,6 +218,8 @@ function Shell() {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   /** Workspace selected for the next session; independent of the active session cwd. */
   const [newSessionTargetCwd, setNewSessionTargetCwd] = useState("");
+  /** Repository owned by the dedicated Coding Workspace. */
+  const [codingWorkspaceCwd, setCodingWorkspaceCwd] = useState("");
   const [cancellingSessionId, setCancellingSessionId] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const modelsRef = useRef<ModelOption[]>([]);
@@ -943,6 +946,16 @@ function Shell() {
     }
     selectionGenerationRef.current += 1;
     setPlaceholderView(label);
+    if (label === "代码开发") {
+      // Enter from the active task's repository when one exists. Subsequent
+      // switches are kept in codingWorkspaceCwd and do not get overwritten by
+      // whichever Agent session currently has global focus.
+      setCodingWorkspaceCwd((current) => current || activeSessionCwd || newSessionTargetCwd);
+      // Coding owns its own repository explorer, so recover horizontal space
+      // while keeping the global sidebar one click away via the floating rail.
+      setSidebarCollapsed(true);
+      return;
+    }
     // Personal memory is an inspector for the active session, not a separate
     // navigation context. Keep both stores focused so the panel can address the
     // live session for flush/dream and resolve its authoritative workspace cwd.
@@ -1052,6 +1065,7 @@ function Shell() {
     text: string,
     attachments: string[] = [],
     queueItemId?: string,
+    promptTextOverride?: string,
   ): Promise<boolean> => {
     if (!text.trim() && attachments.length === 0) return false;
     if (!currentSessionId) return handleSendNew(text, attachments);
@@ -1102,9 +1116,9 @@ function Shell() {
       const isFirstUserTurn = !sessionStore.getState().messages.some(
         (message) => message.role === "user",
       );
-      const textForAgent = project && isFirstUserTurn
+      const textForAgent = promptTextOverride ?? (project && isFirstUserTurn
         ? buildProjectPrompt(project, sendText)
-        : sendText;
+        : sendText);
       const accepted = beginAgentTurn({
         sessionId,
         promptText: textForAgent,
@@ -1145,6 +1159,61 @@ function Shell() {
       sessionStore.getState().setError(friendlyError(e));
       sessionsStore.getState().upsert({ sessionId, status: "failed" });
       return false;
+    }
+  };
+
+  /** Start an Agent session without leaving the dedicated Coding Workspace. */
+  const handleStartCodingRun = async (
+    root: string,
+    prompt: string,
+    displayText: string,
+    options: { mode: CodingAgentMode; modelId?: string },
+  ): Promise<string | undefined> => {
+    setCodingWorkspaceCwd(root);
+    const modelId = isConfiguredModelId(models, options.modelId)
+      ? options.modelId
+      : requireConfiguredModel();
+    if (!modelId || !ensureQuotaAllowsSend()) return undefined;
+    const permissionState = usePermissionModeStore.getState();
+    const configuredPermissionMode = permissionState.capabilityStatus?.locked
+      ? permissionState.capabilityStatus.permissionMode
+      : permissionState.homeMode;
+    // Ask is a read-oriented coding mode. Keeping permission mode at `ask`
+    // gives it a native safety boundary if a model ignores the read-only prompt.
+    const permissionMode = options.mode === "ask" ? "ask" : configuredPermissionMode;
+    let sessionId: string | undefined;
+    try {
+      sessionId = await agentNewSession(root, modelId, permissionMode);
+      useKnowledgeStore.getState().bindSessionSources(sessionId, true);
+      setCurrentModelId(modelId);
+      sessionsStore.getState().setCurrent(sessionId);
+      sessionsStore.getState().upsert({
+        sessionId,
+        title: `${options.mode === "ask" ? "代码问答" : options.mode === "craft" ? "快速开发" : "代码开发"}：${deriveTitle(displayText)}`,
+        cwd: root,
+        status: "planning",
+        currentModelId: modelId,
+        permissionMode,
+      });
+      sessionStore.getState().setSession(sessionId);
+      setPlaceholderView("代码开发");
+      // Plan has a real native approval boundary. Ask/Craft intentionally stay
+      // in ordinary mode, matching their read-only/direct-edit product contract.
+      await togglePlanMode(sessionId, options.mode === "plan");
+      const accepted = beginAgentTurn({
+        sessionId,
+        promptText: prompt,
+        displayText,
+      });
+      if (!accepted) throw new Error("代码开发会话未能获得前台焦点");
+      usePermissionModeStore.getState().resetHomeMode();
+      return sessionId;
+    } catch (error) {
+      if (sessionId) {
+        sessionsStore.getState().upsert({ sessionId, status: "failed" });
+      }
+      showToast(`启动代码开发失败：${friendlyError(error)}`, 6000);
+      return undefined;
     }
   };
 
@@ -1413,6 +1482,19 @@ function Shell() {
     setWorkspaces(next);
   };
 
+  const handleSelectCodingWorkspace = (newCwd: string) => {
+    setCodingWorkspaceCwd(newCwd);
+    if (!newCwd) return;
+    // Keep the IDE repository independent from the ordinary chat composer's
+    // "next session" cwd. It still belongs in recent workspaces, but leaving
+    // Coding must not silently retarget an unrelated new chat.
+    const current = sessionsStore.getState().workspaces;
+    if (current.some((workspace) => workspace.cwd === newCwd)) return;
+    const next = [{ cwd: newCwd, sessionCount: 0 }, ...current];
+    sessionsStore.getState().setWorkspaces(next);
+    setWorkspaces(next);
+  };
+
   const handleNewSession = () => {
     selectionGenerationRef.current += 1;
     setPlaceholderView(null);
@@ -1603,6 +1685,22 @@ function Shell() {
       // ingested again. (No-op when there was no cached transcript to suppress.)
       sessionStore.getState().clearReplaySuppression(sessionId);
     }
+  };
+
+  /** Reload a persisted coding run, then return to the workspace shell. */
+  const handleResumeCodingRun = async (sessionId: string, root: string): Promise<boolean> => {
+    setCodingWorkspaceCwd(root);
+    await handleSelectSession(sessionId, root);
+    const loaded = sessionsStore.getState().currentSessionId === sessionId;
+    if (loaded) {
+      // History replay can legitimately end at an unterminated tool_call when
+      // the previous app process exited mid-turn. Close only that replay-built
+      // tail; cached live sessions remain untouched by the store guard.
+      sessionStore.getState().finalizeIncompleteReplay(sessionId);
+      setPlaceholderView("代码开发");
+      setSidebarCollapsed(true);
+    }
+    return loaded;
   };
 
   // Rewind rewrites the backend history, so our cached transcript is stale —
@@ -1944,8 +2042,10 @@ function Shell() {
 
   const activeNav = placeholderView ?? (currentSessionId ? "" : "新建任务");
 
+  const codingWorkspaceActive = placeholderView === "代码开发";
+
   return (
-    <div className={"app" + (IS_MACOS ? " app--macos" : "")}>
+    <div className={`app${IS_MACOS ? " app--macos" : ""}${codingWorkspaceActive ? " app--coding" : ""}`}>
       {/* macOS 使用系统原生 Overlay 标题栏(红绿灯 + 原生菜单栏),
           不再渲染自绘 TitleBar;Windows 保留窗口控制但隐藏左侧菜单区。 */}
       {!IS_MACOS && (
@@ -2025,7 +2125,7 @@ function Shell() {
               </div>
             </header>
           ) : (
-            sidebarCollapsed && (
+            sidebarCollapsed && !codingWorkspaceActive && (
               <div className="main-topbar-float">
                 <button
                   className="main-topbar__btn"
@@ -2089,9 +2189,27 @@ function Shell() {
                   onToast={showToast}
                   cwd={isMemoryResourceView(placeholderView)
                     ? activeSessionCwd || newSessionTargetCwd
-                    : newSessionTargetCwd}
-                  onSelectWorkspace={handleSelectWorkspace}
+                    : placeholderView === "代码开发"
+                      ? codingWorkspaceCwd || activeSessionCwd || newSessionTargetCwd
+                      : newSessionTargetCwd}
+                  onSelectWorkspace={placeholderView === "代码开发"
+                    ? handleSelectCodingWorkspace
+                    : handleSelectWorkspace}
+                  workspaces={workspaces}
                   sessionId={currentSessionId ?? undefined}
+                  codingApiReady={!!init.auth.ready && !!newSessionModelId}
+                  codingModels={models}
+                  codingModelId={newSessionModelId}
+                  onOpenModelSettings={() => openSettings("model")}
+                  onExitCodingWorkspace={() => {
+                    setPlaceholderView(null);
+                    setSidebarCollapsed(false);
+                  }}
+                  onStartCodingRun={handleStartCodingRun}
+                  onResumeCodingRun={handleResumeCodingRun}
+                  onSendCodingMessage={(promptText, displayText) =>
+                    handleSendCurrent(displayText ?? promptText, [], undefined, promptText)}
+                  onCancelCodingRun={() => void handleCancel("stop")}
                   onStartProject={handleStartProject}
                   onStartProjectConversation={handleStartProjectConversation}
                   onRenameSession={handleRenameSession}

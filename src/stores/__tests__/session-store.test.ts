@@ -732,6 +732,67 @@ describe("session-store transcripts", () => {
     expect(textOf(1)).toBe("realLIVE");
   });
 
+  it("历史回放停在未完成工具调用时关闭假运行状态", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.applyUpdate({
+      sessionUpdate: "user_message_chunk",
+      content: { type: "text", text: "生成99乘法表" },
+      _meta: { promptIndex: 3, isReplay: true },
+      __sessionId: "A",
+    } as never);
+    s.applyUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "write-plan",
+      title: "Write plan.md",
+      kind: "edit",
+      status: "in_progress",
+      content: [],
+      _meta: { promptIndex: 3, isReplay: true },
+      __sessionId: "A",
+    } as never);
+
+    expect(useSessionStore.getState().streaming).toBe(true);
+    const replayMessages = useSessionStore.getState().messages;
+    expect(replayMessages[replayMessages.length - 1]).toMatchObject({
+      role: "assistant",
+      complete: false,
+      replayed: true,
+    });
+
+    s.finalizeIncompleteReplay("A");
+
+    const finalizedMessages = useSessionStore.getState().messages;
+    const assistant = finalizedMessages[finalizedMessages.length - 1];
+    expect(useSessionStore.getState().streaming).toBe(false);
+    expect(assistant).toMatchObject({
+      complete: true,
+      stopReason: "cancelled",
+      cancellationCategory: "session_replay_incomplete",
+    });
+    expect(assistant?.parts[0]).toMatchObject({
+      kind: "tool_call",
+      toolCall: { status: "failed" },
+    });
+  });
+
+  it("历史收尾不会误停缓存中的真实后台运行", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.pushUser("正在执行的任务");
+    s.startStreaming("A", "live-prompt");
+    s.applyUpdate(chunk("正在修改", "A"));
+
+    s.finalizeIncompleteReplay("A");
+
+    expect(useSessionStore.getState().streaming).toBe(true);
+    const liveMessages = useSessionStore.getState().messages;
+    expect(liveMessages[liveMessages.length - 1]).toMatchObject({
+      complete: false,
+      promptId: "live-prompt",
+    });
+  });
+
   it("stopStreaming 保留已流出内容并清 streaming 标志", () => {
     const s = useSessionStore.getState();
     s.setSession("A");

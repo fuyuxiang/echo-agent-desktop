@@ -44,6 +44,10 @@ export interface ChatMessage {
   /** Local wall-clock metadata for live turns. Historical replay may omit it. */
   startedAt?: number;
   completedAt?: number;
+  /** True only for an assistant reconstructed from durable history replay.
+   *  This lets the UI close a truncated historical tail without cancelling a
+   *  genuinely live turn that is still running in the background. */
+  replayed?: boolean;
   /** Terminal reason when the bridge supplied one (for cancelled/error UX). */
   stopReason?: string;
   cancelTrigger?: string;
@@ -184,6 +188,10 @@ interface SessionState {
   /** Re-enable replay ingestion for a session once its agentLoadSession call
    *  has finished (so a *new* turn's updates aren't suppressed). */
   clearReplaySuppression: (id?: string) => void;
+  /** Finish only a replay-created, unterminated historical tail after
+   *  agentLoadSession returns. A process exit can leave the durable log at a
+   *  tool_call with no turn_completed event; that must not look live forever. */
+  finalizeIncompleteReplay: (id?: string) => void;
 
   // --- transcript ops ---
   /** Append a user message (sent optimistically before the round-trip). */
@@ -386,6 +394,7 @@ function ensureStreamingAssistant(
   messages: ChatMessage[],
   streamingMessageId: string | null,
   promptId?: string,
+  replayed = false,
 ): { messages: ChatMessage[]; id: string } {
   // Reuse the existing streaming assistant message if it's still incomplete
   // and its last part isn't a terminal tool_call.
@@ -406,7 +415,7 @@ function ensureStreamingAssistant(
     parts: [],
     ...(promptId ? { promptId } : {}),
     complete: false,
-    startedAt: Date.now(),
+    ...(replayed ? { replayed: true } : { startedAt: Date.now() }),
   };
   return { messages: [...messages, asst], id };
 }
@@ -1143,6 +1152,56 @@ export const useSessionStore = create<SessionState>((set, get) => {
       );
     },
 
+    finalizeIncompleteReplay: (id) => {
+      const target = id ?? get().sessionId;
+      if (!target) return;
+      applyToTranscript(target, (transcript) => {
+        const activeId = transcript.streamingMessageId;
+        if (!activeId) return transcript;
+        const active = transcript.messages.find((message) => message.id === activeId);
+        // Cached live turns do not have replayed=true. Never terminate them:
+        // they may still be producing updates while the user changes pages.
+        if (!active?.replayed) return transcript;
+        const messages = transcript.messages.map((message) => {
+          if (message.id !== activeId) return message;
+          const parts = message.parts.map((part) => {
+            if (part.kind !== "tool_call" || part.toolCall.status !== "in_progress") {
+              return part;
+            }
+            return {
+              ...part,
+              toolCall: {
+                ...part.toolCall,
+                status: "failed" as const,
+                content: [
+                  ...part.toolCall.content,
+                  {
+                    type: "text" as const,
+                    text: "历史会话未记录该操作的完成结果；恢复时已结束此未完成轮次。",
+                  },
+                ],
+              },
+            };
+          });
+          return {
+            ...message,
+            parts,
+            complete: true,
+            stopReason: "cancelled",
+            cancellationCategory: "session_replay_incomplete",
+            agentResult: "上次执行在应用退出或 Runtime 中断前未留下完成事件，已结束历史恢复中的假运行状态。",
+          };
+        });
+        return {
+          ...transcript,
+          messages,
+          streamingMessageId: null,
+          pendingSendNowPromptId: null,
+          planApprovals: [],
+        };
+      });
+    },
+
     pushUser: (text, attachments = [], sessionId) => {
       const sid = sessionId ?? get().sessionId;
       if (!sid) return;
@@ -1285,6 +1344,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
               tr.messages,
               tr.streamingMessageId,
               tr.pendingSendNowPromptId ?? undefined,
+              isReplay,
             );
             const idx = messages.findIndex((m) => m.id === id);
             messages[idx] = appendText(messages[idx], "text", delta);
@@ -1302,6 +1362,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
               tr.messages,
               tr.streamingMessageId,
               tr.pendingSendNowPromptId ?? undefined,
+              isReplay,
             );
             const idx = messages.findIndex((m) => m.id === id);
             messages[idx] = appendText(messages[idx], "thought", delta);
@@ -1318,6 +1379,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
               tr.messages,
               tr.streamingMessageId,
               tr.pendingSendNowPromptId ?? undefined,
+              isReplay,
             );
             const idx = messages.findIndex((m) => m.id === id);
             // ACP omits `kind` when it's "other" and `status` when it's
