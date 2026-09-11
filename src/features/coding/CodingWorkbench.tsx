@@ -38,6 +38,9 @@ import {
   onVerificationUpdated,
 } from "./lib/tauri-api";
 import type { DetectedCommand, Problem } from "./lib/types";
+import { DeliveryReportTab } from "./main/docs/DeliveryReportTab";
+import { ProjectProfileTab } from "./main/docs/ProjectProfileTab";
+import { TaskDagTab } from "./main/docs/TaskDagTab";
 import { BottomPanel } from "./panels/BottomPanel";
 import { TabContainer } from "./main/TabContainer";
 import { ActivityBar } from "./shell/ActivityBar";
@@ -181,6 +184,8 @@ export function CodingWorkbench({
   const [runningVerification, setRunningVerification] = useState(false);
   const [commandOutput, setCommandOutput] = useState("");
   const [terminalActivated, setTerminalActivated] = useState(false);
+  /** Bumped whenever the task's evidence changes, so an open report reloads. */
+  const [reportRevision, setReportRevision] = useState(0);
 
   const task = useTaskStore((state) => state.task);
   const summaries = useTaskStore((state) => state.summaries);
@@ -210,6 +215,7 @@ export function CodingWorkbench({
       useTaskStore.getState().applyPhase(event.taskId, event.phase);
       setPhaseReason(event.reason);
       setBlocker(event.blocker ?? null);
+      setReportRevision((value) => value + 1);
       void useTaskStore.getState().refreshTaskState();
     }).then((unlisten) => {
       if (disposed) unlisten();
@@ -889,15 +895,33 @@ export function CodingWorkbench({
               [path]: list.map((symbol) => ({ ...symbol, path })),
             }))
           }
-          renderDoc={(kind) => (
-            <div className="coding-tabs__empty-body">
-              {kind === "delivery"
-                ? "交付报告将在后续版本接入"
-                : kind === "taskDag"
-                  ? "任务进度将在后续版本接入"
-                  : "工程画像将在后续版本接入"}
-            </div>
-          )}
+          renderDoc={(kind) => {
+            const openRelative = (path: string) => void openFile(workspaceFilePath(cwd, path));
+            if (kind === "delivery") {
+              return (
+                <DeliveryReportTab
+                  root={cwd}
+                  taskId={task?.id ?? null}
+                  revision={reportRevision}
+                  onOpenFile={openRelative}
+                  onToast={onToast}
+                />
+              );
+            }
+            if (kind === "taskDag") {
+              return (
+                <TaskDagTab
+                  task={task}
+                  repairRounds={orchestrator?.repairRounds ?? []}
+                  maxRepairRounds={orchestrator?.maxRepairRounds ?? 3}
+                  changedFileCount={taskChangeCount}
+                  problemCount={problems.length}
+                  onOpenFile={openRelative}
+                />
+              );
+            }
+            return <ProjectProfileTab root={cwd} onOpenFile={openRelative} />;
+          }}
         />
       </main>
 
