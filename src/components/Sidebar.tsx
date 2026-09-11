@@ -34,6 +34,7 @@ import {
   AgentMailIcon,
   CloudToolIcon,
   PluginsIcon,
+  Code2Icon,
 } from "@/foundation/components/Icon/icons";
 import { SessionContextMenu } from "./SessionContextMenu";
 import { useAppDialog } from "./AppDialog";
@@ -339,8 +340,7 @@ function handleMenuKeyDown(
 /**
  * "更多" 侧栏按钮的弹出菜单 — 对齐 EchoAgent：
  * - hover 打开，向右浮出（不向下盖住会话列表）
- * - 只展示保留的本地文件、个人记忆、知识库、插件市场、
- *   用量、通知与云存储入口。
+ * - 展示本地内容、代码开发、插件市场和系统工具入口。
  */
 function MoreDropdown({
   onNavigate,
@@ -445,6 +445,16 @@ function MoreDropdown({
       action: () => {
         setOpen(false);
         onNavigate("知识库");
+      },
+    },
+    {
+      id: "coding_workspace",
+      label: "代码开发",
+      group: "工具",
+      icon: <Code2Icon size="md" />,
+      action: () => {
+        setOpen(false);
+        onNavigate("代码开发");
       },
     },
     {

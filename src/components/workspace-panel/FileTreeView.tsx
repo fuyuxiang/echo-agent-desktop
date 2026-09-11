@@ -19,8 +19,12 @@ interface FileTreeViewProps {
   rootPath?: string;
   /** 当前选中的文件路径（高亮）。 */
   selectedPath?: string;
+  /** 代码工作台中用作新建位置的目录。 */
+  selectedDirectoryPath?: string;
   /** 选中文件回调。 */
   onFileSelect: (path: string) => void;
+  /** 可选的目录选中回调；不传时保持原有文件树行为。 */
+  onDirectorySelect?: (path: string) => void;
   /** 错误/提示回调。 */
   onToast?: (msg: string) => void;
 }
@@ -28,7 +32,9 @@ interface FileTreeViewProps {
 export function FileTreeView({
   rootPath,
   selectedPath,
+  selectedDirectoryPath,
   onFileSelect,
+  onDirectorySelect,
   onToast,
 }: FileTreeViewProps) {
   const [loaded, setLoaded] = useState<LoadedMap>(new Map());
@@ -114,8 +120,10 @@ export function FileTreeView({
           expanded={expanded}
           loaded={loaded}
           selectedPath={selectedPath}
+          selectedDirectoryPath={selectedDirectoryPath}
           onToggleDir={toggleDir}
           onFileSelect={onFileSelect}
+          onDirectorySelect={onDirectorySelect}
         />
       ))}
       {rootEntries.length === 0 && (
@@ -132,25 +140,32 @@ function TreeNode({
   expanded,
   loaded,
   selectedPath,
+  selectedDirectoryPath,
   onToggleDir,
   onFileSelect,
+  onDirectorySelect,
 }: {
   entry: DirEntry;
   depth: number;
   expanded: Set<string>;
   loaded: LoadedMap;
   selectedPath?: string;
+  selectedDirectoryPath?: string;
   onToggleDir: (path: string) => void;
   onFileSelect: (path: string) => void;
+  onDirectorySelect?: (path: string) => void;
 }) {
   const isDir = entry.kind === "directory";
   const isExpanded = expanded.has(entry.path);
-  const isSelected = entry.path === selectedPath;
+  const isSelected = entry.path === selectedPath || (isDir && entry.path === selectedDirectoryPath);
   const children = isDir ? loaded.get(entry.path) : undefined;
   const childLoading = isDir && isExpanded && children === undefined;
 
   const handleClick = () => {
-    if (isDir) onToggleDir(entry.path);
+    if (isDir) {
+      onDirectorySelect?.(entry.path);
+      onToggleDir(entry.path);
+    }
     else onFileSelect(entry.path);
   };
 
@@ -195,8 +210,10 @@ function TreeNode({
             expanded={expanded}
             loaded={loaded}
             selectedPath={selectedPath}
+            selectedDirectoryPath={selectedDirectoryPath}
             onToggleDir={onToggleDir}
             onFileSelect={onFileSelect}
+            onDirectorySelect={onDirectorySelect}
           />
         ))}
       {childLoading && (

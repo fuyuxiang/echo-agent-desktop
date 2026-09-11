@@ -1542,6 +1542,226 @@ export async function filesystemPickDirectory(): Promise<string | null> {
   return invoke<string | null>("filesystem_pick_directory");
 }
 
+/** Read a bounded UTF-8 text file from an authorized workspace. */
+export async function readTextFile(
+  path: string,
+  cwd?: string,
+  maxBytes = 2 * 1024 * 1024,
+): Promise<string> {
+  return invoke<string>("read_text_file", { path, cwd: cwd ?? null, maxBytes });
+}
+
+/** Atomically write a text file below the selected workspace root. */
+export async function writeTextFile(
+  path: string,
+  content: string,
+  workspaceRoot: string,
+): Promise<string> {
+  return invoke<string>("write_text_file", { path, content, workspaceRoot });
+}
+
+// ---------- dedicated Coding Workspace ----------
+
+export interface CodingLanguageStat {
+  language: string;
+  files: number;
+}
+
+export interface CodingModuleInfo {
+  name: string;
+  path: string;
+  kind: string;
+  dependencies: string[];
+}
+
+export interface CodingWorkspaceAnalysis {
+  root: string;
+  name: string;
+  projectType: string;
+  fileCount: number;
+  truncated: boolean;
+  languages: CodingLanguageStat[];
+  modules: CodingModuleInfo[];
+  validationCommands: string[];
+  hasGit: boolean;
+  gitBranch?: string;
+  gitChangedFiles: number;
+  instructionFiles: string[];
+  scannedAt: string;
+}
+
+export type CodingGitFileStatus = "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflict" | "ignored";
+
+export interface CodingGitFile {
+  path: string;
+  oldPath?: string;
+  status: CodingGitFileStatus;
+  staged: boolean;
+  unstaged: boolean;
+  untracked: boolean;
+  added: number;
+  removed: number;
+}
+
+export interface CodingGitSnapshot {
+  hasGit: boolean;
+  branch?: string;
+  head?: string;
+  files: CodingGitFile[];
+  totalAdded: number;
+  totalRemoved: number;
+  capturedAt: string;
+}
+
+export interface CodingDocument {
+  path: string;
+  relativePath: string;
+  content: string;
+  hash: string;
+  size: number;
+  modifiedAt: number;
+  language: string;
+  lineEnding: "LF" | "CRLF";
+}
+
+export interface CodingSearchHit {
+  path: string;
+  line: number;
+  column: number;
+  preview: string;
+}
+
+export interface CodingCommandResult {
+  runId?: string;
+  command: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  durationMs: number;
+  timedOut: boolean;
+  cancelled?: boolean;
+  truncated: boolean;
+}
+
+export interface CodingCommandOutputEvent {
+  runId: string;
+  stream: "stdout" | "stderr";
+  data: string;
+}
+
+export interface CodingTerminalEvent {
+  terminalId: string;
+  dataBase64: string;
+}
+
+export async function codingAnalyzeWorkspace(root: string): Promise<CodingWorkspaceAnalysis> {
+  return invoke<CodingWorkspaceAnalysis>("coding_analyze_workspace", { root });
+}
+
+export async function codingGitSnapshot(root: string): Promise<CodingGitSnapshot> {
+  return invoke<CodingGitSnapshot>("coding_git_snapshot", { root });
+}
+
+export async function codingGitDiff(root: string, path?: string): Promise<string> {
+  return invoke<string>("coding_git_diff", { root, path: path ?? null });
+}
+
+export async function codingGitSetStaged(
+  root: string,
+  path: string,
+  staged: boolean,
+): Promise<CodingGitSnapshot> {
+  return invoke<CodingGitSnapshot>("coding_git_set_staged", { root, path, staged });
+}
+
+export async function codingReadDocument(root: string, path: string): Promise<CodingDocument> {
+  return invoke<CodingDocument>("coding_read_document", { root, path });
+}
+
+export async function codingWriteDocument(
+  root: string,
+  path: string,
+  content: string,
+  expectedHash: string,
+): Promise<CodingDocument> {
+  return invoke<CodingDocument>("coding_write_document", {
+    request: { root, path, content, expectedHash },
+  });
+}
+
+export async function codingCreateEntry(
+  root: string,
+  parent: string,
+  name: string,
+  directory: boolean,
+): Promise<string> {
+  return invoke<string>("coding_create_entry", {
+    request: { root, parent, name, directory },
+  });
+}
+
+export async function codingSearchWorkspace(root: string, query: string): Promise<CodingSearchHit[]> {
+  return invoke<CodingSearchHit[]>("coding_search_workspace", { root, query });
+}
+
+export async function codingRunCommand(
+  root: string,
+  command: string,
+  runId?: string,
+  timeoutSecs = 180,
+): Promise<CodingCommandResult> {
+  return invoke<CodingCommandResult>("coding_run_command", {
+    request: { root, command, runId: runId ?? null, timeoutSecs },
+  });
+}
+
+export async function codingCancelCommand(runId: string): Promise<boolean> {
+  return invoke<boolean>("coding_cancel_command", { runId });
+}
+
+export function codingListenCommandOutput(
+  callback: (event: CodingCommandOutputEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<CodingCommandOutputEvent>("coding://command-output", (event) => callback(event.payload));
+}
+
+export async function codingTerminalCreate(
+  root: string,
+  cols: number,
+  rows: number,
+): Promise<string> {
+  const result = await invoke<{ terminalId: string }>("coding_terminal_create", { root, cols, rows });
+  return result.terminalId;
+}
+
+export async function codingTerminalWrite(terminalId: string, data: string): Promise<void> {
+  await invoke<void>("coding_terminal_write", { terminalId, data });
+}
+
+export async function codingTerminalResize(
+  terminalId: string,
+  cols: number,
+  rows: number,
+): Promise<void> {
+  await invoke<void>("coding_terminal_resize", { terminalId, cols, rows });
+}
+
+export async function codingTerminalClose(terminalId: string): Promise<boolean> {
+  return invoke<boolean>("coding_terminal_close", { terminalId });
+}
+
+export function codingListenTerminalOutput(
+  callback: (event: CodingTerminalEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<CodingTerminalEvent>("coding://terminal-output", (event) => callback(event.payload));
+}
+
+export function codingListenTerminalExit(
+  callback: (event: CodingTerminalEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<CodingTerminalEvent>("coding://terminal-exit", (event) => callback(event.payload));
+}
+
 /** Show the backend-owned native save dialog and export to its exact result.
  * The renderer never supplies the destination path, preventing a forged IPC
  * request from turning export into an arbitrary-file overwrite primitive. */
