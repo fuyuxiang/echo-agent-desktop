@@ -190,6 +190,40 @@ impl CodingProcesses {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Track a running command so it can be cancelled by id. Shared with the
+    /// verification engine, which is the single owner of command execution.
+    pub fn register(&self, run_id: &str, token: CancellationToken) -> Result<(), String> {
+        let mut commands = self
+            .commands
+            .lock()
+            .map_err(|_| "命令运行状态已损坏".to_string())?;
+        if commands.contains_key(run_id) {
+            return Err("命令运行标识已存在".into());
+        }
+        commands.insert(run_id.to_string(), token);
+        Ok(())
+    }
+
+    pub fn unregister(&self, run_id: &str) {
+        if let Ok(mut commands) = self.commands.lock() {
+            commands.remove(run_id);
+        }
+    }
+
+    pub fn cancel(&self, run_id: &str) -> Result<(), String> {
+        let commands = self
+            .commands
+            .lock()
+            .map_err(|_| "命令运行状态已损坏".to_string())?;
+        match commands.get(run_id) {
+            Some(token) => {
+                token.cancel();
+                Ok(())
+            }
+            None => Err("命令已结束或不存在".into()),
+        }
+    }
 }
 
 struct CodingTerminalSession {
@@ -1687,7 +1721,9 @@ fn dangerous_delete_target(raw: &str, workspace_root: &Path) -> bool {
 /// Defense in depth for the renderer-facing command endpoint. The UI already
 /// presents risk confirmation, but a forged IPC call must still be unable to
 /// execute commands that discard repositories or damage system paths.
-fn high_risk_command_reason(command: &str, workspace_root: &Path) -> Option<&'static str> {
+/// Public so the verification engine reuses this single high-risk policy rather
+/// than maintaining a second copy of the rules.
+pub fn high_risk_command_reason(command: &str, workspace_root: &Path) -> Option<&'static str> {
     let normalized = command.to_ascii_lowercase();
     let patterns = [
         (r"\bdd\s+[^\r\n]*\bof=/dev/", "禁止 dd 写入块设备"),
