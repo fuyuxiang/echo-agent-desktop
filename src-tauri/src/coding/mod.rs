@@ -3,3 +3,4 @@
 //! `coding_workspace` module so the workbench owns its own state.
 
 pub mod store;
+pub mod task;

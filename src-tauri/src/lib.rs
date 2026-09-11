@@ -488,6 +488,11 @@ pub fn run() {
             shell_fs::open_echo_agent_data_dir,
             // dedicated Coding Workspace: bounded repository analysis and
             // user-initiated validation commands inside an authorized root
+            coding::task::coding_task_list,
+            coding::task::coding_task_create,
+            coding::task::coding_task_get,
+            coding::task::coding_task_delete,
+            coding::task::coding_task_rename,
             coding_workspace::coding_analyze_workspace,
             coding_workspace::coding_git_snapshot,
             coding_workspace::coding_git_diff,
