@@ -4,6 +4,7 @@
 
 pub mod changeset;
 pub mod diagnostics;
+pub mod orchestrator;
 pub mod store;
 pub mod task;
 pub mod verification;
