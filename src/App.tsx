@@ -107,7 +107,7 @@ import {
   createAgentPromptId,
   isAgentPromptSettled,
 } from "./lib/agent-turn";
-import type { CodingAgentMode } from "./lib/coding-workspace";
+import type { CodingAgentRole, CodingExecutionStrategy } from "./lib/coding-workspace";
 import {
   isAgentOwnedActiveStatus,
   isWaitingForUser,
@@ -1167,7 +1167,7 @@ function Shell() {
     root: string,
     prompt: string,
     displayText: string,
-    options: { mode: CodingAgentMode; modelId?: string },
+    options: { mode: CodingAgentRole; strategy: CodingExecutionStrategy; modelId?: string },
   ): Promise<string | undefined> => {
     setCodingWorkspaceCwd(root);
     const modelId = isConfiguredModelId(models, options.modelId)
@@ -1189,7 +1189,7 @@ function Shell() {
       sessionsStore.getState().setCurrent(sessionId);
       sessionsStore.getState().upsert({
         sessionId,
-        title: `${options.mode === "ask" ? "代码问答" : options.mode === "craft" ? "快速开发" : "代码开发"}：${deriveTitle(displayText)}`,
+        title: `${options.mode === "ask" ? "代码问答" : options.mode === "debug" ? options.strategy === "plan" ? "调试计划" : "问题调试" : options.strategy === "plan" ? "开发计划" : "代码开发"}：${deriveTitle(displayText)}`,
         cwd: root,
         status: "planning",
         currentModelId: modelId,
@@ -1197,9 +1197,9 @@ function Shell() {
       });
       sessionStore.getState().setSession(sessionId);
       setPlaceholderView("代码开发");
-      // Plan has a real native approval boundary. Ask/Craft intentionally stay
-      // in ordinary mode, matching their read-only/direct-edit product contract.
-      await togglePlanMode(sessionId, options.mode === "plan");
+      // Planning is an execution strategy independent from the Agent's role.
+      // It keeps the native approval boundary for both Code and Debug work.
+      await togglePlanMode(sessionId, options.strategy === "plan");
       const accepted = beginAgentTurn({
         sessionId,
         promptText: prompt,

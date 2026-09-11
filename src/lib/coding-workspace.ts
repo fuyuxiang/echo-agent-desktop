@@ -15,12 +15,15 @@ export const CODING_DOC_PATHS = {
 
 export type CodingDocLevel = keyof typeof CODING_DOC_PATHS;
 
-export type CodingAgentMode = "ask" | "craft" | "plan";
+export type CodingAgentRole = "ask" | "craft" | "debug";
+/** Includes the legacy `plan` value so persisted sessions and callers migrate safely. */
+export type CodingAgentMode = CodingAgentRole | "plan";
+export type CodingExecutionStrategy = "direct" | "plan";
 
 export type CodingRequestIntent = "read" | "write" | "unknown";
 
 export interface CodingModeResolution {
-  mode: CodingAgentMode;
+  mode: CodingAgentRole;
   intent: CodingRequestIntent;
   autoAdjusted: boolean;
 }
@@ -97,7 +100,8 @@ export interface CodingRunSnapshot {
   sessionId?: string;
   startedAt?: string;
   docLevels: CodingDocLevel[];
-  mode: CodingAgentMode;
+  mode: CodingAgentRole;
+  strategy: CodingExecutionStrategy;
   modelId?: string;
   contextPaths: string[];
   reviewedFiles: string[];
@@ -174,11 +178,12 @@ export function resolveCodingModeForRequest(
   requestedMode: CodingAgentMode,
   text: string,
 ): CodingModeResolution {
+  const normalizedMode: CodingAgentRole = requestedMode === "plan" ? "craft" : requestedMode;
   const intent = inferCodingRequestIntent(text);
-  if (requestedMode === "ask" && intent === "write") {
+  if (normalizedMode === "ask" && intent === "write") {
     return { mode: "craft", intent, autoAdjusted: true };
   }
-  return { mode: requestedMode, intent, autoAdjusted: false };
+  return { mode: normalizedMode, intent, autoAdjusted: false };
 }
 
 /**
@@ -190,6 +195,7 @@ export function inspectCodingRun(options: {
   messages: ChatMessage[];
   streaming: boolean;
   mode: CodingAgentMode;
+  strategy?: CodingExecutionStrategy;
   plan: Plan | null;
   awaitingQuestion?: boolean;
   awaitingPermission?: boolean;
@@ -199,6 +205,8 @@ export function inspectCodingRun(options: {
   changedFileCount?: number;
   hasGit?: boolean;
 }): CodingRunHealth {
+  const role: CodingAgentRole = options.mode === "plan" ? "craft" : options.mode;
+  const strategy = options.strategy ?? (options.mode === "plan" ? "plan" : "direct");
   // Status and auto-stop belong to the active/latest user turn. Looking at the
   // full persisted transcript made a successful model switch inherit dozens of
   // failures from an older model and permanently display a false red state.
@@ -326,7 +334,7 @@ export function inspectCodingRun(options: {
   if (options.streaming) {
     const phase: CodingRunPhase = isVerification
       ? "verifying"
-      : options.mode === "plan" && tasks.length === 0
+      : strategy === "plan" && tasks.length === 0
         ? calls.length > 0 ? "analyzing" : "planning"
         : calls.length > 0 ? "implementing" : "preparing";
     const label = {
@@ -334,7 +342,7 @@ export function inspectCodingRun(options: {
       analyzing: "正在分析代码库",
       planning: "正在拆解任务",
       implementing: "正在修改代码",
-      verifying: "正在验证结果",
+      verifying: "正在检查结果",
     }[phase] ?? "Agent 正在工作";
     return {
       phase,
@@ -370,7 +378,7 @@ export function inspectCodingRun(options: {
     };
   }
 
-  if (options.mode === "plan" && turnMessages.length > 0 && tasks.length === 0 && lastAssistant?.complete) {
+  if (strategy === "plan" && turnMessages.length > 0 && tasks.length === 0 && lastAssistant?.complete) {
     return {
       phase: "failed",
       label: "计划生成失败",
@@ -398,7 +406,7 @@ export function inspectCodingRun(options: {
     .join("\n") ?? "";
   const turnIntent = inferCodingRequestIntent(latestUserText);
   const requirementIntent = inferCodingRequestIntent(options.requirement ?? "");
-  const implementationExpected = options.mode === "craft"
+  const implementationExpected = (role === "craft" || role === "debug")
     && (turnIntent === "write" || (turnIntent === "unknown" && requirementIntent === "write"));
   const hasMutatingTool = calls.some((call) =>
     call.status === "completed"
@@ -431,7 +439,7 @@ export function inspectCodingRun(options: {
   return {
     phase: hasAssistantText || completedToolCount > 0 ? "completed" : "idle",
     label: hasAssistantText || completedToolCount > 0 ? "本轮已完成" : "等待开始",
-    detail: hasAssistantText || completedToolCount > 0 ? "请审查代码变更并运行验证。" : "输入开发需求开始工作。",
+    detail: hasAssistantText || completedToolCount > 0 ? "请审查代码变更，必要时运行项目检查。" : "输入开发需求开始工作。",
     toolCount: calls.length,
     completedToolCount,
     failedToolCount: failedCalls.length,
@@ -591,11 +599,14 @@ export function buildCodingAgentPrompt(
   analysis?: CodingWorkspaceAnalysis | null,
   options: {
     mode?: CodingAgentMode;
+    strategy?: CodingExecutionStrategy;
     contextPaths?: string[];
     baselineGit?: CodingGitSnapshot | null;
   } = {},
 ): string {
-  const mode = options.mode ?? "plan";
+  const requestedMode = options.mode ?? "craft";
+  const mode: CodingAgentRole = requestedMode === "plan" ? "craft" : requestedMode;
+  const strategy = options.strategy ?? (requestedMode === "plan" ? "plan" : "direct");
   const moduleContext = analysis?.modules.length
     ? analysis.modules.map((module) => `- ${module.name} (${module.kind}, ${module.path})`).join("\n")
     : "- 请自行扫描并识别工程模块";
@@ -612,7 +623,7 @@ export function buildCodingAgentPrompt(
   const existingChanges = options.baselineGit?.files.length
     ? options.baselineGit.files.map((file) => `- ${file.path}（任务开始前已${file.status}）`).join("\n")
     : "- 无已知的任务前 Git 变更";
-  const modeProtocol: Record<CodingAgentMode, string[]> = {
+  const modeProtocol: Record<CodingAgentRole, string[]> = {
     ask: [
       "当前为 Ask 模式：只读取、搜索、解释和给出建议，不写文件、不执行会改变工作区状态的命令。",
       "结论必须引用具体文件或符号；信息不足时明确指出还需读取什么。",
@@ -622,9 +633,10 @@ export function buildCodingAgentPrompt(
       "如果需求要求创建、修改或修复代码，必须使用工具把结果写入当前工作区；不得只在聊天中返回示例代码。",
       "控制修改范围，完成后必须展示变更摘要并执行最相关的验证。",
     ],
-    plan: [
-      "当前为 Plan 模式：任何写入前必须提交结构化计划并等待用户批准。",
-      "每项计划使用 `[T1][depends:none][files:path1,path2] 描述`，标明依赖、预计文件和验证方式。",
+    debug: [
+      "当前为 Debug 模式：先复现问题、读取错误链路并形成根因假设，再做最小范围修复。",
+      "必须区分现象与根因；优先检查日志、调用链、边界输入和最近变更，不进行无证据的试错式改写。",
+      "修复后运行能够覆盖原始失败路径的检查，并在最终答复中说明根因、改动与复现结果。",
     ],
   };
   return [
@@ -645,24 +657,27 @@ export function buildCodingAgentPrompt(
     "## 任务开始前的未提交变更（必须保护）",
     existingChanges,
     "",
-    "## 建议质量验证",
+    "## 建议运行命令",
     validations,
     "",
-    "## 验收标准",
+    "## 完成条件",
     acceptance,
     "",
     "## 必须遵守的执行协议",
     "1. 先读取适用的 AGENTS.md/工程规则、构建文件、相关符号与测试，必要时使用代码搜索或代码库图确认调用关系。",
     "2. 优先启用与当前技术栈匹配的已安装 Coding Skill；Skill 只提供工程约束，代码读写、命令、权限与取消仍由当前 Agent Runtime 统一执行。",
     ...modeProtocol[mode].map((rule, index) => `${index + 3}. ${rule}`),
-    "5. 每次工具调用必须携带符合工具 schema 的完整 JSON arguments。调用 list_dir 必须包含 target_directory，read_file 必须包含 target_file，run_terminal_command 必须包含 command；不得提交空 arguments，连续失败时立即停止并说明模型兼容问题。",
-    "6. 尽量使用小范围 apply_patch；修改前重读目标区域，不覆盖任务开始前已有的未提交改动，不修改与需求无关的功能。",
-    "7. 生成代码必须遵循现有架构、命名、错误处理和安全约定；优先复用现有抽象，不引入无必要依赖。",
-    "8. 变更后执行适用的格式化、类型/编译检查、静态检查和测试；只能根据真实退出码声明通过。",
-    "9. 实施型需求的完成条件是文件已真实落盘且已执行至少一项最相关验证；只输出代码块、只建议用户自行保存，或未读取真实工程都不算完成。",
-    "10. 验证失败时先定位根因，再做最小修复；最多自动修复 3 轮，仍失败则保留日志并报告阻塞。",
-    "11. 仅当公开接口、复杂业务规则或架构确有变更时更新相关源码注释与项目文档；禁止生成重复代码字面含义的废话注释。",
-    "12. 最终逐条核对验收标准，列出 Git 变更、执行命令、测试结果和剩余风险；未运行的验证必须明确标记。",
+    strategy === "plan"
+      ? "5. 当前执行方式为先制定计划：研究代码库后提交可审批的结构化计划；每项使用 `[T1][depends:none][files:path1,path2] 描述`，批准前不得写入业务文件。"
+      : "5. 当前执行方式为直接执行：在获得最小充分上下文后自主完成任务，不需要额外提交计划审批。",
+    "6. 每次工具调用必须携带符合工具 schema 的完整 JSON arguments。调用 list_dir 必须包含 target_directory，read_file 必须包含 target_file，run_terminal_command 必须包含 command；不得提交空 arguments，连续失败时立即停止并说明模型兼容问题。",
+    "7. 尽量使用小范围 apply_patch；修改前重读目标区域，不覆盖任务开始前已有的未提交改动，不修改与需求无关的功能。",
+    "8. 生成代码必须遵循现有架构、命名、错误处理和安全约定；优先复用现有抽象，不引入无必要依赖。",
+    "9. 变更后执行适用的格式化、类型/编译检查、静态检查和测试；只能根据真实退出码声明通过。",
+    "10. 实施型需求的完成条件是文件已真实落盘且已执行至少一项最相关检查；只输出代码块、只建议用户自行保存，或未读取真实工程都不算完成。",
+    "11. 检查失败时先定位根因，再做最小修复；最多自动修复 3 轮，仍失败则保留日志并报告阻塞。",
+    "12. 仅当公开接口、复杂业务规则或架构确有变更时更新相关源码注释与项目文档；禁止生成重复代码字面含义的废话注释。",
+    "13. 最终逐条核对完成条件，列出 Git 变更、执行命令、测试结果和剩余风险；未运行的检查必须明确标记。",
   ].join("\n");
 }
 
@@ -683,16 +698,20 @@ export function buildCodingFollowupPrompt(
   text: string,
   mode: CodingAgentMode,
   contextPaths: string[],
+  strategy: CodingExecutionStrategy = mode === "plan" ? "plan" : "direct",
 ): string {
-  const contract = mode === "ask"
+  const role: CodingAgentRole = mode === "plan" ? "craft" : mode;
+  const contract = role === "ask"
     ? "Ask 模式：只读分析，不修改文件或运行会改变工作区状态的命令。"
-    : mode === "craft"
+    : role === "craft"
       ? "Craft 模式：针对当前要求直接完成最小范围修改，并验证真实结果。"
-      : "Plan 模式：若要求改变实施范围，先更新计划并等待批准，再继续修改。";
+      : "Debug 模式：先复现和定位根因，再完成最小修复并检查原始失败路径。";
   return [
-    `<coding-mode>${mode}</coding-mode>`,
+    `<coding-mode>${role}</coding-mode>`,
+    `<coding-strategy>${strategy}</coding-strategy>`,
     contract,
-    mode === "craft" ? "实施型要求必须使用工具写入当前工作区并运行验证，不得只返回可复制的示例代码。" : "",
+    strategy === "plan" ? "如果补充要求改变了实施范围，先更新计划并等待批准。" : "",
+    role === "craft" || role === "debug" ? "实施型要求必须使用工具写入当前工作区并运行检查，不得只返回可复制的示例代码。" : "",
     contextPaths.length > 0 ? `优先检查这些上下文：${contextPaths.join("、")}` : "",
     "工具调用必须提供符合 schema 的完整 JSON 参数；如果当前模型无法提供工具参数，立即停止并明确报告兼容问题。",
     "",
@@ -836,17 +855,17 @@ export function deriveQualityGates(options: {
     ? tasksComplete && (tasks.length === 1 || hasStructuredDependencies)
       ? "satisfied"
       : tasks.length > 0 ? "in_progress" : "not_satisfied"
-    : mode === "craft"
+    : mode === "craft" || mode === "debug"
       ? completedAssistantTurn && substantiveChanges.length > 0
         ? "satisfied"
         : options.messages.length > 0 || substantiveChanges.length > 0 ? "in_progress" : "not_satisfied"
       : completedAssistantTurn
         ? "satisfied"
         : options.messages.length > 0 ? "in_progress" : "not_satisfied";
-  const workflowTitle = mode === "plan" ? "计划与执行闭环" : mode === "craft" ? "实施与交付闭环" : "只读分析闭环";
+  const workflowTitle = mode === "plan" ? "计划与执行闭环" : mode === "craft" || mode === "debug" ? "实施与交付闭环" : "只读分析闭环";
   const workflowSummary = mode === "plan"
     ? `${tasks.length} 个任务节点，${tasks.filter((task) => task.status === "completed").length} 个已完成`
-    : mode === "craft"
+    : mode === "craft" || mode === "debug"
       ? completedAssistantTurn && substantiveChanges.length > 0 ? `Agent 已交付 ${substantiveChanges.length} 个变更文件` : "等待 Agent 完成代码修改与结果总结"
       : completedAssistantTurn ? "Agent 已完成只读分析并返回结论" : "等待 Agent 返回可引用的代码分析";
 
@@ -872,7 +891,7 @@ export function deriveQualityGates(options: {
       summary: workflowSummary,
       evidence: mode === "plan"
         ? tasks.slice(0, 10).map((task) => `${task.id}${task.dependencies.length ? ` ← ${task.dependencies.join(", ")}` : ""}：${task.content}`)
-        : completedAssistantTurn ? [`${mode === "ask" ? "Ask" : "Craft"} Agent 已结束当前轮次`] : [],
+        : completedAssistantTurn ? [`${mode === "ask" ? "Ask" : mode === "debug" ? "Debug" : "Code"} Agent 已结束当前轮次`] : [],
     },
     {
       id: "validation",
@@ -1045,6 +1064,10 @@ export function loadCodingSnapshot(root: string): CodingRunSnapshot | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(snapshotKey(root)) ?? "null") as unknown;
     if (!isRecord(parsed) || parsed.root !== root || (parsed.version !== 1 && parsed.version !== 2)) return null;
+    const mode: CodingAgentRole = parsed.mode === "ask" || parsed.mode === "craft" || parsed.mode === "debug" ? parsed.mode : "craft";
+    const strategy: CodingExecutionStrategy = parsed.strategy === "plan" || parsed.strategy === "direct"
+      ? parsed.strategy
+      : parsed.mode === "plan" ? "plan" : "direct";
     return {
       version: 2,
       root,
@@ -1056,7 +1079,8 @@ export function loadCodingSnapshot(root: string): CodingRunSnapshot | null {
       docLevels: Array.isArray(parsed.docLevels)
         ? parsed.docLevels.filter((level): level is CodingDocLevel => level === "function" || level === "module" || level === "system")
         : [],
-      mode: parsed.mode === "ask" || parsed.mode === "craft" || parsed.mode === "plan" ? parsed.mode : "craft",
+      mode,
+      strategy,
       modelId: typeof parsed.modelId === "string" ? parsed.modelId : undefined,
       contextPaths: Array.isArray(parsed.contextPaths)
         ? parsed.contextPaths.filter((path): path is string => typeof path === "string").slice(0, 30)
