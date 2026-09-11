@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn(async (command: string, _args?: unknown) => {
@@ -16,6 +17,7 @@ vi.mock("@/components/workspace-panel/FileTreeView", () => ({
 }));
 vi.mock("@/lib/agent-client", () => ({
   filesystemPickDirectory: vi.fn(async () => "/picked"),
+  listDir: vi.fn(async () => []),
 }));
 
 import { CodingWorkbench } from "../CodingWorkbench";
@@ -51,6 +53,38 @@ describe("CodingWorkbench skeleton", () => {
     render(<CodingWorkbench cwd="/repo" models={[]} />);
     await screen.findByRole("navigation", { name: "活动栏" });
     expect(screen.queryByRole("tablist", { name: "开发工具面板" })).not.toBeInTheDocument();
+  });
+
+  it("opens the command palette from the top bar", async () => {
+    const user = userEvent.setup();
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await user.click(await screen.findByRole("button", { name: "打开命令面板" }));
+    expect(screen.getByRole("dialog", { name: "命令面板" })).toBeInTheDocument();
+  });
+
+  it("binds command, quick-open and symbol shortcuts", async () => {
+    const user = userEvent.setup();
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+
+    // ⌘⇧P opens command mode; ⌘K is left to the application's session search.
+    await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
+    expect(screen.getByRole("tab", { name: "命令", selected: true })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await user.keyboard("{Meta>}p{/Meta}");
+    expect(screen.getByRole("tab", { name: "文件", selected: true })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await user.keyboard("{Meta>}t{/Meta}");
+    expect(screen.getByRole("tab", { name: "符号", selected: true })).toBeInTheDocument();
+  });
+
+  it("does not bind shortcuts before a workspace is open", async () => {
+    const user = userEvent.setup();
+    render(<CodingWorkbench cwd="" models={[]} />);
+    await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
+    expect(screen.queryByRole("dialog", { name: "命令面板" })).not.toBeInTheDocument();
   });
 
   it("applies persisted pane widths as CSS variables", async () => {

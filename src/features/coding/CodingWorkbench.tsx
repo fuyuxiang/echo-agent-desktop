@@ -2,17 +2,22 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { ArrowLeft, Code2, FolderGit2, Settings2 } from "lucide-react";
+import { ArrowLeft, Code2, FolderGit2, Search, Settings2 } from "lucide-react";
 
 import type { ModelOption } from "@/components/ModelSelector";
 import { FileTreeView } from "@/components/workspace-panel/FileTreeView";
 import { filesystemPickDirectory } from "@/lib/agent-client";
+import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
 import "@/styles/coding-workbench.css";
 
+import { buildCommands, type CommandContext } from "./lib/commands";
+import { buildFileIndex } from "./lib/file-index";
+import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/CommandPalette";
 import { useWorkbenchStore } from "./store/workbench-store";
 
 interface CodingWorkbenchProps {
@@ -74,13 +79,48 @@ export function CodingWorkbench({
   const setAgentWidth = useWorkbenchStore((state) => state.setAgentWidth);
   const hydrateLayout = useWorkbenchStore((state) => state.hydrateLayout);
 
+  const setActivityView = useWorkbenchStore((state) => state.setActivityView);
+  const setBottomView = useWorkbenchStore((state) => state.setBottomView);
+  const toggleBottom = useWorkbenchStore((state) => state.toggleBottom);
+
   const [selectedDirectory, setSelectedDirectory] = useState(cwd);
+  const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
+  const [filePaths, setFilePaths] = useState<string[]>([]);
+  const [indexing, setIndexing] = useState(false);
+  const [symbols] = useState<PaletteSymbol[]>([]);
 
   useEffect(() => {
     hydrateLayout();
   }, [hydrateLayout]);
 
   useEffect(() => setSelectedDirectory(cwd), [cwd]);
+
+  // Build the quick-open index once per workspace, abandoning it if the user
+  // switches away mid-walk.
+  useEffect(() => {
+    if (!cwd) {
+      setFilePaths([]);
+      return;
+    }
+    const signal = { aborted: false };
+    setIndexing(true);
+    setFilePaths([]);
+    void buildFileIndex(cwd, {
+      signal,
+      onProgress: (paths) => {
+        if (!signal.aborted) setFilePaths(paths);
+      },
+    })
+      .then((result) => {
+        if (!signal.aborted) setFilePaths(result.paths);
+      })
+      .finally(() => {
+        if (!signal.aborted) setIndexing(false);
+      });
+    return () => {
+      signal.aborted = true;
+    };
+  }, [cwd]);
 
   const startExplorerDrag = useDragWidth(setExplorerWidth, false);
   const startAgentDrag = useDragWidth(setAgentWidth, true);
@@ -93,6 +133,77 @@ export function CodingWorkbench({
       onToast?.(`打开文件夹失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
   }, [onSelectWorkspace, onToast]);
+
+  const notImplemented = useCallback(
+    (what: string) => onToast?.(`${what}将在后续版本接入`),
+    [onToast],
+  );
+
+  /**
+   * Commands available right now. Later tasks replace the placeholder handlers
+   * with real task, verification and delivery actions.
+   */
+  const commandContext = useMemo<CommandContext>(
+    () => ({
+      hasWorkspace: Boolean(cwd),
+      hasTask: false,
+      busy: false,
+      problemCount: 0,
+      changedFileCount: 0,
+      setActivityView,
+      setBottomView,
+      openDocTab: () => notImplemented("报告与图表标签页"),
+      runAllVerifications: () => notImplemented("验证执行"),
+      rerunVerification: () => notImplemented("验证执行"),
+      approvePlan: () => notImplemented("计划批准"),
+      rollbackTask: () => notImplemented("任务回滚"),
+      newTask: () => notImplemented("新建开发任务"),
+      commitChanges: () => notImplemented("提交变更"),
+      explain: () => notImplemented("代码解释"),
+      generateComments: () => notImplemented("注释生成"),
+      toggleBottom: () => toggleBottom(),
+    }),
+    [cwd, notImplemented, setActivityView, setBottomView, toggleBottom],
+  );
+
+  const commands = useMemo(() => buildCommands(commandContext), [commandContext]);
+
+  const openPaletteRef = useRef(setPaletteMode);
+  openPaletteRef.current = setPaletteMode;
+
+  /**
+   * Workbench shortcuts. The palette uses ⌘⇧P rather than ⌘K because the
+   * application already binds ⌘K to global session search in App.tsx, and the
+   * workbench must not repurpose an existing app-level shortcut.
+   */
+  useEffect(() => {
+    if (!cwd) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return;
+      if (isGlobalShortcutBlocked()) return;
+      const key = event.key.toLowerCase();
+      if (key === "p" && event.shiftKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        openPaletteRef.current("commands");
+      } else if (key === "p") {
+        event.preventDefault();
+        event.stopPropagation();
+        openPaletteRef.current("files");
+      } else if (key === "t") {
+        event.preventDefault();
+        event.stopPropagation();
+        openPaletteRef.current("symbols");
+      } else if (key === "j") {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleBottom();
+      }
+    };
+    // Capture phase so the workbench claims these before app-level handlers.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [cwd, toggleBottom]);
 
   const style = useMemo(
     () =>
@@ -155,7 +266,18 @@ export function CodingWorkbench({
         </span>
         <button
           type="button"
-          className="coding-icon-btn coding-workbench__settings"
+          className="coding-workbench__palette-btn"
+          onClick={() => setPaletteMode("commands")}
+          aria-label="打开命令面板"
+          title="命令面板 ⌘⇧P"
+        >
+          <Search size={13} />
+          <span>搜索命令与文件</span>
+          <kbd>⌘⇧P</kbd>
+        </button>
+        <button
+          type="button"
+          className="coding-icon-btn"
           onClick={onOpenSettings}
           aria-label="设置"
         >
@@ -208,7 +330,22 @@ export function CodingWorkbench({
 
       <footer className="coding-workbench__status" role="status" aria-label="工作台状态">
         <span>{basename(cwd)}</span>
+        {indexing && <span>正在建立文件索引…</span>}
       </footer>
+
+      {paletteMode && (
+        <CommandPalette
+          mode={paletteMode}
+          commands={commands}
+          paths={filePaths}
+          symbols={symbols}
+          pathsLoading={indexing}
+          onClose={() => setPaletteMode(null)}
+          onModeChange={setPaletteMode}
+          onOpenPath={(path) => notImplemented(`打开文件 ${path}`)}
+          onOpenSymbol={(symbol) => notImplemented(`跳转符号 ${symbol.name}`)}
+        />
+      )}
     </div>
   );
 }
