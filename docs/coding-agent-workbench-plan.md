@@ -4200,4 +4200,951 @@ coding_git_commit(message)
 
 **事件**：`coding://task-phase-changed`（含 `phase`、`reason`、`blocker`）、`coding://verification-updated`（整条记录）、`coding://verification-output`（`runId`、`stream`、`chunk`）、`coding://analysis-progress`（`root`、`scanned`）。
 
-**待补写任务**：Task 9 前端骨架与主题、Task 10 命令面板、Task 11 tab 容器与编辑器、Task 12 活动栏视图、Task 13 Agent 面板、Task 14 底部面板与状态栏、Task 15 虚拟文档 tab、Task 16 切换与清理。
+**复用组件的实际签名**（已核实，不得改动）：
+
+- `ModelOption { id, label?, providerKind?, providerId? }`；`<ModelSelector modelId? modelLoading? models onModelChange />`
+- `<PermissionPicker onToast? triggerLabel? sessionId? />`
+- `<ExecutionProcess parts active startedAt completedAt stopReason cancelTrigger cancellationCategory agentResult markdownConfig? onOpenTool? knowledgeTrace? onOpenKnowledgePath? />`
+- `<FileTreeView rootPath selectedPath? selectedDirectoryPath? onFileSelect onDirectorySelect onToast? />`
+- `useTheme(): { theme }`，来自 `@/components/ThemeProvider`
+
+**可用的主题变量**（`tokens.css`，均随 `[data-theme]` 切换）：`--echo-bg-primary/secondary/tertiary/hover/active/overlay`、`--echo-text-strong/medium/tertiary/weak/link/inverse/disable`、`--echo-border-default/strong/subtle/weak/focus`。
+
+---
+
+### Task 9: 前端骨架与主题
+
+**Files:**
+- Create: `src/features/coding/CodingWorkbench.tsx`
+- Create: `src/features/coding/store/workbench-store.ts`
+- Create: `src/features/coding/lib/tauri-api.ts`
+- Create: `src/features/coding/lib/types.ts`
+- Create: `src/styles/coding-workbench.css`
+- Create: `src/features/coding/__tests__/workbench-store.test.ts`
+- Create: `src/features/coding/__tests__/CodingWorkbench.test.tsx`
+
+**Interfaces:**
+- Consumes: 后端 25 个命令与 4 个事件（见上）
+- Produces:
+  - `types.ts`：与后端一一对应的 TS 类型
+  - `workbench-store.ts`：`useWorkbenchStore` — `explorerWidth`、`agentWidth`、`bottomHeight`、`bottomOpen`、`activityView`、`setExplorerWidth`、`setAgentWidth`、`setBottomHeight`、`toggleBottom`、`setActivityView`
+  - `tauri-api.ts`：命令封装函数
+  - `CodingWorkbench.tsx`：`<CodingWorkbench cwd workspaces onSelectWorkspace onToast onExit onOpenSettings models defaultModelId />`
+
+栏宽持久化到 `localStorage`（仅 UI 偏好，非业务状态，符合设计文档 5.2 分工）。
+
+- [ ] **Step 1: 写失败测试（store）**
+
+`src/features/coding/__tests__/workbench-store.test.ts`：
+
+```typescript
+import { beforeEach, describe, expect, it } from "vitest";
+import { useWorkbenchStore, WORKBENCH_LAYOUT_KEY } from "../store/workbench-store";
+
+describe("workbench layout store", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkbenchStore.getState().resetLayout();
+  });
+
+  it("clamps pane widths so a pane can never be dragged away", () => {
+    useWorkbenchStore.getState().setExplorerWidth(20);
+    expect(useWorkbenchStore.getState().explorerWidth).toBe(180);
+    useWorkbenchStore.getState().setExplorerWidth(5_000);
+    expect(useWorkbenchStore.getState().explorerWidth).toBe(520);
+
+    useWorkbenchStore.getState().setAgentWidth(10);
+    expect(useWorkbenchStore.getState().agentWidth).toBe(300);
+    useWorkbenchStore.getState().setAgentWidth(9_999);
+    expect(useWorkbenchStore.getState().agentWidth).toBe(720);
+  });
+
+  it("persists layout across store recreation", () => {
+    useWorkbenchStore.getState().setExplorerWidth(300);
+    useWorkbenchStore.getState().setAgentWidth(400);
+    useWorkbenchStore.getState().setBottomHeight(260);
+    const stored = JSON.parse(localStorage.getItem(WORKBENCH_LAYOUT_KEY) ?? "{}");
+    expect(stored.explorerWidth).toBe(300);
+    expect(stored.agentWidth).toBe(400);
+    expect(stored.bottomHeight).toBe(260);
+  });
+
+  it("ignores corrupt stored layout instead of crashing", () => {
+    localStorage.setItem(WORKBENCH_LAYOUT_KEY, "{not json");
+    expect(() => useWorkbenchStore.getState().hydrateLayout()).not.toThrow();
+    expect(useWorkbenchStore.getState().explorerWidth).toBe(238);
+  });
+
+  it("toggling the bottom panel keeps its restored height", () => {
+    useWorkbenchStore.getState().setBottomHeight(300);
+    useWorkbenchStore.getState().toggleBottom();
+    expect(useWorkbenchStore.getState().bottomOpen).toBe(true);
+    useWorkbenchStore.getState().toggleBottom();
+    expect(useWorkbenchStore.getState().bottomOpen).toBe(false);
+    expect(useWorkbenchStore.getState().bottomHeight).toBe(300);
+  });
+});
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `pnpm test workbench-store`
+Expected: FAIL — 无法解析 `../store/workbench-store`。
+
+- [ ] **Step 3: 写 types.ts**
+
+```typescript
+/**
+ * Mirrors the Rust types in `src-tauri/src/coding/`. Struct fields arrive as
+ * camelCase and enum values as snake_case, matching the serde attributes there.
+ */
+
+export type TaskPhase =
+  | "idle"
+  | "planning"
+  | "implementing"
+  | "verifying"
+  | "diagnosing"
+  | "repairing"
+  | "gating"
+  | "delivered"
+  | "blocked";
+
+export type TaskNodeStatus = "pending" | "running" | "success" | "failed" | "blocked";
+
+export interface AcceptanceCriterion {
+  id: string;
+  content: string;
+  satisfied: boolean;
+  evidence: string[];
+}
+
+export interface TaskNode {
+  id: string;
+  content: string;
+  dependencies: string[];
+  relatedFiles: string[];
+  status: TaskNodeStatus;
+  priority: string;
+}
+
+export interface CodingTask {
+  id: string;
+  name: string;
+  requirement: string;
+  phase: TaskPhase;
+  acceptanceCriteria: AcceptanceCriterion[];
+  taskNodes: TaskNode[];
+  planRequired: boolean;
+  modelId?: string | null;
+  sessionId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskSummary {
+  id: string;
+  name: string;
+  phase: TaskPhase;
+  updatedAt: string;
+}
+
+export type ChangeKind = "added" | "modified" | "deleted" | "renamed";
+
+export interface FileChange {
+  path: string;
+  kind: ChangeKind;
+  added: number;
+  removed: number;
+  baselineContent?: string | null;
+  preExisting: boolean;
+}
+
+export interface ChangeSet {
+  taskId: string;
+  baselineFiles: string[];
+  changes: FileChange[];
+  createdAt: string;
+  reviewedFiles: string[];
+}
+
+export type VerificationKind = "build" | "lint" | "type_check" | "test" | "custom";
+export type VerificationStatus = "running" | "passed" | "failed" | "timed_out" | "cancelled";
+
+export interface TestSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+}
+
+export interface DetectedCommand {
+  kind: VerificationKind;
+  command: string;
+  label: string;
+}
+
+export interface VerificationRecord {
+  id: string;
+  taskId: string;
+  kind: VerificationKind;
+  command: string;
+  status: VerificationStatus;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  startedAt: string;
+  finishedAt: string;
+  testSummary?: TestSummary | null;
+  structured: boolean;
+}
+
+export type ProblemKind =
+  | "compile"
+  | "syntax"
+  | "type"
+  | "lint"
+  | "test_failure"
+  | "runtime"
+  | "dependency"
+  | "configuration";
+
+export type ProblemSeverity = "error" | "warning";
+
+export interface Problem {
+  id: string;
+  kind: ProblemKind;
+  severity: ProblemSeverity;
+  message: string;
+  file?: string | null;
+  line?: number | null;
+  column?: number | null;
+  symbol?: string | null;
+  sourceCommand: string;
+  fingerprint: string;
+}
+
+export type RepairOutcome = "fixed" | "same_errors" | "new_errors" | "rounds_exhausted";
+
+export interface RepairRound {
+  round: number;
+  problemFingerprints: string[];
+  startedAt: string;
+  outcome?: RepairOutcome | null;
+}
+
+export interface OrchestratorState {
+  task: CodingTask;
+  problems: Problem[];
+  repairRounds: RepairRound[];
+  changedFileCount: number;
+  maxRepairRounds: number;
+}
+
+export type GateId = "build" | "test" | "lint" | "type_check" | "diff_review" | "acceptance";
+export type GateStatus = "satisfied" | "not_satisfied" | "not_applicable";
+
+export interface QualityGate {
+  id: GateId;
+  title: string;
+  status: GateStatus;
+  summary: string;
+  evidence: string[];
+}
+
+export interface EvidenceEntry {
+  criterionId: string;
+  kind: string;
+  detail: string;
+  source: string;
+}
+
+export interface DeliveryReport {
+  task: CodingTask;
+  gates: QualityGate[];
+  changes: FileChange[];
+  totalAdded: number;
+  totalRemoved: number;
+  verifications: VerificationRecord[];
+  problems: Problem[];
+  repairRounds: RepairRound[];
+  evidence: EvidenceEntry[];
+  blockers: string[];
+  deliverable: boolean;
+}
+
+/** Payload of `coding://task-phase-changed`. */
+export interface PhaseChangedEvent {
+  taskId: string;
+  phase: TaskPhase;
+  reason: string;
+  blocker?: string | null;
+}
+
+/** Payload of `coding://verification-output`. */
+export interface VerificationOutputEvent {
+  runId: string;
+  stream: "stdout" | "stderr";
+  chunk: string;
+}
+
+/** Payload of `coding://analysis-progress`. */
+export interface AnalysisProgressEvent {
+  root: string;
+  scanned: number;
+}
+```
+
+- [ ] **Step 4: 写 workbench-store.ts**
+
+```typescript
+import { create } from "zustand";
+
+import type { VerificationKind } from "../lib/types";
+
+/** Activity bar destinations. */
+export type ActivityView = "files" | "search" | "changes" | "symbols" | "context";
+export type BottomView = "terminal" | "problems" | "tests" | "output" | "trace";
+
+export const WORKBENCH_LAYOUT_KEY = "echo-coding-workbench-layout";
+
+const EXPLORER_MIN = 180;
+const EXPLORER_MAX = 520;
+const AGENT_MIN = 300;
+const AGENT_MAX = 720;
+const BOTTOM_MIN = 120;
+const BOTTOM_MAX = 720;
+
+const DEFAULTS = {
+  explorerWidth: 238,
+  agentWidth: 380,
+  bottomHeight: 220,
+};
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+interface LayoutState {
+  explorerWidth: number;
+  agentWidth: number;
+  bottomHeight: number;
+  bottomOpen: boolean;
+  activityView: ActivityView;
+  bottomView: BottomView;
+}
+
+interface WorkbenchState extends LayoutState {
+  setExplorerWidth: (value: number) => void;
+  setAgentWidth: (value: number) => void;
+  setBottomHeight: (value: number) => void;
+  toggleBottom: (open?: boolean) => void;
+  setActivityView: (view: ActivityView) => void;
+  setBottomView: (view: BottomView) => void;
+  hydrateLayout: () => void;
+  resetLayout: () => void;
+}
+
+/** Persist only pane geometry; task state lives in the Rust backend. */
+function persist(state: LayoutState): void {
+  try {
+    localStorage.setItem(
+      WORKBENCH_LAYOUT_KEY,
+      JSON.stringify({
+        explorerWidth: state.explorerWidth,
+        agentWidth: state.agentWidth,
+        bottomHeight: state.bottomHeight,
+      }),
+    );
+  } catch {
+    // Storage may be disabled; the session keeps working with in-memory layout.
+  }
+}
+
+export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
+  ...DEFAULTS,
+  bottomOpen: false,
+  activityView: "files",
+  bottomView: "problems",
+
+  setExplorerWidth: (value) => {
+    set({ explorerWidth: clamp(value, EXPLORER_MIN, EXPLORER_MAX) });
+    persist(get());
+  },
+  setAgentWidth: (value) => {
+    set({ agentWidth: clamp(value, AGENT_MIN, AGENT_MAX) });
+    persist(get());
+  },
+  setBottomHeight: (value) => {
+    set({ bottomHeight: clamp(value, BOTTOM_MIN, BOTTOM_MAX) });
+    persist(get());
+  },
+  toggleBottom: (open) => set((state) => ({ bottomOpen: open ?? !state.bottomOpen })),
+  setActivityView: (activityView) => set({ activityView }),
+  setBottomView: (bottomView) => set({ bottomView, bottomOpen: true }),
+
+  hydrateLayout: () => {
+    try {
+      const raw = localStorage.getItem(WORKBENCH_LAYOUT_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<LayoutState>;
+      set({
+        explorerWidth: clamp(parsed.explorerWidth ?? DEFAULTS.explorerWidth, EXPLORER_MIN, EXPLORER_MAX),
+        agentWidth: clamp(parsed.agentWidth ?? DEFAULTS.agentWidth, AGENT_MIN, AGENT_MAX),
+        bottomHeight: clamp(parsed.bottomHeight ?? DEFAULTS.bottomHeight, BOTTOM_MIN, BOTTOM_MAX),
+      });
+    } catch {
+      // A corrupt entry must not stop the workbench from opening.
+    }
+  },
+  resetLayout: () =>
+    set({ ...DEFAULTS, bottomOpen: false, activityView: "files", bottomView: "problems" }),
+}));
+
+/** Label shown for a verification kind in the tests panel. */
+export function verificationLabel(kind: VerificationKind): string {
+  switch (kind) {
+    case "build":
+      return "构建";
+    case "lint":
+      return "静态检查";
+    case "type_check":
+      return "类型检查";
+    case "test":
+      return "测试";
+    default:
+      return "命令";
+  }
+}
+```
+
+- [ ] **Step 5: 跑 store 测试确认通过**
+
+Run: `pnpm test workbench-store`
+Expected: 4 个用例 PASS。
+
+- [ ] **Step 6: 写 tauri-api.ts**
+
+```typescript
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+import type {
+  AnalysisProgressEvent,
+  ChangeSet,
+  CodingTask,
+  DeliveryReport,
+  DetectedCommand,
+  FileChange,
+  OrchestratorState,
+  PhaseChangedEvent,
+  Problem,
+  TaskSummary,
+  VerificationKind,
+  VerificationOutputEvent,
+  VerificationRecord,
+} from "./types";
+
+export const codingApi = {
+  listTasks: (root: string) => invoke<TaskSummary[]>("coding_task_list", { root }),
+  createTask: (root: string, name: string, requirement: string) =>
+    invoke<CodingTask>("coding_task_create", { root, name, requirement }),
+  getTask: (root: string, taskId: string) =>
+    invoke<CodingTask | null>("coding_task_get", { root, taskId }),
+  deleteTask: (root: string, taskId: string) =>
+    invoke<void>("coding_task_delete", { root, taskId }),
+  renameTask: (root: string, taskId: string, name: string) =>
+    invoke<CodingTask>("coding_task_rename", { root, taskId, name }),
+
+  submitRequirement: (root: string, taskId: string, planRequired: boolean) =>
+    invoke<CodingTask>("coding_task_submit_requirement", { root, taskId, planRequired }),
+  approvePlan: (root: string, taskId: string) =>
+    invoke<CodingTask>("coding_task_approve_plan", { root, taskId }),
+  rollbackTask: (root: string, taskId: string) =>
+    invoke<string[]>("coding_task_rollback", { root, taskId }),
+
+  getChangeSet: (root: string, taskId: string) =>
+    invoke<ChangeSet>("coding_changeset_get", { root, taskId }),
+  captureBaseline: (root: string, taskId: string, dirtyFiles: string[]) =>
+    invoke<ChangeSet>("coding_changeset_capture_baseline", { root, taskId, dirtyFiles }),
+  recordChange: (root: string, taskId: string, change: FileChange) =>
+    invoke<ChangeSet>("coding_changeset_record_change", { root, taskId, change }),
+  discardFile: (root: string, taskId: string, path: string) =>
+    invoke<ChangeSet>("coding_changeset_discard_file", { root, taskId, path }),
+  markReviewed: (root: string, taskId: string, path: string) =>
+    invoke<ChangeSet>("coding_changeset_mark_reviewed", { root, taskId, path }),
+
+  detectCommands: (root: string) =>
+    invoke<DetectedCommand[]>("coding_verification_detect", { root }),
+  listVerifications: (root: string, taskId: string) =>
+    invoke<VerificationRecord[]>("coding_verification_list", { root, taskId }),
+  runVerification: (
+    root: string,
+    taskId: string,
+    kind: VerificationKind,
+    command: string,
+    timeoutSecs?: number,
+  ) =>
+    invoke<VerificationRecord>("coding_verification_run", {
+      root,
+      taskId,
+      kind,
+      command,
+      timeoutSecs: timeoutSecs ?? null,
+    }),
+  cancelVerification: (runId: string) =>
+    invoke<void>("coding_verification_cancel", { runId }),
+
+  listProblems: (root: string, taskId: string) =>
+    invoke<Problem[]>("coding_diagnostics_list", { root, taskId }),
+
+  reportImplementation: (root: string, taskId: string) =>
+    invoke<CodingTask>("coding_orchestrator_report_implementation", { root, taskId }),
+  reportVerification: (root: string, taskId: string) =>
+    invoke<CodingTask>("coding_orchestrator_report_verification", { root, taskId }),
+  orchestratorState: (root: string, taskId: string) =>
+    invoke<OrchestratorState>("coding_orchestrator_state", { root, taskId }),
+
+  deliveryReport: (root: string, taskId: string) =>
+    invoke<DeliveryReport>("coding_delivery_report", { root, taskId }),
+  commitInput: (root: string, taskId: string) =>
+    invoke<string>("coding_delivery_commit_input", { root, taskId }),
+  prInput: (root: string, taskId: string) =>
+    invoke<DeliveryReport>("coding_delivery_pr_input", { root, taskId }),
+  commit: (root: string, taskId: string, message: string) =>
+    invoke<string>("coding_git_commit", { root, taskId, message }),
+};
+
+export function onPhaseChanged(
+  callback: (event: PhaseChangedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<PhaseChangedEvent>("coding://task-phase-changed", (event) =>
+    callback(event.payload),
+  );
+}
+
+export function onVerificationUpdated(
+  callback: (record: VerificationRecord) => void,
+): Promise<UnlistenFn> {
+  return listen<VerificationRecord>("coding://verification-updated", (event) =>
+    callback(event.payload),
+  );
+}
+
+export function onVerificationOutput(
+  callback: (event: VerificationOutputEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<VerificationOutputEvent>("coding://verification-output", (event) =>
+    callback(event.payload),
+  );
+}
+
+export function onAnalysisProgress(
+  callback: (event: AnalysisProgressEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<AnalysisProgressEvent>("coding://analysis-progress", (event) =>
+    callback(event.payload),
+  );
+}
+```
+
+- [ ] **Step 7: 写骨架组件测试**
+
+`src/features/coding/__tests__/CodingWorkbench.test.tsx`：
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const invoke = vi.fn(async (command: string) => {
+  if (command === "coding_task_list") return [];
+  if (command === "coding_verification_detect") return [];
+  return null;
+});
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (c: string, a: unknown) => invoke(c, a) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@/components/workspace-panel/FileTreeView", () => ({
+  FileTreeView: () => <div data-testid="file-tree" />,
+}));
+
+import { CodingWorkbench } from "../CodingWorkbench";
+
+describe("CodingWorkbench skeleton", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    invoke.mockClear();
+  });
+
+  it("prompts to open a folder when no workspace is selected", () => {
+    render(<CodingWorkbench cwd="" models={[]} />);
+    expect(screen.getByRole("button", { name: /选择代码文件夹/ })).toBeInTheDocument();
+  });
+
+  it("renders the four panes and the status bar for a workspace", async () => {
+    render(<CodingWorkbench cwd="/repo" models={[{ id: "m1" }]} defaultModelId="m1" />);
+    expect(await screen.findByRole("navigation", { name: "活动栏" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "资源管理器" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Agent 面板" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "工作台状态" })).toBeInTheDocument();
+  });
+
+  it("exposes draggable separators for both side panes", async () => {
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    const separators = await screen.findAllByRole("separator");
+    const labels = separators.map((node) => node.getAttribute("aria-label"));
+    expect(labels).toContain("调整资源管理器宽度");
+    expect(labels).toContain("调整 Agent 面板宽度");
+  });
+
+  it("keeps the bottom panel collapsed until it is opened", async () => {
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    expect(screen.queryByRole("tablist", { name: "开发工具面板" })).not.toBeInTheDocument();
+  });
+});
+```
+
+- [ ] **Step 8: 写 CodingWorkbench.tsx 骨架**
+
+只实现布局、栏宽拖拽、空状态与状态栏占位；活动栏内容、Agent 面板、底部面板由后续任务填充。
+
+```tsx
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Code2, FolderGit2, Settings2 } from "lucide-react";
+
+import { FileTreeView } from "@/components/workspace-panel/FileTreeView";
+import type { ModelOption } from "@/components/ModelSelector";
+import { filesystemPickDirectory } from "@/lib/agent-client";
+import "@/styles/coding-workbench.css";
+
+import { useWorkbenchStore } from "./store/workbench-store";
+
+interface CodingWorkbenchProps {
+  cwd?: string;
+  workspaces?: { cwd: string }[];
+  onSelectWorkspace?: (cwd: string) => void;
+  onToast?: (message: string) => void;
+  onExit?: () => void;
+  onOpenSettings?: () => void;
+  models?: ModelOption[];
+  defaultModelId?: string;
+}
+
+/** Drag handle shared by both vertical separators. */
+function useDragWidth(apply: (value: number) => void, fromRight: boolean) {
+  return useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const move = (moveEvent: PointerEvent) => {
+        apply(fromRight ? window.innerWidth - moveEvent.clientX : moveEvent.clientX);
+      };
+      const stop = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+    },
+    [apply, fromRight],
+  );
+}
+
+export function CodingWorkbench({
+  cwd = "",
+  workspaces = [],
+  onSelectWorkspace,
+  onToast,
+  onExit,
+  onOpenSettings,
+}: CodingWorkbenchProps) {
+  const layout = useWorkbenchStore();
+  const [selectedDirectory, setSelectedDirectory] = useState(cwd);
+
+  useEffect(() => {
+    layout.hydrateLayout();
+  }, []);
+
+  useEffect(() => setSelectedDirectory(cwd), [cwd]);
+
+  const startExplorerDrag = useDragWidth(layout.setExplorerWidth, false);
+  const startAgentDrag = useDragWidth(layout.setAgentWidth, true);
+
+  const pickWorkspace = useCallback(async () => {
+    const picked = await filesystemPickDirectory();
+    if (picked) onSelectWorkspace?.(picked);
+  }, [onSelectWorkspace]);
+
+  const style = useMemo(
+    () =>
+      ({
+        "--coding-explorer-width": `${layout.explorerWidth}px`,
+        "--coding-agent-width": `${layout.agentWidth}px`,
+        "--coding-bottom-height": `${layout.bottomHeight}px`,
+      }) as CSSProperties,
+    [layout.agentWidth, layout.bottomHeight, layout.explorerWidth],
+  );
+
+  if (!cwd) {
+    return (
+      <div className="coding-workbench coding-workbench--empty">
+        <header className="coding-workbench__topbar" data-tauri-drag-region>
+          <button type="button" onClick={onExit} aria-label="返回">
+            <Code2 size={16} />
+          </button>
+          <strong>Echo Code</strong>
+        </header>
+        <div className="coding-workbench__welcome">
+          <FolderGit2 size={32} />
+          <h1>打开代码库开始开发</h1>
+          <p>在同一个工作台里理解代码、交给 Agent 实现、审阅变更并交付。</p>
+          <button type="button" className="coding-primary-btn" onClick={() => void pickWorkspace()}>
+            <FolderGit2 size={15} /> 选择代码文件夹
+          </button>
+          {workspaces.length > 0 && (
+            <ul className="coding-workbench__recent">
+              {workspaces.slice(0, 5).map((workspace) => (
+                <li key={workspace.cwd}>
+                  <button type="button" onClick={() => onSelectWorkspace?.(workspace.cwd)}>
+                    {workspace.cwd}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`coding-workbench${layout.bottomOpen ? " is-bottom-open" : ""}`} style={style}>
+      <header className="coding-workbench__topbar" data-tauri-drag-region>
+        <button type="button" onClick={onExit} aria-label="返回">
+          <Code2 size={16} />
+        </button>
+        <strong>Echo Code</strong>
+        <span className="coding-workbench__repo">{cwd}</span>
+        <button
+          type="button"
+          className="coding-icon-btn"
+          onClick={onOpenSettings}
+          aria-label="设置"
+        >
+          <Settings2 size={15} />
+        </button>
+      </header>
+
+      <nav className="coding-workbench__activity" aria-label="活动栏" />
+
+      <aside className="coding-workbench__explorer" aria-label="资源管理器">
+        <FileTreeView
+          rootPath={cwd}
+          selectedDirectoryPath={selectedDirectory}
+          onFileSelect={() => {}}
+          onDirectorySelect={setSelectedDirectory}
+          onToast={onToast}
+        />
+      </aside>
+
+      <div
+        className="coding-workbench__vsplit"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整资源管理器宽度"
+        tabIndex={0}
+        onPointerDown={startExplorerDrag}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") layout.setExplorerWidth(layout.explorerWidth - 16);
+          if (event.key === "ArrowRight") layout.setExplorerWidth(layout.explorerWidth + 16);
+        }}
+      />
+
+      <main className="coding-workbench__main" />
+
+      <div
+        className="coding-workbench__vsplit"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整 Agent 面板宽度"
+        tabIndex={0}
+        onPointerDown={startAgentDrag}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") layout.setAgentWidth(layout.agentWidth + 16);
+          if (event.key === "ArrowRight") layout.setAgentWidth(layout.agentWidth - 16);
+        }}
+      />
+
+      <aside className="coding-workbench__agent" aria-label="Agent 面板" />
+
+      <footer className="coding-workbench__status" role="status" aria-label="工作台状态" />
+    </div>
+  );
+}
+```
+
+- [ ] **Step 9: 写 coding-workbench.css**
+
+所有选择器限定在 `.coding-workbench` 内，色值只用 `tokens.css` 变量：
+
+```css
+/* Coding workbench shell. Scoped to .coding-workbench so it cannot affect any
+   other panel, and driven entirely by tokens.css variables so it follows the
+   application's light/dark theme instead of forcing one. */
+
+.coding-workbench {
+  display: grid;
+  grid-template-columns:
+    46px var(--coding-explorer-width, 238px) 4px minmax(0, 1fr)
+    4px var(--coding-agent-width, 380px);
+  grid-template-rows: 38px minmax(0, 1fr) auto 24px;
+  height: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--echo-text-strong);
+  background: var(--echo-bg-primary);
+}
+
+.coding-workbench__topbar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--echo-border-subtle);
+  background: var(--echo-bg-secondary);
+}
+
+.coding-workbench__repo {
+  margin-left: auto;
+  color: var(--echo-text-tertiary);
+}
+
+.coding-workbench__activity {
+  grid-row: 2 / 4;
+  border-right: 1px solid var(--echo-border-subtle);
+  background: var(--echo-bg-secondary);
+}
+
+.coding-workbench__explorer {
+  grid-row: 2 / 4;
+  overflow: auto;
+  border-right: 1px solid var(--echo-border-subtle);
+  background: var(--echo-bg-secondary);
+}
+
+.coding-workbench__vsplit {
+  grid-row: 2 / 4;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.coding-workbench__vsplit:hover,
+.coding-workbench__vsplit:focus-visible {
+  background: var(--echo-border-focus);
+  outline: none;
+}
+
+.coding-workbench__main {
+  grid-row: 2 / 3;
+  overflow: hidden;
+  background: var(--echo-bg-primary);
+}
+
+.coding-workbench__agent {
+  grid-row: 2 / 4;
+  overflow: hidden;
+  border-left: 1px solid var(--echo-border-subtle);
+  background: var(--echo-bg-secondary);
+}
+
+.coding-workbench__status {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+  border-top: 1px solid var(--echo-border-subtle);
+  background: var(--echo-bg-secondary);
+  color: var(--echo-text-tertiary);
+}
+
+.coding-workbench--empty {
+  grid-template-columns: 1fr;
+  grid-template-rows: 38px 1fr;
+  place-items: center;
+}
+
+.coding-workbench__welcome {
+  display: grid;
+  gap: 10px;
+  place-items: center;
+  text-align: center;
+  color: var(--echo-text-medium);
+}
+
+.coding-workbench__welcome h1 {
+  margin: 0;
+  font-size: 19px;
+  color: var(--echo-text-strong);
+}
+
+.coding-workbench .coding-primary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 7px;
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-strong);
+  cursor: pointer;
+}
+
+.coding-workbench .coding-primary-btn:hover {
+  background: var(--echo-bg-hover);
+}
+
+.coding-workbench__recent {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.coding-workbench__recent button {
+  border: 0;
+  background: none;
+  color: var(--echo-text-link);
+  cursor: pointer;
+}
+```
+
+- [ ] **Step 10: 跑测试确认通过**
+
+Run: `pnpm test workbench-store CodingWorkbench`
+Expected: store 4 个 + 骨架 4 个用例 PASS。
+
+- [ ] **Step 11: 提交**
+
+```bash
+git add src/features/coding src/styles/coding-workbench.css
+git commit -F - <<'EOF'
+新增代码工作台前端骨架与主题适配
+
+后端二十五个命令与四个事件已就绪，但缺少承载它们的界面骨架。旧工作台的样式硬编码了近百处颜色并强制暗色，浅色主题下与应用外壳割裂，左右分栏宽度也写死在样式里无法调整。本次建立独立的工作台骨架，作为后续视图的挂载点。
+
+- 新增 features/coding 目录，包含与后端一一对应的类型定义、命令封装与事件订阅
+- 布局状态存放于独立的界面状态仓库，仅持久化分栏几何，任务状态仍由后端负责
+- 左右分栏支持拖拽与键盘调整并记忆宽度，超出范围的值被收敛到合法区间
+- 样式全部限定在工作台作用域内且只使用主题变量，跟随应用浅色与暗色主题
+- 损坏的本地布局记录按缺省值处理，不影响工作台打开
+- 验证：pnpm test 八个用例通过，覆盖宽度收敛、布局持久化、损坏记录容错、底部面板高度保持、空状态引导、四栏与状态栏渲染、分栏分隔符可用
+EOF
+```
+
+---
+
+**待补写任务**：Task 10 命令面板、Task 11 tab 容器与编辑器、Task 12 活动栏视图、Task 13 Agent 面板、Task 14 底部面板与状态栏、Task 15 虚拟文档 tab、Task 16 切换与清理。

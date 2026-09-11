@@ -514,6 +514,9 @@ pub async fn coding_verification_list(
         .map_err(|error| format!("读取验证记录失败：{error}"))
 }
 
+// Three of these are Tauri-injected handles; the rest are the command's wire
+// contract, so collapsing them into a struct would only move the arity.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn coding_verification_run(
     app: AppHandle,
