@@ -457,7 +457,9 @@ describe("coding workspace prompts and report", () => {
       acceptanceCriteria: createAcceptanceCriteria("所有测试通过"),
       validationRecords: [],
       docLevels: [],
-      mode: "plan",
+      // Plan is an execution strategy; the role stays one of ask/craft/debug.
+      mode: "craft",
+      strategy: "plan",
       contextPaths: [],
       reviewedFiles: [],
     };
