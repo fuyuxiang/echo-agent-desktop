@@ -72,6 +72,7 @@ fn open_lock(path: &Path) -> Option<std::fs::File> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .open(lock_path(path))
         .ok()
 }
