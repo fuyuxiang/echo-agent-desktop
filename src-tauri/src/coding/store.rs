@@ -31,6 +31,25 @@ pub fn tasks_index_path(root: &Path) -> PathBuf {
     workspace_dir(root).join("tasks.json")
 }
 
+/// Paths to the workspace-level cross-file index files introduced in phase 2.
+/// They live next to `tasks.json` so they are reachable across all tasks of the
+/// same workspace and so an empty state is detected by their absence.
+#[derive(Clone, Debug)]
+pub struct IndexPaths {
+    pub symbols: PathBuf,
+    pub refs: PathBuf,
+    pub file_index: PathBuf,
+}
+
+pub fn index_paths(root: &Path) -> IndexPaths {
+    let base = workspace_dir(root);
+    IndexPaths {
+        symbols: base.join("symbols.jsonl"),
+        refs: base.join("refs.jsonl"),
+        file_index: base.join("file_index.json"),
+    }
+}
+
 fn ensure_parent(path: &Path) -> Result<(), String> {
     let Some(parent) = path.parent() else {
         return Ok(());
@@ -143,5 +162,18 @@ mod tests {
         assert_eq!(items[0].id, "a");
         assert_eq!(items[1].id, "b");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn index_paths_are_workspace_level_and_share_parent_with_workspace_dir() {
+        let root = Path::new("/tmp/repo-index");
+        let paths = index_paths(root);
+        let dir = workspace_dir(root);
+        assert_eq!(paths.symbols.parent(), Some(dir.as_path()));
+        assert_eq!(paths.refs.parent(), Some(dir.as_path()));
+        assert_eq!(paths.file_index.parent(), Some(dir.as_path()));
+        assert_eq!(paths.symbols.file_name().unwrap(), "symbols.jsonl");
+        assert_eq!(paths.refs.file_name().unwrap(), "refs.jsonl");
+        assert_eq!(paths.file_index.file_name().unwrap(), "file_index.json");
     }
 }

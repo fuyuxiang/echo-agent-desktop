@@ -1,6 +1,6 @@
 import { AlertTriangle, ChevronRight, FileCode2, FileText, LoaderCircle, X } from "lucide-react";
 
-import { isDirty, isFileTab, type DocTabKind, type FileTab, type WorkbenchTab } from "../store/tab-store";
+import { isDirty, isFileTab, isVirtualTab, type DocTabKind, type FileTab, type VirtualTab, type WorkbenchTab } from "../store/tab-store";
 import { CodingEditor, type CodingEditorDiagnostic, type EditorSymbol } from "./CodingEditor";
 
 interface TabContainerProps {
@@ -14,6 +14,7 @@ interface TabContainerProps {
   onDiagnostics?: (path: string, diagnostics: CodingEditorDiagnostic[]) => void;
   onSymbols?: (path: string, symbols: EditorSymbol[]) => void;
   renderDoc: (kind: DocTabKind) => React.ReactNode;
+  renderVirtual?: (tab: VirtualTab) => React.ReactNode;
   reveal?: { line: number; column: number; key: number };
 }
 
@@ -48,6 +49,7 @@ export function TabContainer({
   onDiagnostics,
   onSymbols,
   renderDoc,
+  renderVirtual,
   reveal,
 }: TabContainerProps) {
   const active = tabs.find((tab) => tab.id === activeId) ?? null;
@@ -126,7 +128,10 @@ export function TabContainer({
 
       <div className="coding-tabs__body">
         {!active && <div className="coding-tabs__empty-body">选择一个标签页</div>}
-        {active && !isFileTab(active) && renderDoc(active.kind)}
+        {active && !isFileTab(active) && !isVirtualTab(active) && renderDoc(active.kind)}
+        {active && isVirtualTab(active) && (renderVirtual ? renderVirtual(active) : (
+          <div className="coding-tabs__empty-body">该标签页暂未支持</div>
+        ))}
         {active && isFileTab(active) && active.loading && (
           <div className="coding-tabs__empty-body">
             <LoaderCircle size={15} className="is-spinning" />

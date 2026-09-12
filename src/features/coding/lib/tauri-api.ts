@@ -14,9 +14,17 @@ import type {
   DeliveryReport,
   DetectedCommand,
   FileChange,
+  ImpactGraph,
+  IndexProgressEvent,
+  IndexRemovedEvent,
+  IndexStatus,
+  IndexUpdatedEvent,
   OrchestratorState,
   PhaseChangedEvent,
   Problem,
+  ReferenceHit,
+  SymbolQueryHit,
+  SymbolRecord,
   TaskSummary,
   VerificationKind,
   VerificationOutputEvent,
@@ -92,6 +100,35 @@ export const codingApi = {
     invoke<DeliveryReport>("coding_delivery_pr_input", { root, taskId }),
   commit: (root: string, taskId: string, message: string) =>
     invoke<string>("coding_git_commit", { root, taskId, message }),
+
+  // Phase 2: cross-file symbol index + reference search + impact analysis.
+  indexStatus: (root: string) => invoke<IndexStatus>("coding_index_status", { root }),
+  indexRebuild: (root: string) => invoke<IndexStatus>("coding_index_rebuild", { root }),
+  symbolQuery: (root: string, needle: string, kind?: string, limit?: number) =>
+    invoke<SymbolQueryHit[]>("coding_symbol_query", {
+      root,
+      needle,
+      kind: kind ?? null,
+      limit: limit ?? null,
+    }),
+  symbolAt: (root: string, file: string, line: number) =>
+    invoke<SymbolRecord | null>("coding_symbol_at", { root, file, line }),
+
+  refsFind: (root: string, symbol: string, includeDeclarations?: boolean) =>
+    invoke<ReferenceHit[]>("coding_refs_find", {
+      root,
+      symbol,
+      includeDeclarations: includeDeclarations ?? null,
+    }),
+  refsDefinition: (root: string, symbol: string) =>
+    invoke<ReferenceHit[]>("coding_refs_definition", { root, symbol }),
+  impactAnalyze: (root: string, target: string, depth?: number, includeTests?: boolean) =>
+    invoke<ImpactGraph>("coding_impact_analyze", {
+      root,
+      target,
+      depth: depth ?? null,
+      includeTests: includeTests ?? null,
+    }),
 };
 
 export function onPhaseChanged(callback: (event: PhaseChangedEvent) => void): Promise<UnlistenFn> {
@@ -118,6 +155,30 @@ export function onAnalysisProgress(
   callback: (event: AnalysisProgressEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<AnalysisProgressEvent>("coding://analysis-progress", (event) =>
+    callback(event.payload),
+  );
+}
+
+export function onIndexProgress(
+  callback: (event: IndexProgressEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<IndexProgressEvent>("coding://index-progress", (event) =>
+    callback(event.payload),
+  );
+}
+
+export function onIndexUpdated(
+  callback: (event: IndexUpdatedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<IndexUpdatedEvent>("coding://index-updated", (event) =>
+    callback(event.payload),
+  );
+}
+
+export function onIndexRemoved(
+  callback: (event: IndexRemovedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<IndexRemovedEvent>("coding://index-removed", (event) =>
     callback(event.payload),
   );
 }

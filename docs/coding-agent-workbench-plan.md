@@ -16,7 +16,7 @@
 - 隔离：新增前端代码只允许放在 `src/features/coding/`；唯一挂载点是 `src/components/PlaceholderPage.tsx` 的 `label === "代码开发"` 分支。禁止修改 `src/App.tsx` 主聊天链路、禁止修改共享 store 的现有字段。
 - 共享组件只读复用，不改签名：`ModelSelector`、`PermissionPicker`、`PermissionInlineCard`、`QuestionInlineCard`、`ExecutionProcess`、`InputAddMenu`、`ContextUsagePill`、`Markdown`、`FileTreeView`。
 - 样式：新样式写入 `src/styles/coding-workbench.css`，所有选择器必须在 `.coding-workbench` 作用域内；色值只允许用 `tokens.css` 的 CSS 变量，禁止硬编码 hex，禁止 `color-scheme: dark`。
-- Rust 持久化根目录：`crate::paths::echo_agent_home_dir().join("coding")`。禁止引入新的 Cargo 依赖（不加 rusqlite / tree-sitter / git2）。
+- Rust 持久化根目录：`crate::paths::echo_agent_home_dir().join("coding")`。Cargo 依赖策略：第一期禁止新增；二期为支撑跨文件符号与引用，新增 `ignore`（.gitignore 感知的工作区遍历）、`notify-debouncer-full`（文件监听增量）、`grep` crate 的 `grep-regex`/`grep-matcher`（基于行号的快速多文件匹配）。其余 Cargo 依赖仍按第一期规则收紧，不引入数据库或 tree-sitter。
 - Rust 文件 IO：禁止在 `async fn` 内直接调用 `std::fs`；必须用 `tokio::fs` 或 `tokio::task::spawn_blocking`。
 - 工作区路径校验：所有接收 `root` 参数的 Tauri 命令必须先调用 `access.require_workspace(&root)?`（`State<'_, FilesystemAccess>`）。
 - 命令注册：新增 Tauri 命令必须加进 `src-tauri/src/lib.rs` 的 `invoke_handler` 列表，模块用 `mod` 声明。
@@ -5149,3 +5149,627 @@ EOF
 ---
 
 **待补写任务**：Task 10 命令面板、Task 11 tab 容器与编辑器、Task 12 活动栏视图、Task 13 Agent 面板、Task 14 底部面板与状态栏、Task 15 虚拟文档 tab、Task 16 切换与清理。
+
+---
+
+# 第二期实施计划：跨文件符号与引用
+
+> **范围**：跨文件 Symbol Index + 全工作区符号搜索、Find References、Go To Definition（跨文件跳转）、Impact Analysis（影响范围分析）。
+>
+> **技术栈**：Rust 端纯正则 + 行号索引，不引入 tree-sitter；不引入数据库。
+>
+> **持久化**：沿用 JSON/JSONL，在 `<home>/coding/<hash>/` 下与一期 `tasks.json` 平级新增 `symbols.jsonl` / `refs.jsonl` / `file_index.json`，任务目录内不再新增文件。
+>
+> **更新方式**：启动时 reconcile（stat 比对 mtime）+ mtime 增量（基于 `notify-debouncer-full`）+ 用户主动「重建索引」命令兜底。
+
+## 关键约束（用户已确认）
+
+- **技术栈**：Rust 端纯正则 + 行号索引，**不引入 tree-sitter**；不引入数据库。
+- **范围切片**：跨文件 Symbol Index、全工作区符号搜索、Find References、Go To Definition、Impact Analysis 四项。
+- **持久化**：沿用 JSON/JSONL，与一期 `<home>/coding/<hash>/` 平级新增 `symbols.jsonl` / `refs.jsonl` / `file_index.json`。**任务目录内不新增文件**。
+- **更新方式**：启动时 reconcile（stat 比对 mtime）+ mtime 增量（基于 `notify-debouncer-full`）+ 用户主动「重建索引」命令兜底。
+
+## 与一期的兼容性约束
+
+- 第一期已有的 `SymbolView.tsx`、Monaco `DocumentSymbolProvider` 订阅链路保留不动，但第二期 `SymbolView` 升级为「优先展示工作区符号索引，编辑器打开文件时叠加当前文件符号」。索引尚未构建完成时降级为「仅当前文件符号」并保留原文案。
+- 第一期 `coding://*` 事件名（`task-phase-changed` / `verification-output` / `verification-updated` / `analysis-progress` / `terminal-output` / `terminal-exit`）保持兼容只增不改。第二期新增 `coding://index-progress`、`coding://index-updated`、`coding://index-removed` 三个事件。
+- 第一期持久化根目录布局 `<home>/coding/<hash>/<task_id>/` 不变。第二期在工作区级新增 `<home>/coding/<hash>/symbols.jsonl`、`refs.jsonl`、`file_index.json`，任务目录内不再新增文件，避免与既有 `task.json` / `changeset.json` 混淆。
+- 第一期 `coding_*` 命令命名风格保留：第二期新命令统一以 `coding_index_` / `coding_symbol_` / `coding_refs_` / `coding_impact_` 为前缀。
+- 第一期 `access.require_workspace` 校验、`tokio::fs` / `spawn_blocking` IO 约束、`coding-workbench.css` 作用域与 `tokens.css` 颜色变量、提交规范四段式中文、不加 Claude/Anthropic 署名等约束全部继承。
+
+---
+
+## 二期文件结构
+
+### Rust 新增
+
+| 文件 | 职责 |
+|---|---|
+| `src-tauri/src/coding/symbols.rs` | 工作区符号索引：定义 `SymbolRecord`、基于语言的文件分类、用正则识别函数 / 类 / 常量 / 类型 / 导出；提供 `build_index`、`load_index`、`upsert_file`、`remove_file`、`query`、`symbol_at` |
+| `src-tauri/src/coding/refs.rs` | 引用查找：基于 `grep-regex` 在工作区内做行号精确匹配；提供 `find_references`、`find_definition` |
+| `src-tauri/src/coding/impact.rs` | 影响范围：以 `find_references` 输出为有向图入口，做 1~3 层传递闭包；提供 `analyze` |
+| `src-tauri/src/coding/watcher.rs` | 文件监听：基于 `notify-debouncer-full`，启动后挂到工作区根；事件聚合后通过 `app.emit` 派发 `coding://index-progress`、`coding://index-updated`、`coding://index-removed` |
+
+### Rust 修改
+
+| 文件 | 修改点 |
+|---|---|
+| `src-tauri/Cargo.toml` | `[dependencies]` 加 `ignore = "0.4"`、`notify-debouncer-full = "0.3"`、`grep = { version = "0.3", default-features = false, features = ["regex"] }` |
+| `src-tauri/src/coding/mod.rs` | 加 `pub mod symbols; pub mod refs; pub mod impact; pub mod watcher;`，导出共用类型别名 `pub type SymbolId = String` |
+| `src-tauri/src/coding/store.rs` | 增 `workspace_level_dir`、`index_paths`；新结构体 `IndexPaths { symbols, refs, file_index }`；维持损坏文件按不存在处理的容错语义 |
+| `src-tauri/src/coding/task.rs` | `CodingTask` 增加 `index_status: Option<IndexStatus>`；新建 `bootstrap_index_on_start(root)` 在启动时调用一次 |
+| `src-tauri/src/lib.rs` | `invoke_handler` 注册 8 个新命令：`coding_index_status`、`coding_index_rebuild`、`coding_symbol_query`、`coding_symbol_at`、`coding_refs_find`、`coding_refs_definition`、`coding_impact_analyze`；启动 hook 调 `bootstrap_index_on_start` 与 `spawn_watcher` |
+
+### 前端新增
+
+| 文件 | 职责 |
+|---|---|
+| `src/features/coding/lib/symbol-index.ts` | 缓存与订阅：`SymbolIndexSnapshot`、`subscribe(symbolsChanged)`、`searchSymbols(query)`、`getSymbolAt(path, line)`；订阅 `coding://index-updated` / `coding://index-removed` 事件维护前端镜像 |
+| `src/features/coding/main/FindReferencesView.tsx` | 虚拟 tab 内容：调 `coding_refs_find`，渲染调用方列表，支持点击跳转 |
+| `src/features/coding/main/ImpactAnalysisView.tsx` | 虚拟 tab 内容：调 `coding_impact_analyze`，渲染直接引用 / 传递影响 / 受影响测试三层 |
+| `src/features/coding/main/GoToDefinitionView.tsx` | 多候选时列出，单候选直接跳转；`Shift+⏎` 在命令面板触发 |
+| `src/features/coding/lib/regex-parser.ts` | 工具函数：从符号名构造正则候选（`\b<symbol>\b` 转义） |
+
+### 前端修改
+
+| 文件 | 修改点 |
+|---|---|
+| `src/features/coding/explorer/SymbolView.tsx` | 升级为「工作区符号视图」：默认显示 `symbol-index.ts` 缓存的全工作区符号，编辑器打开文件时叠加当前文件符号；删除「当前仅列出当前文件」文案，替换为索引状态行（构建中 / 已就绪 N 个 / 增量同步中） |
+| `src/features/coding/shell/CommandPalette.tsx` | ⌘T（symbols 模式）改为消费 `symbol-index.ts` 的工作区搜索结果；移除「按符号名称搜索当前文件」placeholder，改为「跨工作区搜索符号（函数 / 类 / 常量）」 |
+| `src/features/coding/CodingWorkbench.tsx` | 接线新事件订阅与新视图容器；`useEffect` 启动时调 `coding_index_status` 决定走「等待索引」还是「立即可用」分支；右键菜单接入「跳转到定义」「查找引用」「分析影响」三个命令 |
+| `src/features/coding/main/CodingEditor.tsx` | `F12` / `Shift+F12` / `Alt+F12` 三个编辑器内快捷键派发到新增命令；状态栏右下加索引图标 |
+| `src/features/coding/lib/tauri-api.ts` | 增加 `coding_index_*` / `coding_symbol_*` / `coding_refs_*` / `coding_impact_*` 八个命令封装与三个事件 `onIndexProgress` / `onIndexUpdated` / `onIndexRemoved` |
+| `src/features/coding/lib/types.ts` | 新增 `SymbolKind`、`SymbolRecord`、`ReferenceRecord`、`ImpactGraph`、`IndexProgressEvent`、`IndexUpdatedEvent` 类型 |
+| `src/features/coding/lib/commands.ts` | 在 `understand` 分组新增「跳转到定义」「查找当前符号引用」「分析当前符号影响」「重建符号索引」四条命令；`CommandContext` 加 `openGoToDefinition` / `openFindReferences` / `openImpactAnalysis` / `rebuildIndex` 四个回调 |
+
+---
+
+## 任务总览
+
+后端 Task 1–8 与前端 Task 9–16（一期）已完成；本期 Task 17–23 在其之上叠加，沿用 # 编号续起。
+
+| # | 任务 | 交付物 | 状态 |
+|---|---|---|---|
+| 17 | Rust 符号索引 | 工作区级 `symbols.jsonl` + reconcile + `bootstrap_index_on_start` + 4 个 Tauri 命令 | 待实施 |
+| 18 | Rust 文件监听 | notify-debouncer-full + 增量事件 + 3 个事件 payload | 待实施 |
+| 19 | Rust 引用查找 | `refs.rs` + `find_references` / `find_definition` + 2 个 Tauri 命令 | 待实施 |
+| 20 | Rust 影响范围 | `impact.rs` + 1~3 层传递闭包 + `coding_impact_analyze` 命令 | 待实施 |
+| 21 | 前端符号视图升级 | `SymbolIndexClient` + `SymbolView` 全工作区版 | 待实施 |
+| 22 | 前端命令面板与虚拟 tab | ⌘T 跨文件 + `FindReferencesView` / `ImpactAnalysisView` / `GoToDefinitionView` + 编辑器快捷键 | 待实施 |
+| 23 | 清理与回归 | 新增依赖审查、与一期事件不冲突、删除旧 probe | 待实施 |
+
+任务 17–20 为 Rust 侧，可独立 `cargo test`；21–22 为前端，依赖 17–20 的命令契约；23 收尾回归。
+
+
+---
+
+### Task 17: Rust 符号索引
+
+**Files:**
+- Create: `src-tauri/src/coding/symbols.rs`
+- Modify: `src-tauri/src/coding/store.rs`（增 `workspace_level_dir` / `index_paths`）
+- Modify: `src-tauri/src/coding/mod.rs`（`pub mod symbols;`）
+- Modify: `src-tauri/src/coding/task.rs`（`CodingTask` 加 `index_status`，新增 `bootstrap_index_on_start`）
+- Modify: `src-tauri/src/lib.rs`（注册 4 个命令 + 启动 hook）
+- Modify: `src-tauri/Cargo.toml`（加 `ignore = "0.4"`）
+
+**Interfaces:**
+
+共享类型：
+
+- `pub enum SymbolKind { Function, Class, Method, Constant, Type, Interface, Enum, Module, Variable }`，serde `rename_all = "snake_case"`。
+- `pub struct SymbolRecord { id: String, name: String, kind: SymbolKind, container: Option<String>, file: String, line: u32, column: u32, signature: Option<String>, exported: bool }`，serde `rename_all = "camelCase"`。`id` 用 `sha2` 对 `kind + file + line + column + name` 取前 16 位十六进制，确保同一符号跨次构建稳定。
+- `pub struct IndexStatus { state: IndexState, files_indexed: u32, symbols: u32, last_reconciled_at: Option<String>, in_progress: bool }`，`IndexState` 为 `Empty | Building | Ready | Rebuilding | Stale`。
+- `pub struct SymbolQueryHit { symbol: SymbolRecord, score: u32 }`（`score` 由简单前缀 / 子序列匹配给出）。
+
+持久化路径（在 `store.rs` 加）：
+
+- `pub fn workspace_level_dir(root: &Path) -> PathBuf` 返回 `<home>/coding/<hash>/`，与既有 `workspace_dir` 同级。
+- `pub struct IndexPaths { symbols: PathBuf, refs: PathBuf, file_index: PathBuf }`
+- `pub fn index_paths(root: &Path) -> IndexPaths`，三个路径：`workspace_level_dir(root).join("symbols.jsonl")`、`.join("refs.jsonl")`、`.join("file_index.json")`。
+- 文件布局：`symbols.jsonl` / `refs.jsonl` 为 JSONL 追加写（与一期 `verifications.jsonl` 一致），`file_index.json` 为 JSON（与一期 `tasks.json` 一致），损坏或缺失按不存在处理。
+
+`symbols.rs` 函数：
+
+- `pub fn build_index(root) -> Result<IndexStatus, String>`：用 `ignore::WalkBuilder` 遍历 `root`，对每个文本文件按扩展名走对应正则（见下「语言正则表」），产出 `Vec<SymbolRecord>` 后一次性写 `symbols.jsonl`，并更新 `file_index.json`。整库构建走 `spawn_blocking`，每 100 文件一次 `app.emit("coding://index-progress", ...)`。
+- `pub fn load_index(root) -> Vec<SymbolRecord>`：读取 `symbols.jsonl`，损坏行跳过。
+- `pub fn upsert_file(root, rel) -> Result<Vec<SymbolRecord>, String>`：单文件重扫，返回该文件此次新增 / 更新的符号集合。
+- `pub fn remove_file(root, rel) -> Result<(), String>`：从 `symbols.jsonl` / `file_index.json` 删除该路径的条目。
+- `pub fn query(root, needle, kind: Option<SymbolKind>, limit) -> Result<Vec<SymbolQueryHit>, String>`：内存过滤 + 排序。
+- `pub fn symbol_at(root, file, line) -> Result<Option<SymbolRecord>, String>`：返回 `line` 落点所在的最内层符号。
+
+`task.rs` 增：
+
+- `pub fn bootstrap_index_on_start(root) -> Result<IndexStatus, String>`：若 `file_index.json` 存在则 reconcile（stat 比对 mtime / size，差异文件走 `upsert_file`），否则全量 `build_index`。被 `lib.rs::run` 的 setup hook 调用一次。
+- `CodingTask` 增字段 `pub index_status: Option<IndexStatus>`，camelCase 序列化；前端通过 `coding_task_get` 拿到的就是含状态的对象，无需新增命令。
+
+Tauri 命令：
+
+- `coding_index_status(root: String) -> IndexStatus`：从 `file_index.json` 读 `last_reconciled_at` / `files_indexed`，从 `symbols.jsonl` 行数得 `symbols`。
+- `coding_index_rebuild(root: String) -> IndexStatus`：清空三个文件并触发 `build_index`；过程发 `coding://index-progress`，完成发 `coding://index-updated`，失败发 `coding://index-removed` 并把 `state` 设为 `Stale`。
+- `coding_symbol_query(root: String, needle: string, kind?: SymbolKind, limit?: u32 = 50) -> SymbolQueryHit[]`：按 `score` 降序返回。
+- `coding_symbol_at(root: String, file: string, line: u32) -> SymbolRecord | null`。
+
+语言正则表（单元测试覆盖每一类）：
+
+| 语言 | 扩展名 | 命中类型 |
+|---|---|---|
+| TypeScript / JavaScript | `.ts` / `.tsx` / `.js` / `.jsx` / `.mts` / `.cts` | `export function/const/class/interface/type/enum`、顶层 `function Name`、类方法 |
+| Rust | `.rs` | `pub fn` / `pub struct` / `pub enum` / `pub trait` / `pub type` / `pub const` / `pub static` / `impl . for . { fn . }` |
+| Python | `.py` | 顶层 `def Name` / `class Name` / `Name: type` 注解变量、`async def` |
+| Go | `.go` | 顶层 `func Name` / `type Name struct|interface` / `var Name` / `const Name` |
+| Java | `.java` | `public/private/protected class|interface|enum Name`、`[public/private/protected] [static] <Type> Name(.)` |
+| 其他文本文件 | 任意 | 不解析；仅在 `file_index.json` 登记路径与 mtime |
+
+**验收标准：**
+
+1. 在临时目录用真实代码片段（含 TS / Rust / Python / Go 各 2 个符号）跑 `build_index`，`symbols.jsonl` 行数等于源码符号数；`file_index.json` 含每个文件的 `mtime_ms` 与 `size`。
+2. `upsert_file` 修改某文件后再次调用，`symbols.jsonl` 中该文件的旧符号被替换而非重复。
+3. `query("foo", Some(Function), 50)` 只返回 `kind == Function` 且名字匹配 `foo` 的条目；前缀匹配得分高于子序列匹配。
+4. `symbol_at(file, line_of_method_body)` 返回该方法（而非外层类）。
+5. 损坏的 `symbols.jsonl` 单行被跳过，余下正常读取。
+6. `coding_index_status` 在索引完成前返回 `state = Empty` 或 `Building`，完成后 `Ready` 且 `last_reconciled_at` 非空。
+7. `coding_index_rebuild` 触发后能完整恢复索引（与首次 `build_index` 结果等价）。
+8. 4 个命令都先调 `access.require_workspace`。
+
+**涉及测试：**
+
+- `cargo test coding::symbols`（位于 `src-tauri/src/coding/symbols.rs` 末尾 `#[cfg(test)] mod tests`）
+  - `builds_index_for_mixed_language_repo`
+  - `upsert_replaces_not_duplicates_and_keeps_first_id_stable`
+  - `remove_file_drops_all_symbols_for_path`
+  - `query_filters_by_kind_and_subsequence_match_scores_prefix_higher`
+  - `symbol_at_returns_innermost_when_method_inside_class`
+  - `corrupt_jsonl_line_is_skipped_others_loaded`
+  - `index_status_reflects_empty_building_ready_transitions`
+  - `rebuild_yields_equivalent_symbols_to_first_build`
+  - `requires_workspace_path_outside_root_is_rejected`
+- `cargo test coding::store` 新增 `index_paths_are_workspace_level_and_share_parent_with_workspace_dir`
+
+
+---
+
+### Task 18: Rust 文件监听增量
+
+**Files:**
+- Create: `src-tauri/src/coding/watcher.rs`
+- Modify: `src-tauri/src/coding/mod.rs`（`pub mod watcher;`）
+- Modify: `src-tauri/src/coding/task.rs`（在 `bootstrap_index_on_start` 完成后挂监听）
+- Modify: `src-tauri/src/lib.rs`（启动 hook 调一次 `spawn_watcher`）
+- Modify: `src-tauri/Cargo.toml`（加 `notify-debouncer-full = "0.3"`）
+
+**Interfaces:**
+
+事件 payload：
+
+- `IndexProgressEvent { root: string, scanned: u32, total_estimate: u32 }`，事件名 `coding://index-progress`
+- `IndexUpdatedEvent { root: string, file: string, added: u32, updated: u32, removed: u32 }`，事件名 `coding://index-updated`
+- `IndexRemovedEvent { root: string, file: string }`，事件名 `coding://index-removed`
+
+`watcher.rs` 函数：
+
+- `pub fn spawn_watcher(app: AppHandle, root: PathBuf) -> Result<JoinHandle<()>, String>`
+  - 用 `notify_debouncer_full::new_debouncer(timeout_ms=400, tick_rate_ms=200, ...)` 包裹 `notify::recommended_watcher`。
+  - 按事件类型分派：`Create` / `Modify` → `upsert_file` → `coding://index-updated`；`Remove` → `remove_file` → `coding://index-removed`。
+  - 对文件 mtime 与 `file_index.json` 比对：无变化直接跳过。
+  - 节流：同文件 400ms 内多次事件合并为一次 `upsert_file` 调用。
+  - 忽略目录：`.git`、`node_modules`、`target`、`dist`、`build`、`.next`、`.venv`、`__pycache__`（与 `ignore::WalkBuilder` 复用同一份过滤规则）。
+- `pub fn stop_watcher(handle: JoinHandle<()>)`（前端卸载工作台时调用，初期可只接后端）。
+
+**验收标准：**
+
+1. 启动监听后修改工作区内的 `.ts` 文件，1 秒内能收到 `coding://index-updated`，payload 中 `file` 等于修改的相对路径，`updated >= 1`。
+2. 删除文件能收到 `coding://index-removed`，且后续 `coding_symbol_query` 不再返回该文件符号。
+3. 修改 `.git/` 内部或 `node_modules/` 下的文件不触发任何事件。
+4. 400ms 内对同一文件连续保存 3 次，只产生 1 次 `coding://index-updated`。
+5. 工作区根不存在或权限不足时，`spawn_watcher` 返回 `Err` 而非 panic。
+6. 监听器自身的 `JoinHandle` 在测试里能被 `Drop` 而不遗留线程。
+
+**涉及测试：**
+
+- `cargo test coding::watcher`
+  - `create_modify_emit_index_updated_with_correct_path`
+  - `remove_file_emits_index_removed`
+  - `events_inside_ignored_dirs_are_silenced`
+  - `rapid_modifications_are_debounced_to_one_event`
+  - `spawn_watcher_returns_err_for_missing_root`
+- `coding::symbols` 集成测试 `watcher_incremental_update_matches_full_rescan`（修改 5 个文件 → watcher 完成后 → `symbols.jsonl` 等价于 `build_index`）。
+
+---
+
+### Task 19: Rust 引用查找
+
+**Files:**
+- Create: `src-tauri/src/coding/refs.rs`
+- Modify: `src-tauri/src/coding/mod.rs`（`pub mod refs;`）
+- Modify: `src-tauri/src/lib.rs`（注册 2 个命令）
+- Modify: `src-tauri/Cargo.toml`（加 `grep = { version = "0.3", default-features = false, features = ["regex"] }`）
+
+**Interfaces:**
+
+类型：
+
+- `pub struct ReferenceRecord { symbol: String, file: String, line: u32, column: u32, kind: ReferenceKind, preview: String }`，`ReferenceKind` 为 `Definition | Read | Write | Call | Import | Type | Unknown`，serde `rename_all = "snake_case"`。
+- `pub struct ReferenceHit { reference: ReferenceRecord, enclosing_symbol: Option<SymbolRecord> }`（`enclosing_symbol` 由 `symbols::symbol_at` 给出）。
+
+`refs.rs` 函数：
+
+- `pub fn find_references(root, symbol, include_declarations) -> Result<Vec<ReferenceHit>, String>`
+  - 走 `grep::grep::Grep::new(.)` + `grep_regex::RegexMatcher` 构造一次扫描，遍历工作区文本文件（复用 `ignore::WalkBuilder`）。
+  - 候选字面量：通过 `regex_parser::identifier_regex_escape` 做 `\b<symbol>\b` 转义，避免同名子串误命中（如 `userId` 不被 `userId_helper` 命中）。
+  - 每条命中调 `symbols::symbol_at(root, file, line)` 反查所在容器；标记 `kind`：
+    - 文件名是 `index.{ts,js,tsx,jsx,d.ts}` 的「`export . from`」行 → `Import`
+    - 行文本以 `function Name` / `class Name` / `struct Name` 等声明关键字打头 → `Definition`
+    - 行内包含 `=` 且不在 `==` / `===` / `=>` 上下文 → `Write`
+    - 行内包含 `(` 且不在 `fn ` / `def ` / `function ` 等声明上下文 → `Call`
+    - 行内包含 `:` 但不包含 `=>` → `Type`
+    - 兜底 → `Unknown`
+  - 行截断保留前后各 80 字符到 `preview`。
+- `pub fn find_definition(root, symbol) -> Result<Vec<ReferenceHit>, String>`
+  - 与 `find_references` 共用扫描，只过滤 `kind == Definition` 的条目。
+  - 调用方按 `exported` 优先 + 文件路径短者优先排序（前端默认接受首条，其他候选在 `GoToDefinitionView` 列出）。
+
+Tauri 命令：
+
+- `coding_refs_find(root: String, symbol: string, include_declarations?: boolean = true) -> ReferenceHit[]`
+- `coding_refs_definition(root: String, symbol: string) -> ReferenceHit[]`
+
+**验收标准：**
+
+1. 在临时目录放真实代码（含同名 `parseToken` 函数在两个文件中定义 + `parseToken(.)` 调用 3 处），`find_references("parseToken", true)` 返回两条 `Definition` 与三条 `Call`，且 `enclosing_symbol` 正确。
+2. `find_references("parseToken", false)` 只返回 `Call` 类。
+3. `find_definition("parseToken")` 返回两条，按 `(exported=true, path.len)` 排序。
+4. 子串误命中不会发生：`identifier = "Token"` 时，`parseToken` 不被命中（验证 `\b` 边界）。
+5. 行截断的 `preview` 不超过 160 字符。
+6. `.git` / `node_modules` / `target` 等被忽略目录不被扫描。
+7. `access.require_workspace` 校验通过。
+
+**涉及测试：**
+
+- `cargo test coding::refs`
+  - `finds_declarations_and_calls_across_files`
+  - `include_declarations_false_returns_only_calls`
+  - `definition_result_is_sorted_by_exported_then_shortest_path`
+  - `word_boundary_avoids_substring_false_positive`
+  - `preview_is_truncated_with_neighbors`
+  - `ignored_dirs_are_not_scanned`
+  - `enclosing_symbol_is_resolved_to_innermost_container`
+  - `requires_workspace_path_outside_root_is_rejected`
+
+
+---
+
+### Task 20: Rust 影响范围
+
+**Files:**
+- Create: `src-tauri/src/coding/impact.rs`
+- Modify: `src-tauri/src/coding/mod.rs`（`pub mod impact;`）
+- Modify: `src-tauri/src/lib.rs`（注册 1 个命令）
+
+**Interfaces:**
+
+类型：
+
+- `pub struct ImpactNode { symbol: SymbolRecord, references: u32, tests: u32, depth: u32 }`，serde `rename_all = "camelCase"`。
+- `pub struct ImpactEdge { from_file: String, from_line: u32, to: String, kind: ReferenceKind }`
+- `pub struct ImpactGraph { target: String, direct: Vec<ImpactNode>, transitive: Vec<ImpactNode>, test_impact: Vec<SymbolRecord>, edges: Vec<ImpactEdge>, depth_used: u32 }`，serde `rename_all = "camelCase"`。
+
+`impact.rs` 函数：
+
+- `pub fn analyze(root, target, depth, include_tests) -> Result<ImpactGraph, String>`
+  - `depth` 上限 3，默认 2；超出收敛到 3。
+  - 第 0 层：`target` 自身对应的 `SymbolRecord`（来自 `symbols::query` 精确匹配 `name`）。若没有同名符号，返回空 `direct` 且 `target` 仍写入响应。
+  - 第 1 层：对 `target` 调 `refs::find_references(target, false)`，命中点上的 `enclosing_symbol` 收集为 `direct`。每条命中收集为 `edges`。
+  - 第 2~3 层：对第 1 层每个 `enclosing_symbol` 递归调 `refs::find_references`，但只取调用 / 写类型的命中，并跳过已经在更浅层出现过的符号以避免环。递归上限即 `depth`。
+  - `test_impact`：当 `include_tests=true`，从 `transitive` 中筛 `file` 含 `__tests__` / `tests/` / `.test.` / `.spec.` / `test_*.py` 的文件所属符号。
+  - `references`：单层 BFS 内的去重计数；`tests`：在所有层内出现过的测试文件数。
+
+Tauri 命令：
+
+- `coding_impact_analyze(root: String, target: string, depth?: u32 = 2, include_tests?: boolean = true) -> ImpactGraph`
+
+**验收标准：**
+
+1. 示例仓库：A 类含 `authenticate`；B 类调 `A.authenticate`；C 测试文件调 `B`。`analyze("authenticate", 2, true)` 返回 `direct` 含 B，`transitive` 包含 C 所在符号，`test_impact` 含 C。
+2. `depth=1` 时 `transitive` 为空。
+3. 存在环 `a → b → a` 时不无限递归：`depth=3` 时 `transitive` 仍只列一次 `a`。
+4. `include_tests=false` 时 `test_impact` 为空。
+5. `references` 计数等于直接引用数（含重复文件多行）。
+6. `edges` 数量等于直接引用命中数。
+7. `access.require_workspace` 校验通过。
+
+**涉及测试：**
+
+- `cargo test coding::impact`
+  - `one_layer_returns_only_direct_callers`
+  - `two_layer_includes_transitive_callers_and_tests`
+  - `include_tests_false_drops_test_impact`
+  - `cycle_is_handled_by_depth_cap`
+  - `unknown_symbol_returns_empty_direct_with_target_in_response`
+  - `references_count_matches_unique_caller_files`
+  - `requires_workspace_path_outside_root_is_rejected`
+
+---
+
+### Task 21: 前端符号视图升级
+
+**Files:**
+- Create: `src/features/coding/lib/symbol-index.ts`
+- Create: `src/features/coding/lib/symbol-index.test.ts`
+- Modify: `src/features/coding/explorer/SymbolView.tsx`
+- Modify: `src/features/coding/lib/tauri-api.ts`（增加 `indexStatus` / `symbolQuery` / `symbolAt` 封装 + `onIndexProgress` / `onIndexUpdated` / `onIndexRemoved` 事件订阅）
+- Modify: `src/features/coding/lib/types.ts`（新增 `SymbolKind` / `SymbolRecord` / `SymbolQueryHit` / `IndexStatus` / 三个事件 payload 类型）
+- Modify: `src/features/coding/__tests__/explorer-views.test.tsx`（扩展现有 SymbolView 用例）
+
+**Interfaces:**
+
+`symbol-index.ts` API：
+
+- `class SymbolIndexClient`：构造接受 `root: string`，对外暴露
+  - `search(query: string, kind?: SymbolKind): SymbolQueryHit[]` —— 内存过滤
+  - `symbolAt(file: string, line: number): SymbolRecord | undefined`
+  - `subscribe(listener: () => void): () => void` —— 反订阅函数
+  - `rebuild(): Promise<void>` —— 调 `coding_index_rebuild` 并等 `coding://index-updated` 完成事件
+  - `status(): IndexStatus`
+- `getSymbolIndexClient(root: string): SymbolIndexClient` —— 单例缓存（`Map<root, SymbolIndexClient>`）
+
+事件流：
+
+- 启动时 `coding_index_status(root)` 拉一次状态，若 `Empty` / `Building` 则进入「构建中」占位，否则立即可用。
+- 订阅 `coding://index-updated` / `coding://index-removed`：内部维护 `Map<file, SymbolRecord[]>` 与 `Map<file, IndexFileEntry>`，按事件 payload 增量更新；事件触发时通知所有订阅者。
+- 订阅 `coding://index-progress`：更新 status bar 进度。
+
+`SymbolView` UI 行为：
+
+- 顶部状态行：根据 `IndexStatus.state` 显示「正在构建…」/「已就绪 N 个」/「增量同步中」。
+- 列表：按 `kind` 分组显示工作区符号（默认显示 Function / Class / Type 三类）；选中符号 → 打开文件到对应行。
+- 叠加：当前编辑器打开文件时，列表顶部新增「当前文件」分组，按行号排序。
+- 过滤框：支持名称模糊筛选（substring）+ kind 多选。
+- 索引未就绪时降级到一期 Monaco 当前文件符号行为，保留「正在构建…」提示。
+- 删除原「当前仅列出当前文件的符号；跨文件符号索引与引用查找将在后续版本接入」文案。
+
+**验收标准：**
+
+1. 状态行显示「正在构建…」时首屏显示空列表（不报错）；索引完成后切到「已就绪」并展示完整符号分组。
+2. 输入「foo」筛选符号后只显示名称含 `foo` 的条目；选 `kind=function` 筛选只留函数。
+3. 编辑器切到 `src/api/auth.ts` 时，符号视图顶部出现「当前文件」分组，按行号排序。
+4. 索引重建过程中修改文件，状态行立刻切到「增量同步中」，完成后回到「已就绪」并展示新文件符号。
+5. `rebuild()` 触发后能成功清空并重建，UI 自动反映。
+6. 旧文案完全移除。
+
+**涉及测试：**
+
+- `pnpm test symbol-index`（新建 `__tests__/symbol-index.test.ts`）
+  - `search_returns_symbols_sorted_by_score_with_kind_filter`
+  - `symbolAt_returns_innermost_when_method_inside_class`
+  - `subscribe_receives_updates_on_index_updated_event`
+  - `subscribe_receives_removals_on_index_removed_event`
+  - `getSymbolIndexClient_returns_same_instance_for_same_root`
+- `pnpm test SymbolView`（扩展 `__tests__/explorer-views.test.tsx`）
+  - `renders_empty_state_with_building_label_when_index_not_ready`
+  - `renders_workspace_symbols_grouped_by_kind_when_index_ready`
+  - `overlays_current_file_symbols_when_editor_opens_a_file`
+  - `omits_legacy_one_file_only_message`
+
+
+---
+
+### Task 22: 前端命令面板与虚拟 tab
+
+**Files:**
+- Create: `src/features/coding/main/FindReferencesView.tsx`
+- Create: `src/features/coding/main/ImpactAnalysisView.tsx`
+- Create: `src/features/coding/main/GoToDefinitionView.tsx`
+- Create: `src/features/coding/__tests__/find-references-view.test.tsx`
+- Create: `src/features/coding/__tests__/impact-analysis-view.test.tsx`
+- Create: `src/features/coding/__tests__/go-to-definition-view.test.tsx`
+- Modify: `src/features/coding/shell/CommandPalette.tsx`（⌘T 跨文件）
+- Modify: `src/features/coding/main/CodingEditor.tsx`（F12 / Shift+F12 / Alt+F12）
+- Modify: `src/features/coding/lib/tauri-api.ts`（新增 `refsFind` / `refsDefinition` / `impactAnalyze` 封装）
+- Modify: `src/features/coding/lib/types.ts`（新增 `ReferenceKind` / `ReferenceRecord` / `ReferenceHit` / `ImpactNode` / `ImpactEdge` / `ImpactGraph`）
+- Modify: `src/features/coding/lib/commands.ts`（新增 4 条命令 + 4 个回调）
+- Modify: `src/features/coding/CodingWorkbench.tsx`（接线新视图容器）
+- Modify: `src/features/coding/store/tab-store.ts`（新增虚拟 tab kind）
+- Modify: `src/features/coding/__tests__/CommandPalette.test.tsx`（扩展）
+- Modify: `src/features/coding/__tests__/commands.test.ts`（扩展）
+- Modify: `src/features/coding/__tests__/tab-store.test.ts`（扩展）
+
+**Interfaces:**
+
+类型（`types.ts` 新增）：
+
+- `ReferenceKind = "definition" | "read" | "write" | "call" | "import" | "type" | "unknown"`
+- `ReferenceRecord { symbol, file, line, column, kind, preview }`
+- `ReferenceHit { reference: ReferenceRecord, enclosingSymbol? }`
+- `ImpactNode { symbol: SymbolRecord, references, tests, depth }`
+- `ImpactEdge { fromFile, fromLine, to, kind }`
+- `ImpactGraph { target, direct, transitive, testImpact, edges, depthUsed }`
+
+`tauri-api.ts` 新增：
+
+- `refsFind(root, symbol, includeDeclarations?)` → `ReferenceHit[]`
+- `refsDefinition(root, symbol)` → `ReferenceHit[]`
+- `impactAnalyze(root, target, depth?, includeTests?)` → `ImpactGraph`
+
+`CommandPalette.tsx` ⌘T 模式变化：
+
+- 移除「按符号名称搜索当前文件」placeholder，改为「跨工作区搜索符号（函数 / 类 / 常量）」。
+- 命中数据来自 `SymbolIndexClient.search(query)`，每项展示 `name · kind · file:line`。
+- 回车默认走 `FindReferencesView`；按住 Shift 回车走 `GoToDefinitionView`；按住 Alt 回车走 `ImpactAnalysisView`。
+- 当索引尚未就绪时显示「正在构建索引…」并禁用回车。
+
+`CodingEditor.tsx` 编辑器内快捷键：
+
+- `F12` / 单击符号 → `GoToDefinitionView`（多候选时列出，单候选直接打开）。
+- `Shift+F12` → `FindReferencesView`，以当前光标所在词为 `symbol`。
+- `Alt+F12` → `ImpactAnalysisView`，默认 `depth=2, includeTests=true`。
+
+`commands.ts` 新增命令（在 `understand` 分组）：
+
+- `understand.gotoDefinition` 「跳转到定义」（快捷键 `F12`）
+- `understand.findReferences` 「查找当前符号引用」（快捷键 `Shift+F12`）
+- `understand.analyzeImpact` 「分析当前符号影响」（快捷键 `Alt+F12`）
+- `index.rebuild` 「重建符号索引」
+
+`CommandContext` 新增回调：`openGoToDefinition(symbol)` / `openFindReferences(symbol)` / `openImpactAnalysis(symbol)` / `rebuildIndex()`。
+
+`tab-store.ts` 新增虚拟 tab kind：`"findReferences" | "impactAnalysis" | "goToDefinition"`，均带 `SymbolKey`（`{ name, file?, line? }`）作为 `params`，避免同一符号多次打开时重复创建 tab。
+
+**验收标准：**
+
+1. ⌘T 输入 `parseToken` 命中跨文件符号；回车打开 `FindReferencesView`，列出三处 `Call`。
+2. 按住 Shift+回车走 `GoToDefinitionView`，多候选时显示候选列表，单候选直接跳转到定义位置。
+3. 按住 Alt+回车走 `ImpactAnalysisView`，分层渲染 `direct` / `transitive` / `testImpact`，且 `edges` 列表与节点对得上。
+4. 编辑器内 `F12` / `Shift+F12` / `Alt+F12` 三个快捷键派发到正确视图。
+5. 命令面板新增的四个命令项在索引未就绪时处于 `enabled=false`。
+6. 同一符号的 `FindReferencesView` 不会创建多个 tab，重复触发会聚焦已有 tab。
+7. 状态栏右下索引图标在 `rebuild` 触发后切换为「重建中」并自动恢复。
+
+**涉及测试：**
+
+- `pnpm test CommandPalette`
+  - `symbols_mode_uses_workspace_index_and_disables_enter_when_index_not_ready`
+  - `shift_enter_opens_go_to_definition_and_alt_enter_opens_impact_analysis`
+- `pnpm test FindReferencesView ImpactAnalysisView GoToDefinitionView`
+  - `renders_three_layers_for_two_level_impact_graph`
+  - `renders_caller_list_grouped_by_file`
+  - `pick_definition_when_single_candidate_jumps_directly`
+  - `click_caller_row_opens_file_at_line`
+- `pnpm test commands`（扩展 `__tests__/commands.test.ts`）
+  - `registers_goto_definition_find_references_analyze_impact_and_rebuild`
+  - `commands_disabled_when_index_not_ready`
+- `pnpm test tab-store`（扩展 `__tests__/tab-store.test.ts`）
+  - `opening_same_symbol_twice_focuses_existing_tab`
+
+---
+
+### Task 23: 清理与回归
+
+**Files:**
+- Modify: `src-tauri/Cargo.toml`（最终依赖审计）
+- Modify: `src/features/coding/explorer/SymbolView.tsx`（清理旧限制文案）
+- Modify: `src/features/coding/CodingWorkbench.tsx`（清理调试日志）
+- Modify: `src/features/coding/lib/tauri-api.ts`（补齐 README 注释）
+- Modify: `docs/coding-agent-workbench-plan.md`（标注第一期前端任务 10–16 已完成情况 + 二期约束原文）
+
+**Interfaces:** 不新增类型；只做收尾。
+
+**验收标准：**
+
+1. `cargo build --release` 在 macOS / Windows / Linux 三平台都能成功（GitHub Actions 三平台任务各跑一遍）。
+2. `cargo audit` 无新增高危告警（允许 `grep` / `notify` 的常规 transitive）。
+3. `pnpm build`（tsc --noEmit && vite build）通过。
+4. `pnpm test` 全部用例通过（含一期 14 个 + 二期新增约 10 个）。
+5. `cargo test` 全部模块通过（含一期 57 个 + 二期新增约 30 个）。
+6. 启动应用，从零创建任务 → 触发一次 `verify` → 关闭 → 重启，索引从空重建并在 30 秒内（视工作区大小）显示「已就绪」。
+7. 索引重建时再编辑文件，能在 1 秒内反映到符号视图。
+8. 事件名全局 grep：现有 `coding://*` 事件名不被任何二期代码改名。
+9. 第一期 `coding_index_*` / `coding_symbol_*` / `coding_refs_*` / `coding_impact_*` 命令名均未与一期命令重名。
+10. 旧 `src/components/coding-workspace/` 一期 Task 16 已删除，二期不依赖其任何符号。
+
+**涉及测试：**
+
+- `pnpm test CodingWorkbench`（扩展 `__tests__/CodingWorkbench.test.tsx`）
+  - `subscribes_to_index_events_and_updates_status_bar_icon`
+  - `rebuild_command_is_invoked_through_command_palette`
+- `cargo test`（一次性回归）
+  - `coding::symbols` / `coding::refs` / `coding::impact` / `coding::watcher` / `coding::store` / `coding::task` / `coding::changeset` / `coding::verification` / `coding::diagnostics` / `coding::orchestrator` / `coding::delivery` 全部模块 0 失败。
+
+---
+
+## 测试策略总览
+
+### Rust（`cargo test`，位于各模块文件尾 `#[cfg(test)] mod tests`）
+
+| 模块 | 测试文件 | 关键用例（最小集） |
+|---|---|---|
+| `coding::symbols` | `src-tauri/src/coding/symbols.rs` 末尾 | 混合语言仓库建索引、upsert 替换、remove 清理、query 子序列计分、symbol_at 取最内层、损坏 JSONL 跳过、状态机迁移、rebuild 等价、require_workspace 拒绝 |
+| `coding::refs` | `src-tauri/src/coding/refs.rs` 末尾 | 跨文件声明与调用、`include_declarations=false` 过滤、definition 排序、词边界避免子串误命中、preview 截断、忽略目录不扫、enclosing_symbol 取最内层 |
+| `coding::impact` | `src-tauri/src/coding/impact.rs` 末尾 | 一层仅直接、二层含传递 + tests、`include_tests=false` 空、环按 depth 收敛、未知符号空 direct、references 计数对得上、require_workspace |
+| `coding::watcher` | `src-tauri/src/coding/watcher.rs` 末尾 | create/modify → index-updated、remove → index-removed、忽略目录静默、快速修改去抖、根缺失返回 Err、JoinHandle 可 Drop |
+| `coding::store` | `src-tauri/src/coding/store.rs` 末尾 | 沿用一期 + 新增 `index_paths_are_workspace_level_and_share_parent_with_workspace_dir` |
+| `coding::task` | `src-tauri/src/coding/task.rs` 末尾 | 沿用一期 + 新增 `bootstrap_index_on_start_reconciles_when_file_index_exists` |
+
+### 前端（`pnpm test`，vitest + testing-library）
+
+| 组件 / 模块 | 测试文件 | 关键用例（最小集） |
+|---|---|---|
+| `SymbolIndexClient` | `src/features/coding/lib/symbol-index.test.ts`（新建） | search 排序与 kind 过滤、symbolAt 最内层、事件订阅更新、移除事件、单例缓存 |
+| `SymbolView` | `src/features/coding/__tests__/explorer-views.test.tsx`（扩展） | 未就绪空态、就绪分组、当前文件叠加、删除旧文案 |
+| `CommandPalette` | `src/features/coding/__tests__/CommandPalette.test.tsx`（扩展） | symbols 模式用工作区索引、未就绪禁用回车、Shift/Alt 回车分支 |
+| `FindReferencesView` | `src/features/coding/__tests__/find-references-view.test.tsx`（新建） | 按文件分组、点击跳转 |
+| `ImpactAnalysisView` | `src/features/coding/__tests__/impact-analysis-view.test.tsx`（新建） | 三层渲染、test_impact 高亮 |
+| `GoToDefinitionView` | `src/features/coding/__tests__/go-to-definition-view.test.tsx`（新建） | 单候选直接跳、多候选列列表 |
+| `commands.ts` | `src/features/coding/__tests__/commands.test.ts`（扩展） | 新增四个命令注册、未就绪禁用 |
+| `tab-store` | `src/features/coding/__tests__/tab-store.test.ts`（扩展） | 同符号不重复创建 tab |
+| `CodingWorkbench` | `src/features/coding/__tests__/CodingWorkbench.test.tsx`（扩展） | 订阅索引事件、重建命令入口 |
+
+
+---
+
+## 风险与应对
+
+### 1. 索引构建耗时
+
+- **现象**：大型 monorepo（>5 万文件）首屏 `build_index` 可能分钟级，前端长时间处于「正在构建…」状态。
+- **应对**：
+  - 后端 `build_index` 走 `spawn_blocking`，不阻塞 Tauri 主线程；通过 `coding://index-progress` 事件持续上报，让 UI 给出进度而非假死。
+  - `bootstrap_index_on_start` 改为「先返回 `Empty` 让 UI 可用，索引在后台异步构建」，首屏不依赖索引完整。`SymbolView` 在 `state != Ready` 时降级到一期 Monaco 提供的当前文件符号。
+  - 留出「重建索引」命令供用户在大型仓库内手动触发，避免每次启动都全量重建。
+
+### 2. 文件监听丢事件
+
+- **现象**：在 macOS FSEvents、Windows ReadDirectoryChangesW、Linux inotify 三种后端上，部分场景（短时间高频写入、文件被替换）会丢事件或合并事件，导致索引与实际不一致。
+- **应对**：
+  - 使用 `notify-debouncer-full` 而非裸 `notify`，自带 400ms 去抖窗口。
+  - 每 5 分钟触发一次轻量 reconcile（stat 比对 `file_index.json`），差异文件走 `upsert_file`，避免长期漂移。
+  - 提供 `coding_index_rebuild` 命令作为兜底。
+
+### 3. `grep` crate 编译大小与依赖膨胀
+
+- **现象**：`grep` crate 依赖 `aho-corasick` / `memchr` / `regex` 等，体积比单纯 `regex::Regex::find_iter` 大；Windows / Linux 编译时间显著增加。
+- **应对**：
+  - 选 `grep = { version = "0.3", default-features = false, features = ["regex"] }`，不启用 `perf-literal` 等大特性。
+  - 仅 `refs::find_references` 走 `grep-regex` 路径；`symbols::query` 与 `symbol_at` 走纯 `regex`（内存匹配），避免每个查询都重建 `grep` 上下文。
+  - CI 上首次冷编译增加 30~60s 是可接受范围；后续增量编译只改 `refs.rs` 时不会有显著回归。
+
+### 4. 跨平台差异（macOS / Windows / Linux）
+
+- **现象**：路径分隔符、`.gitignore` 规则、文件名大小写敏感性（macOS HFS+ 默认不敏感，Linux 敏感）、文件锁（Windows）。
+- **应对**：
+  - 路径全部用 `Path::join` + 自行 `replace('\\', "/")` 归一化（与一期 `changeset.rs::resolve_in_workspace` 同款）。
+  - `ignore::WalkBuilder` 跨平台行为已成熟，直接复用。
+  - Windows 上对 `node_modules` / `target` 等大目录的扫描速度明显慢于 macOS，把它们放进 `ignore::WalkBuilder` 的 `overrides` 列表是必须的。
+  - 文件锁问题：upsert 失败时记日志并标记 `state = Stale`，不 panic；用户可手动 `coding_index_rebuild`。
+
+### 5. 引用识别误命中 / 漏命中
+
+- **现象**：正则无法准确识别所有语言的所有调用形式（如 JSX 中的 `<Foo />` 调用、C 宏、Python 装饰器）。
+- **应对**：
+  - 二期明确声明「基于正则的近似搜索」；UI 在引用视图顶部加「基于正则匹配，结果仅供参考」灰字提示。
+  - 关键设计取舍：宁可多给一些 `Unknown` 命中，也不要漏掉真引用 —— 用户一眼能看出误命中，漏命中却会假性安全。
+  - 留出将来切换 tree-sitter 的接口：`refs::find_references` 的内部实现可后续替换为 tree-sitter 实现，对外接口不变。
+
+### 6. 索引与编码任务并发
+
+- **现象**：Agent 正在修改大量文件（一次实现可能改几十个文件），监听器与编辑器自身会触发高频事件，导致索引重复 upsert。
+- **应对**：
+  - `watcher.rs` 的 debouncer 已经在 400ms 粒度合并；同一文件多次保存只产生 1 次 `upsert_file`。
+  - `upsert_file` 走 `spawn_blocking`，并对同一 `file` 加 in-process 互斥（`tokio::sync::Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>`），防止两次重叠写入。
+  - `coding_index_rebuild` 期间置 `state = Rebuilding`，`upsert_file` 跳过新事件（在前端状态栏明示「重建中」），结束后回到 `Ready` 并触发一次 `build_index` 等价的最终态。
+
+### 7. 与第一期持久化布局的冲突
+
+- **现象**：第二期新增的 `symbols.jsonl` / `refs.jsonl` / `file_index.json` 写在 `<home>/coding/<hash>/` 下，与一期 `tasks.json` 同级。已有用户的旧数据迁移风险。
+- **应对**：
+  - 三个新文件缺失即视为「未建过索引」，`IndexStatus.state = Empty`，不会破坏既有 `tasks.json` / 任务目录。
+  - 不删除任何第一期文件；老用户首次启动会自动 reconcile，无须手动迁移。
+  - 在 `store.rs` 的单元测试里固化 `index_paths_are_workspace_level_and_share_parent_with_workspace_dir`，防止未来有人误把新文件放进任务目录。
+
+### 8. 前端订阅事件泄漏
+
+- **现象**：每个组件 `subscribe(onIndexUpdated)` 都创建新的 `UnlistenFn`，热重载或工作区切换时旧订阅未释放，会导致 `coding://index-updated` 触发多次回调。
+- **应对**：
+  - `SymbolIndexClient` 持有 `Set<UnlistenFn>`，`subscribe` 返回的反订阅函数一次性清理三个事件；在 `useEffect` 清理时调用即可。
+  - 单例缓存 `getSymbolIndexClient(root)` 防止同一工作区多份客户端。
+  - 单元测试 `subscribe_receives_updates_on_index_updated_event` 反复 subscribe / unsubscribe，断言 listener 不再被回调。

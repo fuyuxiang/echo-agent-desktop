@@ -36,6 +36,13 @@ anyhow = "1"
 uuid = { version = "1", features = ["v7"] }
 # statusMatch patterns in connector cli.json files (CLI connector auth).
 regex = "1"
+# Phase 2 cross-file symbol index: walk the workspace honouring .gitignore.
+ignore = "0.4"
+walkdir = "2"
+# Phase 2 file watcher: debounced events for incremental symbol index updates.
+notify-debouncer-full = "0.5"
+# Phase 2 reference search: word-boundary scanning uses the same `regex`
+# engine already imported for symbol parsing; no extra crate needed.
 fs2 = "0.4"
 libc = "0.2"
 

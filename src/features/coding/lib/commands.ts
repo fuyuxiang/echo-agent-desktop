@@ -62,6 +62,16 @@ export interface CommandContext {
   explain: (scope: "function" | "class" | "module" | "system") => void | Promise<void>;
   generateComments: () => void | Promise<void>;
   toggleBottom: () => void;
+  /** Open a virtual tab for the Go-To-Definition flow. */
+  openGoToDefinition?: (symbol: { name: string; file?: string; line?: number }) => void;
+  /** Open a virtual tab listing references to a symbol. */
+  openFindReferences?: (symbol: { name: string; file?: string; line?: number }) => void;
+  /** Open a virtual tab rendering the impact graph for a symbol. */
+  openImpactAnalysis?: (symbol: { name: string; file?: string; line?: number }) => void;
+  /** Force a full rebuild of the workspace symbol index. */
+  rebuildIndex?: () => void | Promise<void>;
+  /** True when the workspace index has reached the Ready state. */
+  indexReady?: boolean;
 }
 
 /**
@@ -268,6 +278,41 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       keywords: ["profile", "分析", "技术栈"],
       enabled: hasWorkspace,
       run: () => openDocTab("profile"),
+    },
+    {
+      id: "understand.gotoDefinition",
+      title: "跳转到定义",
+      group: "understand",
+      keywords: ["definition", "goto", "定义"],
+      hint: "F12",
+      enabled: hasWorkspace && (context.indexReady ?? true),
+      run: () => context.openGoToDefinition?.({ name: "" }),
+    },
+    {
+      id: "understand.findReferences",
+      title: "查找当前符号引用",
+      group: "understand",
+      keywords: ["references", "refs", "引用"],
+      hint: "Shift+F12",
+      enabled: hasWorkspace && (context.indexReady ?? true),
+      run: () => context.openFindReferences?.({ name: "" }),
+    },
+    {
+      id: "understand.analyzeImpact",
+      title: "分析当前符号影响",
+      group: "understand",
+      keywords: ["impact", "影响", "传递"],
+      hint: "Alt+F12",
+      enabled: hasWorkspace && (context.indexReady ?? true),
+      run: () => context.openImpactAnalysis?.({ name: "" }),
+    },
+    {
+      id: "index.rebuild",
+      title: "重建符号索引",
+      group: "understand",
+      keywords: ["index", "rebuild", "重建", "重新索引"],
+      enabled: hasWorkspace,
+      run: () => context.rebuildIndex?.(),
     },
 
     // ---- deliver ----

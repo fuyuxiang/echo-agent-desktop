@@ -290,7 +290,7 @@ describe("ProjectProfileTab", () => {
   it("states that modules are manifest-based, not a dependency graph", async () => {
     render(<ProjectProfileTab root="/repo" onOpenFile={vi.fn()} />);
     expect(
-      await screen.findByText(/并非源码级依赖分析；调用图与影响范围分析将在后续版本接入/),
+      await screen.findByText(/并非源码级依赖分析/),
     ).toBeInTheDocument();
   });
 

@@ -177,6 +177,18 @@ pub fn rename_task(root: &Path, task_id: &str, name: &str) -> Result<CodingTask,
     Ok(task)
 }
 
+/// Reconcile the cross-file symbol index for the workspace.
+/// If a previous index exists, only changed files are rescanned; otherwise a full rebuild runs.
+pub fn bootstrap_index_on_start(root: &Path) -> crate::coding::symbols::IndexStatus {
+    match crate::coding::symbols::reconcile(root) {
+        Ok(status) => status,
+        Err(error) => {
+            tracing::warn!(%error, "cross-file symbol index reconcile failed");
+            crate::coding::symbols::read_status(root)
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn coding_task_list(
     access: State<'_, FilesystemAccess>,
