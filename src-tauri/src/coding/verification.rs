@@ -111,6 +111,17 @@ pub fn list_records(root: &Path, task_id: &str) -> Vec<VerificationRecord> {
     store::read_jsonl(&records_path(root, task_id))
 }
 
+/// Verification evidence is valid only for the exact implementation round
+/// that produced it. Clear the active batch before checking new content so a
+/// removed command or an empty detector result cannot reuse an older pass.
+pub fn clear_records(root: &Path, task_id: &str) -> Result<(), String> {
+    match std::fs::remove_file(records_path(root, task_id)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("清理旧验证记录失败：{error}")),
+    }
+}
+
 fn label_for(kind: VerificationKind) -> &'static str {
     match kind {
         VerificationKind::Build => "构建",
@@ -177,7 +188,11 @@ pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
         push(&mut detected, VerificationKind::Test, "mvn -B test".into());
     }
     if root.join("build.gradle").exists() || root.join("build.gradle.kts").exists() {
-        push(&mut detected, VerificationKind::Build, "gradle build".into());
+        push(
+            &mut detected,
+            VerificationKind::Build,
+            "gradle build".into(),
+        );
         push(&mut detected, VerificationKind::Test, "gradle test".into());
     }
     if root.join("pyproject.toml").exists() || root.join("requirements.txt").exists() {
@@ -193,7 +208,11 @@ pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
             "go build ./...".into(),
         );
         push(&mut detected, VerificationKind::Lint, "go vet ./...".into());
-        push(&mut detected, VerificationKind::Test, "go test ./...".into());
+        push(
+            &mut detected,
+            VerificationKind::Test,
+            "go test ./...".into(),
+        );
     }
     detected
 }
@@ -316,6 +335,8 @@ fn label_dropped(text: String, dropped_early_output: bool) -> String {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct VerificationChunk {
+    root: String,
+    task_id: String,
     run_id: String,
     stream: &'static str,
     chunk: String,
@@ -332,11 +353,20 @@ struct LegacyChunk {
     data: String,
 }
 
-fn emit_output(app: &AppHandle, run_id: &str, stream: &'static str, line: &str) {
+fn emit_output(
+    app: &AppHandle,
+    root: &Path,
+    task_id: &str,
+    run_id: &str,
+    stream: &'static str,
+    line: &str,
+) {
     let chunk = format!("{line}\n");
     let _ = app.emit(
         "coding://verification-output",
         VerificationChunk {
+            root: root.to_string_lossy().into_owned(),
+            task_id: task_id.to_string(),
             run_id: run_id.to_string(),
             stream,
             chunk: chunk.clone(),
@@ -380,9 +410,9 @@ pub async fn run(
         .filter(|value| {
             !value.is_empty()
                 && value.len() <= 100
-                && value
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+                && value.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                })
         })
         .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
     let cancellation = CancellationToken::new();
@@ -418,6 +448,8 @@ pub async fn run(
 
     let stdout_task = {
         let app = app.clone();
+        let root = root.clone();
+        let task_id = task_id.clone();
         let run_id = run_id.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
@@ -425,7 +457,7 @@ pub async fn run(
             let mut dropped = false;
             while let Ok(Some(raw)) = lines.next_line().await {
                 let line = strip_ansi(raw);
-                emit_output(&app, &run_id, "stdout", &line);
+                emit_output(&app, &root, &task_id, &run_id, "stdout", &line);
                 push_bounded(&mut buffer, &line, &mut dropped);
             }
             (buffer, dropped)
@@ -433,6 +465,8 @@ pub async fn run(
     };
     let stderr_task = {
         let app = app.clone();
+        let root = root.clone();
+        let task_id = task_id.clone();
         let run_id = run_id.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
@@ -440,7 +474,7 @@ pub async fn run(
             let mut dropped = false;
             while let Ok(Some(raw)) = lines.next_line().await {
                 let line = strip_ansi(raw);
-                emit_output(&app, &run_id, "stderr", &line);
+                emit_output(&app, &root, &task_id, &run_id, "stderr", &line);
                 push_bounded(&mut buffer, &line, &mut dropped);
             }
             (buffer, dropped)
@@ -527,6 +561,7 @@ pub async fn coding_verification_run(
     kind: VerificationKind,
     command: String,
     timeout_secs: Option<u64>,
+    requested_run_id: Option<String>,
 ) -> Result<VerificationRecord, String> {
     let root = access.require_workspace(&root)?;
     run(
@@ -537,7 +572,7 @@ pub async fn coding_verification_run(
         kind,
         command,
         timeout_secs,
-        None,
+        requested_run_id,
     )
     .await
 }
@@ -593,7 +628,9 @@ mod tests {
         let maven = temp_root();
         std::fs::write(maven.join("pom.xml"), "<project></project>").unwrap();
         let detected = detect_commands(&maven);
-        assert!(detected.iter().any(|entry| entry.command.starts_with("mvn")));
+        assert!(detected
+            .iter()
+            .any(|entry| entry.command.starts_with("mvn")));
         std::fs::remove_dir_all(&maven).ok();
     }
 
@@ -709,7 +746,11 @@ mod tests {
         let mut buffer = String::new();
         let mut dropped = false;
         for index in 0..20_000 {
-            push_bounded(&mut buffer, &format!("line {index} {}", "x".repeat(80)), &mut dropped);
+            push_bounded(
+                &mut buffer,
+                &format!("line {index} {}", "x".repeat(80)),
+                &mut dropped,
+            );
         }
         assert!(dropped);
         assert!(buffer.len() <= MAX_OUTPUT_BYTES);
@@ -748,6 +789,8 @@ mod tests {
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].command, "cmd-0");
         assert_eq!(records[2].command, "cmd-2");
+        clear_records(&root, "task-1").unwrap();
+        assert!(list_records(&root, "task-1").is_empty());
         std::fs::remove_dir_all(&root).ok();
     }
 }

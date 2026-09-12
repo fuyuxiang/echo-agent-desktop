@@ -52,7 +52,6 @@ pub struct ReferenceHit {
     pub enclosing_symbol: Option<SymbolRecord>,
 }
 
-
 /// Build a word-boundary regex for an identifier. Allows `_` / `$` /
 /// alphanumerics but always anchors on word boundaries so substring matches
 /// like `Token` inside `parseToken` are filtered out.
@@ -66,20 +65,22 @@ const PREVIEW_WINDOW: usize = 80;
 const PREVIEW_MAX: usize = 160;
 
 fn build_preview(text: &str, byte_offset: usize, len: usize) -> String {
-    let start = text[..byte_offset.min(text.len())]
+    let match_start = byte_offset.min(text.len());
+    let match_end = byte_offset.saturating_add(len).min(text.len());
+    let start = text[..match_start]
         .char_indices()
         .rev()
         .nth(PREVIEW_WINDOW)
         .map(|(idx, _)| idx)
         .unwrap_or(0);
-    let end = text[byte_offset.min(text.len())..]
+    let end = text[match_end..]
         .char_indices()
         .nth(PREVIEW_WINDOW)
-        .map(|(idx, _)| byte_offset + idx + len)
+        .map(|(idx, _)| match_end + idx)
         .unwrap_or(text.len());
     let slice = &text[start..end.min(text.len())];
-    if slice.len() > PREVIEW_MAX {
-        format!("{}…", &slice[..PREVIEW_MAX])
+    if slice.chars().count() > PREVIEW_MAX {
+        format!("{}…", slice.chars().take(PREVIEW_MAX).collect::<String>())
     } else {
         slice.to_string()
     }
@@ -235,7 +236,6 @@ fn is_ident_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_' || ch == '$'
 }
 
-
 /// Walk a single file and emit every match for `needle` with a word
 /// boundary. The caller (find_references) wraps this in a workspace walk.
 fn scan_file(
@@ -313,7 +313,11 @@ fn line_col(text: &str, byte_offset: usize) -> (u32, u32) {
             last_newline = idx + 1;
         }
     }
-    let column = (byte_offset.saturating_sub(last_newline) as u32) + 1;
+    let column = text[last_newline..byte_offset.min(text.len())]
+        .chars()
+        .count()
+        .min(u32::MAX as usize) as u32
+        + 1;
     (line, column)
 }
 
@@ -350,7 +354,11 @@ pub fn find_references(
             if !include_declarations && hit.reference.kind == ReferenceKind::Definition {
                 continue;
             }
-            let key = (hit.reference.file.clone(), hit.reference.line, hit.reference.column);
+            let key = (
+                hit.reference.file.clone(),
+                hit.reference.line,
+                hit.reference.column,
+            );
             if seen.insert(key) {
                 hits.push(hit);
             }
@@ -385,7 +393,6 @@ pub fn find_definition(root: &Path, needle: &str) -> Result<Vec<ReferenceHit>, S
     });
     Ok(defs)
 }
-
 
 // --- Tauri commands ---------------------------------------------------------
 
@@ -447,11 +454,7 @@ mod tests {
             "b.ts",
             "import { parseToken } from './a';\nconst a = parseToken('x');\nparseToken(a);\n",
         );
-        write(
-            &root,
-            "c.ts",
-            "const b = parseToken('y');\n",
-        );
+        write(&root, "c.ts", "const b = parseToken('y');\n");
         symbols::build_index(&root).unwrap();
 
         let hits = find_references(&root, "parseToken", true).unwrap();
@@ -480,7 +483,9 @@ mod tests {
 
         let all = find_references(&root, "add", true).unwrap();
         let only_calls = find_references(&root, "add", false).unwrap();
-        assert!(all.iter().any(|h| h.reference.kind == ReferenceKind::Definition));
+        assert!(all
+            .iter()
+            .any(|h| h.reference.kind == ReferenceKind::Definition));
         assert!(only_calls
             .iter()
             .all(|h| h.reference.kind != ReferenceKind::Definition));
@@ -518,12 +523,15 @@ mod tests {
         let hits = find_references(&root, "Token", true).unwrap();
         // `parseToken` should NOT appear when we search for `Token` alone.
         assert!(
-            hits.iter().all(|h| !h.reference.preview.contains("parseToken")),
+            hits.iter()
+                .all(|h| !h.reference.preview.contains("parseToken")),
             "word boundary failed: {hits:?}"
         );
         // `userToken` / `_token` / `notoken` also filtered.
         assert!(
-            !hits.iter().any(|h| h.reference.preview.contains("userToken")),
+            !hits
+                .iter()
+                .any(|h| h.reference.preview.contains("userToken")),
             "substring should not match"
         );
         assert!(
@@ -537,9 +545,7 @@ mod tests {
     fn preview_is_truncated_with_neighbors() {
         let root = temp_root();
         let long_line: String = "x".repeat(500);
-        let body = format!(
-            "fn pad() {{ {long_line} }}\nfn target() {{ let _ = pad(); }}\n"
-        );
+        let body = format!("fn pad() {{ {long_line} }}\nfn target() {{ let _ = pad(); }}\n");
         write(&root, "lib.rs", &body);
         symbols::build_index(&root).unwrap();
 

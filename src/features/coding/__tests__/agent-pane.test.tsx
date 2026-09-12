@@ -57,7 +57,9 @@ function paneProps(overrides: Partial<Parameters<typeof AgentPane>[0]> = {}) {
     onModelChange: vi.fn(),
     onSend: vi.fn(),
     onCancel: vi.fn(),
-    onApprovePlan: vi.fn(),
+    onPlanResolved: vi.fn(),
+    onPlanSyncFailed: vi.fn(),
+    onFinalizeDelivery: vi.fn(),
     onOpenReport: vi.fn(),
     ...overrides,
   };
@@ -149,9 +151,9 @@ describe("TaskStarter", () => {
   it("fills the box from a suggestion", async () => {
     const user = userEvent.setup();
     setup();
-    await user.click(screen.getByRole("button", { name: "理解代码库" }));
+    await user.click(screen.getByRole("button", { name: "补齐测试" }));
     expect(screen.getByLabelText("开发需求")).toHaveValue(
-      "解释这个项目的核心架构、入口和关键数据流",
+      "分析当前测试覆盖缺口，为关键路径补齐可靠的自动化测试",
     );
   });
 
@@ -194,13 +196,13 @@ describe("AgentPane", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("出现新的错误");
   });
 
-  it("offers plan approval only while planning", () => {
+  it("shows the runtime plan panel only while planning", () => {
     const { rerender } = render(
       <AgentPane {...paneProps({ task: task({ phase: "planning" }) })} />,
     );
-    expect(screen.getByRole("button", { name: "批准计划" })).toBeInTheDocument();
+    expect(screen.getByText("暂无任务计划")).toBeInTheDocument();
     rerender(<AgentPane {...paneProps({ task: task({ phase: "implementing" }) })} />);
-    expect(screen.queryByRole("button", { name: "批准计划" })).not.toBeInTheDocument();
+    expect(screen.queryByText("暂无任务计划")).not.toBeInTheDocument();
   });
 
   it("links to the report once delivered", async () => {
@@ -226,6 +228,23 @@ describe("AgentPane", () => {
     await user.click(screen.getByRole("button", { name: "发送给 Agent" }));
     expect(props.onSend).toHaveBeenCalledWith("再补一个测试");
     expect(box).toHaveValue("");
+  });
+
+  it("keeps a follow-up draft when the host rejects the send", async () => {
+    const user = userEvent.setup();
+    const props = paneProps({ onSend: vi.fn(async () => false) });
+    render(<AgentPane {...props} />);
+    const box = screen.getByLabelText("给 Agent 的补充要求");
+    await user.type(box, "这条要稍后重试");
+    await user.click(screen.getByRole("button", { name: "发送给 Agent" }));
+    expect(box).toHaveValue("这条要稍后重试");
+  });
+
+  it("disables follow-ups when the task has no bound session", () => {
+    render(<AgentPane {...paneProps({ sessionId: null })} />);
+    const box = screen.getByLabelText("给 Agent 的补充要求");
+    expect(box).toBeDisabled();
+    expect(box).toHaveAttribute("placeholder", "当前任务未绑定 Agent 会话");
   });
 
   it("blocks input and offers stop while streaming", async () => {

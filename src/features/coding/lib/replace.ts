@@ -14,15 +14,18 @@ export interface ReplacePlanEntry {
 }
 
 /** Count non-overlapping occurrences of a literal needle. */
-export function countOccurrences(content: string, needle: string): number {
+function literalPattern(needle: string, caseSensitive: boolean): RegExp {
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(escaped, caseSensitive ? "gu" : "giu");
+}
+
+export function countOccurrences(
+  content: string,
+  needle: string,
+  caseSensitive = true,
+): number {
   if (!needle) return 0;
-  let count = 0;
-  let index = content.indexOf(needle);
-  while (index >= 0) {
-    count += 1;
-    index = content.indexOf(needle, index + needle.length);
-  }
-  return count;
+  return [...content.matchAll(literalPattern(needle, caseSensitive))].length;
 }
 
 /** Replace every literal occurrence, returning the new text and how many changed. */
@@ -30,11 +33,15 @@ export function replaceAll(
   content: string,
   needle: string,
   replacement: string,
+  caseSensitive = true,
 ): { content: string; count: number } {
   if (!needle) return { content, count: 0 };
-  const count = countOccurrences(content, needle);
+  const count = countOccurrences(content, needle, caseSensitive);
   if (count === 0) return { content, count: 0 };
-  return { content: content.split(needle).join(replacement), count };
+  return {
+    content: content.replace(literalPattern(needle, caseSensitive), () => replacement),
+    count,
+  };
 }
 
 /**
@@ -49,13 +56,17 @@ export function replaceAtLine(
   line: number,
   needle: string,
   replacement: string,
+  caseSensitive = true,
 ): string | null {
   if (!needle) return null;
   const lines = content.split("\n");
   const index = line - 1;
   if (index < 0 || index >= lines.length) return null;
-  if (!lines[index].includes(needle)) return null;
-  lines[index] = lines[index].replace(needle, replacement);
+  const pattern = literalPattern(needle, caseSensitive);
+  pattern.lastIndex = 0;
+  if (!pattern.test(lines[index])) return null;
+  pattern.lastIndex = 0;
+  lines[index] = lines[index].replace(pattern, () => replacement);
   return lines.join("\n");
 }
 

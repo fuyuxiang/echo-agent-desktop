@@ -1174,6 +1174,8 @@ function Shell() {
     requirement: string,
     planRequired: boolean,
     requestedModelId?: string,
+    contextPaths: string[] = [],
+    onSessionReady?: (sessionId: string) => Promise<void>,
   ): Promise<string | undefined> => {
     setCodingWorkspaceCwd(root);
     const modelId = isConfiguredModelId(models, requestedModelId)
@@ -1200,11 +1202,19 @@ function Shell() {
       });
       sessionStore.getState().setSession(sessionId);
       setPlaceholderView("代码开发");
+      // Persist the task/session ownership before the first Agent token can be
+      // produced. Otherwise a very fast turn can finish before the workbench
+      // knows which task should receive its Git sync event.
+      await onSessionReady?.(sessionId);
       // Plan mode keeps the native approval boundary before any file is written.
       await togglePlanMode(sessionId, planRequired);
+      const normalizedContext = [...new Set(contextPaths.map((path) => path.trim()).filter(Boolean))];
+      const promptText = normalizedContext.length > 0
+        ? `${requirement}\n\n用户指定的优先工程上下文（请先阅读并按需追踪依赖）：\n${normalizedContext.map((path) => `- ${path}`).join("\n")}`
+        : requirement;
       const accepted = beginAgentTurn({
         sessionId,
-        promptText: requirement,
+        promptText,
         displayText: requirement,
       });
       if (!accepted) throw new Error("代码开发会话未能获得前台焦点");
@@ -1609,7 +1619,11 @@ function Shell() {
     return () => window.removeEventListener("keydown", onShortcut);
   }, [models]);
 
-  const handleSelectSession = async (sessionId: string, sessionCwd?: string) => {
+  const handleSelectSession = async (
+    sessionId: string,
+    sessionCwd?: string,
+    preservePlaceholder = false,
+  ) => {
     const generation = ++selectionGenerationRef.current;
     let entry = findSessionSummary(sessionId);
     // FTS/project/automation links can outlive a stale catalog. Hydrate that
@@ -1643,7 +1657,7 @@ function Shell() {
     setLoadingSession({ sessionId, generation });
     const persistedModelId = entry.currentModelId;
     const selectedModelId = resolveSessionModelId(models, persistedModelId);
-    setPlaceholderView(null);
+    if (!preservePlaceholder) setPlaceholderView(null);
     sessionsStore.getState().setCurrent(sessionId);
     // Reflect the model actually persisted by this session. Do not fall back to
     // the first configured model: that would only change the picker, not the
@@ -2185,17 +2199,19 @@ function Shell() {
                   sessionId={currentSessionId ?? undefined}
                   codingApiReady={!!init.auth.ready && !!newSessionModelId}
                   codingModels={models}
-                  codingModelId={newSessionModelId}
+                  codingModelId={activeSessionModelId ?? newSessionModelId}
                   onOpenModelSettings={() => openSettings("model")}
                   onExitCodingWorkspace={() => {
                     setPlaceholderView(null);
                     setSidebarCollapsed(false);
                   }}
                   onStartCodingRun={handleStartCodingRun}
-                  onSendCodingMessage={(text) => {
-                    void handleSendCurrent(text);
-                  }}
-                  onCancelCodingRun={() => void handleCancel("stop")}
+                  onActivateCodingSession={(targetSessionId, targetCwd) =>
+                    handleSelectSession(targetSessionId, targetCwd, true)
+                  }
+                  onChangeCodingModel={handleModelChange}
+                  onSendCodingMessage={(text) => handleSendCurrent(text)}
+                  onCancelCodingRun={() => handleCancel("stop")}
                   onStartProject={handleStartProject}
                   onStartProjectConversation={handleStartProjectConversation}
                   onRenameSession={handleRenameSession}

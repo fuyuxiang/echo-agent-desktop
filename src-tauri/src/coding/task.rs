@@ -62,6 +62,10 @@ pub struct CodingTask {
     pub name: String,
     pub requirement: String,
     pub phase: TaskPhase,
+    #[serde(default)]
+    pub phase_reason: Option<String>,
+    #[serde(default)]
+    pub blocker: Option<String>,
     pub acceptance_criteria: Vec<AcceptanceCriterion>,
     pub task_nodes: Vec<TaskNode>,
     pub plan_required: bool,
@@ -137,13 +141,31 @@ pub fn create_task(root: &Path, name: &str, requirement: &str) -> Result<CodingT
         return Err("任务名称不能为空".into());
     }
     let timestamp = now();
+    let requirement = requirement.trim().to_string();
+    if requirement.is_empty() {
+        return Err("任务需求不能为空".into());
+    }
     let task = CodingTask {
         id: uuid::Uuid::now_v7().to_string(),
         name: trimmed.to_string(),
-        requirement: requirement.trim().to_string(),
+        requirement: requirement.clone(),
         phase: TaskPhase::Idle,
-        acceptance_criteria: Vec::new(),
-        task_nodes: Vec::new(),
+        phase_reason: None,
+        blocker: None,
+        acceptance_criteria: vec![AcceptanceCriterion {
+            id: uuid::Uuid::now_v7().to_string(),
+            content: requirement.clone(),
+            satisfied: false,
+            evidence: Vec::new(),
+        }],
+        task_nodes: vec![TaskNode {
+            id: uuid::Uuid::now_v7().to_string(),
+            content: requirement,
+            dependencies: Vec::new(),
+            related_files: Vec::new(),
+            status: TaskNodeStatus::Pending,
+            priority: "high".into(),
+        }],
         plan_required: false,
         model_id: None,
         session_id: None,
@@ -152,6 +174,60 @@ pub fn create_task(root: &Path, name: &str, requirement: &str) -> Result<CodingT
     };
     save(root, &task)?;
     Ok(task)
+}
+
+pub fn bind_runtime(
+    root: &Path,
+    task_id: &str,
+    session_id: &str,
+    model_id: &str,
+) -> Result<CodingTask, String> {
+    if session_id.trim().is_empty() || model_id.trim().is_empty() {
+        return Err("会话和模型标识不能为空".into());
+    }
+    let mut task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
+    task.session_id = Some(session_id.to_string());
+    task.model_id = Some(model_id.to_string());
+    save(root, &task)?;
+    Ok(load(root, task_id).unwrap_or(task))
+}
+
+pub fn set_plan_steps(
+    root: &Path,
+    task_id: &str,
+    steps: Vec<String>,
+) -> Result<CodingTask, String> {
+    let mut task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
+    let cleaned: Vec<String> = steps
+        .into_iter()
+        .map(|step| step.trim().to_string())
+        .filter(|step| !step.is_empty())
+        .take(50)
+        .collect();
+    if !cleaned.is_empty() {
+        let ids: Vec<String> = cleaned
+            .iter()
+            .map(|_| uuid::Uuid::now_v7().to_string())
+            .collect();
+        task.task_nodes = cleaned
+            .into_iter()
+            .enumerate()
+            .map(|(index, content)| TaskNode {
+                id: ids[index].clone(),
+                content,
+                dependencies: if index == 0 {
+                    Vec::new()
+                } else {
+                    vec![ids[index - 1].clone()]
+                },
+                related_files: Vec::new(),
+                status: TaskNodeStatus::Pending,
+                priority: if index == 0 { "high" } else { "medium" }.into(),
+            })
+            .collect();
+    }
+    save(root, &task)?;
+    Ok(load(root, task_id).unwrap_or(task))
 }
 
 pub fn delete_task(root: &Path, task_id: &str) -> Result<(), String> {
@@ -175,18 +251,6 @@ pub fn rename_task(root: &Path, task_id: &str, name: &str) -> Result<CodingTask,
     task.name = trimmed.to_string();
     save(root, &task)?;
     Ok(task)
-}
-
-/// Reconcile the cross-file symbol index for the workspace.
-/// If a previous index exists, only changed files are rescanned; otherwise a full rebuild runs.
-pub fn bootstrap_index_on_start(root: &Path) -> crate::coding::symbols::IndexStatus {
-    match crate::coding::symbols::reconcile(root) {
-        Ok(status) => status,
-        Err(error) => {
-            tracing::warn!(%error, "cross-file symbol index reconcile failed");
-            crate::coding::symbols::read_status(root)
-        }
-    }
 }
 
 #[tauri::command]
@@ -248,6 +312,20 @@ pub async fn coding_task_rename(
     tokio::task::spawn_blocking(move || rename_task(&root, &task_id, &name))
         .await
         .map_err(|error| format!("重命名任务失败：{error}"))?
+}
+
+#[tauri::command]
+pub async fn coding_task_bind_runtime(
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+    session_id: String,
+    model_id: String,
+) -> Result<CodingTask, String> {
+    let root = access.require_workspace(&root)?;
+    tokio::task::spawn_blocking(move || bind_runtime(&root, &task_id, &session_id, &model_id))
+        .await
+        .map_err(|error| format!("绑定任务会话失败：{error}"))?
 }
 
 #[cfg(test)]

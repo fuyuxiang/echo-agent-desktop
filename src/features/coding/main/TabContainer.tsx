@@ -11,6 +11,8 @@ interface TabContainerProps {
   onDraftChange: (id: string, draft: string) => void;
   onSave: (id: string) => void;
   onViewChange: (id: string, view: FileTab["view"]) => void;
+  onReload?: (id: string) => void;
+  onSymbolAction?: (action: "definition" | "references" | "impact", symbol: string) => void;
   onDiagnostics?: (path: string, diagnostics: CodingEditorDiagnostic[]) => void;
   onSymbols?: (path: string, symbols: EditorSymbol[]) => void;
   renderDoc: (kind: DocTabKind) => React.ReactNode;
@@ -46,6 +48,8 @@ export function TabContainer({
   onDraftChange,
   onSave,
   onViewChange,
+  onReload,
+  onSymbolAction,
   onDiagnostics,
   onSymbols,
   renderDoc,
@@ -122,7 +126,12 @@ export function TabContainer({
       {active && isFileTab(active) && active.conflict && (
         <div className="coding-tabs__conflict" role="alert">
           <AlertTriangle size={13} />
-          文件已被 Agent 或其他程序修改。保存会覆盖对方的改动，建议先切到差异视图核对。
+          文件已被 Agent 或其他程序修改，当前草稿已过期，不能直接保存。请先核对差异或重新加载。
+          {onReload && (
+            <button type="button" onClick={() => onReload(active.id)}>
+              放弃本地草稿并重新加载
+            </button>
+          )}
         </div>
       )}
 
@@ -148,14 +157,16 @@ export function TabContainer({
           <CodingEditor
             path={active.id}
             language={active.language}
-            original={active.original}
-            value={active.draft}
+            original={active.view === "diff" ? (active.diffOriginal ?? active.original) : active.original}
+            value={active.view === "diff" ? (active.diffModified ?? active.draft) : active.draft}
             mode={active.view}
+            readOnly={active.view === "diff" && active.diffModified !== undefined}
             reveal={reveal}
             onChange={(draft) => onDraftChange(active.id, draft)}
             onSave={() => onSave(active.id)}
             onDiagnostics={onDiagnostics}
             onSymbols={onSymbols}
+            onSymbolAction={onSymbolAction}
           />
         )}
       </div>

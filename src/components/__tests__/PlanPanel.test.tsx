@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { Plan } from "@/lib/types";
 
 // vi.mock 工厂被提升,引用的变量必须用 vi.hoisted 声明。
@@ -8,6 +8,13 @@ const { mocks } = vi.hoisted(() => ({
     capturedPlan: null as Plan | null,
     setPlan: (..._a: unknown[]) => {},
     togglePlanMode: (..._a: unknown[]) => {},
+    resolvePlanApproval: vi.fn(),
+    planApproval: null as null | {
+      requestId: string;
+      sessionId: string;
+      toolCallId: string;
+      planContent?: string;
+    },
   },
 }));
 
@@ -22,7 +29,7 @@ vi.mock("@/stores/session-store", () => ({
         ],
       },
       planMode: false,
-      planApproval: null,
+      planApproval: mocks.planApproval,
       setPlan: mocks.setPlan,
       setPlanMode: vi.fn(),
       dismissPlanApproval: vi.fn(),
@@ -31,7 +38,7 @@ vi.mock("@/stores/session-store", () => ({
 
 vi.mock("@/lib/agent-client", () => ({
   setPlanMode: mocks.togglePlanMode,
-  agentResolvePlanApproval: vi.fn(),
+  agentResolvePlanApproval: mocks.resolvePlanApproval,
 }));
 
 import { PlanPanel } from "../PlanPanel";
@@ -50,6 +57,8 @@ describe("PlanPanel 编辑器(对齐 EchoAgent plan-editor)", () => {
     setPlan.mockClear();
     mocks.capturedPlan = null;
     togglePlanMode.mockClear();
+    mocks.resolvePlanApproval.mockReset();
+    mocks.planApproval = null;
   });
 
   it("渲染进度与列表", () => {
@@ -111,5 +120,29 @@ describe("PlanPanel 编辑器(对齐 EchoAgent plan-editor)", () => {
       "步骤二",
       "步骤三",
     ]);
+  });
+
+  it("运行时已批准但工作流保存失败时立即触发止损", async () => {
+    mocks.planApproval = {
+      requestId: "approval-1",
+      sessionId: "s1",
+      toolCallId: "tool-1",
+      planContent: "# Plan",
+    };
+    mocks.resolvePlanApproval.mockResolvedValue(true);
+    const onApprovalResolved = vi.fn(async () => {
+      throw new Error("保存失败");
+    });
+    const onApprovalSyncFailed = vi.fn();
+    render(
+      <PlanPanel
+        sessionId="s1"
+        onApprovalResolved={onApprovalResolved}
+        onApprovalSyncFailed={onApprovalSyncFailed}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "批准执行" }));
+    await waitFor(() => expect(onApprovalSyncFailed).toHaveBeenCalledWith("保存失败"));
   });
 });

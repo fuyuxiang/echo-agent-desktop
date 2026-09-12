@@ -35,6 +35,10 @@ export interface FileTab {
   error?: string;
   /** Another writer changed the file after we loaded it. */
   conflict?: boolean;
+  /** Task-baseline content used by the review diff, independent of editor load time. */
+  diffOriginal?: string;
+  diffModified?: string;
+  diffBinary?: boolean;
 }
 
 export interface DocTab {
@@ -80,6 +84,7 @@ interface TabState {
   setActive: (id: string) => void;
   updateDraft: (id: string, draft: string) => void;
   setView: (id: string, view: FileTab["view"]) => void;
+  setDiff: (id: string, original: string, modified: string, binary?: boolean) => void;
   markSaved: (id: string, original: string, hash: string) => void;
   markConflict: (id: string) => void;
   setError: (id: string, error?: string) => void;
@@ -181,11 +186,38 @@ export const useTabStore = create<TabState>((set, get) => ({
       tabs: state.tabs.map((tab) => (tab.id === id && isFileTab(tab) ? { ...tab, view } : tab)),
     })),
 
+  setDiff: (id, diffOriginal, diffModified, diffBinary = false) =>
+    set((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.id === id && isFileTab(tab)
+          ? {
+              ...tab,
+              diffOriginal,
+              diffModified,
+              diffBinary,
+              view: "diff",
+              loading: false,
+              error: undefined,
+            }
+          : tab,
+      ),
+    })),
+
   markSaved: (id, original, hash) =>
     set((state) => ({
       tabs: state.tabs.map((tab) =>
         tab.id === id && isFileTab(tab)
-          ? { ...tab, original, draft: original, hash, conflict: false, error: undefined }
+          ? {
+              ...tab,
+              original,
+              draft: original,
+              hash,
+              conflict: false,
+              error: undefined,
+              diffOriginal: undefined,
+              diffModified: undefined,
+              diffBinary: undefined,
+            }
           : tab,
       ),
     })),

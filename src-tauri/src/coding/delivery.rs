@@ -13,7 +13,7 @@ use tauri::State;
 use crate::coding::changeset::{self, ChangeSet, FileChange};
 use crate::coding::diagnostics::{self, Problem};
 use crate::coding::orchestrator::{self, RepairRound};
-use crate::coding::task::{self, AcceptanceCriterion, CodingTask};
+use crate::coding::task::{self, AcceptanceCriterion, CodingTask, TaskNodeStatus, TaskPhase};
 use crate::coding::verification::{self, VerificationKind, VerificationRecord, VerificationStatus};
 use crate::shell_fs::FilesystemAccess;
 
@@ -182,14 +182,10 @@ pub fn evaluate_gates(
         verification_gate(GateId::TypeCheck, VerificationKind::TypeCheck, records),
     ];
 
-    let task_changes: Vec<&FileChange> = set
-        .changes
-        .iter()
-        .filter(|change| !change.pre_existing)
-        .collect();
+    let task_changes: Vec<&FileChange> = set.changes.iter().collect();
     let unreviewed_count = task_changes
         .iter()
-        .filter(|change| !set.reviewed_files.iter().any(|path| path == &change.path))
+        .filter(|change| !set.is_reviewed(&change.path))
         .count();
     gates.push(QualityGate {
         id: GateId::DiffReview,
@@ -265,13 +261,12 @@ pub fn is_deliverable(gates: &[QualityGate]) -> bool {
 pub fn committable_paths(set: &ChangeSet) -> Vec<String> {
     set.changes
         .iter()
-        .filter(|change| !change.pre_existing)
         .map(|change| change.path.clone())
         .collect()
 }
 
-/// Structured input a model turns into a commit message. Deliberately excludes
-/// files the user had already modified so the message never claims them.
+/// Structured input a model turns into a commit message. It describes the full
+/// task change set; the commit command separately refuses dirty-at-start files.
 pub fn commit_message_input(
     name: &str,
     requirement: &str,
@@ -281,7 +276,6 @@ pub fn commit_message_input(
     let files = set
         .changes
         .iter()
-        .filter(|change| !change.pre_existing)
         .map(|change| {
             format!(
                 "- {} ({:?}, +{} -{})",
@@ -356,6 +350,66 @@ pub fn build_report(root: &Path, task_id: &str) -> Result<DeliveryReport, String
     })
 }
 
+/// Complete the human acceptance boundary. Automated verification and real
+/// content-bound diff review must already be green; only then is acceptance
+/// evidence written and the task made deliverable.
+pub fn finalize_delivery(root: &Path, task_id: &str) -> Result<DeliveryReport, String> {
+    let mut task = task::load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
+    if task.phase != TaskPhase::Gating {
+        return Err("只有进入交付门禁的任务可以确认交付".into());
+    }
+    let set = changeset::load(root, task_id);
+    changeset::ensure_head_unchanged(root, &set)?;
+    if !set.rollback_unsafe_files.is_empty() {
+        return Err(format!(
+            "以下文件没有安全快照，不能交付：{}",
+            set.rollback_unsafe_files.join("、")
+        ));
+    }
+    let records = verification::list_records(root, task_id);
+    let problems = diagnostics::load_snapshot(root, task_id);
+    let gates = evaluate_gates(&records, &set, &task.acceptance_criteria, &problems);
+    let blockers: Vec<String> = gates
+        .iter()
+        .filter(|gate| gate.id != GateId::Acceptance && gate.status == GateStatus::NotSatisfied)
+        .map(|gate| format!("{}：{}", gate.title, gate.summary))
+        .collect();
+    if !blockers.is_empty() {
+        return Err(format!("交付门禁尚未通过：{}", blockers.join("；")));
+    }
+    if !problems.is_empty() {
+        return Err(format!("诊断中心仍有 {} 个未解决问题", problems.len()));
+    }
+
+    let mut evidence: Vec<String> = latest_per_command(&records)
+        .into_iter()
+        .filter(|record| record.status == VerificationStatus::Passed)
+        .map(|record| format!("{} 通过（退出码 0）", record.command))
+        .collect();
+    evidence.push(format!("{} 个任务差异已逐一审阅", set.changes.len()));
+    if records.is_empty() {
+        evidence.push("工程未配置可识别的自动验证，由用户完成差异验收".into());
+    }
+    for criterion in &mut task.acceptance_criteria {
+        criterion.satisfied = true;
+        criterion.evidence = evidence.clone();
+    }
+    let related_files: Vec<String> = set
+        .changes
+        .iter()
+        .map(|change| change.path.clone())
+        .collect();
+    for node in &mut task.task_nodes {
+        node.status = TaskNodeStatus::Success;
+        node.related_files = related_files.clone();
+    }
+    task.phase = TaskPhase::Delivered;
+    task.phase_reason = Some("用户已确认验收，所有交付门禁已通过".into());
+    task.blocker = None;
+    task::save(root, &task)?;
+    build_report(root, task_id)
+}
+
 async fn git(root: &PathBuf, arguments: &[&str]) -> Result<String, String> {
     let output = tokio::process::Command::new("git")
         .args(arguments)
@@ -379,6 +433,18 @@ pub async fn coding_delivery_report(
     tokio::task::spawn_blocking(move || build_report(&root, &task_id))
         .await
         .map_err(|error| format!("生成交付报告失败：{error}"))?
+}
+
+#[tauri::command]
+pub async fn coding_delivery_finalize(
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+) -> Result<DeliveryReport, String> {
+    let root = access.require_workspace(&root)?;
+    tokio::task::spawn_blocking(move || finalize_delivery(&root, &task_id))
+        .await
+        .map_err(|error| format!("确认交付失败：{error}"))?
 }
 
 #[tauri::command]
@@ -433,6 +499,32 @@ pub async fn coding_git_commit(
             .await
             .map_err(|error| format!("读取变更集失败：{error}"))?
     };
+    if set.committed_hash.is_some() {
+        return Err("该任务已经提交".into());
+    }
+    changeset::ensure_head_unchanged(&root, &set)?;
+    let report = {
+        let report_root = root.clone();
+        let report_task_id = task_id.clone();
+        tokio::task::spawn_blocking(move || build_report(&report_root, &report_task_id))
+            .await
+            .map_err(|error| format!("读取交付门禁失败：{error}"))??
+    };
+    if report.task.phase != TaskPhase::Delivered || !report.deliverable {
+        return Err("任务尚未通过交付门禁，不能提交".into());
+    }
+    let overlapping: Vec<String> = set
+        .changes
+        .iter()
+        .filter(|change| change.pre_existing)
+        .map(|change| change.path.clone())
+        .collect();
+    if !overlapping.is_empty() {
+        return Err(format!(
+            "以下文件在任务开始前已有未提交修改，为避免将用户改动混入提交，请先手工整理：{}",
+            overlapping.join("、")
+        ));
+    }
     let paths = committable_paths(&set);
     if paths.is_empty() {
         return Err("本任务没有可提交的变更".into());
@@ -446,9 +538,16 @@ pub async fn coding_git_commit(
     add_arguments.extend(paths.iter().map(|path| path.as_str()));
     git(&root, &add_arguments).await?;
     git(&root, &["commit", "-m", &trimmed]).await?;
-    git(&root, &["rev-parse", "HEAD"])
-        .await
-        .map(|hash| hash.trim().to_string())
+    let hash = git(&root, &["rev-parse", "HEAD"]).await?.trim().to_string();
+    let mark_root = root.clone();
+    let mark_task = task_id.clone();
+    let mark_hash = hash.clone();
+    tokio::task::spawn_blocking(move || {
+        changeset::mark_committed(&mark_root, &mark_task, &mark_hash)
+    })
+    .await
+    .map_err(|error| format!("记录提交结果失败：{error}"))??;
+    Ok(hash)
 }
 
 #[cfg(test)]
@@ -489,6 +588,16 @@ mod tests {
             } else {
                 Vec::new()
             },
+            reviewed_hashes: if reviewed {
+                std::collections::BTreeMap::from([("src/a.ts".to_string(), "v1".to_string())])
+            } else {
+                std::collections::BTreeMap::new()
+            },
+            change_hashes: std::collections::BTreeMap::from([(
+                "src/a.ts".to_string(),
+                "v1".to_string(),
+            )]),
+            ..ChangeSet::default()
         }
     }
 
@@ -571,6 +680,7 @@ mod tests {
             changes: Vec::new(),
             created_at: "2026-09-11T00:00:00Z".into(),
             reviewed_files: Vec::new(),
+            ..ChangeSet::default()
         };
         let gates = evaluate_gates(
             &[record(VerificationKind::Test, "pnpm test", 0)],
@@ -616,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_message_input_lists_only_task_changes() {
+    fn commit_message_input_lists_every_reviewed_task_change() {
         let mut set = change_set(true);
         set.changes.push(FileChange {
             path: "src/user-edit.ts".into(),
@@ -628,12 +738,11 @@ mod tests {
         });
         let input = commit_message_input("重构登录", "把登录改成 OIDC", &set, &[]);
         assert!(input.contains("src/a.ts"));
-        // A file the user had already edited must not be attributed to this task.
-        assert!(!input.contains("src/user-edit.ts"));
+        assert!(input.contains("src/user-edit.ts"));
     }
 
     #[test]
-    fn commit_paths_exclude_pre_existing_files() {
+    fn commit_paths_describe_the_complete_task_change_set() {
         let mut set = change_set(true);
         set.changes.push(FileChange {
             path: "src/user-edit.ts".into(),
@@ -644,6 +753,9 @@ mod tests {
             pre_existing: true,
         });
         let paths = committable_paths(&set);
-        assert_eq!(paths, vec!["src/a.ts".to_string()]);
+        assert_eq!(
+            paths,
+            vec!["src/a.ts".to_string(), "src/user-edit.ts".to_string()]
+        );
     }
 }

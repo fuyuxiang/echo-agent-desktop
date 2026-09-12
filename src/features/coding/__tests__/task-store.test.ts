@@ -154,8 +154,30 @@ describe("task store", () => {
   it("deleting the active task clears it", async () => {
     api.deleteTask.mockResolvedValue(undefined);
     api.listTasks.mockResolvedValue([]);
-    useTaskStore.setState({ root: "/repo", task: task() });
+    useTaskStore.setState({
+      root: "/repo",
+      task: task(),
+      changeSet: {
+        taskId: "t1",
+        baselineFiles: [],
+        changes: [],
+        createdAt: "",
+        reviewedFiles: [],
+      },
+      verifications: [record()],
+      problems: [{
+        id: "p1",
+        kind: "test_failure",
+        severity: "error",
+        message: "failed",
+        fingerprint: "fp",
+        sourceCommand: "pnpm test",
+      }],
+    });
     await useTaskStore.getState().deleteTask("t1");
     expect(useTaskStore.getState().task).toBeNull();
+    expect(useTaskStore.getState().changeSet).toBeNull();
+    expect(useTaskStore.getState().verifications).toEqual([]);
+    expect(useTaskStore.getState().problems).toEqual([]);
   });
 });

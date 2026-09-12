@@ -89,9 +89,13 @@ interface PlaceholderPageProps {
     requirement: string,
     planRequired: boolean,
     modelId?: string,
+    contextPaths?: string[],
+    onSessionReady?: (sessionId: string) => Promise<void>,
   ) => Promise<string | undefined>;
-  onSendCodingMessage?: (text: string) => void;
-  onCancelCodingRun?: () => void;
+  onActivateCodingSession?: (sessionId: string, cwd: string) => Promise<void>;
+  onChangeCodingModel?: (modelId: string) => void | Promise<void>;
+  onSendCodingMessage?: (text: string) => boolean | void | Promise<boolean | void>;
+  onCancelCodingRun?: () => boolean | void | Promise<boolean | void>;
   /** Current session id (for plugins/marketplace actions that need a session). */
   sessionId?: string;
   /** 项目页：进入项目（新建会话并注入说明）。 */
@@ -121,6 +125,8 @@ export function PlaceholderPage({
   onOpenModelSettings,
   onExitCodingWorkspace,
   onStartCodingRun,
+  onActivateCodingSession,
+  onChangeCodingModel,
   onSendCodingMessage,
   onCancelCodingRun,
   sessionId,
@@ -192,6 +198,8 @@ export function PlaceholderPage({
           onExit={onExitCodingWorkspace}
           sessionId={sessionId}
           onStartRun={onStartCodingRun}
+          onActivateSession={onActivateCodingSession}
+          onChangeModel={onChangeCodingModel}
           onSendMessage={onSendCodingMessage}
           onCancelRun={onCancelCodingRun}
         />
