@@ -58,7 +58,7 @@ pub struct Item<'a, T> {
 /// and sent across threads.
 pub struct Injector<T> {
     items: Arc<boxcar::Vec<T>>,
-    notify: Arc<(dyn Fn() + Sync + Send)>,
+    notify: Arc<dyn Fn() + Sync + Send>,
 }
 
 impl<T> Clone for Injector<T> {
@@ -283,7 +283,7 @@ pub struct Nucleo<T: Sync + Send + 'static> {
     pool: ThreadPool,
     state: State,
     items: Arc<boxcar::Vec<T>>,
-    notify: Arc<(dyn Fn() + Sync + Send)>,
+    notify: Arc<dyn Fn() + Sync + Send>,
     snapshot: Snapshot<T>,
     /// The pattern matched by this matcher. To update the match pattern
     /// [`MultiPattern::reparse`](`pattern::MultiPattern::reparse`) should be used.
@@ -308,7 +308,7 @@ impl<T: Sync + Send + 'static> Nucleo<T> {
     /// number of columns cannot be changed after construction.
     pub fn new(
         config: Config,
-        notify: Arc<(dyn Fn() + Sync + Send)>,
+        notify: Arc<dyn Fn() + Sync + Send>,
         num_threads: Option<usize>,
         columns: u32,
     ) -> Self {

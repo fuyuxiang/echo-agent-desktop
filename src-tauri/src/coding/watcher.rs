@@ -193,7 +193,6 @@ pub fn spawn_watcher_with_sink<S: EventSink>(
                         };
                         let root = root.clone();
                         let sink = sink.clone();
-                        let classified = classified;
                         // Apply on the drain thread directly. spawn_blocking
                         // would require a tokio runtime and the work is
                         // already blocking. The debouncer queue is serialised
@@ -330,14 +329,7 @@ fn classify(event: &notify_debouncer_full::DebouncedEvent) -> Option<Classified>
     use notify_debouncer_full::notify::EventKind;
 
     match &event.kind {
-        EventKind::Create(_) => {
-            let path = event
-                .paths
-                .first()
-                .cloned()
-                .unwrap_or_else(|| std::path::PathBuf::new());
-            Some(Classified::Modify(path))
-        }
+        EventKind::Create(_) => event.paths.first().cloned().map(Classified::Modify),
         EventKind::Modify(ModifyKind::Metadata(_)) | EventKind::Access(_) => None,
         EventKind::Modify(ModifyKind::Name(RenameMode::Both)) if event.paths.len() >= 2 => {
             Some(Classified::Rename {
@@ -351,22 +343,8 @@ fn classify(event: &notify_debouncer_full::DebouncedEvent) -> Option<Classified>
         EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
             event.paths.first().cloned().map(Classified::Modify)
         }
-        EventKind::Modify(_) => {
-            let path = event
-                .paths
-                .first()
-                .cloned()
-                .unwrap_or_else(|| std::path::PathBuf::new());
-            Some(Classified::Modify(path))
-        }
-        EventKind::Remove(_) => {
-            let path = event
-                .paths
-                .first()
-                .cloned()
-                .unwrap_or_else(|| std::path::PathBuf::new());
-            Some(Classified::Remove(path))
-        }
+        EventKind::Modify(_) => event.paths.first().cloned().map(Classified::Modify),
+        EventKind::Remove(_) => event.paths.first().cloned().map(Classified::Remove),
         _ => None,
     }
 }
