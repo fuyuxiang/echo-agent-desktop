@@ -114,7 +114,11 @@ export function SymbolView({
           )}
         </>
       ) : (
-        <SingleFileFallback symbols={symbols} activeFileName={activeFileName} />
+        <SingleFileFallback
+          symbols={symbols}
+          activeFileName={activeFileName}
+          onOpenSymbol={onOpenSymbol}
+        />
       )}
     </div>
   );
@@ -160,9 +164,11 @@ function SymbolSection({
 function SingleFileFallback({
   symbols,
   activeFileName,
+  onOpenSymbol,
 }: {
   symbols: PaletteSymbol[];
   activeFileName?: string;
+  onOpenSymbol: (symbol: PaletteSymbol) => void;
 }) {
   if (!activeFileName) {
     return (
@@ -182,6 +188,7 @@ function SingleFileFallback({
           key={`${symbol.name}:${symbol.line}:${index}`}
           type="button"
           title="跨文件索引尚未就绪，仅显示当前文件符号"
+          onClick={() => onOpenSymbol(symbol)}
         >
           <Hash size={11} />
           <span>{symbol.name}</span>

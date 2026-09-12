@@ -31,6 +31,7 @@ interface CodingEditorProps {
   onDiagnostics?: (path: string, diagnostics: CodingEditorDiagnostic[]) => void;
   /** Document symbols for the breadcrumb and the ⌘T palette. */
   onSymbols?: (path: string, symbols: EditorSymbol[]) => void;
+  onSymbolAction?: (action: "definition" | "references" | "impact", symbol: string) => void;
 }
 
 function editorModelUri(path: string): string {
@@ -73,6 +74,7 @@ export function CodingEditor({
   onSave,
   onDiagnostics,
   onSymbols,
+  onSymbolAction,
 }: CodingEditorProps) {
   const { theme } = useTheme();
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
@@ -81,13 +83,15 @@ export function CodingEditor({
   const symbolsHandlerRef = useRef(onSymbols);
   const saveHandlerRef = useRef(onSave);
   const changeHandlerRef = useRef(onChange);
+  const symbolActionHandlerRef = useRef(onSymbolAction);
 
   useEffect(() => {
     diagnosticsHandlerRef.current = onDiagnostics;
     symbolsHandlerRef.current = onSymbols;
     saveHandlerRef.current = onSave;
     changeHandlerRef.current = onChange;
-  }, [onChange, onDiagnostics, onSave, onSymbols]);
+    symbolActionHandlerRef.current = onSymbolAction;
+  }, [onChange, onDiagnostics, onSave, onSymbolAction, onSymbols]);
 
   useEffect(() => {
     if (!reveal || !editorRef.current) return;
@@ -178,6 +182,30 @@ export function CodingEditor({
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
       saveHandlerRef.current(),
     );
+    const runSymbolAction = (action: "definition" | "references" | "impact") => {
+      const position = editor.getPosition();
+      const model = editor.getModel();
+      const symbol = position && model ? model.getWordAtPosition(position)?.word : undefined;
+      if (symbol) symbolActionHandlerRef.current?.(action, symbol);
+    };
+    editor.addAction({
+      id: "echo-code.definition",
+      label: "Echo Code: 跳转到定义",
+      keybindings: [monaco.KeyCode.F12],
+      run: () => runSymbolAction("definition"),
+    });
+    editor.addAction({
+      id: "echo-code.references",
+      label: "Echo Code: 查找引用",
+      keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.F12],
+      run: () => runSymbolAction("references"),
+    });
+    editor.addAction({
+      id: "echo-code.impact",
+      label: "Echo Code: 分析影响",
+      keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.F12],
+      run: () => runSymbolAction("impact"),
+    });
     if (reveal) {
       const position = { lineNumber: reveal.line, column: reveal.column };
       editor.setPosition(position);

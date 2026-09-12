@@ -358,7 +358,15 @@ pub fn parse_record(record: &VerificationRecord) -> Vec<Problem> {
             tail
         };
         let kind = classify(&message);
-        problems.push(build(kind, message, None, None, None, None, &record.command));
+        problems.push(build(
+            kind,
+            message,
+            None,
+            None,
+            None,
+            None,
+            &record.command,
+        ));
     }
     problems
 }
@@ -457,7 +465,8 @@ mod tests {
 
     #[test]
     fn parses_pytest_failure_with_test_symbol() {
-        let output = "FAILED tests/test_auth.py::test_login_rejects_expired - AssertionError: expected 401";
+        let output =
+            "FAILED tests/test_auth.py::test_login_rejects_expired - AssertionError: expected 401";
         let problems = parse_record(&record(VerificationKind::Test, output, ""));
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].kind, ProblemKind::TestFailure);

@@ -19,7 +19,7 @@ interface TaskStarterProps {
 }
 
 const SUGGESTIONS = [
-  { label: "理解代码库", text: "解释这个项目的核心架构、入口和关键数据流" },
+  { label: "补齐测试", text: "分析当前测试覆盖缺口，为关键路径补齐可靠的自动化测试" },
   { label: "实现新功能", text: "实现一个新功能，沿用现有架构、交互和测试约定" },
   { label: "定位问题", text: "复现并定位当前问题的根因，完成最小修复" },
 ];
@@ -87,7 +87,7 @@ export function TaskStarter({
           }
         }}
         rows={4}
-        placeholder="让 Echo 实现功能、修复问题，或解释代码库…"
+        placeholder="让 Echo 实现功能、修复问题或补齐测试…"
         aria-label="开发需求"
       />
 

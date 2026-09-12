@@ -291,7 +291,14 @@ describe("CodingWorkbench skeleton", () => {
     // The baseline must be captured before the Agent starts writing.
     expect(invoked).toContain("coding_changeset_capture_baseline");
     expect(invoked).toContain("coding_task_submit_requirement");
-    expect(onStartRun).toHaveBeenCalledWith("/repo", "增加登录审计", false, "m1");
+    expect(onStartRun).toHaveBeenCalledWith(
+      "/repo",
+      "增加登录审计",
+      false,
+      "m1",
+      [],
+      expect.any(Function),
+    );
   });
 
   it("offers the task starter until a task exists", async () => {

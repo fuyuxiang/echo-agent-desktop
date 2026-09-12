@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, ListChecks, LoaderCircle, Send, Square } from "lucide-react";
+import { AlertTriangle, CheckCircle2, LoaderCircle, Send, Square } from "lucide-react";
 
 import { ExecutionProcess } from "@/components/ExecutionProcess";
 import { Markdown } from "@/components/Markdown";
 import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
 import { PermissionInlineCard } from "@/components/PermissionDialog";
 import { PermissionPicker } from "@/components/PermissionPicker";
+import { PlanPanel } from "@/components/PlanPanel";
 import { QuestionInlineCard } from "@/components/QuestionInlineCard";
 import type { ChatMessage } from "@/stores/session-store";
 
@@ -25,10 +26,15 @@ interface AgentPaneProps {
   models: ModelOption[];
   modelId?: string;
   sending: boolean;
-  onModelChange: (modelId: string) => void;
-  onSend: (text: string) => void;
+  onModelChange: (modelId: string) => void | Promise<void>;
+  onSend: (text: string, mutating?: boolean) => boolean | void | Promise<boolean | void>;
   onCancel: () => void;
-  onApprovePlan: () => void;
+  onPlanResolved: (
+    outcome: "approved" | "cancelled" | "abandoned",
+    entries: string[],
+  ) => void | Promise<void>;
+  onPlanSyncFailed: (reason: string) => void | Promise<void>;
+  onFinalizeDelivery: () => void | Promise<void>;
   onOpenReport: () => void;
   onToast?: (message: string) => void;
 }
@@ -55,17 +61,20 @@ export function AgentPane({
   onModelChange,
   onSend,
   onCancel,
-  onApprovePlan,
+  onPlanResolved,
+  onPlanSyncFailed,
+  onFinalizeDelivery,
   onOpenReport,
   onToast,
 }: AgentPaneProps) {
   const [followup, setFollowup] = useState("");
   const phase = describePhase(task.phase);
+  const sessionUnavailable = !sessionId;
 
-  const submit = () => {
+  const submit = async () => {
     if (!followup.trim() || sending || streaming) return;
-    onSend(followup.trim());
-    setFollowup("");
+    const sent = await onSend(followup.trim());
+    if (sent !== false) setFollowup("");
   };
 
   return (
@@ -97,11 +106,23 @@ export function AgentPane({
       )}
 
       {task.phase === "planning" && (
-        <div className="coding-agent__decision">
-          <ListChecks size={13} />
-          <span>Agent 已给出计划，批准后才会修改文件。</span>
-          <button type="button" onClick={onApprovePlan}>
-            批准计划
+        <PlanPanel
+          sessionId={sessionId ?? undefined}
+          onSend={async (text) => {
+            await onSend(text, false);
+          }}
+          onToast={onToast}
+          onApprovalResolved={onPlanResolved}
+          onApprovalSyncFailed={onPlanSyncFailed}
+        />
+      )}
+
+      {task.phase === "gating" && (
+        <div className="coding-agent__decision is-good">
+          <CheckCircle2 size={13} />
+          <span>自动检查已完成。请确认验收结果和代码审阅状态。</span>
+          <button type="button" onClick={() => void onFinalizeDelivery()}>
+            确认验收并完成交付
           </button>
         </div>
       )}
@@ -161,13 +182,15 @@ export function AgentPane({
           onKeyDown={(event) => {
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
               event.preventDefault();
-              submit();
+              void submit();
             }
           }}
           rows={2}
-          placeholder="继续当前任务；⌘ Enter 发送…"
+          placeholder={sessionUnavailable
+            ? "当前任务未绑定 Agent 会话"
+            : "继续当前任务；⌘ Enter 发送…"}
           aria-label="给 Agent 的补充要求"
-          disabled={sending || streaming}
+          disabled={sessionUnavailable || sending || streaming}
         />
         <div className="coding-agent__composer-tools">
           <PermissionPicker onToast={onToast} sessionId={sessionId ?? undefined} />
@@ -175,8 +198,8 @@ export function AgentPane({
           <button
             type="button"
             className="coding-agent__send"
-            disabled={!followup.trim() || sending || streaming}
-            onClick={submit}
+            disabled={sessionUnavailable || !followup.trim() || sending || streaming}
+            onClick={() => void submit()}
             aria-label="发送给 Agent"
           >
             <Send size={14} />

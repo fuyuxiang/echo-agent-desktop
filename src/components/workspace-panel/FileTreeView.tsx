@@ -27,6 +27,8 @@ interface FileTreeViewProps {
   onDirectorySelect?: (path: string) => void;
   /** 错误/提示回调。 */
   onToast?: (msg: string) => void;
+  /** Increment to invalidate the lazy directory cache after creating entries. */
+  refreshKey?: number;
 }
 
 export function FileTreeView({
@@ -36,6 +38,7 @@ export function FileTreeView({
   onFileSelect,
   onDirectorySelect,
   onToast,
+  refreshKey = 0,
 }: FileTreeViewProps) {
   const [loaded, setLoaded] = useState<LoadedMap>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -80,7 +83,7 @@ export function FileTreeView({
     if (!root) return;
     setLoading(true);
     loadDir(root).finally(() => setLoading(false));
-  }, [root]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [refreshKey, root]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleDir = useCallback(
     async (dirPath: string) => {

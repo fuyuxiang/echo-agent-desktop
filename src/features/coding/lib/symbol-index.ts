@@ -118,10 +118,14 @@ export class SymbolIndexClient {
         this.teardown();
       }
     };
-  }  /** Pull the latest status and replace the in-memory list. */
+  }
+
+  /** Pull the latest status and replace the in-memory list. */
   async refresh(): Promise<void> {
     try {
-      this.status = await codingApi.indexStatus(this.root);
+      const status = await codingApi.indexStatus(this.root);
+      if (!status) return;
+      this.status = status;
       if (this.status.state === "ready" || this.status.state === "stale") {
         const hits = await codingApi.symbolQuery(this.root, "", undefined, 5000);
         this.replaceAll(hits.map((hit) => hit.symbol));

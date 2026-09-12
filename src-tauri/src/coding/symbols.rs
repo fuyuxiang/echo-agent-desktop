@@ -44,7 +44,6 @@ pub const HARD_IGNORED_DIRS: &[&str] = &[
     ".git",
 ];
 
-
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolKind {
@@ -144,8 +143,7 @@ fn now_rfc3339() -> String {
 /// does not exist yet — that is the documented "not built" signal.
 pub fn read_status(root: &Path) -> IndexStatus {
     let paths = store::index_paths(root);
-    let file_index: Vec<FileIndexEntry> =
-        store::read_json(&paths.file_index).unwrap_or_default();
+    let file_index: Vec<FileIndexEntry> = store::read_json(&paths.file_index).unwrap_or_default();
     let symbols = store::read_jsonl::<SymbolRecord>(&paths.symbols).len();
     let state = if file_index.is_empty() {
         IndexState::Empty
@@ -164,7 +162,6 @@ pub fn read_status(root: &Path) -> IndexStatus {
         in_progress: false,
     }
 }
-
 
 /// Write the file index (full replace, not append) after a rebuild.
 fn write_file_index(root: &Path, entries: &[FileIndexEntry]) -> Result<(), String> {
@@ -199,7 +196,11 @@ pub fn walk_workspace(root: &Path) -> Vec<PathBuf> {
         let _ = overrides.add(&format!("!{pattern}"));
         let _ = overrides.add(&format!("!{pattern}/**"));
     }
-    walker.overrides(overrides.build().expect("hardcoded ignore patterns are valid"));
+    walker.overrides(
+        overrides
+            .build()
+            .expect("hardcoded ignore patterns are valid"),
+    );
     let walker = walker.build();
     for entry in walker.flatten() {
         let path = entry.path();
@@ -257,7 +258,6 @@ fn read_text(root: &Path, rel: &str) -> Option<String> {
     }
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
-
 
 /// Parse one file's symbols using language-aware regular expressions. Symbols
 /// returned are sorted by (line, column) so the JSONL append order is stable.
@@ -322,8 +322,8 @@ fn parse_with_rules(text: &str, file: &str, ext: &str, out: &mut Vec<SymbolRecor
                 .unwrap_or(*exported_default);
             let signature = caps.get(0).map(|m| {
                 let raw = m.as_str().trim_end();
-                if raw.len() > 160 {
-                    format!("{}…", &raw[..160])
+                if raw.chars().count() > 160 {
+                    format!("{}…", raw.chars().take(160).collect::<String>())
                 } else {
                     raw.to_string()
                 }
@@ -356,7 +356,6 @@ fn line_col_from_match(text: &str, byte_offset: usize) -> (u32, u32) {
     let column = (byte_offset.saturating_sub(last_newline) as u32) + 1;
     (line, column)
 }
-
 
 /// Language-aware symbol recognition rules. Built lazily once at first use
 /// and then reused. The static is keyed by file extension; only rules whose
@@ -648,7 +647,6 @@ fn make_rules() -> Vec<RuleEntry> {
 
 static RULES_BY_EXT: LazyLock<Vec<RuleEntry>> = LazyLock::new(make_rules);
 
-
 /// Append `symbols` to `symbols.jsonl`, removing any existing records whose
 /// `file` matches `rel` first so the resulting file is single-record-per-line
 /// and idempotent for the given file path.
@@ -661,14 +659,20 @@ fn replace_file_symbols(root: &Path, rel: &str, symbols: &[SymbolRecord]) -> Res
         .collect();
     kept.extend(symbols.iter().cloned());
     // Sort for stable output across rebuilds.
-    kept.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)).then(a.column.cmp(&b.column)));
+    kept.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then(a.line.cmp(&b.line))
+            .then(a.column.cmp(&b.column))
+    });
     // Rewrite the JSONL file (one record per line, trailing newline).
     if let Some(parent) = paths.symbols.parent() {
         std::fs::create_dir_all(parent).map_err(|error| format!("无法创建目录：{error}"))?;
     }
     let mut body = String::new();
     for record in &kept {
-        let line = serde_json::to_string(record).map_err(|error| format!("序列化符号失败：{error}"))?;
+        let line =
+            serde_json::to_string(record).map_err(|error| format!("序列化符号失败：{error}"))?;
         body.push_str(&line);
         body.push('\n');
     }
@@ -695,7 +699,8 @@ pub fn remove_file(root: &Path, rel: &str) -> Result<(), String> {
     }
     let mut body = String::new();
     for record in &kept {
-        let line = serde_json::to_string(record).map_err(|error| format!("序列化符号失败：{error}"))?;
+        let line =
+            serde_json::to_string(record).map_err(|error| format!("序列化符号失败：{error}"))?;
         body.push_str(&line);
         body.push('\n');
     }
@@ -774,7 +779,6 @@ fn score(symbol: &SymbolRecord, needle: &str) -> u32 {
     }
 }
 
-
 /// Filter + score the index in memory. Empty `needle` returns the most
 /// recently indexed symbols first.
 pub fn query(
@@ -793,7 +797,11 @@ pub fn query(
         })
         .filter(|hit| hit.score > 0)
         .collect();
-    hits.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.symbol.name.cmp(&b.symbol.name)));
+    hits.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.symbol.name.cmp(&b.symbol.name))
+    });
     hits.truncate(limit);
     Ok(hits)
 }
@@ -825,7 +833,6 @@ pub fn symbol_at(root: &Path, file: &str, line: u32) -> Result<Option<SymbolReco
     Ok(best.cloned())
 }
 
-
 /// Full-rebuild the workspace index. Walks every text file under `root`,
 /// parses it with language-aware rules, and atomically replaces the on-disk
 /// `symbols.jsonl` / `file_index.json` pair. Intended to be called from
@@ -852,7 +859,8 @@ pub fn build_index(root: &Path) -> Result<IndexStatus, String> {
     }
     let mut body = String::new();
     for record in &all_symbols {
-        let line = serde_json::to_string(record).map_err(|error| format!("序列化符号失败：{error}"))?;
+        let line =
+            serde_json::to_string(record).map_err(|error| format!("序列化符号失败：{error}"))?;
         body.push_str(&line);
         body.push('\n');
     }
@@ -905,7 +913,6 @@ pub fn reconcile(root: &Path) -> Result<IndexStatus, String> {
         ..status
     })
 }
-
 
 // --- Tauri commands ---------------------------------------------------------
 
@@ -1029,7 +1036,6 @@ pub async fn coding_index_emit_updated(
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1094,22 +1100,24 @@ mod tests {
         write(&root, "a.ts", "export function alpha() {}\n");
         build_index(&root).unwrap();
         let first = load_index(&root);
-        let alpha_id = first
-            .iter()
-            .find(|s| s.name == "alpha")
-            .unwrap()
-            .id
-            .clone();
+        let alpha_id = first.iter().find(|s| s.name == "alpha").unwrap().id.clone();
 
         // Re-write the file with a new symbol, same name on different line.
-        write(&root, "a.ts", "export function alpha() {}\nexport function beta() {}\n");
+        write(
+            &root,
+            "a.ts",
+            "export function alpha() {}\nexport function beta() {}\n",
+        );
         upsert_file(&root, "a.ts").unwrap();
         let second = load_index(&root);
         let alpha_again = second
             .iter()
             .find(|s| s.name == "alpha")
             .expect("alpha should still exist");
-        assert_eq!(alpha_again.id, alpha_id, "id must stay stable across upserts");
+        assert_eq!(
+            alpha_again.id, alpha_id,
+            "id must stay stable across upserts"
+        );
         assert!(second.iter().any(|s| s.name == "beta"));
         // And the old symbol record for `a.ts` was replaced, not appended twice.
         let alpha_count = second.iter().filter(|s| s.name == "alpha").count();
@@ -1244,4 +1252,3 @@ mod tests {
         assert_eq!(status.state, IndexState::Empty);
     }
 }
-

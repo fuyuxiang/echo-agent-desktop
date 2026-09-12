@@ -99,7 +99,7 @@ pub struct CodingGitFile {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodingGitSnapshot {
-    has_git: bool,
+    pub(crate) has_git: bool,
     branch: Option<String>,
     head: Option<String>,
     pub files: Vec<CodingGitFile>,
@@ -597,7 +597,13 @@ pub async fn git_snapshot(root: &Path) -> CodingGitSnapshot {
     }
     let status = git_output_bytes(
         root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+        ],
     )
     .await
     .unwrap_or_default();
@@ -1319,11 +1325,9 @@ pub async fn coding_search_workspace(
             // must run on the blocking pool rather than a tokio worker.
             let root = root.clone();
             let owned_query = query.to_string();
-            return tokio::task::spawn_blocking(move || {
-                fallback_code_search(&root, &owned_query)
-            })
-            .await
-            .map_err(|error| format!("代码搜索失败：{error}"));
+            return tokio::task::spawn_blocking(move || fallback_code_search(&root, &owned_query))
+                .await
+                .map_err(|error| format!("代码搜索失败：{error}"));
         }
         Err(error) => return Err(format!("无法启动代码搜索：{error}")),
     };
@@ -1618,7 +1622,7 @@ pub async fn coding_analyze_workspace(
     let git_changed_files = if has_git {
         git_output(
             &root,
-            &["status", "--porcelain=v1", "--untracked-files=normal"],
+            &["status", "--porcelain=v1", "--untracked-files=all"],
         )
         .await
         .map(|value| value.lines().filter(|line| !line.trim().is_empty()).count())
@@ -2003,5 +2007,4 @@ mod tests {
         let output = read_thread.join().expect("PTY reader should finish");
         assert!(output.contains(temp.path().to_string_lossy().as_ref()));
     }
-
 }

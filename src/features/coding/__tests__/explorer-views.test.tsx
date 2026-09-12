@@ -92,6 +92,7 @@ describe("ChangeSetView", () => {
       onDiscard: vi.fn(),
       onCommit: vi.fn(),
       onRollback: vi.fn(),
+      canCommit: true,
       ...overrides,
     };
     render(<ChangeSetView {...props} />);
@@ -103,7 +104,7 @@ describe("ChangeSetView", () => {
     expect(screen.getByText(/新建开发任务后/)).toBeInTheDocument();
   });
 
-  it("summarises line counts from task changes only", () => {
+  it("summarises every file changed relative to the task baseline", () => {
     const { container } = render(
       <ChangeSetView
         changeSet={changeSet({
@@ -116,29 +117,25 @@ describe("ChangeSetView", () => {
         onRollback={vi.fn()}
       />,
     );
-    // The protected file's 99 additions must not inflate the task's totals.
     const summary = container.querySelector(".coding-changeset__summary") as HTMLElement;
-    expect(summary).toHaveTextContent("+10");
-    expect(summary).not.toHaveTextContent("+109");
-    expect(summary).toHaveTextContent("1 个文件");
+    expect(summary).toHaveTextContent("+109");
+    expect(summary).toHaveTextContent("2 个文件");
   });
 
-  it("lists pre-existing user changes separately as protected", () => {
+  it("marks files that were dirty at task start", () => {
     setup({
       changeSet: changeSet({
         changes: [change(), change({ path: "src/user.ts", preExisting: true })],
       }),
     });
-    expect(screen.getByText(/任务开始前的改动 · 受保护/)).toBeInTheDocument();
+    expect(screen.getByText("起始时已修改")).toBeInTheDocument();
   });
 
-  it("offers no discard control for protected files", () => {
+  it("can restore a dirty-at-start file to its exact baseline", () => {
     setup({
       changeSet: changeSet({ changes: [change({ path: "src/user.ts", preExisting: true })] }),
     });
-    expect(
-      screen.queryByRole("button", { name: /丢弃 src\/user\.ts/ }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /丢弃 src\/user\.ts/ })).toBeInTheDocument();
   });
 
   it("tracks review progress", () => {

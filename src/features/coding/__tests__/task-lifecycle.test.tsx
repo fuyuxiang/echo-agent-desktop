@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   captureBaseline: vi.fn(),
   syncFromGit: vi.fn(),
   reportImplementation: vi.fn(),
+  reportStartFailed: vi.fn(),
 }));
 
 vi.mock("../lib/tauri-api", () => ({ codingApi: api }));
@@ -13,7 +14,31 @@ vi.mock("../lib/tauri-api", () => ({ codingApi: api }));
 import { useSessionStore } from "@/stores/session-store";
 
 const refreshTaskState = vi.fn(async () => undefined);
-const taskStoreState = { task: null as { id: string; phase: import("../lib/types").TaskPhase } | null };
+const taskStoreState = {
+  task: null as {
+    id: string;
+    phase: import("../lib/types").TaskPhase;
+    sessionId?: string | null;
+  } | null,
+};
+
+function setTaskStreaming(streaming: boolean) {
+  useSessionStore.setState({
+    transcripts: {
+      s1: {
+        messages: [],
+        streamingMessageId: streaming ? "assistant-1" : null,
+        pendingSendNowPromptId: null,
+        usage: {},
+        plan: null,
+        planMode: false,
+        planApprovals: [],
+        suppressReplay: false,
+        dismissedControlPromptIds: [],
+      },
+    },
+  });
+}
 
 vi.mock("../store/task-store", () => ({
   useTaskStore: Object.assign(
@@ -33,7 +58,7 @@ beforeEach(() => {
   }
   refreshTaskState.mockClear();
   taskStoreState.task = null;
-  useSessionStore.setState({ streaming: false });
+  setTaskStreaming(false);
 });
 
 describe("useTaskLifecycle", () => {
@@ -47,41 +72,11 @@ describe("useTaskLifecycle", () => {
     await waitFor(() => expect(api.getChangeSet).not.toHaveBeenCalled());
   });
 
-  it("captures the baseline once when the task first enters Implementing", async () => {
-    api.getChangeSet.mockResolvedValue({
-      taskId: "t1",
-      baselineFiles: [],
-      changes: [
-        {
-          path: "src/a.ts",
-          kind: "modified",
-          added: 1,
-          removed: 1,
-          baselineContent: null,
-          preExisting: false,
-        },
-      ],
-      createdAt: "",
-      reviewedFiles: [],
-    });
-    taskStoreState.task = { id: "t1", phase: "implementing" };
+  it("never recaptures the task baseline after the Agent has started", async () => {
+    taskStoreState.task = { id: "t1", phase: "implementing", sessionId: "s1" };
     renderHook(() => useTaskLifecycle("/repo"));
-    await waitFor(() =>
-      expect(api.captureBaseline).toHaveBeenCalledWith("/repo", "t1", ["src/a.ts"]),
-    );
-  });
-
-  it("does not re-capture when the baseline is already populated", async () => {
-    api.getChangeSet.mockResolvedValue({
-      taskId: "t1",
-      baselineFiles: ["src/a.ts"],
-      changes: [],
-      createdAt: "",
-      reviewedFiles: [],
-    });
-    taskStoreState.task = { id: "t1", phase: "implementing" };
-    renderHook(() => useTaskLifecycle("/repo"));
-    await waitFor(() => expect(api.getChangeSet).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(api.getChangeSet).not.toHaveBeenCalled();
     expect(api.captureBaseline).not.toHaveBeenCalled();
   });
 
@@ -104,17 +99,17 @@ describe("useTaskLifecycle", () => {
       createdAt: "",
       reviewedFiles: [],
     });
-    taskStoreState.task = { id: "t1", phase: "implementing" };
+    taskStoreState.task = { id: "t1", phase: "implementing", sessionId: "s1" };
     // Initial render with streaming=false — nothing to fire yet.
-    useSessionStore.setState({ streaming: false });
+    setTaskStreaming(false);
     renderHook(() => useTaskLifecycle("/repo"));
 
     // Simulate a streaming turn finishing.
     await act(async () => {
-      useSessionStore.setState({ streaming: true });
+      setTaskStreaming(true);
     });
     await act(async () => {
-      useSessionStore.setState({ streaming: false });
+      setTaskStreaming(false);
     });
 
     await waitFor(() => expect(api.syncFromGit).toHaveBeenCalledWith("/repo", "t1"));
@@ -155,22 +150,19 @@ describe("useTaskLifecycle", () => {
       reviewedFiles: [],
     });
     api.syncFromGit.mockRejectedValue(new Error("git failure"));
-    taskStoreState.task = { id: "t1", phase: "implementing" };
-    useSessionStore.setState({ streaming: false });
+    taskStoreState.task = { id: "t1", phase: "implementing", sessionId: "s1" };
+    setTaskStreaming(false);
     renderHook(() => useTaskLifecycle("/repo"));
 
     await act(async () => {
-      useSessionStore.setState({ streaming: true });
+      setTaskStreaming(true);
     });
     await act(async () => {
-      useSessionStore.setState({ streaming: false });
+      setTaskStreaming(false);
     });
 
     await waitFor(() => expect(api.syncFromGit).toHaveBeenCalled());
-    // The report still fires — the orchestrator already has the truth on disk
-    // and the failure surface is in the orchestrator's own verdict.
-    await waitFor(() =>
-      expect(api.reportImplementation).toHaveBeenCalledWith("/repo", "t1"),
-    );
+    expect(api.reportImplementation).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.reportStartFailed).toHaveBeenCalled());
   });
 });

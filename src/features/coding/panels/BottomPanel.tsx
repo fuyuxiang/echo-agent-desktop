@@ -29,6 +29,8 @@ interface BottomPanelProps {
   onOpenProblem: (problem: Problem) => void;
   onRun: (command: DetectedCommand) => void;
   onRunAll: () => void;
+  onCancelVerification?: () => void;
+  onOpenVerificationOutput?: (record: VerificationRecord) => void;
   onToast?: (message: string) => void;
 }
 
@@ -98,6 +100,8 @@ export function BottomPanel({
   onOpenProblem,
   onRun,
   onRunAll,
+  onCancelVerification,
+  onOpenVerificationOutput,
   onToast,
 }: BottomPanelProps) {
   const outputRef = useRef<HTMLPreElement | null>(null);
@@ -175,7 +179,12 @@ export function BottomPanel({
             hasTask={hasTask}
             onRun={onRun}
             onRunAll={onRunAll}
-            onOpenOutput={() => onViewChange("output")}
+            onOpenOutput={(record) => {
+              onViewChange("output");
+              // Parent owns the output buffer so it can also display live chunks.
+              onOpenVerificationOutput?.(record);
+            }}
+            onCancel={onCancelVerification}
           />
         )}
         {view === "output" && (

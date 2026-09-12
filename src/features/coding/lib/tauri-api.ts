@@ -10,6 +10,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AnalysisProgressEvent,
   ChangeSet,
+  ChangeDiff,
   CodingTask,
   DeliveryReport,
   DetectedCommand,
@@ -41,11 +42,25 @@ export const codingApi = {
     invoke<void>("coding_task_delete", { root, taskId }),
   renameTask: (root: string, taskId: string, name: string) =>
     invoke<CodingTask>("coding_task_rename", { root, taskId, name }),
+  bindTaskRuntime: (root: string, taskId: string, sessionId: string, modelId: string) =>
+    invoke<CodingTask>("coding_task_bind_runtime", { root, taskId, sessionId, modelId }),
 
   submitRequirement: (root: string, taskId: string, planRequired: boolean) =>
     invoke<CodingTask>("coding_task_submit_requirement", { root, taskId, planRequired }),
   approvePlan: (root: string, taskId: string) =>
     invoke<CodingTask>("coding_task_approve_plan", { root, taskId }),
+  resolvePlan: (
+    root: string,
+    taskId: string,
+    outcome: "approved" | "cancelled" | "abandoned",
+    planEntries: string[],
+  ) => invoke<CodingTask>("coding_task_resolve_plan", { root, taskId, outcome, planEntries }),
+  reportStartFailed: (root: string, taskId: string, reason: string) =>
+    invoke<CodingTask>("coding_task_report_start_failed", { root, taskId, reason }),
+  beginFollowup: (root: string, taskId: string) =>
+    invoke<CodingTask>("coding_task_begin_followup", { root, taskId }),
+  beginVerification: (root: string, taskId: string) =>
+    invoke<CodingTask>("coding_task_begin_verification", { root, taskId }),
   rollbackTask: (root: string, taskId: string) =>
     invoke<string[]>("coding_task_rollback", { root, taskId }),
 
@@ -53,6 +68,8 @@ export const codingApi = {
     invoke<ChangeSet>("coding_changeset_get", { root, taskId }),
   captureBaseline: (root: string, taskId: string, dirtyFiles: string[]) =>
     invoke<ChangeSet>("coding_changeset_capture_baseline", { root, taskId, dirtyFiles }),
+  changeDiff: (root: string, taskId: string, path: string) =>
+    invoke<ChangeDiff>("coding_changeset_diff", { root, taskId, path }),
   recordChange: (root: string, taskId: string, change: FileChange) =>
     invoke<ChangeSet>("coding_changeset_record_change", { root, taskId, change }),
   discardFile: (root: string, taskId: string, path: string) =>
@@ -72,6 +89,7 @@ export const codingApi = {
     kind: VerificationKind,
     command: string,
     timeoutSecs?: number,
+    requestedRunId?: string,
   ) =>
     invoke<VerificationRecord>("coding_verification_run", {
       root,
@@ -79,6 +97,7 @@ export const codingApi = {
       kind,
       command,
       timeoutSecs: timeoutSecs ?? null,
+      requestedRunId: requestedRunId ?? null,
     }),
   cancelVerification: (runId: string) => invoke<void>("coding_verification_cancel", { runId }),
 
@@ -94,6 +113,8 @@ export const codingApi = {
 
   deliveryReport: (root: string, taskId: string) =>
     invoke<DeliveryReport>("coding_delivery_report", { root, taskId }),
+  finalizeDelivery: (root: string, taskId: string) =>
+    invoke<DeliveryReport>("coding_delivery_finalize", { root, taskId }),
   commitInput: (root: string, taskId: string) =>
     invoke<string>("coding_delivery_commit_input", { root, taskId }),
   prInput: (root: string, taskId: string) =>
@@ -103,6 +124,7 @@ export const codingApi = {
 
   // Phase 2: cross-file symbol index + reference search + impact analysis.
   indexStatus: (root: string) => invoke<IndexStatus>("coding_index_status", { root }),
+  indexBootstrap: (root: string) => invoke<IndexStatus>("coding_index_bootstrap", { root }),
   indexRebuild: (root: string) => invoke<IndexStatus>("coding_index_rebuild", { root }),
   symbolQuery: (root: string, needle: string, kind?: string, limit?: number) =>
     invoke<SymbolQueryHit[]>("coding_symbol_query", {
@@ -128,6 +150,10 @@ export const codingApi = {
       target,
       depth: depth ?? null,
       includeTests: includeTests ?? null,
+    }),
+  createEntry: (root: string, parent: string | undefined, name: string, directory: boolean) =>
+    invoke<string>("coding_create_entry", {
+      request: { root, parent: parent ?? null, name, directory },
     }),
 };
 

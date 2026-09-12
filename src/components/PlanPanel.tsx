@@ -51,9 +51,22 @@ interface PlanPanelProps {
   sessionId?: string;
   onSend?: (text: string) => boolean | void | Promise<boolean | void>;
   onToast?: (msg: string) => void;
+  /** Keep an owning workflow (such as Echo Code) in sync with runtime approval. */
+  onApprovalResolved?: (
+    outcome: "approved" | "cancelled" | "abandoned",
+    entries: string[],
+  ) => void | Promise<void>;
+  /** Stop execution if runtime approval succeeded but workflow persistence failed. */
+  onApprovalSyncFailed?: (reason: string) => void | Promise<void>;
 }
 
-export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
+export function PlanPanel({
+  sessionId,
+  onSend,
+  onToast,
+  onApprovalResolved,
+  onApprovalSyncFailed,
+}: PlanPanelProps) {
   const plan = useSessionStore((s) => s.plan);
   const planMode = useSessionStore((s) => s.planMode);
   const planApproval = useSessionStore((s) => s.planApproval);
@@ -127,6 +140,7 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
     if (!planApproval || approvalBusy) return false;
     setApprovalBusy(true);
     setApprovalError(null);
+    let runtimeAcknowledged = false;
     try {
       const acknowledged = await agentResolvePlanApproval(
         planApproval.requestId,
@@ -134,17 +148,33 @@ export function PlanPanel({ sessionId, onSend, onToast }: PlanPanelProps) {
         feedback,
       );
       if (!acknowledged) throw new Error("后端未找到该计划审批请求，请重试");
+      runtimeAcknowledged = true;
+      await onApprovalResolved?.(
+        outcome,
+        plan?.entries.map((entry) => entry.content.trim()).filter(Boolean) ?? [],
+      );
       dismissPlanApproval(planApproval.requestId, planApproval.sessionId);
       return true;
     } catch (error) {
       const message = String(error).replace(/^Error:\s*/, "");
+      if (runtimeAcknowledged) {
+        await Promise.resolve(onApprovalSyncFailed?.(message)).catch(() => undefined);
+      }
       setApprovalError(message);
       onToast?.(`审批失败：${message}`);
       return false;
     } finally {
       setApprovalBusy(false);
     }
-  }, [approvalBusy, dismissPlanApproval, onToast, planApproval]);
+  }, [
+    approvalBusy,
+    dismissPlanApproval,
+    onApprovalResolved,
+    onApprovalSyncFailed,
+    onToast,
+    plan,
+    planApproval,
+  ]);
 
   const syncPlan = useCallback(async (execute: boolean) => {
     if (!plan) return;

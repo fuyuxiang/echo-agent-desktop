@@ -37,6 +37,8 @@ export interface CodingTask {
   name: string;
   requirement: string;
   phase: TaskPhase;
+  phaseReason?: string | null;
+  blocker?: string | null;
   acceptanceCriteria: AcceptanceCriterion[];
   taskNodes: TaskNode[];
   planRequired: boolean;
@@ -67,9 +69,26 @@ export interface FileChange {
 export interface ChangeSet {
   taskId: string;
   baselineFiles: string[];
+  baselineHead?: string | null;
+  baselineEntries?: Array<{
+    path: string;
+    existed: boolean;
+    contentBase64?: string | null;
+    hash?: string | null;
+  }>;
   changes: FileChange[];
   createdAt: string;
   reviewedFiles: string[];
+  reviewedHashes?: Record<string, string>;
+  changeHashes?: Record<string, string>;
+  rollbackUnsafeFiles?: string[];
+  committedHash?: string | null;
+}
+
+export interface ChangeDiff {
+  original: string;
+  modified: string;
+  binary: boolean;
 }
 
 export type VerificationKind = "build" | "lint" | "type_check" | "test" | "custom";
@@ -183,6 +202,7 @@ export interface DeliveryReport {
 
 /** Payload of `coding://task-phase-changed`. */
 export interface PhaseChangedEvent {
+  root: string;
   taskId: string;
   phase: TaskPhase;
   reason: string;
@@ -191,6 +211,8 @@ export interface PhaseChangedEvent {
 
 /** Payload of `coding://verification-output`. */
 export interface VerificationOutputEvent {
+  root: string;
+  taskId: string;
   runId: string;
   stream: "stdout" | "stderr";
   chunk: string;

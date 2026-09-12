@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, CircleSlash, Clock, LoaderCircle, Play } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleSlash, Clock, LoaderCircle, Play, Square } from "lucide-react";
 
 import { verificationLabel } from "../store/workbench-store";
 import type { DetectedCommand, VerificationRecord } from "../lib/types";
@@ -11,6 +11,7 @@ interface VerificationViewProps {
   onRun: (command: DetectedCommand) => void;
   onRunAll: () => void;
   onOpenOutput: (record: VerificationRecord) => void;
+  onCancel?: () => void;
 }
 
 function formatDuration(durationMs: number): string {
@@ -33,6 +34,7 @@ export function VerificationView({
   onRun,
   onRunAll,
   onOpenOutput,
+  onCancel,
 }: VerificationViewProps) {
   const latest = [...records].reverse();
 
@@ -43,6 +45,11 @@ export function VerificationView({
           {running ? <LoaderCircle size={12} className="is-spinning" /> : <Play size={12} />}
           运行全部验证
         </button>
+        {running && onCancel && (
+          <button type="button" onClick={onCancel}>
+            <Square size={12} /> 停止验证
+          </button>
+        )}
         {detected.map((command) => (
           <button
             key={command.command}

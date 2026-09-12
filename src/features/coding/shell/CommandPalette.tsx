@@ -33,7 +33,7 @@ interface CommandPaletteProps {
 const PLACEHOLDERS: Record<PaletteMode, string> = {
   commands: "输入命令名称，或用 > 前缀继续搜索命令",
   files: "按文件名搜索，输入 > 切换到命令",
-  symbols: "按符号名称搜索当前文件",
+  symbols: "按符号名称搜索整个工作区",
 };
 
 const MODE_ICONS: Record<PaletteMode, typeof Terminal> = {
