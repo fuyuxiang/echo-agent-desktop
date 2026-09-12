@@ -3,6 +3,20 @@ import { create } from "zustand";
 /** Virtual document tabs produced by the workbench rather than the filesystem. */
 export type DocTabKind = "delivery" | "taskDag" | "profile";
 
+/**
+ * Phase 2 virtual tabs. Each kind takes a `SymbolKey` as `params` so
+ * re-opening the same symbol focuses the existing tab instead of stacking
+ * duplicates.
+ */
+export type VirtualTabKind = "findReferences" | "impactAnalysis" | "goToDefinition";
+
+export interface SymbolKey {
+  /** Symbol name — the dedup key. */
+  name: string;
+  file?: string;
+  line?: number;
+}
+
 export interface FileTab {
   type: "file";
   /** Absolute path; also the tab's id. */
@@ -30,7 +44,18 @@ export interface DocTab {
   title: string;
 }
 
-export type WorkbenchTab = FileTab | DocTab;
+export interface VirtualTab {
+  type: "virtual";
+  id: string;
+  kind: VirtualTabKind;
+  title: string;
+  /** Identifies which symbol the tab is bound to. */
+  symbol: SymbolKey;
+  /** Workspace root the analysis was started against. */
+  root: string;
+}
+
+export type WorkbenchTab = FileTab | DocTab | VirtualTab;
 
 const DOC_TITLES: Record<DocTabKind, string> = {
   delivery: "交付报告",
@@ -38,11 +63,18 @@ const DOC_TITLES: Record<DocTabKind, string> = {
   profile: "工程画像",
 };
 
+const VIRTUAL_TITLES: Record<VirtualTabKind, string> = {
+  findReferences: "查找引用",
+  impactAnalysis: "影响范围",
+  goToDefinition: "跳转到定义",
+};
+
 interface TabState {
   tabs: WorkbenchTab[];
   activeId: string | null;
   openFile: (tab: Omit<FileTab, "type" | "view"> & { view?: FileTab["view"] }) => void;
   openDoc: (kind: DocTabKind) => void;
+  openVirtual: (kind: VirtualTabKind, root: string, symbol: SymbolKey) => void;
   closeTab: (id: string) => void;
   closeAll: () => void;
   setActive: (id: string) => void;
@@ -57,9 +89,17 @@ export function isFileTab(tab: WorkbenchTab): tab is FileTab {
   return tab.type === "file";
 }
 
+export function isVirtualTab(tab: WorkbenchTab): tab is VirtualTab {
+  return tab.type === "virtual";
+}
+
 /** A tab whose draft differs from disk. */
 export function isDirty(tab: WorkbenchTab): boolean {
   return isFileTab(tab) && tab.draft !== tab.original;
+}
+
+function virtualTabId(kind: VirtualTabKind, symbol: SymbolKey): string {
+  return `virtual:${kind}:${symbol.name}`;
 }
 
 export const useTabStore = create<TabState>((set, get) => ({
@@ -88,6 +128,29 @@ export const useTabStore = create<TabState>((set, get) => ({
     }
     set((state) => ({
       tabs: [...state.tabs, { type: "doc", id, kind, title: DOC_TITLES[kind] }],
+      activeId: id,
+    }));
+  },
+
+  openVirtual: (kind, root, symbol) => {
+    const id = virtualTabId(kind, symbol);
+    const existing = get().tabs.find((entry) => entry.id === id);
+    if (existing) {
+      set({ activeId: id });
+      return;
+    }
+    set((state) => ({
+      tabs: [
+        ...state.tabs,
+        {
+          type: "virtual",
+          id,
+          kind,
+          title: `${VIRTUAL_TITLES[kind]} · ${symbol.name}`,
+          root,
+          symbol,
+        },
+      ],
       activeId: id,
     }));
   },

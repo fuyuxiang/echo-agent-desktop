@@ -112,7 +112,7 @@ export function ProjectProfileTab({ root, onOpenFile }: ProjectProfileTabProps) 
         </h2>
         <div className="coding-doc__note">
           <Info size={12} />
-          模块依据构建清单所在目录推断，并非源码级依赖分析；调用图与影响范围分析将在后续版本接入。
+          模块依据构建清单所在目录推断，并非源码级依赖分析。
         </div>
         <div className="coding-profile__modules">
           {analysis.modules.map((module) => (

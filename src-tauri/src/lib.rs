@@ -505,6 +505,18 @@ pub fn run() {
             coding::verification::coding_verification_run,
             coding::verification::coding_verification_cancel,
             coding::diagnostics::coding_diagnostics_list,
+            // phase 2 cross-file symbol index (Task 17)
+            coding::symbols::coding_index_status,
+            coding::symbols::coding_index_rebuild,
+            coding::symbols::coding_symbol_query,
+            coding::symbols::coding_symbol_at,
+            coding::symbols::coding_index_emit_progress,
+            coding::symbols::coding_index_emit_updated,
+            // phase 2 reference search (Task 19)
+            coding::refs::coding_refs_find,
+            coding::refs::coding_refs_definition,
+            // phase 2 impact analysis (Task 20)
+            coding::impact::coding_impact_analyze,
             coding::orchestrator::coding_task_submit_requirement,
             coding::orchestrator::coding_task_approve_plan,
             coding::orchestrator::coding_orchestrator_report_implementation,

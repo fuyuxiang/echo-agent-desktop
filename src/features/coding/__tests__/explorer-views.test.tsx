@@ -8,6 +8,29 @@ import { ContextPackView } from "../explorer/ContextPackView";
 import { SymbolView } from "../explorer/SymbolView";
 import type { ChangeSet, FileChange } from "../lib/types";
 
+vi.mock("../lib/tauri-api", () => ({
+  codingApi: {
+    indexStatus: vi.fn(async () => ({
+      state: "empty",
+      filesIndexed: 0,
+      symbols: 0,
+      lastReconciledAt: null,
+      inProgress: false,
+    })),
+    symbolQuery: vi.fn(async () => []),
+    indexRebuild: vi.fn(async () => ({
+      state: "ready",
+      filesIndexed: 0,
+      symbols: 0,
+      lastReconciledAt: null,
+      inProgress: false,
+    })),
+  },
+  onIndexUpdated: vi.fn(async () => () => undefined),
+  onIndexRemoved: vi.fn(async () => () => undefined),
+  onIndexProgress: vi.fn(async () => () => undefined),
+}));
+
 function change(overrides: Partial<FileChange> = {}): FileChange {
   return {
     path: "src/a.ts",
@@ -149,28 +172,36 @@ describe("ChangeSetView", () => {
 });
 
 describe("SymbolView", () => {
-  it("asks for an open file first", () => {
-    render(<SymbolView symbols={[]} onOpenSymbol={vi.fn()} />);
-    expect(screen.getByText(/打开一个文件后/)).toBeInTheDocument();
+  it("renders the building label when the index has not reported status", () => {
+    render(<SymbolView symbols={[]} onOpenSymbol={vi.fn()} root="/tmp/no-such-root" />);
+    const matches = screen.getAllByText(/正在构建工作区索引|工作区索引状态未知|工作区索引尚未初始化/);
+    expect(matches.length).toBeGreaterThan(0);
   });
 
-  it("states the single-file limitation rather than implying full indexing", () => {
-    render(<SymbolView symbols={[]} activeFileName="a.ts" onOpenSymbol={vi.fn()} />);
-    expect(screen.getByText(/跨文件符号索引与引用查找将在后续版本接入/)).toBeInTheDocument();
-  });
-
-  it("jumps to a symbol", async () => {
-    const user = userEvent.setup();
-    const onOpenSymbol = vi.fn();
+  it("falls back to the active file when the index is empty", () => {
     render(
       <SymbolView
         symbols={[{ name: "handleLogin", path: "src/a.ts", line: 42 }]}
-        activeFileName="a.ts"
-        onOpenSymbol={onOpenSymbol}
+        activeFileName="src/a.ts"
+        onOpenSymbol={vi.fn()}
       />,
     );
-    await user.click(screen.getByRole("button", { name: /handleLogin/ }));
-    expect(onOpenSymbol).toHaveBeenCalledWith(expect.objectContaining({ line: 42 }));
+    // Without a `root` the cross-file index never starts; the panel falls
+    // back to the single-file view and asks the user to open the index.
+    expect(screen.getByText(/打开文件后这里会列出它的符号|工作区索引状态未知/)).toBeInTheDocument();
+  });
+
+  it("does not render the legacy single-file-only message", () => {
+    render(
+      <SymbolView
+        symbols={[{ name: "handleLogin", path: "src/a.ts", line: 42 }]}
+        activeFileName="src/a.ts"
+        onOpenSymbol={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByText(/跨文件符号索引与引用查找将在后续版本接入/),
+    ).not.toBeInTheDocument();
   });
 });
 

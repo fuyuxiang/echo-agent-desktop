@@ -39,8 +39,12 @@ import {
   onVerificationOutput,
   onVerificationUpdated,
 } from "./lib/tauri-api";
-import type { DetectedCommand, Problem } from "./lib/types";
+import { getSymbolIndexClient } from "./lib/symbol-index";
+import type { DetectedCommand, IndexStatus, Problem } from "./lib/types";
 import { useTaskLifecycle } from "./lib/task-lifecycle";
+import { FindReferencesView } from "./main/FindReferencesView";
+import { GoToDefinitionView } from "./main/GoToDefinitionView";
+import { ImpactAnalysisView } from "./main/ImpactAnalysisView";
 import { DeliveryReportTab } from "./main/docs/DeliveryReportTab";
 import { ProjectProfileTab } from "./main/docs/ProjectProfileTab";
 import { TaskDagTab } from "./main/docs/TaskDagTab";
@@ -49,7 +53,7 @@ import { TabContainer } from "./main/TabContainer";
 import { ActivityBar } from "./shell/ActivityBar";
 import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/CommandPalette";
 import { TaskSwitcher } from "./shell/TaskSwitcher";
-import { isFileTab, useTabStore } from "./store/tab-store";
+import { isFileTab, useTabStore, type SymbolKey } from "./store/tab-store";
 import { useTaskStore } from "./store/task-store";
 import { useWorkbenchStore } from "./store/workbench-store";
 
@@ -180,6 +184,8 @@ export function CodingWorkbench({
   const [indexing, setIndexing] = useState(false);
   const [symbolsByPath, setSymbolsByPath] = useState<Record<string, PaletteSymbol[]>>({});
   const [reveal, setReveal] = useState<{ line: number; column: number; key: number }>();
+  const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
+  const indexReady = indexStatus?.state === "ready";
   const [contextPaths, setContextPaths] = useState<string[]>([]);
   const [replacing, setReplacing] = useState(false);
   const [modelId, setModelId] = useState(defaultModelId);
@@ -327,6 +333,54 @@ export function CodingWorkbench({
       }
     },
     [cwd],
+  );
+
+  /** Open the Find References virtual tab for a symbol. */
+  const openFindReferences = useCallback(
+    (symbol: SymbolKey) => {
+      if (!cwd || !symbol.name) return;
+      useTabStore.getState().openVirtual("findReferences", cwd, symbol);
+    },
+    [cwd],
+  );
+
+  /** Open the Impact Analysis virtual tab for a symbol. */
+  const openImpactAnalysis = useCallback(
+    (symbol: SymbolKey) => {
+      if (!cwd || !symbol.name) return;
+      useTabStore.getState().openVirtual("impactAnalysis", cwd, symbol);
+    },
+    [cwd],
+  );
+
+  /** Open the Go-To-Definition virtual tab for a symbol. */
+  const openGoToDefinition = useCallback(
+    (symbol: SymbolKey) => {
+      if (!cwd || !symbol.name) return;
+      useTabStore.getState().openVirtual("goToDefinition", cwd, symbol);
+    },
+    [cwd],
+  );
+
+  /** Trigger a full rebuild of the workspace symbol index. */
+  const rebuildIndex = useCallback(async () => {
+    if (!cwd) return;
+    try {
+      const next = await codingApi.indexRebuild(cwd);
+      setIndexStatus(next);
+      void getSymbolIndexClient(cwd).refresh();
+    } catch (error) {
+      onToast?.(`重建索引失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  }, [cwd, onToast]);
+
+  /** Jump to a (file, line) and reveal it in the editor. */
+  const jumpToSymbol = useCallback(
+    (target: { path: string; line: number; name?: string }) => {
+      void openFile(workspaceFilePath(cwd, target.path));
+      setReveal({ line: target.line, column: 1, key: Date.now() });
+    },
+    [cwd, openFile],
   );
 
   /**
@@ -663,14 +717,24 @@ export function CodingWorkbench({
       explain: () => notImplemented("代码解释"),
       generateComments: () => notImplemented("注释生成"),
       toggleBottom: () => toggleBottom(),
+      openGoToDefinition,
+      openFindReferences,
+      openImpactAnalysis,
+      rebuildIndex: () => void rebuildIndex(),
+      indexReady,
     }),
     [
       approvePlan,
       commitChanges,
       cwd,
       detected,
+      indexReady,
       notImplemented,
+      openFindReferences,
+      openGoToDefinition,
+      openImpactAnalysis,
       problems.length,
+      rebuildIndex,
       rollbackTask,
       runVerifications,
       setActivityView,
@@ -688,7 +752,35 @@ export function CodingWorkbench({
   openPaletteRef.current = setPaletteMode;
 
   /**
-   * Workbench shortcuts. The palette uses ⌘⇧P rather than ⌘K because the
+   * Bootstrap the workspace symbol index. Pulls initial status, then mirrors
+   * `coding://index-updated` / `coding://index-removed` into local state so the
+   * command palette can grey out workbench commands until the index is ready.
+   */
+  useEffect(() => {
+    if (!cwd) {
+      setIndexStatus(null);
+      return;
+    }
+    let cancelled = false;
+    void codingApi.indexStatus(cwd).then((status) => {
+      if (!cancelled) setIndexStatus(status);
+    }).catch(() => undefined);
+    const client = getSymbolIndexClient(cwd);
+    void client.refresh();
+    const unsubUpdated = client.subscribe(() => {
+      if (cancelled) return;
+      void codingApi.indexStatus(cwd).then((status) => {
+        if (!cancelled) setIndexStatus(status);
+      }).catch(() => undefined);
+    });
+    return () => {
+      cancelled = true;
+      unsubUpdated();
+    };
+  }, [cwd]);
+
+  /**
+   * Workbench shortcuts. The palette uses ⌘⇧P rather than ⌘K because the because the
    * application already binds ⌘K to global session search in App.tsx, and the
    * workbench must not repurpose an existing app-level shortcut.
    */
@@ -716,10 +808,32 @@ export function CodingWorkbench({
         toggleBottom();
       }
     };
-    // Capture phase so the workbench claims these before app-level handlers.
+    // Editor-scoped shortcuts: F12 / Shift+F12 / Alt+F12 act on the active file.
+    const onEditorKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+      if (isGlobalShortcutBlocked()) return;
+      const activeTab = useTabStore.getState().tabs.find((tab) => tab.id === useTabStore.getState().activeId);
+      if (!activeTab || !isFileTab(activeTab)) return;
+      const word = window.getSelection()?.toString().trim() ?? "";
+      const symbol: SymbolKey = { name: word || (activeTab.name || "").replace(/\\.[^.]+$/, "") };
+      if (event.key === "F12" && event.shiftKey) {
+        event.preventDefault();
+        openFindReferences(symbol);
+      } else if (event.key === "F12" && event.altKey) {
+        event.preventDefault();
+        openImpactAnalysis(symbol);
+      } else if (event.key === "F12") {
+        event.preventDefault();
+        openGoToDefinition(symbol);
+      }
+    };
     window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [cwd, toggleBottom]);
+    window.addEventListener("keydown", onEditorKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keydown", onEditorKeyDown, true);
+    };
+  }, [cwd, toggleBottom, openFindReferences, openGoToDefinition, openImpactAnalysis]);
 
   const style = useMemo(
     () =>
@@ -858,6 +972,7 @@ export function CodingWorkbench({
           <SymbolView
             symbols={symbols}
             activeFileName={activeFileName}
+            root={cwd}
             onOpenSymbol={(symbol) => {
               void openFile(symbol.path);
               setReveal({ line: symbol.line, column: 1, key: Date.now() });
@@ -931,6 +1046,36 @@ export function CodingWorkbench({
               );
             }
             return <ProjectProfileTab root={cwd} onOpenFile={openRelative} />;
+          }}
+          renderVirtual={(tab) => {
+            const handleJump = (target: { path: string; line: number; name?: string }) => jumpToSymbol(target);
+            if (tab.kind === "findReferences") {
+              return (
+                <FindReferencesView
+                  root={tab.root}
+                  symbol={tab.symbol.name}
+                  onOpenSymbol={handleJump}
+                />
+              );
+            }
+            if (tab.kind === "impactAnalysis") {
+              return (
+                <ImpactAnalysisView
+                  root={tab.root}
+                  symbol={tab.symbol.name}
+                  onOpenSymbol={handleJump}
+                />
+              );
+            }
+            return (
+              <GoToDefinitionView
+                root={tab.root}
+                symbol={tab.symbol.name}
+                onJump={handleJump}
+                onOpenSymbol={handleJump}
+                onClose={() => useTabStore.getState().closeTab(tab.id)}
+              />
+            );
           }}
         />
       </main>

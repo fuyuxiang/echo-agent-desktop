@@ -107,4 +107,19 @@ describe("tab store", () => {
     useTabStore.getState().setView("/repo/src/a.ts", "diff");
     expect((useTabStore.getState().tabs[0] as FileTab).view).toBe("diff");
   });
+
+  it("opening the same symbol twice focuses the existing virtual tab", () => {
+    useTabStore.getState().openVirtual("findReferences", "/repo", { name: "authenticate" });
+    useTabStore.getState().openFile(fileTab({ id: "/repo/src/a.ts" }));
+    useTabStore.getState().openVirtual("findReferences", "/repo", { name: "authenticate" });
+    expect(useTabStore.getState().tabs).toHaveLength(2);
+    expect(useTabStore.getState().activeId).toBe("virtual:findReferences:authenticate");
+  });
+
+  it("different virtual kinds for the same symbol create separate tabs", () => {
+    useTabStore.getState().openVirtual("findReferences", "/repo", { name: "authenticate" });
+    useTabStore.getState().openVirtual("impactAnalysis", "/repo", { name: "authenticate" });
+    expect(useTabStore.getState().tabs).toHaveLength(2);
+    expect(useTabStore.getState().activeId).toBe("virtual:impactAnalysis:authenticate");
+  });
 });

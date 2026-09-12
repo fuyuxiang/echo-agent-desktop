@@ -28,6 +28,11 @@ function context(overrides: Partial<CommandContext> = {}): CommandContext {
     explain: vi.fn(),
     generateComments: vi.fn(),
     toggleBottom: vi.fn(),
+    openGoToDefinition: vi.fn(),
+    openFindReferences: vi.fn(),
+    openImpactAnalysis: vi.fn(),
+    rebuildIndex: vi.fn(),
+    indexReady: true,
     ...overrides,
   };
 }
@@ -87,6 +92,34 @@ describe("command registry", () => {
     const commands = buildCommands(context({ explain }));
     commands.find((c) => c.id === "understand.system")?.run();
     expect(explain).toHaveBeenCalledWith("system");
+  });
+
+  it("registers gotoDefinition, findReferences, analyzeImpact and rebuildIndex", () => {
+    const commands = buildCommands(context());
+    for (const id of [
+      "understand.gotoDefinition",
+      "understand.findReferences",
+      "understand.analyzeImpact",
+      "index.rebuild",
+    ]) {
+      expect(commands.find((c) => c.id === id)).toBeDefined();
+    }
+  });
+
+  it("disables gotoDefinition/findReferences/analyzeImpact when the index is not ready", () => {
+    const commands = buildCommands(context({ indexReady: false }));
+    expect(commands.find((c) => c.id === "understand.gotoDefinition")?.enabled).toBe(false);
+    expect(commands.find((c) => c.id === "understand.findReferences")?.enabled).toBe(false);
+    expect(commands.find((c) => c.id === "understand.analyzeImpact")?.enabled).toBe(false);
+    // index.rebuild stays available even when the index has never been built.
+    expect(commands.find((c) => c.id === "index.rebuild")?.enabled).toBe(true);
+  });
+
+  it("rebuildIndex command invokes the workspace callback", () => {
+    const rebuildIndex = vi.fn();
+    const commands = buildCommands(context({ rebuildIndex }));
+    void commands.find((c) => c.id === "index.rebuild")?.run();
+    expect(rebuildIndex).toHaveBeenCalled();
   });
 });
 
