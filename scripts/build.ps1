@@ -248,7 +248,6 @@ if (Test-Path $makensis) {
 if (-not $env:TAURI_SIGNING_PRIVATE_KEY -and -not $env:TAURI_SIGNING_PRIVATE_KEY_PATH) {
     Log-Err "Updater signing key is required for release builds."
     Log-Err "Set TAURI_SIGNING_PRIVATE_KEY_PATH (recommended) or TAURI_SIGNING_PRIVATE_KEY."
-    Log-Err "See docs\desktop-updates.md."
     exit 1
 }
 
