@@ -271,6 +271,7 @@ pub fn run() {
         .manage(FolderTrusts::new())
         .manage(shell_fs::FilesystemAccess::new())
         .manage(coding_workspace::CodingProcesses::new())
+        .manage(coding::watcher::WatcherRegistry::default())
         .manage(org::shared_state())
         .invoke_handler(tauri::generate_handler![
             // session lifecycle
@@ -493,8 +494,10 @@ pub fn run() {
             coding::task::coding_task_get,
             coding::task::coding_task_delete,
             coding::task::coding_task_rename,
+            coding::task::coding_task_bind_runtime,
             coding::changeset::coding_changeset_get,
             coding::changeset::coding_changeset_capture_baseline,
+            coding::changeset::coding_changeset_diff,
             coding::changeset::coding_changeset_record_change,
             coding::changeset::coding_changeset_discard_file,
             coding::changeset::coding_changeset_mark_reviewed,
@@ -512,6 +515,7 @@ pub fn run() {
             coding::symbols::coding_symbol_at,
             coding::symbols::coding_index_emit_progress,
             coding::symbols::coding_index_emit_updated,
+            coding::watcher::coding_index_bootstrap,
             // phase 2 reference search (Task 19)
             coding::refs::coding_refs_find,
             coding::refs::coding_refs_definition,
@@ -519,10 +523,15 @@ pub fn run() {
             coding::impact::coding_impact_analyze,
             coding::orchestrator::coding_task_submit_requirement,
             coding::orchestrator::coding_task_approve_plan,
+            coding::orchestrator::coding_task_resolve_plan,
+            coding::orchestrator::coding_task_report_start_failed,
+            coding::orchestrator::coding_task_begin_followup,
+            coding::orchestrator::coding_task_begin_verification,
             coding::orchestrator::coding_orchestrator_report_implementation,
             coding::orchestrator::coding_orchestrator_report_verification,
             coding::orchestrator::coding_orchestrator_state,
             coding::delivery::coding_delivery_report,
+            coding::delivery::coding_delivery_finalize,
             coding::delivery::coding_delivery_commit_input,
             coding::delivery::coding_delivery_pr_input,
             coding::delivery::coding_git_commit,

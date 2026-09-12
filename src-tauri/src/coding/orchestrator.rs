@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::coding::changeset;
 use crate::coding::diagnostics::{self, Problem};
 use crate::coding::store;
-use crate::coding::task::{self, CodingTask, TaskPhase};
+use crate::coding::task::{self, CodingTask, TaskNodeStatus, TaskPhase};
 use crate::coding::verification::{self, VerificationRecord, VerificationStatus};
 use crate::shell_fs::FilesystemAccess;
 
@@ -96,6 +96,18 @@ fn latest_per_command(records: &[VerificationRecord]) -> Vec<&VerificationRecord
     latest
 }
 
+fn missing_detected_commands(root: &Path, records: &[VerificationRecord]) -> Vec<String> {
+    let completed: HashSet<&str> = records
+        .iter()
+        .map(|record| record.command.as_str())
+        .collect();
+    verification::detect_commands(root)
+        .into_iter()
+        .filter(|expected| !completed.contains(expected.command.as_str()))
+        .map(|expected| expected.command)
+        .collect()
+}
+
 /// Decide where a task goes once verification finished.
 pub fn decide_after_verification(
     records: &[VerificationRecord],
@@ -133,7 +145,11 @@ pub fn decide_after_verification(
 
     PhaseDecision {
         next_phase: TaskPhase::Gating,
-        reason: "全部验证通过且存在代码变更".into(),
+        reason: if effective.is_empty() {
+            "工程未配置可识别的自动验证，已进入人工差异审阅".into()
+        } else {
+            "全部验证通过且存在代码变更".into()
+        },
         blocker: None,
     }
 }
@@ -211,8 +227,17 @@ pub enum OrchestratorEvent {
     RequirementSubmitted { plan_required: bool },
     /// The user approved the plan the Agent produced.
     PlanApproved,
+    /// The user abandoned the pending plan.
+    PlanAbandoned,
+    /// Creating or starting the bound Agent session failed.
+    StartFailed { reason: String },
+    /// The user asked the bound Agent to make another change after a terminal
+    /// or review phase. Re-open the same task before any file can be written.
+    FollowupStarted,
     /// The Agent finished writing code for this round.
     ImplementationFinished,
+    /// The user explicitly re-runs checks from a settled phase.
+    VerificationStarted,
     /// A verification batch finished; recompute from records on disk.
     VerificationFinished,
 }
@@ -220,6 +245,7 @@ pub enum OrchestratorEvent {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct PhaseChangedPayload {
+    root: String,
     task_id: String,
     phase: TaskPhase,
     reason: String,
@@ -233,15 +259,19 @@ pub fn apply(
     event: OrchestratorEvent,
 ) -> Result<(CodingTask, PhaseDecision), String> {
     let mut task = task::load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
-    let changed_file_count = changeset::load(root, task_id)
-        .changes
-        .iter()
-        .filter(|change| !change.pre_existing)
-        .count();
+    let changed_file_count = changeset::load(root, task_id).changes.len();
 
     let decision = match event {
         OrchestratorEvent::RequirementSubmitted { plan_required } => {
+            if task.phase != TaskPhase::Idle {
+                return Err("只有未开始任务可以提交需求".into());
+            }
             task.plan_required = plan_required;
+            if !plan_required {
+                if let Some(node) = task.task_nodes.first_mut() {
+                    node.status = TaskNodeStatus::Running;
+                }
+            }
             let next = phase_after_requirement(plan_required);
             PhaseDecision {
                 next_phase: next,
@@ -253,12 +283,75 @@ pub fn apply(
                 blocker: None,
             }
         }
-        OrchestratorEvent::PlanApproved => PhaseDecision {
-            next_phase: TaskPhase::Implementing,
-            reason: "计划已批准".into(),
-            blocker: None,
-        },
+        OrchestratorEvent::PlanApproved => {
+            if task.phase != TaskPhase::Planning {
+                return Err("当前任务不在等待计划审批状态".into());
+            }
+            if let Some(node) = task.task_nodes.first_mut() {
+                node.status = TaskNodeStatus::Running;
+            }
+            PhaseDecision {
+                next_phase: TaskPhase::Implementing,
+                reason: "计划已批准，Agent 开始执行".into(),
+                blocker: None,
+            }
+        }
+        OrchestratorEvent::PlanAbandoned => {
+            if task.phase != TaskPhase::Planning {
+                return Err("当前任务不在等待计划审批状态".into());
+            }
+            for node in &mut task.task_nodes {
+                node.status = TaskNodeStatus::Blocked;
+            }
+            PhaseDecision {
+                next_phase: TaskPhase::Blocked,
+                reason: "用户已放弃执行计划".into(),
+                blocker: Some("计划已放弃，可以新建任务重新规划。".into()),
+            }
+        }
+        OrchestratorEvent::StartFailed { reason } => {
+            if !matches!(
+                task.phase,
+                TaskPhase::Idle
+                    | TaskPhase::Planning
+                    | TaskPhase::Implementing
+                    | TaskPhase::Repairing
+            ) {
+                return Err("当前任务已离开 Agent 执行阶段，已忽略过期的失败事件".into());
+            }
+            PhaseDecision {
+                next_phase: TaskPhase::Blocked,
+                reason: "Agent 会话执行失败".into(),
+                blocker: Some(reason),
+            }
+        }
+        OrchestratorEvent::FollowupStarted => {
+            if !matches!(
+                task.phase,
+                TaskPhase::Gating | TaskPhase::Delivered | TaskPhase::Blocked
+            ) {
+                return Err("只有待验收、已交付或已阻塞的任务可以继续开发".into());
+            }
+            if changeset::load(root, task_id).committed_hash.is_some() {
+                return Err("该任务已提交到 Git；请新建任务继续开发，避免交付记录失真".into());
+            }
+            for criterion in &mut task.acceptance_criteria {
+                criterion.satisfied = false;
+                criterion.evidence.clear();
+            }
+            for node in &mut task.task_nodes {
+                node.status = TaskNodeStatus::Running;
+            }
+            PhaseDecision {
+                next_phase: TaskPhase::Implementing,
+                reason: "已接收补充要求，重新进入实现与验证流程".into(),
+                blocker: None,
+            }
+        }
         OrchestratorEvent::ImplementationFinished => {
+            if !matches!(task.phase, TaskPhase::Implementing | TaskPhase::Repairing) {
+                return Err("只有实现或修复阶段可以报告代码写入完成".into());
+            }
             if changed_file_count == 0 {
                 PhaseDecision {
                     next_phase: TaskPhase::Blocked,
@@ -269,6 +362,13 @@ pub fn apply(
                     ),
                 }
             } else {
+                // Test/lint/build passes are content-bound evidence. Never let
+                // a new implementation round inherit an earlier green batch.
+                verification::clear_records(root, task_id)?;
+                diagnostics::save_snapshot(root, task_id, &[])?;
+                for node in &mut task.task_nodes {
+                    node.status = TaskNodeStatus::Success;
+                }
                 PhaseDecision {
                     next_phase: TaskPhase::Verifying,
                     reason: format!("已产生 {changed_file_count} 个文件变更，开始验证"),
@@ -276,8 +376,45 @@ pub fn apply(
                 }
             }
         }
+        OrchestratorEvent::VerificationStarted => {
+            if !matches!(
+                task.phase,
+                TaskPhase::Gating | TaskPhase::Delivered | TaskPhase::Blocked
+            ) {
+                return Err("只有待验收、已交付或已阻塞的任务可以重新验证".into());
+            }
+            if changeset::load(root, task_id).committed_hash.is_some() {
+                return Err("该任务已提交到 Git，交付证据已封存".into());
+            }
+            verification::clear_records(root, task_id)?;
+            diagnostics::save_snapshot(root, task_id, &[])?;
+            for criterion in &mut task.acceptance_criteria {
+                criterion.satisfied = false;
+                criterion.evidence.clear();
+            }
+            for node in &mut task.task_nodes {
+                node.status = TaskNodeStatus::Running;
+            }
+            PhaseDecision {
+                next_phase: TaskPhase::Verifying,
+                reason: "已开始重新验证当前任务内容".into(),
+                blocker: None,
+            }
+        }
         OrchestratorEvent::VerificationFinished => {
+            if task.phase != TaskPhase::Verifying {
+                return Err("只有验证阶段可以报告验证完成".into());
+            }
             let records = verification::list_records(root, task_id);
+            let has_current_failure = records
+                .iter()
+                .any(|record| record.status != VerificationStatus::Passed);
+            if !has_current_failure {
+                let missing = missing_detected_commands(root, &records);
+                if !missing.is_empty() {
+                    return Err(format!("尚有验证命令未运行：{}", missing.join("、")));
+                }
+            }
             let problems: Vec<Problem> = latest_per_command(&records)
                 .iter()
                 .flat_map(|record| diagnostics::parse_record(record))
@@ -300,6 +437,9 @@ pub fn apply(
                 let decision =
                     next_after_repair(&problems, &previous, completed, DEFAULT_MAX_REPAIR_ROUNDS);
                 if decision.next_phase == TaskPhase::Repairing {
+                    for node in &mut task.task_nodes {
+                        node.status = TaskNodeStatus::Failed;
+                    }
                     append_round(
                         root,
                         task_id,
@@ -320,6 +460,8 @@ pub fn apply(
     };
 
     task.phase = decision.next_phase;
+    task.phase_reason = Some(decision.reason.clone());
+    task.blocker = decision.blocker.clone();
     task::save(root, &task)?;
     Ok((task, decision))
 }
@@ -340,6 +482,7 @@ async fn apply_and_emit(
     let _ = app.emit(
         "coding://task-phase-changed",
         PhaseChangedPayload {
+            root: root.to_string_lossy().into_owned(),
             task_id,
             phase: task.phase,
             reason: decision.reason,
@@ -379,6 +522,62 @@ pub async fn coding_task_approve_plan(
 }
 
 #[tauri::command]
+pub async fn coding_task_resolve_plan(
+    app: AppHandle,
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+    outcome: String,
+    plan_entries: Vec<String>,
+) -> Result<CodingTask, String> {
+    let root = access.require_workspace(&root)?;
+    match outcome.as_str() {
+        "approved" => {
+            let write_root = root.clone();
+            let write_task_id = task_id.clone();
+            tokio::task::spawn_blocking(move || {
+                task::set_plan_steps(&write_root, &write_task_id, plan_entries)
+            })
+            .await
+            .map_err(|error| format!("保存任务计划失败：{error}"))??;
+            apply_and_emit(app, root, task_id, OrchestratorEvent::PlanApproved).await
+        }
+        "abandoned" => apply_and_emit(app, root, task_id, OrchestratorEvent::PlanAbandoned).await,
+        "cancelled" => task::load(&root, &task_id).ok_or_else(|| "任务不存在".into()),
+        _ => Err("不支持的计划审批结果".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn coding_task_report_start_failed(
+    app: AppHandle,
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+    reason: String,
+) -> Result<CodingTask, String> {
+    let root = access.require_workspace(&root)?;
+    apply_and_emit(
+        app,
+        root,
+        task_id,
+        OrchestratorEvent::StartFailed { reason },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn coding_task_begin_followup(
+    app: AppHandle,
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+) -> Result<CodingTask, String> {
+    let root = access.require_workspace(&root)?;
+    apply_and_emit(app, root, task_id, OrchestratorEvent::FollowupStarted).await
+}
+
+#[tauri::command]
 pub async fn coding_orchestrator_report_implementation(
     app: AppHandle,
     access: State<'_, FilesystemAccess>,
@@ -393,6 +592,17 @@ pub async fn coding_orchestrator_report_implementation(
         OrchestratorEvent::ImplementationFinished,
     )
     .await
+}
+
+#[tauri::command]
+pub async fn coding_task_begin_verification(
+    app: AppHandle,
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+) -> Result<CodingTask, String> {
+    let root = access.require_workspace(&root)?;
+    apply_and_emit(app, root, task_id, OrchestratorEvent::VerificationStarted).await
 }
 
 #[tauri::command]
@@ -418,11 +628,7 @@ pub async fn coding_orchestrator_state(
         Ok(OrchestratorState {
             problems: diagnostics::load_snapshot(&root, &task_id),
             repair_rounds: repair_rounds(&root, &task_id),
-            changed_file_count: changeset::load(&root, &task_id)
-                .changes
-                .iter()
-                .filter(|change| !change.pre_existing)
-                .count(),
+            changed_file_count: changeset::load(&root, &task_id).changes.len(),
             max_repair_rounds: DEFAULT_MAX_REPAIR_ROUNDS,
             task,
         })
@@ -573,5 +779,51 @@ mod tests {
             2,
         );
         assert_eq!(decision.next_phase, TaskPhase::Gating);
+    }
+
+    #[test]
+    fn a_partial_green_batch_cannot_skip_other_detected_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts":{"build":"vite build","test":"vitest run"}}"#,
+        )
+        .unwrap();
+        let records = vec![passed("npm run test")];
+        assert_eq!(
+            missing_detected_commands(dir.path(), &records),
+            vec!["npm run build".to_string()]
+        );
+    }
+
+    #[test]
+    fn followup_reopens_task_and_invalidates_delivery_acceptance() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut task = task::create_task(dir.path(), "task", "implement it").unwrap();
+        task.phase = TaskPhase::Delivered;
+        task.acceptance_criteria[0].satisfied = true;
+        task.acceptance_criteria[0].evidence = vec!["previous delivery".into()];
+        task.task_nodes[0].status = TaskNodeStatus::Success;
+        task::save(dir.path(), &task).unwrap();
+
+        let (reopened, decision) =
+            apply(dir.path(), &task.id, OrchestratorEvent::FollowupStarted).unwrap();
+
+        assert_eq!(decision.next_phase, TaskPhase::Implementing);
+        assert!(!reopened.acceptance_criteria[0].satisfied);
+        assert!(reopened.acceptance_criteria[0].evidence.is_empty());
+        assert_eq!(reopened.task_nodes[0].status, TaskNodeStatus::Running);
+    }
+
+    #[test]
+    fn committed_task_cannot_be_reopened_as_the_same_delivery() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut task = task::create_task(dir.path(), "task", "implement it").unwrap();
+        task.phase = TaskPhase::Delivered;
+        task::save(dir.path(), &task).unwrap();
+        changeset::mark_committed(dir.path(), &task.id, "abc123").unwrap();
+
+        let error = apply(dir.path(), &task.id, OrchestratorEvent::FollowupStarted).unwrap_err();
+        assert!(error.contains("已提交到 Git"));
     }
 }

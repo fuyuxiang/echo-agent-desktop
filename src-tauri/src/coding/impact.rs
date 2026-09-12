@@ -107,10 +107,8 @@ pub fn analyze(
 
     // Layer 2..depth: walk enclosing_symbol names from the previous layer.
     let mut transitive_nodes = Vec::<ImpactNode>::new();
-    let mut current_layer: Vec<String> = direct_nodes
-        .iter()
-        .map(|n| n.symbol.name.clone())
-        .collect();
+    let mut current_layer: Vec<String> =
+        direct_nodes.iter().map(|n| n.symbol.name.clone()).collect();
     // `seen` is everything already emitted (target + direct callers).
     // Hitting one of these names again would be a back-edge from a deeper
     // layer; skip it to keep the BFS acyclic. Current layer members ARE
@@ -410,7 +408,11 @@ mod tests {
 
         let graph = analyze(&root, "doesNotExist", 2, false).unwrap();
         assert_eq!(graph.target, "doesNotExist");
-        assert!(graph.direct.is_empty(), "expected empty direct, got {:?}", graph.direct);
+        assert!(
+            graph.direct.is_empty(),
+            "expected empty direct, got {:?}",
+            graph.direct
+        );
         assert!(
             graph.transitive.is_empty(),
             "expected empty transitive, got {:?}",

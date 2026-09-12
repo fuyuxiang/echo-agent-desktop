@@ -108,6 +108,18 @@ describe("tab store", () => {
     expect((useTabStore.getState().tabs[0] as FileTab).view).toBe("diff");
   });
 
+  it("shows an exact diff even when reading the current file failed", () => {
+    useTabStore.getState().openFile(fileTab({ loading: true }));
+    useTabStore.getState().setError("/repo/src/a.ts", "file was deleted");
+    useTabStore.getState().setDiff("/repo/src/a.ts", "before", "");
+    const tab = useTabStore.getState().tabs[0] as FileTab;
+    expect(tab.view).toBe("diff");
+    expect(tab.loading).toBe(false);
+    expect(tab.error).toBeUndefined();
+    expect(tab.diffOriginal).toBe("before");
+    expect(tab.diffModified).toBe("");
+  });
+
   it("opening the same symbol twice focuses the existing virtual tab", () => {
     useTabStore.getState().openVirtual("findReferences", "/repo", { name: "authenticate" });
     useTabStore.getState().openFile(fileTab({ id: "/repo/src/a.ts" }));

@@ -11,19 +11,22 @@
 //! Watcher handles are cheap to drop — they own a single OS-level watcher
 //! and one drain thread.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::coding::symbols;
+use crate::shell_fs::FilesystemAccess;
 
 #[derive(Clone, Debug)]
 enum Classified {
     Modify(PathBuf),
     Remove(PathBuf),
+    Rename { from: PathBuf, to: PathBuf },
 }
 
 #[derive(Serialize, Clone)]
@@ -84,15 +87,39 @@ impl EventSink for TauriEventSink {
     }
 }
 
-
 /// Owns a debounced watcher. Drop the handle to stop watching.
 pub struct WatcherHandle {
-    _debouncer: Option<notify_debouncer_full::Debouncer<
-        notify_debouncer_full::notify::RecommendedWatcher,
-        notify_debouncer_full::RecommendedCache,
-    >>,
+    _debouncer: Option<
+        notify_debouncer_full::Debouncer<
+            notify_debouncer_full::notify::RecommendedWatcher,
+            notify_debouncer_full::RecommendedCache,
+        >,
+    >,
     stop: Arc<AtomicBool>,
     _join: std::thread::JoinHandle<()>,
+}
+
+/// Process-wide owner for workspace watchers. Holding the handle is essential:
+/// dropping it immediately after bootstrap silently disables indexing updates.
+#[derive(Default)]
+pub struct WatcherRegistry {
+    watchers: Mutex<HashMap<PathBuf, WatcherHandle>>,
+}
+
+impl WatcherRegistry {
+    fn ensure(&self, app: AppHandle, root: PathBuf) -> Result<(), String> {
+        let canonical = root.canonicalize().unwrap_or(root);
+        let mut watchers = self
+            .watchers
+            .lock()
+            .map_err(|_| "符号索引监听器状态已损坏".to_string())?;
+        if watchers.contains_key(&canonical) {
+            return Ok(());
+        }
+        let handle = spawn_watcher(app, canonical.clone())?;
+        watchers.insert(canonical, handle);
+        Ok(())
+    }
 }
 
 impl Drop for WatcherHandle {
@@ -126,15 +153,15 @@ pub fn spawn_watcher_with_sink<S: EventSink>(
 
     let (tx, rx) = std::sync::mpsc::channel();
     // 400ms debounce: multiple saves in quick succession collapse into one.
-    let mut debouncer = notify_debouncer_full::new_debouncer(
-        std::time::Duration::from_millis(400),
-        None,
-        tx,
-    )
-    .map_err(|error| format!("启动文件监听失败：{error}"))?;
+    let mut debouncer =
+        notify_debouncer_full::new_debouncer(std::time::Duration::from_millis(400), None, tx)
+            .map_err(|error| format!("启动文件监听失败：{error}"))?;
 
     debouncer
-        .watch(&root, notify_debouncer_full::notify::RecursiveMode::Recursive)
+        .watch(
+            &root,
+            notify_debouncer_full::notify::RecursiveMode::Recursive,
+        )
         .map_err(|error| format!("挂载监听器失败：{error}"))?;
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -148,17 +175,18 @@ pub fn spawn_watcher_with_sink<S: EventSink>(
                     if stop.load(Ordering::Relaxed) {
                         break;
                     }
-                    let events: Vec<DebouncedEvent> = match rx.recv_timeout(std::time::Duration::from_millis(200)) {
-                        Ok(result) => match result {
-                            Ok(batch) => batch,
-                            Err(errors) => {
-                                tracing::warn!(?errors, "coding watcher received error events");
-                                continue;
-                            }
-                        },
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                    };
+                    let events: Vec<DebouncedEvent> =
+                        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                            Ok(result) => match result {
+                                Ok(batch) => batch,
+                                Err(errors) => {
+                                    tracing::warn!(?errors, "coding watcher received error events");
+                                    continue;
+                                }
+                            },
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        };
                     for event in events {
                         let Some(classified) = classify(&event) else {
                             continue;
@@ -190,8 +218,28 @@ pub fn spawn_watcher(app: AppHandle, root: PathBuf) -> Result<WatcherHandle, Str
     spawn_watcher_with_sink(root, Arc::new(TauriEventSink::new(app)))
 }
 
+#[tauri::command]
+pub async fn coding_index_bootstrap(
+    app: AppHandle,
+    access: State<'_, FilesystemAccess>,
+    registry: State<'_, WatcherRegistry>,
+    root: String,
+) -> Result<symbols::IndexStatus, String> {
+    let root = access.require_workspace(&root)?;
+    let reconcile_root = root.clone();
+    let status = tokio::task::spawn_blocking(move || symbols::reconcile(&reconcile_root))
+        .await
+        .map_err(|error| format!("初始化符号索引失败：{error}"))??;
+    registry.ensure(app, root)?;
+    Ok(status)
+}
+
 fn handle_classified<S: EventSink>(root: &Path, sink: &Arc<S>, classified: Classified) {
     match classified {
+        Classified::Rename { from, to } => {
+            handle_classified(root, sink, Classified::Remove(from));
+            handle_classified(root, sink, Classified::Modify(to));
+        }
         Classified::Modify(path) => {
             let path = std::fs::canonicalize(&path).unwrap_or(path);
             if should_ignore(root, &path) {
@@ -251,7 +299,6 @@ fn handle_classified<S: EventSink>(root: &Path, sink: &Arc<S>, classified: Class
     }
 }
 
-
 /// Build the set of top-level directory basenames we always ignore (in
 /// addition to whatever `.gitignore` already excludes). Used as a fast
 /// filter on every debounced event.
@@ -292,6 +339,18 @@ fn classify(event: &notify_debouncer_full::DebouncedEvent) -> Option<Classified>
             Some(Classified::Modify(path))
         }
         EventKind::Modify(ModifyKind::Metadata(_)) | EventKind::Access(_) => None,
+        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) if event.paths.len() >= 2 => {
+            Some(Classified::Rename {
+                from: event.paths[0].clone(),
+                to: event.paths[1].clone(),
+            })
+        }
+        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+            event.paths.first().cloned().map(Classified::Remove)
+        }
+        EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
+            event.paths.first().cloned().map(Classified::Modify)
+        }
         EventKind::Modify(_) => {
             let path = event
                 .paths
@@ -300,8 +359,7 @@ fn classify(event: &notify_debouncer_full::DebouncedEvent) -> Option<Classified>
                 .unwrap_or_else(|| std::path::PathBuf::new());
             Some(Classified::Modify(path))
         }
-        EventKind::Remove(_)
-        | EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
+        EventKind::Remove(_) => {
             let path = event
                 .paths
                 .first()
@@ -386,10 +444,13 @@ mod tests {
 
     impl EventSink for RecordingSink {
         fn index_updated(&self, root: &str, file: &str, added: u32, updated: u32, removed: u32) {
-            self.updated
-                .lock()
-                .unwrap()
-                .push((root.to_string(), file.to_string(), added, updated, removed));
+            self.updated.lock().unwrap().push((
+                root.to_string(),
+                file.to_string(),
+                added,
+                updated,
+                removed,
+            ));
         }
         fn index_removed(&self, root: &str, file: &str) {
             self.removed
@@ -423,8 +484,14 @@ mod tests {
     fn should_ignore_filters_ignored_top_level_dirs() {
         let root = Path::new("/workspace");
         assert!(should_ignore(root, Path::new("/workspace/.git/config")));
-        assert!(should_ignore(root, Path::new("/workspace/node_modules/pkg/index.js")));
-        assert!(should_ignore(root, Path::new("/workspace/target/debug/binary")));
+        assert!(should_ignore(
+            root,
+            Path::new("/workspace/node_modules/pkg/index.js")
+        ));
+        assert!(should_ignore(
+            root,
+            Path::new("/workspace/target/debug/binary")
+        ));
         assert!(!should_ignore(root, Path::new("/workspace/src/auth.ts")));
     }
 
@@ -434,23 +501,27 @@ mod tests {
         // If this test fails, the issue is not in our wiring but in the
         // notification stack (e.g. CI sandboxing).
         use std::sync::mpsc;
-        let temp_root = std::env::temp_dir().join(format!("notify-sanity-{}", uuid::Uuid::now_v7()));
+        let temp_root =
+            std::env::temp_dir().join(format!("notify-sanity-{}", uuid::Uuid::now_v7()));
         fs::create_dir_all(&temp_root).unwrap();
         fs::create_dir_all(temp_root.join("src")).unwrap();
 
         let (tx, rx) = mpsc::channel();
-        let mut debouncer = notify_debouncer_full::new_debouncer(
-            Duration::from_millis(50),
-            None,
-            tx,
-        )
-        .unwrap();
+        let mut debouncer =
+            notify_debouncer_full::new_debouncer(Duration::from_millis(50), None, tx).unwrap();
         debouncer
-            .watch(&temp_root, notify_debouncer_full::notify::RecursiveMode::Recursive)
+            .watch(
+                &temp_root,
+                notify_debouncer_full::notify::RecursiveMode::Recursive,
+            )
             .unwrap();
         std::thread::sleep(Duration::from_millis(800));
 
-        fs::write(temp_root.join("src/sanity.ts"), "export function sanity() {}\n").unwrap();
+        fs::write(
+            temp_root.join("src/sanity.ts"),
+            "export function sanity() {}\n",
+        )
+        .unwrap();
         std::thread::sleep(Duration::from_millis(1500));
 
         let result = rx.recv_timeout(Duration::from_millis(500));
@@ -537,7 +608,10 @@ mod tests {
             "removed symbol should no longer be in the index"
         );
         let recorded = sink.removed.lock().unwrap();
-        assert!(!recorded.is_empty(), "sink should have at least one removal");
+        assert!(
+            !recorded.is_empty(),
+            "sink should have at least one removal"
+        );
         drop(handle);
         fs::remove_dir_all(&root).ok();
     }
@@ -553,7 +627,11 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(600));
         fs::create_dir_all(root.join(".git/hooks")).unwrap();
-        fs::write(root.join(".git/hooks/hook.ts"), "export function nope() {}\n").unwrap();
+        fs::write(
+            root.join(".git/hooks/hook.ts"),
+            "export function nope() {}\n",
+        )
+        .unwrap();
         std::thread::sleep(Duration::from_millis(1500));
 
         let symbols = crate::coding::symbols::load_index(&root);
@@ -576,7 +654,11 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(600));
         for i in 0..3 {
-            fs::write(root.join("a.ts"), format!("export function a() {{ return {i}; }}\n")).unwrap();
+            fs::write(
+                root.join("a.ts"),
+                format!("export function a() {{ return {i}; }}\n"),
+            )
+            .unwrap();
             std::thread::sleep(Duration::from_millis(50));
         }
         std::thread::sleep(Duration::from_millis(1500));
@@ -593,4 +675,3 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 }
-

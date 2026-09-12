@@ -1,8 +1,10 @@
 //! File-backed persistence for coding tasks. Mirrors the JSON/JSONL layout
 //! already used by `sessions.rs` instead of introducing a database.
 
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt;
 use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -37,7 +39,6 @@ pub fn tasks_index_path(root: &Path) -> PathBuf {
 #[derive(Clone, Debug)]
 pub struct IndexPaths {
     pub symbols: PathBuf,
-    pub refs: PathBuf,
     pub file_index: PathBuf,
 }
 
@@ -45,7 +46,6 @@ pub fn index_paths(root: &Path) -> IndexPaths {
     let base = workspace_dir(root);
     IndexPaths {
         symbols: base.join("symbols.jsonl"),
-        refs: base.join("refs.jsonl"),
         file_index: base.join("file_index.json"),
     }
 }
@@ -57,17 +57,52 @@ fn ensure_parent(path: &Path) -> Result<(), String> {
     std::fs::create_dir_all(parent).map_err(|error| format!("无法创建目录：{error}"))
 }
 
+fn lock_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|value| value.to_os_string())
+        .unwrap_or_default();
+    name.push(".lock");
+    path.with_file_name(name)
+}
+
+fn open_lock(path: &Path) -> Option<std::fs::File> {
+    ensure_parent(path).ok()?;
+    OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(lock_path(path))
+        .ok()
+}
+
 /// Read a JSON document, treating a missing or corrupt file as absent so a
 /// damaged task file can never crash the workbench.
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    let lock = open_lock(path)?;
+    lock.lock_shared().ok()?;
     let bytes = std::fs::read(path).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    let value = serde_json::from_slice(&bytes).ok();
+    let _ = lock.unlock();
+    value
 }
 
 pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     ensure_parent(path)?;
+    let lock = open_lock(path).ok_or_else(|| "无法创建持久化锁".to_string())?;
+    lock.lock_exclusive()
+        .map_err(|error| format!("无法锁定持久化文件：{error}"))?;
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| format!("序列化失败：{error}"))?;
-    std::fs::write(path, bytes).map_err(|error| format!("写入失败：{error}"))
+    let staging = path.with_extension(format!("tmp-{}", uuid::Uuid::now_v7()));
+    let result = (|| {
+        std::fs::write(&staging, bytes).map_err(|error| format!("写入临时文件失败：{error}"))?;
+        crate::paths::replace_file_atomically(&staging, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&staging);
+    }
+    let _ = lock.unlock();
+    result
 }
 
 pub fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
@@ -79,7 +114,14 @@ pub fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> 
         .append(true)
         .open(path)
         .map_err(|error| format!("打开失败：{error}"))?;
-    writeln!(file, "{line}").map_err(|error| format!("写入失败：{error}"))
+    file.lock_exclusive()
+        .map_err(|error| format!("无法锁定事件日志：{error}"))?;
+    let result = writeln!(file, "{line}").map_err(|error| format!("写入失败：{error}"));
+    if result.is_ok() {
+        let _ = file.sync_data();
+    }
+    let _ = file.unlock();
+    result
 }
 
 /// Read an append-only log, skipping lines that failed to serialize or were
@@ -170,10 +212,8 @@ mod tests {
         let paths = index_paths(root);
         let dir = workspace_dir(root);
         assert_eq!(paths.symbols.parent(), Some(dir.as_path()));
-        assert_eq!(paths.refs.parent(), Some(dir.as_path()));
         assert_eq!(paths.file_index.parent(), Some(dir.as_path()));
         assert_eq!(paths.symbols.file_name().unwrap(), "symbols.jsonl");
-        assert_eq!(paths.refs.file_name().unwrap(), "refs.jsonl");
         assert_eq!(paths.file_index.file_name().unwrap(), "file_index.json");
     }
 }

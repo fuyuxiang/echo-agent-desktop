@@ -44,6 +44,9 @@ function message(error: unknown): string {
   return String(error).replace(/^Error:\s*/, "");
 }
 
+let selectionGeneration = 0;
+let stateGeneration = 0;
+
 export const useTaskStore = create<TaskState>((set, get) => ({
   root: "",
   summaries: [],
@@ -57,6 +60,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   setRoot: (root) => {
     if (get().root === root) return;
+    selectionGeneration += 1;
+    stateGeneration += 1;
     set({
       root,
       summaries: [],
@@ -73,24 +78,30 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const { root } = get();
     if (!root) return;
     try {
-      set({ summaries: await codingApi.listTasks(root), error: null });
+      const summaries = await codingApi.listTasks(root);
+      if (get().root === root) set({ summaries, error: null });
     } catch (error) {
-      set({ error: message(error) });
+      if (get().root === root) set({ error: message(error) });
     }
   },
 
   selectTask: async (taskId) => {
     const { root } = get();
     if (!root) return;
+    const generation = ++selectionGeneration;
+    stateGeneration += 1;
     set({ loading: true });
     try {
       const task = await codingApi.getTask(root, taskId);
+      if (generation !== selectionGeneration || get().root !== root) return;
       set({ task, error: null });
       await get().refreshTaskState();
     } catch (error) {
-      set({ error: message(error) });
+      if (generation === selectionGeneration && get().root === root) {
+        set({ error: message(error) });
+      }
     } finally {
-      set({ loading: false });
+      if (generation === selectionGeneration && get().root === root) set({ loading: false });
     }
   },
 
@@ -99,7 +110,17 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (!root) return null;
     try {
       const task = await codingApi.createTask(root, name, requirement);
-      set({ task, changeSet: null, verifications: [], problems: [], error: null });
+      selectionGeneration += 1;
+      stateGeneration += 1;
+      if (get().root !== root) return null;
+      set({
+        task,
+        changeSet: null,
+        verifications: [],
+        problems: [],
+        orchestrator: null,
+        error: null,
+      });
       await get().refreshSummaries();
       return task;
     } catch (error) {
@@ -125,7 +146,16 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (!root) return;
     try {
       await codingApi.deleteTask(root, taskId);
-      set((state) => (state.task?.id === taskId ? { ...state, task: null } : state));
+      set((state) => (state.task?.id === taskId
+        ? {
+            ...state,
+            task: null,
+            changeSet: null,
+            verifications: [],
+            problems: [],
+            orchestrator: null,
+          }
+        : state));
       await get().refreshSummaries();
     } catch (error) {
       set({ error: message(error) });
@@ -135,13 +165,20 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   refreshTaskState: async () => {
     const { root, task } = get();
     if (!root || !task) return;
+    const generation = ++stateGeneration;
+    const taskId = task.id;
     try {
       const [changeSet, verifications, problems, orchestrator] = await Promise.all([
-        codingApi.getChangeSet(root, task.id),
-        codingApi.listVerifications(root, task.id),
-        codingApi.listProblems(root, task.id),
-        codingApi.orchestratorState(root, task.id),
+        codingApi.getChangeSet(root, taskId),
+        codingApi.listVerifications(root, taskId),
+        codingApi.listProblems(root, taskId),
+        codingApi.orchestratorState(root, taskId),
       ]);
+      if (
+        generation !== stateGeneration
+        || get().root !== root
+        || get().task?.id !== taskId
+      ) return;
       set({
         changeSet,
         verifications,
@@ -152,7 +189,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         error: null,
       });
     } catch (error) {
-      set({ error: message(error) });
+      if (
+        generation === stateGeneration
+        && get().root === root
+        && get().task?.id === taskId
+      ) set({ error: message(error) });
     }
   },
 

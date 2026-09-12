@@ -25,6 +25,7 @@ export function SearchView({ root, onOpenHit, onReplaceAll, busy = false }: Sear
   const [hits, setHits] = useState<CodingSearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -54,7 +55,7 @@ export function SearchView({ root, onOpenHit, onReplaceAll, busy = false }: Sear
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query, root]);
+  }, [query, revision, root]);
 
   const grouped = hits.reduce<Record<string, CodingSearchHit[]>>((accumulator, hit) => {
     (accumulator[hit.path] ??= []).push(hit);
@@ -65,7 +66,7 @@ export function SearchView({ root, onOpenHit, onReplaceAll, busy = false }: Sear
     if (!query.trim() || hits.length === 0) return;
     await onReplaceAll(query.trim(), replacement, hits);
     // Re-run the search so the list reflects what is now on disk.
-    setQuery((value) => value);
+    setRevision((value) => value + 1);
   }, [hits, onReplaceAll, query, replacement]);
 
   return (

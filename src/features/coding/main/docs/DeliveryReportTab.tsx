@@ -107,9 +107,11 @@ export function DeliveryReportTab({
       report.task.requirement,
       "",
       `### 变更（+${report.totalAdded} -${report.totalRemoved}）`,
-      ...report.changes
-        .filter((change) => !change.preExisting)
-        .map((change) => `- ${change.path} (+${change.added} -${change.removed})`),
+      ...report.changes.map(
+        (change) => `- ${change.path} (+${change.added} -${change.removed})${
+          change.preExisting ? "（任务开始时已修改，需手动整理提交）" : ""
+        }`,
+      ),
       "",
       "### 验证",
       ...report.verifications.map(
@@ -151,7 +153,7 @@ export function DeliveryReportTab({
   }
   if (!report) return <div className="coding-doc__empty">暂无交付数据。</div>;
 
-  const taskChanges = report.changes.filter((change) => !change.preExisting);
+  const taskChanges = report.changes;
 
   return (
     <div className="coding-doc coding-report">
@@ -211,6 +213,7 @@ export function DeliveryReportTab({
                 <span>{change.path}</span>
                 <small>
                   +{change.added} -{change.removed}
+                  {change.preExisting ? " · 起始时已修改" : ""}
                 </small>
               </button>
             ))}

@@ -226,7 +226,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "提交本次任务的变更",
       group: "review",
       keywords: ["commit", "git", "提交"],
-      enabled: hasTask && changedFileCount > 0 && !busy,
+      enabled: hasTask && context.taskPhase === "delivered" && changedFileCount > 0 && !busy,
       run: context.commitChanges,
     },
 
