@@ -89,7 +89,7 @@ pnpm install --frozen-lockfile
 .\dev.bat
 ```
 
-The first build compiles the complete Rust Runtime and takes longer than later incremental builds. See [Windows build notes](docs/WINDOWS_BUILD_NOTES.md) for MSVC, `protoc`, linker-memory, and packaging troubleshooting.
+The first build compiles the complete Rust Runtime and takes longer than later incremental builds.
 
 ### Connect your first model
 
@@ -190,7 +190,7 @@ EchoAgent stores application state under `~/.echo-agent/` by default. Set `ECHO_
 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | Check Rust formatting |
 | `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings` | Run Clippy |
 
-CI runs frontend type checking, unit tests, the production build, Rust formatting, Clippy, and Rust unit tests for pushes to `main` and pull requests. See [desktop updates](docs/desktop-updates.md) for the maintainer packaging and update workflow.
+CI runs frontend type checking, unit tests, the production build, Rust formatting, Clippy, and Rust unit tests for pushes to `main` and pull requests.
 
 ## Roadmap
 

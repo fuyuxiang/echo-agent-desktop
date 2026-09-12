@@ -89,7 +89,7 @@ pnpm install --frozen-lockfile
 .\dev.bat
 ```
 
-首次构建会编译完整的 Rust Runtime，因此会比后续增量构建耗时更长。Windows 上遇到 MSVC、`protoc`、链接器内存或打包工具问题，可查看 [Windows 构建说明](docs/WINDOWS_BUILD_NOTES.md)。
+首次构建会编译完整的 Rust Runtime，因此会比后续增量构建耗时更长。
 
 ### 连接你的模型
 
@@ -190,7 +190,7 @@ EchoAgent 默认将应用状态保存在 `~/.echo-agent/`；启动前设置 `ECH
 | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 检查 Rust 格式 |
 | `cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings` | 运行 Clippy |
 
-CI 会在 `main` 推送和 Pull Request 上执行前端类型检查、单元测试、生产构建，以及 Rust 格式、Clippy 和单元测试检查。维护者打包与更新流程见 [桌面更新文档](docs/desktop-updates.md)。
+CI 会在 `main` 推送和 Pull Request 上执行前端类型检查、单元测试、生产构建，以及 Rust 格式、Clippy 和单元测试检查。
 
 ## 路线图
 

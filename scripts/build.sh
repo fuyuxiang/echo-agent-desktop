@@ -122,7 +122,6 @@ log_ok "Vendored Runtime source is complete"
 if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -z "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
     log_err "Updater signing key is required for release builds."
     log_err "Set TAURI_SIGNING_PRIVATE_KEY_PATH (recommended) or TAURI_SIGNING_PRIVATE_KEY."
-    log_err "See docs/desktop-updates.md."
     exit 1
 fi
 
