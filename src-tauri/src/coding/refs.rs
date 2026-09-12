@@ -102,14 +102,14 @@ fn classify_line(file: &str, line_text: &str, matched_col: u32, needle: &str) ->
     if trimmed.starts_with("import ") && trimmed.contains(" from ") {
         return ReferenceKind::Import;
     }
-    if lower_path.ends_with("index.ts")
+    if (lower_path.ends_with("index.ts")
         || lower_path.ends_with("index.js")
         || lower_path.ends_with("index.tsx")
-        || lower_path.ends_with("index.jsx")
+        || lower_path.ends_with("index.jsx"))
+        && trimmed.starts_with("export ")
+        && trimmed.contains(" from ")
     {
-        if trimmed.starts_with("export ") && trimmed.contains(" from ") {
-            return ReferenceKind::Import;
-        }
+        return ReferenceKind::Import;
     }
 
     // Compute the column where the matched identifier starts (1-indexed).
