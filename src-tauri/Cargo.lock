@@ -4030,8 +4030,10 @@ dependencies = [
  "ed25519-dalek",
  "fs2",
  "futures",
+ "ignore",
  "image",
  "libc",
+ "notify-debouncer-full",
  "open",
  "quick-xml 0.38.4",
  "regex",
@@ -4059,6 +4061,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "walkdir",
  "windows-sys 0.61.2",
  "zip 3.0.0",
 ]

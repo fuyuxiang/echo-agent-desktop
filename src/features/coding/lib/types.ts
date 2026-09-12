@@ -201,3 +201,118 @@ export interface AnalysisProgressEvent {
   root: string;
   scanned: number;
 }
+
+// ---- Phase 2: cross-file symbol index ----
+
+export type SymbolKind =
+  | "function"
+  | "class"
+  | "method"
+  | "constant"
+  | "type"
+  | "interface"
+  | "enum"
+  | "module"
+  | "variable";
+
+export interface SymbolRecord {
+  id: string;
+  name: string;
+  kind: SymbolKind;
+  container: string | null;
+  file: string;
+  line: number;
+  column: number;
+  signature: string | null;
+  exported: boolean;
+}
+
+export interface SymbolQueryHit {
+  symbol: SymbolRecord;
+  score: number;
+}
+
+export type IndexState =
+  | "empty"
+  | "building"
+  | "ready"
+  | "rebuilding"
+  | "stale";
+
+export interface IndexStatus {
+  state: IndexState;
+  filesIndexed: number;
+  symbols: number;
+  lastReconciledAt: string | null;
+  inProgress: boolean;
+}
+
+/** Payload of `coding://index-progress`. */
+export interface IndexProgressEvent {
+  root: string;
+  scanned: number;
+  totalEstimate: number;
+}
+
+/** Payload of `coding://index-updated`. */
+export interface IndexUpdatedEvent {
+  root: string;
+  file: string;
+  added: number;
+  updated: number;
+  removed: number;
+}
+
+/** Payload of `coding://index-removed`. */
+export interface IndexRemovedEvent {
+  root: string;
+  file: string;
+}
+
+// ---- Phase 2: cross-file references + impact ----
+
+export type ReferenceKind =
+  | "definition"
+  | "read"
+  | "write"
+  | "call"
+  | "import"
+  | "type"
+  | "unknown";
+
+export interface ReferenceRecord {
+  symbol: string;
+  file: string;
+  line: number;
+  column: number;
+  kind: ReferenceKind;
+  preview: string;
+}
+
+export interface ReferenceHit {
+  reference: ReferenceRecord;
+  enclosingSymbol: SymbolRecord | null;
+}
+
+export interface ImpactNode {
+  symbol: SymbolRecord;
+  references: number;
+  tests: number;
+  depth: number;
+}
+
+export interface ImpactEdge {
+  fromFile: string;
+  fromLine: number;
+  to: string;
+  kind: ReferenceKind;
+}
+
+export interface ImpactGraph {
+  target: string;
+  direct: ImpactNode[];
+  transitive: ImpactNode[];
+  testImpact: SymbolRecord[];
+  edges: ImpactEdge[];
+  depthUsed: number;
+}
