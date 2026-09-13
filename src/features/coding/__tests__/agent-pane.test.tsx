@@ -37,6 +37,7 @@ function task(overrides: Partial<CodingTask> = {}): CodingTask {
     acceptanceCriteria: [],
     taskNodes: [],
     planRequired: false,
+    reviewRequired: false,
     createdAt: "",
     updatedAt: "",
     ...overrides,
@@ -46,6 +47,8 @@ function task(overrides: Partial<CodingTask> = {}): CodingTask {
 function paneProps(overrides: Partial<Parameters<typeof AgentPane>[0]> = {}) {
   return {
     task: task(),
+    changeSet: null,
+    verifications: [],
     sessionId: "s1",
     messages: [],
     streaming: false,
@@ -60,6 +63,7 @@ function paneProps(overrides: Partial<Parameters<typeof AgentPane>[0]> = {}) {
     onPlanResolved: vi.fn(),
     onPlanSyncFailed: vi.fn(),
     onFinalizeDelivery: vi.fn(),
+    onOpenChanges: vi.fn(),
     onOpenReport: vi.fn(),
     ...overrides,
   };
@@ -73,6 +77,7 @@ describe("phase presentation", () => {
   });
 
   it("marks settled phases as inactive with a tone", () => {
+    expect(describePhase("gating")).toMatchObject({ label: "待验收", tone: "waiting", active: false });
     expect(describePhase("delivered")).toMatchObject({ tone: "good", active: false });
     expect(describePhase("blocked")).toMatchObject({ tone: "bad", active: false });
     expect(describePhase("idle").active).toBe(false);
@@ -99,6 +104,7 @@ describe("phase presentation", () => {
 
   it("treats working phases as busy", () => {
     expect(isBusyPhase("implementing")).toBe(true);
+    expect(isBusyPhase("gating")).toBe(false);
     expect(isBusyPhase("blocked")).toBe(false);
     expect(isBusyPhase(undefined)).toBe(false);
   });
@@ -125,7 +131,7 @@ describe("TaskStarter", () => {
     const props = setup();
     await user.type(screen.getByLabelText("开发需求"), "增加登录审计");
     await user.click(screen.getByRole("button", { name: "开始开发任务" }));
-    expect(props.onStart).toHaveBeenCalledWith("增加登录审计", false);
+    expect(props.onStart).toHaveBeenCalledWith("增加登录审计", false, false);
   });
 
   it("presents a focused Agent workspace instead of a repeated brand splash", () => {
@@ -140,9 +146,18 @@ describe("TaskStarter", () => {
     const user = userEvent.setup();
     const props = setup();
     await user.type(screen.getByLabelText("开发需求"), "大改造");
-    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("checkbox", { name: "先给计划" }));
     await user.click(screen.getByRole("button", { name: "开始开发任务" }));
-    expect(props.onStart).toHaveBeenCalledWith("大改造", true);
+    expect(props.onStart).toHaveBeenCalledWith("大改造", true, false);
+  });
+
+  it("passes the optional completion review choice through", async () => {
+    const user = userEvent.setup();
+    const props = setup();
+    await user.type(screen.getByLabelText("开发需求"), "高风险重构");
+    await user.click(screen.getByRole("checkbox", { name: "完成前验收" }));
+    await user.click(screen.getByRole("button", { name: "开始开发任务" }));
+    expect(props.onStart).toHaveBeenCalledWith("高风险重构", false, true);
   });
 
   it("refuses to start without a requirement", () => {
@@ -231,8 +246,82 @@ describe("AgentPane", () => {
     const user = userEvent.setup();
     const props = paneProps({ task: task({ phase: "delivered" }) });
     render(<AgentPane {...props} />);
-    await user.click(screen.getByRole("button", { name: "查看交付报告" }));
+    await user.click(screen.getByRole("button", { name: "交付报告" }));
     expect(props.onOpenReport).toHaveBeenCalled();
+  });
+
+  it("completes ordinary tasks without asking for a redundant acceptance click", () => {
+    render(<AgentPane {...paneProps({ task: task({ phase: "delivered" }) })} />);
+    expect(screen.getByText("任务已完成")).toBeInTheDocument();
+    expect(screen.getByText(/未检测到可运行的自动检查/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /确认验收/ })).not.toBeInTheDocument();
+  });
+
+  it("requires every current diff to be reviewed before manual acceptance", async () => {
+    const user = userEvent.setup();
+    const finalizeDelivery = vi.fn();
+    const openChanges = vi.fn();
+    const changeSet = {
+      taskId: "t1",
+      changes: [
+        { path: "src/a.ts", kind: "modified" as const, added: 1, removed: 0, preExisting: false },
+        { path: "src/b.ts", kind: "modified" as const, added: 1, removed: 0, preExisting: false },
+      ],
+      createdAt: "",
+      reviewedFiles: ["src/a.ts"],
+    };
+    render(
+      <AgentPane {...paneProps({
+        task: task({ phase: "gating", reviewRequired: true }),
+        changeSet,
+        onFinalizeDelivery: finalizeDelivery,
+        onOpenChanges: openChanges,
+      })} />,
+    );
+    expect(screen.getByText("等待你验收")).toBeInTheDocument();
+    expect(screen.getByText(/已审阅 1\/2/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认验收" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /查看变更/ }));
+    expect(openChanges).toHaveBeenCalled();
+    expect(finalizeDelivery).not.toHaveBeenCalled();
+  });
+
+  it("allows manual acceptance after review hashes match current changes", async () => {
+    const user = userEvent.setup();
+    const finalizeDelivery = vi.fn();
+    render(
+      <AgentPane {...paneProps({
+        task: task({ phase: "gating", reviewRequired: true }),
+        changeSet: {
+          taskId: "t1",
+          changes: [
+            { path: "src/a.ts", kind: "modified", added: 1, removed: 0, preExisting: false },
+          ],
+          createdAt: "",
+          reviewedFiles: ["src/a.ts"],
+          reviewedHashes: { "src/a.ts": "current" },
+          changeHashes: { "src/a.ts": "current" },
+        },
+        verifications: [{
+          id: "v1",
+          taskId: "t1",
+          kind: "test",
+          command: "pnpm test",
+          status: "passed",
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          durationMs: 1,
+          startedAt: "",
+          finishedAt: "",
+          structured: false,
+        }],
+        onFinalizeDelivery: finalizeDelivery,
+      })} />,
+    );
+    expect(screen.getByText(/1 项自动检查已通过/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认验收" }));
+    expect(finalizeDelivery).toHaveBeenCalledOnce();
   });
 
   it("renders permission and question cards when the Agent is waiting", () => {

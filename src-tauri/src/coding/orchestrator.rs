@@ -112,6 +112,7 @@ fn missing_detected_commands(root: &Path, records: &[VerificationRecord]) -> Vec
 pub fn decide_after_verification(
     records: &[VerificationRecord],
     changed_file_count: usize,
+    review_required: bool,
 ) -> PhaseDecision {
     let effective = latest_per_command(records);
     let failing: Vec<&&VerificationRecord> = effective
@@ -143,14 +144,29 @@ pub fn decide_after_verification(
         };
     }
 
-    PhaseDecision {
-        next_phase: TaskPhase::Gating,
-        reason: if effective.is_empty() {
-            "工程未配置可识别的自动验证，已进入人工差异审阅".into()
-        } else {
-            "全部验证通过且存在代码变更".into()
-        },
-        blocker: None,
+    if review_required {
+        PhaseDecision {
+            next_phase: TaskPhase::Gating,
+            reason: if effective.is_empty() {
+                "未检测到可运行的自动检查，请审阅代码变更后确认验收".into()
+            } else {
+                format!(
+                    "{} 项自动检查通过，请审阅代码变更后确认验收",
+                    effective.len()
+                )
+            },
+            blocker: None,
+        }
+    } else {
+        PhaseDecision {
+            next_phase: TaskPhase::Delivered,
+            reason: if effective.is_empty() {
+                "任务已完成；当前工程未检测到可运行的自动检查".into()
+            } else {
+                format!("任务已完成，{} 项自动检查通过", effective.len())
+            },
+            blocker: None,
+        }
     }
 }
 
@@ -224,7 +240,10 @@ pub fn next_after_repair(
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum OrchestratorEvent {
     /// The user submitted a requirement; the task leaves Idle.
-    RequirementSubmitted { plan_required: bool },
+    RequirementSubmitted {
+        plan_required: bool,
+        review_required: bool,
+    },
     /// The user approved the plan the Agent produced.
     PlanApproved,
     /// The user abandoned the pending plan.
@@ -262,11 +281,15 @@ pub fn apply(
     let changed_file_count = changeset::load(root, task_id).changes.len();
 
     let decision = match event {
-        OrchestratorEvent::RequirementSubmitted { plan_required } => {
+        OrchestratorEvent::RequirementSubmitted {
+            plan_required,
+            review_required,
+        } => {
             if task.phase != TaskPhase::Idle {
                 return Err("只有未开始任务可以提交需求".into());
             }
             task.plan_required = plan_required;
+            task.review_required = review_required;
             if !plan_required {
                 if let Some(node) = task.task_nodes.first_mut() {
                     node.status = TaskNodeStatus::Running;
@@ -330,7 +353,7 @@ pub fn apply(
                 task.phase,
                 TaskPhase::Gating | TaskPhase::Delivered | TaskPhase::Blocked
             ) {
-                return Err("只有待验收、已交付或已阻塞的任务可以继续开发".into());
+                return Err("只有待验收、已完成或已阻塞的任务可以继续开发".into());
             }
             if changeset::load(root, task_id).committed_hash.is_some() {
                 return Err("该任务已提交到 Git；请新建任务继续开发，避免交付记录失真".into());
@@ -384,7 +407,7 @@ pub fn apply(
                     | TaskPhase::Delivered
                     | TaskPhase::Blocked
             ) {
-                return Err("只有验证中、待验收、已交付或已阻塞的任务可以启动验证".into());
+                return Err("只有验证中、待验收、已完成或已阻塞的任务可以启动验证".into());
             }
             if changeset::load(root, task_id).committed_hash.is_some() {
                 return Err("该任务已提交到 Git，交付证据已封存".into());
@@ -435,8 +458,9 @@ pub fn apply(
                 .map(|round| round.problem_fingerprints.clone())
                 .unwrap_or_default();
 
-            let verdict = decide_after_verification(&records, changed_file_count);
-            if verdict.next_phase == TaskPhase::Gating {
+            let verdict =
+                decide_after_verification(&records, changed_file_count, task.review_required);
+            if matches!(verdict.next_phase, TaskPhase::Gating | TaskPhase::Delivered) {
                 // Bind all green verification evidence to the exact file
                 // revision that produced it. A later external edit clears this
                 // marker during native change-set synchronization.
@@ -472,6 +496,18 @@ pub fn apply(
         }
     };
 
+    if decision.next_phase == TaskPhase::Delivered {
+        for node in &mut task.task_nodes {
+            node.status = TaskNodeStatus::Success;
+        }
+    }
+    // Automatic completion bypasses the explicit delivery finalizer, so close
+    // the execution nodes here as part of the same persisted transition.
+    if decision.next_phase == TaskPhase::Delivered {
+        for node in &mut task.task_nodes {
+            node.status = TaskNodeStatus::Success;
+        }
+    }
     task.phase = decision.next_phase;
     task.phase_reason = Some(decision.reason.clone());
     task.blocker = decision.blocker.clone();
@@ -512,13 +548,17 @@ pub async fn coding_task_submit_requirement(
     root: String,
     task_id: String,
     plan_required: bool,
+    review_required: bool,
 ) -> Result<CodingTask, String> {
     let root = access.require_workspace(&root)?;
     apply_and_emit(
         app,
         root,
         task_id,
-        OrchestratorEvent::RequirementSubmitted { plan_required },
+        OrchestratorEvent::RequirementSubmitted {
+            plan_required,
+            review_required,
+        },
     )
     .await
 }
@@ -689,15 +729,57 @@ mod tests {
     }
 
     #[test]
-    fn all_green_with_changes_goes_to_gating() {
-        let decision = decide_after_verification(&[passed("pnpm build"), passed("pnpm test")], 3);
+    fn all_green_with_changes_waits_when_review_is_required() {
+        let decision =
+            decide_after_verification(&[passed("pnpm build"), passed("pnpm test")], 3, true);
         assert_eq!(decision.next_phase, TaskPhase::Gating);
         assert!(decision.blocker.is_none());
     }
 
     #[test]
+    fn all_green_with_changes_completes_automatic_tasks() {
+        let decision =
+            decide_after_verification(&[passed("pnpm build"), passed("pnpm test")], 3, false);
+        assert_eq!(decision.next_phase, TaskPhase::Delivered);
+        assert_eq!(decision.reason, "任务已完成，2 项自动检查通过");
+    }
+
+    #[test]
+    fn automatic_task_without_detected_checks_is_honest_and_complete() {
+        let decision = decide_after_verification(&[], 1, false);
+        assert_eq!(decision.next_phase, TaskPhase::Delivered);
+        assert!(decision.reason.contains("未检测到可运行的自动检查"));
+    }
+
+    #[test]
+    fn automatic_completion_closes_running_task_nodes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut task = task::create_task(dir.path(), "task", "implement it").unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        std::fs::write(dir.path().join("result.txt"), "done\n").unwrap();
+        changeset::sync_from_filesystem(dir.path(), &task.id).unwrap();
+        task.phase = TaskPhase::Verifying;
+        task.task_nodes[0].status = TaskNodeStatus::Running;
+        task::save(dir.path(), &task).unwrap();
+
+        apply(dir.path(), &task.id, OrchestratorEvent::VerificationStarted).unwrap();
+        let (completed, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::VerificationFinished,
+        )
+        .unwrap();
+
+        assert_eq!(decision.next_phase, TaskPhase::Delivered);
+        assert!(completed
+            .task_nodes
+            .iter()
+            .all(|node| node.status == TaskNodeStatus::Success));
+    }
+
+    #[test]
     fn green_verification_without_any_changes_is_blocked() {
-        let decision = decide_after_verification(&[passed("pnpm test")], 0);
+        let decision = decide_after_verification(&[passed("pnpm test")], 0, false);
         assert_eq!(decision.next_phase, TaskPhase::Blocked);
         assert!(decision
             .blocker
@@ -708,8 +790,11 @@ mod tests {
 
     #[test]
     fn failure_goes_to_diagnosing() {
-        let decision =
-            decide_after_verification(&[failed("pnpm test", "src/a.ts(1,1): error TS1: bad")], 2);
+        let decision = decide_after_verification(
+            &[failed("pnpm test", "src/a.ts(1,1): error TS1: bad")],
+            2,
+            false,
+        );
         assert_eq!(decision.next_phase, TaskPhase::Diagnosing);
     }
 
@@ -770,6 +855,24 @@ mod tests {
     }
 
     #[test]
+    fn requirement_submission_persists_the_review_choice() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = task::create_task(dir.path(), "task", "implement it").unwrap();
+        let (started, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted {
+                plan_required: false,
+                review_required: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(decision.next_phase, TaskPhase::Implementing);
+        assert!(started.review_required);
+        assert!(task::load(dir.path(), &task.id).unwrap().review_required);
+    }
+
+    #[test]
     fn cancelled_or_timed_out_verification_is_not_a_pass() {
         let cancelled = record_from_parts(
             "task-1",
@@ -782,7 +885,7 @@ mod tests {
             false,
             true,
         );
-        let decision = decide_after_verification(&[cancelled], 2);
+        let decision = decide_after_verification(&[cancelled], 2, false);
         assert_eq!(decision.next_phase, TaskPhase::Diagnosing);
     }
 
@@ -795,6 +898,7 @@ mod tests {
                 passed("pnpm test"),
             ],
             2,
+            true,
         );
         assert_eq!(decision.next_phase, TaskPhase::Gating);
     }

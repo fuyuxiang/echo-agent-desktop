@@ -39,6 +39,8 @@ export interface FileTab {
   diffOriginal?: string;
   diffModified?: string;
   diffBinary?: boolean;
+  /** The task that produced the cached review diff. */
+  diffTaskId?: string;
 }
 
 export interface DocTab {
@@ -84,7 +86,14 @@ interface TabState {
   setActive: (id: string) => void;
   updateDraft: (id: string, draft: string) => void;
   setView: (id: string, view: FileTab["view"]) => void;
-  setDiff: (id: string, original: string, modified: string, binary?: boolean) => void;
+  setDiff: (
+    id: string,
+    original: string,
+    modified: string,
+    binary?: boolean,
+    taskId?: string,
+  ) => void;
+  clearDiff: (id: string) => void;
   markSaved: (id: string, original: string, hash: string) => void;
   markConflict: (id: string) => void;
   setError: (id: string, error?: string) => void;
@@ -186,7 +195,7 @@ export const useTabStore = create<TabState>((set, get) => ({
       tabs: state.tabs.map((tab) => (tab.id === id && isFileTab(tab) ? { ...tab, view } : tab)),
     })),
 
-  setDiff: (id, diffOriginal, diffModified, diffBinary = false) =>
+  setDiff: (id, diffOriginal, diffModified, diffBinary = false, diffTaskId) =>
     set((state) => ({
       tabs: state.tabs.map((tab) =>
         tab.id === id && isFileTab(tab)
@@ -195,9 +204,26 @@ export const useTabStore = create<TabState>((set, get) => ({
               diffOriginal,
               diffModified,
               diffBinary,
+              diffTaskId,
               view: "diff",
               loading: false,
               error: undefined,
+            }
+          : tab,
+      ),
+    })),
+
+  clearDiff: (id) =>
+    set((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.id === id && isFileTab(tab)
+          ? {
+              ...tab,
+              view: "edit",
+              diffOriginal: undefined,
+              diffModified: undefined,
+              diffBinary: undefined,
+              diffTaskId: undefined,
             }
           : tab,
       ),
@@ -214,9 +240,6 @@ export const useTabStore = create<TabState>((set, get) => ({
               hash,
               conflict: false,
               error: undefined,
-              diffOriginal: undefined,
-              diffModified: undefined,
-              diffBinary: undefined,
             }
           : tab,
       ),

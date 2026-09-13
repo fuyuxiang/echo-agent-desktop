@@ -92,6 +92,7 @@ function verificationTask(overrides: Partial<CodingTask> = {}): CodingTask {
     acceptanceCriteria: [],
     taskNodes: [],
     planRequired: false,
+    reviewRequired: false,
     createdAt: "2026-09-13T00:00:00Z",
     updatedAt: "2026-09-13T00:00:01Z",
     ...overrides,
@@ -108,10 +109,40 @@ async function emitTauriEvent(name: string, payload: unknown) {
 describe("CodingWorkbench skeleton", () => {
   beforeEach(() => {
     localStorage.clear();
-    invoke.mockClear();
+    invoke.mockReset();
+    invoke.mockImplementation(async (command: string): Promise<unknown> => {
+      if (command === "coding_task_list") return [];
+      if (command === "coding_verification_detect") return [];
+      return null;
+    });
     eventListeners.clear();
-    readDocument.mockClear();
-    writeDocument.mockClear();
+    readDocument.mockReset();
+    readDocument.mockImplementation(async (_root: string, path: string) => ({
+      path,
+      relativePath: path.replace("/repo/", ""),
+      content: "disk content",
+      hash: "h1",
+      size: 12,
+      modifiedAt: 0,
+      language: "typescript",
+      lineEnding: "LF" as const,
+    }));
+    writeDocument.mockReset();
+    writeDocument.mockImplementation(async (
+      _root: string,
+      path: string,
+      content: string,
+      _hash?: string,
+    ) => ({
+      path,
+      relativePath: path.replace("/repo/", ""),
+      content,
+      hash: "h2",
+      size: content.length,
+      modifiedAt: 0,
+      language: "typescript",
+      lineEnding: "LF" as const,
+    }));
     useTabStore.getState().closeAll();
     useWorkbenchStore.getState().resetLayout();
     useTaskStore.setState({
@@ -230,6 +261,175 @@ describe("CodingWorkbench skeleton", () => {
 
     expect(await screen.findByRole("tab", { name: /a\.ts/ })).toBeInTheDocument();
     expect(screen.getByTestId("editor")).toHaveTextContent("disk content");
+  });
+
+  it("loads the current task diff from the toolbar and keeps it fresh after Agent writes", async () => {
+    const user = userEvent.setup();
+    const activeTask = verificationTask({
+      id: "task-1",
+      phase: "implementing",
+      name: "修改问候语",
+    });
+    const taskChangeSet = {
+      taskId: activeTask.id,
+      baselineMode: "filesystem" as const,
+      changes: [{
+        path: "src/a.ts",
+        kind: "modified" as const,
+        added: 1,
+        removed: 1,
+        preExisting: false,
+      }],
+      createdAt: "2026-09-13T00:00:00Z",
+      reviewedFiles: [],
+      rollbackUnsafeFiles: [],
+      committedHash: null,
+    };
+    let modified = "task version 1";
+    useTaskStore.setState({ root: "/repo", task: activeTask, changeSet: taskChangeSet });
+    invoke.mockImplementation(async (command: string): Promise<unknown> => {
+      if (command === "coding_task_list" || command === "coding_verification_detect") return [];
+      if (command === "coding_changeset_diff") {
+        return { original: "task baseline", modified, binary: false };
+      }
+      if (command === "coding_changeset_get") return { ...taskChangeSet };
+      if (command === "coding_verification_list" || command === "coding_diagnostics_list") return [];
+      if (command === "coding_orchestrator_state") {
+        return {
+          task: activeTask,
+          problems: [],
+          repairRounds: [],
+          changedFileCount: 1,
+          maxRepairRounds: 3,
+        };
+      }
+      return null;
+    });
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/src/a.ts",
+        relativePath: "src/a.ts",
+        name: "a.ts",
+        language: "typescript",
+        original: "disk content",
+        draft: "disk content",
+        hash: "h1",
+        loading: false,
+      });
+    });
+    await user.click(await screen.findByRole("button", { name: "差异" }));
+
+    await waitFor(() => expect(screen.getByTestId("editor")).toHaveTextContent("task version 1"));
+    expect(invoke).toHaveBeenCalledWith("coding_changeset_diff", {
+      root: "/repo",
+      taskId: activeTask.id,
+      path: "src/a.ts",
+    });
+    expect(useTabStore.getState().tabs.find((tab) => tab.id === "/repo/src/a.ts"))
+      .toMatchObject({
+        view: "diff",
+        diffOriginal: "task baseline",
+        diffModified: "task version 1",
+        diffTaskId: activeTask.id,
+      });
+
+    const callsBeforeWrite = invoke.mock.calls.filter(
+      ([command]) => command === "coding_changeset_diff",
+    ).length;
+    modified = "task version 2";
+    readDocument.mockResolvedValue({
+      path: "/repo/src/a.ts",
+      relativePath: "src/a.ts",
+      content: "task version 2",
+      hash: "h2",
+      size: 14,
+      modifiedAt: 1,
+      language: "typescript",
+      lineEnding: "LF" as const,
+    });
+    await emitTauriEvent("coding://file-updated", { root: "/repo", file: "src/a.ts" });
+
+    await waitFor(() => expect(screen.getByTestId("editor")).toHaveTextContent("task version 2"));
+    expect(invoke.mock.calls.filter(([command]) => command === "coding_changeset_diff").length)
+      .toBeGreaterThan(callsBeforeWrite);
+  });
+
+  it("explains when the active file has no task or local diff", async () => {
+    const user = userEvent.setup();
+    const onToast = vi.fn();
+    const activeTask = verificationTask({ id: "task-1", phase: "implementing" });
+    useTaskStore.setState({ root: "/repo", task: activeTask });
+    invoke.mockImplementation(async (command: string): Promise<unknown> => {
+      if (command === "coding_task_list" || command === "coding_verification_detect") return [];
+      if (command === "coding_changeset_diff") {
+        throw new Error("该文件不在当前任务变更集中");
+      }
+      return null;
+    });
+    render(<CodingWorkbench cwd="/repo" models={[]} onToast={onToast} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/src/a.ts",
+        relativePath: "src/a.ts",
+        name: "a.ts",
+        language: "typescript",
+        original: "disk content",
+        draft: "disk content",
+        hash: "h1",
+        loading: false,
+      });
+    });
+    await user.click(await screen.findByRole("button", { name: "差异" }));
+
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith(
+      "当前文件不在当前任务变更中，也没有未保存修改",
+    ));
+    expect(useTabStore.getState().tabs.find((tab) => tab.id === "/repo/src/a.ts"))
+      .toMatchObject({ view: "edit", diffOriginal: undefined, diffModified: undefined });
+  });
+
+  it("does not switch back to diff after the user cancels an in-flight load", async () => {
+    const user = userEvent.setup();
+    const activeTask = verificationTask({ id: "task-1", phase: "implementing" });
+    let resolveDiff!: (diff: { original: string; modified: string; binary: boolean }) => void;
+    const pendingDiff = new Promise<{ original: string; modified: string; binary: boolean }>(
+      (resolve) => { resolveDiff = resolve; },
+    );
+    useTaskStore.setState({ root: "/repo", task: activeTask });
+    invoke.mockImplementation(async (command: string): Promise<unknown> => {
+      if (command === "coding_task_list" || command === "coding_verification_detect") return [];
+      if (command === "coding_changeset_diff") return pendingDiff;
+      return null;
+    });
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/src/a.ts",
+        relativePath: "src/a.ts",
+        name: "a.ts",
+        language: "typescript",
+        original: "disk content",
+        draft: "disk content",
+        hash: "h1",
+        loading: false,
+      });
+    });
+    await user.click(await screen.findByRole("button", { name: "差异" }));
+    expect(await screen.findByRole("button", { name: "正在加载最新差异" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    await act(async () => {
+      resolveDiff({ original: "before", modified: "after", binary: false });
+      await pendingDiff;
+    });
+
+    await waitFor(() => expect(useTabStore.getState().tabs.find(
+      (tab) => tab.id === "/repo/src/a.ts",
+    )).toMatchObject({ view: "edit" }));
+    expect(screen.getByRole("button", { name: "差异" })).toBeEnabled();
   });
 
   it("refreshes an open HTML tab after an external or Agent write", async () => {
@@ -483,6 +683,7 @@ describe("CodingWorkbench skeleton", () => {
           acceptanceCriteria: [],
           taskNodes: [],
           planRequired: false,
+          reviewRequired: false,
           createdAt: "",
           updatedAt: "",
         };
@@ -510,6 +711,12 @@ describe("CodingWorkbench skeleton", () => {
     // The baseline must be captured before the Agent starts writing.
     expect(invoked).toContain("coding_changeset_capture_baseline");
     expect(invoked).toContain("coding_task_submit_requirement");
+    expect(invoke).toHaveBeenCalledWith("coding_task_submit_requirement", {
+      root: "/repo",
+      taskId: "t1",
+      planRequired: false,
+      reviewRequired: false,
+    });
     expect(onStartRun).toHaveBeenCalledWith(
       "/repo",
       "增加登录审计",
@@ -538,6 +745,7 @@ describe("CodingWorkbench skeleton", () => {
           acceptanceCriteria: [],
           taskNodes: [],
           planRequired: false,
+          reviewRequired: false,
           createdAt: "",
           updatedAt: "",
         };
@@ -607,9 +815,53 @@ describe("CodingWorkbench skeleton", () => {
     );
   });
 
+  it("silently completes a legacy gating task that never requested review", async () => {
+    const legacy = verificationTask({
+      phase: "gating",
+      reviewRequired: false,
+      updatedAt: "2026-09-13T00:00:02Z",
+    });
+    const delivered = verificationTask({
+      phase: "delivered",
+      reviewRequired: false,
+      phaseReason: "任务已完成；当前工程未检测到可运行的自动检查",
+      updatedAt: "2026-09-13T00:00:03Z",
+    });
+    useTaskStore.setState({ root: "/repo", task: legacy });
+    invoke.mockImplementation(async (command: string): Promise<unknown> => {
+      if (command === "coding_task_list" || command === "coding_verification_detect") return [];
+      if (command === "coding_delivery_finalize") return { task: delivered };
+      if (command === "coding_changeset_get") return null;
+      if (command === "coding_verification_list" || command === "coding_diagnostics_list") return [];
+      if (command === "coding_orchestrator_state") {
+        return {
+          task: delivered,
+          problems: [],
+          repairRounds: [],
+          changedFileCount: 1,
+          maxRepairRounds: 3,
+        };
+      }
+      return null;
+    });
+
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("coding_delivery_finalize", {
+      root: "/repo",
+      taskId: legacy.id,
+    }));
+    expect(await screen.findByText("任务已完成")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /确认验收/ })).not.toBeInTheDocument();
+  });
+
   it("keeps an empty output panel closed when automatic verification has no commands", async () => {
     const verifying = verificationTask();
-    const gating = verificationTask({ phase: "gating", updatedAt: "2026-09-13T00:00:02Z" });
+    const gating = verificationTask({
+      phase: "gating",
+      reviewRequired: true,
+      updatedAt: "2026-09-13T00:00:02Z",
+    });
     useTaskStore.setState({ root: "/repo", task: verifying });
     invoke.mockImplementation(async (command: string): Promise<unknown> => {
       if (command === "coding_task_list") return [];
@@ -632,7 +884,11 @@ describe("CodingWorkbench skeleton", () => {
 
   it("opens output for a real verification command without moving the workbench panes", async () => {
     const verifying = verificationTask();
-    const gating = verificationTask({ phase: "gating", updatedAt: "2026-09-13T00:00:02Z" });
+    const gating = verificationTask({
+      phase: "gating",
+      reviewRequired: true,
+      updatedAt: "2026-09-13T00:00:02Z",
+    });
     const record: VerificationRecord = {
       id: "verification-1",
       taskId: verifying.id,

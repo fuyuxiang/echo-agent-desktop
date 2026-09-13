@@ -69,6 +69,10 @@ pub struct CodingTask {
     pub acceptance_criteria: Vec<AcceptanceCriterion>,
     pub task_nodes: Vec<TaskNode>,
     pub plan_required: bool,
+    /// Whether this task must stop for an explicit, content-bound human review
+    /// before it can be delivered. Automatic completion is the default.
+    #[serde(default)]
+    pub review_required: bool,
     pub model_id: Option<String>,
     pub session_id: Option<String>,
     pub created_at: String,
@@ -167,6 +171,7 @@ pub fn create_task(root: &Path, name: &str, requirement: &str) -> Result<CodingT
             priority: "high".into(),
         }],
         plan_required: false,
+        review_required: false,
         model_id: None,
         session_id: None,
         created_at: timestamp.clone(),
@@ -367,6 +372,17 @@ mod tests {
         assert_eq!(reloaded.phase, TaskPhase::Verifying);
         assert_eq!(reloaded.acceptance_criteria.len(), 1);
         assert_eq!(reloaded.acceptance_criteria[0].content, "登录流程可用");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn legacy_task_without_review_setting_defaults_to_automatic_completion() {
+        let root = temp_root();
+        let task = create_task(&root, "兼容旧任务", "完成修改").unwrap();
+        let mut value = serde_json::to_value(task).unwrap();
+        value.as_object_mut().unwrap().remove("reviewRequired");
+        let restored: CodingTask = serde_json::from_value(value).unwrap();
+        assert!(!restored.review_required);
         std::fs::remove_dir_all(&root).ok();
     }
 

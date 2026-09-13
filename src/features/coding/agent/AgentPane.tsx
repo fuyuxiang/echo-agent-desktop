@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, LoaderCircle, Send, Sparkles, Square } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Eye,
+  LoaderCircle,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  Square,
+} from "lucide-react";
 
 import { ExecutionProcess } from "@/components/ExecutionProcess";
 import { Markdown } from "@/components/Markdown";
@@ -11,10 +20,12 @@ import { QuestionInlineCard } from "@/components/QuestionInlineCard";
 import type { ChatMessage } from "@/stores/session-store";
 
 import { describePhase } from "../lib/phase";
-import type { CodingTask } from "../lib/types";
+import type { ChangeSet, CodingTask, VerificationRecord } from "../lib/types";
 
 interface AgentPaneProps {
   task: CodingTask;
+  changeSet: ChangeSet | null;
+  verifications: VerificationRecord[];
   sessionId: string | null;
   messages: ChatMessage[];
   streaming: boolean;
@@ -35,6 +46,7 @@ interface AgentPaneProps {
   ) => void | Promise<void>;
   onPlanSyncFailed: (reason: string) => void | Promise<void>;
   onFinalizeDelivery: () => void | Promise<void>;
+  onOpenChanges: () => void;
   onOpenReport: () => void;
   onToast?: (message: string) => void;
 }
@@ -48,6 +60,8 @@ interface AgentPaneProps {
  */
 export function AgentPane({
   task,
+  changeSet,
+  verifications,
   sessionId,
   messages,
   streaming,
@@ -64,12 +78,44 @@ export function AgentPane({
   onPlanResolved,
   onPlanSyncFailed,
   onFinalizeDelivery,
+  onOpenChanges,
   onOpenReport,
   onToast,
 }: AgentPaneProps) {
   const [followup, setFollowup] = useState("");
+  const [finalizing, setFinalizing] = useState(false);
   const phase = describePhase(task.phase);
   const sessionUnavailable = !sessionId;
+  const changes = changeSet?.changes ?? [];
+  const reviewedCount = changes.filter((change) => {
+    const reviewedHash = changeSet?.reviewedHashes?.[change.path];
+    const currentHash = changeSet?.changeHashes?.[change.path];
+    if (reviewedHash !== undefined || currentHash !== undefined) {
+      return Boolean(reviewedHash && currentHash && reviewedHash === currentHash);
+    }
+    return changeSet?.reviewedFiles.includes(change.path) ?? false;
+  }).length;
+  const unreviewedCount = changes.length - reviewedCount;
+  const latestChecks = new Map<string, VerificationRecord>();
+  for (const record of verifications) latestChecks.set(record.command, record);
+  const passedCheckCount = [...latestChecks.values()].filter(
+    (record) => record.status === "passed",
+  ).length;
+  const verificationSummary = passedCheckCount > 0
+    ? `${passedCheckCount} 项自动检查已通过`
+    : "未检测到可运行的自动检查";
+  const canAccept = changes.length > 0 && unreviewedCount === 0 && !finalizing;
+  const legacyCompletionFailed = phaseReason?.startsWith("自动完成旧任务失败") ?? false;
+
+  const finalize = async (requireReview = true) => {
+    if ((requireReview && !canAccept) || finalizing) return;
+    setFinalizing(true);
+    try {
+      await onFinalizeDelivery();
+    } finally {
+      setFinalizing(false);
+    }
+  };
 
   const submit = async () => {
     if (!followup.trim() || sending || streaming) return;
@@ -105,7 +151,9 @@ export function AgentPane({
       </header>
 
       <div className="coding-agent__body">
-        {phaseReason && !blocker && <div className="coding-agent__reason">{phaseReason}</div>}
+        {phaseReason && !blocker && !["gating", "delivered"].includes(task.phase) && (
+          <div className="coding-agent__reason">{phaseReason}</div>
+        )}
 
         {blocker && (
           <div className="coding-agent__blocker" role="alert">
@@ -129,23 +177,70 @@ export function AgentPane({
           />
         )}
 
-        {task.phase === "gating" && (
-          <div className="coding-agent__decision is-good">
-            <CheckCircle2 size={13} />
-            <span>自动检查已完成。请确认验收结果和代码审阅状态。</span>
-            <button type="button" onClick={() => void onFinalizeDelivery()}>
-              确认验收并完成交付
-            </button>
+        {task.phase === "gating" && task.reviewRequired && (
+          <div className="coding-agent__decision is-review">
+            <ShieldCheck size={15} aria-hidden="true" />
+            <div className="coding-agent__decision-copy">
+              <strong>等待你验收</strong>
+              <span>
+                {verificationSummary}；已审阅 {reviewedCount}/{changes.length} 个变更文件。
+              </span>
+              {unreviewedCount > 0 && <small>查看剩余变更后即可确认，不会自动替你记录审阅。</small>}
+            </div>
+            <div className="coding-agent__decision-actions">
+              <button type="button" onClick={onOpenChanges}>
+                <Eye size={12} /> {unreviewedCount > 0 ? `查看变更 (${unreviewedCount})` : "复查变更"}
+              </button>
+              <button type="button" onClick={onOpenReport}>验收详情</button>
+              <button
+                type="button"
+                className="is-primary"
+                disabled={!canAccept}
+                title={unreviewedCount > 0 ? `还有 ${unreviewedCount} 个变更文件未审阅` : undefined}
+                onClick={() => void finalize()}
+              >
+                {finalizing && <LoaderCircle size={12} className="is-spinning" />}
+                确认验收
+              </button>
+            </div>
+          </div>
+        )}
+
+        {task.phase === "gating" && !task.reviewRequired && (
+          <div className="coding-agent__decision is-pending">
+            {legacyCompletionFailed
+              ? <AlertTriangle size={14} />
+              : <LoaderCircle size={14} className="is-spinning" />}
+            <div className="coding-agent__decision-copy">
+              <strong>{legacyCompletionFailed ? "旧任务状态迁移失败" : "正在完成任务"}</strong>
+              <span>
+                {legacyCompletionFailed
+                  ? phaseReason
+                  : "正在迁移旧任务状态，无需人工验收。"}
+              </span>
+            </div>
+            {legacyCompletionFailed && (
+              <div className="coding-agent__decision-actions">
+                <button type="button" disabled={finalizing} onClick={() => void finalize(false)}>
+                  {finalizing && <LoaderCircle size={12} className="is-spinning" />}
+                  重试完成
+                </button>
+              </div>
+            )}
           </div>
         )}
 
         {task.phase === "delivered" && (
           <div className="coding-agent__decision is-good">
             <CheckCircle2 size={13} />
-            <span>门禁全部通过。</span>
-            <button type="button" onClick={onOpenReport}>
-              查看交付报告
-            </button>
+            <div className="coding-agent__decision-copy">
+              <strong>{task.reviewRequired ? "验收完成" : "任务已完成"}</strong>
+              <span>{verificationSummary}，共修改 {changes.length} 个文件。</span>
+            </div>
+            <div className="coding-agent__decision-actions">
+              <button type="button" onClick={onOpenChanges}>查看变更</button>
+              <button type="button" onClick={onOpenReport}>交付报告</button>
+            </div>
           </div>
         )}
 

@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   CircleSlash,
+  Clock3,
   ClipboardCopy,
   LoaderCircle,
   MinusCircle,
@@ -118,7 +119,7 @@ export function DeliveryReportTab({
         (record) => `- ${record.command}：${record.status}（退出码 ${record.exitCode ?? "无"}）`,
       ),
       "",
-      "### 质量门禁",
+      "### 交付检查",
       ...report.gates.map((gate) => `- ${gate.title}：${GATE_STATUS_TEXT[gate.status]} — ${gate.summary}`),
     ];
     if (report.blockers.length > 0) {
@@ -154,6 +155,12 @@ export function DeliveryReportTab({
   if (!report) return <div className="coding-doc__empty">暂无交付数据。</div>;
 
   const taskChanges = report.changes;
+  const awaitingReview = report.task.phase === "gating" && report.task.reviewRequired;
+  const completedAutomatically = report.task.phase === "delivered" && !report.task.reviewRequired;
+  const latestChecks = new Map(report.verifications.map((record) => [record.command, record]));
+  const passedCheckCount = [...latestChecks.values()].filter(
+    (record) => record.status === "passed",
+  ).length;
 
   return (
     <div className="coding-doc coding-report">
@@ -169,13 +176,37 @@ export function DeliveryReportTab({
         </div>
       </header>
 
-      <div className={`coding-report__verdict is-${report.deliverable ? "good" : "bad"}`}>
-        {report.deliverable ? <CheckCircle2 size={15} /> : <CircleSlash size={15} />}
-        <strong>{report.deliverable ? "满足交付条件" : "尚不满足交付条件"}</strong>
+      <div
+        className={`coding-report__verdict is-${awaitingReview
+          ? "waiting"
+          : report.deliverable
+            ? "good"
+            : "bad"}`}
+      >
+        {awaitingReview
+          ? <Clock3 size={15} />
+          : report.deliverable
+            ? <CheckCircle2 size={15} />
+            : <CircleSlash size={15} />}
+        <strong>
+          {awaitingReview
+            ? "等待人工验收"
+            : completedAutomatically
+              ? "任务已自动完成"
+              : report.deliverable
+                ? "满足交付条件"
+                : "尚不满足交付条件"}
+        </strong>
         <span>
-          {report.deliverable
-            ? "所有门禁均已满足或不适用。"
-            : `${report.blockers.length} 项门禁未满足。`}
+          {awaitingReview
+            ? "请查看文件差异；所有当前变更均已审阅后才能确认验收。"
+            : completedAutomatically
+              ? passedCheckCount > 0
+                ? `${passedCheckCount} 项自动检查通过；人工审阅未启用。`
+                : "当前工程未检测到可运行的自动检查；人工审阅未启用。"
+              : report.deliverable
+                ? "所有适用的交付条件均已满足。"
+                : `${report.blockers.length} 项交付条件未满足。`}
         </span>
       </div>
 
@@ -191,7 +222,7 @@ export function DeliveryReportTab({
       )}
 
       <section>
-        <h2>质量门禁</h2>
+        <h2>交付检查</h2>
         <div className="coding-report__gates">
           {report.gates.map((gate) => (
             <GateRow key={gate.id} gate={gate} />
@@ -224,7 +255,11 @@ export function DeliveryReportTab({
       <section>
         <h2>验证结果</h2>
         {report.verifications.length === 0 ? (
-          <p className="coding-doc__muted">尚未执行验证。</p>
+          <p className="coding-doc__muted">
+            {["gating", "delivered"].includes(report.task.phase)
+              ? "当前工程未检测到可运行的自动检查。"
+              : "尚未执行验证。"}
+          </p>
         ) : (
           <table className="coding-report__table">
             <thead>
@@ -272,13 +307,20 @@ export function DeliveryReportTab({
       )}
 
       <section>
-        <h2>验收标准</h2>
+        <h2>{report.task.reviewRequired ? "验收标准" : "需求记录"}</h2>
         {report.task.acceptanceCriteria.length === 0 ? (
           <p className="coding-doc__muted">尚未生成验收标准。</p>
         ) : (
           <div className="coding-report__criteria">
             {report.task.acceptanceCriteria.map((criterion) => (
-              <div key={criterion.id} className={criterion.satisfied ? "is-met" : "is-unmet"}>
+              <div
+                key={criterion.id}
+                className={criterion.satisfied
+                  ? "is-met"
+                  : report.task.reviewRequired
+                    ? "is-unmet"
+                    : "is-not-applicable"}
+              >
                 {criterion.satisfied ? <CheckCircle2 size={13} /> : <MinusCircle size={13} />}
                 <div>
                   <strong>{criterion.content}</strong>
@@ -289,7 +331,11 @@ export function DeliveryReportTab({
                       ))}
                     </ul>
                   ) : (
-                    <p className="coding-doc__muted">尚无验证证据</p>
+                    <p className="coding-doc__muted">
+                      {report.task.reviewRequired
+                        ? "尚无验收证据"
+                        : "自动完成模式不记录人工验收结论"}
+                    </p>
                   )}
                 </div>
               </div>

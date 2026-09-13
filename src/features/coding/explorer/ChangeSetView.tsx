@@ -98,7 +98,7 @@ export function ChangeSetView({
               : hasProtectedChanges
                 ? "包含任务开始前已有改动的文件，为避免一并提交，请手动整理后提交"
                 : !canCommit
-                  ? "完成验收交付后才能提交"
+                  ? "任务完成后才能提交"
                   : undefined
           }
         >

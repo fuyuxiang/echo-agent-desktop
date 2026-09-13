@@ -21,7 +21,7 @@ interface TaskStarterProps {
   apiReady: boolean;
   /** Files the user pinned as context, shown so the Agent's inputs are visible. */
   contextPaths: string[];
-  onStart: (requirement: string, planRequired: boolean) => void;
+  onStart: (requirement: string, planRequired: boolean, reviewRequired: boolean) => void;
   onOpenSettings?: () => void;
   onToast?: (message: string) => void;
 }
@@ -53,10 +53,11 @@ export function TaskStarter({
 }: TaskStarterProps) {
   const [requirement, setRequirement] = useState("");
   const [planRequired, setPlanRequired] = useState(false);
+  const [reviewRequired, setReviewRequired] = useState(false);
 
   const submit = () => {
     if (!requirement.trim() || starting) return;
-    onStart(requirement.trim(), planRequired);
+    onStart(requirement.trim(), planRequired, reviewRequired);
   };
 
   return (
@@ -134,7 +135,10 @@ export function TaskStarter({
             )}
 
             <div className="coding-agent__composer-tools">
-              <label className="coding-agent__plan">
+              <label
+                className="coding-agent__plan"
+                title="开启后，Agent 会先提交可编辑的执行计划，批准后再修改代码"
+              >
                 <input
                   type="checkbox"
                   checked={planRequired}
@@ -142,6 +146,18 @@ export function TaskStarter({
                 />
                 <ListChecks size={12} />
                 先给计划
+              </label>
+              <label
+                className="coding-agent__plan"
+                title="开启后，Agent 完成检查会等待你逐个查看变更并确认；默认自动完成"
+              >
+                <input
+                  type="checkbox"
+                  checked={reviewRequired}
+                  onChange={(event) => setReviewRequired(event.target.checked)}
+                />
+                <ShieldCheck size={12} />
+                完成前验收
               </label>
               <PermissionPicker onToast={onToast} />
               <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} />

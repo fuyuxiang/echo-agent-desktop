@@ -27,6 +27,7 @@ function task(overrides: Partial<CodingTask> = {}): CodingTask {
     acceptanceCriteria: [],
     taskNodes: [],
     planRequired: false,
+    reviewRequired: false,
     createdAt: "2026-09-11T00:00:00Z",
     updatedAt: "2026-09-11T00:00:00Z",
     ...overrides,
