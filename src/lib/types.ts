@@ -247,7 +247,17 @@ export type SessionUpdate =
 
 // ---------- permissions ----------
 
-export type PermissionKind = "allow" | "allow_always" | "deny";
+/**
+ * ACP currently defines one-shot and persistent outcomes for both approval and
+ * rejection. `other` keeps the frontend honest when a newer runtime sends an
+ * option it does not understand yet: the choice is still shown to the user.
+ */
+export type PermissionKind =
+  | "allow"
+  | "allow_always"
+  | "deny"
+  | "deny_always"
+  | "other";
 
 export interface PermissionOption {
   optionId: string;

@@ -3682,6 +3682,8 @@ button.diff__path {
 .perm-inline {
   margin: 0 auto 8px;
   width: min(640px, 100%);
+  min-width: 0;
+  box-sizing: border-box;
   background: var(--echo-bg-primary);
   border-radius: 12px;
   border: 1px solid var(--echo-brand, #10b981);
@@ -3696,6 +3698,7 @@ button.diff__path {
   border-bottom: 1px solid var(--echo-border-default);
 }
 .perm-inline__kind {
+  flex: none;
   font-family: var(--echo-font-code-family);
   background: var(--echo-bg-tertiary);
   padding: 2px 8px;
@@ -3704,6 +3707,10 @@ button.diff__path {
   color: var(--echo-brand);
 }
 .perm-inline__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   font-size: 13px;
 }
@@ -3713,8 +3720,21 @@ button.diff__path {
   color: var(--echo-text-medium);
 }
 .perm-inline__body p { margin: 0; }
+.perm-inline__details {
+  margin-top: 8px;
+}
+.perm-inline__details summary {
+  width: fit-content;
+  color: var(--echo-text-weak);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.perm-inline__details summary:hover {
+  color: var(--echo-text-strong);
+}
 .perm-inline__raw {
-  margin: 8px 0 0;
+  margin: 7px 0 0;
   padding: 8px;
   background: var(--echo-bg-tertiary);
   border-radius: 6px;
@@ -3723,13 +3743,82 @@ button.diff__path {
   max-height: 160px;
   overflow: auto;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.perm-inline__error {
+  margin-top: 8px !important;
+  color: var(--echo-status-error, #e5484d);
 }
 .perm-inline__footer {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 8px 16px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 16px 12px;
   border-top: 1px solid var(--echo-border-default);
+}
+.perm-inline__actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(132px, 100%), 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+.perm-inline__action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 7px 10px;
+  line-height: 1.35;
+  text-align: center;
+}
+.perm-inline__action-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.perm-inline__action-hint {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--echo-text-weak);
+  font-size: 10px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.perm-inline__section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--echo-text-medium);
+  font-size: 11px;
+}
+.perm-inline__section-title > span:last-child {
+  color: var(--echo-status-warning, #a15c00);
+}
+.perm-inline__cancel {
+  align-self: center;
+  padding: 2px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--echo-text-weak);
+  font-size: 11px;
+  cursor: pointer;
+}
+.perm-inline__cancel:hover:not(:disabled) {
+  color: var(--echo-text-strong);
+  text-decoration: underline;
+}
+.perm-inline__cancel:disabled,
+.perm-inline__action:disabled {
+  cursor: default;
+  opacity: 0.58;
 }
 
 /* ---------- inline question card (session-scoped, non-blocking) ---------- */

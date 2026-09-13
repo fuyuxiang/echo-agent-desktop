@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { useWorkbenchStore, WORKBENCH_LAYOUT_KEY } from "../store/workbench-store";
+import {
+  fitWorkbenchLayout,
+  useWorkbenchStore,
+  WORKBENCH_LAYOUT_KEY,
+} from "../store/workbench-store";
 
 describe("workbench layout store", () => {
   beforeEach(() => {
@@ -61,5 +65,36 @@ describe("workbench layout store", () => {
     useWorkbenchStore.getState().setBottomView("tests");
     expect(useWorkbenchStore.getState().bottomView).toBe("tests");
     expect(useWorkbenchStore.getState().bottomOpen).toBe(true);
+  });
+
+  it("temporarily fits oversized preferences while preserving an editable center", () => {
+    const effective = fitWorkbenchLayout(1_024, 680, {
+      explorerWidth: 520,
+      agentWidth: 720,
+      bottomHeight: 720,
+    });
+
+    expect(effective.explorerWidth + effective.agentWidth).toBeLessThanOrEqual(710);
+    expect(1_024 - 54 - effective.explorerWidth - effective.agentWidth).toBeGreaterThanOrEqual(260);
+    expect(effective.bottomHeight).toBeLessThanOrEqual(354);
+  });
+
+  it("restores preferred dimensions when the container has enough room", () => {
+    expect(fitWorkbenchLayout(1_600, 1_100, {
+      explorerWidth: 320,
+      agentWidth: 500,
+      bottomHeight: 300,
+    })).toEqual({ explorerWidth: 320, agentWidth: 500, bottomHeight: 300 });
+  });
+
+  it("keeps development rendering free of overflow below the native minimum size", () => {
+    const effective = fitWorkbenchLayout(700, 500, {
+      explorerWidth: 520,
+      agentWidth: 720,
+      bottomHeight: 720,
+    });
+
+    expect(effective.explorerWidth + effective.agentWidth).toBe(386);
+    expect(effective.bottomHeight).toBe(174);
   });
 });

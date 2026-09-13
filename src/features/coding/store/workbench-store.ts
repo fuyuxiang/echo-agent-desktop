@@ -22,9 +22,76 @@ const DEFAULTS = {
   bottomHeight: 220,
 };
 
+// 46px activity rail + two 4px separators. Keep a useful editor surface even
+// when large pane widths were persisted on a larger display.
+const FIXED_HORIZONTAL_CHROME = 54;
+const MAIN_MIN_WIDTH = 260;
+// 44px top bar + 22px status bar. The remainder is shared by editor and tools.
+const FIXED_VERTICAL_CHROME = 66;
+const MAIN_MIN_HEIGHT = 260;
+
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+export interface EffectiveWorkbenchLayout {
+  explorerWidth: number;
+  agentWidth: number;
+  bottomHeight: number;
+}
+
+/**
+ * Fit persisted preferences into the current workbench without overwriting
+ * them. Resizing the window smaller temporarily contracts both side panes and
+ * the bottom panel; expanding it restores the user's preferred dimensions.
+ */
+export function fitWorkbenchLayout(
+  containerWidth: number,
+  containerHeight: number,
+  preferred: EffectiveWorkbenchLayout,
+): EffectiveWorkbenchLayout {
+  const desiredExplorer = clamp(preferred.explorerWidth, EXPLORER_MIN, EXPLORER_MAX);
+  const desiredAgent = clamp(preferred.agentWidth, AGENT_MIN, AGENT_MAX);
+  const desiredBottom = clamp(preferred.bottomHeight, BOTTOM_MIN, BOTTOM_MAX);
+
+  let explorerWidth = desiredExplorer;
+  let agentWidth = desiredAgent;
+
+  if (Number.isFinite(containerWidth) && containerWidth > 0) {
+    const paneBudget = Math.max(0, Math.floor(
+      containerWidth - FIXED_HORIZONTAL_CHROME - MAIN_MIN_WIDTH,
+    ));
+    const minimumPaneTotal = EXPLORER_MIN + AGENT_MIN;
+    const desiredPaneTotal = desiredExplorer + desiredAgent;
+
+    if (paneBudget < minimumPaneTotal) {
+      // This only applies below the native window's supported minimum width,
+      // but keeps browser/dev rendering free of horizontal overflow as well.
+      explorerWidth = Math.round(paneBudget * (EXPLORER_MIN / minimumPaneTotal));
+      agentWidth = Math.max(0, paneBudget - explorerWidth);
+    } else if (paneBudget < desiredPaneTotal) {
+      const availableExtra = paneBudget - minimumPaneTotal;
+      const explorerExtra = desiredExplorer - EXPLORER_MIN;
+      const agentExtra = desiredAgent - AGENT_MIN;
+      const desiredExtra = explorerExtra + agentExtra;
+      const explorerShare = desiredExtra > 0
+        ? Math.round(availableExtra * (explorerExtra / desiredExtra))
+        : 0;
+      explorerWidth = EXPLORER_MIN + explorerShare;
+      agentWidth = AGENT_MIN + availableExtra - explorerShare;
+    }
+  }
+
+  const bottomBudget = Number.isFinite(containerHeight) && containerHeight > 0
+    ? Math.max(0, Math.floor(containerHeight - FIXED_VERTICAL_CHROME - MAIN_MIN_HEIGHT))
+    : desiredBottom;
+
+  return {
+    explorerWidth,
+    agentWidth,
+    bottomHeight: Math.min(desiredBottom, bottomBudget),
+  };
 }
 
 interface LayoutState {
