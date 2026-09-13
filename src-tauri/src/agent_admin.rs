@@ -899,9 +899,13 @@ pub async fn memory_flush(state: State<'_, AppState>, session_id: String) -> Res
 /// bypasses the periodic time/session gates while preserving Runtime locking,
 /// indexing, notifications and failure handling.
 #[tauri::command]
-pub async fn memory_dream(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+pub async fn memory_dream(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
     require_live_session(&state, &session_id)?;
-    crate::commands::require_runtime_ready(&state, None)?;
+    crate::commands::require_runtime_ready(Some(&app), &state, None)?;
     let tx = state
         .tx
         .lock()

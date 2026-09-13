@@ -41,7 +41,7 @@ export function TaskSwitcher({ tasks, activeId, onSelect, onNew }: TaskSwitcherP
   const active = tasks.find((task) => task.id === activeId);
 
   return (
-    <div className="coding-task-switcher" ref={containerRef}>
+    <div className={`coding-task-switcher${active ? "" : " is-empty"}`} ref={containerRef}>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -49,7 +49,8 @@ export function TaskSwitcher({ tasks, activeId, onSelect, onNew }: TaskSwitcherP
         aria-haspopup="menu"
         aria-label="切换开发任务"
       >
-        <span>{active ? active.name : "未开始任务"}</span>
+        {!active && <Plus size={12} />}
+        <span>{active ? active.name : "新建任务"}</span>
         <ChevronDown size={12} />
       </button>
 

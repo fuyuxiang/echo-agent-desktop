@@ -12,14 +12,14 @@ import { useTaskStore } from "../store/task-store";
  * shared session store rather than by parsing tool calls:
  *
  * 1. Streaming finishes while the task is Implementing or Repairing → sync the live
- *    Git state into the ChangeSet and tell the orchestrator the round is
+ *    workspace state into the ChangeSet and tell the orchestrator the round is
  *    done so it can move to Verifying.
  * 2. Every phase event the orchestrator emits is already mirrored into the
  *    task store (this is wired in the workbench shell).
  *
  * Parsing tool calls to figure out what the Agent did is exactly the kind of
- * fragile inference the old implementation got wrong; Git is the source of
- * truth and the renderer only reacts to it.
+ * fragile inference the old implementation got wrong. Git is used when it is
+ * available; ordinary folders use an application-owned checkpoint.
  */
 export function useTaskLifecycle(cwd: string | undefined) {
   const taskId = useTaskStore((state) => state.task?.id);
@@ -36,7 +36,7 @@ export function useTaskLifecycle(cwd: string | undefined) {
   }, [taskId, taskSessionId]);
 
   // When streaming falls to false, the Agent just finished an implementation
-  // or repair round. Git is the source of truth for the resulting change set.
+  // or repair round. The native checkpoint is authoritative in every workspace.
   useEffect(() => {
     if (lastStreamingRef.current === streaming) return;
     lastStreamingRef.current = streaming;
@@ -49,7 +49,7 @@ export function useTaskLifecycle(cwd: string | undefined) {
     ) return;
     void (async () => {
       try {
-        await codingApi.syncFromGit(cwd, taskId);
+        await codingApi.syncChanges(cwd, taskId);
         await codingApi.reportImplementation(cwd, taskId);
         await useTaskStore.getState().refreshTaskState();
       } catch (error) {

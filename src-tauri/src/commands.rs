@@ -81,6 +81,10 @@ pub struct AppState {
     /// Last model configuration positively acknowledged by the embedded
     /// Runtime. Disk configuration alone must never unlock message sending.
     pub(crate) runtime_models: Mutex<RuntimeModelState>,
+    /// A synchronous readiness check may be the first observer of an expired
+    /// organization-model lease. Remember that disk mutation until an
+    /// app-aware caller can start the serialized Runtime hot reload.
+    runtime_model_reload_pending: std::sync::atomic::AtomicBool,
     /// Successful ACP initialize response for the installed Runtime. A WebView
     /// reload reuses this generation instead of cancelling unattended work.
     pub(crate) init_outcome: Mutex<Option<InitOutcome>>,
@@ -209,6 +213,17 @@ impl AppState {
 
     pub(crate) fn mark_runtime_models_initializing(&self) {
         *self.runtime_models.lock().unwrap() = RuntimeModelState::default();
+    }
+
+    fn mark_runtime_model_reload_pending(&self) {
+        self.mark_runtime_models_initializing();
+        self.runtime_model_reload_pending
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn take_runtime_model_reload_pending(&self) -> bool {
+        self.runtime_model_reload_pending
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
     }
 
     pub(crate) fn mark_runtime_models_initializing_if_current(
@@ -372,7 +387,11 @@ fn init_result(cwd: &Path, auth: AuthStatus, outcome: &InitOutcome) -> InitResul
 }
 
 fn auth_status(state: &AppState) -> AuthStatus {
-    let _ = crate::org::enforce_organization_model_lease();
+    match crate::org::enforce_organization_model_lease() {
+        Ok(true) => state.mark_runtime_model_reload_pending(),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(%error, "failed to enforce organization model lease"),
+    }
     let (mut model_ids, disk_reason) = crate::providers::usable_model_ids();
     model_ids.sort();
     let revision = crate::providers::model_config_revision();
@@ -397,6 +416,14 @@ fn auth_status(state: &AppState) -> AuthStatus {
     let mut status =
         auth_status_from_snapshots(model_ids, disk_reason, &revision, runtime, sender_current);
     status.default_model_id = default_model_id;
+    status
+}
+
+fn auth_status_with_runtime_reload(app: &tauri::AppHandle, state: &AppState) -> AuthStatus {
+    let status = auth_status(state);
+    if state.take_runtime_model_reload_pending() {
+        crate::org::notify_models_changed(app, "lease-expired-readiness-check");
+    }
     status
 }
 
@@ -506,10 +533,13 @@ fn strip_upstream_branded_ids(ids: Vec<String>) -> Vec<String> {
 /// in Rust as well as in the Composer: queue/plan/automation callers can invoke
 /// `agent_send` without going through the visible send button.
 pub(crate) fn require_runtime_ready(
+    app: Option<&tauri::AppHandle>,
     state: &AppState,
     requested_model: Option<&str>,
 ) -> Result<(), String> {
-    let status = auth_status(state);
+    let status = app
+        .map(|app| auth_status_with_runtime_reload(app, state))
+        .unwrap_or_else(|| auth_status(state));
     validate_runtime_ready(&status, requested_model)
 }
 
@@ -517,10 +547,13 @@ pub(crate) fn require_runtime_ready(
 /// `None` means Auto at the storage/UI boundary, but is never forwarded as None
 /// to the Runtime because that would select its internal fallback model.
 pub(crate) fn resolve_automation_model_id(
+    app: Option<&tauri::AppHandle>,
     state: &AppState,
     requested_model: Option<&str>,
 ) -> Result<String, String> {
-    let status = auth_status(state);
+    let status = app
+        .map(|app| auth_status_with_runtime_reload(app, state))
+        .unwrap_or_else(|| auth_status(state));
     validate_runtime_ready(&status, requested_model)?;
     if let Some(model_id) = requested_model {
         let (configured, _) = crate::providers::usable_model_ids();
@@ -818,7 +851,11 @@ pub async fn agent_init(
     if let Some((outcome, existing_cwd)) = reusable {
         if crate::permission_config::runtime_permission_mode_is_current() {
             tracing::info!("agent init reused the active Runtime");
-            return Ok(init_result(&existing_cwd, auth_status(&state), &outcome));
+            return Ok(init_result(
+                &existing_cwd,
+                auth_status_with_runtime_reload(&app, &state),
+                &outcome,
+            ));
         }
         tracing::warn!("active Runtime permission mode is stale; restarting instead of reusing");
     }
@@ -986,7 +1023,7 @@ pub async fn agent_init(
         tracing::error!(%error, "initial model reload failed");
     }
     *state.init_outcome.lock().unwrap() = Some(init_outcome.clone());
-    let auth = auth_status(&state);
+    let auth = auth_status_with_runtime_reload(&app, &state);
 
     // Start the automations scheduler now that the agent channel is up.
     // Idempotent — safe if agent_init is somehow called twice.
@@ -1009,8 +1046,8 @@ pub async fn agent_init(
 }
 
 #[tauri::command]
-pub fn agent_auth_status(state: State<'_, AppState>) -> AuthStatus {
-    auth_status(&state)
+pub fn agent_auth_status(app: tauri::AppHandle, state: State<'_, AppState>) -> AuthStatus {
+    auth_status_with_runtime_reload(&app, &state)
 }
 
 #[tauri::command]
@@ -1035,7 +1072,7 @@ pub async fn agent_new_session(
         .await;
     let permission_mode =
         crate::permission_config::resolve_new_session_permission_mode(permission_mode.as_deref())?;
-    require_runtime_ready(&state, model_id.as_deref())?;
+    require_runtime_ready(Some(&app), &state, model_id.as_deref())?;
     let tx = state
         .tx
         .lock()
@@ -1354,7 +1391,7 @@ pub async fn agent_send(
     {
         return Err("消息 ID 无效或过长".into());
     }
-    require_runtime_ready(&state, None)?;
+    require_runtime_ready(Some(&app), &state, None)?;
     let workspace = state.session_workspace(&session_id)?;
     let attachments = attachments.unwrap_or_default();
     let attachments = if attachments.is_empty() {
@@ -1709,6 +1746,7 @@ fn validate_question_payload(
 /// the error string is forwarded verbatim so the UI can prompt accordingly.
 #[tauri::command]
 pub async fn agent_set_model(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: String,
     model_id: String,
@@ -1718,7 +1756,7 @@ pub async fn agent_set_model(
     }
     state.session_workspace(&session_id)?;
     crate::policy::require_model(&model_id)?;
-    require_runtime_ready(&state, Some(&model_id))?;
+    require_runtime_ready(Some(&app), &state, Some(&model_id))?;
     let tx = state
         .tx
         .lock()
@@ -2334,6 +2372,23 @@ mod tests {
         clear_runtime_after_init_failure(&state, second);
         assert!(!state.runtime_models.lock().unwrap().initialized);
         assert!(state.tx.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn expired_model_lease_requests_exactly_one_runtime_reload() {
+        let state = AppState::default();
+        let (channels, _agent) = echo_agent_acp::acp_channels();
+        *state.tx.lock().unwrap() = Some(channels.tx.clone());
+        state.mark_runtime_models_synced(
+            &channels.tx,
+            "revision-before-expiry".into(),
+            vec!["managed-model".into()],
+        );
+
+        state.mark_runtime_model_reload_pending();
+        assert!(!state.runtime_models.lock().unwrap().initialized);
+        assert!(state.take_runtime_model_reload_pending());
+        assert!(!state.take_runtime_model_reload_pending());
     }
 
     /// A retired runtime's thread exit must not report the replacement as dead.

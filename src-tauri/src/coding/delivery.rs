@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::coding::changeset::{self, ChangeSet, FileChange};
+use crate::coding::changeset::{self, ChangeSet, FileChange, FileChangeView};
 use crate::coding::diagnostics::{self, Problem};
 use crate::coding::orchestrator::{self, RepairRound};
 use crate::coding::task::{self, AcceptanceCriterion, CodingTask, TaskNodeStatus, TaskPhase};
@@ -24,6 +24,7 @@ pub enum GateId {
     Test,
     Lint,
     TypeCheck,
+    VerificationFreshness,
     DiffReview,
     Acceptance,
 }
@@ -61,7 +62,7 @@ pub struct EvidenceEntry {
 pub struct DeliveryReport {
     pub task: CodingTask,
     pub gates: Vec<QualityGate>,
-    pub changes: Vec<FileChange>,
+    pub changes: Vec<FileChangeView>,
     pub total_added: u32,
     pub total_removed: u32,
     pub verifications: Vec<VerificationRecord>,
@@ -79,6 +80,7 @@ fn title_for(id: GateId) -> &'static str {
         GateId::Test => "测试通过",
         GateId::Lint => "静态检查通过",
         GateId::TypeCheck => "类型检查通过",
+        GateId::VerificationFreshness => "验证对应当前代码",
         GateId::DiffReview => "变更已审阅",
         GateId::Acceptance => "验收标准已核销",
     }
@@ -181,6 +183,23 @@ pub fn evaluate_gates(
         verification_gate(GateId::Lint, VerificationKind::Lint, records),
         verification_gate(GateId::TypeCheck, VerificationKind::TypeCheck, records),
     ];
+
+    let verification_current = set.verification_is_current();
+    gates.push(QualityGate {
+        id: GateId::VerificationFreshness,
+        title: title_for(GateId::VerificationFreshness).into(),
+        status: if verification_current {
+            GateStatus::Satisfied
+        } else {
+            GateStatus::NotSatisfied
+        },
+        summary: if verification_current {
+            "最近一次验证与当前文件内容一致".into()
+        } else {
+            "文件在最近一次验证后发生变化，请重新运行验证".into()
+        },
+        evidence: Vec::new(),
+    });
 
     let task_changes: Vec<&FileChange> = set.changes.iter().collect();
     let unreviewed_count = task_changes
@@ -338,7 +357,7 @@ pub fn build_report(root: &Path, task_id: &str) -> Result<DeliveryReport, String
     Ok(DeliveryReport {
         total_added: set.total_added(),
         total_removed: set.total_removed(),
-        changes: set.changes.clone(),
+        changes: set.changes.iter().map(FileChangeView::from).collect(),
         deliverable: is_deliverable(&gates),
         gates,
         verifications: records,
@@ -360,6 +379,7 @@ pub fn finalize_delivery(root: &Path, task_id: &str) -> Result<DeliveryReport, S
     }
     let set = changeset::load(root, task_id);
     changeset::ensure_head_unchanged(root, &set)?;
+    changeset::ensure_changes_current(root, &set)?;
     if !set.rollback_unsafe_files.is_empty() {
         return Err(format!(
             "以下文件没有安全快照，不能交付：{}",
@@ -423,6 +443,33 @@ async fn git(root: &PathBuf, arguments: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+fn unexpected_staged_paths(staged: &str, allowed: &[String]) -> Vec<String> {
+    let allowed: std::collections::BTreeSet<&str> = allowed.iter().map(String::as_str).collect();
+    let mut unexpected: Vec<String> = staged
+        .split('\0')
+        .filter(|path| !path.is_empty() && !allowed.contains(path))
+        .map(str::to_owned)
+        .collect();
+    unexpected.sort();
+    unexpected.dedup();
+    unexpected
+}
+
+async fn ensure_no_unrelated_staged_changes(
+    root: &PathBuf,
+    task_paths: &[String],
+) -> Result<(), String> {
+    let staged = git(root, &["diff", "--cached", "--name-only", "-z", "--"]).await?;
+    let unexpected = unexpected_staged_paths(&staged, task_paths);
+    if unexpected.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "Git 暂存区包含当前任务之外的变更，为避免混入本次提交，请先提交或取消暂存：{}",
+        unexpected.join("、")
+    ))
+}
+
 #[tauri::command]
 pub async fn coding_delivery_report(
     access: State<'_, FilesystemAccess>,
@@ -430,6 +477,7 @@ pub async fn coding_delivery_report(
     task_id: String,
 ) -> Result<DeliveryReport, String> {
     let root = access.require_workspace(&root)?;
+    changeset::sync_changes(&root, &task_id).await?;
     tokio::task::spawn_blocking(move || build_report(&root, &task_id))
         .await
         .map_err(|error| format!("生成交付报告失败：{error}"))?
@@ -442,6 +490,9 @@ pub async fn coding_delivery_finalize(
     task_id: String,
 ) -> Result<DeliveryReport, String> {
     let root = access.require_workspace(&root)?;
+    // Delivery evidence must describe the bytes that are on disk now, not the
+    // last Agent-stream edge observed by the renderer.
+    changeset::sync_changes(&root, &task_id).await?;
     tokio::task::spawn_blocking(move || finalize_delivery(&root, &task_id))
         .await
         .map_err(|error| format!("确认交付失败：{error}"))?
@@ -454,6 +505,7 @@ pub async fn coding_delivery_commit_input(
     task_id: String,
 ) -> Result<String, String> {
     let root = access.require_workspace(&root)?;
+    changeset::sync_changes(&root, &task_id).await?;
     tokio::task::spawn_blocking(move || {
         let task = task::load(&root, &task_id).ok_or_else(|| "任务不存在".to_string())?;
         Ok(commit_message_input(
@@ -492,6 +544,10 @@ pub async fn coding_git_commit(
     if trimmed.is_empty() {
         return Err("提交信息不能为空".into());
     }
+    // Revalidate review hashes immediately before staging. A file changed in
+    // an external editor after delivery must return the task to review instead
+    // of being silently swept into the commit.
+    changeset::sync_changes(&root, &task_id).await?;
     let set = {
         let root = root.clone();
         let task_id = task_id.clone();
@@ -502,7 +558,13 @@ pub async fn coding_git_commit(
     if set.committed_hash.is_some() {
         return Err("该任务已经提交".into());
     }
+    if set.effective_baseline_mode() == changeset::BaselineMode::Filesystem {
+        return Err(
+            "当前任务使用本地检查点，不支持应用内 Git 提交；可手工提交，或初始化 Git 并新建任务后使用提交功能".into(),
+        );
+    }
     changeset::ensure_head_unchanged(&root, &set)?;
+    changeset::ensure_changes_current(&root, &set)?;
     let report = {
         let report_root = root.clone();
         let report_task_id = task_id.clone();
@@ -530,13 +592,21 @@ pub async fn coding_git_commit(
         return Err("本任务没有可提交的变更".into());
     }
     for path in &paths {
-        if path.starts_with('/') || path.contains("..") {
-            return Err(format!("非法的提交路径：{path}"));
-        }
+        // Validate path components rather than rejecting harmless names such
+        // as `range..test.ts`. `git add --` below then treats leading dashes as
+        // paths too, never command options.
+        changeset::resolve_in_workspace(&root, path)?;
     }
+    // `git commit` includes the entire index, not just files staged by the
+    // command below. Refuse a mixed index rather than silently committing
+    // unrelated work owned by the user or another tool.
+    ensure_no_unrelated_staged_changes(&root, &paths).await?;
     let mut add_arguments: Vec<&str> = vec!["add", "--"];
     add_arguments.extend(paths.iter().map(|path| path.as_str()));
     git(&root, &add_arguments).await?;
+    // Close the practical race window if another process staged a file while
+    // this task's own paths were being added.
+    ensure_no_unrelated_staged_changes(&root, &paths).await?;
     git(&root, &["commit", "-m", &trimmed]).await?;
     let hash = git(&root, &["rev-parse", "HEAD"]).await?.trim().to_string();
     let mark_root = root.clone();
@@ -711,6 +781,44 @@ mod tests {
     }
 
     #[test]
+    fn new_tasks_require_verification_for_the_current_content_revision() {
+        let mut set = change_set(true);
+        set.baseline_mode = Some(changeset::BaselineMode::Filesystem);
+        let stale = evaluate_gates(&[], &set, &criteria(true), &[]);
+        assert_eq!(
+            stale
+                .iter()
+                .find(|gate| gate.id == GateId::VerificationFreshness)
+                .unwrap()
+                .status,
+            GateStatus::NotSatisfied
+        );
+
+        set.verified_revision = Some(set.content_revision());
+        let current = evaluate_gates(&[], &set, &criteria(true), &[]);
+        assert_eq!(
+            current
+                .iter()
+                .find(|gate| gate.id == GateId::VerificationFreshness)
+                .unwrap()
+                .status,
+            GateStatus::Satisfied
+        );
+    }
+
+    #[test]
+    fn unrelated_pre_staged_files_are_detected_before_commit() {
+        let allowed = vec!["src/task.ts".to_string(), "src/range..test.ts".to_string()];
+        assert_eq!(
+            unexpected_staged_paths(
+                "src/task.ts\0docs/user-notes.md\0src/range..test.ts\0",
+                &allowed,
+            ),
+            vec!["docs/user-notes.md".to_string()]
+        );
+    }
+
+    #[test]
     fn all_gate_kinds_are_always_reported() {
         let gates = evaluate_gates(&[], &change_set(true), &criteria(true), &[]);
         for id in [
@@ -718,6 +826,7 @@ mod tests {
             GateId::Test,
             GateId::Lint,
             GateId::TypeCheck,
+            GateId::VerificationFreshness,
             GateId::DiffReview,
             GateId::Acceptance,
         ] {

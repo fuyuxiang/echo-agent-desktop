@@ -50,6 +50,8 @@ export interface CommandContext {
   taskPhase?: string;
   problemCount: number;
   changedFileCount: number;
+  canCommitChanges?: boolean;
+  canRollbackChanges?: boolean;
   setActivityView: (view: ActivityView) => void;
   setBottomView: (view: BottomView) => void;
   openDocTab: (kind: "delivery" | "taskDag" | "profile") => void;
@@ -165,7 +167,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "回滚本次任务的全部改动",
       group: "task",
       keywords: ["rollback", "撤销", "还原"],
-      enabled: hasTask && changedFileCount > 0 && !busy,
+      enabled: hasTask && changedFileCount > 0 && !busy && context.canRollbackChanges !== false,
       run: context.rollbackTask,
     },
 
@@ -226,7 +228,11 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "提交本次任务的变更",
       group: "review",
       keywords: ["commit", "git", "提交"],
-      enabled: hasTask && context.taskPhase === "delivered" && changedFileCount > 0 && !busy,
+      enabled: hasTask
+        && context.taskPhase === "delivered"
+        && changedFileCount > 0
+        && !busy
+        && context.canCommitChanges !== false,
       run: context.commitChanges,
     },
 

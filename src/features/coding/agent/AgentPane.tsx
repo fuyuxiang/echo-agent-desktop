@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertTriangle, CheckCircle2, LoaderCircle, Send, Square } from "lucide-react";
+import { AlertTriangle, CheckCircle2, LoaderCircle, Send, Sparkles, Square } from "lucide-react";
 
 import { ExecutionProcess } from "@/components/ExecutionProcess";
 import { Markdown } from "@/components/Markdown";
@@ -79,131 +79,150 @@ export function AgentPane({
 
   return (
     <div className="coding-agent">
-      <div className="coding-agent__head">
-        <span className={`coding-agent__phase is-${phase.tone}`}>
-          {phase.active && <LoaderCircle size={12} className="is-spinning" />}
-          {task.phase === "delivered" && <CheckCircle2 size={12} />}
-          {task.phase === "blocked" && <AlertTriangle size={12} />}
-          {phase.label}
-        </span>
-        {streaming && (
-          <button type="button" className="coding-agent__stop" onClick={onCancel}>
-            <Square size={11} /> 停止
-          </button>
-        )}
-      </div>
-
-      {phaseReason && !blocker && <div className="coding-agent__reason">{phaseReason}</div>}
-
-      {blocker && (
-        <div className="coding-agent__blocker" role="alert">
-          <AlertTriangle size={13} />
+      <header className="coding-agent__panel-head">
+        <div className="coding-agent__identity">
+          <span className="coding-agent__identity-mark" aria-hidden="true">
+            <Sparkles size={14} />
+          </span>
           <div>
-            <strong>需要人工介入</strong>
-            <p>{blocker}</p>
+            <strong>Agent</strong>
+            <span title={task.name}>{task.name}</span>
           </div>
         </div>
-      )}
-
-      {task.phase === "planning" && (
-        <PlanPanel
-          sessionId={sessionId ?? undefined}
-          onSend={async (text) => {
-            await onSend(text, false);
-          }}
-          onToast={onToast}
-          onApprovalResolved={onPlanResolved}
-          onApprovalSyncFailed={onPlanSyncFailed}
-        />
-      )}
-
-      {task.phase === "gating" && (
-        <div className="coding-agent__decision is-good">
-          <CheckCircle2 size={13} />
-          <span>自动检查已完成。请确认验收结果和代码审阅状态。</span>
-          <button type="button" onClick={() => void onFinalizeDelivery()}>
-            确认验收并完成交付
-          </button>
+        <div className="coding-agent__head">
+          <span className={`coding-agent__phase is-${phase.tone}`}>
+            {phase.active && <LoaderCircle size={12} className="is-spinning" />}
+            {task.phase === "delivered" && <CheckCircle2 size={12} />}
+            {task.phase === "blocked" && <AlertTriangle size={12} />}
+            {phase.label}
+          </span>
+          {streaming && (
+            <button type="button" className="coding-agent__stop" onClick={onCancel}>
+              <Square size={11} /> 停止
+            </button>
+          )}
         </div>
-      )}
+      </header>
 
-      {task.phase === "delivered" && (
-        <div className="coding-agent__decision is-good">
-          <CheckCircle2 size={13} />
-          <span>门禁全部通过。</span>
-          <button type="button" onClick={onOpenReport}>
-            查看交付报告
-          </button>
-        </div>
-      )}
+      <div className="coding-agent__body">
+        {phaseReason && !blocker && <div className="coding-agent__reason">{phaseReason}</div>}
 
-      {(awaitingPermission || awaitingQuestion) && (
-        <div className="coding-agent__interaction" aria-label="等待你的操作">
-          {awaitingPermission && <PermissionInlineCard sessionId={sessionId} />}
-          {awaitingQuestion && <QuestionInlineCard sessionId={sessionId} />}
-        </div>
-      )}
-
-      <div className="coding-agent__stream">
-        {messages.length === 0 && (
-          <div className="coding-row">Agent 正在准备工程上下文…</div>
-        )}
-        {messages.map((entry) =>
-          entry.role === "user" ? (
-            <div className="coding-agent__user" key={entry.id}>
-              {entry.parts.map((part, index) =>
-                part.kind === "text" ? (
-                  <Markdown key={index} complete>
-                    {part.text}
-                  </Markdown>
-                ) : null,
-              )}
+        {blocker && (
+          <div className="coding-agent__blocker" role="alert">
+            <AlertTriangle size={13} />
+            <div>
+              <strong>需要人工介入</strong>
+              <p>{blocker}</p>
             </div>
-          ) : (
-            <ExecutionProcess
-              key={entry.id}
-              parts={entry.parts}
-              active={!entry.complete}
-              startedAt={entry.startedAt}
-              completedAt={entry.completedAt}
-              stopReason={entry.stopReason}
-              cancelTrigger={entry.cancelTrigger}
-              cancellationCategory={entry.cancellationCategory}
-              agentResult={entry.agentResult}
-            />
-          ),
+          </div>
         )}
-      </div>
 
-      <div className="coding-agent__composer">
-        <textarea
-          value={followup}
-          onChange={(event) => setFollowup(event.target.value)}
-          onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-              event.preventDefault();
-              void submit();
-            }
-          }}
-          rows={2}
-          placeholder={sessionUnavailable
-            ? "当前任务未绑定 Agent 会话"
-            : "继续当前任务；⌘ Enter 发送…"}
-          aria-label="给 Agent 的补充要求"
-          disabled={sessionUnavailable || sending || streaming}
-        />
-        <div className="coding-agent__composer-tools">
-          <PermissionPicker onToast={onToast} sessionId={sessionId ?? undefined} />
-          <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} />
-          <button
-            type="button"
-            className="coding-agent__send"
-            disabled={sessionUnavailable || !followup.trim() || sending || streaming}
-            onClick={() => void submit()}
-            aria-label="发送给 Agent"
-          >
-            <Send size={14} />
-          </button>
+        {task.phase === "planning" && (
+          <PlanPanel
+            sessionId={sessionId ?? undefined}
+            onSend={async (text) => {
+              await onSend(text, false);
+            }}
+            onToast={onToast}
+            onApprovalResolved={onPlanResolved}
+            onApprovalSyncFailed={onPlanSyncFailed}
+          />
+        )}
+
+        {task.phase === "gating" && (
+          <div className="coding-agent__decision is-good">
+            <CheckCircle2 size={13} />
+            <span>自动检查已完成。请确认验收结果和代码审阅状态。</span>
+            <button type="button" onClick={() => void onFinalizeDelivery()}>
+              确认验收并完成交付
+            </button>
+          </div>
+        )}
+
+        {task.phase === "delivered" && (
+          <div className="coding-agent__decision is-good">
+            <CheckCircle2 size={13} />
+            <span>门禁全部通过。</span>
+            <button type="button" onClick={onOpenReport}>
+              查看交付报告
+            </button>
+          </div>
+        )}
+
+        {(awaitingPermission || awaitingQuestion) && (
+          <div className="coding-agent__interaction" aria-label="等待你的操作">
+            {awaitingPermission && <PermissionInlineCard sessionId={sessionId} />}
+            {awaitingQuestion && <QuestionInlineCard sessionId={sessionId} />}
+          </div>
+        )}
+
+        <div className="coding-agent__stream">
+          {messages.length === 0 && sessionId && phase.active && (
+            <div className="coding-row">Agent 正在准备工程上下文…</div>
+          )}
+          {messages.length === 0 && !sessionId && (
+            <div className="coding-row">Agent 会话未启动。</div>
+          )}
+          {messages.length === 0 && sessionId && !phase.active && (
+            <div className="coding-row">当前任务暂无对话记录。</div>
+          )}
+          {messages.map((entry) =>
+            entry.role === "user" ? (
+              <div className="coding-agent__user" key={entry.id}>
+                {entry.parts.map((part, index) =>
+                  part.kind === "text" ? (
+                    <Markdown key={index} complete>
+                      {part.text}
+                    </Markdown>
+                  ) : null,
+                )}
+              </div>
+            ) : (
+              <ExecutionProcess
+                key={entry.id}
+                parts={entry.parts}
+                active={!entry.complete}
+                startedAt={entry.startedAt}
+                completedAt={entry.completedAt}
+                stopReason={entry.stopReason}
+                cancelTrigger={entry.cancelTrigger}
+                cancellationCategory={entry.cancellationCategory}
+                agentResult={entry.agentResult}
+              />
+            ),
+          )}
+        </div>
+
+        <div className="coding-agent__composer">
+          <textarea
+            value={followup}
+            onChange={(event) => setFollowup(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                void submit();
+              }
+            }}
+            rows={2}
+            placeholder={sessionUnavailable
+              ? "当前任务未绑定 Agent 会话"
+              : "继续当前任务；⌘ Enter 发送…"}
+            aria-label="给 Agent 的补充要求"
+            disabled={sessionUnavailable || sending || streaming}
+          />
+          <div className="coding-agent__composer-tools">
+            <PermissionPicker onToast={onToast} sessionId={sessionId ?? undefined} />
+            <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} />
+            <button
+              type="button"
+              className="coding-agent__send"
+              disabled={sessionUnavailable || !followup.trim() || sending || streaming}
+              onClick={() => void submit()}
+              aria-label="发送给 Agent"
+            >
+              <Send size={14} />
+            </button>
+          </div>
         </div>
       </div>
     </div>

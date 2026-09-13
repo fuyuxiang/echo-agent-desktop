@@ -74,6 +74,17 @@ describe("command registry", () => {
     expect(commands.find((c) => c.id === "review.commit")?.enabled).toBe(false);
   });
 
+  it("keeps review available but disables Git-only commit for a local checkpoint", () => {
+    const commands = buildCommands(context({
+      taskPhase: "delivered",
+      canCommitChanges: false,
+      canRollbackChanges: true,
+    }));
+    expect(commands.find((c) => c.id === "review.commit")?.enabled).toBe(false);
+    expect(commands.find((c) => c.id === "task.rollback")?.enabled).toBe(true);
+    expect(commands.find((c) => c.id === "view.changes")?.enabled).toBe(true);
+  });
+
   it("surfaces counts as hints", () => {
     const commands = buildCommands(context({ problemCount: 3, changedFileCount: 5 }));
     expect(commands.find((c) => c.id === "verify.problems")?.hint).toBe("3 个");

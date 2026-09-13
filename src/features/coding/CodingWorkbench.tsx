@@ -7,7 +7,16 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { ArrowLeft, Code2, FilePlus2, FolderGit2, FolderPlus, Search, Settings2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Code2,
+  FilePlus2,
+  FolderGit2,
+  FolderOpen,
+  FolderPlus,
+  Search,
+  Settings2,
+} from "lucide-react";
 
 import type { ModelOption } from "@/components/ModelSelector";
 import { FileTreeView } from "@/components/workspace-panel/FileTreeView";
@@ -522,7 +531,7 @@ export function CodingWorkbench({
 
   const finishManualMutation = useCallback(async (context: ManualMutationContext) => {
     if (!context.taskId) return;
-    await codingApi.syncFromGit(cwd, context.taskId);
+    await codingApi.syncChanges(cwd, context.taskId);
     if (context.closeRound) {
       await codingApi.reportImplementation(cwd, context.taskId);
     }
@@ -824,8 +833,9 @@ export function CodingWorkbench({
           return;
         }
         createdId = created.id;
-        // The exact task-start worktree (including existing dirty content) is
-        // persisted before the Agent gets permission to touch the repository.
+        // Persist a task-start checkpoint before the Agent can touch the
+        // workspace. Git repositories get HEAD protection; ordinary folders
+        // get an application-owned filesystem checkpoint.
         await codingApi.captureBaseline(cwd, created.id, []);
         await codingApi.submitRequirement(cwd, created.id, planRequired);
         let boundSession: string | undefined;
@@ -953,7 +963,7 @@ export function CodingWorkbench({
     // the workflow blocked, then capture any writes that landed in that narrow
     // window so review and rollback remain truthful.
     await Promise.resolve(onCancelRun?.()).catch(() => undefined);
-    await codingApi.syncFromGit(cwd, task.id).catch(() => undefined);
+    await codingApi.syncChanges(cwd, task.id).catch(() => undefined);
     await codingApi.reportStartFailed(
       cwd,
       task.id,
@@ -1032,20 +1042,24 @@ export function CodingWorkbench({
     async (commands: DetectedCommand[]) => {
       if (!cwd || !task || runningVerification) return;
       const taskId = task.id;
-      if (task.phase !== "verifying") {
-        if (!["gating", "blocked", "delivered"].includes(task.phase)) {
-          onToast?.("当前任务正在执行，暂不能启动新的验证批次");
-          return;
-        }
-        try {
-          await codingApi.beginVerification(cwd, taskId);
-          await useTaskStore.getState().refreshTaskState();
-        } catch (error) {
-          onToast?.(`无法启动验证：${String(error).replace(/^Error:\s*/, "")}`);
-          return;
-        }
+      if (!["verifying", "gating", "blocked", "delivered"].includes(task.phase)) {
+        onToast?.("当前任务正在执行，暂不能启动新的验证批次");
+        return;
       }
+      // Set this before the phase refresh below; otherwise the updated task
+      // timestamp can retrigger the automatic verification effect concurrently.
       setRunningVerification(true);
+      try {
+        // Every run is an explicit batch. The backend binds its results to the
+        // exact content revision captured here, including automatic first runs.
+        const startedTask = await codingApi.beginVerification(cwd, taskId);
+        autoVerificationRef.current = `${cwd}:${taskId}:${startedTask.updatedAt}`;
+        await useTaskStore.getState().refreshTaskState();
+      } catch (error) {
+        onToast?.(`无法启动验证：${String(error).replace(/^Error:\s*/, "")}`);
+        setRunningVerification(false);
+        return;
+      }
       setCommandOutput("");
       setBottomView("output");
       let mayReport = commands.length === 0;
@@ -1214,6 +1228,8 @@ export function CodingWorkbench({
       taskPhase: task?.phase,
       problemCount: problems.length,
       changedFileCount: taskChangeCount,
+      canCommitChanges: changeSet?.baselineMode !== "filesystem",
+      canRollbackChanges: (changeSet?.rollbackUnsafeFiles?.length ?? 0) === 0,
       setActivityView,
       setBottomView,
       openDocTab: (kind) => useTabStore.getState().openDoc(kind),
@@ -1240,6 +1256,8 @@ export function CodingWorkbench({
     }),
     [
       commitChanges,
+      changeSet?.baselineMode,
+      changeSet?.rollbackUnsafeFiles?.length,
       cwd,
       detected,
       indexReady,
@@ -1349,11 +1367,17 @@ export function CodingWorkbench({
     return (
       <div className="coding-workbench coding-workbench--empty">
         <header className="coding-workbench__topbar" data-tauri-drag-region>
-          <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
-            <ArrowLeft size={16} />
-          </button>
-          <Code2 size={16} />
-          <strong>Echo Code</strong>
+          <div className="coding-workbench__topbar-left" data-tauri-drag-region>
+            <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
+              <ArrowLeft size={16} />
+            </button>
+            <div className="coding-workbench__product" data-tauri-drag-region>
+              <span className="coding-workbench__product-mark" aria-hidden="true">
+                <Code2 size={14} />
+              </span>
+              <strong>Echo Code</strong>
+            </div>
+          </div>
         </header>
         <div className="coding-workbench__welcome">
           <FolderGit2 size={32} />
@@ -1386,40 +1410,48 @@ export function CodingWorkbench({
   return (
     <div className={`coding-workbench${bottomOpen ? " is-bottom-open" : ""}`} style={style}>
       <header className="coding-workbench__topbar" data-tauri-drag-region>
-        <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
-          <ArrowLeft size={16} />
-        </button>
-        <Code2 size={16} />
-        <strong>Echo Code</strong>
-        <span className="coding-workbench__repo" title={cwd}>
-          {basename(cwd)}
-        </span>
-        <TaskSwitcher
-          tasks={summaries}
-          activeId={task?.id}
-          onSelect={(taskId) => void (async () => {
-            setSending(true);
-            try {
-              await useTaskStore.getState().selectTask(taskId);
-              const selected = useTaskStore.getState().task;
-              if (selected?.sessionId) {
-                await onActivateSession?.(selected.sessionId, cwd);
-                if (selected.modelId) setModelId(selected.modelId);
+        <div className="coding-workbench__topbar-left" data-tauri-drag-region>
+          <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
+            <ArrowLeft size={16} />
+          </button>
+          <div className="coding-workbench__product" data-tauri-drag-region>
+            <span className="coding-workbench__product-mark" aria-hidden="true">
+              <Code2 size={14} />
+            </span>
+            <strong>Echo Code</strong>
+          </div>
+          <span className="coding-workbench__topbar-separator" aria-hidden="true" />
+          <span className="coding-workbench__repo" title={cwd}>
+            <FolderOpen size={13} />
+            <span>{basename(cwd)}</span>
+          </span>
+          <TaskSwitcher
+            tasks={summaries}
+            activeId={task?.id}
+            onSelect={(taskId) => void (async () => {
+              setSending(true);
+              try {
+                await useTaskStore.getState().selectTask(taskId);
+                const selected = useTaskStore.getState().task;
+                if (selected?.sessionId) {
+                  await onActivateSession?.(selected.sessionId, cwd);
+                  if (selected.modelId) setModelId(selected.modelId);
+                }
+              } catch (error) {
+                onToast?.(`恢复任务会话失败：${String(error).replace(/^Error:\s*/, "")}`);
+              } finally {
+                setSending(false);
               }
-            } catch (error) {
-              onToast?.(`恢复任务会话失败：${String(error).replace(/^Error:\s*/, "")}`);
-            } finally {
-              setSending(false);
-            }
-          })()}
-          onNew={() => useTaskStore.setState({
-            task: null,
-            changeSet: null,
-            verifications: [],
-            problems: [],
-            orchestrator: null,
-          })}
-        />
+            })()}
+            onNew={() => useTaskStore.setState({
+              task: null,
+              changeSet: null,
+              verifications: [],
+              problems: [],
+              orchestrator: null,
+            })}
+          />
+        </div>
         <button
           type="button"
           className="coding-workbench__palette-btn"
@@ -1431,14 +1463,16 @@ export function CodingWorkbench({
           <span>搜索命令与文件</span>
           <kbd>⌘⇧P</kbd>
         </button>
-        <button
-          type="button"
-          className="coding-icon-btn"
-          onClick={onOpenSettings}
-          aria-label="设置"
-        >
-          <Settings2 size={15} />
-        </button>
+        <div className="coding-workbench__topbar-right" data-tauri-drag-region>
+          <button
+            type="button"
+            className="coding-icon-btn"
+            onClick={onOpenSettings}
+            aria-label="设置"
+          >
+            <Settings2 size={15} />
+          </button>
+        </div>
       </header>
 
       <div className="coding-workbench__activity">
@@ -1719,7 +1753,7 @@ export function CodingWorkbench({
       )}
 
       <footer className="coding-workbench__status" role="status" aria-label="工作台状态">
-        {task && (
+        {task ? (
           <span>
             {statusSummary({
               phase: task.phase,
@@ -1729,6 +1763,8 @@ export function CodingWorkbench({
               maxRepairRounds: orchestrator?.maxRepairRounds,
             })}
           </span>
+        ) : (
+          <span>就绪</span>
         )}
         {problems.length > 0 && (
           <button type="button" onClick={() => setBottomView("problems")}>
@@ -1737,7 +1773,11 @@ export function CodingWorkbench({
         )}
         <span className="coding-workbench__status-spacer" />
         {indexing && <span>正在建立文件索引…</span>}
-        <span>{basename(cwd)}</span>
+        <span>
+          {changeSet
+            ? changeSet.baselineMode === "filesystem" ? "本地检查点" : "Git 基线"
+            : "Agent 就绪"}
+        </span>
       </footer>
 
       {paletteMode && (

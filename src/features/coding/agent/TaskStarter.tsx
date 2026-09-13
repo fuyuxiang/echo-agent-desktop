@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { AlertTriangle, Code2, ListChecks, LoaderCircle, Send } from "lucide-react";
+import {
+  AlertTriangle,
+  Code2,
+  ListChecks,
+  LoaderCircle,
+  Send,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 
 import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
 import { PermissionPicker } from "@/components/PermissionPicker";
@@ -53,81 +61,107 @@ export function TaskStarter({
 
   return (
     <div className="coding-agent__starter">
-      <div className="coding-agent__intro">
-        <Code2 size={22} />
-        <strong>今天要构建什么？</strong>
-        <p>用自然语言描述目标，Echo 会读取工程规则与相关代码，在当前工作区完成任务。</p>
-      </div>
+      <header className="coding-agent__panel-head">
+        <div className="coding-agent__identity">
+          <span className="coding-agent__identity-mark" aria-hidden="true">
+            <Sparkles size={14} />
+          </span>
+          <div>
+            <strong>Agent</strong>
+            <span>新任务</span>
+          </div>
+        </div>
+        <span className="coding-agent__ready">准备就绪</span>
+      </header>
 
-      <div className="coding-agent__suggestions">
-        {SUGGESTIONS.map((suggestion) => (
-          <button key={suggestion.label} type="button" onClick={() => setRequirement(suggestion.text)}>
-            {suggestion.label}
-          </button>
-        ))}
-      </div>
-
-      {contextPaths.length > 0 && (
-        <div className="coding-agent__context" aria-label="已选定上下文">
-          {contextPaths.map((path) => (
-            <span key={path} title={path}>
-              {path.split("/").pop()}
+      <div className="coding-agent__starter-content">
+        <div className="coding-agent__starter-main">
+          <div className="coding-agent__intro">
+            <span className="coding-agent__intro-mark" aria-hidden="true">
+              <Code2 size={22} />
             </span>
-          ))}
-        </div>
-      )}
+            <strong>和 Echo 一起构建</strong>
+            <p>描述你想完成的目标，Agent 会理解当前工程、执行修改并呈现可审阅的结果。</p>
+          </div>
 
-      <textarea
-        value={requirement}
-        onChange={(event) => setRequirement(event.target.value)}
-        onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-            event.preventDefault();
-            submit();
-          }
-        }}
-        rows={4}
-        placeholder="让 Echo 实现功能、修复问题或补齐测试…"
-        aria-label="开发需求"
-      />
+          <div className="coding-agent__starter-card">
+            <div className="coding-agent__suggestions" aria-label="常用任务">
+              {SUGGESTIONS.map((suggestion) => (
+                <button key={suggestion.label} type="button" onClick={() => setRequirement(suggestion.text)}>
+                  {suggestion.label}
+                </button>
+              ))}
+            </div>
 
-      {!apiReady && (
-        <div className="coding-agent__warning">
-          <AlertTriangle size={13} />
-          尚未配置可用模型。
-          <button type="button" onClick={onOpenSettings}>
-            前往设置
-          </button>
-        </div>
-      )}
-      {error && (
-        <div className="coding-agent__warning" role="alert">
-          <AlertTriangle size={13} />
-          {error}
-        </div>
-      )}
+            {contextPaths.length > 0 && (
+              <div className="coding-agent__context" aria-label="已选定上下文">
+                {contextPaths.map((path) => (
+                  <span key={path} title={path}>
+                    {path.split("/").pop()}
+                  </span>
+                ))}
+              </div>
+            )}
 
-      <div className="coding-agent__composer-tools">
-        <label className="coding-agent__plan">
-          <input
-            type="checkbox"
-            checked={planRequired}
-            onChange={(event) => setPlanRequired(event.target.checked)}
-          />
-          <ListChecks size={12} />
-          先给计划
-        </label>
-        <PermissionPicker onToast={onToast} />
-        <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} />
-        <button
-          type="button"
-          className="coding-agent__send"
-          disabled={starting || !requirement.trim() || !modelId}
-          onClick={submit}
-          aria-label="开始开发任务"
-        >
-          {starting ? <LoaderCircle size={14} className="is-spinning" /> : <Send size={14} />}
-        </button>
+            <textarea
+              value={requirement}
+              onChange={(event) => setRequirement(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  event.preventDefault();
+                  submit();
+                }
+              }}
+              rows={5}
+              placeholder="描述一个任务，例如：优化这个页面的布局与视觉层级…"
+              aria-label="开发需求"
+            />
+
+            {!apiReady && (
+              <div className="coding-agent__warning">
+                <AlertTriangle size={13} />
+                尚未配置可用模型。
+                <button type="button" onClick={onOpenSettings}>
+                  前往设置
+                </button>
+              </div>
+            )}
+            {error && (
+              <div className="coding-agent__warning" role="alert">
+                <AlertTriangle size={13} />
+                {error}
+              </div>
+            )}
+
+            <div className="coding-agent__composer-tools">
+              <label className="coding-agent__plan">
+                <input
+                  type="checkbox"
+                  checked={planRequired}
+                  onChange={(event) => setPlanRequired(event.target.checked)}
+                />
+                <ListChecks size={12} />
+                先给计划
+              </label>
+              <PermissionPicker onToast={onToast} />
+              <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} />
+              <button
+                type="button"
+                className="coding-agent__send"
+                disabled={starting || !requirement.trim() || !modelId}
+                onClick={submit}
+                aria-label="开始开发任务"
+              >
+                {starting ? <LoaderCircle size={14} className="is-spinning" /> : <Send size={14} />}
+              </button>
+            </div>
+          </div>
+
+          <div className="coding-agent__checkpoint-note">
+            <ShieldCheck size={12} />
+            <span>自动保护源码与配置改动；依赖缓存和构建产物不纳入检查点</span>
+          </div>
+        </div>
       </div>
     </div>
   );

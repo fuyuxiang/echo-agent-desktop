@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const api = vi.hoisted(() => ({
   getChangeSet: vi.fn(),
   captureBaseline: vi.fn(),
-  syncFromGit: vi.fn(),
+  syncChanges: vi.fn(),
   reportImplementation: vi.fn(),
   reportStartFailed: vi.fn(),
 }));
@@ -112,12 +112,12 @@ describe("useTaskLifecycle", () => {
       setTaskStreaming(false);
     });
 
-    await waitFor(() => expect(api.syncFromGit).toHaveBeenCalledWith("/repo", "t1"));
+    await waitFor(() => expect(api.syncChanges).toHaveBeenCalledWith("/repo", "t1"));
     await waitFor(() =>
       expect(api.reportImplementation).toHaveBeenCalledWith("/repo", "t1"),
     );
     // Order matters: sync must happen before report.
-    const syncOrder = api.syncFromGit.mock.invocationCallOrder[0] ?? 0;
+    const syncOrder = api.syncChanges.mock.invocationCallOrder[0] ?? 0;
     const reportOrder = api.reportImplementation.mock.invocationCallOrder[0] ?? 0;
     expect(syncOrder).toBeLessThan(reportOrder);
     expect(refreshTaskState).toHaveBeenCalled();
@@ -137,7 +137,7 @@ describe("useTaskLifecycle", () => {
 
     // Give the effect a chance to run.
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(api.syncFromGit).not.toHaveBeenCalled();
+    expect(api.syncChanges).not.toHaveBeenCalled();
     expect(api.reportImplementation).not.toHaveBeenCalled();
   });
 
@@ -149,7 +149,7 @@ describe("useTaskLifecycle", () => {
       createdAt: "",
       reviewedFiles: [],
     });
-    api.syncFromGit.mockRejectedValue(new Error("git failure"));
+    api.syncChanges.mockRejectedValue(new Error("checkpoint failure"));
     taskStoreState.task = { id: "t1", phase: "implementing", sessionId: "s1" };
     setTaskStreaming(false);
     renderHook(() => useTaskLifecycle("/repo"));
@@ -161,7 +161,7 @@ describe("useTaskLifecycle", () => {
       setTaskStreaming(false);
     });
 
-    await waitFor(() => expect(api.syncFromGit).toHaveBeenCalled());
+    await waitFor(() => expect(api.syncChanges).toHaveBeenCalled());
     expect(api.reportImplementation).not.toHaveBeenCalled();
     await waitFor(() => expect(api.reportStartFailed).toHaveBeenCalled());
   });

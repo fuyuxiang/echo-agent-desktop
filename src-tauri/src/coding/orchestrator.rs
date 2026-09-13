@@ -379,13 +379,20 @@ pub fn apply(
         OrchestratorEvent::VerificationStarted => {
             if !matches!(
                 task.phase,
-                TaskPhase::Gating | TaskPhase::Delivered | TaskPhase::Blocked
+                TaskPhase::Verifying
+                    | TaskPhase::Gating
+                    | TaskPhase::Delivered
+                    | TaskPhase::Blocked
             ) {
-                return Err("只有待验收、已交付或已阻塞的任务可以重新验证".into());
+                return Err("只有验证中、待验收、已交付或已阻塞的任务可以启动验证".into());
             }
             if changeset::load(root, task_id).committed_hash.is_some() {
                 return Err("该任务已提交到 Git，交付证据已封存".into());
             }
+            // Validate and bind the batch before clearing prior evidence. If
+            // there are no current changes, starting verification must not
+            // destroy the last useful report as a side effect.
+            changeset::mark_verification_started(root, task_id)?;
             verification::clear_records(root, task_id)?;
             diagnostics::save_snapshot(root, task_id, &[])?;
             for criterion in &mut task.acceptance_criteria {
@@ -429,6 +436,12 @@ pub fn apply(
                 .unwrap_or_default();
 
             let verdict = decide_after_verification(&records, changed_file_count);
+            if verdict.next_phase == TaskPhase::Gating {
+                // Bind all green verification evidence to the exact file
+                // revision that produced it. A later external edit clears this
+                // marker during native change-set synchronization.
+                changeset::mark_verified_revision(root, task_id)?;
+            }
             if verdict.next_phase != TaskPhase::Diagnosing {
                 verdict
             } else {
@@ -602,6 +615,7 @@ pub async fn coding_task_begin_verification(
     task_id: String,
 ) -> Result<CodingTask, String> {
     let root = access.require_workspace(&root)?;
+    changeset::sync_changes(&root, &task_id).await?;
     apply_and_emit(app, root, task_id, OrchestratorEvent::VerificationStarted).await
 }
 
@@ -613,6 +627,10 @@ pub async fn coding_orchestrator_report_verification(
     task_id: String,
 ) -> Result<CodingTask, String> {
     let root = access.require_workspace(&root)?;
+    // Close the external-editor race: verification only becomes delivery
+    // evidence when the workspace still matches the revision captured at the
+    // start of this batch.
+    changeset::sync_changes(&root, &task_id).await?;
     apply_and_emit(app, root, task_id, OrchestratorEvent::VerificationFinished).await
 }
 

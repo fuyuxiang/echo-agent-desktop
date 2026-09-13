@@ -101,7 +101,7 @@ pub struct CodingGitFile {
 pub struct CodingGitSnapshot {
     pub(crate) has_git: bool,
     branch: Option<String>,
-    head: Option<String>,
+    pub(crate) head: Option<String>,
     pub files: Vec<CodingGitFile>,
     total_added: usize,
     total_removed: usize,

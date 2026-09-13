@@ -154,6 +154,13 @@ describe("ChangeSetView", () => {
     expect(screen.getByRole("button", { name: /回滚任务/ })).toBeDisabled();
   });
 
+  it("shows local checkpoint mode without treating Git as a task requirement", () => {
+    setup({ changeSet: changeSet({ baselineMode: "filesystem" }) });
+    expect(screen.getByText("本地检查点")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /提交/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /回滚任务/ })).toBeEnabled();
+  });
+
   it("opens a diff, discards a file, commits and rolls back", async () => {
     const user = userEvent.setup();
     const props = setup();
