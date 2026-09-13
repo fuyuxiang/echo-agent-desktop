@@ -7,11 +7,19 @@ const invoke = vi.fn(async (command: string, _args?: unknown): Promise<unknown> 
   if (command === "coding_verification_detect") return [];
   return null;
 });
+const eventListeners = new Map<string, (event: { payload: unknown }) => void>();
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (command: string, args: unknown) => invoke(command, args),
 }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (name: string, callback: (event: { payload: unknown }) => void) => {
+    eventListeners.set(name, callback);
+    return () => {
+      if (eventListeners.get(name) === callback) eventListeners.delete(name);
+    };
+  }),
+}));
 vi.mock("@/components/workspace-panel/FileTreeView", () => ({
   FileTreeView: () => <div data-testid="file-tree" />,
 }));
@@ -90,10 +98,18 @@ function verificationTask(overrides: Partial<CodingTask> = {}): CodingTask {
   };
 }
 
+async function emitTauriEvent(name: string, payload: unknown) {
+  await waitFor(() => expect(eventListeners.has(name)).toBe(true));
+  await act(async () => {
+    eventListeners.get(name)?.({ payload });
+  });
+}
+
 describe("CodingWorkbench skeleton", () => {
   beforeEach(() => {
     localStorage.clear();
     invoke.mockClear();
+    eventListeners.clear();
     readDocument.mockClear();
     writeDocument.mockClear();
     useTabStore.getState().closeAll();
@@ -214,6 +230,154 @@ describe("CodingWorkbench skeleton", () => {
 
     expect(await screen.findByRole("tab", { name: /a\.ts/ })).toBeInTheDocument();
     expect(screen.getByTestId("editor")).toHaveTextContent("disk content");
+  });
+
+  it("refreshes an open HTML tab after an external or Agent write", async () => {
+    readDocument.mockResolvedValueOnce({
+      path: "/repo/hello_world.html",
+      relativePath: "hello_world.html",
+      content: "<!-- updated -->\n<h1>Hello</h1>",
+      hash: "h2",
+      size: 37,
+      modifiedAt: 1,
+      language: "html",
+      lineEnding: "LF" as const,
+    });
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/hello_world.html",
+        relativePath: "hello_world.html",
+        name: "hello_world.html",
+        language: "html",
+        original: "<h1>Hello</h1>",
+        draft: "<h1>Hello</h1>",
+        hash: "h1",
+        loading: false,
+      });
+    });
+
+    await emitTauriEvent("coding://file-updated", {
+      root: "/repo",
+      file: "hello_world.html",
+    });
+
+    await waitFor(() => expect(screen.getByTestId("editor")).toHaveTextContent("updated"));
+    expect(useTabStore.getState().tabs.find((tab) => tab.id === "/repo/hello_world.html"))
+      .toMatchObject({ hash: "h2", conflict: false });
+  });
+
+  it("preserves an unsaved draft and marks a conflict after an Agent write", async () => {
+    readDocument.mockResolvedValueOnce({
+      path: "/repo/hello_world.html",
+      relativePath: "hello_world.html",
+      content: "<!-- Agent edit -->\n<h1>Hello</h1>",
+      hash: "h2",
+      size: 39,
+      modifiedAt: 1,
+      language: "html",
+      lineEnding: "LF" as const,
+    });
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/hello_world.html",
+        relativePath: "hello_world.html",
+        name: "hello_world.html",
+        language: "html",
+        original: "<h1>Hello</h1>",
+        draft: "<h1>Hello</h1>",
+        hash: "h1",
+        loading: false,
+      });
+      useTabStore.getState().updateDraft("/repo/hello_world.html", "<h1>My draft</h1>");
+    });
+
+    await emitTauriEvent("coding://file-updated", {
+      root: "/repo",
+      file: "hello_world.html",
+    });
+
+    await waitFor(() => expect(screen.getByRole("alert"))
+      .toHaveTextContent(/已被 Agent 或其他程序修改/));
+    expect(screen.getByTestId("editor")).toHaveTextContent("My draft");
+    expect(useTabStore.getState().tabs.find((tab) => tab.id === "/repo/hello_world.html"))
+      .toMatchObject({ draft: "<h1>My draft</h1>", hash: "h1", conflict: true });
+  });
+
+  it("uses the synchronized ChangeSet as a missed-event refresh fallback", async () => {
+    readDocument.mockResolvedValueOnce({
+      path: "/repo/hello_world.html",
+      relativePath: "hello_world.html",
+      content: "<!-- synchronized -->\n<h1>Hello</h1>",
+      hash: "h2",
+      size: 42,
+      modifiedAt: 1,
+      language: "html",
+      lineEnding: "LF" as const,
+    });
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/hello_world.html",
+        relativePath: "hello_world.html",
+        name: "hello_world.html",
+        language: "html",
+        original: "<h1>Hello</h1>",
+        draft: "<h1>Hello</h1>",
+        hash: "h1",
+        loading: false,
+      });
+      useTaskStore.setState({
+        changeSet: {
+          taskId: "task-1",
+          baselineMode: "filesystem",
+          changes: [{
+            path: "hello_world.html",
+            kind: "modified",
+            added: 1,
+            removed: 0,
+            preExisting: false,
+          }],
+          createdAt: "2026-09-13T00:00:00Z",
+          reviewedFiles: [],
+          rollbackUnsafeFiles: [],
+          committedHash: null,
+        },
+      });
+    });
+
+    await waitFor(() => expect(screen.getByTestId("editor")).toHaveTextContent("synchronized"));
+    expect(readDocument).toHaveBeenCalledWith("/repo", "/repo/hello_world.html");
+  });
+
+  it("shows a removed-file state without discarding unsaved content", async () => {
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/hello_world.html",
+        relativePath: "hello_world.html",
+        name: "hello_world.html",
+        language: "html",
+        original: "<h1>Hello</h1>",
+        draft: "<h1>Unsaved</h1>",
+        hash: "h1",
+        loading: false,
+      });
+    });
+
+    await emitTauriEvent("coding://file-removed", {
+      root: "/repo",
+      file: "hello_world.html",
+    });
+
+    await waitFor(() => expect(screen.getByRole("alert"))
+      .toHaveTextContent(/已被 Agent 或其他程序修改/));
+    expect(screen.getByTestId("editor")).toHaveTextContent("Unsaved");
   });
 
   it("flags a save conflict instead of overwriting another writer", async () => {

@@ -30,6 +30,7 @@ import type {
   VerificationKind,
   VerificationOutputEvent,
   VerificationRecord,
+  WorkspaceFileEvent,
 } from "./types";
 
 export const codingApi = {
@@ -205,6 +206,22 @@ export function onIndexRemoved(
   callback: (event: IndexRemovedEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<IndexRemovedEvent>("coding://index-removed", (event) =>
+    callback(event.payload),
+  );
+}
+
+export function onWorkspaceFileUpdated(
+  callback: (event: WorkspaceFileEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<WorkspaceFileEvent>("coding://file-updated", (event) =>
+    callback(event.payload),
+  );
+}
+
+export function onWorkspaceFileRemoved(
+  callback: (event: WorkspaceFileEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<WorkspaceFileEvent>("coding://file-removed", (event) =>
     callback(event.payload),
   );
 }

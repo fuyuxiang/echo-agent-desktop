@@ -1,13 +1,10 @@
-//! Cross-file workspace symbol index file watcher (phase 2).
+//! Cross-file workspace watcher and symbol-index reconciler.
 //!
-//! Glues `notify-debouncer-full` to `symbols::upsert_file` /
-//! `symbols::remove_file` so any change in the workspace reconciles the
-//! on-disk index within ~400ms without a full rebuild. Events are emitted
-//! on the standard `coding://index-updated` and `coding://index-removed`
-//! channels so the renderer keeps its cache in sync.
+//! Every non-ignored file change is emitted on `coding://file-updated` or
+//! `coding://file-removed` so open editor tabs stay in sync with Agent and
+//! external writes. Indexable source files additionally reconcile the symbol
+//! index and emit the existing index events.
 //!
-//! Only events whose relative path is indexable (TS / JS / Rust / Python /
-//! Go / Java) trigger an upsert; everything else is silently dropped.
 //! Watcher handles are cheap to drop — they own a single OS-level watcher
 //! and one drain thread.
 
@@ -44,10 +41,18 @@ struct IndexRemovedPayload {
     file: String,
 }
 
+#[derive(Serialize, Clone)]
+struct WorkspaceFilePayload {
+    root: String,
+    file: String,
+}
+
 /// Sink for processed events. In production this re-emits the event on the
 /// Tauri bus; tests pass a recording closure instead so they can observe
 /// events without spinning up a Tauri runtime.
 pub trait EventSink: Send + Sync + 'static {
+    fn file_updated(&self, root: &str, file: &str);
+    fn file_removed(&self, root: &str, file: &str);
     fn index_updated(&self, root: &str, file: &str, added: u32, updated: u32, removed: u32);
     fn index_removed(&self, root: &str, file: &str);
 }
@@ -64,6 +69,24 @@ impl TauriEventSink {
 }
 
 impl EventSink for TauriEventSink {
+    fn file_updated(&self, root: &str, file: &str) {
+        let _ = self.app.emit(
+            "coding://file-updated",
+            WorkspaceFilePayload {
+                root: root.to_string(),
+                file: file.to_string(),
+            },
+        );
+    }
+    fn file_removed(&self, root: &str, file: &str) {
+        let _ = self.app.emit(
+            "coding://file-removed",
+            WorkspaceFilePayload {
+                root: root.to_string(),
+                file: file.to_string(),
+            },
+        );
+    }
     fn index_updated(&self, root: &str, file: &str, added: u32, updated: u32, removed: u32) {
         let _ = self.app.emit(
             "coding://index-updated",
@@ -100,7 +123,7 @@ pub struct WatcherHandle {
 }
 
 /// Process-wide owner for workspace watchers. Holding the handle is essential:
-/// dropping it immediately after bootstrap silently disables indexing updates.
+/// dropping it immediately after bootstrap silently disables file updates.
 #[derive(Default)]
 pub struct WatcherRegistry {
     watchers: Mutex<HashMap<PathBuf, WatcherHandle>>,
@@ -112,7 +135,7 @@ impl WatcherRegistry {
         let mut watchers = self
             .watchers
             .lock()
-            .map_err(|_| "符号索引监听器状态已损坏".to_string())?;
+            .map_err(|_| "工作区文件监听器状态已损坏".to_string())?;
         if watchers.contains_key(&canonical) {
             return Ok(());
         }
@@ -132,9 +155,8 @@ impl Drop for WatcherHandle {
 }
 
 /// Spawn a debounced watcher over `root`. Events are dispatched onto a
-/// worker thread which calls into `symbols::upsert_file` /
-/// `symbols::remove_file` and forwards results through `sink` so the
-/// renderer can keep caches in sync.
+/// worker thread which forwards every workspace-file change and updates the
+/// symbol index for supported source files.
 ///
 /// Returns a handle to the watcher — dropping it stops the listener.
 pub fn spawn_watcher_with_sink<S: EventSink>(
@@ -245,35 +267,41 @@ fn handle_classified<S: EventSink>(root: &Path, sink: &Arc<S>, classified: Class
                 return;
             }
             let rel = relativize(root, &path);
-            if !is_indexable_file(&rel) {
-                return;
-            }
             // macOS FSEvents emits Modify(Metadata) + Modify(Data) before the
             // file actually disappears from disk. If the file is gone by the
             // time we try to read it, treat the event as a removal instead.
             if !path.exists() {
-                match symbols::remove_file(root, &rel) {
-                    Ok(()) => {
-                        sink.index_removed(&root.to_string_lossy(), &rel);
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, file = %path.display(), "coding watcher remove_file failed");
+                sink.file_removed(&root.to_string_lossy(), &rel);
+                if is_indexable_file(&rel) {
+                    match symbols::remove_file(root, &rel) {
+                        Ok(()) => {
+                            sink.index_removed(&root.to_string_lossy(), &rel);
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, file = %path.display(), "coding watcher remove_file failed");
+                        }
                     }
                 }
                 return;
             }
-            match symbols::upsert_file(root, &rel) {
-                Ok(new_symbols) => {
-                    sink.index_updated(
-                        &root.to_string_lossy(),
-                        &rel,
-                        new_symbols.len() as u32,
-                        0,
-                        0,
-                    );
-                }
-                Err(error) => {
-                    tracing::warn!(%error, file = %path.display(), "coding watcher upsert_file failed");
+            if !path.is_file() {
+                return;
+            }
+            sink.file_updated(&root.to_string_lossy(), &rel);
+            if is_indexable_file(&rel) {
+                match symbols::upsert_file(root, &rel) {
+                    Ok(new_symbols) => {
+                        sink.index_updated(
+                            &root.to_string_lossy(),
+                            &rel,
+                            new_symbols.len() as u32,
+                            0,
+                            0,
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, file = %path.display(), "coding watcher upsert_file failed");
+                    }
                 }
             }
         }
@@ -283,15 +311,15 @@ fn handle_classified<S: EventSink>(root: &Path, sink: &Arc<S>, classified: Class
                 return;
             }
             let rel = relativize(root, &path);
-            if !is_indexable_file(&rel) {
-                return;
-            }
-            match symbols::remove_file(root, &rel) {
-                Ok(()) => {
-                    sink.index_removed(&root.to_string_lossy(), &rel);
-                }
-                Err(error) => {
-                    tracing::warn!(%error, file = %path.display(), "coding watcher remove_file failed");
+            sink.file_removed(&root.to_string_lossy(), &rel);
+            if is_indexable_file(&rel) {
+                match symbols::remove_file(root, &rel) {
+                    Ok(()) => {
+                        sink.index_removed(&root.to_string_lossy(), &rel);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, file = %path.display(), "coding watcher remove_file failed");
+                    }
                 }
             }
         }
@@ -416,11 +444,25 @@ mod tests {
     /// Recording sink that captures every forwarded event for assertions.
     #[derive(Default)]
     struct RecordingSink {
+        files_updated: Mutex<Vec<(String, String)>>,
+        files_removed: Mutex<Vec<(String, String)>>,
         updated: Mutex<Vec<(String, String, u32, u32, u32)>>,
         removed: Mutex<Vec<(String, String)>>,
     }
 
     impl EventSink for RecordingSink {
+        fn file_updated(&self, root: &str, file: &str) {
+            self.files_updated
+                .lock()
+                .unwrap()
+                .push((root.to_string(), file.to_string()));
+        }
+        fn file_removed(&self, root: &str, file: &str) {
+            self.files_removed
+                .lock()
+                .unwrap()
+                .push((root.to_string(), file.to_string()));
+        }
         fn index_updated(&self, root: &str, file: &str, added: u32, updated: u32, removed: u32) {
             self.updated.lock().unwrap().push((
                 root.to_string(),
@@ -456,6 +498,37 @@ mod tests {
         assert!(!is_indexable_file("README.md"));
         assert!(!is_indexable_file("assets/logo.png"));
         assert!(!is_indexable_file("Makefile"));
+    }
+
+    #[test]
+    fn non_indexable_file_still_emits_workspace_update() {
+        let root = fs::canonicalize(temp_root()).unwrap();
+        fs::write(root.join("index.html"), "<h1>updated</h1>\n").unwrap();
+        let sink = Arc::new(RecordingSink::default());
+
+        handle_classified(&root, &sink, Classified::Modify(root.join("index.html")));
+
+        assert_eq!(
+            sink.files_updated.lock().unwrap().as_slice(),
+            &[(root.to_string_lossy().into_owned(), "index.html".into())]
+        );
+        assert!(sink.updated.lock().unwrap().is_empty());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn non_indexable_file_removal_is_visible_to_editor_clients() {
+        let root = fs::canonicalize(temp_root()).unwrap();
+        let sink = Arc::new(RecordingSink::default());
+
+        handle_classified(&root, &sink, Classified::Remove(root.join("index.html")));
+
+        assert_eq!(
+            sink.files_removed.lock().unwrap().as_slice(),
+            &[(root.to_string_lossy().into_owned(), "index.html".into())]
+        );
+        assert!(sink.removed.lock().unwrap().is_empty());
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]

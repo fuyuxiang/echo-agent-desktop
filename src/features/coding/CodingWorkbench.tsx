@@ -45,11 +45,11 @@ import { countOccurrences, describeReplacePlan, replaceAll } from "./lib/replace
 import { isBusyPhase, statusSummary } from "./lib/phase";
 import {
   codingApi,
-  onIndexRemoved,
-  onIndexUpdated,
   onPhaseChanged,
   onVerificationOutput,
   onVerificationUpdated,
+  onWorkspaceFileRemoved,
+  onWorkspaceFileUpdated,
 } from "./lib/tauri-api";
 import { getSymbolIndexClient } from "./lib/symbol-index";
 import type { DetectedCommand, IndexStatus, Problem } from "./lib/types";
@@ -109,6 +109,55 @@ interface ManualMutationContext {
 function basename(path: string): string {
   const segments = path.replace(/\\/g, "/").split("/").filter(Boolean);
   return segments[segments.length - 1] ?? path;
+}
+
+function normalizedRelativePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function matchingOpenFileTab(relativePath: string) {
+  const normalized = normalizedRelativePath(relativePath);
+  return useTabStore.getState().tabs.find(
+    (entry) => isFileTab(entry) && normalizedRelativePath(entry.relativePath) === normalized,
+  );
+}
+
+/** Reconcile one open tab without ever replacing an unsaved editor draft. */
+async function reconcileOpenFileTab(
+  root: string,
+  relativePath: string,
+  removed = false,
+): Promise<void> {
+  const before = matchingOpenFileTab(relativePath);
+  if (!before || !isFileTab(before)) return;
+
+  if (removed) {
+    if (before.draft !== before.original) {
+      useTabStore.getState().markConflict(before.id);
+    } else {
+      useTabStore.getState().setError(before.id, "文件已被 Agent 或其他程序删除");
+    }
+    return;
+  }
+
+  try {
+    const document = await codingReadDocument(root, before.id);
+    const current = useTabStore.getState().tabs.find((entry) => entry.id === before.id);
+    if (!current || !isFileTab(current) || current.hash === document.hash) return;
+    if (current.draft !== current.original) {
+      useTabStore.getState().markConflict(current.id);
+    } else {
+      useTabStore.getState().markSaved(current.id, document.content, document.hash);
+    }
+  } catch {
+    const current = useTabStore.getState().tabs.find((entry) => entry.id === before.id);
+    if (!current || !isFileTab(current)) return;
+    if (current.draft !== current.original) {
+      useTabStore.getState().markConflict(current.id);
+    } else {
+      useTabStore.getState().setError(current.id, "文件已被删除或暂时无法读取");
+    }
+  }
 }
 
 const EXPLORER_TITLES: Record<string, string> = {
@@ -362,55 +411,25 @@ export function CodingWorkbench({
     };
   }, [cwd]);
 
-  // Keep clean editor tabs live when the Agent or another process writes an
-  // indexed source file. Unsaved drafts are never overwritten; they become an
-  // explicit conflict that the user can compare or reload.
+  // Keep clean editor tabs live for every workspace file type. Symbol-index
+  // events intentionally cover only programming languages, so editor
+  // consistency uses the independent workspace-file event stream.
   useEffect(() => {
     if (!cwd) return;
     let disposed = false;
     const unlisteners: Array<() => void> = [];
-    const matchingTab = (relativePath: string) => useTabStore.getState().tabs.find(
-      (entry) => isFileTab(entry) && entry.relativePath.replace(/\\/g, "/") === relativePath,
-    );
-    void onIndexUpdated((event) => {
-      if (disposed || event.root !== cwd || !matchingTab(event.file)) return;
-      void (async () => {
-        const before = matchingTab(event.file);
-        if (!before || !isFileTab(before)) return;
-        if (before.draft !== before.original) {
-          useTabStore.getState().markConflict(before.id);
-          return;
-        }
-        try {
-          const document = await codingReadDocument(cwd, before.id);
-          if (disposed) return;
-          const current = matchingTab(event.file);
-          if (!current || !isFileTab(current)) return;
-          if (current.draft !== current.original) {
-            useTabStore.getState().markConflict(current.id);
-          } else {
-            useTabStore.getState().markSaved(current.id, document.content, document.hash);
-          }
-        } catch {
-          const current = matchingTab(event.file);
-          if (current && isFileTab(current)) {
-            useTabStore.getState().setError(current.id, "文件已被删除或暂时无法读取");
-          }
-        }
-      })();
+    void onWorkspaceFileUpdated((event) => {
+      if (disposed || event.root !== cwd) return;
+      setTreeRevision((value) => value + 1);
+      void reconcileOpenFileTab(cwd, event.file);
     }).then((unlisten) => {
       if (disposed) unlisten();
       else unlisteners.push(unlisten);
     });
-    void onIndexRemoved((event) => {
+    void onWorkspaceFileRemoved((event) => {
       if (disposed || event.root !== cwd) return;
-      const current = matchingTab(event.file);
-      if (!current || !isFileTab(current)) return;
-      if (current.draft !== current.original) {
-        useTabStore.getState().markConflict(current.id);
-      } else {
-        useTabStore.getState().setError(current.id, "文件已被 Agent 或其他程序删除");
-      }
+      setTreeRevision((value) => value + 1);
+      void reconcileOpenFileTab(cwd, event.file, true);
     }).then((unlisten) => {
       if (disposed) unlisten();
       else unlisteners.push(unlisten);
@@ -420,6 +439,16 @@ export function CodingWorkbench({
       for (const unlisten of unlisteners) unlisten();
     };
   }, [cwd]);
+
+  // File-system notification delivery can race watcher startup. A freshly
+  // synchronized task ChangeSet is the authoritative fallback at Agent turn
+  // boundaries and when a persisted task is restored.
+  useEffect(() => {
+    if (!cwd || !changeSet) return;
+    for (const change of changeSet.changes) {
+      void reconcileOpenFileTab(cwd, change.path, change.kind === "deleted");
+    }
+  }, [changeSet, cwd]);
 
   // Re-detect at phase boundaries as well as workspace open. An implementation
   // may add/remove package scripts or manifests, so a cached command list is

@@ -300,6 +300,12 @@ export interface IndexRemovedEvent {
   file: string;
 }
 
+/** Payload of workspace file events used to keep open editor tabs current. */
+export interface WorkspaceFileEvent {
+  root: string;
+  file: string;
+}
+
 // ---- Phase 2: cross-file references + impact ----
 
 export type ReferenceKind =
