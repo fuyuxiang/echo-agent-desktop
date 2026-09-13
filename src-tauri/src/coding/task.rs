@@ -14,6 +14,7 @@ use crate::shell_fs::FilesystemAccess;
 #[serde(rename_all = "snake_case")]
 pub enum TaskPhase {
     Idle,
+    Analyzing,
     Planning,
     Implementing,
     Verifying,
@@ -22,6 +23,16 @@ pub enum TaskPhase {
     Gating,
     Delivered,
     Blocked,
+}
+
+/// The user's requested way of working. This is intentionally separate from
+/// the runtime permission policy (ask-before-actions / auto / full autonomy).
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum CodingMode {
+    Ask,
+    Plan,
+    Agent,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,6 +79,10 @@ pub struct CodingTask {
     pub blocker: Option<String>,
     pub acceptance_criteria: Vec<AcceptanceCriterion>,
     pub task_nodes: Vec<TaskNode>,
+    /// `None` is retained only for tasks saved before work modes existed.
+    /// `effective_mode` maps those records without rewriting user data.
+    #[serde(default)]
+    pub mode: Option<CodingMode>,
     pub plan_required: bool,
     /// Whether this task must stop for an explicit, content-bound human review
     /// before it can be delivered. Automatic completion is the default.
@@ -77,6 +92,21 @@ pub struct CodingTask {
     pub session_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl CodingTask {
+    /// Preserve the intent of tasks written before `mode` existed. Legacy
+    /// plan-first tasks can be identified while they are still waiting for
+    /// approval; every other legacy task behaved as Agent mode.
+    pub fn effective_mode(&self) -> CodingMode {
+        self.mode.unwrap_or_else(|| {
+            if self.plan_required && self.phase == TaskPhase::Planning {
+                CodingMode::Plan
+            } else {
+                CodingMode::Agent
+            }
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -170,6 +200,7 @@ pub fn create_task(root: &Path, name: &str, requirement: &str) -> Result<CodingT
             status: TaskNodeStatus::Pending,
             priority: "high".into(),
         }],
+        mode: Some(CodingMode::Agent),
         plan_required: false,
         review_required: false,
         model_id: None,
@@ -383,6 +414,19 @@ mod tests {
         value.as_object_mut().unwrap().remove("reviewRequired");
         let restored: CodingTask = serde_json::from_value(value).unwrap();
         assert!(!restored.review_required);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn legacy_task_without_mode_keeps_its_original_workflow() {
+        let root = temp_root();
+        let mut task = create_task(&root, "兼容旧规划", "先规划").unwrap();
+        task.phase = TaskPhase::Planning;
+        task.plan_required = true;
+        let mut value = serde_json::to_value(task).unwrap();
+        value.as_object_mut().unwrap().remove("mode");
+        let restored: CodingTask = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.effective_mode(), CodingMode::Plan);
         std::fs::remove_dir_all(&root).ok();
     }
 

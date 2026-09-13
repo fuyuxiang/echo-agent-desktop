@@ -5,6 +5,7 @@
 
 export type TaskPhase =
   | "idle"
+  | "analyzing"
   | "planning"
   | "implementing"
   | "verifying"
@@ -13,6 +14,13 @@ export type TaskPhase =
   | "gating"
   | "delivered"
   | "blocked";
+
+/**
+ * The user's intent for a coding task. This is deliberately independent from
+ * the permission policy: mode controls what the Agent should do, while the
+ * permission policy controls which actions need approval.
+ */
+export type CodingMode = "ask" | "plan" | "agent";
 
 export type TaskNodeStatus = "pending" | "running" | "success" | "failed" | "blocked";
 
@@ -41,6 +49,8 @@ export interface CodingTask {
   blocker?: string | null;
   acceptanceCriteria: AcceptanceCriterion[];
   taskNodes: TaskNode[];
+  /** Missing only on tasks persisted by releases before work modes existed. */
+  mode?: CodingMode | null;
   planRequired: boolean;
   /** Stop after automated checks so the user can review every changed file. */
   reviewRequired: boolean;
@@ -48,6 +58,14 @@ export interface CodingTask {
   sessionId?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Infer a safe mode for tasks created before `mode` was persisted. */
+export function codingModeForTask(
+  task: Pick<CodingTask, "mode" | "planRequired" | "phase">,
+): CodingMode {
+  if (task.mode) return task.mode;
+  return task.planRequired && task.phase === "planning" ? "plan" : "agent";
 }
 
 export interface TaskSummary {

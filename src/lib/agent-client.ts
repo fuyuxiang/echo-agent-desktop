@@ -1342,6 +1342,14 @@ export async function folderTrustRespond(
 
 // ---------- plan mode ----------
 
+/** Select EchoAgent's native Ask / Plan / Agent prompt mode. */
+export async function setCodingMode(
+  sessionId: string,
+  mode: "ask" | "plan" | "agent",
+): Promise<void> {
+  await invoke<void>("set_coding_mode", { sessionId, mode });
+}
+
 /** Idempotently set plan mode; CurrentModeUpdate is the authoritative result. */
 export async function setPlanMode(sessionId: string, enabled: boolean): Promise<void> {
   await invoke<void>("set_plan_mode", { sessionId, enabled });

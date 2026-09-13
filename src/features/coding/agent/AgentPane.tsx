@@ -20,7 +20,12 @@ import { QuestionInlineCard } from "@/components/QuestionInlineCard";
 import type { ChatMessage } from "@/stores/session-store";
 
 import { describePhase } from "../lib/phase";
-import type { ChangeSet, CodingTask, VerificationRecord } from "../lib/types";
+import {
+  codingModeForTask,
+  type ChangeSet,
+  type CodingTask,
+  type VerificationRecord,
+} from "../lib/types";
 
 interface AgentPaneProps {
   task: CodingTask;
@@ -84,7 +89,12 @@ export function AgentPane({
 }: AgentPaneProps) {
   const [followup, setFollowup] = useState("");
   const [finalizing, setFinalizing] = useState(false);
-  const phase = describePhase(task.phase);
+  const mode = codingModeForTask(task);
+  const modeLabel = mode === "ask" ? "Ask" : mode === "plan" ? "Plan" : "Agent";
+  const basePhase = describePhase(task.phase);
+  const phase = mode === "ask" && task.phase === "delivered"
+    ? { ...basePhase, label: "已回答" }
+    : basePhase;
   const sessionUnavailable = !sessionId;
   const changes = changeSet?.changes ?? [];
   const reviewedCount = changes.filter((change) => {
@@ -131,7 +141,7 @@ export function AgentPane({
             <Sparkles size={14} />
           </span>
           <div>
-            <strong>Agent</strong>
+            <strong>{modeLabel}</strong>
             <span title={task.name}>{task.name}</span>
           </div>
         </div>
@@ -230,7 +240,17 @@ export function AgentPane({
           </div>
         )}
 
-        {task.phase === "delivered" && (
+        {task.phase === "delivered" && mode === "ask" && (
+          <div className="coding-agent__decision is-good">
+            <CheckCircle2 size={13} />
+            <div className="coding-agent__decision-copy">
+              <strong>只读分析已完成</strong>
+              <span>已回答当前问题，未修改工程文件。你可以在下方继续追问。</span>
+            </div>
+          </div>
+        )}
+
+        {task.phase === "delivered" && mode !== "ask" && (
           <div className="coding-agent__decision is-good">
             <CheckCircle2 size={13} />
             <div className="coding-agent__decision-copy">
@@ -253,7 +273,9 @@ export function AgentPane({
 
         <div className="coding-agent__stream">
           {messages.length === 0 && sessionId && phase.active && (
-            <div className="coding-row">Agent 正在准备工程上下文…</div>
+            <div className="coding-row">
+              {mode === "ask" ? "Echo 正在只读分析工程上下文…" : "Agent 正在准备工程上下文…"}
+            </div>
           )}
           {messages.length === 0 && !sessionId && (
             <div className="coding-row">Agent 会话未启动。</div>
@@ -301,8 +323,10 @@ export function AgentPane({
             rows={2}
             placeholder={sessionUnavailable
               ? "当前任务未绑定 Agent 会话"
-              : "继续当前任务；⌘ Enter 发送…"}
-            aria-label="给 Agent 的补充要求"
+              : mode === "ask"
+                ? "继续追问（保持只读）；⌘ Enter 发送…"
+                : "继续当前任务；⌘ Enter 发送…"}
+            aria-label={mode === "ask" ? "继续追问" : "给 Agent 的补充要求"}
             disabled={sessionUnavailable || sending || streaming}
           />
           <div className="coding-agent__composer-tools">

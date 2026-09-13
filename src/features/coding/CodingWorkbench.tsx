@@ -41,6 +41,7 @@ import { SearchView } from "./explorer/SearchView";
 import { SymbolView } from "./explorer/SymbolView";
 import { buildCommands, type CommandContext } from "./lib/commands";
 import { buildFileIndex } from "./lib/file-index";
+import { buildCodingModePrompt } from "./lib/mode";
 import { countOccurrences, describeReplacePlan, replaceAll } from "./lib/replace";
 import { isBusyPhase, statusSummary } from "./lib/phase";
 import {
@@ -52,7 +53,13 @@ import {
   onWorkspaceFileUpdated,
 } from "./lib/tauri-api";
 import { getSymbolIndexClient } from "./lib/symbol-index";
-import type { DetectedCommand, IndexStatus, Problem } from "./lib/types";
+import {
+  codingModeForTask,
+  type CodingMode,
+  type DetectedCommand,
+  type IndexStatus,
+  type Problem,
+} from "./lib/types";
 import { useTaskLifecycle } from "./lib/task-lifecycle";
 import { FindReferencesView } from "./main/FindReferencesView";
 import { GoToDefinitionView } from "./main/GoToDefinitionView";
@@ -89,7 +96,7 @@ interface CodingWorkbenchProps {
   onStartRun?: (
     root: string,
     requirement: string,
-    planRequired: boolean,
+    mode: CodingMode,
     modelId?: string,
     contextPaths?: string[],
     onSessionReady?: (sessionId: string) => Promise<void>,
@@ -97,7 +104,10 @@ interface CodingWorkbenchProps {
   /** Focus a task's persisted Agent session without leaving the workbench. */
   onActivateSession?: (sessionId: string, cwd: string) => Promise<void>;
   onChangeModel?: (modelId: string) => void | Promise<void>;
-  onSendMessage?: (text: string) => boolean | void | Promise<boolean | void>;
+  onSendMessage?: (
+    text: string,
+    promptTextOverride?: string,
+  ) => boolean | void | Promise<boolean | void>;
   onCancelRun?: () => boolean | void | Promise<boolean | void>;
 }
 
@@ -619,6 +629,15 @@ export function CodingWorkbench({
   const prepareManualMutation = useCallback(async (): Promise<ManualMutationContext | null> => {
     const activeTask = useTaskStore.getState().task;
     if (!activeTask) return { taskId: null, closeRound: false };
+    if (codingModeForTask(activeTask) === "ask") {
+      if (activeTask.phase === "analyzing") {
+        onToast?.("Ask 模式正在只读分析，请等待回答完成后再手动编辑");
+        return null;
+      }
+      // Manual edits after an Ask answer are ordinary editor work and must not
+      // be attributed to the completed read-only analysis task.
+      return { taskId: null, closeRound: false };
+    }
     if (["implementing", "repairing"].includes(activeTask.phase)) {
       return { taskId: activeTask.id, closeRound: false };
     }
@@ -1127,7 +1146,7 @@ export function CodingWorkbench({
    * never decides it locally.
    */
   const startTask = useCallback(
-    async (requirement: string, planRequired: boolean, reviewRequired: boolean) => {
+    async (requirement: string, mode: CodingMode) => {
       if (!cwd || !onStartRun) return;
       setStarting(true);
       setStartError(null);
@@ -1143,7 +1162,7 @@ export function CodingWorkbench({
         // workspace. Git repositories get HEAD protection; ordinary folders
         // get an application-owned filesystem checkpoint.
         await codingApi.captureBaseline(cwd, created.id, []);
-        await codingApi.submitRequirement(cwd, created.id, planRequired, reviewRequired);
+        await codingApi.submitRequirement(cwd, created.id, mode);
         let boundSession: string | undefined;
         const bindSession = async (sessionId: string) => {
           if (boundSession && boundSession !== sessionId) {
@@ -1156,7 +1175,7 @@ export function CodingWorkbench({
         const session = await onStartRun(
           cwd,
           requirement,
-          planRequired,
+          mode,
           modelId,
           contextPaths,
           bindSession,
@@ -1209,14 +1228,20 @@ export function CodingWorkbench({
             await codingApi.beginFollowup(cwd, task.id);
             await useTaskStore.getState().refreshTaskState();
             reopened = true;
-          } else if (!["implementing", "repairing"].includes(task.phase)) {
+          } else if (
+            !(codingModeForTask(task) === "ask" && task.phase === "analyzing")
+            && !["implementing", "repairing"].includes(task.phase)
+          ) {
             onToast?.(task.phase === "verifying"
               ? "正在验证当前改动，请等待验证结束后再补充开发要求"
               : "当前任务阶段不能修改代码");
             return false;
           }
         }
-        const accepted = await onSendMessage(text);
+        const promptTextOverride = task && codingModeForTask(task) === "ask"
+          ? buildCodingModePrompt("ask", text, [], true)
+          : undefined;
+        const accepted = await onSendMessage(text, promptTextOverride);
         if (accepted === false && reopened) {
           await blockInterruptedManualMutation(
             { taskId: task.id, closeRound: true },
@@ -1349,6 +1374,10 @@ export function CodingWorkbench({
   const runVerifications = useCallback(
     async (commands: DetectedCommand[]) => {
       if (!cwd || !task || runningVerification) return;
+      if (codingModeForTask(task) === "ask") {
+        onToast?.("Ask 模式只读回答，不进入代码验证流程");
+        return;
+      }
       const taskId = task.id;
       if (!["verifying", "gating", "blocked", "delivered"].includes(task.phase)) {
         onToast?.("当前任务正在执行，暂不能启动新的验证批次");
@@ -1500,10 +1529,14 @@ export function CodingWorkbench({
       onToast?.("请先打开需要补充注释的文件");
       return;
     }
+    if (task && codingModeForTask(task) === "ask") {
+      onToast?.("生成注释会修改文件，请新建 Agent 模式任务");
+      return;
+    }
     sendFollowup(
       `请为 ${activeRelativePath} 补充必要且简洁的代码注释与公开 API 文档。不要复述显而易见的实现；保持项目既有风格，并直接修改文件。`,
     );
-  }, [activeRelativePath, onToast, sendFollowup]);
+  }, [activeRelativePath, onToast, sendFollowup, task]);
 
   const changeTaskModel = useCallback(async (nextModelId: string) => {
     const previous = modelId;
@@ -1536,6 +1569,7 @@ export function CodingWorkbench({
       hasTask: Boolean(task),
       busy: streaming || isBusyPhase(task?.phase),
       taskPhase: task?.phase,
+      taskMode: task ? codingModeForTask(task) : undefined,
       problemCount: problems.length,
       changedFileCount: taskChangeCount,
       canCommitChanges: changeSet?.baselineMode !== "filesystem",
@@ -1839,7 +1873,11 @@ export function CodingWorkbench({
             hasTask={Boolean(task)}
             busyPath={busyPath ?? diffLoadingPath}
             committing={committing}
-            canCommit={task?.phase === "delivered" && !changeSet?.committedHash}
+            canCommit={
+              task?.phase === "delivered"
+              && codingModeForTask(task) !== "ask"
+              && !changeSet?.committedHash
+            }
             canRollback={
               !changeSet?.committedHash
               && !runningVerification
@@ -1856,7 +1894,7 @@ export function CodingWorkbench({
                 "gating",
                 "blocked",
                 "delivered",
-              ].includes(task.phase))
+              ].includes(task.phase) && codingModeForTask(task) !== "ask")
             }
             onOpenDiff={(change) => void openTaskDiff(change.path)}
             onDiscard={(change) => void discardChange(change.path)}
@@ -2036,8 +2074,7 @@ export function CodingWorkbench({
             error={startError}
             apiReady={apiReady}
             contextPaths={contextPaths}
-            onStart={(requirement, planRequired, reviewRequired) =>
-              void startTask(requirement, planRequired, reviewRequired)}
+            onStart={(requirement, mode) => void startTask(requirement, mode)}
             onOpenSettings={onOpenSettings}
             onToast={onToast}
           />

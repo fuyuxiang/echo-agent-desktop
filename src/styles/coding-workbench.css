@@ -314,7 +314,7 @@
 
 .coding-doc h2 small {
   color: var(--echo-text-weak);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 400;
 }
 
@@ -1464,6 +1464,47 @@
   padding: 7px 8px;
   border-top: 1px solid var(--echo-border-subtle);
   background: color-mix(in srgb, var(--echo-bg-secondary) 58%, var(--echo-bg-primary));
+}
+
+.coding-agent__mode-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--echo-border-subtle);
+  border-radius: 7px;
+  background: var(--echo-bg-primary);
+}
+
+.coding-agent__mode-switch button {
+  min-width: 42px;
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--echo-text-weak);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.coding-agent__mode-switch button:hover {
+  color: var(--echo-text-strong);
+  background: var(--echo-bg-hover);
+}
+
+.coding-agent__mode-switch button.is-active {
+  background: color-mix(in srgb, var(--echo-brand) 12%, var(--echo-bg-primary));
+  color: var(--echo-brand);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--echo-brand) 18%, transparent);
+}
+
+.coding-agent__mode-switch button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--echo-brand) 42%, transparent);
+  outline-offset: 1px;
 }
 
 .coding-agent__starter-card > .coding-agent__warning {

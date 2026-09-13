@@ -4,6 +4,7 @@ import type { ProjectMeta } from "@/stores/projects-store";
 import { openExternalUrl, openLocalPath } from "@/lib/agent-client";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { ModelOption } from "./ModelSelector";
+import type { CodingMode } from "@/features/coding/lib/types";
 
 const ProjectsPanel = lazy(() =>
   import("./ProjectsPanel").then((module) => ({ default: module.ProjectsPanel })),
@@ -87,14 +88,17 @@ interface PlaceholderPageProps {
   onStartCodingRun?: (
     root: string,
     requirement: string,
-    planRequired: boolean,
+    mode: CodingMode,
     modelId?: string,
     contextPaths?: string[],
     onSessionReady?: (sessionId: string) => Promise<void>,
   ) => Promise<string | undefined>;
   onActivateCodingSession?: (sessionId: string, cwd: string) => Promise<void>;
   onChangeCodingModel?: (modelId: string) => void | Promise<void>;
-  onSendCodingMessage?: (text: string) => boolean | void | Promise<boolean | void>;
+  onSendCodingMessage?: (
+    text: string,
+    promptTextOverride?: string,
+  ) => boolean | void | Promise<boolean | void>;
   onCancelCodingRun?: () => boolean | void | Promise<boolean | void>;
   /** Current session id (for plugins/marketplace actions that need a session). */
   sessionId?: string;

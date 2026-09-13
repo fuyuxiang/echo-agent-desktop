@@ -701,10 +701,10 @@ describe("CodingWorkbench skeleton", () => {
         onStartRun={onStartRun}
       />,
     );
-    await screen.findByLabelText("开发需求");
+    await screen.findByLabelText("任务描述");
 
-    await user.type(screen.getByLabelText("开发需求"), "增加登录审计");
-    await user.click(screen.getByRole("button", { name: "开始开发任务" }));
+    await user.type(screen.getByLabelText("任务描述"), "增加登录审计");
+    await user.click(screen.getByRole("button", { name: "开始 Agent 任务" }));
 
     const invoked = invoke.mock.calls.map((call) => call[0]);
     expect(invoked).toContain("coding_task_create");
@@ -714,13 +714,12 @@ describe("CodingWorkbench skeleton", () => {
     expect(invoke).toHaveBeenCalledWith("coding_task_submit_requirement", {
       root: "/repo",
       taskId: "t1",
-      planRequired: false,
-      reviewRequired: false,
+      mode: "agent",
     });
     expect(onStartRun).toHaveBeenCalledWith(
       "/repo",
       "增加登录审计",
-      false,
+      "agent",
       "m1",
       [],
       expect.any(Function),
@@ -763,9 +762,9 @@ describe("CodingWorkbench skeleton", () => {
         onStartRun={onStartRun}
       />,
     );
-    const requirement = await screen.findByLabelText("开发需求");
+    const requirement = await screen.findByLabelText("任务描述");
     await user.type(requirement, "清除 HTML 注释");
-    await user.click(screen.getByRole("button", { name: "开始开发任务" }));
+    await user.click(screen.getByRole("button", { name: "开始 Agent 任务" }));
 
     const invoked = invoke.mock.calls.map((call) => call[0]);
     expect(invoked).toContain("coding_task_create");
@@ -774,7 +773,7 @@ describe("CodingWorkbench skeleton", () => {
     expect(onStartRun).toHaveBeenCalledWith(
       "/plain-folder",
       "清除 HTML 注释",
-      false,
+      "agent",
       "m1",
       [],
       expect.any(Function),
@@ -783,7 +782,7 @@ describe("CodingWorkbench skeleton", () => {
 
   it("offers the task starter until a task exists", async () => {
     render(<CodingWorkbench cwd="/repo" models={[{ id: "m1" }]} defaultModelId="m1" apiReady />);
-    expect(await screen.findByLabelText("开发需求")).toBeInTheDocument();
+    expect(await screen.findByLabelText("任务描述")).toBeInTheDocument();
     expect(screen.queryByLabelText("给 Agent 的补充要求")).not.toBeInTheDocument();
   });
 

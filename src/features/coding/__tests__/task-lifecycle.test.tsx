@@ -5,6 +5,7 @@ const api = vi.hoisted(() => ({
   getChangeSet: vi.fn(),
   captureBaseline: vi.fn(),
   syncChanges: vi.fn(),
+  reportAnalysis: vi.fn(),
   reportImplementation: vi.fn(),
   reportStartFailed: vi.fn(),
 }));
@@ -121,6 +122,23 @@ describe("useTaskLifecycle", () => {
     const reportOrder = api.reportImplementation.mock.invocationCallOrder[0] ?? 0;
     expect(syncOrder).toBeLessThan(reportOrder);
     expect(refreshTaskState).toHaveBeenCalled();
+  });
+
+  it("finishes Ask as read-only analysis instead of an implementation", async () => {
+    taskStoreState.task = { id: "t1", phase: "analyzing", sessionId: "s1" };
+    setTaskStreaming(false);
+    renderHook(() => useTaskLifecycle("/repo"));
+
+    await act(async () => {
+      setTaskStreaming(true);
+    });
+    await act(async () => {
+      setTaskStreaming(false);
+    });
+
+    await waitFor(() => expect(api.syncChanges).toHaveBeenCalledWith("/repo", "t1"));
+    await waitFor(() => expect(api.reportAnalysis).toHaveBeenCalledWith("/repo", "t1"));
+    expect(api.reportImplementation).not.toHaveBeenCalled();
   });
 
   it("skips the sync when the task is not in Implementing", async () => {

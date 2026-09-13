@@ -670,8 +670,10 @@ pub async fn set_session_model(tx: &AcpAgentTx, session_id: &str, model_id: &str
 /// Set (never toggle) the authoritative ACP session mode. The Runtime emits a
 /// `CurrentModeUpdate` that the frontend consumes; callers must not infer the
 /// resulting mode from stale local state.
-pub async fn set_session_mode(tx: &AcpAgentTx, session_id: &str, enabled: bool) -> Result<()> {
-    let mode_id = if enabled { "plan" } else { "default" };
+pub async fn set_session_mode_id(tx: &AcpAgentTx, session_id: &str, mode_id: &str) -> Result<()> {
+    if !matches!(mode_id, "default" | "plan" | "ask") {
+        return Err(anyhow!("unsupported session mode: {mode_id}"));
+    }
     tracing::info!(session_id, mode_id, "echoagent: set_session_mode send");
     let request = acp::SetSessionModeRequest::new(
         acp::SessionId::new(session_id.to_string()),
@@ -682,6 +684,11 @@ pub async fn set_session_mode(tx: &AcpAgentTx, session_id: &str, enabled: bool) 
         anyhow!("set_session_mode: {error:?}")
     })?;
     Ok(())
+}
+
+/// Compatibility adapter for the existing plan-mode toggle API.
+pub async fn set_session_mode(tx: &AcpAgentTx, session_id: &str, enabled: bool) -> Result<()> {
+    set_session_mode_id(tx, session_id, if enabled { "plan" } else { "default" }).await
 }
 
 /// Cancel the in-flight prompt for a session.
@@ -872,6 +879,26 @@ mod tests {
         };
         assert_eq!(arguments.request.session_id.0.as_ref(), "s-1");
         assert_eq!(arguments.request.mode_id.0.as_ref(), "plan");
+        arguments
+            .response_tx
+            .send(Ok(acp::SetSessionModeResponse::default()))
+            .expect("set mode response");
+        task.await
+            .expect("set mode task")
+            .expect("set mode success");
+    }
+
+    #[tokio::test]
+    async fn set_session_mode_id_preserves_native_ask_mode() {
+        let (client, mut agent) = echo_agent_acp::acp_channels();
+        let task =
+            tokio::spawn(async move { set_session_mode_id(&client.tx, "s-ask", "ask").await });
+        let message = agent.rx.recv().await.expect("set mode request");
+        let echo_agent_acp::AcpAgentMessage::SetSessionMode(arguments) = message else {
+            panic!("expected SetSessionMode request")
+        };
+        assert_eq!(arguments.request.session_id.0.as_ref(), "s-ask");
+        assert_eq!(arguments.request.mode_id.0.as_ref(), "ask");
         arguments
             .response_tx
             .send(Ok(acp::SetSessionModeResponse::default()))

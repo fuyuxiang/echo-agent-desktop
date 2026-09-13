@@ -1,8 +1,7 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import {
   AlertTriangle,
   Code2,
-  ListChecks,
   LoaderCircle,
   Send,
   ShieldCheck,
@@ -11,6 +10,9 @@ import {
 
 import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
 import { PermissionPicker } from "@/components/PermissionPicker";
+
+import { CODING_MODE_OPTIONS, codingModeOption } from "../lib/mode";
+import type { CodingMode } from "../lib/types";
 
 interface TaskStarterProps {
   models: ModelOption[];
@@ -21,23 +23,16 @@ interface TaskStarterProps {
   apiReady: boolean;
   /** Files the user pinned as context, shown so the Agent's inputs are visible. */
   contextPaths: string[];
-  onStart: (requirement: string, planRequired: boolean, reviewRequired: boolean) => void;
+  onStart: (requirement: string, mode: CodingMode) => void;
   onOpenSettings?: () => void;
   onToast?: (message: string) => void;
 }
 
-const SUGGESTIONS = [
-  { label: "补齐测试", text: "分析当前测试覆盖缺口，为关键路径补齐可靠的自动化测试" },
-  { label: "实现新功能", text: "实现一个新功能，沿用现有架构、交互和测试约定" },
-  { label: "定位问题", text: "复现并定位当前问题的根因，完成最小修复" },
-];
-
 /**
  * Requirement entry for a new task.
  *
- * There is one switch rather than a role/strategy matrix: the model decides
- * whether a request is a question or an implementation, and read-only safety
- * comes from the permission mode rather than from guessing intent in the UI.
+ * Mode captures user intent; permissions remain an independent control for
+ * runtime autonomy. Validation is part of Agent mode rather than an opt-in.
  */
 export function TaskStarter({
   models,
@@ -52,12 +47,31 @@ export function TaskStarter({
   onToast,
 }: TaskStarterProps) {
   const [requirement, setRequirement] = useState("");
-  const [planRequired, setPlanRequired] = useState(false);
-  const [reviewRequired, setReviewRequired] = useState(false);
+  const [mode, setMode] = useState<CodingMode>("agent");
+  const modeConfig = codingModeOption(mode);
 
   const submit = () => {
     if (!requirement.trim() || starting) return;
-    onStart(requirement.trim(), planRequired, reviewRequired);
+    onStart(requirement.trim(), mode);
+  };
+
+  const moveModeFocus = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | null = null;
+    if (["ArrowRight", "ArrowDown"].includes(event.key)) {
+      nextIndex = (index + 1) % CODING_MODE_OPTIONS.length;
+    } else if (["ArrowLeft", "ArrowUp"].includes(event.key)) {
+      nextIndex = (index - 1 + CODING_MODE_OPTIONS.length) % CODING_MODE_OPTIONS.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = CODING_MODE_OPTIONS.length - 1;
+    }
+    if (nextIndex === null) return;
+    event.preventDefault();
+    setMode(CODING_MODE_OPTIONS[nextIndex].id);
+    event.currentTarget.parentElement
+      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[nextIndex]
+      ?.focus();
   };
 
   return (
@@ -68,7 +82,7 @@ export function TaskStarter({
             <Sparkles size={14} />
           </span>
           <div>
-            <strong>Agent</strong>
+            <strong>Echo Code</strong>
             <span>新任务</span>
           </div>
         </div>
@@ -81,19 +95,11 @@ export function TaskStarter({
             <span className="coding-agent__intro-mark" aria-hidden="true">
               <Code2 size={22} />
             </span>
-            <strong>和 Echo 一起构建</strong>
-            <p>描述你想完成的目标，Agent 会理解当前工程、执行修改并呈现可审阅的结果。</p>
+            <strong>你想怎么处理这个任务？</strong>
+            <p>选择 Ask 了解代码、Plan 先审核方案，或让 Agent 直接完成并验证。</p>
           </div>
 
           <div className="coding-agent__starter-card">
-            <div className="coding-agent__suggestions" aria-label="常用任务">
-              {SUGGESTIONS.map((suggestion) => (
-                <button key={suggestion.label} type="button" onClick={() => setRequirement(suggestion.text)}>
-                  {suggestion.label}
-                </button>
-              ))}
-            </div>
-
             {contextPaths.length > 0 && (
               <div className="coding-agent__context" aria-label="已选定上下文">
                 {contextPaths.map((path) => (
@@ -114,8 +120,8 @@ export function TaskStarter({
                 }
               }}
               rows={5}
-              placeholder="描述一个任务，例如：优化这个页面的布局与视觉层级…"
-              aria-label="开发需求"
+              placeholder={modeConfig.placeholder}
+              aria-label="任务描述"
             />
 
             {!apiReady && (
@@ -135,30 +141,23 @@ export function TaskStarter({
             )}
 
             <div className="coding-agent__composer-tools">
-              <label
-                className="coding-agent__plan"
-                title="开启后，Agent 会先提交可编辑的执行计划，批准后再修改代码"
-              >
-                <input
-                  type="checkbox"
-                  checked={planRequired}
-                  onChange={(event) => setPlanRequired(event.target.checked)}
-                />
-                <ListChecks size={12} />
-                先给计划
-              </label>
-              <label
-                className="coding-agent__plan"
-                title="开启后，Agent 完成检查会等待你逐个查看变更并确认；默认自动完成"
-              >
-                <input
-                  type="checkbox"
-                  checked={reviewRequired}
-                  onChange={(event) => setReviewRequired(event.target.checked)}
-                />
-                <ShieldCheck size={12} />
-                完成前验收
-              </label>
+              <div className="coding-agent__mode-switch" role="radiogroup" aria-label="工作模式">
+                {CODING_MODE_OPTIONS.map((entry, index) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={mode === entry.id}
+                    tabIndex={mode === entry.id ? 0 : -1}
+                    className={mode === entry.id ? "is-active" : undefined}
+                    title={entry.description}
+                    onClick={() => setMode(entry.id)}
+                    onKeyDown={(event) => moveModeFocus(event, index)}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+              </div>
               <PermissionPicker onToast={onToast} />
               <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} />
               <button
@@ -166,7 +165,7 @@ export function TaskStarter({
                 className="coding-agent__send"
                 disabled={starting || !requirement.trim() || !modelId}
                 onClick={submit}
-                aria-label="开始开发任务"
+                aria-label={modeConfig.submitLabel}
               >
                 {starting ? <LoaderCircle size={14} className="is-spinning" /> : <Send size={14} />}
               </button>
@@ -175,7 +174,7 @@ export function TaskStarter({
 
           <div className="coding-agent__checkpoint-note">
             <ShieldCheck size={12} />
-            <span>自动保护源码与配置改动；依赖缓存和构建产物不纳入检查点</span>
+            <span>{modeConfig.description}；权限策略独立控制操作审批</span>
           </div>
         </div>
       </div>

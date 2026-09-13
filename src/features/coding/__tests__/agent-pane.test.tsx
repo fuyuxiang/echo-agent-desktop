@@ -71,7 +71,7 @@ function paneProps(overrides: Partial<Parameters<typeof AgentPane>[0]> = {}) {
 
 describe("phase presentation", () => {
   it("marks working phases as active", () => {
-    for (const phase of ["planning", "implementing", "verifying", "diagnosing", "repairing"] as const) {
+    for (const phase of ["analyzing", "planning", "implementing", "verifying", "diagnosing", "repairing"] as const) {
       expect(describePhase(phase).active).toBe(true);
     }
   });
@@ -129,55 +129,67 @@ describe("TaskStarter", () => {
   it("starts a task with the entered requirement", async () => {
     const user = userEvent.setup();
     const props = setup();
-    await user.type(screen.getByLabelText("开发需求"), "增加登录审计");
-    await user.click(screen.getByRole("button", { name: "开始开发任务" }));
-    expect(props.onStart).toHaveBeenCalledWith("增加登录审计", false, false);
+    await user.type(screen.getByLabelText("任务描述"), "增加登录审计");
+    await user.click(screen.getByRole("button", { name: "开始 Agent 任务" }));
+    expect(props.onStart).toHaveBeenCalledWith("增加登录审计", "agent");
   });
 
   it("presents a focused Agent workspace instead of a repeated brand splash", () => {
     setup();
-    expect(screen.getByText("Agent")).toBeInTheDocument();
+    expect(screen.getByText("Echo Code")).toBeInTheDocument();
     expect(screen.getByText("准备就绪")).toBeInTheDocument();
-    expect(screen.getByText("和 Echo 一起构建")).toBeInTheDocument();
-    expect(screen.getByText(/自动保护源码与配置改动/)).toBeInTheDocument();
+    expect(screen.getByText("你想怎么处理这个任务？")).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: "工作模式" })).toBeInTheDocument();
+    expect(screen.getByText(/权限策略独立控制操作审批/)).toBeInTheDocument();
   });
 
-  it("passes the plan-first choice through", async () => {
+  it("passes Plan as a first-class work mode", async () => {
     const user = userEvent.setup();
     const props = setup();
-    await user.type(screen.getByLabelText("开发需求"), "大改造");
-    await user.click(screen.getByRole("checkbox", { name: "先给计划" }));
-    await user.click(screen.getByRole("button", { name: "开始开发任务" }));
-    expect(props.onStart).toHaveBeenCalledWith("大改造", true, false);
+    await user.type(screen.getByLabelText("任务描述"), "大改造");
+    await user.click(screen.getByRole("radio", { name: "Plan" }));
+    await user.click(screen.getByRole("button", { name: "生成实施计划" }));
+    expect(props.onStart).toHaveBeenCalledWith("大改造", "plan");
   });
 
-  it("passes the optional completion review choice through", async () => {
+  it("supports standard keyboard navigation across work modes", async () => {
+    const user = userEvent.setup();
+    setup();
+    const agent = screen.getByRole("radio", { name: "Agent" });
+    agent.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("radio", { name: "Ask" })).toHaveFocus();
+    expect(screen.getByRole("radio", { name: "Ask" })).toHaveAttribute("aria-checked", "true");
+    await user.keyboard("{End}");
+    expect(screen.getByRole("radio", { name: "Agent" })).toHaveFocus();
+  });
+
+  it("supports a read-only Ask mode without task-category switches", async () => {
     const user = userEvent.setup();
     const props = setup();
-    await user.type(screen.getByLabelText("开发需求"), "高风险重构");
-    await user.click(screen.getByRole("checkbox", { name: "完成前验收" }));
-    await user.click(screen.getByRole("button", { name: "开始开发任务" }));
-    expect(props.onStart).toHaveBeenCalledWith("高风险重构", false, true);
+    await user.type(screen.getByLabelText("任务描述"), "为什么会 500？");
+    await user.click(screen.getByRole("radio", { name: "Ask" }));
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "开始只读分析" }));
+    expect(props.onStart).toHaveBeenCalledWith("为什么会 500？", "ask");
   });
 
   it("refuses to start without a requirement", () => {
     setup();
-    expect(screen.getByRole("button", { name: "开始开发任务" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始 Agent 任务" })).toBeDisabled();
   });
 
   it("refuses to start without a configured model", () => {
     setup({ modelId: undefined, apiReady: false });
-    expect(screen.getByRole("button", { name: "开始开发任务" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始 Agent 任务" })).toBeDisabled();
     expect(screen.getByText(/尚未配置可用模型/)).toBeInTheDocument();
   });
 
-  it("fills the box from a suggestion", async () => {
-    const user = userEvent.setup();
+  it("does not ask users to pre-classify work that Agent can infer", () => {
     setup();
-    await user.click(screen.getByRole("button", { name: "补齐测试" }));
-    expect(screen.getByLabelText("开发需求")).toHaveValue(
-      "分析当前测试覆盖缺口，为关键路径补齐可靠的自动化测试",
-    );
+    expect(screen.queryByText("补齐测试")).not.toBeInTheDocument();
+    expect(screen.queryByText("实现新功能")).not.toBeInTheDocument();
+    expect(screen.queryByText("定位问题")).not.toBeInTheDocument();
   });
 
   it("shows the pinned context so the Agent's inputs are visible", () => {
@@ -255,6 +267,15 @@ describe("AgentPane", () => {
     expect(screen.getByText("任务已完成")).toBeInTheDocument();
     expect(screen.getByText(/未检测到可运行的自动检查/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /确认验收/ })).not.toBeInTheDocument();
+  });
+
+  it("presents a completed Ask as an answer rather than a zero-change delivery", () => {
+    render(<AgentPane {...paneProps({ task: task({ mode: "ask", phase: "delivered" }) })} />);
+    expect(screen.getByText("已回答")).toBeInTheDocument();
+    expect(screen.getByText("只读分析已完成")).toBeInTheDocument();
+    expect(screen.getByText(/未修改工程文件/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "交付报告" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("继续追问")).toBeInTheDocument();
   });
 
   it("requires every current diff to be reviewed before manual acceptance", async () => {
