@@ -1644,6 +1644,33 @@ pub async fn folder_trust_respond(
 // Plan mode
 // ========================================================================
 
+/// Select the native runtime mode used by Echo Code. This is separate from
+/// the permission policy: `ask` and `plan` are read-only prompt modes, while
+/// `agent` maps to ACP's normal `default` mode.
+#[tauri::command]
+pub async fn set_coding_mode(
+    state: State<'_, AppState>,
+    session_id: String,
+    mode: String,
+) -> Result<(), String> {
+    require_live_session(&state, &session_id)?;
+    let mode_id = match mode.as_str() {
+        "ask" => "ask",
+        "plan" => "plan",
+        "agent" => "default",
+        _ => return Err("unsupported coding mode".into()),
+    };
+    let tx = state
+        .tx
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("agent not initialized")?;
+    crate::agent_runtime::set_session_mode_id(&tx, &session_id, mode_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Set plan mode idempotently via ACP `session/set_mode`. EchoAgent confirms
 /// the authoritative value with `CurrentModeUpdate`.
 #[tauri::command]

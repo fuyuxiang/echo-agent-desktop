@@ -8,6 +8,7 @@
  */
 
 import type { ActivityView, BottomView } from "../store/workbench-store";
+import type { CodingMode } from "./types";
 
 export type CommandGroup =
   | "navigate"
@@ -48,6 +49,7 @@ export interface CommandContext {
   /** A run is in progress, so mutating commands are held back. */
   busy: boolean;
   taskPhase?: string;
+  taskMode?: CodingMode;
   problemCount: number;
   changedFileCount: number;
   canCommitChanges?: boolean;
@@ -177,7 +179,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "运行全部验证",
       group: "verify",
       keywords: ["build", "test", "lint", "构建", "测试"],
-      enabled: hasTask && !busy,
+      enabled: hasTask && context.taskMode !== "ask" && !busy,
       run: context.runAllVerifications,
     },
     {
@@ -185,7 +187,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "重跑验证",
       group: "verify",
       keywords: ["rerun", "重试"],
-      enabled: hasTask && !busy,
+      enabled: hasTask && context.taskMode !== "ask" && !busy,
       run: context.rerunVerification,
     },
     {
@@ -230,6 +232,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       keywords: ["commit", "git", "提交"],
       enabled: hasTask
         && context.taskPhase === "delivered"
+        && context.taskMode !== "ask"
         && changedFileCount > 0
         && !busy
         && context.canCommitChanges !== false,
@@ -274,7 +277,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "生成代码注释",
       group: "understand",
       keywords: ["comment", "注释", "文档"],
-      enabled: hasTask && !busy,
+      enabled: hasTask && context.taskMode !== "ask" && !busy,
       run: context.generateComments,
     },
     {
@@ -327,7 +330,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "打开交付报告",
       group: "deliver",
       keywords: ["report", "gate", "门禁", "验收"],
-      enabled: hasTask,
+      enabled: hasTask && context.taskMode !== "ask",
       run: () => openDocTab("delivery"),
     },
 

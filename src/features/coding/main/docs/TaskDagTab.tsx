@@ -1,7 +1,13 @@
 import { AlertTriangle, CheckCircle2, CircleDot, LoaderCircle, MinusCircle } from "lucide-react";
 
 import { describePhase } from "../../lib/phase";
-import type { CodingTask, RepairRound, TaskNode, TaskNodeStatus } from "../../lib/types";
+import {
+  codingModeForTask,
+  type CodingTask,
+  type RepairRound,
+  type TaskNode,
+  type TaskNodeStatus,
+} from "../../lib/types";
 
 interface TaskDagTabProps {
   task: CodingTask | null;
@@ -70,6 +76,8 @@ export function TaskDagTab({
   }
 
   const phase = describePhase(task.phase);
+  const mode = codingModeForTask(task);
+  const modeLabel = mode === "ask" ? "Ask" : task.planRequired ? "Plan → Agent" : "Agent";
   const nodes = task.taskNodes;
   const done = nodes.filter((node) => node.status === "success").length;
 
@@ -101,8 +109,11 @@ export function TaskDagTab({
           问题 <b>{problemCount}</b>
         </span>
         <span>
-          完成方式 <b>{task.reviewRequired ? "人工验收" : "自动完成"}</b>
+          工作模式 <b>{modeLabel}</b>
         </span>
+        {mode !== "ask" && task.reviewRequired && (
+          <span>完成方式 <b>人工验收（旧任务）</b></span>
+        )}
         {repairRounds.length > 0 && (
           <span>
             修复轮次{" "}
@@ -117,9 +128,11 @@ export function TaskDagTab({
         <h2>任务拆解</h2>
         {nodes.length === 0 ? (
           <p className="coding-doc__muted">
-            {task.planRequired
+            {mode === "ask"
+              ? "Ask 模式只读分析，不生成实施子任务。"
+              : task.planRequired
               ? "Agent 尚未提交计划。"
-              : "本任务未启用先给计划，Agent 直接实现，因此没有子任务拆解。"}
+              : "Agent 直接实施当前任务，未另行生成计划拆解。"}
           </p>
         ) : (
           <div className="coding-dag">
@@ -131,7 +144,7 @@ export function TaskDagTab({
       </section>
 
       <section>
-        <h2>{task.reviewRequired ? "验收标准" : "任务目标"}</h2>
+        <h2>{mode === "ask" ? "问题" : task.reviewRequired ? "验收标准" : "任务目标"}</h2>
         {task.acceptanceCriteria.length === 0 ? (
           <p className="coding-doc__muted">尚未生成验收标准。</p>
         ) : (

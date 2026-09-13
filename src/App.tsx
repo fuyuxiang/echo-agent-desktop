@@ -44,6 +44,7 @@ import {
   agentSetSessionExpert,
   agentAuthStatus,
   sessionFork,
+  setCodingMode,
   togglePlanMode,
   providersList,
   flattenModels,
@@ -56,6 +57,8 @@ import {
   type WorkspaceInfo,
 } from "./lib/agent-client";
 import type { AgentEntry, SessionSummary } from "./lib/types";
+import { buildCodingModePrompt } from "./features/coding/lib/mode";
+import type { CodingMode } from "./features/coding/lib/types";
 import { hydrateProjectsFromBackend, useProjectsStore, type ProjectMeta } from "./stores/projects-store";
 import {
   useMessageQueueStore,
@@ -1166,13 +1169,13 @@ function Shell() {
    *
    * The workbench owns the task itself (requirement, phase, change set); this
    * only creates the session it runs in, so session lifecycle stays with the
-   * rest of the application. Role no longer affects permission mode — read-only
-   * safety comes from the configured mode rather than from guessing intent.
+   * rest of the application. Work mode and permission policy stay orthogonal:
+   * mode defines intent, while permission mode defines approval autonomy.
    */
   const handleStartCodingRun = async (
     root: string,
     requirement: string,
-    planRequired: boolean,
+    mode: CodingMode,
     requestedModelId?: string,
     contextPaths: string[] = [],
     onSessionReady?: (sessionId: string) => Promise<void>,
@@ -1194,9 +1197,9 @@ function Shell() {
       sessionsStore.getState().setCurrent(sessionId);
       sessionsStore.getState().upsert({
         sessionId,
-        title: `代码开发：${deriveTitle(requirement)}`,
+        title: `${mode === "ask" ? "代码问答" : mode === "plan" ? "实施计划" : "代码开发"}：${deriveTitle(requirement)}`,
         cwd: root,
-        status: "planning",
+        status: mode === "plan" ? "planning" : "working",
         currentModelId: modelId,
         permissionMode,
       });
@@ -1206,12 +1209,10 @@ function Shell() {
       // produced. Otherwise a very fast turn can finish before the workbench
       // knows which task should receive its Git sync event.
       await onSessionReady?.(sessionId);
-      // Plan mode keeps the native approval boundary before any file is written.
-      await togglePlanMode(sessionId, planRequired);
-      const normalizedContext = [...new Set(contextPaths.map((path) => path.trim()).filter(Boolean))];
-      const promptText = normalizedContext.length > 0
-        ? `${requirement}\n\n用户指定的优先工程上下文（请先阅读并按需追踪依赖）：\n${normalizedContext.map((path) => `- ${path}`).join("\n")}`
-        : requirement;
+      // Use the runtime's native work modes so Ask stays read-only without
+      // inheriting Plan's approval flow. Permissions remain independent.
+      await setCodingMode(sessionId, mode);
+      const promptText = buildCodingModePrompt(mode, requirement, contextPaths);
       const accepted = beginAgentTurn({
         sessionId,
         promptText,
@@ -2210,7 +2211,8 @@ function Shell() {
                     handleSelectSession(targetSessionId, targetCwd, true)
                   }
                   onChangeCodingModel={handleModelChange}
-                  onSendCodingMessage={(text) => handleSendCurrent(text)}
+                  onSendCodingMessage={(text, promptTextOverride) =>
+                    handleSendCurrent(text, [], undefined, promptTextOverride)}
                   onCancelCodingRun={() => handleCancel("stop")}
                   onStartProject={handleStartProject}
                   onStartProjectConversation={handleStartProjectConversation}

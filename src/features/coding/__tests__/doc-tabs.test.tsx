@@ -200,7 +200,13 @@ describe("TaskDagTab", () => {
 
   it("explains why there is no breakdown for a direct task", () => {
     render(<TaskDagTab {...props} task={task({ planRequired: false })} />);
-    expect(screen.getByText(/未启用先给计划/)).toBeInTheDocument();
+    expect(screen.getByText(/未另行生成计划拆解/)).toBeInTheDocument();
+  });
+
+  it("describes Ask as read-only analysis", () => {
+    render(<TaskDagTab {...props} task={task({ mode: "ask", phase: "delivered" })} />);
+    expect(screen.getByText(/Ask 模式只读分析/)).toBeInTheDocument();
+    expect(screen.getByText("Ask")).toBeInTheDocument();
   });
 
   it("says the plan is pending when one was requested", () => {

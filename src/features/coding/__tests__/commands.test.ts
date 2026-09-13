@@ -68,6 +68,15 @@ describe("command registry", () => {
     expect(commands.find((c) => c.id === "view.changes")?.enabled).toBe(true);
   });
 
+  it("keeps Ask read-only while retaining exploration commands", () => {
+    const commands = buildCommands(context({ taskMode: "ask", taskPhase: "delivered" }));
+    expect(commands.find((c) => c.id === "verify.runAll")?.enabled).toBe(false);
+    expect(commands.find((c) => c.id === "understand.comments")?.enabled).toBe(false);
+    expect(commands.find((c) => c.id === "review.commit")?.enabled).toBe(false);
+    expect(commands.find((c) => c.id === "deliver.report")?.enabled).toBe(false);
+    expect(commands.find((c) => c.id === "understand.system")?.enabled).toBe(true);
+  });
+
   it("disables rollback and commit when the task changed nothing", () => {
     const commands = buildCommands(context({ changedFileCount: 0 }));
     expect(commands.find((c) => c.id === "task.rollback")?.enabled).toBe(false);

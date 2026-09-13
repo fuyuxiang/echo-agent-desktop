@@ -11,9 +11,9 @@ import { useTaskStore } from "../store/task-store";
  * Three events matter for the workbench, and all three are driven by the
  * shared session store rather than by parsing tool calls:
  *
- * 1. Streaming finishes while the task is Implementing or Repairing → sync the live
- *    workspace state into the ChangeSet and tell the orchestrator the round is
- *    done so it can move to Verifying.
+ * 1. Streaming finishes while the task is Analyzing, Implementing or Repairing
+ *    → sync the live workspace state into the ChangeSet. Ask completes as a
+ *    read-only answer; implementation rounds move to Verifying.
  * 2. Every phase event the orchestrator emits is already mirrored into the
  *    task store (this is wired in the workbench shell).
  *
@@ -35,8 +35,9 @@ export function useTaskLifecycle(cwd: string | undefined) {
     lastStreamingRef.current = streaming;
   }, [taskId, taskSessionId]);
 
-  // When streaming falls to false, the Agent just finished an implementation
-  // or repair round. The native checkpoint is authoritative in every workspace.
+  // When streaming falls to false, the Agent just finished a managed turn. The
+  // native checkpoint is authoritative in every workspace, including Ask mode
+  // where it proves that the answer did not alter project files.
   useEffect(() => {
     if (lastStreamingRef.current === streaming) return;
     lastStreamingRef.current = streaming;
@@ -45,12 +46,16 @@ export function useTaskLifecycle(cwd: string | undefined) {
       || !cwd
       || !taskId
       || !taskSessionId
-      || (taskPhase !== "implementing" && taskPhase !== "repairing")
+      || (taskPhase !== "analyzing" && taskPhase !== "implementing" && taskPhase !== "repairing")
     ) return;
     void (async () => {
       try {
         await codingApi.syncChanges(cwd, taskId);
-        await codingApi.reportImplementation(cwd, taskId);
+        if (taskPhase === "analyzing") {
+          await codingApi.reportAnalysis(cwd, taskId);
+        } else {
+          await codingApi.reportImplementation(cwd, taskId);
+        }
         await useTaskStore.getState().refreshTaskState();
       } catch (error) {
         // Continuing after a failed sync could falsely report a clean task.

@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::coding::changeset;
 use crate::coding::diagnostics::{self, Problem};
 use crate::coding::store;
-use crate::coding::task::{self, CodingTask, TaskNodeStatus, TaskPhase};
+use crate::coding::task::{self, CodingMode, CodingTask, TaskNodeStatus, TaskPhase};
 use crate::coding::verification::{self, VerificationRecord, VerificationStatus};
 use crate::shell_fs::FilesystemAccess;
 
@@ -70,13 +70,14 @@ fn append_round(root: &Path, task_id: &str, round: &RepairRound) -> Result<(), S
     store::append_jsonl(&repairs_path(root, task_id), round)
 }
 
-/// A simple task skips planning; only work the user marked as plan-first stops
-/// for approval.
-pub fn phase_after_requirement(plan_required: bool) -> TaskPhase {
-    if plan_required {
-        TaskPhase::Planning
-    } else {
-        TaskPhase::Implementing
+/// Work mode is a first-class state-machine input, not a collection of UI
+/// checkboxes. Ask remains read-only, Plan stops for approval, and Agent starts
+/// implementation immediately.
+pub fn phase_after_requirement(mode: CodingMode) -> TaskPhase {
+    match mode {
+        CodingMode::Ask => TaskPhase::Analyzing,
+        CodingMode::Plan => TaskPhase::Planning,
+        CodingMode::Agent => TaskPhase::Implementing,
     }
 }
 
@@ -240,10 +241,7 @@ pub fn next_after_repair(
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum OrchestratorEvent {
     /// The user submitted a requirement; the task leaves Idle.
-    RequirementSubmitted {
-        plan_required: bool,
-        review_required: bool,
-    },
+    RequirementSubmitted { mode: CodingMode },
     /// The user approved the plan the Agent produced.
     PlanApproved,
     /// The user abandoned the pending plan.
@@ -255,6 +253,9 @@ pub enum OrchestratorEvent {
     FollowupStarted,
     /// The Agent finished writing code for this round.
     ImplementationFinished,
+    /// A read-only Ask turn finished. Any workspace mutation makes the result
+    /// untrustworthy and is surfaced instead of being silently attributed.
+    AnalysisFinished,
     /// The user explicitly re-runs checks from a settled phase.
     VerificationStarted,
     /// A verification batch finished; recompute from records on disk.
@@ -281,27 +282,28 @@ pub fn apply(
     let changed_file_count = changeset::load(root, task_id).changes.len();
 
     let decision = match event {
-        OrchestratorEvent::RequirementSubmitted {
-            plan_required,
-            review_required,
-        } => {
+        OrchestratorEvent::RequirementSubmitted { mode } => {
             if task.phase != TaskPhase::Idle {
                 return Err("只有未开始任务可以提交需求".into());
             }
-            task.plan_required = plan_required;
-            task.review_required = review_required;
-            if !plan_required {
+            task.mode = Some(mode);
+            task.plan_required = mode == CodingMode::Plan;
+            // Verification is always part of Agent mode. New tasks no longer
+            // expose a separate human-review switch; the field remains only so
+            // older in-flight tasks keep their original contract.
+            task.review_required = false;
+            if mode != CodingMode::Plan {
                 if let Some(node) = task.task_nodes.first_mut() {
                     node.status = TaskNodeStatus::Running;
                 }
             }
-            let next = phase_after_requirement(plan_required);
+            let next = phase_after_requirement(mode);
             PhaseDecision {
                 next_phase: next,
-                reason: if plan_required {
-                    "需求已提交，等待 Agent 给出计划".into()
-                } else {
-                    "需求已提交，直接开始实现".into()
+                reason: match mode {
+                    CodingMode::Ask => "问题已提交，Agent 将只读分析并回答".into(),
+                    CodingMode::Plan => "需求已提交，等待 Agent 给出可审阅计划".into(),
+                    CodingMode::Agent => "需求已提交，Agent 开始实现并验证".into(),
                 },
                 blocker: None,
             }
@@ -313,6 +315,8 @@ pub fn apply(
             if let Some(node) = task.task_nodes.first_mut() {
                 node.status = TaskNodeStatus::Running;
             }
+            // A reviewed Plan explicitly transitions into Agent execution.
+            task.mode = Some(CodingMode::Agent);
             PhaseDecision {
                 next_phase: TaskPhase::Implementing,
                 reason: "计划已批准，Agent 开始执行".into(),
@@ -336,6 +340,7 @@ pub fn apply(
             if !matches!(
                 task.phase,
                 TaskPhase::Idle
+                    | TaskPhase::Analyzing
                     | TaskPhase::Planning
                     | TaskPhase::Implementing
                     | TaskPhase::Repairing
@@ -358,6 +363,7 @@ pub fn apply(
             if changeset::load(root, task_id).committed_hash.is_some() {
                 return Err("该任务已提交到 Git；请新建任务继续开发，避免交付记录失真".into());
             }
+            let mode = task.effective_mode();
             for criterion in &mut task.acceptance_criteria {
                 criterion.satisfied = false;
                 criterion.evidence.clear();
@@ -366,9 +372,47 @@ pub fn apply(
                 node.status = TaskNodeStatus::Running;
             }
             PhaseDecision {
-                next_phase: TaskPhase::Implementing,
-                reason: "已接收补充要求，重新进入实现与验证流程".into(),
+                next_phase: if mode == CodingMode::Ask {
+                    TaskPhase::Analyzing
+                } else {
+                    TaskPhase::Implementing
+                },
+                reason: if mode == CodingMode::Ask {
+                    "已接收追问，继续只读分析".into()
+                } else {
+                    "已接收补充要求，重新进入实现与验证流程".into()
+                },
                 blocker: None,
+            }
+        }
+        OrchestratorEvent::AnalysisFinished => {
+            if task.phase != TaskPhase::Analyzing || task.effective_mode() != CodingMode::Ask {
+                return Err("只有 Ask 模式的分析阶段可以报告回答完成".into());
+            }
+            if changed_file_count > 0 {
+                for node in &mut task.task_nodes {
+                    node.status = TaskNodeStatus::Blocked;
+                }
+                PhaseDecision {
+                    next_phase: TaskPhase::Blocked,
+                    reason: "Ask 分析期间检测到工程变更".into(),
+                    blocker: Some(format!(
+                        "Ask 模式应保持只读，但工作区在本轮中出现了 {changed_file_count} 个文件变更。已停止自动流程，请先检查变更再继续。"
+                    )),
+                }
+            } else {
+                for node in &mut task.task_nodes {
+                    node.status = TaskNodeStatus::Success;
+                }
+                for criterion in &mut task.acceptance_criteria {
+                    criterion.satisfied = true;
+                    criterion.evidence = vec!["Ask 模式已完成只读分析并返回答案".into()];
+                }
+                PhaseDecision {
+                    next_phase: TaskPhase::Delivered,
+                    reason: "只读分析已完成，未修改工程文件".into(),
+                    blocker: None,
+                }
             }
         }
         OrchestratorEvent::ImplementationFinished => {
@@ -547,18 +591,14 @@ pub async fn coding_task_submit_requirement(
     access: State<'_, FilesystemAccess>,
     root: String,
     task_id: String,
-    plan_required: bool,
-    review_required: bool,
+    mode: CodingMode,
 ) -> Result<CodingTask, String> {
     let root = access.require_workspace(&root)?;
     apply_and_emit(
         app,
         root,
         task_id,
-        OrchestratorEvent::RequirementSubmitted {
-            plan_required,
-            review_required,
-        },
+        OrchestratorEvent::RequirementSubmitted { mode },
     )
     .await
 }
@@ -645,6 +685,17 @@ pub async fn coding_orchestrator_report_implementation(
         OrchestratorEvent::ImplementationFinished,
     )
     .await
+}
+
+#[tauri::command]
+pub async fn coding_orchestrator_report_analysis(
+    app: AppHandle,
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+) -> Result<CodingTask, String> {
+    let root = access.require_workspace(&root)?;
+    apply_and_emit(app, root, task_id, OrchestratorEvent::AnalysisFinished).await
 }
 
 #[tauri::command]
@@ -849,27 +900,87 @@ mod tests {
     }
 
     #[test]
-    fn requirement_submission_respects_plan_flag() {
-        assert_eq!(phase_after_requirement(true), TaskPhase::Planning);
-        assert_eq!(phase_after_requirement(false), TaskPhase::Implementing);
+    fn requirement_submission_respects_work_mode() {
+        assert_eq!(
+            phase_after_requirement(CodingMode::Ask),
+            TaskPhase::Analyzing
+        );
+        assert_eq!(
+            phase_after_requirement(CodingMode::Plan),
+            TaskPhase::Planning
+        );
+        assert_eq!(
+            phase_after_requirement(CodingMode::Agent),
+            TaskPhase::Implementing
+        );
     }
 
     #[test]
-    fn requirement_submission_persists_the_review_choice() {
+    fn requirement_submission_persists_mode_and_uses_automatic_validation() {
         let dir = tempfile::tempdir().unwrap();
         let task = task::create_task(dir.path(), "task", "implement it").unwrap();
         let (started, decision) = apply(
             dir.path(),
             &task.id,
             OrchestratorEvent::RequirementSubmitted {
-                plan_required: false,
-                review_required: true,
+                mode: CodingMode::Agent,
             },
         )
         .unwrap();
         assert_eq!(decision.next_phase, TaskPhase::Implementing);
-        assert!(started.review_required);
-        assert!(task::load(dir.path(), &task.id).unwrap().review_required);
+        assert_eq!(started.effective_mode(), CodingMode::Agent);
+        assert!(!started.review_required);
+    }
+
+    #[test]
+    fn ask_finishes_without_entering_code_verification() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = task::create_task(dir.path(), "question", "explain it").unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        let (started, _) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted {
+                mode: CodingMode::Ask,
+            },
+        )
+        .unwrap();
+        assert_eq!(started.phase, TaskPhase::Analyzing);
+
+        let (finished, decision) =
+            apply(dir.path(), &task.id, OrchestratorEvent::AnalysisFinished).unwrap();
+        assert_eq!(decision.next_phase, TaskPhase::Delivered);
+        assert_eq!(finished.phase, TaskPhase::Delivered);
+        assert!(finished
+            .task_nodes
+            .iter()
+            .all(|node| node.status == TaskNodeStatus::Success));
+    }
+
+    #[test]
+    fn ask_blocks_if_the_workspace_changed_during_analysis() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = task::create_task(dir.path(), "question", "explain it").unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted {
+                mode: CodingMode::Ask,
+            },
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("unexpected.txt"), "changed\n").unwrap();
+        changeset::sync_from_filesystem(dir.path(), &task.id).unwrap();
+
+        let (_, decision) =
+            apply(dir.path(), &task.id, OrchestratorEvent::AnalysisFinished).unwrap();
+        assert_eq!(decision.next_phase, TaskPhase::Blocked);
+        assert!(decision
+            .blocker
+            .as_deref()
+            .unwrap()
+            .contains("Ask 模式应保持只读"));
     }
 
     #[test]
@@ -935,6 +1046,20 @@ mod tests {
         assert!(!reopened.acceptance_criteria[0].satisfied);
         assert!(reopened.acceptance_criteria[0].evidence.is_empty());
         assert_eq!(reopened.task_nodes[0].status, TaskNodeStatus::Running);
+    }
+
+    #[test]
+    fn ask_followup_reopens_read_only_analysis() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut task = task::create_task(dir.path(), "question", "explain it").unwrap();
+        task.mode = Some(CodingMode::Ask);
+        task.phase = TaskPhase::Delivered;
+        task.task_nodes[0].status = TaskNodeStatus::Success;
+        task::save(dir.path(), &task).unwrap();
+
+        let (_, decision) =
+            apply(dir.path(), &task.id, OrchestratorEvent::FollowupStarted).unwrap();
+        assert_eq!(decision.next_phase, TaskPhase::Analyzing);
     }
 
     #[test]

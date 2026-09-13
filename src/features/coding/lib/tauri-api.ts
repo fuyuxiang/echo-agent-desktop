@@ -11,6 +11,7 @@ import type {
   AnalysisProgressEvent,
   ChangeSet,
   ChangeDiff,
+  CodingMode,
   CodingTask,
   DeliveryReport,
   DetectedCommand,
@@ -49,13 +50,11 @@ export const codingApi = {
   submitRequirement: (
     root: string,
     taskId: string,
-    planRequired: boolean,
-    reviewRequired: boolean,
+    mode: CodingMode,
   ) => invoke<CodingTask>("coding_task_submit_requirement", {
     root,
     taskId,
-    planRequired,
-    reviewRequired,
+    mode,
   }),
   approvePlan: (root: string, taskId: string) =>
     invoke<CodingTask>("coding_task_approve_plan", { root, taskId }),
@@ -116,6 +115,8 @@ export const codingApi = {
 
   reportImplementation: (root: string, taskId: string) =>
     invoke<CodingTask>("coding_orchestrator_report_implementation", { root, taskId }),
+  reportAnalysis: (root: string, taskId: string) =>
+    invoke<CodingTask>("coding_orchestrator_report_analysis", { root, taskId }),
   reportVerification: (root: string, taskId: string) =>
     invoke<CodingTask>("coding_orchestrator_report_verification", { root, taskId }),
   orchestratorState: (root: string, taskId: string) =>
