@@ -1,0 +1,19 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const css = readFileSync(resolve(process.cwd(), "src/styles/coding-workbench.css"), "utf8");
+
+describe("coding workbench grid contract", () => {
+  it("pins every workbench region to an explicit grid track", () => {
+    expect(css).toMatch(/\.coding-workbench__topbar\s*\{[^}]*grid-column:\s*1 \/ -1;[^}]*grid-row:\s*1 \/ 2;/s);
+    expect(css).toMatch(/\.coding-workbench__activity\s*\{[^}]*grid-column:\s*1 \/ 2;[^}]*grid-row:\s*2 \/ 4;/s);
+    expect(css).toMatch(/\.coding-workbench__explorer\s*\{[^}]*grid-column:\s*2 \/ 3;[^}]*grid-row:\s*2 \/ 3;/s);
+    expect(css).toMatch(/\.coding-workbench__vsplit--explorer\s*\{[^}]*grid-column:\s*3 \/ 4;/s);
+    expect(css).toMatch(/\.coding-workbench__main\s*\{[^}]*grid-column:\s*4 \/ 5;[^}]*grid-row:\s*2 \/ 3;/s);
+    expect(css).toMatch(/\.coding-workbench__vsplit--agent\s*\{[^}]*grid-column:\s*5 \/ 6;/s);
+    expect(css).toMatch(/\.coding-workbench__agent\s*\{[^}]*grid-column:\s*6 \/ 7;[^}]*grid-row:\s*2 \/ 3;/s);
+    expect(css).toMatch(/\.coding-bottom\s*\{[^}]*grid-column:\s*2 \/ -1;[^}]*grid-row:\s*3 \/ 4;/s);
+    expect(css).toMatch(/\.coding-workbench__status\s*\{[^}]*grid-column:\s*1 \/ -1;[^}]*grid-row:\s*4 \/ 5;/s);
+  });
+});

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -243,6 +243,18 @@ describe("BottomPanel", () => {
     separator.focus();
     await user.keyboard("{ArrowUp}");
     expect(props.onResize).toHaveBeenCalledWith(236);
+  });
+
+  it("resizes from its starting height instead of the window bottom", () => {
+    const props = setup({ height: 220 });
+    const separator = screen.getByRole("separator", { name: "调整开发工具面板高度" });
+
+    fireEvent.pointerDown(separator, { clientY: 500 });
+    fireEvent.pointerMove(window, { clientY: 460 });
+    expect(props.onResize).toHaveBeenCalledWith(260);
+    fireEvent.pointerUp(window);
+    expect(document.body.style.cursor).toBe("");
+    expect(document.body.style.userSelect).toBe("");
   });
 
   it("reports an empty trace", () => {

@@ -6,6 +6,7 @@ import {
   useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from "react";
 import {
   ArrowLeft,
@@ -66,7 +67,7 @@ import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/Co
 import { TaskSwitcher } from "./shell/TaskSwitcher";
 import { isFileTab, useTabStore, type SymbolKey } from "./store/tab-store";
 import { useTaskStore } from "./store/task-store";
-import { useWorkbenchStore } from "./store/workbench-store";
+import { fitWorkbenchLayout, useWorkbenchStore } from "./store/workbench-store";
 
 interface CodingWorkbenchProps {
   cwd?: string;
@@ -125,25 +126,76 @@ function workspaceFilePath(root: string, path: string): string {
 }
 
 /**
- * Pointer-drag handler shared by both vertical separators. `fromRight` measures
- * from the window's right edge, which is what the Agent pane needs.
+ * Pointer-drag handler shared by both vertical separators. Delta-based sizing
+ * stays correct when the workbench is nested or the window moves displays.
  */
-function useDragWidth(apply: (value: number) => void, fromRight: boolean) {
+function useDragWidth(
+  currentWidth: number,
+  apply: (value: number) => void,
+  fromRight: boolean,
+) {
+  const cleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => cleanupRef.current?.(), []);
+
   return useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault();
+      cleanupRef.current?.();
+      const startX = event.clientX;
+      const startWidth = currentWidth;
+      const previousCursor = document.body.style.cursor;
+      const previousUserSelect = document.body.style.userSelect;
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
       const move = (moveEvent: PointerEvent) => {
-        apply(fromRight ? window.innerWidth - moveEvent.clientX : moveEvent.clientX);
+        const delta = moveEvent.clientX - startX;
+        apply(startWidth + (fromRight ? -delta : delta));
       };
       const stop = () => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+        document.body.style.cursor = previousCursor;
+        document.body.style.userSelect = previousUserSelect;
+        cleanupRef.current = null;
       };
+      cleanupRef.current = stop;
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
     },
-    [apply, fromRight],
+    [apply, currentWidth, fromRight],
   );
+}
+
+function useElementSize(ref: RefObject<HTMLElement>): { width: number; height: number } {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const update = () => {
+      const rect = element.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setSize((current) => (
+          current.width === rect.width && current.height === rect.height
+            ? current
+            : { width: rect.width, height: rect.height }
+        ));
+      }
+    };
+    update();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(element);
+    window.addEventListener("resize", update);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [ref]);
+
+  return size;
 }
 
 /**
@@ -237,6 +289,8 @@ export function CodingWorkbench({
   const activeRunIdRef = useRef<string | null>(null);
   const autoVerificationRef = useRef<string | null>(null);
   const repairPromptRef = useRef<string | null>(null);
+  const workbenchRef = useRef<HTMLDivElement>(null);
+  const workbenchSize = useElementSize(workbenchRef);
 
   const task = useTaskStore((state) => state.task);
   const summaries = useTaskStore((state) => state.summaries);
@@ -766,8 +820,20 @@ export function CodingWorkbench({
     };
   }, [cwd]);
 
-  const startExplorerDrag = useDragWidth(setExplorerWidth, false);
-  const startAgentDrag = useDragWidth(setAgentWidth, true);
+  const effectiveLayout = useMemo(
+    () => fitWorkbenchLayout(workbenchSize.width, workbenchSize.height, {
+      explorerWidth,
+      agentWidth,
+      bottomHeight,
+    }),
+    [agentWidth, bottomHeight, explorerWidth, workbenchSize.height, workbenchSize.width],
+  );
+  const startExplorerDrag = useDragWidth(
+    effectiveLayout.explorerWidth,
+    setExplorerWidth,
+    false,
+  );
+  const startAgentDrag = useDragWidth(effectiveLayout.agentWidth, setAgentWidth, true);
 
   const pickWorkspace = useCallback(async () => {
     try {
@@ -1061,7 +1127,9 @@ export function CodingWorkbench({
         return;
       }
       setCommandOutput("");
-      setBottomView("output");
+      // With no detected command there is no output to show. Keep the editor
+      // visible and let the Agent's gating card explain the manual review step.
+      if (commands.length > 0) setBottomView("output");
       let mayReport = commands.length === 0;
       try {
         for (const command of commands) {
@@ -1356,16 +1424,16 @@ export function CodingWorkbench({
   const style = useMemo(
     () =>
       ({
-        "--coding-explorer-width": `${explorerWidth}px`,
-        "--coding-agent-width": `${agentWidth}px`,
-        "--coding-bottom-height": `${bottomHeight}px`,
+        "--coding-explorer-width": `${effectiveLayout.explorerWidth}px`,
+        "--coding-agent-width": `${effectiveLayout.agentWidth}px`,
+        "--coding-bottom-height": `${effectiveLayout.bottomHeight}px`,
       }) as CSSProperties,
-    [agentWidth, bottomHeight, explorerWidth],
+    [effectiveLayout],
   );
 
   if (!cwd) {
     return (
-      <div className="coding-workbench coding-workbench--empty">
+      <div ref={workbenchRef} className="coding-workbench coding-workbench--empty">
         <header className="coding-workbench__topbar" data-tauri-drag-region>
           <div className="coding-workbench__topbar-left" data-tauri-drag-region>
             <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
@@ -1408,7 +1476,11 @@ export function CodingWorkbench({
   }
 
   return (
-    <div className={`coding-workbench${bottomOpen ? " is-bottom-open" : ""}`} style={style}>
+    <div
+      ref={workbenchRef}
+      className={`coding-workbench${bottomOpen ? " is-bottom-open" : ""}`}
+      style={style}
+    >
       <header className="coding-workbench__topbar" data-tauri-drag-region>
         <div className="coding-workbench__topbar-left" data-tauri-drag-region>
           <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
@@ -1574,15 +1646,15 @@ export function CodingWorkbench({
       </aside>
 
       <div
-        className="coding-workbench__vsplit"
+        className="coding-workbench__vsplit coding-workbench__vsplit--explorer"
         role="separator"
         aria-orientation="vertical"
         aria-label="调整资源管理器宽度"
         tabIndex={0}
         onPointerDown={startExplorerDrag}
         onKeyDown={(event) => {
-          if (event.key === "ArrowLeft") setExplorerWidth(explorerWidth - 16);
-          if (event.key === "ArrowRight") setExplorerWidth(explorerWidth + 16);
+          if (event.key === "ArrowLeft") setExplorerWidth(effectiveLayout.explorerWidth - 16);
+          if (event.key === "ArrowRight") setExplorerWidth(effectiveLayout.explorerWidth + 16);
         }}
       />
 
@@ -1670,7 +1742,7 @@ export function CodingWorkbench({
       </main>
 
       <div
-        className="coding-workbench__vsplit"
+        className="coding-workbench__vsplit coding-workbench__vsplit--agent"
         role="separator"
         aria-orientation="vertical"
         aria-label="调整 Agent 面板宽度"
@@ -1678,8 +1750,8 @@ export function CodingWorkbench({
         onPointerDown={startAgentDrag}
         onKeyDown={(event) => {
           // The Agent pane grows leftwards, so the arrows are mirrored.
-          if (event.key === "ArrowLeft") setAgentWidth(agentWidth + 16);
-          if (event.key === "ArrowRight") setAgentWidth(agentWidth - 16);
+          if (event.key === "ArrowLeft") setAgentWidth(effectiveLayout.agentWidth + 16);
+          if (event.key === "ArrowRight") setAgentWidth(effectiveLayout.agentWidth - 16);
         }}
       />
 
@@ -1726,7 +1798,7 @@ export function CodingWorkbench({
         <BottomPanel
           root={cwd}
           view={bottomView}
-          height={bottomHeight}
+          height={effectiveLayout.bottomHeight}
           onViewChange={setBottomView}
           onCollapse={() => toggleBottom(false)}
           onResize={setBottomHeight}

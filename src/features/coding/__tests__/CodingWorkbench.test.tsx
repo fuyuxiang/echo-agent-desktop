@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -70,7 +70,25 @@ vi.mock("@/components/Markdown", () => ({
 }));
 
 import { CodingWorkbench } from "../CodingWorkbench";
+import type { CodingTask, VerificationRecord } from "../lib/types";
 import { useTabStore } from "../store/tab-store";
+import { useTaskStore } from "../store/task-store";
+import { useWorkbenchStore } from "../store/workbench-store";
+
+function verificationTask(overrides: Partial<CodingTask> = {}): CodingTask {
+  return {
+    id: "verification-task",
+    name: "验证布局",
+    requirement: "验证工作台布局",
+    phase: "verifying",
+    acceptanceCriteria: [],
+    taskNodes: [],
+    planRequired: false,
+    createdAt: "2026-09-13T00:00:00Z",
+    updatedAt: "2026-09-13T00:00:01Z",
+    ...overrides,
+  };
+}
 
 describe("CodingWorkbench skeleton", () => {
   beforeEach(() => {
@@ -79,6 +97,18 @@ describe("CodingWorkbench skeleton", () => {
     readDocument.mockClear();
     writeDocument.mockClear();
     useTabStore.getState().closeAll();
+    useWorkbenchStore.getState().resetLayout();
+    useTaskStore.setState({
+      root: "",
+      summaries: [],
+      task: null,
+      changeSet: null,
+      verifications: [],
+      problems: [],
+      orchestrator: null,
+      loading: false,
+      error: null,
+    });
   });
 
   it("prompts to open a folder when no workspace is selected", () => {
@@ -102,6 +132,29 @@ describe("CodingWorkbench skeleton", () => {
     const labels = separators.map((node) => node.getAttribute("aria-label"));
     expect(labels).toContain("调整资源管理器宽度");
     expect(labels).toContain("调整 Agent 面板宽度");
+    expect(screen.getByRole("separator", { name: "调整资源管理器宽度" }))
+      .toHaveClass("coding-workbench__vsplit--explorer");
+    expect(screen.getByRole("separator", { name: "调整 Agent 面板宽度" }))
+      .toHaveClass("coding-workbench__vsplit--agent");
+  });
+
+  it("resizes side panes by pointer delta instead of absolute window coordinates", async () => {
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    const explorerSeparator = await screen.findByRole("separator", {
+      name: "调整资源管理器宽度",
+    });
+    fireEvent.pointerDown(explorerSeparator, { clientX: 300 });
+    fireEvent.pointerMove(window, { clientX: 340 });
+    fireEvent.pointerUp(window);
+    expect(useWorkbenchStore.getState().explorerWidth).toBe(278);
+
+    const agentSeparator = screen.getByRole("separator", { name: "调整 Agent 面板宽度" });
+    fireEvent.pointerDown(agentSeparator, { clientX: 900 });
+    fireEvent.pointerMove(window, { clientX: 940 });
+    fireEvent.pointerUp(window);
+    expect(useWorkbenchStore.getState().agentWidth).toBe(340);
+    expect(document.body.style.cursor).toBe("");
+    expect(document.body.style.userSelect).toBe("");
   });
 
   it("keeps the bottom panel collapsed until it is opened", async () => {
@@ -388,6 +441,71 @@ describe("CodingWorkbench skeleton", () => {
     await waitFor(() =>
       expect(invoke.mock.calls.map((call) => call[0])).toContain("coding_verification_detect"),
     );
+  });
+
+  it("keeps an empty output panel closed when automatic verification has no commands", async () => {
+    const verifying = verificationTask();
+    const gating = verificationTask({ phase: "gating", updatedAt: "2026-09-13T00:00:02Z" });
+    useTaskStore.setState({ root: "/repo", task: verifying });
+    invoke.mockImplementation(async (command: string): Promise<unknown> => {
+      if (command === "coding_task_list") return [];
+      if (command === "coding_verification_detect") return [];
+      if (command === "coding_task_begin_verification") return verifying;
+      if (command === "coding_changeset_get") return null;
+      if (command === "coding_verification_list" || command === "coding_diagnostics_list") return [];
+      if (command === "coding_orchestrator_state") {
+        return { task: gating, problems: [], repairRounds: [], changedFileCount: 1, maxRepairRounds: 3 };
+      }
+      if (command === "coding_orchestrator_report_verification") return gating;
+      return null;
+    });
+
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await waitFor(() => expect(invoke.mock.calls.map((call) => call[0]))
+      .toContain("coding_orchestrator_report_verification"));
+    expect(screen.queryByRole("tablist", { name: "开发工具面板" })).not.toBeInTheDocument();
+  });
+
+  it("opens output for a real verification command without moving the workbench panes", async () => {
+    const verifying = verificationTask();
+    const gating = verificationTask({ phase: "gating", updatedAt: "2026-09-13T00:00:02Z" });
+    const record: VerificationRecord = {
+      id: "verification-1",
+      taskId: verifying.id,
+      kind: "test",
+      command: "pnpm test",
+      status: "passed",
+      exitCode: 0,
+      stdout: "ok",
+      stderr: "",
+      durationMs: 10,
+      startedAt: "2026-09-13T00:00:01Z",
+      finishedAt: "2026-09-13T00:00:02Z",
+      testSummary: null,
+      structured: false,
+    };
+    useTaskStore.setState({ root: "/repo", task: verifying });
+    invoke.mockImplementation(async (command: string): Promise<unknown> => {
+      if (command === "coding_task_list") return [];
+      if (command === "coding_verification_detect") {
+        return [{ kind: "test", command: "pnpm test", label: "测试" }];
+      }
+      if (command === "coding_task_begin_verification") return verifying;
+      if (command === "coding_verification_run") return record;
+      if (command === "coding_changeset_get") return null;
+      if (command === "coding_verification_list" || command === "coding_diagnostics_list") return [];
+      if (command === "coding_orchestrator_state") {
+        return { task: gating, problems: [], repairRounds: [], changedFileCount: 1, maxRepairRounds: 3 };
+      }
+      if (command === "coding_orchestrator_report_verification") return gating;
+      return null;
+    });
+
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    expect(await screen.findByRole("tablist", { name: "开发工具面板" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "资源管理器" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Agent 面板" })).toBeInTheDocument();
+    expect(screen.getByRole("main")).toHaveClass("coding-workbench__main");
   });
 
   it("clears open tabs when the workspace changes", async () => {

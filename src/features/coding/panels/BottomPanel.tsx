@@ -105,6 +105,7 @@ export function BottomPanel({
   onToast,
 }: BottomPanelProps) {
   const outputRef = useRef<HTMLPreElement | null>(null);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (view === "output" && outputRef.current) {
@@ -112,17 +113,32 @@ export function BottomPanel({
     }
   }, [output, view]);
 
+  useEffect(() => () => resizeCleanupRef.current?.(), []);
+
   const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    resizeCleanupRef.current?.();
+    const startY = event.clientY;
+    const startHeight = height;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
     const move = (moveEvent: PointerEvent) => {
-      onResize(window.innerHeight - moveEvent.clientY);
+      onResize(startHeight - (moveEvent.clientY - startY));
     };
     const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      resizeCleanupRef.current = null;
     };
+    resizeCleanupRef.current = stop;
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
   };
 
   return (
