@@ -106,6 +106,20 @@ interface ManualMutationContext {
   closeRound: boolean;
 }
 
+interface OpenTaskDiffOptions {
+  /** Opening from the UI counts as review; background refreshes do not. */
+  markReviewed?: boolean;
+  notifyError?: boolean;
+  refreshTaskState?: boolean;
+  showLoading?: boolean;
+  activate?: boolean;
+}
+
+interface OpenTaskDiffResult {
+  status: "opened" | "missing" | "error" | "cancelled";
+  message?: string;
+}
+
 function basename(path: string): string {
   const segments = path.replace(/\\/g, "/").split("/").filter(Boolean);
   return segments[segments.length - 1] ?? path;
@@ -113,6 +127,15 @@ function basename(path: string): string {
 
 function normalizedRelativePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function workspaceRelativePath(root: string, path: string): string {
+  const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalizedPath = path.replace(/\\/g, "/");
+  if (normalizedPath.startsWith(`${normalizedRoot}/`)) {
+    return normalizedRelativePath(normalizedPath.slice(normalizedRoot.length + 1));
+  }
+  return normalizedRelativePath(normalizedPath);
 }
 
 function matchingOpenFileTab(relativePath: string) {
@@ -134,6 +157,10 @@ async function reconcileOpenFileTab(
   if (removed) {
     if (before.draft !== before.original) {
       useTabStore.getState().markConflict(before.id);
+    } else if (before.view === "diff" && before.diffModified !== undefined) {
+      // Keep an already loaded deletion diff visible. The watcher refresh below
+      // replaces it from the task baseline instead of flashing an error state.
+      return;
     } else {
       useTabStore.getState().setError(before.id, "文件已被 Agent 或其他程序删除");
     }
@@ -325,6 +352,7 @@ export function CodingWorkbench({
   const [phaseReason, setPhaseReason] = useState<string>();
   const [blocker, setBlocker] = useState<string | null | undefined>(undefined);
   const [busyPath, setBusyPath] = useState<string | null>(null);
+  const [diffLoadingPath, setDiffLoadingPath] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
   const [detected, setDetected] = useState<DetectedCommand[]>([]);
   const [detectedReady, setDetectedReady] = useState(false);
@@ -337,7 +365,10 @@ export function CodingWorkbench({
   const [reportRevision, setReportRevision] = useState(0);
   const activeRunIdRef = useRef<string | null>(null);
   const autoVerificationRef = useRef<string | null>(null);
+  const legacyAutoCompletionRef = useRef<string | null>(null);
   const repairPromptRef = useRef<string | null>(null);
+  const diffRequestGenerationRef = useRef(new Map<string, number>());
+  const diffTaskRef = useRef<string | null>(null);
   const workbenchRef = useRef<HTMLDivElement>(null);
   const workbenchSize = useElementSize(workbenchRef);
 
@@ -348,12 +379,46 @@ export function CodingWorkbench({
   const verifications = useTaskStore((state) => state.verifications);
   const orchestrator = useTaskStore((state) => state.orchestrator);
 
+  // A diff is anchored to one task's baseline. Never let a cached comparison
+  // from the previous task leak into a newly selected task.
+  useEffect(() => {
+    const taskId = task?.id ?? null;
+    if (diffTaskRef.current === taskId) return;
+    diffTaskRef.current = taskId;
+    diffRequestGenerationRef.current.clear();
+    setDiffLoadingPath(null);
+    for (const tab of useTabStore.getState().tabs) {
+      if (isFileTab(tab) && tab.diffOriginal !== undefined) {
+        useTabStore.getState().clearDiff(tab.id);
+      }
+    }
+  }, [task?.id]);
+
   useEffect(() => {
     setPhaseReason(undefined);
     setBlocker(undefined);
   }, [task?.id]);
 
   useEffect(() => setModelId(defaultModelId), [defaultModelId]);
+
+  // Older tasks always stopped at `gating`, even when the user never asked for
+  // manual review. Complete those tasks once without manufacturing review
+  // evidence or forcing a migration click.
+  useEffect(() => {
+    if (!cwd || !task || task.phase !== "gating" || task.reviewRequired) return;
+    const key = `${cwd}:${task.id}:${task.updatedAt}`;
+    if (legacyAutoCompletionRef.current === key) return;
+    legacyAutoCompletionRef.current = key;
+    void (async () => {
+      try {
+        await codingApi.finalizeDelivery(cwd, task.id);
+        await useTaskStore.getState().refreshTaskState();
+        setReportRevision((value) => value + 1);
+      } catch (error) {
+        setPhaseReason(`自动完成旧任务失败：${String(error).replace(/^Error:\s*/, "")}`);
+      }
+    })();
+  }, [cwd, task]);
 
   // Bind the task store to this workspace and load its task list.
   useEffect(() => {
@@ -410,45 +475,6 @@ export function CodingWorkbench({
       for (const unlisten of unlisteners) unlisten();
     };
   }, [cwd]);
-
-  // Keep clean editor tabs live for every workspace file type. Symbol-index
-  // events intentionally cover only programming languages, so editor
-  // consistency uses the independent workspace-file event stream.
-  useEffect(() => {
-    if (!cwd) return;
-    let disposed = false;
-    const unlisteners: Array<() => void> = [];
-    void onWorkspaceFileUpdated((event) => {
-      if (disposed || event.root !== cwd) return;
-      setTreeRevision((value) => value + 1);
-      void reconcileOpenFileTab(cwd, event.file);
-    }).then((unlisten) => {
-      if (disposed) unlisten();
-      else unlisteners.push(unlisten);
-    });
-    void onWorkspaceFileRemoved((event) => {
-      if (disposed || event.root !== cwd) return;
-      setTreeRevision((value) => value + 1);
-      void reconcileOpenFileTab(cwd, event.file, true);
-    }).then((unlisten) => {
-      if (disposed) unlisten();
-      else unlisteners.push(unlisten);
-    });
-    return () => {
-      disposed = true;
-      for (const unlisten of unlisteners) unlisten();
-    };
-  }, [cwd]);
-
-  // File-system notification delivery can race watcher startup. A freshly
-  // synchronized task ChangeSet is the authoritative fallback at Agent turn
-  // boundaries and when a persisted task is restored.
-  useEffect(() => {
-    if (!cwd || !changeSet) return;
-    for (const change of changeSet.changes) {
-      void reconcileOpenFileTab(cwd, change.path, change.kind === "deleted");
-    }
-  }, [changeSet, cwd]);
 
   // Re-detect at phase boundaries as well as workspace open. An implementation
   // may add/remove package scripts or manifests, so a cached command list is
@@ -706,23 +732,208 @@ export function CodingWorkbench({
     return () => window.removeEventListener("beforeunload", beforeUnload);
   }, []);
 
-  const openTaskDiff = useCallback(async (path: string) => {
-    if (!cwd || !task) return;
-    const absolutePath = workspaceFilePath(cwd, path);
-    setBusyPath(path);
-    try {
-      const diff = await codingApi.changeDiff(cwd, task.id, path);
-      await openFile(absolutePath);
-      useTabStore.getState().setDiff(absolutePath, diff.original, diff.modified, diff.binary);
-      await codingApi.markReviewed(cwd, task.id, path);
-      await useTaskStore.getState().refreshTaskState();
-      if (diff.binary) onToast?.("二进制文件无法显示文本差异，已显示文件状态摘要");
-    } catch (error) {
-      onToast?.(`打开任务差异失败：${String(error).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setBusyPath(null);
+  const openTaskDiff = useCallback(async (
+    path: string,
+    options: OpenTaskDiffOptions = {},
+  ): Promise<OpenTaskDiffResult> => {
+    const activeTask = useTaskStore.getState().task;
+    if (!cwd || !activeTask) {
+      return { status: "missing", message: "当前没有开发任务" };
     }
-  }, [cwd, onToast, openFile, task]);
+
+    const relativePath = workspaceRelativePath(cwd, path);
+    const absolutePath = workspaceFilePath(cwd, relativePath);
+    const generation = (diffRequestGenerationRef.current.get(absolutePath) ?? 0) + 1;
+    diffRequestGenerationRef.current.set(absolutePath, generation);
+    const isCurrent = () => (
+      diffRequestGenerationRef.current.get(absolutePath) === generation
+      && useTaskStore.getState().task?.id === activeTask.id
+    );
+    const showLoading = options.showLoading ?? true;
+    if (showLoading) setDiffLoadingPath(relativePath);
+
+    try {
+      // The command synchronizes the native ChangeSet before reading, so every
+      // toolbar click is a real refresh rather than a switch to cached panes.
+      const diff = await codingApi.changeDiff(cwd, activeTask.id, relativePath);
+      if (!isCurrent()) return { status: "cancelled" };
+
+      // Bring the editor's disk snapshot forward before installing the task
+      // diff. This prevents a later task-state refresh from clearing or hiding
+      // the comparison that was just opened.
+      await reconcileOpenFileTab(cwd, relativePath);
+      if (!isCurrent()) return { status: "cancelled" };
+
+      const existing = matchingOpenFileTab(relativePath);
+      if ((options.activate ?? true) || !existing) {
+        await openFile(absolutePath);
+      }
+      if (!isCurrent()) return { status: "cancelled" };
+
+      useTabStore.getState().setDiff(
+        absolutePath,
+        diff.original,
+        diff.modified,
+        diff.binary,
+        activeTask.id,
+      );
+
+      if ((options.markReviewed ?? true) && activeTask.reviewRequired) {
+        try {
+          await codingApi.markReviewed(cwd, activeTask.id, relativePath);
+          setReportRevision((nth) => nth + 1);
+        } catch (error) {
+          if (options.notifyError ?? true) {
+            onToast?.(`差异已打开，但审阅状态未能保存：${String(error).replace(/^Error:\s*/, "")}`);
+          }
+        }
+      }
+      if (options.refreshTaskState ?? true) {
+        await useTaskStore.getState().refreshTaskState();
+      }
+      if (!isCurrent()) return { status: "cancelled" };
+
+      // A reconciliation triggered by the task refresh may have touched the
+      // same tab. Re-apply the exact snapshot returned for this request last.
+      useTabStore.getState().setDiff(
+        absolutePath,
+        diff.original,
+        diff.modified,
+        diff.binary,
+        activeTask.id,
+      );
+      if (diff.binary && (options.notifyError ?? true)) {
+        onToast?.("二进制文件无法显示文本差异，已显示文件状态摘要");
+      }
+      return { status: "opened" };
+    } catch (error) {
+      const message = String(error).replace(/^Error:\s*/, "");
+      const status = message.includes("不在当前任务变更集") ? "missing" : "error";
+      if ((options.notifyError ?? true) && isCurrent()) {
+        onToast?.(`打开任务差异失败：${message}`);
+      }
+      return { status, message };
+    } finally {
+      if (diffRequestGenerationRef.current.get(absolutePath) === generation) {
+        setDiffLoadingPath((current) => current === relativePath ? null : current);
+      }
+    }
+  }, [cwd, onToast, openFile]);
+
+  const handleFileViewChange = useCallback(async (
+    id: string,
+    view: "edit" | "diff",
+  ) => {
+    const tab = useTabStore.getState().tabs.find((entry) => entry.id === id);
+    if (!tab || !isFileTab(tab)) return;
+    const relativePath = workspaceRelativePath(cwd, tab.relativePath || id);
+
+    if (view === "edit") {
+      // Invalidate a pending request so it cannot pull the user back into diff
+      // after they deliberately returned to the editor.
+      diffRequestGenerationRef.current.set(
+        id,
+        (diffRequestGenerationRef.current.get(id) ?? 0) + 1,
+      );
+      setDiffLoadingPath((current) => current === relativePath ? null : current);
+      useTabStore.getState().setView(id, "edit");
+      return;
+    }
+
+    const result = await openTaskDiff(relativePath, { notifyError: false });
+    if (result.status === "opened" || result.status === "cancelled") return;
+
+    const current = useTabStore.getState().tabs.find((entry) => entry.id === id);
+    if (!current || !isFileTab(current)) return;
+    useTabStore.getState().clearDiff(id);
+    if (current.draft !== current.original) {
+      useTabStore.getState().setView(id, "diff");
+      onToast?.(result.status === "missing"
+        ? "当前文件没有任务变更，已显示未保存的本地修改"
+        : `任务差异暂时无法刷新，已显示未保存的本地修改：${result.message ?? "未知错误"}`);
+      return;
+    }
+    onToast?.(result.status === "missing"
+      ? "当前文件不在当前任务变更中，也没有未保存修改"
+      : `打开任务差异失败：${result.message ?? "未知错误"}`);
+  }, [cwd, onToast, openTaskDiff]);
+
+  const refreshVisibleDiff = useCallback(async (relativePath: string): Promise<boolean> => {
+    const tab = matchingOpenFileTab(relativePath);
+    if (!tab || !isFileTab(tab) || tab.view !== "diff") return false;
+    const result = await openTaskDiff(relativePath, {
+      activate: false,
+      markReviewed: false,
+      notifyError: false,
+      refreshTaskState: false,
+      showLoading: false,
+    });
+    if (result.status !== "missing") return true;
+
+    // The file may have been reverted and removed from the synchronized task
+    // ChangeSet. Never leave the previous task diff masquerading as current.
+    const current = matchingOpenFileTab(relativePath);
+    if (!current || !isFileTab(current)) return true;
+    useTabStore.getState().clearDiff(current.id);
+    if (current.draft !== current.original) {
+      useTabStore.getState().setView(current.id, "diff");
+    }
+    return true;
+  }, [openTaskDiff]);
+
+  // Keep clean editor tabs live for every workspace file type. If the user is
+  // reviewing a diff, refresh the task-baseline comparison after the disk
+  // snapshot is reconciled instead of silently falling back to identical panes.
+  useEffect(() => {
+    if (!cwd) return;
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    void onWorkspaceFileUpdated((event) => {
+      if (disposed || event.root !== cwd) return;
+      setTreeRevision((value) => value + 1);
+      void (async () => {
+        await reconcileOpenFileTab(cwd, event.file);
+        const refreshed = !disposed && await refreshVisibleDiff(event.file);
+        if (refreshed && !disposed) await useTaskStore.getState().refreshTaskState();
+      })();
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    });
+    void onWorkspaceFileRemoved((event) => {
+      if (disposed || event.root !== cwd) return;
+      setTreeRevision((value) => value + 1);
+      void (async () => {
+        await reconcileOpenFileTab(cwd, event.file, true);
+        const refreshed = !disposed && await refreshVisibleDiff(event.file);
+        if (refreshed && !disposed) await useTaskStore.getState().refreshTaskState();
+      })();
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    });
+    return () => {
+      disposed = true;
+      for (const unlisten of unlisteners) unlisten();
+    };
+  }, [cwd, refreshVisibleDiff]);
+
+  // File-system notifications can race watcher startup. A synchronized
+  // ChangeSet is the fallback, and open diff tabs are refreshed from it too.
+  useEffect(() => {
+    if (!cwd || !changeSet || (task && changeSet.taskId !== task.id)) return;
+    let disposed = false;
+    void (async () => {
+      for (const change of changeSet.changes) {
+        if (disposed) return;
+        await reconcileOpenFileTab(cwd, change.path, change.kind === "deleted");
+        if (!disposed) await refreshVisibleDiff(change.path);
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, [changeSet, cwd, refreshVisibleDiff, task?.id]);
 
   /**
    * Replace across the files a search matched.
@@ -916,7 +1127,7 @@ export function CodingWorkbench({
    * never decides it locally.
    */
   const startTask = useCallback(
-    async (requirement: string, planRequired: boolean) => {
+    async (requirement: string, planRequired: boolean, reviewRequired: boolean) => {
       if (!cwd || !onStartRun) return;
       setStarting(true);
       setStartError(null);
@@ -932,7 +1143,7 @@ export function CodingWorkbench({
         // workspace. Git repositories get HEAD protection; ordinary folders
         // get an application-owned filesystem checkpoint.
         await codingApi.captureBaseline(cwd, created.id, []);
-        await codingApi.submitRequirement(cwd, created.id, planRequired);
+        await codingApi.submitRequirement(cwd, created.id, planRequired, reviewRequired);
         let boundSession: string | undefined;
         const bindSession = async (sessionId: string) => {
           if (boundSession && boundSession !== sessionId) {
@@ -1075,9 +1286,11 @@ export function CodingWorkbench({
       await useTaskStore.getState().refreshTaskState();
       setReportRevision((value) => value + 1);
       useTabStore.getState().openDoc("delivery");
-      onToast?.("任务已通过验收，可以提交或生成交付材料");
+      onToast?.(task.reviewRequired
+        ? "任务已通过验收，可以提交或生成交付材料"
+        : "任务已完成，可以提交或生成交付材料");
     } catch (error) {
-      onToast?.(`暂时无法交付：${String(error).replace(/^Error:\s*/, "")}`);
+      onToast?.(`${task.reviewRequired ? "暂时无法交付" : "暂时无法完成任务"}：${String(error).replace(/^Error:\s*/, "")}`);
     }
   }, [cwd, onToast, task]);
 
@@ -1624,7 +1837,7 @@ export function CodingWorkbench({
           <ChangeSetView
             changeSet={changeSet}
             hasTask={Boolean(task)}
-            busyPath={busyPath}
+            busyPath={busyPath ?? diffLoadingPath}
             committing={committing}
             canCommit={task?.phase === "delivered" && !changeSet?.committedHash}
             canRollback={
@@ -1696,7 +1909,11 @@ export function CodingWorkbench({
           onClose={closeTabSafely}
           onDraftChange={(id, draft) => useTabStore.getState().updateDraft(id, draft)}
           onSave={(id) => void saveFile(id)}
-          onViewChange={(id, view) => useTabStore.getState().setView(id, view)}
+          onViewChange={handleFileViewChange}
+          viewBusy={Boolean(
+            activeFileTab
+            && diffLoadingPath === workspaceRelativePath(cwd, activeFileTab.relativePath),
+          )}
           onReload={(id) => void reloadFile(id)}
           onSymbolAction={(action, symbol) => {
             const key = { name: symbol, file: activeRelativePath };
@@ -1718,7 +1935,7 @@ export function CodingWorkbench({
                   root={cwd}
                   taskId={task?.id ?? null}
                   revision={reportRevision}
-                  onOpenFile={openRelative}
+                  onOpenFile={(path) => void openTaskDiff(path)}
                   onToast={onToast}
                 />
               );
@@ -1788,6 +2005,8 @@ export function CodingWorkbench({
         {task ? (
           <AgentPane
             task={task}
+            changeSet={changeSet}
+            verifications={verifications}
             sessionId={activeSessionId}
             messages={messages}
             streaming={streaming}
@@ -1804,6 +2023,7 @@ export function CodingWorkbench({
             onPlanResolved={resolvePlan}
             onPlanSyncFailed={handlePlanSyncFailure}
             onFinalizeDelivery={finalizeDelivery}
+            onOpenChanges={() => setActivityView("changes")}
             onOpenReport={() => useTabStore.getState().openDoc("delivery")}
             onToast={onToast}
           />
@@ -1816,7 +2036,8 @@ export function CodingWorkbench({
             error={startError}
             apiReady={apiReady}
             contextPaths={contextPaths}
-            onStart={(requirement, planRequired) => void startTask(requirement, planRequired)}
+            onStart={(requirement, planRequired, reviewRequired) =>
+              void startTask(requirement, planRequired, reviewRequired)}
             onOpenSettings={onOpenSettings}
             onToast={onToast}
           />

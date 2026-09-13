@@ -100,6 +100,9 @@ export function TaskDagTab({
         <span>
           问题 <b>{problemCount}</b>
         </span>
+        <span>
+          完成方式 <b>{task.reviewRequired ? "人工验收" : "自动完成"}</b>
+        </span>
         {repairRounds.length > 0 && (
           <span>
             修复轮次{" "}
@@ -128,7 +131,7 @@ export function TaskDagTab({
       </section>
 
       <section>
-        <h2>验收标准</h2>
+        <h2>{task.reviewRequired ? "验收标准" : "任务目标"}</h2>
         {task.acceptanceCriteria.length === 0 ? (
           <p className="coding-doc__muted">尚未生成验收标准。</p>
         ) : (

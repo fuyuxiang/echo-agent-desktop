@@ -46,8 +46,17 @@ export const codingApi = {
   bindTaskRuntime: (root: string, taskId: string, sessionId: string, modelId: string) =>
     invoke<CodingTask>("coding_task_bind_runtime", { root, taskId, sessionId, modelId }),
 
-  submitRequirement: (root: string, taskId: string, planRequired: boolean) =>
-    invoke<CodingTask>("coding_task_submit_requirement", { root, taskId, planRequired }),
+  submitRequirement: (
+    root: string,
+    taskId: string,
+    planRequired: boolean,
+    reviewRequired: boolean,
+  ) => invoke<CodingTask>("coding_task_submit_requirement", {
+    root,
+    taskId,
+    planRequired,
+    reviewRequired,
+  }),
   approvePlan: (root: string, taskId: string) =>
     invoke<CodingTask>("coding_task_approve_plan", { root, taskId }),
   resolvePlan: (

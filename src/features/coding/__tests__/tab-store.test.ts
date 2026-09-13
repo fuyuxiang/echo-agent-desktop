@@ -120,6 +120,31 @@ describe("tab store", () => {
     expect(tab.diffModified).toBe("");
   });
 
+  it("keeps a task diff visible while the clean disk snapshot is reconciled", () => {
+    useTabStore.getState().openFile(fileTab());
+    useTabStore.getState().setDiff("/repo/src/a.ts", "baseline", "agent edit", false, "t1");
+    useTabStore.getState().markSaved("/repo/src/a.ts", "agent edit", "h2");
+    const tab = useTabStore.getState().tabs[0] as FileTab;
+    expect(tab).toMatchObject({
+      view: "diff",
+      diffOriginal: "baseline",
+      diffModified: "agent edit",
+      diffTaskId: "t1",
+      hash: "h2",
+    });
+  });
+
+  it("clears a cached task diff when its task is no longer current", () => {
+    useTabStore.getState().openFile(fileTab());
+    useTabStore.getState().setDiff("/repo/src/a.ts", "baseline", "agent edit", false, "t1");
+    useTabStore.getState().clearDiff("/repo/src/a.ts");
+    const tab = useTabStore.getState().tabs[0] as FileTab;
+    expect(tab.view).toBe("edit");
+    expect(tab.diffOriginal).toBeUndefined();
+    expect(tab.diffModified).toBeUndefined();
+    expect(tab.diffTaskId).toBeUndefined();
+  });
+
   it("opening the same symbol twice focuses the existing virtual tab", () => {
     useTabStore.getState().openVirtual("findReferences", "/repo", { name: "authenticate" });
     useTabStore.getState().openFile(fileTab({ id: "/repo/src/a.ts" }));

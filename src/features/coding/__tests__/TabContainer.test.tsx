@@ -84,6 +84,25 @@ describe("TabContainer", () => {
     expect(props.onViewChange).toHaveBeenCalledWith("/repo/src/auth/login.ts", "diff");
   });
 
+  it("shows an accessible loading state while the latest diff is being fetched", () => {
+    const props = {
+      tabs: [file()],
+      activeId: "/repo/src/auth/login.ts",
+      onSelect: vi.fn(),
+      onClose: vi.fn(),
+      onDraftChange: vi.fn(),
+      onSave: vi.fn(),
+      onViewChange: vi.fn(),
+      viewBusy: true,
+      renderDoc: vi.fn(),
+    };
+    render(<TabContainer {...props} />);
+    const button = screen.getByRole("button", { name: "正在加载最新差异" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveTextContent("刷新中…");
+  });
+
   it("passes the requested view to the editor", () => {
     setup([file({ view: "diff" })]);
     expect(screen.getByTestId("editor")).toHaveAttribute("data-mode", "diff");

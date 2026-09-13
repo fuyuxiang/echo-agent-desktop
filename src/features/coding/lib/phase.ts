@@ -15,8 +15,8 @@ const PHASES: Record<TaskPhase, PhasePresentation> = {
   verifying: { label: "验证中", tone: "running", active: true },
   diagnosing: { label: "诊断中", tone: "running", active: true },
   repairing: { label: "修复中", tone: "running", active: true },
-  gating: { label: "质量门禁", tone: "running", active: true },
-  delivered: { label: "已交付", tone: "good", active: false },
+  gating: { label: "待验收", tone: "waiting", active: false },
+  delivered: { label: "已完成", tone: "good", active: false },
   blocked: { label: "已阻塞", tone: "bad", active: false },
 };
 

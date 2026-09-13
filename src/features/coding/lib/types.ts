@@ -42,6 +42,8 @@ export interface CodingTask {
   acceptanceCriteria: AcceptanceCriterion[];
   taskNodes: TaskNode[];
   planRequired: boolean;
+  /** Stop after automated checks so the user can review every changed file. */
+  reviewRequired: boolean;
   modelId?: string | null;
   sessionId?: string | null;
   createdAt: string;

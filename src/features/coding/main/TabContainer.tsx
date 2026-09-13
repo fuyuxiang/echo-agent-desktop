@@ -10,7 +10,8 @@ interface TabContainerProps {
   onClose: (id: string) => void;
   onDraftChange: (id: string, draft: string) => void;
   onSave: (id: string) => void;
-  onViewChange: (id: string, view: FileTab["view"]) => void;
+  onViewChange: (id: string, view: FileTab["view"]) => void | Promise<void>;
+  viewBusy?: boolean;
   onReload?: (id: string) => void;
   onSymbolAction?: (action: "definition" | "references" | "impact", symbol: string) => void;
   onDiagnostics?: (path: string, diagnostics: CodingEditorDiagnostic[]) => void;
@@ -48,6 +49,7 @@ export function TabContainer({
   onDraftChange,
   onSave,
   onViewChange,
+  viewBusy = false,
   onReload,
   onSymbolAction,
   onDiagnostics,
@@ -108,16 +110,20 @@ export function TabContainer({
             <button
               type="button"
               className={active.view === "edit" ? "is-active" : ""}
-              onClick={() => onViewChange(active.id, "edit")}
+              onClick={() => void onViewChange(active.id, "edit")}
             >
               编辑
             </button>
             <button
               type="button"
               className={active.view === "diff" ? "is-active" : ""}
-              onClick={() => onViewChange(active.id, "diff")}
+              onClick={() => void onViewChange(active.id, "diff")}
+              disabled={viewBusy}
+              aria-busy={viewBusy}
+              aria-label={viewBusy ? "正在加载最新差异" : "差异"}
             >
-              差异
+              {viewBusy && <LoaderCircle size={11} className="is-spinning" />}
+              {viewBusy ? "刷新中…" : "差异"}
             </button>
           </div>
         </div>

@@ -35,6 +35,7 @@ function task(overrides: Partial<CodingTask> = {}): CodingTask {
     acceptanceCriteria: [],
     taskNodes: [],
     planRequired: false,
+    reviewRequired: false,
     createdAt: "",
     updatedAt: "",
     ...overrides,
@@ -155,6 +156,7 @@ describe("DeliveryReportTab", () => {
     api.deliveryReport.mockResolvedValue(
       report({
         task: task({
+          reviewRequired: true,
           acceptanceCriteria: [
             { id: "ac1", content: "登录流程可用", satisfied: false, evidence: [] },
           ],
@@ -162,7 +164,7 @@ describe("DeliveryReportTab", () => {
       }),
     );
     render(<DeliveryReportTab root="/repo" taskId="t1" onOpenFile={vi.fn()} />);
-    expect(await screen.findByText("尚无验证证据")).toBeInTheDocument();
+    expect(await screen.findByText("尚无验收证据")).toBeInTheDocument();
   });
 
   it("lists the repair history when the engine retried", async () => {
