@@ -2,9 +2,11 @@
 //! owns its requirement, acceptance criteria, plan and phase, and survives a
 //! restart so an interrupted run can be resumed.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::State;
 
 use crate::coding::store;
@@ -14,25 +16,13 @@ use crate::shell_fs::FilesystemAccess;
 #[serde(rename_all = "snake_case")]
 pub enum TaskPhase {
     Idle,
-    Analyzing,
-    Planning,
+    Discovering,
     Implementing,
     Verifying,
     Diagnosing,
     Repairing,
-    Gating,
     Delivered,
     Blocked,
-}
-
-/// The user's requested way of working. This is intentionally separate from
-/// the runtime permission policy (ask-before-actions / auto / full autonomy).
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
-#[serde(rename_all = "snake_case")]
-pub enum CodingMode {
-    Ask,
-    Plan,
-    Agent,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,6 +33,13 @@ pub enum TaskNodeStatus {
     Success,
     Failed,
     Blocked,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskNextAction {
+    RevisePlan,
+    ContinueNode,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -59,16 +56,105 @@ pub struct AcceptanceCriterion {
 #[serde(rename_all = "camelCase")]
 pub struct TaskNode {
     pub id: String,
+    /// Stable identifier supplied by the runtime plan (for example `T3`).
+    /// This key is mandatory in the current v2 task schema.
+    #[serde(default)]
+    pub plan_key: String,
     pub content: String,
     pub dependencies: Vec<String>,
     pub related_files: Vec<String>,
+    /// Files that may be read or changed while executing this node.  Keeping
+    /// these separate lets the scheduler detect unsafe concurrent writes.
+    #[serde(default)]
+    pub read_set: Vec<String>,
+    #[serde(default)]
+    pub write_set: Vec<String>,
+    /// Exact interfaces this node expects and provides.  These are planning
+    /// contracts, not guesses derived from the final diff.
+    #[serde(default)]
+    pub consumes: Vec<String>,
+    #[serde(default)]
+    pub produces: Vec<String>,
+    #[serde(default)]
+    pub acceptance_criteria: Vec<String>,
+    #[serde(default)]
+    pub verification_commands: Vec<String>,
+    pub status: TaskNodeStatus,
+    pub priority: String,
+    #[serde(default)]
+    pub attempt: u32,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    #[serde(default)]
+    pub failure: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanIssueSeverity {
+    Warning,
+    Error,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanIssue {
+    pub severity: PlanIssueSeverity,
+    pub code: String,
+    pub message: String,
+    pub node_keys: Vec<String>,
+}
+
+/// Structured form of one ACP plan entry.  ACP itself only carries display
+/// strings, so the frontend parses the documented contract fields before the
+/// plan crosses this trusted persistence boundary.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimePlanEntry {
+    pub key: String,
+    pub content: String,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub related_files: Vec<String>,
+    #[serde(default)]
+    pub read_set: Vec<String>,
+    #[serde(default)]
+    pub write_set: Vec<String>,
+    #[serde(default)]
+    pub consumes: Vec<String>,
+    #[serde(default)]
+    pub produces: Vec<String>,
+    #[serde(default)]
+    pub acceptance_criteria: Vec<String>,
+    #[serde(default)]
+    pub verification_commands: Vec<String>,
     pub status: TaskNodeStatus,
     pub priority: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct ExecutionLedgerEvent {
+    pub id: String,
+    pub task_id: String,
+    pub kind: String,
+    #[serde(default)]
+    pub node_key: Option<String>,
+    pub message: String,
+    #[serde(default)]
+    pub plan_revision: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct CodingTask {
+    /// Development-only task formats are intentionally not migrated. A task
+    /// without the current schema is hidden by `list_tasks` and cannot run.
+    pub schema_version: u32,
     pub id: String,
     pub name: String,
     pub requirement: String,
@@ -79,34 +165,25 @@ pub struct CodingTask {
     pub blocker: Option<String>,
     pub acceptance_criteria: Vec<AcceptanceCriterion>,
     pub task_nodes: Vec<TaskNode>,
-    /// `None` is retained only for tasks saved before work modes existed.
-    /// `effective_mode` maps those records without rewriting user data.
+    /// Hash of the latest structured runtime plan. Missing only while a simple
+    /// task still uses its initial ROOT node.
     #[serde(default)]
-    pub mode: Option<CodingMode>,
-    pub plan_required: bool,
-    /// Whether this task must stop for an explicit, content-bound human review
-    /// before it can be delivered. Automatic completion is the default.
+    pub plan_revision: Option<String>,
     #[serde(default)]
-    pub review_required: bool,
+    pub plan_updated_at: Option<String>,
+    #[serde(default)]
+    pub plan_issues: Vec<PlanIssue>,
+    #[serde(default)]
+    pub global_constraints: Vec<String>,
+    /// Machine-readable instruction for the renderer.  The renderer may start
+    /// another managed Agent turn only when this field is present, which avoids
+    /// racing a plan update that arrives just as the previous stream closes.
+    #[serde(default)]
+    pub next_action: Option<TaskNextAction>,
     pub model_id: Option<String>,
     pub session_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
-}
-
-impl CodingTask {
-    /// Preserve the intent of tasks written before `mode` existed. Legacy
-    /// plan-first tasks can be identified while they are still waiting for
-    /// approval; every other legacy task behaved as Agent mode.
-    pub fn effective_mode(&self) -> CodingMode {
-        self.mode.unwrap_or_else(|| {
-            if self.plan_required && self.phase == TaskPhase::Planning {
-                CodingMode::Plan
-            } else {
-                CodingMode::Agent
-            }
-        })
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -131,10 +208,43 @@ fn task_path(root: &Path, task_id: &str) -> std::path::PathBuf {
     store::task_dir(root, task_id).join("task.json")
 }
 
+fn ledger_path(root: &Path, task_id: &str) -> std::path::PathBuf {
+    store::task_dir(root, task_id).join("execution-ledger.jsonl")
+}
+
+pub fn execution_ledger(root: &Path, task_id: &str) -> Vec<ExecutionLedgerEvent> {
+    store::read_jsonl(&ledger_path(root, task_id))
+}
+
+pub(crate) fn append_ledger(
+    root: &Path,
+    task_id: &str,
+    kind: &str,
+    node_key: Option<String>,
+    message: String,
+    plan_revision: Option<String>,
+) -> Result<(), String> {
+    store::append_jsonl(
+        &ledger_path(root, task_id),
+        &ExecutionLedgerEvent {
+            id: uuid::Uuid::now_v7().to_string(),
+            task_id: task_id.to_string(),
+            kind: kind.to_string(),
+            node_key,
+            message,
+            plan_revision,
+            created_at: now(),
+        },
+    )
+}
+
 pub fn list_tasks(root: &Path) -> Vec<TaskSummary> {
     store::read_json::<TaskIndex>(&store::tasks_index_path(root))
         .unwrap_or_default()
         .tasks
+        .into_iter()
+        .filter(|summary| load(root, &summary.id).is_some())
+        .collect()
 }
 
 fn write_index(root: &Path, tasks: Vec<TaskSummary>) -> Result<(), String> {
@@ -159,10 +269,14 @@ fn upsert_index(root: &Path, task: &CodingTask) -> Result<(), String> {
 }
 
 pub fn load(root: &Path, task_id: &str) -> Option<CodingTask> {
-    store::read_json(&task_path(root, task_id))
+    store::read_json::<CodingTask>(&task_path(root, task_id))
+        .filter(|task| task.schema_version == 2)
 }
 
 pub fn save(root: &Path, task: &CodingTask) -> Result<(), String> {
+    if task.schema_version != 2 {
+        return Err("不支持的代码开发任务数据版本".into());
+    }
     let mut stored = task.clone();
     stored.updated_at = now();
     store::write_json(&task_path(root, &stored.id), &stored)?;
@@ -180,6 +294,7 @@ pub fn create_task(root: &Path, name: &str, requirement: &str) -> Result<CodingT
         return Err("任务需求不能为空".into());
     }
     let task = CodingTask {
+        schema_version: 2,
         id: uuid::Uuid::now_v7().to_string(),
         name: trimmed.to_string(),
         requirement: requirement.clone(),
@@ -187,22 +302,40 @@ pub fn create_task(root: &Path, name: &str, requirement: &str) -> Result<CodingT
         phase_reason: None,
         blocker: None,
         acceptance_criteria: vec![AcceptanceCriterion {
-            id: uuid::Uuid::now_v7().to_string(),
+            id: "requirement".into(),
             content: requirement.clone(),
             satisfied: false,
             evidence: Vec::new(),
         }],
         task_nodes: vec![TaskNode {
             id: uuid::Uuid::now_v7().to_string(),
+            plan_key: "ROOT".into(),
             content: requirement,
             dependencies: Vec::new(),
             related_files: Vec::new(),
+            read_set: Vec::new(),
+            write_set: Vec::new(),
+            consumes: Vec::new(),
+            produces: Vec::new(),
+            acceptance_criteria: Vec::new(),
+            verification_commands: Vec::new(),
             status: TaskNodeStatus::Pending,
             priority: "high".into(),
+            attempt: 0,
+            started_at: None,
+            completed_at: None,
+            failure: None,
         }],
-        mode: Some(CodingMode::Agent),
-        plan_required: false,
-        review_required: false,
+        plan_revision: None,
+        plan_updated_at: None,
+        plan_issues: Vec::new(),
+        global_constraints: vec![
+            "Preserve existing behavior outside the requested scope".into(),
+            "Do not claim completion without fresh verification evidence".into(),
+            "Complex work must use a validated dependency graph and bounded write scopes".into(),
+            "Every planned verification command must pass before delivery".into(),
+        ],
+        next_action: None,
         model_id: None,
         session_id: None,
         created_at: timestamp.clone(),
@@ -228,41 +361,595 @@ pub fn bind_runtime(
     Ok(load(root, task_id).unwrap_or(task))
 }
 
-pub fn set_plan_steps(
+fn clean_values(values: Vec<String>, limit: usize) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty() && seen.insert(value.clone()))
+        .take(limit)
+        .collect()
+}
+
+fn is_valid_plan_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 64
+        && key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+}
+
+fn normalize_plan_path(value: &str) -> Option<String> {
+    let replaced = value.trim().replace('\\', "/");
+    if replaced.is_empty()
+        || replaced.starts_with('/')
+        || replaced.contains(':')
+        || (replaced.contains('*') && !replaced.ends_with("/**"))
+    {
+        return None;
+    }
+    let directory_scope = replaced.ends_with("/**");
+    let base = replaced.strip_suffix("/**").unwrap_or(&replaced);
+    let mut parts = Vec::new();
+    for part in base.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => return None,
+            value => parts.push(value),
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let normalized = parts.join("/");
+    Some(if directory_scope {
+        format!("{normalized}/**")
+    } else {
+        normalized
+    })
+}
+
+fn path_scope_covers(scope: &str, path: &str) -> bool {
+    let Some(scope) = normalize_plan_path(scope) else {
+        return false;
+    };
+    let Some(path) = normalize_plan_path(path) else {
+        return false;
+    };
+    let (scope_folded, path_folded) = if cfg!(target_os = "windows") || cfg!(target_os = "macos") {
+        (scope.to_ascii_lowercase(), path.to_ascii_lowercase())
+    } else {
+        (scope, path)
+    };
+    if let Some(prefix) = scope_folded.strip_suffix("/**") {
+        path_folded == prefix || path_folded.starts_with(&format!("{prefix}/"))
+    } else {
+        scope_folded == path_folded
+    }
+}
+
+fn scopes_overlap(left: &str, right: &str) -> bool {
+    path_scope_covers(left, right) || path_scope_covers(right, left)
+}
+
+fn normalize_plan_paths(values: &mut Vec<String>) {
+    *values = values
+        .drain(..)
+        .filter_map(|value| normalize_plan_path(&value))
+        .collect();
+    values.sort();
+    values.dedup();
+}
+
+/// True when at least one node explicitly owns the changed path. Directory
+/// scopes use a trailing `/**`; all other values are exact repository paths.
+pub fn plan_covers_path(task: &CodingTask, path: &str) -> bool {
+    task.task_nodes.iter().any(|node| {
+        node.write_set
+            .iter()
+            .any(|scope| path_scope_covers(scope, path))
+    })
+}
+
+fn transitively_depends_on(
+    node: &str,
+    target: &str,
+    dependencies: &HashMap<String, Vec<String>>,
+    seen: &mut HashSet<String>,
+) -> bool {
+    if !seen.insert(node.to_string()) {
+        return false;
+    }
+    dependencies.get(node).is_some_and(|direct| {
+        direct.iter().any(|dependency| {
+            dependency == target || transitively_depends_on(dependency, target, dependencies, seen)
+        })
+    })
+}
+
+fn validate_runtime_plan(entries: &[RuntimePlanEntry]) -> Vec<PlanIssue> {
+    let mut issues = Vec::new();
+    if entries.is_empty() {
+        issues.push(PlanIssue {
+            severity: PlanIssueSeverity::Error,
+            code: "empty_plan".into(),
+            message: "执行计划不能为空".into(),
+            node_keys: Vec::new(),
+        });
+        return issues;
+    }
+
+    let mut keys = HashSet::new();
+    for entry in entries {
+        if !is_valid_plan_key(&entry.key) {
+            issues.push(PlanIssue {
+                severity: PlanIssueSeverity::Error,
+                code: "invalid_key".into(),
+                message: format!("节点标识“{}”不合法", entry.key),
+                node_keys: vec![entry.key.clone()],
+            });
+        } else if !keys.insert(entry.key.clone()) {
+            issues.push(PlanIssue {
+                severity: PlanIssueSeverity::Error,
+                code: "duplicate_key".into(),
+                message: format!("节点标识“{}”重复", entry.key),
+                node_keys: vec![entry.key.clone()],
+            });
+        }
+        if entry.content.trim().is_empty() {
+            issues.push(PlanIssue {
+                severity: PlanIssueSeverity::Error,
+                code: "empty_goal".into(),
+                message: format!("节点“{}”没有可执行目标", entry.key),
+                node_keys: vec![entry.key.clone()],
+            });
+        }
+        if entry.write_set.is_empty() {
+            issues.push(PlanIssue {
+                severity: PlanIssueSeverity::Error,
+                code: "missing_write_set".into(),
+                message: format!("节点“{}”没有声明写入文件范围", entry.key),
+                node_keys: vec![entry.key.clone()],
+            });
+        }
+        if entry.acceptance_criteria.is_empty() {
+            issues.push(PlanIssue {
+                severity: PlanIssueSeverity::Error,
+                code: "missing_acceptance".into(),
+                message: format!("节点“{}”没有可观测的验收条件", entry.key),
+                node_keys: vec![entry.key.clone()],
+            });
+        }
+        if entry.verification_commands.is_empty() {
+            issues.push(PlanIssue {
+                severity: PlanIssueSeverity::Error,
+                code: "missing_verification".into(),
+                message: format!("节点“{}”没有声明验证命令", entry.key),
+                node_keys: vec![entry.key.clone()],
+            });
+        }
+        for path in entry
+            .related_files
+            .iter()
+            .chain(&entry.read_set)
+            .chain(&entry.write_set)
+        {
+            if normalize_plan_path(path).is_none() {
+                issues.push(PlanIssue {
+                    severity: PlanIssueSeverity::Error,
+                    code: "invalid_file_scope".into(),
+                    message: format!("节点“{}”包含不安全或无法识别的文件范围“{path}”", entry.key),
+                    node_keys: vec![entry.key.clone()],
+                });
+            }
+        }
+    }
+
+    let dependencies: HashMap<String, Vec<String>> = entries
+        .iter()
+        .map(|entry| (entry.key.clone(), entry.dependencies.clone()))
+        .collect();
+    for entry in entries {
+        for dependency in &entry.dependencies {
+            if dependency == &entry.key {
+                issues.push(PlanIssue {
+                    severity: PlanIssueSeverity::Error,
+                    code: "self_dependency".into(),
+                    message: format!("节点“{}”不能依赖自己", entry.key),
+                    node_keys: vec![entry.key.clone()],
+                });
+            } else if !keys.contains(dependency) {
+                issues.push(PlanIssue {
+                    severity: PlanIssueSeverity::Error,
+                    code: "missing_dependency".into(),
+                    message: format!("节点“{}”依赖不存在的节点“{dependency}”", entry.key),
+                    node_keys: vec![entry.key.clone(), dependency.clone()],
+                });
+            }
+        }
+        if transitively_depends_on(&entry.key, &entry.key, &dependencies, &mut HashSet::new()) {
+            issues.push(PlanIssue {
+                severity: PlanIssueSeverity::Error,
+                code: "dependency_cycle".into(),
+                message: format!("从节点“{}”发现循环依赖", entry.key),
+                node_keys: vec![entry.key.clone()],
+            });
+        }
+    }
+
+    let running = entries
+        .iter()
+        .filter(|entry| entry.status == TaskNodeStatus::Running)
+        .map(|entry| entry.key.clone())
+        .collect::<Vec<_>>();
+    if running.len() > 1 {
+        issues.push(PlanIssue {
+            severity: PlanIssueSeverity::Warning,
+            code: "concurrent_nodes".into(),
+            message: "多个实现节点同时运行，只有写入集完全隔离时才安全".into(),
+            node_keys: running,
+        });
+    }
+
+    for (index, left) in entries.iter().enumerate() {
+        for right in entries.iter().skip(index + 1) {
+            let overlaps = left.write_set.iter().any(|left_scope| {
+                right
+                    .write_set
+                    .iter()
+                    .any(|right_scope| scopes_overlap(left_scope, right_scope))
+            });
+            if !overlaps {
+                continue;
+            }
+            let ordered =
+                transitively_depends_on(&left.key, &right.key, &dependencies, &mut HashSet::new())
+                    || transitively_depends_on(
+                        &right.key,
+                        &left.key,
+                        &dependencies,
+                        &mut HashSet::new(),
+                    );
+            if !ordered {
+                issues.push(PlanIssue {
+                    severity: PlanIssueSeverity::Error,
+                    code: "write_conflict".into(),
+                    message: format!(
+                        "节点“{}”与“{}”修改相同文件却没有依赖顺序",
+                        left.key, right.key
+                    ),
+                    node_keys: vec![left.key.clone(), right.key.clone()],
+                });
+            }
+        }
+    }
+
+    let mut producers: HashMap<&str, &str> = HashMap::new();
+    for entry in entries {
+        for contract in &entry.produces {
+            if let Some(previous) = producers.insert(contract.as_str(), entry.key.as_str()) {
+                issues.push(PlanIssue {
+                    severity: PlanIssueSeverity::Warning,
+                    code: "duplicate_producer".into(),
+                    message: format!(
+                        "接口“{contract}”同时由节点“{previous}”和“{}”产出",
+                        entry.key
+                    ),
+                    node_keys: vec![previous.to_string(), entry.key.clone()],
+                });
+            }
+        }
+    }
+
+    let statuses: HashMap<&str, TaskNodeStatus> = entries
+        .iter()
+        .map(|entry| (entry.key.as_str(), entry.status))
+        .collect();
+    for entry in entries {
+        // A plan update is also the execution scheduler's source of truth.
+        // Reject impossible progress instead of displaying a downstream node
+        // as running while one of its prerequisites is still pending.
+        if matches!(
+            entry.status,
+            TaskNodeStatus::Running | TaskNodeStatus::Success
+        ) {
+            for dependency in &entry.dependencies {
+                if keys.contains(dependency)
+                    && statuses.get(dependency.as_str()) != Some(&TaskNodeStatus::Success)
+                {
+                    issues.push(PlanIssue {
+                        severity: PlanIssueSeverity::Error,
+                        code: "dependency_not_completed".into(),
+                        message: format!(
+                            "节点“{}”已开始，但依赖节点“{dependency}”尚未完成",
+                            entry.key
+                        ),
+                        node_keys: vec![entry.key.clone(), dependency.clone()],
+                    });
+                }
+            }
+        }
+
+        // When an interface is produced inside this plan, consumers must
+        // explicitly depend on the producer so cross-module generation cannot
+        // race ahead with stale type or API assumptions.
+        for consumed in &entry.consumes {
+            let Some(producer) = producers.get(consumed.as_str()) else {
+                continue;
+            };
+            if *producer != entry.key.as_str()
+                && !transitively_depends_on(
+                    &entry.key,
+                    producer,
+                    &dependencies,
+                    &mut HashSet::new(),
+                )
+            {
+                issues.push(PlanIssue {
+                    severity: PlanIssueSeverity::Error,
+                    code: "interface_dependency_missing".into(),
+                    message: format!(
+                        "节点“{}”消费接口“{consumed}”，但未依赖其产出节点“{producer}”",
+                        entry.key
+                    ),
+                    node_keys: vec![entry.key.clone(), (*producer).to_string()],
+                });
+            }
+        }
+    }
+    issues
+}
+
+fn structural_revision(entries: &[RuntimePlanEntry]) -> Result<String, String> {
+    let structure = entries
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "key": entry.key,
+                "content": entry.content,
+                "dependencies": entry.dependencies,
+                "relatedFiles": entry.related_files,
+                "readSet": entry.read_set,
+                "writeSet": entry.write_set,
+                "consumes": entry.consumes,
+                "produces": entry.produces,
+                "acceptanceCriteria": entry.acceptance_criteria,
+                "verificationCommands": entry.verification_commands,
+                "priority": entry.priority,
+            })
+        })
+        .collect::<Vec<_>>();
+    let bytes =
+        serde_json::to_vec(&structure).map_err(|error| format!("计划序列化失败：{error}"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn node_contract_matches(node: &TaskNode, entry: &RuntimePlanEntry) -> bool {
+    node.content == entry.content
+        && node.dependencies == entry.dependencies
+        && node.related_files == entry.related_files
+        && node.read_set == entry.read_set
+        && node.write_set == entry.write_set
+        && node.consumes == entry.consumes
+        && node.produces == entry.produces
+        && node.acceptance_criteria == entry.acceptance_criteria
+        && node.verification_commands == entry.verification_commands
+}
+
+/// Persist the runtime's current plan as an executable DAG. Repeated ACP plan
+/// updates replace structure but preserve node identity, attempts and timing.
+pub fn sync_runtime_plan(
     root: &Path,
     task_id: &str,
-    steps: Vec<String>,
+    entries: Vec<RuntimePlanEntry>,
 ) -> Result<CodingTask, String> {
     let mut task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
-    let cleaned: Vec<String> = steps
-        .into_iter()
-        .map(|step| step.trim().to_string())
-        .filter(|step| !step.is_empty())
-        .take(50)
-        .collect();
-    if !cleaned.is_empty() {
-        let ids: Vec<String> = cleaned
-            .iter()
-            .map(|_| uuid::Uuid::now_v7().to_string())
-            .collect();
-        task.task_nodes = cleaned
-            .into_iter()
-            .enumerate()
-            .map(|(index, content)| TaskNode {
-                id: ids[index].clone(),
-                content,
-                dependencies: if index == 0 {
-                    Vec::new()
-                } else {
-                    vec![ids[index - 1].clone()]
-                },
-                related_files: Vec::new(),
-                status: TaskNodeStatus::Pending,
-                priority: if index == 0 { "high" } else { "medium" }.into(),
-            })
-            .collect();
+    if entries.len() > 100 {
+        return Err("执行计划最多支持 100 个节点".into());
     }
+    let mut entries = entries
+        .into_iter()
+        .map(|mut entry| {
+            entry.key = entry.key.trim().to_ascii_uppercase();
+            entry.content = entry.content.trim().to_string();
+            entry.dependencies = clean_values(entry.dependencies, 100)
+                .into_iter()
+                .map(|value| value.to_ascii_uppercase())
+                .collect();
+            entry.related_files = clean_values(entry.related_files, 200)
+                .into_iter()
+                .map(|value| normalize_plan_path(&value).unwrap_or(value))
+                .collect();
+            entry.read_set = clean_values(entry.read_set, 200)
+                .into_iter()
+                .map(|value| normalize_plan_path(&value).unwrap_or(value))
+                .collect();
+            entry.write_set = clean_values(entry.write_set, 200)
+                .into_iter()
+                .map(|value| normalize_plan_path(&value).unwrap_or(value))
+                .collect();
+            entry.consumes = clean_values(entry.consumes, 100);
+            entry.produces = clean_values(entry.produces, 100);
+            entry.acceptance_criteria = clean_values(entry.acceptance_criteria, 100);
+            entry.verification_commands = clean_values(entry.verification_commands, 50);
+            entry.priority = match entry.priority.as_str() {
+                "high" | "low" => entry.priority,
+                _ => "medium".into(),
+            };
+            entry
+        })
+        .collect::<Vec<_>>();
+
+    let issues = validate_runtime_plan(&entries);
+    task.next_action = None;
+    task.plan_issues = issues.clone();
+    if issues
+        .iter()
+        .any(|issue| issue.severity == PlanIssueSeverity::Error)
+    {
+        save(root, &task)?;
+        let _ = append_ledger(
+            root,
+            task_id,
+            "plan_rejected",
+            None,
+            issues
+                .iter()
+                .filter(|issue| issue.severity == PlanIssueSeverity::Error)
+                .map(|issue| issue.message.clone())
+                .collect::<Vec<_>>()
+                .join("；"),
+            task.plan_revision.clone(),
+        );
+        return Ok(load(root, task_id).unwrap_or(task));
+    }
+    for entry in &mut entries {
+        normalize_plan_paths(&mut entry.related_files);
+        normalize_plan_paths(&mut entry.read_set);
+        normalize_plan_paths(&mut entry.write_set);
+    }
+
+    let revision = structural_revision(&entries)?;
+    let previous = std::mem::take(&mut task.acceptance_criteria);
+    // Requirements submitted by the user (the original and follow-ups) are
+    // durable. Only acceptance rows generated from an earlier plan revision
+    // are replaced when the Agent revises its DAG.
+    let mut acceptance_criteria = previous
+        .iter()
+        .filter(|criterion| !criterion.id.contains(":acceptance:"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !acceptance_criteria
+        .iter()
+        .any(|criterion| criterion.id == "requirement")
+    {
+        acceptance_criteria.insert(
+            0,
+            AcceptanceCriterion {
+                id: "requirement".into(),
+                content: task.requirement.clone(),
+                satisfied: false,
+                evidence: Vec::new(),
+            },
+        );
+    }
+    let mut previous_plan_criteria: HashMap<String, AcceptanceCriterion> = previous
+        .into_iter()
+        .filter(|criterion| criterion.id.contains(":acceptance:"))
+        .map(|criterion| (criterion.id.clone(), criterion))
+        .collect();
+    for entry in &entries {
+        for (index, content) in entry.acceptance_criteria.iter().enumerate() {
+            let id = format!("{}:acceptance:{index}", entry.key);
+            acceptance_criteria.push(
+                previous_plan_criteria
+                    .remove(&id)
+                    .filter(|criterion| criterion.content == *content)
+                    .unwrap_or_else(|| AcceptanceCriterion {
+                        id,
+                        content: content.clone(),
+                        satisfied: false,
+                        evidence: Vec::new(),
+                    }),
+            );
+        }
+    }
+    task.acceptance_criteria = acceptance_criteria;
+    let previous_revision = task.plan_revision.clone();
+    let mut existing: HashMap<String, TaskNode> = task
+        .task_nodes
+        .drain(..)
+        .filter(|node| !node.plan_key.is_empty())
+        .map(|node| (node.plan_key.clone(), node))
+        .collect();
+    let timestamp = now();
+    let mut ledger_events = Vec::<(String, String, String)>::new();
+    task.task_nodes = entries
+        .into_iter()
+        .map(|entry| {
+            let previous = existing.remove(&entry.key);
+            let previous_status = previous.as_ref().map(|node| node.status);
+            // A re-plan may reorder downstream work, but an unchanged node
+            // that already passed must not be generated a second time merely
+            // because the model re-emitted it as pending.
+            let status = if previous.as_ref().is_some_and(|node| {
+                node.status == TaskNodeStatus::Success && node_contract_matches(node, &entry)
+            }) {
+                TaskNodeStatus::Success
+            } else {
+                entry.status
+            };
+            let mut attempt = previous.as_ref().map(|node| node.attempt).unwrap_or(0);
+            let mut started_at = previous.as_ref().and_then(|node| node.started_at.clone());
+            let mut completed_at = previous.as_ref().and_then(|node| node.completed_at.clone());
+            if status == TaskNodeStatus::Running && previous_status != Some(TaskNodeStatus::Running)
+            {
+                attempt = attempt.saturating_add(1);
+                started_at = Some(timestamp.clone());
+                completed_at = None;
+                ledger_events.push((
+                    "node_started".into(),
+                    entry.key.clone(),
+                    format!("开始执行：{}", entry.content),
+                ));
+            }
+            if status == TaskNodeStatus::Success && previous_status != Some(TaskNodeStatus::Success)
+            {
+                completed_at = Some(timestamp.clone());
+                ledger_events.push((
+                    "node_completed".into(),
+                    entry.key.clone(),
+                    format!("执行完成：{}", entry.content),
+                ));
+            }
+            TaskNode {
+                id: previous
+                    .as_ref()
+                    .map(|node| node.id.clone())
+                    .unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
+                plan_key: entry.key,
+                content: entry.content,
+                dependencies: entry.dependencies,
+                related_files: entry.related_files,
+                read_set: entry.read_set,
+                write_set: entry.write_set,
+                consumes: entry.consumes,
+                produces: entry.produces,
+                acceptance_criteria: entry.acceptance_criteria,
+                verification_commands: entry.verification_commands,
+                status,
+                priority: entry.priority,
+                attempt,
+                started_at,
+                completed_at,
+                failure: None,
+            }
+        })
+        .collect();
+    task.plan_revision = Some(revision.clone());
+    task.plan_updated_at = Some(timestamp);
     save(root, &task)?;
+
+    if previous_revision.as_deref() != Some(revision.as_str()) {
+        let _ = append_ledger(
+            root,
+            task_id,
+            "plan_synchronized",
+            None,
+            format!("已同步 {} 个执行节点", task.task_nodes.len()),
+            Some(revision.clone()),
+        );
+    }
+    for (kind, key, message) in ledger_events {
+        let _ = append_ledger(
+            root,
+            task_id,
+            &kind,
+            Some(key),
+            message,
+            Some(revision.clone()),
+        );
+    }
     Ok(load(root, task_id).unwrap_or(task))
 }
 
@@ -407,26 +1094,174 @@ mod tests {
     }
 
     #[test]
-    fn legacy_task_without_review_setting_defaults_to_automatic_completion() {
+    fn unsupported_task_schema_is_hidden_instead_of_migrated() {
         let root = temp_root();
-        let task = create_task(&root, "兼容旧任务", "完成修改").unwrap();
-        let mut value = serde_json::to_value(task).unwrap();
-        value.as_object_mut().unwrap().remove("reviewRequired");
-        let restored: CodingTask = serde_json::from_value(value).unwrap();
-        assert!(!restored.review_required);
+        let task = create_task(&root, "旧任务", "完成修改").unwrap();
+        let mut value = serde_json::to_value(&task).unwrap();
+        value["schemaVersion"] = serde_json::json!(1);
+        store::write_json(&task_path(&root, &task.id), &value).unwrap();
+        assert!(load(&root, &task.id).is_none());
+        assert!(list_tasks(&root).is_empty());
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
-    fn legacy_task_without_mode_keeps_its_original_workflow() {
+    fn valid_plan_persists_dag_acceptance_and_ledger() {
         let root = temp_root();
-        let mut task = create_task(&root, "兼容旧规划", "先规划").unwrap();
-        task.phase = TaskPhase::Planning;
-        task.plan_required = true;
-        let mut value = serde_json::to_value(task).unwrap();
-        value.as_object_mut().unwrap().remove("mode");
-        let restored: CodingTask = serde_json::from_value(value).unwrap();
-        assert_eq!(restored.effective_mode(), CodingMode::Plan);
+        let mut task = create_task(&root, "订单", "实现订单流程").unwrap();
+        task.acceptance_criteria.push(AcceptanceCriterion {
+            id: "followup-1".into(),
+            content: "同时记录审计事件".into(),
+            satisfied: false,
+            evidence: Vec::new(),
+        });
+        save(&root, &task).unwrap();
+        let updated = sync_runtime_plan(
+            &root,
+            &task.id,
+            vec![
+                RuntimePlanEntry {
+                    key: "T1".into(),
+                    content: "定义订单接口".into(),
+                    dependencies: vec![],
+                    related_files: vec!["src/order.ts".into()],
+                    read_set: vec![],
+                    write_set: vec!["src/order.ts".into()],
+                    consumes: vec![],
+                    produces: vec!["OrderService".into()],
+                    acceptance_criteria: vec!["接口可编译".into()],
+                    verification_commands: vec!["cargo check".into()],
+                    status: TaskNodeStatus::Success,
+                    priority: "high".into(),
+                },
+                RuntimePlanEntry {
+                    key: "T2".into(),
+                    content: "实现订单 API".into(),
+                    dependencies: vec!["T1".into()],
+                    related_files: vec!["src/api.rs".into()],
+                    read_set: vec!["src/order.ts".into()],
+                    write_set: vec!["src/api.rs".into()],
+                    consumes: vec!["OrderService".into()],
+                    produces: vec!["OrderApi".into()],
+                    acceptance_criteria: vec!["API 返回订单".into()],
+                    verification_commands: vec!["cargo test order".into()],
+                    status: TaskNodeStatus::Running,
+                    priority: "medium".into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert!(updated.plan_issues.is_empty());
+        assert!(updated.plan_revision.is_some());
+        assert_eq!(updated.task_nodes.len(), 2);
+        assert_eq!(updated.acceptance_criteria.len(), 4);
+        assert!(updated
+            .acceptance_criteria
+            .iter()
+            .any(|criterion| criterion.id == "followup-1"));
+        assert_eq!(updated.task_nodes[1].attempt, 1);
+        let ledger = execution_ledger(&root, &task.id);
+        assert!(ledger.iter().any(|event| event.kind == "plan_synchronized"));
+        assert!(ledger.iter().any(|event| {
+            event.kind == "node_started" && event.node_key.as_deref() == Some("T2")
+        }));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rejects_unordered_nodes_that_write_the_same_file() {
+        let root = temp_root();
+        let task = create_task(&root, "冲突", "修改共享接口").unwrap();
+        let entry = |key: &str| RuntimePlanEntry {
+            key: key.into(),
+            content: format!("执行 {key}"),
+            dependencies: vec![],
+            related_files: vec!["src/shared.ts".into()],
+            read_set: vec![],
+            write_set: vec!["src/shared.ts".into()],
+            consumes: vec![],
+            produces: vec![],
+            acceptance_criteria: vec![],
+            verification_commands: vec![],
+            status: TaskNodeStatus::Pending,
+            priority: "medium".into(),
+        };
+        let updated = sync_runtime_plan(&root, &task.id, vec![entry("T1"), entry("T2")]).unwrap();
+        assert!(updated.plan_revision.is_none());
+        assert!(updated
+            .plan_issues
+            .iter()
+            .any(|issue| issue.code == "write_conflict"));
+        assert!(execution_ledger(&root, &task.id)
+            .iter()
+            .any(|event| event.kind == "plan_rejected"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rejects_incomplete_or_unsafe_execution_contracts() {
+        let root = temp_root();
+        let task = create_task(&root, "不完整计划", "跨模块实现").unwrap();
+        let updated = sync_runtime_plan(
+            &root,
+            &task.id,
+            vec![RuntimePlanEntry {
+                key: "t1".into(),
+                content: "实现模块".into(),
+                dependencies: vec![],
+                related_files: vec![],
+                read_set: vec!["../secret".into()],
+                write_set: vec![],
+                consumes: vec![],
+                produces: vec![],
+                acceptance_criteria: vec![],
+                verification_commands: vec![],
+                status: TaskNodeStatus::Pending,
+                priority: "high".into(),
+            }],
+        )
+        .unwrap();
+        let codes = updated
+            .plan_issues
+            .iter()
+            .map(|issue| issue.code.as_str())
+            .collect::<HashSet<_>>();
+        assert!(codes.contains("missing_write_set"));
+        assert!(codes.contains("missing_acceptance"));
+        assert!(codes.contains("missing_verification"));
+        assert!(codes.contains("invalid_file_scope"));
+        assert!(updated.plan_revision.is_none());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn directory_write_scope_covers_actual_module_files() {
+        let root = temp_root();
+        let task = create_task(&root, "模块计划", "实现订单模块").unwrap();
+        let updated = sync_runtime_plan(
+            &root,
+            &task.id,
+            vec![RuntimePlanEntry {
+                key: "t1".into(),
+                content: "实现订单模块".into(),
+                dependencies: vec![],
+                related_files: vec!["./src/orders/**".into()],
+                read_set: vec![],
+                write_set: vec!["./src/orders/**".into()],
+                consumes: vec![],
+                produces: vec!["OrderService".into()],
+                acceptance_criteria: vec!["订单模块可用".into()],
+                verification_commands: vec!["pnpm test -- orders".into()],
+                status: TaskNodeStatus::Pending,
+                priority: "high".into(),
+            }],
+        )
+        .unwrap();
+        assert!(updated.plan_issues.is_empty());
+        assert_eq!(updated.task_nodes[0].plan_key, "T1");
+        assert_eq!(updated.task_nodes[0].write_set, ["src/orders/**"]);
+        assert!(plan_covers_path(&updated, "src/orders/service.ts"));
+        assert!(!plan_covers_path(&updated, "src/payments/service.ts"));
         std::fs::remove_dir_all(&root).ok();
     }
 

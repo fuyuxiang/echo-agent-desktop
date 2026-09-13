@@ -11,7 +11,6 @@ import type {
   AnalysisProgressEvent,
   ChangeSet,
   ChangeDiff,
-  CodingMode,
   CodingTask,
   DeliveryReport,
   DetectedCommand,
@@ -23,8 +22,10 @@ import type {
   IndexUpdatedEvent,
   OrchestratorState,
   PhaseChangedEvent,
+  ExecutionLedgerEvent,
   Problem,
   ReferenceHit,
+  RuntimePlanEntry,
   SymbolQueryHit,
   SymbolRecord,
   TaskSummary,
@@ -47,27 +48,16 @@ export const codingApi = {
   bindTaskRuntime: (root: string, taskId: string, sessionId: string, modelId: string) =>
     invoke<CodingTask>("coding_task_bind_runtime", { root, taskId, sessionId, modelId }),
 
-  submitRequirement: (
-    root: string,
-    taskId: string,
-    mode: CodingMode,
-  ) => invoke<CodingTask>("coding_task_submit_requirement", {
-    root,
-    taskId,
-    mode,
-  }),
-  approvePlan: (root: string, taskId: string) =>
-    invoke<CodingTask>("coding_task_approve_plan", { root, taskId }),
-  resolvePlan: (
-    root: string,
-    taskId: string,
-    outcome: "approved" | "cancelled" | "abandoned",
-    planEntries: string[],
-  ) => invoke<CodingTask>("coding_task_resolve_plan", { root, taskId, outcome, planEntries }),
+  submitRequirement: (root: string, taskId: string) =>
+    invoke<CodingTask>("coding_task_submit_requirement", { root, taskId }),
+  syncPlan: (root: string, taskId: string, entries: RuntimePlanEntry[]) =>
+    invoke<CodingTask>("coding_task_sync_plan", { root, taskId, entries }),
+  executionLedger: (root: string, taskId: string) =>
+    invoke<ExecutionLedgerEvent[]>("coding_task_execution_ledger", { root, taskId }),
   reportStartFailed: (root: string, taskId: string, reason: string) =>
     invoke<CodingTask>("coding_task_report_start_failed", { root, taskId, reason }),
-  beginFollowup: (root: string, taskId: string) =>
-    invoke<CodingTask>("coding_task_begin_followup", { root, taskId }),
+  beginFollowup: (root: string, taskId: string, requirement: string) =>
+    invoke<CodingTask>("coding_task_begin_followup", { root, taskId, requirement }),
   beginVerification: (root: string, taskId: string) =>
     invoke<CodingTask>("coding_task_begin_verification", { root, taskId }),
   rollbackTask: (root: string, taskId: string) =>
@@ -83,8 +73,6 @@ export const codingApi = {
     invoke<ChangeSet>("coding_changeset_record_change", { root, taskId, change }),
   discardFile: (root: string, taskId: string, path: string) =>
     invoke<ChangeSet>("coding_changeset_discard_file", { root, taskId, path }),
-  markReviewed: (root: string, taskId: string, path: string) =>
-    invoke<ChangeSet>("coding_changeset_mark_reviewed", { root, taskId, path }),
   syncChanges: (root: string, taskId: string) =>
     invoke<ChangeSet>("coding_changeset_sync", { root, taskId }),
 
@@ -115,8 +103,6 @@ export const codingApi = {
 
   reportImplementation: (root: string, taskId: string) =>
     invoke<CodingTask>("coding_orchestrator_report_implementation", { root, taskId }),
-  reportAnalysis: (root: string, taskId: string) =>
-    invoke<CodingTask>("coding_orchestrator_report_analysis", { root, taskId }),
   reportVerification: (root: string, taskId: string) =>
     invoke<CodingTask>("coding_orchestrator_report_verification", { root, taskId }),
   orchestratorState: (root: string, taskId: string) =>
@@ -124,8 +110,6 @@ export const codingApi = {
 
   deliveryReport: (root: string, taskId: string) =>
     invoke<DeliveryReport>("coding_delivery_report", { root, taskId }),
-  finalizeDelivery: (root: string, taskId: string) =>
-    invoke<DeliveryReport>("coding_delivery_finalize", { root, taskId }),
   commitInput: (root: string, taskId: string) =>
     invoke<string>("coding_delivery_commit_input", { root, taskId }),
   prInput: (root: string, taskId: string) =>

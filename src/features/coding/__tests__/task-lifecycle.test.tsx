@@ -5,7 +5,7 @@ const api = vi.hoisted(() => ({
   getChangeSet: vi.fn(),
   captureBaseline: vi.fn(),
   syncChanges: vi.fn(),
-  reportAnalysis: vi.fn(),
+  syncPlan: vi.fn(),
   reportImplementation: vi.fn(),
   reportStartFailed: vi.fn(),
 }));
@@ -81,6 +81,46 @@ describe("useTaskLifecycle", () => {
     expect(api.captureBaseline).not.toHaveBeenCalled();
   });
 
+  it("persists runtime plan contracts while Agent is working", async () => {
+    taskStoreState.task = { id: "t1", phase: "discovering", sessionId: "s1" };
+    renderHook(() => useTaskLifecycle("/repo"));
+    await act(async () => {
+      useSessionStore.setState({
+        transcripts: {
+          s1: {
+            messages: [],
+            streamingMessageId: "assistant-1",
+            pendingSendNowPromptId: null,
+            usage: {},
+            plan: {
+              entries: [{
+                content: "[T1] 修改登录\nFiles: src/auth.ts\nAcceptance: 登录成功\nVerify: pnpm test",
+                priority: "high",
+                status: "in_progress",
+              }],
+            },
+            planMode: false,
+            planApprovals: [],
+            suppressReplay: false,
+            dismissedControlPromptIds: [],
+          },
+        },
+      });
+    });
+
+    await waitFor(() => expect(api.syncPlan).toHaveBeenCalledWith(
+      "/repo",
+      "t1",
+      [expect.objectContaining({
+        key: "T1",
+        writeSet: ["src/auth.ts"],
+        acceptanceCriteria: ["登录成功"],
+        verificationCommands: ["pnpm test"],
+        status: "running",
+      })],
+    ));
+  });
+
   it("does not capture the baseline outside Implementing", async () => {
     taskStoreState.task = { id: "t1", phase: "verifying" };
     useSessionStore.setState({ streaming: false });
@@ -122,23 +162,6 @@ describe("useTaskLifecycle", () => {
     const reportOrder = api.reportImplementation.mock.invocationCallOrder[0] ?? 0;
     expect(syncOrder).toBeLessThan(reportOrder);
     expect(refreshTaskState).toHaveBeenCalled();
-  });
-
-  it("finishes Ask as read-only analysis instead of an implementation", async () => {
-    taskStoreState.task = { id: "t1", phase: "analyzing", sessionId: "s1" };
-    setTaskStreaming(false);
-    renderHook(() => useTaskLifecycle("/repo"));
-
-    await act(async () => {
-      setTaskStreaming(true);
-    });
-    await act(async () => {
-      setTaskStreaming(false);
-    });
-
-    await waitFor(() => expect(api.syncChanges).toHaveBeenCalledWith("/repo", "t1"));
-    await waitFor(() => expect(api.reportAnalysis).toHaveBeenCalledWith("/repo", "t1"));
-    expect(api.reportImplementation).not.toHaveBeenCalled();
   });
 
   it("skips the sync when the task is not in Implementing", async () => {

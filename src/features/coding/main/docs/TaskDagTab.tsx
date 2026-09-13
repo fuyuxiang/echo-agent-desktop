@@ -2,8 +2,8 @@ import { AlertTriangle, CheckCircle2, CircleDot, LoaderCircle, MinusCircle } fro
 
 import { describePhase } from "../../lib/phase";
 import {
-  codingModeForTask,
   type CodingTask,
+  type ExecutionLedgerEvent,
   type RepairRound,
   type TaskNode,
   type TaskNodeStatus,
@@ -15,6 +15,7 @@ interface TaskDagTabProps {
   maxRepairRounds: number;
   changedFileCount: number;
   problemCount: number;
+  ledger?: ExecutionLedgerEvent[];
   onOpenFile: (path: string) => void;
 }
 
@@ -35,11 +36,15 @@ function StatusIcon({ status }: { status: TaskNodeStatus }) {
 
 /** One task node with its dependencies and touched files. */
 function NodeRow({ node, onOpenFile }: { node: TaskNode; onOpenFile: (path: string) => void }) {
+  const hasContracts = node.consumes.length > 0
+    || node.produces.length > 0
+    || node.acceptanceCriteria.length > 0
+    || node.verificationCommands.length > 0;
   return (
     <div className={`coding-dag__node is-${node.status}`}>
       <div className="coding-dag__node-head">
         <StatusIcon status={node.status} />
-        <b>{node.id}</b>
+        <b>{node.planKey || node.id}</b>
         <span>{node.content}</span>
         <em>{STATUS_TEXT[node.status]}</em>
       </div>
@@ -51,6 +56,22 @@ function NodeRow({ node, onOpenFile }: { node: TaskNode; onOpenFile: (path: stri
               {path}
             </button>
           ))}
+        </div>
+      )}
+      {hasContracts && (
+        <div className="coding-dag__contracts">
+          {node.consumes.length > 0 && (
+            <div><strong>依赖接口</strong><span>{node.consumes.join("、")}</span></div>
+          )}
+          {node.produces.length > 0 && (
+            <div><strong>产出接口</strong><span>{node.produces.join("、")}</span></div>
+          )}
+          {node.acceptanceCriteria.length > 0 && (
+            <div><strong>节点验收</strong><span>{node.acceptanceCriteria.join("；")}</span></div>
+          )}
+          {node.verificationCommands.length > 0 && (
+            <div><strong>验证命令</strong><code>{node.verificationCommands.join(" · ")}</code></div>
+          )}
         </div>
       )}
     </div>
@@ -69,6 +90,7 @@ export function TaskDagTab({
   maxRepairRounds,
   changedFileCount,
   problemCount,
+  ledger = [],
   onOpenFile,
 }: TaskDagTabProps) {
   if (!task) {
@@ -76,8 +98,6 @@ export function TaskDagTab({
   }
 
   const phase = describePhase(task.phase);
-  const mode = codingModeForTask(task);
-  const modeLabel = mode === "ask" ? "Ask" : task.planRequired ? "Plan → Agent" : "Agent";
   const nodes = task.taskNodes;
   const done = nodes.filter((node) => node.status === "success").length;
 
@@ -109,11 +129,8 @@ export function TaskDagTab({
           问题 <b>{problemCount}</b>
         </span>
         <span>
-          工作模式 <b>{modeLabel}</b>
+          执行引擎 <b>{task.planRevision ? "结构化 DAG" : "直接任务"}</b>
         </span>
-        {mode !== "ask" && task.reviewRequired && (
-          <span>完成方式 <b>人工验收（旧任务）</b></span>
-        )}
         {repairRounds.length > 0 && (
           <span>
             修复轮次{" "}
@@ -124,16 +141,21 @@ export function TaskDagTab({
         )}
       </div>
 
+      {task.planIssues.length > 0 && (
+        <div className="coding-doc__note is-warning" role="status">
+          <AlertTriangle size={12} />
+          <div>
+            {task.planIssues.map((issue) => (
+              <p key={`${issue.code}:${issue.nodeKeys.join(",")}`}>{issue.message}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
       <section>
         <h2>任务拆解</h2>
         {nodes.length === 0 ? (
-          <p className="coding-doc__muted">
-            {mode === "ask"
-              ? "Ask 模式只读分析，不生成实施子任务。"
-              : task.planRequired
-              ? "Agent 尚未提交计划。"
-              : "Agent 直接实施当前任务，未另行生成计划拆解。"}
-          </p>
+          <p className="coding-doc__muted">Agent 尚未生成执行计划。</p>
         ) : (
           <div className="coding-dag">
             {nodes.map((node) => (
@@ -144,7 +166,7 @@ export function TaskDagTab({
       </section>
 
       <section>
-        <h2>{mode === "ask" ? "问题" : task.reviewRequired ? "验收标准" : "任务目标"}</h2>
+        <h2>任务目标</h2>
         {task.acceptanceCriteria.length === 0 ? (
           <p className="coding-doc__muted">尚未生成验收标准。</p>
         ) : (
@@ -158,6 +180,23 @@ export function TaskDagTab({
           </ul>
         )}
       </section>
+
+      {ledger.length > 0 && (
+        <section>
+          <h2>执行记录</h2>
+          <ol className="coding-dag__ledger">
+            {ledger.slice(-12).reverse().map((event) => (
+              <li key={event.id}>
+                <time dateTime={event.createdAt}>
+                  {new Date(event.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </time>
+                {event.nodeKey && <b>{event.nodeKey}</b>}
+                <span>{event.message}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
     </div>
   );
 }

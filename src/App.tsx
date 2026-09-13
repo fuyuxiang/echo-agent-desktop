@@ -57,8 +57,7 @@ import {
   type WorkspaceInfo,
 } from "./lib/agent-client";
 import type { AgentEntry, SessionSummary } from "./lib/types";
-import { buildCodingModePrompt } from "./features/coding/lib/mode";
-import type { CodingMode } from "./features/coding/lib/types";
+import { buildCodingWorkflowPrompt } from "./features/coding/lib/workflow";
 import { hydrateProjectsFromBackend, useProjectsStore, type ProjectMeta } from "./stores/projects-store";
 import {
   useMessageQueueStore,
@@ -1169,14 +1168,13 @@ function Shell() {
    *
    * The workbench owns the task itself (requirement, phase, change set); this
    * only creates the session it runs in, so session lifecycle stays with the
-   * rest of the application. Work mode and permission policy stay orthogonal:
-   * mode defines intent, while permission mode defines approval autonomy.
+   * rest of the application. Echo Code always runs as an Agent; permission
+   * policy independently defines approval autonomy.
    */
   const handleStartCodingRun = async (
     root: string,
     requirement: string,
-    mode: CodingMode,
-    requestedModelId?: string,
+    requestedModelId: string | undefined,
     contextPaths: string[] = [],
     onSessionReady?: (sessionId: string) => Promise<void>,
   ): Promise<string | undefined> => {
@@ -1197,9 +1195,9 @@ function Shell() {
       sessionsStore.getState().setCurrent(sessionId);
       sessionsStore.getState().upsert({
         sessionId,
-        title: `${mode === "ask" ? "代码问答" : mode === "plan" ? "实施计划" : "代码开发"}：${deriveTitle(requirement)}`,
+        title: `代码开发：${deriveTitle(requirement)}`,
         cwd: root,
-        status: mode === "plan" ? "planning" : "working",
+        status: "working",
         currentModelId: modelId,
         permissionMode,
       });
@@ -1208,11 +1206,11 @@ function Shell() {
       // Persist the task/session ownership before the first Agent token can be
       // produced. Otherwise a very fast turn can finish before the workbench
       // knows which task should receive its Git sync event.
-      await onSessionReady?.(sessionId);
-      // Use the runtime's native work modes so Ask stays read-only without
-      // inheriting Plan's approval flow. Permissions remain independent.
-      await setCodingMode(sessionId, mode);
-      const promptText = buildCodingModePrompt(mode, requirement, contextPaths);
+      if (onSessionReady) await onSessionReady(sessionId);
+      // The mode is an internal runtime safety primitive, not a user-facing
+      // product choice. Every Echo Code task starts with write-capable Agent.
+      await setCodingMode(sessionId, "agent");
+      const promptText = buildCodingWorkflowPrompt(requirement, contextPaths);
       const accepted = beginAgentTurn({
         sessionId,
         promptText,

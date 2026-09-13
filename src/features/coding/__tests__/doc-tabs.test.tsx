@@ -28,14 +28,15 @@ function gate(overrides: Partial<QualityGate> = {}): QualityGate {
 
 function task(overrides: Partial<CodingTask> = {}): CodingTask {
   return {
+    schemaVersion: 2,
     id: "t1",
     name: "重构登录",
     requirement: "改成 OIDC",
-    phase: "gating",
+    phase: "delivered",
     acceptanceCriteria: [],
     taskNodes: [],
-    planRequired: false,
-    reviewRequired: false,
+    planIssues: [],
+    globalConstraints: [],
     createdAt: "",
     updatedAt: "",
     ...overrides,
@@ -79,9 +80,9 @@ describe("DeliveryReportTab", () => {
     expect(screen.getByText(/新建开发任务后即可生成交付报告/)).toBeInTheDocument();
   });
 
-  it("states the deliverable verdict from the backend", async () => {
+  it("states that a delivered task is complete", async () => {
     render(<DeliveryReportTab root="/repo" taskId="t1" onOpenFile={vi.fn()} />);
-    expect(await screen.findByText("满足交付条件")).toBeInTheDocument();
+    expect(await screen.findByText("任务已完成")).toBeInTheDocument();
   });
 
   it("refuses to look deliverable when a gate is unmet", async () => {
@@ -156,7 +157,6 @@ describe("DeliveryReportTab", () => {
     api.deliveryReport.mockResolvedValue(
       report({
         task: task({
-          reviewRequired: true,
           acceptanceCriteria: [
             { id: "ac1", content: "登录流程可用", satisfied: false, evidence: [] },
           ],
@@ -198,20 +198,9 @@ describe("TaskDagTab", () => {
     expect(screen.getByText(/新建开发任务后即可查看拆解与进度/)).toBeInTheDocument();
   });
 
-  it("explains why there is no breakdown for a direct task", () => {
-    render(<TaskDagTab {...props} task={task({ planRequired: false })} />);
-    expect(screen.getByText(/未另行生成计划拆解/)).toBeInTheDocument();
-  });
-
-  it("describes Ask as read-only analysis", () => {
-    render(<TaskDagTab {...props} task={task({ mode: "ask", phase: "delivered" })} />);
-    expect(screen.getByText(/Ask 模式只读分析/)).toBeInTheDocument();
-    expect(screen.getByText("Ask")).toBeInTheDocument();
-  });
-
-  it("says the plan is pending when one was requested", () => {
-    render(<TaskDagTab {...props} task={task({ planRequired: true })} />);
-    expect(screen.getByText("Agent 尚未提交计划。")).toBeInTheDocument();
+  it("explains when Agent has not generated a breakdown yet", () => {
+    render(<TaskDagTab {...props} task={task({ phase: "discovering" })} />);
+    expect(screen.getByText("Agent 尚未生成执行计划。")).toBeInTheDocument();
   });
 
   it("lists nodes with dependencies and opens their files", async () => {
@@ -225,11 +214,19 @@ describe("TaskDagTab", () => {
           taskNodes: [
             {
               id: "T2",
+              planKey: "T2",
               content: "接入回调",
               dependencies: ["T1"],
               relatedFiles: ["src/callback.ts"],
+              readSet: ["src/auth.ts"],
+              writeSet: ["src/callback.ts"],
+              consumes: ["AuthSession"],
+              produces: ["CallbackHandler"],
+              acceptanceCriteria: ["回调可处理"],
+              verificationCommands: ["pnpm test"],
               status: "running",
               priority: "high",
+              attempt: 1,
             },
           ],
         })}
@@ -247,8 +244,8 @@ describe("TaskDagTab", () => {
         {...props}
         task={task({
           taskNodes: [
-            { id: "T1", content: "a", dependencies: [], relatedFiles: [], status: "success", priority: "high" },
-            { id: "T2", content: "b", dependencies: [], relatedFiles: [], status: "pending", priority: "low" },
+            { id: "T1", planKey: "T1", content: "a", dependencies: [], relatedFiles: [], readSet: [], writeSet: [], consumes: [], produces: [], acceptanceCriteria: [], verificationCommands: [], status: "success", priority: "high", attempt: 1 },
+            { id: "T2", planKey: "T2", content: "b", dependencies: [], relatedFiles: [], readSet: [], writeSet: [], consumes: [], produces: [], acceptanceCriteria: [], verificationCommands: [], status: "pending", priority: "low", attempt: 0 },
           ],
         })}
       />,

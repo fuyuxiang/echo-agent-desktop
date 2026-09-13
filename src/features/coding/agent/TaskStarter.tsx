@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState } from "react";
 import {
   AlertTriangle,
   Code2,
@@ -11,9 +11,6 @@ import {
 import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
 import { PermissionPicker } from "@/components/PermissionPicker";
 
-import { CODING_MODE_OPTIONS, codingModeOption } from "../lib/mode";
-import type { CodingMode } from "../lib/types";
-
 interface TaskStarterProps {
   models: ModelOption[];
   modelId?: string;
@@ -23,16 +20,15 @@ interface TaskStarterProps {
   apiReady: boolean;
   /** Files the user pinned as context, shown so the Agent's inputs are visible. */
   contextPaths: string[];
-  onStart: (requirement: string, mode: CodingMode) => void;
+  onStart: (requirement: string) => void;
   onOpenSettings?: () => void;
   onToast?: (message: string) => void;
 }
 
 /**
- * Requirement entry for a new task.
- *
- * Mode captures user intent; permissions remain an independent control for
- * runtime autonomy. Validation is part of Agent mode rather than an opt-in.
+ * Requirement entry for a new task. Echo Code is always an Agent;
+ * understanding, planning and validation are automatic workflow stages while
+ * permissions remain the independent control for runtime autonomy.
  */
 export function TaskStarter({
   models,
@@ -47,31 +43,10 @@ export function TaskStarter({
   onToast,
 }: TaskStarterProps) {
   const [requirement, setRequirement] = useState("");
-  const [mode, setMode] = useState<CodingMode>("agent");
-  const modeConfig = codingModeOption(mode);
 
   const submit = () => {
     if (!requirement.trim() || starting) return;
-    onStart(requirement.trim(), mode);
-  };
-
-  const moveModeFocus = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    let nextIndex: number | null = null;
-    if (["ArrowRight", "ArrowDown"].includes(event.key)) {
-      nextIndex = (index + 1) % CODING_MODE_OPTIONS.length;
-    } else if (["ArrowLeft", "ArrowUp"].includes(event.key)) {
-      nextIndex = (index - 1 + CODING_MODE_OPTIONS.length) % CODING_MODE_OPTIONS.length;
-    } else if (event.key === "Home") {
-      nextIndex = 0;
-    } else if (event.key === "End") {
-      nextIndex = CODING_MODE_OPTIONS.length - 1;
-    }
-    if (nextIndex === null) return;
-    event.preventDefault();
-    setMode(CODING_MODE_OPTIONS[nextIndex].id);
-    event.currentTarget.parentElement
-      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[nextIndex]
-      ?.focus();
+    onStart(requirement.trim());
   };
 
   return (
@@ -95,17 +70,15 @@ export function TaskStarter({
             <span className="coding-agent__intro-mark" aria-hidden="true">
               <Code2 size={22} />
             </span>
-            <strong>你想怎么处理这个任务？</strong>
-            <p>选择 Ask 了解代码、Plan 先审核方案，或让 Agent 直接完成并验证。</p>
+            <strong>和 Echo 一起构建</strong>
+            <p>描述想完成的目标，Agent 会理解工程、拆解复杂任务、分步实施并验证结果。</p>
           </div>
 
           <div className="coding-agent__starter-card">
             {contextPaths.length > 0 && (
               <div className="coding-agent__context" aria-label="已选定上下文">
                 {contextPaths.map((path) => (
-                  <span key={path} title={path}>
-                    {path.split("/").pop()}
-                  </span>
+                  <span key={path} title={path}>{path.split("/").pop()}</span>
                 ))}
               </div>
             )}
@@ -120,7 +93,7 @@ export function TaskStarter({
                 }
               }}
               rows={5}
-              placeholder={modeConfig.placeholder}
+              placeholder="描述你想完成的任务，例如：实现订单导出并补齐测试…"
               aria-label="任务描述"
             />
 
@@ -128,9 +101,7 @@ export function TaskStarter({
               <div className="coding-agent__warning">
                 <AlertTriangle size={13} />
                 尚未配置可用模型。
-                <button type="button" onClick={onOpenSettings}>
-                  前往设置
-                </button>
+                <button type="button" onClick={onOpenSettings}>前往设置</button>
               </div>
             )}
             {error && (
@@ -141,23 +112,6 @@ export function TaskStarter({
             )}
 
             <div className="coding-agent__composer-tools">
-              <div className="coding-agent__mode-switch" role="radiogroup" aria-label="工作模式">
-                {CODING_MODE_OPTIONS.map((entry, index) => (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={mode === entry.id}
-                    tabIndex={mode === entry.id ? 0 : -1}
-                    className={mode === entry.id ? "is-active" : undefined}
-                    title={entry.description}
-                    onClick={() => setMode(entry.id)}
-                    onKeyDown={(event) => moveModeFocus(event, index)}
-                  >
-                    {entry.label}
-                  </button>
-                ))}
-              </div>
               <PermissionPicker onToast={onToast} />
               <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} />
               <button
@@ -165,7 +119,7 @@ export function TaskStarter({
                 className="coding-agent__send"
                 disabled={starting || !requirement.trim() || !modelId}
                 onClick={submit}
-                aria-label={modeConfig.submitLabel}
+                aria-label="开始 Agent 任务"
               >
                 {starting ? <LoaderCircle size={14} className="is-spinning" /> : <Send size={14} />}
               </button>
@@ -174,7 +128,7 @@ export function TaskStarter({
 
           <div className="coding-agent__checkpoint-note">
             <ShieldCheck size={12} />
-            <span>{modeConfig.description}；权限策略独立控制操作审批</span>
+            <span>自动分析、拆解、实施并验证；审批模式独立控制操作权限</span>
           </div>
         </div>
       </div>

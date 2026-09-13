@@ -8,7 +8,6 @@
  */
 
 import type { ActivityView, BottomView } from "../store/workbench-store";
-import type { CodingMode } from "./types";
 
 export type CommandGroup =
   | "navigate"
@@ -49,7 +48,6 @@ export interface CommandContext {
   /** A run is in progress, so mutating commands are held back. */
   busy: boolean;
   taskPhase?: string;
-  taskMode?: CodingMode;
   problemCount: number;
   changedFileCount: number;
   canCommitChanges?: boolean;
@@ -59,7 +57,6 @@ export interface CommandContext {
   openDocTab: (kind: "delivery" | "taskDag" | "profile") => void;
   runAllVerifications: () => void | Promise<void>;
   rerunVerification: () => void | Promise<void>;
-  approvePlan: () => void | Promise<void>;
   rollbackTask: () => void | Promise<void>;
   newTask: () => void | Promise<void>;
   commitChanges: () => void | Promise<void>;
@@ -157,14 +154,6 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       run: () => openDocTab("taskDag"),
     },
     {
-      id: "task.approvePlan",
-      title: "批准计划",
-      group: "task",
-      keywords: ["approve", "plan"],
-      enabled: hasTask && context.taskPhase === "planning",
-      run: context.approvePlan,
-    },
-    {
       id: "task.rollback",
       title: "回滚本次任务的全部改动",
       group: "task",
@@ -179,7 +168,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "运行全部验证",
       group: "verify",
       keywords: ["build", "test", "lint", "构建", "测试"],
-      enabled: hasTask && context.taskMode !== "ask" && !busy,
+      enabled: hasTask && !busy,
       run: context.runAllVerifications,
     },
     {
@@ -187,7 +176,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "重跑验证",
       group: "verify",
       keywords: ["rerun", "重试"],
-      enabled: hasTask && context.taskMode !== "ask" && !busy,
+      enabled: hasTask && !busy,
       run: context.rerunVerification,
     },
     {
@@ -232,7 +221,6 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       keywords: ["commit", "git", "提交"],
       enabled: hasTask
         && context.taskPhase === "delivered"
-        && context.taskMode !== "ask"
         && changedFileCount > 0
         && !busy
         && context.canCommitChanges !== false,
@@ -277,7 +265,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "生成代码注释",
       group: "understand",
       keywords: ["comment", "注释", "文档"],
-      enabled: hasTask && context.taskMode !== "ask" && !busy,
+      enabled: hasTask && !busy,
       run: context.generateComments,
     },
     {
@@ -330,7 +318,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "打开交付报告",
       group: "deliver",
       keywords: ["report", "gate", "门禁", "验收"],
-      enabled: hasTask && context.taskMode !== "ask",
+      enabled: hasTask,
       run: () => openDocTab("delivery"),
     },
 

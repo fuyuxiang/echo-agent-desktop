@@ -5,24 +5,16 @@
 
 export type TaskPhase =
   | "idle"
-  | "analyzing"
-  | "planning"
+  | "discovering"
   | "implementing"
   | "verifying"
   | "diagnosing"
   | "repairing"
-  | "gating"
   | "delivered"
   | "blocked";
 
-/**
- * The user's intent for a coding task. This is deliberately independent from
- * the permission policy: mode controls what the Agent should do, while the
- * permission policy controls which actions need approval.
- */
-export type CodingMode = "ask" | "plan" | "agent";
-
 export type TaskNodeStatus = "pending" | "running" | "success" | "failed" | "blocked";
+export type TaskNextAction = "revise_plan" | "continue_node";
 
 export interface AcceptanceCriterion {
   id: string;
@@ -33,14 +25,60 @@ export interface AcceptanceCriterion {
 
 export interface TaskNode {
   id: string;
+  planKey: string;
   content: string;
   dependencies: string[];
   relatedFiles: string[];
+  readSet: string[];
+  writeSet: string[];
+  consumes: string[];
+  produces: string[];
+  acceptanceCriteria: string[];
+  verificationCommands: string[];
+  status: TaskNodeStatus;
+  priority: string;
+  attempt: number;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  failure?: string | null;
+}
+
+export type PlanIssueSeverity = "warning" | "error";
+
+export interface PlanIssue {
+  severity: PlanIssueSeverity;
+  code: string;
+  message: string;
+  nodeKeys: string[];
+}
+
+export interface RuntimePlanEntry {
+  key: string;
+  content: string;
+  dependencies: string[];
+  relatedFiles: string[];
+  readSet: string[];
+  writeSet: string[];
+  consumes: string[];
+  produces: string[];
+  acceptanceCriteria: string[];
+  verificationCommands: string[];
   status: TaskNodeStatus;
   priority: string;
 }
 
+export interface ExecutionLedgerEvent {
+  id: string;
+  taskId: string;
+  kind: string;
+  nodeKey?: string | null;
+  message: string;
+  planRevision?: string | null;
+  createdAt: string;
+}
+
 export interface CodingTask {
+  schemaVersion: 2;
   id: string;
   name: string;
   requirement: string;
@@ -49,23 +87,15 @@ export interface CodingTask {
   blocker?: string | null;
   acceptanceCriteria: AcceptanceCriterion[];
   taskNodes: TaskNode[];
-  /** Missing only on tasks persisted by releases before work modes existed. */
-  mode?: CodingMode | null;
-  planRequired: boolean;
-  /** Stop after automated checks so the user can review every changed file. */
-  reviewRequired: boolean;
+  planRevision?: string | null;
+  planUpdatedAt?: string | null;
+  planIssues: PlanIssue[];
+  globalConstraints: string[];
+  nextAction?: TaskNextAction | null;
   modelId?: string | null;
   sessionId?: string | null;
   createdAt: string;
   updatedAt: string;
-}
-
-/** Infer a safe mode for tasks created before `mode` was persisted. */
-export function codingModeForTask(
-  task: Pick<CodingTask, "mode" | "planRequired" | "phase">,
-): CodingMode {
-  if (task.mode) return task.mode;
-  return task.planRequired && task.phase === "planning" ? "plan" : "agent";
 }
 
 export interface TaskSummary {

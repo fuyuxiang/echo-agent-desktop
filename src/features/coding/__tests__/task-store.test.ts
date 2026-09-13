@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   getChangeSet: vi.fn(),
   listVerifications: vi.fn(),
   listProblems: vi.fn(),
+  executionLedger: vi.fn(),
   orchestratorState: vi.fn(),
 }));
 
@@ -20,14 +21,15 @@ import type { CodingTask, VerificationRecord } from "../lib/types";
 
 function task(overrides: Partial<CodingTask> = {}): CodingTask {
   return {
+    schemaVersion: 2,
     id: "t1",
     name: "重构登录",
     requirement: "改成 OIDC",
     phase: "implementing",
     acceptanceCriteria: [],
     taskNodes: [],
-    planRequired: false,
-    reviewRequired: false,
+    planIssues: [],
+    globalConstraints: [],
     createdAt: "2026-09-11T00:00:00Z",
     updatedAt: "2026-09-11T00:00:00Z",
     ...overrides,
@@ -66,6 +68,7 @@ describe("task store", () => {
     });
     api.listVerifications.mockResolvedValue([]);
     api.listProblems.mockResolvedValue([]);
+    api.executionLedger.mockResolvedValue([]);
     api.orchestratorState.mockResolvedValue({
       task: task(),
       problems: [],
@@ -108,7 +111,7 @@ describe("task store", () => {
   it("treats the orchestrator's task copy as authoritative", async () => {
     api.getTask.mockResolvedValue(task({ phase: "idle" }));
     api.orchestratorState.mockResolvedValue({
-      task: task({ phase: "gating" }),
+      task: task({ phase: "verifying" }),
       problems: [],
       repairRounds: [],
       changedFileCount: 2,
@@ -117,7 +120,7 @@ describe("task store", () => {
     useTaskStore.getState().setRoot("/repo");
     await useTaskStore.getState().selectTask("t1");
     // The phase must come from the orchestrator, not the plain task read.
-    expect(useTaskStore.getState().task?.phase).toBe("gating");
+    expect(useTaskStore.getState().task?.phase).toBe("verifying");
     expect(useTaskStore.getState().orchestrator?.changedFileCount).toBe(2);
   });
 
