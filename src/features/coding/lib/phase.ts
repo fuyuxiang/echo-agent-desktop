@@ -10,13 +10,11 @@ export interface PhasePresentation {
 
 const PHASES: Record<TaskPhase, PhasePresentation> = {
   idle: { label: "待开始", tone: "idle", active: false },
-  analyzing: { label: "分析中", tone: "running", active: true },
-  planning: { label: "制定计划", tone: "running", active: true },
+  discovering: { label: "分析工程", tone: "running", active: true },
   implementing: { label: "实现中", tone: "running", active: true },
   verifying: { label: "验证中", tone: "running", active: true },
   diagnosing: { label: "诊断中", tone: "running", active: true },
   repairing: { label: "修复中", tone: "running", active: true },
-  gating: { label: "待验收", tone: "waiting", active: false },
   delivered: { label: "已完成", tone: "good", active: false },
   blocked: { label: "已阻塞", tone: "bad", active: false },
 };

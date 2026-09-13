@@ -188,6 +188,7 @@ impl ChangeSet {
         self.baseline_files.iter().any(|entry| entry == path)
     }
 
+    #[cfg(test)]
     pub fn is_reviewed(&self, path: &str) -> bool {
         self.change_hashes
             .get(path)
@@ -650,9 +651,8 @@ pub fn capture_baseline(
     dirty_files.extend(
         initial_paths
             .iter()
-            .cloned()
-            .into_iter()
-            .filter(|path| !tracked_paths.contains(path)),
+            .filter(|path| !tracked_paths.contains(*path))
+            .cloned(),
     );
     dirty_files.sort();
     dirty_files.dedup();
@@ -702,7 +702,7 @@ pub fn capture_filesystem_baseline(root: &Path, task_id: &str) -> Result<ChangeS
     let mut snapshot_bytes = 0_usize;
     let mut entries = Vec::new();
     for path in &initial_paths {
-        entries.push(checkpoint_baseline(root, &path, &mut snapshot_bytes)?);
+        entries.push(checkpoint_baseline(root, path, &mut snapshot_bytes)?);
     }
     ensure_checkpoint_still_current(root, &initial_paths, &entries)?;
     set.baseline_mode = Some(BaselineMode::Filesystem);
@@ -800,6 +800,7 @@ pub fn ensure_changes_current(root: &Path, set: &ChangeSet) -> Result<(), String
 }
 
 /// Mark one file's diff as reviewed. Feeds the diff-review quality gate.
+#[cfg(test)]
 pub fn mark_reviewed(root: &Path, task_id: &str, path: &str) -> Result<ChangeSet, String> {
     let mut set = load(root, task_id);
     if !set.changes.iter().any(|change| change.path == path) {
@@ -924,6 +925,7 @@ async fn baseline_from_git(
 ///
 /// Dirty-at-start files remain included when the task changes their contents;
 /// the persisted byte snapshot protects the user's work during rollback.
+#[cfg(test)]
 pub async fn sync_from_git(root: &Path, task_id: &str) -> Result<ChangeSet, String> {
     let set = load(root, task_id);
     sync_from_git_with_set(root, set).await
@@ -1119,6 +1121,7 @@ async fn sync_from_git_with_set(root: &Path, mut set: ChangeSet) -> Result<Chang
 /// Compare a plain folder with the application-owned task checkpoint. Unlike
 /// tool-call bookkeeping, this also catches writes made by shell commands and
 /// by the user's editor while the Agent is working.
+#[cfg(test)]
 pub fn sync_from_filesystem(root: &Path, task_id: &str) -> Result<ChangeSet, String> {
     let set = load(root, task_id);
     sync_from_filesystem_with_set(root, set)
@@ -1273,19 +1276,6 @@ pub async fn sync_changes(root: &Path, task_id: &str) -> Result<ChangeSet, Strin
 
 #[tauri::command]
 pub async fn coding_changeset_sync(
-    access: State<'_, FilesystemAccess>,
-    root: String,
-    task_id: String,
-) -> Result<ChangeSetView, String> {
-    let root = access.require_workspace(&root)?;
-    let set = sync_changes(&root, &task_id).await?;
-    Ok(ChangeSetView::from(&set))
-}
-
-/// Backward-compatible command name for renderer builds from before local
-/// folder checkpoints were introduced.
-#[tauri::command]
-pub async fn coding_changeset_sync_from_git(
     access: State<'_, FilesystemAccess>,
     root: String,
     task_id: String,
@@ -1681,20 +1671,6 @@ pub async fn coding_changeset_record_change(
 }
 
 #[tauri::command]
-pub async fn coding_changeset_mark_reviewed(
-    access: State<'_, FilesystemAccess>,
-    root: String,
-    task_id: String,
-    path: String,
-) -> Result<ChangeSetView, String> {
-    let root = access.require_workspace(&root)?;
-    let set = tokio::task::spawn_blocking(move || mark_reviewed(&root, &task_id, &path))
-        .await
-        .map_err(|error| format!("标记已审阅失败：{error}"))??;
-    Ok(ChangeSetView::from(&set))
-}
-
-#[tauri::command]
 pub async fn coding_task_rollback(
     access: State<'_, FilesystemAccess>,
     root: String,
@@ -1706,10 +1682,7 @@ pub async fn coding_task_rollback(
     sync_changes(&root, &task_id).await?;
     tokio::task::spawn_blocking(move || {
         let current = task::load(&root, &task_id).ok_or_else(|| "任务不存在".to_string())?;
-        if !matches!(
-            current.phase,
-            TaskPhase::Gating | TaskPhase::Delivered | TaskPhase::Blocked
-        ) {
+        if !matches!(current.phase, TaskPhase::Delivered | TaskPhase::Blocked) {
             return Err("任务正在执行或验证，请先停止后再回滚".into());
         }
         let restored = rollback(&root, &task_id)?;
@@ -1717,6 +1690,7 @@ pub async fn coding_task_rollback(
             coding_task.phase = TaskPhase::Blocked;
             coding_task.phase_reason = Some("任务已回滚".into());
             coding_task.blocker = Some("任务文件已恢复到开始时的状态。".into());
+            coding_task.next_action = None;
             for node in &mut coding_task.task_nodes {
                 node.status = TaskNodeStatus::Blocked;
             }

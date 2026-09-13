@@ -41,7 +41,12 @@ import { SearchView } from "./explorer/SearchView";
 import { SymbolView } from "./explorer/SymbolView";
 import { buildCommands, type CommandContext } from "./lib/commands";
 import { buildFileIndex } from "./lib/file-index";
-import { buildCodingModePrompt } from "./lib/mode";
+import {
+  buildCodingWorkflowPrompt,
+  buildNodeContinuationInstruction,
+  buildPlanRevisionInstruction,
+  mergeTaskVerificationCommands,
+} from "./lib/workflow";
 import { countOccurrences, describeReplacePlan, replaceAll } from "./lib/replace";
 import { isBusyPhase, statusSummary } from "./lib/phase";
 import {
@@ -54,8 +59,6 @@ import {
 } from "./lib/tauri-api";
 import { getSymbolIndexClient } from "./lib/symbol-index";
 import {
-  codingModeForTask,
-  type CodingMode,
   type DetectedCommand,
   type IndexStatus,
   type Problem,
@@ -96,10 +99,9 @@ interface CodingWorkbenchProps {
   onStartRun?: (
     root: string,
     requirement: string,
-    mode: CodingMode,
-    modelId?: string,
-    contextPaths?: string[],
-    onSessionReady?: (sessionId: string) => Promise<void>,
+    modelId: string | undefined,
+    contextPaths: string[],
+    onSessionReady: (sessionId: string) => Promise<void>,
   ) => Promise<string | undefined>;
   /** Focus a task's persisted Agent session without leaving the workbench. */
   onActivateSession?: (sessionId: string, cwd: string) => Promise<void>;
@@ -118,7 +120,6 @@ interface ManualMutationContext {
 
 interface OpenTaskDiffOptions {
   /** Opening from the UI counts as review; background refreshes do not. */
-  markReviewed?: boolean;
   notifyError?: boolean;
   refreshTaskState?: boolean;
   showLoading?: boolean;
@@ -375,8 +376,8 @@ export function CodingWorkbench({
   const [reportRevision, setReportRevision] = useState(0);
   const activeRunIdRef = useRef<string | null>(null);
   const autoVerificationRef = useRef<string | null>(null);
-  const legacyAutoCompletionRef = useRef<string | null>(null);
   const repairPromptRef = useRef<string | null>(null);
+  const workflowActionRef = useRef<string | null>(null);
   const diffRequestGenerationRef = useRef(new Map<string, number>());
   const diffTaskRef = useRef<string | null>(null);
   const workbenchRef = useRef<HTMLDivElement>(null);
@@ -386,8 +387,13 @@ export function CodingWorkbench({
   const summaries = useTaskStore((state) => state.summaries);
   const changeSet = useTaskStore((state) => state.changeSet);
   const problems = useTaskStore((state) => state.problems);
+  const ledger = useTaskStore((state) => state.ledger);
   const verifications = useTaskStore((state) => state.verifications);
   const orchestrator = useTaskStore((state) => state.orchestrator);
+  const verificationCommands = useMemo(
+    () => mergeTaskVerificationCommands(detected, task),
+    [detected, task],
+  );
 
   // A diff is anchored to one task's baseline. Never let a cached comparison
   // from the previous task leak into a newly selected task.
@@ -410,25 +416,6 @@ export function CodingWorkbench({
   }, [task?.id]);
 
   useEffect(() => setModelId(defaultModelId), [defaultModelId]);
-
-  // Older tasks always stopped at `gating`, even when the user never asked for
-  // manual review. Complete those tasks once without manufacturing review
-  // evidence or forcing a migration click.
-  useEffect(() => {
-    if (!cwd || !task || task.phase !== "gating" || task.reviewRequired) return;
-    const key = `${cwd}:${task.id}:${task.updatedAt}`;
-    if (legacyAutoCompletionRef.current === key) return;
-    legacyAutoCompletionRef.current = key;
-    void (async () => {
-      try {
-        await codingApi.finalizeDelivery(cwd, task.id);
-        await useTaskStore.getState().refreshTaskState();
-        setReportRevision((value) => value + 1);
-      } catch (error) {
-        setPhaseReason(`自动完成旧任务失败：${String(error).replace(/^Error:\s*/, "")}`);
-      }
-    })();
-  }, [cwd, task]);
 
   // Bind the task store to this workspace and load its task list.
   useEffect(() => {
@@ -629,21 +616,12 @@ export function CodingWorkbench({
   const prepareManualMutation = useCallback(async (): Promise<ManualMutationContext | null> => {
     const activeTask = useTaskStore.getState().task;
     if (!activeTask) return { taskId: null, closeRound: false };
-    if (codingModeForTask(activeTask) === "ask") {
-      if (activeTask.phase === "analyzing") {
-        onToast?.("Ask 模式正在只读分析，请等待回答完成后再手动编辑");
-        return null;
-      }
-      // Manual edits after an Ask answer are ordinary editor work and must not
-      // be attributed to the completed read-only analysis task.
-      return { taskId: null, closeRound: false };
-    }
-    if (["implementing", "repairing"].includes(activeTask.phase)) {
+    if (["discovering", "implementing", "repairing"].includes(activeTask.phase)) {
       return { taskId: activeTask.id, closeRound: false };
     }
-    if (["gating", "blocked", "delivered"].includes(activeTask.phase)) {
+    if (["blocked", "delivered"].includes(activeTask.phase)) {
       try {
-        await codingApi.beginFollowup(cwd, activeTask.id);
+        await codingApi.beginFollowup(cwd, activeTask.id, "用户在编辑器中继续修改工程文件");
         await useTaskStore.getState().refreshTaskState();
         return { taskId: activeTask.id, closeRound: true };
       } catch (error) {
@@ -797,16 +775,6 @@ export function CodingWorkbench({
         activeTask.id,
       );
 
-      if ((options.markReviewed ?? true) && activeTask.reviewRequired) {
-        try {
-          await codingApi.markReviewed(cwd, activeTask.id, relativePath);
-          setReportRevision((nth) => nth + 1);
-        } catch (error) {
-          if (options.notifyError ?? true) {
-            onToast?.(`差异已打开，但审阅状态未能保存：${String(error).replace(/^Error:\s*/, "")}`);
-          }
-        }
-      }
       if (options.refreshTaskState ?? true) {
         await useTaskStore.getState().refreshTaskState();
       }
@@ -882,7 +850,6 @@ export function CodingWorkbench({
     if (!tab || !isFileTab(tab) || tab.view !== "diff") return false;
     const result = await openTaskDiff(relativePath, {
       activate: false,
-      markReviewed: false,
       notifyError: false,
       refreshTaskState: false,
       showLoading: false,
@@ -1146,7 +1113,7 @@ export function CodingWorkbench({
    * never decides it locally.
    */
   const startTask = useCallback(
-    async (requirement: string, mode: CodingMode) => {
+    async (requirement: string) => {
       if (!cwd || !onStartRun) return;
       setStarting(true);
       setStartError(null);
@@ -1162,7 +1129,7 @@ export function CodingWorkbench({
         // workspace. Git repositories get HEAD protection; ordinary folders
         // get an application-owned filesystem checkpoint.
         await codingApi.captureBaseline(cwd, created.id, []);
-        await codingApi.submitRequirement(cwd, created.id, mode);
+        await codingApi.submitRequirement(cwd, created.id);
         let boundSession: string | undefined;
         const bindSession = async (sessionId: string) => {
           if (boundSession && boundSession !== sessionId) {
@@ -1175,7 +1142,6 @@ export function CodingWorkbench({
         const session = await onStartRun(
           cwd,
           requirement,
-          mode,
           modelId,
           contextPaths,
           bindSession,
@@ -1187,10 +1153,6 @@ export function CodingWorkbench({
           await useTaskStore.getState().refreshTaskState();
           return;
         }
-        // Compatibility fallback for embedders that have not implemented the
-        // pre-send callback yet. The desktop host binds through `bindSession`
-        // before it starts the Agent turn, closing the fast-response race.
-        if (!boundSession) await bindSession(session);
         if (boundSession !== session) {
           throw new Error("Agent 返回的会话与已绑定会话不一致");
         }
@@ -1209,7 +1171,7 @@ export function CodingWorkbench({
   );
 
   const sendFollowup = useCallback(
-    async (text: string, mutating = true) => {
+    async (text: string, mutating = true, managedPrompt?: string) => {
       if (!onSendMessage) return false;
       if (
         !task?.sessionId
@@ -1223,14 +1185,13 @@ export function CodingWorkbench({
       let reopened = false;
       try {
         if (mutating && task) {
-          if (["gating", "blocked", "delivered"].includes(task.phase)) {
+          if (["blocked", "delivered"].includes(task.phase)) {
             if (!cwd) return false;
-            await codingApi.beginFollowup(cwd, task.id);
+            await codingApi.beginFollowup(cwd, task.id, text);
             await useTaskStore.getState().refreshTaskState();
             reopened = true;
           } else if (
-            !(codingModeForTask(task) === "ask" && task.phase === "analyzing")
-            && !["implementing", "repairing"].includes(task.phase)
+            !["discovering", "implementing", "repairing"].includes(task.phase)
           ) {
             onToast?.(task.phase === "verifying"
               ? "正在验证当前改动，请等待验证结束后再补充开发要求"
@@ -1238,9 +1199,9 @@ export function CodingWorkbench({
             return false;
           }
         }
-        const promptTextOverride = task && codingModeForTask(task) === "ask"
-          ? buildCodingModePrompt("ask", text, [], true)
-          : undefined;
+        const promptTextOverride = managedPrompt ?? (task
+          ? buildCodingWorkflowPrompt(text, [], true)
+          : undefined);
         const accepted = await onSendMessage(text, promptTextOverride);
         if (accepted === false && reopened) {
           await blockInterruptedManualMutation(
@@ -1274,50 +1235,61 @@ export function CodingWorkbench({
     ],
   );
 
-  const resolvePlan = useCallback(async (
-    outcome: "approved" | "cancelled" | "abandoned",
-    entries: string[],
-  ) => {
-    if (!cwd || !task) return;
-    try {
-      await codingApi.resolvePlan(cwd, task.id, outcome, entries);
-      await useTaskStore.getState().refreshTaskState();
-    } catch (error) {
-      onToast?.(`同步计划状态失败：${String(error).replace(/^Error:\s*/, "")}`);
-      throw error;
-    }
-  }, [cwd, onToast, task]);
+  // The backend is the scheduler. A managed follow-up is sent only for its
+  // explicit persisted nextAction, so closing/reopening the app resumes the
+  // exact unfinished node without relying on renderer timing or local guesses.
+  useEffect(() => {
+    if (
+      !cwd
+      || !task?.nextAction
+      || !task.sessionId
+      || activeSessionId !== task.sessionId
+      || hostSessionId !== task.sessionId
+      || streaming
+      || sending
+      || awaitingPermission
+      || awaitingQuestion
+      || !onSendMessage
+    ) return;
+    const key = `${task.id}:${task.updatedAt}:${task.nextAction}`;
+    if (workflowActionRef.current === key) return;
 
-  const handlePlanSyncFailure = useCallback(async (reason: string) => {
-    if (!cwd || !task) return;
-    // Runtime approval has already released the Agent. Stop it before marking
-    // the workflow blocked, then capture any writes that landed in that narrow
-    // window so review and rollback remain truthful.
-    await Promise.resolve(onCancelRun?.()).catch(() => undefined);
-    await codingApi.syncChanges(cwd, task.id).catch(() => undefined);
-    await codingApi.reportStartFailed(
-      cwd,
-      task.id,
-      `计划审批已生效，但任务状态保存失败：${reason}`,
-    ).catch(() => undefined);
-    await useTaskStore.getState().refreshTaskState().catch(() => undefined);
-    onToast?.("已停止 Agent，避免在未受管的任务状态下继续修改代码");
-  }, [cwd, onCancelRun, onToast, task]);
-
-  const finalizeDelivery = useCallback(async () => {
-    if (!cwd || !task) return;
-    try {
-      await codingApi.finalizeDelivery(cwd, task.id);
-      await useTaskStore.getState().refreshTaskState();
-      setReportRevision((value) => value + 1);
-      useTabStore.getState().openDoc("delivery");
-      onToast?.(task.reviewRequired
-        ? "任务已通过验收，可以提交或生成交付材料"
-        : "任务已完成，可以提交或生成交付材料");
-    } catch (error) {
-      onToast?.(`${task.reviewRequired ? "暂时无法交付" : "暂时无法完成任务"}：${String(error).replace(/^Error:\s*/, "")}`);
+    const activeNode = task.taskNodes.find((node) => node.status === "running");
+    if (task.nextAction === "continue_node" && !activeNode) {
+      workflowActionRef.current = key;
+      void codingApi
+        .reportStartFailed(cwd, task.id, "调度器要求继续执行，但没有找到运行中的节点")
+        .then(() => useTaskStore.getState().refreshTaskState())
+        .catch(() => undefined);
+      return;
     }
-  }, [cwd, onToast, task]);
+
+    workflowActionRef.current = key;
+    const displayText = task.nextAction === "revise_plan"
+      ? "正在根据结构校验结果修订执行计划"
+      : `继续执行 ${activeNode?.planKey ?? "下一节点"}`;
+    const prompt = task.nextAction === "revise_plan"
+      ? buildPlanRevisionInstruction(task)
+      : buildNodeContinuationInstruction(task, activeNode!);
+    void sendFollowup(displayText, false, prompt).then(async (accepted) => {
+      if (accepted) return;
+      await codingApi
+        .reportStartFailed(cwd, task.id, "Agent 未能接收自动续跑指令")
+        .catch(() => undefined);
+      await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+    });
+  }, [
+    activeSessionId,
+    awaitingPermission,
+    awaitingQuestion,
+    cwd,
+    hostSessionId,
+    onSendMessage,
+    sendFollowup,
+    sending,
+    streaming,
+    task,
+  ]);
 
   const rollbackTask = useCallback(async () => {
     if (!cwd || !task) return;
@@ -1374,12 +1346,8 @@ export function CodingWorkbench({
   const runVerifications = useCallback(
     async (commands: DetectedCommand[]) => {
       if (!cwd || !task || runningVerification) return;
-      if (codingModeForTask(task) === "ask") {
-        onToast?.("Ask 模式只读回答，不进入代码验证流程");
-        return;
-      }
       const taskId = task.id;
-      if (!["verifying", "gating", "blocked", "delivered"].includes(task.phase)) {
+      if (!["verifying", "blocked", "delivered"].includes(task.phase)) {
         onToast?.("当前任务正在执行，暂不能启动新的验证批次");
         return;
       }
@@ -1399,7 +1367,7 @@ export function CodingWorkbench({
       }
       setCommandOutput("");
       // With no detected command there is no output to show. Keep the editor
-      // visible and let the Agent's gating card explain the manual review step.
+      // visible; the delivery report states that automated checks were absent.
       if (commands.length > 0) setBottomView("output");
       let mayReport = commands.length === 0;
       try {
@@ -1421,7 +1389,14 @@ export function CodingWorkbench({
             // only add noise to the diagnosis.
             if (record.status !== "passed") break;
           } catch (error) {
-            onToast?.(`执行 ${command.command} 失败：${String(error).replace(/^Error:\s*/, "")}`);
+            const detail = String(error).replace(/^Error:\s*/, "");
+            onToast?.(`执行 ${command.command} 失败：${detail}`);
+            await codingApi.reportStartFailed(
+              cwd,
+              taskId,
+              `验证命令“${command.command}”未能执行：${detail}`,
+            ).catch(() => undefined);
+            await useTaskStore.getState().refreshTaskState().catch(() => undefined);
             mayReport = false;
             break;
           }
@@ -1431,7 +1406,13 @@ export function CodingWorkbench({
           await useTaskStore.getState().refreshTaskState();
         }
       } catch (error) {
-        onToast?.(`无法更新验证结果：${String(error).replace(/^Error:\s*/, "")}`);
+        const detail = String(error).replace(/^Error:\s*/, "");
+        onToast?.(`无法更新验证结果：${detail}`);
+        await codingApi.reportStartFailed(
+          cwd,
+          taskId,
+          `无法收敛本轮验证结果：${detail}`,
+        ).catch(() => undefined);
         await useTaskStore.getState().refreshTaskState().catch(() => undefined);
       } finally {
         activeRunIdRef.current = null;
@@ -1453,8 +1434,8 @@ export function CodingWorkbench({
     const key = `${cwd}:${task.id}:${task.updatedAt}`;
     if (autoVerificationRef.current === key) return;
     autoVerificationRef.current = key;
-    void runVerifications(detected);
-  }, [cwd, detected, detectedReady, runVerifications, runningVerification, task]);
+    void runVerifications(verificationCommands);
+  }, [cwd, detectedReady, runVerifications, runningVerification, task, verificationCommands]);
 
   // A failed verification opens a repair round. Feed the structured problem
   // list back to the exact task session once, then the lifecycle hook observes
@@ -1529,10 +1510,6 @@ export function CodingWorkbench({
       onToast?.("请先打开需要补充注释的文件");
       return;
     }
-    if (task && codingModeForTask(task) === "ask") {
-      onToast?.("生成注释会修改文件，请新建 Agent 模式任务");
-      return;
-    }
     sendFollowup(
       `请为 ${activeRelativePath} 补充必要且简洁的代码注释与公开 API 文档。不要复述显而易见的实现；保持项目既有风格，并直接修改文件。`,
     );
@@ -1569,7 +1546,6 @@ export function CodingWorkbench({
       hasTask: Boolean(task),
       busy: streaming || isBusyPhase(task?.phase),
       taskPhase: task?.phase,
-      taskMode: task ? codingModeForTask(task) : undefined,
       problemCount: problems.length,
       changedFileCount: taskChangeCount,
       canCommitChanges: changeSet?.baselineMode !== "filesystem",
@@ -1577,15 +1553,15 @@ export function CodingWorkbench({
       setActivityView,
       setBottomView,
       openDocTab: (kind) => useTabStore.getState().openDoc(kind),
-      runAllVerifications: () => void runVerifications(detected),
-      rerunVerification: () => void runVerifications(detected),
-      approvePlan: () => onToast?.("请在右侧计划面板中审阅并批准计划"),
+      runAllVerifications: () => void runVerifications(verificationCommands),
+      rerunVerification: () => void runVerifications(verificationCommands),
       rollbackTask: () => void rollbackTask(),
       newTask: () => useTaskStore.setState({
         task: null,
         changeSet: null,
         verifications: [],
         problems: [],
+        ledger: [],
         orchestrator: null,
       }),
       commitChanges: () => void commitChanges(),
@@ -1603,7 +1579,7 @@ export function CodingWorkbench({
       changeSet?.baselineMode,
       changeSet?.rollbackUnsafeFiles?.length,
       cwd,
-      detected,
+      verificationCommands,
       indexReady,
       generateComments,
       openFindReferences,
@@ -1796,6 +1772,7 @@ export function CodingWorkbench({
               changeSet: null,
               verifications: [],
               problems: [],
+              ledger: [],
               orchestrator: null,
             })}
           />
@@ -1875,14 +1852,13 @@ export function CodingWorkbench({
             committing={committing}
             canCommit={
               task?.phase === "delivered"
-              && codingModeForTask(task) !== "ask"
               && !changeSet?.committedHash
             }
             canRollback={
               !changeSet?.committedHash
               && !runningVerification
               && !streaming
-              && Boolean(task && ["gating", "delivered", "blocked"].includes(task.phase))
+              && Boolean(task && ["delivered", "blocked"].includes(task.phase))
             }
             canDiscard={
               !runningVerification
@@ -1891,10 +1867,10 @@ export function CodingWorkbench({
               && Boolean(task && [
                 "implementing",
                 "repairing",
-                "gating",
+                "discovering",
                 "blocked",
                 "delivered",
-              ].includes(task.phase) && codingModeForTask(task) !== "ask")
+              ].includes(task.phase))
             }
             onOpenDiff={(change) => void openTaskDiff(change.path)}
             onDiscard={(change) => void discardChange(change.path)}
@@ -1986,6 +1962,7 @@ export function CodingWorkbench({
                   maxRepairRounds={orchestrator?.maxRepairRounds ?? 3}
                   changedFileCount={taskChangeCount}
                   problemCount={problems.length}
+                  ledger={ledger}
                   onOpenFile={openRelative}
                 />
               );
@@ -2058,9 +2035,6 @@ export function CodingWorkbench({
             onModelChange={(next) => void changeTaskModel(next)}
             onSend={sendFollowup}
             onCancel={() => onCancelRun?.()}
-            onPlanResolved={resolvePlan}
-            onPlanSyncFailed={handlePlanSyncFailure}
-            onFinalizeDelivery={finalizeDelivery}
             onOpenChanges={() => setActivityView("changes")}
             onOpenReport={() => useTabStore.getState().openDoc("delivery")}
             onToast={onToast}
@@ -2074,7 +2048,7 @@ export function CodingWorkbench({
             error={startError}
             apiReady={apiReady}
             contextPaths={contextPaths}
-            onStart={(requirement, mode) => void startTask(requirement, mode)}
+            onStart={(requirement) => void startTask(requirement)}
             onOpenSettings={onOpenSettings}
             onToast={onToast}
           />
@@ -2091,7 +2065,7 @@ export function CodingWorkbench({
           onResize={setBottomHeight}
           problems={problems}
           records={verifications}
-          detected={detected}
+          detected={verificationCommands}
           running={runningVerification}
           hasTask={Boolean(task)}
           output={commandOutput}
@@ -2100,7 +2074,7 @@ export function CodingWorkbench({
           onActivateTerminal={() => setTerminalActivated(true)}
           onOpenProblem={openProblem}
           onRun={(command) => void runVerifications([command])}
-          onRunAll={() => void runVerifications(detected)}
+          onRunAll={() => void runVerifications(verificationCommands)}
           onCancelVerification={() => {
             if (activeRunId) void codingApi.cancelVerification(activeRunId);
           }}

@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { useSessionStore } from "@/stores/session-store";
 
 import { codingApi } from "./tauri-api";
+import { parseRuntimePlan, runtimePlanFingerprint } from "./workflow-plan";
 import { useTaskStore } from "../store/task-store";
 
 /**
@@ -11,10 +12,12 @@ import { useTaskStore } from "../store/task-store";
  * Three events matter for the workbench, and all three are driven by the
  * shared session store rather than by parsing tool calls:
  *
- * 1. Streaming finishes while the task is Analyzing, Implementing or Repairing
- *    → sync the live workspace state into the ChangeSet. Ask completes as a
- *    read-only answer; implementation rounds move to Verifying.
- * 2. Every phase event the orchestrator emits is already mirrored into the
+ * 1. ACP plan updates are parsed into the persisted execution DAG while the
+ *    Agent is working, so progress survives reloads and context compaction.
+ * 2. Streaming finishes while the task is Discovering, Implementing or
+ *    Repairing → synchronize the final plan and workspace state before the
+ *    orchestrator decides whether implementation is complete.
+ * 3. Every phase event the orchestrator emits is already mirrored into the
  *    task store (this is wired in the workbench shell).
  *
  * Parsing tool calls to figure out what the Agent did is exactly the kind of
@@ -28,16 +31,46 @@ export function useTaskLifecycle(cwd: string | undefined) {
   const streaming = useSessionStore((state) =>
     taskSessionId ? Boolean(state.transcripts[taskSessionId]?.streamingMessageId) : false,
   );
+  const runtimePlan = useSessionStore((state) =>
+    taskSessionId ? state.transcripts[taskSessionId]?.plan ?? null : null,
+  );
+  const planFingerprint = runtimePlanFingerprint(runtimePlan);
   const lastStreamingRef = useRef(streaming);
+  const lastPlanFingerprintRef = useRef("");
 
   // A different task/session is a different stream edge detector.
   useEffect(() => {
     lastStreamingRef.current = streaming;
+    lastPlanFingerprintRef.current = "";
   }, [taskId, taskSessionId]);
 
+  useEffect(() => {
+    if (
+      !cwd
+      || !taskId
+      || !taskSessionId
+      || !runtimePlan
+      || runtimePlan.entries.length === 0
+      || !["discovering", "implementing", "repairing"].includes(taskPhase ?? "")
+      || planFingerprint === lastPlanFingerprintRef.current
+    ) return;
+    lastPlanFingerprintRef.current = planFingerprint;
+    void codingApi
+      .syncPlan(cwd, taskId, parseRuntimePlan(runtimePlan))
+      .then(() => useTaskStore.getState().refreshTaskState())
+      .catch(async (error) => {
+        lastPlanFingerprintRef.current = "";
+        await codingApi.reportStartFailed(
+          cwd,
+          taskId,
+          `执行计划无法持久化：${String(error).replace(/^Error:\s*/, "")}`,
+        ).catch(() => undefined);
+        await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+      });
+  }, [cwd, planFingerprint, runtimePlan, taskId, taskPhase, taskSessionId]);
+
   // When streaming falls to false, the Agent just finished a managed turn. The
-  // native checkpoint is authoritative in every workspace, including Ask mode
-  // where it proves that the answer did not alter project files.
+  // native checkpoint is authoritative in every workspace.
   useEffect(() => {
     if (lastStreamingRef.current === streaming) return;
     lastStreamingRef.current = streaming;
@@ -46,16 +79,15 @@ export function useTaskLifecycle(cwd: string | undefined) {
       || !cwd
       || !taskId
       || !taskSessionId
-      || (taskPhase !== "analyzing" && taskPhase !== "implementing" && taskPhase !== "repairing")
+      || !["discovering", "implementing", "repairing"].includes(taskPhase ?? "")
     ) return;
     void (async () => {
       try {
-        await codingApi.syncChanges(cwd, taskId);
-        if (taskPhase === "analyzing") {
-          await codingApi.reportAnalysis(cwd, taskId);
-        } else {
-          await codingApi.reportImplementation(cwd, taskId);
+        if (runtimePlan?.entries.length) {
+          await codingApi.syncPlan(cwd, taskId, parseRuntimePlan(runtimePlan));
         }
+        await codingApi.syncChanges(cwd, taskId);
+        await codingApi.reportImplementation(cwd, taskId);
         await useTaskStore.getState().refreshTaskState();
       } catch (error) {
         // Continuing after a failed sync could falsely report a clean task.
@@ -69,5 +101,5 @@ export function useTaskLifecycle(cwd: string | undefined) {
         await useTaskStore.getState().refreshTaskState().catch(() => undefined);
       }
     })();
-  }, [cwd, streaming, taskId, taskPhase, taskSessionId]);
+  }, [cwd, runtimePlan, streaming, taskId, taskPhase, taskSessionId]);
 }

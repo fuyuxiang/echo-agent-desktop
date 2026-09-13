@@ -132,6 +132,35 @@ fn label_for(kind: VerificationKind) -> &'static str {
     }
 }
 
+fn workspace_has_script(root: &Path, script: &str) -> bool {
+    walkdir::WalkDir::new(root)
+        .max_depth(5)
+        .into_iter()
+        .filter_entry(|entry| {
+            entry.depth() == 0
+                || !matches!(
+                    entry.file_name().to_string_lossy().as_ref(),
+                    "node_modules" | ".git" | "target" | "dist" | "build"
+                )
+        })
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.file_name() == "package.json" && entry.path() != root.join("package.json")
+        })
+        .any(|entry| {
+            std::fs::read_to_string(entry.path())
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|manifest| {
+                    manifest
+                        .get("scripts")
+                        .and_then(|value| value.as_object())
+                        .map(|scripts| scripts.contains_key(script))
+                })
+                .unwrap_or(false)
+        })
+}
+
 /// Detect the project's real verification commands from its manifests. Only
 /// commands that actually exist are returned, so the orchestrator never invents
 /// a script the project does not define.
@@ -151,13 +180,14 @@ pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
     {
-        let runner = if root.join("pnpm-lock.yaml").exists() {
-            "pnpm"
-        } else if root.join("yarn.lock").exists() {
-            "yarn"
-        } else {
-            "npm run"
-        };
+        let runner =
+            if root.join("pnpm-lock.yaml").exists() || root.join("pnpm-workspace.yaml").exists() {
+                "pnpm"
+            } else if root.join("yarn.lock").exists() {
+                "yarn"
+            } else {
+                "npm run"
+            };
         if let Some(scripts) = manifest.get("scripts").and_then(|value| value.as_object()) {
             for (name, kind) in [
                 ("build", VerificationKind::Build),
@@ -172,6 +202,27 @@ pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
                 }
             }
         }
+        let has_workspaces =
+            root.join("pnpm-workspace.yaml").exists() || manifest.get("workspaces").is_some();
+        if has_workspaces {
+            for (name, kind) in [
+                ("build", VerificationKind::Build),
+                ("lint", VerificationKind::Lint),
+                ("typecheck", VerificationKind::TypeCheck),
+                ("type-check", VerificationKind::TypeCheck),
+                ("test", VerificationKind::Test),
+            ] {
+                if !workspace_has_script(root, name) {
+                    continue;
+                }
+                let command = match runner {
+                    "pnpm" => format!("pnpm -r --if-present run {name}"),
+                    "yarn" => format!("yarn workspaces run {name}"),
+                    _ => format!("npm run {name} --workspaces --if-present"),
+                };
+                push(&mut detected, kind, command);
+            }
+        }
     }
 
     if root.join("Cargo.toml").exists() {
@@ -180,20 +231,38 @@ pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
         push(&mut detected, VerificationKind::Test, "cargo test".into());
     }
     if root.join("pom.xml").exists() {
+        let maven = if root.join("mvnw").exists() {
+            "./mvnw"
+        } else {
+            "mvn"
+        };
         push(
             &mut detected,
             VerificationKind::Build,
-            "mvn -B compile".into(),
+            format!("{maven} -B compile"),
         );
-        push(&mut detected, VerificationKind::Test, "mvn -B test".into());
+        push(
+            &mut detected,
+            VerificationKind::Test,
+            format!("{maven} -B test"),
+        );
     }
     if root.join("build.gradle").exists() || root.join("build.gradle.kts").exists() {
+        let gradle = if root.join("gradlew").exists() {
+            "./gradlew"
+        } else {
+            "gradle"
+        };
         push(
             &mut detected,
             VerificationKind::Build,
-            "gradle build".into(),
+            format!("{gradle} build"),
         );
-        push(&mut detected, VerificationKind::Test, "gradle test".into());
+        push(
+            &mut detected,
+            VerificationKind::Test,
+            format!("{gradle} test"),
+        );
     }
     if root.join("pyproject.toml").exists() || root.join("requirements.txt").exists() {
         push(&mut detected, VerificationKind::Test, "pytest".into());
@@ -212,6 +281,45 @@ pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
             &mut detected,
             VerificationKind::Test,
             "go test ./...".into(),
+        );
+    }
+    if root.join("CMakeLists.txt").exists() {
+        push(
+            &mut detected,
+            VerificationKind::Build,
+            "cmake -S . -B build && cmake --build build".into(),
+        );
+        push(
+            &mut detected,
+            VerificationKind::Test,
+            "ctest --test-dir build --output-on-failure".into(),
+        );
+    }
+    if root.join("MODULE.bazel").exists() || root.join("WORKSPACE").exists() {
+        push(
+            &mut detected,
+            VerificationKind::Test,
+            "bazel test //...".into(),
+        );
+    }
+    let has_dotnet_project = std::fs::read_dir(root).ok().is_some_and(|entries| {
+        entries.filter_map(Result::ok).any(|entry| {
+            matches!(
+                entry.path().extension().and_then(|value| value.to_str()),
+                Some("sln" | "csproj" | "fsproj")
+            )
+        })
+    });
+    if has_dotnet_project {
+        push(
+            &mut detected,
+            VerificationKind::Build,
+            "dotnet build".into(),
+        );
+        push(
+            &mut detected,
+            VerificationKind::Test,
+            "dotnet test --no-build".into(),
         );
     }
     detected
@@ -613,6 +721,36 @@ mod tests {
         assert!(detected
             .iter()
             .any(|entry| entry.kind == VerificationKind::Test && entry.command.contains("test")));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn detects_verification_across_pnpm_workspace_packages() {
+        let root = temp_root();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"private":true,"workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("pnpm-workspace.yaml"),
+            "packages:\n  - packages/*\n",
+        )
+        .unwrap();
+        let package = root.join("packages/api");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"scripts":{"build":"tsc","test":"vitest run"}}"#,
+        )
+        .unwrap();
+        let detected = detect_commands(&root);
+        assert!(detected
+            .iter()
+            .any(|entry| entry.command == "pnpm -r --if-present run build"));
+        assert!(detected
+            .iter()
+            .any(|entry| entry.command == "pnpm -r --if-present run test"));
         std::fs::remove_dir_all(&root).ok();
     }
 

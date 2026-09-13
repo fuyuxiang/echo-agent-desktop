@@ -21,7 +21,6 @@ function context(overrides: Partial<CommandContext> = {}): CommandContext {
     openDocTab: vi.fn(),
     runAllVerifications: vi.fn(),
     rerunVerification: vi.fn(),
-    approvePlan: vi.fn(),
     rollbackTask: vi.fn(),
     newTask: vi.fn(),
     commitChanges: vi.fn(),
@@ -52,13 +51,6 @@ describe("command registry", () => {
     expect(report?.enabled).toBe(false);
   });
 
-  it("only enables plan approval while the task waits in planning", () => {
-    const planning = buildCommands(context({ taskPhase: "planning" }));
-    expect(planning.find((c) => c.id === "task.approvePlan")?.enabled).toBe(true);
-    const implementing = buildCommands(context({ taskPhase: "implementing" }));
-    expect(implementing.find((c) => c.id === "task.approvePlan")?.enabled).toBe(false);
-  });
-
   it("holds back mutating commands while a run is in progress", () => {
     const commands = buildCommands(context({ busy: true }));
     expect(commands.find((c) => c.id === "verify.runAll")?.enabled).toBe(false);
@@ -66,15 +58,6 @@ describe("command registry", () => {
     expect(commands.find((c) => c.id === "review.commit")?.enabled).toBe(false);
     // Read-only navigation stays available.
     expect(commands.find((c) => c.id === "view.changes")?.enabled).toBe(true);
-  });
-
-  it("keeps Ask read-only while retaining exploration commands", () => {
-    const commands = buildCommands(context({ taskMode: "ask", taskPhase: "delivered" }));
-    expect(commands.find((c) => c.id === "verify.runAll")?.enabled).toBe(false);
-    expect(commands.find((c) => c.id === "understand.comments")?.enabled).toBe(false);
-    expect(commands.find((c) => c.id === "review.commit")?.enabled).toBe(false);
-    expect(commands.find((c) => c.id === "deliver.report")?.enabled).toBe(false);
-    expect(commands.find((c) => c.id === "understand.system")?.enabled).toBe(true);
   });
 
   it("disables rollback and commit when the task changed nothing", () => {

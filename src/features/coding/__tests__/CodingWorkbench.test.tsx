@@ -85,14 +85,15 @@ import { useWorkbenchStore } from "../store/workbench-store";
 
 function verificationTask(overrides: Partial<CodingTask> = {}): CodingTask {
   return {
+    schemaVersion: 2,
     id: "verification-task",
     name: "验证布局",
     requirement: "验证工作台布局",
     phase: "verifying",
     acceptanceCriteria: [],
     taskNodes: [],
-    planRequired: false,
-    reviewRequired: false,
+    planIssues: [],
+    globalConstraints: [],
     createdAt: "2026-09-13T00:00:00Z",
     updatedAt: "2026-09-13T00:00:01Z",
     ...overrides,
@@ -296,6 +297,7 @@ describe("CodingWorkbench skeleton", () => {
       if (command === "coding_verification_list" || command === "coding_diagnostics_list") return [];
       if (command === "coding_orchestrator_state") {
         return {
+          schemaVersion: 2,
           task: activeTask,
           problems: [],
           repairRounds: [],
@@ -682,8 +684,8 @@ describe("CodingWorkbench skeleton", () => {
           phase: "idle",
           acceptanceCriteria: [],
           taskNodes: [],
-          planRequired: false,
-          reviewRequired: false,
+          planIssues: [],
+          globalConstraints: [],
           createdAt: "",
           updatedAt: "",
         };
@@ -714,12 +716,10 @@ describe("CodingWorkbench skeleton", () => {
     expect(invoke).toHaveBeenCalledWith("coding_task_submit_requirement", {
       root: "/repo",
       taskId: "t1",
-      mode: "agent",
     });
     expect(onStartRun).toHaveBeenCalledWith(
       "/repo",
       "增加登录审计",
-      "agent",
       "m1",
       [],
       expect.any(Function),
@@ -737,14 +737,15 @@ describe("CodingWorkbench skeleton", () => {
     invoke.mockImplementation(async (command: string) => {
       if (command === "coding_task_create") {
         return {
+          schemaVersion: 2,
           id: "t-local",
           name: "清除 HTML 注释",
           requirement: "清除 HTML 注释",
           phase: "idle",
           acceptanceCriteria: [],
           taskNodes: [],
-          planRequired: false,
-          reviewRequired: false,
+          planIssues: [],
+          globalConstraints: [],
           createdAt: "",
           updatedAt: "",
         };
@@ -773,7 +774,6 @@ describe("CodingWorkbench skeleton", () => {
     expect(onStartRun).toHaveBeenCalledWith(
       "/plain-folder",
       "清除 HTML 注释",
-      "agent",
       "m1",
       [],
       expect.any(Function),
@@ -814,51 +814,147 @@ describe("CodingWorkbench skeleton", () => {
     );
   });
 
-  it("silently completes a legacy gating task that never requested review", async () => {
-    const legacy = verificationTask({
-      phase: "gating",
-      reviewRequired: false,
+  it("runs verification commands declared by structured plan nodes", async () => {
+    const verifying = verificationTask({
+      taskNodes: [{
+        id: "node-1",
+        planKey: "T1",
+        content: "验证登录模块",
+        dependencies: [],
+        relatedFiles: ["src/auth.ts"],
+        readSet: [],
+        writeSet: ["src/auth.ts"],
+        consumes: [],
+        produces: ["AuthService"],
+        acceptanceCriteria: ["登录测试通过"],
+        verificationCommands: ["pnpm test -- auth"],
+        status: "success",
+        priority: "high",
+        attempt: 1,
+      }],
+    });
+    const delivered = verificationTask({ phase: "delivered", updatedAt: "later" });
+    useTaskStore.setState({ root: "/repo", task: verifying });
+    invoke.mockImplementation(async (command: string, args?: unknown): Promise<unknown> => {
+      if (command === "coding_task_list" || command === "coding_verification_detect") return [];
+      if (command === "coding_task_begin_verification") return verifying;
+      if (command === "coding_verification_run") {
+        return {
+          id: "planned-check",
+          taskId: verifying.id,
+          kind: "test",
+          command: (args as { command: string }).command,
+          status: "passed",
+          exitCode: 0,
+          stdout: "ok",
+          stderr: "",
+          durationMs: 1,
+          startedAt: "now",
+          finishedAt: "later",
+          structured: false,
+        } satisfies VerificationRecord;
+      }
+      if (command === "coding_changeset_get") return null;
+      if (
+        command === "coding_verification_list"
+        || command === "coding_diagnostics_list"
+        || command === "coding_task_execution_ledger"
+      ) return [];
+      if (command === "coding_orchestrator_state") {
+        return { task: delivered, problems: [], repairRounds: [], changedFileCount: 1, maxRepairRounds: 3 };
+      }
+      if (command === "coding_orchestrator_report_verification") return delivered;
+      return null;
+    });
+
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      "coding_verification_run",
+      expect.objectContaining({ command: "pnpm test -- auth", kind: "test" }),
+    ));
+  });
+
+  it("blocks cleanly when a verification command cannot be started", async () => {
+    const verifying = verificationTask();
+    const blocked = verificationTask({
+      phase: "blocked",
+      blocker: "验证命令无法执行",
       updatedAt: "2026-09-13T00:00:02Z",
     });
-    const delivered = verificationTask({
-      phase: "delivered",
-      reviewRequired: false,
-      phaseReason: "任务已完成；当前工程未检测到可运行的自动检查",
-      updatedAt: "2026-09-13T00:00:03Z",
-    });
-    useTaskStore.setState({ root: "/repo", task: legacy });
+    useTaskStore.setState({ root: "/repo", task: verifying });
     invoke.mockImplementation(async (command: string): Promise<unknown> => {
-      if (command === "coding_task_list" || command === "coding_verification_detect") return [];
-      if (command === "coding_delivery_finalize") return { task: delivered };
+      if (command === "coding_task_list") return [];
+      if (command === "coding_verification_detect") {
+        return [{ kind: "test", command: "pnpm test", label: "测试" }];
+      }
+      if (command === "coding_task_begin_verification") return verifying;
+      if (command === "coding_verification_run") throw new Error("command rejected");
+      if (command === "coding_task_report_start_failed") return blocked;
       if (command === "coding_changeset_get") return null;
-      if (command === "coding_verification_list" || command === "coding_diagnostics_list") return [];
+      if (
+        command === "coding_verification_list"
+        || command === "coding_diagnostics_list"
+        || command === "coding_task_execution_ledger"
+      ) return [];
       if (command === "coding_orchestrator_state") {
-        return {
-          task: delivered,
-          problems: [],
-          repairRounds: [],
-          changedFileCount: 1,
-          maxRepairRounds: 3,
-        };
+        return { task: blocked, problems: [], repairRounds: [], changedFileCount: 1, maxRepairRounds: 3 };
       }
       return null;
     });
 
     render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith(
+      "coding_task_report_start_failed",
+      expect.objectContaining({
+        taskId: verifying.id,
+        reason: expect.stringContaining("验证命令“pnpm test”未能执行"),
+      }),
+    ));
+    await waitFor(() => expect(useTaskStore.getState().task?.phase).toBe("blocked"));
+  });
 
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("coding_delivery_finalize", {
-      root: "/repo",
-      taskId: legacy.id,
-    }));
-    expect(await screen.findByText("任务已完成")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /确认验收/ })).not.toBeInTheDocument();
+  it("continues the exact node selected by the persisted backend scheduler", async () => {
+    const onSendMessage = vi.fn(async (_text: string, _prompt?: string) => true);
+    const scheduled = verificationTask({
+      phase: "implementing",
+      sessionId: "s1",
+      nextAction: "continue_node",
+      taskNodes: [{
+        id: "node-2",
+        planKey: "T2",
+        content: "实现订单 API",
+        dependencies: ["T1"],
+        relatedFiles: ["src/order-api.ts"],
+        readSet: ["src/order.ts"],
+        writeSet: ["src/order-api.ts"],
+        consumes: ["OrderService"],
+        produces: ["OrderApi"],
+        acceptanceCriteria: ["API 可创建订单"],
+        verificationCommands: ["pnpm test -- order-api"],
+        status: "running",
+        priority: "high",
+        attempt: 1,
+      }],
+    });
+    useTaskStore.setState({ root: "/repo", task: scheduled });
+    render(
+      <CodingWorkbench
+        cwd="/repo"
+        sessionId="s1"
+        models={[{ id: "m1" }]}
+        onSendMessage={onSendMessage}
+      />,
+    );
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalled());
+    expect(onSendMessage.mock.calls[0]?.[0]).toBe("继续执行 T2");
+    expect(onSendMessage.mock.calls[0]?.[1]).toContain("只继续下面这个由调度器选中的节点");
+    expect(onSendMessage.mock.calls[0]?.[1]).toContain("Files: src/order-api.ts");
   });
 
   it("keeps an empty output panel closed when automatic verification has no commands", async () => {
     const verifying = verificationTask();
-    const gating = verificationTask({
-      phase: "gating",
-      reviewRequired: true,
+    const delivered = verificationTask({
+      phase: "delivered",
       updatedAt: "2026-09-13T00:00:02Z",
     });
     useTaskStore.setState({ root: "/repo", task: verifying });
@@ -869,9 +965,9 @@ describe("CodingWorkbench skeleton", () => {
       if (command === "coding_changeset_get") return null;
       if (command === "coding_verification_list" || command === "coding_diagnostics_list") return [];
       if (command === "coding_orchestrator_state") {
-        return { task: gating, problems: [], repairRounds: [], changedFileCount: 1, maxRepairRounds: 3 };
+        return { task: delivered, problems: [], repairRounds: [], changedFileCount: 1, maxRepairRounds: 3 };
       }
-      if (command === "coding_orchestrator_report_verification") return gating;
+      if (command === "coding_orchestrator_report_verification") return delivered;
       return null;
     });
 
@@ -883,9 +979,8 @@ describe("CodingWorkbench skeleton", () => {
 
   it("opens output for a real verification command without moving the workbench panes", async () => {
     const verifying = verificationTask();
-    const gating = verificationTask({
-      phase: "gating",
-      reviewRequired: true,
+    const delivered = verificationTask({
+      phase: "delivered",
       updatedAt: "2026-09-13T00:00:02Z",
     });
     const record: VerificationRecord = {
@@ -914,9 +1009,9 @@ describe("CodingWorkbench skeleton", () => {
       if (command === "coding_changeset_get") return null;
       if (command === "coding_verification_list" || command === "coding_diagnostics_list") return [];
       if (command === "coding_orchestrator_state") {
-        return { task: gating, problems: [], repairRounds: [], changedFileCount: 1, maxRepairRounds: 3 };
+        return { task: delivered, problems: [], repairRounds: [], changedFileCount: 1, maxRepairRounds: 3 };
       }
-      if (command === "coding_orchestrator_report_verification") return gating;
+      if (command === "coding_orchestrator_report_verification") return delivered;
       return null;
     });
 

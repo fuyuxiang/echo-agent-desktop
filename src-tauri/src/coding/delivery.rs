@@ -13,7 +13,7 @@ use tauri::State;
 use crate::coding::changeset::{self, ChangeSet, FileChange, FileChangeView};
 use crate::coding::diagnostics::{self, Problem};
 use crate::coding::orchestrator::{self, RepairRound};
-use crate::coding::task::{self, AcceptanceCriterion, CodingTask, TaskNodeStatus, TaskPhase};
+use crate::coding::task::{self, AcceptanceCriterion, CodingTask, TaskPhase};
 use crate::coding::verification::{self, VerificationKind, VerificationRecord, VerificationStatus};
 use crate::shell_fs::FilesystemAccess;
 
@@ -176,7 +176,6 @@ pub fn evaluate_gates(
     set: &ChangeSet,
     criteria: &[AcceptanceCriterion],
     problems: &[Problem],
-    review_required: bool,
 ) -> Vec<QualityGate> {
     let mut gates = vec![
         verification_gate(GateId::Build, VerificationKind::Build, records),
@@ -203,28 +202,14 @@ pub fn evaluate_gates(
     });
 
     let task_changes: Vec<&FileChange> = set.changes.iter().collect();
-    let unreviewed_count = task_changes
-        .iter()
-        .filter(|change| !set.is_reviewed(&change.path))
-        .count();
     gates.push(QualityGate {
         id: GateId::DiffReview,
         title: title_for(GateId::DiffReview).into(),
-        status: if !review_required {
-            GateStatus::NotApplicable
-        } else if task_changes.is_empty() || unreviewed_count > 0 {
-            GateStatus::NotSatisfied
-        } else {
-            GateStatus::Satisfied
-        },
-        summary: if !review_required {
-            "任务使用自动完成模式，未要求人工审阅".into()
-        } else if task_changes.is_empty() {
+        status: GateStatus::NotApplicable,
+        summary: if task_changes.is_empty() {
             "本任务没有产生代码变更".into()
-        } else if unreviewed_count == 0 {
-            format!("{} 个变更文件已全部审阅", task_changes.len())
         } else {
-            format!("还有 {unreviewed_count} 个变更文件未审阅")
+            format!("{} 个变更文件可在差异视图中随时审阅", task_changes.len())
         },
         evidence: task_changes
             .iter()
@@ -239,16 +224,12 @@ pub fn evaluate_gates(
     gates.push(QualityGate {
         id: GateId::Acceptance,
         title: title_for(GateId::Acceptance).into(),
-        status: if !review_required {
-            GateStatus::NotApplicable
-        } else if criteria.is_empty() || unmet_count > 0 {
+        status: if criteria.is_empty() || unmet_count > 0 {
             GateStatus::NotSatisfied
         } else {
             GateStatus::Satisfied
         },
-        summary: if !review_required {
-            "任务使用自动完成模式，未要求人工验收".into()
-        } else if criteria.is_empty() {
+        summary: if criteria.is_empty() {
             "尚未生成验收标准".into()
         } else if unmet_count == 0 {
             format!("{} 条验收标准均有验证证据", criteria.len())
@@ -341,13 +322,7 @@ pub fn build_report(root: &Path, task_id: &str) -> Result<DeliveryReport, String
     let set = changeset::load(root, task_id);
     let records = verification::list_records(root, task_id);
     let problems = diagnostics::load_snapshot(root, task_id);
-    let gates = evaluate_gates(
-        &records,
-        &set,
-        &task.acceptance_criteria,
-        &problems,
-        task.review_required,
-    );
+    let gates = evaluate_gates(&records, &set, &task.acceptance_criteria, &problems);
     let evidence = task
         .acceptance_criteria
         .iter()
@@ -387,85 +362,6 @@ pub fn build_report(root: &Path, task_id: &str) -> Result<DeliveryReport, String
         blockers,
         task,
     })
-}
-
-/// Complete a task that is waiting at the delivery boundary. Manual-review
-/// tasks require content-bound diff evidence; legacy automatic tasks that were
-/// persisted in `gating` are completed without manufacturing review evidence.
-pub fn finalize_delivery(root: &Path, task_id: &str) -> Result<DeliveryReport, String> {
-    let mut task = task::load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
-    if task.phase != TaskPhase::Gating {
-        return Err("只有进入交付门禁的任务可以确认交付".into());
-    }
-    let set = changeset::load(root, task_id);
-    changeset::ensure_head_unchanged(root, &set)?;
-    changeset::ensure_changes_current(root, &set)?;
-    if !set.rollback_unsafe_files.is_empty() {
-        return Err(format!(
-            "以下文件没有安全快照，不能交付：{}",
-            set.rollback_unsafe_files.join("、")
-        ));
-    }
-    let records = verification::list_records(root, task_id);
-    let problems = diagnostics::load_snapshot(root, task_id);
-    let gates = evaluate_gates(
-        &records,
-        &set,
-        &task.acceptance_criteria,
-        &problems,
-        task.review_required,
-    );
-    let blockers: Vec<String> = gates
-        .iter()
-        .filter(|gate| gate.id != GateId::Acceptance && gate.status == GateStatus::NotSatisfied)
-        .map(|gate| format!("{}：{}", gate.title, gate.summary))
-        .collect();
-    if !blockers.is_empty() {
-        return Err(format!("交付门禁尚未通过：{}", blockers.join("；")));
-    }
-    if !problems.is_empty() {
-        return Err(format!("诊断中心仍有 {} 个未解决问题", problems.len()));
-    }
-
-    if task.review_required {
-        let mut evidence: Vec<String> = latest_per_command(&records)
-            .into_iter()
-            .filter(|record| record.status == VerificationStatus::Passed)
-            .map(|record| format!("{} 通过（退出码 0）", record.command))
-            .collect();
-        evidence.push(format!("{} 个任务差异已逐一审阅", set.changes.len()));
-        evidence.push("用户已确认当前任务满足验收要求".into());
-        if records.is_empty() {
-            evidence.push("当前工程未检测到可运行的自动检查，由用户完成差异验收".into());
-        }
-        for criterion in &mut task.acceptance_criteria {
-            criterion.satisfied = true;
-            criterion.evidence = evidence.clone();
-        }
-    }
-    let related_files: Vec<String> = set
-        .changes
-        .iter()
-        .map(|change| change.path.clone())
-        .collect();
-    for node in &mut task.task_nodes {
-        node.status = TaskNodeStatus::Success;
-        node.related_files = related_files.clone();
-    }
-    task.phase = TaskPhase::Delivered;
-    task.phase_reason = Some(if task.review_required {
-        "用户已确认验收，任务可以交付".into()
-    } else if records.is_empty() {
-        "任务已完成；当前工程未检测到可运行的自动检查".into()
-    } else {
-        format!(
-            "任务已完成，{} 项自动检查通过",
-            latest_per_command(&records).len()
-        )
-    });
-    task.blocker = None;
-    task::save(root, &task)?;
-    build_report(root, task_id)
 }
 
 async fn git(root: &PathBuf, arguments: &[&str]) -> Result<String, String> {
@@ -519,21 +415,6 @@ pub async fn coding_delivery_report(
     tokio::task::spawn_blocking(move || build_report(&root, &task_id))
         .await
         .map_err(|error| format!("生成交付报告失败：{error}"))?
-}
-
-#[tauri::command]
-pub async fn coding_delivery_finalize(
-    access: State<'_, FilesystemAccess>,
-    root: String,
-    task_id: String,
-) -> Result<DeliveryReport, String> {
-    let root = access.require_workspace(&root)?;
-    // Delivery evidence must describe the bytes that are on disk now, not the
-    // last Agent-stream edge observed by the renderer.
-    changeset::sync_changes(&root, &task_id).await?;
-    tokio::task::spawn_blocking(move || finalize_delivery(&root, &task_id))
-        .await
-        .map_err(|error| format!("确认交付失败：{error}"))?
 }
 
 #[tauri::command]
@@ -729,7 +610,6 @@ mod tests {
             &change_set(true),
             &criteria(true),
             &[],
-            true,
         );
         let lint = gates.iter().find(|gate| gate.id == GateId::Lint).unwrap();
         assert_eq!(lint.status, GateStatus::NotApplicable);
@@ -743,7 +623,6 @@ mod tests {
             &change_set(true),
             &criteria(true),
             &[],
-            true,
         );
         let test = gates.iter().find(|gate| gate.id == GateId::Test).unwrap();
         assert_eq!(test.status, GateStatus::NotSatisfied);
@@ -757,7 +636,6 @@ mod tests {
             &change_set(true),
             &criteria(false),
             &[],
-            true,
         );
         let acceptance = gates
             .iter()
@@ -768,24 +646,23 @@ mod tests {
     }
 
     #[test]
-    fn unreviewed_changes_fail_diff_review_gate() {
+    fn diff_review_is_informational_not_a_delivery_gate() {
         let gates = evaluate_gates(
             &[record(VerificationKind::Test, "pnpm test", 0)],
             &change_set(false),
             &criteria(true),
             &[],
-            true,
         );
         let review = gates
             .iter()
             .find(|gate| gate.id == GateId::DiffReview)
             .unwrap();
-        assert_eq!(review.status, GateStatus::NotSatisfied);
+        assert_eq!(review.status, GateStatus::NotApplicable);
         assert!(review.summary.contains('1'));
     }
 
     #[test]
-    fn empty_change_set_fails_diff_review() {
+    fn empty_change_set_is_reported_without_manual_review_gate() {
         let empty = ChangeSet {
             task_id: "task-1".into(),
             baseline_files: Vec::new(),
@@ -799,13 +676,12 @@ mod tests {
             &empty,
             &criteria(true),
             &[],
-            true,
         );
         let review = gates
             .iter()
             .find(|gate| gate.id == GateId::DiffReview)
             .unwrap();
-        assert_eq!(review.status, GateStatus::NotSatisfied);
+        assert_eq!(review.status, GateStatus::NotApplicable);
     }
 
     #[test]
@@ -818,7 +694,6 @@ mod tests {
             &change_set(true),
             &criteria(true),
             &[],
-            true,
         );
         let build = gates.iter().find(|gate| gate.id == GateId::Build).unwrap();
         assert_eq!(build.status, GateStatus::Satisfied);
@@ -828,7 +703,7 @@ mod tests {
     fn new_tasks_require_verification_for_the_current_content_revision() {
         let mut set = change_set(true);
         set.baseline_mode = Some(changeset::BaselineMode::Filesystem);
-        let stale = evaluate_gates(&[], &set, &criteria(true), &[], true);
+        let stale = evaluate_gates(&[], &set, &criteria(true), &[]);
         assert_eq!(
             stale
                 .iter()
@@ -839,7 +714,7 @@ mod tests {
         );
 
         set.verified_revision = Some(set.content_revision());
-        let current = evaluate_gates(&[], &set, &criteria(true), &[], true);
+        let current = evaluate_gates(&[], &set, &criteria(true), &[]);
         assert_eq!(
             current
                 .iter()
@@ -864,7 +739,7 @@ mod tests {
 
     #[test]
     fn all_gate_kinds_are_always_reported() {
-        let gates = evaluate_gates(&[], &change_set(true), &criteria(true), &[], true);
+        let gates = evaluate_gates(&[], &change_set(true), &criteria(true), &[]);
         for id in [
             GateId::Build,
             GateId::Test,
@@ -879,13 +754,12 @@ mod tests {
     }
 
     #[test]
-    fn automatic_mode_does_not_fabricate_review_or_acceptance() {
+    fn automatic_delivery_does_not_fabricate_acceptance_evidence() {
         let gates = evaluate_gates(
             &[record(VerificationKind::Test, "pnpm test", 0)],
             &change_set(false),
             &criteria(false),
             &[],
-            false,
         );
         assert_eq!(
             gates
@@ -901,9 +775,9 @@ mod tests {
                 .find(|gate| gate.id == GateId::Acceptance)
                 .unwrap()
                 .status,
-            GateStatus::NotApplicable
+            GateStatus::NotSatisfied
         );
-        assert!(is_deliverable(&gates));
+        assert!(!is_deliverable(&gates));
     }
 
     #[test]

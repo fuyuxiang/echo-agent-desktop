@@ -4,6 +4,7 @@ import { codingApi } from "../lib/tauri-api";
 import type {
   ChangeSet,
   CodingTask,
+  ExecutionLedgerEvent,
   OrchestratorState,
   Problem,
   TaskSummary,
@@ -24,6 +25,7 @@ interface TaskState {
   changeSet: ChangeSet | null;
   verifications: VerificationRecord[];
   problems: Problem[];
+  ledger: ExecutionLedgerEvent[];
   orchestrator: OrchestratorState | null;
   loading: boolean;
   error: string | null;
@@ -54,6 +56,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   changeSet: null,
   verifications: [],
   problems: [],
+  ledger: [],
   orchestrator: null,
   loading: false,
   error: null,
@@ -69,6 +72,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       changeSet: null,
       verifications: [],
       problems: [],
+      ledger: [],
       orchestrator: null,
       error: null,
     });
@@ -118,6 +122,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         changeSet: null,
         verifications: [],
         problems: [],
+        ledger: [],
         orchestrator: null,
         error: null,
       });
@@ -153,6 +158,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             changeSet: null,
             verifications: [],
             problems: [],
+            ledger: [],
             orchestrator: null,
           }
         : state));
@@ -168,10 +174,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const generation = ++stateGeneration;
     const taskId = task.id;
     try {
-      const [changeSet, verifications, problems, orchestrator] = await Promise.all([
+      const [changeSet, verifications, problems, ledger, orchestrator] = await Promise.all([
         codingApi.getChangeSet(root, taskId),
         codingApi.listVerifications(root, taskId),
         codingApi.listProblems(root, taskId),
+        codingApi.executionLedger(root, taskId),
         codingApi.orchestratorState(root, taskId),
       ]);
       if (
@@ -183,6 +190,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         changeSet,
         verifications,
         problems,
+        ledger: ledger ?? [],
         orchestrator,
         // The orchestrator's copy is authoritative for phase and criteria.
         task: orchestrator.task,
@@ -218,6 +226,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       changeSet: null,
       verifications: [],
       problems: [],
+      ledger: [],
       orchestrator: null,
       error: null,
     }),

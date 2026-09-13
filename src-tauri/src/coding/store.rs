@@ -80,7 +80,22 @@ fn open_lock(path: &Path) -> Option<std::fs::File> {
 /// Read a JSON document, treating a missing or corrupt file as absent so a
 /// damaged task file can never crash the workbench.
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    let lock = open_lock(path)?;
+    // A read must not create persistence directories. Besides being a
+    // surprising side effect, opening a lock first recreated a deleted task
+    // directory when list_tasks filtered a stale index entry.
+    if !path.is_file() {
+        return None;
+    }
+    // Do not call `open_lock` here: its write-path behavior creates the
+    // parent. If deletion wins the race after is_file(), this open simply
+    // fails and still cannot recreate the removed task directory.
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path(path))
+        .ok()?;
     lock.lock_shared().ok()?;
     let bytes = std::fs::read(path).ok()?;
     let value = serde_json::from_slice(&bytes).ok();
