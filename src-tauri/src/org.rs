@@ -401,7 +401,7 @@ fn notify_skills_changed(app: &AppHandle, reason: &str) {
     }
 }
 
-fn notify_models_changed(app: &AppHandle, reason: &str) {
+pub(crate) fn notify_models_changed(app: &AppHandle, reason: &str) {
     let app = app.clone();
     let reason = reason.to_string();
     tauri::async_runtime::spawn(async move {

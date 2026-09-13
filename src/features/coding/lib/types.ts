@@ -68,7 +68,9 @@ export interface FileChange {
 
 export interface ChangeSet {
   taskId: string;
-  baselineFiles: string[];
+  baselineMode?: "git" | "filesystem" | null;
+  /** Legacy backend fields; current IPC intentionally omits internal baselines. */
+  baselineFiles?: string[];
   baselineHead?: string | null;
   baselineEntries?: Array<{
     path: string;
@@ -167,7 +169,14 @@ export interface OrchestratorState {
   maxRepairRounds: number;
 }
 
-export type GateId = "build" | "test" | "lint" | "type_check" | "diff_review" | "acceptance";
+export type GateId =
+  | "build"
+  | "test"
+  | "lint"
+  | "type_check"
+  | "verification_freshness"
+  | "diff_review"
+  | "acceptance";
 export type GateStatus = "satisfied" | "not_satisfied" | "not_applicable";
 
 export interface QualityGate {

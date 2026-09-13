@@ -1476,7 +1476,11 @@ pub fn automations_save(
     // same check is repeated at dispatch because configuration can later change.
     // Paused tasks remain editable while offline and are validated on resume/run.
     if automation.status.eq_ignore_ascii_case("ACTIVE") {
-        crate::commands::resolve_automation_model_id(&state, automation.model_id.as_deref())?;
+        crate::commands::resolve_automation_model_id(
+            Some(&app),
+            &state,
+            automation.model_id.as_deref(),
+        )?;
     }
     let _guard = store_access().lock().unwrap();
     let mut store = read_store()?;
@@ -1573,7 +1577,11 @@ pub fn automations_set_status(
             .iter()
             .find(|automation| automation.id == id)
             .ok_or_else(|| format!("automation {id} not found"))?;
-        crate::commands::resolve_automation_model_id(&state, automation.model_id.as_deref())?;
+        crate::commands::resolve_automation_model_id(
+            Some(&app),
+            &state,
+            automation.model_id.as_deref(),
+        )?;
     }
     set_status_at(&mut store, &id, &status, now_local())?;
     write_store(&store)?;
@@ -1624,8 +1632,11 @@ pub async fn automations_run(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let resolved_model_id =
-        crate::commands::resolve_automation_model_id(&state, automation.model_id.as_deref())?;
+    let resolved_model_id = crate::commands::resolve_automation_model_id(
+        Some(&app),
+        &state,
+        automation.model_id.as_deref(),
+    )?;
 
     let started = now_local().to_rfc3339();
     let record_id = record_run_started(&automation, &started, &cwd, None, &resolved_model_id)?;
@@ -1768,6 +1779,7 @@ async fn execute_automation_run(
         return;
     }
     let resolved_model_id = match crate::commands::resolve_automation_model_id(
+        Some(&app),
         &app.state::<AppState>(),
         automation.model_id.as_deref(),
     ) {
@@ -1937,7 +1949,7 @@ async fn run_automation_once(
 ) -> Result<String, String> {
     crate::policy::require_feature("automations")?;
     crate::policy::require_model(resolved_model_id)?;
-    crate::commands::require_runtime_ready(state, Some(resolved_model_id))?;
+    crate::commands::require_runtime_ready(Some(app), state, Some(resolved_model_id))?;
     if !cwd.is_dir() {
         return Err(format!("自动化工作空间不存在：{}", cwd.display()));
     }
@@ -2315,7 +2327,7 @@ fn recover_queued_dispatches(
 /// Scheduler tick. Fires any automation whose `next_run_at` has passed.
 pub async fn scheduler_tick(app: &AppHandle, tx: &echo_agent_acp::AcpAgentTx, default_cwd: &Path) {
     let state = app.state::<AppState>();
-    if let Err(error) = crate::commands::require_runtime_ready(&state, None) {
+    if let Err(error) = crate::commands::require_runtime_ready(Some(app), &state, None) {
         tracing::debug!(%error, "automation scheduler paused while Agent Runtime is not ready");
         return;
     }
@@ -2354,6 +2366,7 @@ pub async fn scheduler_tick(app: &AppHandle, tx: &echo_agent_acp::AcpAgentTx, de
                 .map(PathBuf::from)
                 .unwrap_or_else(|| default_cwd.to_path_buf());
             let resolved_model_id = crate::commands::resolve_automation_model_id(
+                Some(app),
                 &state,
                 claim.automation.model_id.as_deref(),
             );

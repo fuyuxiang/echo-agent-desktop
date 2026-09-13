@@ -92,6 +92,8 @@ describe("CodingWorkbench skeleton", () => {
     expect(screen.getByRole("complementary", { name: "资源管理器" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Agent 面板" })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "工作台状态" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "切换开发任务" })).toHaveTextContent("新建任务");
+    expect(screen.getByRole("status", { name: "工作台状态" })).toHaveTextContent("Agent 就绪");
   });
 
   it("exposes draggable separators for both side panes", async () => {
@@ -294,6 +296,59 @@ describe("CodingWorkbench skeleton", () => {
     expect(onStartRun).toHaveBeenCalledWith(
       "/repo",
       "增加登录审计",
+      false,
+      "m1",
+      [],
+      expect.any(Function),
+    );
+    const baselineCall = invoke.mock.calls.findIndex(
+      (call) => call[0] === "coding_changeset_capture_baseline",
+    );
+    expect(invoke.mock.invocationCallOrder[baselineCall])
+      .toBeLessThan(onStartRun.mock.invocationCallOrder[0]);
+  });
+
+  it("starts a task in an ordinary folder without requiring Git", async () => {
+    const user = userEvent.setup();
+    const onStartRun = vi.fn(async () => "session-1");
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "coding_task_create") {
+        return {
+          id: "t-local",
+          name: "清除 HTML 注释",
+          requirement: "清除 HTML 注释",
+          phase: "idle",
+          acceptanceCriteria: [],
+          taskNodes: [],
+          planRequired: false,
+          createdAt: "",
+          updatedAt: "",
+        };
+      }
+      if (command === "coding_task_list") return [];
+      return null;
+    });
+
+    render(
+      <CodingWorkbench
+        cwd="/plain-folder"
+        models={[{ id: "m1" }]}
+        defaultModelId="m1"
+        apiReady
+        onStartRun={onStartRun}
+      />,
+    );
+    const requirement = await screen.findByLabelText("开发需求");
+    await user.type(requirement, "清除 HTML 注释");
+    await user.click(screen.getByRole("button", { name: "开始开发任务" }));
+
+    const invoked = invoke.mock.calls.map((call) => call[0]);
+    expect(invoked).toContain("coding_task_create");
+    expect(invoked).toContain("coding_changeset_capture_baseline");
+    expect(invoked).not.toContain("coding_changeset_validate_repository");
+    expect(onStartRun).toHaveBeenCalledWith(
+      "/plain-folder",
+      "清除 HTML 注释",
       false,
       "m1",
       [],

@@ -371,8 +371,14 @@ pub(crate) fn update_config<T>(
         echo_agent_runtime::util::config::acquire_config_transaction_lock_at(&path)
             .map_err(|error| format!("lock Runtime config: {error}"))?;
     let mut config = read_config_unlocked();
+    let original = config.clone();
     let result = update(&mut config)?;
-    write_config_unlocked(&config)?;
+    // Status/lease checks are frequent. Do not atomically replace config.toml
+    // when their mutation is a no-op: besides needless disk churn, a replace
+    // wakes Runtime config watchers even though the semantic revision is stable.
+    if config != original {
+        write_config_unlocked(&config)?;
+    }
     Ok(result)
 }
 

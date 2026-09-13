@@ -128,6 +128,14 @@ describe("TaskStarter", () => {
     expect(props.onStart).toHaveBeenCalledWith("增加登录审计", false);
   });
 
+  it("presents a focused Agent workspace instead of a repeated brand splash", () => {
+    setup();
+    expect(screen.getByText("Agent")).toBeInTheDocument();
+    expect(screen.getByText("准备就绪")).toBeInTheDocument();
+    expect(screen.getByText("和 Echo 一起构建")).toBeInTheDocument();
+    expect(screen.getByText(/自动保护源码与配置改动/)).toBeInTheDocument();
+  });
+
   it("passes the plan-first choice through", async () => {
     const user = userEvent.setup();
     const props = setup();
@@ -186,6 +194,20 @@ describe("AgentPane", () => {
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent("需要人工介入");
     expect(alert).toHaveTextContent("3 轮自动修复");
+  });
+
+  it("does not claim to prepare context after a pre-session failure", () => {
+    render(
+      <AgentPane
+        {...paneProps({
+          task: task({ phase: "blocked" }),
+          sessionId: null,
+          blocker: "当前工作区不是 Git 仓库",
+        })}
+      />,
+    );
+    expect(screen.queryByText("Agent 正在准备工程上下文…")).not.toBeInTheDocument();
+    expect(screen.getByText("Agent 会话未启动。")).toBeInTheDocument();
   });
 
   it("prefers the blocker over the ordinary phase reason", () => {
