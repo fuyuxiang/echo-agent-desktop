@@ -104,7 +104,13 @@ interface PlaceholderPageProps {
   /** 项目页：进入项目（新建会话并注入说明）。 */
   onStartProject?: (project: ProjectMeta) => void;
   /** 项目页：在项目中新建对话（创建真实 EchoAgent 会话）。 */
-  onStartProjectConversation?: (projectId: string, message: string) => Promise<string | undefined>;
+  onStartProjectConversation?: (
+    projectId: string,
+    message: string,
+    modelId?: string,
+  ) => Promise<string | undefined>;
+  projectModels?: ModelOption[];
+  projectDefaultModelId?: string;
   onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;
   onArchiveSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
   onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
@@ -135,6 +141,8 @@ export function PlaceholderPage({
   sessionId,
   onStartProject,
   onStartProjectConversation,
+  projectModels,
+  projectDefaultModelId,
   onRenameSession,
   onArchiveSession,
   onDeleteSession,
@@ -149,6 +157,9 @@ export function PlaceholderPage({
           onToast={onToast}
           onStartProject={onStartProject}
           onStartProjectConversation={onStartProjectConversation}
+          models={projectModels}
+          defaultModelId={projectDefaultModelId}
+          onOpenModelSettings={onOpenModelSettings}
           onOpenSession={onOpenSession}
           onRenameSession={onRenameSession}
           onArchiveSession={onArchiveSession}

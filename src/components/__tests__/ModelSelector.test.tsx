@@ -87,4 +87,34 @@ describe("ModelSelector", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(trigger).toHaveFocus();
   });
+
+  it("同一页多个模型选择器具有独立可访问标识", () => {
+    render(
+      <>
+        <ModelSelector
+          ariaLabel="选择项目默认模型"
+          modelId="model-a"
+          models={[{ id: "model-a", label: "模型 A" }]}
+          onModelChange={vi.fn()}
+        />
+        <ModelSelector
+          ariaLabel="选择项目对话模型"
+          modelId="model-a"
+          models={[{ id: "model-a", label: "模型 A" }]}
+          onModelChange={vi.fn()}
+        />
+      </>,
+    );
+
+    const first = screen.getByRole("button", { name: /选择项目默认模型/ });
+    const second = screen.getByRole("button", { name: /选择项目对话模型/ });
+    fireEvent.click(first);
+    const firstControls = first.getAttribute("aria-controls");
+    fireEvent.click(second);
+    const secondControls = second.getAttribute("aria-controls");
+
+    expect(firstControls).toBeTruthy();
+    expect(secondControls).toBeTruthy();
+    expect(firstControls).not.toBe(secondControls);
+  });
 });

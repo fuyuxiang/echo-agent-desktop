@@ -17,6 +17,8 @@ export interface ProjectConversation {
   sessionId: string;
   title: string;
   createdAt: string;
+  /** Concrete local catalog model bound to this conversation. */
+  modelId?: string;
   /** Mirrors the session sidecar flag so project links never open a hidden row. */
   archived?: boolean;
 }
@@ -28,6 +30,8 @@ export interface PlanCard {
   title: string;
   status: PlanStatus;
   source?: string;
+  /** Explicit model override. Missing means the project default is inherited until execution. */
+  modelId?: string;
   /** Agent conversation created to execute this plan item. */
   sessionId?: string;
   sessionArchived?: boolean;
@@ -39,6 +43,8 @@ export interface TaskItem {
   scope: "personal" | "shared";
   source: string;
   status: PlanStatus;
+  /** Explicit model override. Missing means the project default is inherited until execution. */
+  modelId?: string;
   /** Agent conversation created to execute this task. */
   sessionId?: string;
   sessionArchived?: boolean;
@@ -63,6 +69,8 @@ export interface ProjectMeta {
   cwd?: string;
   templateId?: string;
   instructions?: string;
+  /** Preferred model for new project conversations, plans and tasks. */
+  defaultModelId?: string;
   createdAt: string;
   // 详情
   connectors: RefItem[];
@@ -100,6 +108,7 @@ function normalize(x: unknown): ProjectMeta | null {
     cwd: o.cwd,
     templateId: o.templateId,
     instructions: o.instructions,
+    defaultModelId: typeof o.defaultModelId === "string" ? o.defaultModelId : undefined,
     createdAt: o.createdAt ?? new Date().toISOString(),
     connectors: Array.isArray(o.connectors) ? o.connectors : [],
     experts: Array.isArray(o.experts) ? o.experts : [],
@@ -174,6 +183,7 @@ interface ProjectsState {
     cwd?: string;
     templateId?: string;
     instructions?: string;
+    defaultModelId?: string;
     connectors?: RefItem[];
     experts?: RefItem[];
     skills?: RefItem[];
@@ -182,15 +192,17 @@ interface ProjectsState {
   remove: (id: string) => void;
   updateConfig: (
     id: string,
-    patch: Partial<Pick<ProjectMeta, "instructions" | "connectors" | "experts" | "skills">>,
+    patch: Partial<Pick<ProjectMeta, "instructions" | "defaultModelId" | "connectors" | "experts" | "skills">>,
   ) => void;
-  addPlan: (id: string, title: string, status?: PlanStatus) => void;
+  addPlan: (id: string, title: string, status?: PlanStatus, modelId?: string) => void;
   movePlan: (id: string, cardId: string, status: PlanStatus) => void;
-  linkPlanSession: (id: string, cardId: string, sessionId: string) => void;
+  setPlanModel: (id: string, cardId: string, modelId: string) => void;
+  linkPlanSession: (id: string, cardId: string, sessionId: string, modelId: string) => void;
   removePlan: (id: string, cardId: string) => void;
-  addTask: (id: string, title: string) => void;
+  addTask: (id: string, title: string, modelId?: string) => void;
   moveTask: (id: string, taskId: string, status: PlanStatus) => void;
-  linkTaskSession: (id: string, taskId: string, sessionId: string) => void;
+  setTaskModel: (id: string, taskId: string, modelId: string) => void;
+  linkTaskSession: (id: string, taskId: string, sessionId: string, modelId: string) => void;
   removeTask: (id: string, taskId: string) => void;
   addAsset: (id: string, a: Pick<AssetItem, "name" | "kind"> & Partial<AssetItem>) => void;
   addAssets: (id: string, assets: Array<Pick<AssetItem, "name" | "kind"> & Partial<AssetItem>>) => void;
@@ -227,6 +239,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         cwd: p.cwd || undefined,
         templateId: p.templateId || undefined,
         instructions: p.instructions || undefined,
+        defaultModelId: p.defaultModelId || undefined,
         createdAt: new Date().toISOString(),
         connectors: p.connectors ?? [],
         experts: p.experts ?? [],
@@ -249,26 +262,31 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       persist(next);
     },
     updateConfig: (id, cfg) => patch(id, (p) => ({ ...p, ...cfg })),
-    addPlan: (id, title, status = "pending") =>
-      patch(id, (p) => ({ ...p, plans: [...p.plans, { id: uid("plan"), title, status }] })),
+    addPlan: (id, title, status = "pending", modelId) =>
+      patch(id, (p) => ({ ...p, plans: [...p.plans, { id: uid("plan"), title, status, modelId }] })),
     movePlan: (id, cardId, status) =>
       patch(id, (p) => ({
         ...p,
         plans: p.plans.map((c) => (c.id === cardId ? { ...c, status } : c)),
       })),
-    linkPlanSession: (id, cardId, sessionId) =>
+    setPlanModel: (id, cardId, modelId) =>
       patch(id, (p) => ({
         ...p,
-        plans: p.plans.map((card) => card.id === cardId ? { ...card, sessionId } : card),
+        plans: p.plans.map((card) => card.id === cardId ? { ...card, modelId } : card),
+      })),
+    linkPlanSession: (id, cardId, sessionId, modelId) =>
+      patch(id, (p) => ({
+        ...p,
+        plans: p.plans.map((card) => card.id === cardId ? { ...card, sessionId, modelId } : card),
       })),
     removePlan: (id, cardId) =>
       patch(id, (p) => ({ ...p, plans: p.plans.filter((c) => c.id !== cardId) })),
-    addTask: (id, title) =>
+    addTask: (id, title, modelId) =>
       patch(id, (p) => ({
         ...p,
         tasks: [
           ...p.tasks,
-          { id: uid("task"), title, scope: "personal", source: "manual", status: "pending" },
+          { id: uid("task"), title, scope: "personal", source: "manual", status: "pending", modelId },
         ],
       })),
     moveTask: (id, taskId, status) =>
@@ -276,10 +294,15 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         ...p,
         tasks: p.tasks.map((task) => task.id === taskId ? { ...task, status } : task),
       })),
-    linkTaskSession: (id, taskId, sessionId) =>
+    setTaskModel: (id, taskId, modelId) =>
       patch(id, (p) => ({
         ...p,
-        tasks: p.tasks.map((task) => task.id === taskId ? { ...task, sessionId } : task),
+        tasks: p.tasks.map((task) => task.id === taskId ? { ...task, modelId } : task),
+      })),
+    linkTaskSession: (id, taskId, sessionId, modelId) =>
+      patch(id, (p) => ({
+        ...p,
+        tasks: p.tasks.map((task) => task.id === taskId ? { ...task, sessionId, modelId } : task),
       })),
     removeTask: (id, taskId) =>
       patch(id, (p) => ({ ...p, tasks: p.tasks.filter((t) => t.id !== taskId) })),

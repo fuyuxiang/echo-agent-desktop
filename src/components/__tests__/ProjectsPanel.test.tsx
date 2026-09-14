@@ -187,4 +187,30 @@ describe("ProjectsPanel 项目操作菜单", () => {
     expect(screen.queryByRole("dialog", { name: "新建项目" })).toBeNull();
     await waitFor(() => expect(create).toHaveFocus());
   });
+
+  it("新建项目时可选择默认模型并保存到项目", async () => {
+    render(
+      <ProjectsPanel
+        models={[
+          { id: "model-a", label: "模型 A" },
+          { id: "model-b", label: "模型 B" },
+        ]}
+        defaultModelId="model-a"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "新建项目" }));
+    const dialog = screen.getByRole("dialog", { name: "新建项目" });
+    fireEvent.change(within(dialog).getByPlaceholderText("请输入项目名称"), {
+      target: { value: "模型定制项目" },
+    });
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "默认执行模型" }), {
+      target: { value: "model-b" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "确定" }));
+
+    await waitFor(() => expect(useProjectsStore.getState().projects[0]).toMatchObject({
+      name: "模型定制项目",
+      defaultModelId: "model-b",
+    }));
+  });
 });

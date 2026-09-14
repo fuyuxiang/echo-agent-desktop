@@ -18,12 +18,13 @@ import {
   type ProjectPickerOptions,
 } from "./project-picker";
 import { ActivityTab, PlanTab, TaskTab, AssetsTab } from "./project-tabs";
+import { ModelSelector, type ModelOption } from "./ModelSelector";
 import { FolderIcon } from "@/foundation/components/Icon/icons";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useAppDialog } from "./AppDialog";
 
 type TabKey = "activity" | "plan" | "task" | "asset";
-type DrawerKey = "instruction" | "connectors" | "experts" | "skills" | "automation";
+type DrawerKey = "instruction" | "model" | "connectors" | "experts" | "skills" | "automation";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "activity", label: "动态" },
@@ -34,6 +35,7 @@ const TABS: { key: TabKey; label: string }[] = [
 
 const CONFIG_CARDS: { key: DrawerKey; title: string; desc: string }[] = [
   { key: "instruction", title: "指令", desc: "设定项目背景与规范，让 AI 与你高效协作" },
+  { key: "model", title: "模型", desc: "选择项目对话和任务默认使用的模型" },
   { key: "connectors", title: "连接器", desc: "连接外部服务，扩展 AI 能力" },
   { key: "experts", title: "专家", desc: "配置项目专家，为成员提供更专业的服务" },
   { key: "skills", title: "技能", desc: "配置项目技能，让 AI 精准执行任务" },
@@ -51,18 +53,25 @@ export function ProjectDetailView({
   onDeleteSession,
   picker,
   onOpenAutomation,
+  models = [],
+  defaultModelId,
+  onOpenModelSettings,
 }: {
   project: ProjectMeta;
   onBack: () => void;
   onToast?: (msg: string) => void;
   /** Start a new conversation within this project (creates a real EchoAgent session). */
-  onStartConversation?: (projectId: string, message: string) => Promise<string | undefined>;
+  onStartConversation?: (projectId: string, message: string, modelId: string) => Promise<string | undefined>;
   onOpenSession?: (sessionId: string, cwd?: string) => void;
   onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;
   onArchiveSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
   onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
   picker: { options: ProjectPickerOptions; loading: boolean; error: string | null };
   onOpenAutomation?: () => void;
+  models?: ModelOption[];
+  /** Application default, used only by projects that do not yet have a persisted choice. */
+  defaultModelId?: string;
+  onOpenModelSettings?: () => void;
 }) {
   // 读最新（交互后 store 更新，父传入的快照可能过期）。
   const live = useProjectsStore((s) => s.projects.find((p) => p.id === project.id)) ?? project;
@@ -74,6 +83,17 @@ export function ProjectDetailView({
   const [membersOpen, setMembersOpen] = useState(false);
   const [pickerFor, setPickerFor] = useState<null | "connectors" | "experts" | "skills">(null);
   const { requestInput, dialog } = useAppDialog(live.id);
+  const configuredProjectModelAvailable = !live.defaultModelId
+    || models.some((model) => model.id === live.defaultModelId);
+  const inheritedModelId = defaultModelId && models.some((model) => model.id === defaultModelId)
+    ? defaultModelId
+    : models[0]?.id;
+  const projectModelId = live.defaultModelId
+    ? configuredProjectModelAvailable ? live.defaultModelId : undefined
+    : inheritedModelId;
+  const setProjectModel = (modelId: string) => {
+    updateConfig(live.id, { defaultModelId: modelId });
+  };
 
   const setPicked = (k: typeof pickerFor, items: RefItem[]) => {
     if (!k) return;
@@ -98,9 +118,12 @@ export function ProjectDetailView({
     });
   };
 
-  const handleComposerSend = async (text: string): Promise<boolean> => {
+  const handleComposerSend = async (text: string, modelId: string): Promise<boolean> => {
     if (onStartConversation) {
-      return Boolean(await onStartConversation(live.id, text));
+      // Legacy projects can inherit the application default for display, but
+      // the first actual run materializes it so future execution is stable.
+      if (live.defaultModelId !== modelId) setProjectModel(modelId);
+      return Boolean(await onStartConversation(live.id, text, modelId));
     } else {
       const preview = text.slice(0, 20);
       const suffix = text.length > 20 ? "…" : "";
@@ -161,14 +184,45 @@ export function ProjectDetailView({
                 onArchiveSession={onArchiveSession}
                 onDeleteSession={onDeleteSession}
                 onToast={onToast}
+                models={models}
               />
             )}
-            {tab === "plan" && <PlanTab projectId={live.id} onRun={onStartConversation ? (message) => onStartConversation(live.id, message) : undefined} onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined} />}
-            {tab === "task" && <TaskTab projectId={live.id} onRun={onStartConversation ? (message) => onStartConversation(live.id, message) : undefined} onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined} />}
+            {tab === "plan" && (
+              <PlanTab
+                projectId={live.id}
+                models={models}
+                defaultModelId={projectModelId}
+                onRun={onStartConversation
+                  ? (message, modelId) => onStartConversation(live.id, message, modelId)
+                  : undefined}
+                onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined}
+                onToast={onToast}
+              />
+            )}
+            {tab === "task" && (
+              <TaskTab
+                projectId={live.id}
+                models={models}
+                defaultModelId={projectModelId}
+                onRun={onStartConversation
+                  ? (message, modelId) => onStartConversation(live.id, message, modelId)
+                  : undefined}
+                onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined}
+                onToast={onToast}
+              />
+            )}
             {tab === "asset" && <AssetsTab projectId={live.id} onToast={onToast} />}
           </div>
 
-          <ProjectComposer project={live} onSend={handleComposerSend} />
+          <ProjectComposer
+            project={live}
+            models={models}
+            modelId={projectModelId}
+            unavailableModelId={configuredProjectModelAvailable ? undefined : live.defaultModelId}
+            onModelChange={setProjectModel}
+            onOpenModelSettings={onOpenModelSettings}
+            onSend={handleComposerSend}
+          />
         </div>
 
         <aside className="pd-side">
@@ -192,6 +246,11 @@ export function ProjectDetailView({
           onClose={() => setDrawer(null)}
           onOpenPicker={(k) => setPickerFor(k)}
           onOpenAutomation={onOpenAutomation}
+          models={models}
+          modelId={projectModelId}
+          unavailableModelId={configuredProjectModelAvailable ? undefined : live.defaultModelId}
+          onModelChange={setProjectModel}
+          onOpenModelSettings={onOpenModelSettings}
         />
       )}
 
@@ -215,13 +274,27 @@ export function ProjectDetailView({
 // ============================================================
 
 function ConfigDrawer({
-  drawer, project, onClose, onOpenPicker, onOpenAutomation,
+  drawer,
+  project,
+  onClose,
+  onOpenPicker,
+  onOpenAutomation,
+  models,
+  modelId,
+  unavailableModelId,
+  onModelChange,
+  onOpenModelSettings,
 }: {
   drawer: DrawerKey;
   project: ProjectMeta;
   onClose: () => void;
   onOpenPicker: (k: "connectors" | "experts" | "skills") => void;
   onOpenAutomation?: () => void;
+  models: ModelOption[];
+  modelId?: string;
+  unavailableModelId?: string;
+  onModelChange: (modelId: string) => void;
+  onOpenModelSettings?: () => void;
 }) {
   const updateConfig = useProjectsStore((s) => s.updateConfig);
   const card = CONFIG_CARDS.find((c) => c.key === drawer)!;
@@ -269,6 +342,37 @@ function ConfigDrawer({
               data-modal-initial-focus
             />
           )}
+          {drawer === "model" && (
+            <div className="proj-model-setting">
+              <label className="create-colleague-label">项目默认模型</label>
+              <p className="proj-model-setting__hint">
+                新对话、新计划和新任务默认使用此模型；执行前仍可为单条计划或任务单独选择。
+              </p>
+              <ModelSelector
+                ariaLabel="选择项目默认模型"
+                modelId={modelId}
+                models={models}
+                onModelChange={onModelChange}
+              />
+              {unavailableModelId && (
+                <p className="proj-model-setting__warning" role="alert">
+                  原模型“{unavailableModelId}”已被删除或停用，请重新选择。
+                </p>
+              )}
+              {models.length === 0 && (
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  onClick={() => {
+                    closeDrawer();
+                    onOpenModelSettings?.();
+                  }}
+                >
+                  前往设置模型
+                </button>
+              )}
+            </div>
+          )}
           {drawer === "connectors" && (
             <ConfigRow label="连接器" items={project.connectors} onAdd={() => onOpenPicker("connectors")} onRemove={(id) => updateConfig(project.id, { connectors: project.connectors.filter((x) => x.id !== id) })} />
           )}
@@ -297,17 +401,33 @@ function ConfigDrawer({
 // 项目级 Composer 薄壳（左 Craft/Auto/技能/连接器 + 右 +/发送）
 // ============================================================
 
-function ProjectComposer({ project, onSend }: { project: ProjectMeta; onSend: (text: string) => Promise<boolean> }) {
+function ProjectComposer({
+  project,
+  models,
+  modelId,
+  unavailableModelId,
+  onModelChange,
+  onOpenModelSettings,
+  onSend,
+}: {
+  project: ProjectMeta;
+  models: ModelOption[];
+  modelId?: string;
+  unavailableModelId?: string;
+  onModelChange: (modelId: string) => void;
+  onOpenModelSettings?: () => void;
+  onSend: (text: string, modelId: string) => Promise<boolean>;
+}) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const send = async () => {
     const t = text.trim();
-    if (!t || sending) return;
+    if (!t || !modelId || sending) return;
     setSending(true);
     setSendError(null);
     try {
-      const sent = await onSend(t);
+      const sent = await onSend(t, modelId);
       if (sent) setText("");
       else setSendError("消息尚未发送，请完成模型配置或检查当前配额后重试。");
     } catch (error) {
@@ -333,6 +453,16 @@ function ProjectComposer({ project, onSend }: { project: ProjectMeta; onSend: (t
         }}
       />
       {sendError && <div className="pd-composer__error" role="alert">{sendError}</div>}
+      {!modelId && (
+        <div className="pd-composer__error pd-composer__model-warning" role="alert">
+          {unavailableModelId
+            ? `原项目模型“${unavailableModelId}”已不可用，请重新选择。`
+            : "发送前需要选择一个执行模型。"}
+          {models.length === 0 && onOpenModelSettings && (
+            <button type="button" onClick={onOpenModelSettings}>前往设置模型</button>
+          )}
+        </div>
+      )}
       <div className="pd-composer__footer">
         <span className="pd-composer__context" title="项目指令和所选能力偏好将注入新会话；实际可用性以当前运行时为准">
           项目上下文将注入
@@ -341,7 +471,20 @@ function ProjectComposer({ project, onSend }: { project: ProjectMeta; onSend: (t
           {project.connectors.length > 0 ? ` · ${project.connectors.length} MCP` : ""}
         </span>
         <span className="pd-composer__spacer" />
-        <button className="pd-composer__send" onClick={() => void send()} aria-label="发送" disabled={!text.trim() || sending}>
+        <ModelSelector
+          ariaLabel="选择项目对话模型"
+          modelId={modelId}
+          models={models}
+          disabled={sending}
+          onModelChange={onModelChange}
+        />
+        <button
+          className="pd-composer__send"
+          onClick={() => void send()}
+          aria-label="发送"
+          disabled={!text.trim() || !modelId || sending}
+          title={!modelId ? "请先选择可用模型" : undefined}
+        >
           {sending ? "…" : "➤"}
         </button>
       </div>
