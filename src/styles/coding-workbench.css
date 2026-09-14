@@ -1404,13 +1404,38 @@
   box-shadow: none;
 }
 
-.coding-agent__stream {
+.coding-agent__stream-shell {
   flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+.coding-agent__stream {
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.coding-agent__stream-content {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-height: 0;
-  overflow: auto;
+  min-height: 100%;
+  padding-right: 2px;
+}
+
+.coding-agent__stream-content > * {
+  flex: none;
+}
+
+.coding-agent__jump-latest {
+  bottom: 8px;
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 11px;
 }
 
 .coding-agent__user {

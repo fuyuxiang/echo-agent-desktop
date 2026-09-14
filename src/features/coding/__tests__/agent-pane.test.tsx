@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -119,6 +119,26 @@ describe("AgentPane", () => {
     render(<AgentPane {...paneProps({ awaitingPermission: true, awaitingQuestion: true })} />);
     expect(screen.getByTestId("permission-card")).toBeInTheDocument();
     expect(screen.getByTestId("question-card")).toBeInTheDocument();
+  });
+
+  it("长执行过程可滚动，阅读旧消息时暂停跟随并可回到最新", async () => {
+    const user = userEvent.setup();
+    render(<AgentPane {...paneProps({ streaming: true })} />);
+    const stream = screen.getByLabelText("Agent 执行消息");
+    Object.defineProperties(stream, {
+      scrollHeight: { configurable: true, value: 1_000 },
+      clientHeight: { configurable: true, value: 400 },
+      scrollTop: { configurable: true, writable: true, value: 600 },
+    });
+    fireEvent.scroll(stream);
+    stream.scrollTop = 240;
+    fireEvent.scroll(stream);
+
+    const jump = await screen.findByRole("button", { name: "回到最新消息并恢复自动跟随" });
+    expect(stream.scrollTop).toBe(240);
+    await user.click(jump);
+    expect(stream.scrollTop).toBe(600);
+    expect(screen.queryByRole("button", { name: "回到最新消息并恢复自动跟随" })).toBeNull();
   });
 
   it("preserves a follow-up draft when the host rejects the send", async () => {
