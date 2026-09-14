@@ -209,6 +209,13 @@ describe("自动化会话模型同步", () => {
     fireEvent.click(await screen.findByRole("button", { name: "执行项目任务" }));
 
     await waitFor(() => expect(client.agentNewSession).toHaveBeenCalledWith("/workspace", "model-a"));
+    await waitFor(() => expect(client.agentSend).toHaveBeenCalledWith(
+      "project-session",
+      expect.stringContaining("执行项目任务"),
+      [],
+      "执行项目任务",
+      expect.any(String),
+    ));
     await waitFor(() => expect(useProjectsStore.getState().projects[0].conversations[0]).toMatchObject({
       sessionId: "project-session",
       modelId: "model-a",

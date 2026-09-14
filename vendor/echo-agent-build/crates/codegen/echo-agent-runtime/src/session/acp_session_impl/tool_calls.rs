@@ -2183,8 +2183,12 @@ impl SessionActor {
         );
         self.signals_handle().record_tool_failure(function_name);
         let message = build_tool_parse_error_message(function_name, &err, raw_arguments);
-        let title = (err.kind == echo_agent_tool_runtime::ToolErrorKind::NotFound)
-            .then(|| format!("Agent tried calling a tool that doesn't exist: {function_name}"));
+        let title = if function_name.trim().is_empty() {
+            Some("Model returned an invalid tool call: missing tool name".to_string())
+        } else {
+            (err.kind == echo_agent_tool_runtime::ToolErrorKind::NotFound)
+                .then(|| format!("Agent tried calling a tool that doesn't exist: {function_name}"))
+        };
         self.send_update(
             acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
                 tool_call_id.clone(),

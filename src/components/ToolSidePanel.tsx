@@ -235,45 +235,58 @@ export function ToolSidePanel({
           className="tool-side-panel__nav-header"
           {...(IS_MACOS ? { "data-tauri-drag-region": true } : {})}
         >
-          <ViewSelector view={view} views={views} onChange={handleViewChange} />
-          <button
-            type="button"
-            className="tool-side-panel__icon-btn"
-            onClick={() => setPinned((p) => !p)}
-            title={pinned ? "取消钉住" : "钉住左列"}
-            aria-label={pinned ? "取消钉住" : "钉住左列"}
-            aria-pressed={pinned}
-          >
-            {pinned ? <EchoUnpinIcon size="sm" /> : <EchoPinIcon size="sm" />}
-          </button>
-          {!pinned && (
+          {effectiveNavCollapsed ? (
             <button
               type="button"
-              className="tool-side-panel__icon-btn"
-              onClick={() => setNavCollapsed((v) => !v)}
-              title={navCollapsed ? "展开导航" : "收起导航"}
-              aria-label={navCollapsed ? "展开导航" : "收起导航"}
+              className="tool-side-panel__icon-btn tool-side-panel__nav-expand"
+              onClick={() => setNavCollapsed(false)}
+              title="展开导航"
+              aria-label="展开导航"
             >
-              <ChevronLeftIcon
-                size="sm"
-                className={navCollapsed ? "tool-side-panel__icon--flip" : ""}
-              />
+              <ChevronLeftIcon size="sm" className="tool-side-panel__icon--flip" />
             </button>
+          ) : (
+            <>
+              <ViewSelector view={view} views={views} onChange={handleViewChange} />
+              <button
+                type="button"
+                className="tool-side-panel__icon-btn"
+                onClick={() => setPinned((p) => !p)}
+                title={pinned ? "取消钉住" : "钉住左列"}
+                aria-label={pinned ? "取消钉住" : "钉住左列"}
+                aria-pressed={pinned}
+              >
+                {pinned ? <EchoUnpinIcon size="sm" /> : <EchoPinIcon size="sm" />}
+              </button>
+              {!pinned && (
+                <button
+                  type="button"
+                  className="tool-side-panel__icon-btn"
+                  onClick={() => setNavCollapsed(true)}
+                  title="收起导航"
+                  aria-label="收起导航"
+                >
+                  <ChevronLeftIcon size="sm" />
+                </button>
+              )}
+            </>
           )}
         </div>
-        <div className="tool-side-panel__nav-body">
-          <NavContent
-            view={view}
-            artifacts={artifacts}
-            changes={changes}
-            cwd={cwd}
-            selectedArtifactId={selectedArtifactId}
-            selectedFilePath={selectedFilePath}
-            onArtifactSelect={handleArtifactSelect}
-            onFileSelect={handleFileSelect}
-            onToast={onToast}
-          />
-        </div>
+        {!effectiveNavCollapsed && (
+          <div className="tool-side-panel__nav-body">
+            <NavContent
+              view={view}
+              artifacts={artifacts}
+              changes={changes}
+              cwd={cwd}
+              selectedArtifactId={selectedArtifactId}
+              selectedFilePath={selectedFilePath}
+              onArtifactSelect={handleArtifactSelect}
+              onFileSelect={handleFileSelect}
+              onToast={onToast}
+            />
+          </div>
+        )}
       </div>
 
       {/* Sash：调整左列宽度 */}
