@@ -196,6 +196,9 @@ export function ProjectDetailView({
                   ? (message, modelId) => onStartConversation(live.id, message, modelId)
                   : undefined}
                 onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined}
+                onRestoreSession={onArchiveSession
+                  ? (sessionId) => onArchiveSession(sessionId, false, live.cwd)
+                  : undefined}
                 onToast={onToast}
               />
             )}
@@ -208,6 +211,9 @@ export function ProjectDetailView({
                   ? (message, modelId) => onStartConversation(live.id, message, modelId)
                   : undefined}
                 onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined}
+                onRestoreSession={onArchiveSession
+                  ? (sessionId) => onArchiveSession(sessionId, false, live.cwd)
+                  : undefined}
                 onToast={onToast}
               />
             )}

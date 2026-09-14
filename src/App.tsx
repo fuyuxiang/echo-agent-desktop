@@ -3,7 +3,7 @@ import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
 import { HomePage } from "./components/HomePage";
 import { PlaceholderPage } from "./components/PlaceholderPage";
-import { Toast } from "./components/Toast";
+import { Toast, type ToastAction } from "./components/Toast";
 // PermissionDialog is now inline in ChatView (PermissionInlineCard), not a global modal.
 import { ThemeProvider } from "./components/ThemeProvider";
 import type { SettingsSectionId } from "./components/SettingsPanel";
@@ -208,7 +208,7 @@ function Shell() {
   const [commandRefreshKey, setCommandRefreshKey] = useState(0);
   const [placeholderView, setPlaceholderView] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; actions: ToastAction[] } | null>(null);
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(undefined);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelCatalogError, setModelCatalogError] = useState<string | null>(null);
@@ -249,11 +249,11 @@ function Shell() {
     void useOrgSessionStore.getState().hydrate();
     void hydrateKnowledgeSources().catch((error) => {
       console.error("[EchoAgent] Failed to hydrate knowledge sources:", error);
-      setToast("知识源后端数据读取失败");
+      setToast({ message: "知识源后端数据读取失败", actions: [] });
     });
     void hydrateProjectsFromBackend().catch((error) => {
       console.error("[EchoAgent] Failed to hydrate projects:", error);
-      setToast("项目后端数据读取失败，已使用本地缓存");
+      setToast({ message: "项目后端数据读取失败，已使用本地缓存", actions: [] });
     });
   }, []);
 
@@ -792,7 +792,7 @@ function Shell() {
           onAgentDied: ({ reason }) => {
             console.error('[EchoAgent] Agent thread died:', reason);
             const message = `AI 引擎异常退出：${reason}。请重启应用。`;
-            setToast(`⚠️ ${message}`);
+            setToast({ message: `⚠️ ${message}`, actions: [] });
             setInit((previous) => previous
               ? {
                 ...previous,
@@ -916,8 +916,23 @@ function Shell() {
           : "未能获取此会话的模型信息，请重新打开任务，或在右下角选择模型"
         : runtimeSetupHint;
 
+  const dismissToast = useCallback(() => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = null;
+    setToast(null);
+  }, []);
+
   const showToast = useCallback((message: string, durationMs = 2000) => {
-    setToast(message);
+    setToast({ message, actions: [] });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => {
+      toastTimer.current = null;
+      setToast(null);
+    }, durationMs);
+  }, []);
+
+  const showActionToast = useCallback((message: string, actions: ToastAction[], durationMs = 8000) => {
+    setToast({ message, actions });
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => {
       toastTimer.current = null;
@@ -1561,6 +1576,24 @@ function Shell() {
     if (archived) leaveSessionIfCurrent(sessionId);
   };
 
+  const showArchivedSessionActions = (sessionId: string) => {
+    showActionToast("已归档，会话已从侧边栏收起", [
+      {
+        label: "撤销",
+        onClick: async () => {
+          try {
+            const restored = await agentSetSessionArchived(sessionId, false);
+            syncArchivedSessionState(sessionId, restored);
+            showToast("已恢复会话");
+          } catch (cause) {
+            showToast(`恢复失败：${String(cause).replace(/^Error:\s*/, "")}`, 5000);
+          }
+        },
+      },
+      { label: "管理归档", onClick: () => openSettings("archived") },
+    ]);
+  };
+
   /** One lifecycle implementation is shared by the task list and every project surface. */
   const handleRenameSession = async (sessionId: string, title: string, explicitCwd?: string) => {
     const summary = findSessionSummary(sessionId);
@@ -1578,10 +1611,9 @@ function Shell() {
 
   const handleArchiveSession = async (sessionId: string, archived: boolean, _explicitCwd?: string) => {
     const next = await agentSetSessionArchived(sessionId, archived);
-    sessionsStore.getState().upsert({ sessionId, archived: next });
-    useProjectsStore.getState().setSessionArchived(sessionId, next);
-    if (next) leaveSessionIfCurrent(sessionId);
-    showToast(next ? "已归档，可在“已归档”中恢复" : "已恢复会话");
+    syncArchivedSessionState(sessionId, next);
+    if (next) showArchivedSessionActions(sessionId);
+    else showToast("已恢复会话");
   };
 
   const handleDeleteSession = async (sessionId: string, explicitCwd?: string) => {
@@ -1671,7 +1703,9 @@ function Shell() {
       return;
     }
     if (entry.archived) {
-      showToast("请先在会话操作菜单中恢复该归档会话");
+      showActionToast("该会话已归档，请先恢复后继续", [
+        { label: "管理归档", onClick: () => openSettings("archived") },
+      ], 6000);
       return;
     }
     setLoadingSession({ sessionId, generation });
@@ -1822,13 +1856,15 @@ function Shell() {
           help: "help",
           shortcuts: "shortcuts",
           data: "data",
+          archived: "archived",
+          archive: "archived",
           usage: "usage",
           general: "general",
           notifications: "agent-mail",
         };
         const section = aliases[args.toLowerCase()];
         if (!section) {
-          showToast("用法：/settings model|agent|memory|usage|security|help");
+          showToast("用法：/settings model|agent|memory|archived|usage|security|help");
           return false;
         }
         openSettings(section);
@@ -2166,7 +2202,10 @@ function Shell() {
                     onSessionsChanged={(patch) => {
                       if (patch) sessionsStore.getState().upsert({ sessionId: currentSessionId, ...patch });
                     }}
-                    onArchived={(archived) => syncArchivedSessionState(currentSessionId, archived)}
+                    onArchived={(archived) => {
+                      syncArchivedSessionState(currentSessionId, archived);
+                      if (archived) showArchivedSessionActions(currentSessionId);
+                    }}
                   />
                 )}
               </div>
@@ -2328,7 +2367,11 @@ function Shell() {
           )}
         </main>
       </div>
-      <Toast message={toast} />
+      <Toast
+        message={toast?.message ?? null}
+        actions={toast?.actions}
+        onDismiss={dismissToast}
+      />
       {searchOpen && (
         <Suspense fallback={null}>
           <SearchOverlay
@@ -2346,6 +2389,10 @@ function Shell() {
             sessionId={currentSessionId ?? undefined}
             onClose={() => setSettingsOpen(false)}
             onModelsChanged={refreshModels}
+            onRestoreSession={handleArchiveSession}
+            onDeleteSession={handleDeleteSession}
+            onOpenSession={handleSelectSession}
+            onToast={showToast}
           />
         </Suspense>
       )}

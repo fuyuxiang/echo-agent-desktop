@@ -72,6 +72,32 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
     expect(useProjectsStore.getState().projects[0].tasks[0].status).toBe("completed");
   });
 
+  it("项目任务的关联会话归档后可就地恢复并打开", async () => {
+    useProjectsStore.setState({
+      projects: [{
+        ...structuredClone(project),
+        tasks: [{
+          ...project.tasks[0],
+          sessionId: "archived-task-session",
+          sessionArchived: true,
+        }],
+      }],
+    });
+    const onRestoreSession = vi.fn().mockResolvedValue(undefined);
+    const onOpenSession = vi.fn();
+    render(
+      <TaskTab
+        projectId="p1"
+        onRestoreSession={onRestoreSession}
+        onOpenSession={onOpenSession}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "恢复并打开" }));
+    await waitFor(() => expect(onRestoreSession).toHaveBeenCalledWith("archived-task-session"));
+    expect(onOpenSession).toHaveBeenCalledWith("archived-task-session");
+  });
+
   it("没有可用模型时不允许任务提前进入进行中", () => {
     const onRun = vi.fn();
     render(<TaskTab projectId="p1" onRun={onRun} />);

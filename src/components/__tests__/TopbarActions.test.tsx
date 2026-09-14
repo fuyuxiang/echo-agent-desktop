@@ -92,7 +92,7 @@ describe("TopbarActions", () => {
       expect(onSessionsChanged).toHaveBeenCalledWith({ archived: true });
       expect(onArchived).toHaveBeenCalledWith(true);
     });
-    expect(onToast).toHaveBeenCalledWith("已归档（可在侧栏筛选中找回）");
+    expect(onToast).toHaveBeenCalledWith("已归档，可在“设置 → 已归档”中恢复");
     expect(screen.queryByRole("menu")).toBeNull();
   });
 

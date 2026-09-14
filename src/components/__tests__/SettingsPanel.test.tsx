@@ -59,6 +59,8 @@ import {
   webSearchConfigGet,
   webSearchConfigSave,
 } from "@/lib/agent-client";
+import { useSessionsStore } from "@/stores/sessions-store";
+import { useProjectsStore } from "@/stores/projects-store";
 
 function renderSettings() {
   return render(
@@ -107,7 +109,7 @@ describe("SettingsPanel", () => {
       expect(screen.getByRole("heading", { name: group, level: 2 })).toBeInTheDocument();
     }
 
-    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(11);
+    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(12);
     expect(screen.getByRole("button", { name: "Token 用量" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "模型" })).toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("heading", { name: "模型与连接", level: 2 })).toBeInTheDocument();
@@ -153,6 +155,7 @@ describe("SettingsPanel", () => {
       "系统设置",
       "个性化",
       "快捷键",
+      "已归档",
       "数据管理",
       "安全中心",
       "帮助与反馈",
@@ -298,5 +301,96 @@ describe("SettingsPanel", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
     expect(screen.getByText("rm *")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存全部规则" })).toBeEnabled();
+  });
+
+  it("在设置中集中查看、恢复并打开归档会话", async () => {
+    useSessionsStore.setState({
+      independent: [
+        { sessionId: "active", title: "活动任务", cwd: "/home", archived: false },
+        { sessionId: "archived", title: "发布复盘", cwd: "/workspace", archived: true, updatedAt: "2026-09-14T08:00:00Z" },
+      ],
+    });
+    useProjectsStore.setState({
+      projects: [{
+        id: "p1",
+        name: "发布项目",
+        cwd: "/workspace",
+        createdAt: "2026-09-14T07:00:00Z",
+        connectors: [], experts: [], skills: [], plans: [], tasks: [], assets: [], members: [],
+        conversations: [{
+          sessionId: "archived",
+          title: "发布复盘",
+          createdAt: "2026-09-14T08:00:00Z",
+          archived: true,
+        }],
+      }],
+    });
+    const onRestoreSession = vi.fn().mockResolvedValue(undefined);
+    const onOpenSession = vi.fn().mockResolvedValue(undefined);
+    const onClose = vi.fn();
+    render(
+      <ThemeProvider>
+        <SettingsPanel
+          open
+          initialSection="archived"
+          onClose={onClose}
+          onRestoreSession={onRestoreSession}
+          onOpenSession={onOpenSession}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByRole("heading", { name: "已归档", level: 2 })).toBeInTheDocument();
+    expect(screen.getByText("发布复盘")).toBeInTheDocument();
+    expect(screen.getByText(/发布项目 · 项目对话/)).toBeInTheDocument();
+    expect(screen.queryByText("活动任务")).toBeNull();
+    expect(screen.getByLabelText("1 个已归档会话")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "恢复并打开" }));
+    await waitFor(() => expect(onRestoreSession).toHaveBeenCalledWith("archived", false, "/workspace"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onOpenSession).toHaveBeenCalledWith("archived", "/workspace");
+  });
+
+  it("归档管理支持搜索、范围筛选与永久删除确认", async () => {
+    useSessionsStore.setState({
+      independent: [
+        { sessionId: "standalone", title: "独立归档", cwd: "/home", archived: true },
+        { sessionId: "project-chat", title: "项目归档", cwd: "/workspace", archived: true },
+      ],
+    });
+    useProjectsStore.setState({
+      projects: [{
+        id: "p1", name: "交付项目", cwd: "/workspace", createdAt: "2026-09-14T07:00:00Z",
+        connectors: [], experts: [], skills: [], plans: [], tasks: [], assets: [], members: [],
+        conversations: [{ sessionId: "project-chat", title: "项目归档", createdAt: "2026-09-14T08:00:00Z", archived: true }],
+      }],
+    });
+    const onDeleteSession = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ThemeProvider>
+        <SettingsPanel
+          open
+          initialSection="archived"
+          onClose={() => {}}
+          onRestoreSession={vi.fn().mockResolvedValue(undefined)}
+          onOpenSession={vi.fn()}
+          onDeleteSession={onDeleteSession}
+        />
+      </ThemeProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "项目 1" }));
+    expect(screen.getByText("项目归档")).toBeInTheDocument();
+    expect(screen.queryByText("独立归档")).toBeNull();
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索已归档会话" }), { target: { value: "不存在" } });
+    expect(screen.getByText("没有匹配的归档会话")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索已归档会话" }), { target: { value: "项目" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "永久删除 项目归档" }));
+    expect(screen.getByRole("alertdialog", { name: "永久删除对话“项目归档”？" })).toHaveTextContent("无法恢复");
+    fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
+    await waitFor(() => expect(onDeleteSession).toHaveBeenCalledWith("project-chat", "/workspace"));
   });
 });

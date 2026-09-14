@@ -60,8 +60,6 @@ interface SessionsState {
   filterStatus: SessionStatus | null;
   /** Sidebar task filter: selected date range (null = 全部时间). */
   filterDate: string | null;
-  /** Show archived sessions instead of active sessions. */
-  filterArchived: boolean;
   /**
    * Patches such as `agent://summary` can arrive before the catalog row with its
    * cwd. Keep them until a complete summary arrives.
@@ -88,7 +86,6 @@ interface SessionsState {
   setQuery: (q: string) => void;
   setFilterStatus: (s: SessionStatus | null) => void;
   setFilterDate: (d: string | null) => void;
-  setFilterArchived: (archived: boolean) => void;
   clearFilters: () => void;
   /** Save the draft for one session id. Empty string deletes the entry so
    *  the map stays tidy and `drafts[id] ?? ""` always reflects truth. */
@@ -106,9 +103,8 @@ interface SessionsState {
 export function selectHasFilter(s: {
   filterStatus: SessionStatus | null;
   filterDate: string | null;
-  filterArchived: boolean;
 }): boolean {
-  return s.filterStatus !== null || s.filterDate !== null || s.filterArchived;
+  return s.filterStatus !== null || s.filterDate !== null;
 }
 
 export const useSessionsStore = create<SessionsState>((set) => ({
@@ -123,7 +119,6 @@ export const useSessionsStore = create<SessionsState>((set) => ({
   query: "",
   filterStatus: null,
   filterDate: null,
-  filterArchived: false,
   pendingSessionPatches: {},
   drafts: {},
 
@@ -180,8 +175,7 @@ export const useSessionsStore = create<SessionsState>((set) => ({
   setQuery: (query) => set({ query }),
   setFilterStatus: (filterStatus) => set({ filterStatus }),
   setFilterDate: (filterDate) => set({ filterDate }),
-  setFilterArchived: (filterArchived) => set({ filterArchived }),
-  clearFilters: () => set({ filterStatus: null, filterDate: null, filterArchived: false }),
+  clearFilters: () => set({ filterStatus: null, filterDate: null }),
   setDraft: (id, text) =>
     set((state) => {
       // Avoid a new object reference when nothing changes (no text + absent).
