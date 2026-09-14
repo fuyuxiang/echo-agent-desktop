@@ -17,15 +17,25 @@ function tcMsg(
   kind: string,
   status: "in_progress" | "completed" | "failed",
   rawInput?: unknown,
+  resultText?: string,
+  promptId?: string,
 ): ChatMessage {
   return {
     id: toolCallId,
     role: "assistant",
     complete: true,
+    promptId,
     parts: [
       {
         kind: "tool_call",
-        toolCall: { toolCallId, title, kind, status, content: [], rawInput },
+        toolCall: {
+          toolCallId,
+          title,
+          kind,
+          status,
+          content: resultText ? [{ type: "text", text: resultText }] : [],
+          rawInput,
+        },
       },
     ],
   };
@@ -47,14 +57,21 @@ describe("parseSubagentName", () => {
   it("空标题回退", () => {
     expect(parseSubagentName("")).toBe("(subagent)");
   });
-  it("task 工具标题 + raw_input.subagent_type 提取类型", () => {
-    // EchoAgent 的 task 工具把派生目标放在 raw_input.subagent_type
+  it("task 工具标题保留任务摘要而不是误用 subagent_type", () => {
     expect(
       parseSubagentName("Task: review the code", {
         subagent_type: "general-purpose",
         prompt: "...",
       }),
-    ).toBe("general-purpose");
+    ).toBe("review the code");
+  });
+  it("raw_input.description 是最准确的任务摘要", () => {
+    expect(
+      parseSubagentName("Task: fallback", {
+        description: "审查会话回放",
+        subagent_type: "explore",
+      }),
+    ).toBe("审查会话回放");
   });
   it("task 工具标题无 raw_input 时回退到 Task: 后的描述", () => {
     expect(parseSubagentName("Task: review the code")).toBe("review the code");
@@ -99,11 +116,40 @@ describe("deriveSubagents", () => {
     const list = deriveSubagents([
       tcMsg("t1", "Task: review code", "task", "in_progress", {
         subagent_type: "general-purpose",
+        description: "审查代码",
+        prompt: "完整审查代码并给出证据",
       }),
     ]);
     expect(list).toHaveLength(1);
-    expect(list[0].name).toBe("general-purpose");
+    expect(list[0].name).toBe("审查代码");
+    expect(list[0].subagentType).toBe("general-purpose");
+    expect(list[0].taskPrompt).toBe("完整审查代码并给出证据");
     expect(list[0].isSpawn).toBe(true);
+  });
+  it("从持久化工具结果恢复真实 id、统计与最终产出", () => {
+    const list = deriveSubagents([
+      tcMsg(
+        "tool-call-9",
+        "Task: analyze persistence",
+        "task",
+        "completed",
+        { subagent_type: "explore", description: "分析持久化" },
+        "找到回放方法不一致。\n\n<subagent_meta>id=child-9, type=explore, tool_calls=8, turns=2, duration_ms=3500</subagent_meta>\n\n<subagent_result>\nsubagent_id: child-9\nsubagent_type: explore\n</subagent_result>",
+        "prompt-2",
+      ),
+    ]);
+    expect(list[0]).toMatchObject({
+      id: "tool-call-9",
+      subagentId: "child-9",
+      childSessionId: "child-9",
+      parentPromptId: "prompt-2",
+      description: "分析持久化",
+      subagentType: "explore",
+      toolCallCount: 8,
+      turnCount: 2,
+      durationMs: 3500,
+      output: "找到回放方法不一致。",
+    });
   });
   it("忽略非 subagent 的 tool_call", () => {
     expect(deriveSubagents([tcMsg("t1", "Edit x", "edit", "completed")])).toEqual([]);

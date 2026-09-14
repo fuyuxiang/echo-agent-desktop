@@ -970,12 +970,12 @@ pub struct SummaryEvent {
     pub title: String,
 }
 
-/// Payload emitted on `agent://subagent` — a live subagent lifecycle event
+/// Payload emitted on `agent://subagent` — a live or replayed subagent lifecycle event
 /// (spawned / progress / finished). EchoAgent sends these as
-/// `echo.agent/session_notification` extension notifications addressed to the
-/// parent session. We forward the relevant fields so the frontend can show
-/// live subagent progress (turns, tokens, duration, status) — aligning with
-/// EchoAgent's team-runtime panel.
+/// `echo.agent/session_notification` (live) or `echo.agent/session/update`
+/// (durable replay) extension notifications addressed to the parent session.
+/// We forward both identity/turn provenance and progress/result fields so the
+/// frontend can reconstruct the complete history after a session reload.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentEvent {
@@ -988,12 +988,34 @@ pub struct SubagentEvent {
     /// Child session's ACP session id (same as subagent_id for spawned/progress).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_session_id: Option<String>,
+    /// Parent prompt/turn that created this subagent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_prompt_id: Option<String>,
     /// Human-readable description / task title.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Agent type ("general-purpose", "explore", "plan", etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_type: Option<String>,
+    /// Effective model used by the child session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Named persona and role, when configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Context/capability provenance needed to audit how the child was run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_context_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_normalized: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resumed_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_run_id: Option<String>,
     /// Status: "running" (spawned/progress) or the finished status.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
@@ -1018,12 +1040,30 @@ pub struct SubagentEvent {
     /// Distinct tool names called so far.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools_used: Option<Vec<String>>,
+    /// Number of errors observed by progress reporting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_count: Option<u32>,
     /// Error message (finished only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// Final output text (finished only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
+    /// Durable event timestamp and replay marker from EchoAgent `_meta`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<i64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_replay: bool,
+}
+
+/// EchoAgent deliberately uses a distinct method for durable session replay.
+/// Keep this parity check centralized so adding a second rail cannot silently
+/// regress one event family (subagents, usage, titles, etc.).
+fn is_echo_agent_session_update_method(method: &str) -> bool {
+    matches!(
+        method,
+        "echo.agent/session_notification" | "echo.agent/session/update"
+    )
 }
 
 /// Spawn the dispatcher that forwards agent→client messages to the frontend.
@@ -1422,7 +1462,7 @@ async fn handle_client_message(
                     }
                 }
                 let _ = app.emit("agent://complete", complete);
-            } else if method == "echo.agent/session_notification" {
+            } else if is_echo_agent_session_update_method(&method) {
                 // Session-scoped notification: EchoAgent uses this to push
                 // `SessionSummaryGenerated` after the first user prompt (the
                 // LLM-generated title). The update is a tagged enum with the
@@ -1911,7 +1951,7 @@ fn handle_session_notification(app: &AppHandle, params: &Value) {
             }
         }
         "subagent_spawned" | "subagent_progress" | "subagent_finished" => {
-            emit_subagent_event(app, session_id, kind, update);
+            emit_subagent_event(app, session_id, kind, update, params);
         }
         _ => {
             tracing::debug!(
@@ -1954,7 +1994,12 @@ fn parse_turn_usage_event(
 /// Forward subagent lifecycle events to the frontend as `agent://subagent`.
 /// EchoAgent emits `subagent_spawned` (before child starts), `subagent_progress`
 /// (every ~2s while running), and `subagent_finished` (on completion).
-fn emit_subagent_event(app: &AppHandle, parent_session_id: &str, kind: &str, update: &Value) {
+fn parse_subagent_event(
+    parent_session_id: &str,
+    kind: &str,
+    update: &Value,
+    params: &Value,
+) -> Option<SubagentEvent> {
     let subagent_id = update
         .get("subagent_id")
         .or_else(|| update.get("subagentId"))
@@ -1963,7 +2008,7 @@ fn emit_subagent_event(app: &AppHandle, parent_session_id: &str, kind: &str, upd
         .to_string();
     if subagent_id.is_empty() {
         tracing::warn!(kind, "subagent notification missing subagent_id, skipping");
-        return;
+        return None;
     }
 
     let str_field = |key: &str| {
@@ -1987,7 +2032,7 @@ fn emit_subagent_event(app: &AppHandle, parent_session_id: &str, kind: &str, upd
             let st = str_field("status").unwrap_or_else(|| "completed".to_string());
             ("finished".to_string(), Some(st))
         }
-        _ => return,
+        _ => return None,
     };
 
     let tools_used = update
@@ -2000,15 +2045,29 @@ fn emit_subagent_event(app: &AppHandle, parent_session_id: &str, kind: &str, upd
                 .collect::<Vec<_>>()
         });
 
-    let evt = SubagentEvent {
+    let meta = params.get("_meta");
+    Some(SubagentEvent {
         session_id: parent_session_id.to_string(),
         phase,
         subagent_id: subagent_id.clone(),
         child_session_id: str_field("child_session_id")
             .or_else(|| str_field("childSessionId"))
             .or_else(|| Some(subagent_id.clone())),
+        parent_prompt_id: str_field("parent_prompt_id").or_else(|| str_field("parentPromptId")),
         description: str_field("description"),
         subagent_type: str_field("subagent_type").or_else(|| str_field("subagentType")),
+        model: str_field("model"),
+        persona: str_field("persona"),
+        role: str_field("role"),
+        effective_context_source: str_field("effective_context_source")
+            .or_else(|| str_field("effectiveContextSource")),
+        context_normalized: update
+            .get("context_normalized")
+            .or_else(|| update.get("contextNormalized"))
+            .and_then(Value::as_bool),
+        capability_mode: str_field("capability_mode").or_else(|| str_field("capabilityMode")),
+        resumed_from: str_field("resumed_from").or_else(|| str_field("resumedFrom")),
+        workflow_run_id: str_field("workflow_run_id").or_else(|| str_field("workflowRunId")),
         status,
         duration_ms: u64_field("duration_ms").or_else(|| u64_field("durationMs")),
         turn_count: u32_field("turn_count")
@@ -2022,8 +2081,28 @@ fn emit_subagent_event(app: &AppHandle, parent_session_id: &str, kind: &str, upd
             .or_else(|| u64_field("contextWindowTokens")),
         context_usage_pct: u8_field("context_usage_pct").or_else(|| u8_field("contextUsagePct")),
         tools_used,
+        error_count: u32_field("error_count").or_else(|| u32_field("errorCount")),
         error: str_field("error"),
         output: str_field("output"),
+        occurred_at: meta
+            .and_then(|value| value.get("agentTimestampMs"))
+            .and_then(Value::as_i64),
+        is_replay: meta
+            .and_then(|value| value.get("isReplay"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn emit_subagent_event(
+    app: &AppHandle,
+    parent_session_id: &str,
+    kind: &str,
+    update: &Value,
+    params: &Value,
+) {
+    let Some(evt) = parse_subagent_event(parent_session_id, kind, update, params) else {
+        return;
     };
 
     tracing::info!(
@@ -2344,6 +2423,70 @@ mod tests {
         assert_eq!(event.occurred_at, Some(1_788_000_000_000));
         assert_eq!(event.event_id.as_deref(), Some("evt-1"));
         assert_eq!(event.usage["modelCalls"], 2);
+    }
+
+    #[test]
+    fn accepts_both_live_and_durable_echo_agent_update_methods() {
+        assert!(is_echo_agent_session_update_method(
+            "echo.agent/session_notification"
+        ));
+        assert!(is_echo_agent_session_update_method(
+            "echo.agent/session/update"
+        ));
+        assert!(!is_echo_agent_session_update_method("session/update"));
+    }
+
+    #[test]
+    fn parses_replayed_subagent_provenance_and_evidence() {
+        let params = serde_json::json!({
+            "_meta": {
+                "isReplay": true,
+                "agentTimestampMs": 1_788_000_000_123_i64
+            }
+        });
+        let spawned = serde_json::json!({
+            "sessionUpdate": "subagent_spawned",
+            "subagent_id": "child-1",
+            "child_session_id": "child-1",
+            "parent_prompt_id": "prompt-7",
+            "description": "审查持久化链路",
+            "subagent_type": "explore",
+            "model": "model-a",
+            "persona": "reviewer",
+            "role": "researcher",
+            "effective_context_source": "new",
+            "context_normalized": true,
+            "capability_mode": "read-only",
+            "workflow_run_id": "workflow-1"
+        });
+        let event = parse_subagent_event("parent-1", "subagent_spawned", &spawned, &params)
+            .expect("valid subagent event");
+        assert_eq!(event.session_id, "parent-1");
+        assert_eq!(event.subagent_id, "child-1");
+        assert_eq!(event.parent_prompt_id.as_deref(), Some("prompt-7"));
+        assert_eq!(event.description.as_deref(), Some("审查持久化链路"));
+        assert_eq!(event.model.as_deref(), Some("model-a"));
+        assert_eq!(event.capability_mode.as_deref(), Some("read-only"));
+        assert_eq!(event.context_normalized, Some(true));
+        assert_eq!(event.occurred_at, Some(1_788_000_000_123));
+        assert!(event.is_replay);
+
+        let finished = serde_json::json!({
+            "subagent_id": "child-1",
+            "child_session_id": "child-1",
+            "status": "completed",
+            "tool_calls": 12,
+            "turns": 3,
+            "duration_ms": 4200,
+            "tokens_used": 9000,
+            "output": "审查完成"
+        });
+        let event = parse_subagent_event("parent-1", "subagent_finished", &finished, &params)
+            .expect("valid finished event");
+        assert_eq!(event.status.as_deref(), Some("completed"));
+        assert_eq!(event.tool_call_count, Some(12));
+        assert_eq!(event.turn_count, Some(3));
+        assert_eq!(event.output.as_deref(), Some("审查完成"));
     }
 
     #[test]
