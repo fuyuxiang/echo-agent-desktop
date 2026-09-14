@@ -28,6 +28,7 @@ pub enum ProblemKind {
     Runtime,
     Dependency,
     Configuration,
+    Documentation,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -185,6 +186,18 @@ fn build(
         source_command: command.to_string(),
         fingerprint,
     }
+}
+
+pub fn documentation_problem(file: Option<String>, message: String) -> Problem {
+    build(
+        ProblemKind::Documentation,
+        message,
+        file,
+        None,
+        None,
+        None,
+        "documentation-safety",
+    )
 }
 
 /// Parse one verification record into problems. A passing record yields none,

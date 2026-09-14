@@ -1,3 +1,15 @@
+import {
+  buildDocumentationProtocol,
+  createDocumentationRequest,
+  isDocumentationRequest,
+  type DocumentationWorkflowContext,
+} from "./documentation";
+import type { CodingTask, DetectedCommand, PlanIssue, TaskNode, VerificationKind } from "./types";
+
+export interface CodingWorkflowOptions {
+  documentation?: DocumentationWorkflowContext;
+}
+
 /**
  * Runtime contract for Echo Code's default Agent workflow.
  *
@@ -9,10 +21,18 @@ export function buildCodingWorkflowPrompt(
   request: string,
   contextPaths: string[] = [],
   followup = false,
+  options: CodingWorkflowOptions = {},
 ): string {
   const normalizedContext = [...new Set(contextPaths.map((path) => path.trim()).filter(Boolean))];
   const contextInstruction = normalizedContext.length > 0
     ? `\n\n用户指定的优先工程上下文（请先阅读并按需追踪依赖）：\n${normalizedContext.map((path) => `- ${path}`).join("\n")}`
+    : "";
+  const documentation = options.documentation
+    ?? (isDocumentationRequest(request)
+      ? { request: createDocumentationRequest(request) }
+      : undefined);
+  const documentationProtocol = documentation
+    ? buildDocumentationProtocol(documentation)
     : "";
 
   return `[回声代码工程执行协议${followup ? "·补充要求" : ""}]
@@ -42,7 +62,7 @@ Verify: pnpm test -- example.test.ts
 10. 如果发现计划冲突、接口变化或下游假设失效，对可恢复的非破坏性问题记录专业裁决并自动修订计划与依赖后继续；只有不可逆操作或无法推断的业务歧义才停下询问用户。
 
 ${followup ? "用户补充要求" : "用户需求"}：
-${request.trim()}${contextInstruction}`;
+${request.trim()}${contextInstruction}${documentationProtocol}`;
 }
 
 function issueList(issues: PlanIssue[]): string {
@@ -114,4 +134,3 @@ export function mergeTaskVerificationCommands(
   }
   return [...commands.values()];
 }
-import type { CodingTask, DetectedCommand, PlanIssue, TaskNode, VerificationKind } from "./types";

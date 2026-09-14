@@ -16,6 +16,7 @@ const KIND_LABELS: Record<ProblemKind, string> = {
   runtime: "运行时",
   dependency: "依赖",
   configuration: "配置",
+  documentation: "文档安全",
 };
 
 /**

@@ -40,6 +40,12 @@ import { ContextPackView } from "./explorer/ContextPackView";
 import { SearchView } from "./explorer/SearchView";
 import { SymbolView } from "./explorer/SymbolView";
 import { buildCommands, type CommandContext } from "./lib/commands";
+import {
+  createDocumentationWorkflow,
+  isDocumentationRequest,
+  type DocumentationWorkflowContext,
+  type EditorCodeContext,
+} from "./lib/documentation";
 import { buildFileIndex } from "./lib/file-index";
 import {
   buildCodingWorkflowPrompt,
@@ -102,6 +108,7 @@ interface CodingWorkbenchProps {
     modelId: string | undefined,
     contextPaths: string[],
     onSessionReady: (sessionId: string) => Promise<void>,
+    promptTextOverride?: string,
   ) => Promise<string | undefined>;
   /** Focus a task's persisted Agent session without leaving the workbench. */
   onActivateSession?: (sessionId: string, cwd: string) => Promise<void>;
@@ -351,6 +358,7 @@ export function CodingWorkbench({
   const [indexing, setIndexing] = useState(false);
   const [symbolsByPath, setSymbolsByPath] = useState<Record<string, PaletteSymbol[]>>({});
   const [workspaceSymbols, setWorkspaceSymbols] = useState<PaletteSymbol[]>([]);
+  const [editorContext, setEditorContext] = useState<EditorCodeContext | null>(null);
   const [reveal, setReveal] = useState<{ line: number; column: number; key: number }>();
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const indexReady = indexStatus?.state === "ready";
@@ -507,6 +515,73 @@ export function CodingWorkbench({
 
   const symbols = activeFileTab ? (symbolsByPath[activeFileTab.id] ?? []) : [];
   const activeRelativePath = activeFileTab?.relativePath;
+
+  /**
+   * Convert transient Monaco state into an evidence-backed documentation
+   * request. Index/impact failures deliberately degrade to source discovery by
+   * the Agent; an approximate graph must never block a useful /doc action.
+   */
+  const resolveDocumentationWorkflow = useCallback(async (
+    instruction: string,
+    override?: EditorCodeContext,
+  ): Promise<DocumentationWorkflowContext> => {
+    const matchingOverride = override
+      && activeRelativePath
+      && normalizedRelativePath(override.path) === normalizedRelativePath(activeRelativePath)
+      ? override
+      : undefined;
+    const matchingContext = editorContext
+      && activeRelativePath
+      && normalizedRelativePath(editorContext.path) === normalizedRelativePath(activeRelativePath)
+      ? editorContext
+      : undefined;
+    const target = matchingOverride ?? matchingContext ?? (activeFileTab
+      ? {
+          path: activeFileTab.relativePath,
+          language: activeFileTab.language,
+          cursorLine: 1,
+          cursorColumn: 1,
+          startLine: 1,
+          startColumn: 1,
+          endLine: 1,
+          endColumn: 1,
+          selectedText: "",
+          selectionTruncated: false,
+        }
+      : undefined);
+    const relativePath = target?.path
+      ? workspaceRelativePath(cwd, target.path)
+      : undefined;
+
+    let symbol = null;
+    if (cwd && relativePath && target) {
+      try {
+        const evidenceLine = target.selectedText.trim() ? target.startLine : target.cursorLine;
+        symbol = await codingApi.symbolAt(cwd, relativePath, evidenceLine);
+      } catch {
+        // The editor outline below is still useful when the workspace index is
+        // building or the current language is not supported by the backend.
+      }
+    }
+
+    const symbolName = symbol?.name ?? target?.symbol?.name;
+    let impact = null;
+    if (cwd && symbolName && indexReady) {
+      try {
+        impact = await codingApi.impactAnalyze(cwd, symbolName, 3, true);
+      } catch {
+        // Approximate impact is an optimization, never an authority or blocker.
+      }
+    }
+
+    return createDocumentationWorkflow(instruction, target
+      ? { ...target, path: relativePath ?? target.path }
+      : undefined, {
+      symbol,
+      impact,
+      indexReady,
+    });
+  }, [activeFileTab, activeRelativePath, cwd, editorContext, indexReady]);
 
   /** Load a file into a tab, reusing the tab if it is already open. */
   const openFile = useCallback(
@@ -1010,6 +1085,7 @@ export function CodingWorkbench({
     useTabStore.getState().closeAll();
     setSymbolsByPath({});
     setWorkspaceSymbols([]);
+    setEditorContext(null);
     setContextPaths([]);
   }, [cwd]);
 
@@ -1113,12 +1189,27 @@ export function CodingWorkbench({
    * never decides it locally.
    */
   const startTask = useCallback(
-    async (requirement: string) => {
+    async (requirement: string, documentationTarget?: EditorCodeContext) => {
       if (!cwd || !onStartRun) return;
       setStarting(true);
       setStartError(null);
       let createdId: string | undefined;
       try {
+        const documentation = isDocumentationRequest(requirement)
+          ? await resolveDocumentationWorkflow(requirement, documentationTarget)
+          : undefined;
+        const effectiveContextPaths = [...new Set([
+          ...contextPaths,
+          ...(documentation?.request.target?.path ? [documentation.request.target.path] : []),
+        ])];
+        const managedPrompt = documentation
+          ? buildCodingWorkflowPrompt(
+              requirement,
+              effectiveContextPaths,
+              false,
+              { documentation },
+            )
+          : undefined;
         const created = await useTaskStore.getState().createTask(deriveName(requirement), requirement);
         if (!created) {
           setStartError(useTaskStore.getState().error ?? "创建任务失败");
@@ -1139,13 +1230,22 @@ export function CodingWorkbench({
           await useTaskStore.getState().selectTask(created.id);
           boundSession = sessionId;
         };
-        const session = await onStartRun(
-          cwd,
-          requirement,
-          modelId,
-          contextPaths,
-          bindSession,
-        );
+        const session = managedPrompt
+          ? await onStartRun(
+              cwd,
+              requirement,
+              modelId,
+              effectiveContextPaths,
+              bindSession,
+              managedPrompt,
+            )
+          : await onStartRun(
+              cwd,
+              requirement,
+              modelId,
+              effectiveContextPaths,
+              bindSession,
+            );
         if (!session) {
           const reason = "未能启动 Agent 会话，任务已停止且不会继续执行";
           await codingApi.reportStartFailed(cwd, created.id, reason).catch(() => undefined);
@@ -1167,7 +1267,7 @@ export function CodingWorkbench({
         setStarting(false);
       }
     },
-    [contextPaths, cwd, deriveName, modelId, onStartRun],
+    [contextPaths, cwd, deriveName, modelId, onStartRun, resolveDocumentationWorkflow],
   );
 
   const sendFollowup = useCallback(
@@ -1199,8 +1299,19 @@ export function CodingWorkbench({
             return false;
           }
         }
+        const documentation = !managedPrompt && isDocumentationRequest(text)
+          ? await resolveDocumentationWorkflow(text)
+          : undefined;
+        const documentationPaths = documentation?.request.target?.path
+          ? [documentation.request.target.path]
+          : [];
         const promptTextOverride = managedPrompt ?? (task
-          ? buildCodingWorkflowPrompt(text, [], true)
+          ? buildCodingWorkflowPrompt(
+              text,
+              documentationPaths,
+              true,
+              documentation ? { documentation } : undefined,
+            )
           : undefined);
         const accepted = await onSendMessage(text, promptTextOverride);
         if (accepted === false && reopened) {
@@ -1231,6 +1342,7 @@ export function CodingWorkbench({
       hostSessionId,
       onSendMessage,
       onToast,
+      resolveDocumentationWorkflow,
       task,
     ],
   );
@@ -1447,19 +1559,46 @@ export function CodingWorkbench({
     }
     if (!task.sessionId || hostSessionId !== task.sessionId || streaming || !onSendMessage) return;
     const round = orchestrator?.repairRounds.length ?? 0;
-    const key = `${task.id}:${round}`;
+    // Documentation safety repairs are opened before command verification, so
+    // they do not create a regular repair round. Include their ledger revision
+    // to ensure a second failed safety pass can trigger the next repair turn.
+    const documentationAttempt = ledger.filter(
+      (event) => event.kind === "documentation_validation_requested",
+    ).length;
+    const key = `${task.id}:${round}:${documentationAttempt}`;
     if (repairPromptRef.current === key) return;
     repairPromptRef.current = key;
+    const documentationSafetyFailure = problems.some(
+      (problem) => problem.kind === "documentation",
+    );
+    const documentationMissingWrite = problems.some(
+      (problem) => problem.kind === "documentation" && problem.message.includes("未产生任何文件变更"),
+    );
+    const readOnlyWrite = problems.some(
+      (problem) => problem.kind === "documentation" && problem.message.includes("只读代码解释任务"),
+    );
+    const documentationMissingOutput = problems.some(
+      (problem) => problem.kind === "documentation" && problem.message.includes("变更集中没有"),
+    );
     const details = problems.length > 0
       ? problems.map((problem, index) =>
           `${index + 1}. [${problem.kind}] ${problem.file ?? "未知文件"}${problem.line ? `:${problem.line}` : ""} — ${problem.message}`,
         ).join("\n")
       : "验证未通过，但未能提取结构化诊断。请查看验证输出并定位根因。";
-    sendFollowup(
-      `上一轮验证未通过，请修复下列问题。必须检查真实命令输出、完成代码修改并保持现有功能兼容；修复完成后简要说明。\n\n${details}`,
-    );
+    let instruction = "上一轮验证未通过，请修复下列问题。必须检查真实命令输出、完成代码修改并保持现有功能兼容；修复完成后简要说明。";
+    if (readOnlyWrite) {
+      instruction = "这是只读代码解释任务，但上一轮修改了工程文件。请撤销本轮产生的全部文件变更，保留对话中的证据化分析；不要创建文档来制造交付物。完成后说明已恢复哪些文件。";
+    } else if (documentationMissingWrite) {
+      instruction = "你尚未把注释或文档写入工程。请重新读取原始目标和真实代码，把必要内容直接写入目标文件；不要只在对话中给出示例或完成说明，不要改变可执行逻辑。完成后简要说明实际修改位置。";
+    } else if (documentationMissingOutput) {
+      instruction = "当前变更没有覆盖用户明确要求的全部文档产物。请重新核对原始需求，在保持现有正确注释和不改变可执行逻辑的前提下，补齐缺失的源码注释或架构文档，然后检查真实差异。";
+    } else if (documentationSafetyFailure) {
+      instruction = "注释安全校验发现了超出用户要求的代码变更。请只撤销可执行逻辑、字面量或公共结构的改动，保留正确的注释和文档；不要用改写业务代码的方式绕过校验。完成后简要说明。";
+    }
+    sendFollowup(`${instruction}\n\n${details}`);
   }, [
     hostSessionId,
+    ledger,
     onSendMessage,
     orchestrator?.repairRounds.length,
     problems,
@@ -1494,26 +1633,110 @@ export function CodingWorkbench({
     }
   }, [cwd, onToast, task]);
 
-  const requestExplanation = useCallback((scope: "function" | "class" | "module" | "system") => {
-    if (!onSendMessage || !activeSessionId) {
-      onToast?.("请先启动或恢复一个开发任务");
+  const requestExplanation = useCallback(async (
+    scope: "function" | "class" | "module" | "system",
+  ) => {
+    if (!cwd) return;
+    if (!task && (!apiReady || !modelId)) {
+      onToast?.("请先配置可用模型");
+      onOpenSettings?.();
       return;
     }
     const target = scope === "system"
-      ? "当前代码库的整体架构"
-      : `${activeRelativePath ?? "当前文件"}中的当前${scope === "function" ? "函数" : scope === "class" ? "类" : "模块"}`;
-    void sendFollowup(`请解释${target}：说明职责、关键数据流、依赖关系、边界条件和潜在风险。只做分析，不修改文件。`, false);
-  }, [activeRelativePath, activeSessionId, onSendMessage, onToast, sendFollowup]);
+      ? "当前代码库的系统级整体架构与跨模块调用链"
+      : `${activeRelativePath ?? "当前文件"}中的当前${scope === "function" ? "函数" : scope === "class" ? "类" : "模块级内容"}`;
+    const instruction = `请解释${target}：基于真实代码和测试说明职责、关键数据流、依赖关系、边界条件、业务规则和潜在风险。只做分析，不修改文件。`;
+    if (!task) {
+      await startTask(instruction, scope === "system" ? undefined : editorContext ?? undefined);
+      return;
+    }
+    const documentation = await resolveDocumentationWorkflow(
+      instruction,
+      scope === "system" ? undefined : editorContext ?? undefined,
+    );
+    const prompt = buildCodingWorkflowPrompt(
+      instruction,
+      documentation.request.target?.path ? [documentation.request.target.path] : [],
+      true,
+      { documentation },
+    );
+    await sendFollowup(instruction, false, prompt);
+  }, [
+    activeRelativePath,
+    apiReady,
+    cwd,
+    editorContext,
+    modelId,
+    onOpenSettings,
+    onToast,
+    resolveDocumentationWorkflow,
+    sendFollowup,
+    startTask,
+    task,
+  ]);
 
-  const generateComments = useCallback(() => {
-    if (!activeRelativePath) {
+  const generateComments = useCallback(async (override?: EditorCodeContext) => {
+    const current = activeFileTab;
+    if (!current) {
       onToast?.("请先打开需要补充注释的文件");
       return;
     }
-    sendFollowup(
-      `请为 ${activeRelativePath} 补充必要且简洁的代码注释与公开 API 文档。不要复述显而易见的实现；保持项目既有风格，并直接修改文件。`,
+    if (current.view === "diff") {
+      onToast?.("请先切换到编辑视图，再选择需要文档化的代码");
+      return;
+    }
+    if (current.draft !== current.original) {
+      onToast?.("当前文件有未保存修改；请先保存，避免 Agent 根据过期内容生成注释");
+      return;
+    }
+    if (streaming || sending || isBusyPhase(task?.phase)) {
+      onToast?.("当前 Agent 仍在处理任务，请等待本轮完成后再生成注释");
+      return;
+    }
+    if (!task && (!apiReady || !modelId)) {
+      onToast?.("请先配置可用模型");
+      onOpenSettings?.();
+      return;
+    }
+
+    const candidate = override ?? editorContext ?? undefined;
+    const target = candidate
+      && normalizedRelativePath(candidate.path) === normalizedRelativePath(current.relativePath)
+      ? candidate
+      : undefined;
+    const focused = Boolean(target?.selectedText.trim() || target?.symbol);
+    const targetDescription = target?.selectedText.trim()
+      ? `${current.relativePath} 第 ${target.startLine}-${target.endLine} 行选中的代码`
+      : target?.symbol
+        ? `${current.relativePath} 中的${target.symbol.name} 符号`
+        : `${current.relativePath} 当前文件`;
+    const instruction = `请为${targetDescription}${focused ? "" : "进行模块级分析并"}补充必要、简洁且语义一致的代码注释与公开 API 文档。说明非显然的业务规则、边界条件、副作用和必要的外部调用关系；以当前选区、符号或文件为修改边界，不复述语法，不改变任何可执行逻辑，保持项目既有风格并直接修改文件。`;
+    if (!task) {
+      await startTask(instruction, target);
+      return;
+    }
+    const documentation = await resolveDocumentationWorkflow(instruction, target);
+    const prompt = buildCodingWorkflowPrompt(
+      instruction,
+      documentation.request.target?.path ? [documentation.request.target.path] : [],
+      true,
+      { documentation },
     );
-  }, [activeRelativePath, onToast, sendFollowup, task]);
+    await sendFollowup(instruction, true, prompt);
+  }, [
+    activeFileTab,
+    apiReady,
+    editorContext,
+    modelId,
+    onOpenSettings,
+    onToast,
+    resolveDocumentationWorkflow,
+    sendFollowup,
+    sending,
+    startTask,
+    streaming,
+    task,
+  ]);
 
   const changeTaskModel = useCallback(async (nextModelId: string) => {
     const previous = modelId;
@@ -1543,6 +1766,7 @@ export function CodingWorkbench({
   const commandContext = useMemo<CommandContext>(
     () => ({
       hasWorkspace: Boolean(cwd),
+      hasActiveFile: Boolean(activeFileTab),
       hasTask: Boolean(task),
       busy: streaming || isBusyPhase(task?.phase),
       taskPhase: task?.phase,
@@ -1576,6 +1800,7 @@ export function CodingWorkbench({
     }),
     [
       commitChanges,
+      activeFileTab,
       changeSet?.baselineMode,
       changeSet?.rollbackUnsafeFiles?.length,
       cwd,
@@ -1941,6 +2166,8 @@ export function CodingWorkbench({
               [path]: list.map((symbol) => ({ ...symbol, path })),
             }))
           }
+          onEditorContext={setEditorContext}
+          onGenerateDocumentation={(context) => void generateComments(context)}
           renderDoc={(kind) => {
             const openRelative = (path: string) => void openFile(workspaceFilePath(cwd, path));
             if (kind === "delivery") {

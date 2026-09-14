@@ -184,7 +184,8 @@ export type ProblemKind =
   | "test_failure"
   | "runtime"
   | "dependency"
-  | "configuration";
+  | "configuration"
+  | "documentation";
 
 export type ProblemSeverity = "error" | "warning";
 

@@ -731,6 +731,68 @@ describe("CodingWorkbench skeleton", () => {
       .toBeLessThan(onStartRun.mock.invocationCallOrder[0]);
   });
 
+  it("starts evidence-scoped comment generation directly from the editor toolbar", async () => {
+    const user = userEvent.setup();
+    const onStartRun = vi.fn(async (..._args: unknown[]) => "session-doc");
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "coding_task_create") {
+        return {
+          schemaVersion: 2,
+          id: "t-doc",
+          name: "生成注释",
+          requirement: "生成注释",
+          phase: "idle",
+          acceptanceCriteria: [],
+          taskNodes: [],
+          planIssues: [],
+          globalConstraints: [],
+          createdAt: "",
+          updatedAt: "",
+        };
+      }
+      if (command === "coding_task_list" || command === "coding_verification_detect") return [];
+      if (command === "coding_symbol_at") return null;
+      return null;
+    });
+    render(
+      <CodingWorkbench
+        cwd="/repo"
+        models={[{ id: "m1" }]}
+        defaultModelId="m1"
+        apiReady
+        onStartRun={onStartRun}
+      />,
+    );
+    await screen.findByTestId("file-tree");
+    await act(async () => {
+      useTabStore.getState().openFile({
+        id: "/repo/src/a.ts",
+        relativePath: "src/a.ts",
+        name: "a.ts",
+        language: "typescript",
+        original: "export function total() { return 1; }",
+        draft: "export function total() { return 1; }",
+        hash: "h1",
+        loading: false,
+      });
+    });
+
+    await user.click(screen.getByRole("button", {
+      name: "为当前选区或符号生成注释",
+    }));
+
+    await waitFor(() => expect(onStartRun).toHaveBeenCalledWith(
+      "/repo",
+      expect.stringContaining("src/a.ts"),
+      "m1",
+      ["src/a.ts"],
+      expect.any(Function),
+      expect.stringContaining("[回声代码·分层文档协议]"),
+    ));
+    expect(onStartRun.mock.calls[0]?.[5]).toContain("粒度：module");
+    expect(onStartRun.mock.calls[0]?.[5]).toContain("禁止改变可执行逻辑");
+  });
+
   it("starts a task in an ordinary folder without requiring Git", async () => {
     const user = userEvent.setup();
     const onStartRun = vi.fn(async () => "session-1");
@@ -777,6 +839,7 @@ describe("CodingWorkbench skeleton", () => {
       "m1",
       [],
       expect.any(Function),
+      expect.stringContaining("[回声代码·分层文档协议]"),
     );
   });
 
