@@ -13863,8 +13863,35 @@ button.diff__path {
 }
 
 /* Token 用量与配额 */
-.quota-panel{border:1px solid var(--echo-border-default);border-radius:10px;background:var(--echo-bg-primary);overflow:hidden;font-size:13px;color:var(--echo-text-medium)}
-.quota-panel__head{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 20px;border-bottom:1px solid var(--echo-border-default);background:var(--echo-bg-tertiary)}
+.quota-panel {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 10px;
+  background: var(--echo-bg-primary);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  font-size: 13px;
+  color: var(--echo-text-medium);
+}
+.quota-panel:focus-visible {
+  outline: 2px solid var(--echo-border-focus, var(--echo-brand));
+  outline-offset: -2px;
+}
+.quota-panel__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--echo-border-default);
+  background: var(--echo-bg-tertiary);
+}
 .quota-panel__title{margin:0;font-size:19px;font-weight:700;color:var(--echo-text-strong)}
 .quota-panel__subtitle{margin:4px 0 0;max-width:620px;font-size:12px;line-height:1.5;color:var(--echo-text-light)}
 .quota-panel__actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
