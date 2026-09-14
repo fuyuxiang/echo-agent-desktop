@@ -14,6 +14,7 @@ import { useAppDialog } from "./AppDialog";
 import { SessionContextMenu } from "./SessionContextMenu";
 import type { ModelOption } from "./ModelSelector";
 import { MoreDotsIcon } from "@/foundation/components/Icon/icons";
+import type { SessionStatus } from "@/lib/types";
 
 function availableModelId(
   models: readonly ModelOption[],
@@ -71,6 +72,141 @@ function ProjectModelSelect({
 // 动态
 // ============================================================
 
+type ActivityStatusFilter =
+  | "all"
+  | "attention"
+  | "running"
+  | "pending"
+  | "paused"
+  | "finished"
+  | "unknown";
+
+type ActivityStatusTone =
+  | "running"
+  | "attention"
+  | "pending"
+  | "paused"
+  | "failed"
+  | "finished"
+  | "unknown";
+
+interface ActivityStatusMeta {
+  label: string;
+  tone: ActivityStatusTone;
+  filter: Exclude<ActivityStatusFilter, "all" | "attention"> | "attention";
+  priority: number;
+  description: string;
+}
+
+const ACTIVITY_STATUS_META: Record<SessionStatus, ActivityStatusMeta> = {
+  awaiting_permission: {
+    label: "等待授权",
+    tone: "attention",
+    filter: "attention",
+    priority: 0,
+    description: "Agent 正在等待你确认工具执行权限",
+  },
+  awaiting_answer: {
+    label: "等待回答",
+    tone: "attention",
+    filter: "attention",
+    priority: 0,
+    description: "Agent 正在等待你回答问题",
+  },
+  awaiting_approval: {
+    label: "等待批准",
+    tone: "attention",
+    filter: "attention",
+    priority: 0,
+    description: "Agent 正在等待你批准执行方案",
+  },
+  failed: {
+    label: "执行失败",
+    tone: "failed",
+    filter: "attention",
+    priority: 1,
+    description: "最近一轮 Agent 执行失败，请打开对话查看原因",
+  },
+  working: {
+    label: "执行中",
+    tone: "running",
+    filter: "running",
+    priority: 2,
+    description: "Agent 正在执行最近一轮任务",
+  },
+  planning: {
+    label: "规划中",
+    tone: "running",
+    filter: "running",
+    priority: 2,
+    description: "Agent 正在生成或调整执行方案",
+  },
+  pausing: {
+    label: "正在暂停",
+    tone: "running",
+    filter: "running",
+    priority: 2,
+    description: "暂停请求正在生效",
+  },
+  stopping: {
+    label: "正在停止",
+    tone: "running",
+    filter: "running",
+    priority: 2,
+    description: "停止请求正在生效",
+  },
+  pending: {
+    label: "未开始",
+    tone: "pending",
+    filter: "pending",
+    priority: 3,
+    description: "对话已创建，尚未开始执行",
+  },
+  paused: {
+    label: "已暂停",
+    tone: "paused",
+    filter: "paused",
+    priority: 4,
+    description: "最近一轮执行已暂停，可打开对话继续",
+  },
+  stopped: {
+    label: "已停止",
+    tone: "paused",
+    filter: "paused",
+    priority: 4,
+    description: "最近一轮执行已停止或因应用重启中断",
+  },
+  completed: {
+    label: "本轮已结束",
+    tone: "finished",
+    filter: "finished",
+    priority: 5,
+    description: "最近一轮 Agent 执行已正常结束，不代表项目任务已完成",
+  },
+};
+
+const UNKNOWN_ACTIVITY_STATUS: ActivityStatusMeta = {
+  label: "历史状态未知",
+  tone: "unknown",
+  filter: "unknown",
+  priority: 6,
+  description: "该历史记录创建时尚未保存执行状态，可打开对话查看内容",
+};
+
+function activityStatusMeta(status?: SessionStatus): ActivityStatusMeta {
+  return status ? ACTIVITY_STATUS_META[status] : UNKNOWN_ACTIVITY_STATUS;
+}
+
+const ACTIVITY_FILTER_LABELS: Record<ActivityStatusFilter, string> = {
+  all: "全部状态",
+  attention: "需处理",
+  running: "执行中",
+  pending: "未开始",
+  paused: "已暂停/停止",
+  finished: "本轮已结束",
+  unknown: "状态未知",
+};
+
 export function ActivityTab({
   projectId,
   onOpenSession,
@@ -91,6 +227,8 @@ export function ActivityTab({
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
   const sessionSummaries = useSessionsStore((s) => s.independent);
   const [view, setView] = useState<"active" | "archived">("active");
+  const [statusFilter, setStatusFilter] = useState<ActivityStatusFilter>("all");
+  const [sortMode, setSortMode] = useState<"priority" | "recent">("priority");
   const [visibleCount, setVisibleCount] = useState(20);
   const [menu, setMenu] = useState<{
     x: number;
@@ -109,13 +247,54 @@ export function ActivityTab({
   const allConversations = project?.conversations ?? [];
   const activeCount = allConversations.filter((conversation) => !conversation.archived).length;
   const archivedCount = allConversations.length - activeCount;
-  const conversations = allConversations.filter(
-    (conversation) => !!conversation.archived === (view === "archived"),
-  );
+  const conversationEntries = useMemo(() => allConversations
+    .filter((conversation) => !!conversation.archived === (view === "archived"))
+    .map((conversation) => {
+      const summary = summaryById.get(conversation.sessionId);
+      return {
+        conversation,
+        summary,
+        status: activityStatusMeta(summary?.status),
+        updatedAt: summary?.updatedAt || conversation.createdAt,
+      };
+    }), [allConversations, summaryById, view]);
+  const statusCounts = useMemo(() => {
+    const counts: Record<ActivityStatusFilter, number> = {
+      all: conversationEntries.length,
+      attention: 0,
+      running: 0,
+      pending: 0,
+      paused: 0,
+      finished: 0,
+      unknown: 0,
+    };
+    for (const entry of conversationEntries) counts[entry.status.filter] += 1;
+    return counts;
+  }, [conversationEntries]);
+  const conversations = useMemo(() => conversationEntries
+    .filter((entry) => statusFilter === "all" || entry.status.filter === statusFilter)
+    .sort((a, b) => {
+      if (sortMode === "priority") {
+        const priority = a.status.priority - b.status.priority;
+        if (priority !== 0) return priority;
+      }
+      const aTime = new Date(a.updatedAt).getTime() || 0;
+      const bTime = new Date(b.updatedAt).getTime() || 0;
+      return bTime - aTime;
+    }), [conversationEntries, sortMode, statusFilter]);
   const visibleConversations = conversations.slice(0, visibleCount);
+  const visibleFilters = (Object.keys(ACTIVITY_FILTER_LABELS) as ActivityStatusFilter[])
+    .filter((filter) => filter === "all" || statusCounts[filter] > 0 || filter === statusFilter);
 
   const switchView = (next: "active" | "archived") => {
     setView(next);
+    setStatusFilter("all");
+    setVisibleCount(20);
+    setMenu(null);
+  };
+
+  const selectStatusFilter = (next: ActivityStatusFilter) => {
+    setStatusFilter(next);
     setVisibleCount(20);
     setMenu(null);
   };
@@ -221,7 +400,44 @@ export function ActivityTab({
         <span className="pd-pill pd-pill--stat">{project?.tasks.length ?? 0} 项任务</span>
         <span className="pd-pill pd-pill--stat">{project?.assets.length ?? 0} 个资产</span>
       </div>
-      {conversations.length === 0 ? (
+      {conversationEntries.length > 0 && (
+        <div className="pd-activity-triage">
+          <div className="pd-activity-filters" role="group" aria-label="按最近一轮执行状态筛选">
+            {visibleFilters.map((filter) => (
+              <button
+                key={filter}
+                type="button"
+                className={`pd-status-filter pd-status-filter--${filter}${statusFilter === filter ? " pd-status-filter--on" : ""}`}
+                aria-label={`${ACTIVITY_FILTER_LABELS[filter]}，${statusCounts[filter]} 个对话`}
+                aria-pressed={statusFilter === filter}
+                onClick={() => selectStatusFilter(filter)}
+              >
+                {filter !== "all" && <span className="pd-status-filter__dot" aria-hidden="true" />}
+                <span>{ACTIVITY_FILTER_LABELS[filter]}</span>
+                <span className="pd-status-filter__count">{statusCounts[filter]}</span>
+              </button>
+            ))}
+          </div>
+          <label className="pd-activity-sort">
+            <span>排序</span>
+            <select
+              aria-label="项目对话排序"
+              value={sortMode}
+              onChange={(event) => {
+                setSortMode(event.target.value as "priority" | "recent");
+                setVisibleCount(20);
+              }}
+            >
+              <option value="priority">需处理优先</option>
+              <option value="recent">最近更新</option>
+            </select>
+          </label>
+          <p className="pd-activity-status-hint">
+            显示对话最近一轮的 Agent 执行状态，不等同于项目任务进度。
+          </p>
+        </div>
+      )}
+      {conversationEntries.length === 0 ? (
         <div className="pd-empty">
           {view === "archived"
             ? "还没有已归档的项目对话。"
@@ -229,10 +445,15 @@ export function ActivityTab({
               ? "当前项目对话均已归档，可切换到“已归档”查看或恢复。"
               : "暂无真实运行记录，从下方输入框启动第一个项目对话。"}
         </div>
+      ) : conversations.length === 0 ? (
+        <div className="pd-empty pd-empty--filtered">
+          <span>没有符合“{ACTIVITY_FILTER_LABELS[statusFilter]}”的对话。</span>
+          <button type="button" className="pd-btn" onClick={() => selectStatusFilter("all")}>查看全部状态</button>
+        </div>
       ) : (
         <>
           <ul className="pd-task-list" aria-label={view === "archived" ? "已归档项目对话" : "最近项目对话"}>
-            {visibleConversations.map((conversation) => (
+            {visibleConversations.map(({ conversation, summary, status, updatedAt }) => (
               <li
                 key={conversation.sessionId}
                 className="pd-conversation-row"
@@ -243,15 +464,30 @@ export function ActivityTab({
                   className={`pd-task-item pd-conversation-row__open${onOpenSession ? " pd-task-item--clickable" : ""}`}
                   onClick={() => onOpenSession?.(
                     conversation.sessionId,
-                    summaryById.get(conversation.sessionId)?.cwd || project?.cwd,
+                    summary?.cwd || project?.cwd,
                   )}
                   disabled={!onOpenSession}
                 >
-                  <span className="pd-task-item__title">{conversation.title}</span>
+                  <span className="pd-task-item__title">{summary?.title || conversation.title}</span>
                   <span className="pd-task-item__meta">
-                    {conversation.archived ? "已归档" : "对话"}
-                    {conversation.modelId ? ` · ${modelLabel(models, conversation.modelId)}` : ""}
-                    {` · ${relTime(conversation.createdAt)}`}
+                    <span
+                      className={`pd-session-status pd-session-status--${status.tone}`}
+                      title={status.description}
+                      aria-label={`执行状态：${status.label}。${status.description}`}
+                    >
+                      <span className="pd-session-status__dot" aria-hidden="true" />
+                      {status.label}
+                    </span>
+                    {conversation.archived && <span>已归档</span>}
+                    {(summary?.currentModelId || conversation.modelId) && (
+                      <span
+                        className="pd-conversation-model"
+                        title={modelLabel(models, summary?.currentModelId || conversation.modelId)}
+                      >
+                        {modelLabel(models, summary?.currentModelId || conversation.modelId)}
+                      </span>
+                    )}
+                    <time dateTime={updatedAt}>{relTime(updatedAt)}</time>
                   </span>
                 </button>
                 <button

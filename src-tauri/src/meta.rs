@@ -3,8 +3,8 @@
 //! EchoAgent's `summary.json` (and the in-memory `Summary` it serializes) does NOT
 //! support a `pinned` field — it only knows its own schema, and writing an
 //! unknown key would be clobbered the next time EchoAgent flushes. So we keep
-//! EchoAgent-only state (pinned, archived, expert and per-session permission
-//! bindings) in a separate file:
+//! EchoAgent-only state (pinned, archived, expert, lifecycle and per-session
+//! permission bindings) in a separate file:
 //! `~/.echo-agent/echoagent-state.json`.
 //!
 //! Read on every `list_sessions` call and merged into the per-session
@@ -28,7 +28,31 @@ const MAX_EXPERT_ID_CHARS: usize = 256;
 const MAX_EXPERT_NAME_CHARS: usize = 512;
 const MAX_EXPERT_SOURCE_CHARS: usize = 64;
 const MAX_EXPERT_AVATAR_CHARS: usize = 4_096;
+const MAX_STATUS_TIMESTAMP_CHARS: usize = 128;
 const PERMISSION_MODES: [&str; 3] = ["ask", "auto", "always-approve"];
+const SESSION_STATUSES: [&str; 12] = [
+    "working",
+    "completed",
+    "failed",
+    "pending",
+    "planning",
+    "awaiting_permission",
+    "awaiting_answer",
+    "awaiting_approval",
+    "pausing",
+    "paused",
+    "stopping",
+    "stopped",
+];
+const TRANSIENT_SESSION_STATUSES: [&str; 7] = [
+    "working",
+    "planning",
+    "awaiting_permission",
+    "awaiting_answer",
+    "awaiting_approval",
+    "pausing",
+    "stopping",
+];
 
 static STATE_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -51,6 +75,17 @@ pub struct ExpertBinding {
     pub avatar_local: Option<String>,
 }
 
+/// Last renderer-observed lifecycle state for a session. EchoAgent's upstream
+/// summary has no turn status, so this is kept beside our other session-only
+/// metadata. `updated_at` lets catalog consumers sort by the real state change
+/// rather than the session's original project-link timestamp.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionLifecycle {
+    pub status: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EchoAgentState {
     /// Schema version for forward compatibility.
@@ -68,6 +103,9 @@ pub struct EchoAgentState {
     /// to `ask`; there is intentionally no user-selectable global fallback.
     #[serde(default)]
     pub session_permission_modes: HashMap<String, String>,
+    /// Last lifecycle state: session_id → SessionLifecycle.
+    #[serde(default)]
+    pub session_statuses: HashMap<String, SessionLifecycle>,
 }
 
 impl Default for EchoAgentState {
@@ -78,6 +116,7 @@ impl Default for EchoAgentState {
             archived_sessions: Vec::new(),
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
+            session_statuses: HashMap::new(),
         }
     }
 }
@@ -102,6 +141,10 @@ impl EchoAgentState {
 
     pub fn permission_mode_map(&self) -> &HashMap<String, String> {
         &self.session_permission_modes
+    }
+
+    pub fn session_status_map(&self) -> &HashMap<String, SessionLifecycle> {
+        &self.session_statuses
     }
 }
 
@@ -139,6 +182,22 @@ fn validate_binding(binding: &ExpertBinding) -> Result<(), String> {
     Ok(())
 }
 
+fn valid_session_status(value: &str) -> bool {
+    SESSION_STATUSES.contains(&value)
+}
+
+fn validate_lifecycle(lifecycle: &SessionLifecycle) -> Result<(), String> {
+    if !valid_session_status(&lifecycle.status) {
+        return Err("会话状态无效".into());
+    }
+    if !valid_field(&lifecycle.updated_at, MAX_STATUS_TIMESTAMP_CHARS, false)
+        || chrono::DateTime::parse_from_rfc3339(&lifecycle.updated_at).is_err()
+    {
+        return Err("会话状态时间无效".into());
+    }
+    Ok(())
+}
+
 fn validate_state(state: &EchoAgentState) -> Result<(), String> {
     if state.version != STATE_VERSION {
         return Err(format!(
@@ -150,6 +209,7 @@ fn validate_state(state: &EchoAgentState) -> Result<(), String> {
         || state.archived_sessions.len() > MAX_SESSION_ENTRIES
         || state.expert_sessions.len() > MAX_SESSION_ENTRIES
         || state.session_permission_modes.len() > MAX_SESSION_ENTRIES
+        || state.session_statuses.len() > MAX_SESSION_ENTRIES
     {
         return Err("会话元数据条目超过安全上限".into());
     }
@@ -171,6 +231,12 @@ fn validate_state(state: &EchoAgentState) -> Result<(), String> {
         if !valid_session_id(session_id) || !PERMISSION_MODES.contains(&mode.as_str()) {
             return Err("会话权限模式包含无效数据".into());
         }
+    }
+    for (session_id, lifecycle) in &state.session_statuses {
+        if !valid_session_id(session_id) {
+            return Err("会话状态包含无效会话 ID".into());
+        }
+        validate_lifecycle(lifecycle)?;
     }
     Ok(())
 }
@@ -213,6 +279,16 @@ fn sanitize_state(mut state: EchoAgentState) -> EchoAgentState {
         keys.sort();
         for key in keys.into_iter().skip(MAX_SESSION_ENTRIES) {
             state.session_permission_modes.remove(&key);
+        }
+    }
+    state.session_statuses.retain(|session_id, lifecycle| {
+        valid_session_id(session_id) && validate_lifecycle(lifecycle).is_ok()
+    });
+    if state.session_statuses.len() > MAX_SESSION_ENTRIES {
+        let mut keys = state.session_statuses.keys().cloned().collect::<Vec<_>>();
+        keys.sort();
+        for key in keys.into_iter().skip(MAX_SESSION_ENTRIES) {
+            state.session_statuses.remove(&key);
         }
     }
     state
@@ -494,8 +570,96 @@ fn clear_permission_mode_at(path: &Path, session_id: &str) -> Result<bool, Strin
     })
 }
 
-pub fn clear_permission_mode(session_id: &str) -> Result<bool, String> {
-    clear_permission_mode_at(&state_path(), session_id)
+fn set_session_status_at(
+    path: &Path,
+    session_id: &str,
+    status: &str,
+    updated_at: &str,
+) -> Result<(), String> {
+    if !valid_session_id(session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    let lifecycle = SessionLifecycle {
+        status: status.to_string(),
+        updated_at: updated_at.to_string(),
+    };
+    validate_lifecycle(&lifecycle)?;
+    update_state_at(path, |state| {
+        if !state.session_statuses.contains_key(session_id)
+            && state.session_statuses.len() >= MAX_SESSION_ENTRIES
+        {
+            return Err("会话状态数量超过安全上限".into());
+        }
+        let current_is_newer = state
+            .session_statuses
+            .get(session_id)
+            .and_then(|current| chrono::DateTime::parse_from_rfc3339(&current.updated_at).ok())
+            .zip(chrono::DateTime::parse_from_rfc3339(updated_at).ok())
+            .is_some_and(|(current, incoming)| current > incoming);
+        if current_is_newer {
+            return Ok(((), false));
+        }
+        let changed = state.session_statuses.get(session_id) != Some(&lifecycle);
+        state
+            .session_statuses
+            .insert(session_id.to_string(), lifecycle);
+        Ok(((), changed))
+    })
+}
+
+/// Persist a session lifecycle transition, rejecting out-of-order observations.
+pub fn set_session_status(session_id: &str, status: &str, updated_at: &str) -> Result<(), String> {
+    set_session_status_at(&state_path(), session_id, status, updated_at)
+}
+
+fn mark_transient_statuses_stopped_at(path: &Path, updated_at: &str) -> Result<usize, String> {
+    if !valid_field(updated_at, MAX_STATUS_TIMESTAMP_CHARS, false)
+        || chrono::DateTime::parse_from_rfc3339(updated_at).is_err()
+    {
+        return Err("会话状态时间无效".into());
+    }
+    update_state_at(path, |state| {
+        let mut changed = 0;
+        for lifecycle in state.session_statuses.values_mut() {
+            if TRANSIENT_SESSION_STATUSES.contains(&lifecycle.status.as_str()) {
+                lifecycle.status = "stopped".into();
+                lifecycle.updated_at = updated_at.to_string();
+                changed += 1;
+            }
+        }
+        Ok((changed, changed > 0))
+    })
+}
+
+/// A newly spawned Runtime cannot still own work from the previous process.
+/// Convert only volatile states; terminal, pending and deliberately paused
+/// sessions remain intact. Renderer-only reloads reuse the Runtime and skip it.
+pub fn mark_transient_statuses_stopped() -> Result<usize, String> {
+    mark_transient_statuses_stopped_at(&state_path(), &chrono::Utc::now().to_rfc3339())
+}
+
+fn clear_session_metadata_at(path: &Path, session_id: &str) -> Result<bool, String> {
+    if !valid_session_id(session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    update_state_at(path, |state| {
+        let mut changed = false;
+        let pinned_len = state.pinned_sessions.len();
+        state.pinned_sessions.retain(|value| value != session_id);
+        changed |= state.pinned_sessions.len() != pinned_len;
+        let archived_len = state.archived_sessions.len();
+        state.archived_sessions.retain(|value| value != session_id);
+        changed |= state.archived_sessions.len() != archived_len;
+        changed |= state.expert_sessions.remove(session_id).is_some();
+        changed |= state.session_permission_modes.remove(session_id).is_some();
+        changed |= state.session_statuses.remove(session_id).is_some();
+        Ok((changed, changed))
+    })
+}
+
+/// Remove every sidecar entry owned by a deleted session.
+pub fn clear_session_metadata(session_id: &str) -> Result<bool, String> {
+    clear_session_metadata_at(&state_path(), session_id)
 }
 
 // ---------- unit tests ----------
@@ -513,6 +677,7 @@ mod tests {
         assert!(state.pinned_sessions.is_empty());
         assert!(state.archived_sessions.is_empty());
         assert!(state.session_permission_modes.is_empty());
+        assert!(state.session_statuses.is_empty());
     }
 
     // --- pinned_set / archived_set ---
@@ -525,6 +690,7 @@ mod tests {
             archived_sessions: vec![],
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
+            session_statuses: HashMap::new(),
         };
         let set = state.pinned_set();
         assert_eq!(set.len(), 2); // deduplicated
@@ -540,6 +706,7 @@ mod tests {
             archived_sessions: vec!["a1".into(), "a2".into()],
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
+            session_statuses: HashMap::new(),
         };
         let set = state.archived_set();
         assert_eq!(set.len(), 2);
@@ -564,6 +731,13 @@ mod tests {
             archived_sessions: vec!["a1".into(), "a2".into()],
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::from([("s1".into(), "auto".into())]),
+            session_statuses: HashMap::from([(
+                "s1".into(),
+                SessionLifecycle {
+                    status: "completed".into(),
+                    updated_at: "2026-09-14T08:00:00Z".into(),
+                },
+            )]),
         };
         let json = serde_json::to_string(&state).unwrap();
         let parsed: EchoAgentState = serde_json::from_str(&json).unwrap();
@@ -587,6 +761,7 @@ mod tests {
         assert!(state.pinned_sessions.is_empty());
         assert!(state.archived_sessions.is_empty());
         assert!(state.session_permission_modes.is_empty());
+        assert!(state.session_statuses.is_empty());
     }
 
     #[test]
@@ -649,6 +824,67 @@ mod tests {
                 .map(String::as_str),
             Some("ask")
         );
+    }
+
+    #[test]
+    fn session_statuses_are_validated_persisted_and_recovered_after_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("echoagent-state.json");
+
+        set_session_status_at(
+            &path,
+            "session-running",
+            "awaiting_answer",
+            "2026-09-14T08:00:00Z",
+        )
+        .unwrap();
+        set_session_status_at(&path, "session-done", "completed", "2026-09-14T08:01:00Z").unwrap();
+        // Async IPC calls may finish out of order. An earlier observation must
+        // never overwrite a newer terminal state.
+        set_session_status_at(&path, "session-done", "working", "2026-09-14T08:00:30Z").unwrap();
+        assert!(
+            set_session_status_at(&path, "session-invalid", "made_up", "2026-09-14T08:02:00Z",)
+                .is_err()
+        );
+
+        assert_eq!(
+            mark_transient_statuses_stopped_at(&path, "2026-09-14T09:00:00Z").unwrap(),
+            1
+        );
+        let state = read_state_from(&path, true).unwrap();
+        assert_eq!(state.session_statuses["session-running"].status, "stopped");
+        assert_eq!(
+            state.session_statuses["session-running"].updated_at,
+            "2026-09-14T09:00:00Z"
+        );
+        assert_eq!(state.session_statuses["session-done"].status, "completed");
+    }
+
+    #[test]
+    fn deleting_session_clears_all_sidecar_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("echoagent-state.json");
+        let mut state = EchoAgentState::default();
+        state.pinned_sessions.push("session-a".into());
+        state.archived_sessions.push("session-a".into());
+        state
+            .session_permission_modes
+            .insert("session-a".into(), "ask".into());
+        state.session_statuses.insert(
+            "session-a".into(),
+            SessionLifecycle {
+                status: "failed".into(),
+                updated_at: "2026-09-14T08:00:00Z".into(),
+            },
+        );
+        write_state_to(&path, &state).unwrap();
+
+        assert!(clear_session_metadata_at(&path, "session-a").unwrap());
+        let cleared = read_state_from(&path, true).unwrap();
+        assert!(cleared.pinned_sessions.is_empty());
+        assert!(cleared.archived_sessions.is_empty());
+        assert!(cleared.session_permission_modes.is_empty());
+        assert!(cleared.session_statuses.is_empty());
     }
 
     #[test]
