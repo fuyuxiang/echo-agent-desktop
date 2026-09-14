@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { SubagentPanel } from "../SubagentPanel";
 import { useSubagentStore } from "@/stores/subagent-store";
 import { useSessionStore } from "@/stores/session-store";
@@ -10,11 +10,13 @@ function spawnMsg(
   id: string,
   title: string,
   status: "in_progress" | "completed" | "failed",
+  options?: { rawInput?: unknown; resultText?: string; promptId?: string },
 ): ChatMessage {
   return {
     id: "msg-" + id,
     role: "assistant",
     complete: true,
+    promptId: options?.promptId,
     parts: [
       {
         kind: "tool_call",
@@ -23,7 +25,10 @@ function spawnMsg(
           title,
           kind: "spawn_subagent",
           status,
-          content: [],
+          content: options?.resultText
+            ? [{ type: "text", text: options.resultText }]
+            : [],
+          rawInput: options?.rawInput,
         },
       },
     ],
@@ -89,11 +94,12 @@ describe("SubagentPanel", () => {
   });
 
   it("live + transcript 合并去重(live 优先)", () => {
-    // Same subagent in both live and transcript — live wins.
+    // Runtime id and ACP tool-call id are deliberately different. The task
+    // result carries the true child id and must still merge into one row.
     useSubagentStore.getState().applyEvent({
       sessionId: "s1",
       phase: "spawned",
-      subagentId: "dup1",
+      subagentId: "child-1",
       description: "实时子代理",
       status: "running",
     });
@@ -102,7 +108,9 @@ describe("SubagentPanel", () => {
     render(
       <SubagentPanel
         messages={[
-          spawnMsg("dup1", "Spawn subagent: dup1", "in_progress"),
+          spawnMsg("tool-call-1", "Task: fallback", "in_progress", {
+            resultText: "Subagent moved to the background and is still running.\nsubagent_id: child-1\ntype: explore",
+          }),
           spawnMsg("t2", "Spawn subagent: other", "completed"),
         ]}
       />,
@@ -117,5 +125,79 @@ describe("SubagentPanel", () => {
     render(<SubagentPanel messages={[spawnMsg("t1", "Spawn subagent: x", "failed")]} />);
     expect(screen.getByText(/失败 1/)).toBeInTheDocument();
     expect(screen.getByText("失败")).toBeInTheDocument();
+  });
+
+  it("展开后展示完整任务、最终产出和处理凭证", () => {
+    useSubagentStore.getState().applyEvent({
+      sessionId: "s1",
+      phase: "spawned",
+      subagentId: "child-7",
+      childSessionId: "child-7",
+      parentPromptId: "prompt-7",
+      description: "核验历史记录",
+      subagentType: "explore",
+      model: "model-a",
+      status: "running",
+    });
+    useSubagentStore.getState().applyEvent({
+      sessionId: "s1",
+      phase: "finished",
+      subagentId: "child-7",
+      childSessionId: "child-7",
+      status: "completed",
+      output: "确认历史生命周期事件可以完整回放。",
+      toolCallCount: 9,
+      turnCount: 2,
+    });
+    useSessionStore.setState({ sessionId: "s1" });
+    const openSession = vi.fn();
+
+    render(
+      <SubagentPanel
+        cwd="/workspace"
+        onOpenSession={openSession}
+        messages={[
+          spawnMsg("tool-7", "Task: fallback", "completed", {
+            promptId: "prompt-7",
+            rawInput: {
+              task_id: "child-7",
+              description: "核验历史记录",
+              prompt: "检查多轮子代理记录是否可以持久化并恢复。",
+              subagent_type: "explore",
+            },
+          }),
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /核验历史记录/ }));
+    expect(screen.getByText("检查多轮子代理记录是否可以持久化并恢复。")).toBeInTheDocument();
+    expect(screen.getByText("确认历史生命周期事件可以完整回放。")).toBeInTheDocument();
+    expect(screen.getByText("child-7")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /打开完整工作记录/ }));
+    expect(openSession).toHaveBeenCalledWith("child-7", "/workspace");
+  });
+
+  it("按父 prompt 将历史子代理分轮展示", () => {
+    const user = (id: string, text: string): ChatMessage => ({
+      id,
+      role: "user",
+      complete: true,
+      parts: [{ kind: "text", text }],
+    });
+    render(
+      <SubagentPanel
+        messages={[
+          user("u1", "第一轮需求"),
+          spawnMsg("t1", "Task: 第一项", "completed", { promptId: "p1" }),
+          user("u2", "第二轮需求"),
+          spawnMsg("t2", "Task: 第二项", "completed", { promptId: "p2" }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("历史 · 第 1 轮")).toBeInTheDocument();
+    expect(screen.getByText("当前轮次 · 第 2 轮")).toBeInTheDocument();
+    expect(screen.getByText("第一轮需求")).toBeInTheDocument();
+    expect(screen.getByText("第二轮需求")).toBeInTheDocument();
   });
 });

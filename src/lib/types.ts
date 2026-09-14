@@ -672,7 +672,7 @@ export interface RunningTask {
 
 // ---------- subagent live events (agent://subagent) ----------
 
-/** A live subagent lifecycle event forwarded from EchoAgent's `echo.agent/session_notification`. */
+/** A live or replayed subagent lifecycle event forwarded from EchoAgent. */
 export interface SubagentLiveEvent {
   /** Parent session that owns the subagent. */
   sessionId: string;
@@ -681,8 +681,18 @@ export interface SubagentLiveEvent {
   /** Subagent unique id (= child session id). */
   subagentId: string;
   childSessionId?: string;
+  /** Stable id of the parent turn that created the child. */
+  parentPromptId?: string;
   description?: string;
   subagentType?: string;
+  model?: string;
+  persona?: string;
+  role?: string;
+  effectiveContextSource?: string;
+  contextNormalized?: boolean;
+  capabilityMode?: string;
+  resumedFrom?: string;
+  workflowRunId?: string;
   /** "running" (spawned/progress) or the finished status. */
   status?: string;
   durationMs?: number;
@@ -692,8 +702,11 @@ export interface SubagentLiveEvent {
   contextWindowTokens?: number;
   contextUsagePct?: number;
   toolsUsed?: string[];
+  errorCount?: number;
   error?: string;
   output?: string;
+  occurredAt?: number;
+  isReplay?: boolean;
 }
 
 /**

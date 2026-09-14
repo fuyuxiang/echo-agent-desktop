@@ -1626,23 +1626,33 @@ function Shell() {
   ) => {
     const generation = ++selectionGenerationRef.current;
     let entry = findSessionSummary(sessionId);
-    // FTS/project/automation links can outlive a stale catalog. Hydrate that
-    // cwd and merge it without replacing tasks from other directories.
+    // Subagent child sessions can be created after the last catalog refresh
+    // and may live in an isolated worktree. Refresh the global catalog first;
+    // a parent cwd is not authoritative for those children.
     if (!entry) {
-      if (!sessionCwd) {
-        showToast("无法打开会话：缺少工作目录信息", 5000);
-        return;
-      }
       try {
-        const list = await agentListSessions(sessionCwd, true);
+        const list = await agentListAllSessions(true);
         if (selectionGenerationRef.current !== generation) return;
         sessionsStore.getState().mergeSessions(list);
         entry = list.find((item) => item.sessionId === sessionId);
-      } catch (error) {
-        if (selectionGenerationRef.current === generation) {
-          showToast(`加载会话信息失败：${friendlyError(error)}`, 6000);
+      } catch {
+        // Fall through to the scoped compatibility lookup below. Older
+        // runtimes may not support global discovery.
+      }
+      // FTS/project/automation links can still provide a precise cwd. Hydrate
+      // it as a compatibility fallback without replacing other directories.
+      if (!entry && sessionCwd) {
+        try {
+          const list = await agentListSessions(sessionCwd, true);
+          if (selectionGenerationRef.current !== generation) return;
+          sessionsStore.getState().mergeSessions(list);
+          entry = list.find((item) => item.sessionId === sessionId);
+        } catch (error) {
+          if (selectionGenerationRef.current === generation) {
+            showToast(`加载会话信息失败：${friendlyError(error)}`, 6000);
+          }
+          return;
         }
-        return;
       }
     }
     if (selectionGenerationRef.current !== generation) return;
@@ -1663,6 +1673,10 @@ function Shell() {
     // the first configured model: that would only change the picker, not the
     // backend session, and could route the next prompt to stale runtime settings.
     setCurrentModelId(selectedModelId);
+    // The runtime replay is the authority for lifecycle history. Clear the
+    // in-memory projection so rewind/deletion and stale cached sessions cannot
+    // leave ghost subagents; replay immediately reconstructs the durable list.
+    useSubagentStore.getState().clearSession(sessionId);
     // setSession no longer wipes the transcript — it just moves focus. If we
     // already have a cached transcript for this session it arms replay
     // suppression so EchoAgent's history re-stream can't duplicate/merge it; if we
@@ -1716,6 +1730,7 @@ function Shell() {
       return;
     }
     sessionStore.getState().setSession(rewoundSessionId);
+    useSubagentStore.getState().clearSession(rewoundSessionId);
     try {
       await agentLoadSession(rewoundSessionId, entry.cwd);
       if (sessionsStore.getState().currentSessionId === rewoundSessionId) {
@@ -2244,6 +2259,7 @@ function Shell() {
                   onForked={handleForked}
                   onToast={showToast}
                   onSelectExpert={handleStartWithExpert}
+                  onOpenSubagentSession={handleSelectSession}
                   onNavigateConnectors={() => setPlaceholderView("专家·技能·连接器")}
                   onOpenKnowledgeBase={() => handleNavigate("知识库")}
                   onOpenOrganization={() => handleNavigate("组织")}

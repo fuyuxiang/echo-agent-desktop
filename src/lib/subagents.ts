@@ -13,8 +13,24 @@ import type { RunningTask } from "@/lib/types";
 export interface SubagentActivity {
   /** toolCallId(去重 key)。 */
   id: string;
-  /** 子 agent 名称/描述(从 title 解析)。 */
+  /** Runtime subagent/session id parsed from input/output when available. */
+  subagentId?: string;
+  childSessionId?: string;
+  /** 子 agent 任务摘要。`name` 保留为兼容别名。 */
   name: string;
+  description?: string;
+  subagentType?: string;
+  taskPrompt?: string;
+  output?: string;
+  /** Parent prompt id carried by the transcript message. */
+  parentPromptId?: string;
+  durationMs?: number;
+  turnCount?: number;
+  toolCallCount?: number;
+  model?: string;
+  persona?: string;
+  role?: string;
+  resumedFrom?: string;
   /** 状态(继承 tool_call status)。 */
   status: "in_progress" | "completed" | "failed";
   /** 是否为 spawn_subagent 工具(否则是其它后台任务)。 */
@@ -30,12 +46,14 @@ export interface SubagentActivity {
  *  若 title 不含明确的子代理名，回退到 raw_input 的 subagent_type，再回退到截断的 title。*/
 export function parseSubagentName(title: string, rawInput?: unknown): string {
   const t = (title || "").trim();
+  const inputDescription = parseInputString(rawInput, "description");
+  if (inputDescription) return inputDescription;
   // 「Spawn subagent: <name>」
   let m = t.match(/spawn\s+subagent\s*[:：]\s*(.+)/i);
   if (m?.[1]) return m[1].trim();
-  // 「Task: <desc>」—— 优先用 raw_input 里的 subagent_type（更准确）
+  // 「Task: <desc>」是任务摘要；subagent_type 只是执行者类型，不能替代摘要。
   m = t.match(/^task\s*[:：]\s*(.+)/i);
-  if (m?.[1]) return parseSubagentType(rawInput) ?? m[1].trim();
+  if (m?.[1]) return m[1].trim();
   // 中文「使用 <name> 执行…」
   m = t.match(/^(?:使用|用)\s*(.+?)\s*(?:执行|完成|处理)/);
   if (m?.[1]) return m[1].trim();
@@ -53,6 +71,68 @@ function parseSubagentType(rawInput?: unknown): string | null {
   return typeof t === "string" && t.trim() ? t.trim() : null;
 }
 
+function parseInputString(rawInput: unknown, ...keys: string[]): string | undefined {
+  if (!rawInput || typeof rawInput !== "object") return undefined;
+  const obj = rawInput as Record<string, unknown>;
+  for (const key of keys) {
+    const value = obj[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function toolCallText(tc: ToolCallView): string {
+  return tc.content
+    .flatMap((item) => {
+      if (item.type === "text") return [item.text];
+      if (item.type === "command_output") return [item.output];
+      return [];
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+export interface ParsedSubagentToolResult {
+  subagentId?: string;
+  subagentType?: string;
+  output?: string;
+  durationMs?: number;
+  turnCount?: number;
+  toolCallCount?: number;
+  stillRunning: boolean;
+}
+
+/** Recover durable identity, statistics and final output from task tool text.
+ * This is the compatibility path for older runtimes that did not persist
+ * lifecycle notifications but did persist the task tool result itself. */
+export function parseSubagentToolResult(text: string): ParsedSubagentToolResult {
+  const raw = text.trim();
+  const metaBody = raw.match(/<subagent_meta>([\s\S]*?)<\/subagent_meta>/i)?.[1] ?? "";
+  const field = (name: string): string | undefined => {
+    const match = metaBody.match(new RegExp(`(?:^|,)\\s*${name}\\s*=\\s*([^,]+)`, "i"));
+    return match?.[1]?.trim();
+  };
+  const numberField = (name: string): number | undefined => {
+    const value = Number(field(name));
+    return Number.isFinite(value) ? value : undefined;
+  };
+  const footerId = raw.match(/\bsubagent_id\s*:\s*([^\s<]+)/i)?.[1]?.trim();
+  const inputId = field("id");
+  const firstProtocolMarker = raw.search(/\n\s*<subagent_(?:meta|result)>/i);
+  const output = firstProtocolMarker >= 0 ? raw.slice(0, firstProtocolMarker).trim() : undefined;
+  return {
+    subagentId: inputId || footerId,
+    subagentType: field("type")
+      ?? raw.match(/\bsubagent_type\s*:\s*([^\n<]+)/i)?.[1]?.trim()
+      ?? raw.match(/^\s*type\s*:\s*([^\n]+)/im)?.[1]?.trim(),
+    output: output || undefined,
+    durationMs: numberField("duration_ms"),
+    turnCount: numberField("turns"),
+    toolCallCount: numberField("tool_calls"),
+    stillRunning: /\bstill running\b|moved to the background/i.test(raw),
+  };
+}
+
 /** 从会话消息派生子 agent 活动列表(去重,保持首次出现顺序)。 */
 export function deriveSubagents(messages: ChatMessage[]): SubagentActivity[] {
   const seen = new Set<string>();
@@ -65,10 +145,28 @@ export function deriveSubagents(messages: ChatMessage[]): SubagentActivity[] {
       if (!isSpawn) continue;
       if (seen.has(tc.toolCallId)) continue;
       seen.add(tc.toolCallId);
+      const rawType = parseSubagentType(tc.rawInput) ?? undefined;
+      const parsed = parseSubagentToolResult(toolCallText(tc));
+      const subagentId = parseInputString(tc.rawInput, "task_id", "taskId") ?? parsed.subagentId;
+      const description = parseSubagentName(tc.title, tc.rawInput);
       out.push({
         id: tc.toolCallId,
-        name: parseSubagentName(tc.title, tc.rawInput),
-        status: tc.status,
+        subagentId,
+        childSessionId: subagentId,
+        name: description,
+        description,
+        subagentType: rawType ?? parsed.subagentType,
+        taskPrompt: parseInputString(tc.rawInput, "prompt"),
+        output: parsed.output,
+        parentPromptId: m.promptId,
+        durationMs: parsed.durationMs,
+        turnCount: parsed.turnCount,
+        toolCallCount: parsed.toolCallCount,
+        model: parseInputString(tc.rawInput, "model"),
+        persona: parseInputString(tc.rawInput, "persona"),
+        role: parseInputString(tc.rawInput, "role"),
+        resumedFrom: parseInputString(tc.rawInput, "resume_from", "resumeFrom"),
+        status: parsed.stillRunning ? "in_progress" : tc.status,
         isSpawn,
       });
     }
@@ -104,6 +202,7 @@ export function tasksToActivities(tasks: RunningTask[]): SubagentActivity[] {
   return tasks.map((t) => ({
     id: t.id,
     name: t.description || t.kind || t.id,
+    description: t.description || t.kind || t.id,
     status: taskStatusToToolStatus(t.status),
     isSpawn: false,
   }));

@@ -53,6 +53,7 @@ export function ChatView({
   onForked,
   onToast,
   onSelectExpert,
+  onOpenSubagentSession,
   onNavigateConnectors,
   onOpenKnowledgeBase,
   onOpenOrganization,
@@ -92,6 +93,8 @@ export function ChatView({
   /** Surface transient feedback from the rewind/fork toolbar. */
   onToast?: (msg: string) => void;
   onSelectExpert?: (agent: AgentEntry) => void;
+  /** Open the child ACP session behind a subagent record. */
+  onOpenSubagentSession?: (sessionId: string, cwd?: string) => void | Promise<void>;
   onNavigateConnectors?: () => void;
   onOpenKnowledgeBase?: () => void;
   onOpenOrganization?: () => void;
@@ -548,7 +551,11 @@ export function ChatView({
                 <FileChangesPanel messages={messages} />
               )}
               {subagentsOpen && (
-                <SubagentPanel messages={messages} />
+                <SubagentPanel
+                  messages={messages}
+                  cwd={cwd}
+                  onOpenSession={onOpenSubagentSession}
+                />
               )}
               {teamsOpen && (
                 <TeamStatusView messages={messages} />
