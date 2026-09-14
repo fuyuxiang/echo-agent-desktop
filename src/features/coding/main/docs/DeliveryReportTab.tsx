@@ -72,8 +72,11 @@ export function DeliveryReportTab({
   const [report, setReport] = useState<DeliveryReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   useEffect(() => {
+    setConfirmingId(null);
     if (!root || !taskId) {
       setReport(null);
       return;
@@ -129,6 +132,24 @@ export function DeliveryReportTab({
       onToast?.("PR 描述已复制");
     } catch {
       onToast?.("复制失败，请手动选择内容");
+    }
+  };
+
+  const confirmAcceptance = async (criterionId: string) => {
+    if (!taskId || acceptingId) return;
+    setAcceptingId(criterionId);
+    try {
+      await codingApi.confirmAcceptance(root, taskId, criterionId);
+      const next = await codingApi.deliveryReport(root, taskId);
+      setReport(next);
+      setError(null);
+      setConfirmingId(null);
+      onToast?.("验收标准已确认并写入交付证据");
+    } catch (cause) {
+      const message = String(cause).replace(/^Error:\s*/, "");
+      onToast?.(`确认验收失败：${message}`);
+    } finally {
+      setAcceptingId(null);
     }
   };
 
@@ -311,7 +332,43 @@ export function DeliveryReportTab({
                       ))}
                     </ul>
                   ) : (
-                    <p className="coding-doc__muted">尚无验收证据</p>
+                    <>
+                      <p className="coding-doc__muted">尚无可追溯的自动验收证据</p>
+                      {completed && (
+                        <div className="coding-report__acceptance-actions">
+                          {confirmingId === criterion.id ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={acceptingId !== null}
+                                onClick={() => void confirmAcceptance(criterion.id)}
+                              >
+                                {acceptingId === criterion.id
+                                  ? <LoaderCircle size={12} className="is-spinning" />
+                                  : <CheckCircle2 size={12} />}
+                                确认已满足
+                              </button>
+                              <button
+                                type="button"
+                                disabled={acceptingId !== null}
+                                onClick={() => setConfirmingId(null)}
+                              >
+                                取消
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={acceptingId !== null || confirmingId !== null}
+                              onClick={() => setConfirmingId(criterion.id)}
+                            >
+                              <CheckCircle2 size={12} />
+                              人工确认已满足
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

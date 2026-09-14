@@ -71,6 +71,7 @@ import {
   type Problem,
 } from "./lib/types";
 import { useTaskLifecycle } from "./lib/task-lifecycle";
+import { useVerificationRunner } from "./lib/use-verification-runner";
 import { FindReferencesView } from "./main/FindReferencesView";
 import { GoToDefinitionView } from "./main/GoToDefinitionView";
 import { ImpactAnalysisView } from "./main/ImpactAnalysisView";
@@ -381,8 +382,6 @@ export function CodingWorkbench({
   const [committing, setCommitting] = useState(false);
   const [detected, setDetected] = useState<DetectedCommand[]>([]);
   const [detectedReady, setDetectedReady] = useState(false);
-  const [runningVerification, setRunningVerification] = useState(false);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [commandOutput, setCommandOutput] = useState("");
   const [terminalActivated, setTerminalActivated] = useState(false);
   const [treeRefresh, setTreeRefresh] = useState<{ revision: number; paths: string[] }>({
@@ -391,8 +390,6 @@ export function CodingWorkbench({
   });
   /** Bumped whenever the task's evidence changes, so an open report reloads. */
   const [reportRevision, setReportRevision] = useState(0);
-  const activeRunIdRef = useRef<string | null>(null);
-  const autoVerificationRef = useRef<string | null>(null);
   const repairPromptRef = useRef<string | null>(null);
   const workflowActionRef = useRef<string | null>(null);
   const pendingTreePathsRef = useRef(new Set<string>());
@@ -441,6 +438,21 @@ export function CodingWorkbench({
     () => mergeTaskVerificationCommands(detected, task),
     [detected, task],
   );
+  const {
+    activeRunId,
+    activeRunIdRef,
+    runningVerification,
+    runVerifications,
+  } = useVerificationRunner({
+    cwd,
+    task,
+    commands: verificationCommands,
+    detectedReady,
+    setBottomView,
+    setCommandOutput,
+    requestConfirmation: requestTaskConfirmation,
+    onToast,
+  });
 
   // A diff is anchored to one task's baseline. Never let a cached comparison
   // from the previous task leak into a newly selected task.
@@ -891,6 +903,7 @@ export function CodingWorkbench({
 
       if (options.refreshTaskState ?? true) {
         await useTaskStore.getState().refreshTaskState();
+        setReportRevision((value) => value + 1);
       }
       if (!isCurrent()) return { status: "cancelled" };
 
@@ -1651,104 +1664,6 @@ export function CodingWorkbench({
     ],
   );
 
-  /**
-   * Run verifications, then let the orchestrator decide what the results mean.
-   * The workbench never derives a phase from the records itself.
-   */
-  const runVerifications = useCallback(
-    async (commands: DetectedCommand[]) => {
-      if (!cwd || !task || runningVerification) return;
-      const taskId = task.id;
-      if (!["verifying", "paused", "stopped", "blocked", "delivered"].includes(task.phase)) {
-        onToast?.("当前任务正在执行，暂不能启动新的验证批次");
-        return;
-      }
-      // Set this before the phase refresh below; otherwise the updated task
-      // timestamp can retrigger the automatic verification effect concurrently.
-      setRunningVerification(true);
-      try {
-        // Every run is an explicit batch. The backend binds its results to the
-        // exact content revision captured here, including automatic first runs.
-        const startedTask = await codingApi.beginVerification(cwd, taskId);
-        autoVerificationRef.current = `${cwd}:${taskId}:${startedTask.updatedAt}`;
-        await useTaskStore.getState().refreshTaskState();
-      } catch (error) {
-        onToast?.(`无法启动验证：${String(error).replace(/^Error:\s*/, "")}`);
-        setRunningVerification(false);
-        return;
-      }
-      setCommandOutput("");
-      // With no detected command there is no output to show. Keep the editor
-      // visible; the delivery report states that automated checks were absent.
-      if (commands.length > 0) setBottomView("output");
-      let mayReport = commands.length === 0;
-      try {
-        for (const command of commands) {
-          const runId = crypto.randomUUID();
-          activeRunIdRef.current = runId;
-          setActiveRunId(runId);
-          try {
-            const record = await codingApi.runVerification(
-              cwd,
-              taskId,
-              command.kind,
-              command.command,
-              undefined,
-              runId,
-            );
-            mayReport = record.status !== "cancelled";
-            // Stop the batch at the first genuine failure; a later command would
-            // only add noise to the diagnosis.
-            if (record.status !== "passed") break;
-          } catch (error) {
-            const detail = String(error).replace(/^Error:\s*/, "");
-            onToast?.(`执行 ${command.command} 失败：${detail}`);
-            await codingApi.reportStartFailed(
-              cwd,
-              taskId,
-              `验证命令“${command.command}”未能执行：${detail}`,
-            ).catch(() => undefined);
-            await useTaskStore.getState().refreshTaskState().catch(() => undefined);
-            mayReport = false;
-            break;
-          }
-        }
-        if (mayReport) {
-          await codingApi.reportVerification(cwd, taskId);
-          await useTaskStore.getState().refreshTaskState();
-        }
-      } catch (error) {
-        const detail = String(error).replace(/^Error:\s*/, "");
-        onToast?.(`无法更新验证结果：${detail}`);
-        await codingApi.reportStartFailed(
-          cwd,
-          taskId,
-          `无法收敛本轮验证结果：${detail}`,
-        ).catch(() => undefined);
-        await useTaskStore.getState().refreshTaskState().catch(() => undefined);
-      } finally {
-        activeRunIdRef.current = null;
-        setActiveRunId(null);
-        setRunningVerification(false);
-      }
-    },
-    [cwd, onToast, runningVerification, setBottomView, task],
-  );
-
-  // Verification is part of the orchestrated pipeline, not a hidden manual
-  // step. Once command detection is complete, every verification phase runs.
-  useEffect(() => {
-    if (task?.phase !== "verifying") {
-      autoVerificationRef.current = null;
-      return;
-    }
-    if (!detectedReady || runningVerification) return;
-    const key = `${cwd}:${task.id}:${task.updatedAt}`;
-    if (autoVerificationRef.current === key) return;
-    autoVerificationRef.current = key;
-    void runVerifications(verificationCommands);
-  }, [cwd, detectedReady, runVerifications, runningVerification, task, verificationCommands]);
-
   // A failed verification opens a repair round. Feed the structured problem
   // list back to the exact task session once, then the lifecycle hook observes
   // that repair turn finishing and re-enters verification.
@@ -2040,8 +1955,14 @@ export function CodingWorkbench({
       return;
     }
     let cancelled = false;
+    let watcherAcquired = false;
     const client = getSymbolIndexClient(cwd);
     void codingApi.indexBootstrap(cwd).then((status) => {
+      watcherAcquired = true;
+      if (cancelled) {
+        void codingApi.indexRelease(cwd).catch(() => undefined);
+        return;
+      }
       if (!cancelled && status) setIndexStatus(status);
       return client.refresh();
     }).catch(() => undefined);
@@ -2060,6 +1981,7 @@ export function CodingWorkbench({
     return () => {
       cancelled = true;
       unsubUpdated();
+      if (watcherAcquired) void codingApi.indexRelease(cwd).catch(() => undefined);
     };
   }, [cwd]);
 

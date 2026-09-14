@@ -224,25 +224,28 @@ fn changeset_path(root: &Path, task_id: &str) -> PathBuf {
 }
 
 pub fn load(root: &Path, task_id: &str) -> ChangeSet {
-    store::read_json(&changeset_path(root, task_id)).unwrap_or_else(|| ChangeSet {
-        task_id: task_id.to_string(),
-        baseline_mode: None,
-        baseline_files: Vec::new(),
-        baseline_head: None,
-        baseline_entries: Vec::new(),
-        changes: Vec::new(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        reviewed_files: Vec::new(),
-        reviewed_hashes: BTreeMap::new(),
-        change_hashes: BTreeMap::new(),
-        verified_revision: None,
-        verification_started_revision: None,
-        rollback_unsafe_files: Vec::new(),
-        committed_hash: None,
-    })
+    store::read_json(&changeset_path(root, task_id))
+        .filter(|set: &ChangeSet| set.task_id == task_id)
+        .unwrap_or_else(|| ChangeSet {
+            task_id: task_id.to_string(),
+            baseline_mode: None,
+            baseline_files: Vec::new(),
+            baseline_head: None,
+            baseline_entries: Vec::new(),
+            changes: Vec::new(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            reviewed_files: Vec::new(),
+            reviewed_hashes: BTreeMap::new(),
+            change_hashes: BTreeMap::new(),
+            verified_revision: None,
+            verification_started_revision: None,
+            rollback_unsafe_files: Vec::new(),
+            committed_hash: None,
+        })
 }
 
 fn save(root: &Path, set: &ChangeSet) -> Result<(), String> {
+    store::validate_task_id(&set.task_id)?;
     store::write_json(&changeset_path(root, &set.task_id), set)
 }
 
@@ -799,8 +802,8 @@ pub fn ensure_changes_current(root: &Path, set: &ChangeSet) -> Result<(), String
     Ok(())
 }
 
-/// Mark one file's diff as reviewed. Feeds the diff-review quality gate.
-#[cfg(test)]
+/// Mark one file's diff as reviewed. The hash-bound mark expires whenever the
+/// file changes again.
 pub fn mark_reviewed(root: &Path, task_id: &str, path: &str) -> Result<ChangeSet, String> {
     let mut set = load(root, task_id);
     if !set.changes.iter().any(|change| change.path == path) {
@@ -1624,9 +1627,15 @@ pub async fn coding_changeset_diff(
     // Bind the displayed diff to a fresh native snapshot. This also invalidates
     // a previous review mark if an external editor changed the file.
     sync_changes(&root, &task_id).await?;
-    tokio::task::spawn_blocking(move || change_diff(&root, &task_id, &path))
-        .await
-        .map_err(|error| format!("读取任务差异失败：{error}"))?
+    tokio::task::spawn_blocking(move || {
+        store::with_task_transaction(&root, &task_id, || {
+            let diff = change_diff(&root, &task_id, &path)?;
+            mark_reviewed(&root, &task_id, &path)?;
+            Ok(diff)
+        })
+    })
+    .await
+    .map_err(|error| format!("读取任务差异失败：{error}"))?
 }
 
 #[tauri::command]
@@ -1681,25 +1690,27 @@ pub async fn coding_task_rollback(
     // by an external editor cannot be omitted from the rollback decision.
     sync_changes(&root, &task_id).await?;
     tokio::task::spawn_blocking(move || {
-        let current = task::load(&root, &task_id).ok_or_else(|| "任务不存在".to_string())?;
-        if !matches!(
-            current.phase,
-            TaskPhase::Paused | TaskPhase::Stopped | TaskPhase::Delivered | TaskPhase::Blocked
-        ) {
-            return Err("任务正在执行或验证，请先停止后再回滚".into());
-        }
-        let restored = rollback(&root, &task_id)?;
-        if let Some(mut coding_task) = task::load(&root, &task_id) {
-            coding_task.phase = TaskPhase::Blocked;
-            coding_task.phase_reason = Some("任务已回滚".into());
-            coding_task.blocker = Some("任务文件已恢复到开始时的状态。".into());
-            coding_task.next_action = None;
-            for node in &mut coding_task.task_nodes {
-                node.status = TaskNodeStatus::Blocked;
+        store::with_task_transaction(&root, &task_id, || {
+            let current = task::load(&root, &task_id).ok_or_else(|| "任务不存在".to_string())?;
+            if !matches!(
+                current.phase,
+                TaskPhase::Paused | TaskPhase::Stopped | TaskPhase::Delivered | TaskPhase::Blocked
+            ) {
+                return Err("任务正在执行或验证，请先停止后再回滚".into());
             }
-            task::save(&root, &coding_task)?;
-        }
-        Ok(restored)
+            let restored = rollback(&root, &task_id)?;
+            if let Some(mut coding_task) = task::load(&root, &task_id) {
+                coding_task.phase = TaskPhase::Blocked;
+                coding_task.phase_reason = Some("任务已回滚".into());
+                coding_task.blocker = Some("任务文件已恢复到开始时的状态。".into());
+                coding_task.next_action = None;
+                for node in &mut coding_task.task_nodes {
+                    node.status = TaskNodeStatus::Blocked;
+                }
+                task::save(&root, &coding_task)?;
+            }
+            Ok(restored)
+        })
     })
     .await
     .map_err(|error| format!("回滚任务失败：{error}"))?

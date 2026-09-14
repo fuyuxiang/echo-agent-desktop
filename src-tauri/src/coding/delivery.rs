@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::State;
 
 use crate::coding::changeset::{self, ChangeSet, FileChange, FileChangeView};
@@ -202,14 +203,31 @@ pub fn evaluate_gates(
     });
 
     let task_changes: Vec<&FileChange> = set.changes.iter().collect();
+    let reviewed_count = task_changes
+        .iter()
+        .filter(|change| {
+            set.reviewed_hashes.get(&change.path) == set.change_hashes.get(&change.path)
+        })
+        .count();
     gates.push(QualityGate {
         id: GateId::DiffReview,
         title: title_for(GateId::DiffReview).into(),
-        status: GateStatus::NotApplicable,
+        status: if task_changes.is_empty() {
+            GateStatus::NotApplicable
+        } else if reviewed_count == task_changes.len() {
+            GateStatus::Satisfied
+        } else {
+            GateStatus::NotSatisfied
+        },
         summary: if task_changes.is_empty() {
             "本任务没有产生代码变更".into()
+        } else if reviewed_count == task_changes.len() {
+            format!("{} 个变更文件均已审阅且内容未再变化", task_changes.len())
         } else {
-            format!("{} 个变更文件可在差异视图中随时审阅", task_changes.len())
+            format!(
+                "已审阅 {reviewed_count}/{} 个变更文件；请逐个打开剩余差异",
+                task_changes.len()
+            )
         },
         evidence: task_changes
             .iter()
@@ -377,6 +395,77 @@ async fn git(root: &PathBuf, arguments: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+async fn git_bytes(root: &Path, arguments: &[&str]) -> Result<Vec<u8>, String> {
+    let output = tokio::process::Command::new("git")
+        .args(arguments)
+        .current_dir(root)
+        .output()
+        .await
+        .map_err(|error| format!("执行 git 失败：{error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(output.stdout)
+}
+
+async fn tree_content_hash(root: &Path, tree: &str, path: &str) -> Result<String, String> {
+    let entry = git_bytes(root, &["ls-tree", "-z", tree, "--", path]).await?;
+    if entry.is_empty() {
+        return Ok("<deleted>".into());
+    }
+    let header = entry
+        .split(|byte| *byte == b'\t')
+        .next()
+        .ok_or_else(|| format!("无法读取 {path} 的暂存对象"))?;
+    let header = std::str::from_utf8(header).map_err(|_| format!("{path} 的 Git tree 记录无效"))?;
+    let mut fields = header.split_whitespace();
+    let _mode = fields.next();
+    let kind = fields.next();
+    let object = fields.next();
+    if kind != Some("blob") {
+        return Ok("<directory>".into());
+    }
+    let object = object.ok_or_else(|| format!("{path} 缺少 Git blob 标识"))?;
+    let bytes = git_bytes(root, &["cat-file", "blob", object]).await?;
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Validate the immutable tree that will be committed, rather than the live
+/// worktree or mutable index. Once this succeeds, later editor/index changes
+/// cannot alter the commit contents.
+async fn ensure_commit_tree_matches(
+    root: &PathBuf,
+    tree: &str,
+    set: &ChangeSet,
+    task_paths: &[String],
+) -> Result<(), String> {
+    for path in task_paths {
+        let expected = set
+            .change_hashes
+            .get(path)
+            .ok_or_else(|| format!("{path} 缺少交付内容版本"))?;
+        let actual = tree_content_hash(root, tree, path).await?;
+        if &actual != expected {
+            return Err(format!("{path} 的暂存内容与已验证版本不一致，请刷新后重试"));
+        }
+    }
+    let baseline = set
+        .baseline_head
+        .as_deref()
+        .ok_or_else(|| "任务缺少 Git 基线提交".to_string())?;
+    let changed = git(root, &["diff", "--name-only", "-z", baseline, tree, "--"]).await?;
+    let unexpected = unexpected_staged_paths(&changed, task_paths);
+    if !unexpected.is_empty() {
+        return Err(format!(
+            "待提交 tree 包含当前任务之外的变更：{}",
+            unexpected.join("、")
+        ));
+    }
+    Ok(())
+}
+
 fn unexpected_staged_paths(staged: &str, allowed: &[String]) -> Vec<String> {
     let allowed: std::collections::BTreeSet<&str> = allowed.iter().map(String::as_str).collect();
     let mut unexpected: Vec<String> = staged
@@ -523,11 +612,36 @@ pub async fn coding_git_commit(
     let mut add_arguments: Vec<&str> = vec!["add", "--"];
     add_arguments.extend(paths.iter().map(|path| path.as_str()));
     git(&root, &add_arguments).await?;
-    // Close the practical race window if another process staged a file while
-    // this task's own paths were being added.
+    // Freeze the current index as an immutable Git tree, then validate the
+    // actual blob bytes that will be committed. A same-path restage after this
+    // point may change the live index, but can no longer change `tree`.
     ensure_no_unrelated_staged_changes(&root, &paths).await?;
-    git(&root, &["commit", "-m", &trimmed]).await?;
-    let hash = git(&root, &["rev-parse", "HEAD"]).await?.trim().to_string();
+    let tree = git(&root, &["write-tree"]).await?.trim().to_string();
+    ensure_commit_tree_matches(&root, &tree, &set, &paths).await?;
+    let baseline_head = set
+        .baseline_head
+        .as_deref()
+        .ok_or_else(|| "任务缺少 Git 基线提交".to_string())?;
+    let hash = git(
+        &root,
+        &["commit-tree", &tree, "-p", baseline_head, "-m", &trimmed],
+    )
+    .await?
+    .trim()
+    .to_string();
+    // Compare-and-swap HEAD: a concurrent commit cannot be overwritten.
+    git(
+        &root,
+        &[
+            "update-ref",
+            "-m",
+            &format!("commit: {trimmed}"),
+            "HEAD",
+            &hash,
+            baseline_head,
+        ],
+    )
+    .await?;
     let mark_root = root.clone();
     let mark_task = task_id.clone();
     let mark_hash = hash.clone();
@@ -646,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn diff_review_is_informational_not_a_delivery_gate() {
+    fn unreviewed_diff_blocks_delivery() {
         let gates = evaluate_gates(
             &[record(VerificationKind::Test, "pnpm test", 0)],
             &change_set(false),
@@ -657,8 +771,9 @@ mod tests {
             .iter()
             .find(|gate| gate.id == GateId::DiffReview)
             .unwrap();
-        assert_eq!(review.status, GateStatus::NotApplicable);
-        assert!(review.summary.contains('1'));
+        assert_eq!(review.status, GateStatus::NotSatisfied);
+        assert!(review.summary.contains("0/1"));
+        assert!(!is_deliverable(&gates));
     }
 
     #[test]
@@ -767,7 +882,7 @@ mod tests {
                 .find(|gate| gate.id == GateId::DiffReview)
                 .unwrap()
                 .status,
-            GateStatus::NotApplicable
+            GateStatus::NotSatisfied
         );
         assert_eq!(
             gates
@@ -812,5 +927,76 @@ mod tests {
             paths,
             vec!["src/a.ts".to_string(), "src/user-edit.ts".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn frozen_commit_tree_cannot_be_changed_by_a_later_restage() {
+        let repository = tempfile::tempdir().unwrap();
+        let root = repository.path().to_path_buf();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/a.ts"), "baseline\n").unwrap();
+        let run = |arguments: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(arguments)
+                .current_dir(&root)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        run(&["init", "--initial-branch=main"]);
+        run(&["add", "--", "src/a.ts"]);
+        run(&[
+            "-c",
+            "user.name=Echo Test",
+            "-c",
+            "user.email=echo@example.invalid",
+            "commit",
+            "-m",
+            "baseline",
+        ]);
+        let baseline = run(&["rev-parse", "HEAD"]);
+
+        let verified = b"verified\n";
+        std::fs::write(root.join("src/a.ts"), verified).unwrap();
+        run(&["add", "--", "src/a.ts"]);
+        let tree = run(&["write-tree"]);
+        let expected = format!("{:x}", sha2::Sha256::digest(verified));
+        let set = ChangeSet {
+            task_id: "task-1".into(),
+            baseline_head: Some(baseline),
+            changes: vec![FileChange {
+                path: "src/a.ts".into(),
+                kind: ChangeKind::Modified,
+                added: 1,
+                removed: 1,
+                baseline_content: Some("baseline\n".into()),
+                pre_existing: false,
+            }],
+            change_hashes: std::collections::BTreeMap::from([(
+                "src/a.ts".into(),
+                expected.clone(),
+            )]),
+            ..ChangeSet::default()
+        };
+        ensure_commit_tree_matches(&root, &tree, &set, &["src/a.ts".into()])
+            .await
+            .unwrap();
+
+        // The live index can race after write-tree, but the validated tree is
+        // immutable and still contains the exact verified bytes.
+        std::fs::write(root.join("src/a.ts"), "raced\n").unwrap();
+        run(&["add", "--", "src/a.ts"]);
+        assert_eq!(
+            tree_content_hash(&root, &tree, "src/a.ts").await.unwrap(),
+            expected
+        );
+        ensure_commit_tree_matches(&root, &tree, &set, &["src/a.ts".into()])
+            .await
+            .unwrap();
     }
 }

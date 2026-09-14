@@ -2,7 +2,10 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const api = vi.hoisted(() => ({ deliveryReport: vi.fn() }));
+const api = vi.hoisted(() => ({
+  deliveryReport: vi.fn(),
+  confirmAcceptance: vi.fn(),
+}));
 const analyze = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/tauri-api", () => ({ codingApi: api }));
@@ -73,6 +76,8 @@ describe("DeliveryReportTab", () => {
   beforeEach(() => {
     api.deliveryReport.mockReset();
     api.deliveryReport.mockResolvedValue(report());
+    api.confirmAcceptance.mockReset();
+    api.confirmAcceptance.mockResolvedValue(undefined);
   });
 
   it("asks for a task first", () => {
@@ -164,7 +169,25 @@ describe("DeliveryReportTab", () => {
       }),
     );
     render(<DeliveryReportTab root="/repo" taskId="t1" onOpenFile={vi.fn()} />);
-    expect(await screen.findByText("尚无验收证据")).toBeInTheDocument();
+    expect(await screen.findByText("尚无可追溯的自动验收证据")).toBeInTheDocument();
+  });
+
+  it("records an explicit human confirmation for delivered acceptance criteria", async () => {
+    const user = userEvent.setup();
+    api.deliveryReport.mockResolvedValue(
+      report({
+        task: task({
+          acceptanceCriteria: [
+            { id: "ac1", content: "登录流程可用", satisfied: false, evidence: [] },
+          ],
+        }),
+      }),
+    );
+    render(<DeliveryReportTab root="/repo" taskId="t1" onOpenFile={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "人工确认已满足" }));
+    expect(api.confirmAcceptance).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "确认已满足" }));
+    expect(api.confirmAcceptance).toHaveBeenCalledWith("/repo", "t1", "ac1");
   });
 
   it("lists the repair history when the engine retried", async () => {

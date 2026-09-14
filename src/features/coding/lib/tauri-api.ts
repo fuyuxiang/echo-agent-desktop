@@ -47,6 +47,8 @@ export const codingApi = {
     invoke<CodingTask>("coding_task_rename", { root, taskId, name }),
   bindTaskRuntime: (root: string, taskId: string, sessionId: string, modelId: string) =>
     invoke<CodingTask>("coding_task_bind_runtime", { root, taskId, sessionId, modelId }),
+  confirmAcceptance: (root: string, taskId: string, criterionId: string) =>
+    invoke<CodingTask>("coding_task_confirm_acceptance", { root, taskId, criterionId }),
 
   submitRequirement: (root: string, taskId: string) =>
     invoke<CodingTask>("coding_task_submit_requirement", { root, taskId }),
@@ -84,6 +86,8 @@ export const codingApi = {
     invoke<DetectedCommand[]>("coding_verification_detect", { root }),
   listVerifications: (root: string, taskId: string) =>
     invoke<VerificationRecord[]>("coding_verification_list", { root, taskId }),
+  approvePlanCommand: (root: string, taskId: string, command: string) =>
+    invoke<string>("coding_verification_approve_plan_command", { root, taskId, command }),
   runVerification: (
     root: string,
     taskId: string,
@@ -91,6 +95,7 @@ export const codingApi = {
     command: string,
     timeoutSecs?: number,
     requestedRunId?: string,
+    approvalToken?: string,
   ) =>
     invoke<VerificationRecord>("coding_verification_run", {
       root,
@@ -99,6 +104,7 @@ export const codingApi = {
       command,
       timeoutSecs: timeoutSecs ?? null,
       requestedRunId: requestedRunId ?? null,
+      approvalToken: approvalToken ?? null,
     }),
   cancelVerification: (runId: string) => invoke<void>("coding_verification_cancel", { runId }),
 
@@ -124,13 +130,15 @@ export const codingApi = {
   // Phase 2: cross-file symbol index + reference search + impact analysis.
   indexStatus: (root: string) => invoke<IndexStatus>("coding_index_status", { root }),
   indexBootstrap: (root: string) => invoke<IndexStatus>("coding_index_bootstrap", { root }),
+  indexRelease: (root: string) => invoke<void>("coding_index_release", { root }),
   indexRebuild: (root: string) => invoke<IndexStatus>("coding_index_rebuild", { root }),
-  symbolQuery: (root: string, needle: string, kind?: string, limit?: number) =>
+  symbolQuery: (root: string, needle: string, kind?: string, limit?: number, offset?: number) =>
     invoke<SymbolQueryHit[]>("coding_symbol_query", {
       root,
       needle,
       kind: kind ?? null,
       limit: limit ?? null,
+      offset: offset ?? null,
     }),
   symbolAt: (root: string, file: string, line: number) =>
     invoke<SymbolRecord | null>("coding_symbol_at", { root, file, line }),

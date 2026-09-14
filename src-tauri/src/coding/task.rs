@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::State;
 
+use crate::coding::changeset;
 use crate::coding::store;
 use crate::shell_fs::FilesystemAccess;
 
@@ -226,6 +227,7 @@ pub(crate) fn append_ledger(
     message: String,
     plan_revision: Option<String>,
 ) -> Result<(), String> {
+    store::validate_task_id(task_id)?;
     store::append_jsonl(
         &ledger_path(root, task_id),
         &ExecutionLedgerEvent {
@@ -249,33 +251,34 @@ pub fn list_tasks(root: &Path) -> Vec<TaskSummary> {
         .collect()
 }
 
-fn write_index(root: &Path, tasks: Vec<TaskSummary>) -> Result<(), String> {
-    store::write_json(&store::tasks_index_path(root), &TaskIndex { tasks })
-}
-
 /// Refresh this task's row in the index, keeping insertion order stable so the
 /// task switcher does not reshuffle while a run is in progress.
 fn upsert_index(root: &Path, task: &CodingTask) -> Result<(), String> {
-    let mut tasks = list_tasks(root);
     let summary = TaskSummary {
         id: task.id.clone(),
         name: task.name.clone(),
         phase: task.phase,
         updated_at: task.updated_at.clone(),
     };
-    match tasks.iter_mut().find(|entry| entry.id == task.id) {
-        Some(entry) => *entry = summary,
-        None => tasks.push(summary),
-    }
-    write_index(root, tasks)
+    store::update_json(&store::tasks_index_path(root), |index: &mut TaskIndex| {
+        // Drop stale rows while the same exclusive lock protects this update.
+        index.tasks.retain(|entry| load(root, &entry.id).is_some());
+        match index.tasks.iter_mut().find(|entry| entry.id == task.id) {
+            Some(entry) => *entry = summary,
+            None => index.tasks.push(summary),
+        }
+        Ok(())
+    })
 }
 
 pub fn load(root: &Path, task_id: &str) -> Option<CodingTask> {
+    store::validate_task_id(task_id).ok()?;
     store::read_json::<CodingTask>(&task_path(root, task_id))
-        .filter(|task| task.schema_version == 2)
+        .filter(|task| task.schema_version == 2 && task.id == task_id)
 }
 
 pub fn save(root: &Path, task: &CodingTask) -> Result<(), String> {
+    store::validate_task_id(&task.id)?;
     if task.schema_version != 2 {
         return Err("不支持的代码开发任务数据版本".into());
     }
@@ -353,14 +356,16 @@ pub fn bind_runtime(
     session_id: &str,
     model_id: &str,
 ) -> Result<CodingTask, String> {
-    if session_id.trim().is_empty() || model_id.trim().is_empty() {
-        return Err("会话和模型标识不能为空".into());
-    }
-    let mut task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
-    task.session_id = Some(session_id.to_string());
-    task.model_id = Some(model_id.to_string());
-    save(root, &task)?;
-    Ok(load(root, task_id).unwrap_or(task))
+    store::with_task_transaction(root, task_id, || {
+        if session_id.trim().is_empty() || model_id.trim().is_empty() {
+            return Err("会话和模型标识不能为空".into());
+        }
+        let mut task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
+        task.session_id = Some(session_id.to_string());
+        task.model_id = Some(model_id.to_string());
+        save(root, &task)?;
+        Ok(load(root, task_id).unwrap_or(task))
+    })
 }
 
 fn clean_values(values: Vec<String>, limit: usize) -> Vec<String> {
@@ -740,7 +745,7 @@ fn node_contract_matches(node: &TaskNode, entry: &RuntimePlanEntry) -> bool {
 
 /// Persist the runtime's current plan as an executable DAG. Repeated ACP plan
 /// updates replace structure but preserve node identity, attempts and timing.
-pub fn sync_runtime_plan(
+fn sync_runtime_plan_unlocked(
     root: &Path,
     task_id: &str,
     entries: Vec<RuntimePlanEntry>,
@@ -955,38 +960,77 @@ pub fn sync_runtime_plan(
     Ok(load(root, task_id).unwrap_or(task))
 }
 
+pub fn sync_runtime_plan(
+    root: &Path,
+    task_id: &str,
+    entries: Vec<RuntimePlanEntry>,
+) -> Result<CodingTask, String> {
+    store::with_task_transaction(root, task_id, || {
+        sync_runtime_plan_unlocked(root, task_id, entries)
+    })
+}
+
 pub fn delete_task(root: &Path, task_id: &str) -> Result<(), String> {
-    let task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
-    if matches!(
-        task.phase,
-        TaskPhase::Discovering
-            | TaskPhase::Implementing
-            | TaskPhase::Verifying
-            | TaskPhase::Diagnosing
-            | TaskPhase::Repairing
-    ) {
-        return Err("任务正在执行或验证，请先停止任务再删除".into());
-    }
-    let dir = store::task_dir(root, task_id);
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).map_err(|error| format!("删除任务目录失败：{error}"))?;
-    }
-    let remaining = list_tasks(root)
-        .into_iter()
-        .filter(|entry| entry.id != task_id)
-        .collect();
-    write_index(root, remaining)
+    store::with_task_transaction(root, task_id, || {
+        let task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
+        if matches!(
+            task.phase,
+            TaskPhase::Discovering
+                | TaskPhase::Implementing
+                | TaskPhase::Verifying
+                | TaskPhase::Diagnosing
+                | TaskPhase::Repairing
+        ) {
+            return Err("任务正在执行或验证，请先停止任务再删除".into());
+        }
+        let dir = store::task_dir(root, task_id);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).map_err(|error| format!("删除任务目录失败：{error}"))?;
+        }
+        store::update_json(&store::tasks_index_path(root), |index: &mut TaskIndex| {
+            index.tasks.retain(|entry| entry.id != task_id);
+            Ok(())
+        })
+    })
 }
 
 pub fn rename_task(root: &Path, task_id: &str, name: &str) -> Result<CodingTask, String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err("任务名称不能为空".into());
-    }
-    let mut task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
-    task.name = trimmed.to_string();
-    save(root, &task)?;
-    Ok(task)
+    store::with_task_transaction(root, task_id, || {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err("任务名称不能为空".into());
+        }
+        let mut task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
+        task.name = trimmed.to_string();
+        save(root, &task)?;
+        Ok(load(root, task_id).unwrap_or(task))
+    })
+}
+
+pub fn confirm_acceptance(
+    root: &Path,
+    task_id: &str,
+    criterion_id: &str,
+) -> Result<CodingTask, String> {
+    store::with_task_transaction(root, task_id, || {
+        let mut task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
+        if task.phase != TaskPhase::Delivered {
+            return Err("只有已完成验证的任务可以人工确认验收标准".into());
+        }
+        let criterion = task
+            .acceptance_criteria
+            .iter_mut()
+            .find(|criterion| criterion.id == criterion_id)
+            .ok_or_else(|| "验收标准不存在".to_string())?;
+        criterion.satisfied = true;
+        let content_revision = changeset::load(root, task_id).content_revision();
+        criterion.evidence = vec![format!(
+            "用户于 {} 在交付报告中确认已满足（内容版本 {content_revision}）",
+            chrono::Utc::now().to_rfc3339(),
+        )];
+        save(root, &task)?;
+        Ok(load(root, task_id).unwrap_or(task))
+    })
 }
 
 #[tauri::command]
@@ -1064,9 +1108,23 @@ pub async fn coding_task_bind_runtime(
         .map_err(|error| format!("绑定任务会话失败：{error}"))?
 }
 
+#[tauri::command]
+pub async fn coding_task_confirm_acceptance(
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+    criterion_id: String,
+) -> Result<CodingTask, String> {
+    let root = access.require_workspace(&root)?;
+    tokio::task::spawn_blocking(move || confirm_acceptance(&root, &task_id, criterion_id.trim()))
+        .await
+        .map_err(|error| format!("确认验收标准失败：{error}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
 
     fn temp_root() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("coding-task-{}", uuid::Uuid::now_v7()));
@@ -1084,6 +1142,59 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert!(list.iter().any(|task| task.name == "重构登录"));
         assert!(list.iter().any(|task| task.name == "修复导出"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn concurrent_task_creation_does_not_lose_index_rows() {
+        let root = temp_root();
+        let barrier = Arc::new(Barrier::new(9));
+        let mut threads = Vec::new();
+        for index in 0..8 {
+            let root = root.clone();
+            let barrier = barrier.clone();
+            threads.push(std::thread::spawn(move || {
+                barrier.wait();
+                create_task(&root, &format!("task-{index}"), "requirement").unwrap();
+            }));
+        }
+        barrier.wait();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(list_tasks(&root).len(), 8);
+        std::fs::remove_dir_all(store::workspace_dir(&root)).ok();
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn concurrent_task_updates_preserve_independent_fields() {
+        let root = temp_root();
+        let task = create_task(&root, "old-name", "requirement").unwrap();
+        let barrier = Arc::new(Barrier::new(3));
+        let rename_root = root.clone();
+        let rename_id = task.id.clone();
+        let rename_barrier = barrier.clone();
+        let rename = std::thread::spawn(move || {
+            rename_barrier.wait();
+            rename_task(&rename_root, &rename_id, "new-name").unwrap();
+        });
+        let bind_root = root.clone();
+        let bind_id = task.id.clone();
+        let bind_barrier = barrier.clone();
+        let bind = std::thread::spawn(move || {
+            bind_barrier.wait();
+            bind_runtime(&bind_root, &bind_id, "session-1", "model-1").unwrap();
+        });
+        barrier.wait();
+        rename.join().unwrap();
+        bind.join().unwrap();
+
+        let reloaded = load(&root, &task.id).unwrap();
+        assert_eq!(reloaded.name, "new-name");
+        assert_eq!(reloaded.session_id.as_deref(), Some("session-1"));
+        assert_eq!(reloaded.model_id.as_deref(), Some("model-1"));
+        std::fs::remove_dir_all(store::workspace_dir(&root)).ok();
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -1316,6 +1427,22 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, task.id);
         assert_eq!(list[0].name, "新名");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn acceptance_confirmation_requires_delivery_and_records_user_evidence() {
+        let root = temp_root();
+        let mut task = create_task(&root, "验收任务", "流程可用").unwrap();
+        assert!(confirm_acceptance(&root, &task.id, "requirement").is_err());
+        task.phase = TaskPhase::Delivered;
+        save(&root, &task).unwrap();
+
+        let confirmed = confirm_acceptance(&root, &task.id, "requirement").unwrap();
+        let criterion = &confirmed.acceptance_criteria[0];
+        assert!(criterion.satisfied);
+        assert!(criterion.evidence[0].contains("用户于"));
+        std::fs::remove_dir_all(store::workspace_dir(&root)).ok();
         std::fs::remove_dir_all(&root).ok();
     }
 }

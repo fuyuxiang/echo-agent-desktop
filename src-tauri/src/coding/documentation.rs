@@ -22,9 +22,7 @@ fn contains_clause(requirement: &str, phrase: &str) -> bool {
         requirement[index + phrase.len()..]
             .chars()
             .next()
-            .map_or(true, |next| {
-                next.is_whitespace() || "，。；、,.!?！？：:)）]】".contains(next)
-            })
+            .is_none_or(|next| next.is_whitespace() || "，。；、,.!?！？：:)）]】".contains(next))
     })
 }
 
@@ -130,7 +128,7 @@ fn contains_implementation_work(requirement: &str) -> bool {
         clauses = clauses.replace(separator, "\n");
     }
     clauses
-        .split(|character| matches!(character, '\n' | '，' | ',' | '；' | ';' | '并' | '和'))
+        .split(['\n', '，', ',', '；', ';', '并', '和'])
         .any(|clause| contains_mutation_verb(clause) && !contains_documentation_noun(clause))
 }
 
@@ -277,12 +275,12 @@ fn requests_document_artifact(task: &CodingTask) -> bool {
         || requirement.contains(".md")
 }
 
-fn source_style(
-    path: &str,
-) -> Option<(
+type SourceStyle = (
     &'static [&'static str],
     &'static [(&'static str, &'static str)],
-)> {
+);
+
+fn source_style(path: &str) -> Option<SourceStyle> {
     let extension = Path::new(path)
         .extension()
         .and_then(|value| value.to_str())?
@@ -468,7 +466,7 @@ fn embedded_tag_at(lower_source: &str, offset: usize) -> Option<(usize, &'static
             loop {
                 let index = search_from + lower_source.get(search_from..)?.find(&marker)?;
                 let boundary = lower_source.as_bytes().get(index + marker.len()).copied();
-                if boundary.map_or(true, |byte| byte.is_ascii_whitespace() || byte == b'>') {
+                if boundary.is_none_or(|byte| byte.is_ascii_whitespace() || byte == b'>') {
                     return Some((index, tag));
                 }
                 search_from = index + marker.len();

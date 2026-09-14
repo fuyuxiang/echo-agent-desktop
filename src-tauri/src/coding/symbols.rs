@@ -38,11 +38,19 @@ pub const HARD_IGNORED_DIRS: &[&str] = &[
     "target",
     "dist",
     "build",
+    "coverage",
+    ".cache",
     ".next",
+    ".nuxt",
     ".venv",
+    "venv",
     "__pycache__",
+    ".idea",
+    ".vscode",
     ".git",
 ];
+
+const MAX_QUERY_PAGE: usize = 5_000;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
@@ -123,6 +131,13 @@ pub struct FileIndexEntry {
     pub size: u64,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SymbolOverride {
+    file: String,
+    symbols: Vec<SymbolRecord>,
+}
+
 /// Stable id derived from `(kind, file, line, column, name)`.
 pub fn symbol_id(kind: SymbolKind, file: &str, line: u32, column: u32, name: &str) -> String {
     let mut hasher = Sha256::new();
@@ -141,10 +156,10 @@ fn now_rfc3339() -> String {
 
 /// Read the current `IndexStatus`. Falls back to `Empty` when the file index
 /// does not exist yet — that is the documented "not built" signal.
-pub fn read_status(root: &Path) -> IndexStatus {
+fn read_status_unlocked(root: &Path) -> IndexStatus {
     let paths = store::index_paths(root);
     let file_index: Vec<FileIndexEntry> = store::read_json(&paths.file_index).unwrap_or_default();
-    let symbols = store::read_jsonl::<SymbolRecord>(&paths.symbols).len();
+    let symbols = load_index_unlocked(root).len();
     let state = if file_index.is_empty() {
         IndexState::Empty
     } else {
@@ -161,6 +176,10 @@ pub fn read_status(root: &Path) -> IndexStatus {
         },
         in_progress: false,
     }
+}
+
+pub fn read_status(root: &Path) -> IndexStatus {
+    store::with_index_read(root, || Ok(read_status_unlocked(root))).unwrap_or_default()
 }
 
 /// Write the file index (full replace, not append) after a rebuild.
@@ -650,61 +669,84 @@ static RULES_BY_EXT: LazyLock<Vec<RuleEntry>> = LazyLock::new(make_rules);
 /// Append `symbols` to `symbols.jsonl`, removing any existing records whose
 /// `file` matches `rel` first so the resulting file is single-record-per-line
 /// and idempotent for the given file path.
-fn replace_file_symbols(root: &Path, rel: &str, symbols: &[SymbolRecord]) -> Result<(), String> {
+fn write_symbols(root: &Path, symbols: &[SymbolRecord]) -> Result<(), String> {
     let paths = store::index_paths(root);
-    let existing = store::read_jsonl::<SymbolRecord>(&paths.symbols);
-    let mut kept: Vec<SymbolRecord> = existing
-        .into_iter()
-        .filter(|record| record.file != rel)
-        .collect();
-    kept.extend(symbols.iter().cloned());
-    // Sort for stable output across rebuilds.
-    kept.sort_by(|a, b| {
+    let mut ordered = symbols.to_vec();
+    ordered.sort_by(|a, b| {
         a.file
             .cmp(&b.file)
             .then(a.line.cmp(&b.line))
             .then(a.column.cmp(&b.column))
     });
-    // Rewrite the JSONL file (one record per line, trailing newline).
-    if let Some(parent) = paths.symbols.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| format!("无法创建目录：{error}"))?;
-    }
     let mut body = String::new();
-    for record in &kept {
+    for record in &ordered {
         let line =
             serde_json::to_string(record).map_err(|error| format!("序列化符号失败：{error}"))?;
         body.push_str(&line);
         body.push('\n');
     }
-    std::fs::write(&paths.symbols, body).map_err(|error| format!("写入符号失败：{error}"))?;
-    Ok(())
+    store::write_bytes_atomic(&paths.symbols, body.as_bytes())
+        .map_err(|error| format!("写入符号失败：{error}"))
 }
 
-/// Load all symbol records from disk. Corrupt lines are silently skipped.
-pub fn load_index(root: &Path) -> Vec<SymbolRecord> {
+fn override_path(root: &Path, rel: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(rel.as_bytes());
+    let name = format!("{:x}.json", hasher.finalize());
+    store::index_paths(root).symbol_overrides.join(name)
+}
+
+fn clear_symbol_overrides(root: &Path) -> Result<(), String> {
+    let directory = store::index_paths(root).symbol_overrides;
+    match std::fs::remove_dir_all(directory) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("清理符号增量失败：{error}")),
+    }
+}
+
+fn replace_file_symbols(root: &Path, rel: &str, symbols: &[SymbolRecord]) -> Result<(), String> {
+    store::write_json(
+        &override_path(root, rel),
+        &SymbolOverride {
+            file: rel.to_string(),
+            symbols: symbols.to_vec(),
+        },
+    )
+}
+
+fn load_index_unlocked(root: &Path) -> Vec<SymbolRecord> {
     let paths = store::index_paths(root);
-    store::read_jsonl::<SymbolRecord>(&paths.symbols)
+    let mut by_file = store::read_jsonl::<SymbolRecord>(&paths.symbols)
+        .into_iter()
+        .fold(
+            BTreeMap::<String, Vec<SymbolRecord>>::new(),
+            |mut files, symbol| {
+                files.entry(symbol.file.clone()).or_default().push(symbol);
+                files
+            },
+        );
+    if let Ok(entries) = std::fs::read_dir(paths.symbol_overrides) {
+        for entry in entries.filter_map(Result::ok) {
+            let Some(change) = store::read_json::<SymbolOverride>(&entry.path()) else {
+                continue;
+            };
+            by_file.insert(change.file, change.symbols);
+        }
+    }
+    by_file.into_values().flatten().collect()
+}
+
+/// Load the compacted snapshot plus bounded per-file overrides. Corrupt base
+/// lines or override files are ignored so an interrupted write cannot crash UI.
+pub fn load_index(root: &Path) -> Vec<SymbolRecord> {
+    store::with_index_read(root, || Ok(load_index_unlocked(root))).unwrap_or_default()
 }
 
 /// Drop every symbol that belongs to `rel` and rewrite both index files.
-pub fn remove_file(root: &Path, rel: &str) -> Result<(), String> {
-    let paths = store::index_paths(root);
-    let existing = store::read_jsonl::<SymbolRecord>(&paths.symbols);
-    let kept: Vec<SymbolRecord> = existing
-        .into_iter()
-        .filter(|record| record.file != rel)
-        .collect();
-    if let Some(parent) = paths.symbols.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| format!("无法创建目录：{error}"))?;
-    }
-    let mut body = String::new();
-    for record in &kept {
-        let line =
-            serde_json::to_string(record).map_err(|error| format!("序列化符号失败：{error}"))?;
-        body.push_str(&line);
-        body.push('\n');
-    }
-    std::fs::write(&paths.symbols, body).map_err(|error| format!("写入符号失败：{error}"))?;
+fn remove_file_unlocked(root: &Path, rel: &str) -> Result<(), String> {
+    // An empty override is a tombstone over the last compacted snapshot.
+    replace_file_symbols(root, rel, &[])?;
 
     let mut file_index = read_file_index(root);
     if file_index.remove(rel).is_some() {
@@ -714,10 +756,14 @@ pub fn remove_file(root: &Path, rel: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn remove_file(root: &Path, rel: &str) -> Result<(), String> {
+    store::with_index_transaction(root, || remove_file_unlocked(root, rel))
+}
+
 /// Re-scan a single relative file and replace its entries in the index.
 /// Returns the new symbol set so callers (e.g. the watcher) can emit
 /// `index-updated` with a delta.
-pub fn upsert_file(root: &Path, rel: &str) -> Result<Vec<SymbolRecord>, String> {
+fn upsert_file_unlocked(root: &Path, rel: &str) -> Result<Vec<SymbolRecord>, String> {
     let symbols = parse_file(root, rel);
     replace_file_symbols(root, rel, &symbols)?;
     let mut file_index = read_file_index(root);
@@ -736,6 +782,10 @@ pub fn upsert_file(root: &Path, rel: &str) -> Result<Vec<SymbolRecord>, String> 
     let entries: Vec<FileIndexEntry> = file_index.into_values().collect();
     write_file_index(root, &entries)?;
     Ok(symbols)
+}
+
+pub fn upsert_file(root: &Path, rel: &str) -> Result<Vec<SymbolRecord>, String> {
+    store::with_index_transaction(root, || upsert_file_unlocked(root, rel))
 }
 
 /// Score one symbol against the query. Higher score = better match.
@@ -779,8 +829,8 @@ fn score(symbol: &SymbolRecord, needle: &str) -> u32 {
     }
 }
 
-/// Filter + score the index in memory. Empty `needle` returns the most
-/// recently indexed symbols first.
+/// Filter + score the index in memory. Empty `needle` returns a stable,
+/// deterministic ordering suitable for pagination.
 pub fn query(
     root: &Path,
     needle: &str,
@@ -801,6 +851,10 @@ pub fn query(
         b.score
             .cmp(&a.score)
             .then_with(|| a.symbol.name.cmp(&b.symbol.name))
+            .then_with(|| a.symbol.file.cmp(&b.symbol.file))
+            .then_with(|| a.symbol.line.cmp(&b.symbol.line))
+            .then_with(|| a.symbol.column.cmp(&b.symbol.column))
+            .then_with(|| a.symbol.id.cmp(&b.symbol.id))
     });
     hits.truncate(limit);
     Ok(hits)
@@ -837,7 +891,7 @@ pub fn symbol_at(root: &Path, file: &str, line: u32) -> Result<Option<SymbolReco
 /// parses it with language-aware rules, and atomically replaces the on-disk
 /// `symbols.jsonl` / `file_index.json` pair. Intended to be called from
 /// `spawn_blocking` — file IO here is synchronous by design.
-pub fn build_index(root: &Path) -> Result<IndexStatus, String> {
+fn build_index_unlocked(root: &Path) -> Result<IndexStatus, String> {
     let files = walk_workspace(root);
     let mut all_symbols: Vec<SymbolRecord> = Vec::new();
     let mut entries: Vec<FileIndexEntry> = Vec::new();
@@ -853,19 +907,9 @@ pub fn build_index(root: &Path) -> Result<IndexStatus, String> {
             });
         }
     }
-    let paths = store::index_paths(root);
-    if let Some(parent) = paths.symbols.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| format!("无法创建目录：{error}"))?;
-    }
-    let mut body = String::new();
-    for record in &all_symbols {
-        let line =
-            serde_json::to_string(record).map_err(|error| format!("序列化符号失败：{error}"))?;
-        body.push_str(&line);
-        body.push('\n');
-    }
-    std::fs::write(&paths.symbols, body).map_err(|error| format!("写入符号失败：{error}"))?;
+    write_symbols(root, &all_symbols)?;
     write_file_index(root, &entries)?;
+    clear_symbol_overrides(root)?;
     Ok(IndexStatus {
         state: IndexState::Ready,
         files_indexed: entries.len() as u32,
@@ -875,15 +919,20 @@ pub fn build_index(root: &Path) -> Result<IndexStatus, String> {
     })
 }
 
+pub fn build_index(root: &Path) -> Result<IndexStatus, String> {
+    store::with_index_transaction(root, || build_index_unlocked(root))
+}
+
 /// Reconcile the on-disk index with current files. Files whose `mtime` and
 /// `size` did not change are skipped. When no `file_index.json` exists yet,
 /// this falls back to a full rebuild.
-pub fn reconcile(root: &Path) -> Result<IndexStatus, String> {
-    let paths = store::index_paths(root);
-    if !paths.file_index.exists() {
-        return build_index(root);
+fn reconcile_unlocked(root: &Path) -> Result<IndexStatus, String> {
+    if !store::index_paths(root).file_index.exists() {
+        return build_index_unlocked(root);
     }
     let known = read_file_index(root);
+    let mut next_file_index = known.clone();
+    let mut next_symbols = load_index_unlocked(root);
     let current = walk_workspace(root);
     let mut _changed = 0u32;
     let mut known_paths: std::collections::BTreeSet<String> = known.keys().cloned().collect();
@@ -898,30 +947,44 @@ pub fn reconcile(root: &Path) -> Result<IndexStatus, String> {
             (None, None) => false,
         };
         if needs_update {
-            upsert_file(root, &rel_str)?;
+            next_symbols.retain(|record| record.file != rel_str);
+            next_symbols.extend(parse_file(root, &rel_str));
+            if let Some((mtime_ms, size)) = current_stat {
+                next_file_index.insert(
+                    rel_str.clone(),
+                    FileIndexEntry {
+                        path: rel_str,
+                        mtime_ms,
+                        size,
+                    },
+                );
+            }
             _changed += 1;
         }
     }
     // Anything left in `known_paths` was deleted on disk.
     for stale in known_paths {
-        remove_file(root, &stale)?;
+        next_symbols.retain(|record| record.file != stale);
+        next_file_index.remove(&stale);
         _changed += 1;
     }
-    let status = read_status(root);
+    if _changed > 0 {
+        write_symbols(root, &next_symbols)?;
+        write_file_index(root, &next_file_index.into_values().collect::<Vec<_>>())?;
+        clear_symbol_overrides(root)?;
+    }
+    let status = read_status_unlocked(root);
     Ok(IndexStatus {
         last_reconciled_at: Some(now_rfc3339()),
         ..status
     })
 }
 
-// --- Tauri commands ---------------------------------------------------------
-
-#[derive(Serialize, Clone)]
-struct IndexProgressPayload {
-    root: String,
-    scanned: u32,
-    total_estimate: u32,
+pub fn reconcile(root: &Path) -> Result<IndexStatus, String> {
+    store::with_index_transaction(root, || reconcile_unlocked(root))
 }
+
+// --- Tauri commands ---------------------------------------------------------
 
 #[derive(Serialize, Clone)]
 struct IndexUpdatedPayload {
@@ -975,12 +1038,18 @@ pub async fn coding_symbol_query(
     needle: String,
     kind: Option<SymbolKind>,
     limit: Option<u32>,
+    offset: Option<u32>,
 ) -> Result<Vec<SymbolQueryHit>, String> {
     let root = access.require_workspace(&root)?;
-    let cap = limit.unwrap_or(50).max(1) as usize;
-    tokio::task::spawn_blocking(move || query(&root, &needle, kind, cap))
-        .await
-        .map_err(|error| format!("查询符号失败：{error}"))?
+    let cap = (limit.unwrap_or(50) as usize).clamp(1, MAX_QUERY_PAGE);
+    let offset = offset.unwrap_or(0) as usize;
+    tokio::task::spawn_blocking(move || {
+        let requested = offset.saturating_add(cap);
+        query(&root, &needle, kind, requested)
+            .map(|hits| hits.into_iter().skip(offset).take(cap).collect())
+    })
+    .await
+    .map_err(|error| format!("查询符号失败：{error}"))?
 }
 
 #[tauri::command]
@@ -994,46 +1063,6 @@ pub async fn coding_symbol_at(
     tokio::task::spawn_blocking(move || symbol_at(&root, &file, line))
         .await
         .map_err(|error| format!("查询位置符号失败：{error}"))?
-}
-
-#[tauri::command]
-pub async fn coding_index_emit_progress(
-    app: AppHandle,
-    root: String,
-    scanned: u32,
-    total_estimate: u32,
-) -> Result<(), String> {
-    let _ = app.emit(
-        "coding://index-progress",
-        IndexProgressPayload {
-            root,
-            scanned,
-            total_estimate,
-        },
-    );
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn coding_index_emit_updated(
-    app: AppHandle,
-    root: String,
-    file: String,
-    added: u32,
-    updated: u32,
-    removed: u32,
-) -> Result<(), String> {
-    let _ = app.emit(
-        "coding://index-updated",
-        IndexUpdatedPayload {
-            root,
-            file,
-            added,
-            updated,
-            removed,
-        },
-    );
-    Ok(())
 }
 
 #[cfg(test)]

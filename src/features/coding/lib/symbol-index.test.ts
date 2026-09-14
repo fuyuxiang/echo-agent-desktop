@@ -56,8 +56,13 @@ const invokeMock = vi.fn(async (cmd: string, args: Record<string, unknown>) => {
 vi.mock("./tauri-api", () => ({
   codingApi: {
     indexStatus: (root: string) => invokeMock("coding_index_status", { root }),
-    symbolQuery: (root: string, needle: string) =>
-      invokeMock("coding_symbol_query", { root, needle }),
+    symbolQuery: (
+      root: string,
+      needle: string,
+      kind?: string,
+      limit?: number,
+      offset?: number,
+    ) => invokeMock("coding_symbol_query", { root, needle, kind, limit, offset }),
     indexRebuild: vi.fn(async () => sampleStatus({ state: "ready" })),
   },
   onIndexUpdated: vi.fn((cb: (event: IndexUpdatedEvent) => void) => {
@@ -164,6 +169,51 @@ describe("SymbolIndexClient", () => {
     unsubscribe();
     expect(statusListeners.size).toBe(0);
     expect(removedListeners.size).toBe(0);
+  });
+
+  it("loads indexes larger than one backend page without truncation", async () => {
+    const firstPage = Array.from({ length: 2_000 }, (_, index) => ({
+      symbol: sampleSymbol({ id: `id-${index}`, name: `symbol${index}`, line: index + 1 }),
+      score: 1,
+    }));
+    const last = {
+      symbol: sampleSymbol({ id: "id-2000", name: "lastSymbol", line: 2_001 }),
+      score: 1,
+    };
+    invokeMock
+      .mockResolvedValueOnce(sampleStatus({ symbols: 2_001 }))
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce([last]);
+    const client = getSymbolIndexClient("/workspace/large");
+
+    await client.refresh();
+
+    const queryCalls = invokeMock.mock.calls.filter(([command]) => command === "coding_symbol_query");
+    expect(queryCalls.map(([, args]) => args.offset)).toEqual([0, 2_000]);
+    expect(client.symbolAt("src/a.ts", 2_001)?.name).toBe("lastSymbol");
+  });
+
+  it("keeps a new subscriber when teardown races asynchronous subscription", async () => {
+    const client = getSymbolIndexClient("/workspace/resubscribe");
+    const first = client.subscribe(vi.fn());
+    first();
+    const secondListener = vi.fn();
+    const second = client.subscribe(secondListener);
+
+    await flush();
+    expect(statusListeners.size).toBe(1);
+    expect(removedListeners.size).toBe(1);
+    const before = secondListener.mock.calls.length;
+    statusListeners.forEach((listener) => listener({
+      root: "/workspace/resubscribe",
+      file: "src/a.ts",
+      added: 0,
+      updated: 1,
+      removed: 0,
+    }));
+    await flush();
+    expect(secondListener.mock.calls.length).toBeGreaterThan(before);
+    second();
   });
 });
 

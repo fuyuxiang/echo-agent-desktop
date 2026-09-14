@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, CircleSlash, Clock, LoaderCircle, Play, Square } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleSlash, Clock, LoaderCircle, Play, ShieldAlert, Square } from "lucide-react";
 
 import { verificationLabel } from "../store/workbench-store";
 import type { DetectedCommand, VerificationRecord } from "../lib/types";
@@ -56,8 +56,11 @@ export function VerificationView({
             type="button"
             disabled={!hasTask || running}
             onClick={() => onRun(command)}
-            title={command.command}
+            title={command.requiresApproval
+              ? `${command.command}\n来自 Agent 执行计划，点击后需确认`
+              : command.command}
           >
+            {command.requiresApproval && <ShieldAlert size={12} aria-label="需要确认" />}
             {command.label}
           </button>
         ))}

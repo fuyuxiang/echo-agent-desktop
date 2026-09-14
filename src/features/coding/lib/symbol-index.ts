@@ -104,6 +104,7 @@ export class SymbolIndexClient {
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
+    this.teardownRequested = false;
     if (!this.subscribed && !this.bootstrapStarted) {
       this.bootstrapStarted = true;
       this.subscribed = true;
@@ -127,8 +128,7 @@ export class SymbolIndexClient {
       if (!status) return;
       this.status = status;
       if (this.status.state === "ready" || this.status.state === "stale") {
-        const hits = await codingApi.symbolQuery(this.root, "", undefined, 5000);
-        this.replaceAll(hits.map((hit) => hit.symbol));
+        this.replaceAll(await this.loadAllSymbols());
       }
     } catch (error) {
       // Network or backend failure: leave the cache alone so a stale UI
@@ -145,8 +145,7 @@ export class SymbolIndexClient {
     this.notify();
     try {
       this.status = await codingApi.indexRebuild(this.root);
-      const hits = await codingApi.symbolQuery(this.root, "", undefined, 5000);
-      this.replaceAll(hits.map((hit) => hit.symbol));
+      this.replaceAll(await this.loadAllSymbols());
     } finally {
       this.notify();
     }
@@ -156,7 +155,9 @@ export class SymbolIndexClient {
   teardown(): void {
     if (this.bootstrapping) {
       this.teardownRequested = true;
-      this.bootstrapping.then(() => this.runUnlisten());
+      this.bootstrapping.then(() => {
+        if (this.listeners.size === 0) this.runUnlisten();
+      });
     } else {
       this.runUnlisten();
     }
@@ -166,6 +167,8 @@ export class SymbolIndexClient {
     for (const cancel of this.pendingCancels) cancel();
     this.pendingCancels = [];
     this.subscribed = false;
+    this.bootstrapStarted = false;
+    this.teardownRequested = false;
   }
 
   dispose(): void {
@@ -204,8 +207,7 @@ export class SymbolIndexClient {
     // for `file` would miss renames that moved a symbol out of the file.
     try {
       this.status = await codingApi.indexStatus(this.root);
-      const hits = await codingApi.symbolQuery(this.root, "", undefined, 5000);
-      this.replaceAll(hits.map((hit) => hit.symbol));
+      this.replaceAll(await this.loadAllSymbols());
     } catch (error) {
       console.warn("[symbol-index] file update failed", error);
     } finally {
@@ -217,6 +219,17 @@ export class SymbolIndexClient {
     this.byFile.delete(file);
     this.rebuildIndex();
     this.notify();
+  }
+
+  private async loadAllSymbols(): Promise<SymbolRecord[]> {
+    const pageSize = 2_000;
+    const symbols: SymbolRecord[] = [];
+    for (let offset = 0; offset < this.status.symbols; offset += pageSize) {
+      const page = await codingApi.symbolQuery(this.root, "", undefined, pageSize, offset);
+      symbols.push(...page.map((hit) => hit.symbol));
+      if (page.length < pageSize) break;
+    }
+    return symbols;
   }
 
   private replaceAll(symbols: SymbolRecord[]): void {

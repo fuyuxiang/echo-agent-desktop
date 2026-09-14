@@ -123,11 +123,17 @@ export function mergeTaskVerificationCommands(
   const commands = new Map((detected ?? []).map((entry) => [entry.command, entry]));
   for (const node of task?.taskNodes ?? []) {
     for (const command of node.verificationCommands) {
-      if (!commands.has(command)) {
+      const existing = commands.get(command);
+      if (existing) {
+        // A plan-declared command always crosses the explicit-consent boundary,
+        // even when it happens to match a command detected from the manifest.
+        commands.set(command, { ...existing, requiresApproval: true });
+      } else {
         commands.set(command, {
           command,
           kind: inferVerificationKind(command),
           label: `节点验证 · ${node.planKey}`,
+          requiresApproval: true,
         });
       }
     }

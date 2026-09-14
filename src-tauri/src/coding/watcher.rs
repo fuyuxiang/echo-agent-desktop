@@ -126,7 +126,12 @@ pub struct WatcherHandle {
 /// dropping it immediately after bootstrap silently disables file updates.
 #[derive(Default)]
 pub struct WatcherRegistry {
-    watchers: Mutex<HashMap<PathBuf, WatcherHandle>>,
+    watchers: Mutex<HashMap<PathBuf, WatcherEntry>>,
+}
+
+struct WatcherEntry {
+    _handle: WatcherHandle,
+    clients: usize,
 }
 
 impl WatcherRegistry {
@@ -136,11 +141,38 @@ impl WatcherRegistry {
             .watchers
             .lock()
             .map_err(|_| "工作区文件监听器状态已损坏".to_string())?;
-        if watchers.contains_key(&canonical) {
+        if let Some(entry) = watchers.get_mut(&canonical) {
+            entry.clients = entry.clients.saturating_add(1);
             return Ok(());
         }
         let handle = spawn_watcher(app, canonical.clone())?;
-        watchers.insert(canonical, handle);
+        watchers.insert(
+            canonical,
+            WatcherEntry {
+                _handle: handle,
+                clients: 1,
+            },
+        );
+        Ok(())
+    }
+
+    fn release(&self, root: PathBuf) -> Result<(), String> {
+        let canonical = root.canonicalize().unwrap_or(root);
+        let mut watchers = self
+            .watchers
+            .lock()
+            .map_err(|_| "工作区文件监听器状态已损坏".to_string())?;
+        let remove = match watchers.get_mut(&canonical) {
+            Some(entry) if entry.clients > 1 => {
+                entry.clients -= 1;
+                false
+            }
+            Some(_) => true,
+            None => false,
+        };
+        if remove {
+            watchers.remove(&canonical);
+        }
         Ok(())
     }
 }
@@ -255,6 +287,16 @@ pub async fn coding_index_bootstrap(
     Ok(status)
 }
 
+#[tauri::command]
+pub async fn coding_index_release(
+    access: State<'_, FilesystemAccess>,
+    registry: State<'_, WatcherRegistry>,
+    root: String,
+) -> Result<(), String> {
+    let root = access.require_workspace(&root)?;
+    registry.release(root)
+}
+
 fn handle_classified<S: EventSink>(root: &Path, sink: &Arc<S>, classified: Classified) {
     match classified {
         Classified::Rename { from, to } => {
@@ -263,6 +305,17 @@ fn handle_classified<S: EventSink>(root: &Path, sink: &Arc<S>, classified: Class
         }
         Classified::Modify(path) => {
             let path = std::fs::canonicalize(&path).unwrap_or(path);
+            if is_ignore_rules_file(&path) {
+                let rel = relativize(root, &path);
+                sink.file_updated(&root.to_string_lossy(), &rel);
+                match symbols::reconcile(root) {
+                    Ok(_) => sink.index_updated(&root.to_string_lossy(), &rel, 0, 0, 0),
+                    Err(error) => {
+                        tracing::warn!(%error, "coding watcher failed to reconcile changed ignore rules");
+                    }
+                }
+                return;
+            }
             if should_ignore(root, &path) {
                 return;
             }
@@ -307,6 +360,17 @@ fn handle_classified<S: EventSink>(root: &Path, sink: &Arc<S>, classified: Class
         }
         Classified::Remove(path) => {
             let path = std::fs::canonicalize(&path).unwrap_or(path);
+            if is_ignore_rules_file(&path) {
+                let rel = relativize(root, &path);
+                sink.file_removed(&root.to_string_lossy(), &rel);
+                match symbols::reconcile(root) {
+                    Ok(_) => sink.index_updated(&root.to_string_lossy(), &rel, 0, 0, 0),
+                    Err(error) => {
+                        tracing::warn!(%error, "coding watcher failed to reconcile removed ignore rules");
+                    }
+                }
+                return;
+            }
             if should_ignore(root, &path) {
                 return;
             }
@@ -330,23 +394,7 @@ fn handle_classified<S: EventSink>(root: &Path, sink: &Arc<S>, classified: Class
 /// addition to whatever `.gitignore` already excludes). Used as a fast
 /// filter on every debounced event.
 fn ignored_top_level_dirs() -> std::collections::BTreeSet<&'static str> {
-    [
-        ".git",
-        "node_modules",
-        "target",
-        "dist",
-        "build",
-        ".next",
-        ".venv",
-        "__pycache__",
-        "coverage",
-        ".cache",
-        ".idea",
-        ".vscode",
-    ]
-    .iter()
-    .copied()
-    .collect()
+    symbols::HARD_IGNORED_DIRS.iter().copied().collect()
 }
 
 /// Translate a `notify_debouncer_full` event into a logical operation.
@@ -393,7 +441,45 @@ fn should_ignore(root: &Path, path: &Path) -> bool {
             }
         }
     }
+    // Apply nested ignore files from the closest directory outwards. A
+    // whitelist in a deeper file wins over any shallower rule, matching Git's
+    // precedence and the initial `ignore::WalkBuilder` scan.
+    let is_dir = path.is_dir();
+    let mut directory = path.parent();
+    while let Some(current) = directory {
+        if !current.starts_with(root) {
+            break;
+        }
+        for name in [".gitignore", ".ignore"] {
+            let ignore_path = current.join(name);
+            if !ignore_path.is_file() {
+                continue;
+            }
+            let mut builder = ignore::gitignore::GitignoreBuilder::new(current);
+            let _ = builder.add(ignore_path);
+            if let Ok(matcher) = builder.build() {
+                let matched = matcher.matched_path_or_any_parents(path, is_dir);
+                if matched.is_ignore() {
+                    return true;
+                }
+                if matched.is_whitelist() {
+                    return false;
+                }
+            }
+        }
+        if current == root {
+            break;
+        }
+        directory = current.parent();
+    }
     false
+}
+
+fn is_ignore_rules_file(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".gitignore" | ".ignore")
+    )
 }
 
 /// Relative-path predicate: the watcher only triggers an upsert for files
@@ -544,6 +630,45 @@ mod tests {
             Path::new("/workspace/target/debug/binary")
         ));
         assert!(!should_ignore(root, Path::new("/workspace/src/auth.ts")));
+    }
+
+    #[test]
+    fn should_ignore_applies_nested_gitignore_rules() {
+        let root = fs::canonicalize(temp_root()).unwrap();
+        fs::create_dir_all(root.join("src/generated")).unwrap();
+        fs::write(root.join("src/.gitignore"), "generated/**\n").unwrap();
+        assert!(should_ignore(&root, &root.join("src/generated/client.ts")));
+        assert!(!should_ignore(&root, &root.join("src/checked.ts")));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn changing_ignore_rules_reconciles_and_notifies_index_clients() {
+        let root = fs::canonicalize(temp_root()).unwrap();
+        fs::write(
+            root.join("generated.ts"),
+            "export function generated() {}\n",
+        )
+        .unwrap();
+        init_index(&root);
+        assert!(crate::coding::symbols::load_index(&root)
+            .iter()
+            .any(|symbol| symbol.name == "generated"));
+        fs::write(root.join(".gitignore"), "generated.ts\n").unwrap();
+        let sink = Arc::new(RecordingSink::default());
+
+        handle_classified(&root, &sink, Classified::Modify(root.join(".gitignore")));
+
+        assert!(!crate::coding::symbols::load_index(&root)
+            .iter()
+            .any(|symbol| symbol.name == "generated"));
+        assert!(sink
+            .updated
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, file, _, _, _)| file == ".gitignore"));
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]
