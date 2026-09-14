@@ -34,7 +34,7 @@ function paneProps(overrides: Partial<Parameters<typeof AgentPane>[0]> = {}) {
   return {
     task: task(), changeSet: null, verifications: [], sessionId: "s1", messages: [], streaming: false,
     awaitingPermission: false, awaitingQuestion: false, models: [{ id: "m1" }], modelId: "m1", sending: false,
-    onModelChange: vi.fn(), onSend: vi.fn(), onCancel: vi.fn(), onOpenChanges: vi.fn(), onOpenReport: vi.fn(), ...overrides,
+    onModelChange: vi.fn(), onSend: vi.fn(), onCancel: vi.fn(), onContinue: vi.fn(), onOpenChanges: vi.fn(), onOpenReport: vi.fn(), ...overrides,
   };
 }
 
@@ -45,6 +45,8 @@ describe("phase presentation", () => {
     }
     expect(describePhase("delivered")).toMatchObject({ tone: "good", active: false });
     expect(describePhase("blocked")).toMatchObject({ tone: "bad", active: false });
+    expect(describePhase("paused")).toMatchObject({ label: "已暂停", active: false });
+    expect(describePhase("stopped")).toMatchObject({ label: "已停止", active: false });
     expect(isBusyPhase("blocked")).toBe(false);
   });
 
@@ -113,6 +115,28 @@ describe("AgentPane", () => {
     expect(screen.queryByRole("button", { name: /确认验收/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "交付报告" }));
     expect(props.onOpenReport).toHaveBeenCalled();
+  });
+
+  it("shows a recoverable stopped state with review and continue actions", async () => {
+    const user = userEvent.setup();
+    const props = paneProps({
+      task: task({ phase: "stopped" }),
+      phaseReason: "任务已停止，已保留当前工作区状态",
+      changeSet: {
+        taskId: "t1",
+        changes: [{ path: "src/a.ts", kind: "added", added: 1, removed: 0, preExisting: false }],
+        createdAt: "",
+        reviewedFiles: [],
+      },
+    });
+    render(<AgentPane {...props} />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("任务已停止");
+    expect(screen.queryByText("需要人工介入")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "查看当前变更" }));
+    await user.click(screen.getByRole("button", { name: "继续执行" }));
+    expect(props.onOpenChanges).toHaveBeenCalled();
+    expect(props.onContinue).toHaveBeenCalled();
   });
 
   it("renders permission and clarification cards when paused", () => {

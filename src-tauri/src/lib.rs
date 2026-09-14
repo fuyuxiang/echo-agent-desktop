@@ -526,6 +526,8 @@ pub fn run() {
             coding::orchestrator::coding_task_execution_ledger,
             coding::orchestrator::coding_task_report_start_failed,
             coding::orchestrator::coding_task_begin_followup,
+            coding::orchestrator::coding_task_report_interrupted,
+            coding::orchestrator::coding_task_resume,
             coding::orchestrator::coding_task_begin_verification,
             coding::orchestrator::coding_orchestrator_report_implementation,
             coding::orchestrator::coding_orchestrator_report_verification,

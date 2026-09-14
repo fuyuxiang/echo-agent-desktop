@@ -3311,6 +3311,41 @@ button.knowledge-trace__item:hover {
   color: var(--echo-text-weak);
   text-align: center;
 }
+.file-tree__error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.file-tree__error button,
+.file-tree__retry {
+  border: 1px solid var(--echo-border-default);
+  border-radius: 5px;
+  background: var(--echo-bg-secondary);
+  color: var(--echo-text-medium);
+  font: inherit;
+  cursor: pointer;
+}
+.file-tree__error button {
+  padding: 4px 10px;
+}
+.file-tree__retry {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  padding-block: 3px;
+  padding-inline-end: 8px;
+  overflow: hidden;
+  color: var(--echo-status-error, #d92d20);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-tree__error button:hover,
+.file-tree__retry:hover {
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-strong);
+}
 .file-tree__node {
   display: flex;
   align-items: center;

@@ -19,6 +19,7 @@ import {
   Settings2,
 } from "lucide-react";
 
+import { useAppDialog } from "@/components/AppDialog";
 import type { ModelOption } from "@/components/ModelSelector";
 import { FileTreeView } from "@/components/workspace-panel/FileTreeView";
 import { usePermissionStore } from "@/stores/permission-store";
@@ -46,7 +47,7 @@ import {
   type DocumentationWorkflowContext,
   type EditorCodeContext,
 } from "./lib/documentation";
-import { buildFileIndex } from "./lib/file-index";
+import { applyFileIndexEvent, buildFileIndex } from "./lib/file-index";
 import {
   buildCodingWorkflowPrompt,
   buildNodeContinuationInstruction,
@@ -315,7 +316,12 @@ export function CodingWorkbench({
 }: CodingWorkbenchProps) {
   // Drive the change set, the baseline and the phase transition off the
   // session's streaming signal — see lib/task-lifecycle for the rationale.
-  useTaskLifecycle(cwd);
+  const { settling: lifecycleSettling } = useTaskLifecycle(cwd);
+  const {
+    requestConfirmation: requestTaskConfirmation,
+    requestInput: requestTaskInput,
+    dialog: taskDialog,
+  } = useAppDialog(cwd);
   const taskSessionId = useTaskStore((state) => state.task?.sessionId);
   // Never fall back to an unrelated current chat when a coding task has no
   // bound session. An explicit recovery state prevents cross-task sends.
@@ -379,17 +385,50 @@ export function CodingWorkbench({
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [commandOutput, setCommandOutput] = useState("");
   const [terminalActivated, setTerminalActivated] = useState(false);
-  const [treeRevision, setTreeRevision] = useState(0);
+  const [treeRefresh, setTreeRefresh] = useState<{ revision: number; paths: string[] }>({
+    revision: 0,
+    paths: [],
+  });
   /** Bumped whenever the task's evidence changes, so an open report reloads. */
   const [reportRevision, setReportRevision] = useState(0);
   const activeRunIdRef = useRef<string | null>(null);
   const autoVerificationRef = useRef<string | null>(null);
   const repairPromptRef = useRef<string | null>(null);
   const workflowActionRef = useRef<string | null>(null);
+  const pendingTreePathsRef = useRef(new Set<string>());
+  const treeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileIndexEventsRef = useRef(new Map<string, boolean>());
   const diffRequestGenerationRef = useRef(new Map<string, number>());
   const diffTaskRef = useRef<string | null>(null);
   const workbenchRef = useRef<HTMLDivElement>(null);
   const workbenchSize = useElementSize(workbenchRef);
+
+  const queueTreeRefresh = useCallback((changedPath: string) => {
+    const relativePath = workspaceRelativePath(cwd, changedPath);
+    pendingTreePathsRef.current.add(relativePath);
+    if (treeRefreshTimerRef.current !== null) return;
+    treeRefreshTimerRef.current = setTimeout(() => {
+      treeRefreshTimerRef.current = null;
+      const paths = [...pendingTreePathsRef.current];
+      pendingTreePathsRef.current.clear();
+      setTreeRefresh((current) => ({ revision: current.revision + 1, paths }));
+    }, 80);
+  }, [cwd]);
+
+  const recordFileIndexEvent = useCallback((changedPath: string, removed: boolean) => {
+    const relativePath = workspaceRelativePath(cwd, changedPath);
+    if (!relativePath) return;
+    fileIndexEventsRef.current.set(relativePath, removed);
+    setFilePaths((current) => applyFileIndexEvent(current, relativePath, removed));
+  }, [cwd]);
+
+  const reconcileFileIndexEvents = useCallback((paths: string[]) => {
+    let next = paths;
+    for (const [path, removed] of fileIndexEventsRef.current) {
+      next = applyFileIndexEvent(next, path, removed);
+    }
+    return next;
+  }, []);
 
   const task = useTaskStore((state) => state.task);
   const summaries = useTaskStore((state) => state.summaries);
@@ -694,7 +733,7 @@ export function CodingWorkbench({
     if (["discovering", "implementing", "repairing"].includes(activeTask.phase)) {
       return { taskId: activeTask.id, closeRound: false };
     }
-    if (["blocked", "delivered"].includes(activeTask.phase)) {
+    if (["paused", "stopped", "blocked", "delivered"].includes(activeTask.phase)) {
       try {
         await codingApi.beginFollowup(cwd, activeTask.id, "用户在编辑器中继续修改工程文件");
         await useTaskStore.getState().refreshTaskState();
@@ -946,12 +985,29 @@ export function CodingWorkbench({
   // reviewing a diff, refresh the task-baseline comparison after the disk
   // snapshot is reconciled instead of silently falling back to identical panes.
   useEffect(() => {
+    pendingTreePathsRef.current.clear();
+    fileIndexEventsRef.current.clear();
+    if (treeRefreshTimerRef.current !== null) {
+      clearTimeout(treeRefreshTimerRef.current);
+      treeRefreshTimerRef.current = null;
+    }
+    return () => {
+      pendingTreePathsRef.current.clear();
+      if (treeRefreshTimerRef.current !== null) {
+        clearTimeout(treeRefreshTimerRef.current);
+        treeRefreshTimerRef.current = null;
+      }
+    };
+  }, [cwd]);
+
+  useEffect(() => {
     if (!cwd) return;
     let disposed = false;
     const unlisteners: Array<() => void> = [];
     void onWorkspaceFileUpdated((event) => {
       if (disposed || event.root !== cwd) return;
-      setTreeRevision((value) => value + 1);
+      queueTreeRefresh(event.file);
+      recordFileIndexEvent(event.file, false);
       void (async () => {
         await reconcileOpenFileTab(cwd, event.file);
         const refreshed = !disposed && await refreshVisibleDiff(event.file);
@@ -963,7 +1019,8 @@ export function CodingWorkbench({
     });
     void onWorkspaceFileRemoved((event) => {
       if (disposed || event.root !== cwd) return;
-      setTreeRevision((value) => value + 1);
+      queueTreeRefresh(event.file);
+      recordFileIndexEvent(event.file, true);
       void (async () => {
         await reconcileOpenFileTab(cwd, event.file, true);
         const refreshed = !disposed && await refreshVisibleDiff(event.file);
@@ -977,7 +1034,7 @@ export function CodingWorkbench({
       disposed = true;
       for (const unlisten of unlisteners) unlisten();
     };
-  }, [cwd, refreshVisibleDiff]);
+  }, [cwd, queueTreeRefresh, recordFileIndexEvent, refreshVisibleDiff]);
 
   // File-system notifications can race watcher startup. A synchronized
   // ChangeSet is the fallback, and open diff tabs are refreshed from it too.
@@ -1108,11 +1165,11 @@ export function CodingWorkbench({
     void buildFileIndex(cwd, {
       signal,
       onProgress: (paths) => {
-        if (!signal.aborted) setFilePaths(paths);
+        if (!signal.aborted) setFilePaths(reconcileFileIndexEvents(paths));
       },
     })
       .then((result) => {
-        if (!signal.aborted) setFilePaths(result.paths);
+        if (!signal.aborted) setFilePaths(reconcileFileIndexEvents(result.paths));
       })
       .finally(() => {
         if (!signal.aborted) setIndexing(false);
@@ -1120,7 +1177,7 @@ export function CodingWorkbench({
     return () => {
       signal.aborted = true;
     };
-  }, [cwd]);
+  }, [cwd, reconcileFileIndexEvents]);
 
   const effectiveLayout = useMemo(
     () => fitWorkbenchLayout(workbenchSize.width, workbenchSize.height, {
@@ -1155,7 +1212,8 @@ export function CodingWorkbench({
     try {
       const created = await codingApi.createEntry(cwd, selectedDirectory || cwd, name.trim(), directory);
       createdFile = !directory;
-      setTreeRevision((value) => value + 1);
+      queueTreeRefresh(created);
+      if (!directory) recordFileIndexEvent(created, false);
       if (!directory) await openFile(created);
       if (!directory) await finishManualMutation(mutation);
       onToast?.(`已创建${directory ? "目录" : "文件"} ${name.trim()}`);
@@ -1174,6 +1232,8 @@ export function CodingWorkbench({
     onToast,
     openFile,
     prepareManualMutation,
+    queueTreeRefresh,
+    recordFileIndexEvent,
     selectedDirectory,
   ]);
 
@@ -1285,7 +1345,7 @@ export function CodingWorkbench({
       let reopened = false;
       try {
         if (mutating && task) {
-          if (["blocked", "delivered"].includes(task.phase)) {
+          if (["paused", "stopped", "blocked", "delivered"].includes(task.phase)) {
             if (!cwd) return false;
             await codingApi.beginFollowup(cwd, task.id, text);
             await useTaskStore.getState().refreshTaskState();
@@ -1346,6 +1406,146 @@ export function CodingWorkbench({
       task,
     ],
   );
+
+  const activateCodingTask = useCallback(async (taskId: string) => {
+    setSending(true);
+    try {
+      await useTaskStore.getState().selectTask(taskId);
+      const selected = useTaskStore.getState().task;
+      if (selected?.sessionId) {
+        await onActivateSession?.(selected.sessionId, cwd);
+        if (selected.modelId) setModelId(selected.modelId);
+      }
+    } catch (error) {
+      onToast?.(`恢复任务会话失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setSending(false);
+    }
+  }, [cwd, onActivateSession, onToast]);
+
+  const renameCodingTask = useCallback((
+    summary: (typeof summaries)[number],
+    returnFocus?: HTMLElement | null,
+  ) => {
+    requestTaskInput({
+      title: "重命名开发任务",
+      description: "任务名称只用于识别和切换，不会改变原始需求或 Agent 会话。",
+      confirmLabel: "保存",
+      returnFocus,
+      fields: [{
+        name: "name",
+        label: "任务名称",
+        defaultValue: summary.name,
+        required: true,
+        maxLength: 120,
+      }],
+      validate: (values) => values.name.trim() === summary.name
+        ? "请输入与当前名称不同的新名称。"
+        : null,
+      action: async (values) => {
+        await useTaskStore.getState().renameTask(summary.id, values.name.trim());
+        onToast?.("任务已重命名");
+      },
+      onError: (error) => onToast?.(`重命名失败：${String(error).replace(/^Error:\s*/, "")}`),
+    });
+  }, [onToast, requestTaskInput, summaries]);
+
+  const deleteCodingTask = useCallback((
+    summary: (typeof summaries)[number],
+    returnFocus?: HTMLElement | null,
+  ) => {
+    if (isBusyPhase(summary.phase)) {
+      onToast?.("任务正在执行或验证，请先停止后再删除");
+      return;
+    }
+    const index = summaries.findIndex((entry) => entry.id === summary.id);
+    const fallback = summaries[index + 1] ?? summaries[index - 1];
+    const wasActive = task?.id === summary.id;
+    requestTaskConfirmation({
+      title: `删除开发任务「${summary.name}」？`,
+      description: (
+        <>
+          将删除该任务的执行计划、差异基线、验证记录和交付报告。
+          <br />
+          工作区源码和绑定的 Agent 会话不会被删除。
+        </>
+      ),
+      confirmLabel: "删除任务",
+      danger: true,
+      returnFocus,
+      action: async () => {
+        await useTaskStore.getState().deleteTask(summary.id);
+        const tabStore = useTabStore.getState();
+        for (const tab of tabStore.tabs) {
+          if (isFileTab(tab) && tab.diffTaskId === summary.id) tabStore.clearDiff(tab.id);
+        }
+        if (wasActive) {
+          tabStore.closeTab("doc:delivery");
+          tabStore.closeTab("doc:taskDag");
+          setPhaseReason(undefined);
+          setBlocker(undefined);
+          if (fallback) await activateCodingTask(fallback.id);
+        }
+        onToast?.("已删除开发任务，工作区文件和 Agent 会话均已保留");
+      },
+      onError: (error) => onToast?.(`删除任务失败：${String(error).replace(/^Error:\s*/, "")}`),
+    });
+  }, [activateCodingTask, onToast, requestTaskConfirmation, summaries, task?.id]);
+
+  const continueInterruptedTask = useCallback(async () => {
+    if (
+      !cwd
+      || !task
+      || (task.phase !== "paused" && task.phase !== "stopped")
+      || sending
+      || streaming
+      || lifecycleSettling
+    ) return;
+    if (
+      !onSendMessage
+      || !task.sessionId
+      || activeSessionId !== task.sessionId
+      || hostSessionId !== task.sessionId
+    ) {
+      onToast?.("当前任务的 Agent 会话尚未完成恢复，请重新选择该任务后再试");
+      return;
+    }
+    const interruptedAs = task.phase;
+    let resumed = false;
+    setSending(true);
+    try {
+      const resumedTask = await codingApi.resumeTask(cwd, task.id);
+      resumed = true;
+      await useTaskStore.getState().refreshTaskState();
+      const activeNode = resumedTask.taskNodes.find((node) => node.status === "running");
+      const prompt = activeNode
+        ? buildNodeContinuationInstruction(resumedTask, activeNode)
+        : buildCodingWorkflowPrompt(`继续完成原始需求：${resumedTask.requirement}`, contextPaths, true);
+      const accepted = await onSendMessage("继续执行当前开发任务", prompt);
+      if (accepted === false) throw new Error("Agent 未接收继续执行请求");
+    } catch (error) {
+      if (resumed) {
+        await codingApi
+          .reportInterrupted(cwd, task.id, interruptedAs)
+          .catch(() => undefined);
+        await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+      }
+      onToast?.(`无法继续当前任务：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setSending(false);
+    }
+  }, [
+    activeSessionId,
+    contextPaths,
+    cwd,
+    hostSessionId,
+    lifecycleSettling,
+    onSendMessage,
+    onToast,
+    sending,
+    streaming,
+    task,
+  ]);
 
   // The backend is the scheduler. A managed follow-up is sent only for its
   // explicit persisted nextAction, so closing/reopening the app resumes the
@@ -1459,7 +1659,7 @@ export function CodingWorkbench({
     async (commands: DetectedCommand[]) => {
       if (!cwd || !task || runningVerification) return;
       const taskId = task.id;
-      if (!["verifying", "blocked", "delivered"].includes(task.phase)) {
+      if (!["verifying", "paused", "stopped", "blocked", "delivered"].includes(task.phase)) {
         onToast?.("当前任务正在执行，暂不能启动新的验证批次");
         return;
       }
@@ -1977,21 +2177,7 @@ export function CodingWorkbench({
           <TaskSwitcher
             tasks={summaries}
             activeId={task?.id}
-            onSelect={(taskId) => void (async () => {
-              setSending(true);
-              try {
-                await useTaskStore.getState().selectTask(taskId);
-                const selected = useTaskStore.getState().task;
-                if (selected?.sessionId) {
-                  await onActivateSession?.(selected.sessionId, cwd);
-                  if (selected.modelId) setModelId(selected.modelId);
-                }
-              } catch (error) {
-                onToast?.(`恢复任务会话失败：${String(error).replace(/^Error:\s*/, "")}`);
-              } finally {
-                setSending(false);
-              }
-            })()}
+            onSelect={(taskId) => void activateCodingTask(taskId)}
             onNew={() => useTaskStore.setState({
               task: null,
               changeSet: null,
@@ -2000,6 +2186,8 @@ export function CodingWorkbench({
               ledger: [],
               orchestrator: null,
             })}
+            onRename={renameCodingTask}
+            onDelete={deleteCodingTask}
           />
         </div>
         <button
@@ -2055,7 +2243,8 @@ export function CodingWorkbench({
             onFileSelect={(path) => void openFile(path)}
             onDirectorySelect={setSelectedDirectory}
             onToast={onToast}
-            refreshKey={treeRevision}
+            refreshKey={treeRefresh.revision}
+            refreshPaths={treeRefresh.paths}
           />
         )}
         {activityView === "search" && (
@@ -2083,7 +2272,7 @@ export function CodingWorkbench({
               !changeSet?.committedHash
               && !runningVerification
               && !streaming
-              && Boolean(task && ["delivered", "blocked"].includes(task.phase))
+              && Boolean(task && ["paused", "stopped", "delivered", "blocked"].includes(task.phase))
             }
             canDiscard={
               !runningVerification
@@ -2093,6 +2282,8 @@ export function CodingWorkbench({
                 "implementing",
                 "repairing",
                 "discovering",
+                "paused",
+                "stopped",
                 "blocked",
                 "delivered",
               ].includes(task.phase))
@@ -2258,10 +2449,11 @@ export function CodingWorkbench({
             awaitingQuestion={awaitingQuestion}
             models={models}
             modelId={modelId}
-            sending={sending}
+            sending={sending || lifecycleSettling}
             onModelChange={(next) => void changeTaskModel(next)}
             onSend={sendFollowup}
             onCancel={() => onCancelRun?.()}
+            onContinue={continueInterruptedTask}
             onOpenChanges={() => setActivityView("changes")}
             onOpenReport={() => useTabStore.getState().openDoc("delivery")}
             onToast={onToast}
@@ -2356,6 +2548,7 @@ export function CodingWorkbench({
           }}
         />
       )}
+      {taskDialog}
     </div>
   );
 }

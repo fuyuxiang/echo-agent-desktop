@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const listDir = vi.fn();
 vi.mock("@/lib/agent-client", () => ({ listDir: (path: string) => listDir(path) }));
 
-import { buildFileIndex } from "../lib/file-index";
+import { applyFileIndexEvent, buildFileIndex } from "../lib/file-index";
 
 interface FakeEntry {
   name: string;
@@ -84,5 +84,22 @@ describe("buildFileIndex", () => {
     const result = await buildFileIndex("");
     expect(result.paths).toEqual([]);
     expect(listDir).not.toHaveBeenCalled();
+  });
+});
+
+describe("applyFileIndexEvent", () => {
+  it("增量添加 Agent 新生成的文件并保持排序去重", () => {
+    const next = applyFileIndexEvent(["src/a.ts", "README.md"], "src\\b.ts", false);
+    expect(next).toEqual(["README.md", "src/a.ts", "src/b.ts"]);
+    expect(applyFileIndexEvent(next, "src/b.ts", false)).toBe(next);
+  });
+
+  it("删除文件或目录时同步移除快速打开索引", () => {
+    const paths = ["src/a.ts", "src/nested/b.ts", "tests/a.test.ts"];
+    expect(applyFileIndexEvent(paths, "src/a.ts", true)).toEqual([
+      "src/nested/b.ts",
+      "tests/a.test.ts",
+    ]);
+    expect(applyFileIndexEvent(paths, "src", true)).toEqual(["tests/a.test.ts"]);
   });
 });

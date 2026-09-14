@@ -1682,7 +1682,10 @@ pub async fn coding_task_rollback(
     sync_changes(&root, &task_id).await?;
     tokio::task::spawn_blocking(move || {
         let current = task::load(&root, &task_id).ok_or_else(|| "任务不存在".to_string())?;
-        if !matches!(current.phase, TaskPhase::Delivered | TaskPhase::Blocked) {
+        if !matches!(
+            current.phase,
+            TaskPhase::Paused | TaskPhase::Stopped | TaskPhase::Delivered | TaskPhase::Blocked
+        ) {
             return Err("任务正在执行或验证，请先停止后再回滚".into());
         }
         let restored = rollback(&root, &task_id)?;

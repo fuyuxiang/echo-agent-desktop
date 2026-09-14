@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   syncChanges: vi.fn(),
   syncPlan: vi.fn(),
   reportImplementation: vi.fn(),
+  reportInterrupted: vi.fn(),
   reportStartFailed: vi.fn(),
 }));
 
@@ -20,6 +21,8 @@ const taskStoreState = {
     id: string;
     phase: import("../lib/types").TaskPhase;
     sessionId?: string | null;
+    phaseReason?: string | null;
+    blocker?: string | null;
   } | null,
 };
 
@@ -29,6 +32,36 @@ function setTaskStreaming(streaming: boolean) {
       s1: {
         messages: [],
         streamingMessageId: streaming ? "assistant-1" : null,
+        pendingSendNowPromptId: null,
+        usage: {},
+        plan: null,
+        planMode: false,
+        planApprovals: [],
+        suppressReplay: false,
+        dismissedControlPromptIds: [],
+      },
+    },
+  });
+}
+
+function completeTaskTurn(options: {
+  stopReason: string;
+  cancelTrigger?: string;
+  cancellationCategory?: string;
+  agentResult?: string;
+}) {
+  useSessionStore.setState({
+    transcripts: {
+      s1: {
+        messages: [{
+          id: "assistant-1",
+          promptId: "prompt-1",
+          role: "assistant",
+          parts: [],
+          complete: true,
+          ...options,
+        }],
+        streamingMessageId: null,
         pendingSendNowPromptId: null,
         usage: {},
         plan: null,
@@ -162,6 +195,91 @@ describe("useTaskLifecycle", () => {
     const reportOrder = api.reportImplementation.mock.invocationCallOrder[0] ?? 0;
     expect(syncOrder).toBeLessThan(reportOrder);
     expect(refreshTaskState).toHaveBeenCalled();
+  });
+
+  it("records a user stop as recoverable instead of reporting implementation complete", async () => {
+    taskStoreState.task = { id: "t1", phase: "implementing", sessionId: "s1" };
+    setTaskStreaming(true);
+    renderHook(() => useTaskLifecycle("/repo"));
+
+    await act(async () => {
+      completeTaskTurn({ stopReason: "cancelled", cancelTrigger: "stop" });
+    });
+
+    await waitFor(() => expect(api.reportInterrupted).toHaveBeenCalledWith(
+      "/repo",
+      "t1",
+      "stopped",
+    ));
+    expect(api.reportImplementation).not.toHaveBeenCalled();
+    expect(api.reportStartFailed).not.toHaveBeenCalled();
+  });
+
+  it("records a pause separately and preserves the unfinished round", async () => {
+    taskStoreState.task = { id: "t1", phase: "repairing", sessionId: "s1" };
+    setTaskStreaming(true);
+    renderHook(() => useTaskLifecycle("/repo"));
+
+    await act(async () => {
+      completeTaskTurn({ stopReason: "cancelled", cancelTrigger: "pause" });
+    });
+
+    await waitFor(() => expect(api.reportInterrupted).toHaveBeenCalledWith(
+      "/repo",
+      "t1",
+      "paused",
+    ));
+    expect(api.reportImplementation).not.toHaveBeenCalled();
+  });
+
+  it("routes runtime failures to an exact blocker without claiming a clean finish", async () => {
+    taskStoreState.task = { id: "t1", phase: "implementing", sessionId: "s1" };
+    setTaskStreaming(true);
+    renderHook(() => useTaskLifecycle("/repo"));
+
+    await act(async () => {
+      completeTaskTurn({ stopReason: "error", agentResult: "provider disconnected" });
+    });
+
+    await waitFor(() => expect(api.reportStartFailed).toHaveBeenCalledWith(
+      "/repo",
+      "t1",
+      "provider disconnected",
+    ));
+    expect(api.reportImplementation).not.toHaveBeenCalled();
+  });
+
+  it("ignores the cancelled half of a send-now handoff", async () => {
+    taskStoreState.task = { id: "t1", phase: "implementing", sessionId: "s1" };
+    setTaskStreaming(true);
+    renderHook(() => useTaskLifecycle("/repo"));
+
+    await act(async () => {
+      completeTaskTurn({ stopReason: "cancelled", cancelTrigger: "send_now" });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(api.reportInterrupted).not.toHaveBeenCalled();
+    expect(api.reportImplementation).not.toHaveBeenCalled();
+    expect(api.reportStartFailed).not.toHaveBeenCalled();
+  });
+
+  it("repairs the exact legacy no-change blocker after a stopped terminal turn", async () => {
+    taskStoreState.task = {
+      id: "t1",
+      phase: "blocked",
+      sessionId: "s1",
+      phaseReason: "实现阶段结束但没有代码变更",
+      blocker: "Agent 结束了实现但没有写入任何文件。请检查是否只在会话里返回了示例代码。",
+    };
+    completeTaskTurn({ stopReason: "cancelled", cancelTrigger: "stop" });
+    renderHook(() => useTaskLifecycle("/repo"));
+
+    await waitFor(() => expect(api.reportInterrupted).toHaveBeenCalledWith(
+      "/repo",
+      "t1",
+      "stopped",
+    ));
   });
 
   it("skips the sync when the task is not in Implementing", async () => {

@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { terminalSessionStatus } from "@/lib/turn-status";
 import { useSessionStore } from "@/stores/session-store";
 
 import { codingApi } from "./tauri-api";
@@ -27,6 +28,8 @@ import { useTaskStore } from "../store/task-store";
 export function useTaskLifecycle(cwd: string | undefined) {
   const taskId = useTaskStore((state) => state.task?.id);
   const taskPhase = useTaskStore((state) => state.task?.phase);
+  const taskPhaseReason = useTaskStore((state) => state.task?.phaseReason);
+  const taskBlocker = useTaskStore((state) => state.task?.blocker);
   const taskSessionId = useTaskStore((state) => state.task?.sessionId);
   const streaming = useSessionStore((state) =>
     taskSessionId ? Boolean(state.transcripts[taskSessionId]?.streamingMessageId) : false,
@@ -34,14 +37,29 @@ export function useTaskLifecycle(cwd: string | undefined) {
   const runtimePlan = useSessionStore((state) =>
     taskSessionId ? state.transcripts[taskSessionId]?.plan ?? null : null,
   );
+  const terminalMessage = useSessionStore((state) => {
+    const messages = taskSessionId ? state.transcripts[taskSessionId]?.messages : undefined;
+    if (!messages) return undefined;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role === "assistant" && message.complete && message.stopReason) return message;
+    }
+    return undefined;
+  });
   const planFingerprint = runtimePlanFingerprint(runtimePlan);
   const lastStreamingRef = useRef(streaming);
   const lastPlanFingerprintRef = useRef("");
+  const lastSettledCompletionRef = useRef("");
+  const settlingRef = useRef(false);
+  const [settling, setSettling] = useState(false);
 
   // A different task/session is a different stream edge detector.
   useEffect(() => {
     lastStreamingRef.current = streaming;
     lastPlanFingerprintRef.current = "";
+    lastSettledCompletionRef.current = "";
+    settlingRef.current = false;
+    setSettling(false);
   }, [taskId, taskSessionId]);
 
   useEffect(() => {
@@ -69,8 +87,13 @@ export function useTaskLifecycle(cwd: string | undefined) {
       });
   }, [cwd, planFingerprint, runtimePlan, taskId, taskPhase, taskSessionId]);
 
-  // When streaming falls to false, the Agent just finished a managed turn. The
-  // native checkpoint is authoritative in every workspace.
+  const completionKey = terminalMessage
+    ? `${terminalMessage.promptId ?? terminalMessage.id}:${terminalMessage.stopReason}:${terminalMessage.cancelTrigger ?? ""}:${terminalMessage.cancellationCategory ?? ""}`
+    : "";
+
+  // A stream ending is not necessarily a successful implementation. Settle
+  // the round from its protocol outcome so Stop/Pause/Send-now cannot be
+  // mistaken for a clean end_turn.
   useEffect(() => {
     if (lastStreamingRef.current === streaming) return;
     lastStreamingRef.current = streaming;
@@ -81,13 +104,40 @@ export function useTaskLifecycle(cwd: string | undefined) {
       || !taskSessionId
       || !["discovering", "implementing", "repairing"].includes(taskPhase ?? "")
     ) return;
+    if (completionKey && completionKey === lastSettledCompletionRef.current) return;
+    if (completionKey) lastSettledCompletionRef.current = completionKey;
+    const outcome = terminalMessage
+      ? terminalSessionStatus({
+          stopReason: terminalMessage.stopReason ?? "end_turn",
+          cancelTrigger: terminalMessage.cancelTrigger,
+          cancellationCategory: terminalMessage.cancellationCategory,
+        })
+      : "completed";
+    // send_now closes the superseded turn immediately before the replacement
+    // starts. It is a hand-off, not a task lifecycle boundary.
+    if (outcome === "working") return;
+
+    settlingRef.current = true;
+    setSettling(true);
     void (async () => {
       try {
         if (runtimePlan?.entries.length) {
           await codingApi.syncPlan(cwd, taskId, parseRuntimePlan(runtimePlan));
         }
-        await codingApi.syncChanges(cwd, taskId);
-        await codingApi.reportImplementation(cwd, taskId);
+        if (outcome === "paused" || outcome === "stopped") {
+          await codingApi.reportInterrupted(cwd, taskId, outcome);
+        } else if (outcome === "failed") {
+          await codingApi.syncChanges(cwd, taskId);
+          const detail = terminalMessage?.agentResult?.trim();
+          await codingApi.reportStartFailed(
+            cwd,
+            taskId,
+            detail || "Agent 执行异常结束，已保留当前文件变更和执行记录",
+          );
+        } else {
+          await codingApi.syncChanges(cwd, taskId);
+          await codingApi.reportImplementation(cwd, taskId);
+        }
         await useTaskStore.getState().refreshTaskState();
       } catch (error) {
         // Continuing after a failed sync could falsely report a clean task.
@@ -99,7 +149,65 @@ export function useTaskLifecycle(cwd: string | undefined) {
           )
           .catch(() => undefined);
         await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+      } finally {
+        settlingRef.current = false;
+        setSettling(false);
       }
     })();
-  }, [cwd, runtimePlan, streaming, taskId, taskPhase, taskSessionId]);
+  }, [
+    completionKey,
+    cwd,
+    runtimePlan,
+    streaming,
+    taskId,
+    taskPhase,
+    taskSessionId,
+    terminalMessage,
+  ]);
+
+  // Repair the one blocker produced by older versions of this bug. The exact
+  // persisted reason plus a cancelled terminal outcome makes this safe: real
+  // plan, verification and runtime blockers are never rewritten.
+  useEffect(() => {
+    if (
+      streaming
+      || settlingRef.current
+      || !cwd
+      || !taskId
+      || taskPhase !== "blocked"
+      || taskPhaseReason !== "实现阶段结束但没有代码变更"
+      || taskBlocker !== "Agent 结束了实现但没有写入任何文件。请检查是否只在会话里返回了示例代码。"
+      || !terminalMessage
+    ) return;
+    const outcome = terminalSessionStatus({
+      stopReason: terminalMessage.stopReason ?? "end_turn",
+      cancelTrigger: terminalMessage.cancelTrigger,
+      cancellationCategory: terminalMessage.cancellationCategory,
+    });
+    if (outcome !== "paused" && outcome !== "stopped") return;
+    const repairKey = `repair:${completionKey}`;
+    if (lastSettledCompletionRef.current === repairKey) return;
+    lastSettledCompletionRef.current = repairKey;
+    settlingRef.current = true;
+    setSettling(true);
+    void codingApi
+      .reportInterrupted(cwd, taskId, outcome)
+      .then(() => useTaskStore.getState().refreshTaskState())
+      .catch(() => undefined)
+      .finally(() => {
+        settlingRef.current = false;
+        setSettling(false);
+      });
+  }, [
+    completionKey,
+    cwd,
+    streaming,
+    taskBlocker,
+    taskId,
+    taskPhase,
+    taskPhaseReason,
+    terminalMessage,
+  ]);
+
+  return { settling };
 }

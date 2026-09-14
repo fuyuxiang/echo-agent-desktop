@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   LoaderCircle,
+  Pause,
   Send,
   Sparkles,
   Square,
@@ -37,6 +38,7 @@ interface AgentPaneProps {
   onModelChange: (modelId: string) => void | Promise<void>;
   onSend: (text: string, mutating?: boolean) => boolean | void | Promise<boolean | void>;
   onCancel: () => void;
+  onContinue: () => void | Promise<void>;
   onOpenChanges: () => void;
   onOpenReport: () => void;
   onToast?: (message: string) => void;
@@ -60,6 +62,7 @@ export function AgentPane({
   onModelChange,
   onSend,
   onCancel,
+  onContinue,
   onOpenChanges,
   onOpenReport,
   onToast,
@@ -112,6 +115,8 @@ export function AgentPane({
             {phase.active && <LoaderCircle size={12} className="is-spinning" />}
             {task.phase === "delivered" && <CheckCircle2 size={12} />}
             {task.phase === "blocked" && <AlertTriangle size={12} />}
+            {task.phase === "paused" && <Pause size={12} />}
+            {task.phase === "stopped" && <Square size={11} />}
             {phase.label}
           </span>
           {streaming && (
@@ -123,7 +128,10 @@ export function AgentPane({
       </header>
 
       <div className="coding-agent__body">
-        {phaseReason && !blocker && task.phase !== "delivered" && (
+        {phaseReason
+          && !blocker
+          && !["paused", "stopped", "delivered"].includes(task.phase)
+          && (
           <div className="coding-agent__reason">{phaseReason}</div>
         )}
 
@@ -154,6 +162,29 @@ export function AgentPane({
             <div>
               <strong>需要人工介入</strong>
               <p>{blocker}</p>
+            </div>
+          </div>
+        )}
+
+        {(task.phase === "paused" || task.phase === "stopped") && (
+          <div className="coding-agent__decision is-interrupted" role="status">
+            {task.phase === "paused" ? <Pause size={13} /> : <Square size={12} />}
+            <div className="coding-agent__decision-copy">
+              <strong>{task.phase === "paused" ? "任务已暂停" : "任务已停止"}</strong>
+              <span>{phaseReason ?? (task.phase === "paused"
+                ? "会话上下文和当前文件变更已保留。"
+                : "执行记录和当前工作区状态已保留。")}</span>
+            </div>
+            <div className="coding-agent__decision-actions">
+              {changes.length > 0 && <button type="button" onClick={onOpenChanges}>查看当前变更</button>}
+              <button
+                type="button"
+                className="is-primary"
+                disabled={sending || sessionUnavailable}
+                onClick={() => void onContinue()}
+              >
+                {sending ? "正在继续…" : "继续执行"}
+              </button>
             </div>
           </div>
         )}

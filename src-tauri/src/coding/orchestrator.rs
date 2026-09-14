@@ -36,6 +36,15 @@ pub enum RepairOutcome {
     RoundsExhausted,
 }
 
+/// A user-controlled end to an Agent turn is recoverable and must never be
+/// presented as an implementation failure.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskInterruption {
+    Paused,
+    Stopped,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RepairRound {
@@ -293,6 +302,11 @@ pub enum OrchestratorEvent {
     /// The user asked the bound Agent to make another change after a terminal
     /// or review phase. Re-open the same task before any file can be written.
     FollowupStarted { requirement: String },
+    /// The user paused or stopped an in-flight Agent turn. The workspace is
+    /// synchronized before this event, but the round is not considered done.
+    ImplementationInterrupted { interruption: TaskInterruption },
+    /// Continue an interrupted round without discarding its execution graph.
+    InterruptedTaskResumed,
     /// The Agent finished writing code for this round.
     ImplementationFinished,
     /// The user explicitly re-runs checks from a settled phase.
@@ -327,6 +341,8 @@ pub fn apply(
         OrchestratorEvent::PlanSynchronized => "plan_progress",
         OrchestratorEvent::StartFailed { .. } => "agent_start_failed",
         OrchestratorEvent::FollowupStarted { .. } => "followup_started",
+        OrchestratorEvent::ImplementationInterrupted { .. } => "implementation_interrupted",
+        OrchestratorEvent::InterruptedTaskResumed => "interrupted_task_resumed",
         OrchestratorEvent::ImplementationFinished => "implementation_finished",
         OrchestratorEvent::VerificationStarted => "verification_started",
         OrchestratorEvent::VerificationFinished => "verification_finished",
@@ -376,6 +392,13 @@ pub fn apply(
             ) {
                 return Err("当前任务已离开执行阶段，已忽略过期的失败事件".into());
             }
+            for node in &mut task.task_nodes {
+                if node.status == TaskNodeStatus::Running {
+                    node.status = TaskNodeStatus::Failed;
+                    node.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                    node.failure = Some(reason.clone());
+                }
+            }
             PhaseDecision {
                 next_phase: TaskPhase::Blocked,
                 reason: if was_verifying {
@@ -387,8 +410,11 @@ pub fn apply(
             }
         }
         OrchestratorEvent::FollowupStarted { requirement } => {
-            if !matches!(task.phase, TaskPhase::Delivered | TaskPhase::Blocked) {
-                return Err("只有已完成或已阻塞的任务可以继续开发".into());
+            if !matches!(
+                task.phase,
+                TaskPhase::Paused | TaskPhase::Stopped | TaskPhase::Delivered | TaskPhase::Blocked
+            ) {
+                return Err("只有已暂停、已停止、已完成或已阻塞的任务可以继续开发".into());
             }
             if changeset::load(root, task_id).committed_hash.is_some() {
                 return Err("该任务已提交到 Git；请新建任务继续开发，避免交付记录失真".into());
@@ -432,6 +458,76 @@ pub fn apply(
             PhaseDecision {
                 next_phase: TaskPhase::Discovering,
                 reason: "已接收补充要求，Agent 正在重新分析影响并执行".into(),
+                blocker: None,
+            }
+        }
+        OrchestratorEvent::ImplementationInterrupted { interruption } => {
+            // Releases created before interruption-aware lifecycle reporting
+            // could incorrectly persist a user stop as this exact blocker.
+            // Repair only that known state; never mask a real blocker.
+            let legacy_stop_misclassification = task.phase == TaskPhase::Blocked
+                && task.phase_reason.as_deref() == Some("实现阶段结束但没有代码变更")
+                && task.blocker.as_deref()
+                    == Some(
+                        "Agent 结束了实现但没有写入任何文件。请检查是否只在会话里返回了示例代码。",
+                    );
+            if !matches!(
+                task.phase,
+                TaskPhase::Discovering | TaskPhase::Implementing | TaskPhase::Repairing
+            ) && !legacy_stop_misclassification
+            {
+                return Err("只有正在实现的任务可以报告暂停或停止".into());
+            }
+            for node in &mut task.task_nodes {
+                if node.status == TaskNodeStatus::Running {
+                    node.status = TaskNodeStatus::Pending;
+                    node.completed_at = None;
+                    node.failure = None;
+                }
+            }
+            match interruption {
+                TaskInterruption::Paused => PhaseDecision {
+                    next_phase: TaskPhase::Paused,
+                    reason: "任务已暂停，已保留会话上下文、执行计划和当前文件变更".into(),
+                    blocker: None,
+                },
+                TaskInterruption::Stopped => PhaseDecision {
+                    next_phase: TaskPhase::Stopped,
+                    reason: "任务已停止，已保留执行记录和当前工作区状态".into(),
+                    blocker: None,
+                },
+            }
+        }
+        OrchestratorEvent::InterruptedTaskResumed => {
+            if !matches!(task.phase, TaskPhase::Paused | TaskPhase::Stopped) {
+                return Err("只有已暂停或已停止的任务可以原地继续".into());
+            }
+            if changeset::load(root, task_id).committed_hash.is_some() {
+                return Err("该任务已提交到 Git；请新建任务继续开发，避免交付记录失真".into());
+            }
+            if !task
+                .task_nodes
+                .iter()
+                .any(|node| node.status == TaskNodeStatus::Running)
+            {
+                if let Some(node) = task.task_nodes.iter_mut().find(|node| {
+                    node.status == TaskNodeStatus::Pending
+                        && node.started_at.is_some()
+                        && node.completed_at.is_none()
+                }) {
+                    node.status = TaskNodeStatus::Running;
+                    node.failure = None;
+                } else {
+                    schedule_next_node(&mut task)?;
+                }
+            }
+            PhaseDecision {
+                next_phase: if task.plan_revision.is_some() {
+                    TaskPhase::Implementing
+                } else {
+                    TaskPhase::Discovering
+                },
+                reason: "已恢复任务，Agent 将从中断位置继续执行".into(),
                 blocker: None,
             }
         }
@@ -654,7 +750,7 @@ pub fn apply(
                             next_phase: TaskPhase::Blocked,
                             reason: "实现阶段结束但没有代码变更".into(),
                             blocker: Some(
-                                "Agent 结束了实现但没有写入任何文件。请检查是否只在会话里返回了示例代码。"
+                                "Agent 已结束本轮执行，但当前工作区与任务开始时一致。可能未写入代码，或产生的变更已被撤销或移除；请查看执行记录后补充要求。"
                                     .into(),
                             ),
                         }
@@ -680,7 +776,7 @@ pub fn apply(
                         next_phase: TaskPhase::Blocked,
                         reason: "实现阶段结束但没有代码变更".into(),
                         blocker: Some(
-                            "Agent 结束了实现但没有写入任何文件。请检查是否只在会话里返回了示例代码。"
+                            "Agent 已结束本轮执行，但当前工作区与任务开始时一致。可能未写入代码，或产生的变更已被撤销或移除；请查看执行记录后补充要求。"
                                 .into(),
                         ),
                     }
@@ -706,9 +802,13 @@ pub fn apply(
         OrchestratorEvent::VerificationStarted => {
             if !matches!(
                 task.phase,
-                TaskPhase::Verifying | TaskPhase::Delivered | TaskPhase::Blocked
+                TaskPhase::Verifying
+                    | TaskPhase::Paused
+                    | TaskPhase::Stopped
+                    | TaskPhase::Delivered
+                    | TaskPhase::Blocked
             ) {
-                return Err("只有验证中、待验收、已完成或已阻塞的任务可以启动验证".into());
+                return Err("只有验证中、已暂停、已停止、已完成或已阻塞的任务可以启动验证".into());
             }
             if changeset::load(root, task_id).committed_hash.is_some() {
                 return Err("该任务已提交到 Git，交付证据已封存".into());
@@ -835,6 +935,15 @@ pub fn apply(
                 node_evidence
             };
             criterion.satisfied = !criterion.evidence.is_empty();
+        }
+    } else if decision.next_phase == TaskPhase::Blocked {
+        // A terminal task must never retain a node that claims to be running.
+        for node in &mut task.task_nodes {
+            if node.status == TaskNodeStatus::Running {
+                node.status = TaskNodeStatus::Blocked;
+                node.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                node.failure = decision.blocker.clone();
+            }
         }
     }
     task.phase = decision.next_phase;
@@ -974,6 +1083,44 @@ pub async fn coding_task_begin_followup(
         root,
         task_id,
         OrchestratorEvent::FollowupStarted { requirement },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn coding_task_report_interrupted(
+    app: AppHandle,
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+    interruption: TaskInterruption,
+) -> Result<CodingTask, String> {
+    let root = access.require_workspace(&root)?;
+    // Preserve partial work before changing the phase. A stopped task remains
+    // reviewable and can be resumed or rolled back without guessing from chat.
+    changeset::sync_changes(&root, &task_id).await?;
+    apply_and_emit(
+        app,
+        root,
+        task_id,
+        OrchestratorEvent::ImplementationInterrupted { interruption },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn coding_task_resume(
+    app: AppHandle,
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+) -> Result<CodingTask, String> {
+    let root = access.require_workspace(&root)?;
+    apply_and_emit(
+        app,
+        root,
+        task_id,
+        OrchestratorEvent::InterruptedTaskResumed,
     )
     .await
 }
@@ -1587,6 +1734,85 @@ mod tests_v2 {
             .acceptance_criteria
             .iter()
             .any(|criterion| criterion.content == "add regression test"));
+    }
+
+    #[test]
+    fn user_stop_is_recoverable_and_resume_preserves_the_round() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = task::create_task(dir.path(), "task", "implement it").unwrap();
+        apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted,
+        )
+        .unwrap();
+
+        let (stopped, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationInterrupted {
+                interruption: TaskInterruption::Stopped,
+            },
+        )
+        .unwrap();
+        assert_eq!(decision.next_phase, TaskPhase::Stopped);
+        assert!(stopped.blocker.is_none());
+        assert_eq!(stopped.task_nodes[0].status, TaskNodeStatus::Pending);
+        assert_eq!(stopped.task_nodes[0].attempt, 1);
+
+        let (resumed, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::InterruptedTaskResumed,
+        )
+        .unwrap();
+        assert_eq!(decision.next_phase, TaskPhase::Discovering);
+        assert_eq!(resumed.task_nodes[0].status, TaskNodeStatus::Running);
+        assert_eq!(resumed.task_nodes[0].attempt, 1);
+        let kinds = task::execution_ledger(dir.path(), &task.id)
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+        assert!(kinds.contains(&"implementation_interrupted".to_string()));
+        assert!(kinds.contains(&"interrupted_task_resumed".to_string()));
+    }
+
+    #[test]
+    fn only_the_known_legacy_stop_blocker_can_be_repaired() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut task = task::create_task(dir.path(), "task", "implement it").unwrap();
+        task.phase = TaskPhase::Blocked;
+        task.phase_reason = Some("实现阶段结束但没有代码变更".into());
+        task.blocker =
+            Some("Agent 结束了实现但没有写入任何文件。请检查是否只在会话里返回了示例代码。".into());
+        task.task_nodes[0].status = TaskNodeStatus::Running;
+        task::save(dir.path(), &task).unwrap();
+
+        let (repaired, _) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationInterrupted {
+                interruption: TaskInterruption::Stopped,
+            },
+        )
+        .unwrap();
+        assert_eq!(repaired.phase, TaskPhase::Stopped);
+        assert!(repaired.blocker.is_none());
+
+        let mut real_blocker = repaired;
+        real_blocker.phase = TaskPhase::Blocked;
+        real_blocker.phase_reason = Some("执行图无法继续调度".into());
+        real_blocker.blocker = Some("循环依赖".into());
+        task::save(dir.path(), &real_blocker).unwrap();
+        let error = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationInterrupted {
+                interruption: TaskInterruption::Stopped,
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("正在实现"));
     }
 
     #[test]

@@ -21,6 +21,8 @@ pub enum TaskPhase {
     Verifying,
     Diagnosing,
     Repairing,
+    Paused,
+    Stopped,
     Delivered,
     Blocked,
 }
@@ -954,6 +956,17 @@ pub fn sync_runtime_plan(
 }
 
 pub fn delete_task(root: &Path, task_id: &str) -> Result<(), String> {
+    let task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
+    if matches!(
+        task.phase,
+        TaskPhase::Discovering
+            | TaskPhase::Implementing
+            | TaskPhase::Verifying
+            | TaskPhase::Diagnosing
+            | TaskPhase::Repairing
+    ) {
+        return Err("任务正在执行或验证，请先停止任务再删除".into());
+    }
     let dir = store::task_dir(root, task_id);
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|error| format!("删除任务目录失败：{error}"))?;
@@ -1274,6 +1287,23 @@ mod tests {
         delete_task(&root, &task.id).unwrap();
         assert!(list_tasks(&root).is_empty());
         assert!(!dir.exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_rejects_an_active_task_but_allows_a_stopped_task() {
+        let root = temp_root();
+        let mut task = create_task(&root, "执行中任务", "需求").unwrap();
+        task.phase = TaskPhase::Implementing;
+        save(&root, &task).unwrap();
+        let error = delete_task(&root, &task.id).unwrap_err();
+        assert!(error.contains("请先停止任务再删除"));
+        assert!(load(&root, &task.id).is_some());
+
+        task.phase = TaskPhase::Stopped;
+        save(&root, &task).unwrap();
+        delete_task(&root, &task.id).unwrap();
+        assert!(load(&root, &task.id).is_none());
         std::fs::remove_dir_all(&root).ok();
     }
 
