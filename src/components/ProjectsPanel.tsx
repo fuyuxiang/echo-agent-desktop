@@ -33,6 +33,7 @@ import { ProjectDetailView } from "./ProjectDetailView";
 import { projectAssetsRemoveAll } from "@/lib/agent-client";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useAppDialog } from "./AppDialog";
+import type { ModelOption } from "./ModelSelector";
 
 interface ProjectsPanelProps {
   cwd?: string;
@@ -40,12 +41,19 @@ interface ProjectsPanelProps {
   onToast?: (msg: string) => void;
   onStartProject?: (project: ProjectMeta) => void;
   /** Start a new conversation within a project (creates a real EchoAgent session). */
-  onStartProjectConversation?: (projectId: string, message: string) => Promise<string | undefined>;
+  onStartProjectConversation?: (
+    projectId: string,
+    message: string,
+    modelId?: string,
+  ) => Promise<string | undefined>;
   onOpenSession?: (sessionId: string, cwd?: string) => void;
   onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;
   onArchiveSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
   onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
   onOpenAutomation?: () => void;
+  models?: ModelOption[];
+  defaultModelId?: string;
+  onOpenModelSettings?: () => void;
 }
 
 const FROM_TEMPLATES = TEMPLATE_OPTIONS.filter((t) => t.id !== "custom");
@@ -63,7 +71,20 @@ interface ProjectMenuPosition {
   placement: "top" | "bottom";
 }
 
-export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConversation, onOpenSession, onRenameSession, onArchiveSession, onDeleteSession, onOpenAutomation }: ProjectsPanelProps) {
+export function ProjectsPanel({
+  cwd,
+  onToast,
+  onStartProject,
+  onStartProjectConversation,
+  onOpenSession,
+  onRenameSession,
+  onArchiveSession,
+  onDeleteSession,
+  onOpenAutomation,
+  models = [],
+  defaultModelId,
+  onOpenModelSettings,
+}: ProjectsPanelProps) {
   const projects = useProjectsStore((s) => s.projects);
   const persisting = useProjectsStore((s) => s.persisting);
   const persistError = useProjectsStore((s) => s.persistError);
@@ -108,6 +129,9 @@ export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConv
           onDeleteSession={onDeleteSession}
           picker={picker}
           onOpenAutomation={onOpenAutomation}
+          models={models}
+          defaultModelId={defaultModelId}
+          onOpenModelSettings={onOpenModelSettings}
         />
         {dialog}
       </>
@@ -240,6 +264,9 @@ export function ProjectsPanel({ cwd, onToast, onStartProject, onStartProjectConv
           }}
           cwd={cwd}
           picker={picker}
+          models={models}
+          defaultModelId={defaultModelId}
+          onOpenModelSettings={onOpenModelSettings}
         />
       )}
       {deleteTarget && (
@@ -498,13 +525,23 @@ function ProjectCard({
 interface CreatePreset { templateId?: string }
 
 function CreateProjectDialog({
-  preset, onCancel, onConfirm, cwd, picker,
+  preset,
+  onCancel,
+  onConfirm,
+  cwd,
+  picker,
+  models,
+  defaultModelId,
+  onOpenModelSettings,
 }: {
   preset: CreatePreset;
   onCancel: () => void;
   onConfirm: (saved: ProjectMeta) => void;
   cwd?: string;
   picker: { options: ProjectPickerOptions; loading: boolean; error: string | null };
+  models: ModelOption[];
+  defaultModelId?: string;
+  onOpenModelSettings?: () => void;
 }) {
   const add = useProjectsStore((s) => s.add);
   const initial = preset.templateId ? getTemplate(preset.templateId) : undefined;
@@ -514,10 +551,24 @@ function CreateProjectDialog({
   const [connectors, setConnectors] = useState<RefItem[]>(initial?.connectors ?? []);
   const [experts, setExperts] = useState<RefItem[]>(initial?.experts ?? []);
   const [skills, setSkills] = useState<RefItem[]>(initial?.skills ?? []);
+  const [modelId, setModelId] = useState<string | undefined>(() => {
+    if (defaultModelId && models.some((model) => model.id === defaultModelId)) {
+      return defaultModelId;
+    }
+    return models[0]?.id;
+  });
   const [pickerFor, setPickerFor] = useState<null | "connectors" | "experts" | "skills">(null);
   const [tplOpen, setTplOpen] = useState(false);
   const tplRef = useOutsideClose<HTMLDivElement>(tplOpen, () => setTplOpen(false));
   const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
+
+  useEffect(() => {
+    if (modelId && models.some((model) => model.id === modelId)) return;
+    const next = defaultModelId && models.some((model) => model.id === defaultModelId)
+      ? defaultModelId
+      : models[0]?.id;
+    setModelId(next);
+  }, [defaultModelId, modelId, models]);
 
   const applyTemplate = (id: string) => {
     const t = getTemplate(id);
@@ -545,6 +596,7 @@ function CreateProjectDialog({
       cwd,
       templateId,
       instructions: instructions.trim() || undefined,
+      defaultModelId: modelId,
       connectors, experts, skills,
     });
     onConfirm(saved);
@@ -578,6 +630,32 @@ function CreateProjectDialog({
               placeholder="请输入项目名称"
               data-modal-initial-focus
             />
+          </div>
+
+          <div className="create-colleague-field">
+            <label className="create-colleague-label" htmlFor="create-project-model">默认执行模型</label>
+            {models.length > 0 ? (
+              <select
+                id="create-project-model"
+                className="create-colleague-input proj-model-native-select"
+                value={modelId ?? ""}
+                onChange={(event) => setModelId(event.target.value || undefined)}
+              >
+                {models.map((model) => (
+                  <option key={model.id} value={model.id}>{model.label || model.id}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="proj-model-empty">
+                <span>尚未配置可用模型，项目可以先创建，但执行前需要完成配置。</span>
+                {onOpenModelSettings && (
+                  <button type="button" onClick={onOpenModelSettings}>前往设置模型</button>
+                )}
+              </div>
+            )}
+            <span className="proj-model-field-hint">
+              项目中新建的对话、计划和任务将默认使用此模型，之后可随时调整。
+            </span>
           </div>
 
           <div className="create-colleague-field">

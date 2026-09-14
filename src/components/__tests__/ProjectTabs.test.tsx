@@ -25,6 +25,10 @@ const project: ProjectMeta = {
   plans: [{ id: "plan1", title: "完成发布检查", status: "pending" }],
   tasks: [{ id: "task1", title: "修复阻断问题", scope: "personal", source: "manual", status: "pending" }],
 };
+const models = [
+  { id: "model-a", label: "模型 A" },
+  { id: "model-b", label: "模型 B" },
+];
 
 describe("项目计划/任务与 Agent 会话闭环", () => {
   beforeEach(() => {
@@ -36,21 +40,64 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
 
   it("计划交给 Agent 后进入进行中并关联会话", async () => {
     const onRun = vi.fn().mockResolvedValue("session-plan");
-    render(<PlanTab projectId="p1" onRun={onRun} />);
+    render(<PlanTab projectId="p1" models={models} defaultModelId="model-a" onRun={onRun} />);
     fireEvent.click(screen.getByRole("button", { name: "交给 Agent" }));
-    await waitFor(() => expect(onRun).toHaveBeenCalledWith(expect.stringContaining("完成发布检查")));
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith(
+      expect.stringContaining("完成发布检查"),
+      "model-a",
+    ));
     await waitFor(() => expect(useProjectsStore.getState().projects[0].plans[0]).toMatchObject({
-      status: "in_progress", sessionId: "session-plan",
+      status: "in_progress", sessionId: "session-plan", modelId: "model-a",
     }));
   });
 
   it("任务支持 Agent 执行和人工状态流转", async () => {
     const onRun = vi.fn().mockResolvedValue("session-task");
-    render(<TaskTab projectId="p1" onRun={onRun} />);
+    render(<TaskTab projectId="p1" models={models} defaultModelId="model-a" onRun={onRun} />);
+    fireEvent.change(screen.getByRole("combobox", { name: /选择任务模型/ }), {
+      target: { value: "model-b" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "交给 Agent" }));
-    await waitFor(() => expect(useProjectsStore.getState().projects[0].tasks[0].sessionId).toBe("session-task"));
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith(
+      expect.stringContaining("修复阻断问题"),
+      "model-b",
+    ));
+    await waitFor(() => expect(useProjectsStore.getState().projects[0].tasks[0]).toMatchObject({
+      sessionId: "session-task",
+      modelId: "model-b",
+    }));
+    expect(screen.queryByRole("button", { name: "交给 Agent" })).toBeNull();
+    expect(screen.getByText(/模型 B/)).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: /调整任务状态/ }), { target: { value: "completed" } });
     expect(useProjectsStore.getState().projects[0].tasks[0].status).toBe("completed");
+  });
+
+  it("没有可用模型时不允许任务提前进入进行中", () => {
+    const onRun = vi.fn();
+    render(<TaskTab projectId="p1" onRun={onRun} />);
+
+    expect(screen.getByRole("combobox", { name: /选择任务模型/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "交给 Agent" })).toBeDisabled();
+    expect(onRun).not.toHaveBeenCalled();
+    expect(useProjectsStore.getState().projects[0].tasks[0].status).toBe("pending");
+  });
+
+  it("启动任务期间锁定模型与操作，避免重复创建会话", async () => {
+    let finish!: (sessionId: string) => void;
+    const onRun = vi.fn().mockImplementation(() => new Promise<string>((resolve) => {
+      finish = resolve;
+    }));
+    render(<TaskTab projectId="p1" models={models} defaultModelId="model-a" onRun={onRun} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "交给 Agent" }));
+    const running = screen.getByRole("button", { name: "启动中…" });
+    expect(running).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: /选择任务模型/ })).toBeDisabled();
+    fireEvent.click(running);
+    expect(onRun).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish("session-task"));
+    await waitFor(() => expect(useProjectsStore.getState().projects[0].tasks[0].sessionId).toBe("session-task"));
   });
 
   it("新建待办使用应用内输入对话框", async () => {
@@ -223,6 +270,8 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
         project={project}
         onBack={vi.fn()}
         onStartConversation={onStartConversation}
+        models={models}
+        defaultModelId="model-a"
         picker={{ options: { connectors: [], experts: [], skills: [] }, loading: false, error: null }}
       />,
     );
@@ -231,7 +280,53 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("消息尚未发送"));
+    expect(onStartConversation).toHaveBeenCalledWith("p1", "请生成发布清单", "model-a");
     expect(composer).toHaveValue("请生成发布清单");
+  });
+
+  it("项目对话允许显式切换模型并持久化为项目默认值", async () => {
+    const onStartConversation = vi.fn().mockResolvedValue("session-chat");
+    render(
+      <ProjectDetailView
+        project={project}
+        onBack={vi.fn()}
+        onStartConversation={onStartConversation}
+        models={models}
+        defaultModelId="model-a"
+        picker={{ options: { connectors: [], experts: [], skills: [] }, loading: false, error: null }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /选择项目对话模型：模型 A/ }));
+    fireEvent.click(screen.getByRole("option", { name: /模型 B/ }));
+    fireEvent.change(screen.getByPlaceholderText("输入消息..."), { target: { value: "执行发布" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(onStartConversation).toHaveBeenCalledWith(
+      "p1",
+      "执行发布",
+      "model-b",
+    ));
+    expect(useProjectsStore.getState().projects[0].defaultModelId).toBe("model-b");
+  });
+
+  it("项目默认模型被删除后不静默回退到其他模型", () => {
+    useProjectsStore.setState({
+      projects: [{ ...structuredClone(project), defaultModelId: "removed-model" }],
+    });
+    render(
+      <ProjectDetailView
+        project={project}
+        onBack={vi.fn()}
+        onStartConversation={vi.fn()}
+        models={models}
+        defaultModelId="model-a"
+        picker={{ options: { connectors: [], experts: [], skills: [] }, loading: false, error: null }}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("原项目模型“removed-model”已不可用");
+    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
   });
 
   it("项目指令在关闭配置时再持久化，避免每次按键写盘", () => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, Check } from "lucide-react";
 
 /**
@@ -18,16 +18,23 @@ export interface ModelOption {
 export function ModelSelector({
   modelId,
   modelLoading = false,
+  disabled = false,
   models,
   onModelChange,
+  ariaLabel,
 }: {
   /** Currently selected model id (displayed on the trigger). */
   modelId?: string;
   modelLoading?: boolean;
+  disabled?: boolean;
   models: ModelOption[];
   onModelChange: (id: string) => void;
+  /** Distinguishes selectors when a page exposes project and task model choices together. */
+  ariaLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const reactId = useId();
+  const listboxId = `model-selector-${reactId.replace(/:/g, "")}`;
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -106,12 +113,13 @@ export function ModelSelector({
           setOpen((o) => !o);
         }}
         type="button"
-        disabled={modelLoading || !hasModels}
+        disabled={disabled || modelLoading || !hasModels}
         aria-busy={modelLoading}
+        aria-label={ariaLabel ? `${ariaLabel}：${triggerLabel}` : undefined}
         title={!hasModels ? "请先在设置中配置模型" : undefined}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-controls={open ? "composer-model-listbox" : undefined}
+        aria-controls={open ? listboxId : undefined}
         ref={triggerRef}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -126,9 +134,9 @@ export function ModelSelector({
       {open && !modelLoading && (
         <ul
           className="model-selector__menu"
-          id="composer-model-listbox"
+          id={listboxId}
           role="listbox"
-          aria-label="选择模型"
+          aria-label={ariaLabel ?? "选择模型"}
           onKeyDown={handleMenuKeyDown}
         >
           {models.length === 0 && (

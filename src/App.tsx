@@ -940,6 +940,16 @@ function Shell() {
     openSettings("model");
     return undefined;
   };
+  const requireExplicitProjectModel = (requestedModelId: string): string | undefined => {
+    if (!init?.auth.ready) {
+      showToast(runtimeSetupHint, 5000);
+      openSettings("model");
+      return undefined;
+    }
+    if (isConfiguredModelId(models, requestedModelId)) return requestedModelId;
+    showToast(`所选模型“${requestedModelId}”已被删除或停用，请重新选择`, 5000);
+    return undefined;
+  };
   const handleNavigate = (label: string) => {
     if (label === "用量统计") {
       openSettings("usage");
@@ -1948,7 +1958,9 @@ function Shell() {
 
   // 进入本地项目：在项目关联目录中新建会话，并注入项目说明作为种子消息。
   const handleStartProject = async (project: ProjectMeta) => {
-    const modelId = requireConfiguredModel();
+    const modelId = project.defaultModelId
+      ? requireExplicitProjectModel(project.defaultModelId)
+      : requireConfiguredModel();
     if (!modelId) return;
     if (!ensureQuotaAllowsSend()) return;
     let startedSessionId: string | undefined;
@@ -1957,6 +1969,9 @@ function Shell() {
       const cwd = project.cwd || newSessionTargetCwd;
       const sessionId = await agentNewSession(cwd, modelId);
       startedSessionId = sessionId;
+      if (!project.defaultModelId) {
+        useProjectsStore.getState().updateConfig(project.id, { defaultModelId: modelId });
+      }
       setCurrentModelId(modelId);
       sessionsStore.getState().setCurrent(sessionId);
       sessionsStore.getState().upsert({
@@ -1973,6 +1988,7 @@ function Shell() {
         sessionId,
         title: project.name,
         createdAt: new Date().toISOString(),
+        modelId,
       });
       const seed = `开始「${project.name}」项目，请先根据项目配置确认目标、约束和下一步。`;
       const promptId = createAgentPromptId();
@@ -1995,10 +2011,22 @@ function Shell() {
 
   // 在项目中新建对话（从侧栏 + 按钮或项目详情页 Composer 触发）。
   // 创建 EchoAgent 会话 → 注册到项目 conversations → 打开 ChatView → 可选发送首条消息。
-  const handleStartProjectConversation = async (projectId: string, message?: string) => {
+  const handleStartProjectConversation = async (
+    projectId: string,
+    message?: string,
+    requestedModelId?: string,
+  ) => {
     const project = useProjectsStore.getState().projects.find((p) => p.id === projectId);
     if (!project) return;
-    const modelId = requireConfiguredModel();
+    const persistedModelId = requestedModelId || project.defaultModelId;
+    let modelId: string | undefined;
+    if (persistedModelId) {
+      modelId = requireExplicitProjectModel(persistedModelId);
+    } else if (message) {
+      showToast("请先在项目中选择本次任务使用的模型");
+    } else {
+      modelId = requireConfiguredModel();
+    }
     if (!modelId) return;
     if (message && !ensureQuotaAllowsSend()) return;
     let startedSessionId: string | undefined;
@@ -2006,6 +2034,9 @@ function Shell() {
       const cwd = project.cwd || newSessionTargetCwd;
       const sessionId = await agentNewSession(cwd, modelId);
       startedSessionId = sessionId;
+      if (!project.defaultModelId && !requestedModelId) {
+        useProjectsStore.getState().updateConfig(projectId, { defaultModelId: modelId });
+      }
 
       const title = message ? deriveTitle(message) : `${project.name} 对话`;
 
@@ -2014,6 +2045,7 @@ function Shell() {
         sessionId,
         title,
         createdAt: new Date().toISOString(),
+        modelId,
       });
 
       // Navigate to chat view.
@@ -2215,6 +2247,8 @@ function Shell() {
                   codingApiReady={!!init.auth.ready && !!newSessionModelId}
                   codingModels={models}
                   codingModelId={activeSessionModelId ?? newSessionModelId}
+                  projectModels={models}
+                  projectDefaultModelId={newSessionModelId}
                   onOpenModelSettings={() => openSettings("model")}
                   onExitCodingWorkspace={() => {
                     setPlaceholderView(null);

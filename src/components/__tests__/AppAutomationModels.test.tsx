@@ -12,13 +12,33 @@ vi.mock("@/stores/projects-store", async (original) => ({
 vi.mock("../ThemeProvider", () => ({ ThemeProvider: ({ children }: { children: ReactNode }) => children }));
 vi.mock("../TitleBar", () => ({ TitleBar: () => null }));
 vi.mock("../HomePage", () => ({ HomePage: () => <div>首页</div> }));
-vi.mock("../PlaceholderPage", () => ({ PlaceholderPage: () => null }));
+vi.mock("../PlaceholderPage", () => ({ PlaceholderPage: ({
+  label,
+  onStartProjectConversation,
+}: {
+  label: string;
+  onStartProjectConversation?: (projectId: string, message: string, modelId?: string) => Promise<string | undefined>;
+}) => label === "项目" ? (
+  <button onClick={() => void onStartProjectConversation?.("project-1", "执行项目任务", "model-a")}>
+    执行项目任务
+  </button>
+) : null }));
 vi.mock("../TasksPanel", () => ({ TasksPanel: () => null }));
 vi.mock("../SecondarySidebar", () => ({ SecondarySidebar: () => null }));
 vi.mock("../TopbarActions", () => ({ TopbarActions: () => null }));
 vi.mock("../FolderTrustDialog", () => ({ FolderTrustDialog: () => null }));
-vi.mock("../Sidebar", () => ({ Sidebar: ({ onSelect }: { onSelect: (id: string) => void }) => (
-  <><button onClick={() => onSelect("auto-1")}>打开自动化</button><button onClick={() => onSelect("other")}>打开其他任务</button></>
+vi.mock("../Sidebar", () => ({ Sidebar: ({
+  onSelect,
+  onNavigate,
+}: {
+  onSelect: (id: string) => void;
+  onNavigate: (label: string) => void;
+}) => (
+  <>
+    <button onClick={() => onSelect("auto-1")}>打开自动化</button>
+    <button onClick={() => onSelect("other")}>打开其他任务</button>
+    <button onClick={() => onNavigate("项目")}>打开项目页</button>
+  </>
 ) }));
 // Keep the real shell, event handlers and stores; expose its composer contract.
 vi.mock("../ChatView", () => ({ ChatView: (props: ComponentProps<typeof import("../ChatView").ChatView>) => (
@@ -33,7 +53,9 @@ vi.mock("@/lib/agent-client", async (original) => ({
   ...await original<object>(),
   agentInit: vi.fn(), agentAuthStatus: vi.fn(), providersList: vi.fn(),
   agentListAllSessions: vi.fn(async () => []), agentListWorkspaces: vi.fn(async () => []),
-  agentLoadSession: vi.fn(), agentSend: vi.fn(async () => {}), agentSetModel: vi.fn(async () => {}),
+  agentLoadSession: vi.fn(), agentNewSession: vi.fn(async () => "project-session"),
+  agentSend: vi.fn(async () => {}), agentSetModel: vi.fn(async () => {}),
+  projectsSave: vi.fn(async () => {}),
   internalReload: vi.fn(async () => {}), subscribeAgentEvents: vi.fn(),
 }));
 
@@ -41,6 +63,7 @@ import App from "@/App";
 import * as client from "@/lib/agent-client";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { useSessionStore } from "@/stores/session-store";
+import { useProjectsStore } from "@/stores/projects-store";
 
 let handlers: Parameters<typeof client.subscribeAgentEvents>[0];
 const auth = { ready: true, runtimeReady: true, synchronized: true, providers: ["model-a", "model-b"], runtimeModels: ["model-a", "model-b"], defaultModelId: "model-b" };
@@ -59,6 +82,10 @@ beforeEach(() => {
   localStorage.clear();
   useSessionsStore.setState(useSessionsStore.getInitialState());
   useSessionStore.setState(useSessionStore.getInitialState());
+  useProjectsStore.setState({
+    ...useProjectsStore.getInitialState(),
+    projects: [],
+  });
   vi.mocked(client.agentInit).mockResolvedValue({ ok: true, cwd: "/workspace", auth } as never);
   vi.mocked(client.agentAuthStatus).mockResolvedValue(auth);
   vi.mocked(client.providersList).mockResolvedValue({ providers: [], models: [{ modelId: "model-a", name: "模型 A", providerId: "p" }, { modelId: "model-b", name: "模型 B", providerId: "p" }] } as never);
@@ -164,5 +191,30 @@ describe("自动化会话模型同步", () => {
     // A duplicate creation event must not undo a subsequent user model switch.
     created("model-a");
     expect(screen.getByTestId("model")).toHaveTextContent("model-b");
+  });
+
+  it("项目任务将用户指定的模型原样传入新会话并留存执行凭证", async () => {
+    useProjectsStore.setState({
+      projects: [{
+        id: "project-1",
+        name: "测试项目",
+        cwd: "/workspace",
+        defaultModelId: "model-b",
+        createdAt: new Date().toISOString(),
+        connectors: [], experts: [], skills: [], plans: [], tasks: [], assets: [], members: [], conversations: [],
+      }],
+    });
+    await start();
+    fireEvent.click(screen.getByText("打开项目页"));
+    fireEvent.click(await screen.findByRole("button", { name: "执行项目任务" }));
+
+    await waitFor(() => expect(client.agentNewSession).toHaveBeenCalledWith("/workspace", "model-a"));
+    await waitFor(() => expect(useProjectsStore.getState().projects[0].conversations[0]).toMatchObject({
+      sessionId: "project-session",
+      modelId: "model-a",
+    }));
+    expect(useSessionsStore.getState().independent).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: "project-session", currentModelId: "model-a" }),
+    ]));
   });
 });
