@@ -6,12 +6,30 @@ import {
   readPersistedSessionControls,
   sessionControlStatus,
 } from "@/lib/session-control";
+import { persistSessionStatus } from "@/lib/session-status-persistence";
 
 /**
  * Sentinel draft keys for sessions that don't have a real sessionId yet.
  * Used when the user is typing on HomePage before a session has been created.
  */
 export const HOME_DRAFT_KEY = "__home__";
+
+// Status writes cross an async IPC boundary. Give every transition for one
+// session a monotonic timestamp so a slower earlier request cannot overwrite a
+// newer terminal state when native commands complete out of order.
+const lastStatusTimestampBySession = new Map<string, number>();
+
+function withLifecycleTimestamp<T extends Partial<SessionSummary> & { sessionId: string }>(
+  incoming: T,
+): T {
+  if (incoming.status === undefined) return incoming;
+  const requested = incoming.updatedAt ? new Date(incoming.updatedAt).getTime() : Date.now();
+  const safeRequested = Number.isFinite(requested) ? requested : Date.now();
+  const previous = lastStatusTimestampBySession.get(incoming.sessionId) ?? 0;
+  const timestamp = Math.max(safeRequested, previous + 1);
+  lastStatusTimestampBySession.set(incoming.sessionId, timestamp);
+  return { ...incoming, updatedAt: new Date(timestamp).toISOString() };
+}
 
 /**
  * Session catalog and sidebar presentation state.
@@ -184,7 +202,11 @@ export const useSessionsStore = create<SessionsState>((set) => ({
       return { drafts: next };
     }),
 
-  upsert: (s) =>
+  upsert: (incoming) => {
+    const s = withLifecycleTimestamp(incoming);
+    if (s.status !== undefined && s.updatedAt) {
+      persistSessionStatus(s.sessionId, s.status, s.updatedAt);
+    }
     set((state) => {
       const id = s.sessionId;
       const pending = state.pendingSessionPatches[id];
@@ -231,7 +253,8 @@ export const useSessionsStore = create<SessionsState>((set) => ({
         workspaces,
         pendingSessionPatches,
       };
-    }),
+    });
+  },
 
   remove: (id, explicitCwd) =>
     set((state) => {

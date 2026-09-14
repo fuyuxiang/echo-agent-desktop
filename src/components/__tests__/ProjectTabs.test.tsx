@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ActivityTab, AssetsTab, PlanTab, TaskTab } from "../project-tabs";
 import { ProjectDetailView } from "../ProjectDetailView";
 import { useProjectsStore, type ProjectMeta } from "@/stores/projects-store";
@@ -128,6 +128,53 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
     render(<ActivityTab projectId="p1" onOpenSession={onOpenSession} />);
     fireEvent.click(screen.getByText("历史会话"));
     expect(onOpenSession).toHaveBeenCalledWith("existing", "/workspace");
+  });
+
+  it("项目动态展示可信执行状态并支持待处理筛选与优先排序", () => {
+    useProjectsStore.setState({
+      projects: [{
+        ...structuredClone(project),
+        conversations: [
+          { sessionId: "done", title: "已结束对话", createdAt: "2026-09-14T10:00:00Z" },
+          { sessionId: "failed", title: "失败对话", createdAt: "2026-09-14T09:00:00Z" },
+          { sessionId: "answer", title: "待回答对话", createdAt: "2026-09-14T08:00:00Z" },
+          { sessionId: "running", title: "执行中对话", createdAt: "2026-09-14T07:00:00Z" },
+        ],
+      }],
+    });
+    useSessionsStore.setState({
+      independent: [
+        { sessionId: "done", title: "已结束对话", cwd: "/workspace", status: "completed", updatedAt: "2026-09-14T10:00:00Z" },
+        { sessionId: "failed", title: "失败对话", cwd: "/workspace", status: "failed", updatedAt: "2026-09-14T09:00:00Z" },
+        { sessionId: "answer", title: "待回答对话", cwd: "/workspace", status: "awaiting_answer", updatedAt: "2026-09-14T08:00:00Z" },
+        { sessionId: "running", title: "执行中对话", cwd: "/workspace", status: "working", updatedAt: "2026-09-14T07:00:00Z" },
+      ],
+    });
+
+    render(<ActivityTab projectId="p1" onOpenSession={vi.fn()} />);
+
+    expect(screen.getByLabelText(/执行状态：等待回答/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/执行状态：执行失败/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/执行状态：执行中/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/执行状态：本轮已结束/)).toHaveAttribute(
+      "title",
+      expect.stringContaining("不代表项目任务已完成"),
+    );
+    const list = screen.getByRole("list", { name: "最近项目对话" });
+    expect(within(list).getAllByRole("listitem")[0]).toHaveTextContent("待回答对话");
+
+    fireEvent.click(screen.getByRole("button", { name: /需处理，2 个对话/ }));
+    expect(screen.getByText("待回答对话")).toBeInTheDocument();
+    expect(screen.getByText("失败对话")).toBeInTheDocument();
+    expect(screen.queryByText("已结束对话")).toBeNull();
+    expect(screen.queryByText("执行中对话")).toBeNull();
+  });
+
+  it("项目动态不会把缺少持久化状态的旧记录伪装成已完成", () => {
+    render(<ActivityTab projectId="p1" onOpenSession={vi.fn()} />);
+    expect(screen.getByLabelText(/执行状态：历史状态未知/)).toBeInTheDocument();
+    expect(screen.getByText(/不等同于项目任务进度/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/执行状态：本轮已结束/)).toBeNull();
   });
 
   it("归档会话不会在项目动态中伪装成可打开项", () => {

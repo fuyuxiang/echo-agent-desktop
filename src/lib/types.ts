@@ -359,7 +359,9 @@ export interface SessionSummary {
   expertName?: string;
   /** Expert local avatar path (EchoAgent-only state). */
   expertAvatar?: string;
-  /** Lifecycle status for sidebar task filtering. Absent = "completed". */
+  /** Lifecycle status for task filtering. Absent means a legacy record whose
+   *  terminal state was not captured; consumers must not present it as proven
+   *  task completion. */
   status?: SessionStatus;
 }
 

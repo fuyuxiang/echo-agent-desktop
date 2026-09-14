@@ -59,6 +59,9 @@ pub struct SessionSummary {
     pub expert_avatar: Option<String>,
     /// Permission mode owned by this task. Legacy sessions default to Ask.
     pub permission_mode: String,
+    /// Last renderer-observed turn lifecycle status (EchoAgent-only state).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 /// Subset of EchoAgent's `Summary` struct (see `echo-agent-runtime/src/session/persistence.rs:790`).
@@ -310,16 +313,35 @@ fn to_session_summary(
         expert_name: None,
         expert_avatar: None,
         permission_mode: "ask".into(),
+        status: None,
     })
+}
+
+fn later_timestamp(current: Option<&str>, candidate: &str) -> bool {
+    let Ok(candidate) = chrono::DateTime::parse_from_rfc3339(candidate) else {
+        return false;
+    };
+    current
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .is_none_or(|current| candidate > current)
 }
 
 fn apply_metadata_and_sort(out: &mut Vec<SessionSummary>, include_archived: bool) {
     // Merge EchoAgent-only pinned/archived state (sidecar file, since EchoAgent's
     // Summary has no such fields and would clobber any we tried to add).
     let state = crate::meta::read_state();
+    apply_metadata_from_state(out, include_archived, &state);
+}
+
+fn apply_metadata_from_state(
+    out: &mut Vec<SessionSummary>,
+    include_archived: bool,
+    state: &crate::meta::EchoAgentState,
+) {
     let pinned = state.pinned_set();
     let archived = state.archived_set();
     let experts = state.expert_map();
+    let statuses = state.session_status_map();
     // Keep the historical default (hide archived), while allowing the archive
     // view to request the same authoritative rows with `archived: true`.
     apply_archive_visibility(out, &archived, include_archived);
@@ -341,6 +363,12 @@ fn apply_metadata_and_sort(out: &mut Vec<SessionSummary>, include_archived: bool
             .get(&entry.session_id)
             .cloned()
             .unwrap_or_else(|| "ask".into());
+        if let Some(lifecycle) = statuses.get(&entry.session_id) {
+            entry.status = Some(lifecycle.status.clone());
+            if later_timestamp(entry.updated_at.as_deref(), &lifecycle.updated_at) {
+                entry.updated_at = Some(lifecycle.updated_at.clone());
+            }
+        }
     }
     // Sort: pinned first, then by updated_at descending (falling back to the
     // session_id, which is a UUIDv7 — roughly chronological).
@@ -625,10 +653,10 @@ fn agent_sessions_root() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_archive_visibility, authoritative_session_id, display_title,
-        list_all_sessions_from_root, read_summary_file, recover_title_from_updates, summary_cwd,
-        to_session_summary, workspace_dir_matches_request, SessionSummary, SummaryFile,
-        MAX_SUMMARY_BYTES, MAX_TITLE_CHARS,
+        apply_archive_visibility, apply_metadata_from_state, authoritative_session_id,
+        display_title, list_all_sessions_from_root, read_summary_file, recover_title_from_updates,
+        summary_cwd, to_session_summary, workspace_dir_matches_request, SessionSummary,
+        SummaryFile, MAX_SUMMARY_BYTES, MAX_TITLE_CHARS,
     };
 
     fn summary(json: &str) -> SummaryFile {
@@ -649,6 +677,7 @@ mod tests {
             expert_name: None,
             expert_avatar: None,
             permission_mode: "ask".into(),
+            status: None,
         }
     }
 
@@ -664,6 +693,27 @@ mod tests {
         apply_archive_visibility(&mut all_rows, &archived, true);
         assert_eq!(all_rows.len(), 2);
         assert_eq!(all_rows[1].archived, Some(true));
+    }
+
+    #[test]
+    fn lifecycle_metadata_is_merged_and_advances_catalog_activity_time() {
+        let mut state = crate::meta::EchoAgentState::default();
+        state.session_statuses.insert(
+            "active".into(),
+            crate::meta::SessionLifecycle {
+                status: "awaiting_permission".into(),
+                updated_at: "2026-09-14T09:00:00Z".into(),
+            },
+        );
+        let mut rows = vec![SessionSummary {
+            updated_at: Some("2026-09-14T08:00:00Z".into()),
+            ..session("active")
+        }];
+
+        apply_metadata_from_state(&mut rows, false, &state);
+
+        assert_eq!(rows[0].status.as_deref(), Some("awaiting_permission"));
+        assert_eq!(rows[0].updated_at.as_deref(), Some("2026-09-14T09:00:00Z"));
     }
 
     #[test]

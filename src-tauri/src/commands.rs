@@ -860,6 +860,14 @@ pub async fn agent_init(
         tracing::warn!("active Runtime permission mode is stale; restarting instead of reusing");
     }
 
+    // A genuinely new Runtime cannot still be executing work owned by the
+    // previous process. Reconcile volatile persisted badges before exposing
+    // the catalog; a renderer reload that reuses the live Runtime returned
+    // above and deliberately keeps its in-flight states.
+    if let Err(error) = crate::meta::mark_transient_statuses_stopped() {
+        tracing::warn!(%error, "failed to reconcile persisted session lifecycle states");
+    }
+
     let generation = state.begin_init_generation();
 
     // A renderer/runtime restart invalidates every outstanding reverse
@@ -1874,8 +1882,8 @@ pub async fn agent_delete_session(
     state.forget_session_workspace(&session_id);
     crate::org_mcp::forget_session_selection(&session_id);
     crate::permission_config::forget_session_permission_mode(&session_id);
-    if let Err(error) = crate::meta::clear_permission_mode(&session_id) {
-        tracing::warn!(%error, %session_id, "session deleted but permission metadata cleanup failed");
+    if let Err(error) = crate::meta::clear_session_metadata(&session_id) {
+        tracing::warn!(%error, %session_id, "session deleted but sidecar metadata cleanup failed");
     }
     Ok(SessionDeleteResult {
         memory_summaries_deleted,
@@ -1944,6 +1952,29 @@ pub async fn agent_session_usage(
 #[tauri::command]
 pub fn agent_set_session_archived(session_id: String, archived: bool) -> Result<bool, String> {
     crate::meta::set_archived(&session_id, archived)
+}
+
+/// Persist the latest turn lifecycle state for task lists and project activity.
+/// Only a backend-known session may write metadata; observation timestamps are
+/// validated and future-bounded before they can affect catalog ordering.
+#[tauri::command]
+pub fn agent_set_session_status(
+    state: State<'_, AppState>,
+    session_id: String,
+    status: String,
+    updated_at: String,
+) -> Result<(), String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    state.session_workspace(&session_id)?;
+    let observed_at = chrono::DateTime::parse_from_rfc3339(&updated_at)
+        .map_err(|_| "会话状态时间无效".to_string())?
+        .with_timezone(&chrono::Utc);
+    if observed_at > chrono::Utc::now() + chrono::Duration::minutes(5) {
+        return Err("会话状态时间超出允许范围".into());
+    }
+    crate::meta::set_session_status(&session_id, &status, &updated_at)
 }
 
 /// Bind an expert to a session (EchoAgent-only state). Returns `true` on success.

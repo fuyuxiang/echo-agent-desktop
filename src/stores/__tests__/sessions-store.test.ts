@@ -1,8 +1,13 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+vi.mock("@/lib/session-status-persistence", () => ({
+  persistSessionStatus: vi.fn(),
+}));
 import {
   useSessionsStore,
   HOME_DRAFT_KEY,
 } from "../sessions-store";
+import { persistSessionStatus } from "@/lib/session-status-persistence";
 
 /**
  * Per-session Composer draft storage. The UI uses `drafts[sessionId]` (or a
@@ -15,6 +20,7 @@ import {
  */
 describe("sessions-store drafts", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     localStorage.removeItem("echoagent.session-controls.v1");
     // Reset the whole store between tests so drafts don't bleed across cases.
     useSessionsStore.setState({
@@ -46,6 +52,29 @@ describe("sessions-store drafts", () => {
     ]);
     expect(useSessionsStore.getState().independent.map((entry) => entry.status))
       .toEqual(["paused", "stopped"]);
+  });
+
+  it("状态迁移更新时间并交给原生侧持久化", () => {
+    useSessionsStore.getState().setIndependent([
+      {
+        sessionId: "running",
+        title: "执行任务",
+        cwd: "/workspace",
+        updatedAt: "2020-01-01T00:00:00.000Z",
+      },
+    ]);
+
+    useSessionsStore.getState().upsert({ sessionId: "running", status: "working" });
+    const updated = useSessionsStore.getState().independent[0];
+    expect(updated.status).toBe("working");
+    expect(new Date(updated.updatedAt ?? 0).getTime()).toBeGreaterThan(
+      new Date("2020-01-01T00:00:00.000Z").getTime(),
+    );
+    expect(persistSessionStatus).toHaveBeenCalledWith(
+      "running",
+      "working",
+      updated.updatedAt,
+    );
   });
 
   it("setDraft 写入后可通过 drafts[id] 读回", () => {

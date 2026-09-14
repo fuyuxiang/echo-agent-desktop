@@ -295,6 +295,7 @@ pub fn run() {
             commands::agent_delete_session,
             commands::agent_set_session_pinned,
             commands::agent_set_session_archived,
+            commands::agent_set_session_status,
             commands::agent_set_session_expert,
             commands::agent_clear_session_expert,
             // signed desktop application updates (private organization CA)

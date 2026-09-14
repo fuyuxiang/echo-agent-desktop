@@ -161,7 +161,10 @@ function getDateStart(date: string | null): number | null {
 
 /** "working" family: planning/running sessions also match 进行中. */
 function statusMatches(sessionStatus: SessionStatus | undefined, filter: SessionStatus): boolean {
-  const s = sessionStatus ?? "completed";
+  // Legacy rows without persisted lifecycle evidence remain visible under
+  // "全部状态", but must not be presented as proven completion.
+  if (!sessionStatus) return false;
+  const s = sessionStatus;
   if (filter === "working") return s === "working" || s === "planning";
   if (filter === "paused") return s === "pausing" || s === "paused";
   if (filter === "stopped") return s === "stopping" || s === "stopped";
