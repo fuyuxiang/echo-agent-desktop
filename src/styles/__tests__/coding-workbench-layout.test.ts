@@ -16,4 +16,17 @@ describe("coding workbench grid contract", () => {
     expect(css).toMatch(/\.coding-bottom\s*\{[^}]*grid-column:\s*2 \/ -1;[^}]*grid-row:\s*3 \/ 4;/s);
     expect(css).toMatch(/\.coding-workbench__status\s*\{[^}]*grid-column:\s*1 \/ -1;[^}]*grid-row:\s*4 \/ 5;/s);
   });
+
+  it("keeps execution cards at natural height and scrolls the transcript viewport", () => {
+    expect(css).toMatch(
+      /\.coding-agent__stream-shell\s*\{[^}]*flex:\s*1;[^}]*min-height:\s*0;/s,
+    );
+    expect(css).toMatch(
+      /\.coding-agent__stream\s*\{[^}]*height:\s*100%;[^}]*overflow-y:\s*auto;[^}]*scrollbar-gutter:\s*stable;/s,
+    );
+    expect(css).toMatch(
+      /\.coding-agent__stream-content\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*min-height:\s*100%;/s,
+    );
+    expect(css).toMatch(/\.coding-agent__stream-content\s*>\s*\*\s*\{[^}]*flex:\s*none;/s);
+  });
 });

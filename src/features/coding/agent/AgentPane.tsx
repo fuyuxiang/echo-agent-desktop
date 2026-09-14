@@ -14,6 +14,7 @@ import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
 import { PermissionInlineCard } from "@/components/PermissionDialog";
 import { PermissionPicker } from "@/components/PermissionPicker";
 import { QuestionInlineCard } from "@/components/QuestionInlineCard";
+import { useStickToBottom } from "@/components/use-stick-to-bottom";
 import type { ChatMessage } from "@/stores/session-store";
 
 import { describePhase } from "../lib/phase";
@@ -77,6 +78,16 @@ export function AgentPane({
     : "未检测到可运行的自动检查";
   const completedNodes = task.taskNodes.filter((node) => node.status === "success").length;
   const activeNode = task.taskNodes.find((node) => node.status === "running");
+  const {
+    scrollRef,
+    contentRef,
+    following,
+    scrollToBottom,
+  } = useStickToBottom({
+    contentVersion: messages,
+    streaming,
+    sessionId,
+  });
 
   const submit = async () => {
     if (!followup.trim() || sending || streaming) return;
@@ -168,38 +179,54 @@ export function AgentPane({
           </div>
         )}
 
-        <div className="coding-agent__stream">
-          {messages.length === 0 && sessionId && phase.active && (
-            <div className="coding-row">Agent 正在准备工程上下文…</div>
-          )}
-          {messages.length === 0 && !sessionId && (
-            <div className="coding-row">Agent 会话未启动。</div>
-          )}
-          {messages.length === 0 && sessionId && !phase.active && (
-            <div className="coding-row">当前任务暂无对话记录。</div>
-          )}
-          {messages.map((entry) =>
-            entry.role === "user" ? (
-              <div className="coding-agent__user" key={entry.id}>
-                {entry.parts.map((part, index) =>
-                  part.kind === "text" ? (
-                    <Markdown key={index} complete>{part.text}</Markdown>
-                  ) : null,
-                )}
-              </div>
-            ) : (
-              <ExecutionProcess
-                key={entry.id}
-                parts={entry.parts}
-                active={!entry.complete}
-                startedAt={entry.startedAt}
-                completedAt={entry.completedAt}
-                stopReason={entry.stopReason}
-                cancelTrigger={entry.cancelTrigger}
-                cancellationCategory={entry.cancellationCategory}
-                agentResult={entry.agentResult}
-              />
-            ),
+        <div className="coding-agent__stream-shell">
+          <div className="coding-agent__stream" ref={scrollRef} aria-label="Agent 执行消息">
+            <div className="coding-agent__stream-content" ref={contentRef}>
+              {messages.length === 0 && sessionId && phase.active && (
+                <div className="coding-row">Agent 正在准备工程上下文…</div>
+              )}
+              {messages.length === 0 && !sessionId && (
+                <div className="coding-row">Agent 会话未启动。</div>
+              )}
+              {messages.length === 0 && sessionId && !phase.active && (
+                <div className="coding-row">当前任务暂无对话记录。</div>
+              )}
+              {messages.map((entry) =>
+                entry.role === "user" ? (
+                  <div className="coding-agent__user" key={entry.id}>
+                    {entry.parts.map((part, index) =>
+                      part.kind === "text" ? (
+                        <Markdown key={index} complete>{part.text}</Markdown>
+                      ) : null,
+                    )}
+                  </div>
+                ) : (
+                  <ExecutionProcess
+                    key={entry.id}
+                    parts={entry.parts}
+                    active={!entry.complete}
+                    startedAt={entry.startedAt}
+                    completedAt={entry.completedAt}
+                    stopReason={entry.stopReason}
+                    cancelTrigger={entry.cancelTrigger}
+                    cancellationCategory={entry.cancellationCategory}
+                    agentResult={entry.agentResult}
+                  />
+                ),
+              )}
+            </div>
+          </div>
+          {streaming && !following && (
+            <button
+              type="button"
+              className="chatview__jump-latest coding-agent__jump-latest"
+              onClick={scrollToBottom}
+              aria-label="回到最新消息并恢复自动跟随"
+              title="回到最新消息并恢复自动跟随"
+            >
+              <span aria-hidden="true">↓</span>
+              回到最新
+            </button>
           )}
         </div>
 
