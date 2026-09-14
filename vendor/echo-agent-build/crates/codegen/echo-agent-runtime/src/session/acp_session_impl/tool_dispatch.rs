@@ -407,7 +407,14 @@ pub(super) fn build_tool_parse_error_message(
     err: &echo_agent_tool_runtime::ToolError,
     raw_arguments: &str,
 ) -> String {
-    let mut msg = format!("Failed to parse arguments for tool `{function_name}`: {err}");
+    let mut msg = if function_name.trim().is_empty() {
+        format!(
+            "The model provider returned a tool call without a function name, so it could not be dispatched: {err}\n\
+             Retry the call using exactly one of the advertised tool names."
+        )
+    } else {
+        format!("Failed to parse arguments for tool `{function_name}`: {err}")
+    };
 
     if raw_arguments.is_empty() {
         return msg;

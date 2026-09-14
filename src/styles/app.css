@@ -3109,6 +3109,13 @@ button.knowledge-trace__item:hover {
 .tool-side-panel__nav--collapsed {
   width: 36px !important;
 }
+.tool-side-panel__nav--collapsed .tool-side-panel__nav-header {
+  justify-content: center;
+  padding: 0 4px;
+}
+.tool-side-panel__nav-expand {
+  flex: none;
+}
 .tool-side-panel__nav-header {
   display: flex;
   align-items: center;

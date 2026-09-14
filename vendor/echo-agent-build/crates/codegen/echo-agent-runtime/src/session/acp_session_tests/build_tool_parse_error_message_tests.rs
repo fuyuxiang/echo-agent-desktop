@@ -75,6 +75,22 @@ fn test_empty_arguments_no_extra_content() {
     assert!(!msg.contains("invalid JSON"));
 }
 
+#[test]
+fn test_missing_tool_name_has_actionable_provider_error() {
+    let err = echo_agent_tool_runtime::ToolError::not_found(
+        echo_agent_tool_protocol::ToolId::new("unknown").unwrap(),
+        "Tool not found: ".to_string(),
+    );
+    let args = r#"{"target_file":"README.md"}"#;
+
+    let msg = build_tool_parse_error_message("", &err, args);
+
+    assert!(msg.contains("without a function name"));
+    assert!(msg.contains("advertised tool names"));
+    assert!(msg.contains(args));
+    assert!(!msg.contains("tool ``"));
+}
+
 /// Arguments longer than MAX_ARGS_IN_ERROR must be truncated with a marker.
 #[test]
 fn test_long_arguments_are_truncated() {

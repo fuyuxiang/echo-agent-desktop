@@ -473,7 +473,11 @@ pub struct ChatCompletionResponse {
 pub struct ChatChoice {
     pub index: u32,
     pub message: ChatResponseMessage,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_finish_reason"
+    )]
     pub finish_reason: Option<FinishReason>,
 }
 
@@ -485,6 +489,28 @@ pub enum FinishReason {
     ToolCalls,
     ContentFilter,
     FunctionCall,
+}
+
+/// Some OpenAI-compatible providers emit an empty string in intermediate
+/// chunks instead of `null`/omitting `finish_reason`. Treat that as unfinished
+/// while preserving strict validation for every non-empty value.
+fn deserialize_optional_finish_reason<'de, D>(
+    deserializer: D,
+) -> Result<Option<FinishReason>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    let Some(value) = value.map(|value| value.trim().to_owned()) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+
+    serde_json::from_value(Value::String(value))
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -597,7 +623,11 @@ pub struct ChatCompletionChunk {
 pub struct ChatChunkChoice {
     pub index: u32,
     pub delta: ChatChunkDelta,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_finish_reason"
+    )]
     pub finish_reason: Option<FinishReason>,
 }
 
@@ -631,7 +661,11 @@ pub struct ToolCallDelta {
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ToolCallFunctionDelta {
     /// Only present in the first chunk for this tool call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::serde_helpers::empty_string_as_none"
+    )]
     pub name: Option<String>,
     /// Argument fragment (may be empty or partial JSON).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1514,6 +1548,39 @@ mod tests {
         assert!(call.id.is_empty());
         assert!(call.function.name.is_empty());
         assert_eq!(call.function.arguments, r#"{"query":"news"}"#);
+    }
+
+    #[test]
+    fn streaming_tool_call_treats_empty_function_name_as_omitted() {
+        let delta: ToolCallFunctionDelta =
+            serde_json::from_str(r#"{"name":"","arguments":"{\"target_file\":\"README.md\"}"}"#)
+                .unwrap();
+
+        assert_eq!(delta.name, None);
+        assert_eq!(
+            delta.arguments.as_deref(),
+            Some(r#"{"target_file":"README.md"}"#)
+        );
+    }
+
+    #[test]
+    fn streaming_choice_treats_empty_finish_reason_as_unfinished() {
+        let empty: ChatChunkChoice =
+            serde_json::from_str(r#"{"index":0,"delta":{},"finish_reason":""}"#).unwrap();
+        assert_eq!(empty.finish_reason, None);
+
+        let whitespace: ChatChunkChoice =
+            serde_json::from_str(r#"{"index":0,"delta":{},"finish_reason":"  "}"#).unwrap();
+        assert_eq!(whitespace.finish_reason, None);
+
+        let completed: ChatChunkChoice =
+            serde_json::from_str(r#"{"index":0,"delta":{},"finish_reason":"tool_calls"}"#).unwrap();
+        assert_eq!(completed.finish_reason, Some(FinishReason::ToolCalls));
+
+        let invalid = serde_json::from_str::<ChatChunkChoice>(
+            r#"{"index":0,"delta":{},"finish_reason":"unexpected"}"#,
+        );
+        assert!(invalid.is_err());
     }
 
     /// Regression test: cloning `Box<dyn TraceContext>` must not infinitely recurse.

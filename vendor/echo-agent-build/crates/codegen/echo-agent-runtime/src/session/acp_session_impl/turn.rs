@@ -143,6 +143,81 @@ fn user_echo_mode(prompt_id: &str, input_origin: &InputOrigin) -> UserEchoMode {
     }
 }
 
+/// Return whether the supplied arguments are structurally distinctive for an
+/// advertised input schema.
+///
+/// This is intentionally stricter than ordinary JSON Schema validation:
+/// object schemas allow unknown properties by default, and Serde likewise
+/// ignores them unless `deny_unknown_fields` is present.  Either behaviour is
+/// correct during normal dispatch, but unsafe while recovering a missing tool
+/// name: `{"target_file":"..."}` would otherwise also "match" every empty-input
+/// tool.  For recovery, an unknown key is accepted only when the schema
+/// explicitly declares `additionalProperties` support.
+fn arguments_match_advertised_schema(
+    arguments: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> bool {
+    if schema == &serde_json::Value::Bool(true) {
+        return true;
+    }
+    let Some(schema_object) = schema.as_object() else {
+        return false;
+    };
+
+    if let Some(branches) = schema_object
+        .get("oneOf")
+        .and_then(serde_json::Value::as_array)
+    {
+        return branches
+            .iter()
+            .any(|branch| arguments_match_advertised_schema(arguments, branch));
+    }
+    if let Some(branches) = schema_object
+        .get("anyOf")
+        .and_then(serde_json::Value::as_array)
+    {
+        return branches
+            .iter()
+            .any(|branch| arguments_match_advertised_schema(arguments, branch));
+    }
+    if let Some(branches) = schema_object
+        .get("allOf")
+        .and_then(serde_json::Value::as_array)
+    {
+        return branches
+            .iter()
+            .all(|branch| arguments_match_advertised_schema(arguments, branch));
+    }
+
+    let Some(argument_object) = arguments.as_object() else {
+        return false;
+    };
+    let required = schema_object
+        .get("required")
+        .and_then(serde_json::Value::as_array);
+    if required.is_some_and(|required| {
+        required.iter().any(|field| {
+            field
+                .as_str()
+                .is_some_and(|field| !argument_object.contains_key(field))
+        })
+    }) {
+        return false;
+    }
+
+    let properties = schema_object
+        .get("properties")
+        .and_then(serde_json::Value::as_object);
+    let explicitly_allows_additional = matches!(
+        schema_object.get("additionalProperties"),
+        Some(serde_json::Value::Bool(true) | serde_json::Value::Object(_))
+    );
+    argument_object.keys().all(|key| {
+        properties.is_some_and(|properties| properties.contains_key(key))
+            || explicitly_allows_additional
+    })
+}
+
 /// Some OpenAI-compatible providers occasionally omit `function.name` while
 /// preserving the JSON arguments (and may omit the call id as well).  The
 /// request still contained the complete tool catalogue, so recover only when
@@ -229,7 +304,11 @@ impl SessionActor {
                 let mut matches = Vec::new();
                 for definition in tool_definitions {
                     let candidate = definition.function.name.as_str();
-                    if bridge.try_parse(candidate, arguments.clone()).await.is_ok() {
+                    if arguments_match_advertised_schema(
+                        &arguments,
+                        &definition.function.parameters,
+                    ) && bridge.try_parse(candidate, arguments.clone()).await.is_ok()
+                    {
                         matches.push(candidate);
                     }
                 }
@@ -3472,8 +3551,88 @@ mod user_echo_broadcast_tests {
 }
 #[cfg(test)]
 mod provider_tool_call_compat_tests {
-    use super::provider_tool_name_hint;
+    use super::{arguments_match_advertised_schema, provider_tool_name_hint};
     use std::collections::HashSet;
+
+    #[test]
+    fn missing_name_recovery_rejects_empty_input_tools_for_read_file_arguments() {
+        let arguments = serde_json::json!({"target_file": "README.md"});
+        // Demonstrate the original ambiguity: normal Serde dispatch accepts
+        // unknown fields for an empty struct, so parse success alone cannot
+        // identify the intended tool.
+        assert!(
+            serde_json::from_value::<
+                echo_agent_tools::implementations::echo_agent_build::read_file::ReadFileInput,
+            >(arguments.clone())
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<
+                echo_agent_tools::implementations::echo_agent_build::enter_plan_mode::EnterPlanModeInput,
+            >(arguments.clone())
+            .is_ok()
+        );
+        let read_file_schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "target_file": {"type": "string"},
+                "offset": {"type": "integer"}
+            },
+            "required": ["target_file"]
+        });
+        let empty_input_schema = serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        });
+
+        assert!(arguments_match_advertised_schema(
+            &arguments,
+            &read_file_schema
+        ));
+        assert!(!arguments_match_advertised_schema(
+            &arguments,
+            &empty_input_schema
+        ));
+    }
+
+    #[test]
+    fn missing_name_recovery_requires_all_required_fields_and_known_keys() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": {"type": "string"},
+                "timeout": {"type": "integer"}
+            },
+            "required": ["command"]
+        });
+
+        assert!(!arguments_match_advertised_schema(
+            &serde_json::json!({"timeout": 10}),
+            &schema
+        ));
+        assert!(!arguments_match_advertised_schema(
+            &serde_json::json!({"command": "pwd", "target_file": "README.md"}),
+            &schema
+        ));
+        assert!(arguments_match_advertised_schema(
+            &serde_json::json!({"command": "pwd", "timeout": 10}),
+            &schema
+        ));
+    }
+
+    #[test]
+    fn missing_name_recovery_honors_explicit_additional_properties() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": true
+        });
+        assert!(arguments_match_advertised_schema(
+            &serde_json::json!({"dynamic": "value"}),
+            &schema
+        ));
+    }
 
     #[test]
     fn recognizes_meta_tool_payloads_when_provider_omits_the_name() {

@@ -205,14 +205,30 @@ pub fn stream_chat_completions<'a>(
                     let mut name_for_event: Option<String> = None;
                     let mut args_for_event: Option<String> = None;
 
-                    if let Some(id) = tc_delta.id {
+                    if let Some(id) = tc_delta.id.filter(|id| !id.trim().is_empty()) {
                         entry.0 = id.clone();
                         id_for_event = Some(id);
                     }
                     if let Some(func) = tc_delta.function {
-                        if let Some(name) = func.name {
-                            entry.1 = name.clone();
-                            name_for_event = Some(name);
+                        if let Some(name) = func.name.filter(|name| !name.trim().is_empty()) {
+                            // OpenAI-compatible providers are inconsistent here: some repeat
+                            // function.name in later argument chunks, and some send an empty
+                            // string instead of omitting it. The first non-blank name is the
+                            // authoritative one. Never let a malformed trailing delta erase or
+                            // replace it; doing so leaves valid arguments attached to tool `""`.
+                            if entry.1.is_empty() {
+                                entry.1 = name.clone();
+                                name_for_event = Some(name);
+                            } else if entry.1 == name {
+                                name_for_event = Some(name);
+                            } else {
+                                tracing::warn!(
+                                    tool_index = tc_delta.index,
+                                    retained_name = %entry.1,
+                                    ignored_name = %name,
+                                    "provider changed function.name across tool-call deltas; retaining the first non-blank name"
+                                );
+                            }
                         }
                         if let Some(args) = func.arguments {
                             entry.2.push_str(&args);
@@ -578,6 +594,67 @@ mod tests {
                 assert_eq!(calls[0].arguments.as_ref(), "{\"x\":1}");
                 // Tool calls force ToolCalls stop reason.
                 assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn trailing_blank_tool_name_does_not_erase_first_non_blank_name() {
+        let chunk1 = make_chunk(vec![ChatChunkDelta {
+            role: None,
+            content: None,
+            reasoning_content: None,
+            tool_calls: vec![ChunkToolCallDelta {
+                index: 0,
+                id: Some("call_read".into()),
+                kind: Some("function".into()),
+                function: Some(ToolCallFunctionDelta {
+                    name: Some("read_file".into()),
+                    arguments: Some("{\"target_file\":".into()),
+                }),
+            }],
+            tool_call_id: None,
+        }]);
+        let chunk2 = make_chunk(vec![ChatChunkDelta {
+            role: None,
+            content: None,
+            reasoning_content: None,
+            tool_calls: vec![ChunkToolCallDelta {
+                index: 0,
+                id: Some(String::new()),
+                kind: None,
+                function: Some(ToolCallFunctionDelta {
+                    name: Some(String::new()),
+                    arguments: Some("\"README.md\"}".into()),
+                }),
+            }],
+            tool_call_id: None,
+        }]);
+
+        let raw = stream::iter::<Vec<Result<ChatCompletionChunk, SamplingError>>>(vec![
+            Ok(chunk1),
+            Ok(chunk2),
+        ])
+        .boxed();
+        let events = collect(stream_chat_completions(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].id.as_ref(), "call_read");
+                assert_eq!(calls[0].name, "read_file");
+                assert_eq!(
+                    calls[0].arguments.as_ref(),
+                    r#"{"target_file":"README.md"}"#
+                );
             }
             other => panic!("expected Completed, got {other:?}"),
         }
