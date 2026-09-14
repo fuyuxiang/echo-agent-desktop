@@ -159,6 +159,8 @@ export interface DetectedCommand {
   kind: VerificationKind;
   command: string;
   label: string;
+  /** Plan-authored commands require an explicit, task-scoped user grant. */
+  requiresApproval?: boolean;
 }
 
 export interface VerificationRecord {

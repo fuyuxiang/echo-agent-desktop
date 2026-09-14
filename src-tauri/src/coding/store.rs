@@ -25,8 +25,31 @@ pub fn workspace_dir(root: &Path) -> PathBuf {
         .join(hash)
 }
 
+/// Validate a renderer-provided task key before using it as a path component.
+/// UUIDs are used in production; the wider safe set preserves older fixtures.
+pub fn validate_task_id(task_id: &str) -> Result<(), String> {
+    if task_id.is_empty()
+        || task_id.len() > 100
+        || task_id == "."
+        || task_id == ".."
+        || !task_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err("任务标识无效".into());
+    }
+    Ok(())
+}
+
 pub fn task_dir(root: &Path, task_id: &str) -> PathBuf {
-    workspace_dir(root).join(task_id)
+    // Remain path-safe if a future internal call site forgets to validate. IPC
+    // entry points still validate explicitly so users receive a useful error.
+    let component = if validate_task_id(task_id).is_ok() {
+        task_id
+    } else {
+        ".invalid-task-id"
+    };
+    workspace_dir(root).join(component)
 }
 
 pub fn tasks_index_path(root: &Path) -> PathBuf {
@@ -40,6 +63,7 @@ pub fn tasks_index_path(root: &Path) -> PathBuf {
 pub struct IndexPaths {
     pub symbols: PathBuf,
     pub file_index: PathBuf,
+    pub symbol_overrides: PathBuf,
 }
 
 pub fn index_paths(root: &Path) -> IndexPaths {
@@ -47,6 +71,7 @@ pub fn index_paths(root: &Path) -> IndexPaths {
     IndexPaths {
         symbols: base.join("symbols.jsonl"),
         file_index: base.join("file_index.json"),
+        symbol_overrides: base.join("symbol-overrides"),
     }
 }
 
@@ -121,6 +146,121 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     result
 }
 
+pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    ensure_parent(path)?;
+    let staging = path.with_extension(format!("tmp-{}", uuid::Uuid::now_v7()));
+    let result = std::fs::write(&staging, bytes)
+        .map_err(|error| format!("写入临时文件失败：{error}"))
+        .and_then(|()| crate::paths::replace_file_atomically(&staging, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&staging);
+    }
+    result
+}
+
+/// Update a JSON document while retaining its exclusive lock for the complete
+/// read/modify/write transaction. Separate `read_json` and `write_json` calls
+/// cannot provide this lost-update protection.
+pub fn update_json<T, R>(
+    path: &Path,
+    update: impl FnOnce(&mut T) -> Result<R, String>,
+) -> Result<R, String>
+where
+    T: DeserializeOwned + Serialize + Default,
+{
+    ensure_parent(path)?;
+    let lock = open_lock(path).ok_or_else(|| "无法创建持久化锁".to_string())?;
+    lock.lock_exclusive()
+        .map_err(|error| format!("无法锁定持久化文件：{error}"))?;
+    let result = (|| {
+        let mut value = match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|error| format!("持久化文件格式无效，已停止覆盖：{error}"))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => T::default(),
+            Err(error) => return Err(format!("读取持久化文件失败：{error}")),
+        };
+        let output = update(&mut value)?;
+        let bytes =
+            serde_json::to_vec_pretty(&value).map_err(|error| format!("序列化失败：{error}"))?;
+        let staging = path.with_extension(format!("tmp-{}", uuid::Uuid::now_v7()));
+        if let Err(error) = std::fs::write(&staging, bytes)
+            .map_err(|error| format!("写入临时文件失败：{error}"))
+            .and_then(|()| crate::paths::replace_file_atomically(&staging, path))
+        {
+            let _ = std::fs::remove_file(&staging);
+            return Err(error);
+        }
+        Ok(output)
+    })();
+    let _ = lock.unlock();
+    result
+}
+
+/// Serialize every state transition for one task. The callback form keeps the
+/// transaction guard scoped above the individual task/index file locks.
+pub fn with_task_transaction<T>(
+    root: &Path,
+    task_id: &str,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    validate_task_id(task_id)?;
+    let lock_path = workspace_dir(root)
+        .join(".task-locks")
+        .join(format!("{task_id}.lock"));
+    ensure_parent(&lock_path)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|error| format!("无法创建任务事务锁：{error}"))?;
+    lock.lock_exclusive()
+        .map_err(|error| format!("无法锁定任务状态：{error}"))?;
+    let result = operation();
+    let _ = lock.unlock();
+    result
+}
+
+fn with_index_lock<T>(
+    root: &Path,
+    exclusive: bool,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let lock_path = workspace_dir(root).join("index.transaction.lock");
+    ensure_parent(&lock_path)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|error| format!("无法创建索引事务锁：{error}"))?;
+    if exclusive {
+        lock.lock_exclusive()
+    } else {
+        lock.lock_shared()
+    }
+    .map_err(|error| format!("无法锁定符号索引：{error}"))?;
+    let result = operation();
+    let _ = lock.unlock();
+    result
+}
+
+pub fn with_index_read<T>(
+    root: &Path,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    with_index_lock(root, false, operation)
+}
+
+pub fn with_index_transaction<T>(
+    root: &Path,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    with_index_lock(root, true, operation)
+}
+
 pub fn append_jsonl<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     use std::io::Write;
     ensure_parent(path)?;
@@ -169,6 +309,53 @@ mod tests {
         let b = workspace_dir(Path::new("/tmp/repo-b"));
         assert_ne!(a, b);
         assert_eq!(a, workspace_dir(Path::new("/tmp/repo-a")));
+    }
+
+    #[test]
+    fn task_id_never_escapes_workspace_storage() {
+        let root = Path::new("/tmp/example-workspace");
+        let base = workspace_dir(root);
+        assert!(validate_task_id("task-1").is_ok());
+        assert!(validate_task_id("../other/task").is_err());
+        assert!(validate_task_id("/tmp/task").is_err());
+        assert_eq!(
+            task_dir(root, "../other/task"),
+            base.join(".invalid-task-id")
+        );
+    }
+
+    #[test]
+    fn update_json_keeps_read_modify_write_under_one_lock() {
+        let dir = std::env::temp_dir().join(format!("coding-store-{}", uuid::Uuid::now_v7()));
+        let path = dir.join("counter.json");
+        update_json::<u32, _>(&path, |value| {
+            *value += 1;
+            Ok(())
+        })
+        .unwrap();
+        update_json::<u32, _>(&path, |value| {
+            *value += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(read_json::<u32>(&path), Some(2));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn update_json_never_replaces_a_corrupt_document_with_defaults() {
+        let dir = std::env::temp_dir().join(format!("coding-store-{}", uuid::Uuid::now_v7()));
+        let path = dir.join("state.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, b"{broken").unwrap();
+        let error = update_json::<Vec<String>, _>(&path, |values| {
+            values.push("new".into());
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.contains("已停止覆盖"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"{broken");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -101,6 +101,53 @@ fn latest_per_command(records: &[VerificationRecord]) -> Vec<&VerificationRecord
     latest
 }
 
+/// Bind acceptance rows only to evidence traceable to the current revision.
+/// Plan rows require every command declared by their own node; high-level user
+/// requirements require an explicit, revision-bound confirmation.
+fn bind_acceptance_evidence(
+    task: &mut CodingTask,
+    change_set: &changeset::ChangeSet,
+    verification_records: &[VerificationRecord],
+) {
+    let passed_records = latest_per_command(verification_records)
+        .into_iter()
+        .filter(|record| record.status == VerificationStatus::Passed)
+        .collect::<Vec<_>>();
+    let commands_by_node = task
+        .task_nodes
+        .iter()
+        .map(|node| (node.plan_key.clone(), node.verification_commands.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+    let content_revision = change_set.content_revision();
+    for criterion in &mut task.acceptance_criteria {
+        let node_key = criterion.id.split_once(":acceptance:").map(|(key, _)| key);
+        let Some(commands) = node_key.and_then(|key| commands_by_node.get(key)) else {
+            let current_confirmation = criterion.satisfied
+                && criterion.evidence.iter().any(|evidence| {
+                    evidence.contains("用户于") && evidence.contains(&content_revision)
+                });
+            if !current_confirmation {
+                criterion.satisfied = false;
+                criterion.evidence.clear();
+            }
+            continue;
+        };
+        let matching = passed_records
+            .iter()
+            .filter(|record| commands.contains(&record.command))
+            .collect::<Vec<_>>();
+        criterion.satisfied = !commands.is_empty() && matching.len() == commands.len();
+        criterion.evidence = if criterion.satisfied {
+            matching
+                .iter()
+                .map(|record| format!("{} 通过（退出码 0）", record.command))
+                .collect()
+        } else {
+            Vec::new()
+        };
+    }
+}
+
 fn missing_detected_commands(root: &Path, records: &[VerificationRecord]) -> Vec<String> {
     let completed: HashSet<&str> = records
         .iter()
@@ -326,7 +373,7 @@ struct PhaseChangedPayload {
 }
 
 /// Apply one event and persist the resulting phase.
-pub fn apply(
+fn apply_unlocked(
     root: &Path,
     task_id: &str,
     event: OrchestratorEvent,
@@ -903,39 +950,7 @@ pub fn apply(
                 .get_or_insert_with(|| chrono::Utc::now().to_rfc3339());
         }
         let verification_records = verification::list_records(root, task_id);
-        let passed_records = latest_per_command(&verification_records)
-            .into_iter()
-            .filter(|record| record.status == VerificationStatus::Passed)
-            .collect::<Vec<_>>();
-        let evidence = passed_records
-            .iter()
-            .map(|record| format!("{} 通过（退出码 0）", record.command))
-            .collect::<Vec<_>>();
-        let commands_by_node = task
-            .task_nodes
-            .iter()
-            .map(|node| (node.plan_key.clone(), node.verification_commands.clone()))
-            .collect::<std::collections::HashMap<_, _>>();
-        let structured_plan = task.plan_revision.is_some();
-        for criterion in &mut task.acceptance_criteria {
-            let node_key = criterion.id.split_once(":acceptance:").map(|(key, _)| key);
-            let node_evidence = node_key
-                .and_then(|key| commands_by_node.get(key))
-                .map(|commands| {
-                    passed_records
-                        .iter()
-                        .filter(|record| commands.contains(&record.command))
-                        .map(|record| format!("{} 通过（退出码 0）", record.command))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_else(|| evidence.clone());
-            criterion.evidence = if node_evidence.is_empty() && !structured_plan {
-                vec!["当前工程未检测到可运行的自动检查；已完成变更同步与结构校验".into()]
-            } else {
-                node_evidence
-            };
-            criterion.satisfied = !criterion.evidence.is_empty();
-        }
+        bind_acceptance_evidence(&mut task, &change_set, &verification_records);
     } else if decision.next_phase == TaskPhase::Blocked {
         // A terminal task must never retain a node that claims to be running.
         for node in &mut task.task_nodes {
@@ -974,6 +989,14 @@ pub fn apply(
         );
     }
     Ok((persisted, decision))
+}
+
+pub fn apply(
+    root: &Path,
+    task_id: &str,
+    event: OrchestratorEvent,
+) -> Result<(CodingTask, PhaseDecision), String> {
+    store::with_task_transaction(root, task_id, || apply_unlocked(root, task_id, event))
 }
 
 async fn apply_and_emit(
@@ -1643,6 +1666,41 @@ mod tests_v2 {
             ["pnpm test -- unit"]
         );
         assert!(missing_planned_commands(&task, &[record("pnpm test -- unit", 0)]).is_empty());
+    }
+
+    #[test]
+    fn acceptance_evidence_is_specific_and_revision_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut coding_task = task::create_task(dir.path(), "task", "implement it").unwrap();
+        coding_task.task_nodes[0].plan_key = "T1".into();
+        coding_task.task_nodes[0].verification_commands = vec!["pnpm test -- unit".into()];
+        coding_task.acceptance_criteria[0].satisfied = true;
+        coding_task.acceptance_criteria[0].evidence = vec!["generic evidence".into()];
+        coding_task.acceptance_criteria.push(AcceptanceCriterion {
+            id: "T1:acceptance:0".into(),
+            content: "unit behavior works".into(),
+            satisfied: false,
+            evidence: Vec::new(),
+        });
+        let set = changeset::load(dir.path(), &coding_task.id);
+
+        bind_acceptance_evidence(&mut coding_task, &set, &[record("pnpm test -- unit", 0)]);
+
+        assert!(!coding_task.acceptance_criteria[0].satisfied);
+        assert!(coding_task.acceptance_criteria[0].evidence.is_empty());
+        assert!(coding_task.acceptance_criteria[1].satisfied);
+        assert_eq!(
+            coding_task.acceptance_criteria[1].evidence,
+            ["pnpm test -- unit 通过（退出码 0）"]
+        );
+
+        let revision = set.content_revision();
+        coding_task.acceptance_criteria[0].satisfied = true;
+        coding_task.acceptance_criteria[0].evidence = vec![format!(
+            "用户于 2026-09-14T00:00:00Z 在交付报告中确认已满足（内容版本 {revision}）"
+        )];
+        bind_acceptance_evidence(&mut coding_task, &set, &[record("pnpm test -- unit", 0)]);
+        assert!(coding_task.acceptance_criteria[0].satisfied);
     }
 
     #[test]

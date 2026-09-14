@@ -15,7 +15,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
-use crate::coding::store;
+use crate::coding::{store, task};
 use crate::coding_workspace::{high_risk_command_reason, strip_ansi, CodingProcesses};
 use crate::shell_fs::FilesystemAccess;
 
@@ -325,6 +325,20 @@ pub fn detect_commands(root: &Path) -> Vec<DetectedCommand> {
     detected
 }
 
+fn is_manifest_verification(root: &Path, command: &str) -> bool {
+    detect_commands(root)
+        .iter()
+        .any(|detected| detected.command == command)
+}
+
+fn is_planned_verification(task: &task::CodingTask, command: &str) -> bool {
+    task.task_nodes.iter().any(|node| {
+        node.verification_commands
+            .iter()
+            .any(|planned| planned == command)
+    })
+}
+
 fn capture(text: &str, pattern: &str, group: usize) -> Option<u32> {
     regex::Regex::new(pattern)
         .ok()?
@@ -506,13 +520,24 @@ pub async fn run(
     command: String,
     timeout_secs: Option<u64>,
     requested_run_id: Option<String>,
+    approval_token: Option<String>,
 ) -> Result<VerificationRecord, String> {
+    store::validate_task_id(&task_id)?;
+    let coding_task = task::load(&root, &task_id).ok_or_else(|| "任务不存在".to_string())?;
     let command_text = command.trim().to_string();
-    if command_text.is_empty() {
+    if command_text.is_empty() || command_text.len() > 4_096 {
         return Err("命令不能为空".into());
     }
     if let Some(reason) = high_risk_command_reason(&command_text, &root) {
         return Err(format!("命令被原生安全策略拒绝：{reason}"));
+    }
+    if is_planned_verification(&coding_task, &command_text)
+        || !is_manifest_verification(&root, &command_text)
+    {
+        let token = approval_token
+            .as_deref()
+            .ok_or_else(|| "该命令来自执行计划，运行前需要用户确认".to_string())?;
+        processes.consume_verification_approval(token, &root, &task_id, &command_text)?;
     }
     let run_id = requested_run_id
         .filter(|value| {
@@ -546,6 +571,7 @@ pub async fn run(
     #[cfg(unix)]
     builder.process_group(0);
 
+    let started_at = chrono::Utc::now().to_rfc3339();
     let started = Instant::now();
     let mut child = builder.spawn().map_err(|error| {
         processes.unregister(&run_id);
@@ -613,7 +639,7 @@ pub async fn run(
     let (stderr_buffer, stderr_dropped) = stderr_task.await.unwrap_or_default();
     let stdout_text = label_dropped(stdout_buffer, stdout_dropped);
     let stderr_text = label_dropped(stderr_buffer, stderr_dropped);
-    let record = record_from_parts(
+    let mut record = record_from_parts(
         &task_id,
         kind,
         &command_text,
@@ -624,6 +650,7 @@ pub async fn run(
         timed_out,
         cancelled,
     );
+    record.started_at = started_at;
     let write_root = root.clone();
     let write_record = record.clone();
     tokio::task::spawn_blocking(move || append_record(&write_root, &write_record))
@@ -651,9 +678,33 @@ pub async fn coding_verification_list(
     task_id: String,
 ) -> Result<Vec<VerificationRecord>, String> {
     let root = access.require_workspace(&root)?;
+    store::validate_task_id(&task_id)?;
     tokio::task::spawn_blocking(move || list_records(&root, &task_id))
         .await
         .map_err(|error| format!("读取验证记录失败：{error}"))
+}
+
+#[tauri::command]
+pub async fn coding_verification_approve_plan_command(
+    access: State<'_, FilesystemAccess>,
+    processes: State<'_, CodingProcesses>,
+    root: String,
+    task_id: String,
+    command: String,
+) -> Result<String, String> {
+    let root = access.require_workspace(&root)?;
+    store::validate_task_id(&task_id)?;
+    if task::load(&root, &task_id).is_none() {
+        return Err("任务不存在".into());
+    }
+    let command = command.trim();
+    if command.is_empty() || command.len() > 4_096 {
+        return Err("验证命令无效".into());
+    }
+    if let Some(reason) = high_risk_command_reason(command, &root) {
+        return Err(format!("命令被原生安全策略拒绝：{reason}"));
+    }
+    processes.approve_verification(&root, &task_id, command)
 }
 
 // Three of these are Tauri-injected handles; the rest are the command's wire
@@ -670,6 +721,7 @@ pub async fn coding_verification_run(
     command: String,
     timeout_secs: Option<u64>,
     requested_run_id: Option<String>,
+    approval_token: Option<String>,
 ) -> Result<VerificationRecord, String> {
     let root = access.require_workspace(&root)?;
     run(
@@ -681,6 +733,7 @@ pub async fn coding_verification_run(
         command,
         timeout_secs,
         requested_run_id,
+        approval_token,
     )
     .await
 }
@@ -751,6 +804,22 @@ mod tests {
         assert!(detected
             .iter()
             .any(|entry| entry.command == "pnpm -r --if-present run test"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_plan_declared_command_requires_consent_even_when_manifest_detected() {
+        let root = temp_root();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"test":"vitest run"}}"#,
+        )
+        .unwrap();
+        let mut coding_task = task::create_task(&root, "verify", "run tests").unwrap();
+        coding_task.task_nodes[0].verification_commands = vec!["npm run test".into()];
+        assert!(is_manifest_verification(&root, "npm run test"));
+        assert!(is_planned_verification(&coding_task, "npm run test"));
+        std::fs::remove_dir_all(store::workspace_dir(&root)).ok();
         std::fs::remove_dir_all(&root).ok();
     }
 

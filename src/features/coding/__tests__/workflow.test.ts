@@ -93,7 +93,23 @@ describe("coding workflow contract", () => {
     );
     expect(commands).toEqual([
       { kind: "build", command: "pnpm build", label: "构建" },
-      { kind: "test", command: "pnpm test -- auth", label: "节点验证 · T1" },
+      {
+        kind: "test",
+        command: "pnpm test -- auth",
+        label: "节点验证 · T1",
+        requiresApproval: true,
+      },
+    ]);
+  });
+
+  it("still requires consent when a plan command matches a detected project check", () => {
+    const planned = task();
+    planned.taskNodes[0].verificationCommands = ["pnpm build"];
+    expect(mergeTaskVerificationCommands(
+      [{ kind: "build", command: "pnpm build", label: "构建" }],
+      planned,
+    )).toEqual([
+      { kind: "build", command: "pnpm build", label: "构建", requiresApproval: true },
     ]);
   });
 });

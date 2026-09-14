@@ -877,7 +877,8 @@ describe("CodingWorkbench skeleton", () => {
     );
   });
 
-  it("runs verification commands declared by structured plan nodes", async () => {
+  it("asks before running verification commands declared by structured plan nodes", async () => {
+    const user = userEvent.setup();
     const verifying = verificationTask({
       taskNodes: [{
         id: "node-1",
@@ -901,6 +902,7 @@ describe("CodingWorkbench skeleton", () => {
     invoke.mockImplementation(async (command: string, args?: unknown): Promise<unknown> => {
       if (command === "coding_task_list" || command === "coding_verification_detect") return [];
       if (command === "coding_task_begin_verification") return verifying;
+      if (command === "coding_verification_approve_plan_command") return "approval-token";
       if (command === "coding_verification_run") {
         return {
           id: "planned-check",
@@ -931,9 +933,18 @@ describe("CodingWorkbench skeleton", () => {
     });
 
     render(<CodingWorkbench cwd="/repo" models={[]} />);
+    expect(await screen.findByRole("alertdialog", {
+      name: "确认运行计划中的验证命令",
+    })).toBeInTheDocument();
+    expect(invoke.mock.calls.map((call) => call[0])).not.toContain("coding_verification_run");
+    await user.click(screen.getByRole("button", { name: "确认并运行" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith(
       "coding_verification_run",
-      expect.objectContaining({ command: "pnpm test -- auth", kind: "test" }),
+      expect.objectContaining({
+        command: "pnpm test -- auth",
+        kind: "test",
+        approvalToken: "approval-token",
+      }),
     ));
   });
 

@@ -11,7 +11,7 @@
 //! whose file path matches a test convention into `test_impact` so the
 //! ImpactAnalysisView can highlight them without polluting `transitive`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -78,19 +78,19 @@ pub fn analyze(
     }
     let depth = depth.clamp(1, MAX_DEPTH);
     let direct_layer = refs::find_references(root, target, true)?;
-    let edges = collect_edges(&direct_layer);
+    let mut edges = collect_edges(&direct_layer);
 
     // Seed layer: prefer the symbol index, fall back to the first enclosing
     // symbol of any direct hit. Empty when nothing matches.
     let mut direct_nodes = Vec::<ImpactNode>::new();
-    let mut seen_names: HashSet<String> = HashSet::new();
+    let mut seen_ids: HashSet<String> = HashSet::new();
     let seed_symbols = seed_symbols(root, target);
     for symbol in &seed_symbols {
-        seen_names.insert(symbol.name.clone());
+        seen_ids.insert(symbol.id.clone());
     }
     for hit in &direct_layer {
         if let Some(enclosing) = &hit.enclosing_symbol {
-            if seen_names.insert(enclosing.name.clone()) {
+            if seen_ids.insert(enclosing.id.clone()) {
                 direct_nodes.push(ImpactNode {
                     symbol: enclosing.clone(),
                     references: 0,
@@ -105,20 +105,22 @@ pub fn analyze(
     // contribute to `references` (they are the target, not callers).
     populate_direct_refs(&mut direct_nodes, &direct_layer);
 
-    // Layer 2..depth: walk enclosing_symbol names from the previous layer.
+    // Layer 2..depth: query names from the previous layer while retaining
+    // identity and visited state by stable symbol id.
     let mut transitive_nodes = Vec::<ImpactNode>::new();
-    let mut current_layer: Vec<String> =
-        direct_nodes.iter().map(|n| n.symbol.name.clone()).collect();
-    // `seen` is everything already emitted (target + direct callers).
-    // Hitting one of these names again would be a back-edge from a deeper
-    // layer; skip it to keep the BFS acyclic. Current layer members ARE
-    // allowed to process — only the *results* are filtered against `seen`.
-    let seen: HashSet<String> = seen_names;
+    let mut current_layer: Vec<String> = direct_nodes
+        .iter()
+        .map(|node| node.symbol.name.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    // `seen_ids` is everything already emitted (target + direct callers).
+    // Hitting one again is a back-edge; skip it to keep the BFS acyclic.
     for d in 2..=depth {
-        let mut next_layer: Vec<String> = Vec::new();
+        let mut next_nodes = BTreeMap::<String, ImpactNode>::new();
         for name in &current_layer {
             let layer_hits = refs::find_references(root, name, true)?;
-            let mut next_node: Option<ImpactNode> = None;
+            edges.extend(collect_edges(&layer_hits));
             for hit in &layer_hits {
                 let kind = hit.reference.kind;
                 if !matches!(
@@ -128,32 +130,37 @@ pub fn analyze(
                     continue;
                 }
                 if let Some(enclosing) = &hit.enclosing_symbol {
-                    if seen.contains(&enclosing.name) {
+                    if seen_ids.contains(&enclosing.id) {
                         continue;
                     }
-                    if !next_layer.iter().any(|n| n == &enclosing.name) {
-                        next_layer.push(enclosing.name.clone());
-                    }
-                    let entry = next_node.get_or_insert_with(|| ImpactNode {
-                        symbol: enclosing.clone(),
-                        references: 0,
-                        tests: 0,
-                        depth: d,
-                    });
+                    let entry =
+                        next_nodes
+                            .entry(enclosing.id.clone())
+                            .or_insert_with(|| ImpactNode {
+                                symbol: enclosing.clone(),
+                                references: 0,
+                                tests: 0,
+                                depth: d,
+                            });
                     entry.references += 1;
                     if is_test_file(&enclosing.file) {
                         entry.tests += 1;
                     }
                 }
             }
-            if let Some(node) = next_node {
-                transitive_nodes.push(node);
-            }
         }
-        if next_layer.is_empty() {
+        if next_nodes.is_empty() {
             break;
         }
-        current_layer = next_layer;
+        let layer_nodes = next_nodes.into_values().collect::<Vec<_>>();
+        current_layer = layer_nodes
+            .iter()
+            .map(|node| node.symbol.name.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        seen_ids.extend(layer_nodes.iter().map(|node| node.symbol.id.clone()));
+        transitive_nodes.extend(layer_nodes);
     }
 
     let test_impact: Vec<SymbolRecord> = if include_tests {
@@ -205,7 +212,7 @@ fn populate_direct_refs(nodes: &mut [ImpactNode], hits: &[ReferenceHit]) {
             let Some(enclosing) = &hit.enclosing_symbol else {
                 continue;
             };
-            if enclosing.name != node.symbol.name {
+            if enclosing.id != node.symbol.id {
                 continue;
             }
             refs += 1;
@@ -362,6 +369,33 @@ mod tests {
             "include_tests=false must drop test_impact: {:?}",
             graph.test_impact
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn transitive_layer_preserves_every_branch() {
+        let root = temp_root();
+        write(&root, "leaf.ts", "export function leaf() { return 1; }\n");
+        write(
+            &root,
+            "middle.ts",
+            "import { leaf } from './leaf';\nexport function left() { return leaf(); }\nexport function right() { return leaf(); }\n",
+        );
+        write(
+            &root,
+            "top.ts",
+            "import { left, right } from './middle';\nexport function alpha() { return left(); }\nexport function beta() { return left(); }\nexport function gamma() { return right(); }\n",
+        );
+        symbols::build_index(&root).unwrap();
+
+        let graph = analyze(&root, "leaf", 2, false).unwrap();
+        let transitive = node_names(&graph.transitive);
+        for expected in ["alpha", "beta", "gamma"] {
+            assert!(
+                transitive.contains(&expected.to_string()),
+                "missing {expected}: {transitive:?}"
+            );
+        }
         std::fs::remove_dir_all(&root).ok();
     }
 

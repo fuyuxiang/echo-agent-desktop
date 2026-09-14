@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use base64::Engine as _;
 use echo_agent_pty::pty::{PtyChild, PtyConfig, PtyHandle, PtyMaster};
@@ -152,6 +152,14 @@ pub struct CodingCreateEntryRequest {
 pub struct CodingProcesses {
     commands: Mutex<HashMap<String, CancellationToken>>,
     terminals: Mutex<HashMap<String, Arc<CodingTerminalSession>>>,
+    verification_approvals: Mutex<HashMap<String, VerificationApproval>>,
+}
+
+struct VerificationApproval {
+    root: PathBuf,
+    task_id: String,
+    command: String,
+    expires_at: Instant,
 }
 
 impl CodingProcesses {
@@ -191,6 +199,58 @@ impl CodingProcesses {
             }
             None => Err("命令已结束或不存在".into()),
         }
+    }
+
+    /// Create a short-lived, one-shot grant after the user confirms a plan
+    /// command in the workbench. Automatic manifest commands do not need one.
+    pub fn approve_verification(
+        &self,
+        root: &Path,
+        task_id: &str,
+        command: &str,
+    ) -> Result<String, String> {
+        let token = uuid::Uuid::now_v7().to_string();
+        let mut approvals = self
+            .verification_approvals
+            .lock()
+            .map_err(|_| "验证授权状态已损坏".to_string())?;
+        approvals.retain(|_, approval| approval.expires_at > Instant::now());
+        if approvals.len() >= 256 {
+            return Err("待运行的验证授权过多，请稍后重试".into());
+        }
+        approvals.insert(
+            token.clone(),
+            VerificationApproval {
+                root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+                task_id: task_id.to_string(),
+                command: command.to_string(),
+                expires_at: Instant::now() + Duration::from_secs(5 * 60),
+            },
+        );
+        Ok(token)
+    }
+
+    pub fn consume_verification_approval(
+        &self,
+        token: &str,
+        root: &Path,
+        task_id: &str,
+        command: &str,
+    ) -> Result<(), String> {
+        let mut approvals = self
+            .verification_approvals
+            .lock()
+            .map_err(|_| "验证授权状态已损坏".to_string())?;
+        approvals.retain(|_, approval| approval.expires_at > Instant::now());
+        let approval = approvals
+            .remove(token)
+            .ok_or_else(|| "自定义验证命令尚未确认或授权已过期".to_string())?;
+        let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        if approval.root != canonical || approval.task_id != task_id || approval.command != command
+        {
+            return Err("自定义验证授权与当前任务或命令不匹配".into());
+        }
+        Ok(())
     }
 }
 
@@ -1798,6 +1858,37 @@ pub fn high_risk_command_reason(command: &str, workspace_root: &Path) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verification_approval_is_bound_and_one_shot() {
+        let workspace = tempfile::tempdir().unwrap();
+        let processes = CodingProcesses::default();
+        let token = processes
+            .approve_verification(workspace.path(), "task-1", "pnpm test -- auth")
+            .unwrap();
+        assert!(processes
+            .consume_verification_approval(
+                &token,
+                workspace.path(),
+                "another-task",
+                "pnpm test -- auth",
+            )
+            .is_err());
+        // A mismatched attempt consumes the grant, so it cannot be replayed.
+        assert!(processes
+            .consume_verification_approval(&token, workspace.path(), "task-1", "pnpm test -- auth",)
+            .is_err());
+
+        let token = processes
+            .approve_verification(workspace.path(), "task-1", "pnpm test -- auth")
+            .unwrap();
+        processes
+            .consume_verification_approval(&token, workspace.path(), "task-1", "pnpm test -- auth")
+            .unwrap();
+        assert!(processes
+            .consume_verification_approval(&token, workspace.path(), "task-1", "pnpm test -- auth",)
+            .is_err());
+    }
 
     #[test]
     fn recognizes_common_languages_and_manifests() {
