@@ -184,4 +184,14 @@ describe("task store", () => {
     expect(useTaskStore.getState().verifications).toEqual([]);
     expect(useTaskStore.getState().problems).toEqual([]);
   });
+
+  it("删除被后端拒绝时保留当前任务并允许界面重试", async () => {
+    api.deleteTask.mockRejectedValue(new Error("任务正在执行或验证，请先停止任务再删除"));
+    useTaskStore.setState({ root: "/repo", task: task() });
+
+    await expect(useTaskStore.getState().deleteTask("t1")).rejects.toThrow("请先停止任务再删除");
+
+    expect(useTaskStore.getState().task?.id).toBe("t1");
+    expect(useTaskStore.getState().error).toContain("请先停止任务再删除");
+  });
 });

@@ -143,6 +143,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       await get().refreshSummaries();
     } catch (error) {
       set({ error: message(error) });
+      throw error;
     }
   },
 
@@ -165,6 +166,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       await get().refreshSummaries();
     } catch (error) {
       set({ error: message(error) });
+      throw error;
     }
   },
 

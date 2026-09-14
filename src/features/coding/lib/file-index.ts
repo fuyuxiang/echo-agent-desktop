@@ -34,6 +34,34 @@ export interface FileIndexResult {
   truncated: boolean;
 }
 
+function normalizedRelative(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
+}
+
+/**
+ * Apply a watcher event to the quick-open index without rescanning the whole
+ * repository. A removal may represent a directory, so descendants are removed
+ * as well. The returned list remains sorted and duplicate-free.
+ */
+export function applyFileIndexEvent(
+  paths: string[],
+  changedPath: string,
+  removed: boolean,
+): string[] {
+  const changed = normalizedRelative(changedPath);
+  if (!changed) return paths;
+  if (removed) {
+    const prefix = `${changed}/`;
+    const next = paths.filter((path) => {
+      const normalized = normalizedRelative(path);
+      return normalized !== changed && !normalized.startsWith(prefix);
+    });
+    return next.length === paths.length ? paths : next;
+  }
+  if (paths.some((path) => normalizedRelative(path) === changed)) return paths;
+  return [...paths, changed].sort();
+}
+
 function relative(root: string, absolute: string): string {
   const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
   const normalized = absolute.replace(/\\/g, "/");

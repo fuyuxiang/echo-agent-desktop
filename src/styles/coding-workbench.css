@@ -1075,11 +1075,16 @@
   display: flex;
   flex-direction: column;
   min-width: 260px;
+  max-width: min(360px, calc(100vw - 24px));
+  max-height: min(460px, calc(100vh - 76px));
   padding: 4px;
   border: 1px solid var(--echo-border-default);
   border-radius: 8px;
   background: var(--echo-bg-secondary);
   box-shadow: 0 12px 28px rgb(0 0 0 / 22%);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .coding-task-switcher__menu button {
@@ -1096,12 +1101,42 @@
   cursor: pointer;
 }
 
+.coding-task-switcher__entry {
+  display: flex;
+  flex-direction: column;
+}
+
+.coding-task-switcher__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.coding-task-switcher__row:hover,
+.coding-task-switcher__row.is-active {
+  background: var(--echo-bg-hover);
+}
+
+.coding-task-switcher__menu .coding-task-switcher__select {
+  min-width: 0;
+  background: transparent;
+}
+
+.coding-task-switcher__menu .coding-task-switcher__more {
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--echo-text-weak);
+}
+
 .coding-task-switcher__menu button:hover {
   background: var(--echo-bg-hover);
   color: var(--echo-text-strong);
 }
 
-.coding-task-switcher__menu button.is-active {
+.coding-task-switcher__row.is-active .coding-task-switcher__select {
   color: var(--echo-text-strong);
 }
 
@@ -1115,6 +1150,31 @@
 .coding-task-switcher__menu small {
   color: var(--echo-text-weak);
   font-size: 10px;
+}
+
+.coding-task-switcher__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  margin: 2px 4px 5px 22px;
+  padding: 4px;
+  border: 1px solid var(--echo-border-subtle);
+  border-radius: 6px;
+  background: var(--echo-bg-primary);
+}
+
+.coding-task-switcher__actions button {
+  justify-content: center;
+  padding: 5px 6px;
+}
+
+.coding-task-switcher__actions button.is-danger {
+  color: var(--echo-status-error, #d92d20);
+}
+
+.coding-task-switcher__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .coding-task-switcher__sep {
@@ -1385,6 +1445,11 @@
 
 .coding-agent__decision.is-review {
   border-color: color-mix(in srgb, var(--echo-accent) 32%, var(--echo-border-default));
+}
+
+.coding-agent__decision.is-interrupted {
+  border-color: color-mix(in srgb, #d97706 28%, var(--echo-border-default));
+  background: color-mix(in srgb, #d97706 6%, var(--echo-bg-tertiary));
 }
 
 .coding-agent__interaction {

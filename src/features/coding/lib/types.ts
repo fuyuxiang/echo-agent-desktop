@@ -10,6 +10,8 @@ export type TaskPhase =
   | "verifying"
   | "diagnosing"
   | "repairing"
+  | "paused"
+  | "stopped"
   | "delivered"
   | "blocked";
 

@@ -6,13 +6,41 @@
  *
  * 根目录取 cwd（会话工作区）。隐藏/构建目录已在后端过滤。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listDir, type DirEntry } from "@/lib/agent-client";
 import { pickFileEmoji } from "./file-tab-icon";
 import { ChevronRightIcon } from "@/foundation/components/Icon/icons";
 
-/** 已加载的目录条目缓存：path → entries（undefined=未加载，[]=已加载空）。 */
-type LoadedMap = Map<string, DirEntry[] | undefined>;
+/** 已加载的目录条目缓存：path → entries。 */
+type LoadedMap = Map<string, DirEntry[]>;
+
+function normalize(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/**
+ * Refresh the closest directory already represented in the tree. If an Agent
+ * creates `src/new/module.ts` before `src/new` has ever been loaded, `src` (or
+ * ultimately the root) is refreshed so the new intermediate directory still
+ * appears.
+ */
+function closestLoadedParent(root: string, changedPath: string, loaded: LoadedMap): string {
+  const normalizedRoot = normalize(root);
+  let relative = normalize(changedPath);
+  if (relative === normalizedRoot) return root;
+  if (relative.startsWith(`${normalizedRoot}/`)) {
+    relative = relative.slice(normalizedRoot.length + 1);
+  }
+  const parts = relative.replace(/^\.?\//, "").split("/").filter(Boolean);
+  if (parts.length > 0) parts.pop();
+  while (parts.length > 0) {
+    const candidate = `${root.replace(/[\\/]+$/, "")}/${parts.join("/")}`;
+    const loadedPath = [...loaded.keys()].find((path) => normalize(path) === normalize(candidate));
+    if (loadedPath) return loadedPath;
+    parts.pop();
+  }
+  return root;
+}
 
 interface FileTreeViewProps {
   /** 工作区根目录（绝对路径）。 */
@@ -29,6 +57,8 @@ interface FileTreeViewProps {
   onToast?: (msg: string) => void;
   /** Increment to invalidate the lazy directory cache after creating entries. */
   refreshKey?: number;
+  /** Changed workspace paths associated with refreshKey, for targeted reloads. */
+  refreshPaths?: string[];
 }
 
 export function FileTreeView({
@@ -39,63 +69,145 @@ export function FileTreeView({
   onDirectorySelect,
   onToast,
   refreshKey = 0,
+  refreshPaths = [],
 }: FileTreeViewProps) {
   const [loaded, setLoaded] = useState<LoadedMap>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(false);
+  const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
+  const [errors, setErrors] = useState<Map<string, string>>(new Map());
+  const loadedRef = useRef<LoadedMap>(new Map());
+  const loadingRef = useRef<Set<string>>(new Set());
+  const scopeGenerationRef = useRef(0);
+  const requestGenerationRef = useRef(new Map<string, number>());
+  const reportedErrorsRef = useRef(new Map<string, string>());
+  const previousRefreshKeyRef = useRef(refreshKey);
+  const onToastRef = useRef(onToast);
 
   const root = rootPath ?? "";
-  const rootLoaded = loaded.get(root);
+  const rootLoaded = loaded.has(root);
 
-  // 加载根目录。
+  useEffect(() => {
+    onToastRef.current = onToast;
+  }, [onToast]);
+
+  const updateLoaded = useCallback((updater: (current: LoadedMap) => LoadedMap) => {
+    setLoaded((current) => {
+      const next = updater(current);
+      loadedRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const updateLoading = useCallback((updater: (current: Set<string>) => Set<string>) => {
+    setLoadingDirs((current) => {
+      const next = updater(current);
+      loadingRef.current = next;
+      return next;
+    });
+  }, []);
+
+  // A force refresh deliberately bypasses the cache but keeps its last good
+  // value visible. Per-directory generations make "latest response wins"
+  // deterministic when several saves arrive close together.
   const loadDir = useCallback(
-    async (dirPath: string) => {
-      if (loaded.has(dirPath)) return; // 已加载（含空数组）
-      setLoaded((prev) => {
-        const next = new Map(prev);
-        next.set(dirPath, undefined); // 标记为「加载中」
+    async (dirPath: string, force = false) => {
+      if (!force && (loadedRef.current.has(dirPath) || loadingRef.current.has(dirPath))) return;
+      const scopeGeneration = scopeGenerationRef.current;
+      const requestGeneration = (requestGenerationRef.current.get(dirPath) ?? 0) + 1;
+      requestGenerationRef.current.set(dirPath, requestGeneration);
+      updateLoading((current) => new Set(current).add(dirPath));
+      setErrors((current) => {
+        if (!current.has(dirPath)) return current;
+        const next = new Map(current);
+        next.delete(dirPath);
         return next;
       });
       try {
         const entries = await listDir(dirPath);
-        setLoaded((prev) => {
-          const next = new Map(prev);
+        if (
+          scopeGeneration !== scopeGenerationRef.current
+          || requestGenerationRef.current.get(dirPath) !== requestGeneration
+        ) return;
+        updateLoaded((current) => {
+          const next = new Map(current);
           next.set(dirPath, entries);
           return next;
         });
+        reportedErrorsRef.current.delete(dirPath);
       } catch (e) {
+        if (
+          scopeGeneration !== scopeGenerationRef.current
+          || requestGenerationRef.current.get(dirPath) !== requestGeneration
+        ) return;
         const msg = String(e).replace(/^Error:\s*/, "");
-        onToast?.(`读取目录失败：${msg}`);
-        setLoaded((prev) => {
-          const next = new Map(prev);
-          next.delete(dirPath); // 失败：移除标记，允许重试
+        setErrors((current) => {
+          if (current.get(dirPath) === msg) return current;
+          const next = new Map(current);
+          next.set(dirPath, msg);
           return next;
         });
+        if (reportedErrorsRef.current.get(dirPath) !== msg) {
+          reportedErrorsRef.current.set(dirPath, msg);
+          onToastRef.current?.(`读取目录失败：${msg}`);
+        }
+      } finally {
+        if (
+          scopeGeneration === scopeGenerationRef.current
+          && requestGenerationRef.current.get(dirPath) === requestGeneration
+        ) {
+          updateLoading((current) => {
+            const next = new Set(current);
+            next.delete(dirPath);
+            return next;
+          });
+        }
       }
     },
-    [loaded, onToast],
+    [updateLoaded, updateLoading],
   );
 
-  // 根目录变化时重置并加载。
+  // A workspace switch is the only operation that clears the visible tree.
+  // Late responses from the old workspace are invalidated before state resets.
   useEffect(() => {
-    setLoaded(new Map());
+    scopeGenerationRef.current += 1;
+    requestGenerationRef.current.clear();
+    reportedErrorsRef.current.clear();
+    loadedRef.current = new Map();
+    loadingRef.current = new Set();
+    setLoaded(loadedRef.current);
+    setLoadingDirs(loadingRef.current);
     setExpanded(new Set());
+    setErrors(new Map());
+    previousRefreshKeyRef.current = refreshKey;
     if (!root) return;
-    setLoading(true);
-    loadDir(root).finally(() => setLoading(false));
-  }, [refreshKey, root]); // eslint-disable-line react-hooks/exhaustive-deps
+    void loadDir(root, true);
+  }, [loadDir, root]); // refreshKey is only snapshotted for the new root.
+
+  // File writes refresh in the background. Existing entries and expansion
+  // state stay mounted, so code generation never flashes an empty explorer.
+  useEffect(() => {
+    if (!root || previousRefreshKeyRef.current === refreshKey) return;
+    previousRefreshKeyRef.current = refreshKey;
+    const current = loadedRef.current;
+    const targets = refreshPaths.length > 0
+      ? new Set(refreshPaths.map((path) => closestLoadedParent(root, path, current)))
+      : new Set(current.keys());
+    if (targets.size === 0) targets.add(root);
+    for (const dirPath of targets) void loadDir(dirPath, true);
+  }, [loadDir, refreshKey, refreshPaths, root]);
 
   const toggleDir = useCallback(
     async (dirPath: string) => {
+      const opening = !expanded.has(dirPath);
       setExpanded((prev) => {
         const next = new Set(prev);
         if (next.has(dirPath)) next.delete(dirPath);
         else next.add(dirPath);
         return next;
       });
-      await loadDir(dirPath);
+      if (opening) await loadDir(dirPath);
     },
-    [loadDir],
+    [expanded, loadDir],
   );
 
   if (!root) {
@@ -104,17 +216,31 @@ export function FileTreeView({
     );
   }
 
-  if (loading && rootLoaded === undefined) {
+  if (!rootLoaded && errors.has(root)) {
+    return (
+      <div className="file-tree__empty file-tree__error" role="alert">
+        <span>无法读取工作区文件。</span>
+        <button type="button" onClick={() => void loadDir(root, true)}>重试</button>
+      </div>
+    );
+  }
+
+  if (!rootLoaded) {
     return <div className="file-tree__empty">加载文件树中…</div>;
   }
 
   const rootEntries = loaded.get(root) ?? [];
-  if (rootEntries.length === 0 && rootLoaded !== undefined) {
+  if (rootEntries.length === 0) {
     return <div className="file-tree__empty">这里还是空的，放些文件进来再开始吧。</div>;
   }
 
   return (
-    <div className="file-tree" role="tree" aria-label="工作区文件树">
+    <div
+      className="file-tree"
+      role="tree"
+      aria-label="工作区文件树"
+      aria-busy={loadingDirs.size > 0 || undefined}
+    >
       {rootEntries.map((entry) => (
         <TreeNode
           key={entry.path}
@@ -122,9 +248,12 @@ export function FileTreeView({
           depth={0}
           expanded={expanded}
           loaded={loaded}
+          loadingDirs={loadingDirs}
+          errors={errors}
           selectedPath={selectedPath}
           selectedDirectoryPath={selectedDirectoryPath}
           onToggleDir={toggleDir}
+          onRetryDir={(path) => void loadDir(path, true)}
           onFileSelect={onFileSelect}
           onDirectorySelect={onDirectorySelect}
         />
@@ -142,9 +271,12 @@ function TreeNode({
   depth,
   expanded,
   loaded,
+  loadingDirs,
+  errors,
   selectedPath,
   selectedDirectoryPath,
   onToggleDir,
+  onRetryDir,
   onFileSelect,
   onDirectorySelect,
 }: {
@@ -152,9 +284,12 @@ function TreeNode({
   depth: number;
   expanded: Set<string>;
   loaded: LoadedMap;
+  loadingDirs: Set<string>;
+  errors: Map<string, string>;
   selectedPath?: string;
   selectedDirectoryPath?: string;
   onToggleDir: (path: string) => void;
+  onRetryDir: (path: string) => void;
   onFileSelect: (path: string) => void;
   onDirectorySelect?: (path: string) => void;
 }) {
@@ -162,7 +297,8 @@ function TreeNode({
   const isExpanded = expanded.has(entry.path);
   const isSelected = entry.path === selectedPath || (isDir && entry.path === selectedDirectoryPath);
   const children = isDir ? loaded.get(entry.path) : undefined;
-  const childLoading = isDir && isExpanded && children === undefined;
+  const childLoading = isDir && isExpanded && loadingDirs.has(entry.path);
+  const childError = isDir && isExpanded ? errors.get(entry.path) : undefined;
 
   const handleClick = () => {
     if (isDir) {
@@ -212,9 +348,12 @@ function TreeNode({
             depth={depth + 1}
             expanded={expanded}
             loaded={loaded}
+            loadingDirs={loadingDirs}
+            errors={errors}
             selectedPath={selectedPath}
             selectedDirectoryPath={selectedDirectoryPath}
             onToggleDir={onToggleDir}
+            onRetryDir={onRetryDir}
             onFileSelect={onFileSelect}
             onDirectorySelect={onDirectorySelect}
           />
@@ -226,6 +365,20 @@ function TreeNode({
         >
           …
         </div>
+      )}
+      {childError && !childLoading && (
+        <button
+          type="button"
+          className="file-tree__retry"
+          style={{ paddingInlineStart: `${(depth + 1) * 14 + 8}px` }}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRetryDir(entry.path);
+          }}
+          title={childError}
+        >
+          读取失败，点击重试
+        </button>
       )}
     </>
   );
