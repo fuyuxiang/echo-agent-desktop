@@ -210,7 +210,7 @@ export function UsageQuotaPanel() {
   const recent = filtered.slice().sort((a, b) => b.ts - a.ts).slice(0, 20);
 
   return (
-    <section className="quota-panel" aria-label="Token 用量与配额">
+    <section className="quota-panel" aria-label="Token 用量与配额" tabIndex={0}>
       <div className="quota-panel__head">
         <div>
           <h2 className="quota-panel__title">Token 用量</h2>

@@ -11,6 +11,7 @@ describe("UsageQuotaPanel", () => {
 
   it("空数据显示 0 token + 0 调用", () => {
     render(<UsageQuotaPanel />);
+    expect(screen.getByRole("region", { name: "Token 用量与配额" })).toHaveAttribute("tabindex", "0");
     // 空数据时总 Token 显示 0(作为 stat-value)。
     const tokenStat = screen.getByText("总 Token");
     expect(tokenStat.previousElementSibling?.textContent).toBe("0");
