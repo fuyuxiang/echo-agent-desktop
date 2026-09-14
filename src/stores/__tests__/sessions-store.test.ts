@@ -35,7 +35,6 @@ describe("sessions-store drafts", () => {
       query: "",
       filterStatus: null,
       filterDate: null,
-      filterArchived: false,
       pendingSessionPatches: {},
       drafts: {},
     });

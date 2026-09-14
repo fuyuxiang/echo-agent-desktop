@@ -177,11 +177,12 @@ function filterSessions(
   sessions: SessionSummary[],
   status: SessionStatus | null,
   date: string | null,
-  archived: boolean,
 ): SessionSummary[] {
   const dateStart = getDateStart(date);
   return sessions.filter((s) => {
-    if (!!s.archived !== archived) return false;
+    // Archived content deliberately leaves the work sidebar. Its canonical
+    // recovery surface is Settings > Archived, not another sidebar mode.
+    if (s.archived) return false;
     if (status && !statusMatches(s.status, status)) return false;
     if (dateStart !== null) {
       const t = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
@@ -195,20 +196,16 @@ function filterSessions(
 function TaskFilterMenu({
   filterStatus,
   filterDate,
-  filterArchived,
   hasFilter,
   onSelectStatus,
   onSelectDate,
-  onSelectArchived,
   onClear,
 }: {
   filterStatus: SessionStatus | null;
   filterDate: string | null;
-  filterArchived: boolean;
   hasFilter: boolean;
   onSelectStatus: (s: SessionStatus | null) => void;
   onSelectDate: (d: string | null) => void;
-  onSelectArchived: (archived: boolean) => void;
   onClear: () => void;
 }) {
   return (
@@ -235,34 +232,6 @@ function TaskFilterMenu({
           })}
         </div>
       </div>
-      <div className="task-filter-menu__divider" />
-      <div className="task-filter-menu__section">
-        <div className="task-filter-menu__section-title">会话范围</div>
-        <div className="task-filter-menu__options">
-          {[
-            { value: false, label: "活动会话" },
-            { value: true, label: "已归档会话" },
-          ].map((option) => (
-            <button
-              key={String(option.value)}
-              type="button"
-              role="menuitemradio"
-              aria-checked={filterArchived === option.value}
-              className={
-                "task-filter-menu__option"
-                + (filterArchived === option.value ? " task-filter-menu__option--selected" : "")
-              }
-              onClick={() => onSelectArchived(option.value)}
-            >
-              <span className="task-filter-menu__option-label">{option.label}</span>
-              {filterArchived === option.value && (
-                <span className="task-filter-menu__option-check"><CheckIcon /></span>
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="task-filter-menu__divider" />
       {/* 筛选时间 */}
       <div className="task-filter-menu__section">
         <div className="task-filter-menu__section-title">筛选时间</div>
@@ -651,8 +620,6 @@ export function Sidebar({
   const filterDate = useSessionsStore((s) => s.filterDate);
   const setFilterStatus = useSessionsStore((s) => s.setFilterStatus);
   const setFilterDate = useSessionsStore((s) => s.setFilterDate);
-  const filterArchived = useSessionsStore((s) => s.filterArchived);
-  const setFilterArchived = useSessionsStore((s) => s.setFilterArchived);
   const clearFilters = useSessionsStore((s) => s.clearFilters);
   const hasFilter = useSessionsStore(selectHasFilter);
   const sessionsLoading = useSessionsStore((s) => s.loading);
@@ -791,8 +758,8 @@ export function Sidebar({
     }
   }, [allSessions, upsertSession, onToast]);
 
-  // Archive — EchoAgent-only state; archived sessions are filtered out of
-  // list_sessions, so drop the sidebar entry immediately on success.
+  // Archive — EchoAgent-only state. The complete catalog retains the row for
+  // Settings management, while the sidebar deliberately hides it immediately.
   const handleArchive = useCallback(async (sessionId: string, archived: boolean) => {
     const session = allSessions.find((entry) => entry.sessionId === sessionId);
     const cwd = resolveSessionCwd(sessionId);
@@ -803,7 +770,7 @@ export function Sidebar({
         if (session) upsertSession({ ...session, archived: next });
         useProjectsStore.getState().setSessionArchived(sessionId, next);
         onSessionArchived?.(sessionId, next);
-        onToast?.(next ? "已归档，可在筛选中恢复" : "已恢复会话");
+        onToast?.(next ? "已归档，可在“设置 → 已归档”中恢复" : "已恢复会话");
       }
     } catch (e) {
       onToast?.(`${archived ? "归档" : "恢复"}失败：${String(e).replace(/^Error:\s*/, "")}`);
@@ -939,15 +906,13 @@ export function Sidebar({
     [allSessions],
   );
 
-  // Apply status + date filters only to standalone tasks. Project conversations
-  // remain accessible below their owning project and in global search.
+  // Apply status + date filters only to active standalone tasks. Archived
+  // sessions never return to the work sidebar until explicitly restored.
   const filteredIndependent = useMemo(
-    () => filterSessions(taskSessions, filterStatus, filterDate, filterArchived),
-    [taskSessions, filterStatus, filterDate, filterArchived],
+    () => filterSessions(taskSessions, filterStatus, filterDate),
+    [taskSessions, filterStatus, filterDate],
   );
-  const scopedIndependentCount = taskSessions.filter(
-    (session) => !!session.archived === filterArchived,
-  ).length;
+  const scopedIndependentCount = taskSessions.filter((session) => !session.archived).length;
 
   return (
     <aside className="sidebar">
@@ -1074,11 +1039,9 @@ export function Sidebar({
                 <TaskFilterMenu
                   filterStatus={filterStatus}
                   filterDate={filterDate}
-                  filterArchived={filterArchived}
                   hasFilter={hasFilter}
                   onSelectStatus={setFilterStatus}
                   onSelectDate={setFilterDate}
-                  onSelectArchived={setFilterArchived}
                   onClear={clearFilters}
                 />
               </div>
@@ -1092,7 +1055,7 @@ export function Sidebar({
             )}
             {filteredIndependent.length === 0 && scopedIndependentCount === 0 && !sessionsLoading && (
               <div className="sidebar__empty">
-                {filterArchived ? "归档里还空着" : "这里还没有任务，去完成第一件事吧"}
+                这里还没有任务，去完成第一件事吧
               </div>
             )}
             {sortPinnedFirst(filteredIndependent).map((session) => renderConv(session))}
@@ -1120,9 +1083,10 @@ export function Sidebar({
             )}
             {projects.map((proj) => {
               const open = !!expandedProjects[proj.id];
-              const projectConversations = proj.conversations.filter(
-                (conversation) => !!conversation.archived === filterArchived,
-              );
+              const projectConversations = proj.conversations.filter((conversation) => (
+                !conversation.archived
+                && !sessionSummaryById.get(conversation.sessionId)?.archived
+              ));
               return (
                 <div key={proj.id} className="sidebar__node-wrap">
                   <div
@@ -1178,7 +1142,7 @@ export function Sidebar({
                     <div className="sidebar__children">
                       {projectConversations.length === 0 && (
                         <div className="sidebar__empty">
-                          {filterArchived ? "归档里还没有对话" : "还没有对话，从项目页开启第一轮吧"}
+                          还没有对话，从项目页开启第一轮吧
                         </div>
                       )}
                       {projectConversations.map((conversation) => {

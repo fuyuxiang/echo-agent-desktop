@@ -234,7 +234,7 @@ export function TopbarActions({
     setBusy(true);
     try {
       const archived = await agentSetSessionArchived(sessionId, true);
-      onToast?.("已归档（可在侧栏筛选中找回）");
+      onToast?.("已归档，可在“设置 → 已归档”中恢复");
       onSessionsChanged?.({ archived });
       onArchived?.(archived);
     } catch (e) {

@@ -28,7 +28,9 @@ export function SearchOverlay({
 }) {
   // The local catalog already spans every historical working directory.
   const independent = useSessionsStore((s) => s.independent);
-  const sessions = independent;
+  // Archive means leaving active work surfaces. Archived content is searched
+  // and managed exclusively in Settings > Archived until it is restored.
+  const sessions = independent.filter((session) => !session.archived);
   const [query, setQuery] = useState("");
   const [remoteHits, setRemoteHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
@@ -136,7 +138,9 @@ export function SearchOverlay({
 
   // Prefer the FTS result for duplicate ids because it carries the matching
   // message snippet; keep title-only local rows for ids FTS did not return.
-  const remoteIds = new Set(remoteHits.map((hit) => hit.sessionId));
+  const archivedIds = new Set(independent.filter((session) => session.archived).map((session) => session.sessionId));
+  const visibleRemoteHits = remoteHits.filter((hit) => !archivedIds.has(hit.sessionId));
+  const remoteIds = new Set(visibleRemoteHits.map((hit) => hit.sessionId));
   const localOnly = localMatches.filter((session) => !remoteIds.has(session.sessionId));
 
   const openSession = async (sessionId: string, cwd?: string) => {
@@ -158,7 +162,7 @@ export function SearchOverlay({
         throw new Error("会话不存在、已归档，或当前无权访问");
       }
       if (summary.archived) {
-        throw new Error("该会话已归档，请先在侧栏的归档筛选中恢复");
+        throw new Error("该会话已归档，请前往“设置 → 已归档”恢复");
       }
       await onSelect(summary.sessionId, summary.cwd);
       if (lifecycleGenerationRef.current === lifecycleGeneration) onClose();
@@ -249,13 +253,13 @@ export function SearchOverlay({
             </>
           )}
 
-          {remoteHits.length > 0 && (
+          {visibleRemoteHits.length > 0 && (
             <>
               <div className="conversation-search-modal__count">
-                全文检索结果 ({remoteHits.length})
+                全文检索结果 ({visibleRemoteHits.length})
               </div>
               <ul className="conversation-search-modal__list">
-                {remoteHits.map((h) => (
+                {visibleRemoteHits.map((h) => (
                   <li key={h.sessionId}>
                     <button
                       type="button"
@@ -294,7 +298,7 @@ export function SearchOverlay({
           {!searching &&
             !searchError &&
             localOnly.length === 0 &&
-            remoteHits.length === 0 &&
+            visibleRemoteHits.length === 0 &&
             query.trim().length > 0 && (
               <div className="conversation-search-modal__empty">
                 没有匹配的会话

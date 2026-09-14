@@ -8,6 +8,7 @@ import {
   Cpu,
   Palette,
   Database,
+  Archive,
   BarChart3,
   Shield,
   HelpCircle,
@@ -27,7 +28,9 @@ import {
 } from "./SettingsSections";
 import { UsageQuotaPanel } from "./UsageQuotaPanel";
 import { ModelConnectionsPanel } from "./ModelConnectionsPanel";
+import { ArchivedSessionsSettingsPanel } from "./ArchivedSessionsSettingsPanel";
 import { useModalFocus } from "@/lib/use-modal-focus";
+import { useSessionsStore } from "@/stores/sessions-store";
 
 /**
  * EchoAgent-style Settings dialog.
@@ -48,6 +51,7 @@ export type SettingsSectionId =
   | "memory"
   | "model"
   | "personalize"
+  | "archived"
   | "data"
   | "usage"
   | "security"
@@ -91,6 +95,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "数据与支持",
     items: [
       { id: "usage", label: "Token 用量", icon: BarChart3 },
+      { id: "archived", label: "已归档", icon: Archive },
       { id: "data", label: "数据管理", icon: Database },
       { id: "security", label: "安全中心", icon: Shield },
       { id: "help", label: "帮助与反馈", icon: HelpCircle },
@@ -104,6 +109,10 @@ export function SettingsPanel({
   onModelsChanged,
   sessionId,
   initialSection = "model",
+  onRestoreSession,
+  onDeleteSession,
+  onOpenSession,
+  onToast,
 }: {
   open: boolean;
   onClose: () => void;
@@ -114,9 +123,14 @@ export function SettingsPanel({
   sessionId?: string;
   /** Section selected whenever the dialog is opened. */
   initialSection?: SettingsSectionId;
+  onRestoreSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
+  onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
+  onOpenSession?: (sessionId: string, cwd?: string) => void | Promise<void>;
+  onToast?: (message: string) => void;
 }) {
   const [active, setActive] = useState<SettingsSectionId>(initialSection);
   const modalRef = useModalFocus<HTMLDivElement>(open, onClose);
+  const archivedCount = useSessionsStore((state) => state.independent.filter((session) => session.archived).length);
 
   // Select the caller-requested section every time the dialog opens.
   useEffect(() => {
@@ -160,6 +174,11 @@ export function SettingsPanel({
                             <Icon size={17} strokeWidth={1.75} />
                           </span>
                           <span className="settings-navigation__label">{item.label}</span>
+                          {item.id === "archived" && archivedCount > 0 && (
+                            <span className="settings-navigation__badge" aria-label={`${archivedCount} 个已归档会话`}>
+                              {archivedCount > 99 ? "99+" : archivedCount}
+                            </span>
+                          )}
                         </button>
                       </li>
                     );
@@ -195,6 +214,14 @@ export function SettingsPanel({
               <SecuritySettingsPanel />
             ) : active === "data" ? (
               <DataSettingsPanel />
+            ) : active === "archived" ? (
+              <ArchivedSessionsSettingsPanel
+                onRestoreSession={onRestoreSession}
+                onDeleteSession={onDeleteSession}
+                onOpenSession={onOpenSession}
+                onClose={onClose}
+                onToast={onToast}
+              />
             ) : active === "usage" ? (
               <UsageQuotaPanel />
             ) : active === "general" ? (

@@ -21,7 +21,6 @@ describe("SearchOverlay", () => {
       currentSessionId: null,
       filterStatus: null,
       filterDate: null,
-      filterArchived: false,
       pendingSessionPatches: {},
     });
   });
@@ -86,5 +85,25 @@ describe("SearchOverlay", () => {
     });
     expect(await screen.findByText("独特正文片段")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /\u76f8\u540c\u4f1a\u8bdd/ })).toHaveLength(1);
+  });
+
+  it("普通搜索不显示已归档会话", async () => {
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "active", title: "交付复盘", cwd: "/home", archived: false },
+      { sessionId: "archived", title: "归档复盘", cwd: "/home", archived: true },
+    ]);
+    vi.mocked(sessionSearch).mockResolvedValue([
+      { sessionId: "active", title: "交付复盘", cwd: "/home", snippet: "活动内容" },
+      { sessionId: "archived", title: "归档复盘", cwd: "/home", snippet: "归档内容" },
+    ]);
+
+    render(<SearchOverlay open onClose={vi.fn()} onSelect={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索会话标题或内容" }), {
+      target: { value: "复盘" },
+    });
+
+    expect(await screen.findByText("活动内容")).toBeInTheDocument();
+    expect(screen.queryByText("归档复盘")).toBeNull();
+    expect(screen.queryByText("归档内容")).toBeNull();
   });
 });

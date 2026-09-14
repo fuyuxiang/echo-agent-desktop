@@ -550,6 +550,7 @@ export function PlanTab({
   defaultModelId,
   onRun,
   onOpenSession,
+  onRestoreSession,
   onToast,
 }: {
   projectId: string;
@@ -557,6 +558,7 @@ export function PlanTab({
   defaultModelId?: string;
   onRun?: (message: string, modelId: string) => Promise<string | undefined>;
   onOpenSession?: (sessionId: string) => void;
+  onRestoreSession?: (sessionId: string) => Promise<void>;
   onToast?: (message: string) => void;
 }) {
   const plans = useProjectsStore((s) => s.projects.find((p) => p.id === projectId)?.plans ?? []);
@@ -567,6 +569,7 @@ export function PlanTab({
   const removePlan = useProjectsStore((s) => s.removePlan);
   const runningPlanIdsRef = useRef(new Set<string>());
   const [runningPlanIds, setRunningPlanIds] = useState<Set<string>>(() => new Set());
+  const [restoringSessionIds, setRestoringSessionIds] = useState<Set<string>>(() => new Set());
   const { requestConfirmation, requestInput, dialog } = useAppDialog(projectId);
 
   const newTodo = () => {
@@ -622,6 +625,23 @@ export function PlanTab({
     } finally {
       runningPlanIdsRef.current.delete(card.id);
       setRunningPlanIds(new Set(runningPlanIdsRef.current));
+    }
+  };
+
+  const restoreAndOpen = async (sessionId: string) => {
+    if (!onRestoreSession || restoringSessionIds.has(sessionId)) return;
+    setRestoringSessionIds((current) => new Set(current).add(sessionId));
+    try {
+      await onRestoreSession(sessionId);
+      onOpenSession?.(sessionId);
+    } catch (error) {
+      onToast?.(`恢复会话失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setRestoringSessionIds((current) => {
+        const next = new Set(current);
+        next.delete(sessionId);
+        return next;
+      });
     }
   };
 
@@ -691,11 +711,15 @@ export function PlanTab({
                           {c.sessionId && onOpenSession && (
                             <button
                               className="pd-board-card__move"
-                              onClick={() => onOpenSession(c.sessionId!)}
-                              disabled={c.sessionArchived}
-                              title={c.sessionArchived ? "该会话已归档，请先在侧栏的归档筛选中恢复" : undefined}
+                              onClick={() => c.sessionArchived
+                                ? void restoreAndOpen(c.sessionId!)
+                                : onOpenSession(c.sessionId!)}
+                              disabled={c.sessionArchived && (!onRestoreSession || restoringSessionIds.has(c.sessionId))}
+                              title={c.sessionArchived ? "恢复归档会话并继续该计划" : undefined}
                             >
-                              {c.sessionArchived ? "会话已归档" : "打开会话"}
+                              {c.sessionArchived
+                                ? restoringSessionIds.has(c.sessionId) ? "恢复中…" : "恢复并打开"
+                                : "打开会话"}
                             </button>
                           )}
                           {PLAN_COLUMNS.filter((x) => x.status !== c.status).map((x) => (
@@ -740,6 +764,7 @@ export function TaskTab({
   defaultModelId,
   onRun,
   onOpenSession,
+  onRestoreSession,
   onToast,
 }: {
   projectId: string;
@@ -747,6 +772,7 @@ export function TaskTab({
   defaultModelId?: string;
   onRun?: (message: string, modelId: string) => Promise<string | undefined>;
   onOpenSession?: (sessionId: string) => void;
+  onRestoreSession?: (sessionId: string) => Promise<void>;
   onToast?: (message: string) => void;
 }) {
   const tasks = useProjectsStore((s) => s.projects.find((p) => p.id === projectId)?.tasks ?? []);
@@ -757,6 +783,7 @@ export function TaskTab({
   const removeTask = useProjectsStore((s) => s.removeTask);
   const runningTaskIdsRef = useRef(new Set<string>());
   const [runningTaskIds, setRunningTaskIds] = useState<Set<string>>(() => new Set());
+  const [restoringSessionIds, setRestoringSessionIds] = useState<Set<string>>(() => new Set());
   const [q, setQ] = useState("");
   const { requestConfirmation, requestInput, dialog } = useAppDialog(projectId);
 
@@ -803,6 +830,23 @@ export function TaskTab({
     } finally {
       runningTaskIdsRef.current.delete(task.id);
       setRunningTaskIds(new Set(runningTaskIdsRef.current));
+    }
+  };
+
+  const restoreAndOpen = async (sessionId: string) => {
+    if (!onRestoreSession || restoringSessionIds.has(sessionId)) return;
+    setRestoringSessionIds((current) => new Set(current).add(sessionId));
+    try {
+      await onRestoreSession(sessionId);
+      onOpenSession?.(sessionId);
+    } catch (error) {
+      onToast?.(`恢复会话失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setRestoringSessionIds((current) => {
+        const next = new Set(current);
+        next.delete(sessionId);
+        return next;
+      });
     }
   };
 
@@ -859,11 +903,15 @@ export function TaskTab({
                   {t.sessionId && onOpenSession && (
                     <button
                       className="pd-btn pd-btn--small"
-                      onClick={() => onOpenSession(t.sessionId!)}
-                      disabled={t.sessionArchived}
-                      title={t.sessionArchived ? "该会话已归档，请先在侧栏的归档筛选中恢复" : undefined}
+                      onClick={() => t.sessionArchived
+                        ? void restoreAndOpen(t.sessionId!)
+                        : onOpenSession(t.sessionId!)}
+                      disabled={t.sessionArchived && (!onRestoreSession || restoringSessionIds.has(t.sessionId))}
+                      title={t.sessionArchived ? "恢复归档会话并继续该任务" : undefined}
                     >
-                      {t.sessionArchived ? "会话已归档" : "打开会话"}
+                      {t.sessionArchived
+                        ? restoringSessionIds.has(t.sessionId) ? "恢复中…" : "恢复并打开"
+                        : "打开会话"}
                     </button>
                   )}
                   <select

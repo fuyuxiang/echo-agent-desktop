@@ -41,7 +41,6 @@ describe("Sidebar", () => {
       query: "",
       filterStatus: null,
       filterDate: null,
-      filterArchived: false,
       pendingSessionPatches: {},
       drafts: {},
     });
@@ -340,24 +339,47 @@ describe("Sidebar", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("归档筛选可查看并恢复会话", async () => {
+  it("归档会话始终从侧边栏收起且不再提供归档范围筛选", () => {
     useSessionsStore.getState().setIndependent([
       { sessionId: "active", title: "活动会话", cwd: "/home", archived: false },
       { sessionId: "archived", title: "归档会话", cwd: "/home", archived: true },
     ]);
-    const onSessionArchived = vi.fn();
-    render(<Sidebar {...base} onSessionArchived={onSessionArchived} />);
+    render(<Sidebar {...base} />);
     expect(screen.getByText("活动会话")).toBeInTheDocument();
     expect(screen.queryByText("归档会话")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "筛选任务" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "已归档会话" }));
-    expect(screen.getByText("归档会话")).toBeInTheDocument();
-    expect(screen.queryByTitle("活动会话")).toBeNull();
+    expect(screen.queryByRole("menuitemradio", { name: "已归档会话" })).toBeNull();
+    expect(screen.getByText("活动会话")).toBeInTheDocument();
+    expect(screen.queryByText("归档会话")).toBeNull();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "归档会话的会话操作" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: /\u6062\u590d\u4f1a\u8bdd/ }));
-    await waitFor(() => expect(onSessionArchived).toHaveBeenCalledWith("archived", false));
-    expect(useSessionsStore.getState().independent.find((item) => item.sessionId === "archived")?.archived).toBe(false);
+  it("项目会话的主记录已归档时也不在侧边栏残留", () => {
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "project-archived", title: "已收起项目对话", cwd: "/workspace", archived: true },
+    ]);
+    useProjectsStore.setState({
+      projects: [{
+        id: "project-1",
+        name: "客户项目",
+        cwd: "/workspace",
+        createdAt: "2026-09-05T00:00:00.000Z",
+        connectors: [], experts: [], skills: [], plans: [], tasks: [], assets: [], members: [],
+        // Simulate legacy/stale project metadata: the authoritative session
+        // record is archived even though the duplicated relation flag is not.
+        conversations: [{
+          sessionId: "project-archived",
+          title: "已收起项目对话",
+          createdAt: "2026-09-05T00:00:00.000Z",
+          archived: false,
+        }],
+      }],
+    });
+
+    render(<Sidebar {...base} />);
+    fireEvent.click(screen.getByRole("button", { name: "展开客户项目对话" }));
+
+    expect(screen.queryByText("已收起项目对话")).toBeNull();
+    expect(screen.getByText("还没有对话，从项目页开启第一轮吧")).toBeInTheDocument();
   });
 });
