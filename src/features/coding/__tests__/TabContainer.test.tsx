@@ -38,6 +38,7 @@ function setup(tabs: WorkbenchTab[], activeId: string | null = tabs[0]?.id ?? nu
     onDraftChange: vi.fn(),
     onSave: vi.fn(),
     onViewChange: vi.fn(),
+    onGenerateDocumentation: vi.fn(),
     renderDoc: vi.fn((kind: string) => <div data-testid="doc">{kind}</div>),
   };
   render(<TabContainer {...props} />);
@@ -82,6 +83,25 @@ describe("TabContainer", () => {
     const props = setup([file()]);
     await user.click(screen.getByRole("button", { name: "差异" }));
     expect(props.onViewChange).toHaveBeenCalledWith("/repo/src/auth/login.ts", "diff");
+  });
+
+  it("starts documentation from the editor toolbar and protects unsaved drafts", async () => {
+    const user = userEvent.setup();
+    const props = setup([file()]);
+    await user.click(screen.getByRole("button", { name: "为当前选区或符号生成注释" }));
+    expect(props.onGenerateDocumentation).toHaveBeenCalledOnce();
+
+    setup([file({ id: "dirty", relativePath: "dirty.ts", draft: "unsaved" })], "dirty");
+    const dirtyButton = screen.getAllByRole("button", { name: "为当前选区或符号生成注释" })[1];
+    expect(dirtyButton).toBeDisabled();
+    expect(dirtyButton).toHaveAttribute("title", "请先保存当前文件，再让 Agent 生成注释");
+  });
+
+  it("explains why documentation is unavailable in diff view", () => {
+    setup([file({ view: "diff" })]);
+    const button = screen.getByRole("button", { name: "为当前选区或符号生成注释" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", "请先切换到编辑视图，再让 Agent 生成注释");
   });
 
   it("shows an accessible loading state while the latest diff is being fetched", () => {

@@ -44,6 +44,7 @@ export const GROUP_LABELS: Record<CommandGroup, string> = {
 /** Everything the palette needs from the workbench to build its command list. */
 export interface CommandContext {
   hasWorkspace: boolean;
+  hasActiveFile?: boolean;
   hasTask: boolean;
   /** A run is in progress, so mutating commands are held back. */
   busy: boolean;
@@ -233,7 +234,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "解释：当前函数",
       group: "understand",
       keywords: ["explain", "function", "函数"],
-      enabled: hasWorkspace,
+      enabled: hasWorkspace && context.hasActiveFile !== false,
       run: () => context.explain("function"),
     },
     {
@@ -241,7 +242,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "解释：当前类",
       group: "understand",
       keywords: ["explain", "class", "类"],
-      enabled: hasWorkspace,
+      enabled: hasWorkspace && context.hasActiveFile !== false,
       run: () => context.explain("class"),
     },
     {
@@ -249,7 +250,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "解释：当前模块",
       group: "understand",
       keywords: ["explain", "module", "模块"],
-      enabled: hasWorkspace,
+      enabled: hasWorkspace && context.hasActiveFile !== false,
       run: () => context.explain("module"),
     },
     {
@@ -265,7 +266,8 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "生成代码注释",
       group: "understand",
       keywords: ["comment", "注释", "文档"],
-      enabled: hasTask && !busy,
+      hint: "⌘⌥D",
+      enabled: hasWorkspace && context.hasActiveFile !== false && !busy,
       run: context.generateComments,
     },
     {

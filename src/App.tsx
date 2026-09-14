@@ -1177,6 +1177,7 @@ function Shell() {
     requestedModelId: string | undefined,
     contextPaths: string[] = [],
     onSessionReady?: (sessionId: string) => Promise<void>,
+    promptTextOverride?: string,
   ): Promise<string | undefined> => {
     setCodingWorkspaceCwd(root);
     const modelId = isConfiguredModelId(models, requestedModelId)
@@ -1210,7 +1211,7 @@ function Shell() {
       // The mode is an internal runtime safety primitive, not a user-facing
       // product choice. Every Echo Code task starts with write-capable Agent.
       await setCodingMode(sessionId, "agent");
-      const promptText = buildCodingWorkflowPrompt(requirement, contextPaths);
+      const promptText = promptTextOverride ?? buildCodingWorkflowPrompt(requirement, contextPaths);
       const accepted = beginAgentTurn({
         sessionId,
         promptText,

@@ -5,6 +5,7 @@
 pub mod changeset;
 pub mod delivery;
 pub mod diagnostics;
+pub mod documentation;
 pub mod impact;
 pub mod orchestrator;
 pub mod refs;

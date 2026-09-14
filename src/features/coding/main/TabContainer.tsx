@@ -1,5 +1,6 @@
 import { AlertTriangle, ChevronRight, FileCode2, FileText, LoaderCircle, X } from "lucide-react";
 
+import type { EditorCodeContext } from "../lib/documentation";
 import { isDirty, isFileTab, isVirtualTab, type DocTabKind, type FileTab, type VirtualTab, type WorkbenchTab } from "../store/tab-store";
 import { CodingEditor, type CodingEditorDiagnostic, type EditorSymbol } from "./CodingEditor";
 
@@ -16,6 +17,8 @@ interface TabContainerProps {
   onSymbolAction?: (action: "definition" | "references" | "impact", symbol: string) => void;
   onDiagnostics?: (path: string, diagnostics: CodingEditorDiagnostic[]) => void;
   onSymbols?: (path: string, symbols: EditorSymbol[]) => void;
+  onEditorContext?: (context: EditorCodeContext) => void;
+  onGenerateDocumentation?: (context?: EditorCodeContext) => void;
   renderDoc: (kind: DocTabKind) => React.ReactNode;
   renderVirtual?: (tab: VirtualTab) => React.ReactNode;
   reveal?: { line: number; column: number; key: number };
@@ -54,6 +57,8 @@ export function TabContainer({
   onSymbolAction,
   onDiagnostics,
   onSymbols,
+  onEditorContext,
+  onGenerateDocumentation,
   renderDoc,
   renderVirtual,
   reveal,
@@ -107,6 +112,21 @@ export function TabContainer({
         <div className="coding-tabs__toolbar">
           <Breadcrumb tab={active} />
           <div className="coding-tabs__views" role="group" aria-label="文件视图">
+            <button
+              type="button"
+              onClick={() => onGenerateDocumentation?.()}
+              disabled={active.view === "diff" || active.draft !== active.original || viewBusy}
+              title={active.view === "diff"
+                ? "请先切换到编辑视图，再让 Agent 生成注释"
+                : active.draft !== active.original
+                  ? "请先保存当前文件，再让 Agent 生成注释"
+                  : viewBusy
+                    ? "正在刷新文件差异，请稍候"
+                    : "为当前选区、光标符号或文件生成注释（⌘⌥D）"}
+              aria-label="为当前选区或符号生成注释"
+            >
+              <FileText size={11} /> 注释
+            </button>
             <button
               type="button"
               className={active.view === "edit" ? "is-active" : ""}
@@ -173,6 +193,14 @@ export function TabContainer({
             onDiagnostics={onDiagnostics}
             onSymbols={onSymbols}
             onSymbolAction={onSymbolAction}
+            onContextChange={(context) => onEditorContext?.({
+              ...context,
+              path: active.relativePath,
+            })}
+            onDocumentationAction={(context) => onGenerateDocumentation?.({
+              ...context,
+              path: active.relativePath,
+            })}
           />
         )}
       </div>

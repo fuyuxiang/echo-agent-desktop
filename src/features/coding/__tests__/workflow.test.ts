@@ -62,6 +62,13 @@ describe("coding workflow contract", () => {
     expect(prompt).toContain("用户补充要求");
   });
 
+  it("automatically applies the layered documentation protocol to natural language", () => {
+    const prompt = buildCodingWorkflowPrompt("为跨模块退款调用链生成系统级注释和文档");
+    expect(prompt).toContain("分层文档协议");
+    expect(prompt).toContain("architecture_documentation");
+    expect(prompt).toContain("各粒度产物必须从同一事实表生成");
+  });
+
   it("builds bounded instructions for plan repair and node continuation", () => {
     const invalid = task({
       nextAction: "revise_plan",

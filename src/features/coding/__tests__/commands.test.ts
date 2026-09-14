@@ -11,6 +11,7 @@ import {
 function context(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
     hasWorkspace: true,
+    hasActiveFile: true,
     hasTask: true,
     busy: false,
     taskPhase: "implementing",
@@ -58,6 +59,29 @@ describe("command registry", () => {
     expect(commands.find((c) => c.id === "review.commit")?.enabled).toBe(false);
     // Read-only navigation stays available.
     expect(commands.find((c) => c.id === "view.changes")?.enabled).toBe(true);
+  });
+
+  it("offers comment generation without an existing task when a file is open", () => {
+    const available = buildCommands(context({ hasTask: false }))
+      .find((command) => command.id === "understand.comments");
+    expect(available?.enabled).toBe(true);
+    expect(available?.hint).toBe("⌘⌥D");
+    const unavailable = buildCommands(context({ hasTask: false, hasActiveFile: false }))
+      .find((command) => command.id === "understand.comments");
+    expect(unavailable?.enabled).toBe(false);
+  });
+
+  it("only offers file-scoped explanations when an active file exists", () => {
+    const commands = buildCommands(context({ hasActiveFile: false }));
+    for (const id of [
+      "understand.function",
+      "understand.class",
+      "understand.module",
+      "understand.comments",
+    ]) {
+      expect(commands.find((command) => command.id === id)?.enabled).toBe(false);
+    }
+    expect(commands.find((command) => command.id === "understand.system")?.enabled).toBe(true);
   });
 
   it("disables rollback and commit when the task changed nothing", () => {

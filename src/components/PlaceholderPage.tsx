@@ -90,6 +90,7 @@ interface PlaceholderPageProps {
     modelId: string | undefined,
     contextPaths: string[],
     onSessionReady: (sessionId: string) => Promise<void>,
+    promptTextOverride?: string,
   ) => Promise<string | undefined>;
   onActivateCodingSession?: (sessionId: string, cwd: string) => Promise<void>;
   onChangeCodingModel?: (modelId: string) => void | Promise<void>;

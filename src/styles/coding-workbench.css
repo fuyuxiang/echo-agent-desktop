@@ -2260,6 +2260,11 @@
 }
 
 .coding-tabs__views button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.coding-tabs__views button[aria-busy="true"]:disabled {
   cursor: progress;
   opacity: 0.72;
 }

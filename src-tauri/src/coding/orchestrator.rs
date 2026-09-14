@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::coding::changeset;
 use crate::coding::diagnostics::{self, Problem};
+use crate::coding::documentation;
 use crate::coding::store;
 use crate::coding::task::{
     self, AcceptanceCriterion, CodingTask, ExecutionLedgerEvent, PlanIssueSeverity,
@@ -441,107 +442,238 @@ pub fn apply(
             ) {
                 return Err("只有实现或修复阶段可以报告代码写入完成".into());
             }
-            let plan_errors = task
-                .plan_issues
-                .iter()
-                .filter(|issue| issue.severity == PlanIssueSeverity::Error)
-                .map(|issue| issue.message.clone())
-                .collect::<Vec<_>>();
-            let unfinished = task
-                .task_nodes
-                .iter()
-                .filter(|node| node.status != TaskNodeStatus::Success)
-                .map(|node| node.plan_key.clone())
-                .collect::<Vec<_>>();
-            if !plan_errors.is_empty() {
-                let attempts = count_ledger_events(root, task_id, "plan_correction_requested");
-                if attempts < DEFAULT_MAX_PLAN_REVISIONS {
-                    task.next_action = Some(TaskNextAction::RevisePlan);
-                    workflow_ledger = Some((
-                        "plan_correction_requested",
-                        None,
-                        format!("请求自动修订执行计划：{}", plan_errors.join("；")),
-                    ));
+            let documentation_violations =
+                documentation::validate_documentation_changes(root, &task, &change_set);
+            if !documentation_violations.is_empty() {
+                let read_only_violation = documentation::is_read_only_task(&task);
+                let executable_change = documentation_violations
+                    .iter()
+                    .any(|violation| violation.message.contains("可执行"));
+                let problems = documentation_violations
+                    .iter()
+                    .map(|violation| {
+                        diagnostics::documentation_problem(
+                            violation.file.clone(),
+                            violation.message.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                diagnostics::save_snapshot(root, task_id, &problems)?;
+                let attempts =
+                    count_ledger_events(root, task_id, "documentation_validation_requested");
+                workflow_ledger = Some((
+                    "documentation_validation_requested",
+                    None,
+                    format!(
+                        "文档安全校验发现 {} 个越界文件变更",
+                        documentation_violations.len()
+                    ),
+                ));
+                if attempts < 2 {
                     PhaseDecision {
-                        next_phase: TaskPhase::Implementing,
-                        reason: format!(
-                            "执行计划需要自动修订（{}/{DEFAULT_MAX_PLAN_REVISIONS}）",
-                            attempts + 1
-                        ),
+                        next_phase: TaskPhase::Repairing,
+                        reason: if read_only_violation {
+                            "只读解释产生了文件变更，Agent 将自动恢复原始文件".into()
+                        } else if executable_change {
+                            "注释生成包含可执行逻辑变更，Agent 将自动撤销越界修改".into()
+                        } else {
+                            "文档产物未满足原始需求，Agent 将自动补齐并重新校验".into()
+                        },
                         blocker: None,
                     }
                 } else {
                     PhaseDecision {
                         next_phase: TaskPhase::Blocked,
-                        reason: "执行计划多次校验失败".into(),
-                        blocker: Some(format!(
-                            "执行计划连续 {attempts} 次存在结构错误：{}",
-                            plan_errors.join("；")
-                        )),
+                        reason: "文档安全校验多次未通过".into(),
+                        blocker: Some(if read_only_violation {
+                            "Agent 多次在只读解释任务中修改文件，已停止自动修复并保留现场。请在变更集中核对并回滚相关文件。"
+                                .into()
+                        } else if executable_change {
+                            "Agent 多次改变了可执行逻辑，已停止自动修复并保留现场。请在变更集中核对相关文件。"
+                                .into()
+                        } else {
+                            "Agent 多次未能生成符合原始需求且可安全校验的注释或文档，已停止自动重试。请检查目标范围和文件类型。"
+                                .into()
+                        }),
                     }
                 }
-            } else if task.plan_revision.is_some() {
-                let unplanned = change_set
-                    .changes
+            } else if documentation::requires_comment_only_validation(&task)
+                && changed_file_count == 0
+            {
+                diagnostics::save_snapshot(
+                    root,
+                    task_id,
+                    &[diagnostics::documentation_problem(
+                        None,
+                        "Agent 未产生任何文件变更；注释/文档任务尚未真正写入工程".into(),
+                    )],
+                )?;
+                let attempts =
+                    count_ledger_events(root, task_id, "documentation_validation_requested");
+                workflow_ledger = Some((
+                    "documentation_validation_requested",
+                    None,
+                    "注释任务未产生文件变更，请求 Agent 自动补写".into(),
+                ));
+                if attempts < 2 {
+                    PhaseDecision {
+                        next_phase: TaskPhase::Repairing,
+                        reason: "注释/文档尚未实际写入，Agent 将根据原始目标自动补全".into(),
+                        blocker: None,
+                    }
+                } else {
+                    PhaseDecision {
+                        next_phase: TaskPhase::Blocked,
+                        reason: "注释任务多次未产生实际变更".into(),
+                        blocker: Some(
+                            "Agent 多次未能把注释或文档写入工程，已停止自动重试。请检查目标文件是否可写或需求范围是否明确。"
+                                .into(),
+                        ),
+                    }
+                }
+            } else if documentation::is_read_only_task(&task) && changed_file_count == 0 {
+                diagnostics::save_snapshot(root, task_id, &[])?;
+                for node in &mut task.task_nodes {
+                    node.status = TaskNodeStatus::Success;
+                    node.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                }
+                PhaseDecision {
+                    next_phase: TaskPhase::Delivered,
+                    reason: "代码解释已完成，本次只读分析未修改工程文件".into(),
+                    blocker: None,
+                }
+            } else {
+                let plan_errors = task
+                    .plan_issues
                     .iter()
-                    .filter(|change| !task::plan_covers_path(&task, &change.path))
-                    .map(|change| change.path.clone())
+                    .filter(|issue| issue.severity == PlanIssueSeverity::Error)
+                    .map(|issue| issue.message.clone())
                     .collect::<Vec<_>>();
-                if !unplanned.is_empty() {
+                let unfinished = task
+                    .task_nodes
+                    .iter()
+                    .filter(|node| node.status != TaskNodeStatus::Success)
+                    .map(|node| node.plan_key.clone())
+                    .collect::<Vec<_>>();
+                if !plan_errors.is_empty() {
                     let attempts = count_ledger_events(root, task_id, "plan_correction_requested");
                     if attempts < DEFAULT_MAX_PLAN_REVISIONS {
-                        task.plan_issues.push(crate::coding::task::PlanIssue {
-                            severity: PlanIssueSeverity::Error,
-                            code: "unplanned_write".into(),
-                            message: format!("实际变更超出计划写入范围：{}", unplanned.join("、")),
-                            node_keys: Vec::new(),
-                        });
                         task.next_action = Some(TaskNextAction::RevisePlan);
                         workflow_ledger = Some((
                             "plan_correction_requested",
                             None,
-                            format!("需要把实际变更纳入计划：{}", unplanned.join("、")),
+                            format!("请求自动修订执行计划：{}", plan_errors.join("；")),
                         ));
                         PhaseDecision {
                             next_phase: TaskPhase::Implementing,
-                            reason: "检测到计划外变更，正在自动修订执行范围".into(),
+                            reason: format!(
+                                "执行计划需要自动修订（{}/{DEFAULT_MAX_PLAN_REVISIONS}）",
+                                attempts + 1
+                            ),
                             blocker: None,
                         }
                     } else {
                         PhaseDecision {
                             next_phase: TaskPhase::Blocked,
-                            reason: "计划写入范围多次与实际变更不一致".into(),
+                            reason: "执行计划多次校验失败".into(),
                             blocker: Some(format!(
-                                "无法在 {DEFAULT_MAX_PLAN_REVISIONS} 次修订内覆盖实际变更：{}",
-                                unplanned.join("、")
+                                "执行计划连续 {attempts} 次存在结构错误：{}",
+                                plan_errors.join("；")
                             )),
                         }
                     }
-                } else if !unfinished.is_empty() {
-                    match schedule_next_node(&mut task) {
-                        Ok(node_key) => {
-                            task.next_action = Some(TaskNextAction::ContinueNode);
+                } else if task.plan_revision.is_some() {
+                    let unplanned = change_set
+                        .changes
+                        .iter()
+                        .filter(|change| !task::plan_covers_path(&task, &change.path))
+                        .map(|change| change.path.clone())
+                        .collect::<Vec<_>>();
+                    if !unplanned.is_empty() {
+                        let attempts =
+                            count_ledger_events(root, task_id, "plan_correction_requested");
+                        if attempts < DEFAULT_MAX_PLAN_REVISIONS {
+                            task.plan_issues.push(crate::coding::task::PlanIssue {
+                                severity: PlanIssueSeverity::Error,
+                                code: "unplanned_write".into(),
+                                message: format!(
+                                    "实际变更超出计划写入范围：{}",
+                                    unplanned.join("、")
+                                ),
+                                node_keys: Vec::new(),
+                            });
+                            task.next_action = Some(TaskNextAction::RevisePlan);
                             workflow_ledger = Some((
-                                "node_scheduled",
-                                Some(node_key.clone()),
-                                format!("已调度节点“{node_key}”进入下一执行回合"),
+                                "plan_correction_requested",
+                                None,
+                                format!("需要把实际变更纳入计划：{}", unplanned.join("、")),
                             ));
                             PhaseDecision {
                                 next_phase: TaskPhase::Implementing,
-                                reason: format!(
-                                    "继续执行节点 {node_key}，剩余 {} 个节点",
-                                    unfinished.len()
-                                ),
+                                reason: "检测到计划外变更，正在自动修订执行范围".into(),
                                 blocker: None,
                             }
+                        } else {
+                            PhaseDecision {
+                                next_phase: TaskPhase::Blocked,
+                                reason: "计划写入范围多次与实际变更不一致".into(),
+                                blocker: Some(format!(
+                                    "无法在 {DEFAULT_MAX_PLAN_REVISIONS} 次修订内覆盖实际变更：{}",
+                                    unplanned.join("、")
+                                )),
+                            }
                         }
-                        Err(reason) => PhaseDecision {
+                    } else if !unfinished.is_empty() {
+                        match schedule_next_node(&mut task) {
+                            Ok(node_key) => {
+                                task.next_action = Some(TaskNextAction::ContinueNode);
+                                workflow_ledger = Some((
+                                    "node_scheduled",
+                                    Some(node_key.clone()),
+                                    format!("已调度节点“{node_key}”进入下一执行回合"),
+                                ));
+                                PhaseDecision {
+                                    next_phase: TaskPhase::Implementing,
+                                    reason: format!(
+                                        "继续执行节点 {node_key}，剩余 {} 个节点",
+                                        unfinished.len()
+                                    ),
+                                    blocker: None,
+                                }
+                            }
+                            Err(reason) => PhaseDecision {
+                                next_phase: TaskPhase::Blocked,
+                                reason: "执行图无法继续调度".into(),
+                                blocker: Some(format!(
+                                    "{reason}。已保留现场，请检查节点拆解或实现方向。"
+                                )),
+                            },
+                        }
+                    } else if changed_file_count == 0 {
+                        PhaseDecision {
                             next_phase: TaskPhase::Blocked,
-                            reason: "执行图无法继续调度".into(),
-                            blocker: Some(format!(
-                                "{reason}。已保留现场，请检查节点拆解或实现方向。"
-                            )),
-                        },
+                            reason: "实现阶段结束但没有代码变更".into(),
+                            blocker: Some(
+                                "Agent 结束了实现但没有写入任何文件。请检查是否只在会话里返回了示例代码。"
+                                    .into(),
+                            ),
+                        }
+                    } else {
+                        verification::clear_records(root, task_id)?;
+                        diagnostics::save_snapshot(root, task_id, &[])?;
+                        PhaseDecision {
+                            next_phase: TaskPhase::Verifying,
+                            reason: format!("已产生 {changed_file_count} 个文件变更，开始验证"),
+                            blocker: None,
+                        }
+                    }
+                } else if changed_file_count > 2 {
+                    PhaseDecision {
+                        next_phase: TaskPhase::Blocked,
+                        reason: "复杂变更缺少结构化执行计划".into(),
+                        blocker: Some(format!(
+                            "本轮修改了 {changed_file_count} 个文件，但 Agent 未发布可追踪的执行计划。已保留文件变更，请补充要求后让 Agent 先拆解依赖再继续。"
+                        )),
                     }
                 } else if changed_file_count == 0 {
                     PhaseDecision {
@@ -553,46 +685,21 @@ pub fn apply(
                         ),
                     }
                 } else {
+                    // Test/lint/build passes are content-bound evidence. Never let
+                    // a new implementation round inherit an earlier green batch.
                     verification::clear_records(root, task_id)?;
                     diagnostics::save_snapshot(root, task_id, &[])?;
+                    if task.plan_revision.is_none() {
+                        for node in &mut task.task_nodes {
+                            node.status = TaskNodeStatus::Success;
+                            node.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                        }
+                    }
                     PhaseDecision {
                         next_phase: TaskPhase::Verifying,
                         reason: format!("已产生 {changed_file_count} 个文件变更，开始验证"),
                         blocker: None,
                     }
-                }
-            } else if changed_file_count > 2 {
-                PhaseDecision {
-                    next_phase: TaskPhase::Blocked,
-                    reason: "复杂变更缺少结构化执行计划".into(),
-                    blocker: Some(format!(
-                        "本轮修改了 {changed_file_count} 个文件，但 Agent 未发布可追踪的执行计划。已保留文件变更，请补充要求后让 Agent 先拆解依赖再继续。"
-                    )),
-                }
-            } else if changed_file_count == 0 {
-                PhaseDecision {
-                    next_phase: TaskPhase::Blocked,
-                    reason: "实现阶段结束但没有代码变更".into(),
-                    blocker: Some(
-                        "Agent 结束了实现但没有写入任何文件。请检查是否只在会话里返回了示例代码。"
-                            .into(),
-                    ),
-                }
-            } else {
-                // Test/lint/build passes are content-bound evidence. Never let
-                // a new implementation round inherit an earlier green batch.
-                verification::clear_records(root, task_id)?;
-                diagnostics::save_snapshot(root, task_id, &[])?;
-                if task.plan_revision.is_none() {
-                    for node in &mut task.task_nodes {
-                        node.status = TaskNodeStatus::Success;
-                        node.completed_at = Some(chrono::Utc::now().to_rfc3339());
-                    }
-                }
-                PhaseDecision {
-                    next_phase: TaskPhase::Verifying,
-                    reason: format!("已产生 {changed_file_count} 个文件变更，开始验证"),
-                    blocker: None,
                 }
             }
         }
@@ -1000,6 +1107,310 @@ mod tests_v2 {
         assert!(task::execution_ledger(dir.path(), &task.id)
             .iter()
             .any(|entry| entry.kind == "requirement_submitted"));
+    }
+
+    #[test]
+    fn read_only_code_explanation_delivers_without_fake_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = task::create_task(
+            dir.path(),
+            "explain",
+            "解释当前模块调用链，只做分析，不修改文件",
+        )
+        .unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted,
+        )
+        .unwrap();
+
+        let (delivered, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationFinished,
+        )
+        .unwrap();
+
+        assert_eq!(decision.next_phase, TaskPhase::Delivered);
+        assert!(decision.reason.contains("只读分析未修改工程文件"));
+        assert_eq!(delivered.task_nodes[0].status, TaskNodeStatus::Success);
+        assert!(delivered.blocker.is_none());
+    }
+
+    #[test]
+    fn read_only_code_explanation_repairs_any_file_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = task::create_task(
+            dir.path(),
+            "explain",
+            "解释当前模块调用链，只做分析，不修改文件",
+        )
+        .unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("analysis.md"), "Should be chat output\n").unwrap();
+        changeset::sync_from_filesystem(dir.path(), &task.id).unwrap();
+
+        let (_, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationFinished,
+        )
+        .unwrap();
+
+        assert_eq!(decision.next_phase, TaskPhase::Repairing);
+        assert!(diagnostics::load_snapshot(dir.path(), &task.id)
+            .iter()
+            .any(|problem| problem.message.contains("只读代码解释任务不得修改")));
+    }
+
+    #[test]
+    fn ordinary_no_change_task_is_not_mistaken_for_read_only_constraint() {
+        let dir = tempfile::tempdir().unwrap();
+        let task =
+            task::create_task(dir.path(), "implement", "添加接口测试，不要修改业务逻辑").unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted,
+        )
+        .unwrap();
+
+        let (_, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationFinished,
+        )
+        .unwrap();
+
+        assert_eq!(decision.next_phase, TaskPhase::Blocked);
+        assert_eq!(decision.reason, "实现阶段结束但没有代码变更");
+    }
+
+    #[test]
+    fn mixed_implementation_and_comments_use_the_normal_verification_pipeline() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("cache.ts"), "export const ttl = 1;\n").unwrap();
+        let task =
+            task::create_task(dir.path(), "implement", "为登录服务增加缓存并补充代码注释").unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("cache.ts"),
+            "// Login cache TTL.\nexport const ttl = 30;\n",
+        )
+        .unwrap();
+        changeset::sync_from_filesystem(dir.path(), &task.id).unwrap();
+
+        let (_, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationFinished,
+        )
+        .unwrap();
+
+        assert_eq!(decision.next_phase, TaskPhase::Verifying);
+        assert!(!decision.reason.contains("注释生成包含可执行逻辑变更"));
+    }
+
+    #[test]
+    fn comment_only_task_repairs_executable_changes_before_verification() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("total.ts"), "export const total = 1;\n").unwrap();
+        let mut task = task::create_task(
+            dir.path(),
+            "document",
+            "为 total.ts 添加代码注释，不改变任何可执行逻辑",
+        )
+        .unwrap();
+        task.acceptance_criteria.push(AcceptanceCriterion {
+            id: "DOC:acceptance:0".into(),
+            content: "typecheck passes".into(),
+            satisfied: false,
+            evidence: Vec::new(),
+        });
+        task::save(dir.path(), &task).unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("total.ts"),
+            "/** Current total. */\nexport const total = 2;\n",
+        )
+        .unwrap();
+        changeset::sync_from_filesystem(dir.path(), &task.id).unwrap();
+
+        let (repairing, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationFinished,
+        )
+        .unwrap();
+
+        assert_eq!(decision.next_phase, TaskPhase::Repairing);
+        assert!(decision.reason.contains("可执行逻辑变更"));
+        assert!(diagnostics::load_snapshot(dir.path(), &task.id)
+            .iter()
+            .any(|problem| problem.kind == diagnostics::ProblemKind::Documentation));
+        assert!(task::execution_ledger(dir.path(), &task.id)
+            .iter()
+            .any(|entry| entry.kind == "documentation_validation_requested"));
+        assert!(repairing.blocker.is_none());
+    }
+
+    #[test]
+    fn comment_only_task_retries_when_agent_only_claimed_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("total.ts"), "export const total = 1;\n").unwrap();
+        let task = task::create_task(
+            dir.path(),
+            "document",
+            "为 total.ts 添加代码注释，不改变任何可执行逻辑",
+        )
+        .unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted,
+        )
+        .unwrap();
+
+        let (_, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationFinished,
+        )
+        .unwrap();
+
+        assert_eq!(decision.next_phase, TaskPhase::Repairing);
+        assert!(decision.reason.contains("尚未实际写入"));
+        assert!(diagnostics::load_snapshot(dir.path(), &task.id)
+            .iter()
+            .any(|problem| problem.message.contains("未产生任何文件变更")));
+    }
+
+    #[test]
+    fn source_comment_request_rejects_document_only_substitution() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("total.ts"), "export const total = 1;\n").unwrap();
+        let task = task::create_task(
+            dir.path(),
+            "document",
+            "为 total.ts 添加代码注释，不改变任何可执行逻辑",
+        )
+        .unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("notes.md"), "Example comments only\n").unwrap();
+        changeset::sync_from_filesystem(dir.path(), &task.id).unwrap();
+
+        let (_, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationFinished,
+        )
+        .unwrap();
+
+        assert_eq!(decision.next_phase, TaskPhase::Repairing);
+        assert!(decision.reason.contains("文档产物未满足原始需求"));
+        assert!(diagnostics::load_snapshot(dir.path(), &task.id)
+            .iter()
+            .any(|problem| problem.message.contains("不能用单独的说明文档替代")));
+    }
+
+    #[test]
+    fn architecture_document_request_requires_a_reviewable_document_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("total.ts"), "export const total = 1;\n").unwrap();
+        let task = task::create_task(
+            dir.path(),
+            "architecture",
+            "生成系统级架构文档，不改变任何可执行逻辑",
+        )
+        .unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("total.ts"),
+            "/** Public total. */\nexport const total = 1;\n",
+        )
+        .unwrap();
+        changeset::sync_from_filesystem(dir.path(), &task.id).unwrap();
+
+        let (_, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationFinished,
+        )
+        .unwrap();
+
+        assert_eq!(decision.next_phase, TaskPhase::Repairing);
+        assert!(diagnostics::load_snapshot(dir.path(), &task.id)
+            .iter()
+            .any(|problem| problem.message.contains("没有可审阅的文档文件")));
+    }
+
+    #[test]
+    fn comment_only_task_reaches_normal_verification_when_logic_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("total.ts"), "export const total = 1;\n").unwrap();
+        let task = task::create_task(
+            dir.path(),
+            "document",
+            "为 total.ts 添加代码注释，不改变任何可执行逻辑",
+        )
+        .unwrap();
+        changeset::capture_filesystem_baseline(dir.path(), &task.id).unwrap();
+        apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::RequirementSubmitted,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("total.ts"),
+            "/** Current total. */\nexport const total = 1;\n",
+        )
+        .unwrap();
+        changeset::sync_from_filesystem(dir.path(), &task.id).unwrap();
+
+        let (_, decision) = apply(
+            dir.path(),
+            &task.id,
+            OrchestratorEvent::ImplementationFinished,
+        )
+        .unwrap();
+
+        assert_eq!(decision.next_phase, TaskPhase::Verifying);
+        assert!(diagnostics::load_snapshot(dir.path(), &task.id).is_empty());
     }
 
     #[test]
