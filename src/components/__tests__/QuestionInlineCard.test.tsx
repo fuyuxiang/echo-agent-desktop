@@ -109,4 +109,30 @@ describe("QuestionInlineCard", () => {
     act(() => clientMocks.closed?.({ requestId: "question-1", sessionId: "session-1" }));
     expect(screen.queryByText("Framework?")).not.toBeInTheDocument();
   });
+
+  it("keeps every item in a multi-question request reachable from a keyboard-scrollable region", () => {
+    useQuestionStore.setState({ queues: {} });
+    useQuestionStore.getState().request({
+      ...request,
+      questions: [
+        request.questions[0],
+        {
+          id: "q-2",
+          question: "MVP scope?",
+          multiSelect: false,
+          options: [
+            { id: "contacts", label: "Contacts", description: "Customer records" },
+            { id: "pipeline", label: "Sales pipeline", description: "Opportunity stages" },
+          ],
+        },
+      ],
+    });
+
+    render(<QuestionInlineCard sessionId="session-1" />);
+
+    expect(screen.getByText("2 个问题")).toBeInTheDocument();
+    expect(screen.getByText("Framework?")).toBeInTheDocument();
+    expect(screen.getByText("MVP scope?")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Agent 问题列表" })).toHaveAttribute("tabindex", "0");
+  });
 });
