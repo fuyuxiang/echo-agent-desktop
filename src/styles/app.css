@@ -3823,8 +3823,13 @@ button.diff__path {
 
 /* ---------- inline question card (session-scoped, non-blocking) ---------- */
 .question-inline {
+  display: flex;
+  flex-direction: column;
   margin: 0 auto 8px;
   width: min(640px, 100%);
+  min-width: 0;
+  max-height: min(680px, 72vh);
+  box-sizing: border-box;
   background: var(--echo-bg-primary);
   border-radius: 12px;
   border: 1px solid var(--echo-brand, #10b981);
@@ -3833,8 +3838,10 @@ button.diff__path {
 }
 .question-inline__head {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   padding: 10px 16px;
   border-bottom: 1px solid var(--echo-border-default);
 }
@@ -3852,11 +3859,53 @@ button.diff__path {
   flex-shrink: 0;
 }
 .question-inline__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   font-weight: 600;
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.question-inline__count {
+  flex: none;
+  color: var(--echo-text-weak);
+  font-size: 11px;
+  white-space: nowrap;
 }
 .question-inline__body {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 10px 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.question-inline__body:focus-visible {
+  outline: 2px solid var(--echo-brand, #10b981);
+  outline-offset: -2px;
+}
+.question-inline__body::-webkit-scrollbar {
+  width: 7px;
+}
+.question-inline__body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.question-inline__body::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--echo-text-weak) 48%, transparent);
+  background-clip: padding-box;
+}
+.question-inline__body::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--echo-text-medium) 64%, transparent);
+  background-clip: padding-box;
+}
+.question-inline__timeout {
+  margin: 0 0 10px;
+  color: var(--echo-text-weak);
+  font-size: 12px;
 }
 .question-inline__question {
   margin-bottom: 12px;
@@ -3910,10 +3959,13 @@ button.diff__path {
 }
 .question-inline__footer {
   display: flex;
+  flex: none;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   padding: 8px 16px;
   border-top: 1px solid var(--echo-border-default);
+  background: var(--echo-bg-primary);
 }
 .btn {
   padding: 6px 14px;

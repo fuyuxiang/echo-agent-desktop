@@ -170,8 +170,16 @@ export function QuestionInlineCard({ sessionId }: { sessionId: string | null }) 
       <div className="question-inline__head">
         <span className="question-inline__icon">?</span>
         <span className="question-inline__title">{head.title || "Agent 提问"}</span>
+        {head.questions.length > 1 && (
+          <span className="question-inline__count">{head.questions.length} 个问题</span>
+        )}
       </div>
-      <div className="question-inline__body">
+      <div
+        className="question-inline__body"
+        role="region"
+        aria-label="Agent 问题列表"
+        tabIndex={0}
+      >
         {remainingSeconds != null && (
           <p className="question-inline__timeout" aria-live="polite">
             {expired
