@@ -560,6 +560,7 @@ pub fn set_permission_mode(session_id: &str, mode: &str) -> Result<String, Strin
     set_permission_mode_at(&state_path(), session_id, mode)
 }
 
+#[cfg(test)]
 fn clear_permission_mode_at(path: &Path, session_id: &str) -> Result<bool, String> {
     if !valid_session_id(session_id) {
         return Err("会话 ID 无效或过长".into());
