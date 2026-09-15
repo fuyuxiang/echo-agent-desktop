@@ -78,9 +78,9 @@ jobs:
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -j 2
 
   windows-search-bundle:
-    name: Windows built-in search smoke test
+    name: Windows built-in tool reliability
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -97,3 +97,9 @@ jobs:
           --manifest-path vendor/echo-agent-build/Cargo.toml
           -p echo-agent-tools
           implementations::echo_agent_build::grep::tests::tool_grep_finds_matches
+      - name: Verify parallel tool stream recovery on Windows
+        run: >-
+          cargo test --locked --release
+          --manifest-path vendor/echo-agent-build/Cargo.toml
+          -p echo-agent-sampler
+          ambiguous_parallel_tools_retry_once_with_parallel_disabled

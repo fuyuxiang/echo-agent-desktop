@@ -682,7 +682,10 @@ export function Sidebar({
   const skipMenuFocusRestoreRef = useRef(false);
   const { requestConfirmation, dialog } = useAppDialog("sidebar-session-actions");
 
-  const allSessions = independent;
+  const allSessions = useMemo(
+    () => independent.filter((session) => !session.hidden),
+    [independent],
+  );
 
   const handleContextMenu = useCallback((e: React.MouseEvent, sessionId: string, sessionTitle: string, isPinned: boolean, isArchived: boolean, projectId?: string) => {
     e.preventDefault();
@@ -898,12 +901,16 @@ export function Sidebar({
     return ids;
   }, [projects]);
   const taskSessions = useMemo(
-    () => independent.filter((session) => !projectSessionIds.has(session.sessionId)),
-    [independent, projectSessionIds],
+    () => allSessions.filter((session) => !projectSessionIds.has(session.sessionId)),
+    [allSessions, projectSessionIds],
   );
   const sessionSummaryById = useMemo(
     () => new Map(allSessions.map((session) => [session.sessionId, session])),
     [allSessions],
+  );
+  const hiddenSessionIds = useMemo(
+    () => new Set(independent.filter((session) => session.hidden).map((session) => session.sessionId)),
+    [independent],
   );
 
   // Apply status + date filters only to active standalone tasks. Archived
@@ -1084,8 +1091,8 @@ export function Sidebar({
             {projects.map((proj) => {
               const open = !!expandedProjects[proj.id];
               const projectConversations = proj.conversations.filter((conversation) => (
-                !conversation.archived
-                && !sessionSummaryById.get(conversation.sessionId)?.archived
+                !(sessionSummaryById.get(conversation.sessionId)?.archived ?? conversation.archived)
+                && !hiddenSessionIds.has(conversation.sessionId)
               ));
               return (
                 <div key={proj.id} className="sidebar__node-wrap">
@@ -1153,7 +1160,7 @@ export function Sidebar({
                           cwd: summary?.cwd || proj.cwd || "",
                           updatedAt: summary?.updatedAt || conversation.createdAt,
                           pinned: summary?.pinned,
-                          archived: conversation.archived,
+                          archived: summary?.archived ?? conversation.archived,
                           status: summary?.status,
                         }, proj.id);
                       })}

@@ -1895,7 +1895,19 @@ pub async fn agent_delete_session(
 /// EchoAgent-only state stored in `~/.echo-agent/echoagent-state.json`. Returns the
 /// new pinned value so the frontend can update without a re-fetch.
 #[tauri::command]
-pub fn agent_set_session_pinned(session_id: String, pinned: bool) -> Result<bool, String> {
+pub fn agent_set_session_pinned(
+    state: State<'_, AppState>,
+    session_id: String,
+    pinned: bool,
+) -> Result<bool, String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    if state.session_workspace(&session_id).is_err()
+        && !sessions::persisted_session_exists(&session_id)?
+    {
+        return Err("会话不存在或已被删除，无法修改置顶状态".into());
+    }
     crate::meta::set_pinned(&session_id, pinned)
 }
 
@@ -1947,10 +1959,22 @@ pub async fn agent_session_usage(
 
 /// Archive or unarchive a session. EchoAgent's `Summary` has no `archived` field,
 /// so this is EchoAgent-only state stored in `~/.echo-agent/echoagent-state.json`.
-/// Archived sessions are filtered out of `list_sessions`. Returns the new
-/// archived value so the frontend can update without a re-fetch.
+/// Archived sessions are filtered by default from `list_sessions`. Returns the
+/// new archived value so the frontend can update without a re-fetch.
 #[tauri::command]
-pub fn agent_set_session_archived(session_id: String, archived: bool) -> Result<bool, String> {
+pub fn agent_set_session_archived(
+    state: State<'_, AppState>,
+    session_id: String,
+    archived: bool,
+) -> Result<bool, String> {
+    if !valid_session_id(&session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    if state.session_workspace(&session_id).is_err()
+        && !sessions::persisted_session_exists(&session_id)?
+    {
+        return Err("会话不存在或已被删除，无法修改归档状态".into());
+    }
     crate::meta::set_archived(&session_id, archived)
 }
 

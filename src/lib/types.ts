@@ -349,6 +349,10 @@ export interface SessionSummary {
    *  EchoAgent-only state (EchoAgent has no archived field); stored in
    *  `~/.echo-agent/echoagent-state.json`. */
   archived?: boolean;
+  /** Upstream classification such as `subagent`; used for hierarchy-aware UI. */
+  sessionKind?: string;
+  /** Hidden child/internal sessions are addressable but not catalog tasks. */
+  hidden?: boolean;
   /** Model id bound to this session, if recorded in summary.json. */
   currentModelId?: string;
   /** Permission mode owned and persisted by this task/session. */

@@ -30,6 +30,7 @@ use crate::metrics::InferenceLatencyStats;
 use crate::retry::{
     self as retry_mod, RetryDecision, classify_error, clone_error, resolve_max_retries,
 };
+use crate::stream::chat_completions::AMBIGUOUS_PARALLEL_TOOL_STREAM;
 use crate::stream::responses::stream_responses_tracked;
 use crate::stream::{stream_chat_completions, stream_messages};
 use crate::types::RequestId;
@@ -132,6 +133,8 @@ pub(crate) async fn run_request_task(
     let doom_policy = config.doom_loop_recovery;
     let doom_max_retries = doom_policy.map_or(0, |p| p.max_retries);
     let mut doom_retry_count: u32 = 0;
+    let mut parallel_tool_calls_override = None;
+    let mut parallel_tool_retry_count: u32 = 0;
     let output_observed = Arc::new(AtomicBool::new(false));
 
     loop {
@@ -152,6 +155,7 @@ pub(crate) async fn run_request_task(
             &cancel_token,
             doom_check,
             Arc::clone(&output_observed),
+            parallel_tool_calls_override,
         )
         .instrument(sampling_span.clone())
         .await;
@@ -168,7 +172,7 @@ pub(crate) async fn run_request_task(
                 response,
                 mut metrics,
             } => {
-                metrics.attempts = retry_count + doom_retry_count + 1;
+                metrics.attempts = retry_count + doom_retry_count + parallel_tool_retry_count + 1;
                 if let Some(policy) = doom_policy {
                     let confident = policy.confident_triggers(&response.doom_loop_signals);
                     if !confident.is_empty() {
@@ -236,6 +240,27 @@ pub(crate) async fn run_request_task(
                 error,
                 recovery_items,
             } => {
+                if is_ambiguous_parallel_tool_stream(&error) {
+                    // The parser rejects malformed parallel batches before it
+                    // forwards their deltas. That makes one request-local retry
+                    // with parallel tools disabled safe. If any output escaped,
+                    // or the provider ignored the fallback, fail visibly instead
+                    // of duplicating tool side effects or retry-storming.
+                    if parallel_tool_retry_count == 0 && !output_observed.load(Ordering::Relaxed) {
+                        parallel_tool_calls_override = Some(false);
+                        parallel_tool_retry_count = 1;
+                        tracing::warn!(
+                            target: crate::sampling_log::TARGET,
+                            attempt = parallel_tool_retry_count,
+                            "ambiguous parallel tool stream; retrying once with parallel_tool_calls=false"
+                        );
+                        emit_retrying(&event_tx, &request_id, parallel_tool_retry_count, 1, &error);
+                        continue;
+                    }
+                    emit_failed(&event_tx, &request_id, &error);
+                    send_completion(&mut completion_tx, Err(clone_error(&error)));
+                    return request_id;
+                }
                 // Doom-loop resamples run on their own budget and never
                 // consult the transport classifier, so no classifier change
                 // can silently debit the transport budget for a doom failure.
@@ -536,10 +561,14 @@ async fn run_one_attempt(
     cancel_token: &CancellationToken,
     doom_check: Option<echo_agent_sampling_types::DoomLoopRecoveryPolicy>,
     output_observed: Arc<AtomicBool>,
+    parallel_tool_calls_override: Option<bool>,
 ) -> AttemptOutcome {
     match client.api_backend() {
         ApiBackend::ChatCompletions => {
-            let (raw, metadata) = match client.conversation_stream(request).await {
+            let (raw, metadata) = match client
+                .conversation_stream_with_parallel_tool_calls(request, parallel_tool_calls_override)
+                .await
+            {
                 Ok(pair) => pair,
                 Err(e) => return AttemptOutcome::InitFailed { error: e },
             };
@@ -617,6 +646,14 @@ async fn run_one_attempt(
             .await
         }
     }
+}
+
+fn is_ambiguous_parallel_tool_stream(error: &SamplingError) -> bool {
+    matches!(
+        error,
+        SamplingError::EventStreamError(message)
+            if message.contains(AMBIGUOUS_PARALLEL_TOOL_STREAM)
+    )
 }
 
 /// Captured-error cell shared between the tee adapter and the
@@ -973,6 +1010,20 @@ mod tests {
             SamplingError::IdleTimeout { elapsed_secs } => assert_eq!(elapsed_secs, 240),
             other => panic!("expected IdleTimeout, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn ambiguous_parallel_marker_survives_event_error_round_trip() {
+        let original = SamplingError::EventStreamError(format!(
+            "{AMBIGUOUS_PARALLEL_TOOL_STREAM}：索引 0 重复"
+        ));
+        let info = SamplingErrorInfo::from(&original);
+        let round_tripped = synthesize_from_info(&info);
+
+        assert!(is_ambiguous_parallel_tool_stream(&round_tripped));
+        assert!(!is_ambiguous_parallel_tool_stream(
+            &SamplingError::EventStreamError("普通网络错误".into())
+        ));
     }
 
     #[test]

@@ -6478,6 +6478,7 @@ button.diff__path {
 .pd-task-item__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .pd-task-item__title { font-size: 14px; color: var(--echo-text-strong); }
 .pd-task-item__meta { font-size: 12px; color: var(--echo-text-tertiary); }
+.pd-task-item__meta > .pd-session-status { margin-left: 7px; }
 .pd-task-item__del { margin-left: auto; border: none; background: none; color: var(--echo-text-tertiary); cursor: pointer; }
 .pd-task-item--clickable { cursor: pointer; }
 .pd-task-item--clickable:hover { background: var(--echo-bg-hover); }

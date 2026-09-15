@@ -60,6 +60,10 @@ import type { AgentEntry, SessionSummary } from "./lib/types";
 import { buildCodingWorkflowPrompt } from "./features/coding/lib/workflow";
 import { hydrateProjectsFromBackend, useProjectsStore, type ProjectMeta } from "./stores/projects-store";
 import {
+  onSessionStatusPersistenceIssue,
+  retryPendingSessionStatuses,
+} from "./lib/session-status-persistence";
+import {
   useMessageQueueStore,
   hasActiveItems,
   queueTerminalPolicy,
@@ -251,10 +255,16 @@ function Shell() {
       console.error("[EchoAgent] Failed to hydrate knowledge sources:", error);
       setToast({ message: "知识源后端数据读取失败", actions: [] });
     });
-    void hydrateProjectsFromBackend().catch((error) => {
-      console.error("[EchoAgent] Failed to hydrate projects:", error);
-      setToast({ message: "项目后端数据读取失败，已使用本地缓存", actions: [] });
-    });
+    void hydrateProjectsFromBackend()
+      .then(() => {
+        useProjectsStore.getState().reconcileSessionArchiveStates(
+          useSessionsStore.getState().independent,
+        );
+      })
+      .catch((error) => {
+        console.error("[EchoAgent] Failed to hydrate projects:", error);
+        setToast({ message: "项目后端数据读取失败，已使用本地缓存", actions: [] });
+      });
   }, []);
 
   useEffect(() => {
@@ -326,6 +336,7 @@ function Shell() {
     const failures: string[] = [];
     if (sessionResult.status === "fulfilled") {
       sessionsStore.getState().setIndependent(sessionResult.value);
+      useProjectsStore.getState().reconcileSessionArchiveStates(sessionResult.value);
     } else {
       failures.push(`会话：${friendlyError(sessionResult.reason)}`);
     }
@@ -939,6 +950,20 @@ function Shell() {
       setToast(null);
     }, durationMs);
   }, []);
+
+  useEffect(() => onSessionStatusPersistenceIssue(({ pendingCount }) => {
+    showActionToast(
+      `${pendingCount} 个任务的最新状态暂未保存，任务执行不受影响`,
+      [{
+        label: "重试保存",
+        onClick: () => {
+          const retryCount = retryPendingSessionStatuses();
+          showToast(retryCount > 0 ? `正在重试保存 ${retryCount} 个任务状态` : "任务状态已保存");
+        },
+      }],
+      12_000,
+    );
+  }), [showActionToast, showToast]);
 
   useEffect(() => () => {
     if (toastTimer.current) clearTimeout(toastTimer.current);

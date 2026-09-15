@@ -951,11 +951,11 @@ struct RawSearchHit {
     session_id: String,
     #[serde(default)]
     cwd: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "summary")]
     title: Option<String>,
     #[serde(default)]
     snippet: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "score")]
     rank: Option<f64>,
     #[serde(default)]
     updated_at: Option<String>,
@@ -2271,9 +2271,25 @@ mod tests {
         normalize_plugin_action, parse_slash_commands, remember_marketplace, remember_plugins,
         request_internal_reload_and_wait, require_listed_marketplace_source,
         require_listed_plugin_id, resolve_memory_path, secure_remote_source, validate_admin_action,
-        MemoryEntryScope, MemoryIndex, MemoryStorage, RunningTaskSource,
+        MemoryEntryScope, MemoryIndex, MemoryStorage, RawSearchHit, RunningTaskSource,
         MAX_ADMIN_ACTION_STRING_BYTES,
     };
+
+    #[test]
+    fn search_hits_accept_the_current_upstream_summary_and_score_fields() {
+        let hit: RawSearchHit = serde_json::from_value(serde_json::json!({
+            "sessionId": "session-1",
+            "cwd": "/workspace",
+            "summary": "真实标题",
+            "snippet": "命中内容",
+            "score": 0.25,
+            "updatedAt": "2026-09-15T08:00:00Z"
+        }))
+        .unwrap();
+
+        assert_eq!(hit.title.as_deref(), Some("真实标题"));
+        assert_eq!(hit.rank, Some(0.25));
+    }
 
     fn assert_session_params(
         arguments: &echo_agent_acp::AcpArgs<agent_client_protocol::ExtRequest>,

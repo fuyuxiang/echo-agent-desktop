@@ -18,6 +18,10 @@ use crate::events::{SamplingChannel, SamplingErrorInfo, SamplingEvent};
 use crate::metrics::InferenceLatencyStats;
 use crate::types::RequestId;
 
+/// Stable prefix used by the request actor to recognize the one class of
+/// stream failure that can be recovered safely by disabling parallel tools.
+pub(crate) const AMBIGUOUS_PARALLEL_TOOL_STREAM: &str = "模型服务返回的并行工具调用缺少稳定标识";
+
 fn next_tool_slot(preferred: Option<u32>, calls: &BTreeMap<u32, (String, String, String)>) -> u32 {
     if let Some(preferred) = preferred
         && !calls.contains_key(&preferred)
@@ -36,9 +40,6 @@ fn next_tool_slot(preferred: Option<u32>, calls: &BTreeMap<u32, (String, String,
 fn resolve_tool_slot(
     wire_index: Option<u32>,
     id: Option<&str>,
-    ordinal: usize,
-    wire_ordinal: usize,
-    batch_len: usize,
     calls: &BTreeMap<u32, (String, String, String)>,
     wire_slots: &mut HashMap<u32, Vec<u32>>,
     id_slots: &mut HashMap<String, u32>,
@@ -72,46 +73,48 @@ fn resolve_tool_slot(
         let candidates = wire_slots
             .entry(wire_index)
             .or_insert_with(|| vec![wire_index]);
-        if let [slot] = candidates.as_slice()
-            && wire_ordinal == 0
-        {
+        if let [slot] = candidates.as_slice() {
             return Ok(*slot);
-        }
-        if batch_len > 1 {
-            if let Some(slot) = candidates.get(wire_ordinal) {
-                return Ok(*slot);
-            }
-            if wire_ordinal == candidates.len() {
-                let slot = next_tool_slot(None, calls);
-                candidates.push(slot);
-                return Ok(slot);
-            }
         }
         return match candidates.as_slice() {
             [slot] => Ok(*slot),
             slots => Err(format!(
-                "模型服务返回了无法区分的并行工具调用：索引 {wire_index} 对应 {} 个调用，但当前片段没有调用 ID。请重试本轮任务。",
+                "{AMBIGUOUS_PARALLEL_TOOL_STREAM}：索引 {wire_index} 对应 {} 个调用，但当前片段没有调用 ID。",
                 slots.len()
             )),
         };
-    }
-
-    if batch_len > 1 {
-        if let Some(slot) = calls.keys().nth(ordinal) {
-            return Ok(*slot);
-        }
-        if ordinal == calls.len() {
-            return Ok(next_tool_slot(None, calls));
-        }
     }
 
     match calls.len() {
         0 => Ok(0),
         1 => Ok(*calls.first_key_value().expect("one call exists").0),
         len => Err(format!(
-            "模型服务省略了并行工具调用的索引和调用 ID，无法安全区分 {len} 个调用的参数片段。请重试本轮任务。"
+            "{AMBIGUOUS_PARALLEL_TOOL_STREAM}：当前参数片段同时省略了索引和调用 ID，无法安全区分 {len} 个调用。"
         )),
     }
+}
+
+fn validate_parallel_tool_delta_batch(
+    deltas: &[echo_agent_sampling_types::ToolCallDelta],
+) -> Result<(), String> {
+    if deltas.len() <= 1 {
+        return Ok(());
+    }
+    let mut indices = std::collections::HashSet::with_capacity(deltas.len());
+    for delta in deltas {
+        let Some(index) = delta.index else {
+            return Err(format!(
+                "{AMBIGUOUS_PARALLEL_TOOL_STREAM}：同一片段包含 {} 个调用，但有调用没有索引。",
+                deltas.len()
+            ));
+        };
+        if !indices.insert(index) {
+            return Err(format!(
+                "{AMBIGUOUS_PARALLEL_TOOL_STREAM}：同一片段内的多个调用重复使用索引 {index}。"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Transform a raw Chat Completions chunk stream into a stream of
@@ -305,24 +308,21 @@ pub fn stream_chat_completions<'a>(
                     };
                 }
 
-                let tool_delta_count = delta.tool_calls.len();
-                let mut wire_occurrences: HashMap<u32, usize> = HashMap::new();
-                for (ordinal, tc_delta) in delta.tool_calls.into_iter().enumerate() {
+                if let Err(message) = validate_parallel_tool_delta_batch(&delta.tool_calls) {
+                    let error = SamplingError::EventStreamError(message);
+                    yield SamplingEvent::Failed {
+                        request_id: request_id.clone(),
+                        error: SamplingErrorInfo::from(&error),
+                    };
+                    return;
+                }
+                for tc_delta in delta.tool_calls {
                     chunk_has_content = true;
 
                     let incoming_id = tc_delta.id.filter(|id| !id.trim().is_empty());
-                    let wire_ordinal = tc_delta.index.map_or(ordinal, |wire_index| {
-                        let occurrence = wire_occurrences.entry(wire_index).or_default();
-                        let current = *occurrence;
-                        *occurrence += 1;
-                        current
-                    });
                     let tool_index = match resolve_tool_slot(
                         tc_delta.index,
                         incoming_id.as_deref(),
-                        ordinal,
-                        wire_ordinal,
-                        tool_delta_count,
                         &tool_call_acc,
                         &mut tool_wire_slots,
                         &mut tool_id_slots,
@@ -365,12 +365,15 @@ pub fn stream_chat_completions<'a>(
                             } else if entry.1 == name {
                                 name_for_event = Some(name);
                             } else {
-                                tracing::warn!(
-                                    tool_index,
-                                    retained_name = %entry.1,
-                                    ignored_name = %name,
-                                    "provider changed function.name across tool-call deltas; retaining the first non-blank name"
-                                );
+                                let error = SamplingError::EventStreamError(format!(
+                                    "模型服务在同一工具调用中将名称从“{}”更改为“{name}”，无法安全归属参数片段。",
+                                    entry.1
+                                ));
+                                yield SamplingEvent::Failed {
+                                    request_id: request_id.clone(),
+                                    error: SamplingErrorInfo::from(&error),
+                                };
+                                return;
                             }
                         }
                         if let Some(args) = func.arguments {
@@ -799,7 +802,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_wire_indices_are_disambiguated_by_id_and_batch_position() {
+    async fn duplicate_wire_indices_fail_before_any_tool_delta_is_forwarded() {
         let chunks = vec![
             Ok(parallel_tool_chunk(vec![
                 (Some(0), Some("call_a"), Some("grep"), "{\"pattern\":\"a\""),
@@ -818,21 +821,16 @@ mod tests {
         ))
         .await;
 
-        match events.last().expect("terminal event") {
-            SamplingEvent::Completed { response, .. } => {
-                let calls = response.tool_calls();
-                assert_eq!(calls.len(), 2);
-                assert_eq!(calls[0].id.as_ref(), "call_a");
-                assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"a"}"#);
-                assert_eq!(calls[1].id.as_ref(), "call_b");
-                assert_eq!(calls[1].arguments.as_ref(), r#"{"pattern":"b"}"#);
-            }
-            other => panic!("expected Completed, got {other:?}"),
-        }
+        assert!(matches!(events.last(), Some(SamplingEvent::Failed { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SamplingEvent::ToolCallDelta { .. }))
+        );
     }
 
     #[tokio::test]
-    async fn duplicate_wire_indices_without_ids_use_stable_batch_position() {
+    async fn duplicate_wire_indices_without_ids_fail_instead_of_guessing_by_position() {
         let chunks = vec![
             Ok(parallel_tool_chunk(vec![
                 (Some(0), None, Some("grep"), "{\"pattern\":\"a\""),
@@ -851,21 +849,16 @@ mod tests {
         ))
         .await;
 
-        match events.last().expect("terminal event") {
-            SamplingEvent::Completed { response, .. } => {
-                let calls = response.tool_calls();
-                assert_eq!(calls.len(), 2);
-                assert_eq!(calls[0].name, "grep");
-                assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"a"}"#);
-                assert_eq!(calls[1].name, "read_file");
-                assert_eq!(calls[1].arguments.as_ref(), r#"{"path":"b"}"#);
-            }
-            other => panic!("expected Completed, got {other:?}"),
-        }
+        assert!(matches!(events.last(), Some(SamplingEvent::Failed { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SamplingEvent::ToolCallDelta { .. }))
+        );
     }
 
     #[tokio::test]
-    async fn missing_wire_indices_use_batch_position_without_crossing_arguments() {
+    async fn missing_wire_indices_fail_instead_of_guessing_by_position() {
         let chunks = vec![
             Ok(parallel_tool_chunk(vec![
                 (None, Some("call_a"), Some("grep"), "{\"pattern\":\"a\""),
@@ -884,15 +877,12 @@ mod tests {
         ))
         .await;
 
-        match events.last().expect("terminal event") {
-            SamplingEvent::Completed { response, .. } => {
-                let calls = response.tool_calls();
-                assert_eq!(calls.len(), 2);
-                assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"a"}"#);
-                assert_eq!(calls[1].arguments.as_ref(), r#"{"pattern":"b"}"#);
-            }
-            other => panic!("expected Completed, got {other:?}"),
-        }
+        assert!(matches!(events.last(), Some(SamplingEvent::Failed { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SamplingEvent::ToolCallDelta { .. }))
+        );
     }
 
     #[tokio::test]
@@ -979,6 +969,38 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn changed_tool_name_fails_instead_of_appending_arguments_to_the_wrong_tool() {
+        let chunks = vec![
+            Ok(parallel_tool_chunk(vec![(
+                Some(0),
+                None,
+                Some("grep"),
+                "{\"pattern\":",
+            )])),
+            Ok(parallel_tool_chunk(vec![(
+                Some(0),
+                None,
+                Some("read_file"),
+                "\"README.md\"}",
+            )])),
+        ];
+        let events = collect(stream_chat_completions(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        assert!(matches!(events.last(), Some(SamplingEvent::Failed { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SamplingEvent::Completed { .. }))
+        );
     }
 
     #[tokio::test]

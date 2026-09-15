@@ -45,6 +45,13 @@ pub struct SessionSummary {
     /// Archived (hidden from sidebar) flag (EchoAgent-only state, NOT a EchoAgent field).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
+    /// Upstream session classification, e.g. `subagent` or `worktree`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_kind: Option<String>,
+    /// Effective upstream discovery visibility. Hidden child sessions remain
+    /// addressable by id but must not appear as top-level tasks.
+    #[serde(default)]
+    pub hidden: bool,
     /// Model id bound to this session, if recorded in summary.json.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_model_id: Option<String>,
@@ -92,6 +99,10 @@ struct SummaryFile {
     last_active_at: Option<String>,
     #[serde(default)]
     current_model_id: Option<String>,
+    #[serde(default)]
+    session_kind: Option<String>,
+    #[serde(default)]
+    hidden: Option<bool>,
     #[serde(default)]
     git_root_dir: Option<String>,
     /// Nested `info.id` / `info.cwd` shape (EchoAgent's Summary wraps these in Info).
@@ -298,6 +309,7 @@ fn to_session_summary(
         .or_else(|| summary.last_active_at.clone())
         .map(|value| bounded_text(value, MAX_UPDATED_AT_CHARS));
     let is_git_repo = summary.git_root_dir.as_ref().map(|path| !path.is_empty());
+    let hidden = summary_is_hidden(&summary);
     Some(SessionSummary {
         session_id,
         title,
@@ -306,6 +318,10 @@ fn to_session_summary(
         is_git_repo,
         pinned: None,
         archived: None,
+        session_kind: summary
+            .session_kind
+            .map(|value| bounded_text(value, MAX_MODEL_ID_CHARS)),
+        hidden,
         current_model_id: summary
             .current_model_id
             .map(|value| bounded_text(value, MAX_MODEL_ID_CHARS)),
@@ -314,6 +330,15 @@ fn to_session_summary(
         expert_avatar: None,
         permission_mode: "ask".into(),
         status: None,
+    })
+}
+
+fn summary_is_hidden(summary: &SummaryFile) -> bool {
+    summary.hidden.unwrap_or_else(|| {
+        summary
+            .session_kind
+            .as_deref()
+            .is_some_and(|kind| kind.starts_with("subagent"))
     })
 }
 
@@ -388,6 +413,14 @@ fn apply_metadata_from_state(
 /// filters by cwd. Best-effort: missing/invalid entries are skipped.
 pub fn list_sessions(cwd: &str, include_archived: bool) -> Vec<SessionSummary> {
     let sessions_root = agent_sessions_root();
+    list_sessions_from_root(&sessions_root, cwd, include_archived)
+}
+
+fn list_sessions_from_root(
+    sessions_root: &Path,
+    cwd: &str,
+    include_archived: bool,
+) -> Vec<SessionSummary> {
     let mut out = Vec::new();
     let requested_canonical = canonical_workspace(cwd);
     let output_cwd = requested_canonical
@@ -396,7 +429,7 @@ pub fn list_sessions(cwd: &str, include_archived: bool) -> Vec<SessionSummary> {
         .unwrap_or_else(|| bounded_text(cwd.to_string(), MAX_CWD_CHARS));
     let mut visited_sessions = 0_usize;
 
-    let Ok(cwd_dirs) = std::fs::read_dir(&sessions_root) else {
+    let Ok(cwd_dirs) = std::fs::read_dir(sessions_root) else {
         return out;
     };
     for cwd_entry in cwd_dirs.flatten().take(MAX_CWD_DIRECTORIES) {
@@ -465,6 +498,29 @@ pub fn list_all_sessions(include_archived: bool) -> Result<Vec<SessionSummary>, 
     let mut out = list_all_sessions_from_root(&sessions_root)?;
     apply_metadata_and_sort(&mut out, include_archived);
     Ok(out)
+}
+
+/// Confirm that a persisted session record exists before writing sidecar
+/// metadata such as pin/archive flags. This prevents stale or forged renderer
+/// ids from creating permanent ghost entries in `echoagent-state.json`.
+pub fn persisted_session_exists(session_id: &str) -> Result<bool, String> {
+    let sessions_root = agent_sessions_root();
+    persisted_session_exists_from_root(&sessions_root, session_id)
+}
+
+fn persisted_session_exists_from_root(
+    sessions_root: &Path,
+    session_id: &str,
+) -> Result<bool, String> {
+    if session_id.trim().is_empty()
+        || session_id.chars().count() > MAX_SESSION_ID_CHARS
+        || session_id.chars().any(char::is_control)
+    {
+        return Ok(false);
+    }
+    Ok(list_all_sessions_from_root(sessions_root)?
+        .iter()
+        .any(|summary| summary.session_id == session_id))
 }
 
 fn list_all_sessions_from_root(sessions_root: &Path) -> Result<Vec<SessionSummary>, String> {
@@ -563,12 +619,16 @@ pub struct WorkspaceInfo {
 /// populate the workspace picker. Best-effort: malformed entries are skipped.
 pub fn list_workspaces() -> Vec<WorkspaceInfo> {
     let sessions_root = agent_sessions_root();
+    list_workspaces_from_root(&sessions_root)
+}
+
+fn list_workspaces_from_root(sessions_root: &Path) -> Vec<WorkspaceInfo> {
     // cwd -> (count, last_title)
     let mut map: std::collections::HashMap<String, (usize, Option<String>)> =
         std::collections::HashMap::new();
     let mut visited_sessions = 0_usize;
 
-    let Ok(cwd_dirs) = std::fs::read_dir(&sessions_root) else {
+    let Ok(cwd_dirs) = std::fs::read_dir(sessions_root) else {
         return Vec::new();
     };
     for cwd_entry in cwd_dirs.flatten().take(MAX_CWD_DIRECTORIES) {
@@ -592,6 +652,9 @@ pub fn list_workspaces() -> Vec<WorkspaceInfo> {
             let Some(s) = read_summary_file(&summary_path) else {
                 continue;
             };
+            if summary_is_hidden(&s) {
+                continue;
+            }
             if authoritative_session_id(&session_path, &s).is_none() {
                 continue;
             }
@@ -654,9 +717,10 @@ fn agent_sessions_root() -> PathBuf {
 mod tests {
     use super::{
         apply_archive_visibility, apply_metadata_from_state, authoritative_session_id,
-        display_title, list_all_sessions_from_root, read_summary_file, recover_title_from_updates,
-        summary_cwd, to_session_summary, workspace_dir_matches_request, SessionSummary,
-        SummaryFile, MAX_SUMMARY_BYTES, MAX_TITLE_CHARS,
+        display_title, list_all_sessions_from_root, list_sessions_from_root,
+        list_workspaces_from_root, persisted_session_exists_from_root, read_summary_file,
+        recover_title_from_updates, summary_cwd, to_session_summary, workspace_dir_matches_request,
+        SessionSummary, SummaryFile, MAX_SUMMARY_BYTES, MAX_TITLE_CHARS,
     };
 
     fn summary(json: &str) -> SummaryFile {
@@ -672,6 +736,8 @@ mod tests {
             is_git_repo: None,
             pinned: None,
             archived: None,
+            session_kind: None,
+            hidden: false,
             current_model_id: None,
             expert_id: None,
             expert_name: None,
@@ -714,6 +780,69 @@ mod tests {
 
         assert_eq!(rows[0].status.as_deref(), Some("awaiting_permission"));
         assert_eq!(rows[0].updated_at.as_deref(), Some("2026-09-14T09:00:00Z"));
+    }
+
+    #[test]
+    fn subagent_sessions_are_hidden_by_default_but_remain_addressable() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_dir = temp.path().join("child-session");
+        std::fs::create_dir(&session_dir).unwrap();
+        let parsed = summary(
+            r#"{"session_id":"child-session","session_kind":"subagent","generated_title":"child"}"#,
+        );
+
+        let row = to_session_summary(&session_dir, parsed, "/tmp".into()).unwrap();
+        assert!(row.hidden);
+        assert_eq!(row.session_kind.as_deref(), Some("subagent"));
+    }
+
+    #[test]
+    fn explicit_visibility_override_can_expose_a_subagent_session() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_dir = temp.path().join("visible-child");
+        std::fs::create_dir(&session_dir).unwrap();
+        let parsed =
+            summary(r#"{"session_id":"visible-child","session_kind":"subagent","hidden":false}"#);
+
+        assert!(
+            !to_session_summary(&session_dir, parsed, "/tmp".into())
+                .unwrap()
+                .hidden
+        );
+    }
+
+    #[test]
+    fn scoped_catalog_keeps_hidden_subagents_addressable() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions_root = temp.path().join("sessions");
+        let cwd_dir = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd_dir).unwrap();
+        let cwd = cwd_dir
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let session_dir = sessions_root
+            .join(echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname(&cwd))
+            .join("child-session");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(
+            session_dir.join("summary.json"),
+            serde_json::json!({
+                "session_id": "child-session",
+                "cwd": cwd,
+                "session_kind": "subagent",
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let rows = list_sessions_from_root(&sessions_root, &cwd, true);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, "child-session");
+        assert!(rows[0].hidden);
+        assert!(persisted_session_exists_from_root(&sessions_root, "child-session").unwrap());
+        assert!(!persisted_session_exists_from_root(&sessions_root, "missing").unwrap());
     }
 
     #[test]
@@ -908,7 +1037,7 @@ mod tests {
                 session_dir.join("summary.json"),
                 serde_json::json!({
                     "session_id": id,
-                    "cwd": cwd,
+                    "cwd": cwd.clone(),
                     "generated_title": title,
                     "title_is_manual": true,
                 })
@@ -946,6 +1075,39 @@ mod tests {
         assert!(rows
             .iter()
             .any(|row| row.session_id == "legacy-without-cwd" && row.cwd == legacy_cwd_string));
+    }
+
+    #[test]
+    fn workspace_counts_exclude_hidden_subagent_sessions() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions_root = temp.path().join("sessions");
+        let cwd = temp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cwd = cwd.canonicalize().unwrap().to_string_lossy().into_owned();
+        let encoded = echo_agent_runtime::util::echo_agent_home::encode_cwd_dirname(&cwd);
+        for (id, title, session_kind) in [
+            ("parent", "主任务", None),
+            ("child", "子代理", Some("subagent")),
+        ] {
+            let session_dir = sessions_root.join(&encoded).join(id);
+            std::fs::create_dir_all(&session_dir).unwrap();
+            std::fs::write(
+                session_dir.join("summary.json"),
+                serde_json::json!({
+                    "session_id": id,
+                    "cwd": cwd.clone(),
+                    "generated_title": title,
+                    "session_kind": session_kind,
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+
+        let rows = list_workspaces_from_root(&sessions_root);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_count, 1);
+        assert_eq!(rows[0].last_title.as_deref(), Some("主任务"));
     }
 
     #[cfg(unix)]
