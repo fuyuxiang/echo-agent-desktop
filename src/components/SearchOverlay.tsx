@@ -30,7 +30,7 @@ export function SearchOverlay({
   const independent = useSessionsStore((s) => s.independent);
   // Archive means leaving active work surfaces. Archived content is searched
   // and managed exclusively in Settings > Archived until it is restored.
-  const sessions = independent.filter((session) => !session.archived);
+  const sessions = independent.filter((session) => !session.archived && !session.hidden);
   const [query, setQuery] = useState("");
   const [remoteHits, setRemoteHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
@@ -138,8 +138,10 @@ export function SearchOverlay({
 
   // Prefer the FTS result for duplicate ids because it carries the matching
   // message snippet; keep title-only local rows for ids FTS did not return.
-  const archivedIds = new Set(independent.filter((session) => session.archived).map((session) => session.sessionId));
-  const visibleRemoteHits = remoteHits.filter((hit) => !archivedIds.has(hit.sessionId));
+  const unavailableIds = new Set(independent
+    .filter((session) => session.archived || session.hidden)
+    .map((session) => session.sessionId));
+  const visibleRemoteHits = remoteHits.filter((hit) => !unavailableIds.has(hit.sessionId));
   const remoteIds = new Set(visibleRemoteHits.map((hit) => hit.sessionId));
   const localOnly = localMatches.filter((session) => !remoteIds.has(session.sessionId));
 
@@ -163,6 +165,9 @@ export function SearchOverlay({
       }
       if (summary.archived) {
         throw new Error("该会话已归档，请前往“设置 → 已归档”恢复");
+      }
+      if (summary.hidden) {
+        throw new Error("该记录属于子代理，请从所属主任务的子代理面板打开");
       }
       await onSelect(summary.sessionId, summary.cwd);
       if (lifecycleGenerationRef.current === lifecycleGeneration) onClose();

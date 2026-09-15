@@ -106,4 +106,51 @@ describe("SearchOverlay", () => {
     expect(screen.queryByText("归档复盘")).toBeNull();
     expect(screen.queryByText("归档内容")).toBeNull();
   });
+
+  it("普通搜索不显示隐藏子代理会话", async () => {
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "parent", title: "主任务", cwd: "/home" },
+      { sessionId: "child", title: "子代理记录", cwd: "/home", hidden: true },
+    ]);
+    vi.mocked(sessionSearch).mockResolvedValue([
+      { sessionId: "parent", title: "主任务", cwd: "/home", snippet: "主任务内容" },
+      { sessionId: "child", title: "子代理记录", cwd: "/home", snippet: "子代理内容" },
+    ]);
+
+    render(<SearchOverlay open onClose={vi.fn()} onSelect={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索会话标题或内容" }), {
+      target: { value: "任务" },
+    });
+
+    expect(await screen.findByText("主任务内容")).toBeInTheDocument();
+    expect(screen.queryByText("子代理记录")).toBeNull();
+    expect(screen.queryByText("子代理内容")).toBeNull();
+  });
+
+  it("迟到的隐藏子代理检索结果在打开前被拦截并给出正确入口", async () => {
+    vi.mocked(sessionSearch).mockResolvedValue([{
+      sessionId: "late-child",
+      title: "迟到的子代理",
+      cwd: "/workspace",
+      snippet: "内部执行记录",
+    }]);
+    vi.mocked(agentListSessions).mockResolvedValue([{
+      sessionId: "late-child",
+      title: "迟到的子代理",
+      cwd: "/workspace",
+      hidden: true,
+      sessionKind: "subagent",
+    }]);
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    render(<SearchOverlay open onClose={onClose} onSelect={onSelect} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索会话标题或内容" }), {
+      target: { value: "子代理" },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /迟到的子代理/ }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("请从所属主任务的子代理面板打开");
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });

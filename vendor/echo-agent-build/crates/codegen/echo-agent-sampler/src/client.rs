@@ -1944,7 +1944,23 @@ impl SamplingClient {
     /// Returns the stream and any model metadata extracted from response headers.
     pub async fn conversation_stream(
         &self,
+        request: ConversationRequest,
+    ) -> Result<(
+        BoxStream<'static, Result<ChatCompletionChunk>>,
+        Option<ResponseModelMetadata>,
+    )> {
+        self.conversation_stream_with_parallel_tool_calls(request, None)
+            .await
+    }
+
+    /// Chat Completions stream with a request-local parallel tool-call policy.
+    /// Used only for safe recovery from providers whose streamed tool indices
+    /// are ambiguous; the caller's conversation and global defaults stay
+    /// unchanged.
+    pub(crate) async fn conversation_stream_with_parallel_tool_calls(
+        &self,
         mut request: ConversationRequest,
+        parallel_tool_calls: Option<bool>,
     ) -> Result<(
         BoxStream<'static, Result<ChatCompletionChunk>>,
         Option<ResponseModelMetadata>,
@@ -1953,6 +1969,7 @@ impl SamplingClient {
 
         let trace = request.trace.take();
         let mut chat_request: ChatCompletionRequest = request.into();
+        chat_request.parallel_tool_calls = parallel_tool_calls;
         if let Some(trace) = trace {
             chat_request.trace = Some(trace);
         }
@@ -2309,6 +2326,7 @@ mod tests {
             user: None,
             tools: None,
             tool_choice: None,
+            parallel_tool_calls: Some(false),
             search_parameters: None,
             response_format: None,
             reasoning_effort: None,
@@ -2334,6 +2352,10 @@ mod tests {
         let obj = json.as_object().unwrap();
 
         assert_eq!(obj.get("stream").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            obj.get("parallel_tool_calls").and_then(|v| v.as_bool()),
+            Some(false)
+        );
         assert_eq!(
             obj.get("stream_options")
                 .and_then(|v| v.get("include_usage"))

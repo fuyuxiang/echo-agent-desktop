@@ -230,6 +230,75 @@ async fn submit_emits_started_first_token_channel_completed() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ambiguous_parallel_tools_retry_once_with_parallel_disabled() {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+    let bodies_handler = Arc::clone(&bodies);
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+            let bodies = Arc::clone(&bodies_handler);
+            async move {
+                let fallback = body.get("parallel_tool_calls").and_then(|v| v.as_bool());
+                bodies.lock().unwrap().push(body);
+                let events = if fallback == Some(false) {
+                    sse::chat_completion_events("recovered sequentially", "test-model")
+                } else {
+                    let malformed = json!({
+                        "id": "chatcmpl-ambiguous",
+                        "object": "chat.completion.chunk",
+                        "created": 0,
+                        "model": "test-model",
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {"index": 0, "id": "call-a", "type": "function", "function": {"name": "grep", "arguments": "{"}},
+                                    {"index": 0, "id": "call-b", "type": "function", "function": {"name": "read_file", "arguments": "{"}}
+                                ]
+                            },
+                            "finish_reason": null
+                        }]
+                    });
+                    vec![Event::default().data(malformed.to_string())]
+                };
+                Sse::new(stream::iter(
+                    events.into_iter().map(Ok::<_, std::convert::Infallible>),
+                ))
+            }
+        }),
+    );
+    let server = MockServer::spawn(app).await;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let mut cfg = test_config(server.base_url(), "test-model");
+    cfg.max_retries = Some(0);
+    let handle = SamplerActor::spawn(cfg, RetryPolicy::default(), event_tx);
+
+    handle.submit(RequestId::from("req-parallel-fallback"), user_request("hi"));
+    let events = drain_until_terminal(&mut event_rx, Duration::from_secs(5)).await;
+    server.shutdown();
+
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, SamplingEvent::Retrying { .. }))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SamplingEvent::ToolCallDelta { .. }))
+    );
+    assert!(matches!(
+        events.last(),
+        Some(SamplingEvent::Completed { .. })
+    ));
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(bodies[0].get("parallel_tool_calls"), None);
+    assert_eq!(bodies[1].get("parallel_tool_calls"), Some(&json!(false)));
+}
+
 // ---------------------------------------------------------------------------
 // submit_and_collect
 // ---------------------------------------------------------------------------

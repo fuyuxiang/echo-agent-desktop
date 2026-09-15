@@ -197,6 +197,15 @@ function activityStatusMeta(status?: SessionStatus): ActivityStatusMeta {
   return status ? ACTIVITY_STATUS_META[status] : UNKNOWN_ACTIVITY_STATUS;
 }
 
+function effectiveSessionArchived(
+  sessionId: string,
+  mirrored: boolean | undefined,
+  summaries: ReadonlyMap<string, { archived?: boolean }>,
+): boolean {
+  const summary = summaries.get(sessionId);
+  return summary?.archived !== undefined ? !!summary.archived : !!mirrored;
+}
+
 const ACTIVITY_FILTER_LABELS: Record<ActivityStatusFilter, string> = {
   all: "全部状态",
   attention: "需处理",
@@ -245,19 +254,31 @@ export function ActivityTab({
     [sessionSummaries],
   );
   const allConversations = project?.conversations ?? [];
-  const activeCount = allConversations.filter((conversation) => !conversation.archived).length;
-  const archivedCount = allConversations.length - activeCount;
-  const conversationEntries = useMemo(() => allConversations
-    .filter((conversation) => !!conversation.archived === (view === "archived"))
+  const discoverableConversations = useMemo(
+    () => allConversations.filter(
+      (conversation) => !summaryById.get(conversation.sessionId)?.hidden,
+    ),
+    [allConversations, summaryById],
+  );
+  const activeCount = discoverableConversations.filter((conversation) =>
+    !effectiveSessionArchived(conversation.sessionId, conversation.archived, summaryById)).length;
+  const archivedCount = discoverableConversations.length - activeCount;
+  const conversationEntries = useMemo(() => discoverableConversations
+    .filter((conversation) => effectiveSessionArchived(
+      conversation.sessionId,
+      conversation.archived,
+      summaryById,
+    ) === (view === "archived"))
     .map((conversation) => {
       const summary = summaryById.get(conversation.sessionId);
       return {
         conversation,
         summary,
+        archived: effectiveSessionArchived(conversation.sessionId, conversation.archived, summaryById),
         status: activityStatusMeta(summary?.status),
         updatedAt: summary?.updatedAt || conversation.createdAt,
       };
-    }), [allConversations, summaryById, view]);
+    }), [discoverableConversations, summaryById, view]);
   const statusCounts = useMemo(() => {
     const counts: Record<ActivityStatusFilter, number> = {
       all: conversationEntries.length,
@@ -302,6 +323,7 @@ export function ActivityTab({
   const openMenu = (
     event: ReactMouseEvent<HTMLElement>,
     conversation: (typeof allConversations)[number],
+    archived: boolean,
     fromPointer: boolean,
   ) => {
     event.preventDefault();
@@ -315,7 +337,7 @@ export function ActivityTab({
       y: fromPointer ? event.clientY : rect.bottom + 4,
       sessionId: conversation.sessionId,
       title: conversation.title || "未命名会话",
-      archived: !!conversation.archived,
+      archived,
       returnFocus: focused && event.currentTarget.contains(focused)
         ? focused
         : event.currentTarget.querySelector<HTMLElement>("button") ?? undefined,
@@ -453,11 +475,11 @@ export function ActivityTab({
       ) : (
         <>
           <ul className="pd-task-list" aria-label={view === "archived" ? "已归档项目对话" : "最近项目对话"}>
-            {visibleConversations.map(({ conversation, summary, status, updatedAt }) => (
+            {visibleConversations.map(({ conversation, summary, archived, status, updatedAt }) => (
               <li
                 key={conversation.sessionId}
                 className="pd-conversation-row"
-                onContextMenu={(event) => openMenu(event, conversation, true)}
+                onContextMenu={(event) => openMenu(event, conversation, archived, true)}
               >
                 <button
                   type="button"
@@ -478,7 +500,7 @@ export function ActivityTab({
                       <span className="pd-session-status__dot" aria-hidden="true" />
                       {status.label}
                     </span>
-                    {conversation.archived && <span>已归档</span>}
+                    {archived && <span>已归档</span>}
                     {(summary?.currentModelId || conversation.modelId) && (
                       <span
                         className="pd-conversation-model"
@@ -496,7 +518,7 @@ export function ActivityTab({
                   aria-label={`${conversation.title || "未命名会话"}的会话操作`}
                   aria-haspopup="menu"
                   aria-expanded={menu?.sessionId === conversation.sessionId}
-                  onClick={(event) => openMenu(event, conversation, false)}
+                  onClick={(event) => openMenu(event, conversation, archived, false)}
                 >
                   <MoreDotsIcon size="sm" />
                 </button>
@@ -567,6 +589,11 @@ export function PlanTab({
   const setPlanModel = useProjectsStore((s) => s.setPlanModel);
   const linkPlanSession = useProjectsStore((s) => s.linkPlanSession);
   const removePlan = useProjectsStore((s) => s.removePlan);
+  const sessionSummaries = useSessionsStore((s) => s.independent);
+  const summaryById = useMemo(
+    () => new Map(sessionSummaries.map((summary) => [summary.sessionId, summary])),
+    [sessionSummaries],
+  );
   const runningPlanIdsRef = useRef(new Set<string>());
   const [runningPlanIds, setRunningPlanIds] = useState<Set<string>>(() => new Set());
   const [restoringSessionIds, setRestoringSessionIds] = useState<Set<string>>(() => new Set());
@@ -577,7 +604,7 @@ export function PlanTab({
       title: "新建待办",
       fields: [{ name: "title", label: "待办标题", required: true, maxLength: 200 }],
       confirmLabel: "创建",
-      action: ({ title }) => addPlan(projectId, title.trim(), "pending", defaultModelId),
+      action: ({ title }) => addPlan(projectId, title.trim(), "pending"),
     });
   };
 
@@ -586,7 +613,7 @@ export function PlanTab({
       title: `在“${label}”新建待办`,
       fields: [{ name: "title", label: "待办标题", required: true, maxLength: 200 }],
       confirmLabel: "创建",
-      action: ({ title }) => addPlan(projectId, title.trim(), status, defaultModelId),
+      action: ({ title }) => addPlan(projectId, title.trim(), status),
     });
   };
 
@@ -679,6 +706,13 @@ export function PlanTab({
                   cards.map((c) => {
                     const selectedModelId = availableModelId(models, c.modelId, defaultModelId);
                     const running = runningPlanIds.has(c.id);
+                    const sessionSummary = c.sessionId ? summaryById.get(c.sessionId) : undefined;
+                    const sessionArchived = c.sessionId
+                      ? effectiveSessionArchived(c.sessionId, c.sessionArchived, summaryById)
+                      : false;
+                    const executionStatus = c.sessionId
+                      ? activityStatusMeta(sessionSummary?.status)
+                      : undefined;
                     return (
                       <div className="pd-board-card" key={c.id}>
                         <span className="pd-board-card__title">{c.title}</span>
@@ -708,16 +742,26 @@ export function PlanTab({
                               {modelLabel(models, c.modelId)}
                             </span>
                           )}
+                          {executionStatus && (
+                            <span
+                              className={`pd-session-status pd-session-status--${executionStatus.tone}`}
+                              title={executionStatus.description}
+                              aria-label={`Agent 执行状态：${executionStatus.label}。${executionStatus.description}`}
+                            >
+                              <span className="pd-session-status__dot" aria-hidden="true" />
+                              {executionStatus.label}
+                            </span>
+                          )}
                           {c.sessionId && onOpenSession && (
                             <button
                               className="pd-board-card__move"
-                              onClick={() => c.sessionArchived
+                              onClick={() => sessionArchived
                                 ? void restoreAndOpen(c.sessionId!)
                                 : onOpenSession(c.sessionId!)}
-                              disabled={c.sessionArchived && (!onRestoreSession || restoringSessionIds.has(c.sessionId))}
-                              title={c.sessionArchived ? "恢复归档会话并继续该计划" : undefined}
+                              disabled={sessionArchived && (!onRestoreSession || restoringSessionIds.has(c.sessionId))}
+                              title={sessionArchived ? "恢复归档会话并继续该计划" : undefined}
                             >
-                              {c.sessionArchived
+                              {sessionArchived
                                 ? restoringSessionIds.has(c.sessionId) ? "恢复中…" : "恢复并打开"
                                 : "打开会话"}
                             </button>
@@ -781,6 +825,11 @@ export function TaskTab({
   const setTaskModel = useProjectsStore((s) => s.setTaskModel);
   const linkTaskSession = useProjectsStore((s) => s.linkTaskSession);
   const removeTask = useProjectsStore((s) => s.removeTask);
+  const sessionSummaries = useSessionsStore((s) => s.independent);
+  const summaryById = useMemo(
+    () => new Map(sessionSummaries.map((summary) => [summary.sessionId, summary])),
+    [sessionSummaries],
+  );
   const runningTaskIdsRef = useRef(new Set<string>());
   const [runningTaskIds, setRunningTaskIds] = useState<Set<string>>(() => new Set());
   const [restoringSessionIds, setRestoringSessionIds] = useState<Set<string>>(() => new Set());
@@ -794,7 +843,7 @@ export function TaskTab({
       title: "新建任务",
       fields: [{ name: "title", label: "任务标题", required: true, maxLength: 200 }],
       confirmLabel: "创建",
-      action: ({ title }) => addTask(projectId, title.trim(), defaultModelId),
+      action: ({ title }) => addTask(projectId, title.trim()),
     });
   };
 
@@ -869,6 +918,13 @@ export function TaskTab({
           {filtered.map((t) => {
             const selectedModelId = availableModelId(models, t.modelId, defaultModelId);
             const running = runningTaskIds.has(t.id);
+            const sessionSummary = t.sessionId ? summaryById.get(t.sessionId) : undefined;
+            const sessionArchived = t.sessionId
+              ? effectiveSessionArchived(t.sessionId, t.sessionArchived, summaryById)
+              : false;
+            const executionStatus = t.sessionId
+              ? activityStatusMeta(sessionSummary?.status)
+              : undefined;
             return (
               <li className="pd-task-item" key={t.id}>
                 <div className="pd-task-item__main">
@@ -877,6 +933,16 @@ export function TaskTab({
                     {PLAN_COLUMNS.find((column) => column.status === t.status)?.label ?? "待开始"}
                     {t.sessionId ? " · 已关联 Agent 会话" : ""}
                     {t.sessionId && t.modelId ? ` · ${modelLabel(models, t.modelId)}` : ""}
+                    {executionStatus && (
+                      <span
+                        className={`pd-session-status pd-session-status--${executionStatus.tone}`}
+                        title={executionStatus.description}
+                        aria-label={`Agent 执行状态：${executionStatus.label}。${executionStatus.description}`}
+                      >
+                        <span className="pd-session-status__dot" aria-hidden="true" />
+                        {executionStatus.label}
+                      </span>
+                    )}
                   </span>
                 </div>
                 <div className="pd-task-item__actions">
@@ -903,13 +969,13 @@ export function TaskTab({
                   {t.sessionId && onOpenSession && (
                     <button
                       className="pd-btn pd-btn--small"
-                      onClick={() => t.sessionArchived
+                      onClick={() => sessionArchived
                         ? void restoreAndOpen(t.sessionId!)
                         : onOpenSession(t.sessionId!)}
-                      disabled={t.sessionArchived && (!onRestoreSession || restoringSessionIds.has(t.sessionId))}
-                      title={t.sessionArchived ? "恢复归档会话并继续该任务" : undefined}
+                      disabled={sessionArchived && (!onRestoreSession || restoringSessionIds.has(t.sessionId))}
+                      title={sessionArchived ? "恢复归档会话并继续该任务" : undefined}
                     >
-                      {t.sessionArchived
+                      {sessionArchived
                         ? restoringSessionIds.has(t.sessionId) ? "恢复中…" : "恢复并打开"
                         : "打开会话"}
                     </button>

@@ -127,7 +127,7 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
   });
 
   it("新建待办使用应用内输入对话框", async () => {
-    render(<PlanTab projectId="p1" />);
+    render(<PlanTab projectId="p1" defaultModelId="model-a" />);
     fireEvent.click(screen.getByRole("button", { name: "+ 新建待办" }));
     const dialog = screen.getByRole("dialog", { name: "新建待办" });
     fireEvent.change(screen.getByRole("textbox", { name: /待办标题/ }), { target: { value: "  发布验收  " } });
@@ -135,8 +135,54 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "新建待办" })).toBeNull());
     expect(dialog).not.toBeInTheDocument();
     expect(useProjectsStore.getState().projects[0].plans).toEqual(expect.arrayContaining([
-      expect.objectContaining({ title: "发布验收", status: "pending" }),
+      expect.objectContaining({ title: "发布验收", status: "pending", modelId: undefined }),
     ]));
+  });
+
+  it("未显式选模型的新计划会在执行时继承最新项目默认模型", async () => {
+    useProjectsStore.setState({
+      projects: [{ ...structuredClone(project), plans: [] }],
+    });
+    const onRun = vi.fn().mockResolvedValue("inherited-model-session");
+    const { rerender } = render(
+      <PlanTab projectId="p1" models={models} defaultModelId="model-a" onRun={onRun} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "+ 新建待办" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /待办标题/ }), {
+      target: { value: "继承模型" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(useProjectsStore.getState().projects[0].plans[0].modelId).toBeUndefined());
+
+    rerender(<PlanTab projectId="p1" models={models} defaultModelId="model-b" onRun={onRun} />);
+    fireEvent.click(screen.getByRole("button", { name: "交给 Agent" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith(
+      expect.stringContaining("继承模型"),
+      "model-b",
+    ));
+  });
+
+  it("未显式选模型的新任务不会固化创建时的默认模型", async () => {
+    useProjectsStore.setState({
+      projects: [{ ...structuredClone(project), tasks: [] }],
+    });
+    const onRun = vi.fn().mockResolvedValue("inherited-task-session");
+    const { rerender } = render(
+      <TaskTab projectId="p1" models={models} defaultModelId="model-a" onRun={onRun} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "+ 新建任务" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "任务标题" }), {
+      target: { value: "继承任务模型" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(useProjectsStore.getState().projects[0].tasks[0].modelId).toBeUndefined());
+
+    rerender(<TaskTab projectId="p1" models={models} defaultModelId="model-b" onRun={onRun} />);
+    fireEvent.click(screen.getByRole("button", { name: "交给 Agent" }));
+    await waitFor(() => expect(onRun).toHaveBeenCalledWith(
+      expect.stringContaining("继承任务模型"),
+      "model-b",
+    ));
   });
 
   it("删除任务需确认，取消不变更项目", () => {
@@ -154,6 +200,86 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
     render(<ActivityTab projectId="p1" onOpenSession={onOpenSession} />);
     fireEvent.click(screen.getByText("历史会话"));
     expect(onOpenSession).toHaveBeenCalledWith("existing", "/workspace");
+  });
+
+  it("会话摘要的归档状态优先于项目镜像字段", () => {
+    useSessionsStore.setState({
+      independent: [{
+        sessionId: "existing",
+        title: "历史会话",
+        cwd: "/workspace",
+        archived: true,
+      }],
+    });
+    render(<ActivityTab projectId="p1" onOpenSession={vi.fn()} />);
+
+    expect(screen.queryByText("历史会话")).toBeNull();
+    expect(screen.getByRole("button", { name: "1 个已归档" })).toBeInTheDocument();
+  });
+
+  it("旧运行时未返回归档字段时保留项目镜像状态", () => {
+    useProjectsStore.setState({
+      projects: [{
+        ...structuredClone(project),
+        conversations: [{ ...project.conversations[0], archived: true }],
+      }],
+    });
+    useSessionsStore.setState({
+      independent: [{ sessionId: "existing", title: "历史会话", cwd: "/workspace" }],
+    });
+
+    render(<ActivityTab projectId="p1" onOpenSession={vi.fn()} />);
+    expect(screen.queryByText("历史会话")).toBeNull();
+    expect(screen.getByRole("button", { name: "1 个已归档" })).toBeInTheDocument();
+  });
+
+  it("项目动态不把隐藏子代理记录当作顶层项目对话", () => {
+    useProjectsStore.setState({
+      projects: [{
+        ...structuredClone(project),
+        conversations: [
+          ...project.conversations,
+          { sessionId: "child", title: "内部子代理", createdAt: new Date().toISOString() },
+        ],
+      }],
+    });
+    useSessionsStore.setState({
+      independent: [
+        { sessionId: "existing", title: "历史会话", cwd: "/workspace" },
+        { sessionId: "child", title: "内部子代理", cwd: "/workspace", hidden: true },
+      ],
+    });
+
+    render(<ActivityTab projectId="p1" onOpenSession={vi.fn()} />);
+    expect(screen.getByText("历史会话")).toBeInTheDocument();
+    expect(screen.queryByText("内部子代理")).toBeNull();
+    expect(screen.getByRole("button", { name: "1 个对话" })).toBeInTheDocument();
+  });
+
+  it("计划和任务分开展示项目进度与 Agent 执行状态", () => {
+    useProjectsStore.setState({
+      projects: [{
+        ...structuredClone(project),
+        plans: [{ ...project.plans[0], sessionId: "plan-session", modelId: "model-a" }],
+        tasks: [{ ...project.tasks[0], sessionId: "task-session", modelId: "model-a" }],
+      }],
+    });
+    useSessionsStore.setState({
+      independent: [
+        { sessionId: "plan-session", title: "计划会话", cwd: "/workspace", status: "failed" },
+        { sessionId: "task-session", title: "任务会话", cwd: "/workspace", status: "awaiting_answer" },
+      ],
+    });
+
+    const { unmount } = render(<PlanTab projectId="p1" models={models} />);
+    expect(screen.getByLabelText(/Agent 执行状态：执行失败/)).toBeInTheDocument();
+    expect(useProjectsStore.getState().projects[0].plans[0].status).toBe("pending");
+    unmount();
+
+    render(<TaskTab projectId="p1" models={models} />);
+    expect(screen.getByLabelText(/Agent 执行状态：等待回答/)).toBeInTheDocument();
+    expect(screen.getByText(/待开始 · 已关联 Agent/)).toBeInTheDocument();
+    expect(useProjectsStore.getState().projects[0].tasks[0].status).toBe("pending");
   });
 
   it("项目动态展示可信执行状态并支持待处理筛选与优先排序", () => {
@@ -302,6 +428,15 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
     expect(updated.conversations[0].archived).toBe(true);
     expect(updated.plans[0].sessionArchived).toBe(true);
     expect(updated.tasks[0].sessionArchived).toBe(true);
+
+    useProjectsStore.getState().reconcileSessionArchiveStates([{
+      sessionId: "existing",
+      archived: false,
+    }]);
+    updated = useProjectsStore.getState().projects[0];
+    expect(updated.conversations[0].archived).toBe(false);
+    expect(updated.plans[0].sessionArchived).toBe(false);
+    expect(updated.tasks[0].sessionArchived).toBe(false);
 
     useProjectsStore.getState().removeSessionReferences("existing");
     updated = useProjectsStore.getState().projects[0];

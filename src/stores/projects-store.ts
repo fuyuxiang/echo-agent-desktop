@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { projectsLoad, projectsSave } from "@/lib/agent-client";
+import type { SessionSummary } from "@/lib/types";
 
 /**
  * 本地「项目」实体存储。Rust 后端私有数据目录是权威副本，
@@ -215,6 +216,10 @@ interface ProjectsState {
   updateConversationTitle: (id: string, sessionId: string, title: string) => void;
   /** Mirror archive state into every project reference to this session. */
   setSessionArchived: (sessionId: string, archived: boolean) => void;
+  /** Repair duplicated project link flags from authoritative session rows. */
+  reconcileSessionArchiveStates: (
+    sessions: Array<Pick<SessionSummary, "sessionId" | "archived">>,
+  ) => void;
   /** Remove deleted session links from conversations, plans and tasks. */
   removeSessionReferences: (sessionId: string) => void;
 }
@@ -423,6 +428,45 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
               : task,
           ),
         };
+      });
+      if (!changed) return;
+      set({ projects: next });
+      persist(next);
+    },
+    reconcileSessionArchiveStates: (sessions) => {
+      const archivedById = new Map(
+        sessions
+          .filter((session) => session.archived !== undefined)
+          .map((session) => [session.sessionId, !!session.archived]),
+      );
+      if (archivedById.size === 0) return;
+      let changed = false;
+      const next = get().projects.map((project) => {
+        let projectChanged = false;
+        const conversations = project.conversations.map((conversation) => {
+          const archived = archivedById.get(conversation.sessionId);
+          if (archived === undefined || !!conversation.archived === archived) return conversation;
+          changed = true;
+          projectChanged = true;
+          return { ...conversation, archived };
+        });
+        const plans = project.plans.map((plan) => {
+          if (!plan.sessionId) return plan;
+          const archived = archivedById.get(plan.sessionId);
+          if (archived === undefined || !!plan.sessionArchived === archived) return plan;
+          changed = true;
+          projectChanged = true;
+          return { ...plan, sessionArchived: archived };
+        });
+        const tasks = project.tasks.map((task) => {
+          if (!task.sessionId) return task;
+          const archived = archivedById.get(task.sessionId);
+          if (archived === undefined || !!task.sessionArchived === archived) return task;
+          changed = true;
+          projectChanged = true;
+          return { ...task, sessionArchived: archived };
+        });
+        return projectChanged ? { ...project, conversations, plans, tasks } : project;
       });
       if (!changed) return;
       set({ projects: next });

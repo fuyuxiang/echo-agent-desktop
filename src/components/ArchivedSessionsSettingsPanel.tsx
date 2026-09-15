@@ -114,7 +114,7 @@ export function ArchivedSessionsSettingsPanel({
   }, [projects]);
 
   const archived = useMemo<ArchivedSessionEntry[]>(() => sessions
-    .filter((session) => session.archived)
+    .filter((session) => session.archived && !session.hidden)
     .map((session) => ({
       sessionId: session.sessionId,
       title: session.title || "未命名会话",

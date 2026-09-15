@@ -76,6 +76,17 @@ describe("Sidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("s1", "");
   });
 
+  it("不把隐藏子代理会话当作顶层任务", () => {
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "parent", title: "主任务", cwd: "/workspace", hidden: false },
+      { sessionId: "child", title: "子代理内部会话", cwd: "/workspace", hidden: true, sessionKind: "subagent" },
+    ]);
+
+    render(<Sidebar {...base} />);
+    expect(screen.getByText("主任务")).toBeInTheDocument();
+    expect(screen.queryByText("子代理内部会话")).toBeNull();
+  });
+
   it("在侧栏精确展示运行、等待用户、未开始、停止与失败", () => {
     useSessionsStore.getState().setIndependent([
       { sessionId: "running", title: "后台分析", cwd: "", status: "working" },
@@ -381,5 +392,32 @@ describe("Sidebar", () => {
 
     expect(screen.queryByText("已收起项目对话")).toBeNull();
     expect(screen.getByText("还没有对话，从项目页开启第一轮吧")).toBeInTheDocument();
+  });
+
+  it("项目归档镜像陈旧时以主会话的恢复状态为准", () => {
+    useSessionsStore.getState().setIndependent([
+      { sessionId: "project-restored", title: "已恢复项目对话", cwd: "/workspace", archived: false },
+    ]);
+    useProjectsStore.setState({
+      projects: [{
+        id: "project-1",
+        name: "客户项目",
+        cwd: "/workspace",
+        createdAt: "2026-09-05T00:00:00.000Z",
+        connectors: [], experts: [], skills: [], plans: [], tasks: [], assets: [], members: [],
+        conversations: [{
+          sessionId: "project-restored",
+          title: "已恢复项目对话",
+          createdAt: "2026-09-05T00:00:00.000Z",
+          archived: true,
+        }],
+      }],
+    });
+
+    render(<Sidebar {...base} />);
+    fireEvent.click(screen.getByRole("button", { name: "展开客户项目对话" }));
+    expect(screen.getByText("已恢复项目对话")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "已恢复项目对话的会话操作" }));
+    expect(screen.getByRole("menuitem", { name: "归档" })).toBeInTheDocument();
   });
 });

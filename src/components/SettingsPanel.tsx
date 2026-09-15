@@ -130,7 +130,8 @@ export function SettingsPanel({
 }) {
   const [active, setActive] = useState<SettingsSectionId>(initialSection);
   const modalRef = useModalFocus<HTMLDivElement>(open, onClose);
-  const archivedCount = useSessionsStore((state) => state.independent.filter((session) => session.archived).length);
+  const archivedCount = useSessionsStore((state) => state.independent
+    .filter((session) => session.archived && !session.hidden).length);
 
   // Select the caller-requested section every time the dialog opens.
   useEffect(() => {
