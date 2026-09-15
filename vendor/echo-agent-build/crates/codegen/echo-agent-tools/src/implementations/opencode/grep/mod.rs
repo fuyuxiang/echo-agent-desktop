@@ -6,11 +6,11 @@
 
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::time::Duration;
 
-use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-use crate::implementations::echo_agent_build::grep::ripgrep::rg_path;
+use crate::implementations::echo_agent_build::grep::ripgrep::{output_bounded, rg_path};
 use crate::types::output::{GrepFileMatch, GrepLineMatch, GrepSearchOutput};
 use crate::types::requirements::{Expr, ToolRequirement};
 #[allow(unused_imports)]
@@ -23,6 +23,9 @@ use crate::types::tool::{ToolKind, ToolNamespace};
 
 const RESULT_LIMIT: usize = 100;
 const MAX_LINE_LENGTH: usize = 2000;
+const MAX_STDOUT_BYTES: usize = 5_000_000;
+const MAX_STDERR_BYTES: usize = 256_000;
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ───────────────────────────────────────────────────────────────────────────
 // Description
@@ -161,7 +164,15 @@ impl echo_agent_tool_runtime::Tool for GrepTool {
         };
 
         // Build rg command.
-        let rg_exec = rg_path();
+        let tool_id = echo_agent_tool_protocol::ToolId::new("grep").expect("valid tool id");
+        let rg_exec = rg_path().map_err(|error| {
+            echo_agent_tool_runtime::ToolError::service_unavailable(
+                crate::implementations::echo_agent_build::grep::ripgrep::unavailable_message(
+                    &error,
+                ),
+            )
+            .with_source(error)
+        })?;
         let mut cmd = Command::new(rg_exec);
         cmd.args([
             "-n",
@@ -183,37 +194,22 @@ impl echo_agent_tool_runtime::Tool for GrepTool {
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         crate::util::detach_search_command(&mut cmd);
 
-        // Spawn.
-        #[allow(clippy::disallowed_methods)] // search helper, waited on below
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                return Ok(GrepSearchOutput {
-                    stdout: Vec::new(),
-                    stderr: format!("Error spawning rg: {e}").into_bytes(),
-                    exit_code: -1,
-                    match_count: 0,
-                    file_matches: Vec::new(),
-                });
-            }
-        };
-
-        // Read stdout + stderr.
-        let mut stdout_buf = Vec::new();
-        if let Some(mut pipe) = child.stdout.take() {
-            let _ = pipe.read_to_end(&mut stdout_buf).await;
-        }
-        let mut stderr_buf = Vec::new();
-        if let Some(mut pipe) = child.stderr.take() {
-            let _ = pipe.read_to_end(&mut stderr_buf).await;
-        }
-
-        let status = child.wait().await.ok();
-        let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
+        let output = output_bounded(
+            &mut cmd,
+            COMMAND_TIMEOUT,
+            MAX_STDOUT_BYTES,
+            MAX_STDERR_BYTES,
+        )
+        .await
+        .map_err(|error| error.into_tool_error(tool_id.clone()))?;
+        let stdout_buf = output.stdout;
+        let stderr_buf = output.stderr;
+        let exit_code = output.exit_code;
+        let truncated_by_bytes = output.stdout_truncated;
 
         // Exit code 1 = no matches, exit code 2 with no output = errors only.
         let stdout_str = String::from_utf8_lossy(&stdout_buf);
-        if exit_code == 1 || (exit_code == 2 && stdout_str.trim().is_empty()) {
+        if exit_code == 1 {
             let formatted = "No files found".to_string();
             return Ok(GrepSearchOutput {
                 stdout: formatted.into_bytes(),
@@ -222,6 +218,18 @@ impl echo_agent_tool_runtime::Tool for GrepTool {
                 match_count: 0,
                 file_matches: Vec::new(),
             });
+        }
+        if exit_code != 0 {
+            let stderr = String::from_utf8_lossy(&stderr_buf);
+            let detail = if stderr.trim().is_empty() {
+                "未返回详细错误信息"
+            } else {
+                stderr.trim()
+            };
+            return Err(echo_agent_tool_runtime::ToolError::execution(
+                tool_id,
+                format!("ripgrep 搜索失败（退出码 {exit_code}）：{detail}"),
+            ));
         }
 
         // ── Parse ripgrep output (format: filepath|linenum|linetext) ────
@@ -282,7 +290,7 @@ impl echo_agent_tool_runtime::Tool for GrepTool {
         matches.sort_by_key(|b| std::cmp::Reverse(b.mtime_ms));
 
         let total_matches = matches.len();
-        let truncated = total_matches > RESULT_LIMIT;
+        let truncated = truncated_by_bytes || total_matches > RESULT_LIMIT;
         let final_matches = if truncated {
             &matches[..RESULT_LIMIT]
         } else {
@@ -351,11 +359,6 @@ impl echo_agent_tool_runtime::Tool for GrepTool {
             output_lines.push(format!(
                 "(Results truncated: showing {RESULT_LIMIT} of {total_matches} matches. Consider using a more specific path or pattern.)"
             ));
-        }
-
-        if exit_code == 2 {
-            output_lines.push(String::new());
-            output_lines.push("(Some paths were inaccessible and skipped)".to_string());
         }
 
         let formatted = output_lines.join("\n");
@@ -1025,8 +1028,8 @@ mod tests {
 
     // ── exit_code_2_without_output ──────────────────────────────────
 
-    // Skipped: triggering ripgrep exit code 2 with zero stdout (errors
-    // only, no matches) is impractical in a unit test with real `rg`.
-    // The code path (line 189) returns "No files found" and is simple
-    // enough to verify by inspection. Documented as a known gap.
+    // Triggering ripgrep exit code 2 with zero stdout (errors only, no
+    // matches) is impractical in a unit test with real `rg`. The shared
+    // bounded runner's missing-binary test covers the critical invariant:
+    // launch failures become errors rather than empty successful results.
 }

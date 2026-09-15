@@ -3,7 +3,7 @@
 //! Consumes a raw `ChatCompletionChunk` stream and produces
 //! [`SamplingEvent`]s. Pure: no I/O, no shell coupling.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
@@ -17,6 +17,102 @@ use echo_agent_sampling_types::{
 use crate::events::{SamplingChannel, SamplingErrorInfo, SamplingEvent};
 use crate::metrics::InferenceLatencyStats;
 use crate::types::RequestId;
+
+fn next_tool_slot(preferred: Option<u32>, calls: &BTreeMap<u32, (String, String, String)>) -> u32 {
+    if let Some(preferred) = preferred
+        && !calls.contains_key(&preferred)
+    {
+        return preferred;
+    }
+    calls
+        .last_key_value()
+        .map_or(0, |(index, _)| index.saturating_add(1))
+}
+
+/// Resolve unreliable OpenAI-compatible wire indices to stable local slots.
+/// IDs are authoritative. Duplicate/missing indices are recovered only when
+/// the chunk shape makes the association unambiguous; otherwise the stream is
+/// failed rather than attaching arguments to the wrong tool call.
+fn resolve_tool_slot(
+    wire_index: Option<u32>,
+    id: Option<&str>,
+    ordinal: usize,
+    wire_ordinal: usize,
+    batch_len: usize,
+    calls: &BTreeMap<u32, (String, String, String)>,
+    wire_slots: &mut HashMap<u32, Vec<u32>>,
+    id_slots: &mut HashMap<String, u32>,
+) -> Result<u32, String> {
+    if let Some(id) = id {
+        if let Some(slot) = id_slots.get(id) {
+            return Ok(*slot);
+        }
+
+        let slot = if let Some(wire_index) = wire_index {
+            let candidates = wire_slots.entry(wire_index).or_default();
+            if let Some(slot) = candidates.iter().copied().find(|slot| {
+                calls
+                    .get(slot)
+                    .is_some_and(|(known_id, _, _)| known_id.is_empty() || known_id == id)
+            }) {
+                slot
+            } else {
+                let slot = next_tool_slot(Some(wire_index), calls);
+                candidates.push(slot);
+                slot
+            }
+        } else {
+            next_tool_slot(None, calls)
+        };
+        id_slots.insert(id.to_string(), slot);
+        return Ok(slot);
+    }
+
+    if let Some(wire_index) = wire_index {
+        let candidates = wire_slots
+            .entry(wire_index)
+            .or_insert_with(|| vec![wire_index]);
+        if let [slot] = candidates.as_slice()
+            && wire_ordinal == 0
+        {
+            return Ok(*slot);
+        }
+        if batch_len > 1 {
+            if let Some(slot) = candidates.get(wire_ordinal) {
+                return Ok(*slot);
+            }
+            if wire_ordinal == candidates.len() {
+                let slot = next_tool_slot(None, calls);
+                candidates.push(slot);
+                return Ok(slot);
+            }
+        }
+        return match candidates.as_slice() {
+            [slot] => Ok(*slot),
+            slots => Err(format!(
+                "模型服务返回了无法区分的并行工具调用：索引 {wire_index} 对应 {} 个调用，但当前片段没有调用 ID。请重试本轮任务。",
+                slots.len()
+            )),
+        };
+    }
+
+    if batch_len > 1 {
+        if let Some(slot) = calls.keys().nth(ordinal) {
+            return Ok(*slot);
+        }
+        if ordinal == calls.len() {
+            return Ok(next_tool_slot(None, calls));
+        }
+    }
+
+    match calls.len() {
+        0 => Ok(0),
+        1 => Ok(*calls.first_key_value().expect("one call exists").0),
+        len => Err(format!(
+            "模型服务省略了并行工具调用的索引和调用 ID，无法安全区分 {len} 个调用的参数片段。请重试本轮任务。"
+        )),
+    }
+}
 
 /// Transform a raw Chat Completions chunk stream into a stream of
 /// [`SamplingEvent`]s.
@@ -60,6 +156,7 @@ pub fn stream_chat_completions<'a>(
         // Per-response accumulators
         let mut first_chunk_seen = false;
         let mut first_choice_seen = false;
+        let mut selected_choice_index: Option<u32> = None;
         let mut first_token_emitted = false;
         let mut model: String = String::new();
         let mut model_fingerprint: Option<String> = None;
@@ -74,6 +171,8 @@ pub fn stream_chat_completions<'a>(
         // carries id+name and starts the arguments buffer, subsequent
         // chunks append to arguments only.
         let mut tool_call_acc: BTreeMap<u32, (String, String, String)> = BTreeMap::new();
+        let mut tool_wire_slots: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut tool_id_slots: HashMap<String, u32> = HashMap::new();
 
         // Index counter spanning text + reasoning chunks (matches the
         // shell's chunk_index used for notification correlation).
@@ -144,6 +243,18 @@ pub fn stream_chat_completions<'a>(
             let mut chunk_has_content = false;
 
             for choice in chunk.choices.into_iter() {
+                if let Some(selected) = selected_choice_index {
+                    if choice.index != selected {
+                        tracing::debug!(
+                            selected_choice_index = selected,
+                            ignored_choice_index = choice.index,
+                            "ignoring an alternate chat-completion choice"
+                        );
+                        continue;
+                    }
+                } else {
+                    selected_choice_index = Some(choice.index);
+                }
                 first_choice_seen = true;
                 if let Some(fr) = choice.finish_reason {
                     finish_reason = Some(fr.into());
@@ -194,19 +305,51 @@ pub fn stream_chat_completions<'a>(
                     };
                 }
 
-                for tc_delta in delta.tool_calls.into_iter() {
+                let tool_delta_count = delta.tool_calls.len();
+                let mut wire_occurrences: HashMap<u32, usize> = HashMap::new();
+                for (ordinal, tc_delta) in delta.tool_calls.into_iter().enumerate() {
                     chunk_has_content = true;
 
+                    let incoming_id = tc_delta.id.filter(|id| !id.trim().is_empty());
+                    let wire_ordinal = tc_delta.index.map_or(ordinal, |wire_index| {
+                        let occurrence = wire_occurrences.entry(wire_index).or_default();
+                        let current = *occurrence;
+                        *occurrence += 1;
+                        current
+                    });
+                    let tool_index = match resolve_tool_slot(
+                        tc_delta.index,
+                        incoming_id.as_deref(),
+                        ordinal,
+                        wire_ordinal,
+                        tool_delta_count,
+                        &tool_call_acc,
+                        &mut tool_wire_slots,
+                        &mut tool_id_slots,
+                    ) {
+                        Ok(index) => index,
+                        Err(message) => {
+                            let error = SamplingError::EventStreamError(message);
+                            yield SamplingEvent::Failed {
+                                request_id: request_id.clone(),
+                                error: SamplingErrorInfo::from(&error),
+                            };
+                            return;
+                        }
+                    };
+
                     let entry = tool_call_acc
-                        .entry(tc_delta.index)
+                        .entry(tool_index)
                         .or_insert_with(|| (String::new(), String::new(), String::new()));
 
                     let mut id_for_event: Option<String> = None;
                     let mut name_for_event: Option<String> = None;
                     let mut args_for_event: Option<String> = None;
 
-                    if let Some(id) = tc_delta.id.filter(|id| !id.trim().is_empty()) {
-                        entry.0 = id.clone();
+                    if let Some(id) = incoming_id {
+                        if entry.0.is_empty() {
+                            entry.0 = id.clone();
+                        }
                         id_for_event = Some(id);
                     }
                     if let Some(func) = tc_delta.function {
@@ -223,7 +366,7 @@ pub fn stream_chat_completions<'a>(
                                 name_for_event = Some(name);
                             } else {
                                 tracing::warn!(
-                                    tool_index = tc_delta.index,
+                                    tool_index,
                                     retained_name = %entry.1,
                                     ignored_name = %name,
                                     "provider changed function.name across tool-call deltas; retaining the first non-blank name"
@@ -238,7 +381,7 @@ pub fn stream_chat_completions<'a>(
 
                     yield SamplingEvent::ToolCallDelta {
                         request_id: request_id.clone(),
-                        tool_index: tc_delta.index,
+                        tool_index,
                         id: id_for_event,
                         name: name_for_event,
                         arguments_delta: args_for_event,
@@ -517,7 +660,7 @@ mod tests {
             content: None,
             reasoning_content: None,
             tool_calls: vec![ChunkToolCallDelta {
-                index: 0,
+                index: Some(0),
                 id: Some("call_abc".into()),
                 kind: Some("function".into()),
                 function: Some(ToolCallFunctionDelta {
@@ -533,7 +676,7 @@ mod tests {
             content: None,
             reasoning_content: None,
             tool_calls: vec![ChunkToolCallDelta {
-                index: 0,
+                index: Some(0),
                 id: None,
                 kind: None,
                 function: Some(ToolCallFunctionDelta {
@@ -599,6 +742,184 @@ mod tests {
         }
     }
 
+    fn parallel_tool_chunk(
+        calls: Vec<(Option<u32>, Option<&str>, Option<&str>, &str)>,
+    ) -> ChatCompletionChunk {
+        make_chunk(vec![ChatChunkDelta {
+            role: None,
+            content: None,
+            reasoning_content: None,
+            tool_calls: calls
+                .into_iter()
+                .map(|(index, id, name, arguments)| ChunkToolCallDelta {
+                    index,
+                    id: id.map(str::to_string),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: name.map(str::to_string),
+                        arguments: Some(arguments.to_string()),
+                    }),
+                })
+                .collect(),
+            tool_call_id: None,
+        }])
+    }
+
+    #[tokio::test]
+    async fn parallel_tool_calls_with_distinct_indices_do_not_cross_arguments() {
+        let chunks = vec![
+            Ok(parallel_tool_chunk(vec![
+                (Some(0), Some("call_a"), Some("grep"), "{\"pattern\":\"a\""),
+                (Some(1), Some("call_b"), Some("grep"), "{\"pattern\":\"b\""),
+            ])),
+            Ok(parallel_tool_chunk(vec![
+                (Some(0), None, None, "}"),
+                (Some(1), None, None, "}"),
+            ])),
+        ];
+        let events = collect(stream_chat_completions(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().expect("terminal event") {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].id.as_ref(), "call_a");
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"a"}"#);
+                assert_eq!(calls[1].id.as_ref(), "call_b");
+                assert_eq!(calls[1].arguments.as_ref(), r#"{"pattern":"b"}"#);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_wire_indices_are_disambiguated_by_id_and_batch_position() {
+        let chunks = vec![
+            Ok(parallel_tool_chunk(vec![
+                (Some(0), Some("call_a"), Some("grep"), "{\"pattern\":\"a\""),
+                (Some(0), Some("call_b"), Some("grep"), "{\"pattern\":\"b\""),
+            ])),
+            Ok(parallel_tool_chunk(vec![
+                (Some(0), None, None, "}"),
+                (Some(0), None, None, "}"),
+            ])),
+        ];
+        let events = collect(stream_chat_completions(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().expect("terminal event") {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].id.as_ref(), "call_a");
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"a"}"#);
+                assert_eq!(calls[1].id.as_ref(), "call_b");
+                assert_eq!(calls[1].arguments.as_ref(), r#"{"pattern":"b"}"#);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_wire_indices_without_ids_use_stable_batch_position() {
+        let chunks = vec![
+            Ok(parallel_tool_chunk(vec![
+                (Some(0), None, Some("grep"), "{\"pattern\":\"a\""),
+                (Some(0), None, Some("read_file"), "{\"path\":\"b\""),
+            ])),
+            Ok(parallel_tool_chunk(vec![
+                (Some(0), None, None, "}"),
+                (Some(0), None, None, "}"),
+            ])),
+        ];
+        let events = collect(stream_chat_completions(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().expect("terminal event") {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].name, "grep");
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"a"}"#);
+                assert_eq!(calls[1].name, "read_file");
+                assert_eq!(calls[1].arguments.as_ref(), r#"{"path":"b"}"#);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_wire_indices_use_batch_position_without_crossing_arguments() {
+        let chunks = vec![
+            Ok(parallel_tool_chunk(vec![
+                (None, Some("call_a"), Some("grep"), "{\"pattern\":\"a\""),
+                (None, Some("call_b"), Some("grep"), "{\"pattern\":\"b\""),
+            ])),
+            Ok(parallel_tool_chunk(vec![
+                (None, None, None, "}"),
+                (None, None, None, "}"),
+            ])),
+        ];
+        let events = collect(stream_chat_completions(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().expect("terminal event") {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"a"}"#);
+                assert_eq!(calls[1].arguments.as_ref(), r#"{"pattern":"b"}"#);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ambiguous_parallel_tool_delta_fails_instead_of_corrupting_calls() {
+        let chunks = vec![
+            Ok(parallel_tool_chunk(vec![
+                (None, Some("call_a"), Some("grep"), "{"),
+                (None, Some("call_b"), Some("grep"), "{"),
+            ])),
+            Ok(parallel_tool_chunk(vec![(None, None, None, "}")])),
+        ];
+        let events = collect(stream_chat_completions(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        assert!(matches!(events.last(), Some(SamplingEvent::Failed { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SamplingEvent::Completed { .. }))
+        );
+    }
+
     #[tokio::test]
     async fn trailing_blank_tool_name_does_not_erase_first_non_blank_name() {
         let chunk1 = make_chunk(vec![ChatChunkDelta {
@@ -606,7 +927,7 @@ mod tests {
             content: None,
             reasoning_content: None,
             tool_calls: vec![ChunkToolCallDelta {
-                index: 0,
+                index: Some(0),
                 id: Some("call_read".into()),
                 kind: Some("function".into()),
                 function: Some(ToolCallFunctionDelta {
@@ -621,7 +942,7 @@ mod tests {
             content: None,
             reasoning_content: None,
             tool_calls: vec![ChunkToolCallDelta {
-                index: 0,
+                index: Some(0),
                 id: Some(String::new()),
                 kind: None,
                 function: Some(ToolCallFunctionDelta {

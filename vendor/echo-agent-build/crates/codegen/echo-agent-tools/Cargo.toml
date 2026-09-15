@@ -52,6 +52,7 @@ regex = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 serde_path_to_error = { workspace = true }
 echo-agent-tool-runtime = { workspace = true }
 echo-agent-tool-types = { workspace = true }
@@ -119,6 +120,7 @@ reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 flate2 = { workspace = true }
 sha2 = { workspace = true }
 tar = { workspace = true }
+zip = { version = "3", default-features = false, features = ["deflate-flate2"] }
 
 [lints]
 workspace = true

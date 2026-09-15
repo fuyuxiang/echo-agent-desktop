@@ -76,3 +76,24 @@ jobs:
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -j 2
+
+  windows-search-bundle:
+    name: Windows built-in search smoke test
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: arduino/setup-protoc@v3
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vendor/echo-agent-build -> target
+      # Release profile activates the automatic rg.exe download, pinned hash
+      # verification, ZIP extraction and include_bytes! path. The test then
+      # executes that embedded binary after runtime extraction.
+      - name: Build and execute bundled rg.exe
+        run: >-
+          cargo test --locked --release
+          --manifest-path vendor/echo-agent-build/Cargo.toml
+          -p echo-agent-tools
+          implementations::echo_agent_build::grep::tests::tool_grep_finds_matches

@@ -6,11 +6,11 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Duration;
 
-use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-use crate::implementations::echo_agent_build::grep::ripgrep::rg_path;
+use crate::implementations::echo_agent_build::grep::ripgrep::{output_bounded, rg_path};
 use crate::types::output::ToolOutput;
 #[allow(unused_imports)]
 use crate::types::resources::{
@@ -25,6 +25,8 @@ const RESULT_LIMIT: usize = 100;
 
 /// Hard cap on bytes read from ripgrep's stdout (5 MB).
 const MAX_STDOUT_BYTES: usize = 5_000_000;
+const MAX_STDERR_BYTES: usize = 256_000;
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ─── Description ────────────────────────────────────────────────────
 
@@ -171,7 +173,15 @@ impl echo_agent_tool_runtime::Tool for GlobTool {
 
         // ── Build ripgrep command ───────────────────────────────
         //   rg --files --glob='!.git/*' --hidden --glob=<pattern> <search_dir>
-        let rg_exec = rg_path();
+        let tool_id = echo_agent_tool_protocol::ToolId::new("glob").expect("valid tool id");
+        let rg_exec = rg_path().map_err(|error| {
+            echo_agent_tool_runtime::ToolError::service_unavailable(
+                crate::implementations::echo_agent_build::grep::ripgrep::unavailable_message(
+                    &error,
+                ),
+            )
+            .with_source(error)
+        })?;
         let mut cmd = Command::new(rg_exec);
         cmd.arg("--files")
             .arg("--glob=!.git/*")
@@ -180,64 +190,40 @@ impl echo_agent_tool_runtime::Tool for GlobTool {
             .arg(&input.pattern)
             .arg(&search_dir)
             .stdout(Stdio::piped())
-            // stderr is never read; a pipe would block rg once warnings fill it.
-            // Cached descriptor, not `Stdio::null()`: an unlinked `/dev/null`
-            // must not fail the spawn.
-            .stderr(echo_agent_tty_utils::null_stdio());
+            .stderr(Stdio::piped());
         crate::util::detach_search_command(&mut cmd);
 
-        #[allow(clippy::disallowed_methods)] // search helper, waited on below
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                return Ok(GlobOutput {
-                    tool_output_for_prompt: format!("Error running glob: {e}"),
-                    count: 0,
-                    total_count: 0,
-                    truncated: false,
-                    entries: Vec::new(),
-                    cwd_for_display: display_cwd_or_cwd(&cwd, display_cwd.as_deref())
-                        .display()
-                        .to_string(),
-                });
-            }
-        };
-
-        // ── Read stdout with byte cap ───────────────────────────
-        let mut stdout_buf = Vec::with_capacity(MAX_STDOUT_BYTES.min(65_536));
-        let mut truncated_by_bytes = false;
-        if let Some(mut stdout_pipe) = child.stdout.take() {
-            let mut tmp = [0u8; 8192];
-            loop {
-                match stdout_pipe.read(&mut tmp).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if stdout_buf.len() + n <= MAX_STDOUT_BYTES {
-                            stdout_buf.extend_from_slice(&tmp[..n]);
-                        } else {
-                            let remaining = MAX_STDOUT_BYTES.saturating_sub(stdout_buf.len());
-                            if remaining > 0 {
-                                stdout_buf.extend_from_slice(&tmp[..remaining]);
-                            }
-                            truncated_by_bytes = true;
-                            let _ = child.start_kill();
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
+        let output = output_bounded(
+            &mut cmd,
+            COMMAND_TIMEOUT,
+            MAX_STDOUT_BYTES,
+            MAX_STDERR_BYTES,
+        )
+        .await
+        .map_err(|error| error.into_tool_error(tool_id.clone()))?;
+        let stdout_buf = output.stdout;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let partial_failure = output.exit_code > 1;
+        if partial_failure && stdout_buf.is_empty() {
+            let detail = if stderr.trim().is_empty() {
+                "未返回详细错误信息"
+            } else {
+                stderr.trim()
+            };
+            return Err(echo_agent_tool_runtime::ToolError::execution(
+                tool_id,
+                format!(
+                    "ripgrep 文件列表搜索失败（退出码 {}）：{detail}",
+                    output.exit_code
+                ),
+            ));
         }
-
-        if truncated_by_bytes {
-            // Bounded reap: a D-state rg must not stall this future forever.
-            crate::util::reap_killed_search_child(&mut child).await;
-        } else {
-            let _ = child.wait().await;
-        }
+        let truncated_by_bytes = output.stdout_truncated;
 
         // ── Parse file paths from stdout ────────────────────────
         let stdout = String::from_utf8_lossy(&stdout_buf);
+        // `truncated` describes a result-count/byte cap. A filesystem warning
+        // is surfaced separately below and must not lie about the list cap.
         let mut truncated = truncated_by_bytes;
 
         struct FileEntry {
@@ -303,6 +289,14 @@ impl echo_agent_tool_runtime::Tool for GlobTool {
                      Use a more specific path or pattern to narrow results.)",
                     RESULT_LIMIT
                 ));
+            }
+
+            if partial_failure {
+                lines.push(String::new());
+                lines.push(
+                    "(Partial results: some paths could not be searched. Check directory permissions.)"
+                        .to_string(),
+                );
             }
 
             // Wrap in workspace_result so the model sees the search context.

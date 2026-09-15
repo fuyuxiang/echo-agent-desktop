@@ -4,15 +4,45 @@
 //! - Otherwise, only bundle in release builds
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::PathBuf;
 
-const RG_VER: &str = "15.0.0";
+const RG_VER: &str = "15.2.0";
 const BFS_VER: &str = "4.1";
 const UGREP_VER: &str = "7.7.0";
 const FD_VER: &str = "10.4.2";
 // fd stopped publishing x86_64-apple-darwin assets after 10.3.0.
 const FD_VER_MACOS_X64: &str = "10.3.0";
+
+/// Pinned SHA-256 of every ripgrep release archive that can be embedded.
+/// Keep this table in lock-step with [`RG_VER`]. A release build must fail
+/// closed when the selected asset has no trusted digest.
+const RG_ARCHIVE_SHA256: &[(&str, &str)] = &[
+    (
+        "aarch64-apple-darwin",
+        "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+    ),
+    (
+        "x86_64-apple-darwin",
+        "af7825fcc69a2afc7a7aea55fc9af90e26421d8f20fe59df32e233c0b8a231c1",
+    ),
+    (
+        "x86_64-unknown-linux-musl",
+        "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
+    ),
+    (
+        "aarch64-unknown-linux-gnu",
+        "a740b91c82eaf9914cfedd353572f2791cbe0162c84101ee0951058f4dcbc90d",
+    ),
+    (
+        "x86_64-pc-windows-msvc",
+        "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+    ),
+    (
+        "aarch64-pc-windows-msvc",
+        "e4abca10c3a64ebea742667dd7009449d49403db5460dd6873e389fa2945360f",
+    ),
+];
 
 /// Pinned SHA-256 of each `(version, triple)` fd release tarball we embed.
 const FD_TARBALL_SHA256: &[(&str, &str, &str)] = &[
@@ -249,16 +279,7 @@ fn bundle_rg() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Skip auto-bundling on Windows: ripgrep ships .zip on Windows (not
-    // .tar.gz) and we have no zip-extraction path. Returning here BEFORE
-    // emitting `cargo:rustc-cfg=bundle_rg` keeps include_bytes! macros gated
-    // on cfg(bundle_rg) compiled-out, so the runtime falls back to `rg` on
-    // PATH. Users install ripgrep separately (winget / scoop). An explicit
-    // ECHO_AGENT_TOOLS_BUNDLE_RG_PATH still bundles regardless of target.
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if target_os == "windows" && path_override.is_none() {
-        return Ok(());
-    }
 
     // Expose cfg so the crate can include the bundled bytes.
     println!("cargo:rustc-cfg=bundle_rg");
@@ -280,11 +301,14 @@ fn bundle_rg() -> Result<(), Box<dyn std::error::Error>> {
 
     // Determine supported ripgrep asset triple for auto-download.
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    let asset_triple = match (target_os.as_str(), target_arch.as_str()) {
-        ("macos", "aarch64") => "aarch64-apple-darwin",
-        ("macos", "x86_64") => "x86_64-apple-darwin",
-        ("linux", "x86_64") => "x86_64-unknown-linux-musl",
-        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+    let (asset_triple, archive_ext, binary_name) = match (target_os.as_str(), target_arch.as_str())
+    {
+        ("macos", "aarch64") => ("aarch64-apple-darwin", "tar.gz", "rg"),
+        ("macos", "x86_64") => ("x86_64-apple-darwin", "tar.gz", "rg"),
+        ("linux", "x86_64") => ("x86_64-unknown-linux-musl", "tar.gz", "rg"),
+        ("linux", "aarch64") => ("aarch64-unknown-linux-gnu", "tar.gz", "rg"),
+        ("windows", "x86_64") => ("x86_64-pc-windows-msvc", "zip", "rg.exe"),
+        ("windows", "aarch64") => ("aarch64-pc-windows-msvc", "zip", "rg.exe"),
         _ => {
             return Err(format!(
                 "Unsupported target for ripgrep bundling: {os}-{arch}. Set ECHO_AGENT_TOOLS_BUNDLE_RG_PATH to a local rg binary for offline or unsupported builds.",
@@ -302,7 +326,7 @@ fn bundle_rg() -> Result<(), Box<dyn std::error::Error>> {
     let _ = fs::remove_file(&dest);
 
     let url = format!(
-        "https://github.com/BurntSushi/ripgrep/releases/download/{v}/ripgrep-{v}-{t}.tar.gz",
+        "https://github.com/BurntSushi/ripgrep/releases/download/{v}/ripgrep-{v}-{t}.{archive_ext}",
         v = RG_VER,
         t = asset_triple
     );
@@ -324,31 +348,63 @@ fn bundle_rg() -> Result<(), Box<dyn std::error::Error>> {
         resp.bytes()?.to_vec()
     };
 
-    let gz = flate2::read::GzDecoder::new(&bytes[..]);
-    let mut ar = tar::Archive::new(gz);
-    let mut found = false;
-    for entry in ar.entries()? {
-        let mut e = entry?;
-        let p = e.path()?;
-        if p.file_name().is_some_and(|n| n == "rg") {
-            let data: Vec<u8> = {
-                let mut v = Vec::new();
-                io::copy(&mut e, &mut v)?;
-                v
-            };
-            fs::write(&dest, &data)?;
-            found = true;
-            break;
-        }
-    }
-
-    if !found {
+    let expected_sha = RG_ARCHIVE_SHA256
+        .iter()
+        .find(|(target, _)| *target == asset_triple)
+        .map(|(_, sha)| *sha)
+        .ok_or_else(|| format!("No pinned SHA-256 for ripgrep {RG_VER} {asset_triple}"))?;
+    let actual_sha = {
+        use sha2::Digest as _;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(&bytes);
+        hex_encode(&hasher.finalize())
+    };
+    if actual_sha != expected_sha {
         return Err(format!(
-            "Could not find 'rg' in ripgrep archive {}. Set ECHO_AGENT_TOOLS_BUNDLE_RG_PATH for offline builds.",
-            url
+            "SHA-256 mismatch for {url}:\n  expected {expected_sha}\n  actual   {actual_sha}"
         )
         .into());
     }
+
+    let embedded = if archive_ext == "zip" {
+        let cursor = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(cursor)?;
+        let mut found = None;
+        for idx in 0..archive.len() {
+            let mut entry = archive.by_index(idx)?;
+            if entry
+                .enclosed_name()
+                .is_some_and(|path| path.file_name() == Some(std::ffi::OsStr::new(binary_name)))
+            {
+                let mut data = Vec::with_capacity(entry.size() as usize);
+                entry.read_to_end(&mut data)?;
+                found = Some(data);
+                break;
+            }
+        }
+        found
+    } else {
+        let gz = flate2::read::GzDecoder::new(&bytes[..]);
+        let mut archive = tar::Archive::new(gz);
+        let mut found = None;
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            if entry.path()?.file_name() == Some(std::ffi::OsStr::new(binary_name)) {
+                let mut data = Vec::new();
+                io::copy(&mut entry, &mut data)?;
+                found = Some(data);
+                break;
+            }
+        }
+        found
+    }
+    .ok_or_else(|| {
+        format!(
+            "Could not find '{binary_name}' in ripgrep archive {url}. Set \
+             ECHO_AGENT_TOOLS_BUNDLE_RG_PATH for offline builds."
+        )
+    })?;
+    fs::write(&dest, embedded)?;
 
     Ok(())
 }

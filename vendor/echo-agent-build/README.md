@@ -27,7 +27,7 @@ hosted EchoAgent account is not required for the desktop integration.
 | Protocol namespace | `echo.agent` |
 | Runtime home variable | `ECHO_AGENT_HOME` |
 | Default runtime home | `~/.echo-agent` |
-| Bundled ripgrep variables | `ECHO_AGENT_TOOLS_BUNDLE_RG_PATH`, `ECHO_AGENT_RUNTIME_BUNDLE_RG_PATH` |
+| Bundled ripgrep variable | `ECHO_AGENT_TOOLS_BUNDLE_RG_PATH` (optional local override) |
 
 Legacy home and theme values are read only by narrowly scoped compatibility
 paths so existing local data can be imported safely.
@@ -59,7 +59,6 @@ Run these commands from the EchoAgent Desktop repository root:
 node scripts/verify-vendored-runtime.mjs
 
 ECHO_AGENT_TOOLS_BUNDLE_RG_PATH=/usr/local/bin/rg \
-ECHO_AGENT_RUNTIME_BUNDLE_RG_PATH=/usr/local/bin/rg \
 cargo check --locked \
   --manifest-path vendor/echo-agent-build/Cargo.toml \
   --workspace --all-targets
@@ -69,8 +68,10 @@ cargo clippy --locked \
   --lib -- -D warnings
 ```
 
-Set the two ripgrep paths to the appropriate executable on the build host.
-The desktop build scripts populate the same variables when packaging the app.
+The override is optional. Release builds automatically download the pinned
+ripgrep asset for macOS, Linux, or Windows, verify its SHA-256 digest, and embed
+the executable in `echo-agent-tools`. Set the path only for offline builds or
+to validate a local binary explicitly.
 
 ## Provenance and licensing
 
