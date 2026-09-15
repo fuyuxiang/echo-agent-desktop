@@ -406,6 +406,8 @@ export interface SkillInfo {
   whenToUse?: string;
   /** Exact custom `[skills].paths` registration that can be removed safely. */
   configuredPath?: string;
+  /** Runtime/dependency/account readiness from an optional echo.skill.json contract. */
+  capability?: SkillCapabilityReport;
 }
 
 export type SkillRiskLevel = "low" | "medium" | "high";
@@ -415,6 +417,71 @@ export interface SkillRiskFinding {
   code: string;
   message: string;
   path?: string;
+}
+
+export type SkillCapabilityState =
+  | "instruction_only"
+  | "ready"
+  | "missing_dependencies"
+  | "configuration_required"
+  | "invalid";
+
+export type SkillCapabilityCheckStatus =
+  | "ready"
+  | "missing"
+  | "configuration_required"
+  | "declared"
+  | "invalid";
+
+export interface SkillCapabilityCheck {
+  kind: "manifest" | "command" | "entrypoint" | "connector" | "os_permission" | string;
+  key: string;
+  status: SkillCapabilityCheckStatus;
+  message: string;
+}
+
+export interface SkillConnectorRequirement {
+  id: string;
+  label?: string;
+  accountRequired: boolean;
+  purpose?: string;
+}
+
+export interface SkillCapabilityManifest {
+  schemaVersion: number;
+  capabilities: string[];
+  runtime?: {
+    kind: "python" | "node" | "shell";
+    command?: string;
+    entrypoints: Record<string, string>;
+    timeoutSeconds: number;
+  };
+  requirements: {
+    commands: string[];
+    connectors: SkillConnectorRequirement[];
+    osPermissions: string[];
+  };
+  permissions: {
+    filesystem: "none" | "workspace-read" | "workspace-write";
+    network: string[];
+    externalActions: string[];
+  };
+  artifacts: Array<{
+    id: string;
+    pattern: string;
+    mimeType?: string;
+    required: boolean;
+    maxBytes?: number;
+  }>;
+}
+
+export interface SkillCapabilityReport {
+  declared: boolean;
+  state: SkillCapabilityState;
+  ready: boolean;
+  capabilities: string[];
+  checks: SkillCapabilityCheck[];
+  manifest?: SkillCapabilityManifest;
 }
 
 export interface SkillPackageInspection {
@@ -427,6 +494,8 @@ export interface SkillPackageInspection {
   riskLevel: SkillRiskLevel;
   findings: SkillRiskFinding[];
   warnings: string[];
+  /** Absent only when talking to an older backend. */
+  capability?: SkillCapabilityReport;
   sourceHash: string;
   alreadyInstalled: boolean;
   installedPath?: string;

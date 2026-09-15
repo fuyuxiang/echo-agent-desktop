@@ -12,6 +12,10 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
+use echo_agent_tools::implementations::skills::capability::{
+    inspect_capability, load_manifest, ConnectorState, SkillCapabilityReport, SkillCapabilityState,
+    SkillFilesystemPermission,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::State;
@@ -54,6 +58,9 @@ pub struct SkillPackageInspection {
     pub risk_level: SkillRiskLevel,
     pub findings: Vec<SkillRiskFinding>,
     pub warnings: Vec<String>,
+    /// Structured capability/runtime readiness. Prompt-only skills remain
+    /// installable, but are clearly distinguished from executable packages.
+    pub capability: SkillCapabilityReport,
     pub source_hash: String,
     pub already_installed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -222,6 +229,16 @@ pub fn managed_skill_directory(path: &str) -> Option<String> {
         .map(|directory| directory.to_string_lossy().into_owned())
 }
 
+/// Inspect an already discovered Skill without executing package code. Runtime
+/// paths normally point to SKILL.md, while managed paths may point at the
+/// package directory; normalize both forms here.
+pub fn inspect_installed_capability(
+    path: &str,
+    connector_states: Option<&std::collections::HashMap<String, ConnectorState>>,
+) -> SkillCapabilityReport {
+    inspect_capability(&skill_directory(Path::new(path)), connector_states)
+}
+
 /// Validate an external path before registering it in `[skills].paths`.
 /// Registration intentionally supports a directory containing multiple Skills
 /// (connector bundles); ZIP packages must go through the managed installer.
@@ -266,6 +283,9 @@ pub fn validate_registered_source(path: &str) -> Result<(), String> {
             .map_err(|e| format!("{} 必须是 UTF-8 Markdown：{e}", hit.display()))?;
         let root = hit.parent().unwrap_or(input);
         parse_skill_metadata(&markdown, root)?;
+        // A malformed executable contract must never be silently downgraded to
+        // a prompt-only Skill during direct path registration.
+        load_manifest(root)?;
     }
     Ok(())
 }
@@ -550,9 +570,35 @@ fn inspect_prepared(prepared: &PreparedPackage) -> Result<SkillPackageInspection
         .map_err(|e| format!("SKILL.md 必须是 UTF-8 文本：{e}"))?;
     let (name, description, version, mut warnings) =
         parse_skill_metadata(&markdown, &prepared.root)?;
-    let (risk_level, findings) = scan_risk(&files)?;
+    let capability = inspect_capability(&prepared.root, None);
+    if capability.state == SkillCapabilityState::Invalid {
+        let reason = capability
+            .checks
+            .first()
+            .map(|check| check.message.as_str())
+            .unwrap_or("能力清单无效");
+        return Err(format!("技能能力清单无效：{reason}"));
+    }
+    let (mut risk_level, mut findings) = scan_risk(&files)?;
+    add_capability_risk_findings(&capability, &mut findings);
+    risk_level = findings
+        .iter()
+        .map(|finding| finding.level)
+        .max()
+        .unwrap_or(risk_level);
     if findings.is_empty() {
         warnings.push("静态检查未发现明显风险；技能仍可能指导 Agent 执行外部操作".into());
+    }
+    match capability.state {
+        SkillCapabilityState::InstructionOnly => warnings
+            .push("该包未声明 echo.skill.json，安装后仅能作为提示词/工作流 Skill 使用".into()),
+        SkillCapabilityState::MissingDependencies => {
+            warnings.push("当前设备缺少能力清单声明的命令；可先安装技能，补齐依赖后再运行".into())
+        }
+        SkillCapabilityState::ConfigurationRequired => {
+            warnings.push("该技能需要连接器账号或系统权限；安装不会自动获取任何凭据".into())
+        }
+        SkillCapabilityState::Ready | SkillCapabilityState::Invalid => {}
     }
     let total_bytes = files.iter().map(|f| f.size).sum();
     let source_hash = package_hash(&files)?;
@@ -567,10 +613,60 @@ fn inspect_prepared(prepared: &PreparedPackage) -> Result<SkillPackageInspection
         risk_level,
         findings,
         warnings,
+        capability,
         source_hash,
         already_installed: installed.is_some(),
         installed_path: installed.map(|p| p.to_string_lossy().into_owned()),
     })
+}
+
+fn add_capability_risk_findings(
+    capability: &SkillCapabilityReport,
+    findings: &mut Vec<SkillRiskFinding>,
+) {
+    let Some(manifest) = &capability.manifest else {
+        return;
+    };
+    let mut existing = findings
+        .iter()
+        .map(|finding| finding.code.as_str())
+        .collect::<HashSet<_>>();
+    let mut additions = Vec::new();
+    if manifest.permissions.filesystem == SkillFilesystemPermission::WorkspaceWrite
+        && existing.insert("declared-workspace-write")
+    {
+        additions.push(SkillRiskFinding {
+            level: SkillRiskLevel::Medium,
+            code: "declared-workspace-write".into(),
+            message: "能力清单声明可修改当前工作区文件".into(),
+            path: Some("echo.skill.json".into()),
+        });
+    }
+    if !manifest.permissions.network.is_empty() && existing.insert("declared-network-access") {
+        additions.push(SkillRiskFinding {
+            level: SkillRiskLevel::Medium,
+            code: "declared-network-access".into(),
+            message: format!(
+                "能力清单声明网络访问：{}",
+                manifest.permissions.network.join(", ")
+            ),
+            path: Some("echo.skill.json".into()),
+        });
+    }
+    if !manifest.permissions.external_actions.is_empty()
+        && existing.insert("declared-external-actions")
+    {
+        additions.push(SkillRiskFinding {
+            level: SkillRiskLevel::Medium,
+            code: "declared-external-actions".into(),
+            message: format!(
+                "能力清单声明外部副作用：{}",
+                manifest.permissions.external_actions.join(", ")
+            ),
+            path: Some("echo.skill.json".into()),
+        });
+    }
+    findings.extend(additions);
 }
 
 fn locate_skill_root(root: &Path) -> Result<PathBuf, String> {
@@ -1139,6 +1235,70 @@ mod tests {
             .findings
             .iter()
             .any(|f| f.code == "destructive-command"));
+    }
+
+    #[test]
+    fn inspection_validates_executable_contract_and_declared_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(dir.path(), "Run the create action.");
+        fs::create_dir_all(dir.path().join("scripts")).unwrap();
+        fs::write(dir.path().join("scripts/create.py"), "print('ok')").unwrap();
+        fs::write(
+            dir.path().join("echo.skill.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schemaVersion": 1,
+                "capabilities": ["document.docx.create"],
+                "runtime": {
+                    "kind": "python",
+                    "entrypoints": {"create": "scripts/create.py"}
+                },
+                "permissions": {
+                    "filesystem": "workspace-write",
+                    "network": ["https://example.com"]
+                },
+                "artifacts": [{
+                    "id": "document",
+                    "pattern": "output/*.docx",
+                    "required": true
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let prepared = prepare_package(dir.path()).unwrap();
+        let report = inspect_prepared(&prepared).unwrap();
+        assert!(report.capability.declared);
+        assert_eq!(report.capability.capabilities, vec!["document.docx.create"]);
+        assert_eq!(report.risk_level, SkillRiskLevel::Medium);
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.code == "declared-workspace-write"));
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.code == "declared-network-access"));
+    }
+
+    #[test]
+    fn invalid_capability_contract_blocks_installation_inspection() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(dir.path(), "Run it.");
+        fs::write(
+            dir.path().join("echo.skill.json"),
+            r#"{
+              "schemaVersion": 1,
+              "capabilities": ["document.docx.create"],
+              "runtime": {"kind":"python","entrypoints":{"create":"../escape.py"}}
+            }"#,
+        )
+        .unwrap();
+
+        let prepared = prepare_package(dir.path()).unwrap();
+        let error = inspect_prepared(&prepared).unwrap_err();
+        assert!(error.contains("技能能力清单无效"));
+        assert!(error.contains("safe relative path"));
     }
 
     #[test]

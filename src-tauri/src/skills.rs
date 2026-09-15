@@ -10,8 +10,12 @@
 //! reloads on file changes.
 
 use agent_client_protocol as acp;
+use echo_agent_tools::implementations::skills::capability::{
+    ConnectorState, SkillCapabilityReport,
+};
 use serde::Deserialize;
 use serde_json::value::RawValue;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tauri::State;
@@ -112,6 +116,10 @@ pub struct SkillInfo {
     /// registration, so the UI must use this field.
     #[serde(default)]
     pub configured_path: Option<String>,
+    /// Machine-readable runtime/dependency/connector readiness from the
+    /// optional echo.skill.json package contract.
+    #[serde(default)]
+    pub capability: Option<SkillCapabilityReport>,
 }
 
 /// Generic list shape returned by `echo.agent/skills/list` and `echo.agent/skills/config`:
@@ -193,6 +201,29 @@ pub async fn skills_list_with_tx(
         }
     };
     let organization_metadata = crate::org::managed_skills_metadata();
+    // Connector readiness belongs to the host product because credentials stay
+    // inside connector implementations. A Skill receives status, never secrets.
+    let connector_states = crate::mcp::mcp_list_with_tx(tx, None)
+        .await
+        .ok()
+        .map(|servers| {
+            servers
+                .into_iter()
+                .map(|server| {
+                    let state = if !server.enabled
+                        || server.auth_required
+                        || server.setup_required
+                        || server.status.as_deref().is_some_and(|status| {
+                            matches!(status, "setuprequired" | "unavailable" | "error")
+                        }) {
+                        ConnectorState::ConfigurationRequired
+                    } else {
+                        ConnectorState::Ready
+                    };
+                    (server.name.to_ascii_lowercase(), state)
+                })
+                .collect::<HashMap<_, _>>()
+        });
     Ok(skills
         .into_iter()
         .map(|mut skill| {
@@ -220,6 +251,10 @@ pub async fn skills_list_with_tx(
                         .max_by_key(|configured| configured.len())
                         .cloned();
                 }
+                skill.capability = Some(crate::skill_installer::inspect_installed_capability(
+                    &path,
+                    connector_states.as_ref(),
+                ));
             }
             skill
         })
@@ -327,6 +362,7 @@ mod tests {
         assert_eq!(skills[0].display_name.as_deref(), Some("Deploy Service"));
         assert_eq!(skills[0].user_invocable, Some(false));
         assert_eq!(skills[0].when_to_use.as_deref(), Some("release requests"));
+        assert!(skills[0].capability.is_none());
     }
 
     #[test]

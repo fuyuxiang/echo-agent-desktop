@@ -2945,6 +2945,8 @@ fn verify_extracted_skill(bytes: &[u8], root: &Path) -> Result<(), String> {
     if actual != expected {
         return Err("installed Skill file set differs from its signed package".into());
     }
+    echo_agent_tools::implementations::skills::capability::load_manifest(root)
+        .map_err(|error| format!("installed Skill capability manifest is invalid: {error}"))?;
     Ok(())
 }
 
@@ -3052,6 +3054,8 @@ fn extract_skill_package(
         if skill_entries != 1 || !temp.join("SKILL.md").is_file() {
             return Err("Skill ZIP root must contain exactly one SKILL.md".into());
         }
+        echo_agent_tools::implementations::skills::capability::load_manifest(&temp)
+            .map_err(|error| format!("Skill capability manifest is invalid: {error}"))?;
         std::fs::rename(&temp, &final_dir).map_err(|e| format!("activate Skill package: {e}"))?;
         Ok(())
     })();

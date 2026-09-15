@@ -69,6 +69,29 @@ describe("本地 Skills / MCP 完整流程", () => {
         path: "scripts/run.sh",
       }],
       warnings: [],
+      capability: {
+        declared: true,
+        state: "configuration_required",
+        ready: false,
+        capabilities: ["notion.page.create"],
+        checks: [{
+          kind: "connector",
+          key: "notion",
+          status: "configuration_required",
+          message: "Connect an account for Notion",
+        }],
+        manifest: {
+          schemaVersion: 1,
+          capabilities: ["notion.page.create"],
+          requirements: {
+            commands: [],
+            connectors: [{ id: "notion", label: "Notion", accountRequired: true }],
+            osPermissions: [],
+          },
+          permissions: { filesystem: "none", network: [], externalActions: [] },
+          artifacts: [],
+        },
+      },
       sourceHash: "a".repeat(64),
       alreadyInstalled: false,
     });
@@ -89,6 +112,8 @@ describe("本地 Skills / MCP 完整流程", () => {
 
     expect(await screen.findByText("中风险")).toBeInTheDocument();
     expect(screen.getByText("包含可执行脚本，安装前应审查源码")).toBeInTheDocument();
+    expect(screen.getByText("待连接/授权")).toBeInTheDocument();
+    expect(screen.getByText("待连接账号：Notion")).toBeInTheDocument();
     expect(mocks.install).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "安装技能" }));
@@ -157,6 +182,67 @@ describe("本地 Skills / MCP 完整流程", () => {
     await waitFor(() => expect(mocks.install).toHaveBeenCalledWith(
       "/trusted/catalog/demo",
       "c".repeat(64),
+      false,
+    ));
+  });
+
+  it("低风险技能需要外部账号时，先告知用户再安装", async () => {
+    mocks.inspect.mockResolvedValueOnce({
+      sourcePath: "/trusted/catalog/notion-writer",
+      name: "notion-writer",
+      description: "Write to Notion",
+      fileCount: 1,
+      totalBytes: 32,
+      riskLevel: "low",
+      findings: [],
+      warnings: [],
+      capability: {
+        declared: true,
+        state: "configuration_required",
+        ready: false,
+        capabilities: ["notion.page.create"],
+        checks: [{
+          kind: "connector",
+          key: "notion",
+          status: "configuration_required",
+          message: "Connect an account for Notion",
+        }],
+        manifest: {
+          schemaVersion: 1,
+          capabilities: ["notion.page.create"],
+          requirements: {
+            commands: [],
+            connectors: [{ id: "notion", label: "Notion", accountRequired: true }],
+            osPermissions: [],
+          },
+          permissions: { filesystem: "none", network: [], externalActions: [] },
+          artifacts: [],
+        },
+      },
+      sourceHash: "e".repeat(64),
+      alreadyInstalled: false,
+    });
+    const skill = {
+      id: "notion-writer",
+      name: "Notion Writer",
+      desc: "Write to Notion",
+      sourceDir: "/trusted/catalog/notion-writer",
+      origin: "builtin" as const,
+      cat: "other",
+      featured: false,
+    };
+    render(<SkillDetailModal skill={skill} onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "安装技能" }));
+
+    const dialog = await screen.findByRole("alertdialog", { name: "确认安装需审查技能" });
+    expect(within(dialog).getByText("待连接/授权")).toBeInTheDocument();
+    expect(within(dialog).getByText("待连接账号：Notion")).toBeInTheDocument();
+    expect(mocks.install).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认安装" }));
+    await waitFor(() => expect(mocks.install).toHaveBeenCalledWith(
+      "/trusted/catalog/notion-writer",
+      "e".repeat(64),
       false,
     ));
   });

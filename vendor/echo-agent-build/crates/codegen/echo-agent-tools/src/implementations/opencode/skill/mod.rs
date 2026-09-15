@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use crate::implementations::skills::skill::{SkillOutput, extract_skill_body, format_skill_name};
+use crate::implementations::skills::skill::{SkillOutput, format_skill_name};
 use crate::implementations::skills::types::SkillInfo;
 use crate::types::requirements::{Expr, ToolRequirement};
 #[allow(unused_imports)]
@@ -121,11 +121,7 @@ fn find_skill<'a>(name: &str, skills: &'a [SkillInfo]) -> FindSkillResult<'a> {
 
 /// Load skill content from its SKILL.md file, stripping YAML frontmatter.
 async fn load_skill_content(skill: &SkillInfo) -> Result<String, String> {
-    let path = Path::new(&skill.path);
-    match tokio::fs::read_to_string(path).await {
-        Ok(content) => Ok(extract_skill_body(&content)),
-        Err(e) => Err(format!("Failed to read skill file '{}': {}", skill.path, e)),
-    }
+    crate::implementations::skills::skill::load_skill_content(skill).await
 }
 
 /// List up to `limit` bundled files in the skill directory, excluding SKILL.md.
