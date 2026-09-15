@@ -87,9 +87,15 @@ Agent can claim successful completion.
 - Invalid manifests block managed installation and direct path registration.
 - Missing commands do not block installation; the Skill is labeled “missing
   dependencies” until the host is ready.
+- Missing connectors are also labeled “missing dependencies”; installed
+  connectors that still need setup, account authorization, or re-enabling are
+  labeled “configuration required”.
 - Connector/account and operating-system permission requirements are shown
   before installation. Installation never requests or stores those credentials.
 - Declared workspace writes, network access, and external side effects are
   included in the installation risk report.
 - On invocation, the validated contract is appended to the Skill instructions,
   including entrypoints, security boundaries, and artifact acceptance rules.
+  Dynamic fields are JSON encoded and the complete rendered contract is limited
+  to 4 KiB. Manifests that cannot fit that prompt budget are rejected during
+  inspection rather than truncated at execution time.

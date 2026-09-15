@@ -2049,6 +2049,32 @@ struct AutomationExecutionContext {
     connectors: Vec<String>,
 }
 
+fn require_automated_skill_capability(
+    capability: Option<
+        &echo_agent_tools::implementations::skills::capability::SkillCapabilityReport,
+    >,
+    skill_name: &str,
+) -> Result<(), String> {
+    use echo_agent_tools::implementations::skills::capability::SkillCapabilityState;
+
+    let capability = capability
+        .ok_or_else(|| format!("所选技能未完成执行能力预检，无法启动无人值守任务：{skill_name}"))?;
+    if capability.state.can_run_automated() {
+        return Ok(());
+    }
+    let reason = match capability.state {
+        SkillCapabilityState::MissingDependencies => "缺少运行依赖",
+        SkillCapabilityState::ConfigurationRequired => "尚未完成账号连接或系统授权",
+        SkillCapabilityState::Invalid => "执行能力清单无效",
+        SkillCapabilityState::InstructionOnly | SkillCapabilityState::Ready => {
+            unreachable!("runnable capability state passed the fail-closed guard")
+        }
+    };
+    Err(format!(
+        "所选技能{reason}，无法启动无人值守任务：{skill_name}"
+    ))
+}
+
 async fn resolve_execution_context(
     tx: &echo_agent_acp::AcpAgentTx,
     automation: &Automation,
@@ -2082,23 +2108,7 @@ async fn resolve_execution_context(
             if !skill.enabled {
                 return Err(format!("所选技能未启用：{selected}"));
             }
-            if let Some(capability) = &skill.capability {
-                use echo_agent_tools::implementations::skills::capability::SkillCapabilityState;
-                match capability.state {
-                    SkillCapabilityState::MissingDependencies => {
-                        return Err(format!(
-                            "所选技能缺少运行依赖，无法启动无人值守任务：{selected}"
-                        ));
-                    }
-                    SkillCapabilityState::ConfigurationRequired => {
-                        return Err(format!("所选技能尚未完成账号连接或系统授权：{selected}"));
-                    }
-                    SkillCapabilityState::Invalid => {
-                        return Err(format!("所选技能的执行能力清单无效：{selected}"));
-                    }
-                    SkillCapabilityState::InstructionOnly | SkillCapabilityState::Ready => {}
-                }
-            }
+            require_automated_skill_capability(skill.capability.as_ref(), selected)?;
             let configured_path = skill
                 .path
                 .as_deref()
@@ -3527,6 +3537,38 @@ mod tests {
         assert_eq!(json["status"], "failed");
         assert_eq!(json["error"], "Auto 模型当前不可用");
         assert!(json.get("sessionId").is_none());
+    }
+
+    #[test]
+    fn unattended_skills_require_a_current_runnable_preflight() {
+        use echo_agent_tools::implementations::skills::capability::{
+            SkillCapabilityReport, SkillCapabilityState,
+        };
+
+        let report = |state| SkillCapabilityReport {
+            declared: state != SkillCapabilityState::InstructionOnly,
+            state,
+            ready: state.can_run_automated(),
+            capabilities: Vec::new(),
+            checks: Vec::new(),
+            manifest: None,
+        };
+        assert!(require_automated_skill_capability(None, "demo")
+            .unwrap_err()
+            .contains("未完成执行能力预检"));
+        for state in [
+            SkillCapabilityState::InstructionOnly,
+            SkillCapabilityState::Ready,
+        ] {
+            assert!(require_automated_skill_capability(Some(&report(state)), "demo").is_ok());
+        }
+        for state in [
+            SkillCapabilityState::MissingDependencies,
+            SkillCapabilityState::ConfigurationRequired,
+            SkillCapabilityState::Invalid,
+        ] {
+            assert!(require_automated_skill_capability(Some(&report(state)), "demo").is_err());
+        }
     }
 
     fn test_automation() -> Automation {
