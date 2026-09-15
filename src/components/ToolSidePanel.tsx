@@ -56,6 +56,8 @@ const MIN_WIDTH = 280;
 const MAX_WIDTH_RATIO = 0.6; // 占视口 60%
 const MIN_NAV_WIDTH = 140;
 const MAX_NAV_WIDTH = 360;
+const MIN_MAIN_WIDTH = 120;
+const NAV_SASH_WIDTH = 5;
 
 interface ToolSidePanelProps {
   open: boolean;
@@ -165,17 +167,35 @@ export function ToolSidePanel({
   });
 
   // ---- 面板布局状态 ----
+  const [viewportWidth, setViewportWidth] = useState(getViewportWidth);
+  const panelMaxWidth = getPanelMaxWidth(viewportWidth);
   const [width, setWidth] = useState<number>(() => {
-    const saved = Number(localStorage.getItem(WIDTH_KEY));
-    return saved > 0 ? saved : DEFAULT_WIDTH;
+    return readStoredDimension(
+      WIDTH_KEY,
+      DEFAULT_WIDTH,
+      MIN_WIDTH,
+      getPanelMaxWidth(getViewportWidth()),
+    );
   });
   const [navWidth, setNavWidth] = useState<number>(() => {
-    const saved = Number(localStorage.getItem(NAV_WIDTH_KEY));
-    return saved > 0 ? saved : DEFAULT_NAV_WIDTH;
+    return readStoredDimension(
+      NAV_WIDTH_KEY,
+      DEFAULT_NAV_WIDTH,
+      MIN_NAV_WIDTH,
+      MAX_NAV_WIDTH,
+    );
   });
   const [maximized, setMaximized] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(false);
+
+  const renderedPanelWidth = clamp(width, MIN_WIDTH, panelMaxWidth);
+  const availablePanelWidth = maximized ? viewportWidth : renderedPanelWidth;
+  const navMaxWidth = Math.max(
+    MIN_NAV_WIDTH,
+    Math.min(MAX_NAV_WIDTH, availablePanelWidth - MIN_MAIN_WIDTH - NAV_SASH_WIDTH),
+  );
+  const renderedNavWidth = clamp(navWidth, MIN_NAV_WIDTH, navMaxWidth);
 
   // 切换会话时重置 selection（避免跨会话残留）。
   useEffect(() => {
@@ -184,15 +204,35 @@ export function ToolSidePanel({
     setBrowserUrl(undefined);
   }, [sessionId]);
 
-  // 持久化宽度。
+  // 窗口缩放后重新约束面板，避免持久化尺寸在小窗口中挤坏布局。
   useEffect(() => {
-    localStorage.setItem(WIDTH_KEY, String(width));
+    const handleResize = () => setViewportWidth(getViewportWidth());
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    setWidth((current) => clamp(current, MIN_WIDTH, panelMaxWidth));
+  }, [panelMaxWidth]);
+
+  useEffect(() => {
+    setNavWidth((current) => clamp(current, MIN_NAV_WIDTH, navMaxWidth));
+  }, [navMaxWidth]);
+
+  // 持久化经过校验的宽度；同时兼容无痕模式等 localStorage 不可写场景。
+  useEffect(() => {
+    writeStoredDimension(WIDTH_KEY, width);
   }, [width]);
   useEffect(() => {
-    localStorage.setItem(NAV_WIDTH_KEY, String(navWidth));
+    writeStoredDimension(NAV_WIDTH_KEY, navWidth);
   }, [navWidth]);
 
   const effectiveNavCollapsed = pinned ? false : navCollapsed;
+  const handlePinnedToggle = useCallback(() => {
+    // 钉住/取消钉住只改变后续能否收起，不应沿用历史收起状态或改变当前布局。
+    setNavCollapsed(false);
+    setPinned((current) => !current);
+  }, []);
 
   if (!open) return null;
 
@@ -209,7 +249,7 @@ export function ToolSidePanel({
       style={
         maximized
           ? undefined
-          : { width: `${Math.min(width, window.innerWidth * MAX_WIDTH_RATIO)}px` }
+          : { width: `${renderedPanelWidth}px` }
       }
       aria-label="工作区面板"
     >
@@ -217,7 +257,9 @@ export function ToolSidePanel({
       {!maximized && (
         <div
           className="tool-side-panel__edge-sash"
-          onPointerDown={(e) => startResizeEdge(e, width, setWidth)}
+          onPointerDown={(e) =>
+            startResizeEdge(e, renderedPanelWidth, panelMaxWidth, setWidth)
+          }
         />
       )}
       {/* 左导航列 */}
@@ -227,7 +269,7 @@ export function ToolSidePanel({
           (effectiveNavCollapsed ? " tool-side-panel__nav--collapsed" : "")
         }
         style={
-          effectiveNavCollapsed ? undefined : { width: `${navWidth}px` }
+          effectiveNavCollapsed ? undefined : { width: `${renderedNavWidth}px` }
         }
       >
         {/* macOS 贴窗口顶边：空白处支持拖动/双击缩放（同 header）。 */}
@@ -251,7 +293,7 @@ export function ToolSidePanel({
               <button
                 type="button"
                 className="tool-side-panel__icon-btn"
-                onClick={() => setPinned((p) => !p)}
+                onClick={handlePinnedToggle}
                 title={pinned ? "取消钉住" : "钉住左列"}
                 aria-label={pinned ? "取消钉住" : "钉住左列"}
                 aria-pressed={pinned}
@@ -293,7 +335,9 @@ export function ToolSidePanel({
       {!effectiveNavCollapsed && (
         <div
           className="tool-side-panel__sash"
-          onPointerDown={(e) => startResizeNav(e, navWidth, setNavWidth)}
+          onPointerDown={(e) =>
+            startResizeNav(e, renderedNavWidth, navMaxWidth, setNavWidth)
+          }
         />
       )}
 
@@ -693,10 +737,50 @@ function basename(p: string): string {
   return i >= 0 ? norm.slice(i + 1) : norm;
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getViewportWidth(): number {
+  return typeof window === "undefined"
+    ? DEFAULT_WIDTH / MAX_WIDTH_RATIO
+    : window.innerWidth;
+}
+
+function getPanelMaxWidth(viewportWidth: number): number {
+  return Math.max(MIN_WIDTH, viewportWidth * MAX_WIDTH_RATIO);
+}
+
+function readStoredDimension(
+  key: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw == null) return fallback;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? clamp(parsed, min, max) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredDimension(key: string, value: number): void {
+  try {
+    window.localStorage.setItem(key, String(value));
+  } catch {
+    // localStorage 被禁用不影响当前会话内的面板使用。
+  }
+}
+
 /** 启动左列宽度拖拽（pointer 事件，松开时持久化由外层 effect 处理）。 */
 function startResizeNav(
   e: React.PointerEvent<HTMLDivElement>,
   currentWidth: number,
+  maxWidth: number,
   setWidth: (w: number) => void,
 ) {
   e.preventDefault();
@@ -707,7 +791,7 @@ function startResizeNav(
     const delta = ev.clientX - startX;
     const next = Math.min(
       Math.max(currentWidth + delta, MIN_NAV_WIDTH),
-      MAX_NAV_WIDTH,
+      maxWidth,
     );
     setWidth(next);
   };
@@ -726,12 +810,12 @@ function startResizeNav(
 function startResizeEdge(
   e: React.PointerEvent<HTMLDivElement>,
   currentWidth: number,
+  maxWidth: number,
   setWidth: (w: number) => void,
 ) {
   e.preventDefault();
   const startX = e.clientX;
   const pointerId = e.pointerId;
-  const maxWidth = window.innerWidth * MAX_WIDTH_RATIO;
   const onMove = (ev: PointerEvent) => {
     if (ev.pointerId !== pointerId) return;
     // 向左拖（delta 负）→ 宽度变大。
