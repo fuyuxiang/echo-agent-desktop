@@ -6,6 +6,7 @@
 //! The ripgrep binary resolution logic (`rg_path()`) is shared with the
 //! old implementation via `implementations::grep::ripgrep`.
 
+use std::io;
 use std::process::Stdio;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -33,7 +34,7 @@ pub mod ripgrep;
 
 // Re-export the shared EchoAgentIntegerSchema from types module
 pub use crate::types::EchoAgentIntegerSchema;
-use ripgrep::rg_path;
+use ripgrep::{rg_path, unavailable_message};
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -346,7 +347,10 @@ impl echo_agent_tool_runtime::Tool for GrepTool {
         tracing::Span::current().record("effective_head_limit", config.effective_head_limit as u64);
 
         let timeout = grep_timeout();
-        let io_result = tokio::time::timeout(timeout, async {
+        let deadline_at = tokio::time::Instant::now() + timeout;
+        let stderr_task =
+            stderr_pipe.map(|stderr_pipe| tokio::spawn(read_rg_stderr_capped(stderr_pipe)));
+        let io_result = tokio::time::timeout_at(deadline_at, async {
             // Read stdout until EOF, byte cap, or one line past the budget.
             // Reading `effective_head_limit + 1` lines lets us distinguish an
             // exact-fit result (not truncated) from an overflowing one, so we
@@ -354,7 +358,7 @@ impl echo_agent_tool_runtime::Tool for GrepTool {
             // lines — matching `finalize_grep`'s `> limit` check.
             let (stdout_buf, stdout_truncated) = if let Some(stdout_pipe) = stdout_pipe {
                 read_rg_stdout_capped(stdout_pipe, config.effective_head_limit.saturating_add(1))
-                    .await
+                    .await?
             } else {
                 (Vec::new(), false)
             };
@@ -370,21 +374,32 @@ impl echo_agent_tool_runtime::Tool for GrepTool {
                 let _ = child.start_kill();
             }
 
-            // Read stderr (always small).
-            let mut stderr_buf = Vec::new();
-            if let Some(stderr_pipe) = stderr_pipe {
-                let _ = stderr_pipe
-                    .take(1_000_000)
-                    .read_to_end(&mut stderr_buf)
-                    .await;
-            }
+            // stderr is drained concurrently from process start so a noisy rg
+            // can never block while stdout is being consumed.
+            let stderr_buf = match stderr_task {
+                Some(task) => task
+                    .await
+                    .map_err(|error| io::Error::other(error.to_string()))??,
+                None => Vec::new(),
+            };
 
-            (stdout_buf, stdout_truncated, stderr_buf)
+            Ok::<_, io::Error>((stdout_buf, stdout_truncated, stderr_buf))
         })
         .await;
 
         let (stdout_buf, stdout_truncated, stderr_buf) = match io_result {
-            Ok(result) => result,
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => {
+                tracing::Span::current().record("early_kill", true);
+                tracing::Span::current().record("wall_ms", started.elapsed().as_millis() as u64);
+                let _ = child.start_kill();
+                crate::util::reap_killed_search_child(&mut child).await;
+                return Err(echo_agent_tool_runtime::ToolError::execution(
+                    echo_agent_tool_protocol::ToolId::new("grep").expect("valid tool id"),
+                    format!("读取内置搜索组件输出失败：{error}"),
+                )
+                .with_source(error));
+            }
             Err(_elapsed) => {
                 tracing::Span::current().record("timed_out", true);
                 tracing::Span::current().record("early_kill", true);
@@ -403,7 +418,21 @@ impl echo_agent_tool_runtime::Tool for GrepTool {
             crate::util::reap_killed_search_child(&mut child).await;
             0
         } else {
-            child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1)
+            match tokio::time::timeout_at(deadline_at, child.wait()).await {
+                Ok(Ok(status)) => status.code().unwrap_or(-1),
+                Ok(Err(error)) => {
+                    return Err(echo_agent_tool_runtime::ToolError::execution(
+                        echo_agent_tool_protocol::ToolId::new("grep").expect("valid tool id"),
+                        format!("等待内置搜索组件结束失败：{error}"),
+                    )
+                    .with_source(error));
+                }
+                Err(_) => {
+                    let _ = child.start_kill();
+                    crate::util::reap_killed_search_child(&mut child).await;
+                    return Ok(grep_timeout_output(timeout.as_secs()));
+                }
+            }
         };
 
         tracing::Span::current().record("early_kill", stdout_truncated);
@@ -461,6 +490,9 @@ fn grep_progress_stream(
         span.record("effective_head_limit", config.effective_head_limit as u64);
         let mut stdout_buf = Vec::with_capacity(MAX_STDOUT_BYTES.min(65_536));
         let mut stdout_truncated = false;
+        let mut stdout_read_error = None;
+        let mut stderr_task = stderr_pipe
+            .map(|stderr_pipe| tokio::spawn(read_rg_stderr_capped(stderr_pipe)));
         // Incremental card-body formatter (deltas == terminal body).
         let mut streamer = BodyStreamer::new(spec, &config);
         let mut timed_out = false;
@@ -488,7 +520,10 @@ fn grep_progress_stream(
                         let n = match res {
                             Ok(0) => break,
                             Ok(n) => n,
-                            Err(_) => break,
+                            Err(error) => {
+                                stdout_read_error = Some(error);
+                                break;
+                            }
                         };
                         // Mirror `run`'s hard byte + line caps when filling
                         // `stdout_buf`, then kill so rg stops walking the tree.
@@ -562,6 +597,22 @@ fn grep_progress_stream(
             }
         }
 
+        if let Some(error) = stdout_read_error {
+            let _ = child.start_kill();
+            crate::util::reap_killed_search_child(&mut child).await;
+            if let Some(task) = stderr_task.take() {
+                let _ = tokio::time::timeout(Duration::from_secs(1), task).await;
+            }
+            yield echo_agent_tool_runtime::ToolStreamItem::Terminal(Err(
+                echo_agent_tool_runtime::ToolError::execution(
+                    echo_agent_tool_protocol::ToolId::new("grep").expect("valid tool id"),
+                    format!("读取内置搜索组件输出失败：{error}"),
+                )
+                .with_source(error),
+            ));
+            return;
+        }
+
         if timed_out {
             span.record("timed_out", true);
             span.record("early_kill", true);
@@ -572,6 +623,9 @@ fn grep_progress_stream(
             });
             let _ = child.start_kill();
             crate::util::reap_killed_search_child(&mut child).await;
+            if let Some(task) = stderr_task.take() {
+                let _ = tokio::time::timeout(Duration::from_secs(1), task).await;
+            }
             // Timeout: finalize what was read (marked truncated) plus an
             // explicit notice, so the stream isn't contradicted; with
             // nothing streamed, fall back to the timeout-only card.
@@ -613,14 +667,44 @@ fn grep_progress_stream(
 
         // stderr is small and never streamed; still bounded by the shared
         // deadline as a backstop so a wedged child can't stall the stream.
-        let mut stderr_buf = Vec::new();
-        if let Some(stderr_pipe) = stderr_pipe {
-            let _ = tokio::time::timeout_at(
-                deadline_at,
-                stderr_pipe.take(1_000_000).read_to_end(&mut stderr_buf),
-            )
-            .await;
-        }
+        let stderr_buf = if let Some(task) = stderr_task.take() {
+            match tokio::time::timeout(Duration::from_secs(1), task).await {
+                Ok(Ok(Ok(stderr_buf))) => stderr_buf,
+                Ok(Ok(Err(error))) => {
+                    let _ = child.start_kill();
+                    crate::util::reap_killed_search_child(&mut child).await;
+                    yield echo_agent_tool_runtime::ToolStreamItem::Terminal(Err(
+                        echo_agent_tool_runtime::ToolError::execution(
+                            echo_agent_tool_protocol::ToolId::new("grep").expect("valid tool id"),
+                            format!("读取内置搜索组件错误信息失败：{error}"),
+                        )
+                        .with_source(error),
+                    ));
+                    return;
+                }
+                Ok(Err(error)) => {
+                    let _ = child.start_kill();
+                    crate::util::reap_killed_search_child(&mut child).await;
+                    yield echo_agent_tool_runtime::ToolStreamItem::Terminal(Err(
+                        echo_agent_tool_runtime::ToolError::execution(
+                            echo_agent_tool_protocol::ToolId::new("grep").expect("valid tool id"),
+                            format!("收集内置搜索组件错误信息失败：{error}"),
+                        ),
+                    ));
+                    return;
+                }
+                Err(_) => {
+                    let _ = child.start_kill();
+                    crate::util::reap_killed_search_child(&mut child).await;
+                    yield echo_agent_tool_runtime::ToolStreamItem::Terminal(Ok(
+                        grep_timeout_output(timeout.as_secs()),
+                    ));
+                    return;
+                }
+            }
+        } else {
+            Vec::new()
+        };
 
         // Truncated output means `rg` was already killed above — bounded reap,
         // and the exit code is defined as 0. A natural EOF means rg is exiting,
@@ -629,7 +713,27 @@ fn grep_progress_stream(
             crate::util::reap_killed_search_child(&mut child).await;
             0
         } else {
-            child.wait().await.ok().and_then(|s| s.code()).unwrap_or(-1)
+            match tokio::time::timeout(Duration::from_secs(1), child.wait()).await {
+                Ok(Ok(status)) => status.code().unwrap_or(-1),
+                Ok(Err(error)) => {
+                    yield echo_agent_tool_runtime::ToolStreamItem::Terminal(Err(
+                        echo_agent_tool_runtime::ToolError::execution(
+                            echo_agent_tool_protocol::ToolId::new("grep").expect("valid tool id"),
+                            format!("等待内置搜索组件结束失败：{error}"),
+                        )
+                        .with_source(error),
+                    ));
+                    return;
+                }
+                Err(_) => {
+                    let _ = child.start_kill();
+                    crate::util::reap_killed_search_child(&mut child).await;
+                    yield echo_agent_tool_runtime::ToolStreamItem::Terminal(Ok(
+                        grep_timeout_output(timeout.as_secs()),
+                    ));
+                    return;
+                }
+            }
         };
 
         let wall_ms = stream_started.elapsed().as_millis() as u64;
@@ -755,7 +859,10 @@ async fn prepare_grep(
     let output_mode = input.output_mode.clone().unwrap_or(OutputMode::Content);
     let effective_head_limit = resolve_effective_head_limit(input, &output_mode);
 
-    let rg_exec = rg_path();
+    let rg_exec = rg_path().map_err(|error| {
+        echo_agent_tool_runtime::ToolError::service_unavailable(unavailable_message(&error))
+            .with_source(error)
+    })?;
 
     let mut cmd = Command::new(rg_exec);
     cmd.arg("--heading")
@@ -832,18 +939,10 @@ async fn prepare_grep(
     #[allow(clippy::disallowed_methods)]
     // search helper; killed and reaped with a bound on timeout/truncation,
     // abandoned to the orphan reaper if unreapable (D-state)
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(GrepStep::Early(GrepSearchOutput {
-                stdout: Vec::new(),
-                stderr: format!("Error calling tool: {}", e).into_bytes(),
-                exit_code: -1,
-                match_count: 0,
-                file_matches: Vec::new(),
-            }));
-        }
-    };
+    let mut child = cmd.spawn().map_err(|error| {
+        echo_agent_tool_runtime::ToolError::service_unavailable(unavailable_message(&error))
+            .with_source(error)
+    })?;
 
     // Take pipes so child remains accessible for cleanup on timeout.
     let stdout_pipe = child.stdout.take();
@@ -949,7 +1048,10 @@ fn accept_rg_stdout_chunk(
 /// The post-budget "exact-fit" probe is **time-bounded** ([`EXACT_FIT_PROBE_TIMEOUT`]).
 /// An unbounded `read` would hold the outer tool timeout and, on expiry, drop the
 /// already-buffered matches in favor of a timeout error card.
-async fn read_rg_stdout_capped(mut stdout_pipe: ChildStdout, max_lines: usize) -> (Vec<u8>, bool) {
+async fn read_rg_stdout_capped(
+    mut stdout_pipe: ChildStdout,
+    max_lines: usize,
+) -> io::Result<(Vec<u8>, bool)> {
     let mut buf = Vec::with_capacity(MAX_STDOUT_BYTES.min(65_536));
     let mut complete_lines = 0usize;
     let mut truncated = false;
@@ -987,10 +1089,31 @@ async fn read_rg_stdout_capped(mut stdout_pipe: ChildStdout, max_lines: usize) -
                     break;
                 }
             }
-            Err(_) => break,
+            Err(error) => return Err(error),
         }
     }
-    (buf, truncated)
+    Ok((buf, truncated))
+}
+
+/// Drain stderr to EOF while retaining only a bounded prefix. Continuing to
+/// drain after the display budget is reached is essential: stopping at the cap
+/// would let a noisy child fill the OS pipe and stall its stdout/exit path.
+async fn read_rg_stderr_capped(mut stderr_pipe: ChildStderr) -> io::Result<Vec<u8>> {
+    const MAX_STDERR_BYTES: usize = 1_000_000;
+
+    let mut retained = Vec::with_capacity(64 * 1024);
+    let mut chunk = [0_u8; 16 * 1024];
+    loop {
+        let read = stderr_pipe.read(&mut chunk).await?;
+        if read == 0 {
+            break;
+        }
+        let remaining = MAX_STDERR_BYTES.saturating_sub(retained.len());
+        if remaining > 0 {
+            retained.extend_from_slice(&chunk[..read.min(remaining)]);
+        }
+    }
+    Ok(retained)
 }
 
 /// Terminal card for a grep that exceeded its wall-clock timeout. Shared by the
@@ -1033,7 +1156,10 @@ fn finalize_grep(
         return GrepSearchOutput {
             stdout: result.into_bytes(),
             stderr: Vec::new(),
-            exit_code,
+            // "No files were searched" is a no-match outcome, not an rg
+            // execution failure. Normalize it so every downstream surface
+            // derives the same status.
+            exit_code: 1,
             match_count: 0,
             file_matches: Vec::new(),
         };

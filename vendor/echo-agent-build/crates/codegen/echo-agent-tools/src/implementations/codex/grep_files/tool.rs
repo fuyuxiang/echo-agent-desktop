@@ -6,13 +6,15 @@
 //! echo-agent-build `GrepTool`.
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
-use tokio::time::timeout;
 
-use crate::implementations::echo_agent_build::grep::ripgrep::rg_path;
+use crate::implementations::echo_agent_build::grep::ripgrep::{
+    BoundedRgError, output_bounded, rg_path, unavailable_message,
+};
 use crate::types::output::CodexGrepFilesOutput;
 use crate::types::requirements::Expr;
 #[allow(unused_imports)]
@@ -24,6 +26,8 @@ use crate::types::tool::{ToolKind, ToolNamespace};
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 2000;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_STDOUT_BYTES: usize = 5_000_000;
+const MAX_STDERR_BYTES: usize = 256_000;
 
 // ─── Description ────────────────────────────────────────────────────
 
@@ -78,7 +82,7 @@ async fn run_rg_search(
     limit: usize,
     cwd: &Path,
 ) -> Result<Vec<String>, String> {
-    let rg_exec = rg_path();
+    let rg_exec = rg_path().map_err(|error| unavailable_message(&error))?;
     let mut command = Command::new(rg_exec);
     command
         .current_dir(cwd)
@@ -93,21 +97,38 @@ async fn run_rg_search(
     }
 
     command.arg("--").arg(search_path);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     crate::util::detach_search_command(&mut command);
 
-    let output = timeout(COMMAND_TIMEOUT, command.output())
-        .await
-        .map_err(|_| "rg timed out after 30 seconds".to_string())?
-        .map_err(|err| {
-            format!("failed to launch rg: {err}. Ensure ripgrep is installed and on PATH.")
-        })?;
+    let output = output_bounded(
+        &mut command,
+        COMMAND_TIMEOUT,
+        MAX_STDOUT_BYTES,
+        MAX_STDERR_BYTES,
+    )
+    .await
+    .map_err(|error| match error {
+        BoundedRgError::Spawn(source) => unavailable_message(&source),
+        BoundedRgError::Timeout(seconds) => format!(
+            "搜索超过 {seconds} 秒未完成，已安全终止。请缩小搜索路径或使用更具体的匹配条件。"
+        ),
+        BoundedRgError::Io(source) => format!("读取内置搜索组件输出失败：{source}"),
+    })?;
 
-    match output.status.code() {
-        Some(0) => Ok(parse_results(&output.stdout, limit)),
-        Some(1) => Ok(Vec::new()),
+    match output.exit_code {
+        0 => Ok(parse_results(&output.stdout, limit)),
+        1 => Ok(Vec::new()),
         _ => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(format!("rg failed: {stderr}"))
+            let detail = if stderr.trim().is_empty() {
+                "未返回详细错误信息"
+            } else {
+                stderr.trim()
+            };
+            Err(format!(
+                "ripgrep 搜索失败（退出码 {}）：{detail}",
+                output.exit_code
+            ))
         }
     }
 }
@@ -268,7 +289,7 @@ mod tests {
     }
     fn rg_available() -> bool {
         // Probe the resolver the tool uses (hermetic under Bazel), not PATH.
-        StdCommand::new(rg_path())
+        StdCommand::new(rg_path().expect("ripgrep path should resolve"))
             .arg("--version")
             .output()
             .map(|output| output.status.success())

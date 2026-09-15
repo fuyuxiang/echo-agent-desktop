@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::process::Stdio;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
 // Canonical in echo-agent-workspace-types; re-exported for existing paths.
@@ -34,14 +34,23 @@ pub struct ContentSearchBatch {
 const BATCH_INTERVAL_MS: u64 = 50;
 const DEFAULT_MAX_FILES: usize = 100;
 const DEFAULT_MAX_MATCHES: usize = 1000;
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_STDERR_BYTES: usize = 256_000;
 
-fn build_ripgrep_command(root: &Path, params: &ContentSearchParams) -> Command {
-    let rg_path = crate::util::ripgrep::rg_path();
+fn build_ripgrep_command(root: &Path, params: &ContentSearchParams) -> anyhow::Result<Command> {
+    let rg_path = crate::util::ripgrep::rg_path().map_err(|error| {
+        anyhow::anyhow!(
+            "{}",
+            echo_agent_tools::implementations::echo_agent_build::grep::ripgrep::unavailable_message(
+                &error
+            )
+        )
+    })?;
 
     let mut cmd = Command::new(&rg_path);
     cmd.current_dir(root);
     cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::null());
+    cmd.stderr(Stdio::piped());
     echo_agent_tty_utils::detach_search_command(&mut cmd);
 
     cmd.arg("--json");
@@ -73,7 +82,7 @@ fn build_ripgrep_command(root: &Path, params: &ContentSearchParams) -> Command {
     cmd.arg("-e").arg(&params.pattern);
     cmd.arg(".");
 
-    cmd
+    Ok(cmd)
 }
 
 fn extract_match_positions(data: &serde_json::Value) -> (Option<usize>, Option<usize>) {
@@ -139,16 +148,46 @@ where
     let max_files = params.max_files.unwrap_or(DEFAULT_MAX_FILES);
     let max_matches = params.max_matches.unwrap_or(DEFAULT_MAX_MATCHES);
 
-    let mut cmd = build_ripgrep_command(root, params);
+    let mut cmd = build_ripgrep_command(root, params)?;
     #[allow(clippy::disallowed_methods)] // waited on below; killed on drop (cancellation)
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("Failed to spawn ripgrep: {}", e))?;
+    let mut child = cmd.spawn().map_err(|error| {
+        anyhow::anyhow!(
+            "{}",
+            echo_agent_tools::implementations::echo_agent_build::grep::ripgrep::unavailable_message(
+                &error
+            )
+        )
+    })?;
 
     let stdout = child
         .stdout
         .take()
         .ok_or_else(|| anyhow::anyhow!("Failed to capture ripgrep stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to capture ripgrep stderr"))?;
+    let stderr_task = tokio::spawn(async move {
+        let mut bytes = Vec::with_capacity(MAX_STDERR_BYTES.min(64 * 1024));
+        let mut stderr = stderr;
+        let mut chunk = [0_u8; 16 * 1024];
+        let mut truncated = false;
+        loop {
+            let read = stderr.read(&mut chunk).await?;
+            if read == 0 {
+                break;
+            }
+            let remaining = MAX_STDERR_BYTES.saturating_sub(bytes.len());
+            if read > remaining {
+                truncated = true;
+            }
+            if remaining > 0 {
+                bytes.extend_from_slice(&chunk[..read.min(remaining)]);
+            }
+        }
+        Ok::<_, std::io::Error>((bytes, truncated))
+    });
+    let deadline = tokio::time::Instant::now() + COMMAND_TIMEOUT;
 
     let mut reader = BufReader::new(stdout).lines();
     let mut files: Vec<ContentMatchFile> = Vec::new();
@@ -158,7 +197,26 @@ where
     let mut last_notify = Instant::now();
     let mut hit_limit = false;
 
-    while let Ok(Some(line)) = reader.next_line().await {
+    loop {
+        let line = match tokio::time::timeout_at(deadline, reader.next_line()).await {
+            Ok(Ok(Some(line))) => line,
+            Ok(Ok(None)) => break,
+            Ok(Err(error)) => {
+                let _ = child.start_kill();
+                echo_agent_tools::util::reap_killed_search_child(&mut child).await;
+                let _ = stderr_task.await;
+                return Err(anyhow::anyhow!("读取搜索结果失败：{error}"));
+            }
+            Err(_) => {
+                let _ = child.start_kill();
+                echo_agent_tools::util::reap_killed_search_child(&mut child).await;
+                let _ = stderr_task.await;
+                return Err(anyhow::anyhow!(
+                    "搜索超过 {} 秒未完成，已安全终止。请缩小搜索路径或使用更具体的匹配条件。",
+                    COMMAND_TIMEOUT.as_secs()
+                ));
+            }
+        };
         if line.is_empty() {
             continue;
         }
@@ -221,12 +279,48 @@ where
         }
     }
 
-    if hit_limit {
+    let exit_code = if hit_limit {
         let _ = child.start_kill();
         // Bounded reap: a D-state rg must not stall this future forever.
         echo_agent_tools::util::reap_killed_search_child(&mut child).await;
+        0
     } else {
-        let _ = child.wait().await;
+        match tokio::time::timeout_at(deadline, child.wait()).await {
+            Ok(Ok(status)) => status.code().unwrap_or(-1),
+            Ok(Err(error)) => {
+                let _ = stderr_task.await;
+                return Err(anyhow::anyhow!("等待搜索进程结束失败：{error}"));
+            }
+            Err(_) => {
+                let _ = child.start_kill();
+                echo_agent_tools::util::reap_killed_search_child(&mut child).await;
+                let _ = stderr_task.await;
+                return Err(anyhow::anyhow!(
+                    "搜索超过 {} 秒未完成，已安全终止。请缩小搜索路径或使用更具体的匹配条件。",
+                    COMMAND_TIMEOUT.as_secs()
+                ));
+            }
+        }
+    };
+    let (stderr, stderr_truncated) = stderr_task
+        .await
+        .map_err(|error| anyhow::anyhow!("收集搜索错误信息失败：{error}"))?
+        .map_err(|error| anyhow::anyhow!("读取搜索错误信息失败：{error}"))?;
+    if !hit_limit && (exit_code < 0 || exit_code > 1) {
+        let stderr = String::from_utf8_lossy(&stderr);
+        let suffix = if stderr_truncated {
+            "…（已截断）"
+        } else {
+            ""
+        };
+        let detail = if stderr.trim().is_empty() {
+            "未返回详细错误信息"
+        } else {
+            stderr.trim()
+        };
+        return Err(anyhow::anyhow!(
+            "ripgrep 搜索失败（退出码 {exit_code}）：{detail}{suffix}"
+        ));
     }
 
     if let Some(file) = current_file
@@ -278,7 +372,7 @@ mod tests {
             pattern: "needle".to_string(),
             ..Default::default()
         };
-        let mut cmd = build_ripgrep_command(tmp.path(), &params);
+        let mut cmd = build_ripgrep_command(tmp.path(), &params).expect("build rg command");
         // rg is hermetic under Bazel and on PATH locally; spawn failure is a real bug.
         #[allow(clippy::disallowed_methods)] // test child, killed on drop below
         let mut child = cmd.spawn().expect("spawn rg");

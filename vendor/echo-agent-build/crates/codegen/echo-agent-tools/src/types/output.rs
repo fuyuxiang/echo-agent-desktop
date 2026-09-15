@@ -699,7 +699,7 @@ impl ToolOutput {
             ToolOutput::Todo(
                 TodoWriteOutput::DuplicateId(_) | TodoWriteOutput::InvalidArgument(_),
             ) => true,
-            ToolOutput::GrepSearch(g) => g.exit_code > 1,
+            ToolOutput::GrepSearch(g) => g.exit_code < 0 || g.exit_code > 1,
             _ => false,
         }
     }
@@ -772,7 +772,11 @@ impl ToolOutput {
             },
             ToolOutput::Bash(bash_output) => bash_output.output_for_prompt.clone(),
             ToolOutput::GrepSearch(grep_search_output) => {
-                String::from_utf8_lossy(&grep_search_output.stdout).into_owned()
+                if grep_search_output.stdout.is_empty() && !grep_search_output.stderr.is_empty() {
+                    String::from_utf8_lossy(&grep_search_output.stderr).into_owned()
+                } else {
+                    String::from_utf8_lossy(&grep_search_output.stdout).into_owned()
+                }
             }
             ToolOutput::Todo(todo_output) => match todo_output {
                 TodoWriteOutput::TodosUpdated(success) => success.summary_for_prompt.to_owned(),
@@ -2566,6 +2570,32 @@ mod tests {
             output_delta: None,
             was_bare_echo: false,
         }
+    }
+    #[test]
+    fn grep_negative_and_fatal_exit_codes_are_errors() {
+        for exit_code in [-1, 2, 127] {
+            let output = ToolOutput::GrepSearch(GrepSearchOutput {
+                stdout: Vec::new(),
+                stderr: b"search failed".to_vec(),
+                exit_code,
+                match_count: 0,
+                file_matches: Vec::new(),
+            });
+            assert!(output.is_error(), "exit {exit_code} must be an error");
+            assert_eq!(output.to_prompt_format(), "search failed");
+        }
+    }
+    #[test]
+    fn grep_no_match_exit_code_is_not_an_error() {
+        let output = ToolOutput::GrepSearch(GrepSearchOutput {
+            stdout: b"No matches found".to_vec(),
+            stderr: Vec::new(),
+            exit_code: 1,
+            match_count: 0,
+            file_matches: Vec::new(),
+        });
+        assert!(!output.is_error());
+        assert_eq!(output.to_prompt_format(), "No matches found");
     }
     fn assert_cer(
         resp: &echo_agent_tool_runtime::ToolChatCompletionResponse,

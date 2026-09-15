@@ -637,13 +637,16 @@ pub struct ChatChunkChoice {
 /// - The first chunk carries `id`, `type`, `index`, and the `function.name` + start of `arguments`.
 /// - Subsequent chunks only carry `index` and a `function.arguments` fragment (no `id`, no `name`).
 ///
-/// All fields except `index` are therefore optional so we can deserialize every chunk.
+/// Providers are expected to send `index`, but several OpenAI-compatible
+/// implementations omit it or incorrectly reuse zero for parallel calls. Keep
+/// it optional so the stream assembler can recover by call ID or fail safely
+/// instead of merging two calls.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ToolCallDelta {
     /// The positional index of the tool call being streamed.
     /// Used to correlate delta chunks belonging to the same tool call.
-    #[serde(default)]
-    pub index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
     /// Only present in the first chunk for this tool call.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,

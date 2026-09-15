@@ -280,18 +280,28 @@ pub(crate) fn acp_tool_update(
                     .raw_output(raw_output_json(output, rewriter)),
             ))
         }
-        ToolOutput::GrepSearch(grep_search_output) => Some(acp::ToolCallUpdate::new(
-            acp::ToolCallId::new(Arc::from(tool_call_id)),
-            acp::ToolCallUpdateFields::new()
-                .status(Some(acp::ToolCallStatus::Completed))
-                .content(Some(vec![acp::ToolCallContent::from(
-                    acp::ContentBlock::Text(acp::TextContent::new(format!(
-                        "found {} matches",
-                        grep_search_output.match_count
-                    ))),
-                )]))
-                .raw_output(raw_output_json(output, rewriter)),
-        )),
+        ToolOutput::GrepSearch(grep_search_output) => {
+            let failed = grep_search_output.exit_code < 0 || grep_search_output.exit_code > 1;
+            let status = if failed {
+                acp::ToolCallStatus::Failed
+            } else {
+                acp::ToolCallStatus::Completed
+            };
+            let summary = if failed {
+                output.to_prompt_format()
+            } else {
+                format!("found {} matches", grep_search_output.match_count)
+            };
+            Some(acp::ToolCallUpdate::new(
+                acp::ToolCallId::new(Arc::from(tool_call_id)),
+                acp::ToolCallUpdateFields::new()
+                    .status(Some(status))
+                    .content(Some(vec![acp::ToolCallContent::from(
+                        acp::ContentBlock::Text(acp::TextContent::new(summary)),
+                    )]))
+                    .raw_output(raw_output_json(output, rewriter)),
+            ))
+        }
         ToolOutput::WebSearch(_) => Some(acp::ToolCallUpdate::new(
             acp::ToolCallId::new(Arc::from(tool_call_id)),
             acp::ToolCallUpdateFields::new()
@@ -889,6 +899,40 @@ mod tests {
             file_matches: vec![],
         });
         assert!(acp_plan_update(&output).is_none());
+    }
+
+    #[test]
+    fn test_acp_grep_failure_is_not_reported_as_completed() {
+        let output = ToolOutput::GrepSearch(GrepSearchOutput {
+            stdout: Vec::new(),
+            stderr: b"failed to launch rg".to_vec(),
+            exit_code: -1,
+            match_count: 0,
+            file_matches: vec![],
+        });
+        let update = acp_tool_update(&output, "call-grep", None, None).unwrap();
+        assert_eq!(update.fields.status, Some(acp::ToolCallStatus::Failed));
+        let content = update.fields.content.expect("failure content");
+        match &content[0] {
+            acp::ToolCallContent::Content(acp::Content {
+                content: acp::ContentBlock::Text(text),
+                ..
+            }) => assert!(text.text.contains("failed to launch rg")),
+            other => panic!("expected text content, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_acp_grep_no_match_is_completed() {
+        let output = ToolOutput::GrepSearch(GrepSearchOutput {
+            stdout: b"No matches found".to_vec(),
+            stderr: Vec::new(),
+            exit_code: 1,
+            match_count: 0,
+            file_matches: vec![],
+        });
+        let update = acp_tool_update(&output, "call-grep", None, None).unwrap();
+        assert_eq!(update.fields.status, Some(acp::ToolCallStatus::Completed));
     }
 
     #[test]
