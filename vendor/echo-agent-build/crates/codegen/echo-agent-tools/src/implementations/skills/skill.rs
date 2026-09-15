@@ -660,9 +660,46 @@ It has multiple lines."#;
         let loaded = load_skill_content(&skill).await.unwrap();
         assert!(loaded.starts_with("Create it carefully."));
         assert!(loaded.contains("<skill_runtime_contract>"));
-        assert!(loaded.contains("action: create; entrypoint: scripts/create.py"));
+        assert!(loaded.contains("\"entrypoint\":\"scripts/create.py\""));
+        assert!(loaded.contains("\"id\":\"create\""));
         assert!(loaded.contains("normal Bash tool"));
-        assert!(loaded.contains("artifact: document; pattern: output/*.docx"));
+        assert!(loaded.contains("\"pattern\":\"output/*.docx\""));
+        assert!(loaded.contains("\"id\":\"document\""));
+    }
+
+    #[tokio::test]
+    async fn load_skill_with_empty_body_preserves_runtime_contract() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("scripts")).unwrap();
+        std::fs::write(
+            root.path().join("SKILL.md"),
+            "---\nname: document\ndescription: Create a document\n---\n",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("scripts/create.py"), "print('ok')").unwrap();
+        std::fs::write(
+            root.path().join("echo.skill.json"),
+            r#"{
+              "schemaVersion": 1,
+              "capabilities": ["document.create"],
+              "runtime": {"kind":"python","entrypoints":{"create":"scripts/create.py"}}
+            }"#,
+        )
+        .unwrap();
+        let skill = SkillInfo {
+            name: "document".into(),
+            description: "Create a document".into(),
+            path: root.path().join("SKILL.md").to_string_lossy().into_owned(),
+            scope: SkillScope::User,
+            ..SkillInfo::default()
+        };
+
+        let loaded = load_skill_with_body(&skill).await.unwrap();
+        let body = loaded
+            .body
+            .expect("runtime contract should become the body");
+        assert!(body.starts_with("<skill_runtime_contract>"));
+        assert!(body.contains("\"entrypoint\":\"scripts/create.py\""));
     }
 
     #[test]

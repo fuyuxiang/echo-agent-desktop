@@ -37,6 +37,48 @@ fn required_cwd(cwd: Option<String>) -> String {
         .unwrap_or_else(process_cwd)
 }
 
+fn connector_state_from_host(
+    enabled: bool,
+    auth_required: bool,
+    setup_required: bool,
+    status: Option<&str>,
+) -> ConnectorState {
+    if !enabled || auth_required || setup_required {
+        return ConnectorState::ConfigurationRequired;
+    }
+    // Agent-level catalog entries intentionally have no live session status.
+    // They are installed/configured and may be started by the next session.
+    // An explicit non-ready live status must still fail closed.
+    match status {
+        None | Some("ready") => ConnectorState::Ready,
+        Some(_) => ConnectorState::ConfigurationRequired,
+    }
+}
+
+fn insert_connector_state(
+    states: &mut HashMap<String, ConnectorState>,
+    name: &str,
+    state: ConnectorState,
+) {
+    let normalized = name.to_ascii_lowercase();
+    let mut insert = |key: &str| {
+        states
+            .entry(key.to_owned())
+            .and_modify(|current| {
+                // A requirement is satisfiable when any provider for the same
+                // connector ID is ready.
+                if state == ConnectorState::Ready {
+                    *current = ConnectorState::Ready;
+                }
+            })
+            .or_insert(state);
+    };
+    insert(&normalized);
+    if let Some(connector_id) = normalized.strip_prefix("managed_gateway:") {
+        insert(connector_id);
+    }
+}
+
 fn command_cwd(
     state: &AppState,
     access: &crate::shell_fs::FilesystemAccess,
@@ -207,22 +249,17 @@ pub async fn skills_list_with_tx(
         .await
         .ok()
         .map(|servers| {
-            servers
-                .into_iter()
-                .map(|server| {
-                    let state = if !server.enabled
-                        || server.auth_required
-                        || server.setup_required
-                        || server.status.as_deref().is_some_and(|status| {
-                            matches!(status, "setuprequired" | "unavailable" | "error")
-                        }) {
-                        ConnectorState::ConfigurationRequired
-                    } else {
-                        ConnectorState::Ready
-                    };
-                    (server.name.to_ascii_lowercase(), state)
-                })
-                .collect::<HashMap<_, _>>()
+            let mut states = HashMap::new();
+            for server in servers {
+                let state = connector_state_from_host(
+                    server.enabled,
+                    server.auth_required,
+                    server.setup_required,
+                    server.status.as_deref(),
+                );
+                insert_connector_state(&mut states, &server.name, state);
+            }
+            states
         });
     Ok(skills
         .into_iter()
@@ -370,6 +407,38 @@ mod tests {
         assert_eq!(required_cwd(Some("/tmp/project".into())), "/tmp/project");
         assert!(!required_cwd(None).trim().is_empty());
         assert!(!required_cwd(Some("  ".into())).trim().is_empty());
+    }
+
+    #[test]
+    fn connector_preflight_distinguishes_configured_and_unavailable() {
+        assert_eq!(
+            connector_state_from_host(true, false, false, None),
+            ConnectorState::Ready
+        );
+        assert_eq!(
+            connector_state_from_host(true, false, false, Some("ready")),
+            ConnectorState::Ready
+        );
+        for state in [
+            connector_state_from_host(false, false, false, None),
+            connector_state_from_host(true, true, false, Some("ready")),
+            connector_state_from_host(true, false, true, Some("setuprequired")),
+            connector_state_from_host(true, false, false, Some("initializing")),
+            connector_state_from_host(true, false, false, Some("unavailable")),
+        ] {
+            assert_eq!(state, ConnectorState::ConfigurationRequired);
+        }
+    }
+
+    #[test]
+    fn managed_gateway_connectors_are_addressable_by_manifest_id() {
+        let mut states = HashMap::new();
+        insert_connector_state(&mut states, "managed_gateway:notion", ConnectorState::Ready);
+        assert_eq!(
+            states.get("managed_gateway:notion"),
+            Some(&ConnectorState::Ready)
+        );
+        assert_eq!(states.get("notion"), Some(&ConnectorState::Ready));
     }
 
     #[test]

@@ -1,24 +1,8 @@
 import type {
   SkillCapabilityCheck,
   SkillCapabilityReport,
-  SkillCapabilityState,
 } from "@/lib/types";
-
-const STATE_LABEL: Record<SkillCapabilityState, string> = {
-  instruction_only: "仅工作流",
-  ready: "可执行 · 就绪",
-  missing_dependencies: "缺少依赖",
-  configuration_required: "待连接/授权",
-  invalid: "能力清单异常",
-};
-
-const STATE_HELP: Record<SkillCapabilityState, string> = {
-  instruction_only: "这是提示词/工作流 Skill，没有声明可预检的确定性执行入口。",
-  ready: "执行入口和本机依赖已就绪；运行时仍会经过 Agent 权限审批与沙箱。",
-  missing_dependencies: "已安装 Skill，但本机缺少其声明的运行命令或工具。",
-  configuration_required: "需先连接账号、安装连接器或授予系统权限；EchoAgent 不会把凭据交给模型。",
-  invalid: "echo.skill.json 格式或声明无效，该包不应执行。",
-};
+import { SKILL_CAPABILITY_PRESENTATION } from "@/lib/skill-capability";
 
 export function SkillCapabilityStatus({
   report = PROMPT_ONLY_REPORT,
@@ -32,8 +16,9 @@ export function SkillCapabilityStatus({
   ));
   const accountCount = report.manifest?.requirements.connectors
     .filter((connector) => connector.accountRequired).length ?? 0;
+  const presentation = SKILL_CAPABILITY_PRESENTATION[report.state];
   const statusHelp = [
-    STATE_HELP[report.state],
+    presentation.help,
     ...actionableChecks.slice(0, 5).map((check) => capabilityCheckText(report, check)),
   ].join("\n");
 
@@ -43,7 +28,7 @@ export function SkillCapabilityStatus({
         className={`sk-cap-badge sk-cap-badge--${report.state}`}
         title={statusHelp}
       >
-        {STATE_LABEL[report.state]}
+        {presentation.label}
       </span>
     );
   }
@@ -53,10 +38,10 @@ export function SkillCapabilityStatus({
       <div className="sk-capability-head">
         <strong>执行能力</strong>
         <span className={`sk-cap-badge sk-cap-badge--${report.state}`}>
-          {STATE_LABEL[report.state]}
+          {presentation.label}
         </span>
       </div>
-      <p>{STATE_HELP[report.state]}</p>
+      <p>{presentation.help}</p>
 
       {report.capabilities.length > 0 && (
         <div className="sk-capability-tags" aria-label="声明的能力">
