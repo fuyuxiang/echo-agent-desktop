@@ -560,10 +560,10 @@ export function ActivityTab({
 // ============================================================
 
 const COL_DOT: Record<PlanStatus, string> = {
-  pending: "#bbb",
-  in_progress: "#18a058",
-  paused: "#f0a020",
-  completed: "#18a058",
+  pending: "var(--echo-text-medium)",
+  in_progress: "var(--echo-brand)",
+  paused: "var(--echo-status-warning)",
+  completed: "var(--echo-status-success)",
 };
 
 export function PlanTab({
