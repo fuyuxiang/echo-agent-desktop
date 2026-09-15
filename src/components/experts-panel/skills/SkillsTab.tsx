@@ -11,6 +11,7 @@ import { ImportSkillModal } from "./ImportSkillModal";
 import { UploadSkillModal } from "./UploadSkillModal";
 import { listenOrgSkillsChanged, orgSetSkillPreference } from "@/lib/org-client";
 import { useAppDialog } from "../../AppDialog";
+import { SkillCapabilityStatus } from "./SkillCapabilityStatus";
 
 interface Props {
   pills: React.ReactNode;
@@ -70,6 +71,7 @@ function RuntimeSkillRow({
             {mandatory && <span className="sk-inst-meta--mandatory">组织强制</span>}
             {skill.version && <span>v{skill.version}</span>}
             {skill.compatibility && <span title={skill.compatibility}>{skill.compatibility}</span>}
+            {skill.capability && <SkillCapabilityStatus report={skill.capability} compact />}
           </div>
         </div>
       </div>
@@ -152,6 +154,10 @@ export function SkillsTab({ pills, onToast }: Props) {
       || skill.name.toLowerCase().includes(query)
       || (skill.description ?? "").toLowerCase().includes(query)
       || skillSourceLabel(skill).toLowerCase().includes(query)
+      || skill.capability?.capabilities.some((capability) => capability.includes(query))
+      || skill.capability?.manifest?.requirements.connectors.some((connector) => (
+        connector.id.includes(query) || (connector.label ?? "").toLowerCase().includes(query)
+      ))
     ));
   }, [search, skills]);
 

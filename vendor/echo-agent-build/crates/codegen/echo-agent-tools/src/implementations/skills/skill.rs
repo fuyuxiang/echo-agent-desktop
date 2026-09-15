@@ -3,6 +3,7 @@
 //! Skills are user-defined prompts stored as Markdown files that can be invoked
 //! by the user via slash commands (e.g., /commit) or by the model via this tool.
 
+use crate::implementations::skills::capability::append_runtime_contract;
 use crate::implementations::skills::types::SkillInfo;
 
 /// Input for the Skill tool
@@ -497,10 +498,11 @@ pub async fn load_skill_content(skill: &SkillInfo) -> Result<String, String> {
     match tokio::fs::read_to_string(path).await {
         Ok(content) => {
             let body = extract_skill_body(&content);
-            Ok(match path.parent() {
+            let body = match path.parent() {
                 Some(skill_dir) => resolve_skill_internal_links(&body, skill_dir),
                 None => body,
-            })
+            };
+            append_runtime_contract(body, path)
         }
         Err(e) => Err(format!("Failed to read skill file '{}': {}", skill.path, e)),
     }
@@ -517,6 +519,7 @@ pub async fn load_skill_with_body(skill: &SkillInfo) -> Result<SkillInfo, String
         Some(skill_dir) => resolve_skill_internal_links(&body, skill_dir),
         None => body,
     };
+    let body = append_runtime_contract(body, path)?;
     let mut loaded = skill.clone();
     loaded.body = if body.is_empty() { None } else { Some(body) };
     Ok(loaded)
@@ -623,6 +626,43 @@ It has multiple lines."#;
         let err = load_skill_content(&skill).await.unwrap_err();
         assert!(err.contains("no preloaded body"), "{err}");
         assert!(err.contains("chat-product://pdf"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn load_skill_content_injects_validated_runtime_contract() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("scripts")).unwrap();
+        std::fs::write(
+            root.path().join("SKILL.md"),
+            "---\nname: document\ndescription: Create a document\n---\nCreate it carefully.",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("scripts/create.py"), "print('ok')").unwrap();
+        std::fs::write(
+            root.path().join("echo.skill.json"),
+            r#"{
+              "schemaVersion": 1,
+              "capabilities": ["document.docx.create"],
+              "runtime": {"kind":"python","entrypoints":{"create":"scripts/create.py"}},
+              "permissions": {"filesystem":"workspace-write"},
+              "artifacts": [{"id":"document","pattern":"output/*.docx","required":true}]
+            }"#,
+        )
+        .unwrap();
+        let skill = SkillInfo {
+            name: "document".into(),
+            description: "Create a document".into(),
+            path: root.path().join("SKILL.md").to_string_lossy().into_owned(),
+            scope: SkillScope::User,
+            ..SkillInfo::default()
+        };
+
+        let loaded = load_skill_content(&skill).await.unwrap();
+        assert!(loaded.starts_with("Create it carefully."));
+        assert!(loaded.contains("<skill_runtime_contract>"));
+        assert!(loaded.contains("action: create; entrypoint: scripts/create.py"));
+        assert!(loaded.contains("normal Bash tool"));
+        assert!(loaded.contains("artifact: document; pattern: output/*.docx"));
     }
 
     #[test]

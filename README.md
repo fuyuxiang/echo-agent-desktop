@@ -130,7 +130,7 @@ name = "My Model"
 | **Agent 执行** | 流式会话、可编辑计划、斜杠命令、任务取消、历史回溯与分叉、子 Agent 实时状态和团队协作 |
 | **工作空间** | 目录级会话、全文检索、文件树、常见文档预览、变更跟踪、Unified Diff 与交付资产 |
 | **模型接入** | OpenAI、Anthropic、DeepSeek、通义千问预设，多 Provider、多模型，以及 OpenAI/Anthropic 兼容 Endpoint |
-| **能力扩展** | MCP stdio/HTTP、MCP OAuth、Skills、Plugins、连接器目录、可复用专家与本地能力市场 |
+| **能力扩展** | MCP stdio/HTTP、MCP OAuth、Skills（含 [可执行能力契约](docs/skill-capability-manifest.md)）、Plugins、连接器目录、可复用专家与本地能力市场 |
 | **长期上下文** | 项目指令、任务与计划、个人记忆、会话摘要、本地文件夹知识源与可选组织知识服务 |
 | **自动化与触达** | 单次或周期调度、运行记录、任务级权限、桌面通知、Slack、Discord、Webhook 与 WebDAV |
 | **内容体验** | 文件与图片附件、拖拽、语音输入、GFM、语法高亮、KaTeX、Mermaid 和工具结果预览 |

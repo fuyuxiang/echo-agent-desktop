@@ -3,6 +3,7 @@ import { XCloseIcon, FolderOpenIcon } from "@/foundation/components/Icon/icons";
 import { filesystemPickDirectory, filesystemPickFiles, skillsInspectPackage, skillsInstallPackage } from "@/lib/agent-client";
 import type { SkillPackageInspection, SkillRiskLevel } from "@/lib/types";
 import { useModalFocus } from "@/lib/use-modal-focus";
+import { SkillCapabilityStatus } from "./SkillCapabilityStatus";
 
 const RISK_LABEL: Record<SkillRiskLevel, string> = {
   low: "低风险",
@@ -156,6 +157,8 @@ export function ImportSkillModal({
                 <span>{inspection.alreadyInstalled ? "将更新现有版本" : "全新安装"}</span>
               </div>
 
+              <SkillCapabilityStatus report={inspection.capability} />
+
               {inspection.findings.length > 0 && (
                 <div className="sk-findings">
                   {inspection.findings.map((finding, index) => (
@@ -191,6 +194,7 @@ export function ImportSkillModal({
               <div className="sk-import-req-title">安装检查</div>
               <ul className="sk-import-req-list">
                 <li>验证 SKILL.md、文件数量、大小和目录安全</li>
+                <li>校验 echo.skill.json 执行入口、依赖、账号和产物契约</li>
                 <li>扫描脚本、敏感文件访问、网络和依赖安装风险</li>
                 <li>生成内容指纹，并支持后续原子更新和安全卸载</li>
               </ul>

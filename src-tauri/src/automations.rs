@@ -2082,6 +2082,23 @@ async fn resolve_execution_context(
             if !skill.enabled {
                 return Err(format!("所选技能未启用：{selected}"));
             }
+            if let Some(capability) = &skill.capability {
+                use echo_agent_tools::implementations::skills::capability::SkillCapabilityState;
+                match capability.state {
+                    SkillCapabilityState::MissingDependencies => {
+                        return Err(format!(
+                            "所选技能缺少运行依赖，无法启动无人值守任务：{selected}"
+                        ));
+                    }
+                    SkillCapabilityState::ConfigurationRequired => {
+                        return Err(format!("所选技能尚未完成账号连接或系统授权：{selected}"));
+                    }
+                    SkillCapabilityState::Invalid => {
+                        return Err(format!("所选技能的执行能力清单无效：{selected}"));
+                    }
+                    SkillCapabilityState::InstructionOnly | SkillCapabilityState::Ready => {}
+                }
+            }
             let configured_path = skill
                 .path
                 .as_deref()
@@ -2096,6 +2113,12 @@ async fn resolve_execution_context(
             if body.is_empty() {
                 return Err(format!("所选技能没有可执行指令：{selected}"));
             }
+            let body =
+                echo_agent_tools::implementations::skills::capability::append_runtime_contract(
+                    body,
+                    &skill_path,
+                )
+                .map_err(|error| format!("所选技能的执行能力清单无效：{selected}：{error}"))?;
             context.skills.push((
                 selected.clone(),
                 skill_path.to_string_lossy().into_owned(),

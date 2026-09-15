@@ -13443,6 +13443,22 @@ button.diff__path {
 .sk-inspection-desc { margin: 0; color: var(--echo-text-medium); font-size: 13px; line-height: 1.6; }
 .sk-inspection-meta { display: flex; flex-wrap: wrap; gap: 6px; }
 .sk-inspection-meta span { padding: 3px 8px; border-radius: 6px; background: var(--echo-bg-primary); color: var(--echo-text-weak); font-size: 12px; line-height: 18px; }
+.sk-capability { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--echo-border-default); border-radius: 10px; background: var(--echo-bg-primary); }
+.sk-capability-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sk-capability-head strong { color: var(--echo-text-strong); font-size: 13px; }
+.sk-capability > p { margin: 0; color: var(--echo-text-medium); font-size: 12px; line-height: 1.55; }
+.sk-cap-badge { display: inline-flex; align-items: center; min-height: 20px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.sk-cap-badge--ready { color: #087f5b; background: rgba(16,185,129,.12); }
+.sk-cap-badge--instruction_only { color: var(--echo-text-medium); background: var(--echo-bg-secondary); }
+.sk-cap-badge--missing_dependencies, .sk-cap-badge--configuration_required { color: #9a5b00; background: rgba(245,158,11,.14); }
+.sk-cap-badge--invalid { color: #cf3038; background: rgba(229,72,77,.13); }
+.sk-capability-tags, .sk-capability-permissions { display: flex; flex-wrap: wrap; gap: 6px; }
+.sk-capability-tags code { padding: 2px 6px; border-radius: 5px; background: var(--echo-bg-secondary); color: var(--echo-text-medium); font-size: 11px; }
+.sk-capability-account { padding: 8px 10px; border-radius: 7px; color: #9a5b00; background: rgba(245,158,11,.09); font-size: 12px; line-height: 1.5; }
+.sk-capability-checks { display: flex; flex-direction: column; gap: 4px; margin: 0; padding-left: 18px; color: var(--echo-text-medium); font-size: 12px; line-height: 1.45; }
+.sk-capability-check--missing, .sk-capability-check--invalid { color: #cf3038; }
+.sk-capability-check--configuration_required { color: #9a5b00; }
+.sk-capability-permissions span { color: var(--echo-text-weak); font-size: 11px; }
 .sk-findings { display: flex; flex-direction: column; gap: 8px; max-height: 180px; overflow-y: auto; }
 .sk-finding { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 9px 10px; border-left: 3px solid var(--echo-border-default); background: var(--echo-bg-primary); font-size: 12.5px; line-height: 1.5; }
 .sk-finding--medium { border-left-color: #f59e0b; }

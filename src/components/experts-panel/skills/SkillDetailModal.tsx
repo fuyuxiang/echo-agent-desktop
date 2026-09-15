@@ -20,6 +20,7 @@ import {
   ChevronLeftIcon, AddIcon, CheckIcon, FileTextIcon, Code2Icon,
 } from "@/foundation/components/Icon/icons";
 import { useModalFocus } from "@/lib/use-modal-focus";
+import { SkillCapabilityStatus } from "./SkillCapabilityStatus";
 
 interface Props {
   skill: SkillItem;
@@ -73,7 +74,9 @@ export function SkillDetailModal({ skill, installed = [], onClose, onInstalled, 
     setInstalling(true);
     try {
       const report = await skillsInspectPackage(skill.sourceDir);
-      if (report.riskLevel === "high" || report.riskLevel === "medium") {
+      if (report.riskLevel === "high" || report.riskLevel === "medium"
+        || report.capability?.state === "missing_dependencies"
+        || report.capability?.state === "configuration_required") {
         setPendingInspection(report);
         return;
       }
@@ -253,6 +256,7 @@ function SkillRiskConfirmDialog({
             ))}
           </ul>
         )}
+        {inspection.capability && <SkillCapabilityStatus report={inspection.capability} />}
         <p className="atm-confirm-content">请确认你已检查完整源码和上述风险。</p>
         <div className="atm-confirm-actions">
           <button type="button" className="atm-btn atm-btn--secondary" onClick={onCancel} disabled={busy} data-modal-initial-focus>取消</button>
