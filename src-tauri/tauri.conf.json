@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://api.anthropic.com https://api.openai.com https://api.deepseek.com https://dashscope.aliyuncs.com https://api.minimaxi.com https://agentclientprotocol.com http://10.132.19.82:8787 ws: wss:; img-src 'self' asset: https://asset.localhost data: blob:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; frame-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http: https: ws: wss:; img-src 'self' asset: https://asset.localhost data: blob:; media-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; frame-src data: http: https:"
     }
   },
   "bundle": {
