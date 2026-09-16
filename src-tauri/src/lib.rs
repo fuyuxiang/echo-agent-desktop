@@ -18,6 +18,7 @@ mod command_scope;
 mod commands;
 mod connector_cli;
 mod connectors_catalog;
+mod credentials_webdav;
 mod experts;
 mod error;
 mod ext;
@@ -261,6 +262,12 @@ pub fn run() {
             personal_knowledge::start_background_index(app.handle().clone());
             #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
             setup_desktop_lifecycle(app)?;
+
+    // 平台级凭据存储：macOS 走 Keychain，其他平台 fall back 到 InMemoryStore。
+    // 实际生产配置由具体桌面平台的 credentials_webdav::install_platform_store() 决定；
+    // 当前 PR 仅提供 macOS 实现，其他平台后续接入。
+    #[cfg(target_os = "macos")]
+    credentials_webdav::set_store(credentials_webdav::install_platform_store());
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())

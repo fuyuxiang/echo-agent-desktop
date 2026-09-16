@@ -278,6 +278,12 @@ fn update_store_at<T>(
     with_store_access_at(path, || {
         let mut store = read_store_at(path)?;
         let result = update(&mut store)?;
+        // 写入磁盘前对所有 provider 做一次迁移/分离，确保 JSON 中不残留明文密码。
+        for provider in store.providers.iter_mut() {
+            // detach_password 优先：None/空 → 清 store；有值 → 写 store 再清字段
+            let outcome = crate::credentials_webdav::detach_password(provider)?;
+            tracing::debug!(provider = %provider.id, ?outcome, "webdav credential reconciled before write");
+        }
         write_store_at(path, &store)?;
         Ok(result)
     })
@@ -345,6 +351,9 @@ fn provider(id: &str) -> Result<StorageProviderConfig, String> {
     // remote plaintext HTTP, so validating only new writes would still send a
     // saved Basic credential over an insecure legacy endpoint.
     validate(&config).map_err(|error| format!("存储源 {id} 配置不安全：{error}"))?;
+    let mut config = config;
+    // WebDAV 密码已迁移到 Keychain；运行时从凭据存储挂载以便 basic_auth 使用。
+    crate::credentials_webdav::attach_password(&mut config)?;
     Ok(config)
 }
 
@@ -697,9 +706,12 @@ fn apply_provider_upsert(
 ) -> Result<(), String> {
     if let Some(existing) = store.providers.iter_mut().find(|p| p.id == config.id) {
         if config.password.as_deref() == Some("••••") {
+            // 前端列表返回的是密码掩码；保留旧值即可，由后续 detach 重新写入 Keychain。
             config.password = existing.password.clone();
         }
-        *existing = config;
+        // 旧版 JSON 中可能残留其他 provider 的明文密码；趁本次写入顺手迁移到 Keychain。
+        let _ = crate::credentials_webdav::migrate_legacy_password(existing);
+        *existing = config.clone();
     } else {
         if store.providers.len() >= MAX_STORAGE_PROVIDERS {
             return Err(format!("存储源数量超过 {MAX_STORAGE_PROVIDERS} 个的上限"));
@@ -707,8 +719,14 @@ fn apply_provider_upsert(
         if config.password.as_deref() == Some("••••") {
             return Err("新存储源不能使用密码掩码，请重新输入密码".into());
         }
-        store.providers.push(config);
+        store.providers.push(config.clone());
     }
+    // 当前 upsert 的密码要么落到 Keychain，要么显式清空——绝不留明文在磁盘。
+    let outcome = crate::credentials_webdav::detach_password(&mut config)?;
+    if let Some(slot) = store.providers.iter_mut().find(|p| p.id == config.id) {
+        slot.password = None;
+    }
+    tracing::debug!(provider = %config.id, ?outcome, "webdav credential reconciled");
     Ok(())
 }
 
@@ -733,6 +751,8 @@ pub fn storage_provider_upsert(config: StorageProviderConfig) -> Result<(), Stri
 #[tauri::command]
 pub fn storage_provider_remove(id: String) -> Result<(), String> {
     crate::policy::require_feature("cloud-storage")?;
+    // 先清理 Keychain 凭据（即使磁盘上根本没有该 provider，也允许幂等删除）。
+    crate::credentials_webdav::delete_account(&id)?;
     remove_provider_at(&config_path(), &id)
 }
 
@@ -1000,16 +1020,34 @@ pub async fn storage_make_dir(id: String, path: String) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    static TEST_STORE_ONCE: std::sync::Once = std::sync::Once::new();
+
+    fn ensure_test_store() {
+        TEST_STORE_ONCE.call_once(|| {
+            install_test_store();
+        });
+    }
+
     fn test_provider(id: &str) -> StorageProviderConfig {
+        // 测试态下 `apply_provider_upsert` 会把 password 字段迁移到
+        // credentials_webdav::InMemoryStore 并把 JSON 上的字段清空；本构造器
+        // 不设 password，需要「新建源」场景由调用方自行赋值。
         StorageProviderConfig {
             id: id.into(),
             label: format!("Provider {id}"),
             kind: "webdav".into(),
             base_url: format!("https://dav.test/{id}"),
             username: Some("user".into()),
-            password: Some(format!("secret-{id}")),
+            password: None,
             enabled: true,
         }
+    }
+
+    /// 测试启动时向 `credentials_webdav` 注入一个进程级共享的 InMemoryStore，
+    /// 避免并发用例间互相串改。
+    fn install_test_store() {
+        use crate::credentials_webdav::{set_store, InMemoryStore};
+        set_store(std::sync::Arc::new(InMemoryStore::default()));
     }
 
     fn read_store_with_lock_at(path: &Path) -> StorageConfigStore {
@@ -1018,6 +1056,7 @@ mod tests {
 
     #[test]
     fn parses_namespace_independent_propfind() {
+        ensure_test_store();
         let config = StorageProviderConfig {
             id: "x".into(),
             label: "x".into(),
@@ -1035,6 +1074,7 @@ mod tests {
     }
     #[test]
     fn normalizes_safe_paths_and_rejects_traversal() {
+        ensure_test_store();
         assert_eq!(normalize_path("/a//./b").unwrap(), "/a/b");
         assert_eq!(normalize_path("").unwrap(), "/");
         assert!(normalize_path("/a/../b").is_err());
@@ -1044,6 +1084,7 @@ mod tests {
 
     #[test]
     fn rejects_webdav_base_url_query_and_out_of_collection_entries() {
+        ensure_test_store();
         let mut config = StorageProviderConfig {
             id: "x".into(),
             label: "x".into(),
@@ -1062,6 +1103,7 @@ mod tests {
 
     #[test]
     fn rejects_plain_http_for_remote_webdav_credentials() {
+        ensure_test_store();
         let config = StorageProviderConfig {
             id: "remote".into(),
             label: "remote".into(),
@@ -1076,6 +1118,7 @@ mod tests {
 
     #[test]
     fn allows_plain_http_for_loopback_development_server() {
+        ensure_test_store();
         let config = StorageProviderConfig {
             id: "local".into(),
             label: "local".into(),
@@ -1090,6 +1133,7 @@ mod tests {
 
     #[test]
     fn storage_transaction_oversized_write_preserves_existing_file() {
+        ensure_test_store();
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("providers.json");
         write_store_at(
@@ -1101,17 +1145,19 @@ mod tests {
         .unwrap();
         let original = std::fs::read(&path).unwrap();
 
-        let error = update_store_at(&path, |store| {
-            store.providers = (0..MAX_STORAGE_PROVIDERS)
+        // 直接测 write_store_at 的 2MB 上限保护：password 字段仍在 validate_shape
+        // 允许范围内（≤64KB），用它把序列化结果撑过 2MB；不经过 update_store_at 的
+        // detach 路径，因此 password 不会被迁移清空。
+        let oversized = StorageConfigStore {
+            providers: (0..MAX_STORAGE_PROVIDERS)
                 .map(|index| {
                     let mut provider = test_provider(&format!("large-{index}"));
                     provider.password = Some("x".repeat(40 * 1024));
                     provider
                 })
-                .collect();
-            Ok(())
-        })
-        .unwrap_err();
+                .collect(),
+        };
+        let error = write_store_at(&path, &oversized).unwrap_err();
 
         assert!(error.contains("2MB"), "unexpected error: {error}");
         assert_eq!(std::fs::read(&path).unwrap(), original);
@@ -1119,6 +1165,7 @@ mod tests {
 
     #[test]
     fn storage_transaction_corrupt_file_is_quarantined_not_overwritten() {
+        ensure_test_store();
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("providers.json");
         let corrupt = b"{ definitely not valid JSON";
@@ -1148,6 +1195,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn storage_transaction_symlink_is_not_followed_or_overwritten() {
+        ensure_test_store();
         let temp = tempfile::tempdir().unwrap();
         let target = temp.path().join("outside.json");
         let path = temp.path().join("providers.json");
@@ -1167,6 +1215,7 @@ mod tests {
 
     #[test]
     fn storage_transaction_concurrent_upserts_and_removals_preserve_changes() {
+        ensure_test_store();
         const CHANGES: usize = 8;
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("providers.json");
@@ -1220,6 +1269,7 @@ mod tests {
     /// path environment variable and returns immediately.
     #[test]
     fn storage_transaction_child_writer() {
+        ensure_test_store();
         let Some(path) = std::env::var_os(CHILD_PATH_ENV).map(PathBuf::from) else {
             return;
         };
@@ -1249,6 +1299,7 @@ mod tests {
 
     #[test]
     fn storage_transaction_cross_process_upserts_preserve_changes() {
+        ensure_test_store();
         const CHILDREN: usize = 4;
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("providers.json");
