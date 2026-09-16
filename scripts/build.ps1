@@ -2,11 +2,14 @@
 # ===========================================================================
 #  EchoAgent Windows packaging script (PowerShell)
 #
-#  Produces a distributable NSIS installer (.exe) via `pnpm tauri build`.
+#  Produces a platform-signed NSIS installer (.exe). Updater signing happens
+#  later on the controlled release machine.
+#  Public artifacts use EchoAgent-v<VERSION>-windows-x86_64-setup.exe.
 #
 #  Usage:
 #    powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 #    powershell -ExecutionPolicy Bypass -File scripts/build.ps1 -Version 0.2.0
+#    powershell -ExecutionPolicy Bypass -File scripts/build.ps1 -AllowUnsignedPlatform  # development only
 #
 #  Prerequisites:
 #    The complete vendored Runtime source is included in the repository.
@@ -15,7 +18,8 @@
 
 [CmdletBinding()]
 param(
-    [string]$Version
+    [string]$Version,
+    [switch]$AllowUnsignedPlatform
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,39 +37,14 @@ function Log-Info([string]$msg) { Write-Host "         $msg" -ForegroundColor Da
 
 # Track paths we reference. echo-agent-build path dependencies resolve directly to
 # the source snapshot committed under vendor/echo-agent-build.
-$script:CargoTomlPath = Join-Path $ProjectRoot "src-tauri\Cargo.toml"
 $script:RustToolchainPath = Join-Path $ProjectRoot "rust-toolchain.toml"
 $script:RustToolchainBackup = $null
 
 # ---------------------------------------------------------------------------
-# 1. Version sync (optional)
-# ---------------------------------------------------------------------------
-if ($Version) {
-    Log-Step "Syncing version -> $Version"
-    $pkgJson = Join-Path $ProjectRoot "package.json"
-    $tauriConf = Join-Path $ProjectRoot "src-tauri\tauri.conf.json"
-
-    (Get-Content $pkgJson -Raw) -replace '"version"\s*:\s*"[^"]*"', "`"version`": `"$Version`"" |
-        Set-Content $pkgJson -NoNewline
-    (Get-Content $tauriConf -Raw) -replace '"version"\s*:\s*"[^"]*"', "`"version`": `"$Version`"" |
-        Set-Content $tauriConf -NoNewline
-    # Cargo.toml: only the first `version = "..."` under [package] (line ~3).
-    $cargoLines = Get-Content $script:CargoTomlPath
-    for ($i = 0; $i -lt $cargoLines.Length; $i++) {
-        if ($cargoLines[$i] -match '^\s*version\s*=\s*"[^"]*"') {
-            $cargoLines[$i] = 'version = "{0}"' -f $Version
-            break
-        }
-    }
-    $cargoLines | Set-Content $script:CargoTomlPath
-    Log-Ok "Bumped version in package.json, tauri.conf.json, Cargo.toml"
-}
-
-# ---------------------------------------------------------------------------
-# 2. Toolchain sanity check
+# 1. Toolchain sanity check
 # ---------------------------------------------------------------------------
 Log-Step "Checking toolchain"
-foreach ($cmd in @("pnpm", "cargo", "rustc")) {
+foreach ($cmd in @("node", "pnpm", "cargo", "rustc")) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
         Log-Err "$cmd not found on PATH."
         exit 1
@@ -74,6 +53,19 @@ foreach ($cmd in @("pnpm", "cargo", "rustc")) {
     Log-Info ("{0,-7} {1}" -f $cmd, $v)
 }
 Log-Ok "Core tools present"
+
+# ---------------------------------------------------------------------------
+# 2. Version sync (optional)
+# ---------------------------------------------------------------------------
+if ($Version) {
+    Log-Step "Syncing version -> $Version"
+    & node (Join-Path $ProjectRoot "scripts\release-version.mjs") set $Version | Out-Null
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Log-Ok "Bumped and verified all four version sources"
+}
+$appVersion = (& node (Join-Path $ProjectRoot "scripts\release-version.mjs") check | Select-Object -Last 1).Trim()
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Log-Ok "Release version: $appVersion"
 
 # Prefer an explicitly configured protoc, then PATH, then the documented
 # Windows install location. Do not put this machine-specific path in Cargo's
@@ -243,17 +235,12 @@ if (Test-Path $makensis) {
 }
 
 # ---------------------------------------------------------------------------
-# 6. Build (frontend build runs automatically via beforeBuildCommand).
+# 6. Build the platform installer. The override disables updater signing here;
+#    the controlled release machine creates and signs canonical updater files.
 # ---------------------------------------------------------------------------
-if (-not $env:TAURI_SIGNING_PRIVATE_KEY -and -not $env:TAURI_SIGNING_PRIVATE_KEY_PATH) {
-    Log-Err "Updater signing key is required for release builds."
-    Log-Err "Set TAURI_SIGNING_PRIVATE_KEY_PATH (recommended) or TAURI_SIGNING_PRIVATE_KEY."
-    exit 1
-}
-
 Log-Step "Building NSIS installer (pnpm tauri build --bundles nsis)"
 try {
-    & pnpm tauri build --bundles nsis
+    & pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
     $buildExit = $LASTEXITCODE
 } catch {
     Log-Err "pnpm tauri build threw: $($_.Exception.Message)"
@@ -261,20 +248,59 @@ try {
 }
 
 # ---------------------------------------------------------------------------
-# 7. Report artifacts.
+# 7. Give every public artifact one cross-platform naming convention.
 # ---------------------------------------------------------------------------
-$bundleDir = Join-Path $ProjectRoot "src-tauri\target\release\bundle\nsis"
+$bundleDir = Join-Path $ProjectRoot "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis"
+$canonicalInstaller = $null
 if ($buildExit -eq 0 -and (Test-Path $bundleDir)) {
+    $defaultInstaller = Join-Path $bundleDir ("EchoAgent_{0}_x64-setup.exe" -f $appVersion)
+    $canonicalName = "EchoAgent-v{0}-windows-x86_64-setup.exe" -f $appVersion
+    $canonicalInstaller = Join-Path $bundleDir $canonicalName
+
+    if (-not (Test-Path $defaultInstaller -PathType Leaf)) {
+        Log-Err "Expected Tauri NSIS installer not found: $defaultInstaller"
+        exit 1
+    }
+    Move-Item -Force $defaultInstaller $canonicalInstaller
+
+    $versionInfo = (Get-Item $canonicalInstaller).VersionInfo
+    $coreParts = (($appVersion -split '[-+]')[0] -split '\.')
+    if ($versionInfo.FileMajorPart -ne [int]$coreParts[0] -or
+        $versionInfo.FileMinorPart -ne [int]$coreParts[1] -or
+        $versionInfo.FileBuildPart -ne [int]$coreParts[2]) {
+        Log-Err "Installer file version $($versionInfo.FileVersion) does not match release version $appVersion"
+        exit 1
+    }
+
+    $authenticode = Get-AuthenticodeSignature $canonicalInstaller
+    if ($authenticode.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+        if ($AllowUnsignedPlatform) {
+            Log-Warn "Authenticode check failed ($($authenticode.Status)); development override accepted."
+        } else {
+            Log-Err "Authenticode check failed: $($authenticode.Status) $($authenticode.StatusMessage)"
+            Log-Err "Configure Windows code signing, or use -AllowUnsignedPlatform for development only."
+            exit 1
+        }
+    } else {
+        Log-Ok "Windows Authenticode signature is valid"
+    }
+    Log-Ok "Normalized release name for windows-x86_64"
+}
+
+# ---------------------------------------------------------------------------
+# 8. Report artifacts.
+# ---------------------------------------------------------------------------
+if ($buildExit -eq 0 -and (Test-Path $canonicalInstaller -PathType Leaf)) {
     Log-Step "Build succeeded. Artifacts:"
-    Get-ChildItem $bundleDir -File | Where-Object {
-        $_.Name -like "*.exe" -or $_.Name -like "*.exe.sig"
-    } | ForEach-Object {
+    Get-Item $canonicalInstaller | ForEach-Object {
         $sizeMb = "{0:N1}" -f ($_.Length / 1MB)
         Log-Ok ("{0,-40} {1} MB" -f $_.Name, $sizeMb)
         Log-Info $_.FullName
     }
+    Log-Info "Run scripts/prepare-update-artifacts.sh on the release machine to create updater files."
 } else {
     Log-Err "Build failed (exit $buildExit). See output above."
+    if ($buildExit -eq 0) { $buildExit = 1 }
 }
 
 if ($buildExit -ne 0) { exit $buildExit }
