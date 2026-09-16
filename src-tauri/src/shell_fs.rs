@@ -882,11 +882,17 @@ fn read_file_base64_authorized(
 /// Creates parent directories as needed. Overwrites existing files.
 #[tauri::command]
 pub async fn write_text_file(
+    window: tauri::WebviewWindow,
     access: State<'_, FilesystemAccess>,
     path: String,
     content: String,
     workspace_root: String,
 ) -> Result<String, String> {
+    // P0-3 PoC：窗口级 command scope 校验。
+    // 主窗口允许 FsWrite；任何非声明窗口将被拒绝并抛出 AppError。
+    // 错误仍以 String 返回以兼容既有 IPC 契约（friendlyError 会识别）。
+    crate::command_scope::enforce(window.label(), "write_text_file")
+        .map_err(|e| e.message)?;
     write_text_file_authorized(&access, path, content, workspace_root)
 }
 

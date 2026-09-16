@@ -14,6 +14,7 @@ mod automations;
 mod bridge;
 mod coding;
 mod coding_workspace;
+mod command_scope;
 mod commands;
 mod connector_cli;
 mod connectors_catalog;
