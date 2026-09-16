@@ -6,7 +6,7 @@
   "description": "EchoAgent — an open-source desktop agent workspace built on Tauri.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "pnpm security:csp-check && tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "dist": "node -e \"process.platform==='win32'?require('child_process').execFileSync('powershell',['-ExecutionPolicy','Bypass','-File','scripts/build.ps1'],{stdio:'inherit'}):require('child_process').execFileSync('bash',['scripts/build.sh'],{stdio:'inherit'})\"",
@@ -17,6 +17,7 @@
     "setup:win": "powershell -ExecutionPolicy Bypass -File scripts/setup.ps1",
     "setup:mac": "bash scripts/setup.sh",
     "test": "vitest run",
+    "security:csp-check": "node scripts/check-csp.mjs",
     "git:push": "bash scripts/git-push.sh",
     "git:push:tags": "bash scripts/git-push.sh --tags"
   },
