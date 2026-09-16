@@ -18,6 +18,7 @@ mod commands;
 mod connector_cli;
 mod connectors_catalog;
 mod experts;
+mod error;
 mod ext;
 mod logging;
 mod mcp;

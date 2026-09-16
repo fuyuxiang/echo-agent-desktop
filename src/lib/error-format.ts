@@ -26,6 +26,29 @@ interface AgentErrorData {
   [key: string]: unknown;
 }
 
+/**
+ * Rust 端 `AppError` 结构化错误在 IPC 抛出时会被 Tauri 序列化为 JSON。
+ * 字段顺序与命名规则见 `src-tauri/src/error.rs::wire::WireEnvelope`。
+ */
+interface AppErrorShape {
+  code: number;
+  kind: string;
+  message: string;
+}
+
+const APP_ERROR_KIND_LABELS: Record<string, string> = {
+  validation: "参数错误",
+  state: "状态错误",
+  network: "网络错误",
+  filesystem: "文件系统错误",
+  permission: "权限错误",
+  credential: "凭据错误",
+  timeout: "操作超时",
+  cancelled: "已取消",
+  verificationToken: "验证令牌错误",
+  internal: "内部错误",
+};
+
 /** Try to parse a EchoAgent error string into structured data. */
 /**
  * Convert Rust Debug-style value wrappers to JSON.
@@ -152,6 +175,11 @@ function fmtDuration(ms?: number): string {
 export function formatAgentError(raw: string): string | null {
   const parsed = tryParseAgentError(raw);
 
+  // 优先识别结构化 AppError（Rust 端序列化产生的 JSON 对象）。
+  if (parsed && isAppErrorShape(parsed)) {
+    return formatAppError(parsed);
+  }
+
   // If structured parsing failed, check raw string for known patterns.
   if (!parsed) {
     const lower = raw.toLowerCase();
@@ -232,11 +260,48 @@ export function formatAgentError(raw: string): string | null {
   return null;
 }
 
+function isAppErrorShape(parsed: { code?: number; message?: string; data?: AgentErrorData }): parsed is AppErrorShape & { code: number } {
+  if (typeof parsed.code !== "number") return false;
+  if (typeof parsed.message !== "string") return false;
+  // RPC Error 的 message 通常含 "Internal error"/"Invalid params" 等
+  if (/^(Internal error|Invalid params|Method not found|Unknown error|Parse error|Invalid Request)$/i.test(parsed.message)) {
+    return false;
+  }
+  // AppError code 段位：1xxx 客户端参数；2xxx 业务/运行时；9xxx 内部
+  return parsed.code >= 1000 && parsed.code < 10000;
+}
+
+function formatAppError(err: AppErrorShape): string {
+  const label = APP_ERROR_KIND_LABELS[err.kind];
+  if (label) {
+    const detail = err.message ? "：" + err.message : "";
+    return "⚠️ " + label + "（" + err.code + "）" + detail;
+  }
+  return "⚠️ " + err.message;
+}
+
 /**
  * Wrap an error value (string or Error) with formatAgentError.
  * Falls back to String(e) if the error can't be parsed.
  */
 export function friendlyError(e: unknown): string {
+  // 1) 直接传入结构化 AppError 对象
+  if (isAppErrorObject(e)) {
+    return formatAppError(e);
+  }
+  // 2) 字符串路径：交给 formatAgentError 解析（含 AppError JSON / Debug / RPC Error）
   const raw = String(e);
   return formatAgentError(raw) ?? raw.replace(/^Error:\s*/, "");
+}
+
+function isAppErrorObject(e: unknown): e is AppErrorShape {
+  if (!e || typeof e !== "object") return false;
+  const obj = e as Record<string, unknown>;
+  return (
+    typeof obj.code === "number" &&
+    typeof obj.kind === "string" &&
+    typeof obj.message === "string" &&
+    obj.code >= 1000 &&
+    obj.code < 10000
+  );
 }

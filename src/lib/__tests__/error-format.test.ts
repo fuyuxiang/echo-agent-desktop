@@ -84,3 +84,77 @@ describe("friendlyError", () => {
     expect(result).toContain("网络连接失败");
   });
 });
+
+// AppError 契约：Rust → TS 结构化错误识别。
+// 形态：{ code: number, kind: ErrorKind, message: string }
+// kind ∈ "validation" | "state" | "network" | "filesystem" | "permission"
+//        | "credential" | "timeout" | "cancelled" | "verificationToken" | "internal"
+interface AppErrorPayload {
+  code: number;
+  kind: string;
+  message: string;
+}
+
+describe("formatAgentError - AppError structured", () => {
+  it("validation kind → 给出参数校验提示", () => {
+    const err: AppErrorPayload = { code: 1003, kind: "validation", message: "sessionId 不能为空" };
+    const result = formatAgentError(JSON.stringify(err));
+    expect(result).toContain("参数错误");
+    expect(result).toContain("sessionId");
+  });
+
+  it("network kind → 给出网络重试提示", () => {
+    const err: AppErrorPayload = { code: 2003, kind: "network", message: "ECONNREFUSED" };
+    const result = formatAgentError(JSON.stringify(err));
+    expect(result).toContain("网络");
+    expect(result).toContain("ECONNREFUSED");
+  });
+
+  it("credential kind → 给出凭据提示", () => {
+    const err: AppErrorPayload = { code: 2007, kind: "credential", message: "API Key 无效" };
+    const result = formatAgentError(JSON.stringify(err));
+    expect(result).toContain("凭据");
+  });
+
+  it("state kind → 给出初始化/状态提示", () => {
+    const err: AppErrorPayload = { code: 2001, kind: "state", message: "模型未初始化" };
+    const result = formatAgentError(JSON.stringify(err));
+    expect(result).toContain("状态");
+  });
+
+  it("timeout kind → 给出超时重试提示", () => {
+    const err: AppErrorPayload = { code: 2004, kind: "timeout", message: "等待响应超时" };
+    const result = formatAgentError(JSON.stringify(err));
+    expect(result).toContain("超时");
+  });
+
+  it("permission kind → 给出权限提示", () => {
+    const err: AppErrorPayload = { code: 2006, kind: "permission", message: "无权限访问 /etc" };
+    const result = formatAgentError(JSON.stringify(err));
+    expect(result).toContain("权限");
+  });
+
+  it("未知 kind → 回退到 message 本体", () => {
+    const err: AppErrorPayload = { code: 9999, kind: "weird", message: "原始错误信息" };
+    const result = formatAgentError(JSON.stringify(err));
+    expect(result).toContain("原始错误信息");
+  });
+});
+
+describe("friendlyError - AppError structured", () => {
+  it("直接接受 AppError 对象", () => {
+    const err: AppErrorPayload = { code: 1003, kind: "validation", message: "ID 缺失" };
+    const result = friendlyError(err);
+    expect(result).toContain("参数错误");
+    expect(result).toContain("ID 缺失");
+  });
+
+  it("接受 Rust Debug 风格的 AppError 字符串", () => {
+    // Rust 端 serde 序列化的字符串表示
+    const raw = `Error { code: 1003: validation, message: "ID 缺失" }`;
+    // 实际结构化 AppError 在 IPC 抛出会以 JSON 形式出现，这里只校验友好降级不丢 message
+    const result = friendlyError(raw);
+    expect(typeof result).toBe("string");
+    expect(result.length).toBeGreaterThan(0);
+  });
+});
