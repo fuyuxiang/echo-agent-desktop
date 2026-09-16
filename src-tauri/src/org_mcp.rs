@@ -26,13 +26,33 @@ use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 pub const MCP_SERVER_NAME: &str = "echoagent_organization_memory";
-pub const AUTH_HEADER: &str = "x-echo-org-mcp-token";
+// The Runtime deliberately skips OAuth discovery only when an HTTP MCP server
+// already carries the standard Authorization header. Keep this private bridge
+// on that contract so its process-local credential is never mistaken for an
+// interactive OAuth challenge.
+pub const AUTH_HEADER: &str = "Authorization";
 pub const SOURCES_HEADER: &str = "x-echo-knowledge-sources";
 const MAX_MCP_BODY_BYTES: usize = 256 * 1024;
 const MAX_TOOL_TEXT_CHARS: usize = 8_192;
 const MAX_IDENTIFIER_CHARS: usize = 256;
 const MAX_SCOPE_ITEMS: usize = 64;
 const RECONCILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const ATTACHMENT_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+const ATTACHMENT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+const PERSONAL_TOOL_NAMES: &[&str] = &["local_knowledge_search", "local_knowledge_fetch"];
+const ORGANIZATION_TOOL_NAMES: &[&str] = &[
+    "knowledge_context",
+    "knowledge_ask",
+    "knowledge_feedback",
+    "knowledge_search",
+    "knowledge_fetch_document",
+    "knowledge_fetch_doc",
+    "knowledge_list_documents",
+    "knowledge_list_docs",
+    "knowledge_who_knows",
+    "knowledge_submit",
+];
 
 static BOUND_PORT: OnceLock<u16> = OnceLock::new();
 static PROCESS_TOKEN: OnceLock<String> = OnceLock::new();
@@ -116,7 +136,8 @@ fn parse_selection(value: &str) -> Result<KnowledgeSourceSelection, StatusCode> 
 
 #[derive(Clone)]
 struct ServerState {
-    token: String,
+    /// Full Authorization value, including the Bearer scheme.
+    authorization: String,
     expected_host: String,
     app: Option<AppHandle>,
 }
@@ -139,8 +160,9 @@ pub fn serve(app: AppHandle) {
     };
     let port = address.port();
     let token = format!("{}{}", Uuid::now_v7().simple(), Uuid::now_v7().simple());
+    let authorization = format!("Bearer {token}");
     let _ = BOUND_PORT.set(port);
-    let _ = PROCESS_TOKEN.set(token.clone());
+    let _ = PROCESS_TOKEN.set(token);
     tracing::info!(port, "organization MCP server listening");
 
     tauri::async_runtime::spawn(async move {
@@ -161,7 +183,7 @@ pub fn serve(app: AppHandle) {
             .route("/mcp", delete(method_not_allowed))
             .layer(DefaultBodyLimit::max(MAX_MCP_BODY_BYTES))
             .with_state(ServerState {
-                token,
+                authorization,
                 expected_host: address.to_string(),
                 app: Some(app),
             });
@@ -178,7 +200,7 @@ fn bind_with_retry() -> Option<TcpListener> {
 pub fn server_config() -> Option<(String, String)> {
     Some((
         format!("http://127.0.0.1:{}/mcp", BOUND_PORT.get()?),
-        PROCESS_TOKEN.get()?.clone(),
+        format!("Bearer {}", PROCESS_TOKEN.get()?),
     ))
 }
 
@@ -278,11 +300,11 @@ fn validate_request_headers(
     headers: &HeaderMap,
     state: &ServerState,
 ) -> Result<KnowledgeSourceSelection, StatusCode> {
-    let token = headers
-        .get(AUTH_HEADER)
+    let authorization = headers
+        .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    if !constant_time_eq(token.as_bytes(), state.token.as_bytes()) {
+    if !constant_time_eq(authorization.as_bytes(), state.authorization.as_bytes()) {
         return Err(StatusCode::UNAUTHORIZED);
     }
 
@@ -1030,6 +1052,111 @@ pub fn reconcile_registration(tx: &echo_agent_acp::AcpAgentTx, session_id: &str)
     });
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum AttachmentReadiness {
+    Ready,
+    Pending(String),
+    Failed(String),
+}
+
+fn attachment_readiness(
+    server: Option<&crate::mcp::McpServerEntry>,
+    selection: KnowledgeSourceSelection,
+) -> AttachmentReadiness {
+    let Some(server) = server else {
+        return AttachmentReadiness::Pending("知识桥尚未出现在 Runtime 会话中".into());
+    };
+    if server.auth_required {
+        return AttachmentReadiness::Failed(
+            "内部知识桥鉴权失败，请重试；若持续失败，请完全退出后重启应用".into(),
+        );
+    }
+
+    match server.status.as_deref() {
+        Some("ready") => {}
+        Some("unavailable") | Some("setuprequired") => {
+            return AttachmentReadiness::Failed(
+                "知识桥初始化失败，请重试；若持续失败，请完全退出后重启应用".into(),
+            );
+        }
+        Some(status) => {
+            return AttachmentReadiness::Pending(format!("知识桥正在初始化（当前状态：{status}）"));
+        }
+        None => return AttachmentReadiness::Pending("知识桥正在初始化".into()),
+    }
+
+    let available = server
+        .tools
+        .iter()
+        .filter(|tool| tool.enabled)
+        .map(|tool| tool.name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut missing = Vec::new();
+    if selection.personal {
+        missing.extend(
+            PERSONAL_TOOL_NAMES
+                .iter()
+                .copied()
+                .filter(|name| !available.contains(name)),
+        );
+    }
+    if selection.organization {
+        missing.extend(
+            ORGANIZATION_TOOL_NAMES
+                .iter()
+                .copied()
+                .filter(|name| !available.contains(name)),
+        );
+    }
+    if missing.is_empty() {
+        AttachmentReadiness::Ready
+    } else {
+        AttachmentReadiness::Pending(format!(
+            "知识桥已连接，但工具尚未完整加载：{}",
+            missing.join("、")
+        ))
+    }
+}
+
+async fn wait_for_attachment_ready(
+    tx: &echo_agent_acp::AcpAgentTx,
+    session_id: &str,
+    selection: KnowledgeSourceSelection,
+) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + ATTACHMENT_READY_TIMEOUT;
+    let mut last_detail = "知识桥正在初始化".to_string();
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Err(format!("等待知识库工具就绪超时：{last_detail}"));
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let entries = match tokio::time::timeout(
+            remaining,
+            crate::mcp::mcp_list_with_tx(tx, Some(session_id.to_string())),
+        )
+        .await
+        {
+            Ok(Ok(entries)) => entries,
+            Ok(Err(error)) => {
+                last_detail = format!("读取 Runtime 知识工具状态失败：{error}");
+                tokio::time::sleep(ATTACHMENT_POLL_INTERVAL.min(remaining)).await;
+                continue;
+            }
+            Err(_) => return Err(format!("等待知识库工具就绪超时：{last_detail}")),
+        };
+        match attachment_readiness(
+            entries.iter().find(|entry| entry.name == MCP_SERVER_NAME),
+            selection,
+        ) {
+            AttachmentReadiness::Ready => return Ok(()),
+            AttachmentReadiness::Failed(message) => return Err(message),
+            AttachmentReadiness::Pending(message) => last_detail = message,
+        }
+        tokio::time::sleep(ATTACHMENT_POLL_INTERVAL.min(remaining)).await;
+    }
+}
+
 pub(crate) async fn reconcile_session(
     tx: &echo_agent_acp::AcpAgentTx,
     session_id: &str,
@@ -1047,7 +1174,8 @@ pub(crate) async fn reconcile_session(
     } else {
         None
     };
-    let (method, payload) = if let Some((url, token)) = config {
+    let should_attach = config.is_some();
+    let (method, payload) = if let Some((url, authorization)) = config {
         (
             "echo.agent/mcp/upsert",
             json!({
@@ -1056,7 +1184,7 @@ pub(crate) async fn reconcile_session(
                 "persist": false,
                 "url": url,
                 "headers": {
-                    AUTH_HEADER: token,
+                    AUTH_HEADER: authorization,
                     SOURCES_HEADER: encode_selection(selection)
                 },
                 "enabled": true
@@ -1077,9 +1205,13 @@ pub(crate) async fn reconcile_session(
         crate::ext::call_ext_value(tx, method, crate::ext::raw_params(&payload)),
     )
     .await
-    .map_err(|_| "knowledge source Runtime synchronization timed out".to_owned())?
-    .map(|_| ())
-    .map_err(|error| format!("{error:?}"))
+    .map_err(|_| "知识来源 Runtime 同步超时".to_owned())?
+    .map_err(|error| format!("{error:?}"))?;
+
+    if should_attach {
+        wait_for_attachment_ready(tx, session_id, selection).await?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn reconcile_all_sessions(app: &AppHandle) {
@@ -1105,6 +1237,7 @@ mod tests {
 
     #[tokio::test]
     async fn requires_process_token_and_lists_tools() {
+        assert!(AUTH_HEADER.eq_ignore_ascii_case(header::AUTHORIZATION.as_str()));
         set_capability_enabled(true);
         let std_listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = std_listener.local_addr().unwrap();
@@ -1115,7 +1248,7 @@ mod tests {
                 .route("/mcp", post(handle_post))
                 .layer(DefaultBodyLimit::max(MAX_MCP_BODY_BYTES))
                 .with_state(ServerState {
-                    token: "test-secret".into(),
+                    authorization: "Bearer test-secret".into(),
                     expected_host: address.to_string(),
                     app: None,
                 });
@@ -1136,7 +1269,7 @@ mod tests {
         );
         let response: Value = client
             .post(&url)
-            .header(AUTH_HEADER, "test-secret")
+            .header(AUTH_HEADER, "Bearer test-secret")
             .header(SOURCES_HEADER, "organization")
             .json(&request)
             .send()
@@ -1191,12 +1324,12 @@ mod tests {
     #[test]
     fn rejects_invalid_headers_and_unbounded_tool_inputs() {
         let state = ServerState {
-            token: "secret".into(),
+            authorization: "Bearer secret".into(),
             expected_host: "127.0.0.1:1234".into(),
             app: None,
         };
         let mut headers = HeaderMap::new();
-        headers.insert(AUTH_HEADER, "secret".parse().unwrap());
+        headers.insert(header::AUTHORIZATION, "Bearer secret".parse().unwrap());
         headers.insert(header::HOST, "127.0.0.1:1234".parse().unwrap());
         headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
         assert_eq!(
@@ -1249,5 +1382,98 @@ mod tests {
 
         let both = tools_list_result_for(true, true);
         assert_eq!(both["tools"].as_array().unwrap().len(), 12);
+        let actual = both["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let expected = PERSONAL_TOOL_NAMES
+            .iter()
+            .chain(ORGANIZATION_TOOL_NAMES)
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    fn mcp_entry(
+        status: Option<&str>,
+        auth_required: bool,
+        tools: &[&str],
+    ) -> crate::mcp::McpServerEntry {
+        crate::mcp::McpServerEntry {
+            name: MCP_SERVER_NAME.into(),
+            display_name: None,
+            transport: Some("streamable_http".into()),
+            target: None,
+            enabled: true,
+            source: Some("local".into()),
+            disabled_reason: None,
+            vendor: None,
+            status: status.map(str::to_string),
+            live: true,
+            auth_required,
+            setup_required: false,
+            setup: None,
+            setup_values: HashMap::new(),
+            tools: tools
+                .iter()
+                .map(|name| crate::mcp::McpToolEntry {
+                    name: (*name).into(),
+                    display_name: None,
+                    description: None,
+                    enabled: true,
+                })
+                .collect(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            editable: false,
+        }
+    }
+
+    #[test]
+    fn attachment_is_ready_only_after_every_selected_tool_is_live() {
+        let personal = KnowledgeSourceSelection {
+            personal: true,
+            organization: false,
+        };
+        assert!(matches!(
+            attachment_readiness(None, personal),
+            AttachmentReadiness::Pending(_)
+        ));
+        assert!(matches!(
+            attachment_readiness(
+                Some(&mcp_entry(Some("ready"), false, PERSONAL_TOOL_NAMES)),
+                personal,
+            ),
+            AttachmentReadiness::Ready
+        ));
+        assert!(matches!(
+            attachment_readiness(
+                Some(&mcp_entry(
+                    Some("ready"),
+                    false,
+                    &["local_knowledge_search"],
+                )),
+                personal,
+            ),
+            AttachmentReadiness::Pending(message)
+                if message.contains("local_knowledge_fetch")
+        ));
+    }
+
+    #[test]
+    fn attachment_surfaces_internal_auth_failure_instead_of_claiming_success() {
+        let organization = KnowledgeSourceSelection {
+            personal: false,
+            organization: true,
+        };
+        assert!(matches!(
+            attachment_readiness(
+                Some(&mcp_entry(Some("unavailable"), true, &[])),
+                organization,
+            ),
+            AttachmentReadiness::Failed(message) if message.contains("鉴权失败")
+        ));
     }
 }

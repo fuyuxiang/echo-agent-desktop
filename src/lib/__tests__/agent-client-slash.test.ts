@@ -96,7 +96,7 @@ describe("agentSend attachment contract", () => {
     expect(invokeMock.mock.calls.filter(([command]) => command === "agent_send")).toHaveLength(2);
   });
 
-  it("知识来源同步失败不会丢失用户任务", async () => {
+  it("组织知识同步失败时阻止未经知识库支撑的回答", async () => {
     useKnowledgeStore.getState().setSessionSources("session-org", ["organization"]);
     invokeMock.mockImplementation((command) => (
       command === "agent_set_knowledge_sources"
@@ -105,12 +105,9 @@ describe("agentSend attachment contract", () => {
     ));
 
     await expect(agentSend("session-org", "继续原任务", [], "继续原任务", "prompt-org"))
-      .resolves.toBeUndefined();
+      .rejects.toThrow("本次消息未发送");
 
-    expect(invokeMock).toHaveBeenCalledWith("agent_send", expect.objectContaining({
-      sessionId: "session-org",
-      text: "继续原任务",
-    }));
+    expect(invokeMock.mock.calls.some(([command]) => command === "agent_send")).toBe(false);
     expect(useKnowledgeStore.getState().turnTraces["session-org"]["prompt-org"])
       .toMatchObject({
         organization: {
@@ -118,6 +115,65 @@ describe("agentSend attachment contract", () => {
           message: expect.stringContaining("组织连接超时"),
         },
       });
+  });
+
+  it("原生层未确认所选个人知识工具就绪时不缓存假成功", async () => {
+    useKnowledgeStore.getState().setSessionSources("session-personal", ["personal"]);
+    invokeMock.mockImplementation((command) => Promise.resolve(
+      command === "agent_set_knowledge_sources"
+        ? {
+            personalSelected: true,
+            organizationSelected: false,
+            personalAttached: false,
+            organizationAttached: false,
+          }
+        : undefined,
+    ));
+
+    await expect(agentSend(
+      "session-personal",
+      "总结我的文档",
+      [],
+      "总结我的文档",
+      "prompt-personal",
+    )).rejects.toThrow("个人知识库尚未就绪");
+
+    expect(invokeMock.mock.calls.some(([command]) => command === "agent_send")).toBe(false);
+    expect(useKnowledgeStore.getState().turnTraces["session-personal"]["prompt-personal"])
+      .toMatchObject({
+        personal: {
+          state: "error",
+          message: expect.stringContaining("个人知识库尚未就绪"),
+        },
+      });
+  });
+
+  it("组织知识工具实际就绪后才发送消息", async () => {
+    useKnowledgeStore.getState().setSessionSources("session-org-ready", ["organization"]);
+    invokeMock.mockImplementation((command) => Promise.resolve(
+      command === "agent_set_knowledge_sources"
+        ? {
+            personalSelected: false,
+            organizationSelected: true,
+            personalAttached: false,
+            organizationAttached: true,
+          }
+        : undefined,
+    ));
+
+    await expect(agentSend(
+      "session-org-ready",
+      "组织知识是什么",
+      [],
+      "组织知识是什么",
+      "prompt-org-ready",
+    )).resolves.toBeUndefined();
+
+    expect(invokeMock).toHaveBeenCalledWith("agent_send", expect.objectContaining({
+      sessionId: "session-org-ready",
+    }));
+    expect(useKnowledgeStore.getState().turnTraces["session-org-ready"]["prompt-org-ready"])
+      .toMatchObject({ organization: { state: "available" } });
   });
 });
 

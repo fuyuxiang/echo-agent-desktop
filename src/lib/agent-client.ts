@@ -215,6 +215,30 @@ export interface AgentKnowledgeSourcesResult {
   organizationAttached: boolean;
 }
 
+export const KNOWLEDGE_MCP_SERVER_NAME = "echoagent_organization_memory";
+
+export interface McpServerStatusEvent {
+  sessionId: string;
+  name: string;
+  source: "local" | "managed" | string;
+  status: "ready" | "initializing" | "unavailable" | "needsauth" | string;
+  reason:
+    | "transport_closed"
+    | "handshake_failed"
+    | "config_added"
+    | "config_removed"
+    | "config_changed"
+    | "disabled"
+    | "auth_expired"
+    | "initialized"
+    | "restart_succeeded"
+    | "restart_failed"
+    | "managed_token_refreshed"
+    | string;
+  detail?: string;
+  tools?: unknown;
+}
+
 interface AppliedKnowledgeSources {
   key: string;
   result: AgentKnowledgeSourcesResult;
@@ -227,9 +251,11 @@ function knowledgeSourcesKey(sources: KnowledgeSource[]): string {
 }
 
 /** Invalidate MCP reconciliation acknowledgements after a Runtime/session lifecycle boundary. */
-export function invalidateAgentKnowledgeSourceSync(sessionId?: string): void {
-  if (sessionId) appliedKnowledgeSources.delete(sessionId);
-  else appliedKnowledgeSources.clear();
+export function invalidateAgentKnowledgeSourceSync(sessionId?: string): boolean {
+  if (sessionId) return appliedKnowledgeSources.delete(sessionId);
+  const hadEntries = appliedKnowledgeSources.size > 0;
+  appliedKnowledgeSources.clear();
+  return hadEntries;
 }
 
 /** Make the Runtime's MCP catalog match the task-owned source selection. */
@@ -237,11 +263,22 @@ export async function agentSetKnowledgeSources(
   sessionId: string,
   sources: KnowledgeSource[],
 ): Promise<AgentKnowledgeSourcesResult> {
+  const personal = sources.includes("personal");
+  const organization = sources.includes("organization");
   const result = await invoke<AgentKnowledgeSourcesResult>("agent_set_knowledge_sources", {
     sessionId,
-    personal: sources.includes("personal"),
-    organization: sources.includes("organization"),
+    personal,
+    organization,
   });
+  const mismatches = [
+    result.personalSelected !== personal ? "个人知识选择状态" : null,
+    result.organizationSelected !== organization ? "组织知识选择状态" : null,
+    result.personalAttached !== personal ? "个人知识库尚未就绪" : null,
+    result.organizationAttached !== organization ? "组织知识库尚未就绪" : null,
+  ].filter((label): label is string => Boolean(label));
+  if (mismatches.length > 0) {
+    throw new Error(`Runtime 未能确认知识来源状态：${mismatches.join("、")}`);
+  }
   appliedKnowledgeSources.set(sessionId, {
     key: knowledgeSourcesKey(sources),
     result,
@@ -264,28 +301,49 @@ async function synchronizeKnowledgeSources(
     try {
       result = await agentSetKnowledgeSources(sessionId, sources);
     } catch (error) {
-      // Knowledge augments a task; it is not an admission dependency. The
-      // backend rolls a failed selection change back to its last applied state,
-      // so continuing cannot accidentally expose a newly deselected source.
       synchronizationError = String(error).replace(/^Error:\s*/, "");
-      console.warn("[EchoAgent] Knowledge source synchronization skipped:", error);
+      console.warn("[EchoAgent] Knowledge source synchronization failed:", error);
     }
+  }
+  const unavailableLabels = [
+    sources.includes("personal") && !result?.personalAttached ? "个人知识库" : null,
+    sources.includes("organization") && !result?.organizationAttached ? "组织知识库" : null,
+  ].filter((label): label is string => Boolean(label));
+  const attachmentError = synchronizationError
+    ?? (unavailableLabels.length > 0
+      ? `${unavailableLabels.join("、")}尚未就绪`
+      : undefined);
+
+  if (attachmentError) {
+    // Never silently broaden or narrow a user-selected knowledge boundary. A
+    // failed detach may leave the previous tools resident, while a failed
+    // attach would produce an ungrounded answer that looks knowledge-backed.
+    invalidateAgentKnowledgeSourceSync(sessionId);
   }
   store.beginTurnTrace(
     sessionId,
     promptId,
     sources,
     sources.includes("organization")
-      ? result?.organizationAttached
+      ? !attachmentError && result?.organizationAttached
         ? { state: "available" }
         : {
             state: "unavailable",
-            message: synchronizationError
-              ? `知识来源同步失败，本次任务已不使用组织知识：${synchronizationError}`
-              : "组织知识库当前不可用，本次任务未使用该来源",
+            message: `组织知识库连接失败：${attachmentError ?? "服务尚未就绪"}`,
           }
       : undefined,
   );
+  if (attachmentError) {
+    if (sources.includes("personal")) {
+      store.setRetrieval(sessionId, {
+        state: "error",
+        message: `知识工具连接失败：${attachmentError}`,
+      }, promptId);
+    }
+    throw new Error(
+      `知识来源尚未就绪，本次消息未发送：${attachmentError}。请重试；若持续失败，请完全退出后重启应用。`,
+    );
+  }
   return sources;
 }
 
@@ -831,8 +889,10 @@ export async function mcpAuthStatus(sessionId: string): Promise<McpAuthStatusEnt
 }
 
 /** Subscribe to Runtime MCP handshake/health changes. */
-export function onMcpStatusEvent(cb: (payload: unknown) => void): Promise<UnlistenFn> {
-  return listen<unknown>("agent://mcp-status", (event) => cb(event.payload));
+export function onMcpStatusEvent(
+  cb: (payload: McpServerStatusEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<McpServerStatusEvent>("agent://mcp-status", (event) => cb(event.payload));
 }
 
 // ---------- CLI-type connector authorization (cli.json driven) ----------
@@ -1858,7 +1918,7 @@ export async function subscribeAgentEvents(handlers: {
    *  (`echo.agent/session_notification` → `SessionSummaryGenerated`). */
   onSummary?: (s: SessionSummaryEvent) => void;
   /** Fired on MCP connector status / init-progress notifications. */
-  onMcpStatus?: (p: unknown) => void;
+  onMcpStatus?: (p: McpServerStatusEvent) => void;
   /** Fired when EchoAgent asks us to trust a folder (`echo.agent/folder_trust/request`). */
   onFolderTrust?: (p: FolderTrustRequest) => void;
   /** Fired when a plan is parked on the exit-plan approval ExtMethod. */
@@ -1912,7 +1972,7 @@ export async function subscribeAgentEvents(handlers: {
   await wire<PromptComplete>("agent://complete", handlers.onComplete);
   await wire<SessionSummaryEvent>("agent://summary", handlers.onSummary);
   await wire<TurnUsageEvent>("agent://turn-usage", handlers.onTurnUsage);
-  await wire("agent://mcp-status", handlers.onMcpStatus);
+  await wire<McpServerStatusEvent>("agent://mcp-status", handlers.onMcpStatus);
   await wire<FolderTrustRequest>("agent://folder-trust", handlers.onFolderTrust);
   await wire<PlanApprovalRequest>("agent://plan-approval", handlers.onPlanApproval);
   await wire("agent://plan-mode", handlers.onPlanMode);

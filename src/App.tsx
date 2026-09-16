@@ -52,6 +52,8 @@ import {
   notificationAppend,
   memoryAppend,
   internalReload,
+  invalidateAgentKnowledgeSourceSync,
+  KNOWLEDGE_MCP_SERVER_NAME,
   subscribeAgentEvents,
   type InitResult,
   type WorkspaceInfo,
@@ -234,6 +236,15 @@ function Shell() {
   const selectionGenerationRef = useRef(0);
   const sessionCatalogGenerationRef = useRef(0);
   const modelCatalogGenerationRef = useRef(0);
+
+  const showToast = useCallback((message: string, durationMs = 2000) => {
+    setToast({ message, actions: [] });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => {
+      toastTimer.current = null;
+      setToast(null);
+    }, durationMs);
+  }, []);
 
   const sessionStore = useSessionStore;
   const sessionsStore = useSessionsStore;
@@ -718,12 +729,26 @@ function Shell() {
             }
           },
           onMcpStatus: (p) => {
+            const isKnowledgeBridge = p.name === KNOWLEDGE_MCP_SERVER_NAME;
+            const intentionalShutdown = p.reason === "config_removed" || p.reason === "disabled";
+            const connectionLost = p.status === "unavailable" || p.status === "needsauth";
+            if (isKnowledgeBridge && connectionLost && !intentionalShutdown) {
+              const hadReadyAcknowledgement = invalidateAgentKnowledgeSourceSync(p.sessionId);
+              const selected = useKnowledgeStore.getState().sessionSources[p.sessionId] ?? [];
+              if (hadReadyAcknowledgement && selected.length > 0) {
+                const labels = [
+                  selected.includes("personal") ? "个人知识" : null,
+                  selected.includes("organization") ? "组织知识" : null,
+                ].filter(Boolean).join("、");
+                showToast(`${labels || "知识库"}连接已中断，下次发送前将自动重连`, 6000);
+              }
+            }
             void notificationAppend(
               "mcp_status",
-              "MCP 连接器状态变化",
+              isKnowledgeBridge ? "知识库连接状态变化" : "MCP 连接器状态变化",
               typeof p === "string" ? p : JSON.stringify(p).slice(0, 200),
-              undefined,
-              "info",
+              p.sessionId,
+              isKnowledgeBridge && connectionLost && !intentionalShutdown ? "warn" : "info",
             );
           },
           onModelsUpdate: () => {
@@ -894,6 +919,7 @@ function Shell() {
     questionStore,
     refreshModels,
     refreshSessionCatalog,
+    showToast,
   ]);
 
   const currentSessionId = sessionsStore((s) => s.currentSessionId);
@@ -931,15 +957,6 @@ function Shell() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = null;
     setToast(null);
-  }, []);
-
-  const showToast = useCallback((message: string, durationMs = 2000) => {
-    setToast({ message, actions: [] });
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => {
-      toastTimer.current = null;
-      setToast(null);
-    }, durationMs);
   }, []);
 
   const showActionToast = useCallback((message: string, actions: ToastAction[], durationMs = 8000) => {

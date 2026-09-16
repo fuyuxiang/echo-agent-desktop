@@ -74,6 +74,10 @@ describe("friendlyError", () => {
     expect(friendlyError(raw)).toBe(raw);
   });
 
+  it("展示普通 Error 时去掉技术性前缀", () => {
+    expect(friendlyError(new Error("知识来源尚未就绪"))).toBe("知识来源尚未就绪");
+  });
+
   it("handles Error objects", () => {
     const err = new Error("connection timeout");
     const result = friendlyError(err);

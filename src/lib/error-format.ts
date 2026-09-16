@@ -238,5 +238,5 @@ export function formatAgentError(raw: string): string | null {
  */
 export function friendlyError(e: unknown): string {
   const raw = String(e);
-  return formatAgentError(raw) ?? raw;
+  return formatAgentError(raw) ?? raw.replace(/^Error:\s*/, "");
 }
