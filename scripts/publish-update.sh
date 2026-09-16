@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Upload one Tauri-signed updater artifact and atomically publish latest.json.
+# Internal helper: upload one preflighted updater artifact and atomically
+# publish its latest.json. Use publish-all-updates.sh for release operations.
 set -euo pipefail
+
+if [[ "${ECHOAGENT_BATCH_PUBLISH:-}" != "1" ]]; then
+  echo "This helper cannot publish directly. Use scripts/publish-all-updates.sh." >&2
+  exit 2
+fi
 
 HOST="root@10.132.19.82"
 VERSION=""
@@ -30,11 +36,11 @@ if [[ -z "$VERSION" || -z "$TARGET" || -z "$ARTIFACT" ]]; then
   usage >&2
   exit 2
 fi
-if [[ ! "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
-  echo "Invalid SemVer: $VERSION" >&2
+VERSION="${VERSION#v}"
+if ! node "$(dirname "$0")/release-version.mjs" validate "$VERSION" >/dev/null; then
   exit 2
 fi
-if [[ ! "$TARGET" =~ ^(windows|darwin|linux)-(x86_64|aarch64)$ ]]; then
+if [[ ! "$TARGET" =~ ^(windows-x86_64|darwin-x86_64|darwin-aarch64)$ ]]; then
   echo "Unsupported updater target: $TARGET" >&2
   exit 2
 fi
@@ -47,11 +53,23 @@ if [[ -n "$NOTES_FILE" && ! -f "$NOTES_FILE" ]]; then
   exit 2
 fi
 
+case "$TARGET" in
+  windows-x86_64) EXPECTED_NAME="EchoAgent-v$VERSION-$TARGET-setup.exe" ;;
+  darwin-x86_64|darwin-aarch64) EXPECTED_NAME="EchoAgent-v$VERSION-$TARGET.app.tar.gz" ;;
+esac
+if [[ "$(basename "$ARTIFACT")" != "$EXPECTED_NAME" ]]; then
+  echo "Artifact name does not match version/target; expected: $EXPECTED_NAME" >&2
+  exit 2
+fi
+node "$(dirname "$0")/verify-updater-signature.mjs" "$ARTIFACT" >/dev/null
+
 REMOTE_TMP="$(ssh "$HOST" 'mktemp -d /tmp/echoagent-update.XXXXXX')"
 if [[ ! "$REMOTE_TMP" =~ ^/tmp/echoagent-update\.[A-Za-z0-9]+$ ]]; then
   echo "Unexpected remote staging path: $REMOTE_TMP" >&2
   exit 1
 fi
+# REMOTE_TMP is accepted only after the strict /tmp/echoagent-update.* check.
+# shellcheck disable=SC2029
 cleanup() { ssh "$HOST" "rm -rf '$REMOTE_TMP'" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
@@ -66,6 +84,8 @@ fi
 REMOTE_MANDATORY=""
 if [[ $MANDATORY -eq 1 ]]; then REMOTE_MANDATORY="--mandatory"; fi
 
+# Version, target and artifact name are all allowlisted above.
+# shellcheck disable=SC2029
 ssh "$HOST" \
   "/usr/local/sbin/echoagent-publish-update --version '$VERSION' --target '$TARGET' --artifact '$REMOTE_ARTIFACT' --signature '$REMOTE_SIGNATURE' $REMOTE_NOTES $REMOTE_MANDATORY"
 

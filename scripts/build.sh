@@ -2,23 +2,24 @@
 # ===========================================================================
 #  EchoAgent macOS packaging script (bash)
 #
-#  Produces a distributable .dmg via `pnpm tauri build --bundles dmg`.
+#  Produces a platform-signed distributable .dmg. Updater archives and
+#  updater signatures are generated later on the controlled release machine.
+#  Public artifacts use EchoAgent-v<VERSION>-darwin-<ARCH>.dmg names.
 #  Builds for the host architecture (Apple Silicon or Intel); Tauri picks
 #  the right target automatically.
 #
 #  Usage:
 #    bash scripts/build.sh
 #    bash scripts/build.sh --version 0.2.0
+#    bash scripts/build.sh --allow-unsigned-platform  # development only
 #
 #  Prerequisites:
 #    The complete vendored Runtime source is included in the repository.
 #    `scripts/setup.sh` can be used to verify checkout integrity.
 #
-#  NOTE on code signing / notarization:
-#    This script intentionally does NOT sign or notarize the bundle.
-#    Unsigned .dmg/.app will run on the build machine but will prompt
-#    "unidentified developer" elsewhere (right-click > Open to bypass).
-#    Setting up signing is a separate task requiring an Apple Developer ID.
+#  Production builds must pass codesign and Gatekeeper assessment. The escape
+#  hatch above exists only for local development and must not be used to make
+#  an update release.
 # ===========================================================================
 
 set -euo pipefail
@@ -26,7 +27,6 @@ set -euo pipefail
 # ---- helpers --------------------------------------------------------------
 log_step() { printf '\n\033[36m===> %s\033[0m\n' "$1"; }
 log_ok()   { printf '  \033[32m[OK]\033[0m   %s\n' "$1"; }
-log_warn() { printf '  \033[33m[WARN]\033[0m %s\n' "$1"; }
 log_err()  { printf '  \033[31m[ERR]\033[0m  %s\n' "$1"; }
 log_info() { printf '         %s\n' "$1"; }
 
@@ -34,13 +34,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Cargo.toml may be updated when --version is supplied.
-CARGO_TOML="$PROJECT_ROOT/src-tauri/Cargo.toml"
-
 # ---------------------------------------------------------------------------
 # 1. Parse args
 # ---------------------------------------------------------------------------
 NEW_VERSION=""
+ALLOW_UNSIGNED_PLATFORM=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --version)
@@ -50,6 +48,10 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             shift 2
+            ;;
+        --allow-unsigned-platform)
+            ALLOW_UNSIGNED_PLATFORM=1
+            shift
             ;;
         -h|--help)
             sed -n '2,28p' "$0"
@@ -73,8 +75,23 @@ fi
 ARCH="$(uname -m)"
 log_ok "macOS detected ($ARCH)"
 
+case "$ARCH" in
+    arm64)
+        RELEASE_TARGET="darwin-aarch64"
+        TAURI_DMG_ARCH="aarch64"
+        ;;
+    x86_64)
+        RELEASE_TARGET="darwin-x86_64"
+        TAURI_DMG_ARCH="x64"
+        ;;
+    *)
+        log_err "Unsupported macOS architecture: $ARCH"
+        exit 1
+        ;;
+esac
+
 log_step "Checking toolchain"
-for cmd in pnpm cargo rustc; do
+for cmd in node pnpm cargo rustc; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         log_err "$cmd not found on PATH."
         exit 1
@@ -95,18 +112,11 @@ log_ok "Core tools present"
 # ---------------------------------------------------------------------------
 if [[ -n "$NEW_VERSION" ]]; then
     log_step "Syncing version -> $NEW_VERSION"
-    PKG_JSON="$PROJECT_ROOT/package.json"
-    Tauri_CONF="$PROJECT_ROOT/src-tauri/tauri.conf.json"
-    # sed -i behaves differently on GNU vs BSD; use a temp file for portability.
-    sed -E "s/\"version\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$PKG_JSON" > "$PKG_JSON.tmp" && mv "$PKG_JSON.tmp" "$PKG_JSON"
-    sed -E "s/\"version\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$Tauri_CONF" > "$Tauri_CONF.tmp" && mv "$Tauri_CONF.tmp" "$Tauri_CONF"
-    # Cargo.toml: only replace the first `version = "..."` (under [package]).
-    awk -v v="$NEW_VERSION" '
-        !done && /^[[:space:]]*version[[:space:]]*=/ { sub(/"[^"]*"/, "\"" v "\""); done=1 }
-        { print }
-    ' "$CARGO_TOML" > "$CARGO_TOML.tmp" && mv "$CARGO_TOML.tmp" "$CARGO_TOML"
-    log_ok "Bumped version in package.json, tauri.conf.json, Cargo.toml"
+    node "$PROJECT_ROOT/scripts/release-version.mjs" set "$NEW_VERSION" >/dev/null
+    log_ok "Bumped and verified all four version sources"
 fi
+APP_VERSION="$(node "$PROJECT_ROOT/scripts/release-version.mjs" check)"
+log_ok "Release version: $APP_VERSION"
 
 # ---------------------------------------------------------------------------
 # 4. Vendored Runtime sanity check. Path dependencies in Cargo.toml resolve
@@ -117,37 +127,86 @@ node "$PROJECT_ROOT/scripts/verify-vendored-runtime.mjs"
 log_ok "Vendored Runtime source is complete"
 
 # ---------------------------------------------------------------------------
-# 5. Build (frontend build runs automatically via beforeBuildCommand).
+# 5. Build the platform installer. The override disables updater signing here;
+#    the controlled release machine creates and signs canonical updater files.
 # ---------------------------------------------------------------------------
-if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" && -z "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]]; then
-    log_err "Updater signing key is required for release builds."
-    log_err "Set TAURI_SIGNING_PRIVATE_KEY_PATH (recommended) or TAURI_SIGNING_PRIVATE_KEY."
-    exit 1
-fi
-
 log_step "Building .dmg (pnpm tauri build --bundles dmg)"
 BUILD_RC=0
 pnpm tauri build --bundles dmg || BUILD_RC=$?
 
 # ---------------------------------------------------------------------------
-# 6. Report artifacts.
+# 6. Verify the app and give the installer one canonical public name.
 # ---------------------------------------------------------------------------
 BUNDLE_DIR="$PROJECT_ROOT/src-tauri/target/release/bundle/dmg"
-if [[ $BUILD_RC -eq 0 && -d "$BUNDLE_DIR" ]]; then
+APP_BUNDLE="$PROJECT_ROOT/src-tauri/target/release/bundle/macos/EchoAgent.app"
+CANONICAL_DMG=""
+if [[ $BUILD_RC -eq 0 ]]; then
+    DEFAULT_DMG="$BUNDLE_DIR/EchoAgent_${APP_VERSION}_${TAURI_DMG_ARCH}.dmg"
+    CANONICAL_DMG="$BUNDLE_DIR/EchoAgent-v${APP_VERSION}-${RELEASE_TARGET}.dmg"
+
+    if [[ ! -f "$DEFAULT_DMG" ]]; then
+        log_err "Expected Tauri DMG not found: $DEFAULT_DMG"
+        exit 1
+    fi
+    if [[ ! -d "$APP_BUNDLE" ]]; then
+        log_err "Expected app bundle not found: $APP_BUNDLE"
+        exit 1
+    fi
+
+    APP_PLIST="$APP_BUNDLE/Contents/Info.plist"
+    BUNDLE_VERSION="$(plutil -extract CFBundleShortVersionString raw -o - "$APP_PLIST")"
+    BUNDLE_ID="$(plutil -extract CFBundleIdentifier raw -o - "$APP_PLIST")"
+    EXECUTABLE_NAME="$(plutil -extract CFBundleExecutable raw -o - "$APP_PLIST")"
+    if [[ "$BUNDLE_VERSION" != "$APP_VERSION" ]]; then
+        log_err "App version $BUNDLE_VERSION does not match release version $APP_VERSION"
+        exit 1
+    fi
+    if [[ "$BUNDLE_ID" != "com.echoagent.desktop" ]]; then
+        log_err "Unexpected bundle identifier: $BUNDLE_ID"
+        exit 1
+    fi
+    if ! lipo -archs "$APP_BUNDLE/Contents/MacOS/$EXECUTABLE_NAME" | tr ' ' '\n' | grep -Fxq "$ARCH"; then
+        log_err "App executable does not contain expected architecture: $ARCH"
+        exit 1
+    fi
+
+    PLATFORM_SIGNING_OK=1
+    if ! codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"; then
+        PLATFORM_SIGNING_OK=0
+    fi
+    if ! spctl --assess --type execute --verbose=2 "$APP_BUNDLE"; then
+        PLATFORM_SIGNING_OK=0
+    fi
+    if [[ $PLATFORM_SIGNING_OK -ne 1 ]]; then
+        if [[ $ALLOW_UNSIGNED_PLATFORM -eq 1 ]]; then
+            log_info "WARNING: macOS signing/Gatekeeper check failed; development override accepted."
+        else
+            log_err "macOS signing or Gatekeeper assessment failed."
+            log_err "Configure Developer ID signing/notarization, or use --allow-unsigned-platform for development only."
+            exit 1
+        fi
+    else
+        log_ok "macOS code signature and Gatekeeper assessment passed"
+    fi
+
+    mv -f "$DEFAULT_DMG" "$CANONICAL_DMG"
+    log_ok "Normalized release names for $RELEASE_TARGET"
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Report artifacts.
+# ---------------------------------------------------------------------------
+if [[ $BUILD_RC -eq 0 && -f "$CANONICAL_DMG" ]]; then
     log_step "Build succeeded. Artifacts:"
-    while IFS= read -r -d '' f; do
-        size_mb=$(du -m "$f" | cut -f1)
-        log_ok "$(basename "$f")  (${size_mb} MB)"
-        log_info "$f"
-    done < <(find "$BUNDLE_DIR" -name '*.dmg' -print0)
-    UPDATER_DIR="$PROJECT_ROOT/src-tauri/target/release/bundle/macos"
-    while IFS= read -r -d '' f; do
-        size_mb=$(du -m "$f" | cut -f1)
-        log_ok "$(basename "$f")  (${size_mb} MB) [updater]"
-        log_info "$f"
-    done < <(find "$UPDATER_DIR" -maxdepth 1 \( -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \) -print0 2>/dev/null)
+    size_mb=$(du -m "$CANONICAL_DMG" | cut -f1)
+    log_ok "$(basename "$CANONICAL_DMG")  (${size_mb} MB) [installer]"
+    log_info "$CANONICAL_DMG"
+    log_info "Run scripts/prepare-update-artifacts.sh on the release machine to create updater files."
 else
     log_err "Build failed (exit $BUILD_RC). See output above."
+    if [[ $BUILD_RC -eq 0 ]]; then
+        BUILD_RC=1
+    fi
 fi
 
 exit $BUILD_RC
