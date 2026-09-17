@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Composer } from "../Composer";
+import { invoke } from "@tauri-apps/api/core";
 
 // Tauri shell 接口被 Composer 调用,这里集中拦截以驱动 paste / drop 流程。
 // Tauri 2 真实的 `onDragDropEvent` 回调收到的是 `event.payload = { type, paths?, position? }`,
@@ -39,6 +40,15 @@ function makeImageFile(name: string): File {
   return new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], name, { type: "image/png" });
 }
 
+function makeSizedImage(name: string, size: number, arrayBuffer = vi.fn()) {
+  return {
+    name,
+    size,
+    type: "image/png",
+    arrayBuffer,
+  } as unknown as Blob;
+}
+
 /**
  * jsdom 不支持 ClipboardEvent 构造器。testing-library/dom v10 已经知道这点
  * (events.js:76-97),会把 init.clipboardData 通过 defineProperty 注入到事件
@@ -56,6 +66,8 @@ function firePasteWith(
 describe("Composer clipboard paste of images", () => {
   beforeEach(() => {
     dragDropCallback = null;
+    vi.mocked(invoke).mockClear();
+    base.onSend.mockReset();
   });
 
   it("pasting an image calls save_attachment_blob and adds it to attachments", async () => {
@@ -104,9 +116,8 @@ describe("Composer clipboard paste of images", () => {
   });
 
   it("save_attachment_blob failure surfaces a toast and adds nothing", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
     const onToast = vi.fn();
-    (invoke as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+    vi.mocked(invoke).mockImplementationOnce(async () => {
       throw new Error("disk full");
     });
     render(<Composer {...base} onToast={onToast} />);
@@ -116,6 +127,166 @@ describe("Composer clipboard paste of images", () => {
     ]);
     await waitFor(() => expect(onToast).toHaveBeenCalled());
     expect(screen.queryByText("fail.png")).toBeNull();
+  });
+
+  it("单张图片超过 20MB 时在读取二进制前拒绝", () => {
+    const onToast = vi.fn();
+    const arrayBuffer = vi.fn();
+    render(<Composer {...base} onToast={onToast} />);
+
+    firePasteWith(screen.getByRole("textbox"), [
+      {
+        kind: "file",
+        type: "image/png",
+        getAsFile: () => makeSizedImage("large.png", 20 * 1024 * 1024 + 1, arrayBuffer),
+      },
+    ]);
+
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith("save_attachment_blob", expect.anything());
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("超过 20MB"));
+  });
+
+  it("一次粘贴超过 20 个附件时不读取文件", () => {
+    const onToast = vi.fn();
+    const arrayBuffer = vi.fn();
+    render(<Composer {...base} onToast={onToast} />);
+    const items = Array.from({ length: 21 }, (_, index) => ({
+      kind: "file",
+      type: "image/png",
+      getAsFile: () => makeSizedImage(`image-${index}.png`, 1, arrayBuffer),
+    }));
+
+    firePasteWith(screen.getByRole("textbox"), items);
+
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledWith("附件数量不能超过 20 个");
+  });
+
+  it("一次粘贴总大小超过 64MB 时不读取文件", () => {
+    const onToast = vi.fn();
+    const arrayBuffer = vi.fn();
+    render(<Composer {...base} onToast={onToast} />);
+    const items = Array.from({ length: 4 }, (_, index) => ({
+      kind: "file",
+      type: "image/png",
+      getAsFile: () => makeSizedImage(`image-${index}.png`, 17 * 1024 * 1024, arrayBuffer),
+    }));
+
+    firePasteWith(screen.getByRole("textbox"), items);
+
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledWith("本次粘贴的图片总大小不能超过 64MB");
+  });
+
+  it("并发粘贴完成时仍严格限制为 20 个附件", async () => {
+    const onToast = vi.fn();
+    render(<Composer {...base} onToast={onToast} />);
+    const textarea = screen.getByRole("textbox");
+    const makeItems = (prefix: string) => Array.from({ length: 11 }, (_, index) => ({
+      kind: "file",
+      type: "image/png",
+      getAsFile: () => makeImageFile(`${prefix}-${index}.png`),
+    }));
+
+    firePasteWith(textarea, makeItems("first"));
+    firePasteWith(textarea, makeItems("second"));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "移除附件" })).toHaveLength(20);
+    });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("discard_attachment_blob", expect.objectContaining({
+        path: expect.stringContaining(".png"),
+      }));
+    });
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("已忽略多余图片"));
+  });
+
+  it("移除未发送的粘贴图片时删除临时文件", async () => {
+    render(<Composer {...base} />);
+    firePasteWith(screen.getByRole("textbox"), [
+      { kind: "file", type: "image/png", getAsFile: () => makeImageFile("remove.png") },
+    ]);
+
+    await screen.findByText("remove.png");
+    fireEvent.click(screen.getByRole("button", { name: "移除附件" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("discard_attachment_blob", {
+        path: "/fake/appdata/clipboard-images/remove.png",
+      });
+    });
+  });
+
+  it("组件卸载时清理未发送的粘贴图片", async () => {
+    const view = render(<Composer {...base} />);
+    firePasteWith(screen.getByRole("textbox"), [
+      { kind: "file", type: "image/png", getAsFile: () => makeImageFile("draft.png") },
+    ]);
+    await screen.findByText("draft.png");
+
+    view.unmount();
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("discard_attachment_blob", {
+        path: "/fake/appdata/clipboard-images/draft.png",
+      });
+    });
+  });
+
+  it("历史消息恢复的附件移除时不删除原文件", async () => {
+    render(
+      <Composer
+        {...base}
+        externalText="重新发送"
+        externalAttachments={["/fake/appdata/clipboard-images/history.png"]}
+        externalTextNonce={1}
+      />,
+    );
+    await screen.findByText("history.png");
+    vi.mocked(invoke).mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "移除附件" }));
+
+    expect(invoke).not.toHaveBeenCalledWith("discard_attachment_blob", expect.anything());
+  });
+
+  it("发送成功后保留已转交给会话的粘贴图片", async () => {
+    base.onSend.mockResolvedValue(true);
+    render(<Composer {...base} />);
+    firePasteWith(screen.getByRole("textbox"), [
+      { kind: "file", type: "image/png", getAsFile: () => makeImageFile("sent.png") },
+    ]);
+    await screen.findByText("sent.png");
+    vi.mocked(invoke).mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(base.onSend).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText("sent.png")).not.toBeInTheDocument());
+    expect(invoke).not.toHaveBeenCalledWith("discard_attachment_blob", expect.anything());
+  });
+
+  it("发送被拒绝后保留附件，之后移除仍会清理临时文件", async () => {
+    base.onSend.mockResolvedValue(false);
+    render(<Composer {...base} />);
+    firePasteWith(screen.getByRole("textbox"), [
+      { kind: "file", type: "image/png", getAsFile: () => makeImageFile("retry.png") },
+    ]);
+    await screen.findByText("retry.png");
+    vi.mocked(invoke).mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(base.onSend).toHaveBeenCalled());
+    expect(screen.getByText("retry.png")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "移除附件" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("discard_attachment_blob", {
+        path: "/fake/appdata/clipboard-images/retry.png",
+      });
+    });
   });
 });
 

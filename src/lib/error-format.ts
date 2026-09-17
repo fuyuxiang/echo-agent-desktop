@@ -33,11 +33,13 @@ const INCOMPATIBLE_MODEL_RESPONSE_MESSAGE =
 
 function isIncompatibleModelResponse(message: string): boolean {
   const lower = message.toLowerCase();
-  return lower.includes("serialization error")
-    || lower.includes("failed to parse api response")
+  const unknownFinishReason = lower.includes("unknown variant")
+    && (lower.includes("finish_reason")
+      || (lower.includes("tool_calls") && lower.includes("content_filter")));
+  return lower.includes("failed to parse api response")
     || lower.includes("unexpected response format")
     || lower.includes("model provider returned an incompatible response")
-    || (lower.includes("unknown variant") && lower.includes("finish_reason"));
+    || unknownFinishReason;
 }
 
 /** Try to parse a EchoAgent error string into structured data. */

@@ -44,6 +44,27 @@ mod team_mcp;
 
 use bridge::{FolderTrusts, Permissions, PlanApprovals, Questions};
 use commands::AppState;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static EXIT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+fn try_begin_exit(flag: &AtomicBool) -> bool {
+    flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
+fn request_graceful_exit(app: tauri::AppHandle) {
+    if !try_begin_exit(&EXIT_IN_PROGRESS) {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        use tauri::Manager;
+
+        let state = app.state::<AppState>();
+        commands::stop_agent_runtime(&state).await;
+        app.exit(0);
+    });
+}
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 const DESKTOP_MIN_WIDTH: f64 = 1024.0;
@@ -147,7 +168,7 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
     use tauri::{
         menu::{Menu, MenuItem},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-        Manager, WindowEvent,
+        DragDropEvent, Manager, WindowEvent,
     };
     use tauri_plugin_autostart::MacosLauncher;
     use tauri_plugin_notification::NotificationExt;
@@ -170,13 +191,7 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
             "quit" => {
-                use tauri::Manager;
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let state = app.state::<AppState>();
-                    commands::stop_agent_runtime(&state).await;
-                    app.exit(0);
-                });
+                request_graceful_exit(app.clone());
             }
             _ => {}
         })
@@ -210,6 +225,14 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
         let app_handle = app.handle().clone();
         let close_window = window.clone();
         window.on_window_event(move |event| match event {
+            WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+                let access = app_handle.state::<shell_fs::FilesystemAccess>();
+                for path in paths {
+                    if let Err(error) = access.authorize_file(path) {
+                        tracing::warn!(path = %path.display(), %error, "failed to authorize dropped file");
+                    }
+                }
+            }
             WindowEvent::Resized(_) => {
                 save_desktop_window_state(&app_handle, &close_window);
             }
@@ -248,12 +271,7 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
                         }
                     }
                 } else {
-                    let app = app_handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let state = app.state::<AppState>();
-                        commands::stop_agent_runtime(&state).await;
-                        app.exit(0);
-                    });
+                    request_graceful_exit(app_handle.clone());
                 }
             }
             _ => {}
@@ -477,6 +495,7 @@ pub fn run() {
             // hand back a path so the existing attachments pipeline (multimodal
             // send, thumbnails, ACP metadata) keeps working.
             attachment_blob::save_attachment_blob,
+            attachment_blob::discard_attachment_blob,
             // connector marketplace (live from a local EchoAgent marketplace dir)
             connectors_catalog::connectors_default_root,
             connectors_catalog::connectors_list_roots,
@@ -635,16 +654,36 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building EchoAgent");
 
-    app.run(|_app_handle, _event| {
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+            if !EXIT_IN_PROGRESS.load(Ordering::Acquire) {
+                api.prevent_exit();
+                request_graceful_exit(app_handle.clone());
+            }
+        }
+
         // Closing the last window does not terminate the process on macOS.
         // Clicking the Dock icon must therefore restore the resident window.
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen {
             has_visible_windows: false,
             ..
-        } = _event
+        } = event
         {
-            show_main_window(_app_handle);
+            show_main_window(app_handle);
         }
     });
+}
+
+#[cfg(test)]
+mod exit_tests {
+    use super::try_begin_exit;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn graceful_exit_can_only_start_once() {
+        let flag = AtomicBool::new(false);
+        assert!(try_begin_exit(&flag));
+        assert!(!try_begin_exit(&flag));
+    }
 }

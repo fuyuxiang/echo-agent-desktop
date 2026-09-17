@@ -35,7 +35,7 @@ async function settle() {
 }
 
 describe("SecondarySidebar", () => {
-  it("鼠标在两个助理中间位置时,预览块不卸载(避免浮动面板高度反复抖动)", async () => {
+  it("面板首次打开即渲染默认预览，切换助理时复用预览块", async () => {
     render(<SecondarySidebar onSelectExpert={vi.fn()} onToast={vi.fn()} />);
     await settle();
 
@@ -46,23 +46,16 @@ describe("SecondarySidebar", () => {
 
     const floating = document.querySelector(".secondary-sidebar__floating") as HTMLElement;
     expect(floating).toBeTruthy();
+    const initialPreview = document.querySelector(".secondary-sidebar__preview");
+    expect(initialPreview).toBeTruthy();
+    expect(initialPreview).toHaveTextContent("小圆子");
     const buttons = document.querySelectorAll(".secondary-sidebar__item-btn") as NodeListOf<HTMLElement>;
     expect(buttons.length).toBeGreaterThanOrEqual(4);
 
-    // hover 第一项 → 预览出现。
-    fireEvent.mouseEnter(buttons[0]);
-    const previewAfterHoverFirst = document.querySelector(".secondary-sidebar__preview");
-    expect(previewAfterHoverFirst).toBeTruthy();
-    const heightWithPreview = floating.getBoundingClientRect().height;
-
-    // 关键断言:鼠标从 button[0] 移到 button[1] 时(中间经过 gap),
-    // 预览块不应卸载(否则浮动面板高度反复抖动)。
-    fireEvent.mouseLeave(buttons[0]);
     fireEvent.mouseEnter(buttons[1]);
     const previewAfterTransition = document.querySelector(".secondary-sidebar__preview");
-    expect(previewAfterTransition).toBeTruthy();
-    // 浮动面板高度不应变化(预览块一直挂在 DOM 里)。
-    expect(floating.getBoundingClientRect().height).toBe(heightWithPreview);
+    expect(previewAfterTransition).toBe(initialPreview);
+    expect(previewAfterTransition).toHaveTextContent("小坦克");
   });
 
   it("鼠标离开所有 item 后,预览块应保持挂载", async () => {
@@ -78,13 +71,26 @@ describe("SecondarySidebar", () => {
     const buttons = document.querySelectorAll(".secondary-sidebar__item-btn") as NodeListOf<HTMLElement>;
     expect(buttons.length).toBeGreaterThanOrEqual(4);
 
-    fireEvent.mouseEnter(buttons[0]);
     const previewAfterHover = document.querySelector(".secondary-sidebar__preview");
-    expect(previewAfterHover).toBeTruthy();
+    expect(previewAfterHover).toHaveTextContent("小圆子");
 
     // 鼠标完全离开所有 item。期望:预览保持挂载,面板高度稳定。
     fireEvent.mouseLeave(buttons[0]);
     const previewAfterLeave = document.querySelector(".secondary-sidebar__preview");
     expect(previewAfterLeave).toBeTruthy();
+  });
+
+  it("键盘聚焦助理时同步更新预览", async () => {
+    render(<SecondarySidebar onSelectExpert={vi.fn()} onToast={vi.fn()} />);
+    await settle();
+
+    const trigger = document.querySelector(".secondary-sidebar__trigger") as HTMLElement;
+    fireEvent.mouseEnter(trigger);
+    await settle();
+
+    const buttons = document.querySelectorAll(".secondary-sidebar__item-btn") as NodeListOf<HTMLElement>;
+    fireEvent.focus(buttons[2]);
+
+    expect(document.querySelector(".secondary-sidebar__preview")).toHaveTextContent("小玄子");
   });
 });

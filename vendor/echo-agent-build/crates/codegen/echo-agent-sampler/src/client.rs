@@ -1299,7 +1299,7 @@ impl SamplingClient {
         let extra_tool_entries = std::mem::take(&mut request.extra_tool_entries);
         let mut request_body = serde_json::to_value(&request.inner).map_err(|e| {
             tracing::error!("Failed to serialize responses request: {}", e);
-            SamplingError::Serialization(e)
+            SamplingError::InvalidConfiguration("failed to serialize Responses request")
         })?;
         splice_extra_tool_entries(&mut request_body, extra_tool_entries);
         append_response_includes(&mut request_body, &self.defaults.extra_response_includes);
@@ -1435,7 +1435,7 @@ impl SamplingClient {
         let extra_tool_entries = std::mem::take(&mut request.extra_tool_entries);
         let mut request_body = serde_json::to_value(&request.inner).map_err(|e| {
             tracing::error!("Failed to serialize responses request: {}", e);
-            SamplingError::Serialization(e)
+            SamplingError::InvalidConfiguration("failed to serialize Responses request")
         })?;
         // Inject EchoAgent-specific fields not in async-openai's CreateResponse type.
         if self.defaults.stream_tool_calls {

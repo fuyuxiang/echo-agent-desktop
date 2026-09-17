@@ -27,6 +27,7 @@ use std::sync::{
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::io::ReaderStream;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
@@ -2180,13 +2181,17 @@ pub async fn org_new_document_version(
         .and_then(|value| value.to_str())
         .ok_or("invalid file name")?
         .to_string();
-    let bytes = read_bounded_upload_file(&path, MAX_DOCUMENT_UPLOAD_BYTES, "文档").await?;
+    let upload = MultipartUpload::File {
+        path,
+        max_bytes: MAX_DOCUMENT_UPLOAD_BYTES,
+        label: "文档",
+    };
     authenticated_multipart(
         &state.inner,
         &format!("/api/v1/docs/{}/new-version", urlencoding::encode(&doc_id)),
         &[],
         &name,
-        &bytes,
+        &upload,
         Some(&request_context),
     )
     .await
@@ -2209,12 +2214,90 @@ pub async fn org_publish_document(
     .await
 }
 
+#[derive(Clone)]
+enum MultipartUpload {
+    File {
+        path: PathBuf,
+        max_bytes: u64,
+        label: &'static str,
+    },
+    Bytes {
+        bytes: bytes::Bytes,
+        max_bytes: u64,
+        label: &'static str,
+    },
+}
+
+impl MultipartUpload {
+    async fn part(&self, file_name: &str) -> Result<reqwest::multipart::Part, String> {
+        match self {
+            Self::File {
+                path,
+                max_bytes,
+                label,
+            } => {
+                let metadata = tokio::fs::symlink_metadata(path)
+                    .await
+                    .map_err(|error| format!("读取{label}失败：{error}"))?;
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(format!("{label}必须是普通文件"));
+                }
+                if metadata.len() > *max_bytes {
+                    return Err(format!(
+                        "{label}超过大小限制（最大 {}MB）",
+                        max_bytes / 1024 / 1024
+                    ));
+                }
+                let file = tokio::fs::File::open(path)
+                    .await
+                    .map_err(|error| format!("打开{label}失败：{error}"))?;
+                let limit = *max_bytes;
+                let mut streamed = 0_u64;
+                let stream = ReaderStream::new(file).map(move |chunk| match chunk {
+                    Ok(chunk) => {
+                        streamed = streamed.saturating_add(chunk.len() as u64);
+                        if streamed > limit {
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "upload file grew beyond its size limit",
+                            ))
+                        } else {
+                            Ok(chunk)
+                        }
+                    }
+                    Err(error) => Err(error),
+                });
+                Ok(
+                    reqwest::multipart::Part::stream(reqwest::Body::wrap_stream(stream))
+                        .file_name(file_name.to_string()),
+                )
+            }
+            Self::Bytes {
+                bytes,
+                max_bytes,
+                label,
+            } => {
+                if bytes.len() as u64 > *max_bytes {
+                    return Err(format!(
+                        "{label}超过大小限制（最大 {}MB）",
+                        max_bytes / 1024 / 1024
+                    ));
+                }
+                Ok(
+                    reqwest::multipart::Part::stream(reqwest::Body::from(bytes.clone()))
+                        .file_name(file_name.to_string()),
+                )
+            }
+        }
+    }
+}
+
 async fn authenticated_multipart(
     inner: &Arc<OrgInner>,
     path: &str,
     fields: &[(String, String)],
     file_name: &str,
-    bytes: &[u8],
+    upload: &MultipartUpload,
     expected_context: Option<&AccountContext>,
 ) -> Result<Value, String> {
     if path.len() > 8_192
@@ -2223,7 +2306,6 @@ async fn authenticated_multipart(
         || file_name.is_empty()
         || file_name.chars().count() > 1_024
         || file_name.chars().any(char::is_control)
-        || bytes.len() as u64 > MAX_DOCUMENT_UPLOAD_BYTES
     {
         return Err("organization multipart request is invalid or too large".into());
     }
@@ -2266,10 +2348,7 @@ async fn authenticated_multipart(
         for (key, value) in fields {
             form = form.text(key.clone(), value.clone());
         }
-        form = form.part(
-            "file",
-            reqwest::multipart::Part::bytes(bytes.to_vec()).file_name(file_name.to_string()),
-        );
+        form = form.part("file", upload.part(file_name).await?);
         let response = inner
             .client
             .post(endpoint(&base, path))
@@ -2287,19 +2366,6 @@ async fn authenticated_multipart(
         return Ok(data);
     }
     Err("organization session expired".into())
-}
-
-async fn read_bounded_upload_file(
-    path: &Path,
-    max_bytes: u64,
-    label: &str,
-) -> Result<Vec<u8>, String> {
-    let path = path.to_path_buf();
-    let error_label = label.to_string();
-    let task_label = error_label.clone();
-    tauri::async_runtime::spawn_blocking(move || read_file_bounded(&path, max_bytes, &task_label))
-        .await
-        .map_err(|error| format!("读取{error_label}任务失败：{error}"))?
 }
 
 pub(crate) fn canonical_org_managed_skill_directory(raw: &str) -> Option<PathBuf> {
@@ -2398,7 +2464,11 @@ pub async fn org_submit_document(
         .and_then(|v| v.to_str())
         .ok_or("invalid file name")?
         .to_string();
-    let bytes = read_bounded_upload_file(&path, MAX_DOCUMENT_UPLOAD_BYTES, "文档").await?;
+    let upload = MultipartUpload::File {
+        path,
+        max_bytes: MAX_DOCUMENT_UPLOAD_BYTES,
+        label: "文档",
+    };
     let mut fields = vec![("scopeId".to_string(), scope_id)];
     if let Some(title) = title {
         fields.push(("title".into(), title));
@@ -2411,7 +2481,7 @@ pub async fn org_submit_document(
         "/api/v1/document-submissions",
         &fields,
         &name,
-        &bytes,
+        &upload,
         Some(&request_context),
     )
     .await
@@ -2562,21 +2632,35 @@ pub async fn org_submit_skill(
             .extension()
             .and_then(|value| value.to_str())
             .is_some_and(|value| value.eq_ignore_ascii_case("zip"));
-    let (name, bytes) = if is_zip {
+    let (name, upload) = if is_zip {
         let name = path
             .file_name()
             .and_then(|value| value.to_str())
             .ok_or("invalid file name")?
             .to_string();
-        let bytes = read_bounded_upload_file(&path, MAX_SKILL_UPLOAD_BYTES, "Skill ZIP").await?;
-        (name, bytes)
+        (
+            name,
+            MultipartUpload::File {
+                path,
+                max_bytes: MAX_SKILL_UPLOAD_BYTES,
+                label: "Skill ZIP",
+            },
+        )
     } else {
         let source = path.to_string_lossy().into_owned();
-        tauri::async_runtime::spawn_blocking(move || {
+        let (name, bytes) = tauri::async_runtime::spawn_blocking(move || {
             crate::skill_installer::package_skill_for_upload(&source)
         })
         .await
-        .map_err(|error| format!("打包 Skill 失败：{error}"))??
+        .map_err(|error| format!("打包 Skill 失败：{error}"))??;
+        (
+            name,
+            MultipartUpload::Bytes {
+                bytes: bytes::Bytes::from(bytes),
+                max_bytes: MAX_SKILL_UPLOAD_BYTES,
+                label: "Skill ZIP",
+            },
+        )
     };
     let mut fields = vec![("scopeId".to_string(), scope_id)];
     if let Some(version) = version {
@@ -2587,7 +2671,7 @@ pub async fn org_submit_skill(
         "/api/v1/skill-submissions",
         &fields,
         &name,
-        &bytes,
+        &upload,
         Some(&request_context),
     )
     .await

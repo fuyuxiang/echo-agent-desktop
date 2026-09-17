@@ -88,6 +88,11 @@ describe("formatAgentError", () => {
     expect(result).not.toContain("Internal error");
   });
 
+  it("不把请求序列化失败误报为模型响应协议不兼容", () => {
+    const raw = "serialization error: failed to serialize Responses request";
+    expect(formatAgentError(raw)).toBeNull();
+  });
+
   it("returns null for unparseable string", () => {
     expect(formatAgentError("some random error")).toBeNull();
   });

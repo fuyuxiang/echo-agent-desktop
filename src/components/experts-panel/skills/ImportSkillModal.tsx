@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { XCloseIcon, FolderOpenIcon } from "@/foundation/components/Icon/icons";
 import { filesystemPickDirectory, filesystemPickFiles, skillsInspectPackage, skillsInstallPackage } from "@/lib/agent-client";
 import type { SkillPackageInspection, SkillRiskLevel } from "@/lib/types";
@@ -35,6 +35,25 @@ function basenameOf(path: string): string {
   return normalized.split("/").pop() || path;
 }
 
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  limit: number,
+  task: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < values.length) {
+      const index = cursor++;
+      results[index] = await task(values[index]);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, values.length) }, () => worker()),
+  );
+  return results;
+}
+
 /** Managed local Skill installer: inspect first, then copy/update atomically.
  *
  * 重写为列表队列:支持多选文件/批量 inspect,提供「安装全部低风险」与逐项安装。
@@ -52,56 +71,62 @@ export function ImportSkillModal({
   // commitInstall 必须能同步读到当前 items;用 ref 跟踪最新值,避免依赖 setState
   // updater(React 18 不保证同步执行)导致的空读 race。
   const itemsRef = useRef<PendingItem[]>(items);
-  useEffect(() => { itemsRef.current = items; }, [items]);
+  const updateItems = (
+    next: PendingItem[] | ((previous: PendingItem[]) => PendingItem[]),
+  ) => {
+    const value = typeof next === "function" ? next(itemsRef.current) : next;
+    itemsRef.current = value;
+    setItems(value);
+  };
   const dialogRef = useModalFocus<HTMLDivElement>(true, () => {
     if (!isBusy(items)) onClose();
   });
 
   const updateItem = (id: string, patch: Partial<PendingItem>) => {
-    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
+    updateItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
   };
 
-  const inspectOne = async (path: string): Promise<PendingItem> => {
-    const item: PendingItem = {
+  const createPendingItem = (path: string): PendingItem => ({
       id: nextItemId(),
       path,
       status: "inspecting",
       inspection: null,
       error: null,
       approvedHighRisk: false,
-    };
-    setItems((prev) => [...prev, item]);
+  });
+
+  const inspectOne = async (item: PendingItem): Promise<PendingItem> => {
     try {
-      const report = await skillsInspectPackage(path);
-      let completedItem: PendingItem = { ...item, status: "ready", inspection: report };
-      setItems((prev) =>
+      const report = await skillsInspectPackage(item.path);
+      const completedItem: PendingItem = { ...item, status: "ready", inspection: report };
+      updateItems((prev) =>
         prev.map((it) => (it.id === item.id ? completedItem : it)),
       );
-      // 仅在勾选了「自动安装低风险」时才自动开装,中/高风险一律等用户确认。
-      if (autoInstall && report.riskLevel === "low") {
-        await commitInstall(completedItem.id);
-      }
       return completedItem;
     } catch (e) {
       const message = String(e).replace(/^Error:\s*/, "");
       const failed: PendingItem = { ...item, status: "error", error: message };
-      setItems((prev) => prev.map((it) => (it.id === item.id ? failed : it)));
+      updateItems((prev) => prev.map((it) => (it.id === item.id ? failed : it)));
       return failed;
     }
   };
 
-  const commitInstall = async (id: string, approved?: boolean) => {
+  const commitInstall = async (
+    id: string,
+    approved?: boolean,
+    snapshot?: PendingItem,
+  ) => {
     // 同步读最新 item,避免 setState 异步导致空 read。
-    const target = itemsRef.current.find((it) => it.id === id);
+    const target = snapshot ?? itemsRef.current.find((it) => it.id === id);
     if (!target || !target.inspection) return;
     const inspection = target.inspection;
     const approve = approved ?? target.approvedHighRisk;
-    setItems((prev) =>
+    updateItems((prev) =>
       prev.map((it) => (it.id === id ? { ...it, status: "installing" } : it)),
     );
     try {
       const result = await skillsInstallPackage(target.path, inspection.sourceHash, approve);
-      setItems((prev) =>
+      updateItems((prev) =>
         prev.map((it) =>
           it.id === id ? { ...it, status: "done", inspection: result.inspection } : it,
         ),
@@ -110,7 +135,7 @@ export function ImportSkillModal({
       onInstalled?.();
     } catch (e) {
       const message = String(e).replace(/^Error:\s*/, "");
-      setItems((prev) =>
+      updateItems((prev) =>
         prev.map((it) =>
           it.id === id ? { ...it, status: "error", error: message } : it,
         ),
@@ -118,15 +143,31 @@ export function ImportSkillModal({
     }
   };
 
-  const installAllLowRisk = async () => {
-    const readyLow = items.filter(
+  const installLowRiskItems = async (candidates: PendingItem[]) => {
+    const readyLow = candidates.filter(
       (it) => it.status === "ready" && it.inspection?.riskLevel === "low",
     );
-    await Promise.all(readyLow.map((it) => commitInstall(it.id)));
+    const names = new Set<string>();
+    for (const item of readyLow) {
+      const normalizedName = item.inspection!.name.trim().toLocaleLowerCase();
+      if (names.has(normalizedName)) {
+        updateItem(item.id, {
+          status: "error",
+          error: `已跳过同名技能「${item.inspection!.name}」，请只保留一个版本后重试`,
+        });
+        continue;
+      }
+      names.add(normalizedName);
+      await commitInstall(item.id, undefined, item);
+    }
+  };
+
+  const installAllLowRisk = async () => {
+    await installLowRiskItems(itemsRef.current);
   };
 
   const removeItem = (id: string) => {
-    setItems((prev) => prev.filter((it) => it.id !== id));
+    updateItems((prev) => prev.filter((it) => it.id !== id));
   };
 
   const pickFile = async () => {
@@ -139,8 +180,12 @@ export function ImportSkillModal({
         maxFiles: 50,
       });
       if (!selected || selected.length === 0) return;
-      // 并行 inspect;每条独立更新,失败也不会阻塞其它行。
-      await Promise.all(selected.map((path) => inspectOne(path)));
+      const pending = selected.map(createPendingItem);
+      updateItems((prev) => [...prev, ...pending]);
+      // 本地解压和风险扫描最多 3 路并发，避免大批量包同时占用内存和线程。
+      const inspected = await mapWithConcurrency(pending, 3, inspectOne);
+      // 先等待整批检查完成,才能对 Skill 名做去重并串行安装。
+      if (autoInstall) await installLowRiskItems(inspected);
     } catch (cause) {
       setGlobalError(`选择技能文件失败：${String(cause).replace(/^Error:\s*/, "")}`);
     }
@@ -151,7 +196,10 @@ export function ImportSkillModal({
     try {
       const selected = await filesystemPickDirectory();
       if (!selected) return;
-      await inspectOne(selected);
+      const pending = createPendingItem(selected);
+      updateItems((prev) => [...prev, pending]);
+      const inspected = await inspectOne(pending);
+      if (autoInstall) await installLowRiskItems([inspected]);
     } catch (cause) {
       setGlobalError(`选择技能文件夹失败：${String(cause).replace(/^Error:\s*/, "")}`);
     }
@@ -327,8 +375,6 @@ function SkillBatchRow({
             <span className="sk-batch-row-error" role="alert">{item.error}</span>
           )}
         </div>
-      </div>
-      <div className="sk-batch-row-actions">
         {item.status === "ready" && inspection && (
           <details className="sk-batch-row-detail">
             <summary>详情</summary>
@@ -352,6 +398,8 @@ function SkillBatchRow({
             ))}
           </details>
         )}
+      </div>
+      <div className="sk-batch-row-actions">
         {requiresApproval && (
           <label className="sk-high-risk-confirm">
             <input

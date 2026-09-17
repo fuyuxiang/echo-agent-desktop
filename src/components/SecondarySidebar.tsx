@@ -128,6 +128,7 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
   const [loading, setLoading] = useState(true);
   const [previewAgent, setPreviewAgent] = useState<AgentEntry | null>(null);
   const { hoverPeek, triggerBindings, floatingBindings, closePeek } = useHoverPeek(false);
+  const displayedPreview = previewAgent ?? agents[0] ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -191,6 +192,7 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
                   className="secondary-sidebar__item-btn"
                   onClick={() => handlePick(agent)}
                   onMouseEnter={() => setPreviewAgent(agent)}
+                  onFocus={() => setPreviewAgent(agent)}
                 >
                   <span className="secondary-sidebar__item-avatar">
                     {(agent.name ?? "?").slice(0, 1).toUpperCase()}
@@ -212,18 +214,18 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
           </ul>
 
           {/* Hover preview card */}
-          {previewAgent && (
+          {displayedPreview && (
             <div className="secondary-sidebar__preview">
-              <div className="secondary-sidebar__preview-name">{previewAgent.name}</div>
-              {previewAgent.description && (
+              <div className="secondary-sidebar__preview-name">{displayedPreview.name}</div>
+              {displayedPreview.description && (
                 <div className="secondary-sidebar__preview-desc">
-                  {previewAgent.description}
+                  {displayedPreview.description}
                 </div>
               )}
               <div className="secondary-sidebar__preview-meta">
-                {previewAgent.scope && <span>来源：{previewAgent.scope === "user" ? "用户" : "项目"}</span>}
-                {previewAgent.modelTags && previewAgent.modelTags.length > 0 && (
-                  <span>能力：{previewAgent.modelTags.join(", ")}</span>
+                {displayedPreview.scope && <span>来源：{displayedPreview.scope === "user" ? "用户" : "项目"}</span>}
+                {displayedPreview.modelTags && displayedPreview.modelTags.length > 0 && (
+                  <span>能力：{displayedPreview.modelTags.join(", ")}</span>
                 )}
               </div>
             </div>

@@ -1086,7 +1086,7 @@ button,
   color: var(--echo-brand);
   font-size: 14px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   pointer-events: none;
   backdrop-filter: blur(2px);
   animation: echo-composer-dropzone-fade 120ms ease-out;

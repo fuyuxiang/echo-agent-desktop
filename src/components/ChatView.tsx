@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
 import { PauseIcon } from "@/foundation/components/Icon/icons";
 import { useSessionStore, type ToolCallView } from "@/stores/session-store";
 import { useSessionsStore } from "@/stores/sessions-store";
@@ -135,11 +135,12 @@ export function ChatView({
   // 会话内查找(对齐 EchoAgent chat-search)。
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
-  const [findHits, setFindHits] = useState<{ hitIds: string[]; occurrences: FindOccurrence[] }>({
-    hitIds: [],
-    occurrences: [],
-  });
+  const [findOccurrences, setFindOccurrences] = useState<FindOccurrence[]>([]);
   const [findActive, setFindActive] = useState<FindOccurrence | null>(null);
+  const findHitIds = useMemo(
+    () => [...new Set(findOccurrences.map((occurrence) => occurrence.messageId))],
+    [findOccurrences],
+  );
   // 文件变更聚合面板(对齐 EchoAgent file-changes-panel)。
   const [fileChangesOpen, setFileChangesOpen] = useState(false);
   // 子代理运行时面板(对齐 EchoAgent team-runtime)。
@@ -419,7 +420,7 @@ export function ChatView({
     sessionId,
   });
 
-  // 会话内查找:Ctrl/Cmd+F 打开;当前命中滚入视野。
+  // 会话内查找:Ctrl/Cmd+F 打开。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
@@ -433,13 +434,37 @@ export function ChatView({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [messages.length]);
+  // Markdown 和用户消息都完成渲染后，从实际 mark 收集唯一可信的命中顺序。
+  useLayoutEffect(() => {
+    if (!findOpen || !findQuery) {
+      setFindOccurrences([]);
+      return;
+    }
+    const next: FindOccurrence[] = [];
+    scrollRef.current?.querySelectorAll<HTMLElement>("[data-msg-id]").forEach((messageNode) => {
+      const messageId = messageNode.dataset.msgId;
+      if (!messageId) return;
+      messageNode.querySelectorAll(".find-hit").forEach((_, localIndex) => {
+        next.push({ messageId, localIndex });
+      });
+    });
+    setFindOccurrences(next);
+  }, [findOpen, findQuery, messages]);
+
+  // 激活样式和滚动都落到具体命中，避免多命中消息只滚到容器顶部。
   useEffect(() => {
+    const root = scrollRef.current;
+    root?.querySelectorAll(".find-hit-active").forEach((node) => {
+      node.classList.remove("find-hit-active");
+    });
     if (!findActive) return;
-    const node = scrollRef.current?.querySelector(
-      `[data-msg-id="${findActive.messageId}"]`,
-    );
-    node?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [findActive]);
+    const messageNode = Array.from(
+      root?.querySelectorAll<HTMLElement>("[data-msg-id]") ?? [],
+    ).find((node) => node.dataset.msgId === findActive.messageId);
+    const hit = messageNode?.querySelectorAll<HTMLElement>(".find-hit")[findActive.localIndex];
+    hit?.classList.add("find-hit-active");
+    hit?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  }, [findActive, findOccurrences]);
   return (
     <div className={"chatview" + (panelOpen ? " chatview--with-panel" : "")}>
       <div className="chatview__main">
@@ -621,17 +646,16 @@ export function ChatView({
         )}
 
         <FindBar
-          messages={messages}
+          occurrences={findOccurrences}
           open={findOpen}
           query={findQuery}
           onQueryChange={setFindQuery}
           onClose={() => {
             setFindOpen(false);
             setFindQuery("");
-            setFindHits({ hitIds: [], occurrences: [] });
+            setFindOccurrences([]);
             setFindActive(null);
           }}
-          onHitsChange={setFindHits}
           onActiveChange={setFindActive}
         />
 
@@ -674,14 +698,11 @@ export function ChatView({
                 const isLastAssistant =
                   m.role === "assistant" && idx === messages.length - 1;
                 // 会话内查找:命中容器高亮(当前命中更深一层)。
-                const findCls = findOpen && isFindHit(findHits.hitIds, m.id)
+                const findCls = findOpen && isFindHit(findHitIds, m.id)
                   ? m.id === findActive?.messageId
                     ? " msg-wrap--find-current"
                     : " msg-wrap--find-hit"
                   : "";
-                // 当前消息在它自己内部的 localIndex,供 MessageItem 给文本节点着色。
-                const localActiveIdx =
-                  findActive?.messageId === m.id ? findActive.localIndex : -1;
                 return (
                   <div key={m.id} className={"msg-wrap" + findCls} data-msg-id={m.id}>
                     <MessageItem
@@ -693,7 +714,6 @@ export function ChatView({
                       onToast={onToast}
                       onOpenTool={handleOpenTool}
                       findQuery={findOpen ? findQuery : undefined}
-                      findActiveLocalIndex={findOpen ? localActiveIdx : undefined}
                       onEditResend={handleEditResend}
                       latest={isLastAssistant}
                       retrying={isLastAssistant && retryingSessionId === sessionId}

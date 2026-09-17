@@ -1,10 +1,16 @@
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 const DESKTOP_PREFERENCES_FILE: &str = "desktop-preferences.json";
 const MAX_DESKTOP_PREFERENCES_BYTES: u64 = 16 * 1024;
+static DESKTOP_PREFERENCES_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn preferences_lock() -> &'static Mutex<()> {
+    DESKTOP_PREFERENCES_LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -58,7 +64,11 @@ fn write_preferences(path: &Path, preferences: &DesktopPreferences) -> Result<()
 }
 
 pub(crate) fn load(app: &AppHandle) -> Result<DesktopPreferences, String> {
-    read_preferences(&preferences_path(app)?)
+    let path = preferences_path(app)?;
+    let _guard = preferences_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    read_preferences(&path)
 }
 
 /// Returns true only once per installation and persists that decision before
@@ -74,7 +84,11 @@ fn take_background_notice_at(path: &Path) -> Result<bool, String> {
 }
 
 pub(crate) fn take_background_notice(app: &AppHandle) -> Result<bool, String> {
-    take_background_notice_at(&preferences_path(app)?)
+    let path = preferences_path(app)?;
+    let _guard = preferences_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    take_background_notice_at(&path)
 }
 
 #[tauri::command]
@@ -88,6 +102,9 @@ pub(crate) fn desktop_preferences_save(
     close_to_tray: bool,
 ) -> Result<DesktopPreferencesView, String> {
     let path = preferences_path(&app)?;
+    let _guard = preferences_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // A malformed preferences file must not permanently lock the settings UI.
     // Saving an explicit user choice repairs this non-critical file.
     let mut preferences = read_preferences(&path).unwrap_or_default();

@@ -1930,6 +1930,11 @@ export async function saveAttachmentBlob(input: {
   });
 }
 
+/** Delete a clipboard image that was removed before it was sent. */
+export async function discardAttachmentBlob(path: string): Promise<void> {
+  await invoke<void>("discard_attachment_blob", { path });
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   await invoke<void>("open_url", { url });
 }

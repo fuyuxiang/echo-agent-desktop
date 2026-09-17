@@ -24,6 +24,7 @@ import {
   isImageAttachment,
   stripInjectedUserContext,
 } from "@/lib/user-message";
+import { highlightSegments } from "@/lib/extract-text";
 import { copyShareText } from "@/lib/share";
 import { partitionAssistantParts } from "@/lib/execution-process";
 import {
@@ -93,7 +94,6 @@ export function MessageItem({
   latest = false,
   onToast,
   findQuery,
-  findActiveLocalIndex,
 }: {
   message: ChatMessage;
   streaming: boolean;
@@ -115,8 +115,6 @@ export function MessageItem({
   latest?: boolean;
   /** 会话内查找的当前关键词,Markdown 渲染时把命中处染出。 */
   findQuery?: string;
-  /** 本条消息内被激活的命中下标(0-based),-1 表示无激活。 */
-  findActiveLocalIndex?: number;
 }) {
   const { theme } = useTheme();
   const [speaking, setSpeaking] = useState(false);
@@ -298,9 +296,19 @@ export function MessageItem({
                 })}
               </div>
             )}
-            {message.parts.map((p, i) =>
-              p.kind === "text" ? <span key={i}>{stripInjectedUserContext(p.text)}</span> : null
-            )}
+            {message.parts.map((p, i) => {
+              if (p.kind !== "text") return null;
+              const visibleText = stripInjectedUserContext(p.text);
+              return (
+                <span key={i}>
+                  {highlightSegments(visibleText, findQuery ?? "").map((segment, segmentIndex) =>
+                    segment.hit
+                      ? <mark className="find-hit" key={segmentIndex}>{segment.text}</mark>
+                      : <span key={segmentIndex}>{segment.text}</span>
+                  )}
+                </span>
+              );
+            })}
           </div>
           {/* Hover actions */}
           <div className="msg__actions">
@@ -375,7 +383,6 @@ export function MessageItem({
               theme={theme}
               config={markdownConfig}
               findQuery={findQuery}
-              findActiveLocalIndex={findActiveLocalIndex}
             >
               {part.text}
             </Markdown>

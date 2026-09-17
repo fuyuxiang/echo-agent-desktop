@@ -21,7 +21,7 @@ const MAX_TRUSTED_PACKAGE_SOURCES: usize = 2_048;
 const MAX_CONFIGURED_SKILL_SOURCES: usize = 512;
 const MAX_PICKED_FILES: usize = 100;
 const MAX_ATTACHMENT_COUNT: usize = 20;
-const MAX_ATTACHMENT_FILE_BYTES: u64 = 20 * 1024 * 1024;
+pub(crate) const MAX_ATTACHMENT_FILE_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_ATTACHMENT_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Native-side filesystem authority for custom Tauri commands.
@@ -121,7 +121,7 @@ impl FilesystemAccess {
         ))
     }
 
-    fn authorize_file(&self, raw: &Path) -> Result<PathBuf, String> {
+    pub(crate) fn authorize_file(&self, raw: &Path) -> Result<PathBuf, String> {
         if !raw.is_absolute() {
             return Err("文件路径必须是绝对路径".into());
         }
@@ -144,6 +144,14 @@ impl FilesystemAccess {
         }
         files.insert(canonical.clone());
         Ok(canonical)
+    }
+
+    pub(crate) fn revoke_authorized_file(&self, raw: &Path) -> Result<(), String> {
+        self.files
+            .lock()
+            .map_err(|_| "文件系统授权状态已损坏".to_string())?
+            .remove(raw);
+        Ok(())
     }
 
     pub(crate) fn require_authorized_file(&self, raw: &Path) -> Result<PathBuf, String> {

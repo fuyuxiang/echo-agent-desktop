@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use chrono::Utc;
 use echo_agent_tools::implementations::skills::capability::{
@@ -26,6 +27,15 @@ const MAX_FILES: usize = 200;
 const MAX_TOTAL_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_DEPTH: usize = 12;
+
+static SKILL_INSTALL_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn lock_skill_install_transaction() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    SKILL_INSTALL_TRANSACTION
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "技能安装事务锁已损坏".to_string())
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
@@ -308,6 +318,7 @@ fn install_path(
     expected_source_hash: &str,
     approve_high_risk: bool,
 ) -> Result<SkillInstallResult, String> {
+    let _transaction = lock_skill_install_transaction()?;
     let prepared = prepare_package(Path::new(path))?;
     let inspection = inspect_prepared(&prepared)?;
     require_matching_source_hash(expected_source_hash, &inspection.source_hash)?;
@@ -396,6 +407,7 @@ fn install_prepared(
 }
 
 fn uninstall_path(path: &str) -> Result<(), String> {
+    let _transaction = lock_skill_install_transaction()?;
     let root = managed_skills_root();
     uninstall_path_in(Path::new(path), &root, true)
 }

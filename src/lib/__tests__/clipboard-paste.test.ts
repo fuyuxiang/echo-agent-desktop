@@ -47,7 +47,7 @@ describe("isLikelyImageMime", () => {
     expect(isLikelyImageMime("image/jpg")).toBe(true);
     expect(isLikelyImageMime("image/gif")).toBe(true);
     expect(isLikelyImageMime("image/webp")).toBe(true);
-    expect(isLikelyImageMime("image/bmp")).toBe(true);
+    expect(isLikelyImageMime("image/bmp")).toBe(false);
   });
 
   it("rejects non-image mimes", () => {

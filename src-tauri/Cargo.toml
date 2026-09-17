@@ -68,7 +68,8 @@ schemars = "1"
 agent-client-protocol = { version = "0.10.4", features = ["unstable"] }
 dirs = "6"
 toml = "0.8"
-tokio-util = { version = "0.7", features = ["compat"] }
+tokio-util = { version = "0.7", features = ["compat", "io"] }
+bytes = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"

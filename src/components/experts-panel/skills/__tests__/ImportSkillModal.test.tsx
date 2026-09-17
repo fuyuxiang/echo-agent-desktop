@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ImportSkillModal } from "../ImportSkillModal";
 import type { SkillPackageInspection, SkillInstallResult } from "@/lib/types";
 
@@ -70,6 +70,32 @@ describe("ImportSkillModal — 列表型批量安装", () => {
     expect(screen.getByText("c.zip")).toBeInTheDocument();
   });
 
+  it("批量 inspect 最多 3 路并发且立即展示完整队列", async () => {
+    const paths = Array.from({ length: 5 }, (_, index) => `/tmp/${index}.zip`);
+    api.filesystemPickFiles.mockResolvedValue(paths);
+    let active = 0;
+    let peak = 0;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    api.skillsInspectPackage.mockImplementation(async (path: string) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await gate;
+      active -= 1;
+      return makeInspection({ sourcePath: path, name: `skill-${path}` });
+    });
+
+    render(<ImportSkillModal onClose={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("选择 Markdown 或 ZIP 技能文件"));
+
+    expect(await screen.findByText("已选择 5 个技能包")).toBeInTheDocument();
+    await waitFor(() => expect(api.skillsInspectPackage).toHaveBeenCalledTimes(3));
+    expect(peak).toBe(3);
+    await act(async () => { release?.(); });
+    await waitFor(() => expect(api.skillsInspectPackage).toHaveBeenCalledTimes(5));
+    expect(peak).toBeLessThanOrEqual(3);
+  });
+
   it("单个 inspect 失败不会阻塞其它行,失败行展示错误信息", async () => {
     api.filesystemPickFiles.mockResolvedValue(["/tmp/ok.zip", "/tmp/bad.zip"]);
     api.skillsInspectPackage.mockImplementation(async (path: string) => {
@@ -92,7 +118,7 @@ describe("ImportSkillModal — 列表型批量安装", () => {
     expect(screen.getByText("bad.zip")).toBeInTheDocument();
   });
 
-  it("「安装全部低风险」一键并发安装所有低风险行,不安装高/中风险", async () => {
+  it("「安装全部低风险」仅安装低风险行", async () => {
     api.filesystemPickFiles.mockResolvedValue(["/low.zip", "/med.zip", "/high.zip"]);
     api.skillsInspectPackage.mockImplementation(async (path: string) => {
       const name = path.split("/").pop()!;
@@ -129,6 +155,88 @@ describe("ImportSkillModal — 列表型批量安装", () => {
       "/low.zip",
     ]);
     expect(onInstalled).toHaveBeenCalled();
+  });
+
+  it("勾选自动安装后会安装刚检查完的低风险 Skill", async () => {
+    const inspection = makeInspection({ sourcePath: "/auto.zip", name: "auto-skill" });
+    api.filesystemPickFiles.mockResolvedValue(["/auto.zip"]);
+    api.skillsInspectPackage.mockResolvedValue(inspection);
+    api.skillsInstallPackage.mockResolvedValue(makeInstallResult(inspection));
+
+    render(<ImportSkillModal onClose={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("仅在检查结果为低风险时自动安装"));
+    fireEvent.click(screen.getByLabelText("选择 Markdown 或 ZIP 技能文件"));
+
+    await waitFor(() => {
+      expect(api.skillsInstallPackage).toHaveBeenCalledWith(
+        "/auto.zip",
+        inspection.sourceHash,
+        false,
+      );
+    });
+  });
+
+  it("批量安装按 Skill 名忽略大小写去重", async () => {
+    api.filesystemPickFiles.mockResolvedValue(["/first.zip", "/second.zip"]);
+    api.skillsInspectPackage.mockImplementation(async (path: string) =>
+      makeInspection({
+        sourcePath: path,
+        name: path === "/first.zip" ? "Demo-Skill" : "demo-skill",
+      }),
+    );
+    api.skillsInstallPackage.mockImplementation(async (path: string) => {
+      const inspection = makeInspection({ sourcePath: path, name: "Demo-Skill" });
+      return makeInstallResult(inspection);
+    });
+
+    render(<ImportSkillModal onClose={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("选择 Markdown 或 ZIP 技能文件"));
+    fireEvent.click(await screen.findByRole("button", { name: /安装全部低风险/ }));
+
+    await waitFor(() => expect(api.skillsInstallPackage).toHaveBeenCalledTimes(1));
+    expect(api.skillsInstallPackage).toHaveBeenCalledWith(
+      "/first.zip",
+      expect.any(String),
+      false,
+    );
+    expect(await screen.findByText(/同名技能.*只保留一个版本/)).toBeInTheDocument();
+  });
+
+  it("批量安装严格串行执行", async () => {
+    api.filesystemPickFiles.mockResolvedValue(["/one.zip", "/two.zip"]);
+    api.skillsInspectPackage.mockImplementation(async (path: string) =>
+      makeInspection({ sourcePath: path, name: path.slice(1, -4) }),
+    );
+    let resolveFirst: ((value: SkillInstallResult) => void) | undefined;
+    api.skillsInstallPackage.mockImplementation((path: string) => {
+      const inspection = makeInspection({ sourcePath: path, name: path.slice(1, -4) });
+      if (path === "/one.zip") {
+        return new Promise<SkillInstallResult>((resolve) => { resolveFirst = resolve; });
+      }
+      return Promise.resolve(makeInstallResult(inspection));
+    });
+
+    render(<ImportSkillModal onClose={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("选择 Markdown 或 ZIP 技能文件"));
+    fireEvent.click(await screen.findByRole("button", { name: /安装全部低风险/ }));
+
+    await waitFor(() => expect(api.skillsInstallPackage).toHaveBeenCalledTimes(1));
+    expect(api.skillsInstallPackage).toHaveBeenNthCalledWith(
+      1,
+      "/one.zip",
+      expect.any(String),
+      false,
+    );
+    await act(async () => {
+      resolveFirst?.(makeInstallResult(makeInspection({ sourcePath: "/one.zip", name: "one" })));
+    });
+    await waitFor(() => expect(api.skillsInstallPackage).toHaveBeenCalledTimes(2));
+    expect(api.skillsInstallPackage).toHaveBeenNthCalledWith(
+      2,
+      "/two.zip",
+      expect.any(String),
+      false,
+    );
   });
 
   it("高风险行安装前需要勾选「我已查看风险」", async () => {

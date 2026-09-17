@@ -1,7 +1,7 @@
 /**
  * rehype-find-highlight —— 在 markdown 渲染前的 hast 树上把命中关键词的文本切片包成 `<mark>`。
  *
- * 命中处输出 `<mark class="find-hit">`;当前激活的那一处额外加 `find-hit-active`。
+ * 命中处输出 `<mark class="find-hit">`。激活态由 ChatView 按最终 DOM 顺序统一管理。
  * 该插件由 Markdown 组件在 rehype 流水线中按需注入(query 为空时短路)。
  *
  * 为何走 rehype 而不是 react-markdown 组件覆盖:react-markdown 的文本节点无法被组件化,
@@ -13,8 +13,6 @@ import type { Element, Root, RootContent, Text } from "hast";
 interface Options {
   /** 当前查询关键词(已 trim)。空字符串表示关闭高亮。 */
   query: string;
-  /** 当前消息内被激活的命中下标(0-based);-1 表示无激活。 */
-  activeLocalIndex: number;
 }
 
 function escapeRegex(s: string): string {
@@ -27,11 +25,9 @@ type Transformer = (root: Root) => void;
 export const rehypeFindHighlight =
   (options: Options): Transformer =>
   (root) => {
-    const { query, activeLocalIndex } = options;
+    const { query } = options;
     if (!query) return;
     const re = new RegExp(escapeRegex(query), "gi");
-    let localIdx = 0;
-
     visit(root, "text", (node: Text, index, parent) => {
       if (typeof index !== "number" || !parent || parent.type !== "element") return;
       const text = node.value;
@@ -43,16 +39,13 @@ export const rehypeFindHighlight =
         if (hit.index > last) {
           replacements.push({ type: "text", value: text.slice(last, hit.index) });
         }
-        const isActive = localIdx === activeLocalIndex;
-        const className = isActive ? ["find-hit", "find-hit-active"] : ["find-hit"];
         const mark: Element = {
           type: "element",
           tagName: "mark",
-          properties: { className },
+          properties: { className: ["find-hit"] },
           children: [{ type: "text", value: hit[0] }],
         };
         replacements.push(mark);
-        localIdx += 1;
         last = hit.index + hit[0].length;
         if (hit[0].length === 0) re.lastIndex += 1;
       }

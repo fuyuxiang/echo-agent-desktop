@@ -74,7 +74,8 @@ export function HomePage({
     // Only auto-fill once per expert (avoid re-filling on store churn).
     if (pendingHandledRef.current === pendingExpert.expertId) return;
     pendingHandledRef.current = pendingExpert.expertId;
-    if (pendingExpert.quickPrompt) {
+    const currentDraft = useSessionsStore.getState().drafts[HOME_DRAFT_KEY] ?? "";
+    if (pendingExpert.quickPrompt && currentDraft.length === 0) {
       fillComposer(pendingExpert.quickPrompt);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

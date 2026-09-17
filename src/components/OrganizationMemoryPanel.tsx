@@ -98,6 +98,34 @@ const readableBytes = (bytes: number) => {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 };
 
+async function settleWithConcurrency<T>(
+  items: string[],
+  limit: number,
+  task: (item: string) => Promise<T>,
+  onProgress: (completed: number) => void,
+): Promise<PromiseSettledResult<T>[]> {
+  const results = new Array<PromiseSettledResult<T>>(items.length);
+  let cursor = 0;
+  let completed = 0;
+  const worker = async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      try {
+        results[index] = { status: "fulfilled", value: await task(items[index]) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      } finally {
+        completed += 1;
+        onProgress(completed);
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return results;
+}
+
 function ScopeIcon({ kind }: { kind: OrgScope["kind"] }) {
   if (kind === "personal") return <UserRound size={14} />;
   if (kind === "team") return <UsersRound size={14} />;
@@ -117,6 +145,11 @@ export function OrganizationMemoryPanel({
   const clearMirroredOrgSession = useOrgSessionStore((state) => state.clearSession);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{
+    label: string;
+    completed: number;
+    total: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [serverUrl, setServerUrl] = useState("https://");
   const [username, setUsername] = useState("");
@@ -384,40 +417,63 @@ export function OrganizationMemoryPanel({
 
   const pickAndUploadDocument = async () => {
     if (!uploadScope) return;
-    const paths = await filesystemPickFiles({
-      multiple: true,
-      maxFiles: 50,
-      title: "选择要提交的可检索文档（可多选）",
-      extensions: ["md", "txt", "pdf", "docx", "xlsx", "pptx", "png", "jpg", "jpeg"],
-    });
-    if (!paths || paths.length === 0) return;
-    await uploadDocumentsInBatch(paths, uploadScope.id);
+    setError(null);
+    try {
+      const paths = await filesystemPickFiles({
+        multiple: true,
+        maxFiles: 50,
+        title: "选择要提交的可检索文档（可多选）",
+        extensions: ["md", "txt", "pdf", "docx", "xlsx", "pptx", "png", "jpg", "jpeg"],
+      });
+      if (!paths || paths.length === 0) return;
+      await uploadDocumentsInBatch(paths, uploadScope.id);
+    } catch (reason) {
+      setError(`选择文档失败：${String(reason).replace(/^Error:\s*/, "")}`);
+    }
   };
 
   const uploadDocumentsInBatch = async (paths: string[], scopeId: string) => {
     setBusy(true);
     setError(null);
-    let done = 0;
-    const failures: string[] = [];
-    const settled = await Promise.allSettled(
-      paths.map((path) => orgSubmitDocument(path, scopeId)),
-    );
-    settled.forEach((result, index) => {
-      if (result.status === "fulfilled") done += 1;
-      else failures.push(`${paths[index]}: ${String(result.reason).replace(/^Error:\s*/, "")}`);
-    });
-    if (failures.length > 0) setError(failures.slice(0, 3).join("\n"));
-    if (done > 0) {
-      onToast?.(
-        failures.length > 0
-          ? `已上传 ${done} 个文档，失败 ${failures.length} 个`
-          : `已上传 ${done} 个文档，正在建立索引`,
+    setUploadProgress({ label: "正在上传文档", completed: 0, total: paths.length });
+    let batchError: string | null = null;
+    try {
+      const settled = await settleWithConcurrency(
+        paths,
+        3,
+        (path) => orgSubmitDocument(path, scopeId),
+        (completed) => setUploadProgress({
+          label: "正在上传文档",
+          completed,
+          total: paths.length,
+        }),
       );
-    } else {
-      onToast?.(`上传失败：${failures[0] ?? "未知原因"}`);
+      const failures: string[] = [];
+      let done = 0;
+      settled.forEach((result, index) => {
+        if (result.status === "fulfilled") done += 1;
+        else failures.push(`${paths[index]}: ${String(result.reason).replace(/^Error:\s*/, "")}`);
+      });
+      batchError = failures.length > 0 ? failures.slice(0, 3).join("\n") : null;
+      setError(batchError);
+      if (done > 0) {
+        onToast?.(
+          failures.length > 0
+            ? `已上传 ${done} 个文档，失败 ${failures.length} 个`
+            : `已上传 ${done} 个文档，正在建立索引`,
+        );
+      } else {
+        onToast?.(`上传失败：${failures[0] ?? "未知原因"}`);
+      }
+      setUploadProgress({ label: "正在刷新列表", completed: paths.length, total: paths.length });
+      await loadWorkspace();
+    } catch (reason) {
+      const refreshError = `刷新列表失败：${String(reason).replace(/^Error:\s*/, "")}`;
+      setError(batchError ? `${batchError}\n${refreshError}` : refreshError);
+    } finally {
+      setUploadProgress(null);
+      setBusy(false);
     }
-    setBusy(false);
-    await loadWorkspace();
   };
 
   const submitMemoryCandidate = async (event: React.FormEvent) => {
@@ -454,36 +510,60 @@ export function OrganizationMemoryPanel({
 
   const pickAndUploadSkill = async () => {
     if (!uploadScope) return;
-    const paths = await filesystemPickFiles({
-      multiple: true,
-      maxFiles: 50,
-      title: "选择要提交的 Skill ZIP（可多选）",
-      extensions: ["zip"],
-    });
+    setError(null);
+    let paths: string[];
+    try {
+      paths = await filesystemPickFiles({
+        multiple: true,
+        maxFiles: 50,
+        title: "选择要提交的 Skill ZIP（可多选）",
+        extensions: ["zip"],
+      });
+    } catch (reason) {
+      setError(`选择 Skill ZIP 失败：${String(reason).replace(/^Error:\s*/, "")}`);
+      return;
+    }
     if (!paths || paths.length === 0) return;
     setBusy(true);
-    setError(null);
-    let done = 0;
-    const failures: string[] = [];
-    const settled = await Promise.allSettled(
-      paths.map((path) => orgSubmitSkill(path, uploadScope.id)),
-    );
-    settled.forEach((result, index) => {
-      if (result.status === "fulfilled") done += 1;
-      else failures.push(`${paths[index]}: ${String(result.reason).replace(/^Error:\s*/, "")}`);
-    });
-    if (failures.length > 0) setError(failures.slice(0, 3).join("\n"));
-    if (done > 0) {
-      onToast?.(
-        failures.length > 0
-          ? `已上传 ${done} 个 Skill，失败 ${failures.length} 个`
-          : "Skill 已提交，等待组织审核",
+    setUploadProgress({ label: "正在上传 Skill", completed: 0, total: paths.length });
+    let batchError: string | null = null;
+    try {
+      const settled = await settleWithConcurrency(
+        paths,
+        3,
+        (path) => orgSubmitSkill(path, uploadScope.id),
+        (completed) => setUploadProgress({
+          label: "正在上传 Skill",
+          completed,
+          total: paths.length,
+        }),
       );
-    } else {
-      onToast?.(`Skill 上传失败：${failures[0] ?? "未知原因"}`);
+      const failures: string[] = [];
+      let done = 0;
+      settled.forEach((result, index) => {
+        if (result.status === "fulfilled") done += 1;
+        else failures.push(`${paths[index]}: ${String(result.reason).replace(/^Error:\s*/, "")}`);
+      });
+      batchError = failures.length > 0 ? failures.slice(0, 3).join("\n") : null;
+      setError(batchError);
+      if (done > 0) {
+        onToast?.(
+          failures.length > 0
+            ? `已上传 ${done} 个 Skill，失败 ${failures.length} 个`
+            : "Skill 已提交，等待组织审核",
+        );
+      } else {
+        onToast?.(`Skill 上传失败：${failures[0] ?? "未知原因"}`);
+      }
+      setUploadProgress({ label: "正在刷新列表", completed: paths.length, total: paths.length });
+      await loadWorkspace();
+    } catch (reason) {
+      const refreshError = `刷新列表失败：${String(reason).replace(/^Error:\s*/, "")}`;
+      setError(batchError ? `${batchError}\n${refreshError}` : refreshError);
+    } finally {
+      setUploadProgress(null);
+      setBusy(false);
     }
-    setBusy(false);
-    await loadWorkspace();
   };
 
   const uploadNewVersion = async (document: OrgDocument) => {
@@ -627,6 +707,13 @@ export function OrganizationMemoryPanel({
       </nav>
 
       {error && <div className="org-memory__error"><XCircle size={15} />{error}<button onClick={() => setError(null)}>关闭</button></div>}
+      {uploadProgress && (
+        <div className="org-memory__upload-progress" role="status" aria-live="polite">
+          <Loader2 className="org-memory__spin" size={15} />
+          <span>{uploadProgress.label}</span>
+          <strong>{uploadProgress.completed}/{uploadProgress.total}</strong>
+        </div>
+      )}
 
       {tab === "ask" && (
         <section className="org-ask">

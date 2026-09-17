@@ -62,7 +62,7 @@ describe("HomePage", () => {
     expect(input.value).toBe("请帮我开始");
   });
 
-  it("dismiss 后再次召唤同一专家会重新预填 quickPrompt", () => {
+  it("dismiss 后再次召唤同一专家时保留用户已有草稿", () => {
     usePendingExpertStore.getState().set({
       name: "小坦克",
       prompt: "...",
@@ -98,7 +98,7 @@ describe("HomePage", () => {
       });
     });
 
-    // quickPrompt 被重新预填(覆盖用户已改的文字)。
-    expect(input.value).toBe("请帮我开始");
+    // 已有草稿比专家 quickPrompt 优先，避免用户输入丢失。
+    expect(input.value).toBe("用户接着改的字");
   });
 });

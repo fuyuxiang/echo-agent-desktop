@@ -315,7 +315,6 @@ function MarkdownInner({
   config,
   theme = "light",
   findQuery,
-  findActiveLocalIndex = -1,
 }: MarkdownProps) {
   const preprocessed = useMemo(
     () => preprocessMarkdown(children ?? ""),
@@ -393,12 +392,12 @@ function MarkdownInner({
       if (findQuery) {
         plugins.push([
           rehypeFindHighlight,
-          { query: findQuery, activeLocalIndex: findActiveLocalIndex },
+          { query: findQuery },
         ] as const);
       }
       return plugins;
     },
-    [sanitizeSchema, findQuery, findActiveLocalIndex],
+    [sanitizeSchema, findQuery],
   );
 
   const components = useMemo(

@@ -36,6 +36,7 @@ import {
 import type { AgentEntry } from "@/lib/types";
 import {
   filesystemPickFiles,
+  discardAttachmentBlob,
   saveAttachmentBlob,
   type WorkspaceInfo,
 } from "@/lib/agent-client";
@@ -49,6 +50,16 @@ import {
   type SessionControlAction,
 } from "@/lib/session-control";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+
+const MAX_ATTACHMENT_COUNT = 20;
+const MAX_ATTACHMENT_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_ATTACHMENT_TOTAL_BYTES = 64 * 1024 * 1024;
+
+function discardUnsentAttachments(paths: string[]) {
+  for (const path of paths) {
+    void discardAttachmentBlob(path).catch(() => undefined);
+  }
+}
 
 /**
  * EchoAgent 风格输入卡片(圆角16):左下 +,右下 Auto 下拉/麦克风/发送;
@@ -217,7 +228,43 @@ export function Composer({
   onOpenOrganization?: () => void;
 }) {
   const [text, setText] = useState("");
+  const textRef = useRef("");
   const [attachments, setAttachments] = useState<string[]>([]);
+  const attachmentsRef = useRef<string[]>([]);
+  // Only clipboard blobs created by this Composer are disposable. Picker,
+  // drop and edit-resend paths can belong to the workspace or chat history.
+  const ownedAttachmentPathsRef = useRef(new Set<string>());
+  const discardOwnedAttachments = (paths: Iterable<string>) => {
+    const disposable: string[] = [];
+    for (const path of paths) {
+      if (ownedAttachmentPathsRef.current.delete(path)) disposable.push(path);
+    }
+    discardUnsentAttachments(disposable);
+  };
+  const beginAttachmentSubmission = (paths: string[]): string[] => {
+    const pending: string[] = [];
+    for (const path of paths) {
+      if (ownedAttachmentPathsRef.current.delete(path)) pending.push(path);
+    }
+    return pending;
+  };
+  const rejectAttachmentSubmission = (paths: string[]) => {
+    const current = new Set(attachmentsRef.current);
+    for (const path of paths) {
+      if (mountedRef.current && current.has(path)) {
+        ownedAttachmentPathsRef.current.add(path);
+      } else {
+        discardUnsentAttachments([path]);
+      }
+    }
+  };
+  const updateAttachments = (
+    next: string[] | ((previous: string[]) => string[]),
+  ) => {
+    const value = typeof next === "function" ? next(attachmentsRef.current) : next;
+    attachmentsRef.current = value;
+    setAttachments(value);
+  };
   // 发送前成本预估(对齐 EchoAgent credit-estimate):纯本地 token 估算。
   // ctxUsed/ctxTotal 由 ContextUsagePill 异步获取,这里不耦合;徽章在占比未知时
   // 仍显示 +N(新增 token),有占比信息时叠加(此处保守不取,避免与 pill 抢请求)。
@@ -245,7 +292,11 @@ export function Composer({
 
   useEffect(() => {
     mountedRef.current = true;
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+      discardOwnedAttachments([...ownedAttachmentPathsRef.current]);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -255,11 +306,10 @@ export function Composer({
   // 统一更新入口:每次写入输入框内容时同步把草稿推给父组件(若启用持久化)。
   // 回填(draftKey 变化)时不走这里,避免把"恢复出来的字"再当成用户输入回写。
   const updateText = (next: string | ((prev: string) => string)) => {
-    setText((prev) => {
-      const value = typeof next === "function" ? (next as (p: string) => string)(prev) : next;
-      onDraftChangeRef.current?.(value);
-      return value;
-    });
+    const value = typeof next === "function" ? next(textRef.current) : next;
+    textRef.current = value;
+    setText(value);
+    onDraftChangeRef.current?.(value);
   };
 
   useEffect(() => {
@@ -288,7 +338,14 @@ export function Composer({
     const next = externalText ?? "";
     updateText(next); // 同步草稿:模板写入也算当前草稿内容。
     if (externalAttachments !== undefined) {
-      setAttachments([...new Set(externalAttachments)]);
+      const replacement = [...new Set(externalAttachments)].slice(0, MAX_ATTACHMENT_COUNT);
+      discardOwnedAttachments(
+        attachmentsRef.current.filter((path) => !replacement.includes(path)),
+      );
+      // Edit-resend attachments already belong to chat history and must
+      // survive removal or navigation from this Composer.
+      for (const path of replacement) ownedAttachmentPathsRef.current.delete(path);
+      updateAttachments(replacement);
     }
     setCursorPos(next.length);
     requestAnimationFrame(() => {
@@ -312,10 +369,12 @@ export function Composer({
     else recognition?.stop();
     recognitionRef.current = null;
     const next = draft ?? "";
+    textRef.current = next;
     setText(next);
     // Attachments are session-scoped. Never carry an unsent local file into
     // another conversation when ChatView reuses the same Composer instance.
-    setAttachments([]);
+    discardOwnedAttachments([...ownedAttachmentPathsRef.current]);
+    updateAttachments([]);
     setCursorPos(next.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey]);
@@ -450,7 +509,7 @@ export function Composer({
                 setDragHovering(false);
                 return;
               }
-              setAttachments((prev) => {
+              updateAttachments((prev) => {
                 const seen = new Set(prev);
                 const next = [...prev];
                 for (const path of incoming) {
@@ -458,6 +517,10 @@ export function Composer({
                     seen.add(path);
                     next.push(path);
                   }
+                }
+                if (next.length > MAX_ATTACHMENT_COUNT) {
+                  onToast?.(`附件数量不能超过 ${MAX_ATTACHMENT_COUNT} 个`);
+                  return prev;
                 }
                 return next;
               });
@@ -501,6 +564,20 @@ export function Composer({
     );
     if (images.length === 0) return;
     event.preventDefault();
+    if (attachmentsRef.current.length + images.length > MAX_ATTACHMENT_COUNT) {
+      onToast?.(`附件数量不能超过 ${MAX_ATTACHMENT_COUNT} 个`);
+      return;
+    }
+    const oversized = images.find((item) => item.blob.size > MAX_ATTACHMENT_FILE_BYTES);
+    if (oversized) {
+      onToast?.(`图片「${oversized.suggestedName}」超过 20MB，无法添加`);
+      return;
+    }
+    const totalBytes = images.reduce((total, item) => total + item.blob.size, 0);
+    if (totalBytes > MAX_ATTACHMENT_TOTAL_BYTES) {
+      onToast?.("本次粘贴的图片总大小不能超过 64MB");
+      return;
+    }
     const saved: string[] = [];
     let lastError: unknown = null;
     for (const item of images) {
@@ -517,18 +594,33 @@ export function Composer({
         // 单张失败不影响其它图片继续落盘。
       }
     }
+    if (!mountedRef.current) {
+      discardUnsentAttachments(saved);
+      return;
+    }
     if (saved.length > 0) {
-      setAttachments((prev) => {
-        const seen = new Set(prev);
-        const next = [...prev];
-        for (const path of saved) {
-          if (!seen.has(path)) {
-            seen.add(path);
-            next.push(path);
-          }
+      // Another paste/drop can finish while this batch is being persisted.
+      // Recheck capacity synchronously against the ref before committing.
+      const next = [...attachmentsRef.current];
+      const seen = new Set(next);
+      const accepted: string[] = [];
+      const overflow: string[] = [];
+      for (const path of saved) {
+        if (seen.has(path)) continue;
+        if (next.length >= MAX_ATTACHMENT_COUNT) {
+          overflow.push(path);
+        } else {
+          seen.add(path);
+          next.push(path);
+          accepted.push(path);
         }
-        return next;
-      });
+      }
+      for (const path of accepted) ownedAttachmentPathsRef.current.add(path);
+      discardUnsentAttachments(overflow);
+      updateAttachments(next);
+      if (overflow.length > 0) {
+        onToast?.(`附件数量不能超过 ${MAX_ATTACHMENT_COUNT} 个，已忽略多余图片`);
+      }
     }
     if (lastError) {
       onToast?.(
@@ -545,9 +637,10 @@ export function Composer({
       histCursorRef.current = histRef.current.items.length;
       draftRef.current = "";
     }
+    discardOwnedAttachments([...ownedAttachmentPathsRef.current]);
     if (mountedRef.current) {
       updateText("");
-      setAttachments([]);
+      updateAttachments([]);
     } else {
       // Navigation commands and accepted new-session sends may unmount this
       // Composer before their promise settles. Clear the persisted draft too.
@@ -616,13 +709,19 @@ export function Composer({
       body = body ? `【${sceneTag.label}】${body}` : `【${sceneTag.label}】`;
     }
     setSending(true);
+    const submittedAttachments = [...attachments];
+    const pendingOwnedAttachments = beginAttachmentSubmission(submittedAttachments);
     try {
-      const result = onSend(body || "请分析附件。", attachments);
+      const result = onSend(body || "请分析附件。", submittedAttachments);
       const accepted = result && typeof (result as PromiseLike<boolean | void>).then === "function"
         ? await result
         : result;
-      if (accepted === false) return;
+      if (accepted === false) {
+        rejectAttachmentSubmission(pendingOwnedAttachments);
+        return;
+      }
     } catch (error) {
+      rejectAttachmentSubmission(pendingOwnedAttachments);
       onToast?.(`发送失败：${String(error).replace(/^Error:\s*/, "")}`);
       return;
     } finally {
@@ -657,14 +756,20 @@ export function Composer({
     let body = t;
     if (sceneTag) body = body ? `【${sceneTag.label}】${body}` : `【${sceneTag.label}】`;
     setSending(true);
+    const submittedAttachments = [...attachments];
+    const pendingOwnedAttachments = beginAttachmentSubmission(submittedAttachments);
     try {
-      const result = onSendNow(body || "请分析附件。", attachments);
+      const result = onSendNow(body || "请分析附件。", submittedAttachments);
       const accepted = result && typeof (result as PromiseLike<boolean | void>).then === "function"
         ? await result
         : result;
-      if (accepted === false) return;
+      if (accepted === false) {
+        rejectAttachmentSubmission(pendingOwnedAttachments);
+        return;
+      }
       finishAcceptedSubmission(body);
     } catch (error) {
+      rejectAttachmentSubmission(pendingOwnedAttachments);
       onToast?.(`立即发送失败：${String(error).replace(/^Error:\s*/, "")}`);
     } finally {
       if (mountedRef.current) setSending(false);
@@ -681,9 +786,17 @@ export function Composer({
     }
     let body = t;
     if (sceneTag) body = body ? `【${sceneTag.label}】${body}` : `【${sceneTag.label}】`;
-    onEnqueue?.(body || "请分析附件。", attachments);
+    const submittedAttachments = [...attachments];
+    const pendingOwnedAttachments = beginAttachmentSubmission(submittedAttachments);
+    try {
+      onEnqueue?.(body || "请分析附件。", submittedAttachments);
+    } catch (error) {
+      rejectAttachmentSubmission(pendingOwnedAttachments);
+      onToast?.(`加入待发送队列失败：${String(error).replace(/^Error:\s*/, "")}`);
+      return;
+    }
     updateText("");
-    setAttachments([]);
+    updateAttachments([]);
     onClearSceneTag?.();
   };
 
@@ -691,10 +804,15 @@ export function Composer({
     try {
       const paths = await filesystemPickFiles({ maxFiles: 20 });
       if (paths.length === 0) return;
-      setAttachments((prev) => {
+      updateAttachments((prev) => {
         const set = new Set(prev);
         paths.forEach((p) => set.add(p));
-        return [...set];
+        const next = [...set];
+        if (next.length > MAX_ATTACHMENT_COUNT) {
+          onToast?.(`附件数量不能超过 ${MAX_ATTACHMENT_COUNT} 个`);
+          return prev;
+        }
+        return next;
       });
     } catch (error) {
       onToast?.(`选择附件失败：${String(error).replace(/^Error:\s*/, "")}`);
@@ -802,7 +920,8 @@ export function Composer({
                   className="composer-attachments__chip-remove"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setAttachments((prev) => prev.filter((p) => p !== path));
+                    discardOwnedAttachments([path]);
+                    updateAttachments((prev) => prev.filter((p) => p !== path));
                   }}
                   aria-label="移除附件"
                 >

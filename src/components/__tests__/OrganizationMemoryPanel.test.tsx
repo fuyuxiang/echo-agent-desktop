@@ -460,6 +460,67 @@ describe("OrganizationMemoryPanel — 文档/Skill 批量上传", () => {
     });
   });
 
+  it("文档批量上传的并发数不超过 3", async () => {
+    let active = 0;
+    let peak = 0;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    api.orgSubmitDocument.mockImplementation(async (path: string) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await gate;
+      active -= 1;
+      return { id: path, state: "pending" };
+    });
+    vi.mocked(filesystemPickFiles).mockResolvedValue(
+      Array.from({ length: 5 }, (_, index) => `/tmp/${index}.md`),
+    );
+
+    await mountOnDocsTab();
+    fireEvent.click(screen.getByRole("button", { name: /上传到当前范围/ }));
+
+    await waitFor(() => expect(api.orgSubmitDocument).toHaveBeenCalledTimes(3));
+    expect(peak).toBe(3);
+    await act(async () => { release?.(); });
+    await waitFor(() => expect(api.orgSubmitDocument).toHaveBeenCalledTimes(5));
+    await waitFor(() => {
+      expect(screen.queryByText("正在上传文档")).not.toBeInTheDocument();
+    });
+    expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it("上传成功但刷新失败时展示错误并解锁操作", async () => {
+    api.orgSubmitDocument.mockResolvedValue({ id: "d-new", state: "pending" });
+    let rejectRefresh: ((reason: Error) => void) | undefined;
+    api.orgListDocuments
+      .mockResolvedValueOnce({ items: [], total: 0, page: 1, size: 50 })
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectRefresh = reject; }));
+    vi.mocked(filesystemPickFiles).mockResolvedValue(["/tmp/new.md"]);
+
+    await mountOnDocsTab();
+    const upload = screen.getByRole("button", { name: /上传到当前范围/ });
+    fireEvent.click(upload);
+
+    await screen.findByText("正在刷新列表");
+    expect(upload).toBeDisabled();
+    await act(async () => { rejectRefresh?.(new Error("服务不可用")); });
+    expect(await screen.findByText(/刷新列表失败.*服务不可用/)).toBeInTheDocument();
+    await waitFor(() => expect(upload).toBeEnabled());
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("文件选择器失败时展示可见错误", async () => {
+    vi.mocked(filesystemPickFiles).mockRejectedValue(new Error("无法打开文件选择器"));
+
+    await mountOnDocsTab();
+    fireEvent.click(screen.getByRole("button", { name: /上传到当前范围/ }));
+
+    expect(
+      await screen.findByText(/选择文档失败：无法打开文件选择器/),
+    ).toBeInTheDocument();
+    expect(api.orgSubmitDocument).not.toHaveBeenCalled();
+  });
+
   it("单文件失败不影响其它文件,toast 显示「成功 X / 失败 Y」", async () => {
     api.orgSubmitDocument.mockImplementation(async (path: string) => {
       if (path.endsWith("bad.pdf")) throw new Error("文件已损坏");

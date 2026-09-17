@@ -29,7 +29,6 @@ const SUPPORTED_IMAGE_MIME_PREFIXES = [
   "image/jpg",
   "image/gif",
   "image/webp",
-  "image/bmp",
 ];
 
 export function isLikelyImageMime(mime: string): boolean {
