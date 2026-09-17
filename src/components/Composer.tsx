@@ -34,11 +34,21 @@ import {
   createWebSpeechAsrProvider,
 } from "@/lib/voice-contract";
 import type { AgentEntry } from "@/lib/types";
-import { filesystemPickFiles, type WorkspaceInfo } from "@/lib/agent-client";
+import {
+  filesystemPickFiles,
+  saveAttachmentBlob,
+  type WorkspaceInfo,
+} from "@/lib/agent-client";
+import {
+  extractImageFilesFromClipboard,
+  blobToBytes,
+} from "@/lib/clipboard-paste";
+import { isImageAttachment } from "@/lib/user-message";
 import {
   parseSessionControlIntent,
   type SessionControlAction,
 } from "@/lib/session-control";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 /**
  * EchoAgent 风格输入卡片(圆角16):左下 +,右下 Auto 下拉/麦克风/发送;
@@ -405,6 +415,128 @@ export function Composer({
     };
   }, []);
 
+  // Drag-hover state drives the drop overlay. The actual path collection is
+  // driven by Tauri's native onDragDropEvent below — the DOM-level
+  // onDragEnter/Over/Leave only sees File blobs without local paths, so we
+  // never trust them for attachment ingestion.
+  const [dragHovering, setDragHovering] = useState(false);
+
+  // Tauri 2 delivers file drop events with absolute local paths through
+  // `getCurrentWebview().onDragDropEvent`. This is the only reliable way to
+  // obtain real paths in a desktop webview; DOM `onDrop` only sees File
+  // blobs. The listener lives for the lifetime of this Composer instance.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const webview = getCurrentWebview();
+        const dispose = await webview.onDragDropEvent((event) => {
+          const payload = (event as { payload?: unknown }).payload as
+            | { type: string; paths?: string[] }
+            | undefined;
+          if (!payload) return;
+          switch (payload.type) {
+            case "enter":
+            case "over":
+              setDragHovering(true);
+              break;
+            case "leave":
+              setDragHovering(false);
+              break;
+            case "drop": {
+              const incoming = (payload.paths ?? []).filter(isImageAttachment);
+              if (incoming.length === 0) {
+                setDragHovering(false);
+                return;
+              }
+              setAttachments((prev) => {
+                const seen = new Set(prev);
+                const next = [...prev];
+                for (const path of incoming) {
+                  if (!seen.has(path)) {
+                    seen.add(path);
+                    next.push(path);
+                  }
+                }
+                return next;
+              });
+              setDragHovering(false);
+              break;
+            }
+            default:
+              break;
+          }
+        });
+        if (cancelled) {
+          dispose();
+        } else {
+          unlisten = dispose;
+        }
+      } catch (error) {
+        // 非桌面环境或权限被拒 —— 让粘贴路径继续工作,不影响主流程。
+        if (!cancelled) {
+          onToast?.(`拖拽监听不可用：${String(error).replace(/^Error:\s*/, "")}`);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * 处理剪贴板粘贴:仅在 items 中包含 image/* 文件时拦截,其它内容走
+   * 默认行为(纯文本、HTML 富文本都能正常粘贴)。图片落到磁盘后塞进现有
+   * attachments 列表,与文件选择器共用同一条下游管线。
+   */
+  const handlePaste = async (
+    event: React.ClipboardEvent<HTMLTextAreaElement>,
+  ) => {
+    const items = event.clipboardData?.items;
+    const images = extractImageFilesFromClipboard(
+      items as unknown as ArrayLike<{ kind: string; type: string; getAsFile(): File | Blob | null }> | undefined,
+    );
+    if (images.length === 0) return;
+    event.preventDefault();
+    const saved: string[] = [];
+    let lastError: unknown = null;
+    for (const item of images) {
+      try {
+        const bytes = await blobToBytes(item.blob);
+        const path = await saveAttachmentBlob({
+          bytes,
+          mime: item.mime,
+          suggestedName: item.suggestedName,
+        });
+        saved.push(path);
+      } catch (error) {
+        lastError = error;
+        // 单张失败不影响其它图片继续落盘。
+      }
+    }
+    if (saved.length > 0) {
+      setAttachments((prev) => {
+        const seen = new Set(prev);
+        const next = [...prev];
+        for (const path of saved) {
+          if (!seen.has(path)) {
+            seen.add(path);
+            next.push(path);
+          }
+        }
+        return next;
+      });
+    }
+    if (lastError) {
+      onToast?.(
+        `粘贴图片失败：${String(lastError).replace(/^Error:\s*/, "")}`,
+      );
+    }
+  };
+
   const [sending, setSending] = useState(false);
 
   const finishAcceptedSubmission = (submittedText: string) => {
@@ -702,6 +834,19 @@ export function Composer({
           </div>
         )}
 
+        {/* 拖拽图片悬停时显示的提示层。仅在 Tauri 投递的 enter/over 事件期间出现,
+            DOM 级别的 dragenter 不会触发它,所以非桌面环境自动降级为「无提示」。 */}
+        {dragHovering && (
+          <div
+            className="echo-composer__dropzone"
+            role="status"
+            aria-live="polite"
+            data-testid="composer-dropzone"
+          >
+            松开以添加为附件
+          </div>
+        )}
+
         <textarea
           ref={ref}
           className="echo-composer__input"
@@ -726,6 +871,7 @@ export function Composer({
           onSelect={(e) =>
             setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? cursorPos)
           }
+          onPaste={handlePaste}
           onClick={(e) =>
             setCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? cursorPos)
           }

@@ -1053,6 +1053,7 @@ button,
 }
 
 .echo-composer {
+  position: relative;
   border: 1px solid var(--ui-line-strong);
   border-radius: 18px;
   background: var(--ui-surface-raised);
@@ -1068,6 +1069,32 @@ button,
 
 .echo-composer :where(textarea, input):focus-visible {
   outline: none;
+}
+
+/* 拖拽图片时的全卡片覆盖提示。Tauri onDragDropEvent 在 enter/over 期间触发,
+   半透明遮罩 + 居中文案给用户一个明确的释放目标。 */
+.echo-composer__dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--echo-brand) 14%, transparent);
+  border: 1.5px dashed color-mix(in srgb, var(--echo-brand) 65%, transparent);
+  color: var(--echo-brand);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  backdrop-filter: blur(2px);
+  animation: echo-composer-dropzone-fade 120ms ease-out;
+}
+
+@keyframes echo-composer-dropzone-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* ---------- Chat ---------- */

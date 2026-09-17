@@ -1909,6 +1909,27 @@ export async function attachmentThumbnail(path: string): Promise<string> {
   return invoke<string>("attachment_thumbnail", { path });
 }
 
+/**
+ * Persist a clipboard / drag-drop image blob under the app's data dir and
+ * return its absolute path. The path flows straight into the existing
+ * `attachments: string[]` pipeline — multimodal send, thumbnails, ACP metadata
+ * — so paste and drop behave identically to a file-picker selection.
+ */
+export async function saveAttachmentBlob(input: {
+  bytes: Uint8Array;
+  mime: string;
+  suggestedName?: string;
+}): Promise<string> {
+  // Tauri commands expect plain arrays; `Uint8Array` works because it is an
+  // ArrayBufferView, but `serde` decodes `[u8]` faster from a number[].
+  const byteArray = Array.from(input.bytes);
+  return invoke<string>("save_attachment_blob", {
+    bytes: byteArray,
+    mime: input.mime,
+    suggestedName: input.suggestedName ?? null,
+  });
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   await invoke<void>("open_url", { url });
 }

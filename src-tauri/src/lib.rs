@@ -9,6 +9,7 @@ mod agent_config;
 mod agent_runtime;
 mod agents_store;
 mod app_updater;
+mod attachment_blob;
 mod attachment_preview;
 mod automations;
 mod bridge;
@@ -472,6 +473,10 @@ pub fn run() {
             experts::experts_link_agents,
             // Safe, bounded previews for local chat image attachments.
             attachment_preview::attachment_thumbnail,
+            // Persist clipboard / drag-drop image blobs under app_data_dir and
+            // hand back a path so the existing attachments pipeline (multimodal
+            // send, thumbnails, ACP metadata) keeps working.
+            attachment_blob::save_attachment_blob,
             // connector marketplace (live from a local EchoAgent marketplace dir)
             connectors_catalog::connectors_default_root,
             connectors_catalog::connectors_list_roots,
