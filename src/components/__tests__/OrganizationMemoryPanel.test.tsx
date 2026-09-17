@@ -34,9 +34,14 @@ vi.mock("@/lib/org-client", () => api);
 vi.mock("../Markdown", () => ({
   Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
+const agentClientMocks = vi.hoisted(() => ({
+  filesystemPickFiles: vi.fn(async () => []),
+}));
+vi.mock("@/lib/agent-client", () => agentClientMocks);
 
 import { OrganizationMemoryPanel } from "../OrganizationMemoryPanel";
 import { resetOrgSessionMirror, useOrgSessionStore } from "@/stores/org-session-store";
+import { filesystemPickFiles } from "@/lib/agent-client";
 
 let askListener: ((event: OrgAskEvent) => void) | undefined;
 
@@ -385,5 +390,130 @@ describe("OrganizationMemoryPanel", () => {
     view.unmount();
     await act(async () => resolveListener?.(stop));
     expect(stop).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("OrganizationMemoryPanel — 文档/Skill 批量上传", () => {
+  beforeEach(() => {
+    resetOrgSessionMirror();
+    for (const mock of Object.values(api)) mock.mockReset();
+    for (const mock of Object.values(agentClientMocks)) mock.mockReset();
+    agentClientMocks.filesystemPickFiles.mockResolvedValue([]);
+    api.orgSession.mockResolvedValue({
+      loggedIn: true,
+      organizationMemoryEnabled: true,
+      serverUrl: "https://memory.example.com",
+      user: { id: "u1", username: "alice", displayName: "Alice", role: "member", clearance: 1 },
+      bootstrap: {
+        apiVersion: 1,
+        user: { id: "u1", username: "alice", displayName: "Alice", role: "member", clearance: 1 },
+        scopes: [personalScope, teamScope],
+        policy: { allowSkillSubmission: true, allowPersonalCloud: true },
+        serverTime: 1,
+      },
+    });
+    api.orgListScopes.mockResolvedValue([personalScope, teamScope]);
+    api.orgListDocuments.mockResolvedValue({ items: [], total: 0, page: 1, size: 50 });
+    api.orgListSkills.mockResolvedValue([]);
+    api.orgListMemories.mockResolvedValue([]);
+    api.orgMemoryPromotionsMine.mockResolvedValue([]);
+    api.orgDocumentSubmissionsMine.mockResolvedValue([]);
+    api.orgSkillSubmissionsMine.mockResolvedValue([]);
+    api.orgAskStart.mockResolvedValue("request-1");
+    api.orgAskCancel.mockResolvedValue(true);
+    api.orgSubmitMemoryCandidate.mockResolvedValue({ promotionId: "p1", state: "pending" });
+    api.listenOrgAsk.mockImplementation(async () => vi.fn());
+  });
+
+  // 跳到「文档」Tab + 选 personal scope(允许个人云上传),后续才能点到上传按钮。
+  async function mountOnDocsTab() {
+    render(<OrganizationMemoryPanel />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    fireEvent.change(screen.getAllByRole("combobox")[0], {
+      target: { value: personalScope.id },
+    });
+  }
+
+  it("多选 3 个文档 → 并行提交 3 次 org_submit_document", async () => {
+    api.orgSubmitDocument.mockResolvedValue({ id: "d1", state: "pending" });
+    vi.mocked(filesystemPickFiles).mockResolvedValue([
+      "/tmp/a.md",
+      "/tmp/b.pdf",
+      "/tmp/c.docx",
+    ]);
+
+    await mountOnDocsTab();
+    fireEvent.click(screen.getByRole("button", { name: /上传到当前范围/ }));
+
+    await waitFor(() => {
+      expect(api.orgSubmitDocument).toHaveBeenCalledTimes(3);
+    });
+    expect(api.orgSubmitDocument.mock.calls.map(([path]) => path)).toEqual([
+      "/tmp/a.md",
+      "/tmp/b.pdf",
+      "/tmp/c.docx",
+    ]);
+    api.orgSubmitDocument.mock.calls.forEach(([path, scopeId]) => {
+      expect(scopeId).toBe(personalScope.id);
+      expect(path).toMatch(/^\/tmp\//);
+    });
+  });
+
+  it("单文件失败不影响其它文件,toast 显示「成功 X / 失败 Y」", async () => {
+    api.orgSubmitDocument.mockImplementation(async (path: string) => {
+      if (path.endsWith("bad.pdf")) throw new Error("文件已损坏");
+      return { id: path, state: "pending" };
+    });
+    vi.mocked(filesystemPickFiles).mockResolvedValue([
+      "/tmp/good.md",
+      "/tmp/bad.pdf",
+      "/tmp/good2.md",
+    ]);
+
+    const onToast = vi.fn();
+    render(<OrganizationMemoryPanel onToast={onToast} />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^文档/ }));
+    fireEvent.change(screen.getAllByRole("combobox")[0], {
+      target: { value: personalScope.id },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /上传到当前范围/ }));
+
+    await waitFor(() => expect(api.orgSubmitDocument).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(onToast).toHaveBeenCalledWith(
+        expect.stringMatching(/已上传 2.*失败 1/),
+      ),
+    );
+  });
+
+  it("未选中文件时不做任何操作", async () => {
+    vi.mocked(filesystemPickFiles).mockResolvedValue([]);
+    await mountOnDocsTab();
+    fireEvent.click(screen.getByRole("button", { name: /上传到当前范围/ }));
+    expect(api.orgSubmitDocument).not.toHaveBeenCalled();
+  });
+
+  it("Skill 批量上传也走相同批量管线", async () => {
+    api.orgSubmitSkill.mockResolvedValue({ id: "s1", state: "pending" });
+    vi.mocked(filesystemPickFiles).mockResolvedValue([
+      "/tmp/skill-a.zip",
+      "/tmp/skill-b.zip",
+    ]);
+
+    render(<OrganizationMemoryPanel />);
+    await screen.findByText("Alice · https://memory.example.com");
+    fireEvent.click(screen.getByRole("button", { name: /^Skills/ }));
+    fireEvent.change(screen.getAllByRole("combobox")[0], {
+      target: { value: personalScope.id },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /上传 ZIP/ }));
+
+    await waitFor(() => expect(api.orgSubmitSkill).toHaveBeenCalledTimes(2));
+    expect(api.orgSubmitSkill.mock.calls.map(([path]) => path)).toEqual([
+      "/tmp/skill-a.zip",
+      "/tmp/skill-b.zip",
+    ]);
   });
 });

@@ -384,23 +384,40 @@ export function OrganizationMemoryPanel({
 
   const pickAndUploadDocument = async () => {
     if (!uploadScope) return;
-    const [path] = await filesystemPickFiles({
-      multiple: false,
-      title: "选择要提交的可检索文档",
+    const paths = await filesystemPickFiles({
+      multiple: true,
+      maxFiles: 50,
+      title: "选择要提交的可检索文档（可多选）",
       extensions: ["md", "txt", "pdf", "docx", "xlsx", "pptx", "png", "jpg", "jpeg"],
     });
-    if (!path) return;
+    if (!paths || paths.length === 0) return;
+    await uploadDocumentsInBatch(paths, uploadScope.id);
+  };
+
+  const uploadDocumentsInBatch = async (paths: string[], scopeId: string) => {
     setBusy(true);
     setError(null);
-    try {
-      const result = await orgSubmitDocument(path, uploadScope.id);
-      onToast?.(result.state === "pending" ? "文档已提交，等待组织审核" : "文档已提交，正在建立索引");
-      await loadWorkspace();
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
+    let done = 0;
+    const failures: string[] = [];
+    const settled = await Promise.allSettled(
+      paths.map((path) => orgSubmitDocument(path, scopeId)),
+    );
+    settled.forEach((result, index) => {
+      if (result.status === "fulfilled") done += 1;
+      else failures.push(`${paths[index]}: ${String(result.reason).replace(/^Error:\s*/, "")}`);
+    });
+    if (failures.length > 0) setError(failures.slice(0, 3).join("\n"));
+    if (done > 0) {
+      onToast?.(
+        failures.length > 0
+          ? `已上传 ${done} 个文档，失败 ${failures.length} 个`
+          : `已上传 ${done} 个文档，正在建立索引`,
+      );
+    } else {
+      onToast?.(`上传失败：${failures[0] ?? "未知原因"}`);
     }
+    setBusy(false);
+    await loadWorkspace();
   };
 
   const submitMemoryCandidate = async (event: React.FormEvent) => {
@@ -437,23 +454,36 @@ export function OrganizationMemoryPanel({
 
   const pickAndUploadSkill = async () => {
     if (!uploadScope) return;
-    const [path] = await filesystemPickFiles({
-      multiple: false,
-      title: "选择要提交的 Skill ZIP",
+    const paths = await filesystemPickFiles({
+      multiple: true,
+      maxFiles: 50,
+      title: "选择要提交的 Skill ZIP（可多选）",
       extensions: ["zip"],
     });
-    if (!path) return;
+    if (!paths || paths.length === 0) return;
     setBusy(true);
     setError(null);
-    try {
-      const result = await orgSubmitSkill(path, uploadScope.id);
-      onToast?.(result.state === "pending" ? "Skill 已提交，等待组织审核" : "Skill 已发布，可以同步使用");
-      await loadWorkspace();
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
+    let done = 0;
+    const failures: string[] = [];
+    const settled = await Promise.allSettled(
+      paths.map((path) => orgSubmitSkill(path, uploadScope.id)),
+    );
+    settled.forEach((result, index) => {
+      if (result.status === "fulfilled") done += 1;
+      else failures.push(`${paths[index]}: ${String(result.reason).replace(/^Error:\s*/, "")}`);
+    });
+    if (failures.length > 0) setError(failures.slice(0, 3).join("\n"));
+    if (done > 0) {
+      onToast?.(
+        failures.length > 0
+          ? `已上传 ${done} 个 Skill，失败 ${failures.length} 个`
+          : "Skill 已提交，等待组织审核",
+      );
+    } else {
+      onToast?.(`Skill 上传失败：${failures[0] ?? "未知原因"}`);
     }
+    setBusy(false);
+    await loadWorkspace();
   };
 
   const uploadNewVersion = async (document: OrgDocument) => {
