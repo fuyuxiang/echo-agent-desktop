@@ -724,6 +724,13 @@ export interface RewindPoint {
   toolNames?: string[];
 }
 
+/** Result of a committed conversation/file rewind. For message regeneration,
+ * `promptText` preserves the exact model-facing prompt that was removed. */
+export interface RewindExecution {
+  targetPromptIndex: number;
+  promptText?: string;
+}
+
 // ---------- slash commands + prompt history ----------
 
 export interface SlashCommand {

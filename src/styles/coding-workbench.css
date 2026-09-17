@@ -1544,6 +1544,14 @@
   font-size: 11px;
 }
 
+.coding-agent__assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--echo-text-medium);
+  font-size: 11px;
+}
+
 .coding-agent__composer {
   display: flex;
   flex-direction: column;

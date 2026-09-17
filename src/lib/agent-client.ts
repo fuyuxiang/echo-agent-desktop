@@ -33,6 +33,7 @@ import type {
   PermissionRequest,
   PermissionRule,
   PromptComplete,
+  RewindExecution,
   RewindPoint,
   RunningTask,
   SearchHit,
@@ -345,6 +346,12 @@ async function synchronizeKnowledgeSources(
     );
   }
   return sources;
+}
+
+/** Validate all selected Runtime knowledge integrations before a destructive
+ * conversation replacement. The subsequent send reuses this acknowledgement. */
+export async function agentPrepareSend(sessionId: string): Promise<void> {
+  await synchronizeKnowledgeSources(sessionId);
 }
 
 /** Send a user prompt; streamed updates arrive via the events below. */
@@ -1285,8 +1292,8 @@ export async function rewindExecute(
   targetPromptIndex: number,
   mode?: string,
   force?: boolean,
-): Promise<void> {
-  await invoke<void>("rewind_execute", {
+): Promise<RewindExecution> {
+  return invoke<RewindExecution>("rewind_execute", {
     sessionId,
     targetPromptIndex,
     mode: mode ?? null,

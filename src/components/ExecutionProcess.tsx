@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Markdown, type MarkdownConfig } from "./markdown/index";
 import { ToolCallCard } from "./ToolCallCard";
 import { useTheme } from "./ThemeProvider";
@@ -7,7 +7,6 @@ import {
   formatProcessDuration,
   summarizeExecutionProcess,
 } from "@/lib/execution-process";
-import { pickThinkingCompanion } from "@/lib/loading-tips";
 import type { KnowledgeTurnTrace } from "@/stores/knowledge-store";
 
 interface ExecutionProcessProps {
@@ -19,15 +18,98 @@ interface ExecutionProcessProps {
   cancelTrigger?: string;
   cancellationCategory?: string;
   agentResult?: string;
+  hasFinalAnswer?: boolean;
   markdownConfig?: MarkdownConfig;
   onOpenTool?: (tool: ToolCallView) => void;
   knowledgeTrace?: KnowledgeTurnTrace;
   onOpenKnowledgePath?: (path: string) => void;
 }
 
+type ReasoningPart = Extract<MessagePart, { kind: "text" | "thought" }>;
+type ProcessRow =
+  | { kind: "reasoning"; parts: ReasoningPart[] }
+  | { kind: "tool"; part: Extract<MessagePart, { kind: "tool_call" }> };
+
+interface ReasoningDisclosureProps {
+  parts: ReasoningPart[];
+  active: boolean;
+  hasFinalAnswer: boolean;
+  markdownConfig?: MarkdownConfig;
+  theme: "light" | "dark";
+}
+
+function groupProcessRows(parts: MessagePart[]): ProcessRow[] {
+  const rows: ProcessRow[] = [];
+  for (const part of parts) {
+    if (part.kind === "tool_call") {
+      rows.push({ kind: "tool", part });
+      continue;
+    }
+    const previous = rows[rows.length - 1];
+    if (previous?.kind === "reasoning") previous.parts.push(part);
+    else rows.push({ kind: "reasoning", parts: [part] });
+  }
+  return rows;
+}
+
+function ReasoningDisclosure({
+  parts,
+  active,
+  hasFinalAnswer,
+  markdownConfig,
+  theme,
+}: ReasoningDisclosureProps) {
+  const [open, setOpen] = useState(!hasFinalAnswer);
+  const userToggled = useRef(false);
+  const previousActive = useRef(active);
+  const previousHasFinalAnswer = useRef(hasFinalAnswer);
+
+  useLayoutEffect(() => {
+    const beganNewRun = active && !previousActive.current;
+    if (beganNewRun) userToggled.current = false;
+    if (
+      !userToggled.current
+      && (beganNewRun || previousHasFinalAnswer.current !== hasFinalAnswer)
+    ) {
+      setOpen(!hasFinalAnswer);
+    }
+    previousActive.current = active;
+    previousHasFinalAnswer.current = hasFinalAnswer;
+  }, [active, hasFinalAnswer]);
+
+  return (
+    <details className="execution-process__reasoning" open={open}>
+      <summary
+        onClick={(event) => {
+          // Keep the disclosure controlled so streamed parent renders cannot
+          // overwrite an explicit user choice.
+          event.preventDefault();
+          userToggled.current = true;
+          setOpen((value) => !value);
+        }}
+      >
+        深度思考
+      </summary>
+      <div className="execution-process__reasoning-body">
+        {parts.map((part, partIndex) => (
+          <Markdown
+            key={partIndex}
+            complete={!active}
+            markdownTheme="reasoning"
+            theme={theme}
+            config={markdownConfig}
+          >
+            {part.text}
+          </Markdown>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 /**
  * One desktop-friendly process group per assistant turn. It keeps the live
- * state readable, folds automatically when a turn completes, and delegates
+ * state readable, folds automatically when the final answer begins, and delegates
  * dense tool output to the existing right-side detail panel.
  */
 export function ExecutionProcess({
@@ -39,6 +121,7 @@ export function ExecutionProcess({
   cancelTrigger,
   cancellationCategory,
   agentResult,
+  hasFinalAnswer = false,
   markdownConfig,
   onOpenTool,
   knowledgeTrace,
@@ -46,11 +129,6 @@ export function ExecutionProcess({
 }: ExecutionProcessProps) {
   const { theme } = useTheme();
   const bodyId = useId();
-  const [open, setOpen] = useState(active);
-  const [now, setNow] = useState(() => Date.now());
-  const [thinkingCompanion] = useState(() => pickThinkingCompanion());
-  const previousActive = useRef(active);
-  const userToggled = useRef(false);
   const summary = useMemo(
     () => summarizeExecutionProcess(
       parts,
@@ -61,8 +139,17 @@ export function ExecutionProcess({
     ),
     [active, cancellationCategory, cancelTrigger, parts, stopReason],
   );
+  const needsAttention = summary.state === "attention" || summary.state === "stopped";
+  // Keep live reasoning visible until the first user-facing answer arrives.
+  // Abnormal endings stay open so the diagnostic context is never hidden.
+  const shouldOpenAutomatically = needsAttention || !hasFinalAnswer;
+  const [open, setOpen] = useState(shouldOpenAutomatically);
+  const [now, setNow] = useState(() => Date.now());
+  const previousActive = useRef(active);
+  const previousAutomaticOpen = useRef(shouldOpenAutomatically);
+  const userToggled = useRef(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!startedAt || !active) return;
     const update = () => setNow(Date.now());
     update();
@@ -71,19 +158,26 @@ export function ExecutionProcess({
   }, [active, startedAt]);
 
   useEffect(() => {
-    if (active && !previousActive.current) {
+    const beganNewRun = active && !previousActive.current;
+    if (beganNewRun) {
       userToggled.current = false;
-      setOpen(true);
-    } else if (!active && previousActive.current && !userToggled.current) {
-      setOpen(false);
     }
-    previousActive.current = active;
-  }, [active]);
 
-  const thoughtParts = parts.filter(
-    (part): part is Extract<MessagePart, { kind: "thought" }> => part.kind === "thought",
-  );
-  const visibleParts = parts.filter((part) => part.kind !== "thought");
+    // Follow the automatic state only until the user makes an explicit choice.
+    // In particular, collapse as soon as the first final-answer token arrives,
+    // rather than waiting for the entire turn to finish streaming.
+    if (
+      !userToggled.current
+      && (beganNewRun || previousAutomaticOpen.current !== shouldOpenAutomatically)
+    ) {
+      setOpen(shouldOpenAutomatically);
+    }
+
+    previousActive.current = active;
+    previousAutomaticOpen.current = shouldOpenAutomatically;
+  }, [active, shouldOpenAutomatically]);
+
+  const processRows = useMemo(() => groupProcessRows(parts), [parts]);
   const duration = startedAt
     ? formatProcessDuration(Math.max(0, (completedAt ?? now) - startedAt))
     : null;
@@ -100,17 +194,20 @@ export function ExecutionProcess({
   if (knowledgeTrace?.personal?.state === "used") {
     meta.unshift(`${knowledgeTrace.personal.resultCount} 个知识片段`);
   }
-  const knowledgeOnly = visibleParts.length === 0
-    && thoughtParts.length === 0
-    && Boolean(knowledgeTrace);
+  const knowledgeOnly = parts.length === 0 && Boolean(knowledgeTrace);
   const title = knowledgeTrace?.personal?.state === "searching"
     ? "正在检索个人知识库"
+    : active && hasFinalAnswer && !needsAttention
+      ? summary.toolCount > 0 ? "已完成执行过程" : "已完成思考"
     : knowledgeOnly && !active
       ? "知识检索完成"
       : summary.title;
+  const displayState = active && hasFinalAnswer && summary.state === "running"
+    ? "complete"
+    : summary.state;
 
   return (
-    <section className={`execution-process execution-process--${summary.state}`}>
+    <section className={`execution-process execution-process--${displayState}`}>
       <button
         type="button"
         className="execution-process__header"
@@ -151,60 +248,27 @@ export function ExecutionProcess({
               onOpenPath={onOpenKnowledgePath}
             />
           )}
-          {visibleParts.length === 0 && thoughtParts.length > 0 && (
-            <p className="execution-process__empty">
-              {active
-                ? thinkingCompanion
-                : "本轮没有调用外部操作，可展开查看思考过程。"}
-            </p>
-          )}
-          {visibleParts.map((part, index) => {
-            if (part.kind === "text") {
-              return (
-                <div className="execution-process__commentary" key={`text-${index}`}>
-                  <Markdown
-                    complete={!active}
-                    markdownTheme="reasoning"
-                    theme={theme}
-                    config={markdownConfig}
-                  >
-                    {part.text}
-                  </Markdown>
-                </div>
-              );
-            }
-            if (part.kind === "tool_call") {
+          {processRows.map((row, index) => {
+            if (row.kind === "tool") {
               return (
                 <ToolCallCard
-                  key={part.toolCall.toolCallId || `tool-${index}`}
-                  tc={part.toolCall}
+                  key={row.part.toolCall.toolCallId || `tool-${index}`}
+                  tc={row.part.toolCall}
                   onOpen={onOpenTool}
                 />
               );
             }
-            return null;
+            return (
+              <ReasoningDisclosure
+                key={`reasoning-${index}`}
+                parts={row.parts}
+                active={active}
+                hasFinalAnswer={hasFinalAnswer}
+                markdownConfig={markdownConfig}
+                theme={theme}
+              />
+            );
           })}
-
-          {thoughtParts.length > 0 && (
-            <details className="execution-process__reasoning">
-              <summary>
-                思考过程{thoughtParts.length > 1 ? ` · ${thoughtParts.length} 段` : ""}
-              </summary>
-              <div className="execution-process__reasoning-body">
-                {thoughtParts.map((part, index) => (
-                  <Markdown
-                    key={index}
-                    complete={!active}
-                    markdownTheme="reasoning"
-                    theme={theme}
-                    config={markdownConfig}
-                  >
-                    {part.text}
-                  </Markdown>
-                ))}
-              </div>
-            </details>
-          )}
 
           {summary.toolCount > 0 && onOpenTool && (
             <p className="execution-process__hint">选择操作可在右侧查看输入、输出和文件变更</p>

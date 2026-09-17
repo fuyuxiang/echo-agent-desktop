@@ -49,6 +49,7 @@ const MAX_ADMIN_ACTION_NODES: usize = 2_048;
 const MAX_ADMIN_RESPONSE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const MAX_ADMIN_RESPONSE_STRING_BYTES: usize = 256 * 1024;
 const MAX_ADMIN_RESPONSE_NODES: usize = 100_000;
+const MAX_REWIND_PROMPT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ADMIN_RESULTS: usize = 2_000;
 const MAX_ADMIN_LISTED_SOURCES: usize = 256;
 const MAX_ADMIN_LISTED_PLUGINS: usize = 4_096;
@@ -1019,21 +1020,40 @@ pub async fn session_search(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RewindPoint {
+    #[serde(alias = "prompt_index")]
     pub prompt_index: u32,
+    #[serde(default, alias = "prompt_preview")]
     pub prompt_preview: Option<String>,
+    #[serde(default, alias = "created_at", alias = "createdAt")]
     pub timestamp: Option<String>,
     /// First assistant response snippet (for timeline display).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "message_preview",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub message_preview: Option<String>,
     /// Whether this prompt produced file changes (for badge display).
-    #[serde(default)]
+    #[serde(default, alias = "has_file_changes")]
     pub has_file_changes: bool,
     /// Whether this prompt produced memory writes (for badge display).
-    #[serde(default)]
+    #[serde(default, alias = "has_memory_changes")]
     pub has_memory_changes: bool,
     /// Tool calls made during this turn (for timeline detail).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, alias = "tool_names", skip_serializing_if = "Option::is_none")]
     pub tool_names: Option<Vec<String>>,
+}
+
+fn rewind_point_values(value: &serde_json::Value) -> Result<&[serde_json::Value], String> {
+    let values = value
+        .get("points")
+        .or_else(|| value.get("rewindPoints"))
+        // Runtime's canonical Rust response uses snake_case.
+        .or_else(|| value.get("rewind_points"))
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .or_else(|| value.as_array().map(Vec::as_slice));
+    values.ok_or_else(|| "Agent Runtime 返回了无效的可恢复位置列表".to_string())
 }
 
 /// List the prompts a session can rewind to.
@@ -1055,67 +1075,17 @@ pub async fn rewind_points(
         .map_err(|e| e.to_string())?;
     validate_admin_response(&v)?;
     // Response shape: array or { points: [...] }.
-    let arr = v
-        .get("points")
-        .and_then(|p| p.as_array())
-        .or_else(|| v.as_array());
-    let Some(arr) = arr else {
-        return Ok(Vec::new());
-    };
-    Ok(arr
+    let arr = rewind_point_values(&v)?;
+    let points = arr
         .iter()
         .take(MAX_ADMIN_RESULTS)
         .map(|item| {
-            serde_json::from_value::<RewindPoint>(item.clone()).unwrap_or_else(|_| {
-                let prompt_index = item
-                    .get("promptIndex")
-                    .or_else(|| item.get("prompt_index"))
-                    .and_then(|n| n.as_u64())
-                    .unwrap_or(0) as u32;
-                let prompt_preview = item
-                    .get("promptPreview")
-                    .or_else(|| item.get("prompt_preview"))
-                    .and_then(|s| s.as_str())
-                    .map(String::from);
-                let timestamp = item
-                    .get("timestamp")
-                    .and_then(|s| s.as_str())
-                    .map(String::from);
-                let message_preview = item
-                    .get("messagePreview")
-                    .or_else(|| item.get("message_preview"))
-                    .and_then(|s| s.as_str())
-                    .map(String::from);
-                let has_file_changes = item
-                    .get("hasFileChanges")
-                    .or_else(|| item.get("has_file_changes"))
-                    .and_then(|b| b.as_bool())
-                    .unwrap_or(false);
-                let has_memory_changes = item
-                    .get("hasMemoryChanges")
-                    .or_else(|| item.get("has_memory_changes"))
-                    .and_then(|b| b.as_bool())
-                    .unwrap_or(false);
-                let tool_names = item
-                    .get("toolNames")
-                    .or_else(|| item.get("tool_names"))
-                    .and_then(|a| a.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    });
-                RewindPoint {
-                    prompt_index,
-                    prompt_preview,
-                    timestamp,
-                    message_preview,
-                    has_file_changes,
-                    has_memory_changes,
-                    tool_names,
-                }
-            })
+            serde_json::from_value::<RewindPoint>(item.clone())
+                .map_err(|error| format!("Agent Runtime 返回了无效的可恢复位置：{error}"))
         })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(points
+        .into_iter()
         .map(|mut point| {
             point.prompt_preview = point
                 .prompt_preview
@@ -1136,6 +1106,65 @@ pub async fn rewind_points(
         .collect())
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewindExecution {
+    target_prompt_index: u32,
+    prompt_text: Option<String>,
+}
+
+fn parse_rewind_execution(
+    response: serde_json::Value,
+    requested_prompt_index: u32,
+) -> Result<RewindExecution, String> {
+    // `prompt_text` is the exact accepted user prompt and follows the normal
+    // 4 MiB send contract. Validate it separately, then apply the tighter
+    // generic admin-response budget to the remaining metadata.
+    let prompt_value = response
+        .get("promptText")
+        .or_else(|| response.get("prompt_text"));
+    if prompt_value
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value.len() > MAX_REWIND_PROMPT_BYTES)
+    {
+        return Err("Agent Runtime 返回的原始消息过大".into());
+    }
+    let mut response_metadata = response.clone();
+    if let Some(object) = response_metadata.as_object_mut() {
+        object.remove("promptText");
+        object.remove("prompt_text");
+    }
+    validate_admin_response(&response_metadata)?;
+    match response.get("success").and_then(serde_json::Value::as_bool) {
+        Some(true) => {}
+        Some(false) => {
+            return Err(response
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .filter(|message| !message.trim().is_empty())
+                .unwrap_or("回溯未成功")
+                .to_string());
+        }
+        None => return Err("Agent Runtime 返回了无效的回溯结果".into()),
+    }
+    let response_target = response
+        .get("targetPromptIndex")
+        .or_else(|| response.get("target_prompt_index"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or("Agent Runtime 返回的恢复位置无效")?;
+    if response_target != requested_prompt_index {
+        return Err("Agent Runtime 返回的恢复位置与请求不一致".into());
+    }
+    let prompt_text = prompt_value
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    Ok(RewindExecution {
+        target_prompt_index: response_target,
+        prompt_text,
+    })
+}
+
 /// Rewind a session to a specific prompt index. `mode` ∈ "all" (default) |
 /// "conversation" (don't touch files) | "files".
 #[tauri::command]
@@ -1145,7 +1174,7 @@ pub async fn rewind_execute(
     target_prompt_index: u32,
     mode: Option<String>,
     force: Option<bool>,
-) -> Result<(), String> {
+) -> Result<RewindExecution, String> {
     require_live_session(&state, &session_id)?;
     let mode = mode.unwrap_or_else(|| "all".into());
     if !matches!(mode.as_str(), "all" | "conversation" | "files") {
@@ -1164,10 +1193,10 @@ pub async fn rewind_execute(
         "force": force.unwrap_or(false),
     });
     let params = raw_params(&payload);
-    let _: serde_json::Value = call_ext(&tx, "echo.agent/rewind/execute", params)
+    let response: serde_json::Value = call_ext(&tx, "echo.agent/rewind/execute", params)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(())
+    parse_rewind_execution(response, target_prompt_index)
 }
 
 // ========================================================================
@@ -2268,12 +2297,81 @@ mod tests {
     use super::{
         check_expected_revision, delete_session_memory_artifacts_from_storage, file_revision,
         init_sqlite_vec, kill_running_task, list_memory, list_running_tasks,
-        normalize_plugin_action, parse_slash_commands, remember_marketplace, remember_plugins,
-        request_internal_reload_and_wait, require_listed_marketplace_source,
-        require_listed_plugin_id, resolve_memory_path, secure_remote_source, validate_admin_action,
-        MemoryEntryScope, MemoryIndex, MemoryStorage, RawSearchHit, RunningTaskSource,
-        MAX_ADMIN_ACTION_STRING_BYTES,
+        normalize_plugin_action, parse_rewind_execution, parse_slash_commands,
+        remember_marketplace, remember_plugins, request_internal_reload_and_wait,
+        require_listed_marketplace_source, require_listed_plugin_id, resolve_memory_path,
+        rewind_point_values, secure_remote_source, validate_admin_action, MemoryEntryScope,
+        MemoryIndex, MemoryStorage, RawSearchHit, RunningTaskSource, MAX_ADMIN_ACTION_STRING_BYTES,
     };
+
+    #[test]
+    fn rewind_points_accept_runtime_snake_case_envelope() {
+        let value = serde_json::json!({
+            "rewind_points": [{ "prompt_index": 0, "prompt_preview": "hello" }]
+        });
+        let points = rewind_point_values(&value).expect("runtime rewind points");
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0]["prompt_index"], 0);
+
+        let point: super::RewindPoint =
+            serde_json::from_value(points[0].clone()).expect("snake case rewind point");
+        assert_eq!(point.prompt_index, 0);
+        assert_eq!(point.prompt_preview.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn rewind_points_reject_unknown_or_malformed_shapes() {
+        assert!(rewind_point_values(&serde_json::json!({ "items": [] })).is_err());
+        let malformed = serde_json::from_value::<super::RewindPoint>(serde_json::json!({
+            "prompt_preview": "missing index"
+        }));
+        assert!(malformed.is_err());
+    }
+
+    #[test]
+    fn rewind_execute_accepts_exact_snake_case_result() {
+        let execution = parse_rewind_execution(
+            serde_json::json!({
+                "success": true,
+                "target_prompt_index": 3,
+                "prompt_text": "exact model-facing prompt",
+            }),
+            3,
+        )
+        .expect("valid rewind result");
+
+        assert_eq!(execution.target_prompt_index, 3);
+        assert_eq!(
+            execution.prompt_text.as_deref(),
+            Some("exact model-facing prompt")
+        );
+    }
+
+    #[test]
+    fn rewind_execute_rejects_failure_or_wrong_target() {
+        let failure = parse_rewind_execution(
+            serde_json::json!({
+                "success": false,
+                "target_prompt_index": 3,
+                "error": "rewind rejected",
+            }),
+            3,
+        );
+        assert_eq!(failure.unwrap_err(), "rewind rejected");
+
+        let mismatch = parse_rewind_execution(
+            serde_json::json!({
+                "success": true,
+                "target_prompt_index": 4,
+                "prompt_text": "wrong turn",
+            }),
+            3,
+        );
+        assert_eq!(
+            mismatch.unwrap_err(),
+            "Agent Runtime 返回的恢复位置与请求不一致"
+        );
+    }
 
     #[test]
     fn search_hits_accept_the_current_upstream_summary_and_score_fields() {

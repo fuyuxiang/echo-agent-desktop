@@ -30,6 +30,7 @@ import { ThumbImg } from "./components/experts-panel/shared/ThumbImg";
 import {
   agentInit,
   agentNewSession,
+  agentPrepareSend,
   agentSend,
   agentSendNow,
   agentCancel,
@@ -115,6 +116,7 @@ import {
   createAgentPromptId,
   isAgentPromptSettled,
 } from "./lib/agent-turn";
+import type { MessageRetrySendRequest } from "./lib/message-retry";
 import {
   isAgentOwnedActiveStatus,
   isWaitingForUser,
@@ -1230,6 +1232,53 @@ function Shell() {
     }
   };
 
+  const handlePrepareRetry = async (sessionId: string): Promise<boolean> => {
+    if (sessionStore.getState().transcripts[sessionId]?.streamingMessageId) return false;
+    if (modelSwitching || sessionLoading) {
+      showToast(sessionLoading ? "正在加载会话，请稍候" : "正在切换模型，请稍候");
+      return false;
+    }
+    if (!init?.auth.ready) {
+      showToast(runtimeSetupHint, 5000);
+      openSettings("model");
+      return false;
+    }
+    const summary = findSessionSummary(sessionId);
+    if (!summary?.currentModelId && sessionId !== currentSessionId) {
+      showToast("原会话的模型不可用，请返回该会话重新选择模型");
+      return false;
+    }
+    if (sessionId === currentSessionId && !activeSessionModelId) {
+      showToast("当前会话的模型未配置，请先在输入框右下角重新选择模型");
+      return false;
+    }
+    if (!ensureQuotaAllowsSend()) return false;
+    try {
+      await agentPrepareSend(sessionId);
+      return true;
+    } catch (error) {
+      showToast(`暂时无法重试：${friendlyError(error)}`, 6000);
+      return false;
+    }
+  };
+
+  const handleRetrySend = ({
+    sessionId,
+    displayText,
+    promptText,
+    attachments,
+  }: MessageRetrySendRequest): boolean => {
+    const accepted = beginAgentTurn({
+      sessionId,
+      promptText,
+      displayText,
+      attachments,
+      allowBackgroundSession: true,
+    });
+    if (!accepted) showToast("原会话状态已变化，请返回该会话重试");
+    return accepted;
+  };
+
   /**
    * Open an Agent session for a coding-workbench task.
    *
@@ -1808,14 +1857,16 @@ function Shell() {
   const handleRewound = async (rewoundSessionId: string) => {
     const entry = findSessionSummary(rewoundSessionId);
     sessionStore.getState().dropSessionCache(rewoundSessionId);
-    // Rewind may finish after the user switches away. The old cache still has
-    // to be invalidated, but must not steal focus or surface errors in the new chat.
-    if (sessionsStore.getState().currentSessionId !== rewoundSessionId) return;
+    const focused = sessionsStore.getState().currentSessionId === rewoundSessionId;
     if (!entry?.cwd) {
-      sessionStore.getState().setError("无法重载回溯会话：缺少工作区信息");
-      return;
+      const error = new Error("无法重载会话：缺少工作区信息");
+      if (focused) sessionStore.getState().setError(error.message);
+      throw error;
     }
-    sessionStore.getState().setSession(rewoundSessionId);
+    // A replacement can finish after navigation. Reload its transcript in the
+    // background without stealing focus so the retry remains complete and the
+    // next visit cannot suppress a partial cache as authoritative history.
+    if (focused) sessionStore.getState().setSession(rewoundSessionId);
     useSubagentStore.getState().clearSession(rewoundSessionId);
     try {
       await agentLoadSession(rewoundSessionId, entry.cwd);
@@ -1826,6 +1877,9 @@ function Shell() {
       if (sessionsStore.getState().currentSessionId === rewoundSessionId) {
         sessionStore.getState().setError(friendlyError(error));
       }
+      throw error;
+    } finally {
+      sessionStore.getState().clearReplaySuppression(rewoundSessionId);
     }
   };
 
@@ -2370,6 +2424,8 @@ function Shell() {
                   newSessionTargetCwd={newSessionTargetCwd}
                   workspaces={workspaces}
                   onSelectWorkspace={handleSelectWorkspace}
+                  onPrepareRetry={handlePrepareRetry}
+                  onRetrySend={handleRetrySend}
                   onRewound={handleRewound}
                   onForked={handleForked}
                   onToast={showToast}

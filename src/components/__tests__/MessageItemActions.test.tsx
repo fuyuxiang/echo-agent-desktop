@@ -72,6 +72,30 @@ describe("assistant message actions", () => {
     expect(screen.getByRole("button", { name: "已复制 Markdown" })).toBeInTheDocument();
   });
 
+  it("默认复制只带正式答案，不泄露折叠的中间过程", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderMessage({
+      id: "assistant-process-copy",
+      role: "assistant",
+      complete: true,
+      parts: [
+        {
+          kind: "text",
+          text: "<think>I should inspect the project first.</think>\n\n这是用户需要的正式答案。",
+          streamId: "generation-1",
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "复制纯文本" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("这是用户需要的正式答案。"));
+    expect(writeText).not.toHaveBeenCalledWith(expect.stringContaining("I should inspect"));
+  });
+
   it("Escape 关闭复制菜单并把焦点还给触发器", () => {
     renderMessage();
     const trigger = screen.getByRole("button", { name: "更多复制选项" });
@@ -103,10 +127,37 @@ describe("assistant message actions", () => {
         />
       </ThemeProvider>,
     );
-    const retry = screen.getByRole("button", { name: "正在重新执行…" });
+    const retry = screen.getByRole("button", { name: "正在重试…" });
     expect(retry).toBeDisabled();
     expect(retry).toHaveAttribute("aria-busy", "true");
     expect(screen.queryByRole("button", { name: "复制纯文本" })).toBeNull();
+  });
+
+  it("只要本轮使用过工具，就明确标记为重新执行", () => {
+    const onRetry = vi.fn();
+    renderMessage({
+      id: "assistant-tool-actions",
+      role: "assistant",
+      complete: true,
+      parts: [
+        {
+          kind: "tool_call",
+          toolCall: {
+            toolCallId: "tool-1",
+            title: "运行终端命令",
+            kind: "terminal",
+            status: "completed",
+            content: [],
+          },
+        },
+        { kind: "text", text: "命令已完成。" },
+      ],
+    }, { onRetry });
+
+    const button = screen.getByRole("button", { name: "重新执行" });
+    expect(button).toHaveAttribute("title", "重新执行本轮任务（可能再次调用工具）");
+    fireEvent.click(button);
+    expect(onRetry).toHaveBeenCalledWith("reexecute");
   });
 
   it("流式回复完成前不显示读后操作", () => {

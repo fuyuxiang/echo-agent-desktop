@@ -16,6 +16,7 @@ import { PermissionInlineCard } from "@/components/PermissionDialog";
 import { PermissionPicker } from "@/components/PermissionPicker";
 import { QuestionInlineCard } from "@/components/QuestionInlineCard";
 import { useStickToBottom } from "@/components/use-stick-to-bottom";
+import { partitionAssistantParts } from "@/lib/execution-process";
 import type { ChatMessage } from "@/stores/session-store";
 
 import { describePhase } from "../lib/phase";
@@ -222,29 +223,44 @@ export function AgentPane({
               {messages.length === 0 && sessionId && !phase.active && (
                 <div className="coding-row">当前任务暂无对话记录。</div>
               )}
-              {messages.map((entry) =>
-                entry.role === "user" ? (
-                  <div className="coding-agent__user" key={entry.id}>
-                    {entry.parts.map((part, index) =>
-                      part.kind === "text" ? (
-                        <Markdown key={index} complete>{part.text}</Markdown>
-                      ) : null,
+              {messages.map((entry) => {
+                if (entry.role === "user") {
+                  return (
+                    <div className="coding-agent__user" key={entry.id}>
+                      {entry.parts.map((part, index) =>
+                        part.kind === "text" ? (
+                          <Markdown key={index} complete>{part.text}</Markdown>
+                        ) : null,
+                      )}
+                    </div>
+                  );
+                }
+                const groups = partitionAssistantParts(entry.parts);
+                const hasFinalAnswer = groups.responseParts.some((part) => part.text.trim());
+                const hasTerminalStatus = Boolean(
+                  entry.complete && entry.stopReason && entry.stopReason !== "end_turn",
+                );
+                return (
+                  <div className="coding-agent__assistant" key={entry.id}>
+                    {(groups.processParts.length > 0 || hasTerminalStatus) && (
+                      <ExecutionProcess
+                        parts={groups.processParts}
+                        active={!entry.complete}
+                        startedAt={entry.startedAt}
+                        completedAt={entry.completedAt}
+                        stopReason={entry.stopReason}
+                        cancelTrigger={entry.cancelTrigger}
+                        cancellationCategory={entry.cancellationCategory}
+                        agentResult={entry.agentResult}
+                        hasFinalAnswer={hasFinalAnswer}
+                      />
                     )}
+                    {groups.responseParts.map((part, index) => (
+                      <Markdown key={index} complete={entry.complete}>{part.text}</Markdown>
+                    ))}
                   </div>
-                ) : (
-                  <ExecutionProcess
-                    key={entry.id}
-                    parts={entry.parts}
-                    active={!entry.complete}
-                    startedAt={entry.startedAt}
-                    completedAt={entry.completedAt}
-                    stopReason={entry.stopReason}
-                    cancelTrigger={entry.cancelTrigger}
-                    cancellationCategory={entry.cancellationCategory}
-                    agentResult={entry.agentResult}
-                  />
-                ),
-              )}
+                );
+              })}
             </div>
           </div>
           {streaming && !following && (

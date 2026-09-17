@@ -60,10 +60,23 @@ export function parseLegacyAttachmentPrompt(text: string): {
   text: string;
   attachments: string[];
 } {
+  const parsed = stripAttachmentTransportContext(text);
+  return {
+    text: stripInjectedUserContext(parsed.text),
+    attachments: parsed.attachments,
+  };
+}
+
+/** Remove only the desktop-generated attachment suffix while preserving
+ * model-facing context such as expert/project instructions. */
+export function stripAttachmentTransportContext(text: string): {
+  text: string;
+  attachments: string[];
+} {
   const marker = `\n\n${LEGACY_ATTACHMENT_HEADING}\n`;
   const markerIndex = text.lastIndexOf(marker);
   if (markerIndex === -1) {
-    return { text: stripInjectedUserContext(text), attachments: [] };
+    return { text, attachments: [] };
   }
 
   const rows = text
@@ -72,12 +85,12 @@ export function parseLegacyAttachmentPrompt(text: string): {
     .map((row) => row.trim())
     .filter(Boolean);
   if (rows.length === 0 || rows.some((row) => !row.startsWith("- @"))) {
-    return { text: stripInjectedUserContext(text), attachments: [] };
+    return { text, attachments: [] };
   }
 
   const attachments = [...new Set(rows.map((row) => row.slice(3).trim()).filter(Boolean))];
   return {
-    text: stripInjectedUserContext(text.slice(0, markerIndex)),
+    text: text.slice(0, markerIndex),
     attachments,
   };
 }

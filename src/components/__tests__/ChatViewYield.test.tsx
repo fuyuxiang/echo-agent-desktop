@@ -10,7 +10,7 @@
  * mock session-store 提供 streaming/sessionId/messages;mock agent-client 的 rewind*。
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 
 // session-store mock:可控的 streaming / sessionId / messages。
 let storeState: {
@@ -26,6 +26,7 @@ let storeState: {
     requestedAt: number;
   };
   resumeSession: (sessionId: string) => void;
+  discardMessagesFrom: ReturnType<typeof vi.fn>;
 } = {
   messages: [],
   streaming: false,
@@ -37,10 +38,15 @@ let storeState: {
   resumeSession: () => {
     storeState = { ...storeState, control: undefined };
   },
+  discardMessagesFrom: vi.fn(),
 };
-vi.mock("@/stores/session-store", () => ({
-  useSessionStore: (sel: (s: typeof storeState) => unknown) => sel(storeState),
-}));
+vi.mock("@/stores/session-store", () => {
+  const useSessionStore = Object.assign(
+    (sel: (s: typeof storeState) => unknown) => sel(storeState),
+    { getState: () => storeState },
+  );
+  return { useSessionStore };
+});
 vi.mock("@/stores/sessions-store", () => {
   const value = {
     drafts: {} as Record<string, string>,
@@ -112,7 +118,7 @@ vi.mock("@/lib/agent-client", async () => {
 
 import { ChatView } from "../ChatView";
 import { ThemeProvider } from "../ThemeProvider";
-import { rewindPoints } from "@/lib/agent-client";
+import { rewindExecute, rewindPoints } from "@/lib/agent-client";
 
 /** 用 ThemeProvider 包裹(ChatView 内的 MessageItem/Markdown 需要 useTheme)。 */
 function renderChat() {
@@ -125,6 +131,8 @@ function renderChat() {
 
 const baseProps = {
   onSend: vi.fn(),
+  onPrepareRetry: vi.fn(async () => true),
+  onRetrySend: vi.fn(() => true),
   onCancel: vi.fn(),
   modelId: "m1",
   onToast: vi.fn(),
@@ -146,8 +154,12 @@ describe("ChatView pause/yield/resume 闭环", () => {
       control: undefined,
     });
     baseProps.onSend.mockClear();
+    baseProps.onPrepareRetry.mockClear().mockResolvedValue(true);
+    baseProps.onRetrySend.mockClear().mockReturnValue(true);
     baseProps.onCancel.mockClear();
     baseProps.onToast.mockClear();
+    storeState.discardMessagesFrom.mockClear();
+    vi.mocked(rewindExecute).mockReset().mockResolvedValue({ targetPromptIndex: 0 });
     vi.mocked(rewindPoints).mockReset().mockResolvedValue([]);
   });
 
@@ -292,7 +304,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     expect(baseProps.onToast).toHaveBeenCalledWith(expect.stringContaining("任务仍保持暂停"));
   });
 
-  it("模型初始化失败且没有回溯点时，安全重发原始消息", async () => {
+  it("请求未进入 Runtime 时，原位清理失败轮次后重试", async () => {
     setStore({
       messages: [
         { id: "u1", role: "user", complete: true, parts: [{ kind: "text", text: "生成每日报告" }] },
@@ -302,13 +314,20 @@ describe("ChatView pause/yield/resume 闭环", () => {
     });
     renderChat();
 
-    fireEvent.click(screen.getByRole("button", { name: "重新执行" }));
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
 
-    await waitFor(() => expect(baseProps.onSend).toHaveBeenCalledWith("生成每日报告", []));
-    expect(baseProps.onToast).toHaveBeenCalledWith("已使用当前模型重新发送");
+    await waitFor(() => expect(baseProps.onRetrySend).toHaveBeenCalledWith({
+      sessionId: "s1",
+      displayText: "生成每日报告",
+      promptText: "生成每日报告",
+      attachments: [],
+      kind: "retry",
+    }));
+    expect(storeState.discardMessagesFrom).toHaveBeenCalledWith("s1", "u1");
+    expect(baseProps.onSend).not.toHaveBeenCalled();
   });
 
-  it("没有回溯点但已产生回复时，不会冒险重复执行", async () => {
+  it("无法安全替换纯文本回复时保留原回复，不追加重复消息", async () => {
     setStore({
       messages: [
         { id: "u1", role: "user", complete: true, parts: [{ kind: "text", text: "执行任务" }] },
@@ -320,7 +339,95 @@ describe("ChatView pause/yield/resume 闭环", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
 
     await waitFor(() => expect(rewindPoints).toHaveBeenCalledWith("s1"));
-    expect(baseProps.onSend).not.toHaveBeenCalled();
-    expect(baseProps.onToast).toHaveBeenCalledWith("该轮没有可回溯点，为避免重复执行工具无法自动重试。");
+    expect(baseProps.onRetrySend).not.toHaveBeenCalled();
+    expect(storeState.discardMessagesFrom).not.toHaveBeenCalled();
+    expect(baseProps.onToast).toHaveBeenCalledWith(
+      "重新生成失败：暂时无法替换这条回复，原回复已保留。请稍后重试。",
+    );
+  });
+
+  it("重新生成使用被替换轮次的原始模型提示", async () => {
+    setStore({
+      messages: [
+        {
+          id: "u1",
+          role: "user",
+          complete: true,
+          promptIndex: 4,
+          agentText: "<hidden>project contract</hidden>\n\n执行任务",
+          attachments: ["/tmp/方案.docx"],
+          parts: [{ kind: "text", text: "执行任务" }],
+        },
+        { id: "a1", role: "assistant", complete: true, parts: [{ kind: "text", text: "旧回答" }] },
+      ],
+    });
+    vi.mocked(rewindPoints).mockResolvedValue([
+      { promptIndex: 2 },
+      { promptIndex: 4 },
+      { promptIndex: 3 },
+    ]);
+    vi.mocked(rewindExecute).mockResolvedValue({
+      targetPromptIndex: 4,
+      promptText: "<hidden>project contract</hidden>\n\n执行任务"
+        + "\n\n附件（图片已作为多模态内容附加；其他文件请使用 read_file 读取）：\n- @/tmp/方案.docx",
+    });
+    renderChat();
+
+    fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
+
+    await waitFor(() => expect(rewindExecute).toHaveBeenCalledWith("s1", 4, "conversation", true));
+    expect(baseProps.onRetrySend).toHaveBeenCalledWith({
+      sessionId: "s1",
+      displayText: "执行任务",
+      promptText: "<hidden>project contract</hidden>\n\n执行任务",
+      attachments: ["/tmp/方案.docx"],
+      kind: "regenerate",
+    });
+  });
+
+  it("工具轮次必须确认后才会重新执行，且只回溯对话", async () => {
+    setStore({
+      messages: [
+        { id: "u1", role: "user", complete: true, parts: [{ kind: "text", text: "帮我查查 ls" }] },
+        {
+          id: "a1",
+          role: "assistant",
+          complete: true,
+          parts: [
+            {
+              kind: "tool_call",
+              toolCall: {
+                toolCallId: "tool-1",
+                title: "运行终端命令",
+                kind: "terminal",
+                status: "completed",
+                content: [],
+              },
+            },
+            { kind: "text", text: "目录已列出。" },
+          ],
+        },
+      ],
+    });
+    vi.mocked(rewindPoints).mockResolvedValue([{ promptIndex: 0 }]);
+    renderChat();
+
+    fireEvent.click(screen.getByRole("button", { name: "重新执行" }));
+    const dialog = screen.getByRole("alertdialog", { name: "重新执行本轮任务？" });
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText(/1 个工具/)).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("将从当前工作区状态开始");
+    expect(dialog).not.toHaveTextContent("回溯");
+    expect(rewindPoints).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "重新执行" }));
+    await waitFor(() => expect(rewindExecute).toHaveBeenCalledWith("s1", 0, "conversation", true));
+    expect(baseProps.onRetrySend).toHaveBeenCalledWith({
+      sessionId: "s1",
+      displayText: "帮我查查 ls",
+      promptText: "帮我查查 ls",
+      attachments: [],
+      kind: "reexecute",
+    });
   });
 });

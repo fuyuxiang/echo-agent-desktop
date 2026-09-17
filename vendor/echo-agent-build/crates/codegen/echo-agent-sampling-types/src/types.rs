@@ -569,11 +569,11 @@ impl ToolCallFunction {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Usage {
-    #[serde(default, alias = "input_tokens")]
+    #[serde(default)]
     pub prompt_tokens: u32,
-    #[serde(default, alias = "output_tokens")]
+    #[serde(default)]
     pub completion_tokens: u32,
     #[serde(default)]
     pub total_tokens: u32,
@@ -586,6 +586,63 @@ pub struct Usage {
     /// normalize `0` to "unreported" (see `stream/chat_completions.rs`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_in_usd_ticks: Option<i64>,
+}
+
+impl<'de> Deserialize<'de> for Usage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Some OpenAI-compatible gateways emit both naming conventions in the
+        // same usage object (for example `prompt_tokens` and `input_tokens`).
+        // A serde alias treats that as a duplicate field and rejects the whole
+        // streamed response. Deserialize through Value so duplicate literal
+        // keys use serde_json's normal last-value behavior, while canonical
+        // OpenAI names take precedence over Responses-style aliases.
+        let value = Value::deserialize(deserializer)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| serde::de::Error::custom("usage must be a JSON object"))?;
+
+        fn token_field<E: serde::de::Error>(
+            object: &serde_json::Map<String, Value>,
+            canonical: &str,
+            alias: Option<&str>,
+        ) -> Result<u32, E> {
+            let value = object
+                .get(canonical)
+                .or_else(|| alias.and_then(|name| object.get(name)));
+            match value {
+                Some(Value::Null) | None => Ok(0),
+                Some(value) => serde_json::from_value(value.clone()).map_err(E::custom),
+            }
+        }
+
+        fn optional_field<T, E>(
+            object: &serde_json::Map<String, Value>,
+            name: &str,
+        ) -> Result<Option<T>, E>
+        where
+            T: serde::de::DeserializeOwned,
+            E: serde::de::Error,
+        {
+            match object.get(name) {
+                Some(Value::Null) | None => Ok(None),
+                Some(value) => serde_json::from_value(value.clone())
+                    .map(Some)
+                    .map_err(E::custom),
+            }
+        }
+
+        Ok(Self {
+            prompt_tokens: token_field(object, "prompt_tokens", Some("input_tokens"))?,
+            completion_tokens: token_field(object, "completion_tokens", Some("output_tokens"))?,
+            total_tokens: token_field(object, "total_tokens", None)?,
+            prompt_tokens_details: optional_field(object, "prompt_tokens_details")?,
+            completion_tokens_details: optional_field(object, "completion_tokens_details")?,
+            cost_in_usd_ticks: optional_field(object, "cost_in_usd_ticks")?,
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -1547,6 +1604,31 @@ mod tests {
         assert_eq!(aliased.prompt_tokens, 30);
         assert_eq!(aliased.completion_tokens, 12);
         assert_eq!(aliased.total_tokens, 42);
+    }
+
+    #[test]
+    fn usage_accepts_gateways_that_emit_both_token_naming_conventions() {
+        let usage: Usage = serde_json::from_str(
+            r#"{
+                "prompt_tokens":30,
+                "input_tokens":999,
+                "completion_tokens":12,
+                "output_tokens":888,
+                "total_tokens":42
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(usage.prompt_tokens, 30);
+        assert_eq!(usage.completion_tokens, 12);
+        assert_eq!(usage.total_tokens, 42);
+
+        let duplicate_literal: Usage = serde_json::from_str(
+            r#"{"prompt_tokens":10,"prompt_tokens":11,"completion_tokens":2}"#,
+        )
+        .unwrap();
+        assert_eq!(duplicate_literal.prompt_tokens, 11);
+        assert_eq!(duplicate_literal.completion_tokens, 2);
     }
 
     #[test]

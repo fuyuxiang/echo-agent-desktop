@@ -145,6 +145,20 @@ describe("AgentPane", () => {
     expect(screen.getByTestId("question-card")).toBeInTheDocument();
   });
 
+  it("将最终答案作为正常正文展示，不塞进执行过程", () => {
+    render(<AgentPane {...paneProps({
+      messages: [{
+        id: "answer-1",
+        role: "assistant",
+        parts: [{ kind: "text", text: "这是最终答案" }],
+        complete: true,
+      }],
+    })} />);
+
+    expect(screen.getByText("这是最终答案")).toBeInTheDocument();
+    expect(screen.queryByTestId("execution")).toBeNull();
+  });
+
   it("长执行过程可滚动，阅读旧消息时暂停跟随并可回到最新", async () => {
     const user = userEvent.setup();
     render(<AgentPane {...paneProps({ streaming: true })} />);

@@ -3,27 +3,112 @@ import { detectToolRenderer } from "@/lib/tool-renderers";
 
 export type TextMessagePart = Extract<MessagePart, { kind: "text" }>;
 
+const INTERNAL_REASONING_TAGS = ["think", "thinking", "reasoning", "analysis"] as const;
+const INTERNAL_REASONING_OPENING = /^\s*<(think|thinking|reasoning|analysis)(?:\s[^>]*)?>/i;
+
 export interface AssistantPartGroups {
-  /** Reasoning and tool calls that may be folded without hiding assistant text. */
+  /** Reasoning, tool calls, and intermediate model commentary. */
   processParts: MessagePart[];
-  /** Every user-visible assistant text chunk, in protocol order. */
+  /** Text emitted by the final model generation for the user. */
   responseParts: TextMessagePart[];
 }
 
 /**
  * Split one assistant turn into a compact execution process and its final answer.
  *
- * ACP distinguishes assistant text from reasoning, but does not distinguish a
- * textual "preamble" from a "final answer". Reasoning may legally be interleaved
- * between two assistant-text chunks. Therefore positional inference is unsafe:
- * every text part remains visible/copyable/exportable and only explicit process
- * events (thoughts and tools) are folded.
+ * ACP marks explicit reasoning, while EchoAgent also stamps every inference
+ * generation with `streamStartMs`. Text from a generation that goes on to call
+ * tools is process commentary; text from the last generation is the answer.
+ * Historical events without that stamp use the ordered-protocol fallback: the
+ * trailing text after the last process event is the answer. If there is no
+ * trailing text, keep all text visible rather than hiding a partial response.
  */
 export function partitionAssistantParts(parts: MessagePart[]): AssistantPartGroups {
+  const normalizedParts = expandTaggedThinking(parts);
+  const textParts = normalizedParts.filter(isTextPart);
+  const lastNonEmptyText = [...textParts].reverse().find((part) => part.text.trim());
+
+  if (lastNonEmptyText?.streamId) {
+    const responseParts = textParts.filter(
+      (part) => part.streamId === lastNonEmptyText.streamId,
+    );
+    const processParts = normalizedParts.filter(
+      (part) => part.kind !== "text" || part.streamId !== lastNonEmptyText.streamId,
+    );
+    return { processParts, responseParts };
+  }
+
+  let lastProcessIndex = -1;
+  for (let index = 0; index < normalizedParts.length; index += 1) {
+    if (normalizedParts[index].kind !== "text") lastProcessIndex = index;
+  }
+  const responseParts = normalizedParts.slice(lastProcessIndex + 1).filter(isTextPart);
+  if (responseParts.some((part) => part.text.trim())) {
+    return {
+      processParts: normalizedParts.slice(0, lastProcessIndex + 1),
+      responseParts,
+    };
+  }
+
   return {
-    processParts: parts.filter((part) => part.kind !== "text"),
-    responseParts: parts.filter(isTextPart),
+    processParts: normalizedParts.filter((part) => part.kind !== "text"),
+    responseParts: textParts,
   };
+}
+
+/**
+ * Some OpenAI-compatible gateways return reasoning and the answer in one
+ * AgentMessageChunk using a literal reasoning envelope. Convert the common
+ * `<think>`, `<thinking>`, `<reasoning>`, and `<analysis>` variants into normal
+ * thought/text parts so live output, replay, copy, search, and export all share
+ * the same behavior. A missing closing tag is expected while streaming.
+ */
+function expandTaggedThinking(parts: MessagePart[]): MessagePart[] {
+  return parts.flatMap((part) => {
+    if (part.kind !== "text") return [part];
+
+    const opening = part.text.match(INTERNAL_REASONING_OPENING);
+    if (!opening) {
+      const pendingTag = part.text.trimStart().toLowerCase();
+      // Avoid briefly flashing a fragmented opening tag while tokens stream.
+      if (isPendingReasoningOpening(pendingTag)) return [];
+      return [part];
+    }
+
+    const tag = opening[1].toLowerCase();
+    const afterOpening = part.text.slice(opening[0].length);
+    const closing = new RegExp(`</${tag}\\s*>`, "i").exec(afterOpening);
+    const thoughtText = (closing
+      ? afterOpening.slice(0, closing.index)
+      : afterOpening).trim();
+    const expanded: MessagePart[] = [];
+    if (thoughtText) {
+      expanded.push({
+        kind: "thought",
+        text: thoughtText,
+        ...(part.streamId ? { streamId: part.streamId } : {}),
+      });
+    }
+    if (closing) {
+      const answerText = afterOpening
+        .slice(closing.index + closing[0].length)
+        .trimStart();
+      if (answerText) {
+        expanded.push({
+          kind: "text",
+          text: answerText,
+          ...(part.streamId ? { streamId: part.streamId } : {}),
+        });
+      }
+    }
+    return expanded;
+  });
+}
+
+function isPendingReasoningOpening(value: string): boolean {
+  if (!value) return false;
+  if (INTERNAL_REASONING_TAGS.some((tag) => `<${tag}>`.startsWith(value))) return true;
+  return /^<(think|thinking|reasoning|analysis)(?:\s[^>]*)?$/i.test(value);
 }
 
 export interface ExecutionProcessSummary {

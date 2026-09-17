@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { PauseIcon } from "@/foundation/components/Icon/icons";
 import { useSessionStore, type ToolCallView } from "@/stores/session-store";
 import { useSessionsStore } from "@/stores/sessions-store";
@@ -35,6 +35,12 @@ import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
 import { useStickToBottom } from "./use-stick-to-bottom";
 import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
+import { stripAttachmentTransportContext } from "@/lib/user-message";
+import { useAppDialog } from "./AppDialog";
+import type {
+  MessageRetryKind,
+  MessageRetrySendRequest,
+} from "@/lib/message-retry";
 
 /** Center chat column: scrollable message list + composer pinned at bottom. */
 export function ChatView({
@@ -49,6 +55,8 @@ export function ChatView({
   newSessionTargetCwd,
   workspaces,
   onSelectWorkspace,
+  onPrepareRetry,
+  onRetrySend,
   onRewound,
   onForked,
   onToast,
@@ -86,6 +94,10 @@ export function ChatView({
   newSessionTargetCwd?: string;
   workspaces?: WorkspaceInfo[];
   onSelectWorkspace?: (cwd: string) => void;
+  /** Validate send prerequisites before replacing conversation history. */
+  onPrepareRetry?: (sessionId: string) => boolean | Promise<boolean>;
+  /** Submit the exact prompt removed by a successful answer replacement. */
+  onRetrySend?: (request: MessageRetrySendRequest) => boolean | Promise<boolean>;
   /** Rewind rewrote backend history — reload the transcript. */
   onRewound?: (sessionId: string) => void | Promise<void>;
   /** Fork created a new session id — navigate to it. */
@@ -194,10 +206,12 @@ export function ChatView({
     setResendNonce((n) => n + 1);
   }, []);
 
-  // ---- 消息级"重试":回溯到最后一条用户 prompt 并重新发送（重新生成回复） ----
-  const [retrying, setRetrying] = useState(false);
-  const handleRetry = useCallback(async () => {
-    if (!sessionId || streaming || retrying) return;
+  // ---- 消息级重试：文本回复重新生成；工具轮次明确二次确认后重新执行 ----
+  const [retryingSessionId, setRetryingSessionId] = useState<string | null>(null);
+  const retryingSessionsRef = useRef(new Set<string>());
+  const { requestConfirmation, dialog: retryDialog } = useAppDialog(sessionId);
+  const performRetry = useCallback(async (kind: MessageRetryKind) => {
+    if (!sessionId || streaming || retryingSessionsRef.current.has(sessionId)) return;
     const targetSessionId = sessionId;
     // Find the last user message text.
     const lastUserIndex = messages.map((message) => message.role).lastIndexOf("user");
@@ -213,54 +227,124 @@ export function ChatView({
     const userAttachments = lastUserMsg.attachments ?? [];
     if (!userText.trim() && userAttachments.length === 0) return;
 
-    setRetrying(true);
+    retryingSessionsRef.current.add(targetSessionId);
+    setRetryingSessionId(targetSessionId);
     try {
+      const prepared = await onPrepareRetry?.(targetSessionId);
+      if (prepared === false) return;
+
       // Rewind the conversation to the last user prompt (conversation only —
       // don't touch files), which drops the assistant turn we're regenerating.
       const points = await rewindPoints(targetSessionId);
       if (points.length === 0) {
-        // A setup/model failure can happen before the Runtime creates its first
-        // rewind checkpoint. Retrying is safe only when that failed turn emitted
-        // no answer and invoked no tools; otherwise a blind resend could repeat
-        // side effects.
-        const hasObservableWork = messages.slice(lastUserIndex + 1).some((message) =>
-          message.parts.some((part) =>
-            part.kind === "tool_call"
-            || (part.kind === "text" && part.text.trim().length > 0),
-          ),
-        );
-        if (hasObservableWork) {
-          onToast?.("该轮没有可回溯点，为避免重复执行工具无法自动重试。");
-          return;
+        // Only a request that failed before the Runtime produced any work can
+        // be retried without a persisted turn. A completed reply must never be
+        // silently appended as a duplicate user message.
+        if (kind !== "retry") {
+          throw new Error(
+            kind === "regenerate"
+              ? "暂时无法替换这条回复，原回复已保留。请稍后重试。"
+              : "暂时无法安全重新执行，原执行记录已保留。请发起新任务。",
+          );
         }
-        const accepted = await onSend(userText || "请分析附件。", userAttachments);
+        const displayText = userText || "请分析附件。";
+        useSessionStore.getState().discardMessagesFrom(targetSessionId, lastUserMsg.id);
+        const accepted = await (onRetrySend
+          ? onRetrySend({
+              sessionId: targetSessionId,
+              displayText,
+              promptText: lastUserMsg.agentText ?? displayText,
+              attachments: userAttachments,
+              kind,
+            })
+          : onSend(displayText, userAttachments));
         if (accepted === false) {
-          onToast?.("消息未能重新发送，请确认当前模型可用后再试。");
-          return;
+          throw new Error("未能启动重试，请确认当前模型可用后再试。");
         }
-        onToast?.("已使用当前模型重新发送");
         return;
       }
-      // Pick the latest point explicitly by promptIndex — don't rely on the
-      // points array being sorted ascending (the order isn't documented).
-      const lastPoint = points.reduce((a, b) =>
-        b.promptIndex > a.promptIndex ? b : a,
+      // Prefer replay metadata so the operation targets the clicked turn. A
+      // fresh live turn may not have an index yet, so use the latest point.
+      const targetPoint = lastUserMsg.promptIndex === undefined
+        ? points.reduce((a, b) => b.promptIndex > a.promptIndex ? b : a)
+        : points.find((point) => point.promptIndex === lastUserMsg.promptIndex);
+      if (!targetPoint) {
+        throw new Error("无法确认要替换的回复，原回复已保留。请刷新会话后重试。");
+      }
+      const execution = await rewindExecute(
+        targetSessionId,
+        targetPoint.promptIndex,
+        "conversation",
+        true,
       );
-      await rewindExecute(targetSessionId, lastPoint.promptIndex, "conversation", true);
       await onRewound?.(targetSessionId);
-      // Session selection may change while rewind/reload is pending. Do not
-      // route the old prompt through the newly focused conversation.
-      if (useSessionStore.getState().sessionId !== targetSessionId) {
-        onToast?.("已回溯原会话；因你已切换会话，未自动重发");
-        return;
+      const continuedInBackground = useSessionStore.getState().sessionId !== targetSessionId;
+      const displayText = userText || "请分析附件。";
+      const restoredTransport = execution.promptText
+        ? stripAttachmentTransportContext(execution.promptText)
+        : undefined;
+      const restoredPromptText = restoredTransport
+        && userAttachments.length > 0
+        && restoredTransport.attachments.length > 0
+        ? restoredTransport.text
+        : execution.promptText;
+      const accepted = await (onRetrySend
+        ? onRetrySend({
+            sessionId: targetSessionId,
+            displayText,
+            promptText: restoredPromptText ?? lastUserMsg.agentText ?? displayText,
+            attachments: userAttachments,
+            kind,
+          })
+        : onSend(displayText, userAttachments));
+      if (accepted === false) {
+        throw new Error("回复已准备重试，但当前模型未能启动。请重试本轮请求。");
       }
-      await onSend(userText || "请分析附件。", userAttachments);
-    } catch (e) {
-      onToast?.(`重试失败：${String(e).replace(/^Error:\s*/, "")}`);
+      if (continuedInBackground) onToast?.("已在原会话中继续执行");
     } finally {
-      setRetrying(false);
+      retryingSessionsRef.current.delete(targetSessionId);
+      setRetryingSessionId((current) => current === targetSessionId ? null : current);
     }
-  }, [sessionId, streaming, retrying, messages, onSend, onRewound, onToast]);
+  }, [sessionId, streaming, messages, onPrepareRetry, onRetrySend, onSend, onRewound, onToast]);
+
+  const handleRetry = useCallback((kind: MessageRetryKind) => {
+    if (kind === "reexecute") {
+      const lastUserIndex = messages.map((message) => message.role).lastIndexOf("user");
+      const tools = messages
+        .slice(lastUserIndex + 1)
+        .flatMap((message) => message.parts)
+        .filter((part): part is Extract<(typeof messages)[number]["parts"][number], { kind: "tool_call" }> => (
+          part.kind === "tool_call"
+        ));
+      const toolSummary = [...new Set(tools.map((part) => part.toolCall.title).filter(Boolean))]
+        .slice(0, 3)
+        .join("、");
+      requestConfirmation({
+        title: "重新执行本轮任务？",
+        description: (
+          <div className="retry-confirmation">
+            <p>
+              本轮使用过 {tools.length} 个工具
+              {toolSummary ? `（${toolSummary}${tools.length > 3 ? "等" : ""}）` : ""}。
+              重新执行可能再次修改文件、运行命令或触发外部操作。
+            </p>
+            <p>将从当前工作区状态开始；本轮已产生的文件修改不会被撤销。</p>
+          </div>
+        ),
+        confirmLabel: "重新执行",
+        cancelLabel: "取消",
+        danger: true,
+        action: () => performRetry(kind),
+        onError: (error) => onToast?.(`重新执行失败：${String(error).replace(/^Error:\s*/, "")}`),
+      });
+      return;
+    }
+
+    void performRetry(kind).catch((error) => {
+      const action = kind === "regenerate" ? "重新生成" : "重试";
+      onToast?.(`${action}失败：${String(error).replace(/^Error:\s*/, "")}`);
+    });
+  }, [messages, onToast, performRetry, requestConfirmation]);
 
   // ---- Phase 2/3: tool detail + artifacts side panel ----
   const [panelOpen, setPanelOpen] = useState(false);
@@ -600,7 +684,7 @@ export function ChatView({
                       onOpenTool={handleOpenTool}
                       onEditResend={handleEditResend}
                       latest={isLastAssistant}
-                      retrying={isLastAssistant && retrying}
+                      retrying={isLastAssistant && retryingSessionId === sessionId}
                       onRetry={
                         isLastAssistant && !streaming && m.complete
                           ? handleRetry
@@ -769,6 +853,7 @@ export function ChatView({
         onOpenArtifacts={handleOpenArtifacts}
         findToolCall={(id) => findToolCall(messages, id)}
       />
+      {retryDialog}
     </div>
   );
 }

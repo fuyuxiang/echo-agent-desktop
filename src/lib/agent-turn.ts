@@ -19,6 +19,9 @@ export interface AgentTurnInput {
   attachments?: string[];
   /** Reuse the id assigned while atomically claiming a queued row. */
   promptId?: string;
+  /** Message replacement may finish after navigation and must remain scoped to
+   * its original session. Ordinary composer sends never enable this. */
+  allowBackgroundSession?: boolean;
   /** Observe asynchronous native rejection without delaying local admission. */
   onRejected?: (error: unknown, promptId: string) => void;
 }
@@ -65,17 +68,18 @@ export function beginAgentTurn(
   const attachments = input.attachments ?? [];
   const promptId = input.promptId ?? createAgentPromptId();
   const transcript = useSessionStore.getState();
-  if (transcript.sessionId !== sessionId) {
+  if (transcript.sessionId !== sessionId && !input.allowBackgroundSession) {
     return false;
   }
+  const targetTranscript = transcript.transcripts[sessionId];
   // startStreaming deliberately clears a paused/stopped barrier because a new
   // prompt is an explicit continue action. Keep the prior value until native
   // admission succeeds so an asynchronous rejection can restore honest UI.
-  const previousControl = transcript.transcripts[sessionId]?.control;
+  const previousControl = targetTranscript?.control;
 
   useSessionsStore.getState().upsert({ sessionId, status: "working" });
-  transcript.pushUser(displayText, attachments);
-  transcript.startStreaming(undefined, promptId);
+  transcript.pushUser(displayText, attachments, sessionId, promptText);
+  transcript.startStreaming(sessionId, promptId);
 
   void send(sessionId, promptText, attachments, displayText, promptId).catch((error) => {
     if (isAgentPromptSettled(sessionId, promptId)) return;

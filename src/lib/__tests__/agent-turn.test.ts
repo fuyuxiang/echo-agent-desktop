@@ -48,6 +48,7 @@ describe("beginAgentTurn", () => {
     expect(state.messages[0]).toMatchObject({
       role: "user",
       attachments: ["/tmp/数据回流方案.docx"],
+      agentText: "模型完整提示",
       complete: true,
     });
     expect(state.messages[0].parts).toEqual([
@@ -135,6 +136,32 @@ describe("beginAgentTurn", () => {
     expect(accepted).toBe(false);
     expect(send).not.toHaveBeenCalled();
     expect(useSessionStore.getState().messages).toEqual([]);
+  });
+
+  it("回复替换在用户切换会话后仍精确发送到原会话", () => {
+    const store = useSessionStore.getState();
+    store.setSession("original");
+    store.setSession("current");
+    const send = vi.fn(() => Promise.resolve()) as AgentTurnSender;
+
+    const accepted = beginAgentTurn({
+      sessionId: "original",
+      promptText: "original model prompt",
+      displayText: "original prompt",
+      allowBackgroundSession: true,
+    }, send);
+
+    expect(accepted).toBe(true);
+    expect(send).toHaveBeenCalledWith(
+      "original",
+      "original model prompt",
+      [],
+      "original prompt",
+      expect.any(String),
+    );
+    expect(useSessionStore.getState().sessionId).toBe("current");
+    expect(useSessionStore.getState().messages).toEqual([]);
+    expect(useSessionStore.getState().transcripts.original.messages).toHaveLength(2);
   });
 
   it("队列轮次复用认领时的 promptId，并在原生拒绝时精确通知调用方", async () => {

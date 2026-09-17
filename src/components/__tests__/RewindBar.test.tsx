@@ -8,7 +8,7 @@ vi.mock("@/lib/agent-client", () => ({
   rewindPoints: vi.fn().mockResolvedValue([
     { promptIndex: 0, promptPreview: "first prompt", timestamp: "2026-01-01T00:00:00Z" },
   ]),
-  rewindExecute: vi.fn().mockResolvedValue(undefined),
+  rewindExecute: vi.fn().mockResolvedValue({ targetPromptIndex: 0 }),
   sessionFork: vi.fn().mockResolvedValue("forked-session-id-1234"),
 }));
 

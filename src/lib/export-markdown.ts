@@ -42,13 +42,6 @@ export function buildSessionMarkdown(
       const responseText = groups.responseParts
         .map((part) => part.text)
         .filter((text) => text.trim());
-      const thoughtParts = groups.processParts
-        .filter((part) => part.kind === "thought")
-        .map((part) => part.text);
-      const toolCalls = groups.processParts
-        .filter((part) => part.kind === "tool_call")
-        .map((part) => part.toolCall);
-
       if (
         responseText.length === 0
         && (!options.includeProcess || groups.processParts.length === 0)
@@ -60,21 +53,7 @@ export function buildSessionMarkdown(
       if (options.includeProcess && groups.processParts.length > 0) {
         lines.push("### 执行过程");
         lines.push("");
-        for (const thought of thoughtParts) {
-          lines.push("> **思考过程**");
-          lines.push(">");
-          for (const line of thought.split("\n")) lines.push(`> ${line}`);
-          lines.push("");
-        }
-        if (toolCalls.length > 0) {
-          lines.push("**操作记录：**");
-          lines.push("");
-          for (const tool of toolCalls) {
-            const icon = tool.status === "completed" ? "✅" : tool.status === "failed" ? "❌" : "⏳";
-            lines.push(`- ${icon} \`${tool.kind}\` — ${tool.title}`);
-          }
-          lines.push("");
-        }
+        appendProcessMarkdown(lines, groups.processParts);
       }
 
       if (responseText.length > 0) {
@@ -88,6 +67,32 @@ export function buildSessionMarkdown(
   }
 
   return lines.join("\n");
+}
+
+/** Keep exported process records in the same order the user saw in the UI. */
+function appendProcessMarkdown(lines: string[], parts: ChatMessage["parts"]): void {
+  let inToolList = false;
+  for (const part of parts) {
+    if (part.kind === "tool_call") {
+      if (!inToolList) {
+        lines.push("**操作记录：**");
+        lines.push("");
+        inToolList = true;
+      }
+      const tool = part.toolCall;
+      const icon = tool.status === "completed" ? "✅" : tool.status === "failed" ? "❌" : "⏳";
+      lines.push(`- ${icon} \`${tool.kind}\` — ${tool.title}`);
+      continue;
+    }
+
+    if (inToolList) lines.push("");
+    inToolList = false;
+    lines.push("> **深度思考**");
+    lines.push(">");
+    for (const line of part.text.split("\n")) lines.push(`> ${line}`);
+    lines.push("");
+  }
+  if (inToolList) lines.push("");
 }
 
 /** Sanitize a string for use as a filename. */

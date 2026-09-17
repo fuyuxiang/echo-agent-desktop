@@ -6,6 +6,7 @@
  * 纯函数、无副作用,便于单测。
  */
 import type { ChatMessage, ToolCallView } from "@/stores/session-store";
+import { partitionAssistantParts } from "@/lib/execution-process";
 
 /**
  * 从一条消息的可见 parts 拼出纯文本(供搜索索引)。
@@ -17,13 +18,28 @@ export function extractPlainText(
   message: ChatMessage,
   options: { includeThoughts?: boolean; includeProcess?: boolean } = {},
 ): string {
+  if (message.role === "assistant") {
+    const groups = partitionAssistantParts(message.parts);
+    const selectedParts = options.includeProcess
+      ? [...groups.processParts, ...groups.responseParts]
+      : options.includeThoughts
+        ? [
+            ...groups.responseParts,
+            ...groups.processParts.filter((part) => part.kind === "thought"),
+          ]
+        : groups.responseParts;
+    return extractPartsText(selectedParts, options.includeProcess === true);
+  }
+
+  return extractPartsText(message.parts, options.includeProcess === true);
+}
+
+function extractPartsText(parts: ChatMessage["parts"], includeTools: boolean): string {
   const segs: string[] = [];
-  for (const p of message.parts) {
-    if (p.kind === "text") {
+  for (const p of parts) {
+    if (p.kind === "text" || p.kind === "thought") {
       segs.push(p.text);
-    } else if (p.kind === "thought" && (options.includeThoughts || options.includeProcess)) {
-      segs.push(p.text);
-    } else if (p.kind === "tool_call" && options.includeProcess) {
+    } else if (p.kind === "tool_call" && includeTools) {
       segs.push(extractToolCallText(p.toolCall));
     }
   }

@@ -33,6 +33,39 @@ describe("extractPlainText", () => {
     expect(extractPlainText(m, { includeThoughts: true })).toBe("answer\nthinking");
   });
 
+  it("默认只索引最终答案，不让折叠的中间分析污染搜索", () => {
+    const m = msg([
+      { kind: "text", text: "internal English analysis" },
+      {
+        kind: "tool_call",
+        toolCall: {
+          toolCallId: "read-1",
+          title: "Read file",
+          kind: "read_file",
+          status: "completed",
+          content: [],
+        },
+      },
+      { kind: "text", text: "最终答案" },
+    ]);
+
+    expect(extractPlainText(m)).toBe("最终答案");
+    expect(extractPlainText(m, { includeProcess: true }))
+      .toContain("internal English analysis");
+  });
+
+  it("过滤模型在普通文本中返回的 think 标签内容", () => {
+    const m = msg([{
+      kind: "text",
+      text: "<think>private reasoning</think>\n\n用户可见答案",
+      streamId: "generation-1",
+    }]);
+
+    expect(extractPlainText(m)).toBe("用户可见答案");
+    expect(extractPlainText(m, { includeProcess: true }))
+      .toBe("private reasoning\n用户可见答案");
+  });
+
   it("默认不索引折叠的 tool_call，显式开启时提取详情", () => {
     const m = msg([
       {

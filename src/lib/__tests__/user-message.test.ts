@@ -4,6 +4,7 @@ import {
   attachmentBasename,
   isImageAttachment,
   parseLegacyAttachmentPrompt,
+  stripAttachmentTransportContext,
   stripInjectedUserContext,
 } from "../user-message";
 
@@ -26,6 +27,16 @@ describe("user-message attachment compatibility", () => {
     expect(parsed).toEqual({
       text: "请优化文档",
       attachments: ["/tmp/方案.docx", "C:\\docs\\说明.pdf"],
+    });
+  });
+
+  it("重放附件提示时只移除运输尾注，保留模型上下文", () => {
+    const modelText = "<!--EXPERT_PERSONA_BEGIN-->expert<!--EXPERT_PERSONA_END-->\n\n用户正文"
+      + `\n\n${LEGACY_ATTACHMENT_HEADING}\n- @/tmp/方案.docx`;
+
+    expect(stripAttachmentTransportContext(modelText)).toEqual({
+      text: "<!--EXPERT_PERSONA_BEGIN-->expert<!--EXPERT_PERSONA_END-->\n\n用户正文",
+      attachments: ["/tmp/方案.docx"],
     });
   });
 

@@ -12,6 +12,7 @@ import {
   ATTACHMENTS_META_KEY,
   normalizeAttachmentPaths,
   parseLegacyAttachmentPrompt,
+  stripAttachmentTransportContext,
   stripInjectedUserContext,
 } from "@/lib/user-message";
 import {
@@ -35,6 +36,9 @@ export interface ChatMessage {
   parts: MessagePart[];
   /** Local paths attached to a user prompt, in selection order. */
   attachments?: string[];
+  /** Exact model-facing prompt before Runtime execution. Hidden expert/project
+   * context may differ from the visible text and must survive regeneration. */
+  agentText?: string;
   /** ACP prompt index used to merge replayed text/image chunks into one turn. */
   promptIndex?: number;
   /** Stable terminal id used to deduplicate live and durable completion rails. */
@@ -56,9 +60,9 @@ export interface ChatMessage {
 }
 
 export type MessagePart =
-  | { kind: "text"; text: string }
-  | { kind: "thought"; text: string }
-  | { kind: "tool_call"; toolCall: ToolCallView };
+  | { kind: "text"; text: string; streamId?: string }
+  | { kind: "thought"; text: string; streamId?: string }
+  | { kind: "tool_call"; toolCall: ToolCallView; streamId?: string };
 
 /** A tool-call card rendered inline. Mirrors a subset of ToolCallUpdate. */
 export interface ToolCallView {
@@ -195,10 +199,18 @@ interface SessionState {
 
   // --- transcript ops ---
   /** Append a user message (sent optimistically before the round-trip). */
-  pushUser: (text: string, attachments?: string[], sessionId?: string) => void;
+  pushUser: (
+    text: string,
+    attachments?: string[],
+    sessionId?: string,
+    agentText?: string,
+  ) => void;
   /** Remove the most recent optimistic user message and its empty assistant
    *  placeholder when `agent_send` rejects before the turn starts. */
   rollbackPendingTurn: () => void;
+  /** Remove a visible turn before retrying a request that the Runtime never
+   * accepted and therefore cannot expose as a rewindable conversation turn. */
+  discardMessagesFrom: (sessionId: string, messageId: string) => void;
   /** Append an assistant message (for preview mode simulation). */
   pushAssistant: (text: string) => void;
   /** Apply a streamed session/update from the backend. The update is routed
@@ -423,23 +435,24 @@ function ensureStreamingAssistant(
 function appendText(
   msg: ChatMessage,
   kind: "text" | "thought",
-  delta: string
+  delta: string,
+  streamId?: string,
 ): ChatMessage {
   const parts = [...msg.parts];
   const last = parts[parts.length - 1];
-  if (last && last.kind === kind) {
+  if (last && last.kind === kind && last.streamId === streamId) {
     if (last.text.endsWith(TRUNCATED_OUTPUT_MARKER)) return msg;
     const available = MAX_MESSAGE_TEXT_CHARS - last.text.length - TRUNCATED_OUTPUT_MARKER.length;
     const text = delta.length <= Math.max(0, available)
       ? last.text + delta
       : last.text + delta.slice(0, Math.max(0, available)) + TRUNCATED_OUTPUT_MARKER;
-    parts[parts.length - 1] = { kind, text } as MessagePart;
+    parts[parts.length - 1] = { kind, text, ...(streamId ? { streamId } : {}) } as MessagePart;
   } else {
     const available = MAX_MESSAGE_TEXT_CHARS - TRUNCATED_OUTPUT_MARKER.length;
     const text = delta.length <= available
       ? delta
       : delta.slice(0, available) + TRUNCATED_OUTPUT_MARKER;
-    parts.push({ kind, text } as MessagePart);
+    parts.push({ kind, text, ...(streamId ? { streamId } : {}) } as MessagePart);
   }
   return { ...msg, parts };
 }
@@ -590,6 +603,7 @@ function completeStreamingAssistant(
 
 interface ReplayedUserChunk {
   text: string;
+  agentText?: string;
   attachments: string[];
   promptIndex?: number;
   hasText: boolean;
@@ -612,6 +626,7 @@ function normalizeUserChunk(update: Record<string, unknown>): ReplayedUserChunk 
   if (content.type !== "text") {
     return {
       text: "",
+      agentText: undefined,
       attachments: mergePaths(structuredAttachments, imagePath),
       promptIndex,
       hasText: false,
@@ -624,8 +639,11 @@ function normalizeUserChunk(update: Record<string, unknown>): ReplayedUserChunk 
     ? stripInjectedUserContext(contentMeta.displayText)
     : undefined;
   const legacy = parseLegacyAttachmentPrompt(rawText);
+  const transport = stripAttachmentTransportContext(rawText);
+  const visibleText = displayText ?? legacy.text;
   return {
-    text: displayText ?? legacy.text,
+    text: visibleText,
+    agentText: transport.text && transport.text !== visibleText ? transport.text : undefined,
     attachments: mergePaths(structuredAttachments, legacy.attachments),
     promptIndex,
     hasText: true,
@@ -650,6 +668,7 @@ function applyUserChunk(transcript: SessionTranscript, chunk: ReplayedUserChunk)
       messages[matchingIndex] = {
         ...current,
         parts: nextText,
+        agentText: chunk.agentText ?? current.agentText,
         attachments: mergePaths(current.attachments, chunk.attachments),
       };
       return { ...transcript, messages };
@@ -674,6 +693,7 @@ function applyUserChunk(transcript: SessionTranscript, chunk: ReplayedUserChunk)
     messages[optimisticIndex] = {
       ...optimistic,
       promptIndex: chunk.promptIndex,
+      agentText: chunk.agentText ?? optimistic.agentText,
       attachments: mergePaths(optimistic.attachments, chunk.attachments),
     };
     return { ...transcript, messages };
@@ -686,6 +706,7 @@ function applyUserChunk(transcript: SessionTranscript, chunk: ReplayedUserChunk)
     id: nextId(),
     role: "user",
     parts: chunk.text ? [{ kind: "text", text: chunk.text }] : [],
+    agentText: chunk.agentText,
     attachments: chunk.attachments,
     promptIndex: chunk.promptIndex,
     complete: true,
@@ -750,15 +771,20 @@ function rememberDismissedControlPrompt(transcript: SessionTranscript): string[]
   return [...transcript.dismissedControlPromptIds, promptId].slice(-32);
 }
 
-function upsertToolCall(msg: ChatMessage, tc: ToolCallView): ChatMessage {
+function upsertToolCall(msg: ChatMessage, tc: ToolCallView, streamId?: string): ChatMessage {
   const parts = [...msg.parts];
   const idx = parts.findIndex(
     (p) => p.kind === "tool_call" && p.toolCall.toolCallId === tc.toolCallId
   );
   if (idx === -1) {
-    parts.push({ kind: "tool_call", toolCall: tc });
+    parts.push({ kind: "tool_call", toolCall: tc, ...(streamId ? { streamId } : {}) });
   } else {
-    parts[idx] = { kind: "tool_call", toolCall: tc };
+    const current = parts[idx];
+    parts[idx] = {
+      kind: "tool_call",
+      toolCall: tc,
+      ...(current.streamId || streamId ? { streamId: current.streamId ?? streamId } : {}),
+    };
   }
   return { ...msg, parts };
 }
@@ -995,6 +1021,20 @@ export const useSessionStore = create<SessionState>((set, get) => {
       });
     },
 
+    discardMessagesFrom: (sessionId, messageId) => {
+      applyToTranscript(sessionId, (transcript) => {
+        const index = transcript.messages.findIndex((message) => message.id === messageId);
+        if (index < 0) return transcript;
+        return {
+          ...transcript,
+          messages: transcript.messages.slice(0, index),
+          streamingMessageId: null,
+          pendingSendNowPromptId: null,
+          planApprovals: [],
+        };
+      });
+    },
+
     markComplete: (p) => {
       // Route by the complete's own sessionId so a background session finishing
       // after we switched away finalizes ITS transcript (clearing its streaming
@@ -1202,7 +1242,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       });
     },
 
-    pushUser: (text, attachments = [], sessionId) => {
+    pushUser: (text, attachments = [], sessionId, agentText) => {
       const sid = sessionId ?? get().sessionId;
       if (!sid) return;
       applyToTranscript(sid, (t) => ({
@@ -1214,6 +1254,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
             role: "user",
             parts: [{ kind: "text", text }],
             attachments: normalizeAttachmentPaths(attachments),
+            ...(agentText && agentText !== text ? { agentText } : {}),
             complete: true,
           },
         ],
@@ -1282,6 +1323,12 @@ export const useSessionStore = create<SessionState>((set, get) => {
       ]);
       const updateMeta = (u as unknown as { _meta?: Record<string, unknown> })._meta;
       const isReplay = updateMeta?.isReplay === true;
+      const streamId = typeof updateMeta?.streamStartMs === "number"
+        && Number.isFinite(updateMeta.streamStartMs)
+        ? String(updateMeta.streamStartMs)
+        : typeof updateMeta?.streamStartMs === "string" && updateMeta.streamStartMs
+          ? updateMeta.streamStartMs
+          : undefined;
       const updatePromptId = typeof updateMeta?.promptId === "string"
         ? updateMeta.promptId
         : undefined;
@@ -1347,7 +1394,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
               isReplay,
             );
             const idx = messages.findIndex((m) => m.id === id);
-            messages[idx] = appendText(messages[idx], "text", delta);
+            messages[idx] = appendText(messages[idx], "text", delta, streamId);
             return {
               ...tr,
               messages: [...messages],
@@ -1365,7 +1412,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
               isReplay,
             );
             const idx = messages.findIndex((m) => m.id === id);
-            messages[idx] = appendText(messages[idx], "thought", delta);
+            messages[idx] = appendText(messages[idx], "thought", delta, streamId);
             return {
               ...tr,
               messages: [...messages],
@@ -1396,7 +1443,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
               content: normalizeToolCallContent(raw.content),
               rawInput: boundedRawInput(raw.rawInput ?? raw.raw_input),
             };
-            messages[idx] = upsertToolCall(messages[idx], view);
+            messages[idx] = upsertToolCall(messages[idx], view, streamId);
             return {
               ...tr,
               messages: [...messages],

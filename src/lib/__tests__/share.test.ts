@@ -52,32 +52,27 @@ describe("buildSharePayload", () => {
       role: "assistant",
       complete: true,
       parts: [
-        { kind: "thought", text: "不应默认导出的内部思考" },
         {
-          kind: "tool_call",
-          toolCall: {
-            toolCallId: "t1",
-            title: "Run secret command",
-            kind: "bash",
-            status: "completed",
-            content: [],
-          },
+          kind: "text",
+          text: "<think>I should inspect the project before answering.\n不应默认导出的内部思考</think>\n\n用户需要的最终结论",
+          streamId: "generation-1",
         },
-        { kind: "text", text: "用户需要的最终结论" },
       ],
     }];
 
     const normal = buildSharePayload(withProcess, "markdown", "测试");
     expect(normal.content).toContain("用户需要的最终结论");
+    expect(normal.content).not.toContain("I should inspect");
     expect(normal.content).not.toContain("内部思考");
-    expect(normal.content).not.toContain("Run secret command");
 
     const detailed = buildSharePayload(withProcess, "markdown", "测试", {
       includeProcess: true,
     });
     expect(detailed.content).toContain("### 执行过程");
+    expect(detailed.content).toContain("I should inspect the project before answering.");
     expect(detailed.content).toContain("内部思考");
-    expect(detailed.content).toContain("Run secret command");
+    expect(detailed.content.indexOf("内部思考"))
+      .toBeLessThan(detailed.content.indexOf("用户需要的最终结论"));
   });
 });
 

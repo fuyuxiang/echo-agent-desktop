@@ -2338,13 +2338,6 @@
   padding: 4px 8px 8px;
   border-top: 1px solid var(--echo-border-subtle, var(--echo-border-default));
 }
-.execution-process__commentary {
-  padding: 6px 4px 2px;
-  color: var(--echo-text-medium);
-  font-size: 12px;
-  line-height: 20px;
-}
-.execution-process__commentary .markdown-body > :last-child,
 .execution-process__reasoning-body .markdown-body > :last-child {
   margin-bottom: 0;
 }
@@ -2362,7 +2355,7 @@
 .execution-process__reasoning {
   margin-top: 4px;
   padding: 0 4px;
-  color: var(--echo-text-weak);
+  color: var(--echo-text-tertiary);
   font-size: 12px;
 }
 .execution-process__reasoning > summary {
@@ -2390,9 +2383,12 @@
   margin: 2px 0 6px 6px;
   padding: 2px 0 2px 12px;
   border-left: 2px solid var(--echo-border-subtle, var(--echo-border-default));
-  color: var(--echo-text-weak);
+  color: color-mix(in srgb, var(--echo-text-tertiary) 82%, var(--echo-text-strong));
   font-size: 12px;
   line-height: 20px;
+}
+.execution-process__reasoning-body .markdown-body[data-md-theme="reasoning"] {
+  color: color-mix(in srgb, var(--echo-text-tertiary) 82%, var(--echo-text-strong));
 }
 .execution-process__empty,
 .execution-process__hint {
@@ -4239,6 +4235,8 @@ button.diff__path {
 .app-dialog--danger { border-color: color-mix(in srgb, var(--echo-status-error, #d92d20) 35%, var(--echo-border-default)); }
 .app-dialog__title { margin: 0; font-size: 17px; line-height: 1.45; }
 .app-dialog__description { margin-top: 8px; color: var(--echo-text-muted); font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.retry-confirmation { display: grid; gap: 8px; }
+.retry-confirmation p { margin: 0; }
 .app-dialog__fields { display: flex; flex-direction: column; gap: 14px; margin-top: 18px; }
 .app-dialog__field { display: flex; flex-direction: column; gap: 7px; color: var(--echo-text-strong); font-size: 13px; }
 .app-dialog__field input,

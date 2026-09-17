@@ -298,12 +298,68 @@ describe("session-store transcripts", () => {
     expect(text.text).not.toContain("c");
   });
 
+  it("保留每次模型生成标识，避免把工具前分析和最终答案合并", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.applyUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "I should inspect the project." },
+      _meta: { streamStartMs: 100 },
+      __sessionId: "A",
+    } as never);
+    s.applyUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "read-1",
+      title: "Read project",
+      kind: "read_file",
+      status: "completed",
+      content: [],
+      _meta: { streamStartMs: 100 },
+      __sessionId: "A",
+    } as never);
+    s.applyUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "这是最终答案。" },
+      _meta: { streamStartMs: 200 },
+      __sessionId: "A",
+    } as never);
+
+    expect(useSessionStore.getState().messages[0].parts).toMatchObject([
+      { kind: "text", text: "I should inspect the project.", streamId: "100" },
+      { kind: "tool_call", streamId: "100" },
+      { kind: "text", text: "这是最终答案。", streamId: "200" },
+    ]);
+  });
+
+  it("将模型提供的标准 reasoning 事件保存为思考过程", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.applyUpdate({
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "structured reasoning" },
+      _meta: { streamStartMs: 100 },
+      __sessionId: "A",
+    } as never);
+    s.applyUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "final answer" },
+      _meta: { streamStartMs: 100 },
+      __sessionId: "A",
+    } as never);
+
+    expect(useSessionStore.getState().messages[0].parts).toEqual([
+      { kind: "thought", text: "structured reasoning", streamId: "100" },
+      { kind: "text", text: "final answer", streamId: "100" },
+    ]);
+  });
+
   it("历史回放按 promptIndex 恢复用户文本、附件和轮次边界", () => {
     const s = useSessionStore.getState();
     s.setSession("A");
     s.applyUpdate(userChunk({
       type: "text",
-      text: "<system-reminder>hidden</system-reminder>\n\nraw body",
+      text: "<system-reminder>hidden</system-reminder>\n\nraw body"
+        + "\n\n附件（图片已作为多模态内容附加；其他文件请使用 read_file 读取）：\n- @/tmp/方案.docx",
       _meta: {
         displayText: "请优化方案",
         echoAgentAttachments: ["/tmp/方案.docx"],
@@ -328,6 +384,9 @@ describe("session-store transcripts", () => {
       "user", "assistant", "user", "assistant",
     ]);
     expect(userMessageTextForTest(messages[0])).toBe("请优化方案");
+    expect(messages[0].agentText).toBe(
+      "<system-reminder>hidden</system-reminder>\n\nraw body",
+    );
     expect(messages[0].attachments).toEqual(["/tmp/方案.docx", "/tmp/架构图.png"]);
     expect(messages[1].complete).toBe(true);
     expect(messages[3].complete).toBe(true);
@@ -688,6 +747,20 @@ describe("session-store transcripts", () => {
     s.rollbackPendingTurn();
     expect(useSessionStore.getState().messages).toEqual([]);
     expect(useSessionStore.getState().streaming).toBe(false);
+  });
+
+  it("失败请求的原位重试会删除该轮可见尾部", () => {
+    const s = useSessionStore.getState();
+    s.setSession("A");
+    s.pushAssistant("之前的答复");
+    s.pushUser("请重试");
+    s.pushAssistant("请求失败");
+    const retryMessage = useSessionStore.getState().messages[1];
+
+    s.discardMessagesFrom("A", retryMessage.id);
+
+    expect(useSessionStore.getState().messages).toHaveLength(1);
+    expect(textOf(0)).toBe("之前的答复");
   });
 
   it("已有流式内容时不回滚已开始的 turn", () => {

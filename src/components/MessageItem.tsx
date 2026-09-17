@@ -26,6 +26,12 @@ import {
 } from "@/lib/user-message";
 import { copyShareText } from "@/lib/share";
 import { partitionAssistantParts } from "@/lib/execution-process";
+import {
+  messageRetryKind,
+  messageRetryLabel,
+  messageRetryTitle,
+  type MessageRetryKind,
+} from "@/lib/message-retry";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
 const logoMarkUrl = "/app-icon.png";
 import {
@@ -99,9 +105,8 @@ export function MessageItem({
   onOpenTool?: (tc: ToolCallView) => void;
   /** Put text back into the composer for re-editing (user messages only). */
   onEditResend?: (text: string, attachments: string[]) => void;
-  /** Regenerate this response (last assistant message only): rewinds the
-   *  conversation to the preceding user prompt and resends it. */
-  onRetry?: () => void;
+  /** Retry the latest turn using semantics derived from whether it used tools. */
+  onRetry?: (kind: MessageRetryKind) => void;
   /** Prevent duplicate retry gestures and expose progress in the local action. */
   retrying?: boolean;
   /** The latest completed assistant reply keeps its actions more discoverable. */
@@ -211,13 +216,8 @@ export function MessageItem({
     knowledgeTrace?.personal && knowledgeTrace.personal.state !== "idle"
       || knowledgeTrace?.organization?.state === "unavailable",
   );
-  const hasFailedTool = message.parts.some(
-    (part) => part.kind === "tool_call" && part.toolCall.status === "failed",
-  );
-  const retryIsExecution = hasFailedTool || hasTerminalProcessStatus || !hasAnswerText;
-  const retryLabel = retrying
-    ? retryIsExecution ? "正在重新执行…" : "正在重新生成…"
-    : retryIsExecution ? "重新执行" : "重新生成";
+  const retryKind = messageRetryKind(message);
+  const retryLabel = messageRetryLabel(retryKind, retrying);
   const copyMainLabel = copiedKind === "plain"
     ? "已复制"
     : copiedKind === "markdown"
@@ -350,6 +350,7 @@ export function MessageItem({
                 cancelTrigger={message.cancelTrigger}
                 cancellationCategory={message.cancellationCategory}
                 agentResult={message.agentResult}
+                hasFinalAnswer={hasAnswerText}
                 markdownConfig={markdownConfig}
                 onOpenTool={onOpenTool}
                 knowledgeTrace={knowledgeTrace}
@@ -494,8 +495,8 @@ export function MessageItem({
                 <button
                   type="button"
                   className="msg__action-btn"
-                  onClick={onRetry}
-                  title={retryIsExecution ? "回溯对话并重新执行本轮" : "回溯对话并重新生成回复"}
+                  onClick={() => onRetry(retryKind)}
+                  title={messageRetryTitle(retryKind)}
                   disabled={retrying}
                   aria-busy={retrying}
                 >
