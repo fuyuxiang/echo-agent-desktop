@@ -66,8 +66,12 @@ export function HomePage({
 
   // When a pending expert arrives with a quickPrompt, pre-fill the composer.
   useEffect(() => {
-    if (!pendingExpert) return;
-    // Only auto-fill once per expert (avoid re-filling if user clears it).
+    if (!pendingExpert) {
+      // 已被 dismiss 或未召唤:重置处理记录,使再次召唤同一专家能重新预填。
+      pendingHandledRef.current = null;
+      return;
+    }
+    // Only auto-fill once per expert (avoid re-filling on store churn).
     if (pendingHandledRef.current === pendingExpert.expertId) return;
     pendingHandledRef.current = pendingExpert.expertId;
     if (pendingExpert.quickPrompt) {
@@ -75,6 +79,12 @@ export function HomePage({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingExpert]);
+
+  /** Dismiss the active expert: clear pending store + drop pre-fill guard. */
+  const dismissPendingExpert = () => {
+    usePendingExpertStore.getState().clear();
+    pendingHandledRef.current = null;
+  };
 
   /** 写入 Composer 并聚焦。 */
   const fillComposer = (text: string) => {
@@ -123,6 +133,7 @@ export function HomePage({
             onClientSlashCommand={onClientSlashCommand}
             activeExpertName={pendingExpert?.name}
             activeExpertAvatar={pendingExpert?.avatarLocal}
+            onDismissExpert={dismissPendingExpert}
           />
           {creatingSession && (
             <div className="home__send-status" role="status" aria-live="polite">

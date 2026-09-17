@@ -5435,7 +5435,7 @@ button.diff__path {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 10px 3px 7px;
+  padding: 3px 4px 3px 7px;
   font-size: 12px;
   font-weight: 500;
   color: var(--echo-text-medium);
@@ -5445,8 +5445,30 @@ button.diff__path {
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: default;
   user-select: none;
+}
+.echo-composer__expert-badge__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  color: var(--echo-text-medium);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.echo-composer__expert-badge__remove:hover {
+  background: var(--echo-bg-tertiary, rgba(0,0,0,0.08));
+  color: var(--echo-text-strong);
+}
+.echo-composer__expert-badge__remove:focus-visible {
+  outline: 2px solid var(--echo-brand, #00c29a);
+  outline-offset: 1px;
 }
 .knowledge-picker {
   position: relative;
@@ -7664,7 +7686,8 @@ button.diff__path {
 .composer-blocks__chip {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
   font-size: 11px;
   color: var(--echo-brand);
   background: color-mix(in srgb, var(--echo-brand) 8%, transparent);
@@ -7674,6 +7697,28 @@ button.diff__path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.composer-blocks__chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  color: var(--echo-brand);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+.composer-blocks__chip-remove:hover {
+  background: color-mix(in srgb, var(--echo-brand) 18%, transparent);
+}
+.composer-blocks__chip-remove:focus-visible {
+  outline: 2px solid var(--echo-brand, #00c29a);
+  outline-offset: 1px;
 }
 .composer-attachments {
   display: flex;

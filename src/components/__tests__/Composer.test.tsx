@@ -344,6 +344,64 @@ describe("Composer", () => {
     expect(onSend).toHaveBeenCalledWith("/acme:review staged", []);
   });
 
+  // ---------- 已选专家取消 ----------
+  it("activeExpertName + onDismissExpert 时顶部 chip 与底部 footer 各渲染一个移除按钮", () => {
+    const onDismissExpert = vi.fn();
+    render(
+      <Composer
+        {...base}
+        activeExpertName="小坦克"
+        onDismissExpert={onDismissExpert}
+      />,
+    );
+    // 同一 aria-label 出现两次:顶部 chip 与底部 footer badge 各一。
+    expect(screen.getAllByRole("button", { name: "移除已选专家" })).toHaveLength(2);
+  });
+
+  it("点击顶部 chip 的移除按钮触发 onDismissExpert 且不影响输入框文本", () => {
+    const onDismissExpert = vi.fn();
+    render(
+      <Composer
+        {...base}
+        activeExpertName="小坦克"
+        draft="已预填的 quickPrompt"
+        draftKey="s1"
+        onDismissExpert={onDismissExpert}
+      />,
+    );
+    const removeButtons = screen.getAllByRole("button", { name: "移除已选专家" });
+    // 顶部 chip 是第一个(按 DOM 顺序出现在 footer 之前)。
+    fireEvent.click(removeButtons[0]);
+    expect(onDismissExpert).toHaveBeenCalledTimes(1);
+    // 输入框文本保留:dismiss 只撤销专家身份,不破坏用户已输入/预填的内容。
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(
+      "已预填的 quickPrompt",
+    );
+  });
+
+  it("点击底部 footer 的移除按钮同样触发 onDismissExpert", () => {
+    const onDismissExpert = vi.fn();
+    render(
+      <Composer
+        {...base}
+        activeExpertName="小坦克"
+        onDismissExpert={onDismissExpert}
+      />,
+    );
+    const removeButtons = screen.getAllByRole("button", { name: "移除已选专家" });
+    // 底部 footer badge 是第二个。
+    fireEvent.click(removeButtons[1]);
+    expect(onDismissExpert).toHaveBeenCalledTimes(1);
+  });
+
+  it("未传 onDismissExpert 时仍显示徽标,不抛错(向下兼容旧调用方)", () => {
+    expect(() =>
+      render(<Composer {...base} activeExpertName="小坦克" />),
+    ).not.toThrow();
+    // 没有移除按钮 — 旧路径下行为不变。
+    expect(screen.queryByRole("button", { name: "移除已选专家" })).toBeNull();
+  });
+
   it("编辑重发时同时恢复正文和附件", () => {
     const onSend = vi.fn();
     render(

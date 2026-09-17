@@ -101,6 +101,8 @@ export function Composer({
   activeExpertName,
   /** Local avatar path for the expert badge. */
   activeExpertAvatar,
+  /** Dismiss the active expert (clear pending selection). Called from the × on either chip. */
+  onDismissExpert,
   /** Session id powering the context-usage pill (omit on the home page). */
   usageSessionId,
   usageMsgCount,
@@ -191,6 +193,8 @@ export function Composer({
   activeExpertName?: string;
   /** Local avatar path for the expert badge. */
   activeExpertAvatar?: string;
+  /** Dismiss the active expert (clear pending selection). Called from the × on either chip. */
+  onDismissExpert?: () => void;
   /** Session id powering the context-usage pill (omit on the home page). */
   usageSessionId?: string;
   /** Triggers pill re-fetch when messages change. */
@@ -627,11 +631,29 @@ export function Composer({
         {/* 多块提示预览(对齐 EchoAgent content-blocks):引用块 chip 行 */}
         {hasRefs && (
           <div className="composer-blocks" title={assemblePrompt(blockList)}>
-            {blockList.map((b) => (
-              <span key={b.id} className="composer-blocks__chip">
-                {blockLabel(b)}
-              </span>
-            ))}
+            {blockList.map((b) => {
+              const isExpert = b.kind === "expert";
+              const dismissable = isExpert && onDismissExpert;
+              return (
+                <span key={b.id} className="composer-blocks__chip">
+                  {blockLabel(b)}
+                  {dismissable && (
+                    <button
+                      type="button"
+                      className="composer-blocks__chip-remove"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDismissExpert?.();
+                      }}
+                      aria-label="移除已选专家"
+                      title="移除已选专家"
+                    >
+                      <X size={11} strokeWidth={2} />
+                    </button>
+                  )}
+                </span>
+              );
+            })}
           </div>
         )}
 
@@ -797,6 +819,20 @@ export function Composer({
             <span className="echo-composer__expert-badge" title={`当前专家：${activeExpertName}`}>
               <ThumbImg name={activeExpertName} local={activeExpertAvatar} size={18} shape="circle" />
               {activeExpertName}
+              {onDismissExpert && (
+                <button
+                  type="button"
+                  className="echo-composer__expert-badge__remove"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDismissExpert?.();
+                  }}
+                  aria-label="移除已选专家"
+                  title="移除已选专家"
+                >
+                  <X size={11} strokeWidth={2} />
+                </button>
+              )}
             </span>
           )}
           {permissionInline && (
