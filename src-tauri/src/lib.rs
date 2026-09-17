@@ -17,6 +17,7 @@ mod coding_workspace;
 mod commands;
 mod connector_cli;
 mod connectors_catalog;
+mod desktop_preferences;
 mod experts;
 mod ext;
 mod logging;
@@ -144,10 +145,11 @@ fn restore_desktop_window_state(app: &tauri::AppHandle, window: &tauri::WebviewW
 fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::{
         menu::{Menu, MenuItem},
-        tray::TrayIconBuilder,
+        tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
         Manager, WindowEvent,
     };
     use tauri_plugin_autostart::MacosLauncher;
+    use tauri_plugin_notification::NotificationExt;
 
     app.handle().plugin(tauri_plugin_autostart::init(
         MacosLauncher::LaunchAgent,
@@ -160,7 +162,10 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
     let menu = Menu::with_items(app, &[&show, &quit])?;
     let mut tray = TrayIconBuilder::new()
         .menu(&menu)
-        .show_menu_on_left_click(true)
+        .tooltip("EchoAgent - 后台运行中")
+        // macOS conventionally opens the status-item menu on left click.
+        // Windows users expect a left click or double click to restore the app.
+        .show_menu_on_left_click(!cfg!(target_os = "windows"))
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
             "quit" => {
@@ -173,6 +178,26 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
                 });
             }
             _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            let should_show = matches!(
+                event,
+                TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) || (cfg!(target_os = "windows")
+                && matches!(
+                    event,
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    }
+                ));
+            if should_show {
+                show_main_window(tray.app_handle());
+            }
         });
     if let Some(icon) = app.default_window_icon() {
         tray = tray.icon(icon.clone());
@@ -190,8 +215,37 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
             WindowEvent::CloseRequested { api, .. } => {
                 save_desktop_window_state(&app_handle, &close_window);
                 api.prevent_close();
-                if automations::should_keep_app_alive() {
-                    let _ = close_window.hide();
+                let close_to_tray = desktop_preferences::load(&app_handle)
+                    .map(|preferences| preferences.close_to_tray)
+                    .unwrap_or_else(|error| {
+                        tracing::warn!(%error, "failed to read desktop preferences; keeping app alive");
+                        true
+                    });
+                if close_to_tray {
+                    match close_window.hide() {
+                        Ok(()) => {
+                            if desktop_preferences::take_background_notice(&app_handle)
+                                .unwrap_or_else(|error| {
+                                    tracing::warn!(%error, "failed to persist background notice state");
+                                    false
+                                })
+                            {
+                                if let Err(error) = app_handle
+                                    .notification()
+                                    .builder()
+                                    .title("EchoAgent 已在后台运行")
+                                    .body("从系统托盘选择“打开 EchoAgent”可恢复窗口；选择“退出 EchoAgent”可完全退出。")
+                                    .show()
+                                {
+                                    tracing::warn!(%error, "failed to show background residency notification");
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            tracing::error!(%error, "failed to hide main window");
+                            show_main_window(&app_handle);
+                        }
+                    }
                 } else {
                     let app = app_handle.clone();
                     tauri::async_runtime::spawn(async move {
@@ -249,7 +303,7 @@ pub fn run() {
         }
     }));
 
-    builder
+    let app = builder
         .setup(|app| {
             // The authenticated knowledge bridge is reachable on loopback for
             // personal local knowledge. Organization tools are added only after
@@ -301,6 +355,9 @@ pub fn run() {
             // signed desktop application updates (private organization CA)
             app_updater::app_update_check,
             app_updater::app_update_install,
+            // desktop window lifecycle preferences
+            desktop_preferences::desktop_preferences_get,
+            desktop_preferences::desktop_preferences_save,
             // context usage pill (echo.agent/session/info + echo.agent/session/usage)
             commands::agent_session_info,
             commands::agent_session_usage,
@@ -570,6 +627,19 @@ pub fn run() {
             storage::storage_delete,
             storage::storage_make_dir,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running EchoAgent");
+        .build(tauri::generate_context!())
+        .expect("error while building EchoAgent");
+
+    app.run(|_app_handle, _event| {
+        // Closing the last window does not terminate the process on macOS.
+        // Clicking the Dock icon must therefore restore the resident window.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } = _event
+        {
+            show_main_window(_app_handle);
+        }
+    });
 }

@@ -2904,6 +2904,12 @@ button,
   background: var(--ui-brand-soft);
 }
 
+.settings-info-callout--warn {
+  border-color: color-mix(in srgb, var(--echo-warning) 32%, transparent);
+  background: var(--echo-warning-soft);
+  color: var(--echo-warning);
+}
+
 .settings-loading-state,
 .settings-empty-inline {
   background: var(--ui-surface-muted);

@@ -333,7 +333,7 @@ export function TitleBar({
         <button
           className="titlebar__control titlebar__control--close"
           onClick={() => win("close")}
-          title="关闭"
+          title="关闭窗口"
         >
           <XCloseIcon size="sm" />
         </button>

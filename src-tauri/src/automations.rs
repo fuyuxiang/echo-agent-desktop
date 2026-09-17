@@ -378,23 +378,6 @@ pub fn has_active_automations() -> bool {
     }
 }
 
-pub fn should_keep_app_alive() -> bool {
-    if has_active_automations() {
-        return true;
-    }
-    let _guard = record_access().lock().unwrap();
-    match read_records() {
-        Ok(records) => records
-            .records
-            .iter()
-            .any(|record| matches!(record.status.as_str(), "queued" | "running")),
-        Err(error) => {
-            tracing::error!(%error, "failed to inspect automation records");
-            true
-        }
-    }
-}
-
 fn sync_autostart_enabled(app: &AppHandle, enabled: bool) {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {

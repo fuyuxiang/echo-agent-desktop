@@ -111,6 +111,19 @@ export async function agentAuthStatus(): Promise<AuthStatus> {
   return invoke<AuthStatus>("agent_auth_status");
 }
 
+export interface DesktopPreferences {
+  /** Keep the native process and Runtime alive when the main window closes. */
+  closeToTray: boolean;
+}
+
+export async function desktopPreferencesGet(): Promise<DesktopPreferences> {
+  return invoke<DesktopPreferences>("desktop_preferences_get");
+}
+
+export async function desktopPreferencesSave(closeToTray: boolean): Promise<DesktopPreferences> {
+  return invoke<DesktopPreferences>("desktop_preferences_save", { closeToTray });
+}
+
 // NOTE: the backend `agent_new_session` command returns the session id as a
 // bare `String` (see commands.rs agent_new_session). We type it as `string`
 // here — do NOT wrap it in `{ sessionId }`, or callers destructuring

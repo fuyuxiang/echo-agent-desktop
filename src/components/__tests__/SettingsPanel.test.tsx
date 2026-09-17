@@ -14,6 +14,8 @@ vi.mock("@/lib/agent-client", () => ({
   commandsList: vi.fn().mockResolvedValue([]),
   exportTextFile: vi.fn().mockResolvedValue("/tmp/usage.csv"),
   echoAgentDataDir: vi.fn().mockResolvedValue("/tmp/.echo-agent"),
+  desktopPreferencesGet: vi.fn().mockResolvedValue({ closeToTray: true }),
+  desktopPreferencesSave: vi.fn(async (closeToTray: boolean) => ({ closeToTray })),
   mcpList: vi.fn().mockResolvedValue([]),
   notificationList: vi.fn().mockResolvedValue([]),
   notificationMarkRead: vi.fn().mockResolvedValue(undefined),
@@ -58,6 +60,7 @@ import {
   subagentsConfigSave,
   webSearchConfigGet,
   webSearchConfigSave,
+  desktopPreferencesSave,
 } from "@/lib/agent-client";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { useProjectsStore } from "@/stores/projects-store";
@@ -250,6 +253,43 @@ describe("SettingsPanel", () => {
     expect(
       screen.getByText("记忆配置已保存，重启 Agent 后对新会话生效。"),
     ).toBeInTheDocument();
+  });
+
+  it("默认关闭到托盘，并可在系统设置中关闭", async () => {
+    render(
+      <ThemeProvider>
+        <SettingsPanel open initialSection="general" onClose={() => {}} />
+      </ThemeProvider>,
+    );
+
+    const toggle = await screen.findByRole("checkbox", { name: "关闭窗口时继续后台运行" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(desktopPreferencesSave).toHaveBeenCalledWith(false);
+      expect(toggle).not.toBeChecked();
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("关闭主窗口将停止当前 Runtime 和自动化调度");
+    expect(screen.getByText("已关闭后台运行，下次关闭窗口将退出 EchoAgent。")).toBeInTheDocument();
+  });
+
+  it("桌面偏好保存失败时回滚后台运行开关", async () => {
+    vi.mocked(desktopPreferencesSave).mockRejectedValueOnce(new Error("偏好文件只读"));
+    render(
+      <ThemeProvider>
+        <SettingsPanel open initialSection="general" onClose={() => {}} />
+      </ThemeProvider>,
+    );
+
+    const toggle = await screen.findByRole("checkbox", { name: "关闭窗口时继续后台运行" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(screen.getByText("保存桌面偏好失败：偏好文件只读")).toBeInTheDocument();
   });
 
   it("运行时配置分项读取失败时不使用默认值且禁止保存", async () => {

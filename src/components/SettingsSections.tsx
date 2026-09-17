@@ -30,6 +30,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   Loader2,
+  AppWindow,
 } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import {
@@ -52,6 +53,8 @@ import {
   webSearchConfigGet,
   webSearchConfigSave,
   echoAgentDataDir,
+  desktopPreferencesGet,
+  desktopPreferencesSave,
   openEchoAgentDataDir,
   openExternalUrl,
   type MemoryConfig,
@@ -724,6 +727,45 @@ export function DataSettingsPanel() {
 export function GeneralSettingsPanel() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [closeToTray, setCloseToTray] = useState(true);
+  const [loadingDesktopPreferences, setLoadingDesktopPreferences] = useState(true);
+  const [savingDesktopPreferences, setSavingDesktopPreferences] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void desktopPreferencesGet()
+      .then((preferences) => {
+        if (active) setCloseToTray(preferences.closeToTray);
+      })
+      .catch((error) => {
+        if (active) {
+          setMsg(`桌面偏好读取失败，已使用默认设置：${String(error).replace(/^Error:\s*/, "")}`);
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingDesktopPreferences(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleCloseToTrayChange = async (enabled: boolean) => {
+    const previous = closeToTray;
+    setCloseToTray(enabled);
+    setSavingDesktopPreferences(true);
+    setMsg(null);
+    try {
+      const saved = await desktopPreferencesSave(enabled);
+      setCloseToTray(saved.closeToTray);
+      setMsg(enabled ? "已开启后台运行。" : "已关闭后台运行，下次关闭窗口将退出 EchoAgent。");
+    } catch (error) {
+      setCloseToTray(previous);
+      setMsg(`保存桌面偏好失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setSavingDesktopPreferences(false);
+    }
+  };
 
   const handleReload = async (kind: "mcp_all" | "skills" | "models") => {
     setBusy(true);
@@ -740,8 +782,33 @@ export function GeneralSettingsPanel() {
   return (
     <SectionShell
       title="系统设置"
-      desc="热重载 EchoAgent 的配置视图。修改 config.toml 后无需重启整个应用。"
+      desc="管理窗口、后台运行与 EchoAgent 配置重载。"
     >
+      <SettingsGroup title="窗口与后台运行" desc="控制关闭主窗口时是否保留 Runtime 与后台任务。">
+        <div className="settings-row settings-row--comfortable">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name"><AppWindow size={17} />关闭窗口时继续后台运行</span>
+            <span className="settings-row__description">
+              关闭后可从系统托盘重新打开；从托盘选择“退出 EchoAgent”才会完全退出。
+            </span>
+          </div>
+          <label className="sk-toggle">
+            <input
+              type="checkbox"
+              aria-label="关闭窗口时继续后台运行"
+              checked={closeToTray}
+              disabled={loadingDesktopPreferences || savingDesktopPreferences}
+              onChange={(event) => void handleCloseToTrayChange(event.target.checked)}
+            />
+            <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
+          </label>
+        </div>
+        {!closeToTray && !loadingDesktopPreferences && (
+          <div className="settings-info-callout settings-info-callout--warn" role="status">
+            关闭主窗口将停止当前 Runtime 和自动化调度。仍可使用最小化保留窗口与任务。
+          </div>
+        )}
+      </SettingsGroup>
       <SettingsGroup title="运行时热重载" desc="只刷新对应配置，不关闭当前窗口或中断其他页面。">
         <div className="settings-action-row">
           <div className="settings-action-row__content"><strong>MCP 连接器</strong><span>重新读取所有 MCP 服务和工具配置。</span></div>
