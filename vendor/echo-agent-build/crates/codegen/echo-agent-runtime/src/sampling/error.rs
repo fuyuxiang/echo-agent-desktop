@@ -101,6 +101,12 @@ fn pushes_consumer_subscription_upsell(detail: &str) -> bool {
 /// HTTP 529, proxy-wrapped 5xx). See [`SamplingError::is_overloaded`].
 pub const OVERLOADED_USER_MESSAGE: &str = "Model is temporarily overloaded. Try again in a moment.";
 
+/// Safe, actionable copy for a response that could not be decoded according
+/// to the selected provider protocol. The original serde error remains in
+/// local logs; it may contain raw provider data and must not be exposed in the
+/// conversation banner.
+pub const INCOMPATIBLE_MODEL_RESPONSE_USER_MESSAGE: &str = "Model provider returned an incompatible response. Check that this connection uses the provider's supported API protocol (OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages), then retry.";
+
 /// Map a `SamplingError` to an ACP `Error` for client-facing responses.
 /// This stays in echo-agent-runtime because it depends on `agent_client_protocol::Error`.
 pub(crate) fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
@@ -120,7 +126,21 @@ pub(crate) fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
         SamplingError::Http(e) => {
             acp::Error::internal_error().data(format!("http client init failed: {e}"))
         }
-        SamplingError::Serialization(_) => acp::Error::invalid_params().data(err.to_string()),
+        SamplingError::Serialization(ref source) => {
+            tracing::error!(
+                error = %source,
+                line = source.line(),
+                column = source.column(),
+                "model provider returned an incompatible response"
+            );
+            // This is an upstream response-contract failure, not an invalid
+            // user prompt. Keep the technical detail in logs and carry a
+            // stable kind for clients that can localize the presentation.
+            acp::Error::internal_error().data(serde_json::json!({
+                "message": INCOMPATIBLE_MODEL_RESPONSE_USER_MESSAGE,
+                "error_kind": echo_agent_sampler::SamplingErrorKind::Serialization.as_str(),
+            }))
+        }
         SamplingError::Api {
             status, message, ..
         } => match status {
@@ -391,6 +411,35 @@ mod tests {
         assert_eq!(
             error_detail_from_data(&data).as_deref(),
             Some("upstream unavailable")
+        );
+    }
+
+    #[test]
+    fn serialization_error_is_safe_actionable_and_server_classified() {
+        let serde_error = serde_json::from_str::<i32>(r#"{"finish_reason":""}"#).unwrap_err();
+        let raw_detail = serde_error.to_string();
+        let acp_err = map_sampling_err_to_acp(SamplingError::Serialization(serde_error));
+
+        assert_eq!(acp_err.code, acp::Error::internal_error().code);
+        let data = acp_err.data.as_ref().expect("structured error data");
+        assert_eq!(
+            data.get("message").and_then(serde_json::Value::as_str),
+            Some(INCOMPATIBLE_MODEL_RESPONSE_USER_MESSAGE)
+        );
+        assert_eq!(
+            data.get("error_kind").and_then(serde_json::Value::as_str),
+            Some("serialization")
+        );
+        assert!(
+            !data.to_string().contains(&raw_detail),
+            "raw serde diagnostics belong in local logs, not the UI payload"
+        );
+
+        let fields = prompt_complete_fields(&Err(acp_err));
+        assert_eq!(fields.0, serde_json::json!("error"));
+        assert_eq!(
+            fields.1,
+            serde_json::json!(INCOMPATIBLE_MODEL_RESPONSE_USER_MESSAGE)
         );
     }
 

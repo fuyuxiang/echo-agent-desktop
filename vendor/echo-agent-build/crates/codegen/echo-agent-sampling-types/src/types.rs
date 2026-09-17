@@ -1656,7 +1656,7 @@ mod tests {
     }
 
     #[test]
-    fn streaming_choice_treats_empty_finish_reason_as_unfinished() {
+    fn chat_choices_treat_empty_finish_reason_as_unfinished() {
         let empty: ChatChunkChoice =
             serde_json::from_str(r#"{"index":0,"delta":{},"finish_reason":""}"#).unwrap();
         assert_eq!(empty.finish_reason, None);
@@ -1673,6 +1673,12 @@ mod tests {
             r#"{"index":0,"delta":{},"finish_reason":"unexpected"}"#,
         );
         assert!(invalid.is_err());
+
+        let non_streaming: ChatChoice = serde_json::from_str(
+            r#"{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":""}"#,
+        )
+        .unwrap();
+        assert_eq!(non_streaming.finish_reason, None);
     }
 
     /// Regression test: cloning `Box<dyn TraceContext>` must not infinitely recurse.

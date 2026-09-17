@@ -2310,6 +2310,73 @@ mod tests {
         }
     }
 
+    /// Regression for OpenAI-compatible providers (including MiniMax) that
+    /// encode an unfinished streaming choice as `finish_reason: ""` instead
+    /// of the protocol-standard `null`. Exercise the real HTTP/SSE ingress so
+    /// the field-level compatibility deserializer cannot be accidentally
+    /// bypassed by a future client refactor.
+    #[tokio::test]
+    async fn chat_completion_stream_accepts_empty_finish_reason() {
+        let body = concat!(
+            "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",",
+            "\"created\":1,\"model\":\"MiniMax-M3\",\"choices\":[{\"index\":0,",
+            "\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},",
+            "\"finish_reason\":\"\"}]}\n\n",
+            "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",",
+            "\"created\":1,\"model\":\"MiniMax-M3\",\"choices\":[{\"index\":0,",
+            "\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(move || async move {
+                axum::response::Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(axum::body::Body::from(body))
+                    .unwrap()
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let client = SamplingClient::new(SamplerConfig {
+            base_url: format!("http://{addr}/v1"),
+            model: "MiniMax-M3".into(),
+            ..minimal_config()
+        })
+        .unwrap();
+        let request =
+            ChatCompletionRequest::new("MiniMax-M3", vec![ChatRequestMessage::user("hello")]);
+
+        let (mut stream, _) = client
+            .chat_completion_stream(request)
+            .await
+            .expect("the SSE request should start");
+        let content_chunk = stream
+            .next()
+            .await
+            .expect("content chunk")
+            .expect("empty finish_reason must not fail deserialization");
+        assert_eq!(
+            content_chunk.choices[0].delta.content.as_deref(),
+            Some("ok")
+        );
+        assert_eq!(content_chunk.choices[0].finish_reason, None);
+
+        let final_chunk = stream.next().await.expect("final chunk").unwrap();
+        assert_eq!(
+            final_chunk.choices[0].finish_reason,
+            Some(echo_agent_sampling_types::types::FinishReason::Stop)
+        );
+        assert!(
+            stream.next().await.is_none(),
+            "[DONE] must close the stream"
+        );
+        server.abort();
+    }
+
     /// Verify the serialized shape of StreamingChatRequest matches the
     /// expected wire format: all ChatCompletionRequest fields flattened at
     /// top level, plus `stream: true` and `stream_options.include_usage: true`.

@@ -63,6 +63,31 @@ describe("formatAgentError", () => {
     expect(result).toContain("网络连接失败");
   });
 
+  it("将旧版 finish_reason 反序列化错误转为可操作提示", () => {
+    const raw = "serialization error: unknown variant ``, expected one of `stop`, `length`, `tool_calls`, `content_filter`, `function_call` at line 1 column 71";
+    const result = formatAgentError(raw);
+
+    expect(result).toContain("模型服务返回了");
+    expect(result).toContain("设置 → 模型与连接");
+    expect(result).toContain("Chat Completions");
+    expect(result).not.toContain("unknown variant");
+  });
+
+  it("识别 Runtime 的结构化响应协议错误", () => {
+    const raw = JSON.stringify({
+      code: -32603,
+      message: "Internal error",
+      data: {
+        message: "Model provider returned an incompatible response.",
+        error_kind: "serialization",
+      },
+    });
+    const result = formatAgentError(raw);
+
+    expect(result).toContain("本轮已安全停止");
+    expect(result).not.toContain("Internal error");
+  });
+
   it("returns null for unparseable string", () => {
     expect(formatAgentError("some random error")).toBeNull();
   });

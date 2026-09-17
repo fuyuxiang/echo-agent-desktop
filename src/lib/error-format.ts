@@ -22,8 +22,22 @@ interface PromptUsage {
 
 interface AgentErrorData {
   message?: string;
+  error_kind?: string;
+  errorKind?: string;
   promptUsage?: PromptUsage;
   [key: string]: unknown;
+}
+
+const INCOMPATIBLE_MODEL_RESPONSE_MESSAGE =
+  "⚠️ 模型服务返回了与当前连接协议不兼容的响应，本轮已安全停止。请在「设置 → 模型与连接」中确认 API 协议与服务商一致（OpenAI Chat Completions / Responses 或 Anthropic Messages），然后重试。";
+
+function isIncompatibleModelResponse(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes("serialization error")
+    || lower.includes("failed to parse api response")
+    || lower.includes("unexpected response format")
+    || lower.includes("model provider returned an incompatible response")
+    || (lower.includes("unknown variant") && lower.includes("finish_reason"));
 }
 
 /** Try to parse a EchoAgent error string into structured data. */
@@ -153,6 +167,11 @@ export function formatAgentError(raw: string): string | null {
   if (raw.toLowerCase().includes("no auth method id provided")) {
     return "⚠️ 模型凭证同步尚未完成。请稍候后重试；若持续出现，请刷新模型配置。";
   }
+  // Cover both the current structured Runtime error and legacy builds that
+  // leaked serde's raw `unknown variant` diagnostic into the banner.
+  if (isIncompatibleModelResponse(raw)) {
+    return INCOMPATIBLE_MODEL_RESPONSE_MESSAGE;
+  }
   const parsed = tryParseAgentError(raw);
 
   // If structured parsing failed, check raw string for known patterns.
@@ -172,6 +191,14 @@ export function formatAgentError(raw: string): string | null {
 
   const { code, message, data } = parsed;
   const innerMsg = data?.message ?? message ?? "";
+
+  if (
+    data?.error_kind === "serialization"
+    || data?.errorKind === "serialization"
+    || isIncompatibleModelResponse(innerMsg)
+  ) {
+    return INCOMPATIBLE_MODEL_RESPONSE_MESSAGE;
+  }
 
   // 429 Rate limit
   if (code === -32003 && innerMsg.includes("429")) {
