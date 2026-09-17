@@ -838,6 +838,7 @@ function Shell() {
                   ...previous.auth,
                   ready: false,
                   runtimeReady: false,
+                  runtimeAuthReady: false,
                   synchronized: false,
                   runtimeModels: [],
                   lastRuntimeError: reason,
@@ -2137,7 +2138,7 @@ function Shell() {
           setCurrentError: (message) => sessionStore.getState().setError(message),
         });
       }
-      showToast(`启动项目失败：${String(e).replace(/^Error:\s*/, "")}`);
+      showToast(`启动项目失败：${friendlyError(e)}`);
     }
   };
 
@@ -2214,7 +2215,7 @@ function Shell() {
           setCurrentError: (message) => sessionStore.getState().setError(message),
         });
       }
-      showToast(`创建项目对话失败：${String(e).replace(/^Error:\s*/, "")}`);
+      showToast(`创建项目对话失败：${friendlyError(e)}`);
       return undefined;
     }
   };

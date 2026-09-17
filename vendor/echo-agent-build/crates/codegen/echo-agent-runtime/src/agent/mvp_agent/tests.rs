@@ -3040,6 +3040,72 @@ async fn auth_type_no_method_id_with_current_returns_session_token() {
     assert!(agent.auth_manager.current().is_some());
     assert_eq!(agent.auth_type(), echo_agent_chat_state::AuthType::SessionToken,);
 }
+/// A desktop Runtime can initialize before organization login, then receive
+/// its first managed BYOK model through `internal/reload_models`. The reload
+/// must install API-key auth immediately and retire it again when the last
+/// credential disappears; requiring a process restart is a broken lifecycle.
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
+async fn model_reload_reconciles_first_added_and_last_removed_byok_credential() {
+    use crate::agent::auth_method::{
+        ECHO_AGENT_API_KEY_ENV_VAR, ECHO_AGENT_API_KEY_METHOD_ID,
+        LEGACY_ECHO_AGENT_API_KEY_ENV_VAR,
+    };
+    use crate::agent::config::{EndpointsConfig, ModelEntry};
+    use echo_agent_test_support::EnvGuard;
+    let _new = EnvGuard::unset(ECHO_AGENT_API_KEY_ENV_VAR);
+    let _legacy = EnvGuard::unset(LEGACY_ECHO_AGENT_API_KEY_ENV_VAR);
+    let agent = build_minimal_agent_for_tests();
+    assert!(agent.auth_method_id.load().is_none());
+
+    let mut managed = ModelEntry::fallback("organization/minimax-m3", &EndpointsConfig::default());
+    managed.api_key = Some("organization-secret".into());
+    agent
+        .models_manager
+        .insert_test_entry("organization/minimax-m3", managed);
+
+    assert_eq!(
+        agent.reconcile_auth_method_after_model_reload().as_deref(),
+        Some(ECHO_AGENT_API_KEY_METHOD_ID),
+        "the first hot-reloaded organization credential must make session/new usable"
+    );
+
+    let without_credential =
+        ModelEntry::fallback("organization/minimax-m3", &EndpointsConfig::default());
+    agent
+        .models_manager
+        .insert_test_entry("organization/minimax-m3", without_credential);
+    assert_eq!(agent.reconcile_auth_method_after_model_reload(), None);
+    assert!(agent.auth_method_id.load().is_none());
+}
+
+/// Adding a BYOK model must not replace an already authenticated OIDC/cached
+/// session. Model-owned credentials win per model during sampling while the
+/// process-wide session method remains available to other models.
+#[tokio::test(flavor = "current_thread")]
+#[serial_test::serial]
+async fn model_reload_preserves_established_session_auth_method() {
+    use crate::agent::auth_method::{
+        CACHED_TOKEN_AUTH_METHOD_ID, ECHO_AGENT_API_KEY_ENV_VAR,
+        LEGACY_ECHO_AGENT_API_KEY_ENV_VAR,
+    };
+    use crate::agent::config::{EndpointsConfig, ModelEntry};
+    use echo_agent_test_support::EnvGuard;
+    let _new = EnvGuard::unset(ECHO_AGENT_API_KEY_ENV_VAR);
+    let _legacy = EnvGuard::unset(LEGACY_ECHO_AGENT_API_KEY_ENV_VAR);
+    let agent = build_minimal_agent_for_tests();
+    agent.set_auth_method(acp::AuthMethodId::new(CACHED_TOKEN_AUTH_METHOD_ID));
+    let mut managed = ModelEntry::fallback("organization/minimax-m3", &EndpointsConfig::default());
+    managed.api_key = Some("organization-secret".into());
+    agent
+        .models_manager
+        .insert_test_entry("organization/minimax-m3", managed);
+
+    assert_eq!(
+        agent.reconcile_auth_method_after_model_reload().as_deref(),
+        Some(CACHED_TOKEN_AUTH_METHOD_ID)
+    );
+}
 /// Minimal agent whose `echo_agent_com_config` engages the api-key kill switch
 /// (`disable_api_key_auth = true`), mirroring a forced-IdP deployment.
 fn build_agent_with_api_key_auth_disabled() -> MvpAgent {

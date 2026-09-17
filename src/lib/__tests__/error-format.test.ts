@@ -36,6 +36,15 @@ describe("formatAgentError", () => {
     const result = formatAgentError(raw);
     expect(result).not.toBeNull();
     expect(result).toContain("认证失败");
+    expect(result).toContain("组织托管模型");
+  });
+
+  it("将 Runtime 凭证同步问题与 API Key 被拒绝区分展示", () => {
+    const raw = `Error { code: -32000: Authentication required, message: "Authentication required", data: Some(String("no auth method id provided")) }`;
+    const result = formatAgentError(raw);
+    expect(result).toContain("凭证同步尚未完成");
+    expect(result).not.toContain("API Key");
+    expect(result).not.toContain("认证失败");
   });
 
   it("parses ACP internal errors whose Rust data is a String", () => {

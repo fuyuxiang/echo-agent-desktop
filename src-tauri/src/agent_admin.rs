@@ -1776,10 +1776,10 @@ fn internal_reload_request(kind: &str) -> Result<agent_client_protocol::ExtReque
 /// Send a reload request and do not report success until the runtime has
 /// actually applied it. The gateway executes requests concurrently, so merely
 /// enqueueing this message does not order a following `session/new` behind it.
-pub(crate) async fn request_internal_reload_and_wait(
+async fn request_internal_reload_response(
     tx: &echo_agent_acp::AcpAgentTx,
     kind: &str,
-) -> Result<(), String> {
+) -> Result<agent_client_protocol::ExtResponse, String> {
     let request = internal_reload_request(kind)?;
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(60),
@@ -1787,9 +1787,56 @@ pub(crate) async fn request_internal_reload_and_wait(
     )
     .await
     .map_err(|_| format!("reload {kind} timed out after 60 seconds"))?;
-    result
-        .map(|_response: agent_client_protocol::ExtResponse| ())
-        .map_err(|error| format!("reload {kind}: {error:?}"))
+    result.map_err(|error| format!("reload {kind}: {error:?}"))
+}
+
+pub(crate) async fn request_internal_reload_and_wait(
+    tx: &echo_agent_acp::AcpAgentTx,
+    kind: &str,
+) -> Result<(), String> {
+    request_internal_reload_response(tx, kind).await.map(|_| ())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModelReloadAck {
+    pub(crate) model_count: usize,
+    pub(crate) auth_method_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelReloadAckWire {
+    models: usize,
+    auth_method_id: Option<String>,
+    auth_ready: bool,
+}
+
+fn parse_model_reload_ack(
+    response: agent_client_protocol::ExtResponse,
+) -> Result<ModelReloadAck, String> {
+    let wire: ModelReloadAckWire = crate::ext::parse_ext_response(&response)
+        .map_err(|error| format!("reload models returned an invalid acknowledgement: {error}"))?;
+    let auth_method_id = wire
+        .auth_method_id
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty());
+    if wire.auth_ready != auth_method_id.is_some() {
+        return Err("reload models returned inconsistent authentication state".into());
+    }
+    Ok(ModelReloadAck {
+        model_count: wire.models,
+        auth_method_id,
+    })
+}
+
+/// Reload models and retain the Runtime's authentication acknowledgement.
+/// The model catalog and auth method are separate in-memory states; callers
+/// must not mark the Runtime ready after observing only the catalog.
+pub(crate) async fn request_model_reload_and_wait(
+    tx: &echo_agent_acp::AcpAgentTx,
+) -> Result<ModelReloadAck, String> {
+    let response = request_internal_reload_response(tx, "models").await?;
+    parse_model_reload_ack(response)
 }
 
 /// Send one of the runtime's internal reload extension requests without requiring
@@ -2297,11 +2344,12 @@ mod tests {
     use super::{
         check_expected_revision, delete_session_memory_artifacts_from_storage, file_revision,
         init_sqlite_vec, kill_running_task, list_memory, list_running_tasks,
-        normalize_plugin_action, parse_rewind_execution, parse_slash_commands,
-        remember_marketplace, remember_plugins, request_internal_reload_and_wait,
-        require_listed_marketplace_source, require_listed_plugin_id, resolve_memory_path,
-        rewind_point_values, secure_remote_source, validate_admin_action, MemoryEntryScope,
-        MemoryIndex, MemoryStorage, RawSearchHit, RunningTaskSource, MAX_ADMIN_ACTION_STRING_BYTES,
+        normalize_plugin_action, parse_model_reload_ack, parse_rewind_execution,
+        parse_slash_commands, remember_marketplace, remember_plugins,
+        request_internal_reload_and_wait, require_listed_marketplace_source,
+        require_listed_plugin_id, resolve_memory_path, rewind_point_values, secure_remote_source,
+        validate_admin_action, MemoryEntryScope, MemoryIndex, MemoryStorage, ModelReloadAck,
+        RawSearchHit, RunningTaskSource, MAX_ADMIN_ACTION_STRING_BYTES,
     };
 
     #[test]
@@ -2582,6 +2630,38 @@ mod tests {
 
         assert!(error.contains("unknown reload kind"));
         assert!(agent.rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn model_reload_ack_preserves_runtime_authentication_state() {
+        let response =
+            agent_client_protocol::ExtResponse::new(crate::ext::raw_params(&serde_json::json!({
+                "models": 2,
+                "authMethodId": "echoagent.api_key",
+                "authReady": true,
+            })));
+
+        assert_eq!(
+            parse_model_reload_ack(response),
+            Ok(ModelReloadAck {
+                model_count: 2,
+                auth_method_id: Some("echoagent.api_key".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn model_reload_ack_rejects_inconsistent_authentication_state() {
+        let response =
+            agent_client_protocol::ExtResponse::new(crate::ext::raw_params(&serde_json::json!({
+                "models": 1,
+                "authMethodId": null,
+                "authReady": true,
+            })));
+
+        assert!(parse_model_reload_ack(response)
+            .expect_err("authReady without an auth method must fail closed")
+            .contains("inconsistent authentication state"));
     }
 
     #[test]

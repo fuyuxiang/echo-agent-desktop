@@ -71,6 +71,8 @@ export interface AuthStatus {
   providers: string[];
   /** Whether Runtime acknowledged the current model configuration. */
   runtimeReady: boolean;
+  /** Whether Runtime installed auth for the acknowledged model configuration. */
+  runtimeAuthReady?: boolean;
   /** Whether Runtime and disk model configuration revisions match. */
   synchronized: boolean;
   /** Model ids in the last Runtime-acknowledged configuration. */

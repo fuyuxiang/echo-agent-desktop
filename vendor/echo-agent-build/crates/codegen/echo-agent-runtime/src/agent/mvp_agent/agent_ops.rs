@@ -112,6 +112,48 @@ impl MvpAgent {
     pub(super) fn set_auth_method(&self, id: acp::AuthMethodId) {
         self.auth_method_id.store(Some(std::sync::Arc::new(id)));
     }
+    /// Reconcile model-owned API-key authentication after a model hot reload.
+    ///
+    /// `initialize()` selects the initial method from the model catalog, but
+    /// `internal/reload_models` can add the first BYOK model later (for example
+    /// when a desktop organization downloads its managed model after login).
+    /// Keep an established session-based method intact; model credentials only
+    /// fill an unselected method or retire a now-unusable API-key method.
+    pub(crate) fn reconcile_auth_method_after_model_reload(&self) -> Option<String> {
+        let preferred = self.cfg.borrow().echo_agent_com_config.preferred_method;
+        let has_external_api_key = auth_method::should_advertise_echo_agent_api_key_with_env_ok(
+            self.cfg.borrow().echo_agent_com_config.api_key_auth_disabled(),
+            self.models_manager.models().values(),
+            self.auth_manager.first_party_env_api_key_ok(),
+        ) && !matches!(preferred, Some(PreferredAuthMethod::Oidc));
+        let current = self.auth_method_id.load_full();
+        let current_kind = current
+            .as_deref()
+            .map(auth_method::AuthMethodKind::from_id);
+
+        match current_kind {
+            None if has_external_api_key => self.set_auth_method(acp::AuthMethodId::new(
+                auth_method::ECHO_AGENT_API_KEY_METHOD_ID,
+            )),
+            Some(auth_method::AuthMethodKind::EchoAgentApiKey) if !has_external_api_key => {
+                self.auth_method_id.store(None);
+            }
+            // Cached/OIDC authentication remains the process-wide default when
+            // it was already established. Per-model credentials still win in
+            // `resolve_credentials`, matching initialize's priority rules.
+            _ => {}
+        }
+
+        let reconciled = self.auth_method_id.load_full();
+        let reconciled_id = reconciled.as_deref().map(|id| id.0.to_string());
+        tracing::info!(
+            previous_auth_method_id = current.as_deref().map(|id| id.0.as_ref()),
+            auth_method_id = reconciled_id.as_deref(),
+            has_external_api_key,
+            "model reload reconciled auth method"
+        );
+        reconciled_id
+    }
     /// Publish model-owned credentials for voice/tools static fallthrough.
     /// Only [`ModelEntry::own_credential`] — not `sampling_config.api_key` (may be a session JWT).
     pub(crate) fn sync_process_static_api_key(&self, preferred_model_id: Option<&str>) {

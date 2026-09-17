@@ -830,12 +830,23 @@ fn handle_reload_models(agent: &MvpAgent) -> ExtResult {
 
     agent.models_manager.apply_config(merged_config);
     agent.sync_process_static_api_key(None);
+    let auth_method_id = agent.reconcile_auth_method_after_model_reload();
 
     let count = agent.models_manager.models().len();
-    tracing::info!(count, "model list reloaded from config.toml");
-    ExtMethodResult::success(serde_json::json!({ "models": count }))
-        .to_ext_response()
-        .map_err(|e| acp::Error::internal_error().data(e.to_string()))
+    let auth_ready = auth_method_id.is_some();
+    tracing::info!(
+        count,
+        auth_method_id,
+        auth_ready,
+        "model list reloaded from config.toml"
+    );
+    ExtMethodResult::success(serde_json::json!({
+        "models": count,
+        "authMethodId": auth_method_id,
+        "authReady": auth_ready,
+    }))
+    .to_ext_response()
+    .map_err(|e| acp::Error::internal_error().data(e.to_string()))
 }
 
 // internal/reload_models_cache

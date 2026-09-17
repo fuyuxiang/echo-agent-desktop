@@ -59,6 +59,9 @@ pub(crate) struct RuntimeModelState {
     initialized: bool,
     revision: Option<String>,
     model_ids: Vec<String>,
+    /// Authentication method reconciled from the same Runtime model reload.
+    /// A catalog without this acknowledgement is not usable by `session/new`.
+    auth_method_id: Option<String>,
     last_error: Option<String>,
     /// Sender identity that produced this snapshot. A late response from a
     /// retired Runtime must never mark a newly-started Runtime as ready.
@@ -246,6 +249,7 @@ impl AppState {
         sender: &echo_agent_acp::AcpAgentTx,
         revision: String,
         model_ids: Vec<String>,
+        auth_method_id: String,
     ) -> bool {
         let current_sender = self.tx.lock().unwrap();
         if !current_sender
@@ -258,6 +262,7 @@ impl AppState {
             initialized: true,
             revision: Some(revision),
             model_ids,
+            auth_method_id: Some(auth_method_id),
             last_error: None,
             sender: Some(sender.clone()),
         };
@@ -269,6 +274,7 @@ impl AppState {
         runtime.initialized = false;
         runtime.revision = None;
         runtime.model_ids.clear();
+        runtime.auth_method_id = None;
         runtime.sender = None;
         runtime.last_error = Some(error.into());
     }
@@ -337,6 +343,9 @@ pub struct AuthStatus {
     /// True only when the embedded Runtime has acknowledged the exact
     /// model-related configuration revision currently on disk.
     pub runtime_ready: bool,
+    /// True only when the Runtime also installed an authentication method for
+    /// the acknowledged model configuration.
+    pub runtime_auth_ready: bool,
     pub synchronized: bool,
     /// Runtime catalog as shown to the frontend: upstream-branded ids removed.
     pub runtime_models: Vec<String>,
@@ -460,8 +469,11 @@ fn auth_status_from_snapshots(
     // disables a single model.
     let synchronized =
         sender_current && runtime.initialized && runtime.revision.as_deref() == Some(revision);
-    let runtime_ready =
-        synchronized && runtime.last_error.is_none() && !runtime.model_ids.is_empty();
+    let runtime_auth_ready = synchronized && runtime.auth_method_id.is_some();
+    let runtime_ready = synchronized
+        && runtime.last_error.is_none()
+        && !runtime.model_ids.is_empty()
+        && runtime_auth_ready;
     let ready = runtime_ready;
     let reason = if ready {
         None
@@ -473,6 +485,10 @@ fn auth_status_from_snapshots(
         Some("Agent Runtime 尚未完成初始化，请稍候或重启应用。".into())
     } else if !synchronized {
         Some("Agent Runtime 中的模型配置与磁盘不一致，请在设置中重试刷新。".into())
+    } else if !runtime_auth_ready {
+        Some(
+            "Agent Runtime 尚未完成模型凭证同步，请稍候后重试；若持续出现，请刷新模型配置。".into(),
+        )
     } else {
         Some("Agent Runtime 未加载任何可用模型，请检查“设置 → 模型与连接”中的可用范围配置。".into())
     };
@@ -492,6 +508,7 @@ fn auth_status_from_snapshots(
         reason,
         providers: strip_upstream_branded_ids(model_ids),
         runtime_ready,
+        runtime_auth_ready,
         synchronized,
         runtime_models: strip_upstream_branded_ids(runtime.model_ids.clone()),
         default_model_id: None,
@@ -663,13 +680,13 @@ pub(crate) async fn reload_models_and_sync(
     let mut last_revision = None;
     for attempt in 1..=MODEL_RELOAD_ATTEMPTS {
         let before = crate::providers::model_config_revision();
-        let result = crate::agent_admin::request_internal_reload_and_wait(tx, "models").await;
+        let result = crate::agent_admin::request_model_reload_and_wait(tx).await;
         match result {
             Err(error) => {
                 state.mark_runtime_models_failed_if_current(tx, error.clone());
                 return Err(error);
             }
-            Ok(()) => {
+            Ok(ack) => {
                 let after = crate::providers::model_config_revision();
                 if before == after {
                     if let Some(revision) = stable_model_revision() {
@@ -708,10 +725,26 @@ pub(crate) async fn reload_models_and_sync(
                                         );
                                         return Err(error);
                                     }
+                                    let Some(auth_method_id) = ack.auth_method_id else {
+                                        let error = "Agent Runtime 已加载模型，但尚未完成凭证认证同步；请刷新模型配置后重试。".to_string();
+                                        tracing::error!(
+                                            attempt,
+                                            runtime_models = runtime_model_ids.len(),
+                                            acknowledged_models = ack.model_count,
+                                            %error,
+                                            "Runtime auth method is missing after model reload"
+                                        );
+                                        state.mark_runtime_models_failed_if_current(
+                                            tx,
+                                            error.clone(),
+                                        );
+                                        return Err(error);
+                                    };
                                     let committed = state.mark_runtime_models_synced(
                                         tx,
                                         revision,
                                         runtime_model_ids,
+                                        auth_method_id,
                                     );
                                     if !committed {
                                         return Err(
@@ -2083,6 +2116,7 @@ mod tests {
             initialized: true,
             revision: Some(revision.into()),
             model_ids: model_ids.iter().map(|id| (*id).into()).collect(),
+            auth_method_id: Some("echoagent.api_key".into()),
             last_error: None,
             sender: Some(client.tx),
         }
@@ -2154,10 +2188,26 @@ mod tests {
         );
         assert!(synchronized.ready);
         assert!(synchronized.synchronized);
+        assert!(synchronized.runtime_auth_ready);
         assert_eq!(
             validate_runtime_ready(&synchronized, Some("model-a")),
             Ok(())
         );
+    }
+
+    #[test]
+    fn runtime_catalog_without_auth_acknowledgement_is_not_ready() {
+        let mut runtime = runtime_state("rev-a", &["model-a"]);
+        runtime.auth_method_id = None;
+        let status =
+            auth_status_from_snapshots(vec!["model-a".into()], None, "rev-a", runtime, true);
+
+        assert!(status.synchronized, "the catalog revision did match");
+        assert!(!status.runtime_auth_ready);
+        assert!(!status.runtime_ready);
+        assert!(!status.ready);
+        assert!(status.reason.as_deref().unwrap().contains("凭证同步"));
+        assert!(validate_runtime_ready(&status, Some("model-a")).is_err());
     }
 
     #[test]
@@ -2419,7 +2469,12 @@ mod tests {
         // runtime state untouched.
         let (client, _agent) = echo_agent_acp::acp_channels();
         *state.tx.lock().unwrap() = Some(client.tx.clone());
-        state.mark_runtime_models_synced(&client.tx, "rev-a".into(), vec!["model-a".into()]);
+        state.mark_runtime_models_synced(
+            &client.tx,
+            "rev-a".into(),
+            vec!["model-a".into()],
+            "echoagent.api_key".into(),
+        );
         clear_runtime_after_init_failure(&state, first);
         assert!(state.runtime_models.lock().unwrap().initialized);
         assert!(state.tx.lock().unwrap().is_some());
@@ -2438,6 +2493,7 @@ mod tests {
             &channels.tx,
             "revision-before-expiry".into(),
             vec!["managed-model".into()],
+            "echoagent.api_key".into(),
         );
 
         state.mark_runtime_model_reload_pending();
@@ -2453,7 +2509,12 @@ mod tests {
         let (retired, _retired_agent) = echo_agent_acp::acp_channels();
         let (current, _current_agent) = echo_agent_acp::acp_channels();
         *state.tx.lock().unwrap() = Some(current.tx.clone());
-        state.mark_runtime_models_synced(&current.tx, "rev-a".into(), vec!["model-a".into()]);
+        state.mark_runtime_models_synced(
+            &current.tx,
+            "rev-a".into(),
+            vec!["model-a".into()],
+            "echoagent.api_key".into(),
+        );
 
         assert!(!state.mark_runtime_dead_if_current(&retired.tx, "old thread exited"));
         assert!(state.runtime_models.lock().unwrap().initialized);

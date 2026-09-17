@@ -150,13 +150,16 @@ function fmtDuration(ms?: number): string {
  * Returns null if the error can't be parsed (caller should fall back to raw).
  */
 export function formatAgentError(raw: string): string | null {
+  if (raw.toLowerCase().includes("no auth method id provided")) {
+    return "⚠️ 模型凭证同步尚未完成。请稍候后重试；若持续出现，请刷新模型配置。";
+  }
   const parsed = tryParseAgentError(raw);
 
   // If structured parsing failed, check raw string for known patterns.
   if (!parsed) {
     const lower = raw.toLowerCase();
     if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("invalid api key")) {
-      return "⚠️ API 认证失败。请检查当前会话的模型与「设置 → 模型」中的 API Key 是否匹配。";
+      return "⚠️ API 认证失败。组织托管模型请重新同步组织配置；个人模型请检查「设置 → 模型与连接」中的 API Key。";
     }
     if (lower.includes("connection") || lower.includes("timeout") || lower.includes("econnrefused")) {
       return "⚠️ 网络连接失败。请检查网络/代理设置，确认 API endpoint 可达。";
@@ -204,7 +207,7 @@ export function formatAgentError(raw: string): string | null {
 
   // Auth errors
   if (innerMsg.includes("401") || innerMsg.includes("Unauthorized") || innerMsg.includes("auth")) {
-    return "⚠️ API 认证失败。请检查当前会话的模型与「设置 → 模型」中的 API Key 是否匹配。";
+    return "⚠️ API 认证失败。组织托管模型请重新同步组织配置；个人模型请检查「设置 → 模型与连接」中的 API Key。";
   }
 
   // Connection errors
