@@ -79,4 +79,8 @@ export type MarkdownProps = {
   config?: MarkdownConfig;
   /** Host UI theme for mermaid / diagrams (Phase 2). */
   theme?: "light" | "dark";
+  /** 会话内查找的当前关键词(非空时启用 inline 高亮)。 */
+  findQuery?: string;
+  /** 本条消息内被激活的命中下标(0-based),-1 表示无激活。 */
+  findActiveLocalIndex?: number;
 };

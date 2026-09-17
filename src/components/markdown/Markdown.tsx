@@ -24,6 +24,7 @@ import { remarkLinkifyIt } from "./plugins/remark-linkify-it";
 import { rehypeCodeBlock } from "./plugins/rehype-code-block";
 import { rehypeInlineCode } from "./plugins/rehype-inline-code";
 import { rehypeFixAutolinkBoundary } from "./plugins/rehype-fix-autolink-boundary";
+import { rehypeFindHighlight } from "./plugins/rehype-find-highlight";
 import { MarkdownPre } from "./MarkdownPre";
 import { MarkdownPreMermaid } from "./MarkdownPreMermaid";
 import { MarkdownInlineCode } from "./MarkdownInlineCode";
@@ -90,6 +91,7 @@ function buildSanitizeSchema(config?: MarkdownConfig) {
   };
   schema.tagNames = [
     ...(defaultSchema.tagNames || []),
+    "mark",
     "math",
     "semantics",
     "mrow",
@@ -312,6 +314,8 @@ function MarkdownInner({
   markdownTheme = "legacy",
   config,
   theme = "light",
+  findQuery,
+  findActiveLocalIndex = -1,
 }: MarkdownProps) {
   const preprocessed = useMemo(
     () => preprocessMarkdown(children ?? ""),
@@ -358,31 +362,43 @@ function MarkdownInner({
    * 1. sanitize before katex (katex emits MathML + styles)
    * 2. code-block / inline-code before highlight (extract raw content)
    * 3. highlight last
+   * 4. find-highlight runs AFTER sanitize so <mark> isn't stripped; sanitize
+   *    schema 已显式允许 mark + className(find-hit / find-hit-active)。
    */
   const rehypePlugins = useMemo(
-    () => [
-      [rehypeSanitize, sanitizeSchema] as const,
-      rehypeFixAutolinkBoundary,
-      rehypeCodeBlock,
-      rehypeInlineCode,
-      [
-        rehypeKatex,
-        {
-          strict: false,
-          throwOnError: false,
-          errorColor: "#cc0000",
-          macros: {
-            "\\RR": "\\mathbb{R}",
-            "\\NN": "\\mathbb{N}",
-            "\\ZZ": "\\mathbb{Z}",
-            "\\QQ": "\\mathbb{Q}",
-            "\\CC": "\\mathbb{C}",
+    () => {
+      const plugins: unknown[] = [
+        [rehypeSanitize, sanitizeSchema] as const,
+        rehypeFixAutolinkBoundary,
+        rehypeCodeBlock,
+        rehypeInlineCode,
+        [
+          rehypeKatex,
+          {
+            strict: false,
+            throwOnError: false,
+            errorColor: "#cc0000",
+            macros: {
+              "\\RR": "\\mathbb{R}",
+              "\\NN": "\\mathbb{N}",
+              "\\ZZ": "\\mathbb{Z}",
+              "\\QQ": "\\mathbb{Q}",
+              "\\CC": "\\mathbb{C}",
+            },
           },
-        },
-      ] as const,
-      [rehypeHighlight, { languages: { ...common } }] as const,
-    ],
-    [sanitizeSchema],
+        ] as const,
+        [rehypeHighlight, { languages: { ...common } }] as const,
+      ];
+      // 会话内查找:把命中处包成 <mark>。query 为空时插件内部短路,无开销。
+      if (findQuery) {
+        plugins.push([
+          rehypeFindHighlight,
+          { query: findQuery, activeLocalIndex: findActiveLocalIndex },
+        ] as const);
+      }
+      return plugins;
+    },
+    [sanitizeSchema, findQuery, findActiveLocalIndex],
   );
 
   const components = useMemo(

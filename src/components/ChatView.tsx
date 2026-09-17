@@ -16,7 +16,7 @@ import { RewindBar } from "./RewindBar";
 import { PermissionInlineCard } from "./PermissionDialog";
 import { QuestionInlineCard } from "./QuestionInlineCard";
 import { ToolSidePanel, type ToolSidePanelMode } from "./ToolSidePanel";
-import { FindBar, isFindHit } from "./FindBar";
+import { FindBar, isFindHit, type FindOccurrence } from "./FindBar";
 import { FileChangesPanel } from "./FileChangesPanel";
 import { SubagentPanel } from "./SubagentPanel";
 import { TeamStatusView } from "./TeamStatusView";
@@ -134,8 +134,12 @@ export function ChatView({
   const awaitingQuestion = Boolean(useQuestionStore(selectQuestionForSession(sessionId)));
   // 会话内查找(对齐 EchoAgent chat-search)。
   const [findOpen, setFindOpen] = useState(false);
-  const [findHits, setFindHits] = useState<string[]>([]);
-  const [findCurrent, setFindCurrent] = useState<string | null>(null);
+  const [findQuery, setFindQuery] = useState("");
+  const [findHits, setFindHits] = useState<{ hitIds: string[]; occurrences: FindOccurrence[] }>({
+    hitIds: [],
+    occurrences: [],
+  });
+  const [findActive, setFindActive] = useState<FindOccurrence | null>(null);
   // 文件变更聚合面板(对齐 EchoAgent file-changes-panel)。
   const [fileChangesOpen, setFileChangesOpen] = useState(false);
   // 子代理运行时面板(对齐 EchoAgent team-runtime)。
@@ -430,12 +434,12 @@ export function ChatView({
     return () => window.removeEventListener("keydown", onKey);
   }, [messages.length]);
   useEffect(() => {
-    if (!findCurrent) return;
+    if (!findActive) return;
     const node = scrollRef.current?.querySelector(
-      `[data-msg-id="${findCurrent}"]`,
+      `[data-msg-id="${findActive.messageId}"]`,
     );
     node?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [findCurrent]);
+  }, [findActive]);
   return (
     <div className={"chatview" + (panelOpen ? " chatview--with-panel" : "")}>
       <div className="chatview__main">
@@ -619,13 +623,16 @@ export function ChatView({
         <FindBar
           messages={messages}
           open={findOpen}
+          query={findQuery}
+          onQueryChange={setFindQuery}
           onClose={() => {
             setFindOpen(false);
-            setFindHits([]);
-            setFindCurrent(null);
+            setFindQuery("");
+            setFindHits({ hitIds: [], occurrences: [] });
+            setFindActive(null);
           }}
           onHitsChange={setFindHits}
-          onActiveChange={setFindCurrent}
+          onActiveChange={setFindActive}
         />
 
         <div className="chatview__scroll-shell">
@@ -667,11 +674,14 @@ export function ChatView({
                 const isLastAssistant =
                   m.role === "assistant" && idx === messages.length - 1;
                 // 会话内查找:命中容器高亮(当前命中更深一层)。
-                const findCls = findOpen && isFindHit(findHits, m.id)
-                  ? m.id === findCurrent
+                const findCls = findOpen && isFindHit(findHits.hitIds, m.id)
+                  ? m.id === findActive?.messageId
                     ? " msg-wrap--find-current"
                     : " msg-wrap--find-hit"
                   : "";
+                // 当前消息在它自己内部的 localIndex,供 MessageItem 给文本节点着色。
+                const localActiveIdx =
+                  findActive?.messageId === m.id ? findActive.localIndex : -1;
                 return (
                   <div key={m.id} className={"msg-wrap" + findCls} data-msg-id={m.id}>
                     <MessageItem
@@ -682,6 +692,8 @@ export function ChatView({
                       sessionId={sessionId ?? undefined}
                       onToast={onToast}
                       onOpenTool={handleOpenTool}
+                      findQuery={findOpen ? findQuery : undefined}
+                      findActiveLocalIndex={findOpen ? localActiveIdx : undefined}
                       onEditResend={handleEditResend}
                       latest={isLastAssistant}
                       retrying={isLastAssistant && retryingSessionId === sessionId}

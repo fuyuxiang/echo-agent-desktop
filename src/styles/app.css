@@ -473,6 +473,23 @@
   box-shadow: inset 3px 0 0 var(--echo-brand);
   background: color-mix(in srgb, var(--echo-brand) 8%, transparent);
 }
+/* 会话内查找:Markdown 文本节点级高亮。
+ * - find-hit:被动高亮(同消息内非当前命中处)
+ * - find-hit-active:当前激活的命中处,用更强的对比与细微 outline 提示位置
+ */
+.find-hit {
+  background: color-mix(in srgb, var(--echo-brand) 18%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.find-hit-active {
+  background: color-mix(in srgb, var(--echo-brand) 38%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--echo-brand) 55%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
 
 /* ---------- messages ---------- */
 .msg {

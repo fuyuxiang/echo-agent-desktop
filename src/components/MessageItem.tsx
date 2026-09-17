@@ -92,6 +92,8 @@ export function MessageItem({
   retrying = false,
   latest = false,
   onToast,
+  findQuery,
+  findActiveLocalIndex,
 }: {
   message: ChatMessage;
   streaming: boolean;
@@ -111,6 +113,10 @@ export function MessageItem({
   retrying?: boolean;
   /** The latest completed assistant reply keeps its actions more discoverable. */
   latest?: boolean;
+  /** 会话内查找的当前关键词,Markdown 渲染时把命中处染出。 */
+  findQuery?: string;
+  /** 本条消息内被激活的命中下标(0-based),-1 表示无激活。 */
+  findActiveLocalIndex?: number;
 }) {
   const { theme } = useTheme();
   const [speaking, setSpeaking] = useState(false);
@@ -368,6 +374,8 @@ export function MessageItem({
               markdownTheme="loose"
               theme={theme}
               config={markdownConfig}
+              findQuery={findQuery}
+              findActiveLocalIndex={findActiveLocalIndex}
             >
               {part.text}
             </Markdown>
