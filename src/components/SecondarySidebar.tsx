@@ -191,7 +191,6 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
                   className="secondary-sidebar__item-btn"
                   onClick={() => handlePick(agent)}
                   onMouseEnter={() => setPreviewAgent(agent)}
-                  onMouseLeave={() => setPreviewAgent(null)}
                 >
                   <span className="secondary-sidebar__item-avatar">
                     {(agent.name ?? "?").slice(0, 1).toUpperCase()}
