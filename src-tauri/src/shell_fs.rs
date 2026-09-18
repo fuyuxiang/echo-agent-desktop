@@ -404,9 +404,7 @@ impl FilesystemAccess {
             .roots
             .lock()
             .map_err(|_| "文件系统授权状态已损坏".to_string())?;
-        if internal_allowed
-            || exact_allowed
-            || roots.iter().any(|root| canonical.starts_with(root))
+        if internal_allowed || exact_allowed || roots.iter().any(|root| canonical.starts_with(root))
         {
             return Ok(canonical);
         }
@@ -1706,9 +1704,7 @@ mod tests {
             .authorize_workspace(&workspace.to_string_lossy())
             .unwrap();
 
-        let error = access
-            .is_authorized(&outside, false)
-            .unwrap_err();
+        let error = access.is_authorized(&outside, false).unwrap_err();
         assert!(error.contains("未授权"));
     }
 
@@ -1794,9 +1790,7 @@ mod tests {
         assert_eq!(jpg_canonical, jpg.canonicalize().unwrap());
 
         // Non-image siblings must not be silently admitted as attachments.
-        let error = access
-            .is_authorized(&unsupported, false)
-            .unwrap_err();
+        let error = access.is_authorized(&unsupported, false).unwrap_err();
         assert!(error.contains("未授权"));
     }
 
