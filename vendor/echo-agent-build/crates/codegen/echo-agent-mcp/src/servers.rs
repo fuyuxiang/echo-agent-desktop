@@ -3920,6 +3920,71 @@ impl McpClient {
         *self.liveness_handle.lock() = handle;
     }
 
+    /// Active transport teardown path. Drops the rmcp
+    /// [`RunningService`] so the underlying transport (and stdio child
+    /// process, for [`crate::servers::SafeTokioChildProcess`]) closes
+    /// **immediately**, instead of waiting for the
+    /// `Arc<McpClient>` count to hit zero and the
+    /// [`McpClient`] → [`SafeTokioChildProcess`] Drop chain to fire.
+    ///
+    /// # Why this exists
+    ///
+    /// `OwnedClients::clear/remove/insert` previously only cancelled the
+    /// liveness watcher and relied on Arc-release for reaping. Any
+    /// external `Arc<McpClient>` (e.g. a `SharedMcpPool` snapshot, a
+    /// stale liveness task reference, `McpState::shared_clients`)
+    /// kept the count > 0 and orphaned the stdio child permanently —
+    /// which is exactly the symptom observed in production where every
+    /// new conversation left another `npx`/`node` process in Task
+    /// Manager.
+    ///
+    /// # Idempotency
+    ///
+    /// Safe to call multiple times. Subsequent calls observe
+    /// [`ClientState::Empty`] and return without effect.
+    ///
+    /// # Sync safety
+    ///
+    /// Takes the state lock briefly to swap `Ready → Empty`, then drops
+    /// the service *outside* the lock. The drop runs
+    /// [`SafeTokioChildProcess::drop`] which SIGKILLs the process group
+    /// synchronously.
+    pub async fn shutdown_transport(&self) {
+        // Atomically swap `state` to `Empty` and pull out whatever was
+        // holding the live transport. The lock is released BEFORE the
+        // drop so any transport-Close callbacks (Stdio::drop spawns a
+        // kill task, Http may issue cancel RPCs) run without holding
+        // the state mutex.
+        //
+        // Covers all three "has a live stdio child" cases:
+        // 1. `Ready` — the rmcp RunningService holds the live transport
+        //    (passed through by `client.serve` during handshake).
+        //    Dropping the Arc tears down the service loop, which drops
+        //    the transport and fires `kill_process_group` +
+        //    `child.kill()` synchronously.
+        // 2. `Pending(Stdio(_))` — the only state where a fresh,
+        //    not-yet-handedshake stdio child is alive. The handshake
+        //    consumes the transport out of Pending on its way to Ready,
+        //    so until then the live PID lives here. Dropping the boxed
+        //    `SafeTokioChildProcess` reaps the process group.
+        //    (Non-Stdio Pending variants hold cheap config + Arc auth
+        //    managers; no live PIDs to reap, so the drop is a no-op.)
+        // 3. `Initializing` — racing with a handshake. The handshake
+        //    currently owns no transport yet (it moves the transport
+        //    into Ready atomically); if we lose the race, the rmcp
+        //    serve loop owns the transport and will be reaped by the
+        //    Arc-release chain. No-op here.
+        let prev = {
+            let mut guard = self.state.lock().await;
+            std::mem::replace(&mut *guard, ClientState::Empty)
+        };
+        match prev {
+            ClientState::Ready { service, .. } => drop(service),
+            ClientState::Pending(pending) => drop(pending),
+            ClientState::Initializing | ClientState::Empty => {}
+        }
+    }
+
     /// Arm the per-client transport-liveness watcher.
     ///
     /// Idempotent and gated:

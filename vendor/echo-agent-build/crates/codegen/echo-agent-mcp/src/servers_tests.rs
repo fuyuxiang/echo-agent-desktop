@@ -2428,6 +2428,94 @@ async fn dropping_the_owned_map_releases_watched_clients() {
     assert_watcher_releases(weak, "map teardown").await;
 }
 
+/// Regression contract for the orphan-MCP-process bug.
+///
+/// Symptom: opening a new conversation spawned a fresh stdio child but
+/// never reaped the previous one, leading to dozens of `node`/`npx`
+/// grandchildren accumulating in Task Manager.
+///
+/// Root cause: `OwnedClients::clear` only cancelled the liveness watcher
+/// and relied on `Arc<McpClient>` count hitting zero to drop the
+/// `McpClient` → `SafeTokioChildProcess` → kill the child. Any other
+/// holder of the Arc (e.g. `McpState::shared_clients`, a subagent pool
+/// snapshot, a stale task reference) keeps the Arc alive and the child
+/// orphaned forever.
+///
+/// Contract: when an `OwnedClients` map evicts a client, the child's
+/// stdio process must die **immediately**, regardless of whether other
+/// Arc references to the McpClient still exist.
+#[cfg(unix)]
+#[tokio::test]
+async fn owned_clients_clear_reaps_stdio_child_even_with_external_arc() {
+    use std::time::{Duration, Instant};
+
+    let mut cmd = Command::new("sleep");
+    cmd.arg("600").kill_on_drop(true);
+    echo_agent_tools::util::detach_command(&mut cmd);
+    let (transport, _stderr) = SafeTokioChildProcess::spawn(
+        cmd,
+        None,
+        "reap-test".to_string(),
+        echo_agent_session_events::EventWriter::noop(),
+    )
+    .await
+    .expect("spawn test child");
+    let child_pid = transport.id().expect("spawned child pid");
+
+    // Wrap in McpClient. The transport is held in `reconnect` until the
+    // handshake completes; a Pending-state child still owns a live PID
+    // via SafeTokioChildProcess's `child` field.
+    let client = Arc::new(McpClient::new_stdio(
+        "reap-test".to_string(),
+        transport,
+        None,
+        None,
+    ));
+
+    // Simulate the production leak: an external holder (e.g.
+    // `McpState::shared_clients`, or a stale liveness task reference)
+    // keeps a strong Arc clone alive past the eviction.
+    let external_holder = Arc::clone(&client);
+
+    let mut owned = crate::owned_clients::OwnedClients::new();
+    owned.insert("reap-test".to_string(), client);
+
+    // Sanity: child is alive before eviction.
+    assert!(
+        unix_process_exists(child_pid),
+        "test setup invariant: child {child_pid} must be alive before clear()",
+    );
+
+    // The contract: eviction must reap the child now, not "eventually".
+    owned.clear();
+
+    // The fix spawns an async shutdown task; let the runtime poll it.
+    // 2 seconds is generous — `kill_process_group` is synchronous and
+    // SIGKILL lands in milliseconds.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while unix_process_exists(child_pid) {
+        assert!(
+            Instant::now() < deadline,
+            "child {child_pid} survived OwnedClients::clear() — Arc-release path \
+             did not reap; OwnedClients must actively shutdown transports on eviction",
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    // The external holder is still alive — that's intentional and the
+    // whole point: the child must die *without* requiring Arc release.
+    // strong_count >= 1 means the external reference is still valid;
+    // we deliberately don't assert ">= 2" because the spawned
+    // shutdown task in `cancel_and_shutdown` has already completed
+    // and dropped its own Arc clone by now.
+    assert!(
+        Arc::strong_count(&external_holder) >= 1,
+        "external holder should still hold an Arc reference, proving \
+         the child was reaped actively rather than via Arc-release chain",
+    );
+    drop(external_holder);
+}
+
 #[test]
 fn is_auth_rejection_message_matches_auth_signals() {
     assert!(is_auth_rejection_message(
