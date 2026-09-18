@@ -13640,10 +13640,47 @@ button.diff__path {
 .mcp-empty-icon { opacity: .3; }
 .mcp-empty-title { font-size: 15px; font-weight: 700; color: var(--echo-text-strong); }
 .mcp-empty-hint { font-size: 13px; color: var(--echo-text-weak); }
-.mcp-list { flex: 1 1 auto; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-.mcp-item-wrap { border: 1px solid var(--echo-border-default); border-radius: 12px; background: var(--echo-bg-primary); overflow: hidden; }
-.mcp-item-wrap--expanded { border-color: color-mix(in srgb, var(--echo-brand) 45%, var(--echo-border-default)); }
-.mcp-item { display: flex; align-items: center; gap: 14px; padding: 16px 18px; }
+.mcp-list {
+  flex: 1 1 auto;
+  min-height: 0; /* 解锁 flex 收缩链,让 .mcp-list 拿到有界高度后让 overflow-y 真正滚动 */
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  scrollbar-gutter: stable;
+  padding-inline: 2px; /* 给自定义滚动条留出 2px,不挤压内容宽度 */
+  margin-inline: -2px; /* 抵消内边距,内容仍贴齐搜索行 */
+}
+/* 紧凑的 webkit 滚动条,贴合 EchoAgent 整体风格,避免出现两层滚动条 */
+.mcp-list::-webkit-scrollbar { width: 8px; }
+.mcp-list::-webkit-scrollbar-track { background: transparent; }
+.mcp-list::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--echo-text-weak) 35%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.mcp-list::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--echo-text-weak) 60%, transparent);
+  background-clip: padding-box;
+}
+.mcp-list { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--echo-text-weak) 35%, transparent) transparent; }
+
+.mcp-item-wrap {
+  border: 1px solid var(--echo-border-default);
+  border-radius: 12px;
+  background: var(--echo-bg-primary);
+  overflow: hidden;
+  flex-shrink: 0; /* 关键:锁定收缩,避免 flex 容器把卡片压扁到只剩名称 */
+  transition: border-color .15s, box-shadow .15s, background-color .15s;
+}
+.mcp-item-wrap:hover { border-color: color-mix(in srgb, var(--echo-brand) 28%, var(--echo-border-default)); }
+.mcp-item-wrap:focus-within { border-color: color-mix(in srgb, var(--echo-brand) 45%, var(--echo-border-default)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--echo-brand) 10%, transparent); }
+.mcp-item-wrap--expanded {
+  border-color: color-mix(in srgb, var(--echo-brand) 55%, var(--echo-border-default));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--echo-brand) 8%, transparent);
+}
+.mcp-item { display: flex; align-items: center; gap: 14px; padding: 14px 18px; }
 .mcp-item-main { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; padding: 0; border: none; background: transparent; text-align: left; cursor: pointer; }
 .mcp-item-info { flex: 1 1 auto; min-width: 0; }
 .mcp-item-name { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; color: var(--echo-text-strong); }
