@@ -1,7 +1,51 @@
 import { useEffect, useRef, useState } from "react";
-import { FileText, Image as ImageIcon } from "lucide-react";
+import {
+  FileCode,
+  FileSpreadsheet,
+  FileText,
+  Image as ImageIcon,
+} from "lucide-react";
 import { attachmentThumbnail } from "@/lib/agent-client";
-import { isImageAttachment } from "@/lib/user-message";
+import { AttachmentKind, classifyAttachment } from "@/lib/user-message";
+
+/** 按附件分类挑选最贴近语义的 lucide-react 图标。
+ *
+ * 设计原则:先按文件类型直观对应(Code → FileCode, Document → FileText),
+ * 再用 kind 兜底。避免「任何非图片都是 FileText」的单调体验。 */
+function iconForKind(kind: AttachmentKind) {
+  switch (kind) {
+    case AttachmentKind.Image:
+      return ImageIcon;
+    case AttachmentKind.Code:
+      return FileCode;
+    case AttachmentKind.Data:
+      return FileSpreadsheet;
+    case AttachmentKind.Document:
+      return FileText;
+    case AttachmentKind.Text:
+      return FileText;
+    default:
+      return FileText;
+  }
+}
+
+/** 给 chip / 列表头用的简短标签。 */
+function labelForKind(kind: AttachmentKind): string {
+  switch (kind) {
+    case AttachmentKind.Image:
+      return "image";
+    case AttachmentKind.Document:
+      return "document";
+    case AttachmentKind.Code:
+      return "code";
+    case AttachmentKind.Text:
+      return "text";
+    case AttachmentKind.Data:
+      return "data";
+    case AttachmentKind.Unsupported:
+      return "file";
+  }
+}
 
 const MAX_MEMORY_THUMBNAILS = 128;
 /** Shared across message remounts/session switches so history replay does not
@@ -41,10 +85,14 @@ function load(path: string): Promise<string> {
   return pending;
 }
 
-/** Lazy thumbnail for supported chat images, with an icon fallback for missing
- * or unreadable local files. Non-image attachments retain the document icon. */
+/** Lazy thumbnail for supported chat images, with a kind-aware icon fallback
+ * for missing or unreadable local files. Non-image attachments now show
+ * an icon that matches their file category (Code → FileCode, Data → FileSpreadsheet,
+ * Document → FileText) so users can scan a multi-file list at a glance. */
 export function AttachmentVisual({ path }: { path: string }) {
-  const image = isImageAttachment(path);
+  const kind = classifyAttachment(path);
+  const image = kind === AttachmentKind.Image;
+  const Icon = iconForKind(kind);
   const [src, setSrc] = useState(() => image ? cache.get(path) : undefined);
   const wrapperRef = useRef<HTMLSpanElement>(null);
 
@@ -91,8 +139,11 @@ export function AttachmentVisual({ path }: { path: string }) {
 
   if (!image) {
     return (
-      <span className="msg__attachment-icon" aria-hidden="true">
-        <FileText size={20} strokeWidth={1.8} />
+      <span
+        className={`msg__attachment-icon msg__attachment-icon--${labelForKind(kind)}`}
+        aria-hidden="true"
+      >
+        <Icon size={20} strokeWidth={1.8} />
       </span>
     );
   }

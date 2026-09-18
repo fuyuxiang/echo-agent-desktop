@@ -41,10 +41,10 @@ import {
   type WorkspaceInfo,
 } from "@/lib/agent-client";
 import {
-  extractImageFilesFromClipboard,
+  extractFilesFromClipboard,
   blobToBytes,
 } from "@/lib/clipboard-paste";
-import { isImageAttachment } from "@/lib/user-message";
+import { AttachmentKind, classifyAttachment } from "@/lib/user-message";
 import {
   parseSessionControlIntent,
   type SessionControlAction,
@@ -504,27 +504,59 @@ export function Composer({
               setDragHovering(false);
               break;
             case "drop": {
-              const incoming = (payload.paths ?? []).filter(isImageAttachment);
-              if (incoming.length === 0) {
+              const paths = payload.paths ?? [];
+              // 之前 `filter(isImageAttachment)` 把 PDF / 代码 / 文本
+              // 静默丢弃,用户毫无反馈。现在按 [`classifyAttachment`]
+              // 的白名单分类,接受的加入 attachments,拒绝的统计后
+              // toast "已添加 N / 跳过 M" —— 与 ChatGPT / Cursor /
+              // Claude 桌面端的多类型拖拽反馈对齐。
+              const accepted: string[] = [];
+              const rejected: Array<{ path: string; kind: AttachmentKind }> = [];
+              const pathToFolder = new Set<string>();
+              for (const path of paths) {
+                const kind = classifyAttachment(path);
+                if (kind === AttachmentKind.Unsupported) {
+                  rejected.push({ path, kind });
+                  continue;
+                }
+                if (pathToFolder.has(path)) continue;
+                pathToFolder.add(path);
+                accepted.push(path);
+              }
+              if (paths.length === 0) {
                 setDragHovering(false);
                 return;
               }
-              updateAttachments((prev) => {
-                const seen = new Set(prev);
-                const next = [...prev];
-                for (const path of incoming) {
-                  if (!seen.has(path)) {
+              let overflowCount = 0;
+              if (accepted.length > 0) {
+                updateAttachments((prev) => {
+                  const seen = new Set(prev);
+                  const next = [...prev];
+                  for (const path of accepted) {
+                    if (seen.has(path)) continue;
+                    if (next.length >= MAX_ATTACHMENT_COUNT) {
+                      overflowCount += 1;
+                      continue;
+                    }
                     seen.add(path);
                     next.push(path);
                   }
-                }
-                if (next.length > MAX_ATTACHMENT_COUNT) {
-                  onToast?.(`附件数量不能超过 ${MAX_ATTACHMENT_COUNT} 个`);
-                  return prev;
-                }
-                return next;
-              });
+                  return next;
+                });
+              }
               setDragHovering(false);
+              // 反馈:分别告知接受数量与拒绝数量,让用户知道发生了什么。
+              if (accepted.length > 0 || rejected.length > 0) {
+                const parts: string[] = [];
+                if (accepted.length > 0) parts.push(`已添加 ${accepted.length} 个`);
+                if (rejected.length > 0) {
+                  parts.push(`跳过 ${rejected.length} 个不支持的类型`);
+                }
+                if (overflowCount > 0) {
+                  parts.push(`超出 ${MAX_ATTACHMENT_COUNT} 个上限`);
+                }
+                onToast?.(parts.join("，"));
+              }
               break;
             }
             default:
@@ -559,28 +591,40 @@ export function Composer({
     event: React.ClipboardEvent<HTMLTextAreaElement>,
   ) => {
     const items = event.clipboardData?.items;
-    const images = extractImageFilesFromClipboard(
+    const extracted = extractFilesFromClipboard(
       items as unknown as ArrayLike<{ kind: string; type: string; getAsFile(): File | Blob | null }> | undefined,
     );
-    if (images.length === 0) return;
+    // 拆分:接受的多类型 + 拒绝的不可执行/不可支持文件
+    const supported = extracted.filter((item) => item.kind !== AttachmentKind.Unsupported);
+    const unsupported = extracted.filter((item) => item.kind === AttachmentKind.Unsupported);
+    if (supported.length === 0 && unsupported.length === 0) return;
+    // 全部被拒:给用户明确反馈,告知至少一个不被支持
+    if (supported.length === 0) {
+      event.preventDefault();
+      onToast?.(`剪贴板中的文件类型不支持（${unsupported[0].suggestedName}）`);
+      return;
+    }
     event.preventDefault();
-    if (attachmentsRef.current.length + images.length > MAX_ATTACHMENT_COUNT) {
+    if (unsupported.length > 0) {
+      onToast?.(`已跳过 ${unsupported.length} 个不支持的文件类型`);
+    }
+    if (attachmentsRef.current.length + supported.length > MAX_ATTACHMENT_COUNT) {
       onToast?.(`附件数量不能超过 ${MAX_ATTACHMENT_COUNT} 个`);
       return;
     }
-    const oversized = images.find((item) => item.blob.size > MAX_ATTACHMENT_FILE_BYTES);
+    const oversized = supported.find((item) => item.blob.size > MAX_ATTACHMENT_FILE_BYTES);
     if (oversized) {
-      onToast?.(`图片「${oversized.suggestedName}」超过 20MB，无法添加`);
+      onToast?.(`「${oversized.suggestedName}」超过 20MB，无法添加`);
       return;
     }
-    const totalBytes = images.reduce((total, item) => total + item.blob.size, 0);
+    const totalBytes = supported.reduce((total, item) => total + item.blob.size, 0);
     if (totalBytes > MAX_ATTACHMENT_TOTAL_BYTES) {
-      onToast?.("本次粘贴的图片总大小不能超过 64MB");
+      onToast?.("本次粘贴的文件总大小不能超过 64MB");
       return;
     }
     const saved: string[] = [];
     let lastError: unknown = null;
-    for (const item of images) {
+    for (const item of supported) {
       try {
         const bytes = await blobToBytes(item.blob);
         const path = await saveAttachmentBlob({
@@ -591,7 +635,7 @@ export function Composer({
         saved.push(path);
       } catch (error) {
         lastError = error;
-        // 单张失败不影响其它图片继续落盘。
+        // 单张失败不影响其它文件继续落盘。
       }
     }
     if (!mountedRef.current) {
@@ -619,12 +663,12 @@ export function Composer({
       discardUnsentAttachments(overflow);
       updateAttachments(next);
       if (overflow.length > 0) {
-        onToast?.(`附件数量不能超过 ${MAX_ATTACHMENT_COUNT} 个，已忽略多余图片`);
+        onToast?.(`附件数量不能超过 ${MAX_ATTACHMENT_COUNT} 个，已忽略多余文件`);
       }
     }
     if (lastError) {
       onToast?.(
-        `粘贴图片失败：${String(lastError).replace(/^Error:\s*/, "")}`,
+        `粘贴文件失败：${String(lastError).replace(/^Error:\s*/, "")}`,
       );
     }
   };
@@ -953,8 +997,13 @@ export function Composer({
           </div>
         )}
 
-        {/* 拖拽图片悬停时显示的提示层。仅在 Tauri 投递的 enter/over 事件期间出现,
-            DOM 级别的 dragenter 不会触发它,所以非桌面环境自动降级为「无提示」。 */}
+        {/* 拖拽悬停时显示的提示层。仅在 Tauri 投递的 enter/over 事件期间出现,
+            DOM 级别的 dragenter 不会触发它,所以非桌面环境自动降级为「无提示」。
+
+            文案同步支持类型范围:之前只说「松开以添加为附件」暗示仅图片,
+            现在明确列出支持的类型(图片 / PDF / Office / 代码 / 文本 / 数据),
+            并在 hover/over 时如能拿到 paths 则即时给出「已添加 N / 跳过 M」的
+            预览反馈(只是 hover 提示,真正的反馈在 drop 后的 toast)。 */}
         {dragHovering && (
           <div
             className="echo-composer__dropzone"
@@ -962,7 +1011,10 @@ export function Composer({
             aria-live="polite"
             data-testid="composer-dropzone"
           >
-            松开以添加为附件
+            <div className="echo-composer__dropzone-title">松开以添加为附件</div>
+            <div className="echo-composer__dropzone-hint">
+              支持图片、PDF、Office、代码、文本与数据文件
+            </div>
           </div>
         )}
 

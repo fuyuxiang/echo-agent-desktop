@@ -90,7 +90,19 @@ describe("Composer clipboard paste of images", () => {
     expect(await screen.findByText("b.jpg")).toBeInTheDocument();
   });
 
-  it("pasting a non-image file does not add it as attachment", () => {
+  it("pasting a PDF file is accepted as a document attachment", async () => {
+    // Bug contract: 之前 Composer 把 PDF / 代码文件 / 文本当作非图片
+    // 直接 `filter(isImageAttachment)` 静默丢弃,用户毫无反馈。新契约:
+    // 文档类(以及代码 / 文本 / 数据)走和图片相同的「save → 显示 chip」
+    // 路径。
+    vi.mocked(invoke).mockImplementationOnce(async (cmd, args?: unknown) => {
+      if (cmd === "save_attachment_blob") {
+        const suggestedName =
+          (args as { suggestedName?: string } | undefined)?.suggestedName ?? "file";
+        return `/fake/appdata/clipboard-images/${suggestedName}`;
+      }
+      return undefined;
+    });
     render(<Composer {...base} />);
     const textarea = screen.getByRole("textbox");
     firePasteWith(textarea, [
@@ -100,7 +112,54 @@ describe("Composer clipboard paste of images", () => {
         getAsFile: () => new File(["pdf"], "x.pdf", { type: "application/pdf" }),
       },
     ]);
-    expect(screen.queryByText("x.pdf")).toBeNull();
+    expect(await screen.findByText("x.pdf")).toBeInTheDocument();
+  });
+
+  it("pasting a text-only file (.txt / .md / .ts) is accepted", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd, args?: unknown) => {
+      if (cmd === "save_attachment_blob") {
+        const suggestedName =
+          (args as { suggestedName?: string } | undefined)?.suggestedName ?? "file";
+        return `/fake/appdata/clipboard-images/${suggestedName}`;
+      }
+      return undefined;
+    });
+    render(<Composer {...base} />);
+    const textarea = screen.getByRole("textbox");
+    firePasteWith(textarea, [
+      {
+        kind: "file",
+        type: "text/plain",
+        getAsFile: () => new File(["hello"], "notes.txt", { type: "text/plain" }),
+      },
+      {
+        kind: "file",
+        type: "text/markdown",
+        getAsFile: () => new File(["# md"], "doc.md", { type: "text/markdown" }),
+      },
+      {
+        kind: "file",
+        type: "text/x-typescript",
+        getAsFile: () => new File(["const x = 1"], "code.ts", { type: "text/x-typescript" }),
+      },
+    ]);
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+    expect(await screen.findByText("doc.md")).toBeInTheDocument();
+    expect(await screen.findByText("code.ts")).toBeInTheDocument();
+  });
+
+  it("pasting an executable file (.exe) is rejected with a toast", () => {
+    const onToast = vi.fn();
+    render(<Composer {...base} onToast={onToast} />);
+    firePasteWith(screen.getByRole("textbox"), [
+      {
+        kind: "file",
+        type: "application/octet-stream",
+        getAsFile: () => new File(["MZ"], "evil.exe", { type: "application/octet-stream" }),
+      },
+    ]);
+    expect(screen.queryByText("evil.exe")).toBeNull();
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("不支持"));
   });
 
   it("pasting mixed text + image keeps the textarea content unchanged and adds the image", async () => {
@@ -176,7 +235,7 @@ describe("Composer clipboard paste of images", () => {
     firePasteWith(screen.getByRole("textbox"), items);
 
     expect(arrayBuffer).not.toHaveBeenCalled();
-    expect(onToast).toHaveBeenCalledWith("本次粘贴的图片总大小不能超过 64MB");
+    expect(onToast).toHaveBeenCalledWith("本次粘贴的文件总大小不能超过 64MB");
   });
 
   it("并发粘贴完成时仍严格限制为 20 个附件", async () => {
@@ -200,7 +259,7 @@ describe("Composer clipboard paste of images", () => {
         path: expect.stringContaining(".png"),
       }));
     });
-    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("已忽略多余图片"));
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("已忽略多余文件"));
   });
 
   it("移除未发送的粘贴图片时删除临时文件", async () => {
@@ -319,20 +378,39 @@ describe("Composer drag-drop via Tauri native event", () => {
     expect(await screen.findByText("b.jpg")).toBeInTheDocument();
   });
 
-  it("drop ignores non-image files", () => {
+  it("drop accepts text/code/pdf paths as attachments", async () => {
     render(<Composer {...base} />);
     expect(dragDropCallback).not.toBeNull();
     act(() => {
       dragDropCallback!({
         payload: {
           type: "drop",
-          paths: ["/Users/me/notes.txt", "/Users/me/code.ts"],
+          paths: ["/Users/me/notes.txt", "/Users/me/code.ts", "/Users/me/spec.pdf"],
           position: { x: 0, y: 0 },
         },
       });
     });
-    expect(screen.queryByText("notes.txt")).toBeNull();
-    expect(screen.queryByText("code.ts")).toBeNull();
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+    expect(await screen.findByText("code.ts")).toBeInTheDocument();
+    expect(await screen.findByText("spec.pdf")).toBeInTheDocument();
+  });
+
+  it("drop reports how many files were skipped via toast when unsupported mixed in", () => {
+    const onToast = vi.fn();
+    render(<Composer {...base} onToast={onToast} />);
+    act(() => {
+      dragDropCallback!({
+        payload: {
+          type: "drop",
+          paths: ["/Users/me/a.png", "/Users/me/evil.exe", "/Users/me/code.ts"],
+          position: { x: 0, y: 0 },
+        },
+      });
+    });
+    expect(screen.getByText("a.png")).toBeInTheDocument();
+    expect(screen.getByText("code.ts")).toBeInTheDocument();
+    expect(screen.queryByText("evil.exe")).toBeNull();
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("跳过"));
   });
 
   it("drag-hover shows the drop overlay", () => {
@@ -344,6 +422,18 @@ describe("Composer drag-drop via Tauri native event", () => {
       });
     });
     expect(screen.getByText("松开以添加为附件")).toBeInTheDocument();
+  });
+
+  it("拖拽覆盖层提示支持的文件类型", () => {
+    render(<Composer {...base} />);
+    act(() => {
+      dragDropCallback!({
+        payload: { type: "enter", paths: [], position: { x: 0, y: 0 } },
+      });
+    });
+    expect(
+      screen.getByText(/支持图片、PDF、Office、代码、文本与数据文件/),
+    ).toBeInTheDocument();
   });
 
   it("drag-leave hides the drop overlay", async () => {

@@ -1072,14 +1072,20 @@ button,
 }
 
 /* 拖拽图片时的全卡片覆盖提示。Tauri onDragDropEvent 在 enter/over 期间触发,
-   半透明遮罩 + 居中文案给用户一个明确的释放目标。 */
+   半透明遮罩 + 居中文案给用户一个明确的释放目标。
+   2026-09 扩展:列表出实际支持的文件类型范围(图片 / 文档 / 代码 / 文本 /
+   数据),并把 hover 与 drop 的反馈分开 —— hover 仅给乐观提示,真正的
+   「已添加 N / 跳过 M」留给 toast。 */
 .echo-composer__dropzone {
   position: absolute;
   inset: 0;
   z-index: 5;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 6px;
+  padding: 12px 16px;
   border-radius: 18px;
   background: color-mix(in srgb, var(--echo-brand) 14%, transparent);
   border: 1.5px dashed color-mix(in srgb, var(--echo-brand) 65%, transparent);
@@ -1090,6 +1096,19 @@ button,
   pointer-events: none;
   backdrop-filter: blur(2px);
   animation: echo-composer-dropzone-fade 120ms ease-out;
+}
+
+.echo-composer__dropzone-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.echo-composer__dropzone-hint {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.85;
+  letter-spacing: 0.2px;
+  text-align: center;
 }
 
 @keyframes echo-composer-dropzone-fade {
