@@ -584,13 +584,21 @@ function MarkdownInner({
   );
 }
 
+/**
+ * memo 自定义比较器必须覆盖所有进入 `rehypePlugins` / `components` /
+ * `preprocessMarkdown` 等 `useMemo` 依赖的 prop。
+ * 漏写任何一项,React 会跳过重渲染,导致下游依赖该 prop 的流水线(如
+ * 会话内查找 findQuery)永远不刷新 — 这是历史 bug「搜索『鸟』返回 0/0」
+ * 的根因。新增影响渲染的 prop 时,必须同步加入此处。
+ */
 export const Markdown = memo(MarkdownInner, (prev, next) => {
   return (
     prev.children === next.children &&
     prev.complete === next.complete &&
     prev.theme === next.theme &&
     prev.config === next.config &&
-    prev.markdownTheme === next.markdownTheme
+    prev.markdownTheme === next.markdownTheme &&
+    prev.findQuery === next.findQuery
   );
 });
 

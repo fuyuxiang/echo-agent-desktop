@@ -482,6 +482,8 @@
   color: inherit;
   border-radius: 2px;
   padding: 0 1px;
+  /* 滚动时预留顶部 FindBar 与消息间距,避免激活命中被遮挡 */
+  scroll-margin-top: 72px;
 }
 .find-hit-active {
   background: color-mix(in srgb, var(--echo-brand) 38%, transparent);
@@ -489,6 +491,7 @@
   color: inherit;
   border-radius: 2px;
   padding: 0 1px;
+  scroll-margin-top: 72px;
 }
 
 /* ---------- messages ---------- */

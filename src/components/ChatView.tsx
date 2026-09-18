@@ -452,19 +452,30 @@ export function ChatView({
   }, [findOpen, findQuery, messages]);
 
   // 激活样式和滚动都落到具体命中，避免多命中消息只滚到容器顶部。
+  // 滚动行为区分两种场景:query 变化(立即跳) 与 Enter 上下切换(平滑滚),
+  // 避免快速键击时动画叠加导致定位漂移。
+  const findPrevQueryRef = useRef(findQuery);
   useEffect(() => {
     const root = scrollRef.current;
     root?.querySelectorAll(".find-hit-active").forEach((node) => {
       node.classList.remove("find-hit-active");
     });
-    if (!findActive) return;
+    if (!findActive) {
+      findPrevQueryRef.current = findQuery;
+      return;
+    }
     const messageNode = Array.from(
       root?.querySelectorAll<HTMLElement>("[data-msg-id]") ?? [],
     ).find((node) => node.dataset.msgId === findActive.messageId);
     const hit = messageNode?.querySelectorAll<HTMLElement>(".find-hit")[findActive.localIndex];
     hit?.classList.add("find-hit-active");
-    hit?.scrollIntoView?.({ behavior: "smooth", block: "center" });
-  }, [findActive, findOccurrences]);
+    const queryJustChanged = findPrevQueryRef.current !== findQuery;
+    findPrevQueryRef.current = findQuery;
+    hit?.scrollIntoView?.({
+      behavior: queryJustChanged ? "auto" : "smooth",
+      block: "center",
+    });
+  }, [findActive, findOccurrences, findQuery]);
   return (
     <div className={"chatview" + (panelOpen ? " chatview--with-panel" : "")}>
       <div className="chatview__main">
