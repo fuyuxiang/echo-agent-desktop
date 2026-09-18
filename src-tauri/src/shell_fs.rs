@@ -66,6 +66,63 @@ impl FilesystemAccess {
         access
     }
 
+    /// Re-adopt image blobs already on disk inside the desktop paste sink so
+    /// that historical attachments remain previewable after a process restart.
+    /// Called once from setup with `<app_data_dir>/clipboard-images`; mirrors
+    /// the same extension allow-list `save_attachment_blob` enforces so
+    /// non-image artifacts and symlinks can't piggyback on the durable grant.
+    pub(crate) fn register_clipboard_images(&self, dir: &Path) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::debug!(
+                    dir = %dir.display(),
+                    error = %error,
+                    "clipboard-images directory unavailable during startup",
+                );
+                return;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Symlinks can redirect preview traffic to anything reachable on
+            // disk. `authorize_file` already refuses them, but skip earlier
+            // so the warn message points at the real cause rather than the
+            // downstream symlink rejection.
+            if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    tracing::debug!(
+                        path = %path.display(),
+                        "skipping non-regular clipboard-image entry",
+                    );
+                    continue;
+                }
+            }
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase);
+            let supported = matches!(
+                extension.as_deref(),
+                Some("png" | "jpg" | "jpeg" | "gif" | "webp")
+            );
+            if !supported {
+                tracing::debug!(
+                    path = %path.display(),
+                    "skipping clipboard-image entry with non-image extension",
+                );
+                continue;
+            }
+            if let Err(error) = self.authorize_file(&path) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "skipping clipboard-image entry that failed validation",
+                );
+            }
+        }
+    }
+
     /// Add one existing directory to the native allow-list and return its
     /// canonical spelling. The set is deliberately bounded to avoid an IPC
     /// caller turning grants into unbounded process memory.
@@ -326,11 +383,31 @@ impl FilesystemAccess {
             .canonicalize()
             .is_ok_and(|root| canonical.starts_with(root));
 
+        // Exact-file grants (file picker selection, paste-image landing) are
+        // recorded through `authorize_file` and previously only fed
+        // `require_authorized_file` (used by attachment thumbnails) plus
+        // `validate_session_attachments` (used at send time). The other
+        // previewer commands — `open_path`, `reveal_in_folder`,
+        // `browse_directory`, `path_stat`, `read_text_file`,
+        // `read_file_base64` — all funnel through this method, so without
+        // checking the set here the moment a user clicks an approved
+        // attachment that lives outside every authorized workspace they see
+        // "拒绝访问未授权的路径". The set is bounded at MAX_AUTHORIZED_FILES,
+        // so consulting it on every preview is cheap.
+        let exact_allowed = self
+            .files
+            .lock()
+            .map_err(|_| "文件系统授权状态已损坏".to_string())?
+            .contains(&canonical);
+
         let roots = self
             .roots
             .lock()
             .map_err(|_| "文件系统授权状态已损坏".to_string())?;
-        if internal_allowed || roots.iter().any(|root| canonical.starts_with(root)) {
+        if internal_allowed
+            || exact_allowed
+            || roots.iter().any(|root| canonical.starts_with(root))
+        {
             return Ok(canonical);
         }
         Err(format!("拒绝访问未授权的路径：{}", canonical.display()))
@@ -1587,6 +1664,178 @@ mod tests {
             .validate_session_attachments(&workspace, &[outside.to_string_lossy().into_owned()])
             .unwrap();
         assert_eq!(accepted, vec![canonical.to_string_lossy().into_owned()]);
+    }
+
+    /// Regression: a file previously approved via `authorize_file` (file picker
+    /// selection, paste-image landing) must be readable through the same
+    /// `is_authorized` check that backs `open_path` / `reveal_in_folder` /
+    /// `path_stat` / `read_text_file`. Without this, every previewer would
+    /// surface "拒绝访问未授权的路径" the moment a user clicked an approved
+    /// attachment that lives outside the bound workspace.
+    #[test]
+    fn exact_file_grant_allows_preview_outside_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        let paste = tmp.path().join("pasted.png");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(&paste, b"png-bytes").unwrap();
+        let access = FilesystemAccess::default();
+        access
+            .authorize_workspace(&workspace.to_string_lossy())
+            .unwrap();
+        access.authorize_file(&paste).unwrap();
+
+        let canonical = access
+            .is_authorized(&paste, false)
+            .expect("picker-granted file should be readable");
+        assert_eq!(canonical, paste.canonicalize().unwrap());
+    }
+
+    /// Regression: `is_authorized` still rejects arbitrary renderer-asserted
+    /// paths that were never approved through a backend-owned picker. This
+    /// keeps the security boundary intact while letting the previous test pass.
+    #[test]
+    fn ungranted_paths_remain_rejected_after_exact_file_check_is_added() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        let outside = tmp.path().join("unauthorized.txt");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(&outside, "secret").unwrap();
+        let access = FilesystemAccess::default();
+        access
+            .authorize_workspace(&workspace.to_string_lossy())
+            .unwrap();
+
+        let error = access
+            .is_authorized(&outside, false)
+            .unwrap_err();
+        assert!(error.contains("未授权"));
+    }
+
+    /// `open_path` is the desktop command fired when a user clicks an
+    /// attachment chip; it must succeed for a previously picker-granted file
+    /// even when that file lives outside every authorized workspace root.
+    #[test]
+    fn open_path_succeeds_for_exact_file_grant() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        let outside = tmp.path().join("picked.png");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(&outside, b"png-bytes").unwrap();
+        let access = FilesystemAccess::default();
+        access
+            .authorize_workspace(&workspace.to_string_lossy())
+            .unwrap();
+        access.authorize_file(&outside).unwrap();
+
+        // Mirror what the `open_path` Tauri command does: resolve against
+        // optional cwd, then run through `is_authorized`.
+        let resolved = resolve_path(&outside.to_string_lossy(), None);
+        let canonical = access
+            .is_authorized(&resolved, false)
+            .expect("open_path should accept picker-granted file");
+        assert!(canonical.is_file());
+    }
+
+    /// Files registered through `authorize_file` survive across calls to
+    /// `is_authorized` regardless of declaration order, mirroring the way a
+    /// user may click any one of several pasted attachments.
+    #[test]
+    fn multiple_exact_file_grants_each_pass_independently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("clipboard-images");
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = dir.join("image-1.png");
+        let second = dir.join("image-2.jpg");
+        std::fs::write(&first, b"a").unwrap();
+        std::fs::write(&second, b"b").unwrap();
+        let access = FilesystemAccess::default();
+        access.authorize_file(&first).unwrap();
+        access.authorize_file(&second).unwrap();
+
+        let first_canonical = access
+            .is_authorized(&first, false)
+            .expect("first authorized file should pass");
+        let second_canonical = access
+            .is_authorized(&second, false)
+            .expect("second authorized file should pass");
+        assert_eq!(first_canonical, first.canonicalize().unwrap());
+        assert_eq!(second_canonical, second.canonicalize().unwrap());
+    }
+
+    /// `register_clipboard_images` is the durable-side hook called once
+    /// during application setup. After a process restart the in-memory
+    /// `files` set is empty, so without re-adopting the files the user
+    /// already landed in `<app_data_dir>/clipboard-images/`, every preview
+    /// of a historical attachment would fail. Scanned files must round-trip
+    /// through `is_authorized` like a freshly saved blob.
+    #[test]
+    fn register_clipboard_images_adopts_existing_blobs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("clipboard-images");
+        std::fs::create_dir_all(&dir).unwrap();
+        let png = dir.join("image-1700000000000-abcdef.png");
+        let jpg = dir.join("image-1700000000001-123456.jpg");
+        let unsupported = dir.join("notes.txt");
+        std::fs::write(&png, b"png-bytes").unwrap();
+        std::fs::write(&jpg, b"jpg-bytes").unwrap();
+        std::fs::write(&unsupported, b"plain").unwrap();
+
+        let access = FilesystemAccess::default();
+        access.register_clipboard_images(&dir);
+
+        let png_canonical = access
+            .is_authorized(&png, false)
+            .expect("previously saved png must be re-authorized after restart");
+        assert_eq!(png_canonical, png.canonicalize().unwrap());
+        let jpg_canonical = access
+            .is_authorized(&jpg, false)
+            .expect("previously saved jpg must be re-authorized after restart");
+        assert_eq!(jpg_canonical, jpg.canonicalize().unwrap());
+
+        // Non-image siblings must not be silently admitted as attachments.
+        let error = access
+            .is_authorized(&unsupported, false)
+            .unwrap_err();
+        assert!(error.contains("未授权"));
+    }
+
+    /// Missing clipboard-images directory is the cold-start case: nothing has
+    /// ever been pasted. The hook must be a no-op without raising so startup
+    /// does not fail on a fresh machine.
+    #[test]
+    fn register_clipboard_images_handles_missing_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("never-created");
+        let access = FilesystemAccess::default();
+        access.register_clipboard_images(&missing);
+        // Nothing authorized, nothing to assert against — the call itself
+        // must simply return without panicking.
+    }
+
+    /// Symlinks planted inside clipboard-images must be rejected the same
+    /// way `authorize_file` rejects them. A compromised renderer should
+    /// never be able to redirect preview traffic through a link to
+    /// credentials sitting next to the data dir.
+    #[cfg(unix)]
+    #[test]
+    fn register_clipboard_images_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("clipboard-images");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = tmp.path().join("secret.txt");
+        std::fs::write(&target, b"outside").unwrap();
+        symlink(&target, dir.join("image-link.png")).unwrap();
+
+        let access = FilesystemAccess::default();
+        access.register_clipboard_images(&dir);
+
+        let error = access
+            .is_authorized(&dir.join("image-link.png"), false)
+            .unwrap_err();
+        assert!(error.contains("未授权"));
     }
 
     #[cfg(unix)]

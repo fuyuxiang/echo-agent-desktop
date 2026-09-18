@@ -45,6 +45,7 @@ mod team_mcp;
 use bridge::{FolderTrusts, Permissions, PlanApprovals, Questions};
 use commands::AppState;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::Manager;
 
 static EXIT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
@@ -324,6 +325,15 @@ pub fn run() {
 
     let app = builder
         .setup(|app| {
+            // Re-adopt image blobs already on disk inside the paste sink so
+            // historical attachments stay previewable after a process restart.
+            // Done here (not in `FilesystemAccess::new`) because the allow-list
+            // is registered before setup runs and needs `app_data_dir` from the
+            // Tauri handle.
+            if let Ok(clipboard_dir) = app.path().app_data_dir() {
+                let access = app.state::<shell_fs::FilesystemAccess>();
+                access.register_clipboard_images(&clipboard_dir.join("clipboard-images"));
+            }
             // The authenticated knowledge bridge is reachable on loopback for
             // personal local knowledge. Organization tools are added only after
             // a verified login and shared-scope bootstrap.

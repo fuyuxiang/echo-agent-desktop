@@ -24,6 +24,7 @@ import {
   isImageAttachment,
   stripInjectedUserContext,
 } from "@/lib/user-message";
+import { friendlyAttachmentError } from "@/lib/attachment-errors";
 import { highlightSegments } from "@/lib/extract-text";
 import { copyShareText } from "@/lib/share";
 import { partitionAssistantParts } from "@/lib/execution-process";
@@ -279,7 +280,7 @@ export function MessageItem({
                         aria-label={`打开附件 ${name}`}
                         onClick={() => {
                           void openLocalPath(path, cwd).catch((error) => {
-                            onToast?.(`打开附件失败：${String(error).replace(/^Error:\s*/, "")}`);
+                            onToast?.(friendlyAttachmentError(error, path));
                           });
                         }}
                       >
