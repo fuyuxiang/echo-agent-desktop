@@ -483,12 +483,15 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
         picker={{ options: { connectors: [], experts: [], skills: [] }, loading: false, error: null }}
       />,
     );
-    const composer = screen.getByPlaceholderText("输入消息...");
+    const composer = screen.getByPlaceholderText(/Shift\+Enter/);
     fireEvent.change(composer, { target: { value: "请生成发布清单" } });
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("消息尚未发送"));
-    expect(onStartConversation).toHaveBeenCalledWith("p1", "请生成发布清单", "model-a");
+    await waitFor(() => {
+      const alerts = screen.getAllByRole("alert");
+      expect(alerts.some((node) => node.textContent?.includes("消息尚未发送"))).toBe(true);
+    });
+    expect(onStartConversation).toHaveBeenCalledWith("p1", "请生成发布清单", "model-a", []);
     expect(composer).toHaveValue("请生成发布清单");
   });
 
@@ -505,15 +508,16 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /选择项目对话模型：模型 A/ }));
+    fireEvent.click(screen.getByRole("button", { name: /模型 A/ }));
     fireEvent.click(screen.getByRole("option", { name: /模型 B/ }));
-    fireEvent.change(screen.getByPlaceholderText("输入消息..."), { target: { value: "执行发布" } });
+    fireEvent.change(screen.getByPlaceholderText(/Shift\+Enter/), { target: { value: "执行发布" } });
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => expect(onStartConversation).toHaveBeenCalledWith(
       "p1",
       "执行发布",
       "model-b",
+      [],
     ));
     expect(useProjectsStore.getState().projects[0].defaultModelId).toBe("model-b");
   });
@@ -533,7 +537,11 @@ describe("项目计划/任务与 Agent 会话闭环", () => {
       />,
     );
 
-    expect(screen.getByRole("alert")).toHaveTextContent("原项目模型“removed-model”已不可用");
+    expect(
+      screen
+        .getAllByRole("alert")
+        .some((node) => node.textContent?.includes("原项目模型")),
+    ).toBe(true);
     expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
   });
 

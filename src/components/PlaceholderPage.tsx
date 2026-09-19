@@ -108,6 +108,7 @@ interface PlaceholderPageProps {
     projectId: string,
     message: string,
     modelId?: string,
+    attachments?: string[],
   ) => Promise<string | undefined>;
   projectModels?: ModelOption[];
   projectDefaultModelId?: string;

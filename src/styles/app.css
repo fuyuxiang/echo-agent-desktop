@@ -6665,26 +6665,65 @@ button.diff__path {
 .pd-asset-icon { margin-right: 8px; }
 .pd-asset-empty { text-align: center; color: var(--echo-text-tertiary); padding: 40px 0; }
 .pd-asset-del { border: none; background: none; color: var(--echo-text-tertiary); cursor: pointer; }
-/* 项目级 Composer */
-.pd-composer { flex-shrink: 0; border: 1px solid var(--echo-border-default, #e8e8e8); border-radius: 12px; background: var(--echo-bg-primary, #fff); padding: 10px 12px; margin: 12px 0 16px; }
-.pd-composer__input { width: 100%; border: none; resize: none; outline: none; font-size: 14px; color: var(--echo-text-strong); background: transparent; min-height: 24px; font-family: inherit; }
-.pd-composer__input:disabled { color: var(--echo-text-medium); cursor: progress; }
-.pd-composer__error { margin-top: 6px; color: var(--echo-color-text-danger, #d03050); font-size: 12px; line-height: 1.45; }
-.pd-composer__model-warning { display: flex; align-items: center; gap: 8px; }
-.pd-composer__model-warning button { padding: 0; border: 0; background: transparent; color: var(--echo-brand); font: inherit; cursor: pointer; }
-.pd-composer__footer { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
-.pd-composer__context { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pd-composer .model-selector { flex: none; }
-.pd-composer .model-selector__trigger { max-width: min(240px, 30vw); border: 1px solid var(--echo-border-default); background: var(--echo-bg-secondary); }
-.pd-composer__chip { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border: none; background: none; border-radius: 6px; color: var(--echo-text-medium); font-size: 13px; cursor: pointer; }
-.pd-composer__chip:hover { background: var(--echo-bg-hover); }
-.pd-composer__spacer { flex: 1; }
-.pd-composer__add { width: 28px; height: 28px; border: none; background: none; border-radius: 6px; color: var(--echo-text-medium); font-size: 18px; cursor: pointer; }
-.pd-composer__add:hover { background: var(--echo-bg-hover); }
-.pd-composer__send { width: 30px; height: 30px; border: none; border-radius: 50%; background: var(--echo-button-primary-bg); color: var(--echo-button-primary-fg); cursor: pointer; }
-.pd-composer__send:hover:not(:disabled) { background: var(--echo-button-primary-bg-hover); }
-.pd-composer__send:active:not(:disabled) { background: var(--echo-button-primary-bg-active); }
-.pd-composer__send:disabled { background: var(--echo-button-primary-bg-disabled); color: var(--echo-button-primary-fg-disabled); cursor: default; }
+/* 项目级 Composer:复用首页 `<Composer>` 组件,
+   .pd-composer-shell 仅承载 header chip + Composer 卡片 + 外置 alert。 */
+.pd-composer-shell { padding: 0 0 12px; flex-shrink: 0; }
+.pd-composer-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px;
+  font-size: 12px;
+  color: var(--echo-text-tertiary);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.pd-composer-header__icon { color: var(--echo-text-medium); flex: none; display: inline-flex; }
+.pd-composer-header__name {
+  color: var(--echo-text-strong);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+.pd-composer-header__sep { color: var(--echo-text-tertiary); }
+.pd-composer-header__label { color: var(--echo-text-tertiary); }
+.pd-composer-header__count {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--echo-text-medium);
+  background: transparent;
+  font-variant-numeric: tabular-nums;
+}
+.pd-composer-header__count--active {
+  color: var(--echo-brand);
+  background: color-mix(in srgb, var(--echo-brand) 10%, transparent);
+}
+/* Composer 卡片下方的错误降级 alert。Composer 内部 setupHint 覆盖卡片
+   内部,本 alert 处理的是项目级降级场景(原项目模型不可用 / 发送失败)。 */
+.pd-composer-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-top: 8px;
+  border: 1px solid color-mix(in srgb, var(--echo-color-text-danger, #d03050) 30%, transparent);
+  background: color-mix(in srgb, var(--echo-color-text-danger, #d03050) 6%, transparent);
+  color: var(--echo-color-text-danger, #d03050);
+  font-size: 12px;
+  border-radius: 10px;
+  line-height: 1.45;
+}
+.pd-composer-warning button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--echo-brand);
+  font: inherit;
+  cursor: pointer;
+  margin-left: auto;
+}
 
 @media (max-width: 980px) {
   .pd-side { width: 250px; padding-inline: 14px; }
@@ -6694,6 +6733,15 @@ button.diff__path {
   .pd-conversation-row__open .pd-task-item__meta { flex-basis: 100%; justify-content: flex-start; }
   .pd-task-item__actions { flex-basis: 100%; margin-left: 0; justify-content: flex-start; }
   .pd-task-item__del { margin-left: auto; }
+}
+
+@media (max-width: 720px) {
+  /* 窄屏:项目 composer 顶部的注入摘要只保留项目名 + 注入标签,节省横向空间。 */
+  .pd-composer-header__count,
+  .pd-composer-header__label + .pd-composer-header__sep {
+    display: none;
+  }
+  .pd-composer-header__label { display: none; }
 }
 
 /* ===== HomePage (EchoAgent echo-home-page,实测:标题36/600/lh48) ===== */

@@ -2148,6 +2148,7 @@ function Shell() {
     projectId: string,
     message?: string,
     requestedModelId?: string,
+    attachments: string[] = [],
   ) => {
     const project = useProjectsStore.getState().projects.find((p) => p.id === projectId);
     if (!project) return;
@@ -2202,7 +2203,7 @@ function Shell() {
         const promptId = createAgentPromptId();
         sessionStore.getState().pushUser(message);
         sessionStore.getState().startStreaming(undefined, promptId);
-        await agentSend(sessionId, prompt, [], message, promptId);
+        await agentSend(sessionId, prompt, attachments, message, promptId);
       }
       return sessionId;
     } catch (e) {

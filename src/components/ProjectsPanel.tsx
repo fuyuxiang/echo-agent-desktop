@@ -45,6 +45,7 @@ interface ProjectsPanelProps {
     projectId: string,
     message: string,
     modelId?: string,
+    attachments?: string[],
   ) => Promise<string | undefined>;
   onOpenSession?: (sessionId: string, cwd?: string) => void;
   onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;

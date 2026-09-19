@@ -27,15 +27,23 @@ describe("project detail theme contract", () => {
   });
 
   it("keeps project primary controls legible in both themes", () => {
-    for (const selector of [".pd-invite", ".pd-btn--primary", ".pd-pill--on", ".pd-composer__send"]) {
+    for (const selector of [".pd-invite", ".pd-btn--primary", ".pd-pill--on"]) {
       const block = rule(selector);
       expect(block).toContain("background: var(--echo-button-primary-bg);");
       expect(block).toContain("color: var(--echo-button-primary-fg);");
     }
 
-    expect(rule(".pd-composer__send:disabled")).toContain(
-      "background: var(--echo-button-primary-bg-disabled);",
-    );
+    // 项目 composer 改用首页 `<Composer>` 后,发送按钮由 Composer 提供(.echo-composer__send);
+    // 主题契约由 `--echo-bg-pill-active` / `--echo-bg-tertiary` 等 token 保障,在此验证双主题可读性。
+    const sendBlock = rule(".echo-composer__send");
+    expect(sendBlock).toContain("background: var(--echo-bg-pill-active);");
+    expect(sendBlock).toContain("color: #fff;");
+    // disabled 状态与 empty 共享规则体,索引查找直接定位规则块。
+    const disabledStart = css.indexOf(".echo-composer__send:disabled,");
+    expect(disabledStart, "missing disabled rule for .echo-composer__send").toBeGreaterThanOrEqual(0);
+    const disabledBlockEnd = css.indexOf("}", disabledStart);
+    const disabledBlock = css.slice(disabledStart, disabledBlockEnd + 1);
+    expect(disabledBlock).toContain("background: var(--echo-bg-tertiary);");
   });
 
   it("uses theme-aware emphasis and status colours", () => {

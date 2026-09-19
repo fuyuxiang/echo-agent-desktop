@@ -18,6 +18,7 @@ import {
   type ProjectPickerOptions,
 } from "./project-picker";
 import { ActivityTab, PlanTab, TaskTab, AssetsTab } from "./project-tabs";
+import { Composer } from "./Composer";
 import { ModelSelector, type ModelOption } from "./ModelSelector";
 import { FolderIcon } from "@/foundation/components/Icon/icons";
 import { useModalFocus } from "@/lib/use-modal-focus";
@@ -61,7 +62,12 @@ export function ProjectDetailView({
   onBack: () => void;
   onToast?: (msg: string) => void;
   /** Start a new conversation within this project (creates a real EchoAgent session). */
-  onStartConversation?: (projectId: string, message: string, modelId: string) => Promise<string | undefined>;
+  onStartConversation?: (
+    projectId: string,
+    message: string,
+    modelId: string,
+    attachments?: string[],
+  ) => Promise<string | undefined>;
   onOpenSession?: (sessionId: string, cwd?: string) => void;
   onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;
   onArchiveSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
@@ -82,6 +88,9 @@ export function ProjectDetailView({
   const [drawer, setDrawer] = useState<DrawerKey | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
   const [pickerFor, setPickerFor] = useState<null | "connectors" | "experts" | "skills">(null);
+  // Composer 失败原因。Composer 内部不持有"失败 alert",必须由调用方展示,
+  // 否则用户看到"按了发送但什么都没发生"。
+  const [sendError, setSendError] = useState<string | null>(null);
   const { requestInput, dialog } = useAppDialog(live.id);
   const configuredProjectModelAvailable = !live.defaultModelId
     || models.some((model) => model.id === live.defaultModelId);
@@ -118,19 +127,48 @@ export function ProjectDetailView({
     });
   };
 
-  const handleComposerSend = async (text: string, modelId: string): Promise<boolean> => {
-    if (onStartConversation) {
-      // Legacy projects can inherit the application default for display, but
-      // the first actual run materializes it so future execution is stable.
-      if (live.defaultModelId !== modelId) setProjectModel(modelId);
-      return Boolean(await onStartConversation(live.id, text, modelId));
-    } else {
+  const handleComposerSend = async (
+    text: string,
+    modelId: string,
+    attachments: string[] = [],
+  ): Promise<boolean> => {
+    if (!onStartConversation) {
       const preview = text.slice(0, 20);
       const suffix = text.length > 20 ? "…" : "";
       onToast?.(`无法启动项目会话：${preview}${suffix}`);
       return false;
     }
+    // Legacy projects can inherit the application default for display, but
+    // the first actual run materializes it so future execution is stable.
+    if (live.defaultModelId !== modelId) setProjectModel(modelId);
+    setSendError(null);
+    try {
+      const sessionId = await onStartConversation(live.id, text, modelId, attachments);
+      if (sessionId) return true;
+      setSendError("消息尚未发送，请完成模型配置或检查当前配额后重试。");
+      return false;
+    } catch (error) {
+      setSendError(`发送失败：${String(error).replace(/^Error:\s*/, "")}`);
+      return false;
+    }
   };
+
+  // header chip 文案：项目契约注入摘要。0 项降级为「仅指令」（含项目说明）
+  // 或「无」；指令是项目核心契约，即使无 Agent/Skill/MCP 也应显示。
+  const hasInstructionsOnly = live.experts.length === 0
+    && live.skills.length === 0
+    && live.connectors.length === 0
+    && typeof live.instructions === "string"
+    && live.instructions.trim().length > 0;
+  const hasNoContract = live.experts.length === 0
+    && live.skills.length === 0
+    && live.connectors.length === 0
+    && !hasInstructionsOnly;
+  const projectHeaderAria = hasInstructionsOnly
+    ? `项目「${live.name}」当前会话将注入项目指令`
+    : hasNoContract
+      ? `项目「${live.name}」当前会话未配置任何 Agent、Skill 或 MCP`
+      : `项目「${live.name}」当前会话将注入 ${live.experts.length} 个 Agent、${live.skills.length} 个 Skill、${live.connectors.length} 个 MCP`;
 
   return (
     <div className="pd-page">
@@ -193,7 +231,7 @@ export function ProjectDetailView({
                 models={models}
                 defaultModelId={projectModelId}
                 onRun={onStartConversation
-                  ? (message, modelId) => onStartConversation(live.id, message, modelId)
+                  ? (message, modelId) => onStartConversation(live.id, message, modelId, [])
                   : undefined}
                 onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined}
                 onRestoreSession={onArchiveSession
@@ -208,7 +246,7 @@ export function ProjectDetailView({
                 models={models}
                 defaultModelId={projectModelId}
                 onRun={onStartConversation
-                  ? (message, modelId) => onStartConversation(live.id, message, modelId)
+                  ? (message, modelId) => onStartConversation(live.id, message, modelId, [])
                   : undefined}
                 onOpenSession={onOpenSession ? (sessionId) => onOpenSession(sessionId, live.cwd) : undefined}
                 onRestoreSession={onArchiveSession
@@ -220,15 +258,74 @@ export function ProjectDetailView({
             {tab === "asset" && <AssetsTab projectId={live.id} onToast={onToast} />}
           </div>
 
-          <ProjectComposer
-            project={live}
-            models={models}
-            modelId={projectModelId}
-            unavailableModelId={configuredProjectModelAvailable ? undefined : live.defaultModelId}
-            onModelChange={setProjectModel}
-            onOpenModelSettings={onOpenModelSettings}
-            onSend={handleComposerSend}
-          />
+          <div className="pd-composer-shell">
+            <div
+              className="pd-composer-header"
+              role="status"
+              aria-label={projectHeaderAria}
+              title={projectHeaderAria}
+            >
+              <span className="pd-composer-header__icon" aria-hidden="true">
+                <FolderIcon size="xs" />
+              </span>
+              <span className="pd-composer-header__name">{live.name}</span>
+              <span className="pd-composer-header__sep" aria-hidden="true">·</span>
+              <span className="pd-composer-header__label">注入：</span>
+              {hasInstructionsOnly ? (
+                <span className="pd-composer-header__count pd-composer-header__count--active">仅指令</span>
+              ) : hasNoContract ? (
+                <span className="pd-composer-header__count">无</span>
+              ) : (
+                <>
+                  <span className={`pd-composer-header__count${live.experts.length > 0 ? " pd-composer-header__count--active" : ""}`}>
+                    {live.experts.length} Agent
+                  </span>
+                  <span className="pd-composer-header__sep" aria-hidden="true">·</span>
+                  <span className={`pd-composer-header__count${live.skills.length > 0 ? " pd-composer-header__count--active" : ""}`}>
+                    {live.skills.length} Skill
+                  </span>
+                  <span className="pd-composer-header__sep" aria-hidden="true">·</span>
+                  <span className={`pd-composer-header__count${live.connectors.length > 0 ? " pd-composer-header__count--active" : ""}`}>
+                    {live.connectors.length} MCP
+                  </span>
+                </>
+              )}
+            </div>
+            <Composer
+              streaming={false}
+              onSend={(text, attachments) => handleComposerSend(text, projectModelId!, attachments)}
+              onCancel={() => { /* 项目页 composer 不流式,onCancel 为 Composer prop 必传的占位。 */ }}
+              placeholder="输入项目任务或附件（Shift+Enter 换行）"
+              apiReady={!!projectModelId && models.length > 0}
+              setupHint={
+                models.length === 0
+                  ? "请先在「设置 → 模型」配置模型"
+                  : !projectModelId && live.defaultModelId
+                    ? `原项目模型「${live.defaultModelId}」已不可用，请重新选择`
+                    : undefined
+              }
+              onOpenSettings={onOpenModelSettings}
+              onToast={onToast}
+              modelId={projectModelId}
+              modelLoading={false}
+              models={models}
+              onModelChange={setProjectModel}
+              cwd={live.cwd}
+            />
+            {(sendError || (!projectModelId && live.defaultModelId)) && (
+              <div className="pd-composer-warning" role="alert">
+                <span>
+                  {sendError
+                    ?? `原项目模型「${live.defaultModelId}」已不可用，请重新选择。`}
+                </span>
+                {models.length === 0 && onOpenModelSettings && (
+                  <button type="button" onClick={onOpenModelSettings}>
+                    前往设置模型
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         <aside className="pd-side">
@@ -404,96 +501,9 @@ function ConfigDrawer({
 }
 
 // ============================================================
-// 项目级 Composer 薄壳（左 Craft/Auto/技能/连接器 + 右 +/发送）
+// 项目 composer 改用首页 `<Composer>`（src/components/Composer.tsx），
+// 原薄壳函数 ProjectComposer 已删除：附件 / 拖拽 / `/` / `@` / 语音 /
+// 输入历史 / 知识来源 等能力统一由 Composer 接管；项目级契约（cwd +
+// 上下文注入摘要）通过 header chip 与 Composer 的 props 表达。
 // ============================================================
 
-function ProjectComposer({
-  project,
-  models,
-  modelId,
-  unavailableModelId,
-  onModelChange,
-  onOpenModelSettings,
-  onSend,
-}: {
-  project: ProjectMeta;
-  models: ModelOption[];
-  modelId?: string;
-  unavailableModelId?: string;
-  onModelChange: (modelId: string) => void;
-  onOpenModelSettings?: () => void;
-  onSend: (text: string, modelId: string) => Promise<boolean>;
-}) {
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [sendError, setSendError] = useState<string | null>(null);
-  const send = async () => {
-    const t = text.trim();
-    if (!t || !modelId || sending) return;
-    setSending(true);
-    setSendError(null);
-    try {
-      const sent = await onSend(t, modelId);
-      if (sent) setText("");
-      else setSendError("消息尚未发送，请完成模型配置或检查当前配额后重试。");
-    } catch (error) {
-      setSendError(`发送失败：${String(error).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setSending(false);
-    }
-  };
-  return (
-    <div className="pd-composer">
-      <textarea
-        className="pd-composer__input"
-        rows={1}
-        value={text}
-        placeholder="输入消息..."
-        disabled={sending}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-            e.preventDefault();
-            void send();
-          }
-        }}
-      />
-      {sendError && <div className="pd-composer__error" role="alert">{sendError}</div>}
-      {!modelId && (
-        <div className="pd-composer__error pd-composer__model-warning" role="alert">
-          {unavailableModelId
-            ? `原项目模型“${unavailableModelId}”已不可用，请重新选择。`
-            : "发送前需要选择一个执行模型。"}
-          {models.length === 0 && onOpenModelSettings && (
-            <button type="button" onClick={onOpenModelSettings}>前往设置模型</button>
-          )}
-        </div>
-      )}
-      <div className="pd-composer__footer">
-        <span className="pd-composer__context" title="项目指令和所选能力偏好将注入新会话；实际可用性以当前运行时为准">
-          项目上下文将注入
-          {project.experts.length > 0 ? ` · ${project.experts.length} Agent` : ""}
-          {project.skills.length > 0 ? ` · ${project.skills.length} Skill` : ""}
-          {project.connectors.length > 0 ? ` · ${project.connectors.length} MCP` : ""}
-        </span>
-        <span className="pd-composer__spacer" />
-        <ModelSelector
-          ariaLabel="选择项目对话模型"
-          modelId={modelId}
-          models={models}
-          disabled={sending}
-          onModelChange={onModelChange}
-        />
-        <button
-          className="pd-composer__send"
-          onClick={() => void send()}
-          aria-label="发送"
-          disabled={!text.trim() || !modelId || sending}
-          title={!modelId ? "请先选择可用模型" : undefined}
-        >
-          {sending ? "…" : "➤"}
-        </button>
-      </div>
-    </div>
-  );
-}
