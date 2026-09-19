@@ -101,6 +101,7 @@ interface LayoutState {
   bottomOpen: boolean;
   activityView: ActivityView;
   bottomView: BottomView;
+  showHidden: boolean;
 }
 
 interface WorkbenchState extends LayoutState {
@@ -110,6 +111,7 @@ interface WorkbenchState extends LayoutState {
   toggleBottom: (open?: boolean) => void;
   setActivityView: (view: ActivityView) => void;
   setBottomView: (view: BottomView) => void;
+  setShowHidden: (value: boolean) => void;
   hydrateLayout: () => void;
   resetLayout: () => void;
 }
@@ -126,6 +128,7 @@ function persist(state: LayoutState): void {
         explorerWidth: state.explorerWidth,
         agentWidth: state.agentWidth,
         bottomHeight: state.bottomHeight,
+        showHidden: state.showHidden,
       }),
     );
   } catch {
@@ -138,6 +141,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   bottomOpen: false,
   activityView: "files",
   bottomView: "problems",
+  showHidden: false,
 
   setExplorerWidth: (value) => {
     set({ explorerWidth: clamp(value, EXPLORER_MIN, EXPLORER_MAX) });
@@ -154,6 +158,10 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   toggleBottom: (open) => set((state) => ({ bottomOpen: open ?? !state.bottomOpen })),
   setActivityView: (activityView) => set({ activityView }),
   setBottomView: (bottomView) => set({ bottomView, bottomOpen: true }),
+  setShowHidden: (value) => {
+    set({ showHidden: value });
+    persist(get());
+  },
 
   hydrateLayout: () => {
     try {
@@ -168,13 +176,20 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         ),
         agentWidth: clamp(parsed.agentWidth ?? DEFAULTS.agentWidth, AGENT_MIN, AGENT_MAX),
         bottomHeight: clamp(parsed.bottomHeight ?? DEFAULTS.bottomHeight, BOTTOM_MIN, BOTTOM_MAX),
+        showHidden: parsed.showHidden === true,
       });
     } catch {
       // A corrupt entry must not stop the workbench from opening.
     }
   },
   resetLayout: () =>
-    set({ ...DEFAULTS, bottomOpen: false, activityView: "files", bottomView: "problems" }),
+    set({
+      ...DEFAULTS,
+      bottomOpen: false,
+      activityView: "files",
+      bottomView: "problems",
+      showHidden: false,
+    }),
 }));
 
 /** Label shown for a verification kind in the tests panel. */

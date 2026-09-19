@@ -229,6 +229,49 @@ function Shell() {
   const [newSessionTargetCwd, setNewSessionTargetCwd] = useState("");
   /** Repository owned by the dedicated Coding Workspace. */
   const [codingWorkspaceCwd, setCodingWorkspaceCwd] = useState("");
+  // SP4: multi-tab workbench — list of registered cwd + active tab.
+  const [codingWorkspaces, setCodingWorkspaces] = useState<WorkspaceInfo[]>([]);
+  const [activeCodingWorkspaceCwd, setActiveCodingWorkspaceCwd] = useState("");
+
+  // SP4: hydrate coding tab strip from localStorage on first mount.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("echo-coding-workspaces");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as WorkspaceInfo[];
+      if (!Array.isArray(parsed) || parsed.length === 0) return;
+      setCodingWorkspaces(parsed);
+      const active = localStorage.getItem("echo-coding-active-cwd");
+      if (active && parsed.some((w) => w.cwd === active)) {
+        setActiveCodingWorkspaceCwd(active);
+      } else {
+        setActiveCodingWorkspaceCwd(parsed[0].cwd);
+      }
+    } catch {
+      /* corrupt entry, ignore */
+    }
+  }, []);
+
+  // SP4: persist tab strip whenever it changes.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "echo-coding-workspaces",
+        JSON.stringify(codingWorkspaces),
+      );
+    } catch {
+      /* quota or storage disabled */
+    }
+  }, [codingWorkspaces]);
+  useEffect(() => {
+    try {
+      if (activeCodingWorkspaceCwd) {
+        localStorage.setItem("echo-coding-active-cwd", activeCodingWorkspaceCwd);
+      }
+    } catch {
+      /* quota */
+    }
+  }, [activeCodingWorkspaceCwd]);
   const [cancellingSessionId, setCancellingSessionId] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const modelsRef = useRef<ModelOption[]>([]);
@@ -1297,6 +1340,15 @@ function Shell() {
     promptTextOverride?: string,
   ): Promise<string | undefined> => {
     setCodingWorkspaceCwd(root);
+    // SP4: also register the new cwd in the multi-tab strip + activate it.
+    if (root) {
+      setCodingWorkspaces((current) =>
+        current.some((w) => w.cwd === root)
+          ? current
+          : [{ cwd: root, sessionCount: 0 }, ...current],
+      );
+      setActiveCodingWorkspaceCwd(root);
+    }
     const modelId = isConfiguredModelId(models, requestedModelId)
       ? requestedModelId
       : requireConfiguredModel();
@@ -1613,6 +1665,15 @@ function Shell() {
 
   const handleSelectCodingWorkspace = (newCwd: string) => {
     setCodingWorkspaceCwd(newCwd);
+    // SP4: also register the cwd in the multi-tab strip + activate it.
+    if (newCwd) {
+      setCodingWorkspaces((current) =>
+        current.some((w) => w.cwd === newCwd)
+          ? current
+          : [{ cwd: newCwd, sessionCount: 0 }, ...current],
+      );
+      setActiveCodingWorkspaceCwd(newCwd);
+    }
     if (!newCwd) return;
     // Keep the IDE repository independent from the ordinary chat composer's
     // "next session" cwd. It still belongs in recent workspaces, but leaving
@@ -1622,6 +1683,24 @@ function Shell() {
     const next = [{ cwd: newCwd, sessionCount: 0 }, ...current];
     sessionsStore.getState().setWorkspaces(next);
     setWorkspaces(next);
+  };
+
+  const handleCloseCodingWorkspace = (cwd: string) => {
+    setCodingWorkspaces((current) => {
+      const next = current.filter((w) => w.cwd !== cwd);
+      if (cwd === activeCodingWorkspaceCwd) {
+        setActiveCodingWorkspaceCwd(next[0]?.cwd ?? "");
+      }
+      if (cwd === codingWorkspaceCwd) {
+        setCodingWorkspaceCwd(next[0]?.cwd ?? "");
+      }
+      return next;
+    });
+  };
+
+  const handleAddCodingWorkspace = () => {
+    // Implemented in CodingWorkbench via filesystemPickDirectory. Hook
+    // reserved here so WorkspaceTabBar can call back through props.
   };
 
   const handleNewSession = () => {
@@ -2374,11 +2453,15 @@ function Shell() {
                   cwd={isMemoryResourceView(placeholderView)
                     ? activeSessionCwd || newSessionTargetCwd
                     : placeholderView === "代码开发"
-                      ? codingWorkspaceCwd || activeSessionCwd || newSessionTargetCwd
+                      ? activeCodingWorkspaceCwd || codingWorkspaceCwd || activeSessionCwd || newSessionTargetCwd
                       : newSessionTargetCwd}
                   onSelectWorkspace={placeholderView === "代码开发"
                     ? handleSelectCodingWorkspace
                     : handleSelectWorkspace}
+                  codingWorkspaces={codingWorkspaces}
+                  activeCodingWorkspaceCwd={activeCodingWorkspaceCwd}
+                  onCloseCodingWorkspace={handleCloseCodingWorkspace}
+                  onAddCodingWorkspace={handleAddCodingWorkspace}
                   workspaces={workspaces}
                   sessionId={currentSessionId ?? undefined}
                   codingApiReady={!!init.auth.ready && !!newSessionModelId}

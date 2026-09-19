@@ -7,6 +7,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+import {
+  codingCopyEntries as _codingCopyEntries,
+  codingDeleteEntries as _codingDeleteEntries,
+  codingMoveEntries as _codingMoveEntries,
+  codingRenameEntry as _codingRenameEntry,
+  codingRestoreFromTrash as _codingRestoreFromTrash,
+  type CodingBatchOpResult,
+  type CodingRenameResult,
+  type CodingRestoreResult,
+} from "@/lib/agent-client";
+
 import type {
   AnalysisProgressEvent,
   ChangeSet,
@@ -162,7 +173,22 @@ export const codingApi = {
     invoke<string>("coding_create_entry", {
       request: { root, parent: parent ?? null, name, directory },
     }),
+  // SP1: file ops (delete / rename / copy / move) routed through agent-client so
+  // tests can mock a single import surface.
+  deleteEntries: (root: string, paths: string[]) =>
+    _codingDeleteEntries(root, paths),
+  renameEntry: (root: string, path: string, newName: string) =>
+    _codingRenameEntry(root, path, newName),
+  copyEntries: (root: string, sources: string[], destination: string) =>
+    _codingCopyEntries(root, sources, destination),
+  moveEntries: (root: string, sources: string[], destination: string) =>
+    _codingMoveEntries(root, sources, destination),
+  /** SP5: undo a previous `deleteEntries` call. */
+  restoreFromTrash: (root: string, originalPaths: string[], trashBasenames: string[]) =>
+    _codingRestoreFromTrash(root, originalPaths, trashBasenames),
 };
+
+export type { CodingBatchOpResult, CodingRenameResult, CodingRestoreResult };
 
 export function onPhaseChanged(callback: (event: PhaseChangedEvent) => void): Promise<UnlistenFn> {
   return listen<PhaseChangedEvent>("coding://task-phase-changed", (event) => callback(event.payload));

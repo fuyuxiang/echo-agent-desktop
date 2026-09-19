@@ -50,6 +50,8 @@ notify-debouncer-full = "0.5"
 # engine already imported for symbol parsing; no extra crate needed.
 fs2 = "0.4"
 libc = "0.2"
+# SP1: cross-platform "move to OS trash" for file deletion from the workbench.
+trash = "5"
 
 # EchoAgent's in-process runtime adapter. The Apache-2.0 Runtime source snapshot
 # is tracked directly at <repo>/vendor/echo-agent-build (see ECHOAGENT_VENDOR.json and

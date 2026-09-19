@@ -17,6 +17,8 @@ const file = (name: string, root: string): DirEntry => ({
   kind: "file",
   size: 12,
   modifiedAt: Date.now(),
+  isLarge: false,
+  isBinary: false,
 });
 
 beforeEach(() => {

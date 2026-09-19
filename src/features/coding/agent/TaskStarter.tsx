@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Code2,
@@ -10,6 +10,7 @@ import {
 
 import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
 import { PermissionPicker } from "@/components/PermissionPicker";
+import { DRAFT_TTL_MS, useAiDraftStore } from "@/features/coding/store/ai-draft-store";
 
 interface TaskStarterProps {
   models: ModelOption[];
@@ -43,6 +44,17 @@ export function TaskStarter({
   onToast,
 }: TaskStarterProps) {
   const [requirement, setRequirement] = useState("");
+  const consumeDraft = useAiDraftStore((s) => s.consume);
+
+  // SP3: pre-fill the textarea from the ai-draft store on first mount. The
+  // draft is consumed exactly once; if the user already started typing or the
+  // draft is stale, we leave the field alone.
+  useEffect(() => {
+    const draft = consumeDraft();
+    if (!draft) return;
+    if (draft.createdAt + DRAFT_TTL_MS < Date.now()) return;
+    if (draft.prompt) setRequirement(draft.prompt);
+  }, [consumeDraft]);
 
   const submit = () => {
     if (!requirement.trim() || starting) return;

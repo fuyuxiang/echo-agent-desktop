@@ -1,14 +1,12 @@
 /**
- * 文件类型 → emoji 图标选择（workspace-panel 标签 / 文件树共用）。
+ * 文件类型 → SVG 图标选择（workspace-panel 标签 / 文件树共用）。
  *
- * 复用 `@/lib/file-changes` 的 `fileIcon` 映射，保证与「文件变更」面板一致。
+ * SP2 起废除 emoji，统一用 lucide-react。
  */
-import { fileIcon } from "@/lib/file-changes";
+import { FileTypeIcon } from "@/features/coding/lib/file-type-icon";
+import type { ReactNode } from "react";
 
-/** 按扩展名取一个 emoji 字符（无扩展名返回通用文件图标）。 */
-export function pickFileEmoji(fileName: string): string {
-  const dot = fileName.lastIndexOf(".");
-  if (dot < 0 || dot === fileName.length - 1) return "📄";
-  const ext = fileName.slice(dot).toLowerCase();
-  return fileIcon(ext);
+/** 按文件名返回 SVG 图标节点（无扩展名走 default）。 */
+export function pickFileEmoji(fileName: string): ReactNode {
+  return <FileTypeIcon name={fileName} kind="file" size={12} />;
 }

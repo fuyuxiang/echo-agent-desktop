@@ -26,10 +26,13 @@ use crate::shell_fs::FilesystemAccess;
 const MAX_SCANNED_FILES: usize = 12_000;
 const MAX_SCAN_DEPTH: usize = 18;
 const MAX_MANIFEST_BYTES: u64 = 512 * 1024;
-const MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
+// SP5: 4 MB → 2 MB. Anything bigger should not be loaded into the editor.
+const MAX_DOCUMENT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_GIT_DIFF_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SEARCH_RESULTS: usize = 300;
 const MAX_SEARCH_PREVIEW_CHARS: usize = 600;
+/// SP1: maximum number of entries accepted by a single batch FS-mutation call.
+const MAX_BATCH_OPS: usize = 500;
 /// How often a long workspace scan reports progress to the UI.
 const PROGRESS_EVERY_FILES: usize = 2_000;
 
@@ -146,6 +149,61 @@ pub struct CodingCreateEntryRequest {
     parent: Option<String>,
     name: String,
     directory: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingDeleteEntryRequest {
+    pub root: String,
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingRenameEntryRequest {
+    pub root: String,
+    pub path: String,
+    pub new_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingCopyEntryRequest {
+    pub root: String,
+    pub sources: Vec<String>,
+    pub destination: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingMoveEntryRequest {
+    pub root: String,
+    pub sources: Vec<String>,
+    pub destination: String,
+}
+
+/// SP5: counterpart to `CodingDeleteEntryRequest` used to undo a deletion.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingRestoreRequest {
+    pub root: String,
+    pub original_paths: Vec<String>,
+    pub trash_basenames: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingBatchOpResult {
+    pub path: String,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingRenameResult {
+    pub path: String,
+    pub old_path: String,
 }
 
 #[derive(Default)]
@@ -1078,6 +1136,482 @@ fn create_entry_blocking(root: &Path, request: CodingCreateEntryRequest) -> Resu
             .map_err(|error| format!("创建文件失败：{error}"))?;
     }
     Ok(target.to_string_lossy().into_owned())
+}
+
+// ----- SP1: file ops helpers (delete / rename / copy / move) -----
+
+/// Resolve an existing entry (file or directory) inside `root`, rejecting
+/// symlinks and entries outside the workspace. Returns the canonical path.
+fn resolve_coding_path_strict(root: &Path, claimed: &str) -> Result<PathBuf, String> {
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("无法解析工作区：{error}"))?;
+    let candidate = PathBuf::from(claimed);
+    let candidate = if candidate.is_absolute() {
+        candidate
+    } else {
+        canonical_root.join(candidate)
+    };
+    let metadata = std::fs::symlink_metadata(&candidate)
+        .map_err(|error| format!("无法读取路径：{error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("拒绝访问符号链接".into());
+    }
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|error| format!("无法解析路径：{error}"))?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err("拒绝访问工作区之外的路径".into());
+    }
+    Ok(canonical)
+}
+
+/// Recursively copy a directory tree (refuses to follow symlinks; preserves
+/// permissions and best-effort mtime). Used for cross-volume move fallback.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in walkdir::WalkDir::new(src).follow_links(false) {
+        let entry = entry?;
+        let ft = entry.file_type();
+        if ft.is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("拒绝复制符号链接：{}", entry.path().display()),
+            ));
+        }
+        let rel = entry.path().strip_prefix(src).unwrap_or(entry.path());
+        let target = dst.join(rel);
+        if ft.is_dir() {
+            std::fs::create_dir_all(&target)?;
+            if let Ok(perm) = entry.metadata().map(|m| m.permissions()) {
+                let _ = std::fs::set_permissions(&target, perm);
+            }
+        } else if ft.is_file() {
+            std::fs::copy(entry.path(), &target)?;
+            if let Ok(meta) = entry.metadata() {
+                let _ = std::fs::set_permissions(&target, meta.permissions());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn copy_one(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(src)?;
+    if meta.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "拒绝复制符号链接",
+        ));
+    }
+    if meta.is_dir() {
+        copy_dir_recursive(src, dst)?;
+    } else {
+        std::fs::copy(src, dst)?;
+        let _ = std::fs::set_permissions(dst, meta.permissions());
+    }
+    Ok(())
+}
+
+// ----- SP1: 4 new commands -----
+
+#[tauri::command]
+pub async fn coding_delete_entries(
+    access: State<'_, FilesystemAccess>,
+    request: CodingDeleteEntryRequest,
+) -> Result<Vec<CodingBatchOpResult>, String> {
+    if request.paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    if request.paths.len() > MAX_BATCH_OPS {
+        return Err(format!("一次最多删除 {MAX_BATCH_OPS} 个条目"));
+    }
+    let root = access.require_workspace(&request.root)?;
+    tokio::task::spawn_blocking(move || delete_entries_blocking(&root, request))
+        .await
+        .map_err(|error| format!("删除失败：{error}"))?
+}
+
+fn delete_entries_blocking(
+    root: &Path,
+    request: CodingDeleteEntryRequest,
+) -> Result<Vec<CodingBatchOpResult>, String> {
+    // Pre-resolve every source; reject the whole batch on first escape attempt.
+    let mut resolved = Vec::with_capacity(request.paths.len());
+    for raw in &request.paths {
+        let canonical = resolve_coding_path_strict(root, raw)?;
+        resolved.push(canonical);
+    }
+    // Use trash crate when available; fall back to remove_file/remove_dir_all
+    // (Linux headless without gio; never silently swallows).
+    let mut results: Vec<CodingBatchOpResult> = Vec::with_capacity(resolved.len());
+    for path in &resolved {
+        let display = path.to_string_lossy().into_owned();
+        let outcome = trash_path(path);
+        match outcome {
+            Ok(()) => results.push(CodingBatchOpResult {
+                path: display,
+                ok: true,
+                error: None,
+            }),
+            Err(error) => results.push(CodingBatchOpResult {
+                path: display,
+                ok: false,
+                error: Some(error),
+            }),
+        }
+    }
+    Ok(results)
+}
+
+fn trash_path(path: &Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("无法读取路径：{error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("拒绝删除符号链接".into());
+    }
+    // trash 5.x 的 delete_all 签名是 `fn(paths: &[impl AsRef<Path>]) -> Result<(), Error>`.
+    let owned: PathBuf = path.to_path_buf();
+    match trash::delete_all(&[owned.as_path()]) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            tracing::warn!("trash crate 不可用，回退到物理删除: {e}");
+            fallback_remove(path)
+        }
+    }
+}
+
+fn fallback_remove(path: &Path) -> Result<(), String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("无法读取路径：{error}"))?;
+    if metadata.is_dir() {
+        std::fs::remove_dir_all(path).map_err(|error| format!("删除目录失败：{error}"))
+    } else {
+        std::fs::remove_file(path).map_err(|error| format!("删除文件失败：{error}"))
+    }
+}
+
+// ----- SP5: undo a previous `coding_delete_entries` by restoring the trashed entry. -----
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingRestoreResult {
+    pub path: String,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn coding_restore_from_trash(
+    access: State<'_, FilesystemAccess>,
+    request: CodingRestoreRequest,
+) -> Result<Vec<CodingRestoreResult>, String> {
+    if request.original_paths.len() != request.trash_basenames.len() {
+        return Err("original_paths 与 trash_basenames 数量不匹配".into());
+    }
+    if request.original_paths.len() > MAX_BATCH_OPS {
+        return Err(format!("一次最多恢复 {MAX_BATCH_OPS} 个条目"));
+    }
+    let root = access.require_workspace(&request.root)?;
+    tokio::task::spawn_blocking(move || restore_blocking(&root, request))
+        .await
+        .map_err(|error| format!("恢复失败：{error}"))?
+}
+
+fn restore_blocking(
+    root: &Path,
+    request: CodingRestoreRequest,
+) -> Result<Vec<CodingRestoreResult>, String> {
+    let mut out = Vec::with_capacity(request.original_paths.len());
+    for (orig, basename) in request.original_paths.iter().zip(request.trash_basenames.iter()) {
+        let target = match resolve_coding_path_strict(root, orig) {
+            Ok(p) => p,
+            Err(e) => {
+                out.push(CodingRestoreResult {
+                    path: orig.clone(),
+                    ok: false,
+                    error: Some(e),
+                });
+                continue;
+            }
+        };
+        // Abort if the target was already restored by another path — the
+        // user might have re-pasted or re-created a file with the same name.
+        if target.exists() {
+            out.push(CodingRestoreResult {
+                path: orig.clone(),
+                ok: false,
+                error: Some("目标位置已存在同名文件或目录".into()),
+            });
+            continue;
+        }
+        match locate_trash_path(basename).and_then(|src| std::fs::rename(&src, &target)) {
+            Ok(()) => out.push(CodingRestoreResult {
+                path: target.to_string_lossy().into_owned(),
+                ok: true,
+                error: None,
+            }),
+            Err(e) => out.push(CodingRestoreResult {
+                path: orig.clone(),
+                ok: false,
+                error: Some(e),
+            }),
+        }
+    }
+    Ok(out)
+}
+
+fn locate_trash_path(basename: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(xdg_data) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
+        candidates.push(xdg_data.join("Trash").join("files").join(basename));
+    }
+    candidates.push(home.join(".local/share/Trash/files").join(basename));
+    if let Some(xdg_runtime) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+        candidates.push(xdg_runtime.join("Trash").join(basename));
+    }
+    candidates.push(home.join(".Trash").join(basename));
+    candidates
+        .into_iter()
+        .find(|p| p.exists() && !p.is_symlink() && p.is_file())
+        .or_else(|| {
+            // Fallback: scan all known trash roots for the basename. Avoids
+            // surprising the user when `Trash/files/` is elsewhere.
+            let roots = [
+                std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+                Some(home.join(".local/share/Trash")),
+                std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+                Some(home.join(".Trash")),
+            ];
+            roots
+                .into_iter()
+                .flatten()
+                .map(|root| root.join("files").join(basename))
+                .find(|p| p.exists() && !p.is_symlink() && p.is_file())
+        })
+}
+
+// ----- end SP5 -----
+
+#[tauri::command]
+pub async fn coding_rename_entry(
+    access: State<'_, FilesystemAccess>,
+    request: CodingRenameEntryRequest,
+) -> Result<CodingRenameResult, String> {
+    let root = access.require_workspace(&request.root)?;
+    tokio::task::spawn_blocking(move || rename_entry_blocking(&root, request))
+        .await
+        .map_err(|error| format!("重命名失败：{error}"))?
+}
+
+fn rename_entry_blocking(
+    root: &Path,
+    request: CodingRenameEntryRequest,
+) -> Result<CodingRenameResult, String> {
+    let new_name = safe_new_entry_name(&request.new_name)?;
+    let old = resolve_coding_path_strict(root, &request.path)?;
+    let parent = old
+        .parent()
+        .ok_or_else(|| "无法解析父目录".to_string())?;
+    let new_path = parent.join(new_name);
+    if new_path == old {
+        return Ok(CodingRenameResult {
+            path: new_path.to_string_lossy().into_owned(),
+            old_path: old.to_string_lossy().into_owned(),
+        });
+    }
+    if new_path
+        .try_exists()
+        .map_err(|error| format!("无法检测目标：{error}"))?
+    {
+        return Err("同名文件或目录已经存在".into());
+    }
+    std::fs::rename(&old, &new_path).map_err(|error| format!("重命名失败：{error}"))?;
+    Ok(CodingRenameResult {
+        path: new_path.to_string_lossy().into_owned(),
+        old_path: old.to_string_lossy().into_owned(),
+    })
+}
+
+#[tauri::command]
+pub async fn coding_copy_entries(
+    access: State<'_, FilesystemAccess>,
+    request: CodingCopyEntryRequest,
+) -> Result<Vec<CodingBatchOpResult>, String> {
+    if request.sources.is_empty() {
+        return Ok(Vec::new());
+    }
+    if request.sources.len() > MAX_BATCH_OPS {
+        return Err(format!("一次最多复制 {MAX_BATCH_OPS} 个条目"));
+    }
+    let root = access.require_workspace(&request.root)?;
+    tokio::task::spawn_blocking(move || copy_entries_blocking(&root, request))
+        .await
+        .map_err(|error| format!("复制失败：{error}"))?
+}
+
+fn copy_entries_blocking(
+    root: &Path,
+    request: CodingCopyEntryRequest,
+) -> Result<Vec<CodingBatchOpResult>, String> {
+    let destination = resolve_coding_directory_path(root, Some(&request.destination))?;
+    let mut resolved: Vec<PathBuf> = Vec::with_capacity(request.sources.len());
+    for raw in &request.sources {
+        let src = resolve_coding_path_strict(root, raw)?;
+        if src.is_dir() && destination.starts_with(&src) {
+            return Err(format!("不能把目录复制到自身内部：{}", src.display()));
+        }
+        resolved.push(src);
+    }
+    let mut results = Vec::with_capacity(resolved.len());
+    for src in &resolved {
+        let display = src.to_string_lossy().into_owned();
+        let basename = match src.file_name() {
+            Some(name) => name.to_owned(),
+            None => {
+                results.push(CodingBatchOpResult {
+                    path: display,
+                    ok: false,
+                    error: Some("源路径缺少文件名".into()),
+                });
+                continue;
+            }
+        };
+        let target = destination.join(&basename);
+        if target
+            .try_exists()
+            .map_err(|error| format!("无法检测目标：{error}"))?
+        {
+            results.push(CodingBatchOpResult {
+                path: display,
+                ok: false,
+                error: Some("目标已存在同名条目".into()),
+            });
+            continue;
+        }
+        match copy_one(src, &target) {
+            Ok(()) => results.push(CodingBatchOpResult {
+                path: display,
+                ok: true,
+                error: None,
+            }),
+            Err(error) => results.push(CodingBatchOpResult {
+                path: display,
+                ok: false,
+                error: Some(format!("{error}")),
+            }),
+        }
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn coding_move_entries(
+    access: State<'_, FilesystemAccess>,
+    request: CodingMoveEntryRequest,
+) -> Result<Vec<CodingBatchOpResult>, String> {
+    if request.sources.is_empty() {
+        return Ok(Vec::new());
+    }
+    if request.sources.len() > MAX_BATCH_OPS {
+        return Err(format!("一次最多移动 {MAX_BATCH_OPS} 个条目"));
+    }
+    let root = access.require_workspace(&request.root)?;
+    tokio::task::spawn_blocking(move || move_entries_blocking(&root, request))
+        .await
+        .map_err(|error| format!("移动失败：{error}"))?
+}
+
+fn move_entries_blocking(
+    root: &Path,
+    request: CodingMoveEntryRequest,
+) -> Result<Vec<CodingBatchOpResult>, String> {
+    let destination = resolve_coding_directory_path(root, Some(&request.destination))?;
+    let mut resolved: Vec<PathBuf> = Vec::with_capacity(request.sources.len());
+    for raw in &request.sources {
+        let src = resolve_coding_path_strict(root, raw)?;
+        if src.is_dir() && destination.starts_with(&src) {
+            return Err(format!("不能把目录移动到自身内部：{}", src.display()));
+        }
+        resolved.push(src);
+    }
+    let mut results = Vec::with_capacity(resolved.len());
+    for src in &resolved {
+        let display = src.to_string_lossy().into_owned();
+        let basename = match src.file_name() {
+            Some(name) => name.to_owned(),
+            None => {
+                results.push(CodingBatchOpResult {
+                    path: display,
+                    ok: false,
+                    error: Some("源路径缺少文件名".into()),
+                });
+                continue;
+            }
+        };
+        let target = destination.join(&basename);
+        if target == *src {
+            results.push(CodingBatchOpResult {
+                path: display,
+                ok: true,
+                error: None,
+            });
+            continue;
+        }
+        if target
+            .try_exists()
+            .map_err(|error| format!("无法检测目标：{error}"))?
+        {
+            results.push(CodingBatchOpResult {
+                path: display,
+                ok: false,
+                error: Some("目标已存在同名条目".into()),
+            });
+            continue;
+        }
+        match std::fs::rename(src, &target) {
+            Ok(()) => results.push(CodingBatchOpResult {
+                path: display,
+                ok: true,
+                error: None,
+            }),
+            Err(error) => {
+                // Cross-volume fallback: copy then trash source.
+                let is_cross_volume = error.raw_os_error() == Some(libc::EXDEV);
+                if !is_cross_volume {
+                    results.push(CodingBatchOpResult {
+                        path: display,
+                        ok: false,
+                        error: Some(format!("移动失败：{error}")),
+                    });
+                    continue;
+                }
+                let copy_result = copy_one(src, &target);
+                if let Err(copy_err) = copy_result {
+                    results.push(CodingBatchOpResult {
+                        path: display,
+                        ok: false,
+                        error: Some(format!("跨卷复制失败：{copy_err}")),
+                    });
+                    continue;
+                }
+                match trash_path(src) {
+                    Ok(()) => results.push(CodingBatchOpResult {
+                        path: display,
+                        ok: true,
+                        error: None,
+                    }),
+                    Err(trash_err) => results.push(CodingBatchOpResult {
+                        path: display,
+                        ok: false,
+                        error: Some(format!("已复制但源移入回收站失败：{trash_err}")),
+                    }),
+                }
+            }
+        }
+    }
+    Ok(results)
 }
 
 #[tauri::command]
@@ -2097,5 +2631,188 @@ mod tests {
         drop(master);
         let output = read_thread.join().expect("PTY reader should finish");
         assert!(output.contains(temp.path().to_string_lossy().as_ref()));
+    }
+
+    // ----- SP1: file ops (delete / rename / copy / move) -----
+
+    fn make_workspace() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("a.txt"), "alpha").unwrap();
+        std::fs::write(dir.path().join("sub").join("b.txt"), "bravo").unwrap();
+        dir
+    }
+
+    fn workspace_str(dir: &tempfile::TempDir) -> String {
+        dir.path().to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn rename_entry_rejects_existing_target_and_applies_new_name() {
+        let dir = make_workspace();
+        let root = dir.path();
+
+        let req = CodingRenameEntryRequest {
+            root: workspace_str(&dir),
+            path: root.join("a.txt").to_string_lossy().into_owned(),
+            new_name: "renamed.txt".into(),
+        };
+        let result = rename_entry_blocking(root, req).expect("rename should succeed");
+        assert!(result.path.ends_with("renamed.txt"));
+        assert!(result.old_path.ends_with("a.txt"));
+        assert!(root.join("renamed.txt").exists());
+
+        // First conflict variant: rename to "b.txt" — b.txt lives under sub/,
+        // not under root, so this should actually succeed (no collision).
+        let rename_into_subdir = CodingRenameEntryRequest {
+            root: workspace_str(&dir),
+            path: root.join("renamed.txt").to_string_lossy().into_owned(),
+            new_name: "b.txt".into(),
+        };
+        rename_entry_blocking(root, rename_into_subdir)
+            .expect("rename to non-colliding name should succeed");
+
+        // create a colliding target in the same parent directory
+        std::fs::write(root.join("renamed.txt"), "x").unwrap();
+        let conflict = CodingRenameEntryRequest {
+            root: workspace_str(&dir),
+            path: root.join("renamed.txt").to_string_lossy().into_owned(),
+            new_name: "collide.txt".into(),
+        };
+        std::fs::write(root.join("collide.txt"), "x").unwrap();
+        let err = rename_entry_blocking(root, conflict).unwrap_err();
+        assert!(err.contains("已经存在"), "expected conflict error, got {err}");
+    }
+
+    #[test]
+    fn rename_entry_rejects_invalid_names() {
+        let dir = make_workspace();
+        let root = dir.path();
+        let req = CodingRenameEntryRequest {
+            root: workspace_str(&dir),
+            path: root.join("a.txt").to_string_lossy().into_owned(),
+            new_name: "../escape.txt".into(),
+        };
+        assert!(rename_entry_blocking(root, req).is_err());
+    }
+
+    #[test]
+    fn delete_entries_moves_to_trash_or_removes_and_reports_per_item() {
+        let dir = make_workspace();
+        let root = dir.path();
+        let a = root.join("a.txt").to_string_lossy().into_owned();
+        let b = root.join("sub").join("b.txt").to_string_lossy().into_owned();
+
+        let req = CodingDeleteEntryRequest {
+            root: workspace_str(&dir),
+            paths: vec![a.clone(), b.clone()],
+        };
+        let results = delete_entries_blocking(root, req).expect("delete should run");
+        assert_eq!(results.len(), 2);
+        // Some Linux CI may have no `gio` and trash crate falls back; in that case
+        // both succeed; in macOS dev trash crate succeeds; in either case the
+        // original files should be gone afterwards.
+        for r in &results {
+            assert!(r.ok, "expected ok, got {:?}", r);
+        }
+        assert!(!root.join("a.txt").exists());
+        assert!(!root.join("sub").join("b.txt").exists());
+    }
+
+    #[test]
+    fn delete_entries_empty_paths_short_circuits() {
+        let dir = make_workspace();
+        let results =
+            delete_entries_blocking(dir.path(), CodingDeleteEntryRequest {
+                root: workspace_str(&dir),
+                paths: vec![],
+            })
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn delete_entries_rejects_workspace_escape() {
+        let dir = make_workspace();
+        let outside = tempfile::tempdir().unwrap();
+        let req = CodingDeleteEntryRequest {
+            root: workspace_str(&dir),
+            paths: vec![outside.path().join("nope.txt").to_string_lossy().into_owned()],
+        };
+        // Pre-resolution should reject before invoking trash.
+        assert!(delete_entries_blocking(dir.path(), req).is_err());
+    }
+
+    #[test]
+    fn copy_entries_creates_copies_and_preserves_basename() {
+        let dir = make_workspace();
+        let root = dir.path();
+        let dest_dir = root.join("dest");
+        std::fs::create_dir(&dest_dir).unwrap();
+
+        let req = CodingCopyEntryRequest {
+            root: workspace_str(&dir),
+            sources: vec![
+                root.join("a.txt").to_string_lossy().into_owned(),
+                root.join("sub").join("b.txt").to_string_lossy().into_owned(),
+            ],
+            destination: dest_dir.to_string_lossy().into_owned(),
+        };
+        let results = copy_entries_blocking(root, req).expect("copy should run");
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(r.ok, "expected ok, got {:?}", r);
+        }
+        assert!(dest_dir.join("a.txt").exists());
+        assert!(dest_dir.join("b.txt").exists());
+        // source should still exist
+        assert!(root.join("a.txt").exists());
+        assert!(root.join("sub").join("b.txt").exists());
+    }
+
+    #[test]
+    fn copy_entries_rejects_directory_into_itself() {
+        let dir = make_workspace();
+        let root = dir.path();
+        let req = CodingCopyEntryRequest {
+            root: workspace_str(&dir),
+            sources: vec![root.join("sub").to_string_lossy().into_owned()],
+            destination: root.join("sub").join("inner").to_string_lossy().into_owned(),
+        };
+        assert!(copy_entries_blocking(root, req).is_err());
+    }
+
+    #[test]
+    fn move_entries_renames_in_place_within_same_dir() {
+        let dir = make_workspace();
+        let root = dir.path();
+        let dest_dir = root.join("dest");
+        std::fs::create_dir(&dest_dir).unwrap();
+
+        let req = CodingMoveEntryRequest {
+            root: workspace_str(&dir),
+            sources: vec![root.join("a.txt").to_string_lossy().into_owned()],
+            destination: dest_dir.to_string_lossy().into_owned(),
+        };
+        let results = move_entries_blocking(root, req).expect("move should run");
+        assert_eq!(results.len(), 1);
+        assert!(results[0].ok);
+        assert!(!root.join("a.txt").exists());
+        assert!(dest_dir.join("a.txt").exists());
+    }
+
+    #[test]
+    fn copy_entries_rejects_path_outside_workspace() {
+        let dir = make_workspace();
+        let root = dir.path();
+        let outside = tempfile::tempdir().unwrap();
+        let dest_dir = root.join("dest");
+        std::fs::create_dir(&dest_dir).unwrap();
+        let req = CodingCopyEntryRequest {
+            root: workspace_str(&dir),
+            sources: vec![outside.path().join("foreign.txt").to_string_lossy().into_owned()],
+            destination: dest_dir.to_string_lossy().into_owned(),
+        };
+        assert!(copy_entries_blocking(root, req).is_err());
     }
 }

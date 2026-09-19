@@ -1925,6 +1925,29 @@
   color: var(--echo-text-strong);
 }
 
+/* SP2: dedicated button class for the toggle (matches the inline action style). */
+.coding-explorer__heading-actions-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--echo-text-weak);
+  cursor: pointer;
+}
+.coding-explorer__heading-actions-btn:hover {
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-strong);
+}
+.coding-explorer__heading-actions-btn.is-active {
+  background: color-mix(in srgb, var(--echo-accent) 14%, transparent);
+  color: var(--echo-accent);
+}
+
 .coding-explorer-view {
   display: flex;
   flex-direction: column;

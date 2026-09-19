@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import React from "react";
 import {
   aggregateFileChanges,
   fileIcon,
@@ -152,14 +153,14 @@ describe("aggregateFileChanges", () => {
 });
 
 describe("fileIcon", () => {
-  it("已知扩展名返回 emoji", () => {
-    expect(fileIcon(".ts")).toBe("📘");
-    expect(fileIcon(".md")).toBe("📝");
-    expect(fileIcon(".py")).toBe("🐍");
+  it("已知扩展名返回 lucide SVG ReactNode", () => {
+    expect(React.isValidElement(fileIcon(".ts"))).toBe(true);
+    expect(React.isValidElement(fileIcon(".md"))).toBe(true);
+    expect(React.isValidElement(fileIcon(".py"))).toBe(true);
   });
-  it("未知扩展名回退 📄", () => {
-    expect(fileIcon(".unknownext")).toBe("📄");
-    expect(fileIcon("")).toBe("📄");
+  it("未知扩展名也返回 SVG fallback", () => {
+    expect(React.isValidElement(fileIcon(".unknownext"))).toBe(true);
+    expect(React.isValidElement(fileIcon(""))).toBe(true);
   });
 });
 

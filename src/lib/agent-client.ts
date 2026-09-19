@@ -1795,6 +1795,72 @@ export async function codingCreateEntry(
   });
 }
 
+export interface CodingBatchOpResult {
+  path: string;
+  ok: boolean;
+  error?: string | null;
+}
+
+export interface CodingRenameResult {
+  path: string;
+  oldPath: string;
+}
+
+export async function codingDeleteEntries(
+  root: string,
+  paths: string[],
+): Promise<CodingBatchOpResult[]> {
+  return invoke<CodingBatchOpResult[]>("coding_delete_entries", {
+    request: { root, paths },
+  });
+}
+
+export async function codingRenameEntry(
+  root: string,
+  path: string,
+  newName: string,
+): Promise<CodingRenameResult> {
+  return invoke<CodingRenameResult>("coding_rename_entry", {
+    request: { root, path, newName },
+  });
+}
+
+export async function codingCopyEntries(
+  root: string,
+  sources: string[],
+  destination: string,
+): Promise<CodingBatchOpResult[]> {
+  return invoke<CodingBatchOpResult[]>("coding_copy_entries", {
+    request: { root, sources, destination },
+  });
+}
+
+export async function codingMoveEntries(
+  root: string,
+  sources: string[],
+  destination: string,
+): Promise<CodingBatchOpResult[]> {
+  return invoke<CodingBatchOpResult[]>("coding_move_entries", {
+    request: { root, sources, destination },
+  });
+}
+
+export interface CodingRestoreResult {
+  path: string;
+  ok: boolean;
+  error?: string | null;
+}
+
+export async function codingRestoreFromTrash(
+  root: string,
+  originalPaths: string[],
+  trashBasenames: string[],
+): Promise<CodingRestoreResult[]> {
+  return invoke<CodingRestoreResult[]>("coding_restore_from_trash", {
+    request: { root, originalPaths, trashBasenames },
+  });
+}
+
 export async function codingSearchWorkspace(root: string, query: string): Promise<CodingSearchHit[]> {
   return invoke<CodingSearchHit[]>("coding_search_workspace", { root, query });
 }
@@ -1855,12 +1921,16 @@ export interface DirEntry {
   name: string;
   /** Absolute path of the entry. */
   path: string;
-  /** "directory" | "file" | "other". */
+  /** "directory" | "file" | "other" | "symlink" (SP5). */
   kind: string;
   /** File size in bytes (directories report 0). */
   size: number;
   /** Last modified time in Unix milliseconds (0 when unavailable). */
   modifiedAt: number;
+  /** SP5: file size exceeds 2 MiB. */
+  isLarge: boolean;
+  /** SP5: extension whitelist or first 8 KiB contain a NUL byte. */
+  isBinary: boolean;
 }
 
 /**
@@ -1872,11 +1942,13 @@ export async function listDir(
   path: string,
   cwd?: string,
   maxEntries?: number,
+  includeHidden?: boolean,
 ): Promise<DirEntry[]> {
   return invoke<DirEntry[]>("list_dir", {
     path,
     cwd: cwd ?? null,
     maxEntries: maxEntries ?? null,
+    includeHidden: includeHidden ?? null,
   });
 }
 

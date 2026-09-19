@@ -19,6 +19,7 @@ import {
 import { WorkspacePicker } from "./WorkspacePicker";
 import { PermissionPicker } from "./PermissionPicker";
 import { SlashCommands, type SlashCommandsHandle } from "./SlashCommands";
+import { AtMentionMenu, type AtMentionHandle, type AtMentionSymbol } from "@/components/AtMentionMenu";
 import {
   isClientSlashCommand,
   parseSlashInvocation,
@@ -26,6 +27,7 @@ import {
   slashTokenAtCursor,
   type SlashCommandInvocation,
 } from "@/lib/slash-commands";
+import { replaceAtToken } from "@/lib/at-commands";
 import { InputAddMenu } from "./InputAddMenu";
 import { KnowledgePicker } from "./KnowledgePicker";
 import {
@@ -85,6 +87,8 @@ export function Composer({
   sendNowPending = false,
   awaitingQuestion = false,
   disabled,
+  filePaths = [],
+  workspaceSymbols = [],
   onSend,
   onSendNow,
   onCancel,
@@ -151,6 +155,10 @@ export function Composer({
   /** A structured AskUserQuestion card owns input until it is resolved. */
   awaitingQuestion?: boolean;
   disabled?: boolean;
+  /** SP4: workspace-relative file paths to back the `@` candidate picker. */
+  filePaths?: string[];
+  /** SP4: workspace symbols (mirrors `SymbolIndexClient.symbols()`). */
+  workspaceSymbols?: AtMentionSymbol[];
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onSendNow?: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   onCancel: () => boolean | void | Promise<boolean | void>;
@@ -953,6 +961,7 @@ export function Composer({
   // Cursor tracking for slash-command autocomplete.
   const [cursorPos, setCursorPos] = useState(0);
   const slashCommandsRef = useRef<SlashCommandsHandle>(null);
+  const atMenuRef = useRef<AtMentionHandle>(null);
   // Slash completion is limited to the first token, matching runtime command
   // resolution. The shared parser supports qualified names such as
   // `/plugin-name:skill-name`.
@@ -991,6 +1000,30 @@ export function Composer({
         className={composerCls}
         onClick={() => {
           if (!apiReady) onOpenSettings?.();
+        }}
+        onDragOver={(event) => {
+          // SP4: HTML5 fallback for in-webview drag from the file tree.
+          // Tauri also fires `onDragDropEvent` with real paths; this branch
+          // covers the JS-only event with `application/x-echo-paths` mime.
+          if (event.dataTransfer.types.includes("application/x-echo-paths")) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+          }
+        }}
+        onDrop={(event) => {
+          if (!event.dataTransfer.types.includes("application/x-echo-paths")) return;
+          event.preventDefault();
+          const raw = event.dataTransfer.getData("application/x-echo-paths");
+          if (!raw) return;
+          try {
+            const parsed = JSON.parse(raw) as string[];
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              void addPathAttachments(parsed);
+            }
+          } catch {
+            // Tauri drop fires its own event with real paths; ignore duplicate
+            // payloads carrying only a text/plain representation here.
+          }
         }}
       >
         {!apiReady && (
@@ -1139,6 +1172,10 @@ export function Composer({
           onKeyDown={(e) => {
             if (
               !e.nativeEvent.isComposing
+              && atMenuRef.current?.handleKeyDown(e as unknown as KeyboardEvent)
+            ) return;
+            if (
+              !e.nativeEvent.isComposing
               && slashCommandsRef.current?.handleKeyDown(e)
             ) {
               return;
@@ -1202,6 +1239,21 @@ export function Composer({
             onPick={handleSlashPick}
           />
         )}
+        {/* SP4: @-mention autocomplete */}
+        <AtMentionMenu
+          ref={atMenuRef}
+          text={text}
+          cursor={cursorPos}
+          filePaths={filePaths}
+          workspaceSymbols={workspaceSymbols}
+          onPick={(mention) => {
+            const result = replaceAtToken(text, cursorPos, mention);
+            if (result) {
+              updateText(result.text);
+              setCursorPos(result.cursor);
+            }
+          }}
+        />
         <div className="echo-composer__footer">
           <InputAddMenu
             disabled={!apiReady || awaitingQuestion || disabled}

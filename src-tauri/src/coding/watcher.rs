@@ -444,42 +444,16 @@ fn should_ignore(root: &Path, path: &Path) -> bool {
     // Apply nested ignore files from the closest directory outwards. A
     // whitelist in a deeper file wins over any shallower rule, matching Git's
     // precedence and the initial `ignore::WalkBuilder` scan.
-    let is_dir = path.is_dir();
-    let mut directory = path.parent();
-    while let Some(current) = directory {
-        if !current.starts_with(root) {
-            break;
-        }
-        for name in [".gitignore", ".ignore"] {
-            let ignore_path = current.join(name);
-            if !ignore_path.is_file() {
-                continue;
-            }
-            let mut builder = ignore::gitignore::GitignoreBuilder::new(current);
-            let _ = builder.add(ignore_path);
-            if let Ok(matcher) = builder.build() {
-                let matched = matcher.matched_path_or_any_parents(path, is_dir);
-                if matched.is_ignore() {
-                    return true;
-                }
-                if matched.is_whitelist() {
-                    return false;
-                }
-            }
-        }
-        if current == root {
-            break;
-        }
-        directory = current.parent();
-    }
-    false
+    super::gitignore_chain::apply_nested_gitignore(
+        root,
+        path,
+        path.is_dir(),
+        super::gitignore_chain::DEFAULT_IGNORE_FILES,
+    )
 }
 
 fn is_ignore_rules_file(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some(".gitignore" | ".ignore")
-    )
+    super::gitignore_chain::is_ignore_rules_file(path)
 }
 
 /// Relative-path predicate: the watcher only triggers an upsert for files

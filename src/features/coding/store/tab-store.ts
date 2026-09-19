@@ -97,6 +97,8 @@ interface TabState {
   markSaved: (id: string, original: string, hash: string) => void;
   markConflict: (id: string) => void;
   setError: (id: string, error?: string) => void;
+  /** SP1: rename a file tab id (when the underlying file is renamed). */
+  renameTab: (oldId: string, newId: string) => void;
 }
 
 export function isFileTab(tab: WorkbenchTab): tab is FileTab {
@@ -258,4 +260,21 @@ export const useTabStore = create<TabState>((set, get) => ({
         tab.id === id && isFileTab(tab) ? { ...tab, error, loading: false } : tab,
       ),
     })),
+
+  renameTab: (oldId, newId) =>
+    set((state) => {
+      let renamed = false;
+      const tabs = state.tabs.map((tab) => {
+        if (tab.id !== oldId || !isFileTab(tab)) return tab;
+        renamed = true;
+        return {
+          ...tab,
+          id: newId,
+          // Keep the relative display title; the editor itself reloads content.
+        };
+      });
+      if (!renamed) return state;
+      const activeId = state.activeId === oldId ? newId : state.activeId;
+      return { tabs, activeId };
+    }),
 }));

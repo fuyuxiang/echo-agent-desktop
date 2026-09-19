@@ -58,7 +58,11 @@ describe("FileChangesPanel", () => {
   });
 
   it("文件类型图标渲染", () => {
-    render(<FileChangesPanel messages={[diffMsg("a.ts", "x", "y")] } />);
-    expect(screen.getByText("📘")).toBeInTheDocument();
+    const { container } = render(<FileChangesPanel messages={[diffMsg("a.ts", "x", "y")] } />);
+    const icon = container.querySelector(".file-changes__icon svg");
+    expect(icon).not.toBeNull();
+    // lucide-react renders the SVG with a className derived from the icon name.
+    // We don't pin the exact display name, just assert it's an SVG node.
+    expect(icon?.tagName.toLowerCase()).toBe("svg");
   });
 });

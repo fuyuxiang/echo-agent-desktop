@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -16,6 +16,7 @@ import { PermissionInlineCard } from "@/components/PermissionDialog";
 import { PermissionPicker } from "@/components/PermissionPicker";
 import { QuestionInlineCard } from "@/components/QuestionInlineCard";
 import { useStickToBottom } from "@/components/use-stick-to-bottom";
+import { DRAFT_TTL_MS, useAiDraftStore } from "@/features/coding/store/ai-draft-store";
 import { partitionAssistantParts } from "@/lib/execution-process";
 import type { ChatMessage } from "@/stores/session-store";
 
@@ -43,6 +44,8 @@ interface AgentPaneProps {
   onOpenChanges: () => void;
   onOpenReport: () => void;
   onToast?: (message: string) => void;
+  /** SP4: called when the user drops file-tree paths onto the agent pane. */
+  onPathsDropped?: (paths: string[]) => void;
 }
 
 /** Agent activity, interaction requests and delivery summary for one task. */
@@ -67,8 +70,19 @@ export function AgentPane({
   onOpenChanges,
   onOpenReport,
   onToast,
+  onPathsDropped,
 }: AgentPaneProps) {
   const [followup, setFollowup] = useState("");
+  const consumeDraft = useAiDraftStore((s) => s.consume);
+
+  // SP3: consume a queued AI draft on first mount. The draft originates from
+  // a context-menu action («在对话中提问») and pre-fills the followup box.
+  useEffect(() => {
+    const draft = consumeDraft();
+    if (!draft) return;
+    if (draft.createdAt + DRAFT_TTL_MS < Date.now()) return;
+    if (draft.prompt) setFollowup(draft.prompt);
+  }, [consumeDraft]);
   const phase = describePhase(task.phase);
   const sessionUnavailable = !sessionId;
   const changes = changeSet?.changes ?? [];
@@ -100,7 +114,29 @@ export function AgentPane({
   };
 
   return (
-    <div className="coding-agent">
+    <div
+      className="coding-agent"
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("application/x-echo-paths")) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDrop={(event) => {
+        if (!event.dataTransfer.types.includes("application/x-echo-paths")) return;
+        event.preventDefault();
+        const raw = event.dataTransfer.getData("application/x-echo-paths");
+        if (!raw) return;
+        try {
+          const parsed = JSON.parse(raw) as string[];
+          if (Array.isArray(parsed) && parsed.length > 0 && onPathsDropped) {
+            onPathsDropped(parsed);
+          }
+        } catch {
+          /* noop — Tauri drop delivers real paths separately */
+        }
+      }}
+    >
       <header className="coding-agent__panel-head">
         <div className="coding-agent__identity">
           <span className="coding-agent__identity-mark" aria-hidden="true">

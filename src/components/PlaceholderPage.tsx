@@ -77,6 +77,14 @@ interface PlaceholderPageProps {
   onSelectWorkspace?: (cwd: string) => void;
   /** Known working directories for the Coding Workspace picker. */
   workspaces?: WorkspaceInfo[];
+  /** SP4: registered cwd list for the workbench tab strip. */
+  codingWorkspaces?: WorkspaceInfo[];
+  /** SP4: currently active tab cwd (forwarded to CodingWorkbench). */
+  activeCodingWorkspaceCwd?: string;
+  /** SP4: close a coding workspace tab. */
+  onCloseCodingWorkspace?: (cwd: string) => void;
+  /** SP4: open the OS folder picker to register a new cwd. */
+  onAddCodingWorkspace?: () => void;
   /** Coding Workspace Agent/runtime integration. */
   codingApiReady?: boolean;
   codingModels?: ModelOption[];
@@ -129,6 +137,10 @@ export function PlaceholderPage({
   cwd,
   onSelectWorkspace,
   workspaces,
+  codingWorkspaces,
+  activeCodingWorkspaceCwd,
+  onCloseCodingWorkspace,
+  onAddCodingWorkspace,
   codingApiReady,
   codingModels,
   codingModelId,
@@ -206,6 +218,10 @@ export function PlaceholderPage({
           workspaces={workspaces}
           onSelectWorkspace={onSelectWorkspace}
           onToast={onToast}
+          codingWorkspaces={codingWorkspaces ?? []}
+          activeCodingWorkspaceCwd={activeCodingWorkspaceCwd ?? ""}
+          onCloseCodingWorkspace={onCloseCodingWorkspace}
+          onAddCodingWorkspace={onAddCodingWorkspace}
           apiReady={codingApiReady}
           models={codingModels}
           defaultModelId={codingModelId}

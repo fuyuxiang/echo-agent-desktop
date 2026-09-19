@@ -6,16 +6,64 @@
  *
  * 根目录取 cwd（会话工作区）。隐藏/构建目录已在后端过滤。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import { listDir, type DirEntry } from "@/lib/agent-client";
-import { pickFileEmoji } from "./file-tab-icon";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listDir, type DirEntry, type CodingGitFile } from "@/lib/agent-client";
+import { formatFileSize } from "@/lib/file-utils";
 import { ChevronRightIcon } from "@/foundation/components/Icon/icons";
+import { InlineRenameField } from "./InlineRenameField";
+import { FileTypeIcon } from "@/features/coding/lib/file-type-icon";
+import { useFileTreeSelectionStore } from "@/features/coding/store/file-tree-selection-store";
+import { FixedSizeList, type FixedSizeListHandle } from "@/features/coding/components/FixedSizeList";
+import { useElementSize } from "@/lib/use-element-size";
 
 /** 已加载的目录条目缓存：path → entries。 */
 type LoadedMap = Map<string, DirEntry[]>;
 
 function normalize(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+const GIT_STATUS_LETTER: Record<string, string> = {
+  added: "A",
+  modified: "M",
+  deleted: "D",
+  renamed: "R",
+  untracked: "U",
+  ignored: "I",
+  conflict: "!",
+};
+
+function letterForGitStatus(status: string): string {
+  return GIT_STATUS_LETTER[status] ?? "?";
+}
+
+function gitStatusTooltip(file: CodingGitFile): string {
+  const label: Record<string, string> = {
+    added: "新增已暂存",
+    modified: "已修改",
+    deleted: "已删除",
+    renamed: "已重命名",
+    untracked: "未跟踪",
+    ignored: "已忽略",
+    conflict: "冲突",
+  };
+  const name = label[file.status] ?? file.status;
+  if (file.added || file.removed) {
+    return `${name}（+${file.added} / -${file.removed}）`;
+  }
+  return name;
+}
+
+/** Trim the workspace root from an absolute path; returns POSIX. */
+function toWorkspaceRelative(root: string, absolute: string): string | null {
+  if (!root) return null;
+  const trimmed = absolute.replace(/\\/g, "/");
+  const normRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (trimmed === normRoot) return "";
+  if (trimmed.startsWith(`${normRoot}/`)) {
+    return trimmed.slice(normRoot.length + 1);
+  }
+  return null;
 }
 
 /**
@@ -59,6 +107,24 @@ interface FileTreeViewProps {
   refreshKey?: number;
   /** Changed workspace paths associated with refreshKey, for targeted reloads. */
   refreshPaths?: string[];
+  /** Paths that are cut and awaiting paste; rendered with reduced opacity. */
+  cutPaths?: Set<string>;
+  /** Right-click on a tree node. The parent typically opens a context menu. */
+  onContextMenu?: (event: React.MouseEvent, entry: DirEntry) => void;
+  /** Path currently being inline-renamed; if set the matching node shows the input. */
+  renamingPath?: string | null;
+  /** Submit a new name for `renamingPath`. Resolves on success; rejects keep editing. */
+  onRenameSubmit?: (path: string, newName: string) => Promise<void>;
+  /** Cancel the inline rename (e.g. Escape, blur). */
+  onRenameCancel?: () => void;
+  /** SP2: include hidden dotfile entries (still honouring .gitignore / .echoagentignore). */
+  includeHidden?: boolean;
+  /** SP2: git status indexed by workspace-relative POSIX path. */
+  gitStatusByPath?: Map<string, CodingGitFile>;
+  /** SP2: top-level entries above this count trigger virtualisation. */
+  topLevelThreshold?: number;
+  /** SP2: row height used by the virtual list, in px. */
+  virtualItemHeight?: number;
 }
 
 export function FileTreeView({
@@ -70,6 +136,15 @@ export function FileTreeView({
   onToast,
   refreshKey = 0,
   refreshPaths = [],
+  cutPaths,
+  onContextMenu,
+  renamingPath,
+  onRenameSubmit,
+  onRenameCancel,
+  includeHidden = false,
+  gitStatusByPath,
+  topLevelThreshold = 200,
+  virtualItemHeight = 26,
 }: FileTreeViewProps) {
   const [loaded, setLoaded] = useState<LoadedMap>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -123,7 +198,7 @@ export function FileTreeView({
         return next;
       });
       try {
-        const entries = await listDir(dirPath);
+        const entries = await listDir(dirPath, undefined, undefined, includeHidden);
         if (
           scopeGeneration !== scopeGenerationRef.current
           || requestGenerationRef.current.get(dirPath) !== requestGeneration
@@ -183,6 +258,16 @@ export function FileTreeView({
     void loadDir(root, true);
   }, [loadDir, root]); // refreshKey is only snapshotted for the new root.
 
+  // SP2: toggling "show hidden" must drop the cached entries because they may
+  // now be missing (dotfile hidden) or duplicated (dotfile shown).
+  const previousIncludeHiddenRef = useRef(includeHidden);
+  useEffect(() => {
+    if (!root) return;
+    if (previousIncludeHiddenRef.current === includeHidden) return;
+    previousIncludeHiddenRef.current = includeHidden;
+    void loadDir(root, true);
+  }, [includeHidden, loadDir, root]);
+
   // File writes refresh in the background. Existing entries and expansion
   // state stay mounted, so code generation never flashes an empty explorer.
   useEffect(() => {
@@ -210,6 +295,31 @@ export function FileTreeView({
     [expanded, loadDir],
   );
 
+  // Flatten visible tree for shift-click range selection. Must be defined
+  // BEFORE any conditional return so the hook order is stable across renders.
+  const rootEntries = root ? loaded.get(root) ?? [] : [];
+  const visiblePaths = useMemo(() => {
+    const out: string[] = [];
+    const walk = (entries: DirEntry[] | undefined) => {
+      if (!entries) return;
+      for (const entry of entries) {
+        out.push(entry.path);
+        if (entry.kind === "directory" && expanded.has(entry.path)) {
+          walk(loaded.get(entry.path));
+        }
+      }
+    };
+    walk(rootEntries);
+    return out;
+  }, [rootEntries, expanded, loaded]);
+
+  // SP2: virtualisation + container size hooks must run before any early
+  // return so the hook order is stable across renders.
+  const treeRef = useRef<HTMLDivElement | null>(null);
+  const listHandleRef = useRef<FixedSizeListHandle | null>(null);
+  const containerHeight = useElementSize(treeRef, "height");
+  const shouldVirtualize = rootEntries.length >= topLevelThreshold;
+
   if (!root) {
     return (
       <div className="file-tree__empty">未设置工作区目录（cwd）。</div>
@@ -229,37 +339,59 @@ export function FileTreeView({
     return <div className="file-tree__empty">加载文件树中…</div>;
   }
 
-  const rootEntries = loaded.get(root) ?? [];
   if (rootEntries.length === 0) {
     return <div className="file-tree__empty">这里还是空的，放些文件进来再开始吧。</div>;
   }
 
+  const renderTreeNode = (entry: DirEntry) => {
+    const rel = gitStatusByPath ? toWorkspaceRelative(root, entry.path) : null;
+    const gitStatus = rel !== null ? gitStatusByPath?.get(rel) : undefined;
+    return (
+      <TreeNode
+        key={entry.path}
+        entry={entry}
+        depth={0}
+        expanded={expanded}
+        loaded={loaded}
+        loadingDirs={loadingDirs}
+        errors={errors}
+        selectedPath={selectedPath}
+        selectedDirectoryPath={selectedDirectoryPath}
+        cutPaths={cutPaths}
+        renamingPath={renamingPath ?? null}
+        visiblePaths={visiblePaths}
+        gitStatus={gitStatus}
+        onContextMenu={onContextMenu}
+        onRenameSubmit={onRenameSubmit}
+        onRenameCancel={onRenameCancel}
+        onToggleDir={toggleDir}
+        onRetryDir={(path) => void loadDir(path, true)}
+        onFileSelect={onFileSelect}
+        onDirectorySelect={onDirectorySelect}
+      />
+    );
+  };
+
   return (
     <div
-      className="file-tree"
+      ref={treeRef}
+      className={"file-tree" + (shouldVirtualize ? " file-tree--virtual" : "")}
       role="tree"
       aria-label="工作区文件树"
       aria-busy={loadingDirs.size > 0 || undefined}
     >
-      {rootEntries.map((entry) => (
-        <TreeNode
-          key={entry.path}
-          entry={entry}
-          depth={0}
-          expanded={expanded}
-          loaded={loaded}
-          loadingDirs={loadingDirs}
-          errors={errors}
-          selectedPath={selectedPath}
-          selectedDirectoryPath={selectedDirectoryPath}
-          onToggleDir={toggleDir}
-          onRetryDir={(path) => void loadDir(path, true)}
-          onFileSelect={onFileSelect}
-          onDirectorySelect={onDirectorySelect}
+      {shouldVirtualize && containerHeight && containerHeight > 0 ? (
+        <FixedSizeList
+          ref={listHandleRef}
+          items={rootEntries}
+          itemHeight={virtualItemHeight}
+          height={containerHeight}
+          renderItem={(entry) => renderTreeNode(entry)}
+          getKey={(entry) => entry.path}
+          ariaLabel="工作区文件树"
         />
-      ))}
-      {rootEntries.length === 0 && (
-        <div className="file-tree__empty">选择文件查看内容</div>
+      ) : (
+        rootEntries.map((entry) => renderTreeNode(entry))
       )}
     </div>
   );
@@ -275,6 +407,13 @@ function TreeNode({
   errors,
   selectedPath,
   selectedDirectoryPath,
+  cutPaths,
+  renamingPath,
+  visiblePaths,
+  gitStatus,
+  onContextMenu,
+  onRenameSubmit,
+  onRenameCancel,
   onToggleDir,
   onRetryDir,
   onFileSelect,
@@ -288,6 +427,13 @@ function TreeNode({
   errors: Map<string, string>;
   selectedPath?: string;
   selectedDirectoryPath?: string;
+  cutPaths?: Set<string>;
+  renamingPath: string | null;
+  visiblePaths: string[];
+  gitStatus?: CodingGitFile;
+  onContextMenu?: (event: React.MouseEvent, entry: DirEntry) => void;
+  onRenameSubmit?: (path: string, newName: string) => Promise<void>;
+  onRenameCancel?: () => void;
   onToggleDir: (path: string) => void;
   onRetryDir: (path: string) => void;
   onFileSelect: (path: string) => void;
@@ -295,33 +441,92 @@ function TreeNode({
 }) {
   const isDir = entry.kind === "directory";
   const isExpanded = expanded.has(entry.path);
-  const isSelected = entry.path === selectedPath || (isDir && entry.path === selectedDirectoryPath);
+  const isSingleSelected =
+    entry.path === selectedPath || (isDir && entry.path === selectedDirectoryPath);
+  const isMultiSelected = useFileTreeSelectionStore(
+    (s) => s.selectedPaths.has(entry.path) || isSingleSelected,
+  );
+  const isCut = cutPaths?.has(entry.path) ?? false;
+  const isRenaming = renamingPath === entry.path;
   const children = isDir ? loaded.get(entry.path) : undefined;
   const childLoading = isDir && isExpanded && loadingDirs.has(entry.path);
   const childError = isDir && isExpanded ? errors.get(entry.path) : undefined;
 
-  const handleClick = () => {
+  const handleClick = (event: React.MouseEvent) => {
+    const sel = useFileTreeSelectionStore.getState();
+    if (event.shiftKey) {
+      if (sel.anchorPath && visiblePaths.length > 0) {
+        sel.rangeSelect(visiblePaths, sel.anchorPath, entry.path);
+      } else {
+        sel.select([entry.path], entry.path);
+      }
+    } else if (event.metaKey || event.ctrlKey) {
+      sel.toggle(entry.path);
+    } else {
+      sel.select([entry.path], entry.path);
+    }
     if (isDir) {
       onDirectorySelect?.(entry.path);
       onToggleDir(entry.path);
+    } else {
+      onFileSelect(entry.path);
     }
-    else onFileSelect(entry.path);
   };
+
+  const handleContextMenu = (event: React.MouseEvent) => {
+    if (!onContextMenu) return;
+    event.preventDefault();
+    onContextMenu(event, entry);
+  };
+
+  // SP5: large / binary / symlink classification. Done here so the badges
+  // and the dimmed title both see a single source of truth.
+  const isSymlink = entry.kind === "symlink";
+  const tip = (() => {
+    if (isSymlink) return `符号链接：${entry.path}`;
+    if (entry.isBinary) return `二进制文件（${entry.size} 字节），双击将无法打开`;
+    if (entry.isLarge) return `大文件：${formatFileSize(entry.size)}，超过 2 MB`;
+    return entry.path;
+  })();
+
+  const classes = [
+    "file-tree__node",
+    isDir ? "file-tree__node--dir" : "file-tree__node--file",
+    isSymlink ? "file-tree__node--disabled" : "",
+    isMultiSelected ? "file-tree__node--selected" : "",
+    isCut ? "file-tree__node--cut" : "",
+    isRenaming ? "file-tree__node--renaming" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <>
       <div
-        className={
-          "file-tree__node" +
-          (isDir ? " file-tree__node--dir" : " file-tree__node--file") +
-          (isSelected ? " file-tree__node--selected" : "")
-        }
+        className={classes}
         style={{ paddingInlineStart: `${depth * 14 + 8}px` }}
         role="treeitem"
         aria-expanded={isDir ? isExpanded : undefined}
-        aria-selected={isSelected}
+        aria-selected={isMultiSelected}
+        data-cut={isCut || undefined}
+        draggable
         onClick={handleClick}
-        title={entry.path}
+        onContextMenu={handleContextMenu}
+        onDragStart={(event) => {
+          // SP4: file tree → Composer / AgentPane drag bridge. Carry the
+          // (possibly multi-select) paths in our own MIME so receivers can
+          // round-trip them without touching Tauri events.
+          const sel = useFileTreeSelectionStore.getState().selectedPaths;
+          const paths = sel.has(entry.path) ? [...sel] : [entry.path];
+          event.dataTransfer.setData(
+            "application/x-echo-paths",
+            JSON.stringify(paths),
+          );
+          // Fallback for components that only inspect text/plain.
+          event.dataTransfer.setData("text/plain", paths.join("\n"));
+          event.dataTransfer.effectAllowed = "copy";
+        }}
+        title={tip}
       >
         {isDir ? (
           <ChevronRightIcon
@@ -333,10 +538,56 @@ function TreeNode({
         ) : (
           <span className="file-tree__chevron-placeholder" />
         )}
-        <span className="file-tree__icon">
-          {isDir ? "📁" : pickFileEmoji(entry.name)}
+        <span className="file-tree__icon file-tree__icon--svg">
+          <FileTypeIcon name={entry.name} kind={isDir ? "directory" : "file"} size={14} />
         </span>
-        <span className="file-tree__name">{entry.name}</span>
+        {isRenaming && onRenameSubmit && onRenameCancel ? (
+          <InlineRenameField
+            initialName={entry.name}
+            onSubmit={(name) => onRenameSubmit(entry.path, name)}
+            onCancel={onRenameCancel}
+          />
+        ) : (
+          <>
+            <span className="file-tree__name">{entry.name}</span>
+            {/* SP5: large / binary / symlink badges, in priority order */}
+            {!isSymlink && entry.isLarge ? (
+              <span
+                className="file-tree__large-badge"
+                title={`大文件：${formatFileSize(entry.size)}`}
+                data-testid="file-tree-large-badge"
+              >
+                L
+              </span>
+            ) : null}
+            {!isSymlink && entry.isBinary ? (
+              <span
+                className="file-tree__binary-badge"
+                title="二进制文件，AI 评审会跳过"
+                data-testid="file-tree-binary-badge"
+              >
+                B
+              </span>
+            ) : null}
+            {isSymlink ? (
+              <span
+                className="file-tree__symlink-badge"
+                title="符号链接"
+                data-testid="file-tree-symlink-badge"
+              >
+                ↪
+              </span>
+            ) : null}
+          </>
+        )}
+        {gitStatus && !isRenaming ? (
+          <span
+            className={`file-tree__git-badge file-tree__git-badge--${gitStatus.status}`}
+            title={gitStatusTooltip(gitStatus)}
+          >
+            {letterForGitStatus(gitStatus.status)}
+          </span>
+        ) : null}
       </div>
       {isDir &&
         isExpanded &&
@@ -352,6 +603,12 @@ function TreeNode({
             errors={errors}
             selectedPath={selectedPath}
             selectedDirectoryPath={selectedDirectoryPath}
+            cutPaths={cutPaths}
+            renamingPath={renamingPath}
+            visiblePaths={visiblePaths}
+            onContextMenu={onContextMenu}
+            onRenameSubmit={onRenameSubmit}
+            onRenameCancel={onRenameCancel}
             onToggleDir={onToggleDir}
             onRetryDir={onRetryDir}
             onFileSelect={onFileSelect}

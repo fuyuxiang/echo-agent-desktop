@@ -1241,12 +1241,52 @@ pub struct DirEntry {
     pub name: String,
     /// Absolute path of the entry.
     pub path: String,
-    /// "directory" | "file" | "other".
+    /// "directory" | "file" | "other" | "symlink" (SP5).
     pub kind: String,
     /// File size in bytes (directories report 0).
     pub size: u64,
     /// Last modified time in Unix milliseconds (0 when unavailable).
     pub modified_at: u64,
+    /// SP5: true when `size > LARGE_FILE_BYTES` (2 MiB).
+    pub is_large: bool,
+    /// SP5: true when the extension matches the binary list OR the first
+    /// `BINARY_SNIFF_BYTES` contain a NUL byte.
+    pub is_binary: bool,
+}
+
+/// SP5: size threshold above which a file is flagged as `is_large`. 2 MiB.
+pub const LARGE_FILE_BYTES: u64 = 2 * 1024 * 1024;
+/// SP5: how many leading bytes to read when sniffing for binary content.
+pub const BINARY_SNIFF_BYTES: usize = 8 * 1024;
+/// SP5: extension whitelist — files with these suffixes are always treated
+/// as binary regardless of their first bytes.
+const BINARY_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico",
+    "pdf", "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
+    "exe", "dll", "so", "dylib", "bin", "wasm", "class",
+    "mp3", "mp4", "mov", "avi", "mkv", "flac", "ogg", "wav",
+    "ttf", "otf", "woff", "woff2",
+];
+
+fn looks_binary_by_extension(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if let Some(dot) = lower.rfind('.') {
+        let ext = &lower[dot + 1..];
+        BINARY_EXTENSIONS.iter().any(|b| *b == ext)
+    } else {
+        false
+    }
+}
+
+fn looks_binary_by_sniff(path: &Path) -> bool {
+    if let Ok(mut f) = std::fs::File::open(path) {
+        use std::io::Read;
+        let mut buf = [0u8; BINARY_SNIFF_BYTES];
+        if let Ok(n) = f.read(&mut buf) {
+            return buf[..n].contains(&0);
+        }
+    }
+    false
 }
 
 /// Directory names that are skipped by [`list_dir`] to keep the file tree
@@ -1274,16 +1314,21 @@ const IGNORED_DIRS: &[&str] = &[
 /// List the immediate children of a directory (non-recursive).
 ///
 /// Relative paths resolve against `cwd`. Hidden entries (leading `.`) and a
-/// curated set of noisy build/VCS directories are skipped. Capped at
-/// `max_entries` (default 2000) so a huge directory can't freeze the UI.
+/// curated set of noisy build/VCS directories are skipped by default. Pass
+/// `include_hidden = true` to surface dotfile entries, and pass
+/// `ignore_files` to override the default `.gitignore` / `.ignore` /
+/// `.echoagentignore` chain (basenames only). Capped at `max_entries`
+/// (default 2000) so a huge directory can't freeze the UI.
 #[tauri::command]
 pub async fn list_dir(
     access: State<'_, FilesystemAccess>,
     path: String,
     cwd: Option<String>,
     max_entries: Option<usize>,
+    include_hidden: Option<bool>,
+    ignore_files: Option<Vec<String>>,
 ) -> Result<Vec<DirEntry>, String> {
-    list_dir_authorized(&access, path, cwd, max_entries)
+    list_dir_authorized(&access, path, cwd, max_entries, include_hidden, ignore_files)
 }
 
 fn list_dir_authorized(
@@ -1291,6 +1336,8 @@ fn list_dir_authorized(
     path: String,
     cwd: Option<String>,
     max_entries: Option<usize>,
+    include_hidden: Option<bool>,
+    ignore_files: Option<Vec<String>>,
 ) -> Result<Vec<DirEntry>, String> {
     let resolved = resolve_path(&path, cwd.as_deref());
     let authorized = access.is_authorized(&resolved, false)?;
@@ -1300,6 +1347,12 @@ fn list_dir_authorized(
     let limit = max_entries
         .unwrap_or(DIRECTORY_LIST_MAX_ENTRIES)
         .min(DIRECTORY_LIST_MAX_ENTRIES);
+    let show_hidden = include_hidden.unwrap_or(false);
+    // Translate ignore_files basenames to &str slices for the chain helper.
+    let ignore_names: Vec<&str> = match ignore_files.as_ref() {
+        Some(list) => list.iter().map(String::as_str).collect(),
+        None => crate::coding::gitignore_chain::DEFAULT_IGNORE_FILES.to_vec(),
+    };
     let read = authorized
         .read_dir()
         .map_err(|e| format!("读取目录失败：{e}"))?;
@@ -1312,14 +1365,51 @@ fn list_dir_authorized(
         };
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy().to_string();
-        // Skip hidden entries (Unix dotfiles + Windows works the same by name).
-        if name.starts_with('.') {
-            continue;
+        let starts_with_dot = name.starts_with('.');
+        let is_ignore_rule = starts_with_dot
+            && crate::coding::gitignore_chain::is_ignore_rules_file(&entry.path());
+        if starts_with_dot {
+            if !show_hidden {
+                continue;
+            }
+            // Even when showing hidden, the rule files themselves stay hidden
+            // so the tree doesn't render `.gitignore` / `.echoagentignore` as
+            // ordinary entries.
+            if is_ignore_rule {
+                continue;
+            }
         }
         let ft = entry.file_type();
+        // SP5: classify symlinks explicitly. All file operations reject symlinks
+        // elsewhere, so exposing them here would only mislead users.
+        if ft.as_ref().map(|t| t.is_symlink()).unwrap_or(false) {
+            entries.push(DirEntry {
+                name,
+                path: entry.path().to_string_lossy().to_string(),
+                kind: "symlink".into(),
+                size: 0,
+                modified_at: 0,
+                is_large: false,
+                is_binary: false,
+            });
+            if entries.len() >= limit {
+                break;
+            }
+            continue;
+        }
         let is_dir = ft.as_ref().map(|t| t.is_dir()).unwrap_or(false);
         // Skip noisy directories (only applies to directories).
         if is_dir && IGNORED_DIRS.iter().any(|d| *d == name) {
+            continue;
+        }
+        // Apply the nested ignore chain to honour `.echoagentignore` /
+        // `.gitignore` (deeper whitelist wins, matching Git precedence).
+        if crate::coding::gitignore_chain::apply_nested_gitignore(
+            &authorized,
+            &entry.path(),
+            is_dir,
+            &ignore_names,
+        ) {
             continue;
         }
         let is_file = ft.as_ref().map(|t| t.is_file()).unwrap_or(false);
@@ -1336,6 +1426,13 @@ fn list_dir_authorized(
         } else {
             metadata.as_ref().map(|m| m.len()).unwrap_or(0)
         };
+        // SP5: classify large / binary. Binary sniffing is gated by `is_file`
+        // and `size > 0` so we never open a directory fd.
+        let is_large = !is_dir && size > LARGE_FILE_BYTES;
+        let mut is_binary = !is_dir && looks_binary_by_extension(&name);
+        if !is_binary && is_file && size > 0 {
+            is_binary = looks_binary_by_sniff(&entry.path());
+        }
         let modified_at = metadata
             .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -1347,6 +1444,8 @@ fn list_dir_authorized(
             kind: kind.into(),
             size,
             modified_at,
+            is_large,
+            is_binary,
         });
         if entries.len() >= limit {
             break;
@@ -1572,6 +1671,8 @@ mod tests {
             tmp.path().to_string_lossy().into_owned(),
             None,
             Some(usize::MAX),
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(entries.len(), DIRECTORY_LIST_MAX_ENTRIES);
@@ -1590,8 +1691,15 @@ mod tests {
 
         let access = FilesystemAccess::default();
         access.authorize_workspace(&root.to_string_lossy()).unwrap();
-        let entries =
-            list_dir_authorized(&access, root.to_string_lossy().to_string(), None, None).unwrap();
+        let entries = list_dir_authorized(
+            &access,
+            root.to_string_lossy().to_string(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         // Directories first (alphabetical), then files (alphabetical).
         assert_eq!(names, vec!["adir", "zdir", "a.txt", "b.txt"]);
@@ -1608,8 +1716,15 @@ mod tests {
 
         let access = FilesystemAccess::default();
         access.authorize_workspace(&root.to_string_lossy()).unwrap();
-        let entries =
-            list_dir_authorized(&access, root.to_string_lossy().to_string(), None, None).unwrap();
+        let entries = list_dir_authorized(
+            &access,
+            root.to_string_lossy().to_string(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
         assert_eq!(names, vec!["keep.txt".to_string()]);
     }
@@ -1623,7 +1738,14 @@ mod tests {
         access
             .authorize_workspace(&tmp.path().to_string_lossy())
             .unwrap();
-        let result = list_dir_authorized(&access, file.to_string_lossy().to_string(), None, None);
+        let result = list_dir_authorized(
+            &access,
+            file.to_string_lossy().to_string(),
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(result.is_err());
     }
 

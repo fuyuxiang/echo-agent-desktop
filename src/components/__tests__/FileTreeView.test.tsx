@@ -153,3 +153,119 @@ describe("FileTreeView live refresh", () => {
     expect(await screen.findByRole("treeitem", { name: /recovered\.ts/ })).toBeInTheDocument();
   });
 });
+
+describe("FileTreeView SP1 — context menu, multi-select, inline rename", () => {
+  beforeEach(() => listDir.mockReset());
+
+  it("右键节点触发 onContextMenu 回调", async () => {
+    listDir.mockResolvedValue([file("/repo", "a.ts")]);
+    const onContextMenu = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <FileTreeView
+        rootPath="/repo"
+        onFileSelect={vi.fn()}
+        onContextMenu={onContextMenu}
+      />,
+    );
+    const node = await screen.findByRole("treeitem", { name: /a\.ts/ });
+    await user.pointer({ target: node, keys: "[MouseRight]" });
+    expect(onContextMenu).toHaveBeenCalledTimes(1);
+    const [, entry] = onContextMenu.mock.calls[0];
+    expect(entry.path).toBe("/repo/a.ts");
+  });
+
+  it("Cmd/Ctrl+Click 切换多选", async () => {
+    listDir.mockResolvedValue([file("/repo", "a.ts"), file("/repo", "b.ts")]);
+    const user = userEvent.setup();
+    render(<FileTreeView rootPath="/repo" onFileSelect={vi.fn()} />);
+    const a = await screen.findByRole("treeitem", { name: /a\.ts/ });
+    const b = await screen.findByRole("treeitem", { name: /b\.ts/ });
+    await user.click(a);
+    expect(a).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{Control>}");
+    await user.click(b);
+    await user.keyboard("{/Control}");
+    expect(a).toHaveAttribute("aria-selected", "true");
+    expect(b).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("renamingPath 命中时节点显示内联重命名输入框，Enter 提交", async () => {
+    listDir.mockResolvedValue([file("/repo", "old.ts")]);
+    const onRenameSubmit = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <FileTreeView
+        rootPath="/repo"
+        onFileSelect={vi.fn()}
+        renamingPath="/repo/old.ts"
+        onRenameSubmit={onRenameSubmit}
+        onRenameCancel={vi.fn()}
+      />,
+    );
+    const input = await screen.findByTestId("inline-rename-input");
+    await user.clear(input);
+    await user.type(input, "new.ts");
+    await user.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(onRenameSubmit).toHaveBeenCalledWith("/repo/old.ts", "new.ts"),
+    );
+  });
+
+  it("内联重命名抛错时仍保持编辑态", async () => {
+    listDir.mockResolvedValue([file("/repo", "old.ts")]);
+    const onRenameSubmit = vi.fn().mockRejectedValue(new Error("duplicate"));
+    const onRenameCancel = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <FileTreeView
+        rootPath="/repo"
+        onFileSelect={vi.fn()}
+        renamingPath="/repo/old.ts"
+        onRenameSubmit={onRenameSubmit}
+        onRenameCancel={onRenameCancel}
+      />,
+    );
+    const input = await screen.findByTestId("inline-rename-input");
+    await user.clear(input);
+    await user.type(input, "new.ts");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(onRenameSubmit).toHaveBeenCalled());
+    // still in editing state
+    expect(screen.queryByTestId("inline-rename-input")).toBeInTheDocument();
+    expect(onRenameCancel).not.toHaveBeenCalled();
+  });
+
+  it("Escape 触发 onRenameCancel", async () => {
+    listDir.mockResolvedValue([file("/repo", "old.ts")]);
+    const onRenameCancel = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <FileTreeView
+        rootPath="/repo"
+        onFileSelect={vi.fn()}
+        renamingPath="/repo/old.ts"
+        onRenameSubmit={vi.fn()}
+        onRenameCancel={onRenameCancel}
+      />,
+    );
+    const input = await screen.findByTestId("inline-rename-input");
+    await user.click(input);
+    await user.keyboard("{Escape}");
+    expect(onRenameCancel).toHaveBeenCalled();
+  });
+
+  it("cutPaths 命中的节点带 file-tree__node--cut class 与 data-cut", async () => {
+    listDir.mockResolvedValue([file("/repo", "a.ts")]);
+    render(
+      <FileTreeView
+        rootPath="/repo"
+        onFileSelect={vi.fn()}
+        cutPaths={new Set(["/repo/a.ts"])}
+      />,
+    );
+    const node = await screen.findByRole("treeitem", { name: /a\.ts/ });
+    expect(node).toHaveAttribute("data-cut", "true");
+    expect(node.className).toContain("file-tree__node--cut");
+  });
+});

@@ -3531,6 +3531,71 @@ button.knowledge-trace__item:hover {
   color: var(--echo-text-weak);
   cursor: default;
 }
+.file-tree__node--cut {
+  opacity: 0.55;
+}
+.file-tree__node--renaming {
+  background: var(--echo-bg-hover);
+  padding: 0;
+}
+.file-tree__rename-input {
+  width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--echo-border-focus, var(--echo-color-text-brand-default, #4f8cff));
+  border-radius: var(--echo-radius-sm, 3px);
+  background: var(--echo-bg-primary);
+  color: var(--echo-text-strong);
+  font: inherit;
+  outline: none;
+}
+
+/* SP2: SVG file type icon container */
+.file-tree__icon--svg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--echo-icon-secondary);
+  width: 16px;
+  height: 16px;
+}
+.file-tree__icon--svg svg {
+  display: block;
+}
+
+/* SP2: Git status badge (A/M/D/R/U/I/?) shown on the right of a node */
+.file-tree__git-badge {
+  margin-inline-start: auto;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--echo-font-mono, ui-monospace);
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: #fff;
+  flex-shrink: 0;
+}
+.file-tree__git-badge--added    { background: color-mix(in srgb, var(--echo-status-success) 80%, transparent); }
+.file-tree__git-badge--modified { background: color-mix(in srgb, var(--echo-status-warning) 85%, transparent); }
+.file-tree__git-badge--deleted  { background: color-mix(in srgb, var(--echo-status-error) 85%, transparent); }
+.file-tree__git-badge--renamed  { background: color-mix(in srgb, var(--echo-status-info) 80%, transparent); }
+.file-tree__git-badge--untracked{ background: color-mix(in srgb, var(--echo-status-info) 60%, transparent); }
+.file-tree__git-badge--ignored  { background: var(--echo-text-muted); color: var(--echo-bg-primary); opacity: 0.7; }
+.file-tree__git-badge--conflict { background: var(--echo-status-error); }
+
+/* SP2: virtualised container — nothing fancy, just layout */
+.file-tree--virtual {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.file-tree--virtual > .fixed-size-list {
+  flex: 1;
+  min-height: 0;
+}
 .file-tree__chevron {
   flex: none;
   color: var(--echo-text-weak);
@@ -7935,6 +8000,37 @@ button.diff__path {
   color: var(--echo-text-white, #fff);
 }
 .context-menu__rename-actions button:disabled { opacity: 0.5; cursor: default; }
+
+/* SP1: file-tree context menu additions */
+.context-menu__shortcut {
+  margin-left: auto;
+  padding-left: 16px;
+  font-size: 11px;
+  color: var(--echo-text-weak);
+  font-family: var(--echo-font-mono, ui-monospace);
+}
+.context-menu__icon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  color: var(--echo-icon-secondary, inherit);
+}
+.context-menu__item--disabled,
+.context-menu__item:disabled {
+  color: var(--echo-text-disable);
+  cursor: not-allowed;
+}
+.context-menu__item--disabled:hover,
+.context-menu__item:disabled:hover {
+  background: transparent;
+}
+.context-menu__group-label {
+  padding: 4px 10px 2px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--echo-text-weak);
+}
 
 /* ========================================================================
  * Sidebar Session Item — pinned state
@@ -14427,4 +14523,181 @@ button.diff__path {
   color: var(--echo-link, #2563eb);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ===== SP4: Workspace tab strip ===== */
+.workspace-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  background: var(--echo-bg-secondary);
+  border-bottom: 1px solid var(--echo-border-subtle);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.workspace-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 4px 0 10px;
+  border: 1px solid transparent;
+  border-bottom-color: transparent;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--echo-text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.workspace-tab:hover { background: var(--echo-bg-hover); color: var(--echo-text-primary); }
+.workspace-tab--active {
+  background: var(--echo-bg-primary);
+  border-color: var(--echo-border-subtle);
+  border-bottom-color: var(--echo-bg-primary);
+  color: var(--echo-text-primary);
+  font-weight: 500;
+}
+.workspace-tab__select {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+}
+.workspace-tab__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  color: var(--echo-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.workspace-tab__close:hover {
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-primary);
+}
+.workspace-tab--add {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px dashed var(--echo-border-subtle);
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--echo-text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+.workspace-tab--add:hover {
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-primary);
+}
+
+/* ===== SP4: @-mention candidate popover ===== */
+.at-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0; right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--echo-bg-primary);
+  border: 1px solid var(--echo-border-subtle);
+  border-radius: var(--echo-radius-md, 6px);
+  box-shadow: var(--echo-shadow-md);
+  z-index: 1000;
+}
+.at-menu__header {
+  font-size: 11px;
+  color: var(--echo-text-muted);
+  padding: 6px 10px 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.at-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--echo-text-primary);
+  font-size: 13px;
+}
+.at-menu__item--active {
+  background: color-mix(in srgb, var(--echo-accent-unread) 18%, transparent);
+  color: var(--echo-accent-unread);
+}
+.at-menu__label {
+  flex: 1;
+  font-family: var(--echo-font-mono, ui-monospace);
+  font-size: 12px;
+}
+.at-menu__hint {
+  font-family: var(--echo-font-mono, ui-monospace);
+  font-size: 11px;
+  color: var(--echo-text-muted);
+}
+.at-menu__kind {
+  font-size: 10px;
+  color: var(--echo-text-muted);
+  padding: 1px 4px;
+  border: 1px solid var(--echo-border-subtle);
+  border-radius: 3px;
+}
+
+/* ===== SP5: file tree large / binary / symlink badges ===== */
+.file-tree__large-badge,
+.file-tree__binary-badge,
+.file-tree__symlink-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin-inline-start: 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  cursor: help;
+  user-select: none;
+}
+.file-tree__large-badge {
+  background: color-mix(in srgb, var(--echo-status-warning, #b45309) 18%, transparent);
+  color: #b45309;
+  border: 1px solid color-mix(in srgb, var(--echo-status-warning, #b45309) 35%, transparent);
+}
+.file-tree__binary-badge {
+  background: color-mix(in srgb, var(--echo-text-muted, #6b7280) 15%, transparent);
+  color: var(--echo-text-secondary, #4b5563);
+  border: 1px solid color-mix(in srgb, var(--echo-text-muted, #6b7280) 30%, transparent);
+}
+.file-tree__symlink-badge {
+  background: color-mix(in srgb, #8b5cf6 12%, transparent);
+  color: #6d28d9;
+  border: 1px solid color-mix(in srgb, #8b5cf6 30%, transparent);
+}
+.file-tree__node--disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.file-tree__node--disabled:hover {
+  background: transparent;
 }

@@ -11,12 +11,19 @@ import {
 import {
   ArrowLeft,
   Code2,
+  Eye,
+  EyeOff,
   FilePlus2,
+  FlaskConical,
   FolderGit2,
-  FolderOpen,
   FolderPlus,
+  Hammer,
+  MessageSquare,
+  Plus,
   Search,
   Settings2,
+  ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 
 import { useAppDialog } from "@/components/AppDialog";
@@ -83,14 +90,32 @@ import { TabContainer } from "./main/TabContainer";
 import { ActivityBar } from "./shell/ActivityBar";
 import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/CommandPalette";
 import { TaskSwitcher } from "./shell/TaskSwitcher";
+import { WorkspaceTabBar } from "./shell/WorkspaceTabBar";
 import { isFileTab, useTabStore, type SymbolKey } from "./store/tab-store";
 import { useTaskStore } from "./store/task-store";
+import { useFileTreeSelectionStore } from "./store/file-tree-selection-store";
+import { useClipboardStore } from "./store/clipboard-store";
+import { useGitSnapshotStore } from "./store/git-snapshot-store";
+import { useAiDraftStore } from "./store/ai-draft-store";
+import { humanOpLabel, useHistoryStackStore } from "./store/history-stack-store";
+import {
+  buildRefactorPrompt,
+  buildReviewPrompt,
+  buildTestsPrompt,
+  type DocumentSnippet,
+} from "@/features/coding/lib/ai-prompts";
+import { FileTreeContextMenu, type ContextMenuItem } from "@/components/workspace-panel/FileTreeContextMenu";
 import { fitWorkbenchLayout, useWorkbenchStore } from "./store/workbench-store";
 
 interface CodingWorkbenchProps {
   cwd?: string;
   workspaces?: { cwd: string }[];
   onSelectWorkspace?: (cwd: string) => void;
+  /** SP4: multi-tab workspace strip. */
+  codingWorkspaces?: { cwd: string }[];
+  activeCodingWorkspaceCwd?: string;
+  onCloseCodingWorkspace?: (cwd: string) => void;
+  onAddCodingWorkspace?: () => void;
   onToast?: (message: string) => void;
   onExit?: () => void;
   onOpenSettings?: () => void;
@@ -306,6 +331,10 @@ export function CodingWorkbench({
   onExit,
   onOpenSettings,
   models = [],
+  codingWorkspaces,
+  activeCodingWorkspaceCwd,
+  onCloseCodingWorkspace,
+  onAddCodingWorkspace,
   defaultModelId,
   apiReady = false,
   sessionId: hostSessionId = null,
@@ -355,6 +384,9 @@ export function CodingWorkbench({
   const setActivityView = useWorkbenchStore((state) => state.setActivityView);
   const setBottomView = useWorkbenchStore((state) => state.setBottomView);
   const toggleBottom = useWorkbenchStore((state) => state.toggleBottom);
+  const showHidden = useWorkbenchStore((state) => state.showHidden);
+  const setShowHidden = useWorkbenchStore((state) => state.setShowHidden);
+  const gitStatusByPath = useGitSnapshotStore((state) => state.byPath);
 
   const tabs = useTabStore((state) => state.tabs);
   const activeTabId = useTabStore((state) => state.activeId);
@@ -367,6 +399,19 @@ export function CodingWorkbench({
   const [workspaceSymbols, setWorkspaceSymbols] = useState<PaletteSymbol[]>([]);
   const [editorContext, setEditorContext] = useState<EditorCodeContext | null>(null);
   const [reveal, setReveal] = useState<{ line: number; column: number; key: number }>();
+  // SP1: context menu + inline rename state.
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    primaryPath: string;
+    primaryKind: "file" | "directory";
+    selectedPaths: string[];
+    pasteTargetDir: string;
+  } | null>(null);
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const cutPaths = useClipboardStore((state) =>
+    state.mode === "cut" ? new Set(state.paths) : undefined,
+  );
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const indexReady = indexStatus?.state === "ready";
   const [contextPaths, setContextPaths] = useState<string[]>([]);
@@ -409,7 +454,23 @@ export function CodingWorkbench({
       const paths = [...pendingTreePathsRef.current];
       pendingTreePathsRef.current.clear();
       setTreeRefresh((current) => ({ revision: current.revision + 1, paths }));
+      // SP2: re-fetch git snapshot alongside the tree refresh so badges stay
+      // current whenever the file system changes.
+      void useGitSnapshotStore.getState().refresh(cwd);
     }, 80);
+  }, [cwd]);
+
+  const queueTreeRefreshPaths = useCallback((changedPaths: string[]) => {
+    if (changedPaths.length === 0) return;
+    const relativePaths = changedPaths
+      .map((p) => workspaceRelativePath(cwd, p))
+      .filter((p): p is string => Boolean(p));
+    if (relativePaths.length === 0) return;
+    pendingTreePathsRef.current.clear();
+    setTreeRefresh((current) => ({
+      revision: current.revision + 1,
+      paths: relativePaths,
+    }));
   }, [cwd]);
 
   const recordFileIndexEvent = useCallback((changedPath: string, removed: boolean) => {
@@ -480,6 +541,13 @@ export function CodingWorkbench({
   useEffect(() => {
     useTaskStore.getState().setRoot(cwd);
     if (cwd) void useTaskStore.getState().refreshSummaries();
+  }, [cwd]);
+
+  // SP2: refresh git snapshot on workspace switch so badges appear as soon
+  // as a user lands on a new repo. Debounced inside the store.
+  useEffect(() => {
+    if (cwd) void useGitSnapshotStore.getState().refresh(cwd);
+    else useGitSnapshotStore.getState().clear();
   }, [cwd]);
 
   /**
@@ -671,9 +739,9 @@ export function CodingWorkbench({
           loading: false,
         });
       } catch (error) {
-        useTabStore
-          .getState()
-          .setError(absolutePath, `打开失败：${String(error).replace(/^Error:\s*/, "")}`);
+        const msg = String(error).replace(/^Error:\s*/, "");
+        useTabStore.getState().setError(absolutePath, `打开失败：${msg}`);
+        onToast?.(`无法打开 ${basenameOf(absolutePath)}：${msg}`);
       }
     },
     [cwd],
@@ -1217,19 +1285,43 @@ export function CodingWorkbench({
   }, [onSelectWorkspace, onToast]);
 
   const createWorkspaceEntry = useCallback(async (directory: boolean) => {
-    const name = window.prompt(directory ? "新目录名称" : "新文件名称");
-    if (!name?.trim()) return;
+    const name: string | null = await new Promise((resolve) => {
+      requestTaskInput({
+        title: directory ? "新建目录" : "新建文件",
+        fields: [
+          {
+            name: "name",
+            label: "名称",
+            placeholder: directory ? "例如 utils" : "例如 note.md",
+            required: true,
+            maxLength: 240,
+          },
+        ],
+        confirmLabel: "创建",
+        action: (values) => {
+          resolve(values.name.trim() || null);
+        },
+      });
+    });
+    if (!name) return;
     const mutation = directory ? { taskId: null, closeRound: false } : await prepareManualMutation();
     if (!mutation) return;
     let createdFile = false;
     try {
-      const created = await codingApi.createEntry(cwd, selectedDirectory || cwd, name.trim(), directory);
+      const created = await codingApi.createEntry(cwd, selectedDirectory || cwd, name, directory);
       createdFile = !directory;
       queueTreeRefresh(created);
       if (!directory) recordFileIndexEvent(created, false);
       if (!directory) await openFile(created);
       if (!directory) await finishManualMutation(mutation);
-      onToast?.(`已创建${directory ? "目录" : "文件"} ${name.trim()}`);
+      onToast?.(`已创建${directory ? "目录" : "文件"} ${name}`);
+      // SP5: record for undo.
+      useHistoryStackStore.getState().push({
+        op: "create",
+        cwd,
+        path: created,
+        isDir: directory,
+      });
     } catch (error) {
       const message = String(error).replace(/^Error:\s*/, "");
       await blockInterruptedManualMutation(
@@ -1247,8 +1339,252 @@ export function CodingWorkbench({
     prepareManualMutation,
     queueTreeRefresh,
     recordFileIndexEvent,
+    requestTaskInput,
     selectedDirectory,
   ]);
+
+  // ---- SP1: file ops helpers ----
+
+  const basenameOf = useCallback((path: string): string => {
+    const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    return idx >= 0 ? path.slice(idx + 1) : path;
+  }, []);
+
+  const dirnameOf = useCallback((path: string): string => {
+    const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    return idx > 0 ? path.slice(0, idx) : path;
+  }, []);
+
+  const findDirtyTabsFor = useCallback((paths: string[]) => {
+    const set = new Set(paths);
+    return useTabStore.getState().tabs.filter(
+      (tab) => set.has(tab.id) && (tab as { isDirty?: boolean }).isDirty,
+    );
+  }, []);
+
+  const performRename = useCallback(
+    async (path: string, newName: string) => {
+      try {
+        const result = await codingApi.renameEntry(cwd, path, newName);
+        queueTreeRefreshPaths([result.path, result.oldPath]);
+        // If the renamed file is open in a tab, swap the tab id.
+        useTabStore.getState().tabs.forEach((tab) => {
+          if (tab.id === result.oldPath) {
+            useTabStore.getState().renameTab(tab.id, result.path);
+          }
+        });
+        setRenamingPath(null);
+        onToast?.(`已重命名为 ${basenameOf(result.path)}`);
+        // SP5: record for undo (rebuild original basename for restoration).
+        useHistoryStackStore.getState().push({
+          op: "rename",
+          cwd,
+          path: result.path,
+          oldBasename: basenameOf(result.oldPath),
+        });
+      } catch (error) {
+        const message = String(error).replace(/^Error:\s*/, "");
+        onToast?.(`重命名失败：${message}`);
+        throw error;
+      }
+    },
+    [basenameOf, cwd, onToast, queueTreeRefreshPaths],
+  );
+
+  const performDelete = useCallback(
+    async (paths: string[]) => {
+      try {
+        const results = await codingApi.deleteEntries(cwd, paths);
+        for (const r of results) {
+          if (!r.ok) {
+            onToast?.(`删除失败：${basenameOf(r.path)} - ${r.error ?? "未知错误"}`);
+          }
+        }
+        queueTreeRefreshPaths(paths);
+        for (const p of paths) {
+          const tab = useTabStore.getState().tabs.find((t) => t.id === p);
+          if (tab) {
+            useTabStore.getState().markConflict(tab.id);
+            useTabStore.getState().setError(tab.id, "文件已移到回收站，请手动关闭。");
+          }
+        }
+        useClipboardStore.getState().clear();
+        useFileTreeSelectionStore.getState().clear();
+        onToast?.(`已删除 ${paths.length} 个条目`);
+        // SP5: record for undo (basename is what the trash crate stores).
+        useHistoryStackStore.getState().push({
+          op: "delete",
+          cwd,
+          originalPaths: paths.slice(),
+          trashBasenames: paths.map((p) => basenameOf(p)),
+        });
+      } catch (error) {
+        const message = String(error).replace(/^Error:\s*/, "");
+        onToast?.(`删除失败：${message}`);
+        throw error;
+      }
+    },
+    [basenameOf, cwd, onToast, queueTreeRefreshPaths],
+  );
+
+  const confirmDelete = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) return;
+      const dirty = findDirtyTabsFor(paths);
+      if (dirty.length > 0) {
+        await new Promise<void>((resolve) => {
+          requestTaskConfirmation({
+            title: `${dirty.length} 个文件有未保存改动`,
+            description: "继续删除会丢弃这些改动。确定要继续吗？",
+            confirmLabel: "强制删除",
+            danger: true,
+            action: async () => {
+              resolve();
+            },
+          });
+        });
+      }
+      const isMulti = paths.length > 1;
+      await new Promise<void>((resolve, reject) => {
+        requestTaskConfirmation({
+          title: isMulti
+            ? `删除 ${paths.length} 个条目`
+            : `删除 “${basenameOf(paths[0])}”`,
+          description: "所选条目将被移到操作系统的回收站，可从回收站恢复。",
+          confirmLabel: "移到回收站",
+          cancelLabel: "取消",
+          danger: true,
+          action: async () => {
+            try {
+              await performDelete(paths);
+              resolve();
+            } catch (error) {
+              reject(error);
+            }
+          },
+        });
+      });
+    },
+    [basenameOf, findDirtyTabsFor, performDelete, requestTaskConfirmation],
+  );
+
+  const performPaste = useCallback(
+    async (destDir: string) => {
+      const cb = useClipboardStore.getState();
+      if (cb.paths.length === 0 || !cwd) return;
+      // Pre-check: every source must live under cwd for the backend to accept it.
+      const validSources = cb.paths.filter((p) => p === cwd || p.startsWith(cwd + "/"));
+      if (validSources.length === 0) {
+        onToast?.("剪贴板中的条目不在当前工作区内，无法粘贴");
+        return;
+      }
+      try {
+        const api = cb.mode === "cut" ? codingApi.moveEntries : codingApi.copyEntries;
+        const results = await api(cwd, validSources, destDir);
+        for (const r of results) {
+          if (!r.ok) {
+            onToast?.(`${cb.mode === "cut" ? "移动" : "复制"}失败：${basenameOf(r.path)} - ${r.error ?? "未知错误"}`);
+          }
+        }
+        queueTreeRefreshPaths([...validSources, destDir]);
+        // SP5: record paste for undo. For `cut`, undo = move back to source
+        // parent; for `copy`, undo = delete the created copies. Snapshot the
+        // created paths BEFORE `clear()` so we can still reach them.
+        const created = results.filter((r) => r.ok).map((r) => r.path);
+        if (created.length > 0) {
+          useHistoryStackStore.getState().push({
+            op: "paste",
+            cwd,
+            mode: cb.mode,
+            finalPaths: created,
+            sourceParent: dirnameOf(validSources[0]!),
+          });
+        }
+        if (cb.mode === "cut") {
+          useClipboardStore.getState().clear();
+          useFileTreeSelectionStore.getState().clear();
+        }
+        onToast?.(`${cb.mode === "cut" ? "已移动" : "已复制"} ${validSources.length} 个条目`);
+      } catch (error) {
+        const message = String(error).replace(/^Error:\s*/, "");
+        onToast?.(`粘贴失败：${message}`);
+      }
+    },
+    [basenameOf, cwd, onToast, queueTreeRefreshPaths],
+  );
+
+  // SP5: undo / redo for the six core file operations.
+  const performHistoryAction = useCallback(
+    async (direction: "undo" | "redo") => {
+      const store = useHistoryStackStore.getState();
+      const entry = direction === "undo" ? store.undo() : store.redo();
+      if (!entry) {
+        onToast?.(direction === "undo" ? "没有可撤销的操作" : "没有可重做的操作");
+        return;
+      }
+      if (entry.cwd !== cwd) {
+        // Push it back so we don't lose the entry to a different workspace.
+        if (direction === "undo") useHistoryStackStore.setState((s) => ({ past: [...s.past, entry] }));
+        else useHistoryStackStore.setState((s) => ({ future: [...s.future, entry] }));
+        onToast?.(`${direction === "undo" ? "撤销" : "重做"}栈属于其他工作区，已忽略`);
+        return;
+      }
+      try {
+        switch (entry.op) {
+          case "rename":
+            await codingApi.renameEntry(cwd, entry.path, entry.oldBasename);
+            break;
+          case "delete":
+            await codingApi.restoreFromTrash(cwd, entry.originalPaths, entry.trashBasenames);
+            break;
+          case "copy":
+          case "create":
+            await codingApi.deleteEntries(cwd, "path" in entry ? [entry.path] : entry.createdPaths);
+            break;
+          case "move":
+            await codingApi.moveEntries(cwd, entry.paths, entry.sourceParent);
+            break;
+          case "paste":
+            if (entry.mode === "cut") {
+              await codingApi.moveEntries(cwd, entry.finalPaths, entry.sourceParent);
+            } else {
+              await codingApi.deleteEntries(cwd, entry.finalPaths);
+            }
+            break;
+        }
+        queueTreeRefreshPaths([cwd]);
+        onToast?.(direction === "undo" ? "已撤销" : "已重做");
+      } catch (error) {
+        const message = String(error).replace(/^Error:\s*/, "");
+        onToast?.(`${direction === "undo" ? "撤销" : "重做"}失败：${message}`);
+      }
+    },
+    [cwd, onToast, queueTreeRefresh],
+  );
+
+  const handleFileTreeContextMenu = useCallback(
+    (event: React.MouseEvent, entry: { path: string; kind: string }) => {
+      event.preventDefault();
+      const sel = useFileTreeSelectionStore.getState();
+      if (!sel.selectedPaths.has(entry.path)) {
+        sel.select([entry.path], entry.path);
+      }
+      const current = useFileTreeSelectionStore.getState().selectedPaths;
+      const kind = entry.kind === "directory" ? "directory" : "file";
+      const pasteTargetDir =
+        kind === "directory" ? entry.path : dirnameOf(entry.path);
+      setContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        primaryPath: entry.path,
+        primaryKind: kind,
+        selectedPaths: Array.from(current),
+        pasteTargetDir,
+      });
+    },
+    [dirnameOf],
+  );
+
 
   /** Derive a task name from the requirement's first clause. */
   const deriveName = useCallback((requirement: string) => {
@@ -1435,6 +1771,340 @@ export function CodingWorkbench({
       setSending(false);
     }
   }, [cwd, onActivateSession, onToast]);
+
+  // ---- SP3: AI actions (right-click submenu) ----
+
+  /** Heuristic test-framework detector based on `package.json` deps in cwd. */
+  const inferTestFramework = useCallback(async (_samplePath: string): Promise<string | null> => {
+    if (!cwd) return null;
+    try {
+      const pkgPath = cwd + "/package.json";
+      const exists = await codingReadDocument(cwd, pkgPath).catch(() => null);
+      if (!exists) return null;
+      const content = (exists.content ?? "").toLowerCase();
+      if (content.includes("vitest")) return "vitest";
+      if (content.includes("jest")) return "jest";
+      if (content.includes("mocha")) return "mocha";
+      return null;
+    } catch {
+      return null;
+    }
+  }, [cwd]);
+
+  /** SP3: AI review — pre-read every selected file and embed in the prompt. */
+  const requestReview = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) return;
+    if (!cwd) return;
+    if (!task && (!apiReady || !modelId)) {
+      onToast?.("请先配置可用模型");
+      onOpenSettings?.();
+      return;
+    }
+    try {
+      const docs: DocumentSnippet[] = await Promise.all(
+        paths.map(async (p) => {
+          const doc = await codingReadDocument(cwd, p).catch(() => null);
+          return {
+            path: p,
+            hash: doc?.hash ?? "",
+            content: doc?.content ?? "(无法读取文件内容)",
+          };
+        }),
+      );
+      const requirement = buildReviewPrompt(docs);
+      await startTask(requirement, undefined);
+    } catch (error) {
+      const message = String(error).replace(/^Error:\s*/, "");
+      onToast?.(`AI 评审发起失败：${message}`);
+    }
+  }, [apiReady, cwd, modelId, onOpenSettings, onToast, startTask]);
+
+  /** SP3: AI refactor suggestions — collect optional user note + run. */
+  const requestRefactor = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) return;
+    if (!cwd) return;
+    if (!task && (!apiReady || !modelId)) {
+      onToast?.("请先配置可用模型");
+      onOpenSettings?.();
+      return;
+    }
+    const userNote: string | null = await new Promise((resolve) => {
+      requestTaskInput({
+        title: "AI 重构建议",
+        description: `将对 ${paths.length} 个文件给出重构建议。可填写关注点（如「拆分大函数」「统一错误处理」），留空则让 Agent 自行判断。`,
+        fields: [{
+          name: "note",
+          label: "关注点",
+          placeholder: "可选：你重点关注的重构方向…",
+          multiline: true,
+          maxLength: 600,
+        }],
+        confirmLabel: "生成建议",
+        action: (values) => resolve(values.note ?? ""),
+      });
+    });
+    if (userNote === null) return;
+    try {
+      const requirement = buildRefactorPrompt(paths, userNote);
+      await startTask(requirement, undefined);
+    } catch (error) {
+      const message = String(error).replace(/^Error:\s*/, "");
+      onToast?.(`AI 重构发起失败：${message}`);
+    }
+  }, [apiReady, cwd, modelId, onOpenSettings, onToast, requestTaskInput, startTask]);
+
+  /** SP3: AI test generation — infer framework, collect note, run. */
+  const requestTests = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) return;
+    if (!cwd) return;
+    if (!task && (!apiReady || !modelId)) {
+      onToast?.("请先配置可用模型");
+      onOpenSettings?.();
+      return;
+    }
+    const inferred = await inferTestFramework(paths[0] ?? cwd);
+    const userNote: string | null = await new Promise((resolve) => {
+      requestTaskInput({
+        title: "AI 生成测试",
+        description: `将为 ${paths.length} 个文件生成测试。检测到框架：${inferred ?? "未知"}。可填写覆盖目标或边界条件，留空则让 Agent 自行决定。`,
+        fields: [{
+          name: "note",
+          label: "覆盖要求",
+          placeholder: "可选：想覆盖的边界 / 错误路径…",
+          multiline: true,
+          maxLength: 600,
+        }],
+        confirmLabel: "生成测试",
+        action: (values) => resolve(values.note ?? ""),
+      });
+    });
+    if (userNote === null) return;
+    try {
+      const requirement = buildTestsPrompt(paths, inferred, userNote);
+      await startTask(requirement, undefined);
+    } catch (error) {
+      const message = String(error).replace(/^Error:\s*/, "");
+      onToast?.(`AI 测试生成发起失败：${message}`);
+    }
+  }, [apiReady, cwd, inferTestFramework, modelId, onOpenSettings, onToast, requestTaskInput, startTask]);
+
+  /** SP3: «在对话中提问» — bridge into the Agent via the ai-draft store. */
+  const promptAskInConversation = useCallback(async (paths: string[]) => {
+    if (!cwd) return;
+    const question: string | null = await new Promise((resolve) => {
+      requestTaskInput({
+        title: paths.length === 0 ? "向 AI 提问" : "在对话中提问",
+        description: paths.length > 0
+          ? `已自动附加 ${paths.length} 个文件作为上下文。`
+          : "提交后将创建新任务并跳转。",
+        fields: [{
+          name: "question",
+          label: "问题",
+          placeholder: "请输入你的问题…",
+          multiline: true,
+          required: true,
+          maxLength: 2000,
+        }],
+        confirmLabel: "开始对话",
+        action: (values) => resolve(values.question ?? ""),
+      });
+    });
+    if (question === null || !question.trim()) return;
+    useAiDraftStore.getState().setDraft({
+      prompt: question.trim(),
+      contextPaths: paths,
+      source: "context-menu",
+    });
+    onToast?.("正在跳转到 AI 对话…");
+    if (onStartRun) {
+      try {
+        await startTask("", undefined);
+      } catch (error) {
+        const message = String(error).replace(/^Error:\s*/, "");
+        onToast?.(`发起对话失败：${message}`);
+      }
+    }
+  }, [cwd, onStartRun, onToast, requestTaskInput, startTask]);
+
+  /** SP3: «加入上下文» — push selected paths into `contextPaths`. */
+  const addManyToContext = useCallback((paths: string[]) => {
+    if (paths.length === 0) return;
+    setContextPaths((current) => [...new Set([...current, ...paths])]);
+    onToast?.(`已添加 ${paths.length} 个到上下文`);
+  }, [onToast]);
+  const buildContextMenuItems = useCallback(
+    (target: NonNullable<typeof contextMenu>): ContextMenuItem[] => {
+      const cb = useClipboardStore.getState();
+      const primaryIsDir = target.primaryKind === "directory";
+      const singleSelected = target.selectedPaths.length === 1;
+      const items: ContextMenuItem[] = [];
+
+      // SP5: undo entry comes first so it's reachable via "Z" muscle memory.
+      const pastEntries = useHistoryStackStore.getState().past;
+      const undoEntry = pastEntries.length > 0 ? pastEntries[pastEntries.length - 1] : undefined;
+      if (undoEntry) {
+        items.push({
+          id: "undo",
+          label: `撤销 ${humanOpLabel(undoEntry.op)}`,
+          shortcut: "⌘Z",
+          onSelect: () => void performHistoryAction("undo"),
+        });
+        items.push({ kind: "separator", id: "sep-undo", dividerBefore: true });
+      }
+
+      items.push({ kind: "label", id: "label-system", label: "基本操作" });
+      items.push({
+        id: "open",
+        label: primaryIsDir ? "展开目录" : "打开",
+        onSelect: () => {
+          if (primaryIsDir) {
+            setSelectedDirectory(target.primaryPath);
+          } else {
+            void openFile(target.primaryPath);
+          }
+        },
+      });
+      items.push({
+        id: "rename",
+        label: "重命名",
+        shortcut: "F2",
+        disabled: !singleSelected,
+        onSelect: () => {
+          setRenamingPath(target.primaryPath);
+        },
+      });
+
+      items.push({ kind: "separator", id: "sep-clipboard", dividerBefore: true });
+      items.push({ kind: "label", id: "label-clipboard", label: "剪贴板" });
+      items.push({
+        id: "copy",
+        label: "复制",
+        shortcut: "⌘C",
+        onSelect: () => {
+          useClipboardStore.getState().setCopy(target.selectedPaths);
+          onToast?.(`已复制 ${target.selectedPaths.length} 个条目`);
+        },
+      });
+      items.push({
+        id: "cut",
+        label: "剪切",
+        shortcut: "⌘X",
+        onSelect: () => {
+          useClipboardStore.getState().setCut(target.selectedPaths);
+          onToast?.(`已剪切 ${target.selectedPaths.length} 个条目`);
+        },
+      });
+      items.push({
+        id: "paste",
+        label: "粘贴到此处",
+        shortcut: "⌘V",
+        disabled: cb.paths.length === 0,
+        onSelect: () => {
+          void performPaste(target.pasteTargetDir);
+        },
+      });
+
+      // SP3: AI actions submenu (replaces the SP1 placeholder).
+      items.push({ kind: "separator", id: "sep-ai", dividerBefore: true });
+      items.push({ kind: "label", id: "label-ai", label: "AI 操作" });
+
+      // The 4 single-step AI actions only make sense on a file. Directories
+      // keep a tooltip explaining the constraint.
+      const fileOnlyTooltip = "暂不支持对目录执行此操作（SP4 评估）";
+      const filesSelected = target.selectedPaths.filter((p) => !p.endsWith("/"));
+
+      items.push({
+        id: "ai-explain",
+        label: "AI 解释",
+        icon: <Sparkles size={12} aria-hidden />,
+        disabled: filesSelected.length === 0,
+        tooltip: filesSelected.length === 0 ? fileOnlyTooltip : undefined,
+        onSelect: () => {
+          const paths = filesSelected.length > 0 ? filesSelected : target.selectedPaths;
+          // Reuse the existing Agent-prompt pipeline rather than calling
+          // `requestExplanation` (which is the inline single-file explainer).
+          const instruction = `请基于真实代码解释 ${paths.join(", ")} 的职责、关键数据流、依赖关系、边界条件、业务规则与潜在风险。只分析，不修改文件。`;
+          void startTask(instruction, undefined);
+        },
+      });
+      items.push({
+        id: "ai-review",
+        label: "AI 评审",
+        icon: <ShieldCheck size={12} aria-hidden />,
+        onSelect: () => void requestReview(target.selectedPaths),
+      });
+      items.push({
+        id: "ai-refactor",
+        label: "AI 重构建议",
+        icon: <Hammer size={12} aria-hidden />,
+        disabled: filesSelected.length === 0,
+        tooltip: filesSelected.length === 0 ? fileOnlyTooltip : undefined,
+        onSelect: () => {
+          const paths = filesSelected.length > 0 ? filesSelected : target.selectedPaths;
+          void requestRefactor(paths);
+        },
+      });
+      items.push({
+        id: "ai-tests",
+        label: "AI 生成测试",
+        icon: <FlaskConical size={12} aria-hidden />,
+        disabled: filesSelected.length === 0,
+        tooltip: filesSelected.length === 0 ? fileOnlyTooltip : undefined,
+        onSelect: () => {
+          const paths = filesSelected.length > 0 ? filesSelected : target.selectedPaths;
+          void requestTests(paths);
+        },
+      });
+
+      items.push({
+        id: "ai-add-context",
+        label: target.selectedPaths.length > 1
+          ? `加入 ${target.selectedPaths.length} 个到上下文`
+          : "加入上下文",
+        icon: <Plus size={12} aria-hidden />,
+        onSelect: () => addManyToContext(target.selectedPaths),
+      });
+
+      items.push({
+        id: "ai-ask",
+        label: "在对话中提问…",
+        icon: <MessageSquare size={12} aria-hidden />,
+        onSelect: () => void promptAskInConversation(target.selectedPaths),
+      });
+
+      items.push({
+        kind: "separator",
+        id: "sep-danger",
+        dividerBefore: true,
+      });
+      items.push({
+        id: "delete",
+        label: target.selectedPaths.length === 1
+          ? `删除 “${basenameOf(target.primaryPath)}”`
+          : `删除 ${target.selectedPaths.length} 个条目`,
+        danger: true,
+        onSelect: () => {
+          void confirmDelete(target.selectedPaths);
+        },
+      });
+      return items;
+    },
+    [
+      basenameOf,
+      confirmDelete,
+      onToast,
+      openFile,
+      performPaste,
+      setSelectedDirectory,
+      addManyToContext,
+      promptAskInConversation,
+      requestReview,
+      requestRefactor,
+      requestTests,
+      startTask,
+      performHistoryAction,
+    ],
+  );
 
   const renameCodingTask = useCallback((
     summary: (typeof summaries)[number],
@@ -1993,8 +2663,137 @@ export function CodingWorkbench({
   useEffect(() => {
     if (!cwd) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return;
       if (isGlobalShortcutBlocked()) return;
+      const lower = event.key.toLowerCase();
+
+      // F2: rename primary selected node (only one selected, single no-modifier press).
+      if (
+        !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+        && !event.repeat
+        && lower === "f2"
+      ) {
+        const sel = useFileTreeSelectionStore.getState().selectedPaths;
+        if (sel.size === 1) {
+          event.preventDefault();
+          event.stopPropagation();
+          setRenamingPath([...sel][0]);
+        }
+        return;
+      }
+
+      // Delete / Backspace: delete selected entries.
+      if (
+        !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+        && !event.repeat
+        && (lower === "delete" || lower === "backspace")
+      ) {
+        const sel = useFileTreeSelectionStore.getState().selectedPaths;
+        if (sel.size > 0) {
+          event.preventDefault();
+          event.stopPropagation();
+          void confirmDelete([...sel]);
+        }
+        return;
+      }
+
+      // Cmd+C / Cmd+X / Cmd+V: clipboard.
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && !event.repeat) {
+        if (lower === "c") {
+          const sel = [...useFileTreeSelectionStore.getState().selectedPaths];
+          if (sel.length > 0) {
+            event.preventDefault();
+            event.stopPropagation();
+            useClipboardStore.getState().setCopy(sel);
+            onToast?.(`已复制 ${sel.length} 个条目`);
+          }
+          return;
+        }
+        // SP4: ⌘⇧E / ⌘⇧R / ⌘⇧T / ⌘⇧F — AI quick actions.
+        if (event.shiftKey) {
+          // Don't let the textarea (or any other input) swallow the combo.
+          if (event.target instanceof HTMLTextAreaElement) return;
+          const sel = [...useFileTreeSelectionStore.getState().selectedPaths];
+          const noSelection = () => onToast?.("请先在文件树中选中文件");
+          const dispatch = () => {
+            if (sel.length === 0) {
+              noSelection();
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+          };
+          switch (lower) {
+            case "e":
+              dispatch();
+              void startTask(
+                `请基于真实代码解释 ${sel.join(", ")} 的职责、关键数据流、依赖关系、边界条件、业务规则与潜在风险。只分析，不修改文件。`,
+                undefined,
+              );
+              return;
+            case "r":
+              dispatch();
+              void requestReview(sel);
+              return;
+            case "t":
+              dispatch();
+              void requestTests(sel);
+              return;
+            case "f":
+              dispatch();
+              void requestRefactor(sel);
+              return;
+            default:
+              break;
+          }
+        }
+        if (lower === "x") {
+          const sel = [...useFileTreeSelectionStore.getState().selectedPaths];
+          if (sel.length > 0) {
+            event.preventDefault();
+            event.stopPropagation();
+            useClipboardStore.getState().setCut(sel);
+            onToast?.(`已剪切 ${sel.length} 个条目`);
+          }
+          return;
+        }
+        if (lower === "v") {
+          const cb = useClipboardStore.getState();
+          if (cb.paths.length > 0) {
+            event.preventDefault();
+            event.stopPropagation();
+            const dest = selectedDirectory || cwd;
+            void performPaste(dest);
+          }
+          return;
+        }
+      }
+
+      // SP5: ⌘Z / ⌘⇧Z — undo / redo. Don't intercept inside editable fields
+      // so Monaco / Composer textarea get the browser's native undo for free.
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.repeat) {
+        const target = event.target as HTMLElement | null;
+        const inEditable =
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLInputElement ||
+          (target instanceof HTMLElement && target.isContentEditable);
+        if (!inEditable) {
+          const undoKey = event.key.toLowerCase();
+          if (undoKey === "z" && !event.shiftKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            void performHistoryAction("undo");
+            return;
+          }
+          if (undoKey === "z" && event.shiftKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            void performHistoryAction("redo");
+            return;
+          }
+        }
+      }
+
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return;
       const key = event.key.toLowerCase();
       if (key === "p" && event.shiftKey) {
         event.preventDefault();
@@ -2018,7 +2817,15 @@ export function CodingWorkbench({
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [cwd, toggleBottom]);
+  }, [
+    confirmDelete,
+    cwd,
+    onToast,
+    performHistoryAction,
+    performPaste,
+    selectedDirectory,
+    toggleBottom,
+  ]);
 
   const style = useMemo(
     () =>
@@ -2092,10 +2899,16 @@ export function CodingWorkbench({
             <strong>Echo Code</strong>
           </div>
           <span className="coding-workbench__topbar-separator" aria-hidden="true" />
-          <span className="coding-workbench__repo" title={cwd}>
-            <FolderOpen size={13} />
-            <span>{basename(cwd)}</span>
-          </span>
+          <WorkspaceTabBar
+            workspaces={codingWorkspaces ?? []}
+            activeCwd={activeCodingWorkspaceCwd ?? cwd}
+            onSelect={(next: string) => onSelectWorkspace?.(next)}
+            onClose={(closed: string) => onCloseCodingWorkspace?.(closed)}
+            onAdd={() => {
+              if (onAddCodingWorkspace) onAddCodingWorkspace();
+              else void pickWorkspace();
+            }}
+          />
           <TaskSwitcher
             tasks={summaries}
             activeId={task?.id}
@@ -2148,6 +2961,16 @@ export function CodingWorkbench({
           <span>{EXPLORER_TITLES[activityView]}</span>
           {activityView === "files" && (
             <span className="coding-explorer__heading-actions">
+              <button
+                type="button"
+                className={"coding-explorer__heading-actions-btn" + (showHidden ? " is-active" : "")}
+                onClick={() => setShowHidden(!showHidden)}
+                title={showHidden ? "隐藏 dotfile（含 .gitignore / .echoagentignore）" : "显示所有文件"}
+                aria-label={showHidden ? "隐藏 dotfile" : "显示所有文件"}
+                aria-pressed={showHidden}
+              >
+                {showHidden ? <Eye size={13} /> : <EyeOff size={13} />}
+              </button>
               <button type="button" onClick={() => void createWorkspaceEntry(false)} title="新建文件" aria-label="新建文件">
                 <FilePlus2 size={13} />
               </button>
@@ -2167,6 +2990,26 @@ export function CodingWorkbench({
             onToast={onToast}
             refreshKey={treeRefresh.revision}
             refreshPaths={treeRefresh.paths}
+            cutPaths={cutPaths}
+            onContextMenu={handleFileTreeContextMenu}
+            renamingPath={renamingPath}
+            onRenameSubmit={performRename}
+            onRenameCancel={() => setRenamingPath(null)}
+            includeHidden={showHidden}
+            gitStatusByPath={gitStatusByPath}
+          />
+        )}
+        {contextMenu && (
+          <FileTreeContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            items={buildContextMenuItems(contextMenu)}
+            onClose={() => setContextMenu(null)}
+            onError={(error) => {
+              const message = String(error).replace(/^Error:\s*/, "");
+              onToast?.(`操作失败：${message}`);
+            }}
+            ariaLabel="文件操作"
           />
         )}
         {activityView === "search" && (
@@ -2231,7 +3074,7 @@ export function CodingWorkbench({
           <ContextPackView
             paths={contextPaths}
             activePath={activeRelativePath}
-            onAdd={(path) => setContextPaths((current) => [...new Set([...current, path])])}
+            onAdd={(path) => addManyToContext([path])}
             onRemove={(path) =>
               setContextPaths((current) => current.filter((entry) => entry !== path))
             }
@@ -2379,6 +3222,10 @@ export function CodingWorkbench({
             onOpenChanges={() => setActivityView("changes")}
             onOpenReport={() => useTabStore.getState().openDoc("delivery")}
             onToast={onToast}
+            onPathsDropped={(paths) => {
+              addManyToContext(paths);
+              onToast?.(`已添加 ${paths.length} 个文件到上下文`);
+            }}
           />
         ) : (
           <TaskStarter

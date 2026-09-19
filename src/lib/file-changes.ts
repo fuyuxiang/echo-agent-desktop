@@ -7,7 +7,10 @@
  */
 import type { ChatMessage } from "@/stores/session-store";
 import type { DiffContent } from "@/lib/types";
+import type { ReactNode } from "react";
+import React from "react";
 import { extOf } from "./drop-utils";
+import { FileTypeIcon } from "@/features/coding/lib/file-type-icon";
 
 /** 单个文件的聚合变更。 */
 export interface FileChange {
@@ -97,16 +100,13 @@ export function aggregateFileChanges(messages: ChatMessage[]): FileChangesSummar
   return { files, totalFiles: files.length, totalAdded, totalRemoved };
 }
 
-/** 文件类型 → emoji 图标(vscode 风格简化)。 */
-export function fileIcon(ext: string): string {
-  const map: Record<string, string> = {
-    ".ts": "📘", ".tsx": "📘", ".js": "📙", ".jsx": "📙",
-    ".json": "🔧", ".md": "📝", ".py": "🐍", ".rs": "🦀",
-    ".css": "🎨", ".scss": "🎨", ".html": "🌐",
-    ".png": "🖼️", ".jpg": "🖼️", ".jpeg": "🖼️", ".svg": "🖼️",
-    ".yml": "⚙️", ".yaml": "⚙️", ".toml": "⚙️",
-  };
-  return map[ext] ?? "📄";
+/** 文件类型 → ReactNode 图标 (SP2 起改为 lucide-react SVG)。 */
+export function fileIcon(ext: string): ReactNode {
+  return React.createElement(FileTypeIcon, {
+    name: `x${ext}`,
+    kind: "file",
+    size: 14,
+  });
 }
 
 /** 变更状态:净增/净删/混合,用于配色。 */
