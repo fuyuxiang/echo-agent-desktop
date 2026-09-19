@@ -19,7 +19,7 @@ const MAX_AUTHORIZED_ROOTS: usize = 512;
 const MAX_AUTHORIZED_FILES: usize = 2_048;
 const MAX_TRUSTED_PACKAGE_SOURCES: usize = 2_048;
 const MAX_CONFIGURED_SKILL_SOURCES: usize = 512;
-const MAX_PICKED_FILES: usize = 100;
+pub(crate) const MAX_PICKED_FILES: usize = 100;
 const MAX_ATTACHMENT_COUNT: usize = 20;
 pub(crate) const MAX_ATTACHMENT_FILE_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_ATTACHMENT_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
@@ -37,6 +37,10 @@ const MAX_ATTACHMENT_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 pub struct FilesystemAccess {
     roots: Mutex<HashSet<PathBuf>>,
     files: Mutex<HashSet<PathBuf>>,
+    /// Canonical application-owned attachment store. Files inside this one
+    /// narrow root are authorized by containment instead of consuming the
+    /// process-wide exact-file quota one entry at a time.
+    managed_attachment_root: Mutex<Option<PathBuf>>,
     package_sources: Mutex<HashSet<PathBuf>>,
     configured_skill_sources: Mutex<HashMap<PathBuf, String>>,
 }
@@ -66,61 +70,122 @@ impl FilesystemAccess {
         access
     }
 
-    /// Re-adopt image blobs already on disk inside the desktop paste sink so
-    /// that historical attachments remain previewable after a process restart.
-    /// Called once from setup with `<app_data_dir>/clipboard-images`; mirrors
-    /// the same extension allow-list `save_attachment_blob` enforces so
-    /// non-image artifacts and symlinks can't piggyback on the durable grant.
-    pub(crate) fn register_clipboard_images(&self, dir: &Path) {
+    /// Register the private clipboard attachment store as one durable,
+    /// containment-scoped capability. This avoids consuming one of the 2048
+    /// general exact-file grants for every historical paste while still
+    /// refusing unsupported files and symlinks planted in the directory.
+    pub(crate) fn register_attachment_store(&self, dir: &Path) {
+        if let Err(error) = std::fs::create_dir_all(dir) {
+            tracing::warn!(dir = %dir.display(), %error, "failed to create attachment store");
+            return;
+        }
+        if let Err(error) = crate::attachment_blob::prune_store(dir, None) {
+            tracing::warn!(dir = %dir.display(), %error, "failed to prune attachment store");
+        }
+        let Ok(canonical_dir) = std::fs::canonicalize(dir) else {
+            tracing::warn!(dir = %dir.display(), "failed to canonicalize attachment store");
+            return;
+        };
+        if let Ok(mut root) = self.managed_attachment_root.lock() {
+            *root = Some(canonical_dir);
+        }
+
+        // Validate the existing entries once at startup so malformed/symlinked
+        // content is visible in logs. Authorization itself is checked lazily by
+        // `require_managed_attachment`, so the number of historical files no
+        // longer competes with MAX_AUTHORIZED_FILES.
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(error) => {
                 tracing::debug!(
                     dir = %dir.display(),
                     error = %error,
-                    "clipboard-images directory unavailable during startup",
+                    "attachment store unavailable during startup",
                 );
                 return;
             }
         };
         for entry in entries.flatten() {
-            let path = entry.path();
-            // Symlinks can redirect preview traffic to anything reachable on
-            // disk. `authorize_file` already refuses them, but skip earlier
-            // so the warn message points at the real cause rather than the
-            // downstream symlink rejection.
-            if let Ok(metadata) = std::fs::symlink_metadata(&path) {
-                if metadata.file_type().is_symlink() || !metadata.is_file() {
+            let entry_path = entry.path();
+            let candidates = if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                std::fs::read_dir(&entry_path)
+                    .map(|children| children.flatten().map(|child| child.path()).collect())
+                    .unwrap_or_default()
+            } else {
+                vec![entry_path]
+            };
+            for path in candidates {
+                // Symlinks can redirect preview traffic to anything reachable on
+                // disk. `authorize_file` already refuses them, but skip earlier
+                // so the warn message points at the real cause rather than the
+                // downstream symlink rejection.
+                if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+                    if metadata.file_type().is_symlink() || !metadata.is_file() {
+                        tracing::debug!(
+                            path = %path.display(),
+                            "skipping non-regular clipboard-image entry",
+                        );
+                        continue;
+                    }
+                }
+                if !crate::attachment_blob::is_supported_attachment_path(&path) {
                     tracing::debug!(
                         path = %path.display(),
-                        "skipping non-regular clipboard-image entry",
+                        "skipping attachment-store entry with unsupported extension",
                     );
                     continue;
                 }
-            }
-            let extension = path
-                .extension()
-                .and_then(|value| value.to_str())
-                .map(str::to_ascii_lowercase);
-            let supported = matches!(
-                extension.as_deref(),
-                Some("png" | "jpg" | "jpeg" | "gif" | "webp")
-            );
-            if !supported {
-                tracing::debug!(
-                    path = %path.display(),
-                    "skipping clipboard-image entry with non-image extension",
-                );
-                continue;
-            }
-            if let Err(error) = self.authorize_file(&path) {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %error,
-                    "skipping clipboard-image entry that failed validation",
-                );
+                if let Err(error) = self.require_managed_attachment(&path) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %error,
+                        "skipping attachment-store entry that failed validation",
+                    );
+                }
             }
         }
+    }
+
+    /// Resolve one regular supported file inside the registered application-
+    /// owned attachment store. Parent symlinks cannot escape the store because
+    /// the canonical result must remain below the canonical root.
+    pub(crate) fn require_managed_attachment(&self, raw: &Path) -> Result<PathBuf, String> {
+        if !raw.is_absolute() {
+            return Err("附件路径必须是绝对路径".into());
+        }
+        let metadata =
+            std::fs::symlink_metadata(raw).map_err(|error| format!("无法读取附件：{error}"))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("附件必须是普通文件，不能是符号链接".into());
+        }
+        if !crate::attachment_blob::is_supported_attachment_path(raw) {
+            return Err("应用附件目录中包含不支持的文件类型".into());
+        }
+        let canonical = raw
+            .canonicalize()
+            .map_err(|error| format!("无法解析附件路径：{error}"))?;
+        let root = self
+            .managed_attachment_root
+            .lock()
+            .map_err(|_| "文件系统授权状态已损坏".to_string())?
+            .clone()
+            .ok_or_else(|| "应用附件目录尚未初始化".to_string())?;
+        if canonical.starts_with(&root) {
+            Ok(canonical)
+        } else {
+            Err(format!("附件不在应用管理目录内：{}", canonical.display()))
+        }
+    }
+
+    fn is_managed_attachment(&self, canonical: &Path) -> Result<bool, String> {
+        let root = self
+            .managed_attachment_root
+            .lock()
+            .map_err(|_| "文件系统授权状态已损坏".to_string())?;
+        Ok(root
+            .as_ref()
+            .is_some_and(|root| canonical.starts_with(root))
+            && crate::attachment_blob::is_supported_attachment_path(canonical))
     }
 
     /// Add one existing directory to the native allow-list and return its
@@ -345,7 +410,10 @@ impl FilesystemAccess {
             let canonical = canonicalize_candidate(&candidate, false)?;
             // Exact-file grants are general, process-lifetime EchoAgent read
             // capabilities created only by a backend-owned native picker.
-            if !canonical.starts_with(&workspace) && !exact_files.contains(&canonical) {
+            if !canonical.starts_with(&workspace)
+                && !exact_files.contains(&canonical)
+                && !self.is_managed_attachment(&canonical)?
+            {
                 return Err(format!("附件不在当前会话工作区内：{}", canonical.display()));
             }
             if metadata.len() > MAX_ATTACHMENT_FILE_BYTES {
@@ -400,11 +468,15 @@ impl FilesystemAccess {
             .map_err(|_| "文件系统授权状态已损坏".to_string())?
             .contains(&canonical);
 
+        let managed_allowed = self.is_managed_attachment(&canonical)?;
         let roots = self
             .roots
             .lock()
             .map_err(|_| "文件系统授权状态已损坏".to_string())?;
-        if internal_allowed || exact_allowed || roots.iter().any(|root| canonical.starts_with(root))
+        if internal_allowed
+            || exact_allowed
+            || managed_allowed
+            || roots.iter().any(|root| canonical.starts_with(root))
         {
             return Ok(canonical);
         }
@@ -858,6 +930,84 @@ pub struct PathStat {
     /// "file" | "directory" | "other" | "missing"
     pub kind: String,
     pub absolute: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentFileStat {
+    pub input_path: String,
+    /// Canonical path, suitable for passing directly to agent_send.
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectedAttachmentFile {
+    pub path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentStatsResult {
+    pub files: Vec<AttachmentFileStat>,
+    pub rejected: Vec<RejectedAttachmentFile>,
+}
+
+/// Validate and stat a small batch of picker/drop attachments before the UI
+/// reports success. This uses the native capability set populated by the file
+/// picker or native drag event; renderer-supplied arbitrary paths cannot grant
+/// themselves access through this command.
+#[tauri::command]
+pub async fn filesystem_attachment_stats(
+    access: State<'_, FilesystemAccess>,
+    paths: Vec<String>,
+) -> Result<AttachmentStatsResult, String> {
+    if paths.len() > MAX_PICKED_FILES {
+        return Err(format!("一次最多检查 {MAX_PICKED_FILES} 个附件"));
+    }
+    let mut seen = HashSet::new();
+    let mut stats = Vec::with_capacity(paths.len());
+    let mut rejected = Vec::new();
+    for raw in paths {
+        let canonical = match access.require_authorized_file(Path::new(&raw)) {
+            Ok(path) => path,
+            Err(reason) => {
+                rejected.push(RejectedAttachmentFile { path: raw, reason });
+                continue;
+            }
+        };
+        if !crate::attachment_blob::is_supported_attachment_path(&canonical) {
+            rejected.push(RejectedAttachmentFile {
+                path: raw,
+                reason: format!("不支持的附件类型：{}", canonical.display()),
+            });
+            continue;
+        }
+        if !seen.insert(canonical.clone()) {
+            continue;
+        }
+        let metadata = match std::fs::metadata(&canonical) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                rejected.push(RejectedAttachmentFile {
+                    path: raw,
+                    reason: format!("无法读取附件 {}：{error}", canonical.display()),
+                });
+                continue;
+            }
+        };
+        stats.push(AttachmentFileStat {
+            input_path: raw,
+            path: canonical.to_string_lossy().into_owned(),
+            size_bytes: metadata.len(),
+        });
+    }
+    Ok(AttachmentStatsResult {
+        files: stats,
+        rejected,
+    })
 }
 
 /// Stat a path (relative paths resolve against cwd).
@@ -1759,26 +1909,28 @@ mod tests {
         assert_eq!(second_canonical, second.canonicalize().unwrap());
     }
 
-    /// `register_clipboard_images` is the durable-side hook called once
+    /// `register_attachment_store` is the durable-side hook called once
     /// during application setup. After a process restart the in-memory
     /// `files` set is empty, so without re-adopting the files the user
     /// already landed in `<app_data_dir>/clipboard-images/`, every preview
     /// of a historical attachment would fail. Scanned files must round-trip
     /// through `is_authorized` like a freshly saved blob.
     #[test]
-    fn register_clipboard_images_adopts_existing_blobs() {
+    fn register_attachment_store_adopts_existing_blobs() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("clipboard-images");
         std::fs::create_dir_all(&dir).unwrap();
         let png = dir.join("image-1700000000000-abcdef.png");
         let jpg = dir.join("image-1700000000001-123456.jpg");
-        let unsupported = dir.join("notes.txt");
+        let text = dir.join("notes.txt");
+        let unsupported = dir.join("program.exe");
         std::fs::write(&png, b"png-bytes").unwrap();
         std::fs::write(&jpg, b"jpg-bytes").unwrap();
-        std::fs::write(&unsupported, b"plain").unwrap();
+        std::fs::write(&text, b"plain").unwrap();
+        std::fs::write(&unsupported, b"MZ").unwrap();
 
         let access = FilesystemAccess::default();
-        access.register_clipboard_images(&dir);
+        access.register_attachment_store(&dir);
 
         let png_canonical = access
             .is_authorized(&png, false)
@@ -1788,6 +1940,10 @@ mod tests {
             .is_authorized(&jpg, false)
             .expect("previously saved jpg must be re-authorized after restart");
         assert_eq!(jpg_canonical, jpg.canonicalize().unwrap());
+        let text_canonical = access
+            .is_authorized(&text, false)
+            .expect("supported text paste must be re-authorized after restart");
+        assert_eq!(text_canonical, text.canonicalize().unwrap());
 
         // Non-image siblings must not be silently admitted as attachments.
         let error = access.is_authorized(&unsupported, false).unwrap_err();
@@ -1798,13 +1954,12 @@ mod tests {
     /// ever been pasted. The hook must be a no-op without raising so startup
     /// does not fail on a fresh machine.
     #[test]
-    fn register_clipboard_images_handles_missing_directory() {
+    fn register_attachment_store_creates_missing_directory() {
         let tmp = tempfile::tempdir().unwrap();
         let missing = tmp.path().join("never-created");
         let access = FilesystemAccess::default();
-        access.register_clipboard_images(&missing);
-        // Nothing authorized, nothing to assert against — the call itself
-        // must simply return without panicking.
+        access.register_attachment_store(&missing);
+        assert!(missing.is_dir());
     }
 
     /// Symlinks planted inside clipboard-images must be rejected the same
@@ -1813,7 +1968,7 @@ mod tests {
     /// credentials sitting next to the data dir.
     #[cfg(unix)]
     #[test]
-    fn register_clipboard_images_rejects_symlinks() {
+    fn register_attachment_store_rejects_symlinks() {
         use std::os::unix::fs::symlink;
 
         let tmp = tempfile::tempdir().unwrap();
@@ -1824,7 +1979,7 @@ mod tests {
         symlink(&target, dir.join("image-link.png")).unwrap();
 
         let access = FilesystemAccess::default();
-        access.register_clipboard_images(&dir);
+        access.register_attachment_store(&dir);
 
         let error = access
             .is_authorized(&dir.join("image-link.png"), false)

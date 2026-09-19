@@ -36,8 +36,10 @@ import {
 import type { AgentEntry } from "@/lib/types";
 import {
   filesystemPickFiles,
+  filesystemAttachmentStats,
   discardAttachmentBlob,
   saveAttachmentBlob,
+  type AttachmentFileStat,
   type WorkspaceInfo,
 } from "@/lib/agent-client";
 import {
@@ -54,6 +56,16 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 const MAX_ATTACHMENT_COUNT = 20;
 const MAX_ATTACHMENT_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_ATTACHMENT_TOTAL_BYTES = 64 * 1024 * 1024;
+const MAX_ATTACHMENT_INSPECTION_COUNT = 100;
+
+interface AttachmentAdmissionSummary {
+  added: number;
+  acceptedPaths: string[];
+  duplicates: number;
+  oversized: number;
+  countLimited: number;
+  totalLimited: number;
+}
 
 function discardUnsentAttachments(paths: string[]) {
   for (const path of paths) {
@@ -231,6 +243,7 @@ export function Composer({
   const textRef = useRef("");
   const [attachments, setAttachments] = useState<string[]>([]);
   const attachmentsRef = useRef<string[]>([]);
+  const attachmentSizesRef = useRef(new Map<string, number>());
   // Only clipboard blobs created by this Composer are disposable. Picker,
   // drop and edit-resend paths can belong to the workspace or chat history.
   const ownedAttachmentPathsRef = useRef(new Set<string>());
@@ -263,7 +276,129 @@ export function Composer({
   ) => {
     const value = typeof next === "function" ? next(attachmentsRef.current) : next;
     attachmentsRef.current = value;
+    const retained = new Set(value);
+    for (const path of attachmentSizesRef.current.keys()) {
+      if (!retained.has(path)) attachmentSizesRef.current.delete(path);
+    }
     setAttachments(value);
+  };
+
+  /** Resolve missing sizes natively and only return a total for a stable list. */
+  const currentAttachmentBytes = async (): Promise<number> => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const snapshot = [...attachmentsRef.current];
+      const missing = snapshot.filter((path) => !attachmentSizesRef.current.has(path));
+      if (missing.length > 0) {
+        const inspected = await filesystemAttachmentStats(missing);
+        if (inspected.rejected.length > 0) {
+          throw new Error(inspected.rejected[0].reason);
+        }
+        for (const file of inspected.files) {
+          attachmentSizesRef.current.set(file.inputPath, file.sizeBytes);
+          attachmentSizesRef.current.set(file.path, file.sizeBytes);
+        }
+      }
+      if (
+        snapshot.length === attachmentsRef.current.length
+        && snapshot.every((path, index) => path === attachmentsRef.current[index])
+      ) {
+        return snapshot.reduce(
+          (total, path) => total + (attachmentSizesRef.current.get(path) ?? 0),
+          0,
+        );
+      }
+    }
+    throw new Error("附件列表变化过快，请稍后重试");
+  };
+
+  /**
+   * Atomically admit already-inspected files against count, per-file and total
+   * limits. The final calculation happens synchronously after the last await,
+   * so overlapping paste/drop operations cannot both over-admit.
+   */
+  const admitAttachmentFiles = async (
+    files: AttachmentFileStat[],
+  ): Promise<AttachmentAdmissionSummary> => {
+    await currentAttachmentBytes();
+    const next = [...attachmentsRef.current];
+    // Another admission can finish while this call is waiting for native size
+    // inspection. Recompute from the latest ref after the final await so count
+    // and byte limits are both applied to one current, synchronous snapshot.
+    let totalBytes = next.reduce(
+      (total, path) => total + (attachmentSizesRef.current.get(path) ?? 0),
+      0,
+    );
+    const seen = new Set(next);
+    const summary: AttachmentAdmissionSummary = {
+      added: 0,
+      acceptedPaths: [],
+      duplicates: 0,
+      oversized: 0,
+      countLimited: 0,
+      totalLimited: 0,
+    };
+    for (const file of files) {
+      if (seen.has(file.path)) {
+        summary.duplicates += 1;
+        continue;
+      }
+      if (file.sizeBytes > MAX_ATTACHMENT_FILE_BYTES) {
+        summary.oversized += 1;
+        continue;
+      }
+      if (next.length >= MAX_ATTACHMENT_COUNT) {
+        summary.countLimited += 1;
+        continue;
+      }
+      if (totalBytes + file.sizeBytes > MAX_ATTACHMENT_TOTAL_BYTES) {
+        summary.totalLimited += 1;
+        continue;
+      }
+      seen.add(file.path);
+      next.push(file.path);
+      attachmentSizesRef.current.set(file.path, file.sizeBytes);
+      totalBytes += file.sizeBytes;
+      summary.added += 1;
+      summary.acceptedPaths.push(file.path);
+    }
+    if (summary.added > 0) updateAttachments(next);
+    return summary;
+  };
+
+  const attachmentAdmissionMessage = (
+    summary: AttachmentAdmissionSummary,
+    unsupported = 0,
+    unreadable = 0,
+  ): string => {
+    const parts: string[] = [];
+    if (summary.added > 0) parts.push(`已添加 ${summary.added} 个`);
+    if (summary.duplicates > 0) parts.push(`忽略 ${summary.duplicates} 个重复文件`);
+    if (unsupported > 0) parts.push(`跳过 ${unsupported} 个不支持的类型`);
+    if (unreadable > 0) parts.push(`跳过 ${unreadable} 个无法读取的文件`);
+    if (summary.oversized > 0) parts.push(`${summary.oversized} 个文件超过 20MB`);
+    if (summary.countLimited > 0) parts.push(`附件最多 ${MAX_ATTACHMENT_COUNT} 个`);
+    if (summary.totalLimited > 0) parts.push(`附件总大小最多 64MB`);
+    return parts.join("，") || "没有可添加的附件";
+  };
+
+  const addPathAttachments = async (paths: string[]) => {
+    const unique = [...new Set(paths)];
+    const supported = unique.filter(
+      (path) => classifyAttachment(path) !== AttachmentKind.Unsupported,
+    );
+    const unsupported = unique.length - supported.length;
+    const inspectable = supported.slice(0, MAX_ATTACHMENT_INSPECTION_COUNT);
+    const uninspected = supported.length - inspectable.length;
+    try {
+      const inspected = await filesystemAttachmentStats(inspectable);
+      const summary = await admitAttachmentFiles(inspected.files);
+      summary.countLimited += uninspected;
+      onToast?.(
+        attachmentAdmissionMessage(summary, unsupported, inspected.rejected.length),
+      );
+    } catch (error) {
+      onToast?.(`添加附件失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
   };
   // 发送前成本预估(对齐 EchoAgent credit-estimate):纯本地 token 估算。
   // ctxUsed/ctxTotal 由 ContextUsagePill 异步获取,这里不耦合;徽章在占比未知时
@@ -505,58 +640,12 @@ export function Composer({
               break;
             case "drop": {
               const paths = payload.paths ?? [];
-              // 之前 `filter(isImageAttachment)` 把 PDF / 代码 / 文本
-              // 静默丢弃,用户毫无反馈。现在按 [`classifyAttachment`]
-              // 的白名单分类,接受的加入 attachments,拒绝的统计后
-              // toast "已添加 N / 跳过 M" —— 与 ChatGPT / Cursor /
-              // Claude 桌面端的多类型拖拽反馈对齐。
-              const accepted: string[] = [];
-              const rejected: Array<{ path: string; kind: AttachmentKind }> = [];
-              const pathToFolder = new Set<string>();
-              for (const path of paths) {
-                const kind = classifyAttachment(path);
-                if (kind === AttachmentKind.Unsupported) {
-                  rejected.push({ path, kind });
-                  continue;
-                }
-                if (pathToFolder.has(path)) continue;
-                pathToFolder.add(path);
-                accepted.push(path);
-              }
               if (paths.length === 0) {
                 setDragHovering(false);
                 return;
               }
-              let overflowCount = 0;
-              if (accepted.length > 0) {
-                updateAttachments((prev) => {
-                  const seen = new Set(prev);
-                  const next = [...prev];
-                  for (const path of accepted) {
-                    if (seen.has(path)) continue;
-                    if (next.length >= MAX_ATTACHMENT_COUNT) {
-                      overflowCount += 1;
-                      continue;
-                    }
-                    seen.add(path);
-                    next.push(path);
-                  }
-                  return next;
-                });
-              }
               setDragHovering(false);
-              // 反馈:分别告知接受数量与拒绝数量,让用户知道发生了什么。
-              if (accepted.length > 0 || rejected.length > 0) {
-                const parts: string[] = [];
-                if (accepted.length > 0) parts.push(`已添加 ${accepted.length} 个`);
-                if (rejected.length > 0) {
-                  parts.push(`跳过 ${rejected.length} 个不支持的类型`);
-                }
-                if (overflowCount > 0) {
-                  parts.push(`超出 ${MAX_ATTACHMENT_COUNT} 个上限`);
-                }
-                onToast?.(parts.join("，"));
-              }
+              void addPathAttachments(paths);
               break;
             }
             default:
@@ -582,11 +671,7 @@ export function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /**
-   * 处理剪贴板粘贴:仅在 items 中包含 image/* 文件时拦截,其它内容走
-   * 默认行为(纯文本、HTML 富文本都能正常粘贴)。图片落到磁盘后塞进现有
-   * attachments 列表,与文件选择器共用同一条下游管线。
-   */
+  /** Handle supported clipboard files without disturbing ordinary text/HTML paste. */
   const handlePaste = async (
     event: React.ClipboardEvent<HTMLTextAreaElement>,
   ) => {
@@ -605,25 +690,40 @@ export function Composer({
       return;
     }
     event.preventDefault();
-    if (unsupported.length > 0) {
-      onToast?.(`已跳过 ${unsupported.length} 个不支持的文件类型`);
+    let currentBytes: number;
+    try {
+      currentBytes = await currentAttachmentBytes();
+    } catch (error) {
+      onToast?.(`无法检查现有附件：${String(error).replace(/^Error:\s*/, "")}`);
+      return;
     }
+    const preflight: AttachmentAdmissionSummary = {
+      added: 0,
+      acceptedPaths: [],
+      duplicates: 0,
+      oversized: 0,
+      countLimited: 0,
+      totalLimited: 0,
+    };
+    preflight.oversized = supported.filter(
+      (item) => item.blob.size > MAX_ATTACHMENT_FILE_BYTES,
+    ).length;
     if (attachmentsRef.current.length + supported.length > MAX_ATTACHMENT_COUNT) {
-      onToast?.(`附件数量不能超过 ${MAX_ATTACHMENT_COUNT} 个`);
-      return;
+      preflight.countLimited = supported.length;
     }
-    const oversized = supported.find((item) => item.blob.size > MAX_ATTACHMENT_FILE_BYTES);
-    if (oversized) {
-      onToast?.(`「${oversized.suggestedName}」超过 20MB，无法添加`);
-      return;
+    const pastedBytes = supported.reduce((total, item) => total + item.blob.size, 0);
+    if (currentBytes + pastedBytes > MAX_ATTACHMENT_TOTAL_BYTES) {
+      preflight.totalLimited = supported.length;
     }
-    const totalBytes = supported.reduce((total, item) => total + item.blob.size, 0);
-    if (totalBytes > MAX_ATTACHMENT_TOTAL_BYTES) {
-      onToast?.("本次粘贴的文件总大小不能超过 64MB");
+    // Clipboard batches are atomic: silently accepting only part of a paste is
+    // hard to notice and can make the model answer from incomplete context.
+    if (preflight.oversized || preflight.countLimited || preflight.totalLimited) {
+      onToast?.(attachmentAdmissionMessage(preflight, unsupported.length));
       return;
     }
     const saved: string[] = [];
-    let lastError: unknown = null;
+    const savedStats: AttachmentFileStat[] = [];
+    let failed = 0;
     for (const item of supported) {
       try {
         const bytes = await blobToBytes(item.blob);
@@ -633,8 +733,9 @@ export function Composer({
           suggestedName: item.suggestedName,
         });
         saved.push(path);
+        savedStats.push({ inputPath: path, path, sizeBytes: item.blob.size });
       } catch (error) {
-        lastError = error;
+        failed += 1;
         // 单张失败不影响其它文件继续落盘。
       }
     }
@@ -642,35 +743,30 @@ export function Composer({
       discardUnsentAttachments(saved);
       return;
     }
-    if (saved.length > 0) {
-      // Another paste/drop can finish while this batch is being persisted.
-      // Recheck capacity synchronously against the ref before committing.
-      const next = [...attachmentsRef.current];
-      const seen = new Set(next);
-      const accepted: string[] = [];
-      const overflow: string[] = [];
-      for (const path of saved) {
-        if (seen.has(path)) continue;
-        if (next.length >= MAX_ATTACHMENT_COUNT) {
-          overflow.push(path);
-        } else {
-          seen.add(path);
-          next.push(path);
-          accepted.push(path);
-        }
+    let admitted: AttachmentAdmissionSummary = {
+      added: 0,
+      acceptedPaths: [],
+      duplicates: 0,
+      oversized: 0,
+      countLimited: 0,
+      totalLimited: 0,
+    };
+    if (savedStats.length > 0) {
+      try {
+        admitted = await admitAttachmentFiles(savedStats);
+      } catch {
+        failed += savedStats.length;
       }
-      for (const path of accepted) ownedAttachmentPathsRef.current.add(path);
-      discardUnsentAttachments(overflow);
-      updateAttachments(next);
-      if (overflow.length > 0) {
-        onToast?.(`附件数量不能超过 ${MAX_ATTACHMENT_COUNT} 个，已忽略多余文件`);
+      const accepted = new Set(admitted.acceptedPaths);
+      for (const path of admitted.acceptedPaths) {
+        ownedAttachmentPathsRef.current.add(path);
       }
+      discardUnsentAttachments(saved.filter((path) => !accepted.has(path)));
     }
-    if (lastError) {
-      onToast?.(
-        `粘贴文件失败：${String(lastError).replace(/^Error:\s*/, "")}`,
-      );
-    }
+    admitted.oversized += preflight.oversized;
+    admitted.countLimited += preflight.countLimited;
+    admitted.totalLimited += preflight.totalLimited;
+    onToast?.(attachmentAdmissionMessage(admitted, unsupported.length, failed));
   };
 
   const [sending, setSending] = useState(false);
@@ -848,16 +944,7 @@ export function Composer({
     try {
       const paths = await filesystemPickFiles({ maxFiles: 20 });
       if (paths.length === 0) return;
-      updateAttachments((prev) => {
-        const set = new Set(prev);
-        paths.forEach((p) => set.add(p));
-        const next = [...set];
-        if (next.length > MAX_ATTACHMENT_COUNT) {
-          onToast?.(`附件数量不能超过 ${MAX_ATTACHMENT_COUNT} 个`);
-          return prev;
-        }
-        return next;
-      });
+      await addPathAttachments(paths);
     } catch (error) {
       onToast?.(`选择附件失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
@@ -1001,7 +1088,7 @@ export function Composer({
             DOM 级别的 dragenter 不会触发它,所以非桌面环境自动降级为「无提示」。
 
             文案同步支持类型范围:之前只说「松开以添加为附件」暗示仅图片,
-            现在明确列出支持的类型(图片 / PDF / Office / 代码 / 文本 / 数据),
+            现在明确列出支持的类型(图片 / PDF / 现代 Office / 代码 / 文本 / 数据),
             并在 hover/over 时如能拿到 paths 则即时给出「已添加 N / 跳过 M」的
             预览反馈(只是 hover 提示,真正的反馈在 drop 后的 toast)。 */}
         {dragHovering && (
@@ -1013,7 +1100,7 @@ export function Composer({
           >
             <div className="echo-composer__dropzone-title">松开以添加为附件</div>
             <div className="echo-composer__dropzone-hint">
-              支持图片、PDF、Office、代码、文本与数据文件
+              支持图片、PDF、DOCX、XLSX、PPTX、代码、文本与数据文件
             </div>
           </div>
         )}

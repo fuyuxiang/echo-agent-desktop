@@ -9,7 +9,7 @@
  *
  * mock session-store 提供 streaming/sessionId/messages;mock agent-client 的 rewind*。
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 
 // session-store mock:可控的 streaming / sessionId / messages。
@@ -138,12 +138,18 @@ const baseProps = {
   onToast: vi.fn(),
 };
 
+const scrollIntoViewMock = vi.fn();
+
 function setStore(patch: Partial<typeof storeState>) {
   storeState = { ...storeState, ...patch };
 }
 
 describe("ChatView pause/yield/resume 闭环", () => {
   beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoViewMock,
+    });
     setStore({
       messages: [{ id: "u1", role: "user", complete: true, parts: [{ kind: "text", text: "hi" }] }],
       streaming: false,
@@ -159,8 +165,13 @@ describe("ChatView pause/yield/resume 闭环", () => {
     baseProps.onCancel.mockClear();
     baseProps.onToast.mockClear();
     storeState.discardMessagesFrom.mockClear();
+    scrollIntoViewMock.mockClear();
     vi.mocked(rewindExecute).mockReset().mockResolvedValue({ targetPromptIndex: 0 });
     vi.mocked(rewindPoints).mockReset().mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   });
 
   it("会话工具入口统一位于响应式工具栏内", () => {
@@ -170,6 +181,37 @@ describe("ChatView pause/yield/resume 闭环", () => {
     for (const label of ["查找", "变更", "子代理", "团队", "浏览器", "分享"]) {
       expect(toolbar).toContainElement(screen.getByRole("button", { name: label }));
     }
+  });
+
+  it("查询变化后首个真实命中立即定位，后续导航平滑滚动", async () => {
+    setStore({
+      messages: [{
+        id: "a-find",
+        role: "assistant",
+        complete: true,
+        parts: [{ kind: "text", text: "第一只鸟，第二只鸟" }],
+      }],
+    });
+    renderChat();
+    fireEvent.click(screen.getByRole("button", { name: "查找" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "查找" }), {
+      target: { value: "鸟" },
+    });
+
+    await waitFor(() => {
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({
+        behavior: "auto",
+        block: "center",
+      });
+    });
+    scrollIntoViewMock.mockClear();
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "查找" }), { key: "Enter" });
+    await waitFor(() => {
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({
+        behavior: "smooth",
+        block: "center",
+      });
+    });
   });
 
   it("流式时显示「暂停」按钮,点击触发 onCancel", () => {

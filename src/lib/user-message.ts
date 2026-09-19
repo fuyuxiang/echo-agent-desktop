@@ -48,20 +48,34 @@ const IMAGE_EXTENSIONS = new Set([
   ".webp",
 ]);
 
-/** 文档类:PDF / Office / OpenDocument / ePub。 */
+/**
+ * 文档类:仅包含 Runtime 能可靠提取内容的格式。
+ *
+ * 旧版二进制 Office（DOC/XLS/PPT）和 RTF 不在此列：把文件显示为“已添加”
+ * 但在 read_file 时才失败，比一开始明确拒绝更糟。现代 OOXML、OpenDocument
+ * 与 ePub 由 read_file 的专用提取器处理。
+ */
 const DOCUMENT_EXTENSIONS = new Set([
   ".pdf",
-  ".doc",
   ".docx",
-  ".rtf",
   ".odt",
   ".ods",
   ".odp",
-  ".xls",
   ".xlsx",
-  ".ppt",
   ".pptx",
   ".epub",
+]);
+
+/** 没有普通扩展名、但 agent 工作流中高频的精确文件名。 */
+const SPECIAL_TEXT_FILENAMES = new Set([
+  "dockerfile",
+  "makefile",
+  "rakefile",
+  "cmakelists.txt",
+  ".gitignore",
+  ".gitattributes",
+  ".env.example",
+  ".editorconfig",
 ]);
 
 /** 源代码:agent 工作流高频。覆盖主流语言 + 前端框架 + 脚本。 */
@@ -176,22 +190,13 @@ const DATA_EXTENSIONS = new Set([
 export function classifyAttachment(path: string): AttachmentKind {
   const name = attachmentBasename(path);
   if (!name) return AttachmentKind.Unsupported;
+  const lower = name.toLowerCase();
+  // Exact-name checks must happen before extension parsing: `.gitignore` and
+  // `CMakeLists.txt` both contain a dot, so placing this inside `dot === -1`
+  // makes the intended branches unreachable.
+  if (SPECIAL_TEXT_FILENAMES.has(lower)) return AttachmentKind.Text;
   const dot = name.lastIndexOf(".");
-  // Dockerfile / Makefile 等无扩展名源文件
   if (dot === -1) {
-    const lower = name.toLowerCase();
-    if (
-      lower === "dockerfile" ||
-      lower === "makefile" ||
-      lower === "rakefile" ||
-      lower === "cmakelists.txt" ||
-      lower === ".gitignore" ||
-      lower === ".gitattributes" ||
-      lower === ".env.example" ||
-      lower === ".editorconfig"
-    ) {
-      return AttachmentKind.Text;
-    }
     return AttachmentKind.Unsupported;
   }
   const ext = name.slice(dot).toLowerCase();

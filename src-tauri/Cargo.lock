@@ -4029,6 +4029,7 @@ dependencies = [
  "echo-agent-tool-types",
  "echo-agent-tools",
  "ed25519-dalek",
+ "embed-resource",
  "fs2",
  "futures",
  "ignore",

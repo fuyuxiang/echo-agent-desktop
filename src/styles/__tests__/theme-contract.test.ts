@@ -3,10 +3,12 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const stylesDir = resolve(process.cwd(), "src/styles");
-const appCss = readFileSync(resolve(stylesDir, "app.css"), "utf8");
-const globalCss = readFileSync(resolve(stylesDir, "global.css"), "utf8");
-const tokensCss = readFileSync(resolve(stylesDir, "tokens.css"), "utf8");
-const visualPolishCss = readFileSync(resolve(stylesDir, "visual-polish.css"), "utf8");
+const readCss = (fileName: string) =>
+  readFileSync(resolve(stylesDir, fileName), "utf8").replace(/\r\n?/g, "\n");
+const appCss = readCss("app.css");
+const globalCss = readCss("global.css");
+const tokensCss = readCss("tokens.css");
+const visualPolishCss = readCss("visual-polish.css");
 
 function darkBlocks(css: string): string[] {
   return [...css.matchAll(/\[data-theme=dark\],[\s\S]*?\n\}/g)].map((match) => match[0]);

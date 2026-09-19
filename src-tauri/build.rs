@@ -85,5 +85,22 @@ fn main() {
             println!("cargo:rerun-if-changed={path}");
         }
     }
-    tauri_build::build()
+    let windows_target = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    // Keep Tauri's version and icon resources, but provide the application
+    // manifest separately below. Tauri otherwise links its manifest only into
+    // application binaries, leaving library test harnesses unable to resolve
+    // TaskDialogIndirect from Common Controls v6 on Windows.
+    let attributes = tauri_build::Attributes::new()
+        .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+    tauri_build::try_build(attributes).expect("failed to run Tauri build script");
+    // Link one manifest-only resource into every artifact. The application gets
+    // VERSION/icon from Tauri and MANIFEST from this resource; test harnesses
+    // get only the manifest. Keeping the resource types disjoint prevents the
+    // CVT1100 duplicate-resource failure seen when both contained VERSION 1.
+    if windows_target {
+        let resource = manifest_dir.join("windows-app-manifest.rc");
+        embed_resource::compile_for_everything(resource, embed_resource::NONE)
+            .manifest_required()
+            .expect("failed to embed Windows resources into test executables");
+    }
 }

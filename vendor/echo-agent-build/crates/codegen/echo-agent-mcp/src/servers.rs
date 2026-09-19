@@ -2862,6 +2862,12 @@ pub struct McpClient {
     /// first tool dispatch raced the session actor's background
     /// `get_tool_registrations` handshake.
     init_done: Notify,
+    /// Terminal cancellation for client eviction. Unlike `state = Empty`, the
+    /// token is visible to the task that temporarily owns a transport while
+    /// `state` is `Initializing`, allowing shutdown to drop an in-flight stdio
+    /// `serve` future immediately and preventing the handshake from publishing
+    /// `Ready` after eviction.
+    shutdown_token: tokio_util::sync::CancellationToken,
     startup_timeout_sec: u64,
     tool_timeout_sec: u64,
     /// Per-tool timeout overrides in seconds. Looked up by tool name;
@@ -3041,6 +3047,7 @@ impl McpClient {
             server_name,
             state: Mutex::new(ClientState::Pending(transport)),
             init_done: Notify::new(),
+            shutdown_token: tokio_util::sync::CancellationToken::new(),
             startup_timeout_sec,
             tool_timeout_sec,
             tool_timeouts,
@@ -3513,6 +3520,12 @@ impl McpClient {
     /// `Initializing` and the wait-timeout fallback below surfaces a
     /// clear error rather than blocking forever.
     pub async fn ensure_initialized(&self) -> Result<McpService, McpError> {
+        if self.shutdown_token.is_cancelled() {
+            return Err(McpError::ClientError(format!(
+                "MCP client {} has been shut down",
+                self.server_name
+            )));
+        }
         // Bound how long a parked caller waits on `init_done` before
         // surfacing an error. `try_handshake` is itself bounded by
         // `startup_timeout_sec`, so anything beyond that plus a 1 s margin
@@ -3575,14 +3588,22 @@ impl McpClient {
                     // drop the lock, park on `init_done`.
                     *guard = ClientState::Initializing;
                     drop(guard);
-                    match tokio::time::timeout(inflight_wait, notified.as_mut()).await {
-                        Ok(()) => continue,
-                        Err(_) => {
+                    tokio::select! {
+                        _ = self.shutdown_token.cancelled() => {
                             return Err(McpError::ClientError(format!(
-                                "MCP client {} init still in progress after {}s",
+                                "MCP client {} has been shut down",
                                 self.server_name,
-                                inflight_wait.as_secs(),
                             )));
+                        }
+                        waited = tokio::time::timeout(inflight_wait, notified.as_mut()) => match waited {
+                            Ok(()) => continue,
+                            Err(_) => {
+                                return Err(McpError::ClientError(format!(
+                                    "MCP client {} init still in progress after {}s",
+                                    self.server_name,
+                                    inflight_wait.as_secs(),
+                                )));
+                            }
                         }
                     }
                 }
@@ -3618,7 +3639,14 @@ impl McpClient {
         };
 
         let handshake_start = std::time::Instant::now();
-        let mut result = self.try_handshake(pending).await;
+        let mut result = tokio::select! {
+            biased;
+            _ = self.shutdown_token.cancelled() => Err(McpError::ClientError(format!(
+                "MCP client {} was shut down during initialization",
+                self.server_name,
+            ))),
+            result = self.try_handshake(pending) => result,
+        };
 
         let handshake_elapsed = handshake_start.elapsed().as_micros() as u64;
         tracing::info!(target: echo_agent_telemetry::instrumentation::TARGET, event = "timing", name = "mcp_try_handshake", elapsed_us = handshake_elapsed);
@@ -3629,7 +3657,8 @@ impl McpClient {
         // kick in. We attempt refresh on any failure (not just auth
         // errors) because the cost is low and error strings from
         // different MCP servers are not reliable to match.
-        if result.is_err()
+        if !self.shutdown_token.is_cancelled()
+            && result.is_err()
             && let (Some(auth_mgr), Some(config)) = (&self.auth_manager, &self.http_config)
         {
             tracing::info!(
@@ -3645,7 +3674,14 @@ impl McpClient {
                     config: config.clone(),
                     auth_manager: auth_mgr.clone(),
                 };
-                result = self.try_handshake(retry_transport).await;
+                result = tokio::select! {
+                    biased;
+                    _ = self.shutdown_token.cancelled() => Err(McpError::ClientError(format!(
+                        "MCP client {} was shut down during initialization",
+                        self.server_name,
+                    ))),
+                    result = self.try_handshake(retry_transport) => result,
+                };
             }
         }
 
@@ -3669,30 +3705,44 @@ impl McpClient {
 
         let outcome = {
             let mut guard = self.state.lock().await;
-            match result {
-                Ok(service) => {
-                    let service = Arc::new(service);
-                    *guard = ClientState::Ready {
-                        service: service.clone(),
-                        _connected: echo_agent_telemetry::activity::MCP_SERVERS_CONNECTED.enter(),
-                    };
-                    tracing::info!(
-                        server = %self.server_name,
-                        "MCP server initialized successfully"
-                    );
-                    Ok(service)
+            if self.shutdown_token.is_cancelled() {
+                // `shutdown_transport` already installed Empty. Do not let a
+                // handshake that won a close race resurrect the transport.
+                *guard = ClientState::Empty;
+                if let Ok(service) = result {
+                    drop(service);
                 }
-                Err(e) => {
-                    *guard = match restore {
-                        Some(transport) => ClientState::Pending(transport),
-                        None => ClientState::Empty,
-                    };
-                    tracing::warn!(
-                        server = %self.server_name,
-                        error = %e,
-                        "MCP server init failed"
-                    );
-                    Err(e)
+                Err(McpError::ClientError(format!(
+                    "MCP client {} has been shut down",
+                    self.server_name,
+                )))
+            } else {
+                match result {
+                    Ok(service) => {
+                        let service = Arc::new(service);
+                        *guard = ClientState::Ready {
+                            service: service.clone(),
+                            _connected: echo_agent_telemetry::activity::MCP_SERVERS_CONNECTED
+                                .enter(),
+                        };
+                        tracing::info!(
+                            server = %self.server_name,
+                            "MCP server initialized successfully"
+                        );
+                        Ok(service)
+                    }
+                    Err(e) => {
+                        *guard = match restore {
+                            Some(transport) => ClientState::Pending(transport),
+                            None => ClientState::Empty,
+                        };
+                        tracing::warn!(
+                            server = %self.server_name,
+                            error = %e,
+                            "MCP server init failed"
+                        );
+                        Err(e)
+                    }
                 }
             }
         };
@@ -3950,6 +4000,12 @@ impl McpClient {
     /// [`SafeTokioChildProcess::drop`] which SIGKILLs the process group
     /// synchronously.
     pub async fn shutdown_transport(&self) {
+        // Cancel first so an Initializing holder drops its `try_handshake`
+        // future (and therefore its owned stdio transport) while we wait for
+        // the state lock. CancellationToken is sticky, so no later caller can
+        // restart this evicted client.
+        self.shutdown_token.cancel();
+        self.init_done.notify_waiters();
         // Atomically swap `state` to `Empty` and pull out whatever was
         // holding the live transport. The lock is released BEFORE the
         // drop so any transport-Close callbacks (Stdio::drop spawns a
@@ -3969,11 +4025,9 @@ impl McpClient {
         //    `SafeTokioChildProcess` reaps the process group.
         //    (Non-Stdio Pending variants hold cheap config + Arc auth
         //    managers; no live PIDs to reap, so the drop is a no-op.)
-        // 3. `Initializing` — racing with a handshake. The handshake
-        //    currently owns no transport yet (it moves the transport
-        //    into Ready atomically); if we lose the race, the rmcp
-        //    serve loop owns the transport and will be reaped by the
-        //    Arc-release chain. No-op here.
+        // 3. `Initializing` — the cancellation token above interrupts the
+        //    handshake future, dropping its owned transport. Its publication
+        //    path observes the sticky cancellation and preserves `Empty`.
         let prev = {
             let mut guard = self.state.lock().await;
             std::mem::replace(&mut *guard, ClientState::Empty)

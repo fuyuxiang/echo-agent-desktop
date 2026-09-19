@@ -228,7 +228,13 @@ fn setup_desktop_lifecycle(app: &mut tauri::App) -> Result<(), Box<dyn std::erro
         window.on_window_event(move |event| match event {
             WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
                 let access = app_handle.state::<shell_fs::FilesystemAccess>();
-                for path in paths {
+                // Mirror the stats command's hard batch cap so one oversized
+                // native drop cannot consume the process-wide exact-file grant
+                // budget for paths the Composer will never inspect.
+                for path in paths.iter().take(shell_fs::MAX_PICKED_FILES) {
+                    if !attachment_blob::is_supported_attachment_path(path) {
+                        continue;
+                    }
                     if let Err(error) = access.authorize_file(path) {
                         tracing::warn!(path = %path.display(), %error, "failed to authorize dropped file");
                     }
@@ -325,14 +331,15 @@ pub fn run() {
 
     let app = builder
         .setup(|app| {
-            // Re-adopt image blobs already on disk inside the paste sink so
-            // historical attachments stay previewable after a process restart.
+            // Register the bounded, application-owned paste store so all
+            // supported historical attachments remain previewable after a
+            // process restart without exhausting exact-file grants.
             // Done here (not in `FilesystemAccess::new`) because the allow-list
             // is registered before setup runs and needs `app_data_dir` from the
             // Tauri handle.
             if let Ok(clipboard_dir) = app.path().app_data_dir() {
                 let access = app.state::<shell_fs::FilesystemAccess>();
-                access.register_clipboard_images(&clipboard_dir.join("clipboard-images"));
+                access.register_attachment_store(&clipboard_dir.join("clipboard-images"));
             }
             // The authenticated knowledge bridge is reachable on loopback for
             // personal local knowledge. Organization tools are added only after
@@ -501,7 +508,7 @@ pub fn run() {
             experts::experts_link_agents,
             // Safe, bounded previews for local chat image attachments.
             attachment_preview::attachment_thumbnail,
-            // Persist clipboard / drag-drop image blobs under app_data_dir and
+            // Persist clipboard file blobs under app_data_dir and
             // hand back a path so the existing attachments pipeline (multimodal
             // send, thumbnails, ACP metadata) keeps working.
             attachment_blob::save_attachment_blob,
@@ -569,6 +576,7 @@ pub fn run() {
             shell_fs::open_url,
             shell_fs::filesystem_pick_directory,
             shell_fs::filesystem_pick_files,
+            shell_fs::filesystem_attachment_stats,
             shell_fs::open_path,
             shell_fs::reveal_in_folder,
             shell_fs::path_stat,

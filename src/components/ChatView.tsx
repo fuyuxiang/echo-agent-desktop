@@ -460,18 +460,19 @@ export function ChatView({
     root?.querySelectorAll(".find-hit-active").forEach((node) => {
       node.classList.remove("find-hit-active");
     });
-    if (!findActive) {
-      findPrevQueryRef.current = findQuery;
-      return;
-    }
+    // Query changes clear the active occurrence until the freshly rendered
+    // marks have been collected. Do not mark the query as handled yet, or the
+    // first real hit would incorrectly use smooth scrolling.
+    if (!findActive) return;
     const messageNode = Array.from(
       root?.querySelectorAll<HTMLElement>("[data-msg-id]") ?? [],
     ).find((node) => node.dataset.msgId === findActive.messageId);
     const hit = messageNode?.querySelectorAll<HTMLElement>(".find-hit")[findActive.localIndex];
-    hit?.classList.add("find-hit-active");
+    if (!hit) return;
+    hit.classList.add("find-hit-active");
     const queryJustChanged = findPrevQueryRef.current !== findQuery;
     findPrevQueryRef.current = findQuery;
-    hit?.scrollIntoView?.({
+    hit.scrollIntoView?.({
       behavior: queryJustChanged ? "auto" : "smooth",
       block: "center",
     });
@@ -660,7 +661,12 @@ export function ChatView({
           occurrences={findOccurrences}
           open={findOpen}
           query={findQuery}
-          onQueryChange={setFindQuery}
+          onQueryChange={(next) => {
+            setFindQuery(next);
+            // Prevent the previous query's occurrence from being applied to
+            // the new set of marks before FindBar publishes its first hit.
+            setFindActive(null);
+          }}
           onClose={() => {
             setFindOpen(false);
             setFindQuery("");

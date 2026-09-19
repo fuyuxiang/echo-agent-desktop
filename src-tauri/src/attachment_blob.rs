@@ -1,27 +1,171 @@
-//! Persistent storage for clipboard / drag-drop image blobs.
+//! Persistent storage for clipboard file blobs.
 //!
-//! Pasted or dragged images never carry a real local file path. We land them
-//! in `<app_data_dir>/clipboard-images/<timestamp>-<rand>.<ext>` and hand the
+//! Pasted files do not carry a trustworthy local file path. We land them in
+//! `<app_data_dir>/clipboard-images/<unique>/<original-name>` and hand the
 //! resulting absolute path back to the frontend, so the existing
 //! `attachments: string[]` pipeline (multimodal send, thumbnail render, ACP
 //! metadata) keeps working without special-casing the origin.
 //!
-//! Filenames are always suffixed with a monotonic timestamp + 6 hex chars of
-//! randomness so concurrent pastes (and 1-second clock drift) never collide.
-//! Mime-to-extension mapping is deliberately identical to the formats the
-//! multimodal pipeline accepts.
+//! A private per-blob directory preserves the original filename (important for
+//! type classification and readable chips) while keeping concurrent pastes
+//! collision-free. The accepted extensions deliberately mirror the frontend
+//! attachment classifier and the Runtime read_file extractors.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn extension_for_mime(mime: &str) -> Option<&'static str> {
+const MAX_STORED_ATTACHMENTS: usize = 10_000;
+const MAX_STORED_ATTACHMENT_BYTES: u64 = 1024 * 1024 * 1024;
+
+fn fallback_name_for_mime(mime: &str) -> Option<&'static str> {
     match mime.to_ascii_lowercase().as_str() {
-        "image/png" => Some("png"),
-        "image/jpeg" | "image/jpg" => Some("jpg"),
-        "image/gif" => Some("gif"),
-        "image/webp" => Some("webp"),
+        "image/png" => Some("image.png"),
+        "image/jpeg" | "image/jpg" => Some("image.jpg"),
+        "image/gif" => Some("image.gif"),
+        "image/webp" => Some("image.webp"),
+        "application/pdf" => Some("document.pdf"),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => {
+            Some("document.docx")
+        }
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => {
+            Some("spreadsheet.xlsx")
+        }
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => {
+            Some("presentation.pptx")
+        }
+        "application/vnd.oasis.opendocument.text" => Some("document.odt"),
+        "application/vnd.oasis.opendocument.spreadsheet" => Some("spreadsheet.ods"),
+        "application/vnd.oasis.opendocument.presentation" => Some("presentation.odp"),
+        "application/epub+zip" => Some("book.epub"),
+        "application/json" => Some("data.json"),
+        "text/markdown" => Some("document.md"),
+        "text/yaml" | "text/x-yaml" | "application/yaml" => Some("data.yaml"),
+        mime if mime.starts_with("text/") => Some("document.txt"),
         _ => None,
     }
+}
+
+const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "adoc",
+    "astro",
+    "bash",
+    "bib",
+    "c",
+    "cc",
+    "cfg",
+    "cjs",
+    "clj",
+    "cljc",
+    "cljs",
+    "conf",
+    "cpp",
+    "cs",
+    "csv",
+    "cxx",
+    "dart",
+    "docx",
+    "dockerfile",
+    "env",
+    "epub",
+    "erl",
+    "ex",
+    "exs",
+    "fish",
+    "gif",
+    "go",
+    "gql",
+    "gradle",
+    "graphql",
+    "groovy",
+    "h",
+    "hh",
+    "hpp",
+    "hs",
+    "ini",
+    "java",
+    "jpeg",
+    "jpg",
+    "js",
+    "json",
+    "json5",
+    "jsonc",
+    "jsx",
+    "kt",
+    "kts",
+    "log",
+    "lua",
+    "makefile",
+    "markdown",
+    "md",
+    "mdown",
+    "mjs",
+    "mk",
+    "ml",
+    "mli",
+    "odp",
+    "ods",
+    "odt",
+    "org",
+    "pdf",
+    "php",
+    "png",
+    "pptx",
+    "properties",
+    "proto",
+    "ps1",
+    "py",
+    "pyi",
+    "pyx",
+    "r",
+    "rb",
+    "rs",
+    "rst",
+    "sc",
+    "scala",
+    "sh",
+    "sql",
+    "svelte",
+    "swift",
+    "tex",
+    "toml",
+    "ts",
+    "tsv",
+    "tsx",
+    "txt",
+    "vue",
+    "webp",
+    "xlsx",
+    "xml",
+    "xsd",
+    "xsl",
+    "yaml",
+    "yml",
+    "zsh",
+];
+
+const SUPPORTED_EXACT_NAMES: &[&str] = &[
+    ".editorconfig",
+    ".env.example",
+    ".gitattributes",
+    ".gitignore",
+    "cmakelists.txt",
+    "dockerfile",
+    "makefile",
+    "rakefile",
+];
+
+pub(crate) fn is_supported_attachment_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let lower = name.to_ascii_lowercase();
+    if SUPPORTED_EXACT_NAMES.contains(&lower.as_str()) {
+        return true;
+    }
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|extension| SUPPORTED_EXTENSIONS.contains(&extension.as_str()))
 }
 
 /// Build a safe base filename from the suggested name. Strips path
@@ -46,10 +190,10 @@ fn sanitize_basename(suggested: Option<&str>) -> Option<String> {
             c => c,
         })
         .collect();
-    let trimmed: String = cleaned
-        .trim_matches(|c: char| c == '.' || c.is_whitespace())
-        .to_string();
-    if trimmed.is_empty() {
+    // Leading dots are meaningful for `.gitignore` / `.editorconfig`. Only
+    // trailing dots/spaces are invalid on Windows; dot-only names are rejected.
+    let trimmed = cleaned.trim().trim_end_matches(['.', ' ']).to_string();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
         return None;
     }
     Some(if trimmed.chars().count() > 80 {
@@ -80,10 +224,101 @@ pub(crate) fn build_destination(
     mime: &str,
     suggested_name: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let ext = extension_for_mime(mime).ok_or_else(|| format!("不支持的图片类型：{mime}"))?;
-    let stem = sanitize_basename(suggested_name).unwrap_or_else(|| "image".to_string());
-    let file_name = format!("{}-{}.{}", stem, unique_suffix(), ext);
-    Ok(dir.join(file_name))
+    let suggested = sanitize_basename(suggested_name);
+    let file_name = suggested
+        .filter(|name| is_supported_attachment_path(Path::new(name)))
+        .or_else(|| fallback_name_for_mime(mime).map(str::to_string))
+        .ok_or_else(|| format!("不支持的附件类型：{mime}"))?;
+    Ok(dir.join(unique_suffix()).join(file_name))
+}
+
+/// Bound the application-owned paste store without coupling it to the much
+/// smaller process-lifetime exact-file grant set. Oldest blobs are evicted
+/// first; `keep` protects the file just written by the current operation.
+pub(crate) fn prune_store(dir: &Path, keep: Option<&Path>) -> Result<(), String> {
+    prune_store_with_limits(
+        dir,
+        keep,
+        MAX_STORED_ATTACHMENTS,
+        MAX_STORED_ATTACHMENT_BYTES,
+    )
+}
+
+fn prune_store_with_limits(
+    dir: &Path,
+    keep: Option<&Path>,
+    max_count: usize,
+    max_bytes: u64,
+) -> Result<(), String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("读取附件目录失败：{error}")),
+    };
+    let keep = keep.and_then(|path| path.canonicalize().ok());
+    let mut files: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let candidates = if metadata.file_type().is_symlink() {
+            Vec::new()
+        } else if metadata.is_dir() {
+            std::fs::read_dir(&path)
+                .map(|children| children.flatten().map(|child| child.path()).collect())
+                .unwrap_or_default()
+        } else {
+            vec![path]
+        };
+        for candidate in candidates {
+            let Ok(metadata) = std::fs::symlink_metadata(&candidate) else {
+                continue;
+            };
+            if metadata.file_type().is_symlink()
+                || !metadata.is_file()
+                || !is_supported_attachment_path(&candidate)
+            {
+                continue;
+            }
+            files.push((
+                candidate,
+                metadata.len(),
+                metadata.modified().unwrap_or(UNIX_EPOCH),
+            ));
+        }
+    }
+    files.sort_by_key(|(_, _, modified)| *modified);
+    let mut total_bytes = files
+        .iter()
+        .fold(0_u64, |total, (_, size, _)| total.saturating_add(*size));
+    let mut total_count = files.len();
+    for (path, size, _) in files {
+        if total_count <= max_count && total_bytes <= max_bytes {
+            break;
+        }
+        if keep.as_ref().is_some_and(|kept| {
+            path.canonicalize()
+                .is_ok_and(|candidate| candidate.as_path() == kept.as_path())
+        }) {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                total_count = total_count.saturating_sub(1);
+                total_bytes = total_bytes.saturating_sub(size);
+                if let Some(parent) = path.parent() {
+                    if parent != dir {
+                        let _ = std::fs::remove_dir(parent);
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "failed to evict old attachment blob");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Write bytes to a fresh file inside `dir` using the private-file helper so
@@ -95,17 +330,20 @@ pub fn save_blob(
     suggested_name: Option<&str>,
 ) -> Result<PathBuf, String> {
     if bytes.is_empty() {
-        return Err("粘贴的图片为空".into());
+        return Err("粘贴的文件为空".into());
     }
     if bytes.len() as u64 > crate::shell_fs::MAX_ATTACHMENT_FILE_BYTES {
         return Err(format!(
-            "单张图片不能超过 {}MB",
+            "单个附件不能超过 {}MB",
             crate::shell_fs::MAX_ATTACHMENT_FILE_BYTES / 1024 / 1024
         ));
     }
-    std::fs::create_dir_all(dir)
-        .map_err(|error| format!("创建附件目录 {} 失败：{error}", dir.display()))?;
     let destination = build_destination(dir, mime, suggested_name)?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "无法创建附件目录".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("创建附件目录 {} 失败：{error}", parent.display()))?;
     crate::paths::write_private_file(&destination, bytes)?;
     // write_private_file uses a staging file inside the same dir; the
     // canonicalize-to-staging dance is irrelevant to the caller.
@@ -127,9 +365,15 @@ pub async fn save_attachment_blob(
         .map_err(|error| format!("解析应用数据目录失败：{error}"))?
         .join("clipboard-images");
     let path = save_blob(&dir, &bytes, &mime, suggested_name.as_deref())?;
-    if let Err(error) = access.authorize_file(&path) {
+    if let Err(error) = access.require_managed_attachment(&path) {
         let _ = std::fs::remove_file(&path);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
         return Err(error);
+    }
+    if let Err(error) = prune_store(&dir, Some(&path)) {
+        tracing::warn!(dir = %dir.display(), %error, "failed to prune attachment store after save");
     }
     Ok(path.to_string_lossy().into_owned())
 }
@@ -160,10 +404,15 @@ pub async fn discard_attachment_blob(
     let Ok(canonical) = std::fs::canonicalize(&raw) else {
         return Ok(());
     };
-    if canonical.parent() != Some(canonical_dir.as_path()) {
+    if !canonical.starts_with(&canonical_dir) {
         return Ok(());
     }
     std::fs::remove_file(&canonical).map_err(|error| format!("删除未发送附件失败：{error}"))?;
+    if let Some(parent) = canonical.parent() {
+        if parent != canonical_dir {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
     access.revoke_authorized_file(&canonical)
 }
 
@@ -199,10 +448,10 @@ mod tests {
     }
 
     #[test]
-    fn unknown_image_mime_is_rejected() {
+    fn unknown_attachment_mime_is_rejected() {
         let temp = tempfile::tempdir().expect("temp dir");
         let error = save_blob(temp.path(), b"x", "image/avif", None).unwrap_err();
-        assert!(error.contains("不支持的图片类型"));
+        assert!(error.contains("不支持的附件类型"));
     }
 
     #[test]
@@ -215,20 +464,19 @@ mod tests {
     #[test]
     fn suggested_name_is_used_as_stem_when_safe() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let path = save_blob(temp.path(), b"x", "image/png", Some("screenshot")).unwrap();
+        let path = save_blob(temp.path(), b"x", "image/png", Some("screenshot.png")).unwrap();
         let file_name = path.file_name().unwrap().to_string_lossy().to_string();
-        assert!(file_name.starts_with("screenshot-"), "got {file_name}");
-        assert!(file_name.ends_with(".png"), "got {file_name}");
+        assert_eq!(file_name, "screenshot.png");
     }
 
     #[test]
     fn suggested_name_strips_path_separators_and_traversal() {
         let temp = tempfile::tempdir().expect("temp dir");
         // 路径穿越和绝对路径都只应留下 basename 段。
-        let evil = "../../../etc/passwd";
+        let evil = "../../../etc/passwd.png";
         let path = save_blob(temp.path(), b"x", "image/png", Some(evil)).unwrap();
         let file_name = path.file_name().unwrap().to_string_lossy().to_string();
-        assert!(file_name.starts_with("passwd-"), "got {file_name}");
+        assert_eq!(file_name, "passwd.png");
         // 必须仍在 temp 目录内(不能逃逸)。
         assert!(
             path.starts_with(temp.path().canonicalize().unwrap()),
@@ -239,10 +487,9 @@ mod tests {
     #[test]
     fn suggested_name_sanitizes_os_unsafe_characters() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let path = save_blob(temp.path(), b"x", "image/png", Some("a:b*c?d\"e<f>g|h")).unwrap();
+        let path = save_blob(temp.path(), b"x", "image/png", Some("a:b*c?d\"e<f>g|h.png")).unwrap();
         let file_name = path.file_name().unwrap().to_string_lossy().to_string();
-        let stem = file_name.split('-').next().unwrap();
-        assert_eq!(stem, "a_b_c_d_e_f_g_h", "got {file_name}");
+        assert_eq!(file_name, "a_b_c_d_e_f_g_h.png", "got {file_name}");
     }
 
     #[test]
@@ -251,10 +498,7 @@ mod tests {
         for bad in [None, Some(""), Some("   "), Some("....."), Some("\t\n")] {
             let path = save_blob(temp.path(), b"x", "image/png", bad).unwrap();
             let file_name = path.file_name().unwrap().to_string_lossy().to_string();
-            assert!(
-                file_name.starts_with("image-"),
-                "got {file_name} for {bad:?}"
-            );
+            assert!(file_name == "image.png", "got {file_name} for {bad:?}");
         }
     }
 
@@ -308,21 +552,53 @@ mod tests {
     #[test]
     fn long_suggested_name_is_truncated_to_80_chars() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let long = "a".repeat(500);
+        let long = format!("{}.png", "a".repeat(500));
         let path = save_blob(temp.path(), b"x", "image/png", Some(&long)).unwrap();
         let file_name = path.file_name().unwrap().to_string_lossy().to_string();
-        // stem 截断到 80 字符 + `-<suffix>.png`，整段文件名前缀 < 200。
+        // Basename is bounded before landing on disk.
         assert!(
             file_name.len() < 200,
             "got len {}: {file_name}",
             file_name.len()
         );
-        let stem = file_name.split('-').next().unwrap();
-        assert_eq!(
-            stem.len(),
-            80,
-            "stem must be exactly 80 chars, got {}",
-            stem.len()
-        );
+    }
+
+    #[test]
+    fn preserves_supported_non_image_names_and_special_dotfiles() {
+        let temp = tempfile::tempdir().unwrap();
+        for (name, mime) in [
+            ("report.pdf", "application/pdf"),
+            ("notes.md", "text/markdown"),
+            ("service.dockerfile", "text/plain"),
+            ("rules.makefile", "text/plain"),
+            (
+                "table.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+            (".gitignore", "text/plain"),
+        ] {
+            let path = save_blob(temp.path(), b"content", mime, Some(name)).unwrap();
+            assert_eq!(
+                path.file_name().and_then(|value| value.to_str()),
+                Some(name)
+            );
+            assert!(is_supported_attachment_path(&path));
+        }
+    }
+
+    #[test]
+    fn prune_store_evicts_oldest_and_keeps_current_blob() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = save_blob(temp.path(), b"1111", "text/plain", Some("first.txt")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let second = save_blob(temp.path(), b"2222", "text/plain", Some("second.txt")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let newest = save_blob(temp.path(), b"3333", "text/plain", Some("newest.txt")).unwrap();
+
+        prune_store_with_limits(temp.path(), Some(&newest), 2, 8).unwrap();
+
+        assert!(!first.exists(), "oldest blob should be evicted first");
+        assert!(second.exists());
+        assert!(newest.exists(), "current save must never be evicted");
     }
 }

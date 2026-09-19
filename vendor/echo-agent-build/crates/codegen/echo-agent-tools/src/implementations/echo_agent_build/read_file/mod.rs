@@ -77,6 +77,8 @@ static READ_FILE_CAPABILITIES: LazyLock<echo_agent_tool_protocol::ToolCapabiliti
     });
 const MAX_PPTX_BYTES: usize = 50 * 1024 * 1024;
 const PPTX_PROCESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const MAX_MODERN_DOCUMENT_BYTES: usize = 50 * 1024 * 1024;
+const MODERN_DOCUMENT_PROCESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 async fn handle_pptx(
     file_bytes: Vec<u8>,
     path: &std::path::Path,
@@ -100,6 +102,22 @@ fn extract_pptx_text(file_bytes: Vec<u8>) -> Result<ReadFileOutput, String> {
         .map_err(|e| format!("Failed to extract text from PPTX: {e}"))?;
     Ok(raw_text_to_file_content(text))
 }
+async fn handle_modern_document(
+    file_bytes: Vec<u8>,
+    path: &std::path::Path,
+    label: &'static str,
+    extractor: fn(&[u8]) -> Result<String, String>,
+) -> Result<ReadFileOutput, echo_agent_tool_runtime::ToolError> {
+    run_document_extraction(
+        file_bytes,
+        path,
+        label,
+        MAX_MODERN_DOCUMENT_BYTES,
+        MODERN_DOCUMENT_PROCESS_TIMEOUT,
+        move |bytes| extractor(&bytes).map(raw_text_to_file_content),
+    )
+    .await
+}
 /// Description for default toolset (full/non-concise)
 pub(crate) const DESCRIPTION_FULL: &str = r#"Read a file.
 
@@ -107,7 +125,7 @@ Usage:
 - The ${{ params.read.target_file }} parameter can be a relative path in the workspace or an absolute path
 - By default, it reads up to {max_lines_read} lines starting from the beginning of the file
 - Line numbers (1-based) appear as anchors in the format LINE_NUMBER→LINE_CONTENT on the first returned line and on every 10th line of the file; the lines in between show content only. Count from the nearest anchor when referring to a specific line
-- This tool can read PDF files (.pdf), PowerPoint files (.pptx), Jupyter notebooks (.ipynb files), and image files (e.g. PNG, JPG, etc).
+- This tool can read PDF, modern Office (.docx/.xlsx/.pptx), OpenDocument (.odt/.ods/.odp), ePub, Jupyter notebooks (.ipynb), and image files (e.g. PNG, JPG, etc).
 - When reading an image file the contents are presented visually as this tool uses multimodal LLMs."#;
 /// Schema-only advertised default (runtime still treats omit as line 1 via unwrap_or).
 fn schema_default_offset() -> Option<i64> {
@@ -463,6 +481,45 @@ pub(crate) async fn run_read_file(
     }
     if extension == "pptx" {
         return handle_pptx(file_bytes, &path).await;
+    }
+    match extension.as_str() {
+        "docx" => {
+            return handle_modern_document(
+                file_bytes,
+                &path,
+                "DOCX",
+                crate::implementations::read_file::office::extract_docx_text,
+            )
+            .await;
+        }
+        "xlsx" => {
+            return handle_modern_document(
+                file_bytes,
+                &path,
+                "XLSX",
+                crate::implementations::read_file::office::extract_xlsx_text,
+            )
+            .await;
+        }
+        "odt" | "ods" | "odp" => {
+            return handle_modern_document(
+                file_bytes,
+                &path,
+                "OpenDocument",
+                crate::implementations::read_file::office::extract_open_document_text,
+            )
+            .await;
+        }
+        "epub" => {
+            return handle_modern_document(
+                file_bytes,
+                &path,
+                "EPUB",
+                crate::implementations::read_file::office::extract_epub_text,
+            )
+            .await;
+        }
+        _ => {}
     }
     if crate::util::binary::is_binary(&extension, &file_bytes) {
         tracing::info!(

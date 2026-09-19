@@ -214,6 +214,29 @@ export async function filesystemPickFiles(options?: {
   });
 }
 
+export interface AttachmentFileStat {
+  inputPath: string;
+  /** Canonical path returned by the native capability boundary. */
+  path: string;
+  sizeBytes: number;
+}
+
+export interface AttachmentStatsResult {
+  files: AttachmentFileStat[];
+  rejected: Array<{ path: string; reason: string }>;
+}
+
+/**
+ * Validate picker/drop paths and return their real on-disk sizes before the
+ * Composer reports that they were added. Paths must already have been granted
+ * by a native picker, native drag event, workspace, or the managed paste store.
+ */
+export async function filesystemAttachmentStats(
+  paths: string[],
+): Promise<AttachmentStatsResult> {
+  return invoke<AttachmentStatsResult>("filesystem_attachment_stats", { paths });
+}
+
 /**
  * Switch the model used by an existing session (EchoAgent's `session/set_model`).
  * May reject with `MODEL_SWITCH_INCOMPATIBLE_AGENT` if the session has turns
@@ -1910,7 +1933,7 @@ export async function attachmentThumbnail(path: string): Promise<string> {
 }
 
 /**
- * Persist a clipboard / drag-drop image blob under the app's data dir and
+ * Persist a clipboard file blob under the app's data dir and
  * return its absolute path. The path flows straight into the existing
  * `attachments: string[]` pipeline — multimodal send, thumbnails, ACP metadata
  * — so paste and drop behave identically to a file-picker selection.
@@ -1930,7 +1953,7 @@ export async function saveAttachmentBlob(input: {
   });
 }
 
-/** Delete a clipboard image that was removed before it was sent. */
+/** Delete an application-owned clipboard file that was removed before send. */
 export async function discardAttachmentBlob(path: string): Promise<void> {
   await invoke<void>("discard_attachment_blob", { path });
 }

@@ -2,6 +2,7 @@
 
 pub mod image;
 pub mod metadata;
+pub(crate) mod office;
 pub mod pdf;
 pub mod pptx;
 

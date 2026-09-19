@@ -16,14 +16,29 @@ let dragDropCallback: ((event: { payload: DragDropPayload }) => void) | null = n
 const unlistenMock = vi.fn();
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async (cmd: string, args: { suggestedName?: string; mime?: string }) => {
+  invoke: vi.fn(),
+}));
+
+async function defaultInvoke(
+  cmd: string,
+  args: { suggestedName?: string; mime?: string; paths?: string[] },
+) {
     if (cmd === "save_attachment_blob") {
       // 保留 suggestedName 原值,这样 chip 显示的 basename 跟测试期望一致。
       return `/fake/appdata/clipboard-images/${args.suggestedName ?? "image.png"}`;
     }
+    if (cmd === "filesystem_attachment_stats") {
+      return {
+        files: (args.paths ?? []).map((path) => ({
+          inputPath: path,
+          path,
+          sizeBytes: 4,
+        })),
+        rejected: [],
+      };
+    }
     return undefined;
-  }),
-}));
+}
 
 vi.mock("@tauri-apps/api/webview", () => ({
   getCurrentWebview: () => ({
@@ -35,6 +50,11 @@ vi.mock("@tauri-apps/api/webview", () => ({
 }));
 
 const base = { streaming: false, onSend: vi.fn(), onCancel: vi.fn() };
+
+beforeEach(() => {
+  vi.mocked(invoke).mockReset();
+  vi.mocked(invoke).mockImplementation(defaultInvoke as typeof invoke);
+});
 
 function makeImageFile(name: string): File {
   return new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], name, { type: "image/png" });
@@ -66,7 +86,6 @@ function firePasteWith(
 describe("Composer clipboard paste of images", () => {
   beforeEach(() => {
     dragDropCallback = null;
-    vi.mocked(invoke).mockClear();
     base.onSend.mockReset();
   });
 
@@ -188,7 +207,7 @@ describe("Composer clipboard paste of images", () => {
     expect(screen.queryByText("fail.png")).toBeNull();
   });
 
-  it("单张图片超过 20MB 时在读取二进制前拒绝", () => {
+  it("单张图片超过 20MB 时在读取二进制前拒绝", async () => {
     const onToast = vi.fn();
     const arrayBuffer = vi.fn();
     render(<Composer {...base} onToast={onToast} />);
@@ -201,12 +220,14 @@ describe("Composer clipboard paste of images", () => {
       },
     ]);
 
+    await waitFor(() => {
+      expect(onToast).toHaveBeenCalledWith(expect.stringContaining("超过 20MB"));
+    });
     expect(arrayBuffer).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalledWith("save_attachment_blob", expect.anything());
-    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("超过 20MB"));
   });
 
-  it("一次粘贴超过 20 个附件时不读取文件", () => {
+  it("一次粘贴超过 20 个附件时不读取文件", async () => {
     const onToast = vi.fn();
     const arrayBuffer = vi.fn();
     render(<Composer {...base} onToast={onToast} />);
@@ -218,11 +239,13 @@ describe("Composer clipboard paste of images", () => {
 
     firePasteWith(screen.getByRole("textbox"), items);
 
+    await waitFor(() => {
+      expect(onToast).toHaveBeenCalledWith(expect.stringContaining("附件最多 20 个"));
+    });
     expect(arrayBuffer).not.toHaveBeenCalled();
-    expect(onToast).toHaveBeenCalledWith("附件数量不能超过 20 个");
   });
 
-  it("一次粘贴总大小超过 64MB 时不读取文件", () => {
+  it("一次粘贴总大小超过 64MB 时不读取文件", async () => {
     const onToast = vi.fn();
     const arrayBuffer = vi.fn();
     render(<Composer {...base} onToast={onToast} />);
@@ -234,8 +257,10 @@ describe("Composer clipboard paste of images", () => {
 
     firePasteWith(screen.getByRole("textbox"), items);
 
+    await waitFor(() => {
+      expect(onToast).toHaveBeenCalledWith(expect.stringContaining("附件总大小最多 64MB"));
+    });
     expect(arrayBuffer).not.toHaveBeenCalled();
-    expect(onToast).toHaveBeenCalledWith("本次粘贴的文件总大小不能超过 64MB");
   });
 
   it("并发粘贴完成时仍严格限制为 20 个附件", async () => {
@@ -259,7 +284,26 @@ describe("Composer clipboard paste of images", () => {
         path: expect.stringContaining(".png"),
       }));
     });
-    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("已忽略多余文件"));
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("附件最多 20 个"));
+  });
+
+  it("并发粘贴完成时使用最新附件总大小，不能绕过 64MB 上限", async () => {
+    const onToast = vi.fn();
+    render(<Composer {...base} onToast={onToast} />);
+    const textarea = screen.getByRole("textbox");
+    const makeItems = (prefix: string) => Array.from({ length: 4 }, (_, index) => ({
+      kind: "file",
+      type: "image/png",
+      getAsFile: () => makeSizedImage(`${prefix}-${index}.png`, 9 * 1024 * 1024),
+    }));
+
+    firePasteWith(textarea, makeItems("first"));
+    firePasteWith(textarea, makeItems("second"));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "移除附件" })).toHaveLength(7);
+    });
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("附件总大小最多 64MB"));
   });
 
   it("移除未发送的粘贴图片时删除临时文件", async () => {
@@ -395,7 +439,55 @@ describe("Composer drag-drop via Tauri native event", () => {
     expect(await screen.findByText("spec.pdf")).toBeInTheDocument();
   });
 
-  it("drop reports how many files were skipped via toast when unsupported mixed in", () => {
+  it("drop validates real file size before reporting success", async () => {
+    const onToast = vi.fn();
+    vi.mocked(invoke).mockImplementationOnce(async (cmd, args?: unknown) => {
+      if (cmd === "filesystem_attachment_stats") {
+        const path = (args as { paths: string[] }).paths[0];
+        return {
+          files: [{ inputPath: path, path, sizeBytes: 20 * 1024 * 1024 + 1 }],
+          rejected: [],
+        };
+      }
+      return undefined;
+    });
+    render(<Composer {...base} onToast={onToast} />);
+    act(() => {
+      dragDropCallback!({
+        payload: {
+          type: "drop",
+          paths: ["/Users/me/too-large.pdf"],
+          position: { x: 0, y: 0 },
+        },
+      });
+    });
+
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith(expect.stringContaining("超过 20MB")));
+    expect(screen.queryByText("too-large.pdf")).toBeNull();
+  });
+
+  it("drop reports duplicates instead of claiming they were added again", async () => {
+    const onToast = vi.fn();
+    render(<Composer {...base} onToast={onToast} />);
+    const event = {
+      payload: {
+        type: "drop" as const,
+        paths: ["/Users/me/repeat.txt"],
+        position: { x: 0, y: 0 },
+      },
+    };
+    act(() => dragDropCallback!(event));
+    expect(await screen.findByText("repeat.txt")).toBeInTheDocument();
+    onToast.mockClear();
+    act(() => dragDropCallback!(event));
+
+    await waitFor(() => {
+      expect(onToast).toHaveBeenCalledWith(expect.stringContaining("重复文件"));
+    });
+    expect(screen.getAllByText("repeat.txt")).toHaveLength(1);
+  });
+
+  it("drop reports how many files were skipped via toast when unsupported mixed in", async () => {
     const onToast = vi.fn();
     render(<Composer {...base} onToast={onToast} />);
     act(() => {
@@ -407,8 +499,8 @@ describe("Composer drag-drop via Tauri native event", () => {
         },
       });
     });
-    expect(screen.getByText("a.png")).toBeInTheDocument();
-    expect(screen.getByText("code.ts")).toBeInTheDocument();
+    expect(await screen.findByText("a.png")).toBeInTheDocument();
+    expect(await screen.findByText("code.ts")).toBeInTheDocument();
     expect(screen.queryByText("evil.exe")).toBeNull();
     expect(onToast).toHaveBeenCalledWith(expect.stringContaining("跳过"));
   });
@@ -432,7 +524,7 @@ describe("Composer drag-drop via Tauri native event", () => {
       });
     });
     expect(
-      screen.getByText(/支持图片、PDF、Office、代码、文本与数据文件/),
+      screen.getByText(/支持图片、PDF、DOCX、XLSX、PPTX、代码、文本与数据文件/),
     ).toBeInTheDocument();
   });
 

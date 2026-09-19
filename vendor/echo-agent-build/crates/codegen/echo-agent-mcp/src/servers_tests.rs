@@ -2881,6 +2881,66 @@ async fn ensure_initialized_drop_guard_restores_state_after_holder_aborted() {
     }
 }
 
+/// Cross-platform regression for eviction during the `Initializing` window.
+/// The previous orphan-process test only covered Pending stdio and only ran on
+/// Unix; this exercises the state-machine race on Windows as well.
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_during_handshake_cancels_and_never_republishes_ready() {
+    use crate::acp_transport::AcpReverseInvoker;
+    use std::time::Duration;
+
+    struct HangingInvoker {
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl AcpReverseInvoker for HangingInvoker {
+        async fn invoke(
+            &self,
+            _server_id: &str,
+            _message: serde_json::Value,
+            _timeout: Duration,
+        ) -> Result<serde_json::Value, String> {
+            self.started.notify_waiters();
+            std::future::pending().await
+        }
+    }
+
+    let started = Arc::new(tokio::sync::Notify::new());
+    let started_wait = started.notified();
+    let client = Arc::new(McpClient::new_acp(
+        "shutdown-race".to_string(),
+        "sdk-0".to_string(),
+        Arc::new(HangingInvoker {
+            started: Arc::clone(&started),
+        }),
+        None,
+        None,
+    ));
+    let holder_client = Arc::clone(&client);
+    let holder = tokio::spawn(async move { holder_client.ensure_initialized().await });
+
+    tokio::time::timeout(Duration::from_secs(2), started_wait)
+        .await
+        .expect("handshake should reach the reverse invoker");
+    assert_eq!(client.state_kind().await, ClientStateKind::Initializing);
+
+    tokio::time::timeout(Duration::from_secs(2), client.shutdown_transport())
+        .await
+        .expect("shutdown must not wait for the configured startup timeout");
+    let error = tokio::time::timeout(Duration::from_secs(2), holder)
+        .await
+        .expect("initialization holder must finish after shutdown")
+        .expect("holder task must not panic")
+        .expect_err("a shut-down client cannot initialize successfully");
+    assert!(error.to_string().contains("shut down"), "got {error}");
+    assert_eq!(client.state_kind().await, ClientStateKind::Empty);
+
+    let second = client.ensure_initialized().await.unwrap_err();
+    assert!(second.to_string().contains("shut down"), "got {second}");
+    assert_eq!(client.state_kind().await, ClientStateKind::Empty);
+}
+
 #[test]
 fn test_mcp_state_is_initialized_requires_empty_initializing_servers() {
     let mut state = McpState::new(vec![make_stdio_server("a", "/bin/a")]);

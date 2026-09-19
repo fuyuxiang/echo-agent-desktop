@@ -32,17 +32,23 @@ describe("classifyAttachment — 多类型附件分类契约", () => {
     expect(classifyAttachment("/tmp/a.webp")).toBe(AttachmentKind.Image);
   });
 
-  // 文档:PDF / Office / OpenDocument / ePub
+  // 文档:PDF / 可可靠解析的现代 Office / OpenDocument / ePub
   it("文档格式返回 Document", () => {
     expect(classifyAttachment("/tmp/a.pdf")).toBe(AttachmentKind.Document);
     expect(classifyAttachment("/tmp/a.docx")).toBe(AttachmentKind.Document);
-    expect(classifyAttachment("/tmp/a.doc")).toBe(AttachmentKind.Document);
     expect(classifyAttachment("/tmp/a.xlsx")).toBe(AttachmentKind.Document);
-    expect(classifyAttachment("/tmp/a.xls")).toBe(AttachmentKind.Document);
     expect(classifyAttachment("/tmp/a.pptx")).toBe(AttachmentKind.Document);
-    expect(classifyAttachment("/tmp/a.rtf")).toBe(AttachmentKind.Document);
     expect(classifyAttachment("/tmp/a.odt")).toBe(AttachmentKind.Document);
+    expect(classifyAttachment("/tmp/a.ods")).toBe(AttachmentKind.Document);
+    expect(classifyAttachment("/tmp/a.odp")).toBe(AttachmentKind.Document);
     expect(classifyAttachment("/tmp/a.epub")).toBe(AttachmentKind.Document);
+  });
+
+  it("无法可靠解析的旧 Office 与 RTF 会在添加前拒绝", () => {
+    expect(classifyAttachment("/tmp/a.doc")).toBe(AttachmentKind.Unsupported);
+    expect(classifyAttachment("/tmp/a.xls")).toBe(AttachmentKind.Unsupported);
+    expect(classifyAttachment("/tmp/a.ppt")).toBe(AttachmentKind.Unsupported);
+    expect(classifyAttachment("/tmp/a.rtf")).toBe(AttachmentKind.Unsupported);
   });
 
   // 代码源文件:agent 场景最高频
@@ -116,6 +122,15 @@ describe("classifyAttachment — 多类型附件分类契约", () => {
     expect(classifyAttachment("/tmp/.hidden")).toBe(AttachmentKind.Unsupported);
     expect(classifyAttachment("/tmp/a.xyz")).toBe(AttachmentKind.Unsupported);
     expect(classifyAttachment("")).toBe(AttachmentKind.Unsupported);
+  });
+
+  it("识别常见的精确配置文件名", () => {
+    expect(classifyAttachment("/tmp/.gitignore")).toBe(AttachmentKind.Text);
+    expect(classifyAttachment("/tmp/.gitattributes")).toBe(AttachmentKind.Text);
+    expect(classifyAttachment("/tmp/.env.example")).toBe(AttachmentKind.Text);
+    expect(classifyAttachment("/tmp/.editorconfig")).toBe(AttachmentKind.Text);
+    expect(classifyAttachment("/tmp/CMakeLists.txt")).toBe(AttachmentKind.Text);
+    expect(classifyAttachment("/tmp/Dockerfile")).toBe(AttachmentKind.Text);
   });
 
   it("路径大小写不敏感、POSIX/Windows 路径都识别", () => {
