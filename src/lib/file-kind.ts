@@ -6,7 +6,7 @@
  * 重型格式(pdf/docx/pptx/sheet/audio/video)在桌面端需要专门依赖,这里先归到
  * `binary`(显示占位 + 文件名 + 大小);markdown/image/code/text 可本地直接渲染。
  */
-import { extOf } from "./drop-utils";
+import { basenameOf, extOf } from "./drop-utils";
 
 export type PreviewKind =
   | "markdown"
@@ -44,6 +44,11 @@ function inSet(ext: string, set: string[]): boolean {
 /** 根据文件名(或路径)判定预览类型。 */
 export function detectPreviewKind(filename: string): PreviewKind {
   const ext = extOf(filename);
+  const base = basenameOf(filename).toLowerCase();
+  if (["readme", "license", "notice", "authors", "changelog", "dockerfile", "makefile"].includes(base)
+    || (/^\.[a-z0-9_-]+$/i.test(base) && ![".png", ".jpg", ".gif"].includes(base))) {
+    return "text";
+  }
   if (inSet(ext, MARKDOWN_EXTS)) return "markdown";
   if (inSet(ext, IMAGE_EXTS)) return "image";
   if (inSet(ext, CODE_EXTS)) return "code";

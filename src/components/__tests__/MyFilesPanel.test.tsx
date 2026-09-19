@@ -5,6 +5,7 @@ import "@testing-library/jest-dom/vitest";
 vi.mock("@/lib/agent-client", () => ({
   listDir: vi.fn(),
   openLocalPath: vi.fn().mockResolvedValue(undefined),
+  filesystemPickFiles: vi.fn().mockResolvedValue([]),
 }));
 
 import { listDir, openLocalPath, type DirEntry } from "@/lib/agent-client";

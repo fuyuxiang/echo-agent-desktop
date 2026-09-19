@@ -1,27 +1,39 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
 import { ToolSidePanel, type ToolSidePanelMode } from "../ToolSidePanel";
+import type { SessionArtifact } from "@/lib/session-artifacts";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-function renderPanel(mode: ToolSidePanelMode = "artifacts") {
+function renderPanel(
+  mode: ToolSidePanelMode = "artifacts",
+  artifacts: SessionArtifact[] = [],
+  onToast = vi.fn(),
+) {
   return render(
     <ToolSidePanel
       open
       mode={mode}
-      artifacts={[]}
+      artifacts={artifacts}
+      cwd="C:\\work"
       messages={[]}
       sessionId="session-1"
       onClose={vi.fn()}
       onSelectTool={vi.fn()}
       onSelectArtifact={vi.fn()}
       onOpenArtifacts={vi.fn()}
+      onToast={onToast}
     />,
   );
 }
 
 describe("ToolSidePanel navigation collapse", () => {
-  beforeEach(() => localStorage.clear());
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(invoke).mockReset().mockResolvedValue([]);
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+  });
 
   it("replaces the full header with one accessible expand control", () => {
     const { container } = renderPanel();
@@ -78,4 +90,52 @@ describe("ToolSidePanel navigation collapse", () => {
       });
     },
   );
+
+  it("explains external-file authorization instead of offering a broken open action", async () => {
+    vi.mocked(invoke).mockRejectedValue("拒绝访问未授权的路径：C:\\outside\\report.md");
+    renderPanel("artifacts", [artifact("C:\\outside\\report.md")]);
+
+    fireEvent.click(screen.getByRole("button", { name: /report\.md/ }));
+
+    expect(await screen.findByText(/位于当前工作区之外/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择该文件并授权预览" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "用系统应用打开" })).not.toBeInTheDocument();
+  });
+
+  it("retries the preview after the user authorizes the exact external file", async () => {
+    let textReads = 0;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "read_text_file") {
+        textReads += 1;
+        if (textReads === 1) throw new Error("拒绝访问未授权的路径：C:\\outside\\report.md");
+        return "preview ready";
+      }
+      if (command === "filesystem_pick_files") return ["C:\\outside\\report.md"];
+      if (command === "path_stat") {
+        return { path: "C:\\outside\\report.md", exists: true, kind: "file", absolute: "C:\\outside\\report.md" };
+      }
+      return undefined;
+    });
+    const onToast = vi.fn();
+    renderPanel("artifacts", [artifact("C:\\outside\\report.md")], onToast);
+    fireEvent.click(screen.getByRole("button", { name: /report\.md/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "选择该文件并授权预览" }));
+
+    expect(await screen.findByText("preview ready")).toBeInTheDocument();
+    expect(textReads).toBe(2);
+    expect(onToast).toHaveBeenCalledWith("已授权该文件，可以在面板中预览");
+    expect(screen.getByRole("button", { name: "用系统应用打开" })).toBeInTheDocument();
+  });
 });
+
+function artifact(path: string): SessionArtifact {
+  return {
+    id: path.replace(/\\/g, "/").toLowerCase(),
+    path,
+    kind: "edit",
+    title: `Write ${path}`,
+    toolCallId: "write-1",
+    status: "completed",
+    verifiedOutput: true,
+  };
+}

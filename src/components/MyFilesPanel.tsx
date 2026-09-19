@@ -9,6 +9,11 @@ import {
 } from "@/foundation/components/Icon/icons";
 import { FileText, FileSpreadsheet, FileImage, FileCode, Film, Music, Globe, File, FolderOpen } from "lucide-react";
 import { listDir, openLocalPath } from "@/lib/agent-client";
+import {
+  authorizeArtifactFile,
+  errorMessage,
+  isUnauthorizedPathError,
+} from "@/lib/artifact-access";
 import { formatFileSize, inferFileTypeFromExt, relativeTime, type FileType, type LocalFileItem } from "@/lib/file-utils";
 import {
   ARTIFACT_CATALOG_EVENT,
@@ -212,18 +217,14 @@ function ArtifactsTab({
             key={`${entry.sessionId}/${entry.path}`}
             className="myfiles-row myfiles-row--artifact"
             title={entry.path}
-            onClick={() => void openLocalPath(entry.path, entry.cwd || cwd).catch((error) => {
-              onToast?.(`打开成果失败：${String(error).replace(/^Error:\s*/, "")}`);
-            })}
+            onClick={() => void openCatalogArtifact(entry.path, entry.cwd || cwd, onToast)}
             role="button"
             tabIndex={0}
             aria-label={`打开成果 ${entry.path}`}
             onKeyDown={(event) => {
               if (event.key !== "Enter" && event.key !== " ") return;
               event.preventDefault();
-              void openLocalPath(entry.path, entry.cwd || cwd).catch((error) => {
-                onToast?.(`打开成果失败：${String(error).replace(/^Error:\s*/, "")}`);
-              });
+              void openCatalogArtifact(entry.path, entry.cwd || cwd, onToast);
             }}
           >
             <span className="myfiles-col-name">
@@ -240,6 +241,35 @@ function ArtifactsTab({
       })}
     </div>
   );
+}
+
+async function openCatalogArtifact(
+  path: string,
+  cwd: string | undefined,
+  onToast?: (message: string) => void,
+): Promise<void> {
+  try {
+    await openLocalPath(path, cwd);
+    return;
+  } catch (error) {
+    if (!isUnauthorizedPathError(error)) {
+      onToast?.(`打开成果失败：${errorMessage(error)}`);
+      return;
+    }
+  }
+
+  try {
+    const result = await authorizeArtifactFile(path, cwd);
+    if (result === "cancelled") return;
+    if (result === "mismatch") {
+      onToast?.("所选文件与任务成果不一致，请选择列表中显示的原文件");
+      return;
+    }
+    await openLocalPath(path, cwd);
+    onToast?.("已授权并用系统应用打开成果");
+  } catch (error) {
+    onToast?.(`打开成果失败：${errorMessage(error)}`);
+  }
 }
 
 function LocalFilesTab({

@@ -38,6 +38,14 @@ describe("artifact catalog", () => {
     expect(entries[0]).toMatchObject({ sessionId: "s1", sessionTitle: "任务", cwd: "/work" });
   });
 
+  it("读取动作不会覆盖同一路径此前的真实产出记录", () => {
+    const write = toolMessage("edit", "Write /work/output.md", "/work/output.md");
+    const read = toolMessage("read_file", "Read /work/output.md", "/work/output.md");
+    const entries = taskArtifactsFromMessages("s1", "任务", "/work", [write, read], 10);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ kind: "edit", path: "/work/output.md" });
+  });
+
   it("重新索引会替换该会话旧成果并持久化", () => {
     indexTaskArtifacts("s1", "任务1", "/w", [toolMessage("edit", "Write a.md", "a.md")]);
     indexTaskArtifacts("s1", "任务1", "/w", [toolMessage("edit", "Write b.md", "b.md")]);
@@ -54,5 +62,14 @@ describe("artifact catalog", () => {
       [{ ...base, updatedAt: 1 }],
       [{ ...base, path: "a.md", sessionTitle: "new", updatedAt: 2 }],
     )[0].sessionTitle).toBe("new");
+  });
+
+  it("加载旧目录时清除误收录的读取文件", () => {
+    window.localStorage.setItem("echoagent.task-artifacts.v1", JSON.stringify([{
+      id: "config", path: "/home/user/config.toml", kind: "read_file",
+      title: "Read /home/user/config.toml", toolCallId: "read-1", status: "completed",
+      sessionId: "s1", sessionTitle: "旧任务", cwd: "/work", updatedAt: 1,
+    }]));
+    expect(loadTaskArtifacts()).toEqual([]);
   });
 });

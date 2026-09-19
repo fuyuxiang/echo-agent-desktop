@@ -23,6 +23,13 @@ import {
 } from "@/lib/use-unified-tabs";
 import { ToolCallDetailBody } from "./ToolCallCard";
 import { openLocalPath } from "@/lib/markdown-host";
+import { FilePreview as RichFilePreview } from "./FilePreview";
+import { detectPreviewKind, type PreviewKind } from "@/lib/file-kind";
+import {
+  authorizeArtifactFile,
+  errorMessage,
+  isUnauthorizedPathError,
+} from "@/lib/artifact-access";
 import { invoke } from "@tauri-apps/api/core";
 import { IS_MACOS } from "@/lib/platform";
 import { ViewSelector, defaultViews } from "./workspace-panel/ViewSelector";
@@ -420,9 +427,12 @@ export function ToolSidePanel({
                 handleArtifactSelect(a.id);
               }}
               onBrowserUrlChange={setBrowserUrl}
-              onOpenOs={(path) => {
-                void openLocalPath(path, { cwd, type: "file", onToast });
-              }}
+              onOpenOs={(path) => openLocalPath(path, {
+                cwd,
+                type: "file",
+                onToast,
+                revealFile: false,
+              })}
               onToast={onToast}
             />
           )}
@@ -594,7 +604,7 @@ function MainContent({
   browserUrl?: string;
   onArtifactSelect: (a: SessionArtifact) => void;
   onBrowserUrlChange: (url?: string) => void;
-  onOpenOs: (path: string) => void;
+  onOpenOs: (path: string) => Promise<boolean>;
   onToast?: (msg: string) => void;
 }) {
   if (view === "preview") {
@@ -611,7 +621,7 @@ function MainContent({
       return <p className="tool-side-panel__empty">选择文件查看内容</p>;
     }
     return (
-      <FilePreview path={path} cwd={cwd} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
+      <ArtifactFilePreview path={path} cwd={cwd} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
     );
   }
   if (view === "changes") {
@@ -620,7 +630,7 @@ function MainContent({
       return <p className="tool-side-panel__empty">在左侧选择文件查看变更</p>;
     }
     return (
-      <FilePreview path={path} cwd={cwd} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
+      <ArtifactFilePreview path={path} cwd={cwd} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
     );
   }
   // artifacts：选中产物时预览其文件。
@@ -646,16 +656,22 @@ function MainContent({
             查看关联工具
           </button>
         )}
-        <FilePreview path={path} cwd={cwd} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
+        <ArtifactFilePreview path={path} cwd={cwd} onToast={onToast} onOpenOs={() => onOpenOs(path)} />
       </div>
     );
   }
   return null;
 }
 
-// ---------- FilePreview（保留原实现） ----------
+// ---------- ArtifactFilePreview ----------
 
-function FilePreview({
+type PreviewState =
+  | { type: "loading" }
+  | { type: "ready"; content: string }
+  | { type: "unauthorized"; message: string }
+  | { type: "error"; message: string; canOpen: boolean };
+
+function ArtifactFilePreview({
   path,
   cwd,
   onToast,
@@ -664,69 +680,173 @@ function FilePreview({
   path: string;
   cwd?: string;
   onToast?: (msg: string) => void;
-  onOpenOs: () => void;
+  onOpenOs: () => Promise<boolean>;
 }) {
-  const [text, setText] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [state, setState] = useState<PreviewState>({ type: "loading" });
+  const [retry, setRetry] = useState(0);
+  const [authorizing, setAuthorizing] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const kind = detectPreviewKind(path);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setErr(null);
-    setText(null);
+    setState({ type: "loading" });
     (async () => {
       try {
-        const content = await invoke<string>("read_text_file", {
-          path,
-          cwd: cwd ?? null,
-          maxBytes: 256 * 1024,
-        });
-        if (!cancelled) {
-          setText(content);
-          setLoading(false);
-        }
+        const content = await loadPreviewContent(path, cwd, kind);
+        if (!cancelled) setState({ type: "ready", content });
       } catch (e) {
         if (!cancelled) {
-          setErr(String(e).replace(/^Error:\s*/, ""));
-          setLoading(false);
+          const message = errorMessage(e);
+          setState(isUnauthorizedPathError(e)
+            ? { type: "unauthorized", message }
+            : { type: "error", message, canOpen: !isMissingPathError(message) });
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [path, cwd]);
+  }, [path, cwd, kind, retry]);
+
+  const authorize = async () => {
+    setAuthorizing(true);
+    try {
+      const result = await authorizeArtifactFile(path, cwd);
+      if (result === "authorized") {
+        onToast?.("已授权该文件，可以在面板中预览");
+        setRetry((value) => value + 1);
+      } else if (result === "mismatch") {
+        onToast?.("所选文件与当前产物不一致，请选择列表中显示的原文件");
+      }
+    } catch (error) {
+      onToast?.(`授权失败：${errorMessage(error)}`);
+    } finally {
+      setAuthorizing(false);
+    }
+  };
+
+  const openWithSystem = async () => {
+    setOpening(true);
+    try {
+      if (await onOpenOs()) onToast?.("已用系统应用打开文件");
+    } finally {
+      setOpening(false);
+    }
+  };
 
   return (
-    <div className="file-preview">
+    <div className="artifact-file-preview">
       <div className="file-preview__bar">
         <span className="file-preview__path" title={path}>
           {path}
         </span>
-        <button type="button" className="file-preview__open" onClick={onOpenOs}>
-          系统打开
-        </button>
-      </div>
-      {loading && <p className="tool-side-panel__empty">加载中…</p>}
-      {err && (
-        <div className="file-preview__err">
-          <p>无法在面板内预览：{err}</p>
+        {(state.type === "ready" || (state.type === "error" && state.canOpen)) && (
           <button
             type="button"
             className="file-preview__open"
-            onClick={() => {
-              onOpenOs();
-              onToast?.("已尝试用系统打开文件");
-            }}
+            onClick={() => void openWithSystem()}
+            disabled={opening}
           >
-            用系统应用打开
+            {opening ? "正在打开…" : "用系统应用打开"}
+          </button>
+        )}
+      </div>
+      {state.type === "loading" && <p className="tool-side-panel__empty">加载中…</p>}
+      {state.type === "unauthorized" && (
+        <div className="file-preview__err file-preview__err--authorization" role="alert">
+          <p>该成果位于当前工作区之外。为保护本地文件，需要你确认授权后才能预览或打开。</p>
+          <p className="file-preview__detail">{state.message}</p>
+          <button
+            type="button"
+            className="file-preview__open"
+            onClick={() => void authorize()}
+            disabled={authorizing}
+          >
+            {authorizing ? "等待选择…" : "选择该文件并授权预览"}
           </button>
         </div>
       )}
-      {text != null && <pre className="file-preview__body">{text}</pre>}
+      {state.type === "error" && (
+        <div className="file-preview__err" role="alert">
+          <p>无法在面板内预览：{state.message}</p>
+          {state.canOpen && (
+            <p className="file-preview__detail">文件仍可使用系统应用打开。</p>
+          )}
+        </div>
+      )}
+      {state.type === "ready" && (
+        <RichFilePreview
+          filename={basename(path)}
+          content={state.content}
+          onCopyText={(content) => {
+            if (!navigator.clipboard?.writeText) {
+              onToast?.("当前环境不支持复制到剪贴板");
+              return;
+            }
+            void navigator.clipboard.writeText(content).then(
+              () => onToast?.("已复制文件内容"),
+              () => onToast?.("复制失败，请检查剪贴板权限"),
+            );
+          }}
+        />
+      )}
     </div>
   );
+}
+
+async function loadPreviewContent(
+  path: string,
+  cwd: string | undefined,
+  kind: PreviewKind,
+): Promise<string> {
+  if (kind === "markdown" || kind === "code" || kind === "text") {
+    return invoke<string>("read_text_file", {
+      path,
+      cwd: cwd ?? null,
+      maxBytes: 256 * 1024,
+    });
+  }
+  if (kind === "binary") {
+    // Validate existence and native authorization without decoding binary data.
+    await invoke("path_stat", { path, cwd: cwd ?? null });
+    return "";
+  }
+  const absolutePath = await resolveAuthorizedPath(path, cwd);
+  const base64 = await invoke<string>("read_file_base64", {
+    path: absolutePath,
+    maxBytes: 1024 * 1024,
+  });
+  return `data:${previewMimeType(path, kind)};base64,${base64}`;
+}
+
+async function resolveAuthorizedPath(path: string, cwd?: string): Promise<string> {
+  const stat = await invoke<{ absolute: string }>("path_stat", {
+    path,
+    cwd: cwd ?? null,
+  });
+  return stat.absolute;
+}
+
+function previewMimeType(path: string, kind: PreviewKind): string {
+  const extension = path.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
+  const byExtension: Record<string, string> = {
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+    webp: "image/webp", svg: "image/svg+xml", bmp: "image/bmp", ico: "image/x-icon",
+    pdf: "application/pdf", mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg",
+    flac: "audio/flac", m4a: "audio/mp4", aac: "audio/aac", mp4: "video/mp4",
+    webm: "video/webm", mov: "video/quicktime", mkv: "video/x-matroska", avi: "video/x-msvideo",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    xls: "application/vnd.ms-excel",
+  };
+  return byExtension[extension]
+    ?? (kind === "image" ? "image/*" : "application/octet-stream");
+}
+
+function isMissingPathError(message: string): boolean {
+  return /路径不存在|不是文件|找不到|not found|does not exist/i.test(message);
 }
 
 // ---------- 工具函数 ----------

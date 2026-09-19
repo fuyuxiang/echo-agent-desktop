@@ -3776,6 +3776,10 @@ button.knowledge-trace__item:hover {
 .file-preview__open:hover {
   background: var(--echo-bg-hover);
 }
+.file-preview__open:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
 .file-preview__body {
   margin: 0;
   padding: 10px;
@@ -3796,6 +3800,16 @@ button.knowledge-trace__item:hover {
 }
 .file-preview__err p {
   margin: 0 0 10px;
+}
+.file-preview__err--authorization {
+  padding: 14px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 8px;
+  background: var(--echo-bg-tertiary);
+}
+.file-preview__detail {
+  color: var(--echo-text-weak);
+  word-break: break-word;
 }
 
 /* ---------- diff ---------- */

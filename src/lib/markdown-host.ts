@@ -64,25 +64,37 @@ function defaultSnippetName(language: string): string {
  */
 export async function openLocalPath(
   path: string,
-  opts: { cwd?: string; type?: PathType; onToast?: (msg: string) => void },
-): Promise<void> {
-  const { cwd, type, onToast: toast } = opts;
+  opts: {
+    cwd?: string;
+    type?: PathType;
+    onToast?: (msg: string) => void;
+    /** Files are revealed by default; set false when the UI promises to open them. */
+    revealFile?: boolean;
+  },
+): Promise<boolean> {
+  const { cwd, type, onToast: toast, revealFile = true } = opts;
   if (!cwd && !path.match(/^(?:[a-zA-Z]:[\\/]|[\\/])/)) {
     toast?.("无工作区，无法打开相对路径");
-    return;
+    return false;
   }
   try {
     if (type === "directory") {
       await invoke("open_path", { path, cwd: cwd ?? null });
-      return;
+      return true;
+    }
+    if (!revealFile) {
+      await invoke("open_path", { path, cwd: cwd ?? null });
+      return true;
     }
     try {
       await invoke("reveal_in_folder", { path, cwd: cwd ?? null });
     } catch {
       await invoke("open_path", { path, cwd: cwd ?? null });
     }
+    return true;
   } catch (e) {
     toast?.(String(e).replace(/^Error:\s*/, ""));
+    return false;
   }
 }
 

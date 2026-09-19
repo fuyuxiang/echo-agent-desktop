@@ -14,16 +14,12 @@ export const ARTIFACT_CATALOG_EVENT = "echoagent:artifact-catalog-changed";
 /** Keep output-producing tools and reject obvious read/search-only paths. */
 export function isTaskArtifact(artifact: SessionArtifact): boolean {
   if (artifact.status !== "completed") return false;
+  if (artifact.verifiedOutput) return true;
   const label = `${artifact.kind} ${artifact.title}`.toLowerCase();
-  if (/\b(write|edit|create|apply[_ -]?patch|save|export|generate|delete|move|rename|copy)\b/.test(label)) {
-    return true;
-  }
   if (/\b(read|open|view|list|search|find|grep|glob|stat)\b/.test(label)) {
     return false;
   }
-  // Diff-bearing calls are normalized to edit-like kinds by the runtime; for
-  // unknown tools, retain the path because it may be a connector-generated file.
-  return true;
+  return /\b(write|edit|create|apply[_ -]?patch|save|export|generate|move|rename|copy|download)\b/.test(label);
 }
 
 export function taskArtifactsFromMessages(
@@ -44,7 +40,11 @@ export function loadTaskArtifacts(): TaskArtifact[] {
     const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "[]");
     return Array.isArray(parsed)
       ? parsed.filter((item): item is TaskArtifact =>
-        !!item && typeof item === "object" && typeof item.path === "string" && typeof item.sessionId === "string")
+        !!item
+        && typeof item === "object"
+        && typeof item.path === "string"
+        && typeof item.sessionId === "string"
+        && isTaskArtifact(item as TaskArtifact))
       : [];
   } catch {
     return [];
