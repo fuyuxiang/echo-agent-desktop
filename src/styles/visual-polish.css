@@ -3115,9 +3115,51 @@ button,
 }
 
 .archived-settings__scope:focus-visible,
-.archived-settings__delete:focus-visible {
+.archived-settings__delete:focus-visible,
+.archived-settings__item-select input:focus-visible {
   outline: 2px solid var(--echo-brand);
   outline-offset: 2px;
+}
+
+.archived-settings__bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 54px;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: 12px;
+  background: var(--ui-surface-muted);
+}
+
+.archived-settings__bulk-selection,
+.archived-settings__bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.archived-settings__select-all {
+  background: var(--echo-bg-primary);
+}
+
+.archived-settings__selected-count {
+  color: var(--echo-text-medium);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.archived-settings__bulk-delete {
+  border-color: color-mix(in srgb, #e5484d 32%, var(--ui-line));
+  color: #d83b40;
+}
+
+.archived-settings__bulk-delete:hover:not(:disabled) {
+  border-color: color-mix(in srgb, #e5484d 48%, var(--ui-line));
+  background: color-mix(in srgb, #e5484d 9%, transparent);
+  color: #c83338;
 }
 
 .archived-settings__error {
@@ -3153,6 +3195,37 @@ button,
 .archived-settings__item:hover {
   border-color: var(--echo-border-default);
   background: color-mix(in srgb, var(--echo-bg-primary) 94%, var(--echo-brand) 6%);
+}
+
+.archived-settings__item--selected {
+  border-color: color-mix(in srgb, var(--echo-brand) 45%, var(--ui-line));
+  background: color-mix(in srgb, var(--echo-bg-primary) 92%, var(--echo-brand) 8%);
+}
+
+.archived-settings__item--selected:hover {
+  border-color: color-mix(in srgb, var(--echo-brand) 58%, var(--ui-line));
+  background: color-mix(in srgb, var(--echo-bg-primary) 89%, var(--echo-brand) 11%);
+}
+
+.archived-settings__item-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 38px;
+}
+
+.archived-settings__item-select input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--echo-brand);
+  cursor: pointer;
+}
+
+.archived-settings__item-select input:disabled {
+  cursor: default;
 }
 
 .archived-settings__item-icon {
@@ -4139,6 +4212,16 @@ a.help-card:hover {
     overflow-x: auto;
   }
 
+  .archived-settings__bulk-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .archived-settings__bulk-selection,
+  .archived-settings__bulk-actions {
+    justify-content: space-between;
+  }
+
   .archived-settings__item {
     align-items: flex-start;
     flex-wrap: wrap;
@@ -4148,6 +4231,10 @@ a.help-card:hover {
     width: calc(100% - 50px);
   }
 
+  .archived-settings__item--selecting .archived-settings__item-content {
+    width: calc(100% - 90px);
+  }
+
   .archived-settings__item-actions {
     width: 100%;
     padding-left: 50px;
@@ -4155,6 +4242,20 @@ a.help-card:hover {
 }
 
 @media (max-width: 560px) {
+  .archived-settings__bulk-selection {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .archived-settings__bulk-actions,
+  .archived-settings__bulk-actions .settings-btn {
+    width: 100%;
+  }
+
+  .archived-settings__bulk-actions .settings-btn {
+    flex: 1 1 0;
+  }
+
   .archived-settings__item-actions {
     align-items: stretch;
     padding-left: 0;

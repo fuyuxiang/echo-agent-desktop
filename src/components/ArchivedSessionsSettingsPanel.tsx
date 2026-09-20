@@ -1,11 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArchiveRestore,
+  CheckSquare2,
   FolderKanban,
+  ListChecks,
   Loader2,
   MessageSquare,
   Search,
+  Square,
   Trash2,
+  X,
 } from "lucide-react";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { useProjectsStore } from "@/stores/projects-store";
@@ -13,6 +17,7 @@ import type { SessionStatus } from "@/lib/types";
 import { useAppDialog } from "./AppDialog";
 
 type ArchiveScope = "all" | "standalone" | "project";
+type BulkAction = "restore" | "delete";
 
 interface ArchivedSessionEntry {
   sessionId: string;
@@ -79,7 +84,9 @@ export function ArchivedSessionsSettingsPanel({
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<ArchiveScope>("all");
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
-  const [bulkRestoring, setBulkRestoring] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkAction, setBulkAction] = useState<BulkAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { requestConfirmation, dialog } = useAppDialog("archived-session-settings");
 
@@ -139,6 +146,22 @@ export function ArchivedSessionsSettingsPanel({
     return [entry.title, entry.projectName, entry.relation, entry.cwd]
       .some((value) => value?.toLocaleLowerCase().includes(normalizedQuery));
   });
+  const selectedEntries = archived.filter((entry) => selectedIds.has(entry.sessionId));
+  const allVisibleSelected = visible.length > 0
+    && visible.every((entry) => selectedIds.has(entry.sessionId));
+  const bulkBusy = bulkAction !== null;
+
+  useEffect(() => {
+    const archivedIds = new Set(archived.map((entry) => entry.sessionId));
+    setSelectedIds((current) => {
+      const next = new Set([...current].filter((sessionId) => archivedIds.has(sessionId)));
+      if (next.size === current.size) return current;
+      return next;
+    });
+    if (selectionMode && archived.length === 0 && !bulkBusy) {
+      setSelectionMode(false);
+    }
+  }, [archived, bulkBusy, selectionMode]);
 
   const markBusy = (sessionId: string, busy: boolean) => {
     setBusyIds((current) => {
@@ -150,7 +173,7 @@ export function ArchivedSessionsSettingsPanel({
   };
 
   const restore = async (entry: ArchivedSessionEntry, openAfterRestore: boolean) => {
-    if (!onRestoreSession || busyIds.has(entry.sessionId) || bulkRestoring) return;
+    if (!onRestoreSession || busyIds.has(entry.sessionId) || bulkBusy) return;
     setError(null);
     markBusy(entry.sessionId, true);
     try {
@@ -170,43 +193,119 @@ export function ArchivedSessionsSettingsPanel({
     }
   };
 
-  const restoreAllVisible = () => {
-    if (!onRestoreSession || visible.length === 0 || bulkRestoring) return;
-    const snapshot = [...visible];
+  const toggleSelectionMode = () => {
+    if (bulkBusy) return;
+    setError(null);
+    setSelectedIds(new Set());
+    setSelectionMode((current) => !current);
+  };
+
+  const toggleSelected = (sessionId: string) => {
+    if (bulkBusy) return;
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  };
+
+  const toggleAllVisible = () => {
+    if (bulkBusy || visible.length === 0) return;
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (allVisibleSelected) {
+        for (const entry of visible) next.delete(entry.sessionId);
+      } else {
+        for (const entry of visible) next.add(entry.sessionId);
+      }
+      return next;
+    });
+  };
+
+  const updateQuery = (value: string) => {
+    setQuery(value);
+    if (selectionMode) setSelectedIds(new Set());
+  };
+
+  const updateScope = (value: ArchiveScope) => {
+    setScope(value);
+    if (selectionMode) setSelectedIds(new Set());
+  };
+
+  const requestBulkRestore = () => {
+    if (!onRestoreSession || selectedEntries.length === 0 || bulkBusy) return;
+    const snapshot = [...selectedEntries];
     requestConfirmation({
-      title: `恢复当前 ${snapshot.length} 个归档会话？`,
-      description: query || scope !== "all"
-        ? "只恢复当前搜索和范围筛选结果，其他归档会话保持不变。"
-        : "这些会话将重新出现在原来的任务或项目中。",
-      confirmLabel: "全部恢复",
+      title: `恢复所选 ${snapshot.length} 个归档会话？`,
+      description: "所选会话将重新出现在原来的任务或项目中，其他归档会话保持不变。",
+      confirmLabel: `恢复 ${snapshot.length} 个会话`,
       action: async () => {
-        setBulkRestoring(true);
+        setBulkAction("restore");
         setError(null);
-        const failures: string[] = [];
+        const failedIds = new Set<string>();
         try {
           for (const entry of snapshot) {
             try {
               await onRestoreSession(entry.sessionId, false, entry.cwd);
             } catch {
-              failures.push(entry.title);
+              failedIds.add(entry.sessionId);
             }
           }
-          if (failures.length > 0) {
-            const message = `已恢复 ${snapshot.length - failures.length} 个，${failures.length} 个恢复失败`;
+          setSelectedIds(failedIds);
+          if (failedIds.size > 0) {
+            const message = `已恢复 ${snapshot.length - failedIds.size} 个，${failedIds.size} 个恢复失败`;
             setError(message);
             onToast?.(message);
           } else {
             onToast?.(`已恢复 ${snapshot.length} 个会话`);
+            setSelectionMode(false);
           }
         } finally {
-          setBulkRestoring(false);
+          setBulkAction(null);
+        }
+      },
+    });
+  };
+
+  const requestBulkDelete = () => {
+    if (!onDeleteSession || selectedEntries.length === 0 || bulkBusy) return;
+    const snapshot = [...selectedEntries];
+    requestConfirmation({
+      title: `永久删除所选 ${snapshot.length} 个对话？`,
+      description: "对话历史与应用内关联信息将被删除且无法恢复；项目资产和工作区原始文件不会被删除。",
+      confirmLabel: `永久删除 ${snapshot.length} 个对话`,
+      danger: true,
+      action: async () => {
+        setBulkAction("delete");
+        setError(null);
+        const failedIds = new Set<string>();
+        try {
+          for (const entry of snapshot) {
+            try {
+              await onDeleteSession(entry.sessionId, entry.cwd);
+            } catch {
+              failedIds.add(entry.sessionId);
+            }
+          }
+          setSelectedIds(failedIds);
+          if (failedIds.size > 0) {
+            const message = `已永久删除 ${snapshot.length - failedIds.size} 个，${failedIds.size} 个删除失败`;
+            setError(message);
+            onToast?.(message);
+          } else {
+            onToast?.(`已永久删除 ${snapshot.length} 个对话`);
+            setSelectionMode(false);
+          }
+        } finally {
+          setBulkAction(null);
         }
       },
     });
   };
 
   const requestDelete = (entry: ArchivedSessionEntry) => {
-    if (!onDeleteSession || busyIds.has(entry.sessionId) || bulkRestoring) return;
+    if (!onDeleteSession || busyIds.has(entry.sessionId) || bulkBusy) return;
     requestConfirmation({
       title: `永久删除对话“${entry.title}”？`,
       description: "对话历史与应用内关联信息将被删除且无法恢复；项目资产和工作区原始文件不会被删除。",
@@ -230,7 +329,7 @@ export function ArchivedSessionsSettingsPanel({
   };
 
   return (
-    <div className="settings-section archived-settings">
+    <div className="settings-section archived-settings" aria-busy={bulkBusy}>
       <header className="settings-section__header archived-settings__header">
         <div className="settings-section__heading">
           <h2 className="settings-section__title">已归档</h2>
@@ -239,11 +338,12 @@ export function ArchivedSessionsSettingsPanel({
         <button
           type="button"
           className="settings-btn"
-          onClick={restoreAllVisible}
-          disabled={!onRestoreSession || visible.length === 0 || bulkRestoring}
+          onClick={toggleSelectionMode}
+          disabled={archived.length === 0 || bulkBusy}
+          aria-pressed={selectionMode}
         >
-          {bulkRestoring ? <Loader2 size={15} className="archive-spin" /> : <ArchiveRestore size={15} />}
-          {bulkRestoring ? "恢复中…" : `恢复当前 ${visible.length} 项`}
+          {selectionMode ? <X size={15} /> : <ListChecks size={15} />}
+          {selectionMode ? "完成" : "批量管理"}
         </button>
       </header>
 
@@ -254,8 +354,9 @@ export function ArchivedSessionsSettingsPanel({
             type="search"
             aria-label="搜索已归档会话"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => updateQuery(event.target.value)}
             placeholder="搜索标题、项目或工作目录"
+            disabled={bulkBusy}
           />
         </label>
         <div className="archived-settings__scopes" role="group" aria-label="归档范围">
@@ -269,13 +370,54 @@ export function ArchivedSessionsSettingsPanel({
               type="button"
               aria-pressed={scope === value}
               className={scope === value ? "archived-settings__scope archived-settings__scope--active" : "archived-settings__scope"}
-              onClick={() => setScope(value)}
+              onClick={() => updateScope(value)}
+              disabled={bulkBusy}
             >
               {label}
             </button>
           ))}
         </div>
       </div>
+
+      {selectionMode && archived.length > 0 && (
+        <div className="archived-settings__bulk-bar" aria-label="批量管理已归档会话">
+          <div className="archived-settings__bulk-selection">
+            <button
+              type="button"
+              className="settings-btn archived-settings__select-all"
+              aria-pressed={allVisibleSelected}
+              onClick={toggleAllVisible}
+              disabled={visible.length === 0 || bulkBusy}
+            >
+              {allVisibleSelected ? <CheckSquare2 size={15} /> : <Square size={15} />}
+              {allVisibleSelected ? `取消选择当前 ${visible.length} 项` : `选择当前 ${visible.length} 项`}
+            </button>
+            <span className="archived-settings__selected-count" aria-live="polite">
+              已选 {selectedEntries.length} 项
+            </span>
+          </div>
+          <div className="archived-settings__bulk-actions">
+            <button
+              type="button"
+              className="settings-btn settings-btn--primary"
+              onClick={requestBulkRestore}
+              disabled={!onRestoreSession || selectedEntries.length === 0 || bulkBusy}
+            >
+              {bulkAction === "restore" ? <Loader2 size={15} className="archive-spin" /> : <ArchiveRestore size={15} />}
+              {bulkAction === "restore" ? "恢复中…" : "恢复所选"}
+            </button>
+            <button
+              type="button"
+              className="settings-btn archived-settings__bulk-delete"
+              onClick={requestBulkDelete}
+              disabled={!onDeleteSession || selectedEntries.length === 0 || bulkBusy}
+            >
+              {bulkAction === "delete" ? <Loader2 size={15} className="archive-spin" /> : <Trash2 size={15} />}
+              {bulkAction === "delete" ? "删除中…" : "永久删除"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {error && <div className="archived-settings__error" role="alert">{error}</div>}
 
@@ -292,11 +434,26 @@ export function ArchivedSessionsSettingsPanel({
           <span>尝试更换关键词或范围。</span>
         </div>
       ) : (
-        <ul className="archived-settings__list" aria-label="已归档会话列表">
+        <ul className="archived-settings__list" aria-label={selectionMode ? "选择已归档会话" : "已归档会话列表"}>
           {visible.map((entry) => {
             const busy = busyIds.has(entry.sessionId);
+            const selected = selectedIds.has(entry.sessionId);
             return (
-              <li className="archived-settings__item" key={entry.sessionId}>
+              <li
+                className={`archived-settings__item${selectionMode ? " archived-settings__item--selecting" : ""}${selected ? " archived-settings__item--selected" : ""}`}
+                key={entry.sessionId}
+              >
+                {selectionMode && (
+                  <label className="archived-settings__item-select">
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => toggleSelected(entry.sessionId)}
+                      disabled={bulkBusy}
+                      aria-label={`选择 ${entry.title}`}
+                    />
+                  </label>
+                )}
                 <div className="archived-settings__item-icon" aria-hidden="true">
                   {entry.projectId ? <FolderKanban size={18} /> : <MessageSquare size={18} />}
                 </div>
@@ -308,12 +465,12 @@ export function ArchivedSessionsSettingsPanel({
                   </span>
                   <span className="archived-settings__item-time">{formatRecentActivity(entry.updatedAt)}</span>
                 </div>
-                <div className="archived-settings__item-actions">
+                {!selectionMode && <div className="archived-settings__item-actions">
                   <button
                     type="button"
                     className="settings-btn settings-btn--primary"
                     onClick={() => void restore(entry, true)}
-                    disabled={busy || bulkRestoring || !onRestoreSession || !onOpenSession}
+                    disabled={busy || bulkBusy || !onRestoreSession || !onOpenSession}
                   >
                     {busy ? <Loader2 size={14} className="archive-spin" /> : <ArchiveRestore size={14} />}
                     恢复并打开
@@ -322,7 +479,7 @@ export function ArchivedSessionsSettingsPanel({
                     type="button"
                     className="settings-btn"
                     onClick={() => void restore(entry, false)}
-                    disabled={busy || bulkRestoring || !onRestoreSession}
+                    disabled={busy || bulkBusy || !onRestoreSession}
                   >
                     仅恢复
                   </button>
@@ -332,11 +489,11 @@ export function ArchivedSessionsSettingsPanel({
                     aria-label={`永久删除 ${entry.title}`}
                     title="永久删除"
                     onClick={() => requestDelete(entry)}
-                    disabled={busy || bulkRestoring || !onDeleteSession}
+                    disabled={busy || bulkBusy || !onDeleteSession}
                   >
                     <Trash2 size={16} />
                   </button>
-                </div>
+                </div>}
               </li>
             );
           })}

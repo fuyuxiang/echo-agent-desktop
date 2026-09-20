@@ -433,4 +433,96 @@ describe("SettingsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
     await waitFor(() => expect(onDeleteSession).toHaveBeenCalledWith("project-chat", "/workspace"));
   });
+
+  it("归档管理通过显式选择安全地批量永久删除当前筛选结果", async () => {
+    useSessionsStore.setState({
+      independent: [
+        { sessionId: "standalone", title: "独立归档", cwd: "/home", archived: true },
+        { sessionId: "project-chat", title: "项目归档", cwd: "/workspace", archived: true },
+        { sessionId: "active", title: "活动任务", cwd: "/home", archived: false },
+      ],
+    });
+    useProjectsStore.setState({
+      projects: [{
+        id: "p1", name: "交付项目", cwd: "/workspace", createdAt: "2026-09-14T07:00:00Z",
+        connectors: [], experts: [], skills: [], plans: [], tasks: [], assets: [], members: [],
+        conversations: [{ sessionId: "project-chat", title: "项目归档", createdAt: "2026-09-14T08:00:00Z", archived: true }],
+      }],
+    });
+    const onDeleteSession = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ThemeProvider>
+        <SettingsPanel
+          open
+          initialSection="archived"
+          onClose={() => {}}
+          onRestoreSession={vi.fn().mockResolvedValue(undefined)}
+          onOpenSession={vi.fn()}
+          onDeleteSession={onDeleteSession}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: /恢复当前/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "批量管理" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择当前 2 项" }));
+    expect(screen.getByText("已选 2 项")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "项目 1" }));
+    expect(screen.getByText("已选 0 项")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "永久删除" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "选择当前 1 项" }));
+    expect(screen.getByRole("checkbox", { name: "选择 项目归档" })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
+
+    expect(screen.getByRole("alertdialog", { name: "永久删除所选 1 个对话？" }))
+      .toHaveTextContent("无法恢复");
+    expect(onDeleteSession).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "永久删除 1 个对话" }));
+
+    await waitFor(() => expect(onDeleteSession).toHaveBeenCalledTimes(1));
+    expect(onDeleteSession).toHaveBeenCalledWith("project-chat", "/workspace");
+    expect(screen.getByRole("button", { name: "批量管理" })).toBeInTheDocument();
+  });
+
+  it("批量恢复发生部分失败时只保留失败项并提供可重试反馈", async () => {
+    useSessionsStore.setState({
+      independent: [
+        { sessionId: "restore-ok", title: "可恢复归档", cwd: "/home", archived: true },
+        { sessionId: "restore-failed", title: "恢复失败归档", cwd: "/workspace", archived: true },
+      ],
+    });
+    useProjectsStore.setState({ projects: [] });
+    const onRestoreSession = vi.fn(async (sessionId: string) => {
+      if (sessionId === "restore-failed") throw new Error("磁盘不可写");
+    });
+    const onToast = vi.fn();
+    render(
+      <ThemeProvider>
+        <SettingsPanel
+          open
+          initialSection="archived"
+          onClose={() => {}}
+          onRestoreSession={onRestoreSession}
+          onOpenSession={vi.fn()}
+          onDeleteSession={vi.fn().mockResolvedValue(undefined)}
+          onToast={onToast}
+        />
+      </ThemeProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "批量管理" }));
+    fireEvent.click(screen.getByRole("button", { name: "选择当前 2 项" }));
+    fireEvent.click(screen.getByRole("button", { name: "恢复所选" }));
+    expect(screen.getByRole("dialog", { name: "恢复所选 2 个归档会话？" }))
+      .toHaveTextContent("其他归档会话保持不变");
+    fireEvent.click(screen.getByRole("button", { name: "恢复 2 个会话" }));
+
+    await waitFor(() => expect(onRestoreSession).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("alert")).toHaveTextContent("已恢复 1 个，1 个恢复失败");
+    expect(screen.getByRole("checkbox", { name: "选择 可恢复归档" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "选择 恢复失败归档" })).toBeChecked();
+    expect(onToast).toHaveBeenCalledWith("已恢复 1 个，1 个恢复失败");
+  });
 });
