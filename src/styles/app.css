@@ -6457,7 +6457,6 @@ button.diff__path {
 .proj-model-setting__warning { margin: 0; color: var(--echo-color-text-danger, #d03050); font-size: 12px; line-height: 1.5; }
 .proj-model-setting .model-selector { width: 100%; }
 .proj-model-setting .model-selector__trigger { width: 100%; max-width: none; justify-content: space-between; border: 1px solid var(--echo-border-default); background: var(--echo-bg-primary); }
-.proj-model-setting .model-selector__menu { top: calc(100% + 6px); bottom: auto; left: 0; right: auto; width: 100%; max-width: none; }
 
 /* ===== 项目详情页（图3-6） ===== */
 .pd-page { height: 100%; display: flex; flex-direction: column; min-height: 0; background: transparent; }
@@ -7618,8 +7617,6 @@ button.diff__path {
 }
 .model-selector__menu,
 .workspace-picker__menu {
-  position: absolute;
-  bottom: calc(100% + 6px);
   min-width: 220px;
   max-width: 320px;
   max-height: 320px;
@@ -7633,12 +7630,17 @@ button.diff__path {
   box-shadow: var(--echo-shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.16));
   z-index: 50;
 }
-/* Model selector 在 footer 右侧,菜单向左对齐避免溢出右边 */
+/* ModelSelector portals into body and receives viewport-clamped fixed
+   coordinates inline, so rounded cards and scroll containers cannot clip it. */
 .model-selector__menu {
-  right: 0;
+  position: fixed;
+  right: auto;
+  bottom: auto;
 }
 /* Workspace picker 在 meta 行左侧,菜单向右对齐避免溢出左边被裁剪 */
 .workspace-picker__menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
   left: 0;
 }
 .model-selector__empty,
@@ -9641,16 +9643,18 @@ button.diff__path {
   position: relative;
 }
 .permission-picker__popover {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
+  /* Portalled to body and positioned from the trigger's viewport rect. */
+  position: fixed;
+  right: auto;
+  bottom: auto;
   width: 440px;
   max-width: calc(100vw - 48px);
+  box-sizing: border-box;
   background: var(--echo-bg-primary);
   border: 1px solid var(--echo-border-default);
   border-radius: 12px;
   box-shadow: var(--echo-shadow-lg, 0 10px 40px rgba(0, 0, 0, 0.2));
-  z-index: 50;
+  z-index: 1200;
   display: flex;
   flex-direction: column;
   gap: 8px;

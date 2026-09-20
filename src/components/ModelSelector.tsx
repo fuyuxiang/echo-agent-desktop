@@ -1,5 +1,12 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, Check } from "lucide-react";
+import {
+  useAnchoredFloating,
+  type FloatingAlignment,
+  type FloatingPlacement,
+  type FloatingWidth,
+} from "@/lib/use-anchored-floating";
 
 /**
  * Model picker dropdown for the Composer. Shows the current model id on a
@@ -22,6 +29,9 @@ export function ModelSelector({
   models,
   onModelChange,
   ariaLabel,
+  menuPlacement = "top",
+  menuAlign = "end",
+  menuWidth = "content",
 }: {
   /** Currently selected model id (displayed on the trigger). */
   modelId?: string;
@@ -31,18 +41,35 @@ export function ModelSelector({
   onModelChange: (id: string) => void;
   /** Distinguishes selectors when a page exposes project and task model choices together. */
   ariaLabel?: string;
+  /** Floating-menu preferences for form fields that differ from Composer placement. */
+  menuPlacement?: FloatingPlacement;
+  menuAlign?: FloatingAlignment;
+  menuWidth?: FloatingWidth;
 }) {
   const [open, setOpen] = useState(false);
   const reactId = useId();
   const listboxId = `model-selector-${reactId.replace(/:/g, "")}`;
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLUListElement>(null);
   const optionRefs = useRef(new Map<string, HTMLButtonElement>());
+  const { style: menuStyle, placement } = useAnchoredFloating(
+    triggerRef,
+    menuRef,
+    open,
+    {
+      preferredPlacement: menuPlacement,
+      align: menuAlign,
+      width: menuWidth,
+      estimatedHeight: Math.min(320, Math.max(52, models.length * 48 + 8)),
+      offset: 6,
+    },
+  );
 
-  const close = (restoreFocus = true) => {
+  const close = useCallback((restoreFocus = true) => {
     setOpen(false);
     if (restoreFocus) triggerRef.current?.focus();
-  };
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -57,11 +84,14 @@ export function ModelSelector({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) close(false);
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (ref.current?.contains(target) || menuRef.current?.contains(target)) return;
+      close(false);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
+  }, [close, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -73,7 +103,7 @@ export function ModelSelector({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, [close, open]);
 
   const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
     const index = models.findIndex((model) => optionRefs.current.get(model.id) === document.activeElement);
@@ -131,12 +161,16 @@ export function ModelSelector({
         <span className="model-selector__label">{triggerLabel}</span>
         <ChevronDown size={14} strokeWidth={1.75} className="model-selector__arrow" />
       </button>
-      {open && !modelLoading && (
+      {open && !modelLoading && typeof document !== "undefined" && createPortal(
         <ul
+          ref={menuRef}
           className="model-selector__menu"
           id={listboxId}
           role="listbox"
           aria-label={ariaLabel ?? "选择模型"}
+          style={menuStyle}
+          data-placement={placement ?? undefined}
+          onClick={(event) => event.stopPropagation()}
           onKeyDown={handleMenuKeyDown}
         >
           {models.length === 0 && (
@@ -168,7 +202,8 @@ export function ModelSelector({
               </button>
             </li>
           ))}
-        </ul>
+        </ul>,
+        document.body,
       )}
     </div>
   );

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const mocks = vi.hoisted(() => ({
@@ -93,6 +93,48 @@ describe("PermissionPicker", () => {
     });
     usePermissionStore.setState({ queues: {}, closedRequestIds: [] });
     useSessionsStore.setState({ independent: [], pendingSessionPatches: {} });
+  });
+
+  it("通过 body portal 完整展示并根据视口定位，不受卡片裁剪", async () => {
+    const user = userEvent.setup();
+    render(
+      <div data-testid="clipping-card" style={{ overflow: "hidden" }}>
+        <PermissionPicker />
+      </div>,
+    );
+    const trigger = screen.getByRole("button", { name: /审批模式/ });
+    trigger.getBoundingClientRect = () => ({
+      x: 760,
+      y: 520,
+      top: 520,
+      right: 860,
+      bottom: 552,
+      left: 760,
+      width: 100,
+      height: 32,
+      toJSON: () => ({}),
+    });
+
+    await user.click(trigger);
+
+    const menu = screen.getByRole("menu", { name: "本任务权限" });
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu).toHaveStyle({ position: "fixed" });
+    expect(menu).toHaveAttribute("data-placement", "top");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveAttribute("aria-controls", menu.id);
+    expect(menu).toHaveTextContent("当前任务的敏感操作需要你确认");
+    expect(menu).toHaveTextContent("仅当前任务的后续工具调用会自动批准");
+
+    await user.click(screen.getByRole("menuitemradio", { name: /^本任务始终允许/ }));
+    expect(screen.getByRole("alertdialog", { name: "确认本任务始终允许" })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("alertdialog", { name: "确认本任务始终允许" })).toBeNull();
+    await waitFor(() => expect(screen.getByRole("menuitemradio", { name: /^本任务始终允许/ })).toHaveFocus());
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu", { name: "本任务权限" })).toBeNull();
+    await waitFor(() => expect(trigger).toHaveFocus());
   });
 
   it("首页选择只修改待创建任务，不调用后端也不改其他任务", async () => {

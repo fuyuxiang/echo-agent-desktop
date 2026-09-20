@@ -3,6 +3,37 @@ import { describe, expect, it, vi } from "vitest";
 import { ModelSelector } from "../ModelSelector";
 
 describe("ModelSelector", () => {
+  it("菜单通过 body portal 渲染并在上方空间不足时向下翻转", () => {
+    render(
+      <div data-testid="clipping-card" style={{ overflow: "hidden" }}>
+        <ModelSelector
+          modelId="model-a"
+          models={[{ id: "model-a", label: "模型 A" }]}
+          onModelChange={vi.fn()}
+        />
+      </div>,
+    );
+    const trigger = screen.getByRole("button", { name: "模型 A" });
+    trigger.getBoundingClientRect = () => ({
+      x: 12,
+      y: 10,
+      top: 10,
+      right: 132,
+      bottom: 42,
+      left: 12,
+      width: 120,
+      height: 32,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.click(trigger);
+
+    const menu = screen.getByRole("listbox", { name: "选择模型" });
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu).toHaveStyle({ position: "fixed" });
+    expect(menu).toHaveAttribute("data-placement", "bottom");
+  });
+
   it("加载模型信息时不显示未选择，恢复后显示实际模型", () => {
     const onModelChange = vi.fn();
     const { rerender } = render(<ModelSelector models={[{ id: "model-a", label: "模型 A" }]} modelLoading onModelChange={onModelChange} />);

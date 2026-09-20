@@ -9,7 +9,8 @@
  * 首页选择只属于即将创建的任务；已有会话通过 sessionId
  * 定向同步，绝不影响其他任务。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ChevronDownIcon,
   CheckIcon,
@@ -17,6 +18,7 @@ import {
 } from "@/foundation/components/Icon/icons";
 import { permissionModeGet, permissionModeSet } from "@/lib/agent-client";
 import type { PermissionMode } from "@/lib/agent-client";
+import { useAnchoredFloating } from "@/lib/use-anchored-floating";
 import {
   permissionModeStatusFromEvent,
   usePermissionModeStore,
@@ -64,10 +66,25 @@ export function PermissionPicker({
     ? state.independent.find((entry) => entry.sessionId === sessionId)?.permissionMode
     : undefined);
   const [busy, setBusy] = useState(false);
-  const popRef = useRef<HTMLDivElement>(null);
+  const reactId = useId();
+  const popoverId = `permission-picker-${reactId.replace(/:/g, "")}`;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const alwaysOptionRef = useRef<HTMLButtonElement>(null);
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
   const requestRef = useRef(0);
+  const { style: popoverStyle, placement } = useAnchoredFloating(
+    triggerRef,
+    popoverRef,
+    open,
+    {
+      preferredPlacement: "top",
+      align: "start",
+      width: 260,
+      estimatedHeight: confirmingAlways ? 390 : 250,
+    },
+  );
 
   const runtimeMode = status &&
       (status.runtimeSyncState === "failed" || status.runtimeSyncState === "syncing") &&
@@ -109,27 +126,46 @@ export function PermissionPicker({
     };
   }, [sessionId, setHomeMode, setStatus]);
 
-  // Close on outside click.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (popRef.current && !popRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setConfirmingAlways(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  useEffect(() => {
-    if (confirmingAlways) confirmCancelRef.current?.focus();
-  }, [confirmingAlways]);
+  const closePicker = useCallback((restoreFocus = false) => {
+    setOpen(false);
+    setConfirmingAlways(false);
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => triggerRef.current?.focus());
+    }
+  }, []);
 
   const cancelAlwaysConfirmation = useCallback(() => {
     setConfirmingAlways(false);
     requestAnimationFrame(() => alwaysOptionRef.current?.focus());
   }, []);
+
+  // A portalled popover is not a DOM child of the trigger, so both trees
+  // participate in outside-click and Escape handling.
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (rootRef.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      closePicker(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      if (confirmingAlways) cancelAlwaysConfirmation();
+      else closePicker(true);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [cancelAlwaysConfirmation, closePicker, confirmingAlways, open]);
+
+  useEffect(() => {
+    if (confirmingAlways) confirmCancelRef.current?.focus();
+  }, [confirmingAlways]);
 
   const applySelection = useCallback(
     async (next: PermissionMode) => {
@@ -141,8 +177,7 @@ export function PermissionPicker({
         status?.runtimeSyncState !== "failed" &&
         status?.runtimeSyncState !== "syncing"
       ) {
-        setOpen(false);
-        setConfirmingAlways(false);
+        closePicker(true);
         return;
       }
       // An earlier capability read must not overwrite the result of the
@@ -152,8 +187,7 @@ export function PermissionPicker({
       try {
         if (!sessionId) {
           setHomeMode(next);
-          setOpen(false);
-          setConfirmingAlways(false);
+          closePicker(true);
           const selected = MODES.find((item) => item.id === next) ?? MODES[0];
           const label = selected.id === "always-approve" ? "始终允许" : selected.label;
           onToast?.(`本任务将使用“${label}”`);
@@ -166,8 +200,7 @@ export function PermissionPicker({
           sessionId,
           permissionMode: result.permissionMode ?? next,
         });
-        setOpen(false);
-        setConfirmingAlways(false);
+        closePicker(true);
         const selected = MODES.find((item) => item.id === next) ?? MODES[0];
         const label = selected.id === "always-approve" ? "始终允许" : selected.label;
         const remaining = result?.remainingPending ?? 0;
@@ -180,7 +213,7 @@ export function PermissionPicker({
         setBusy(false);
       }
     },
-    [mode, onToast, sessionId, setHomeMode, setStatus, status],
+    [closePicker, mode, onToast, sessionId, setHomeMode, setStatus, status],
   );
 
   const select = useCallback((next: PermissionMode) => {
@@ -218,22 +251,35 @@ export function PermissionPicker({
     Boolean(status?.locked);
 
   return (
-    <div className="permission-picker" ref={popRef}>
+    <div className="permission-picker" ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className="echo-composer-meta__btn"
         onClick={() => {
-          if (open) setConfirmingAlways(false);
-          setOpen((v) => !v);
+          if (open) closePicker(false);
+          else setOpen(true);
         }}
         title={`权限模式 · ${modeDescription(current)}${syncWarning ? ` · ${syncWarning}` : ""}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? popoverId : undefined}
       >
         <ShieldCheckIcon size="sm" />
         {triggerLabel ?? current.label}
         <ChevronDownIcon size="sm" />
       </button>
-      {open && (
-        <div className="permission-picker__popover permission-picker__popover--modes" role="menu">
+      {open && typeof document !== "undefined" && createPortal(
+        <div
+          ref={popoverRef}
+          id={popoverId}
+          className="permission-picker__popover permission-picker__popover--modes"
+          role="menu"
+          aria-label="本任务权限"
+          style={popoverStyle}
+          data-placement={placement ?? undefined}
+          onClick={(event) => event.stopPropagation()}
+        >
           <div className="permission-picker__header">本任务权限</div>
           <div className="permission-picker__scope">仅影响当前任务，其他任务保持不变</div>
           {(syncWarning || status?.lockedReason) && (
@@ -290,7 +336,8 @@ export function PermissionPicker({
               </div>
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

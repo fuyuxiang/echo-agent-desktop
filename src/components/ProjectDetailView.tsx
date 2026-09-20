@@ -490,6 +490,9 @@ function ConfigDrawer({
                 modelId={modelId}
                 models={models}
                 onModelChange={onModelChange}
+                menuPlacement="bottom"
+                menuAlign="start"
+                menuWidth="anchor"
               />
               {unavailableModelId && (
                 <p className="proj-model-setting__warning" role="alert">
