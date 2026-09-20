@@ -1796,9 +1796,14 @@ export async function codingCreateEntry(
 }
 
 export interface CodingBatchOpResult {
+  /** Result path on success; source path on failure. */
   path: string;
+  /** Original source path for stable partial-batch correlation. */
+  sourcePath: string;
   ok: boolean;
   error?: string | null;
+  /** Opaque system-trash restore token, present only after a successful delete. */
+  restoreToken?: string | null;
 }
 
 export interface CodingRenameResult {
@@ -1854,10 +1859,10 @@ export interface CodingRestoreResult {
 export async function codingRestoreFromTrash(
   root: string,
   originalPaths: string[],
-  trashBasenames: string[],
+  restoreTokens: string[],
 ): Promise<CodingRestoreResult[]> {
   return invoke<CodingRestoreResult[]>("coding_restore_from_trash", {
-    request: { root, originalPaths, trashBasenames },
+    request: { root, originalPaths, restoreTokens },
   });
 }
 

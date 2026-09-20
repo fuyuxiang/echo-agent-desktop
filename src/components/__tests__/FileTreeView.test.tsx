@@ -6,6 +6,9 @@ const listDir = vi.fn();
 vi.mock("@/lib/agent-client", () => ({
   listDir: (path: string) => listDir(path),
 }));
+vi.mock("@/lib/use-element-size", () => ({
+  useElementSize: () => 260,
+}));
 
 import { FileTreeView } from "@/components/workspace-panel/FileTreeView";
 
@@ -267,5 +270,62 @@ describe("FileTreeView SP1 — context menu, multi-select, inline rename", () =>
     const node = await screen.findByRole("treeitem", { name: /a\.ts/ });
     expect(node).toHaveAttribute("data-cut", "true");
     expect(node.className).toContain("file-tree__node--cut");
+  });
+});
+
+describe("FileTreeView virtual rows", () => {
+  beforeEach(() => listDir.mockReset());
+
+  it("把展开后的子节点作为独立虚拟行渲染，并显示嵌套 Git 状态", async () => {
+    listDir.mockImplementation((path: string) => {
+      if (path === "/repo") {
+        return Promise.resolve([dir("/repo", "src"), file("/repo", "root.ts")]);
+      }
+      return Promise.resolve([file("/repo/src", "nested.ts")]);
+    });
+    const user = userEvent.setup();
+    render(
+      <FileTreeView
+        rootPath="/repo"
+        onFileSelect={vi.fn()}
+        topLevelThreshold={1}
+        gitStatusByPath={new Map([["src/nested.ts", {
+          path: "src/nested.ts",
+          status: "modified",
+          staged: false,
+          unstaged: true,
+          untracked: false,
+          added: 1,
+          removed: 0,
+        }]])}
+      />,
+    );
+
+    await user.click(await screen.findByRole("treeitem", { name: /src/ }));
+    const nested = await screen.findByRole("treeitem", { name: /nested\.ts/ });
+    expect(nested).toHaveStyle({ paddingInlineStart: "22px" });
+    expect(nested).toHaveTextContent("M");
+    expect(document.querySelector("[data-fixed-size-list]")).toBeInTheDocument();
+  });
+
+  it("虚拟列表中的目录加载失败时仍提供可见重试入口", async () => {
+    listDir
+      .mockResolvedValueOnce([dir("/repo", "src")])
+      .mockRejectedValueOnce(new Error("permission denied"));
+    const onToast = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <FileTreeView
+        rootPath="/repo"
+        onFileSelect={vi.fn()}
+        onToast={onToast}
+        topLevelThreshold={1}
+      />,
+    );
+
+    await user.click(await screen.findByRole("treeitem", { name: /src/ }));
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith("读取目录失败：permission denied"));
+    const retry = await screen.findByRole("button", { name: "加载失败，重试" });
+    expect(retry).toHaveAttribute("title", "permission denied");
   });
 });

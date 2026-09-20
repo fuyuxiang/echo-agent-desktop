@@ -18,6 +18,10 @@ import { useElementSize } from "@/lib/use-element-size";
 
 /** 已加载的目录条目缓存：path → entries。 */
 type LoadedMap = Map<string, DirEntry[]>;
+type VisibleTreeRow =
+  | { kind: "entry"; entry: DirEntry; depth: number }
+  | { kind: "loading"; directoryPath: string; depth: number }
+  | { kind: "error"; directoryPath: string; depth: number; message: string };
 
 function normalize(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -198,7 +202,7 @@ export function FileTreeView({
         return next;
       });
       try {
-        const entries = await listDir(dirPath, undefined, undefined, includeHidden);
+        const entries = await listDir(dirPath, root, undefined, includeHidden);
         if (
           scopeGeneration !== scopeGenerationRef.current
           || requestGenerationRef.current.get(dirPath) !== requestGeneration
@@ -238,7 +242,7 @@ export function FileTreeView({
         }
       }
     },
-    [updateLoaded, updateLoading],
+    [includeHidden, root, updateLoaded, updateLoading],
   );
 
   // A workspace switch is the only operation that clears the visible tree.
@@ -298,27 +302,41 @@ export function FileTreeView({
   // Flatten visible tree for shift-click range selection. Must be defined
   // BEFORE any conditional return so the hook order is stable across renders.
   const rootEntries = root ? loaded.get(root) ?? [] : [];
-  const visiblePaths = useMemo(() => {
-    const out: string[] = [];
-    const walk = (entries: DirEntry[] | undefined) => {
+  const visibleRows = useMemo(() => {
+    const out: VisibleTreeRow[] = [];
+    const walk = (entries: DirEntry[] | undefined, depth: number) => {
       if (!entries) return;
       for (const entry of entries) {
-        out.push(entry.path);
+        out.push({ kind: "entry", entry, depth });
         if (entry.kind === "directory" && expanded.has(entry.path)) {
-          walk(loaded.get(entry.path));
+          const children = loaded.get(entry.path);
+          if (children) {
+            walk(children, depth + 1);
+          } else if (loadingDirs.has(entry.path)) {
+            out.push({ kind: "loading", directoryPath: entry.path, depth: depth + 1 });
+          } else {
+            const message = errors.get(entry.path);
+            if (message) {
+              out.push({ kind: "error", directoryPath: entry.path, depth: depth + 1, message });
+            }
+          }
         }
       }
     };
-    walk(rootEntries);
+    walk(rootEntries, 0);
     return out;
-  }, [rootEntries, expanded, loaded]);
+  }, [rootEntries, expanded, loaded, loadingDirs, errors]);
+  const visiblePaths = useMemo(
+    () => visibleRows.flatMap((row) => row.kind === "entry" ? [row.entry.path] : []),
+    [visibleRows],
+  );
 
   // SP2: virtualisation + container size hooks must run before any early
   // return so the hook order is stable across renders.
   const treeRef = useRef<HTMLDivElement | null>(null);
   const listHandleRef = useRef<FixedSizeListHandle | null>(null);
   const containerHeight = useElementSize(treeRef, "height");
-  const shouldVirtualize = rootEntries.length >= topLevelThreshold;
+  const shouldVirtualize = visibleRows.length >= topLevelThreshold;
 
   if (!root) {
     return (
@@ -343,14 +361,14 @@ export function FileTreeView({
     return <div className="file-tree__empty">这里还是空的，放些文件进来再开始吧。</div>;
   }
 
-  const renderTreeNode = (entry: DirEntry) => {
-    const rel = gitStatusByPath ? toWorkspaceRelative(root, entry.path) : null;
-    const gitStatus = rel !== null ? gitStatusByPath?.get(rel) : undefined;
+  const renderTreeNode = (entry: DirEntry, depth = 0, renderChildren = true) => {
     return (
       <TreeNode
         key={entry.path}
         entry={entry}
-        depth={0}
+        depth={depth}
+        root={root}
+        renderChildren={renderChildren}
         expanded={expanded}
         loaded={loaded}
         loadingDirs={loadingDirs}
@@ -360,7 +378,7 @@ export function FileTreeView({
         cutPaths={cutPaths}
         renamingPath={renamingPath ?? null}
         visiblePaths={visiblePaths}
-        gitStatus={gitStatus}
+        gitStatusByPath={gitStatusByPath}
         onContextMenu={onContextMenu}
         onRenameSubmit={onRenameSubmit}
         onRenameCancel={onRenameCancel}
@@ -383,11 +401,36 @@ export function FileTreeView({
       {shouldVirtualize && containerHeight && containerHeight > 0 ? (
         <FixedSizeList
           ref={listHandleRef}
-          items={rootEntries}
+          items={visibleRows}
           itemHeight={virtualItemHeight}
           height={containerHeight}
-          renderItem={(entry) => renderTreeNode(entry)}
-          getKey={(entry) => entry.path}
+          renderItem={(row) => {
+            if (row.kind === "entry") return renderTreeNode(row.entry, row.depth, false);
+            if (row.kind === "loading") {
+              return (
+                <div
+                  className="file-tree__node file-tree__node--loading"
+                  style={{ paddingInlineStart: `${row.depth * 14 + 8}px` }}
+                >
+                  …
+                </div>
+              );
+            }
+            return (
+              <button
+                type="button"
+                className="file-tree__retry"
+                title={row.message}
+                style={{ marginInlineStart: `${row.depth * 14 + 8}px` }}
+                onClick={() => void loadDir(row.directoryPath, true)}
+              >
+                加载失败，重试
+              </button>
+            );
+          }}
+          getKey={(row) => row.kind === "entry"
+            ? row.entry.path
+            : `${row.kind}:${row.directoryPath}`}
           ariaLabel="工作区文件树"
         />
       ) : (
@@ -401,6 +444,8 @@ export function FileTreeView({
 function TreeNode({
   entry,
   depth,
+  root,
+  renderChildren,
   expanded,
   loaded,
   loadingDirs,
@@ -410,7 +455,7 @@ function TreeNode({
   cutPaths,
   renamingPath,
   visiblePaths,
-  gitStatus,
+  gitStatusByPath,
   onContextMenu,
   onRenameSubmit,
   onRenameCancel,
@@ -421,6 +466,8 @@ function TreeNode({
 }: {
   entry: DirEntry;
   depth: number;
+  root: string;
+  renderChildren: boolean;
   expanded: Set<string>;
   loaded: LoadedMap;
   loadingDirs: Set<string>;
@@ -430,7 +477,7 @@ function TreeNode({
   cutPaths?: Set<string>;
   renamingPath: string | null;
   visiblePaths: string[];
-  gitStatus?: CodingGitFile;
+  gitStatusByPath?: Map<string, CodingGitFile>;
   onContextMenu?: (event: React.MouseEvent, entry: DirEntry) => void;
   onRenameSubmit?: (path: string, newName: string) => Promise<void>;
   onRenameCancel?: () => void;
@@ -451,8 +498,12 @@ function TreeNode({
   const children = isDir ? loaded.get(entry.path) : undefined;
   const childLoading = isDir && isExpanded && loadingDirs.has(entry.path);
   const childError = isDir && isExpanded ? errors.get(entry.path) : undefined;
+  const relativePath = gitStatusByPath ? toWorkspaceRelative(root, entry.path) : null;
+  const gitStatus = relativePath !== null ? gitStatusByPath?.get(relativePath) : undefined;
+  const isSymlink = entry.kind === "symlink";
 
   const handleClick = (event: React.MouseEvent) => {
+    if (isSymlink) return;
     const sel = useFileTreeSelectionStore.getState();
     if (event.shiftKey) {
       if (sel.anchorPath && visiblePaths.length > 0) {
@@ -474,14 +525,13 @@ function TreeNode({
   };
 
   const handleContextMenu = (event: React.MouseEvent) => {
-    if (!onContextMenu) return;
+    if (!onContextMenu || isSymlink) return;
     event.preventDefault();
     onContextMenu(event, entry);
   };
 
   // SP5: large / binary / symlink classification. Done here so the badges
   // and the dimmed title both see a single source of truth.
-  const isSymlink = entry.kind === "symlink";
   const tip = (() => {
     if (isSymlink) return `符号链接：${entry.path}`;
     if (entry.isBinary) return `二进制文件（${entry.size} 字节），双击将无法打开`;
@@ -509,10 +559,15 @@ function TreeNode({
         aria-expanded={isDir ? isExpanded : undefined}
         aria-selected={isMultiSelected}
         data-cut={isCut || undefined}
-        draggable
+        draggable={!isSymlink}
+        aria-disabled={isSymlink || undefined}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         onDragStart={(event) => {
+          if (isSymlink) {
+            event.preventDefault();
+            return;
+          }
           // SP4: file tree → Composer / AgentPane drag bridge. Carry the
           // (possibly multi-select) paths in our own MIME so receivers can
           // round-trip them without touching Tauri events.
@@ -589,7 +644,7 @@ function TreeNode({
           </span>
         ) : null}
       </div>
-      {isDir &&
+      {renderChildren && isDir &&
         isExpanded &&
         children &&
         children.map((child) => (
@@ -597,6 +652,8 @@ function TreeNode({
             key={child.path}
             entry={child}
             depth={depth + 1}
+            root={root}
+            renderChildren
             expanded={expanded}
             loaded={loaded}
             loadingDirs={loadingDirs}
@@ -606,6 +663,7 @@ function TreeNode({
             cutPaths={cutPaths}
             renamingPath={renamingPath}
             visiblePaths={visiblePaths}
+            gitStatusByPath={gitStatusByPath}
             onContextMenu={onContextMenu}
             onRenameSubmit={onRenameSubmit}
             onRenameCancel={onRenameCancel}
@@ -615,7 +673,7 @@ function TreeNode({
             onDirectorySelect={onDirectorySelect}
           />
         ))}
-      {childLoading && (
+      {renderChildren && childLoading && (
         <div
           className="file-tree__node file-tree__node--loading"
           style={{ paddingInlineStart: `${(depth + 1) * 14 + 8}px` }}
@@ -623,7 +681,7 @@ function TreeNode({
           …
         </div>
       )}
-      {childError && !childLoading && (
+      {renderChildren && childError && !childLoading && (
         <button
           type="button"
           className="file-tree__retry"

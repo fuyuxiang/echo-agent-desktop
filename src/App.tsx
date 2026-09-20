@@ -50,6 +50,7 @@ import {
   providersList,
   flattenModels,
   filterModelsByRuntimeCatalog,
+  filesystemPickDirectory,
   notificationAppend,
   memoryAppend,
   internalReload,
@@ -1698,9 +1699,13 @@ function Shell() {
     });
   };
 
-  const handleAddCodingWorkspace = () => {
-    // Implemented in CodingWorkbench via filesystemPickDirectory. Hook
-    // reserved here so WorkspaceTabBar can call back through props.
+  const handleAddCodingWorkspace = async () => {
+    try {
+      const selected = await filesystemPickDirectory();
+      if (selected) handleSelectCodingWorkspace(selected);
+    } catch (error) {
+      showToast(`选择代码文件夹失败：${friendlyError(error)}`);
+    }
   };
 
   const handleNewSession = () => {
@@ -2181,6 +2186,7 @@ function Shell() {
       const cwd = project.cwd || newSessionTargetCwd;
       const sessionId = await agentNewSession(cwd, modelId);
       startedSessionId = sessionId;
+      useKnowledgeStore.getState().bindSessionSources(sessionId, true);
       if (!project.defaultModelId) {
         useProjectsStore.getState().updateConfig(project.id, { defaultModelId: modelId });
       }
@@ -2247,6 +2253,7 @@ function Shell() {
       const cwd = project.cwd || newSessionTargetCwd;
       const sessionId = await agentNewSession(cwd, modelId);
       startedSessionId = sessionId;
+      useKnowledgeStore.getState().bindSessionSources(sessionId, true);
       if (!project.defaultModelId && !requestedModelId) {
         useProjectsStore.getState().updateConfig(projectId, { defaultModelId: modelId });
       }
@@ -2470,6 +2477,7 @@ function Shell() {
                   projectModels={models}
                   projectDefaultModelId={newSessionModelId}
                   onOpenModelSettings={() => openSettings("model")}
+                  onClientSlashCommand={handleClientSlashCommand}
                   onExitCodingWorkspace={() => {
                     setPlaceholderView(null);
                     setSidebarCollapsed(false);

@@ -58,6 +58,36 @@ describe("tab store", () => {
     expect((useTabStore.getState().tabs[0] as FileTab).conflict).toBe(false);
   });
 
+  it("restoring a deleted file clears its conflict and stale error", () => {
+    useTabStore.getState().openFile(fileTab());
+    useTabStore.getState().markConflict("/repo/src/a.ts");
+    useTabStore.getState().setError("/repo/src/a.ts", "文件已移到回收站");
+    useTabStore.getState().clearConflict("/repo/src/a.ts");
+    expect(useTabStore.getState().tabs[0]).toMatchObject({
+      conflict: false,
+      error: undefined,
+    });
+  });
+
+  it("renaming a directory remaps descendant tabs and the active id", () => {
+    useTabStore.getState().openFile(fileTab());
+    useTabStore.getState().openFile(fileTab({
+      id: "/repo/src/nested/b.ts",
+      relativePath: "src/nested/b.ts",
+      name: "b.ts",
+    }));
+    useTabStore.getState().renameTab("/repo/src", "/repo/source");
+    expect(useTabStore.getState().tabs.map((tab) => tab.id)).toEqual([
+      "/repo/source/a.ts",
+      "/repo/source/nested/b.ts",
+    ]);
+    expect(useTabStore.getState().tabs.map((tab) => (tab as FileTab).relativePath)).toEqual([
+      "source/a.ts",
+      "source/nested/b.ts",
+    ]);
+    expect(useTabStore.getState().activeId).toBe("/repo/source/nested/b.ts");
+  });
+
   it("closing the active tab focuses the tab that takes its place", () => {
     useTabStore.getState().openFile(fileTab({ id: "a", name: "a" }));
     useTabStore.getState().openFile(fileTab({ id: "b", name: "b" }));

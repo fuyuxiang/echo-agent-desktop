@@ -34,6 +34,7 @@ import { projectAssetsRemoveAll } from "@/lib/agent-client";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useAppDialog } from "./AppDialog";
 import type { ModelOption } from "./ModelSelector";
+import type { SlashCommandInvocation } from "@/lib/slash-commands";
 
 interface ProjectsPanelProps {
   cwd?: string;
@@ -55,6 +56,10 @@ interface ProjectsPanelProps {
   models?: ModelOption[];
   defaultModelId?: string;
   onOpenModelSettings?: () => void;
+  onClientSlashCommand?: (invocation: SlashCommandInvocation) => boolean | void | Promise<boolean | void>;
+  onNavigateConnectors?: () => void;
+  onOpenKnowledgeBase?: () => void;
+  onOpenOrganization?: () => void;
 }
 
 const FROM_TEMPLATES = TEMPLATE_OPTIONS.filter((t) => t.id !== "custom");
@@ -85,6 +90,10 @@ export function ProjectsPanel({
   models = [],
   defaultModelId,
   onOpenModelSettings,
+  onClientSlashCommand,
+  onNavigateConnectors,
+  onOpenKnowledgeBase,
+  onOpenOrganization,
 }: ProjectsPanelProps) {
   const projects = useProjectsStore((s) => s.projects);
   const persisting = useProjectsStore((s) => s.persisting);
@@ -133,6 +142,10 @@ export function ProjectsPanel({
           models={models}
           defaultModelId={defaultModelId}
           onOpenModelSettings={onOpenModelSettings}
+          onClientSlashCommand={onClientSlashCommand}
+          onNavigateConnectors={onNavigateConnectors}
+          onOpenKnowledgeBase={onOpenKnowledgeBase}
+          onOpenOrganization={onOpenOrganization}
         />
         {dialog}
       </>

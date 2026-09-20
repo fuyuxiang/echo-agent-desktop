@@ -1261,11 +1261,9 @@ pub const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 /// SP5: extension whitelist — files with these suffixes are always treated
 /// as binary regardless of their first bytes.
 const BINARY_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico",
-    "pdf", "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
-    "exe", "dll", "so", "dylib", "bin", "wasm", "class",
-    "mp3", "mp4", "mov", "avi", "mkv", "flac", "ogg", "wav",
-    "ttf", "otf", "woff", "woff2",
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "pdf", "zip", "tar", "gz", "bz2", "xz",
+    "7z", "rar", "exe", "dll", "so", "dylib", "bin", "wasm", "class", "mp3", "mp4", "mov", "avi",
+    "mkv", "flac", "ogg", "wav", "ttf", "otf", "woff", "woff2",
 ];
 
 fn looks_binary_by_extension(name: &str) -> bool {
@@ -1328,9 +1326,21 @@ pub async fn list_dir(
     include_hidden: Option<bool>,
     ignore_files: Option<Vec<String>>,
 ) -> Result<Vec<DirEntry>, String> {
-    list_dir_authorized(&access, path, cwd, max_entries, include_hidden, ignore_files)
+    let (authorized, ignore_root) = resolve_list_dir_paths(&access, &path, cwd.as_deref())?;
+    tokio::task::spawn_blocking(move || {
+        list_dir_resolved(
+            authorized,
+            ignore_root,
+            max_entries,
+            include_hidden,
+            ignore_files,
+        )
+    })
+    .await
+    .map_err(|error| format!("读取目录任务失败：{error}"))?
 }
 
+#[cfg(test)]
 fn list_dir_authorized(
     access: &FilesystemAccess,
     path: String,
@@ -1339,11 +1349,44 @@ fn list_dir_authorized(
     include_hidden: Option<bool>,
     ignore_files: Option<Vec<String>>,
 ) -> Result<Vec<DirEntry>, String> {
+    let (authorized, ignore_root) = resolve_list_dir_paths(access, &path, cwd.as_deref())?;
+    list_dir_resolved(
+        authorized,
+        ignore_root,
+        max_entries,
+        include_hidden,
+        ignore_files,
+    )
+}
+
+fn resolve_list_dir_paths(
+    access: &FilesystemAccess,
+    path: &str,
+    cwd: Option<&str>,
+) -> Result<(PathBuf, PathBuf), String> {
     let resolved = resolve_path(&path, cwd.as_deref());
     let authorized = access.is_authorized(&resolved, false)?;
     if !authorized.is_dir() {
         return Err(format!("不是目录：{}", authorized.display()));
     }
+    // `authorized` is the directory currently being expanded. Ignore rules,
+    // however, must be evaluated from the workspace root so a root
+    // `.gitignore` continues to apply inside nested folders.
+    let ignore_root = cwd
+        .as_deref()
+        .and_then(|claimed| access.require_workspace(claimed).ok())
+        .filter(|workspace| authorized.starts_with(workspace))
+        .unwrap_or_else(|| authorized.clone());
+    Ok((authorized, ignore_root))
+}
+
+fn list_dir_resolved(
+    authorized: PathBuf,
+    ignore_root: PathBuf,
+    max_entries: Option<usize>,
+    include_hidden: Option<bool>,
+    ignore_files: Option<Vec<String>>,
+) -> Result<Vec<DirEntry>, String> {
     let limit = max_entries
         .unwrap_or(DIRECTORY_LIST_MAX_ENTRIES)
         .min(DIRECTORY_LIST_MAX_ENTRIES);
@@ -1366,16 +1409,8 @@ fn list_dir_authorized(
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy().to_string();
         let starts_with_dot = name.starts_with('.');
-        let is_ignore_rule = starts_with_dot
-            && crate::coding::gitignore_chain::is_ignore_rules_file(&entry.path());
         if starts_with_dot {
             if !show_hidden {
-                continue;
-            }
-            // Even when showing hidden, the rule files themselves stay hidden
-            // so the tree doesn't render `.gitignore` / `.echoagentignore` as
-            // ordinary entries.
-            if is_ignore_rule {
                 continue;
             }
         }
@@ -1405,7 +1440,7 @@ fn list_dir_authorized(
         // Apply the nested ignore chain to honour `.echoagentignore` /
         // `.gitignore` (deeper whitelist wins, matching Git precedence).
         if crate::coding::gitignore_chain::apply_nested_gitignore(
-            &authorized,
+            &ignore_root,
             &entry.path(),
             is_dir,
             &ignore_names,
@@ -1727,6 +1762,51 @@ mod tests {
         .unwrap();
         let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
         assert_eq!(names, vec!["keep.txt".to_string()]);
+    }
+
+    #[test]
+    fn list_dir_uses_workspace_root_ignore_chain_for_nested_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let nested = root.join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(root.join(".gitignore"), "*.generated.ts\n").unwrap();
+        std::fs::write(nested.join("model.generated.ts"), "generated").unwrap();
+        std::fs::write(nested.join("model.ts"), "source").unwrap();
+
+        let access = FilesystemAccess::default();
+        access.authorize_workspace(&root.to_string_lossy()).unwrap();
+        let entries = list_dir_authorized(
+            &access,
+            nested.to_string_lossy().into_owned(),
+            Some(root.to_string_lossy().into_owned()),
+            None,
+            Some(false),
+            None,
+        )
+        .unwrap();
+        let names: Vec<String> = entries.into_iter().map(|entry| entry.name).collect();
+        assert_eq!(names, vec!["model.ts".to_string()]);
+    }
+
+    #[test]
+    fn list_dir_show_hidden_includes_ignore_rule_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+
+        let access = FilesystemAccess::default();
+        access.authorize_workspace(&root.to_string_lossy()).unwrap();
+        let entries = list_dir_authorized(
+            &access,
+            root.to_string_lossy().into_owned(),
+            Some(root.to_string_lossy().into_owned()),
+            None,
+            Some(true),
+            None,
+        )
+        .unwrap();
+        assert!(entries.iter().any(|entry| entry.name == ".gitignore"));
     }
 
     #[test]

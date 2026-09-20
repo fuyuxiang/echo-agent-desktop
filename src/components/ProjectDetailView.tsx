@@ -23,6 +23,9 @@ import { ModelSelector, type ModelOption } from "./ModelSelector";
 import { FolderIcon } from "@/foundation/components/Icon/icons";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useAppDialog } from "./AppDialog";
+import type { AgentEntry } from "@/lib/types";
+import type { SlashCommandInvocation } from "@/lib/slash-commands";
+import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
 
 type TabKey = "activity" | "plan" | "task" | "asset";
 type DrawerKey = "instruction" | "model" | "connectors" | "experts" | "skills" | "automation";
@@ -57,6 +60,10 @@ export function ProjectDetailView({
   models = [],
   defaultModelId,
   onOpenModelSettings,
+  onClientSlashCommand,
+  onNavigateConnectors,
+  onOpenKnowledgeBase,
+  onOpenOrganization,
 }: {
   project: ProjectMeta;
   onBack: () => void;
@@ -78,6 +85,10 @@ export function ProjectDetailView({
   /** Application default, used only by projects that do not yet have a persisted choice. */
   defaultModelId?: string;
   onOpenModelSettings?: () => void;
+  onClientSlashCommand?: (invocation: SlashCommandInvocation) => boolean | void | Promise<boolean | void>;
+  onNavigateConnectors?: () => void;
+  onOpenKnowledgeBase?: () => void;
+  onOpenOrganization?: () => void;
 }) {
   // 读最新（交互后 store 更新，父传入的快照可能过期）。
   const live = useProjectsStore((s) => s.projects.find((p) => p.id === project.id)) ?? project;
@@ -91,7 +102,9 @@ export function ProjectDetailView({
   // Composer 失败原因。Composer 内部不持有"失败 alert",必须由调用方展示,
   // 否则用户看到"按了发送但什么都没发生"。
   const [sendError, setSendError] = useState<string | null>(null);
+  const [composerExpert, setComposerExpert] = useState<AgentEntry | null>(null);
   const { requestInput, dialog } = useAppDialog(live.id);
+  const mentionCandidates = useWorkspaceMentions(live.cwd);
   const configuredProjectModelAvailable = !live.defaultModelId
     || models.some((model) => model.id === live.defaultModelId);
   const inheritedModelId = defaultModelId && models.some((model) => model.id === defaultModelId)
@@ -102,6 +115,18 @@ export function ProjectDetailView({
     : inheritedModelId;
   const setProjectModel = (modelId: string) => {
     updateConfig(live.id, { defaultModelId: modelId });
+  };
+
+  const addComposerExpert = (agent: AgentEntry) => {
+    const item: RefItem = {
+      id: agent.path || agent.name,
+      name: agent.name,
+    };
+    if (!live.experts.some((expert) => expert.id === item.id || expert.name === item.name)) {
+      updateConfig(live.id, { experts: [...live.experts, item] });
+    }
+    setComposerExpert(agent);
+    onToast?.(`已将专家「${agent.name}」加入项目上下文`);
   };
 
   const setPicked = (k: typeof pickerFor, items: RefItem[]) => {
@@ -311,6 +336,15 @@ export function ProjectDetailView({
               models={models}
               onModelChange={setProjectModel}
               cwd={live.cwd}
+              onSelectExpert={addComposerExpert}
+              activeExpertName={composerExpert?.name}
+              onDismissExpert={() => setComposerExpert(null)}
+              onNavigateConnectors={onNavigateConnectors}
+              onOpenKnowledgeBase={onOpenKnowledgeBase}
+              onOpenOrganization={onOpenOrganization}
+              onClientSlashCommand={onClientSlashCommand}
+              filePaths={mentionCandidates.filePaths}
+              workspaceSymbols={mentionCandidates.workspaceSymbols}
             />
             {(sendError || (!projectModelId && live.defaultModelId)) && (
               <div className="pd-composer-warning" role="alert">
@@ -506,4 +540,3 @@ function ConfigDrawer({
 // 输入历史 / 知识来源 等能力统一由 Composer 接管；项目级契约（cwd +
 // 上下文注入摘要）通过 header chip 与 Composer 的 props 表达。
 // ============================================================
-

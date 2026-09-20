@@ -184,8 +184,8 @@ export const codingApi = {
   moveEntries: (root: string, sources: string[], destination: string) =>
     _codingMoveEntries(root, sources, destination),
   /** SP5: undo a previous `deleteEntries` call. */
-  restoreFromTrash: (root: string, originalPaths: string[], trashBasenames: string[]) =>
-    _codingRestoreFromTrash(root, originalPaths, trashBasenames),
+  restoreFromTrash: (root: string, originalPaths: string[], restoreTokens: string[]) =>
+    _codingRestoreFromTrash(root, originalPaths, restoreTokens),
 };
 
 export type { CodingBatchOpResult, CodingRenameResult, CodingRestoreResult };

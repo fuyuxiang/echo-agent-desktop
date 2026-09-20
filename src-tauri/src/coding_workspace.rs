@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
+#[cfg(target_os = "macos")]
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -33,6 +35,8 @@ const MAX_SEARCH_RESULTS: usize = 300;
 const MAX_SEARCH_PREVIEW_CHARS: usize = 600;
 /// SP1: maximum number of entries accepted by a single batch FS-mutation call.
 const MAX_BATCH_OPS: usize = 500;
+#[cfg(target_os = "macos")]
+const MAX_TRASH_RESTORE_TOKENS: usize = 25_000;
 /// How often a long workspace scan reports progress to the UI.
 const PROGRESS_EVERY_FILES: usize = 2_000;
 
@@ -188,15 +192,36 @@ pub struct CodingMoveEntryRequest {
 pub struct CodingRestoreRequest {
     pub root: String,
     pub original_paths: Vec<String>,
-    pub trash_basenames: Vec<String>,
+    pub restore_tokens: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodingBatchOpResult {
+    /// The resulting path on success; the source path on failure.
     pub path: String,
+    /// Original source path, allowing callers to correlate partial batches.
+    pub source_path: String,
     pub ok: bool,
     pub error: Option<String>,
+    /// Opaque token required to restore an item moved to the system trash.
+    pub restore_token: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+struct TrashRestoreRecord {
+    original_path: PathBuf,
+    trashed_path: PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+static TRASH_RESTORE_RECORDS: OnceLock<Mutex<HashMap<String, TrashRestoreRecord>>> =
+    OnceLock::new();
+
+#[cfg(target_os = "macos")]
+fn trash_restore_records() -> &'static Mutex<HashMap<String, TrashRestoreRecord>> {
+    TRASH_RESTORE_RECORDS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -964,7 +989,7 @@ fn read_coding_document(root: &Path, claimed: &str) -> Result<CodingDocument, St
     let metadata =
         std::fs::metadata(&path).map_err(|error| format!("无法读取文件信息：{error}"))?;
     if metadata.len() as usize > MAX_DOCUMENT_BYTES {
-        return Err("文件超过 4 MB，为避免编辑器卡顿已拒绝打开".into());
+        return Err("文件超过 2 MB，为避免编辑器卡顿已拒绝打开".into());
     }
     let bytes = std::fs::read(&path).map_err(|error| format!("读取文件失败：{error}"))?;
     if bytes.contains(&0) {
@@ -1012,7 +1037,7 @@ pub async fn coding_write_document(
     request: CodingWriteDocumentRequest,
 ) -> Result<CodingDocument, String> {
     if request.content.len() > MAX_DOCUMENT_BYTES {
-        return Err("写入内容超过 4 MB 安全上限".into());
+        return Err("写入内容超过 2 MB 安全上限".into());
     }
     let root = access.require_workspace(&request.root)?;
     // The staged write, permission copy and atomic replace form one synchronous
@@ -1152,8 +1177,8 @@ fn resolve_coding_path_strict(root: &Path, claimed: &str) -> Result<PathBuf, Str
     } else {
         canonical_root.join(candidate)
     };
-    let metadata = std::fs::symlink_metadata(&candidate)
-        .map_err(|error| format!("无法读取路径：{error}"))?;
+    let metadata =
+        std::fs::symlink_metadata(&candidate).map_err(|error| format!("无法读取路径：{error}"))?;
     if metadata.file_type().is_symlink() {
         return Err("拒绝访问符号链接".into());
     }
@@ -1204,11 +1229,28 @@ fn copy_one(src: &Path, dst: &Path) -> std::io::Result<()> {
             "拒绝复制符号链接",
         ));
     }
-    if meta.is_dir() {
-        copy_dir_recursive(src, dst)?;
-    } else {
-        std::fs::copy(src, dst)?;
-        let _ = std::fs::set_permissions(dst, meta.permissions());
+    let result = (|| {
+        if meta.is_dir() {
+            copy_dir_recursive(src, dst)?;
+        } else {
+            std::fs::copy(src, dst)?;
+            let _ = std::fs::set_permissions(dst, meta.permissions());
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let cleanup = match std::fs::symlink_metadata(dst) {
+            Ok(_) => fallback_remove(dst),
+            Err(check_error) if check_error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(check_error) => Err(format!("无法检查未完整副本：{check_error}")),
+        };
+        return Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup_error) => std::io::Error::new(
+                error.kind(),
+                format!("{error}；且未完整副本清理失败：{cleanup_error}"),
+            ),
+        });
     }
     Ok(())
 }
@@ -1238,52 +1280,97 @@ fn delete_entries_blocking(
 ) -> Result<Vec<CodingBatchOpResult>, String> {
     // Pre-resolve every source; reject the whole batch on first escape attempt.
     let mut resolved = Vec::with_capacity(request.paths.len());
+    let mut seen = HashSet::new();
     for raw in &request.paths {
         let canonical = resolve_coding_path_strict(root, raw)?;
+        if !seen.insert(canonical.clone()) {
+            return Err("删除批次包含重复路径".into());
+        }
         resolved.push(canonical);
     }
-    // Use trash crate when available; fall back to remove_file/remove_dir_all
-    // (Linux headless without gio; never silently swallows).
+    // Deletion is recoverable by contract. If the platform trash is
+    // unavailable, report a per-item failure and leave the source untouched.
     let mut results: Vec<CodingBatchOpResult> = Vec::with_capacity(resolved.len());
     for path in &resolved {
         let display = path.to_string_lossy().into_owned();
         let outcome = trash_path(path);
         match outcome {
-            Ok(()) => results.push(CodingBatchOpResult {
-                path: display,
+            Ok(restore_token) => results.push(CodingBatchOpResult {
+                path: display.clone(),
+                source_path: display,
                 ok: true,
                 error: None,
+                restore_token: Some(restore_token),
             }),
             Err(error) => results.push(CodingBatchOpResult {
-                path: display,
+                path: display.clone(),
+                source_path: display,
                 ok: false,
                 error: Some(error),
+                restore_token: None,
             }),
         }
     }
     Ok(results)
 }
 
-fn trash_path(path: &Path) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| format!("无法读取路径：{error}"))?;
+fn trash_path(path: &Path) -> Result<String, String> {
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|error| format!("无法读取路径：{error}"))?;
     if metadata.file_type().is_symlink() {
         return Err("拒绝删除符号链接".into());
     }
-    // trash 5.x 的 delete_all 签名是 `fn(paths: &[impl AsRef<Path>]) -> Result<(), Error>`.
-    let owned: PathBuf = path.to_path_buf();
-    match trash::delete_all(&[owned.as_path()]) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            tracing::warn!("trash crate 不可用，回退到物理删除: {e}");
-            fallback_remove(path)
-        }
+    #[cfg(target_os = "macos")]
+    {
+        return trash_path_macos(path);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        trash::delete(path)
+            .map_err(|error| format!("无法移到系统回收站，文件未被删除：{error}"))?;
+        Ok(path.to_string_lossy().into_owned())
     }
 }
 
+#[cfg(target_os = "macos")]
+fn trash_path_macos(path: &Path) -> Result<String, String> {
+    use objc2_foundation::{NSFileManager, NSString, NSURL};
+
+    let path_string = path.to_string_lossy();
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&path_string));
+    let manager = NSFileManager::defaultManager();
+    let mut resulting_url = None;
+    manager
+        .trashItemAtURL_resultingItemURL_error(&url, Some(&mut resulting_url))
+        .map_err(|error| format!("无法移到系统回收站，文件未被删除：{error}"))?;
+    let trashed_path = resulting_url
+        .and_then(|url| url.path())
+        .map(|path| PathBuf::from(path.to_string()))
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "条目已移到回收站，但系统未返回恢复位置".to_string())?;
+    let token = uuid::Uuid::now_v7().to_string();
+    let mut records = trash_restore_records()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if records.len() >= MAX_TRASH_RESTORE_TOKENS {
+        if let Some(oldest) = records.keys().next().cloned() {
+            records.remove(&oldest);
+        }
+    }
+    records.insert(
+        token.clone(),
+        TrashRestoreRecord {
+            original_path: path.to_path_buf(),
+            trashed_path,
+        },
+    );
+    Ok(token)
+}
+
 fn fallback_remove(path: &Path) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| format!("无法读取路径：{error}"))?;
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|error| format!("无法读取路径：{error}"))?;
     if metadata.is_dir() {
         std::fs::remove_dir_all(path).map_err(|error| format!("删除目录失败：{error}"))
     } else {
@@ -1306,8 +1393,8 @@ pub async fn coding_restore_from_trash(
     access: State<'_, FilesystemAccess>,
     request: CodingRestoreRequest,
 ) -> Result<Vec<CodingRestoreResult>, String> {
-    if request.original_paths.len() != request.trash_basenames.len() {
-        return Err("original_paths 与 trash_basenames 数量不匹配".into());
+    if request.original_paths.len() != request.restore_tokens.len() {
+        return Err("original_paths 与 restore_tokens 数量不匹配".into());
     }
     if request.original_paths.len() > MAX_BATCH_OPS {
         return Err(format!("一次最多恢复 {MAX_BATCH_OPS} 个条目"));
@@ -1322,30 +1409,67 @@ fn restore_blocking(
     root: &Path,
     request: CodingRestoreRequest,
 ) -> Result<Vec<CodingRestoreResult>, String> {
-    let mut out = Vec::with_capacity(request.original_paths.len());
-    for (orig, basename) in request.original_paths.iter().zip(request.trash_basenames.iter()) {
-        let target = match resolve_coding_path_strict(root, orig) {
-            Ok(p) => p,
-            Err(e) => {
-                out.push(CodingRestoreResult {
-                    path: orig.clone(),
-                    ok: false,
-                    error: Some(e),
-                });
-                continue;
+    // Validate every destination before touching the trash. Otherwise a
+    // predictable collision near the end of a batch would leave earlier
+    // entries restored and the history action only half applied.
+    let mut seen_targets = HashSet::new();
+    let validations: Vec<Result<PathBuf, String>> = request
+        .original_paths
+        .iter()
+        .map(|orig| {
+            let target = resolve_coding_target_path(root, orig)?;
+            if !seen_targets.insert(target.clone()) {
+                return Err("恢复批次包含重复目标".into());
             }
-        };
-        // Abort if the target was already restored by another path — the
-        // user might have re-pasted or re-created a file with the same name.
-        if target.exists() {
-            out.push(CodingRestoreResult {
+            if target
+                .try_exists()
+                .map_err(|error| format!("无法检测恢复目标：{error}"))?
+            {
+                return Err("目标位置已存在同名文件或目录".into());
+            }
+            Ok(target)
+        })
+        .collect();
+    if validations.iter().any(Result::is_err) {
+        return Ok(request
+            .original_paths
+            .iter()
+            .zip(validations)
+            .map(|(orig, validation)| CodingRestoreResult {
                 path: orig.clone(),
                 ok: false,
-                error: Some("目标位置已存在同名文件或目录".into()),
-            });
-            continue;
-        }
-        match locate_trash_path(basename).and_then(|src| std::fs::rename(&src, &target)) {
+                error: Some(
+                    validation
+                        .err()
+                        .unwrap_or_else(|| "同批次包含无法恢复的条目，本次未执行任何恢复".into()),
+                ),
+            })
+            .collect());
+    }
+
+    let targets = validations
+        .into_iter()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+    if let Err(error) = preflight_restore_batch(&request.restore_tokens, &targets) {
+        return Ok(request
+            .original_paths
+            .iter()
+            .map(|orig| CodingRestoreResult {
+                path: orig.clone(),
+                ok: false,
+                error: Some(format!("恢复批次未执行：{error}")),
+            })
+            .collect());
+    }
+    let mut out = Vec::with_capacity(request.original_paths.len());
+    for ((orig, restore_token), target) in request
+        .original_paths
+        .iter()
+        .zip(request.restore_tokens.iter())
+        .zip(targets)
+    {
+        match restore_trash_item(restore_token, &target) {
             Ok(()) => out.push(CodingRestoreResult {
                 path: target.to_string_lossy().into_owned(),
                 ok: true,
@@ -1361,35 +1485,171 @@ fn restore_blocking(
     Ok(out)
 }
 
-fn locate_trash_path(basename: &str) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(xdg_data) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
-        candidates.push(xdg_data.join("Trash").join("files").join(basename));
+#[cfg(target_os = "macos")]
+fn preflight_restore_batch(restore_tokens: &[String], targets: &[PathBuf]) -> Result<(), String> {
+    for (restore_token, target) in restore_tokens.iter().zip(targets) {
+        let record = trash_restore_records()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(restore_token)
+            .cloned()
+            .ok_or_else(|| "恢复标识无效或已过期".to_string())?;
+        if record.original_path != *target {
+            return Err("恢复标识与目标路径不匹配".into());
+        }
+        let metadata = std::fs::symlink_metadata(&record.trashed_path)
+            .map_err(|error| format!("回收站中的条目已不存在：{error}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err("拒绝从回收站恢复符号链接".into());
+        }
     }
-    candidates.push(home.join(".local/share/Trash/files").join(basename));
-    if let Some(xdg_runtime) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
-        candidates.push(xdg_runtime.join("Trash").join(basename));
+    Ok(())
+}
+
+#[cfg(any(
+    target_os = "windows",
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+))]
+fn preflight_restore_batch(restore_tokens: &[String], targets: &[PathBuf]) -> Result<(), String> {
+    let items =
+        trash::os_limited::list().map_err(|error| format!("无法读取系统回收站：{error}"))?;
+    for (restore_token, target) in restore_tokens.iter().zip(targets) {
+        if Path::new(restore_token) != target {
+            return Err("恢复标识与目标路径不匹配".into());
+        }
+        if !items.iter().any(|item| item.original_path() == *target) {
+            return Err(format!("系统回收站中未找到对应条目：{}", target.display()));
+        }
     }
-    candidates.push(home.join(".Trash").join(basename));
-    candidates
+    Ok(())
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(unix, not(target_os = "ios"), not(target_os = "android"))
+)))]
+fn preflight_restore_batch(_restore_tokens: &[String], _targets: &[PathBuf]) -> Result<(), String> {
+    Err("当前平台暂不支持从系统回收站恢复".into())
+}
+
+/// Resolve a path that does not exist yet while still enforcing that its
+/// existing parent is a real directory inside the workspace.
+fn resolve_coding_target_path(root: &Path, claimed: &str) -> Result<PathBuf, String> {
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("无法解析工作区：{error}"))?;
+    let candidate = PathBuf::from(claimed);
+    let candidate = if candidate.is_absolute() {
+        candidate
+    } else {
+        canonical_root.join(candidate)
+    };
+    let name = candidate
+        .file_name()
+        .ok_or_else(|| "恢复目标缺少文件名".to_string())?;
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| "无法解析恢复目标的父目录".to_string())?;
+    let parent_metadata = std::fs::symlink_metadata(parent)
+        .map_err(|error| format!("无法读取恢复目标的父目录：{error}"))?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        return Err("恢复目标的父路径不是工作区内的真实目录".into());
+    }
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|error| format!("无法解析恢复目标的父目录：{error}"))?;
+    if !canonical_parent.starts_with(&canonical_root) {
+        return Err("拒绝恢复到工作区之外".into());
+    }
+    Ok(canonical_parent.join(name))
+}
+
+#[cfg(target_os = "macos")]
+fn restore_trash_item(restore_token: &str, target: &Path) -> Result<(), String> {
+    let record = trash_restore_records()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(restore_token)
+        .cloned()
+        .ok_or_else(|| "恢复标识无效或已过期".to_string())?;
+    if record.original_path != target {
+        return Err("恢复标识与目标路径不匹配".into());
+    }
+    let source = record.trashed_path;
+    let Some(trash_root) = dirs::home_dir().map(|home| home.join(".Trash")) else {
+        return Err("无法定位系统回收站".into());
+    };
+    let canonical_home_trash = trash_root.canonicalize().ok();
+    let metadata = std::fs::symlink_metadata(&source)
+        .map_err(|error| format!("回收站中的条目已不存在：{error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("拒绝从回收站恢复符号链接".into());
+    }
+    let canonical_source = source
+        .canonicalize()
+        .map_err(|error| format!("无法解析回收站条目：{error}"))?;
+    let effective_uid = unsafe { libc::geteuid() }.to_string();
+    let is_volume_trash = canonical_source.ancestors().any(|ancestor| {
+        ancestor
+            .file_name()
+            .is_some_and(|name| name == effective_uid.as_str())
+            && ancestor
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == ".Trashes")
+    });
+    let is_home_trash = canonical_home_trash
+        .as_ref()
+        .is_some_and(|trash| canonical_source.starts_with(trash));
+    if !is_home_trash && !is_volume_trash {
+        return Err("恢复标识不属于系统回收站".into());
+    }
+    std::fs::rename(canonical_source, target)
+        .map_err(|error| format!("从系统回收站恢复失败：{error}"))?;
+    trash_restore_records()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(restore_token);
+    Ok(())
+}
+
+#[cfg(any(
+    target_os = "windows",
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+))]
+fn restore_trash_item(restore_token: &str, target: &Path) -> Result<(), String> {
+    let expected = PathBuf::from(restore_token);
+    if expected != target {
+        return Err("恢复标识与目标路径不匹配".into());
+    }
+    let items =
+        trash::os_limited::list().map_err(|error| format!("无法读取系统回收站：{error}"))?;
+    let item = items
         .into_iter()
-        .find(|p| p.exists() && !p.is_symlink() && p.is_file())
-        .or_else(|| {
-            // Fallback: scan all known trash roots for the basename. Avoids
-            // surprising the user when `Trash/files/` is elsewhere.
-            let roots = [
-                std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
-                Some(home.join(".local/share/Trash")),
-                std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
-                Some(home.join(".Trash")),
-            ];
-            roots
-                .into_iter()
-                .flatten()
-                .map(|root| root.join("files").join(basename))
-                .find(|p| p.exists() && !p.is_symlink() && p.is_file())
-        })
+        .filter(|item| item.original_path() == expected)
+        .max_by_key(|item| item.time_deleted)
+        .ok_or_else(|| "系统回收站中未找到对应条目".to_string())?;
+    trash::os_limited::restore_all([item]).map_err(|error| format!("从系统回收站恢复失败：{error}"))
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "windows",
+    all(unix, not(target_os = "ios"), not(target_os = "android"))
+)))]
+fn restore_trash_item(_restore_token: &str, _target: &Path) -> Result<(), String> {
+    Err("当前平台暂不支持从系统回收站恢复".into())
 }
 
 // ----- end SP5 -----
@@ -1411,9 +1671,7 @@ fn rename_entry_blocking(
 ) -> Result<CodingRenameResult, String> {
     let new_name = safe_new_entry_name(&request.new_name)?;
     let old = resolve_coding_path_strict(root, &request.path)?;
-    let parent = old
-        .parent()
-        .ok_or_else(|| "无法解析父目录".to_string())?;
+    let parent = old.parent().ok_or_else(|| "无法解析父目录".to_string())?;
     let new_path = parent.join(new_name);
     if new_path == old {
         return Ok(CodingRenameResult {
@@ -1457,8 +1715,12 @@ fn copy_entries_blocking(
 ) -> Result<Vec<CodingBatchOpResult>, String> {
     let destination = resolve_coding_directory_path(root, Some(&request.destination))?;
     let mut resolved: Vec<PathBuf> = Vec::with_capacity(request.sources.len());
+    let mut seen = HashSet::new();
     for raw in &request.sources {
         let src = resolve_coding_path_strict(root, raw)?;
+        if !seen.insert(src.clone()) {
+            return Err("复制批次包含重复路径".into());
+        }
         if src.is_dir() && destination.starts_with(&src) {
             return Err(format!("不能把目录复制到自身内部：{}", src.display()));
         }
@@ -1471,9 +1733,11 @@ fn copy_entries_blocking(
             Some(name) => name.to_owned(),
             None => {
                 results.push(CodingBatchOpResult {
-                    path: display,
+                    path: display.clone(),
+                    source_path: display,
                     ok: false,
                     error: Some("源路径缺少文件名".into()),
+                    restore_token: None,
                 });
                 continue;
             }
@@ -1484,22 +1748,28 @@ fn copy_entries_blocking(
             .map_err(|error| format!("无法检测目标：{error}"))?
         {
             results.push(CodingBatchOpResult {
-                path: display,
+                path: display.clone(),
+                source_path: display,
                 ok: false,
                 error: Some("目标已存在同名条目".into()),
+                restore_token: None,
             });
             continue;
         }
         match copy_one(src, &target) {
             Ok(()) => results.push(CodingBatchOpResult {
-                path: display,
+                path: target.to_string_lossy().into_owned(),
+                source_path: display,
                 ok: true,
                 error: None,
+                restore_token: None,
             }),
             Err(error) => results.push(CodingBatchOpResult {
-                path: display,
+                path: display.clone(),
+                source_path: display,
                 ok: false,
                 error: Some(format!("{error}")),
+                restore_token: None,
             }),
         }
     }
@@ -1529,8 +1799,12 @@ fn move_entries_blocking(
 ) -> Result<Vec<CodingBatchOpResult>, String> {
     let destination = resolve_coding_directory_path(root, Some(&request.destination))?;
     let mut resolved: Vec<PathBuf> = Vec::with_capacity(request.sources.len());
+    let mut seen = HashSet::new();
     for raw in &request.sources {
         let src = resolve_coding_path_strict(root, raw)?;
+        if !seen.insert(src.clone()) {
+            return Err("移动批次包含重复路径".into());
+        }
         if src.is_dir() && destination.starts_with(&src) {
             return Err(format!("不能把目录移动到自身内部：{}", src.display()));
         }
@@ -1543,9 +1817,11 @@ fn move_entries_blocking(
             Some(name) => name.to_owned(),
             None => {
                 results.push(CodingBatchOpResult {
-                    path: display,
+                    path: display.clone(),
+                    source_path: display,
                     ok: false,
                     error: Some("源路径缺少文件名".into()),
+                    restore_token: None,
                 });
                 continue;
             }
@@ -1553,9 +1829,11 @@ fn move_entries_blocking(
         let target = destination.join(&basename);
         if target == *src {
             results.push(CodingBatchOpResult {
-                path: display,
+                path: target.to_string_lossy().into_owned(),
+                source_path: display,
                 ok: true,
                 error: None,
+                restore_token: None,
             });
             continue;
         }
@@ -1564,49 +1842,70 @@ fn move_entries_blocking(
             .map_err(|error| format!("无法检测目标：{error}"))?
         {
             results.push(CodingBatchOpResult {
-                path: display,
+                path: display.clone(),
+                source_path: display,
                 ok: false,
                 error: Some("目标已存在同名条目".into()),
+                restore_token: None,
             });
             continue;
         }
         match std::fs::rename(src, &target) {
             Ok(()) => results.push(CodingBatchOpResult {
-                path: display,
+                path: target.to_string_lossy().into_owned(),
+                source_path: display,
                 ok: true,
                 error: None,
+                restore_token: None,
             }),
             Err(error) => {
-                // Cross-volume fallback: copy then trash source.
+                // Cross-volume fallback: copy, remove the source, and roll the
+                // fresh copy back if source removal fails.
                 let is_cross_volume = error.raw_os_error() == Some(libc::EXDEV);
                 if !is_cross_volume {
                     results.push(CodingBatchOpResult {
-                        path: display,
+                        path: display.clone(),
+                        source_path: display,
                         ok: false,
                         error: Some(format!("移动失败：{error}")),
+                        restore_token: None,
                     });
                     continue;
                 }
                 let copy_result = copy_one(src, &target);
                 if let Err(copy_err) = copy_result {
                     results.push(CodingBatchOpResult {
-                        path: display,
+                        path: display.clone(),
+                        source_path: display,
                         ok: false,
                         error: Some(format!("跨卷复制失败：{copy_err}")),
+                        restore_token: None,
                     });
                     continue;
                 }
-                match trash_path(src) {
+                match fallback_remove(src) {
                     Ok(()) => results.push(CodingBatchOpResult {
-                        path: display,
+                        path: target.to_string_lossy().into_owned(),
+                        source_path: display,
                         ok: true,
                         error: None,
+                        restore_token: None,
                     }),
-                    Err(trash_err) => results.push(CodingBatchOpResult {
-                        path: display,
-                        ok: false,
-                        error: Some(format!("已复制但源移入回收站失败：{trash_err}")),
-                    }),
+                    Err(remove_error) => {
+                        let rollback = fallback_remove(&target);
+                        results.push(CodingBatchOpResult {
+                            path: display.clone(),
+                            source_path: display,
+                            ok: false,
+                            error: Some(match rollback {
+                                Ok(()) => format!("跨卷移动未完成：{remove_error}"),
+                                Err(rollback_error) => format!(
+                                    "跨卷移动未完成，且临时副本清理失败：{remove_error}；{rollback_error}"
+                                ),
+                            }),
+                            restore_token: None,
+                        });
+                    }
                 }
             }
         }
@@ -2681,7 +2980,10 @@ mod tests {
         };
         std::fs::write(root.join("collide.txt"), "x").unwrap();
         let err = rename_entry_blocking(root, conflict).unwrap_err();
-        assert!(err.contains("已经存在"), "expected conflict error, got {err}");
+        assert!(
+            err.contains("已经存在"),
+            "expected conflict error, got {err}"
+        );
     }
 
     #[test]
@@ -2697,37 +2999,101 @@ mod tests {
     }
 
     #[test]
-    fn delete_entries_moves_to_trash_or_removes_and_reports_per_item() {
+    fn delete_entries_moves_to_trash_or_keeps_source_and_reports_per_item() {
         let dir = make_workspace();
         let root = dir.path();
         let a = root.join("a.txt").to_string_lossy().into_owned();
-        let b = root.join("sub").join("b.txt").to_string_lossy().into_owned();
+        let sub = root.join("sub").to_string_lossy().into_owned();
 
         let req = CodingDeleteEntryRequest {
             root: workspace_str(&dir),
-            paths: vec![a.clone(), b.clone()],
+            paths: vec![a.clone(), sub.clone()],
         };
         let results = delete_entries_blocking(root, req).expect("delete should run");
         assert_eq!(results.len(), 2);
-        // Some Linux CI may have no `gio` and trash crate falls back; in that case
-        // both succeed; in macOS dev trash crate succeeds; in either case the
-        // original files should be gone afterwards.
+        // Headless CI may not expose a system trash. A failure must keep the
+        // source intact; a success must provide a restore token and remove it.
         for r in &results {
-            assert!(r.ok, "expected ok, got {:?}", r);
+            assert_eq!(
+                r.ok,
+                r.restore_token.is_some(),
+                "unexpected result: {:?}",
+                r
+            );
+            #[cfg(target_os = "macos")]
+            if let Some(token) = &r.restore_token {
+                assert!(uuid::Uuid::parse_str(token).is_ok(), "token must be opaque");
+            }
+            let source_exists = Path::new(&r.source_path).exists();
+            assert_eq!(source_exists, !r.ok, "source/result mismatch: {:?}", r);
         }
-        assert!(!root.join("a.txt").exists());
-        assert!(!root.join("sub").join("b.txt").exists());
+
+        // Restore every successfully trashed item so the test exercises file
+        // and directory round-trips and does not leave artifacts in Trash.
+        let successful = results
+            .iter()
+            .filter(|result| result.ok)
+            .collect::<Vec<_>>();
+        if !successful.is_empty() {
+            let restored = restore_blocking(
+                root,
+                CodingRestoreRequest {
+                    root: workspace_str(&dir),
+                    original_paths: successful
+                        .iter()
+                        .map(|result| result.source_path.clone())
+                        .collect(),
+                    restore_tokens: successful
+                        .iter()
+                        .map(|result| result.restore_token.clone().unwrap())
+                        .collect(),
+                },
+            )
+            .expect("restore should run");
+            assert!(restored.iter().all(|result| result.ok), "{restored:?}");
+            for result in successful {
+                assert!(Path::new(&result.source_path).exists());
+            }
+        }
+    }
+
+    #[test]
+    fn restore_batch_preflight_prevents_partial_restore_on_collision() {
+        let dir = make_workspace();
+        let root = dir.path();
+        let missing = root.join("missing.txt");
+        let existing = root.join("a.txt");
+        let results = restore_blocking(
+            root,
+            CodingRestoreRequest {
+                root: workspace_str(&dir),
+                original_paths: vec![
+                    missing.to_string_lossy().into_owned(),
+                    existing.to_string_lossy().into_owned(),
+                ],
+                restore_tokens: vec!["unused-1".into(), "unused-2".into()],
+            },
+        )
+        .unwrap();
+        assert!(results.iter().all(|result| !result.ok));
+        assert!(
+            !missing.exists(),
+            "valid entries must not restore before preflight completes"
+        );
+        assert_eq!(std::fs::read_to_string(existing).unwrap(), "alpha");
     }
 
     #[test]
     fn delete_entries_empty_paths_short_circuits() {
         let dir = make_workspace();
-        let results =
-            delete_entries_blocking(dir.path(), CodingDeleteEntryRequest {
+        let results = delete_entries_blocking(
+            dir.path(),
+            CodingDeleteEntryRequest {
                 root: workspace_str(&dir),
                 paths: vec![],
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert!(results.is_empty());
     }
 
@@ -2737,10 +3103,58 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let req = CodingDeleteEntryRequest {
             root: workspace_str(&dir),
-            paths: vec![outside.path().join("nope.txt").to_string_lossy().into_owned()],
+            paths: vec![outside
+                .path()
+                .join("nope.txt")
+                .to_string_lossy()
+                .into_owned()],
         };
         // Pre-resolution should reject before invoking trash.
         assert!(delete_entries_blocking(dir.path(), req).is_err());
+    }
+
+    #[test]
+    fn batch_mutations_reject_duplicate_sources_before_changing_disk() {
+        let dir = make_workspace();
+        let root = dir.path();
+        let source = root.join("a.txt").to_string_lossy().into_owned();
+        let destination = root.join("dest");
+        std::fs::create_dir(&destination).unwrap();
+
+        let delete_error = delete_entries_blocking(
+            root,
+            CodingDeleteEntryRequest {
+                root: workspace_str(&dir),
+                paths: vec![source.clone(), source.clone()],
+            },
+        )
+        .unwrap_err();
+        assert!(delete_error.contains("重复"));
+        assert!(root.join("a.txt").exists());
+
+        let copy_error = copy_entries_blocking(
+            root,
+            CodingCopyEntryRequest {
+                root: workspace_str(&dir),
+                sources: vec![source.clone(), source.clone()],
+                destination: destination.to_string_lossy().into_owned(),
+            },
+        )
+        .unwrap_err();
+        assert!(copy_error.contains("重复"));
+        assert!(!destination.join("a.txt").exists());
+
+        let move_error = move_entries_blocking(
+            root,
+            CodingMoveEntryRequest {
+                root: workspace_str(&dir),
+                sources: vec![source.clone(), source],
+                destination: destination.to_string_lossy().into_owned(),
+            },
+        )
+        .unwrap_err();
+        assert!(move_error.contains("重复"));
+        assert!(root.join("a.txt").exists());
     }
 
     #[test]
@@ -2754,20 +3168,53 @@ mod tests {
             root: workspace_str(&dir),
             sources: vec![
                 root.join("a.txt").to_string_lossy().into_owned(),
-                root.join("sub").join("b.txt").to_string_lossy().into_owned(),
+                root.join("sub")
+                    .join("b.txt")
+                    .to_string_lossy()
+                    .into_owned(),
             ],
             destination: dest_dir.to_string_lossy().into_owned(),
         };
         let results = copy_entries_blocking(root, req).expect("copy should run");
         assert_eq!(results.len(), 2);
+        let canonical_destination = dest_dir.canonicalize().unwrap();
         for r in &results {
             assert!(r.ok, "expected ok, got {:?}", r);
+            assert!(Path::new(&r.path).starts_with(&canonical_destination));
         }
         assert!(dest_dir.join("a.txt").exists());
         assert!(dest_dir.join("b.txt").exists());
         // source should still exist
         assert!(root.join("a.txt").exists());
         assert!(root.join("sub").join("b.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_directory_copy_removes_incomplete_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = make_workspace();
+        let root = dir.path();
+        let source = root.join("with-link");
+        let destination = root.join("dest");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("first.txt"), "partial").unwrap();
+        symlink(root.join("a.txt"), source.join("blocked-link")).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+
+        let results = copy_entries_blocking(
+            root,
+            CodingCopyEntryRequest {
+                root: workspace_str(&dir),
+                sources: vec![source.to_string_lossy().into_owned()],
+                destination: destination.to_string_lossy().into_owned(),
+            },
+        )
+        .unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].ok);
+        assert!(!destination.join("with-link").exists());
     }
 
     #[test]
@@ -2777,7 +3224,11 @@ mod tests {
         let req = CodingCopyEntryRequest {
             root: workspace_str(&dir),
             sources: vec![root.join("sub").to_string_lossy().into_owned()],
-            destination: root.join("sub").join("inner").to_string_lossy().into_owned(),
+            destination: root
+                .join("sub")
+                .join("inner")
+                .to_string_lossy()
+                .into_owned(),
         };
         assert!(copy_entries_blocking(root, req).is_err());
     }
@@ -2810,7 +3261,11 @@ mod tests {
         std::fs::create_dir(&dest_dir).unwrap();
         let req = CodingCopyEntryRequest {
             root: workspace_str(&dir),
-            sources: vec![outside.path().join("foreign.txt").to_string_lossy().into_owned()],
+            sources: vec![outside
+                .path()
+                .join("foreign.txt")
+                .to_string_lossy()
+                .into_owned()],
             destination: dest_dir.to_string_lossy().into_owned(),
         };
         assert!(copy_entries_blocking(root, req).is_err());

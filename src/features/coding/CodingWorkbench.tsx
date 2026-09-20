@@ -91,12 +91,17 @@ import { ActivityBar } from "./shell/ActivityBar";
 import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/CommandPalette";
 import { TaskSwitcher } from "./shell/TaskSwitcher";
 import { WorkspaceTabBar } from "./shell/WorkspaceTabBar";
-import { isFileTab, useTabStore, type SymbolKey } from "./store/tab-store";
+import {
+  isDirty,
+  isFileTab,
+  useTabStore,
+  type SymbolKey,
+  type WorkbenchTab,
+} from "./store/tab-store";
 import { useTaskStore } from "./store/task-store";
 import { useFileTreeSelectionStore } from "./store/file-tree-selection-store";
 import { useClipboardStore } from "./store/clipboard-store";
 import { useGitSnapshotStore } from "./store/git-snapshot-store";
-import { useAiDraftStore } from "./store/ai-draft-store";
 import { humanOpLabel, useHistoryStackStore } from "./store/history-stack-store";
 import {
   buildRefactorPrompt,
@@ -442,6 +447,14 @@ export function CodingWorkbench({
   const fileIndexEventsRef = useRef(new Map<string, boolean>());
   const diffRequestGenerationRef = useRef(new Map<string, number>());
   const diffTaskRef = useRef<string | null>(null);
+  const previousWorkspaceRef = useRef("");
+  const workspaceUiStateRef = useRef(new Map<string, {
+    tabs: WorkbenchTab[];
+    activeId: string | null;
+    contextPaths: string[];
+    editorContext: EditorCodeContext | null;
+    selectedDirectory: string;
+  }>());
   const workbenchRef = useRef<HTMLDivElement>(null);
   const workbenchSize = useElementSize(workbenchRef);
 
@@ -1218,20 +1231,38 @@ export function CodingWorkbench({
     ],
   );
 
-  // Close every tab when the workspace changes; their paths no longer apply.
+  // Each workspace tab owns its editor/context state. Switching tabs should
+  // feel like switching IDE windows, not like closing every open document.
   useEffect(() => {
-    useTabStore.getState().closeAll();
+    const previous = previousWorkspaceRef.current;
+    if (previous && previous !== cwd) {
+      const tabState = useTabStore.getState();
+      workspaceUiStateRef.current.set(previous, {
+        tabs: tabState.tabs,
+        activeId: tabState.activeId,
+        contextPaths,
+        editorContext,
+        selectedDirectory,
+      });
+    }
+    if (previous === cwd) return;
+    const saved = cwd ? workspaceUiStateRef.current.get(cwd) : undefined;
+    useTabStore.setState({
+      tabs: saved?.tabs ?? [],
+      activeId: saved?.activeId ?? null,
+    });
     setSymbolsByPath({});
     setWorkspaceSymbols([]);
-    setEditorContext(null);
-    setContextPaths([]);
+    setEditorContext(saved?.editorContext ?? null);
+    setContextPaths(saved?.contextPaths ?? []);
+    setSelectedDirectory(saved?.selectedDirectory ?? cwd);
+    useFileTreeSelectionStore.getState().clear();
+    previousWorkspaceRef.current = cwd;
   }, [cwd]);
 
   useEffect(() => {
     hydrateLayout();
   }, [hydrateLayout]);
-
-  useEffect(() => setSelectedDirectory(cwd), [cwd]);
 
   // Build the quick-open index once per workspace, abandoning it if the user
   // switches away mid-walk.
@@ -1355,12 +1386,30 @@ export function CodingWorkbench({
     return idx > 0 ? path.slice(0, idx) : path;
   }, []);
 
-  const findDirtyTabsFor = useCallback((paths: string[]) => {
-    const set = new Set(paths);
-    return useTabStore.getState().tabs.filter(
-      (tab) => set.has(tab.id) && (tab as { isDirty?: boolean }).isDirty,
+  const normalizePath = useCallback((path: string): string =>
+    path.replace(/\\/g, "/").replace(/\/+$/, ""), []);
+
+  const pathContains = useCallback((parent: string, candidate: string): boolean => {
+    const normalizedParent = normalizePath(parent);
+    const normalizedCandidate = normalizePath(candidate);
+    return normalizedCandidate === normalizedParent
+      || normalizedCandidate.startsWith(`${normalizedParent}/`);
+  }, [normalizePath]);
+
+  const collapseNestedPaths = useCallback((paths: string[]): string[] => {
+    const unique = [...new Set(paths)].sort((left, right) =>
+      normalizePath(left).length - normalizePath(right).length,
     );
-  }, []);
+    return unique.filter((candidate, index) =>
+      !unique.slice(0, index).some((parent) => pathContains(parent, candidate)),
+    );
+  }, [normalizePath, pathContains]);
+
+  const findDirtyTabsFor = useCallback((paths: string[]) => {
+    return useTabStore.getState().tabs.filter(
+      (tab) => isDirty(tab) && paths.some((path) => pathContains(path, tab.id)),
+    );
+  }, [pathContains]);
 
   const performRename = useCallback(
     async (path: string, newName: string) => {
@@ -1368,19 +1417,15 @@ export function CodingWorkbench({
         const result = await codingApi.renameEntry(cwd, path, newName);
         queueTreeRefreshPaths([result.path, result.oldPath]);
         // If the renamed file is open in a tab, swap the tab id.
-        useTabStore.getState().tabs.forEach((tab) => {
-          if (tab.id === result.oldPath) {
-            useTabStore.getState().renameTab(tab.id, result.path);
-          }
-        });
+        useTabStore.getState().renameTab(result.oldPath, result.path);
         setRenamingPath(null);
         onToast?.(`已重命名为 ${basenameOf(result.path)}`);
         // SP5: record for undo (rebuild original basename for restoration).
         useHistoryStackStore.getState().push({
           op: "rename",
           cwd,
-          path: result.path,
-          oldBasename: basenameOf(result.oldPath),
+          oldPath: result.oldPath,
+          newPath: result.path,
         });
       } catch (error) {
         const message = String(error).replace(/^Error:\s*/, "");
@@ -1395,42 +1440,63 @@ export function CodingWorkbench({
     async (paths: string[]) => {
       try {
         const results = await codingApi.deleteEntries(cwd, paths);
-        for (const r of results) {
-          if (!r.ok) {
-            onToast?.(`删除失败：${basenameOf(r.path)} - ${r.error ?? "未知错误"}`);
-          }
-        }
-        queueTreeRefreshPaths(paths);
-        for (const p of paths) {
-          const tab = useTabStore.getState().tabs.find((t) => t.id === p);
-          if (tab) {
+        const succeeded = results.filter(
+          (result): result is typeof result & { restoreToken: string } =>
+            result.ok && typeof result.restoreToken === "string" && result.restoreToken.length > 0,
+        );
+        const failed = results.filter((result) => !result.ok || !result.restoreToken);
+        const succeededPaths = succeeded.map((result) => result.sourcePath);
+        queueTreeRefreshPaths(succeededPaths);
+        for (const tab of useTabStore.getState().tabs) {
+          if (succeededPaths.some((path) => pathContains(path, tab.id))) {
             useTabStore.getState().markConflict(tab.id);
-            useTabStore.getState().setError(tab.id, "文件已移到回收站，请手动关闭。");
+            useTabStore.getState().setError(tab.id, "文件已移到回收站，可通过撤销恢复。");
           }
         }
-        useClipboardStore.getState().clear();
-        useFileTreeSelectionStore.getState().clear();
-        onToast?.(`已删除 ${paths.length} 个条目`);
-        // SP5: record for undo (basename is what the trash crate stores).
-        useHistoryStackStore.getState().push({
-          op: "delete",
-          cwd,
-          originalPaths: paths.slice(),
-          trashBasenames: paths.map((p) => basenameOf(p)),
-        });
+        if (succeeded.length > 0) {
+          useHistoryStackStore.getState().push({
+            op: "delete",
+            cwd,
+            items: succeeded.map((result) => ({
+              path: result.sourcePath,
+              restoreToken: result.restoreToken,
+            })),
+          });
+        }
+        const failedPaths = failed.map((result) => result.sourcePath);
+        useFileTreeSelectionStore.getState().select(failedPaths);
+        const clipboard = useClipboardStore.getState();
+        const remainingClipboardPaths = clipboard.paths.filter((path) =>
+          !succeededPaths.some((deletedPath) => pathContains(deletedPath, path)));
+        if (remainingClipboardPaths.length !== clipboard.paths.length) {
+          if (remainingClipboardPaths.length === 0) clipboard.clear();
+          else if (clipboard.mode === "cut") clipboard.setCut(remainingClipboardPaths);
+          else clipboard.setCopy(remainingClipboardPaths);
+        }
+        if (failed.length > 0) {
+          const first = failed[0];
+          onToast?.(
+            succeeded.length > 0
+              ? `已移到回收站 ${succeeded.length} 个，${failed.length} 个失败：${first.error ?? "未取得恢复标识"}`
+              : `删除失败：${first.error ?? "未取得恢复标识"}`,
+          );
+        } else {
+          onToast?.(`已移到回收站 ${succeeded.length} 个条目`);
+        }
       } catch (error) {
         const message = String(error).replace(/^Error:\s*/, "");
         onToast?.(`删除失败：${message}`);
         throw error;
       }
     },
-    [basenameOf, cwd, onToast, queueTreeRefreshPaths],
+    [cwd, onToast, pathContains, queueTreeRefreshPaths],
   );
 
   const confirmDelete = useCallback(
     async (paths: string[]) => {
-      if (paths.length === 0) return;
-      const dirty = findDirtyTabsFor(paths);
+      const targets = collapseNestedPaths(paths);
+      if (targets.length === 0) return;
+      const dirty = findDirtyTabsFor(targets);
       if (dirty.length > 0) {
         await new Promise<void>((resolve) => {
           requestTaskConfirmation({
@@ -1444,19 +1510,19 @@ export function CodingWorkbench({
           });
         });
       }
-      const isMulti = paths.length > 1;
+      const isMulti = targets.length > 1;
       await new Promise<void>((resolve, reject) => {
         requestTaskConfirmation({
           title: isMulti
-            ? `删除 ${paths.length} 个条目`
-            : `删除 “${basenameOf(paths[0])}”`,
+            ? `删除 ${targets.length} 个条目`
+            : `删除 “${basenameOf(targets[0])}”`,
           description: "所选条目将被移到操作系统的回收站，可从回收站恢复。",
           confirmLabel: "移到回收站",
           cancelLabel: "取消",
           danger: true,
           action: async () => {
             try {
-              await performDelete(paths);
+              await performDelete(targets);
               resolve();
             } catch (error) {
               reject(error);
@@ -1465,7 +1531,7 @@ export function CodingWorkbench({
         });
       });
     },
-    [basenameOf, findDirtyTabsFor, performDelete, requestTaskConfirmation],
+    [basenameOf, collapseNestedPaths, findDirtyTabsFor, performDelete, requestTaskConfirmation],
   );
 
   const performPaste = useCallback(
@@ -1473,7 +1539,11 @@ export function CodingWorkbench({
       const cb = useClipboardStore.getState();
       if (cb.paths.length === 0 || !cwd) return;
       // Pre-check: every source must live under cwd for the backend to accept it.
-      const validSources = cb.paths.filter((p) => p === cwd || p.startsWith(cwd + "/"));
+      const clipboardSources = collapseNestedPaths(cb.paths);
+      const validSources = clipboardSources.filter(
+        (path) => pathContains(cwd, path) && normalizePath(path) !== normalizePath(cwd),
+      );
+      const invalidSources = clipboardSources.filter((path) => !validSources.includes(path));
       if (validSources.length === 0) {
         onToast?.("剪贴板中的条目不在当前工作区内，无法粘贴");
         return;
@@ -1481,85 +1551,286 @@ export function CodingWorkbench({
       try {
         const api = cb.mode === "cut" ? codingApi.moveEntries : codingApi.copyEntries;
         const results = await api(cwd, validSources, destDir);
-        for (const r of results) {
-          if (!r.ok) {
-            onToast?.(`${cb.mode === "cut" ? "移动" : "复制"}失败：${basenameOf(r.path)} - ${r.error ?? "未知错误"}`);
+        const succeeded = results.filter((result) => result.ok);
+        const failed = results.filter((result) => !result.ok);
+        queueTreeRefreshPaths([
+          ...succeeded.map((result) => result.sourcePath),
+          ...succeeded.map((result) => result.path),
+          destDir,
+        ]);
+        if (cb.mode === "cut") {
+          for (const result of succeeded) {
+            useTabStore.getState().renameTab(result.sourcePath, result.path);
           }
         }
-        queueTreeRefreshPaths([...validSources, destDir]);
         // SP5: record paste for undo. For `cut`, undo = move back to source
         // parent; for `copy`, undo = delete the created copies. Snapshot the
         // created paths BEFORE `clear()` so we can still reach them.
-        const created = results.filter((r) => r.ok).map((r) => r.path);
+        const created = succeeded.map((result) => result.path);
         if (created.length > 0) {
           useHistoryStackStore.getState().push({
             op: "paste",
             cwd,
             mode: cb.mode,
+            sources: succeeded.map((result) => result.sourcePath),
+            destination: destDir,
             finalPaths: created,
-            sourceParent: dirnameOf(validSources[0]!),
           });
         }
         if (cb.mode === "cut") {
-          useClipboardStore.getState().clear();
-          useFileTreeSelectionStore.getState().clear();
+          const failedSources = [
+            ...invalidSources,
+            ...failed.map((result) => result.sourcePath),
+          ];
+          if (failedSources.length > 0) {
+            useClipboardStore.getState().setCut(failedSources);
+            useFileTreeSelectionStore.getState().select(failedSources);
+          } else {
+            useClipboardStore.getState().clear();
+            useFileTreeSelectionStore.getState().clear();
+          }
         }
-        onToast?.(`${cb.mode === "cut" ? "已移动" : "已复制"} ${validSources.length} 个条目`);
+        const failedCount = failed.length + invalidSources.length;
+        if (failedCount > 0) {
+          onToast?.(
+            `${cb.mode === "cut" ? "移动" : "复制"}完成 ${succeeded.length} 个，失败 ${failedCount} 个：${failed[0]?.error ?? "部分条目不在当前工作区"}`,
+          );
+        } else {
+          onToast?.(`${cb.mode === "cut" ? "已移动" : "已复制"} ${succeeded.length} 个条目`);
+        }
       } catch (error) {
         const message = String(error).replace(/^Error:\s*/, "");
         onToast?.(`粘贴失败：${message}`);
       }
     },
-    [basenameOf, cwd, onToast, queueTreeRefreshPaths],
+    [collapseNestedPaths, cwd, normalizePath, onToast, pathContains, queueTreeRefreshPaths],
   );
 
   // SP5: undo / redo for the six core file operations.
   const performHistoryAction = useCallback(
     async (direction: "undo" | "redo") => {
       const store = useHistoryStackStore.getState();
-      const entry = direction === "undo" ? store.undo() : store.redo();
+      const entry = direction === "undo" ? store.peekUndo(cwd) : store.peekRedo(cwd);
       if (!entry) {
         onToast?.(direction === "undo" ? "没有可撤销的操作" : "没有可重做的操作");
         return;
       }
-      if (entry.cwd !== cwd) {
-        // Push it back so we don't lose the entry to a different workspace.
-        if (direction === "undo") useHistoryStackStore.setState((s) => ({ past: [...s.past, entry] }));
-        else useHistoryStackStore.setState((s) => ({ future: [...s.future, entry] }));
-        onToast?.(`${direction === "undo" ? "撤销" : "重做"}栈属于其他工作区，已忽略`);
-        return;
-      }
       try {
+        let updated = entry;
+        const requireBatchSuccess = <T extends { ok: boolean; error?: string | null },>(
+          results: T[],
+          action: string,
+        ): T[] => {
+          const failed = results.find((result) => !result.ok);
+          if (failed) throw new Error(`${action}未完整完成：${failed.error ?? "未知错误"}`);
+          return results;
+        };
+        const deleteForUndo = async (paths: string[]) => {
+          const results = await codingApi.deleteEntries(cwd, paths);
+          const successful = results.filter(
+            (result): result is typeof result & { restoreToken: string } =>
+              result.ok && typeof result.restoreToken === "string" && result.restoreToken.length > 0,
+          );
+          const failed = results.filter((result) => !result.ok || !result.restoreToken);
+          if (failed.length > 0) {
+            // Undo/redo is presented as one operation. Roll successful items
+            // back when the batch is incomplete so the file system and the
+            // history cursor cannot drift apart.
+            const rollback = successful.length > 0
+              ? await codingApi.restoreFromTrash(
+                  cwd,
+                  successful.map((result) => result.sourcePath),
+                  successful.map((result) => result.restoreToken),
+                )
+              : [];
+            const rollbackFailure = rollback.find((result) => !result.ok);
+            if (rollbackFailure) {
+              throw new Error(
+                `移到回收站未完整完成，自动回滚也失败：${rollbackFailure.error ?? "未知错误"}`,
+              );
+            }
+            throw new Error(`移到回收站未完整完成：${failed[0]?.error ?? "未取得恢复标识"}`);
+          }
+          for (const result of successful) {
+            for (const tab of useTabStore.getState().tabs) {
+              if (pathContains(result.sourcePath, tab.id)) {
+                useTabStore.getState().markConflict(tab.id);
+                useTabStore.getState().setError(tab.id, "文件已移到回收站，可通过重做或撤销恢复。");
+              }
+            }
+          }
+          return successful.map((result) => {
+            return { path: result.sourcePath, restoreToken: result.restoreToken };
+          });
+        };
+        const restore = async (items: Array<{ path: string; restoreToken: string }>) => {
+          requireBatchSuccess(await codingApi.restoreFromTrash(
+            cwd,
+            items.map((item) => item.path),
+            items.map((item) => item.restoreToken),
+          ), "恢复");
+          for (const item of items) {
+            for (const tab of useTabStore.getState().tabs) {
+              if (pathContains(item.path, tab.id)) useTabStore.getState().clearConflict(tab.id);
+            }
+          }
+        };
+        const moveTransaction = async (
+          requests: Array<{ path: string; destination: string }>,
+          action: string,
+        ) => {
+          const grouped = new Map<string, string[]>();
+          for (const request of requests) {
+            grouped.set(request.destination, [
+              ...(grouped.get(request.destination) ?? []),
+              request.path,
+            ]);
+          }
+          const applied: Array<{ sourcePath: string; path: string }> = [];
+          let failure: string | null = null;
+          for (const [destination, paths] of grouped) {
+            try {
+              const results = await codingApi.moveEntries(cwd, paths, destination);
+              applied.push(...results.filter((result) => result.ok));
+              const failed = results.find((result) => !result.ok);
+              if (failed || results.length !== paths.length) {
+                failure = failed?.error ?? "原生文件操作返回结果不完整";
+                break;
+              }
+            } catch (error) {
+              failure = String(error).replace(/^Error:\s*/, "");
+              break;
+            }
+          }
+          if (failure) {
+            const rollbackFailures: string[] = [];
+            for (const moved of [...applied].reverse()) {
+              if (normalizePath(moved.sourcePath) === normalizePath(moved.path)) continue;
+              try {
+                const rollback = await codingApi.moveEntries(
+                  cwd,
+                  [moved.path],
+                  dirnameOf(moved.sourcePath),
+                );
+                const failed = rollback.length === 1 && rollback[0]?.ok
+                  ? undefined
+                  : rollback.find((result) => !result.ok) ?? { error: "原生文件操作返回结果不完整" };
+                if (failed) {
+                  rollbackFailures.push(failed.error ?? moved.path);
+                  useTabStore.getState().renameTab(moved.sourcePath, moved.path);
+                }
+              } catch (error) {
+                rollbackFailures.push(String(error).replace(/^Error:\s*/, ""));
+                useTabStore.getState().renameTab(moved.sourcePath, moved.path);
+              }
+            }
+            throw new Error(
+              rollbackFailures.length > 0
+                ? `${action}未完整完成，且 ${rollbackFailures.length} 个条目自动回滚失败：${rollbackFailures[0]}`
+                : `${action}未完整完成，已自动回滚：${failure}`,
+            );
+          }
+          for (const moved of applied) {
+            useTabStore.getState().renameTab(moved.sourcePath, moved.path);
+          }
+          return applied;
+        };
+        const movePairsBack = async (pairs: Array<{ sourcePath: string; finalPath: string }>) => {
+          await moveTransaction(
+            pairs.map((pair) => ({
+              path: pair.finalPath,
+              destination: dirnameOf(pair.sourcePath),
+            })),
+            "移回原位置",
+          );
+        };
         switch (entry.op) {
-          case "rename":
-            await codingApi.renameEntry(cwd, entry.path, entry.oldBasename);
+          case "rename": {
+            const source = direction === "undo" ? entry.newPath : entry.oldPath;
+            const target = direction === "undo" ? entry.oldPath : entry.newPath;
+            const result = await codingApi.renameEntry(cwd, source, basenameOf(target));
+            useTabStore.getState().renameTab(result.oldPath, result.path);
             break;
-          case "delete":
-            await codingApi.restoreFromTrash(cwd, entry.originalPaths, entry.trashBasenames);
-            break;
-          case "copy":
-          case "create":
-            await codingApi.deleteEntries(cwd, "path" in entry ? [entry.path] : entry.createdPaths);
-            break;
-          case "move":
-            await codingApi.moveEntries(cwd, entry.paths, entry.sourceParent);
-            break;
-          case "paste":
-            if (entry.mode === "cut") {
-              await codingApi.moveEntries(cwd, entry.finalPaths, entry.sourceParent);
+          }
+          case "delete": {
+            if (direction === "undo") {
+              await restore(entry.items);
             } else {
-              await codingApi.deleteEntries(cwd, entry.finalPaths);
+              updated = { ...entry, items: await deleteForUndo(entry.items.map((item) => item.path)) };
             }
             break;
+          }
+          case "create": {
+            if (direction === "undo") {
+              const [trashedItem] = await deleteForUndo([entry.path]);
+              updated = { ...entry, trashedItem };
+            } else {
+              if (!entry.trashedItem) throw new Error("缺少新建条目的恢复标识");
+              await restore([entry.trashedItem]);
+              updated = { ...entry, trashedItem: undefined };
+            }
+            break;
+          }
+          case "copy": {
+            if (direction === "undo") {
+              updated = { ...entry, trashedCopies: await deleteForUndo(entry.createdPaths) };
+            } else {
+              if (!entry.trashedCopies) throw new Error("缺少复制条目的恢复标识");
+              await restore(entry.trashedCopies);
+              updated = { ...entry, trashedCopies: undefined };
+            }
+            break;
+          }
+          case "move": {
+            if (direction === "undo") await movePairsBack(entry.moves);
+            else {
+              await moveTransaction(
+                entry.moves.map((move) => ({
+                  path: move.sourcePath,
+                  destination: entry.destination,
+                })),
+                "重新移动",
+              );
+            }
+            break;
+          }
+          case "paste": {
+            if (entry.mode === "cut") {
+              const pairs = entry.sources.map((sourcePath, index) => ({
+                sourcePath,
+                finalPath: entry.finalPaths[index]!,
+              }));
+              if (direction === "undo") await movePairsBack(pairs);
+              else {
+                await moveTransaction(
+                  entry.sources.map((path) => ({ path, destination: entry.destination })),
+                  "重新移动",
+                );
+              }
+            } else if (direction === "undo") {
+              updated = { ...entry, trashedCopies: await deleteForUndo(entry.finalPaths) };
+            } else {
+              if (!entry.trashedCopies) throw new Error("缺少复制条目的恢复标识");
+              await restore(entry.trashedCopies);
+              updated = { ...entry, trashedCopies: undefined };
+            }
+            break;
+          }
         }
+        if (direction === "undo") store.commitUndo(cwd, updated);
+        else store.commitRedo(cwd, updated);
         queueTreeRefreshPaths([cwd]);
         onToast?.(direction === "undo" ? "已撤销" : "已重做");
       } catch (error) {
         const message = String(error).replace(/^Error:\s*/, "");
+        // Most failures are rolled back, but a platform-level rollback can
+        // itself fail. Refresh from disk so the explorer never claims a stale
+        // state in that exceptional case.
+        queueTreeRefreshPaths([cwd]);
         onToast?.(`${direction === "undo" ? "撤销" : "重做"}失败：${message}`);
       }
     },
-    [cwd, onToast, queueTreeRefresh],
+    [basenameOf, cwd, dirnameOf, onToast, pathContains, queueTreeRefreshPaths],
   );
 
   const handleFileTreeContextMenu = useCallback(
@@ -1598,28 +1869,41 @@ export function CodingWorkbench({
    * never decides it locally.
    */
   const startTask = useCallback(
-    async (requirement: string, documentationTarget?: EditorCodeContext) => {
+    async (
+      requirement: string,
+      documentationTarget?: EditorCodeContext,
+      additionalContextPaths: string[] = [],
+    ) => {
       if (!cwd || !onStartRun) return;
+      const trimmedRequirement = requirement.trim();
+      if (!trimmedRequirement) {
+        setStartError("请输入任务目标后再开始");
+        return;
+      }
       setStarting(true);
       setStartError(null);
       let createdId: string | undefined;
       try {
-        const documentation = isDocumentationRequest(requirement)
-          ? await resolveDocumentationWorkflow(requirement, documentationTarget)
+        const documentation = isDocumentationRequest(trimmedRequirement)
+          ? await resolveDocumentationWorkflow(trimmedRequirement, documentationTarget)
           : undefined;
         const effectiveContextPaths = [...new Set([
           ...contextPaths,
+          ...additionalContextPaths,
           ...(documentation?.request.target?.path ? [documentation.request.target.path] : []),
         ])];
         const managedPrompt = documentation
           ? buildCodingWorkflowPrompt(
-              requirement,
+              trimmedRequirement,
               effectiveContextPaths,
               false,
               { documentation },
             )
           : undefined;
-        const created = await useTaskStore.getState().createTask(deriveName(requirement), requirement);
+        const created = await useTaskStore.getState().createTask(
+          deriveName(trimmedRequirement),
+          trimmedRequirement,
+        );
         if (!created) {
           setStartError(useTaskStore.getState().error ?? "创建任务失败");
           return;
@@ -1642,7 +1926,7 @@ export function CodingWorkbench({
         const session = managedPrompt
           ? await onStartRun(
               cwd,
-              requirement,
+              trimmedRequirement,
               modelId,
               effectiveContextPaths,
               bindSession,
@@ -1650,7 +1934,7 @@ export function CodingWorkbench({
             )
           : await onStartRun(
               cwd,
-              requirement,
+              trimmedRequirement,
               modelId,
               effectiveContextPaths,
               bindSession,
@@ -1714,10 +1998,11 @@ export function CodingWorkbench({
         const documentationPaths = documentation?.request.target?.path
           ? [documentation.request.target.path]
           : [];
+        const effectiveContextPaths = [...new Set([...contextPaths, ...documentationPaths])];
         const promptTextOverride = managedPrompt ?? (task
           ? buildCodingWorkflowPrompt(
               text,
-              documentationPaths,
+              effectiveContextPaths,
               true,
               documentation ? { documentation } : undefined,
             )
@@ -1747,6 +2032,7 @@ export function CodingWorkbench({
     [
       activeSessionId,
       blockInterruptedManualMutation,
+      contextPaths,
       cwd,
       hostSessionId,
       onSendMessage,
@@ -1888,7 +2174,7 @@ export function CodingWorkbench({
     }
   }, [apiReady, cwd, inferTestFramework, modelId, onOpenSettings, onToast, requestTaskInput, startTask]);
 
-  /** SP3: «在对话中提问» — bridge into the Agent via the ai-draft store. */
+  /** SP3: «在对话中提问» — start a real task with the selected paths attached. */
   const promptAskInConversation = useCallback(async (paths: string[]) => {
     if (!cwd) return;
     const question: string | null = await new Promise((resolve) => {
@@ -1910,15 +2196,10 @@ export function CodingWorkbench({
       });
     });
     if (question === null || !question.trim()) return;
-    useAiDraftStore.getState().setDraft({
-      prompt: question.trim(),
-      contextPaths: paths,
-      source: "context-menu",
-    });
-    onToast?.("正在跳转到 AI 对话…");
+    onToast?.("正在创建 AI 对话…");
     if (onStartRun) {
       try {
-        await startTask("", undefined);
+        await startTask(question.trim(), undefined, paths);
       } catch (error) {
         const message = String(error).replace(/^Error:\s*/, "");
         onToast?.(`发起对话失败：${message}`);
@@ -1940,8 +2221,7 @@ export function CodingWorkbench({
       const items: ContextMenuItem[] = [];
 
       // SP5: undo entry comes first so it's reachable via "Z" muscle memory.
-      const pastEntries = useHistoryStackStore.getState().past;
-      const undoEntry = pastEntries.length > 0 ? pastEntries[pastEntries.length - 1] : undefined;
+      const undoEntry = useHistoryStackStore.getState().peekUndo(cwd);
       if (undoEntry) {
         items.push({
           id: "undo",
@@ -2092,6 +2372,7 @@ export function CodingWorkbench({
     [
       basenameOf,
       confirmDelete,
+      cwd,
       onToast,
       openFile,
       performPaste,
@@ -2665,10 +2946,16 @@ export function CodingWorkbench({
     const onKeyDown = (event: KeyboardEvent) => {
       if (isGlobalShortcutBlocked()) return;
       const lower = event.key.toLowerCase();
+      const target = event.target as HTMLElement | null;
+      const inEditable =
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLInputElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
 
       // F2: rename primary selected node (only one selected, single no-modifier press).
       if (
-        !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+        !inEditable
+        && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
         && !event.repeat
         && lower === "f2"
       ) {
@@ -2683,7 +2970,8 @@ export function CodingWorkbench({
 
       // Delete / Backspace: delete selected entries.
       if (
-        !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+        !inEditable
+        && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
         && !event.repeat
         && (lower === "delete" || lower === "backspace")
       ) {
@@ -2697,8 +2985,8 @@ export function CodingWorkbench({
       }
 
       // Cmd+C / Cmd+X / Cmd+V: clipboard.
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && !event.repeat) {
-        if (lower === "c") {
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.repeat) {
+        if (lower === "c" && !event.shiftKey && !inEditable) {
           const sel = [...useFileTreeSelectionStore.getState().selectedPaths];
           if (sel.length > 0) {
             event.preventDefault();
@@ -2710,43 +2998,44 @@ export function CodingWorkbench({
         }
         // SP4: ⌘⇧E / ⌘⇧R / ⌘⇧T / ⌘⇧F — AI quick actions.
         if (event.shiftKey) {
-          // Don't let the textarea (or any other input) swallow the combo.
-          if (event.target instanceof HTMLTextAreaElement) return;
+          // Editors and form fields own their native Shift shortcuts.
+          if (inEditable) return;
           const sel = [...useFileTreeSelectionStore.getState().selectedPaths];
           const noSelection = () => onToast?.("请先在文件树中选中文件");
-          const dispatch = () => {
+          const dispatch = (): boolean => {
             if (sel.length === 0) {
               noSelection();
-              return;
+              return false;
             }
             event.preventDefault();
             event.stopPropagation();
+            return true;
           };
           switch (lower) {
             case "e":
-              dispatch();
+              if (!dispatch()) return;
               void startTask(
                 `请基于真实代码解释 ${sel.join(", ")} 的职责、关键数据流、依赖关系、边界条件、业务规则与潜在风险。只分析，不修改文件。`,
                 undefined,
               );
               return;
             case "r":
-              dispatch();
+              if (!dispatch()) return;
               void requestReview(sel);
               return;
             case "t":
-              dispatch();
+              if (!dispatch()) return;
               void requestTests(sel);
               return;
             case "f":
-              dispatch();
+              if (!dispatch()) return;
               void requestRefactor(sel);
               return;
             default:
               break;
           }
         }
-        if (lower === "x") {
+        if (lower === "x" && !event.shiftKey && !inEditable) {
           const sel = [...useFileTreeSelectionStore.getState().selectedPaths];
           if (sel.length > 0) {
             event.preventDefault();
@@ -2756,7 +3045,7 @@ export function CodingWorkbench({
           }
           return;
         }
-        if (lower === "v") {
+        if (lower === "v" && !event.shiftKey && !inEditable) {
           const cb = useClipboardStore.getState();
           if (cb.paths.length > 0) {
             event.preventDefault();
@@ -2771,11 +3060,6 @@ export function CodingWorkbench({
       // SP5: ⌘Z / ⌘⇧Z — undo / redo. Don't intercept inside editable fields
       // so Monaco / Composer textarea get the browser's native undo for free.
       if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.repeat) {
-        const target = event.target as HTMLElement | null;
-        const inEditable =
-          target instanceof HTMLTextAreaElement ||
-          target instanceof HTMLInputElement ||
-          (target instanceof HTMLElement && target.isContentEditable);
         if (!inEditable) {
           const undoKey = event.key.toLowerCase();
           if (undoKey === "z" && !event.shiftKey) {
@@ -2965,7 +3249,7 @@ export function CodingWorkbench({
                 type="button"
                 className={"coding-explorer__heading-actions-btn" + (showHidden ? " is-active" : "")}
                 onClick={() => setShowHidden(!showHidden)}
-                title={showHidden ? "隐藏 dotfile（含 .gitignore / .echoagentignore）" : "显示所有文件"}
+                title={showHidden ? "隐藏 dotfile（含 .gitignore / .echoagentignore）" : "显示隐藏文件"}
                 aria-label={showHidden ? "隐藏 dotfile" : "显示所有文件"}
                 aria-pressed={showHidden}
               >
@@ -3237,6 +3521,7 @@ export function CodingWorkbench({
             apiReady={apiReady}
             contextPaths={contextPaths}
             onStart={(requirement) => void startTask(requirement)}
+            onDraftContextPaths={addManyToContext}
             onOpenSettings={onOpenSettings}
             onToast={onToast}
           />

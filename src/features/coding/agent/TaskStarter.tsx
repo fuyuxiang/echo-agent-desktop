@@ -22,6 +22,7 @@ interface TaskStarterProps {
   /** Files the user pinned as context, shown so the Agent's inputs are visible. */
   contextPaths: string[];
   onStart: (requirement: string) => void;
+  onDraftContextPaths?: (paths: string[]) => void;
   onOpenSettings?: () => void;
   onToast?: (message: string) => void;
 }
@@ -40,6 +41,7 @@ export function TaskStarter({
   apiReady,
   contextPaths,
   onStart,
+  onDraftContextPaths,
   onOpenSettings,
   onToast,
 }: TaskStarterProps) {
@@ -54,7 +56,8 @@ export function TaskStarter({
     if (!draft) return;
     if (draft.createdAt + DRAFT_TTL_MS < Date.now()) return;
     if (draft.prompt) setRequirement(draft.prompt);
-  }, [consumeDraft]);
+    if (draft.contextPaths.length > 0) onDraftContextPaths?.(draft.contextPaths);
+  }, [consumeDraft, onDraftContextPaths]);
 
   const submit = () => {
     if (!requirement.trim() || starting) return;

@@ -82,7 +82,8 @@ export function AgentPane({
     if (!draft) return;
     if (draft.createdAt + DRAFT_TTL_MS < Date.now()) return;
     if (draft.prompt) setFollowup(draft.prompt);
-  }, [consumeDraft]);
+    if (draft.contextPaths.length > 0) onPathsDropped?.(draft.contextPaths);
+  }, [consumeDraft, onPathsDropped]);
   const phase = describePhase(task.phase);
   const sessionUnavailable = !sessionId;
   const changes = changeSet?.changes ?? [];

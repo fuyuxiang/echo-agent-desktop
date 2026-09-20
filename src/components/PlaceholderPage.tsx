@@ -4,6 +4,7 @@ import type { ProjectMeta } from "@/stores/projects-store";
 import { openExternalUrl, openLocalPath } from "@/lib/agent-client";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { ModelOption } from "./ModelSelector";
+import type { SlashCommandInvocation } from "@/lib/slash-commands";
 
 const ProjectsPanel = lazy(() =>
   import("./ProjectsPanel").then((module) => ({ default: module.ProjectsPanel })),
@@ -120,6 +121,7 @@ interface PlaceholderPageProps {
   ) => Promise<string | undefined>;
   projectModels?: ModelOption[];
   projectDefaultModelId?: string;
+  onClientSlashCommand?: (invocation: SlashCommandInvocation) => boolean | void | Promise<boolean | void>;
   onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;
   onArchiveSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
   onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
@@ -156,6 +158,7 @@ export function PlaceholderPage({
   onStartProjectConversation,
   projectModels,
   projectDefaultModelId,
+  onClientSlashCommand,
   onRenameSession,
   onArchiveSession,
   onDeleteSession,
@@ -173,6 +176,10 @@ export function PlaceholderPage({
           models={projectModels}
           defaultModelId={projectDefaultModelId}
           onOpenModelSettings={onOpenModelSettings}
+          onClientSlashCommand={onClientSlashCommand}
+          onNavigateConnectors={() => onNavigate?.("专家·技能·连接器")}
+          onOpenKnowledgeBase={() => onNavigate?.("知识库")}
+          onOpenOrganization={() => onNavigate?.("组织")}
           onOpenSession={onOpenSession}
           onRenameSession={onRenameSession}
           onArchiveSession={onArchiveSession}

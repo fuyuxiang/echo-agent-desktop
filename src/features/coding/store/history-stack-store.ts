@@ -15,54 +15,75 @@ import { create } from "zustand";
 
 export const MAX_HISTORY = 50;
 
+export interface TrashedPath {
+  path: string;
+  restoreToken: string;
+}
+
+export interface MovedPath {
+  sourcePath: string;
+  finalPath: string;
+}
+
 export type HistoryOp =
   | {
       op: "rename";
       cwd: string;
-      /** New (post-rename) absolute path. */
-      path: string;
-      /** Basename to restore on undo. */
-      oldBasename: string;
+      oldPath: string;
+      newPath: string;
     }
   | {
       op: "delete";
       cwd: string;
-      originalPaths: string[];
-      trashBasenames: string[];
+      items: TrashedPath[];
     }
   | {
       op: "copy";
       cwd: string;
-      /** Absolute paths of newly created copies. */
+      sources: string[];
+      destination: string;
       createdPaths: string[];
+      trashedCopies?: TrashedPath[];
     }
   | {
       op: "move";
       cwd: string;
-      paths: string[];
-      sourceParent: string;
+      destination: string;
+      moves: MovedPath[];
     }
   | {
       op: "create";
       cwd: string;
       path: string;
       isDir: boolean;
+      trashedItem?: TrashedPath;
     }
   | {
       op: "paste";
       cwd: string;
       mode: "cut" | "copy";
+      sources: string[];
+      destination: string;
       finalPaths: string[];
-      sourceParent: string;
+      trashedCopies?: TrashedPath[];
     };
 
 interface HistoryState {
   past: HistoryOp[];
   future: HistoryOp[];
   push: (op: HistoryOp) => void;
-  undo: () => HistoryOp | null;
-  redo: () => HistoryOp | null;
+  peekUndo: (cwd: string) => HistoryOp | null;
+  peekRedo: (cwd: string) => HistoryOp | null;
+  commitUndo: (cwd: string, updated?: HistoryOp) => void;
+  commitRedo: (cwd: string, updated?: HistoryOp) => void;
   clear: () => void;
+}
+
+function lastWorkspaceIndex(entries: HistoryOp[], cwd: string): number {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entries[index]?.cwd === cwd) return index;
+  }
+  return -1;
 }
 
 export const useHistoryStackStore = create<HistoryState>((set, get) => ({
@@ -72,30 +93,44 @@ export const useHistoryStackStore = create<HistoryState>((set, get) => ({
   push: (op) => {
     set((state) => ({
       past: [...state.past, op].slice(-MAX_HISTORY),
-      future: [], // a fresh action invalidates the redo stack
+      // A fresh action invalidates redo only in the same workspace. Other
+      // workspace tabs retain their independent editing history.
+      future: state.future.filter((entry) => entry.cwd !== op.cwd),
     }));
   },
 
-  undo: () => {
-    const { past, future } = get();
-    if (past.length === 0) return null;
-    const entry = past[past.length - 1];
-    set({
-      past: past.slice(0, -1),
-      future: [...future, entry],
-    });
-    return entry;
+  peekUndo: (cwd) => {
+    const { past } = get();
+    const index = lastWorkspaceIndex(past, cwd);
+    return index < 0 ? null : past[index];
   },
 
-  redo: () => {
+  peekRedo: (cwd) => {
+    const { future } = get();
+    const index = lastWorkspaceIndex(future, cwd);
+    return index < 0 ? null : future[index];
+  },
+
+  commitUndo: (cwd, updated) => {
     const { past, future } = get();
-    if (future.length === 0) return null;
-    const entry = future[future.length - 1];
+    const index = lastWorkspaceIndex(past, cwd);
+    if (index < 0) return;
+    const entry = updated ?? past[index];
     set({
-      past: [...past, entry],
-      future: future.slice(0, -1),
+      past: past.filter((_, entryIndex) => entryIndex !== index),
+      future: [...future, entry].slice(-MAX_HISTORY),
     });
-    return entry;
+  },
+
+  commitRedo: (cwd, updated) => {
+    const { past, future } = get();
+    const index = lastWorkspaceIndex(future, cwd);
+    if (index < 0) return;
+    const entry = updated ?? future[index];
+    set({
+      past: [...past, entry].slice(-MAX_HISTORY),
+      future: future.filter((_, entryIndex) => entryIndex !== index),
+    });
   },
 
   clear: () => set({ past: [], future: [] }),

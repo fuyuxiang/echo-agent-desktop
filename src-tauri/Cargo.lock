@@ -4036,6 +4036,7 @@ dependencies = [
  "image",
  "libc",
  "notify-debouncer-full",
+ "objc2-foundation",
  "open",
  "quick-xml 0.38.4",
  "regex",

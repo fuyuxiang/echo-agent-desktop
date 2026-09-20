@@ -82,6 +82,8 @@ import type { CodingTask, VerificationRecord } from "../lib/types";
 import { useTabStore } from "../store/tab-store";
 import { useTaskStore } from "../store/task-store";
 import { useWorkbenchStore } from "../store/workbench-store";
+import { useClipboardStore } from "../store/clipboard-store";
+import { useFileTreeSelectionStore } from "../store/file-tree-selection-store";
 
 function verificationTask(overrides: Partial<CodingTask> = {}): CodingTask {
   return {
@@ -145,6 +147,8 @@ describe("CodingWorkbench skeleton", () => {
       lineEnding: "LF" as const,
     }));
     useTabStore.getState().closeAll();
+    useClipboardStore.getState().clear();
+    useFileTreeSelectionStore.getState().clear();
     useWorkbenchStore.getState().resetLayout();
     useTaskStore.setState({
       root: "",
@@ -241,6 +245,18 @@ describe("CodingWorkbench skeleton", () => {
     render(<CodingWorkbench cwd="" models={[]} />);
     await user.keyboard("{Meta>}{Shift>}p{/Shift}{/Meta}");
     expect(screen.queryByRole("dialog", { name: "命令面板" })).not.toBeInTheDocument();
+  });
+
+  it("does not apply file-tree mutation shortcuts while typing", async () => {
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    const input = await screen.findByRole("textbox", { name: "任务描述" });
+    useFileTreeSelectionStore.getState().select(["/repo/src/a.ts"]);
+
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "c", metaKey: true });
+    expect(useClipboardStore.getState().paths).toEqual([]);
   });
 
   it("reads a file and shows its content in a tab", async () => {
@@ -1096,7 +1112,7 @@ describe("CodingWorkbench skeleton", () => {
     expect(screen.getByRole("main")).toHaveClass("coding-workbench__main");
   });
 
-  it("clears open tabs when the workspace changes", async () => {
+  it("isolates and restores open tabs when the workspace changes", async () => {
     const { rerender } = render(<CodingWorkbench cwd="/repo" models={[]} />);
     await screen.findByRole("navigation", { name: "活动栏" });
     await act(async () => {
@@ -1113,8 +1129,15 @@ describe("CodingWorkbench skeleton", () => {
     });
     expect(useTabStore.getState().tabs).toHaveLength(1);
 
-    rerender(<CodingWorkbench cwd="/other" models={[]} />);
+    await act(async () => {
+      rerender(<CodingWorkbench cwd="/other" models={[]} />);
+    });
     expect(useTabStore.getState().tabs).toHaveLength(0);
+
+    await act(async () => {
+      rerender(<CodingWorkbench cwd="/repo" models={[]} />);
+    });
+    expect(useTabStore.getState().tabs.map((tab) => tab.id)).toEqual(["/repo/src/a.ts"]);
   });
 
   it("applies persisted pane widths as CSS variables", async () => {

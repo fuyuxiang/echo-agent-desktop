@@ -48,6 +48,7 @@ describe("useGitSnapshotStore", () => {
 
   it("refresh 失败保留原 snapshot 并填充 error", async () => {
     useGitSnapshotStore.setState({
+      root: "/x",
       snapshot: sampleSnapshot,
       byPath: new Map(),
       loading: false,
@@ -74,11 +75,28 @@ describe("useGitSnapshotStore", () => {
     expect(useGitSnapshotStore.getState().byPath.size).toBe(0);
   });
 
-  it("300ms 内不重抓", async () => {
+  it("500ms 内不重抓", async () => {
     codingGitSnapshotMock.mockResolvedValue(sampleSnapshot);
     await useGitSnapshotStore.getState().refresh("/x");
     await useGitSnapshotStore.getState().refresh("/x");
     expect(codingGitSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("workspace 切换后忽略旧 workspace 的迟到响应", async () => {
+    let resolveA: ((snapshot: CodingGitSnapshot) => void) | undefined;
+    const pendingA = new Promise<CodingGitSnapshot>((resolve) => { resolveA = resolve; });
+    const snapshotB = { ...sampleSnapshot, branch: "feature-b" };
+    codingGitSnapshotMock
+      .mockReturnValueOnce(pendingA)
+      .mockResolvedValueOnce(snapshotB);
+
+    const refreshA = useGitSnapshotStore.getState().refresh("/a");
+    await useGitSnapshotStore.getState().refresh("/b");
+    resolveA?.({ ...sampleSnapshot, branch: "stale-a" });
+    await refreshA;
+
+    expect(useGitSnapshotStore.getState().root).toBe("/b");
+    expect(useGitSnapshotStore.getState().snapshot?.branch).toBe("feature-b");
   });
 });
 

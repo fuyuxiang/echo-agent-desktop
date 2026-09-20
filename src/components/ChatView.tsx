@@ -33,6 +33,7 @@ import type { ModelOption } from "./ModelSelector";
 import type { AgentEntry } from "@/lib/types";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
+import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
 import { useStickToBottom } from "./use-stick-to-bottom";
 import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
 import { stripAttachmentTransportContext } from "@/lib/user-message";
@@ -132,6 +133,7 @@ export function ChatView({
   const control = useSessionStore((s) => s.control);
   const resumeSession = useSessionStore((s) => s.resumeSession);
   const awaitingQuestion = Boolean(useQuestionStore(selectQuestionForSession(sessionId)));
+  const mentionCandidates = useWorkspaceMentions(cwd);
   // 会话内查找(对齐 EchoAgent chat-search)。
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
@@ -877,6 +879,8 @@ export function ChatView({
             activeExpertAvatar={activeExpertAvatar}
             usageSessionId={sessionId ?? undefined}
             usageMsgCount={messages.length}
+            filePaths={mentionCandidates.filePaths}
+            workspaceSymbols={mentionCandidates.workspaceSymbols}
           />
         </div>
       </div>

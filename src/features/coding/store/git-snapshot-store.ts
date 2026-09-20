@@ -7,6 +7,7 @@ import {
 } from "@/lib/agent-client";
 
 interface GitSnapshotState {
+  root: string | null;
   snapshot: CodingGitSnapshot | null;
   /** Relative-posix path (under workspace root) → file status. */
   byPath: Map<string, CodingGitFile>;
@@ -21,6 +22,7 @@ interface GitSnapshotState {
 const EMPTY_MAP: Map<string, CodingGitFile> = new Map();
 // SP5: 300 ms → 500 ms. Reduces git status spam on large repos.
 const MIN_REFRESH_GAP_MS = 500;
+let requestGeneration = 0;
 
 function indexByPath(snapshot: CodingGitSnapshot | null): Map<string, CodingGitFile> {
   if (!snapshot) return EMPTY_MAP;
@@ -32,6 +34,7 @@ function indexByPath(snapshot: CodingGitSnapshot | null): Map<string, CodingGitF
 }
 
 export const useGitSnapshotStore = create<GitSnapshotState>((set, get) => ({
+  root: null,
   snapshot: null,
   byPath: EMPTY_MAP,
   loading: false,
@@ -40,16 +43,26 @@ export const useGitSnapshotStore = create<GitSnapshotState>((set, get) => ({
 
   refresh: async (root: string) => {
     if (!root) {
-      set({ snapshot: null, byPath: EMPTY_MAP, error: null, loading: false });
+      requestGeneration += 1;
+      set({ root: null, snapshot: null, byPath: EMPTY_MAP, error: null, loading: false, lastFetched: 0 });
       return;
     }
     const now = Date.now();
-    const { lastFetched, loading } = get();
-    if (loading) return;
-    if (now - lastFetched < MIN_REFRESH_GAP_MS) return;
-    set({ loading: true, error: null });
+    const { root: activeRoot, lastFetched, loading } = get();
+    if (activeRoot === root && loading) return;
+    if (activeRoot === root && now - lastFetched < MIN_REFRESH_GAP_MS) return;
+    const generation = ++requestGeneration;
+    set({
+      root,
+      loading: true,
+      error: null,
+      ...(activeRoot === root
+        ? {}
+        : { snapshot: null, byPath: EMPTY_MAP, lastFetched: 0 }),
+    });
     try {
       const snapshot = await codingGitSnapshot(root);
+      if (generation !== requestGeneration || get().root !== root) return;
       set({
         snapshot,
         byPath: indexByPath(snapshot),
@@ -58,12 +71,16 @@ export const useGitSnapshotStore = create<GitSnapshotState>((set, get) => ({
         lastFetched: now,
       });
     } catch (error) {
+      if (generation !== requestGeneration || get().root !== root) return;
       const message = String(error).replace(/^Error:\s*/, "");
       set({ loading: false, error: message });
     }
   },
 
-  clear: () => set({ snapshot: null, byPath: EMPTY_MAP, error: null, loading: false, lastFetched: 0 }),
+  clear: () => {
+    requestGeneration += 1;
+    set({ root: null, snapshot: null, byPath: EMPTY_MAP, error: null, loading: false, lastFetched: 0 });
+  },
 }));
 
 /**

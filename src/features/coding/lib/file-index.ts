@@ -107,7 +107,7 @@ export async function buildFileIndex(
       }
       let entries;
       try {
-        entries = await listDir(entry.path);
+        entries = await listDir(entry.path, root);
       } catch {
         // An unreadable directory is skipped rather than failing the whole index.
         continue;
