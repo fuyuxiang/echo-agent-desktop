@@ -1322,7 +1322,7 @@ fn trash_path(path: &Path) -> Result<String, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        return trash_path_macos(path);
+        trash_path_macos(path)
     }
 
     #[cfg(not(target_os = "macos"))]

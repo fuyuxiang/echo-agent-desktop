@@ -67,7 +67,7 @@ pub fn apply_nested_gitignore(
 pub fn is_ignore_rules_file(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
-        Some(name) if DEFAULT_IGNORE_FILES.iter().any(|known| *known == name),
+        Some(name) if DEFAULT_IGNORE_FILES.contains(&name),
     )
 }
 

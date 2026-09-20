@@ -1270,7 +1270,7 @@ fn looks_binary_by_extension(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     if let Some(dot) = lower.rfind('.') {
         let ext = &lower[dot + 1..];
-        BINARY_EXTENSIONS.iter().any(|b| *b == ext)
+        BINARY_EXTENSIONS.contains(&ext)
     } else {
         false
     }
@@ -1364,7 +1364,7 @@ fn resolve_list_dir_paths(
     path: &str,
     cwd: Option<&str>,
 ) -> Result<(PathBuf, PathBuf), String> {
-    let resolved = resolve_path(&path, cwd.as_deref());
+    let resolved = resolve_path(path, cwd);
     let authorized = access.is_authorized(&resolved, false)?;
     if !authorized.is_dir() {
         return Err(format!("不是目录：{}", authorized.display()));
@@ -1373,7 +1373,6 @@ fn resolve_list_dir_paths(
     // however, must be evaluated from the workspace root so a root
     // `.gitignore` continues to apply inside nested folders.
     let ignore_root = cwd
-        .as_deref()
         .and_then(|claimed| access.require_workspace(claimed).ok())
         .filter(|workspace| authorized.starts_with(workspace))
         .unwrap_or_else(|| authorized.clone());
@@ -1409,10 +1408,8 @@ fn list_dir_resolved(
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy().to_string();
         let starts_with_dot = name.starts_with('.');
-        if starts_with_dot {
-            if !show_hidden {
-                continue;
-            }
+        if starts_with_dot && !show_hidden {
+            continue;
         }
         let ft = entry.file_type();
         // SP5: classify symlinks explicitly. All file operations reject symlinks
