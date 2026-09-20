@@ -225,19 +225,11 @@
     animation: none;
   }
 }
-/* Lightweight hover tooltip (mirrors EchoAgent's "收起侧边栏" hint).
- * :where() keeps specificity at 0 so this never overrides a positioned
- * element's own `position` (e.g. the floating .sidebar-expand-btn stays
- * `absolute` and is not forced to `relative`). */
-:where([data-tip]) {
-  position: relative;
-}
-[data-tip]::after {
-  content: attr(data-tip);
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+/* Application-level tooltip. GlobalTooltip portals this node into body so
+ * backdrop-filter stacking contexts and overflow containers cannot cover it. */
+.global-tooltip {
+  box-sizing: border-box;
+  max-width: min(360px, calc(100vw - 16px));
   background: var(--echo-bg-elevated, #fff);
   color: var(--echo-text-strong);
   border: 1px solid var(--echo-border, rgba(0, 0, 0, 0.08));
@@ -245,15 +237,27 @@
   padding: 4px 8px;
   font-size: 12px;
   line-height: 16px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-  opacity: 0;
   pointer-events: none;
-  transition: opacity 0.12s ease;
-  z-index: 60;
+  animation: global-tooltip__fade-in 0.12s ease;
 }
-[data-tip]:hover::after {
-  opacity: 1;
+.global-tooltip[data-placement="top"] {
+  animation-name: global-tooltip__fade-in-up;
+}
+@keyframes global-tooltip__fade-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes global-tooltip__fade-in-up {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .global-tooltip {
+    animation: none;
+  }
 }
 .app__main {
   flex: 1;
@@ -7630,18 +7634,13 @@ button.diff__path {
   box-shadow: var(--echo-shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.16));
   z-index: 50;
 }
-/* ModelSelector portals into body and receives viewport-clamped fixed
-   coordinates inline, so rounded cards and scroll containers cannot clip it. */
-.model-selector__menu {
+/* Selectors portal into body and receive viewport-clamped fixed coordinates
+   inline, so rounded cards and scroll containers cannot clip them. */
+.model-selector__menu,
+.workspace-picker__menu {
   position: fixed;
   right: auto;
   bottom: auto;
-}
-/* Workspace picker 在 meta 行左侧,菜单向右对齐避免溢出左边被裁剪 */
-.workspace-picker__menu {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
 }
 .model-selector__empty,
 .workspace-picker__empty {

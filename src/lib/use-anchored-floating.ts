@@ -7,7 +7,7 @@ import {
 } from "react";
 
 export type FloatingPlacement = "top" | "bottom";
-export type FloatingAlignment = "start" | "end";
+export type FloatingAlignment = "start" | "center" | "end";
 export type FloatingWidth = number | "anchor" | "content";
 
 interface FloatingLayout {
@@ -102,7 +102,11 @@ export function useAnchoredFloating(
     const availableHeight = placement === "top" ? spaceAbove : spaceBelow;
     const renderedHeight = Math.min(measuredHeight, availableHeight);
 
-    const desiredLeft = align === "end" ? rect.right - floatingWidth : rect.left;
+    const desiredLeft = align === "end"
+      ? rect.right - floatingWidth
+      : align === "center"
+        ? rect.left + (rect.width - floatingWidth) / 2
+        : rect.left;
     const maxLeft = Math.max(viewportMargin, viewportWidth - floatingWidth - viewportMargin);
     const left = Math.min(Math.max(viewportMargin, desiredLeft), maxLeft);
     const desiredTop = placement === "top"

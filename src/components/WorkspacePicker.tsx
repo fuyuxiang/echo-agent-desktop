@@ -1,6 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, Check, Folder, FolderOpen } from "lucide-react";
 import { filesystemPickDirectory, type WorkspaceInfo } from "@/lib/agent-client";
+import {
+  useAnchoredFloating,
+  type FloatingAlignment,
+  type FloatingPlacement,
+} from "@/lib/use-anchored-floating";
 
 /**
  * Working-directory picker for the Composer.
@@ -13,21 +19,40 @@ export function WorkspacePicker({
   cwd,
   workspaces,
   onSelectWorkspace,
+  menuPlacement = "top",
+  menuAlign = "start",
 }: {
   /** Currently active cwd (highlighted in the list). */
   cwd?: string;
   workspaces: WorkspaceInfo[];
   onSelectWorkspace: (cwd: string) => void;
+  /** Prefer below the trigger in top utility bars and above it in composers. */
+  menuPlacement?: FloatingPlacement;
+  menuAlign?: FloatingAlignment;
 }) {
   const [open, setOpen] = useState(false);
+  const reactId = useId();
+  const menuId = `workspace-picker-${reactId.replace(/:/g, "")}`;
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLUListElement>(null);
+  const { style: menuStyle, placement } = useAnchoredFloating(
+    triggerRef,
+    menuRef,
+    open,
+    {
+      preferredPlacement: menuPlacement,
+      align: menuAlign,
+      width: "content",
+      estimatedHeight: Math.min(320, 52 + workspaces.length * 40),
+      offset: 6,
+    },
+  );
 
-  const close = (restoreFocus = true) => {
+  const close = useCallback((restoreFocus = true) => {
     setOpen(false);
     if (restoreFocus) triggerRef.current?.focus();
-  };
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -38,11 +63,14 @@ export function WorkspacePicker({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) close(false);
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (ref.current?.contains(target) || menuRef.current?.contains(target)) return;
+      close(false);
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
+  }, [close, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -54,7 +82,7 @@ export function WorkspacePicker({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, [close, open]);
 
   const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
     const items = Array.from(
@@ -104,11 +132,16 @@ export function WorkspacePicker({
     <div className="workspace-picker" ref={ref}>
       <button
         className="workspace-picker__trigger"
-        onClick={() => setOpen((o) => !o)}
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((value) => !value);
+        }}
         type="button"
+        aria-label={cwd ? `工作目录：${cwd}。点击切换` : "选择工作目录"}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-controls={open ? "composer-workspace-menu" : undefined}
+        aria-controls={open ? menuId : undefined}
+        data-tip={cwd ? `当前工作目录：${cwd}` : "选择工作目录"}
         ref={triggerRef}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -121,13 +154,16 @@ export function WorkspacePicker({
         <span className="workspace-picker__label">{triggerLabel}</span>
         <ChevronDown size={14} strokeWidth={1.75} className="workspace-picker__arrow" />
       </button>
-      {open && (
+      {open && typeof document !== "undefined" && createPortal(
         <ul
           className="workspace-picker__menu"
-          id="composer-workspace-menu"
+          id={menuId}
           role="menu"
           aria-label="选择工作目录"
           ref={menuRef}
+          style={menuStyle}
+          data-placement={placement ?? undefined}
+          onClick={(event) => event.stopPropagation()}
           onKeyDown={handleMenuKeyDown}
         >
           <li role="none">
@@ -168,7 +204,8 @@ export function WorkspacePicker({
               </button>
             </li>
           ))}
-        </ul>
+        </ul>,
+        document.body,
       )}
     </div>
   );

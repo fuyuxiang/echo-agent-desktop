@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { TopbarActions } from "../TopbarActions";
+import { GlobalTooltip } from "../GlobalTooltip";
 import {
   agentSetSessionArchived,
   agentSetSessionPinned,
@@ -39,6 +40,24 @@ describe("TopbarActions", () => {
     vi.mocked(agentSetSessionArchived).mockResolvedValue(true);
     vi.mocked(agentSetSessionPinned).mockResolvedValue(true);
     vi.mocked(exportTextFile).mockResolvedValue(null);
+  });
+
+  it("更多操作 hover 提示通过全局 portal 渲染，不会被下层工具栏遮挡", () => {
+    render(
+      <>
+        <TopbarActions sessionId="session-1" title="测试会话" />
+        <GlobalTooltip />
+      </>,
+    );
+    const trigger = screen.getByRole("button", { name: "更多操作" });
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(rect(400, 12));
+
+    fireEvent.pointerOver(trigger);
+
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveTextContent("更多操作");
+    expect(tooltip.parentElement).toBe(document.body);
+    expect(tooltip).toHaveStyle({ position: "fixed", zIndex: "2000" });
   });
 
   it("通过 body portal 以 fixed 浮层渲染，不受顶栏层叠上下文和裁剪影响", () => {

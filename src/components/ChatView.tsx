@@ -505,6 +505,7 @@ export function ChatView({
                   cwd={newSessionTargetCwd ?? cwd}
                   workspaces={workspaces}
                   onSelectWorkspace={onSelectWorkspace}
+                  menuPlacement="bottom"
                 />
               </div>
             )}
