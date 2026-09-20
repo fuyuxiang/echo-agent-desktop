@@ -865,6 +865,7 @@ fn add_capability_risk_findings(
     findings.extend(additions);
 }
 
+#[cfg(test)]
 fn locate_skill_root(root: &Path) -> Result<PathBuf, String> {
     let roots = discover_skill_roots(root)?;
     select_skill_root(root, &roots, None)
