@@ -38,6 +38,7 @@ function setup(tabs: WorkbenchTab[], activeId: string | null = tabs[0]?.id ?? nu
     onDraftChange: vi.fn(),
     onSave: vi.fn(),
     onViewChange: vi.fn(),
+    onReload: vi.fn(),
     onGenerateDocumentation: vi.fn(),
     renderDoc: vi.fn((kind: string) => <div data-testid="doc">{kind}</div>),
   };
@@ -133,10 +134,13 @@ describe("TabContainer", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/已被 Agent 或其他程序修改/);
   });
 
-  it("shows a load error instead of an empty editor", () => {
-    setup([file({ error: "读取文件失败" })]);
-    expect(screen.getByText("读取文件失败")).toBeInTheDocument();
+  it("shows a load error and lets the user retry", async () => {
+    const user = userEvent.setup();
+    const props = setup([file({ error: "读取文件失败" })]);
+    expect(screen.getByRole("alert")).toHaveTextContent("读取文件失败");
     expect(screen.queryByTestId("editor")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(props.onReload).toHaveBeenCalledWith("/repo/src/auth/login.ts");
   });
 
   it("renders a virtual document tab through the provided renderer", () => {

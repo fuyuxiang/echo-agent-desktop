@@ -174,9 +174,14 @@ export function TabContainer({
           </div>
         )}
         {active && isFileTab(active) && active.error && (
-          <div className="coding-tabs__empty-body is-error">
+          <div className="coding-tabs__empty-body is-error" role="alert">
             <AlertTriangle size={15} />
-            {active.error}
+            <span>{active.error}</span>
+            {onReload && (
+              <button type="button" onClick={() => onReload(active.id)}>
+                重试
+              </button>
+            )}
           </div>
         )}
         {active && isFileTab(active) && !active.loading && !active.error && (

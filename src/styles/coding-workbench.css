@@ -2457,6 +2457,20 @@
   color: var(--echo-text-medium);
 }
 
+.coding-tabs__empty-body.is-error button {
+  padding: 3px 9px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 5px;
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-strong);
+  font: inherit;
+  cursor: pointer;
+}
+
+.coding-tabs__empty-body.is-error button:hover {
+  background: var(--echo-bg-active);
+}
+
 .coding-monaco {
   height: 100%;
 }

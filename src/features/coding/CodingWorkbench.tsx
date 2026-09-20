@@ -36,6 +36,7 @@ import {
   codingReadDocument,
   codingWriteDocument,
   filesystemPickDirectory,
+  type CodingDocument,
   type CodingSearchHit,
 } from "@/lib/agent-client";
 import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
@@ -92,9 +93,11 @@ import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/Co
 import { TaskSwitcher } from "./shell/TaskSwitcher";
 import { WorkspaceTabBar } from "./shell/WorkspaceTabBar";
 import {
+  completeFileTabLoad,
   isDirty,
   isFileTab,
   useTabStore,
+  type FileTab,
   type SymbolKey,
   type WorkbenchTab,
 } from "./store/tab-store";
@@ -168,6 +171,26 @@ interface OpenTaskDiffOptions {
 interface OpenTaskDiffResult {
   status: "opened" | "missing" | "error" | "cancelled";
   message?: string;
+}
+
+const FILE_OPEN_TIMEOUT_MS = 15_000;
+
+/** A filesystem request must never leave the editor behind an endless spinner. */
+async function readDocumentWithTimeout(root: string, path: string): Promise<CodingDocument> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      codingReadDocument(root, path),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("读取文件超时，请重试")),
+          FILE_OPEN_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
 }
 
 function basename(path: string): string {
@@ -446,7 +469,9 @@ export function CodingWorkbench({
   const treeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileIndexEventsRef = useRef(new Map<string, boolean>());
   const diffRequestGenerationRef = useRef(new Map<string, number>());
+  const fileReadGenerationRef = useRef(new Map<string, number>());
   const diffTaskRef = useRef<string | null>(null);
+  const workbenchMountedRef = useRef(true);
   const previousWorkspaceRef = useRef("");
   const workspaceUiStateRef = useRef(new Map<string, {
     tabs: WorkbenchTab[];
@@ -457,6 +482,13 @@ export function CodingWorkbench({
   }>());
   const workbenchRef = useRef<HTMLDivElement>(null);
   const workbenchSize = useElementSize(workbenchRef);
+
+  useEffect(() => {
+    workbenchMountedRef.current = true;
+    return () => {
+      workbenchMountedRef.current = false;
+    };
+  }, []);
 
   const queueTreeRefresh = useCallback((changedPath: string) => {
     const relativePath = workspaceRelativePath(cwd, changedPath);
@@ -715,49 +747,106 @@ export function CodingWorkbench({
     });
   }, [activeFileTab, activeRelativePath, cwd, editorContext, indexReady]);
 
-  /** Load a file into a tab, reusing the tab if it is already open. */
-  const openFile = useCallback(
-    async (absolutePath: string) => {
+  /**
+   * Read a file into its tab. A failed or interrupted tab is deliberately
+   * retried instead of merely being focused, and only the newest request may
+   * settle it. This prevents workspace switches and late responses from
+   * restoring a permanently loading tab.
+   */
+  const loadFile = useCallback(
+    async (absolutePath: string, force = false, notifySuccess = false) => {
+      const requestRoot = cwd;
+      if (!requestRoot) return;
+
       const store = useTabStore.getState();
       const existing = store.tabs.find((tab) => tab.id === absolutePath);
       if (existing) {
         store.setActive(absolutePath);
-        return;
-      }
-      const name = basename(absolutePath);
-      store.openFile({
-        id: absolutePath,
-        relativePath: absolutePath,
-        name,
-        language: "plaintext",
-        original: "",
-        draft: "",
-        hash: "",
-        loading: true,
-      });
-      try {
-        const document = await codingReadDocument(cwd, absolutePath);
-        const current = useTabStore.getState();
-        // The tab may have been closed while the read was in flight.
-        if (!current.tabs.some((tab) => tab.id === absolutePath)) return;
-        current.closeTab(absolutePath);
-        current.openFile({
+        if (!isFileTab(existing) || (!force && !existing.loading && !existing.error)) return;
+        store.beginFileLoad(absolutePath);
+      } else {
+        store.openFile({
           id: absolutePath,
+          relativePath: workspaceRelativePath(requestRoot, absolutePath),
+          name: basename(absolutePath),
+          language: "plaintext",
+          original: "",
+          draft: "",
+          hash: "",
+          loading: true,
+        });
+      }
+
+      const requestKey = `${requestRoot}\0${absolutePath}`;
+      const generation = (fileReadGenerationRef.current.get(requestKey) ?? 0) + 1;
+      fileReadGenerationRef.current.set(requestKey, generation);
+
+      const settleActiveOrCachedTab = (
+        updateActive: (id: string) => void,
+        updateCached: (tab: FileTab) => FileTab,
+      ): boolean => {
+        if (
+          !workbenchMountedRef.current
+          || fileReadGenerationRef.current.get(requestKey) !== generation
+        ) {
+          return false;
+        }
+
+        if (previousWorkspaceRef.current === requestRoot) {
+          const current = useTabStore.getState();
+          const tab = current.tabs.find((entry) => entry.id === absolutePath);
+          if (!tab || !isFileTab(tab)) return false;
+          updateActive(absolutePath);
+          return true;
+        }
+
+        const cached = workspaceUiStateRef.current.get(requestRoot);
+        if (!cached) return false;
+        let found = false;
+        const tabs = cached.tabs.map((entry) => {
+          if (entry.id !== absolutePath || !isFileTab(entry)) return entry;
+          found = true;
+          return updateCached(entry);
+        });
+        if (found) workspaceUiStateRef.current.set(requestRoot, { ...cached, tabs });
+        return found;
+      };
+
+      try {
+        const document = await readDocumentWithTimeout(requestRoot, absolutePath);
+        const snapshot = {
           relativePath: document.relativePath,
-          name,
           language: document.language,
           original: document.content,
           draft: document.content,
           hash: document.hash,
-          loading: false,
-        });
+        };
+        const settled = settleActiveOrCachedTab(
+          (id) => useTabStore.getState().completeFileLoad(id, snapshot),
+          (tab) => completeFileTabLoad(tab, snapshot),
+        );
+        if (settled && notifySuccess && previousWorkspaceRef.current === requestRoot) {
+          onToast?.(`已重新加载 ${basename(absolutePath)}`);
+        }
       } catch (error) {
-        const msg = String(error).replace(/^Error:\s*/, "");
-        useTabStore.getState().setError(absolutePath, `打开失败：${msg}`);
-        onToast?.(`无法打开 ${basenameOf(absolutePath)}：${msg}`);
+        const message = String(error).replace(/^Error:\s*/, "");
+        const errorMessage = `打开失败：${message}`;
+        const settled = settleActiveOrCachedTab(
+          (id) => useTabStore.getState().setError(id, errorMessage),
+          (tab) => ({ ...tab, loading: false, error: errorMessage }),
+        );
+        if (settled && previousWorkspaceRef.current === requestRoot) {
+          onToast?.(`无法打开 ${basename(absolutePath)}：${message}`);
+        }
       }
     },
-    [cwd],
+    [cwd, onToast],
+  );
+
+  /** Load a file into a tab, reusing healthy tabs and retrying broken ones. */
+  const openFile = useCallback(
+    (absolutePath: string) => loadFile(absolutePath),
+    [loadFile],
   );
 
   /** Open the Find References virtual tab for a symbol. */
@@ -895,15 +984,10 @@ export function CodingWorkbench({
     [blockInterruptedManualMutation, cwd, finishManualMutation, onToast, prepareManualMutation],
   );
 
-  const reloadFile = useCallback(async (id: string) => {
-    try {
-      const document = await codingReadDocument(cwd, id);
-      useTabStore.getState().markSaved(id, document.content, document.hash);
-      onToast?.(`已重新加载 ${basename(id)}`);
-    } catch (error) {
-      onToast?.(`重新加载失败：${String(error).replace(/^Error:\s*/, "")}`);
-    }
-  }, [cwd, onToast]);
+  const reloadFile = useCallback(
+    (id: string) => loadFile(id, true, true),
+    [loadFile],
+  );
 
   const closeTabSafely = useCallback((id: string) => {
     const tab = useTabStore.getState().tabs.find((entry) => entry.id === id);

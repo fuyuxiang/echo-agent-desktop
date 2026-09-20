@@ -21,7 +21,19 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 vi.mock("@/components/workspace-panel/FileTreeView", () => ({
-  FileTreeView: () => <div data-testid="file-tree" />,
+  FileTreeView: ({
+    rootPath,
+    onFileSelect,
+  }: {
+    rootPath: string;
+    onFileSelect: (path: string) => void;
+  }) => (
+    <div data-testid="file-tree">
+      <button type="button" onClick={() => onFileSelect(`${rootPath}/src/a.ts`)}>
+        打开源文件
+      </button>
+    </div>
+  ),
 }));
 const readDocument = vi.fn(async (_root: string, path: string) => ({
   path,
@@ -176,6 +188,101 @@ describe("CodingWorkbench skeleton", () => {
     expect(screen.getByRole("status", { name: "工作台状态" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "切换开发任务" })).toHaveTextContent("新建任务");
     expect(screen.getByRole("status", { name: "工作台状态" })).toHaveTextContent("Agent 就绪");
+  });
+
+  it("从资源管理器打开源文件并显示可编辑内容", async () => {
+    const user = userEvent.setup();
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+
+    await user.click(await screen.findByRole("button", { name: "打开源文件" }));
+
+    expect(await screen.findByTestId("editor")).toHaveTextContent("disk content");
+    expect(useTabStore.getState().tabs[0]).toMatchObject({
+      id: "/repo/src/a.ts",
+      relativePath: "src/a.ts",
+      language: "typescript",
+      loading: false,
+      error: undefined,
+    });
+  });
+
+  it("文件读取失败后可从错误态直接重试", async () => {
+    const user = userEvent.setup();
+    readDocument
+      .mockRejectedValueOnce(new Error("temporary read failure"))
+      .mockImplementationOnce(async (_root: string, path: string) => ({
+        path,
+        relativePath: "src/a.ts",
+        content: "recovered content",
+        hash: "recovered-hash",
+        size: 17,
+        modifiedAt: 0,
+        language: "typescript",
+        lineEnding: "LF" as const,
+      }));
+
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await user.click(await screen.findByRole("button", { name: "打开源文件" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "打开失败：temporary read failure",
+    );
+
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByTestId("editor")).toHaveTextContent("recovered content");
+    expect(readDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it("工作区切换中断加载后可重试，且过期响应不会覆盖新内容", async () => {
+    const user = userEvent.setup();
+    let resolveFirst!: (value: Awaited<ReturnType<typeof readDocument>>) => void;
+    const firstRead = new Promise<Awaited<ReturnType<typeof readDocument>>>((resolve) => {
+      resolveFirst = resolve;
+    });
+    readDocument
+      .mockImplementationOnce(() => firstRead)
+      .mockImplementationOnce(async (_root: string, path: string) => ({
+        path,
+        relativePath: "src/a.ts",
+        content: "fresh content",
+        hash: "fresh-hash",
+        size: 13,
+        modifiedAt: 0,
+        language: "typescript",
+        lineEnding: "LF" as const,
+      }));
+
+    const { rerender } = render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await user.click(await screen.findByRole("button", { name: "打开源文件" }));
+    expect(await screen.findByText("正在打开…")).toBeInTheDocument();
+
+    rerender(<CodingWorkbench cwd="/other" models={[]} />);
+    expect(await screen.findByText(/从资源管理器打开文件/)).toBeInTheDocument();
+    rerender(<CodingWorkbench cwd="/repo" models={[]} />);
+    expect(await screen.findByText("正在打开…")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "打开源文件" }));
+    expect(await screen.findByTestId("editor")).toHaveTextContent("fresh content");
+    expect(readDocument).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      resolveFirst({
+        path: "/repo/src/a.ts",
+        relativePath: "src/a.ts",
+        content: "stale content",
+        hash: "stale-hash",
+        size: 13,
+        modifiedAt: 0,
+        language: "typescript",
+        lineEnding: "LF",
+      });
+      await firstRead;
+    });
+    expect(screen.getByTestId("editor")).toHaveTextContent("fresh content");
+    expect(useTabStore.getState().tabs[0]).toMatchObject({
+      draft: "fresh content",
+      hash: "fresh-hash",
+      loading: false,
+    });
   });
 
   it("exposes draggable separators for both side panes", async () => {

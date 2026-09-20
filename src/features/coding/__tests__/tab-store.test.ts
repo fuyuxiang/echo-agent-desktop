@@ -50,6 +50,43 @@ describe("tab store", () => {
     expect(tab.hash).toBe("h2");
   });
 
+  it("retries and completes a file load without replacing the tab", () => {
+    useTabStore.getState().openFile(fileTab({ loading: false, error: "temporary failure" }));
+    const originalTab = useTabStore.getState().tabs[0];
+
+    useTabStore.getState().beginFileLoad("/repo/src/a.ts");
+    expect(useTabStore.getState().tabs[0]).toMatchObject({
+      loading: true,
+      error: undefined,
+    });
+
+    useTabStore.getState().completeFileLoad("/repo/src/a.ts", {
+      relativePath: "src/a.ts",
+      language: "typescript",
+      original: "loaded",
+      draft: "loaded",
+      hash: "h2",
+    });
+    expect(useTabStore.getState().tabs).toHaveLength(1);
+    expect(useTabStore.getState().tabs[0]).toMatchObject({
+      id: originalTab.id,
+      original: "loaded",
+      draft: "loaded",
+      hash: "h2",
+      loading: false,
+      error: undefined,
+    });
+  });
+
+  it("reconciliation cannot leave a loaded tab spinning", () => {
+    useTabStore.getState().openFile(fileTab({ loading: true }));
+    useTabStore.getState().markSaved("/repo/src/a.ts", "agent content", "h2");
+    expect(useTabStore.getState().tabs[0]).toMatchObject({
+      draft: "agent content",
+      loading: false,
+    });
+  });
+
   it("saving clears a previous conflict flag", () => {
     useTabStore.getState().openFile(fileTab());
     useTabStore.getState().markConflict("/repo/src/a.ts");

@@ -63,6 +63,11 @@ export interface VirtualTab {
 
 export type WorkbenchTab = FileTab | DocTab | VirtualTab;
 
+export type FileLoadSnapshot = Pick<
+  FileTab,
+  "relativePath" | "language" | "original" | "draft" | "hash"
+>;
+
 const DOC_TITLES: Record<DocTabKind, string> = {
   delivery: "交付报告",
   taskDag: "任务进度",
@@ -94,6 +99,8 @@ interface TabState {
     taskId?: string,
   ) => void;
   clearDiff: (id: string) => void;
+  beginFileLoad: (id: string) => void;
+  completeFileLoad: (id: string, document: FileLoadSnapshot) => void;
   markSaved: (id: string, original: string, hash: string) => void;
   markConflict: (id: string) => void;
   clearConflict: (id: string) => void;
@@ -108,6 +115,17 @@ export function isFileTab(tab: WorkbenchTab): tab is FileTab {
 
 export function isVirtualTab(tab: WorkbenchTab): tab is VirtualTab {
   return tab.type === "virtual";
+}
+
+/** Resolve a file read while retaining view/diff metadata owned by the tab. */
+export function completeFileTabLoad(tab: FileTab, document: FileLoadSnapshot): FileTab {
+  return {
+    ...tab,
+    ...document,
+    loading: false,
+    error: undefined,
+    conflict: false,
+  };
 }
 
 /** A tab whose draft differs from disk. */
@@ -232,6 +250,24 @@ export const useTabStore = create<TabState>((set, get) => ({
       ),
     })),
 
+  beginFileLoad: (id) =>
+    set((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.id === id && isFileTab(tab)
+          ? { ...tab, loading: true, error: undefined }
+          : tab,
+      ),
+    })),
+
+  completeFileLoad: (id, document) =>
+    set((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.id === id && isFileTab(tab)
+          ? completeFileTabLoad(tab, document)
+          : tab,
+      ),
+    })),
+
   markSaved: (id, original, hash) =>
     set((state) => ({
       tabs: state.tabs.map((tab) =>
@@ -241,6 +277,7 @@ export const useTabStore = create<TabState>((set, get) => ({
               original,
               draft: original,
               hash,
+              loading: false,
               conflict: false,
               error: undefined,
             }
