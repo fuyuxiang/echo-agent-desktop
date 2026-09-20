@@ -12,6 +12,7 @@ import {
 import { ExecutionProcess } from "@/components/ExecutionProcess";
 import { Markdown } from "@/components/Markdown";
 import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
+import { shortcutLabel } from "@/lib/platform";
 import { PermissionInlineCard } from "@/components/PermissionDialog";
 import { PermissionPicker } from "@/components/PermissionPicker";
 import { QuestionInlineCard } from "@/components/QuestionInlineCard";
@@ -145,7 +146,7 @@ export function AgentPane({
           </span>
           <div>
             <strong>Agent</strong>
-            <span title={task.name}>{task.name}</span>
+            <span>当前任务协作</span>
           </div>
         </div>
         <div className="coding-agent__head">
@@ -157,8 +158,14 @@ export function AgentPane({
             {task.phase === "stopped" && <Square size={11} />}
             {phase.label}
           </span>
-          {streaming && (
-            <button type="button" className="coding-agent__stop" onClick={onCancel}>
+          {phase.active && (
+            <button
+              type="button"
+              className="coding-agent__stop"
+              onClick={onCancel}
+              disabled={sending}
+              title="停止当前任务的 Agent 与验证流程"
+            >
               <Square size={11} /> 停止
             </button>
           )}
@@ -325,9 +332,13 @@ export function AgentPane({
               }
             }}
             rows={2}
-            placeholder={sessionUnavailable ? "当前任务未绑定 Agent 会话" : "继续当前任务；⌘ Enter 发送…"}
+            placeholder={sessionUnavailable
+              ? "当前任务未绑定 Agent 会话"
+              : streaming
+                ? "可先输入补充要求，本轮完成后发送…"
+                : `继续当前任务；${shortcutLabel("⌘ Enter", "Ctrl+Enter")} 发送…`}
             aria-label="给 Agent 的补充要求"
-            disabled={sessionUnavailable || sending || streaming}
+            disabled={sessionUnavailable || sending}
           />
           <div className="coding-agent__composer-tools">
             <PermissionPicker onToast={onToast} sessionId={sessionId ?? undefined} />

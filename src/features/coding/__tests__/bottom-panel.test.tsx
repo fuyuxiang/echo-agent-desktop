@@ -236,6 +236,18 @@ describe("BottomPanel", () => {
     expect(screen.getByText("尚无命令输出。")).toBeInTheDocument();
   });
 
+  it("lets the user wrap and clear command output", async () => {
+    const user = userEvent.setup();
+    const onClearOutput = vi.fn();
+    setup({ view: "output", output: "line one\nline two", onClearOutput });
+    const output = screen.getByText(/line one/);
+    expect(output).toHaveClass("is-wrapped");
+    await user.click(screen.getByRole("button", { name: "切换自动换行" }));
+    expect(output).not.toHaveClass("is-wrapped");
+    await user.click(screen.getByRole("button", { name: "清空输出" }));
+    expect(onClearOutput).toHaveBeenCalledOnce();
+  });
+
   it("resizes with the keyboard", async () => {
     const user = userEvent.setup();
     const props = setup();

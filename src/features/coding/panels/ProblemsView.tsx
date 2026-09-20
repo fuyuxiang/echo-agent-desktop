@@ -59,6 +59,7 @@ export function ProblemsView({ problems, onOpenProblem }: ProblemsViewProps) {
             <em>{KIND_LABELS[problem.kind]}</em>
             <span>{problem.message}</span>
             {problem.symbol && <code>{problem.symbol}</code>}
+            {problem.sourceCommand === "Monaco" && <em title="编辑器实时诊断">编辑器</em>}
             {problem.file && (
               <small>
                 {problem.file.split("/").pop()}

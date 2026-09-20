@@ -1,4 +1,6 @@
-import { AlertTriangle, ChevronRight, FileCode2, FileText, LoaderCircle, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, FileCode2, FileText, LoaderCircle, X } from "lucide-react";
+
+import { shortcutLabel } from "@/lib/platform";
 
 import type { EditorCodeContext } from "../lib/documentation";
 import { isDirty, isFileTab, isVirtualTab, type DocTabKind, type FileTab, type VirtualTab, type WorkbenchTab } from "../store/tab-store";
@@ -13,6 +15,9 @@ interface TabContainerProps {
   onSave: (id: string) => void;
   onViewChange: (id: string, view: FileTab["view"]) => void | Promise<void>;
   viewBusy?: boolean;
+  reviewBusy?: boolean;
+  reviewedPath?: string;
+  onMarkReviewed?: (tab: FileTab) => void | Promise<void>;
   onReload?: (id: string) => void;
   onSymbolAction?: (action: "definition" | "references" | "impact", symbol: string) => void;
   onDiagnostics?: (path: string, diagnostics: CodingEditorDiagnostic[]) => void;
@@ -53,6 +58,9 @@ export function TabContainer({
   onSave,
   onViewChange,
   viewBusy = false,
+  reviewBusy = false,
+  reviewedPath,
+  onMarkReviewed,
   onReload,
   onSymbolAction,
   onDiagnostics,
@@ -69,7 +77,7 @@ export function TabContainer({
     return (
       <div className="coding-tabs coding-tabs--empty">
         <FileCode2 size={26} />
-        <p>从资源管理器打开文件，或用 ⌘P 快速查找</p>
+        <p>从资源管理器打开文件，或用 {shortcutLabel("⌘P", "Ctrl+P")} 快速查找</p>
       </div>
     );
   }
@@ -112,6 +120,20 @@ export function TabContainer({
         <div className="coding-tabs__toolbar">
           <Breadcrumb tab={active} />
           <div className="coding-tabs__views" role="group" aria-label="文件视图">
+            {active.view === "diff" && active.diffTaskId && onMarkReviewed && (
+              <button
+                type="button"
+                className={reviewedPath === active.relativePath ? "is-reviewed" : ""}
+                disabled={reviewBusy || reviewedPath === active.relativePath}
+                onClick={() => void onMarkReviewed(active)}
+                title={reviewedPath === active.relativePath
+                  ? "该内容版本已审阅；文件变化后需重新审阅"
+                  : "确认已检查当前差异"}
+              >
+                {reviewBusy ? <LoaderCircle size={11} className="is-spinning" /> : <Check size={11} />}
+                {reviewedPath === active.relativePath ? "已审阅" : "标记已审阅"}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onGenerateDocumentation?.()}
@@ -122,7 +144,7 @@ export function TabContainer({
                   ? "请先保存当前文件，再让 Agent 生成注释"
                   : viewBusy
                     ? "正在刷新文件差异，请稍候"
-                    : "为当前选区、光标符号或文件生成注释（⌘⌥D）"}
+                    : `为当前选区、光标符号或文件生成注释（${shortcutLabel("⌘⌥D", "Ctrl+Alt+D")}）`}
               aria-label="为当前选区或符号生成注释"
             >
               <FileText size={11} /> 注释

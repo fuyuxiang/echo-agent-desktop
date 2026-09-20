@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { shortcutLabel } from "@/lib/platform";
 
 import {
   buildCommands,
@@ -65,7 +66,7 @@ describe("command registry", () => {
     const available = buildCommands(context({ hasTask: false }))
       .find((command) => command.id === "understand.comments");
     expect(available?.enabled).toBe(true);
-    expect(available?.hint).toBe("⌘⌥D");
+    expect(available?.hint).toBe(shortcutLabel("⌘⌥D", "Ctrl+Alt+D"));
     const unavailable = buildCommands(context({ hasTask: false, hasActiveFile: false }))
       .find((command) => command.id === "understand.comments");
     expect(unavailable?.enabled).toBe(false);

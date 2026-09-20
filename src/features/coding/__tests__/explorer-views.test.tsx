@@ -55,31 +55,32 @@ function changeSet(overrides: Partial<ChangeSet> = {}): ChangeSet {
 }
 
 describe("ActivityBar", () => {
-  it("exposes all five destinations", () => {
+  it("exposes the four primary destinations", () => {
     render(<ActivityBar active="files" onChange={vi.fn()} />);
-    for (const label of ["资源管理器", "搜索", "变更集", "符号", "上下文包"]) {
+    for (const label of ["资源管理器", "搜索", "任务变更", "上下文包"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: "符号" })).not.toBeInTheDocument();
   });
 
   it("marks the active destination", () => {
     render(<ActivityBar active="changes" onChange={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "变更集" })).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "任务变更" })).toHaveAttribute("aria-current", "true");
   });
 
   it("switches destination on click", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<ActivityBar active="files" onChange={onChange} />);
-    await user.click(screen.getByRole("button", { name: "符号" }));
-    expect(onChange).toHaveBeenCalledWith("symbols");
+    await user.click(screen.getByRole("button", { name: "上下文包" }));
+    expect(onChange).toHaveBeenCalledWith("context");
   });
 
   it("badges the change count and caps it", () => {
     const { rerender } = render(<ActivityBar active="files" onChange={vi.fn()} changeCount={7} />);
-    expect(screen.getByRole("button", { name: "变更集" })).toHaveTextContent("7");
+    expect(screen.getByRole("button", { name: "任务变更" })).toHaveTextContent("7");
     rerender(<ActivityBar active="files" onChange={vi.fn()} changeCount={150} />);
-    expect(screen.getByRole("button", { name: "变更集" })).toHaveTextContent("99+");
+    expect(screen.getByRole("button", { name: "任务变更" })).toHaveTextContent("99+");
   });
 });
 

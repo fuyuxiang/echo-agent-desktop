@@ -11,9 +11,11 @@ import {
 import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
 import { PermissionPicker } from "@/components/PermissionPicker";
 import { DRAFT_TTL_MS, useAiDraftStore } from "@/features/coding/store/ai-draft-store";
+import { codingTaskDraftKey } from "../lib/hot-exit";
 
 interface TaskStarterProps {
   models: ModelOption[];
+  workspaceRoot?: string;
   modelId?: string;
   onModelChange: (modelId: string) => void;
   starting: boolean;
@@ -34,6 +36,7 @@ interface TaskStarterProps {
  */
 export function TaskStarter({
   models,
+  workspaceRoot = "",
   modelId,
   onModelChange,
   starting,
@@ -45,7 +48,13 @@ export function TaskStarter({
   onOpenSettings,
   onToast,
 }: TaskStarterProps) {
-  const [requirement, setRequirement] = useState("");
+  const [requirement, setRequirement] = useState(() => {
+    try {
+      return localStorage.getItem(codingTaskDraftKey(workspaceRoot)) ?? "";
+    } catch {
+      return "";
+    }
+  });
   const consumeDraft = useAiDraftStore((s) => s.consume);
 
   // SP3: pre-fill the textarea from the ai-draft store on first mount. The
@@ -58,6 +67,24 @@ export function TaskStarter({
     if (draft.prompt) setRequirement(draft.prompt);
     if (draft.contextPaths.length > 0) onDraftContextPaths?.(draft.contextPaths);
   }, [consumeDraft, onDraftContextPaths]);
+
+  useEffect(() => {
+    try {
+      setRequirement(localStorage.getItem(codingTaskDraftKey(workspaceRoot)) ?? "");
+    } catch {
+      setRequirement("");
+    }
+  }, [workspaceRoot]);
+
+  useEffect(() => {
+    try {
+      const key = codingTaskDraftKey(workspaceRoot);
+      if (requirement) localStorage.setItem(key, requirement);
+      else localStorage.removeItem(key);
+    } catch {
+      // Draft recovery is best-effort and must never block the composer.
+    }
+  }, [requirement, workspaceRoot]);
 
   const submit = () => {
     if (!requirement.trim() || starting) return;

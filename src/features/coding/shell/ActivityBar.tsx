@@ -1,4 +1,4 @@
-import { FileCode2, GitCompareArrows, Hash, PackageSearch, Search } from "lucide-react";
+import { FileCode2, GitCompareArrows, PackageSearch, Search } from "lucide-react";
 
 import type { ActivityView } from "../store/workbench-store";
 
@@ -13,12 +13,11 @@ interface ActivityBarProps {
 const ITEMS: Array<{ id: ActivityView; label: string; Icon: typeof Search }> = [
   { id: "files", label: "资源管理器", Icon: FileCode2 },
   { id: "search", label: "搜索", Icon: Search },
-  { id: "changes", label: "变更集", Icon: GitCompareArrows },
-  { id: "symbols", label: "符号", Icon: Hash },
+  { id: "changes", label: "任务变更", Icon: GitCompareArrows },
   { id: "context", label: "上下文包", Icon: PackageSearch },
 ];
 
-/** Five destinations, matching the five explorer views. */
+/** Primary work modes. File outline stays inside Explorer; workspace symbols use Quick Open. */
 export function ActivityBar({ active, onChange, changeCount = 0, contextCount = 0 }: ActivityBarProps) {
   return (
     <nav className="coding-activity" aria-label="活动栏">

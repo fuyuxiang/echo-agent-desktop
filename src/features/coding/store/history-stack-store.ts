@@ -93,8 +93,8 @@ export const useHistoryStackStore = create<HistoryState>((set, get) => ({
   push: (op) => {
     set((state) => ({
       past: [...state.past, op].slice(-MAX_HISTORY),
-      // A fresh action invalidates redo only in the same workspace. Other
-      // workspace tabs retain their independent editing history.
+      // A fresh action invalidates redo only in the same project. Other
+      // recently opened projects retain their independent editing history.
       future: state.future.filter((entry) => entry.cwd !== op.cwd),
     }));
   },

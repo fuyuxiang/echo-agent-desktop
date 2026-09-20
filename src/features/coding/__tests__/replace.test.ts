@@ -21,6 +21,11 @@ describe("countOccurrences", () => {
   it("treats the needle literally, not as a pattern", () => {
     expect(countOccurrences("a.c abc", ".")).toBe(1);
   });
+
+  it("supports case-insensitive, whole-word and regex contracts", () => {
+    expect(countOccurrences("Foo foo food", "foo", false, false, true)).toBe(2);
+    expect(countOccurrences("v1 v22", "v\\d+", true, true)).toBe(2);
+  });
 });
 
 describe("replaceAll", () => {
@@ -44,6 +49,11 @@ describe("replaceAll", () => {
 
   it("supports replacing with an empty string", () => {
     expect(replaceAll("keep me", " me", "").content).toBe("keep");
+  });
+
+  it("preserves regex capture-group replacement semantics", () => {
+    const result = replaceAll("name: Ada", "name: (\\w+)", "hello $1", true, true);
+    expect(result).toEqual({ content: "hello Ada", count: 1 });
   });
 });
 

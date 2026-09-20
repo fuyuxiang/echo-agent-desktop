@@ -84,6 +84,7 @@ export interface CodingTask {
   id: string;
   name: string;
   requirement: string;
+  contextPaths?: string[];
   phase: TaskPhase;
   phaseReason?: string | null;
   blocker?: string | null;

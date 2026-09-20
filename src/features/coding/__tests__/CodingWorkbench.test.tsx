@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -186,8 +186,34 @@ describe("CodingWorkbench skeleton", () => {
     expect(screen.getByRole("complementary", { name: "资源管理器" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Agent 面板" })).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "工作台状态" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "切换项目" })).toHaveTextContent("repo");
+    expect(screen.getByText("项目根目录")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "切换开发任务" })).toHaveTextContent("新建任务");
     expect(screen.getByRole("status", { name: "工作台状态" })).toHaveTextContent("Agent 就绪");
+  });
+
+  it("执行中的任务会阻止切换项目，避免丢失任务上下文", async () => {
+    const user = userEvent.setup();
+    const onSelectWorkspace = vi.fn();
+    const onToast = vi.fn();
+    render(
+      <CodingWorkbench
+        cwd="/repo"
+        models={[]}
+        codingWorkspaces={[{ cwd: "/repo" }, { cwd: "/other" }]}
+        activeCodingWorkspaceCwd="/repo"
+        onSelectWorkspace={onSelectWorkspace}
+        onToast={onToast}
+      />,
+    );
+    await screen.findByRole("navigation", { name: "活动栏" });
+    act(() => useTaskStore.setState({ task: verificationTask({ phase: "implementing" }) }));
+
+    await user.click(screen.getByRole("button", { name: "切换项目" }));
+    await user.click(screen.getByRole("menuitem", { name: "切换到项目 other" }));
+
+    expect(onSelectWorkspace).not.toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledWith("当前开发任务仍在执行，请先停止任务再切换项目");
   });
 
   it("从资源管理器打开源文件并显示可编辑内容", async () => {
@@ -479,6 +505,86 @@ describe("CodingWorkbench skeleton", () => {
     await waitFor(() => expect(screen.getByTestId("editor")).toHaveTextContent("task version 2"));
     expect(invoke.mock.calls.filter(([command]) => command === "coding_changeset_diff").length)
       .toBeGreaterThan(callsBeforeWrite);
+  });
+
+  it("回滚仅恢复任务文件，并保留无关标签和未保存草稿", async () => {
+    const user = userEvent.setup();
+    const activeTask = verificationTask({ id: "task-rollback", phase: "stopped" });
+    const taskChangeSet = {
+      taskId: activeTask.id,
+      baselineMode: "filesystem" as const,
+      changes: [{
+        path: "src/a.ts",
+        kind: "modified" as const,
+        added: 1,
+        removed: 1,
+        preExisting: false,
+      }],
+      createdAt: "2026-09-13T00:00:00Z",
+      reviewedFiles: [],
+      rollbackUnsafeFiles: [],
+      committedHash: null,
+    };
+    useTaskStore.setState({ root: "/repo", task: activeTask, changeSet: taskChangeSet });
+    readDocument.mockImplementation(async (_root: string, path: string) => ({
+      path,
+      relativePath: path.replace("/repo/", ""),
+      content: "restored baseline",
+      hash: "restored-hash",
+      size: 17,
+      modifiedAt: 1,
+      language: "typescript",
+      lineEnding: "LF" as const,
+    }));
+    invoke.mockImplementation(async (command: string): Promise<unknown> => {
+      if (command === "coding_task_list" || command === "coding_verification_detect") return [];
+      if (command === "coding_task_rollback") return ["src/a.ts"];
+      if (command === "coding_changeset_get") return { ...taskChangeSet, changes: [] };
+      if (
+        command === "coding_verification_list"
+        || command === "coding_diagnostics_list"
+        || command === "coding_task_execution_ledger"
+      ) return [];
+      if (command === "coding_orchestrator_state") return null;
+      return null;
+    });
+
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    act(() => {
+      useTabStore.getState().openFile({
+        id: "/repo/src/a.ts",
+        relativePath: "src/a.ts",
+        name: "a.ts",
+        language: "typescript",
+        original: "task version",
+        draft: "unsaved task draft",
+        hash: "task-hash",
+        loading: false,
+      });
+      useTabStore.getState().openFile({
+        id: "/repo/notes.txt",
+        relativePath: "notes.txt",
+        name: "notes.txt",
+        language: "plaintext",
+        original: "notes",
+        draft: "private draft",
+        hash: "notes-hash",
+        loading: false,
+      });
+    });
+
+    await user.click(screen.getByRole("button", { name: "任务变更" }));
+    await user.click(screen.getByRole("button", { name: /回滚任务/ }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent(/其他标签和草稿会保留/);
+    await user.click(within(dialog).getByRole("button", { name: "回滚任务" }));
+
+    await waitFor(() => expect(readDocument).toHaveBeenCalledWith("/repo", "/repo/src/a.ts"));
+    expect(useTabStore.getState().tabs.find((tab) => tab.id === "/repo/src/a.ts"))
+      .toMatchObject({ original: "restored baseline", draft: "restored baseline" });
+    expect(useTabStore.getState().tabs.find((tab) => tab.id === "/repo/notes.txt"))
+      .toMatchObject({ original: "notes", draft: "private draft" });
   });
 
   it("explains when the active file has no task or local diff", async () => {

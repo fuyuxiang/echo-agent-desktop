@@ -7,6 +7,8 @@
  * visible UI from growing a button per feature.
  */
 
+import { shortcutLabel } from "@/lib/platform";
+
 import type { ActivityView, BottomView } from "../store/workbench-store";
 
 export type CommandGroup =
@@ -55,6 +57,7 @@ export interface CommandContext {
   canRollbackChanges?: boolean;
   setActivityView: (view: ActivityView) => void;
   setBottomView: (view: BottomView) => void;
+  openSymbols?: () => void;
   openDocTab: (kind: "delivery" | "taskDag" | "profile") => void;
   runAllVerifications: () => void | Promise<void>;
   rerunVerification: () => void | Promise<void>;
@@ -113,7 +116,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
     },
     {
       id: "view.changes",
-      title: "转到：变更集",
+      title: "转到：任务变更",
       group: "navigate",
       keywords: ["diff", "git", "改动"],
       hint: changedFileCount > 0 ? `${changedFileCount} 个文件` : undefined,
@@ -122,11 +125,11 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
     },
     {
       id: "view.symbols",
-      title: "转到：符号",
+      title: "打开：工作区符号",
       group: "navigate",
       keywords: ["symbol", "函数", "类"],
       enabled: hasWorkspace,
-      run: () => setActivityView("symbols"),
+      run: () => context.openSymbols?.(),
     },
     {
       id: "view.context",
@@ -143,7 +146,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "新建开发任务",
       group: "task",
       keywords: ["new", "创建"],
-      enabled: hasWorkspace,
+      enabled: hasWorkspace && !busy,
       run: context.newTask,
     },
     {
@@ -266,7 +269,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "生成代码注释",
       group: "understand",
       keywords: ["comment", "注释", "文档"],
-      hint: "⌘⌥D",
+      hint: shortcutLabel("⌘⌥D", "Ctrl+Alt+D"),
       enabled: hasWorkspace && context.hasActiveFile !== false && !busy,
       run: context.generateComments,
     },
@@ -330,7 +333,7 @@ export function buildCommands(context: CommandContext): WorkbenchCommand[] {
       title: "切换底部面板",
       group: "view",
       keywords: ["panel", "bottom", "面板"],
-      hint: "⌘J",
+      hint: shortcutLabel("⌘J", "Ctrl+J"),
       enabled: hasWorkspace,
       run: context.toggleBottom,
     },

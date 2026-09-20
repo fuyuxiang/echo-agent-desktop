@@ -78,13 +78,13 @@ interface PlaceholderPageProps {
   onSelectWorkspace?: (cwd: string) => void;
   /** Known working directories for the Coding Workspace picker. */
   workspaces?: WorkspaceInfo[];
-  /** SP4: registered cwd list for the workbench tab strip. */
+  /** Recently opened coding projects. */
   codingWorkspaces?: WorkspaceInfo[];
-  /** SP4: currently active tab cwd (forwarded to CodingWorkbench). */
+  /** Currently active coding project (forwarded to CodingWorkbench). */
   activeCodingWorkspaceCwd?: string;
-  /** SP4: close a coding workspace tab. */
+  /** Close the current project or remove a path from recent projects. */
   onCloseCodingWorkspace?: (cwd: string) => void;
-  /** SP4: open the OS folder picker to register a new cwd. */
+  /** Open the OS folder picker to register and activate a project. */
   onAddCodingWorkspace?: () => void;
   /** Coding Workspace Agent/runtime integration. */
   codingApiReady?: boolean;

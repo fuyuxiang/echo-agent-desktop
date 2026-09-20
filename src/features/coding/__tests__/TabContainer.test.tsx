@@ -29,8 +29,8 @@ function file(overrides: Partial<FileTab> = {}): FileTab {
   };
 }
 
-function setup(tabs: WorkbenchTab[], activeId: string | null = tabs[0]?.id ?? null) {
-  const props = {
+function setupProps(tabs: WorkbenchTab[], activeId: string | null = tabs[0]?.id ?? null) {
+  return {
     tabs,
     activeId,
     onSelect: vi.fn(),
@@ -42,6 +42,10 @@ function setup(tabs: WorkbenchTab[], activeId: string | null = tabs[0]?.id ?? nu
     onGenerateDocumentation: vi.fn(),
     renderDoc: vi.fn((kind: string) => <div data-testid="doc">{kind}</div>),
   };
+}
+
+function setup(tabs: WorkbenchTab[], activeId: string | null = tabs[0]?.id ?? null) {
+  const props = setupProps(tabs, activeId);
   render(<TabContainer {...props} />);
   return props;
 }
@@ -49,7 +53,7 @@ function setup(tabs: WorkbenchTab[], activeId: string | null = tabs[0]?.id ?? nu
 describe("TabContainer", () => {
   it("guides the user when nothing is open", () => {
     setup([]);
-    expect(screen.getByText(/⌘P 快速查找/)).toBeInTheDocument();
+    expect(screen.getByText(/(?:⌘P|Ctrl\+P) 快速查找/)).toBeInTheDocument();
   });
 
   it("shows a breadcrumb of the file path", () => {
@@ -84,6 +88,30 @@ describe("TabContainer", () => {
     const props = setup([file()]);
     await user.click(screen.getByRole("button", { name: "差异" }));
     expect(props.onViewChange).toHaveBeenCalledWith("/repo/src/auth/login.ts", "diff");
+  });
+
+  it("requires an explicit action before a task diff is marked reviewed", async () => {
+    const user = userEvent.setup();
+    const onMarkReviewed = vi.fn();
+    const tab = file({ view: "diff", diffTaskId: "task-1" });
+    const { rerender } = render(
+      <TabContainer
+        {...setupProps([tab])}
+        onMarkReviewed={onMarkReviewed}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "标记已审阅" }));
+    expect(onMarkReviewed).toHaveBeenCalledWith(tab);
+
+    rerender(
+      <TabContainer
+        {...setupProps([tab])}
+        reviewedPath="src/auth/login.ts"
+        onMarkReviewed={onMarkReviewed}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "已审阅" })).toBeDisabled();
   });
 
   it("starts documentation from the editor toolbar and protects unsaved drafts", async () => {

@@ -11,12 +11,8 @@ import {
 import {
   ArrowLeft,
   Code2,
-  Eye,
-  EyeOff,
-  FilePlus2,
   FlaskConical,
   FolderGit2,
-  FolderPlus,
   Hammer,
   MessageSquare,
   Plus,
@@ -38,14 +34,17 @@ import {
   filesystemPickDirectory,
   type CodingDocument,
   type CodingSearchHit,
+  type CodingSearchOptions,
 } from "@/lib/agent-client";
 import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
+import { shortcutLabel } from "@/lib/platform";
 import "@/styles/coding-workbench.css";
 
 import { AgentPane } from "./agent/AgentPane";
 import { TaskStarter } from "./agent/TaskStarter";
 import { ChangeSetView } from "./explorer/ChangeSetView";
 import { ContextPackView } from "./explorer/ContextPackView";
+import { FileExplorerView } from "./explorer/FileExplorerView";
 import { SearchView } from "./explorer/SearchView";
 import { SymbolView } from "./explorer/SymbolView";
 import { buildCommands, type CommandContext } from "./lib/commands";
@@ -56,6 +55,7 @@ import {
   type EditorCodeContext,
 } from "./lib/documentation";
 import { applyFileIndexEvent, buildFileIndex } from "./lib/file-index";
+import { codingTaskDraftKey, loadCodingHotExit, saveCodingHotExit } from "./lib/hot-exit";
 import {
   buildCodingWorkflowPrompt,
   buildNodeContinuationInstruction,
@@ -83,6 +83,7 @@ import { useVerificationRunner } from "./lib/use-verification-runner";
 import { FindReferencesView } from "./main/FindReferencesView";
 import { GoToDefinitionView } from "./main/GoToDefinitionView";
 import { ImpactAnalysisView } from "./main/ImpactAnalysisView";
+import type { CodingEditorDiagnostic } from "./main/CodingEditor";
 import { DeliveryReportTab } from "./main/docs/DeliveryReportTab";
 import { ProjectProfileTab } from "./main/docs/ProjectProfileTab";
 import { TaskDagTab } from "./main/docs/TaskDagTab";
@@ -90,8 +91,8 @@ import { BottomPanel } from "./panels/BottomPanel";
 import { TabContainer } from "./main/TabContainer";
 import { ActivityBar } from "./shell/ActivityBar";
 import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/CommandPalette";
+import { ProjectSwitcher } from "./shell/ProjectSwitcher";
 import { TaskSwitcher } from "./shell/TaskSwitcher";
-import { WorkspaceTabBar } from "./shell/WorkspaceTabBar";
 import {
   completeFileTabLoad,
   isDirty,
@@ -119,9 +120,11 @@ interface CodingWorkbenchProps {
   cwd?: string;
   workspaces?: { cwd: string }[];
   onSelectWorkspace?: (cwd: string) => void;
-  /** SP4: multi-tab workspace strip. */
+  /** Recently opened coding projects shown by the current-project switcher. */
   codingWorkspaces?: { cwd: string }[];
+  /** Current coding project. One workbench window has one active project. */
   activeCodingWorkspaceCwd?: string;
+  /** Remove a path from recent projects without deleting its files. */
   onCloseCodingWorkspace?: (cwd: string) => void;
   onAddCodingWorkspace?: () => void;
   onToast?: (message: string) => void;
@@ -263,8 +266,8 @@ async function reconcileOpenFileTab(
 const EXPLORER_TITLES: Record<string, string> = {
   files: "资源管理器",
   search: "搜索",
-  changes: "变更集",
-  symbols: "符号",
+  changes: "任务变更",
+  symbols: "工作区符号",
   context: "上下文包",
 };
 
@@ -377,6 +380,7 @@ export function CodingWorkbench({
   const { settling: lifecycleSettling } = useTaskLifecycle(cwd);
   const {
     requestConfirmation: requestTaskConfirmation,
+    confirm: confirmTaskAction,
     requestInput: requestTaskInput,
     dialog: taskDialog,
   } = useAppDialog(cwd);
@@ -418,6 +422,14 @@ export function CodingWorkbench({
 
   const tabs = useTabStore((state) => state.tabs);
   const activeTabId = useTabStore((state) => state.activeId);
+  const dirtyFileCount = useMemo(() => tabs.filter(isDirty).length, [tabs]);
+  const recentCodingProjects = useMemo(() => {
+    const paths = [
+      activeCodingWorkspaceCwd || cwd,
+      ...(codingWorkspaces ?? []).map((workspace) => workspace.cwd),
+    ].filter(Boolean);
+    return [...new Set(paths)].map((projectCwd) => ({ cwd: projectCwd }));
+  }, [activeCodingWorkspaceCwd, codingWorkspaces, cwd]);
 
   const [selectedDirectory, setSelectedDirectory] = useState(cwd);
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
@@ -443,6 +455,8 @@ export function CodingWorkbench({
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const indexReady = indexStatus?.state === "ready";
   const [contextPaths, setContextPaths] = useState<string[]>([]);
+  const [editorDiagnostics, setEditorDiagnostics] = useState<Record<string, CodingEditorDiagnostic[]>>({});
+  const [reviewingPath, setReviewingPath] = useState<string | null>(null);
   const [replacing, setReplacing] = useState(false);
   const [modelId, setModelId] = useState(defaultModelId);
   const [startError, setStartError] = useState<string | null>(null);
@@ -461,6 +475,9 @@ export function CodingWorkbench({
     revision: 0,
     paths: [],
   });
+  const [treeCollapseKey, setTreeCollapseKey] = useState(0);
+  const [treePersistenceRevision, setTreePersistenceRevision] = useState(0);
+  const [treeReveal, setTreeReveal] = useState<{ path?: string; key: number }>({ key: 0 });
   /** Bumped whenever the task's evidence changes, so an open report reloads. */
   const [reportRevision, setReportRevision] = useState(0);
   const repairPromptRef = useRef<string | null>(null);
@@ -471,6 +488,7 @@ export function CodingWorkbench({
   const diffRequestGenerationRef = useRef(new Map<string, number>());
   const fileReadGenerationRef = useRef(new Map<string, number>());
   const diffTaskRef = useRef<string | null>(null);
+  const contextSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const workbenchMountedRef = useRef(true);
   const previousWorkspaceRef = useRef("");
   const workspaceUiStateRef = useRef(new Map<string, {
@@ -480,6 +498,7 @@ export function CodingWorkbench({
     editorContext: EditorCodeContext | null;
     selectedDirectory: string;
   }>());
+  const treeExpandedPathsRef = useRef(new Map<string, string[]>());
   const workbenchRef = useRef<HTMLDivElement>(null);
   const workbenchSize = useElementSize(workbenchRef);
 
@@ -540,6 +559,35 @@ export function CodingWorkbench({
   const ledger = useTaskStore((state) => state.ledger);
   const verifications = useTaskStore((state) => state.verifications);
   const orchestrator = useTaskStore((state) => state.orchestrator);
+  const activeTaskCount = useMemo(() => {
+    const activeIds = new Set(
+      summaries
+        .filter((summary) => isBusyPhase(summary.phase))
+        .map((summary) => summary.id),
+    );
+    // The detail record can be newer than the summary list immediately after
+    // a phase transition. Count it as well so navigation can never create a
+    // brief window in which an active task is accidentally abandoned.
+    if (task && isBusyPhase(task.phase)) activeIds.add(task.id);
+    return activeIds.size;
+  }, [summaries, task]);
+  const combinedProblems = useMemo<Problem[]>(() => {
+    const editorProblems = Object.entries(editorDiagnostics).flatMap(([path, diagnostics]) =>
+      diagnostics.map((diagnostic) => ({
+        id: `editor:${path}:${diagnostic.line}:${diagnostic.column}:${diagnostic.message}`,
+        kind: diagnostic.severity === "error" ? "syntax" as const : "lint" as const,
+        severity: diagnostic.severity,
+        message: diagnostic.message,
+        file: workspaceRelativePath(cwd, diagnostic.path || path),
+        line: diagnostic.line,
+        column: diagnostic.column,
+        sourceCommand: "Monaco",
+        fingerprint: `editor:${path}:${diagnostic.line}:${diagnostic.column}:${diagnostic.message}`,
+      })),
+    );
+    const seen = new Set(problems.map((problem) => problem.fingerprint));
+    return [...problems, ...editorProblems.filter((problem) => !seen.has(problem.fingerprint))];
+  }, [cwd, editorDiagnostics, problems]);
   const verificationCommands = useMemo(
     () => mergeTaskVerificationCommands(detected, task),
     [detected, task],
@@ -587,6 +635,19 @@ export function CodingWorkbench({
     useTaskStore.getState().setRoot(cwd);
     if (cwd) void useTaskStore.getState().refreshSummaries();
   }, [cwd]);
+
+  // Task context is owned by the task, not by whichever repository happened to
+  // be visible when the user pinned it. A new-task draft starts empty.
+  useEffect(() => {
+    if (task) setContextPaths(task.contextPaths ?? []);
+  }, [task?.id]);
+
+  useEffect(() => {
+    const openPaths = new Set(tabs.filter(isFileTab).map((tab) => tab.id));
+    setEditorDiagnostics((current) => Object.fromEntries(
+      Object.entries(current).filter(([path]) => openPaths.has(path)),
+    ));
+  }, [tabs]);
 
   // SP2: refresh git snapshot on workspace switch so badges appear as soon
   // as a user lands on a new repo. Debounced inside the store.
@@ -989,26 +1050,86 @@ export function CodingWorkbench({
     [loadFile],
   );
 
-  const closeTabSafely = useCallback((id: string) => {
+  const closeTabSafely = useCallback(async (id: string) => {
     const tab = useTabStore.getState().tabs.find((entry) => entry.id === id);
     if (tab && isFileTab(tab) && tab.draft !== tab.original) {
-      if (!window.confirm(`${tab.name} 有未保存修改，确认放弃并关闭？`)) return;
+      const confirmed = await confirmTaskAction({
+        title: `关闭未保存的文件“${tab.name}”？`,
+        description: "未保存的编辑内容将被放弃，磁盘文件不会改变。",
+        confirmLabel: "放弃并关闭",
+        danger: true,
+      });
+      if (!confirmed) return;
     }
     useTabStore.getState().closeTab(id);
-  }, []);
+  }, [confirmTaskAction]);
 
-  const exitSafely = useCallback(() => {
+  const persistHotExitNow = useCallback(() => {
+    if (!cwd) return;
+    const tabState = useTabStore.getState();
+    saveCodingHotExit({
+      version: 1,
+      root: cwd,
+      tabs: tabState.tabs,
+      activeId: tabState.activeId,
+      selectedDirectory,
+      expandedPaths: treeExpandedPathsRef.current.get(cwd) ?? [],
+      savedAt: Date.now(),
+    });
+  }, [cwd, selectedDirectory]);
+
+  const exitSafely = useCallback(async () => {
     const dirtyCount = useTabStore.getState().tabs.filter(
       (tab) => isFileTab(tab) && tab.draft !== tab.original,
     ).length;
-    if (dirtyCount > 0 && !window.confirm(`有 ${dirtyCount} 个文件尚未保存，确认离开代码开发？`)) {
+    if (dirtyCount > 0) {
+      const confirmed = await confirmTaskAction({
+        title: "离开代码开发？",
+        description: `有 ${dirtyCount} 个文件尚未保存。草稿会保留在本机，但建议先保存需要写入工程的内容。`,
+        confirmLabel: "保留草稿并离开",
+      });
+      if (!confirmed) return;
+    }
+    persistHotExitNow();
+    onExit?.();
+  }, [confirmTaskAction, onExit, persistHotExitNow]);
+
+  const switchProject = useCallback((nextCwd: string) => {
+    if (!nextCwd || nextCwd === cwd) return;
+    if (activeTaskCount > 0) {
+      onToast?.(
+        activeTaskCount === 1
+          ? "当前开发任务仍在执行，请先停止任务再切换项目"
+          : `当前项目有 ${activeTaskCount} 个任务仍在执行，请先停止后再切换项目`,
+      );
       return;
     }
-    onExit?.();
-  }, [onExit]);
+    if (dirtyFileCount > 0) {
+      onToast?.(`当前项目的 ${dirtyFileCount} 个未保存文件已保留，返回后可继续编辑`);
+    }
+    onSelectWorkspace?.(nextCwd);
+  }, [activeTaskCount, cwd, dirtyFileCount, onSelectWorkspace, onToast]);
+
+  const removeRecentProject = useCallback(async (projectCwd: string) => {
+    if (projectCwd === cwd && activeTaskCount > 0) {
+      onToast?.("当前开发任务仍在执行，请先停止任务再移除项目");
+      return;
+    }
+    if (projectCwd === cwd && dirtyFileCount > 0) {
+      const confirmed = await confirmTaskAction({
+        title: "从最近项目移除？",
+        description: `当前项目有 ${dirtyFileCount} 个未保存文件。草稿会保留在本机，磁盘文件不会被删除。`,
+        confirmLabel: "从列表移除",
+        danger: true,
+      });
+      if (!confirmed) return;
+    }
+    onCloseCodingWorkspace?.(projectCwd);
+  }, [activeTaskCount, confirmTaskAction, cwd, dirtyFileCount, onCloseCodingWorkspace, onToast]);
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
+      persistHotExitNow();
       const dirty = useTabStore.getState().tabs.some(
         (tab) => isFileTab(tab) && tab.draft !== tab.original,
       );
@@ -1018,7 +1139,7 @@ export function CodingWorkbench({
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, []);
+  }, [persistHotExitNow]);
 
   const openTaskDiff = useCallback(async (
     path: string,
@@ -1137,6 +1258,22 @@ export function CodingWorkbench({
       : `打开任务差异失败：${result.message ?? "未知错误"}`);
   }, [cwd, onToast, openTaskDiff]);
 
+  const markTaskDiffReviewed = useCallback(async (tab: FileTab) => {
+    if (!cwd || !task || tab.diffTaskId !== task.id) return;
+    const relativePath = workspaceRelativePath(cwd, tab.relativePath);
+    setReviewingPath(relativePath);
+    try {
+      await codingApi.markReviewed(cwd, task.id, relativePath);
+      await useTaskStore.getState().refreshTaskState();
+      setReportRevision((value) => value + 1);
+      onToast?.(`已标记 ${relativePath} 为已审阅`);
+    } catch (error) {
+      onToast?.(`标记已审阅失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setReviewingPath(null);
+    }
+  }, [cwd, onToast, task]);
+
   const refreshVisibleDiff = useCallback(async (relativePath: string): Promise<boolean> => {
     const tab = matchingOpenFileTab(relativePath);
     if (!tab || !isFileTab(tab) || tab.view !== "diff") return false;
@@ -1239,14 +1376,25 @@ export function CodingWorkbench({
    * than reporting a clean success.
    */
   const replaceAcrossHits = useCallback(
-    async (query: string, replacement: string, hits: CodingSearchHit[]) => {
+    async (
+      query: string,
+      replacement: string,
+      hits: CodingSearchHit[],
+      options: CodingSearchOptions,
+    ) => {
       const uniquePaths = [...new Set(hits.map((hit) => hit.path))];
-      const caseSensitive = query !== query.toLowerCase();
+      const caseSensitive = options.caseSensitive === true;
       const plans: Array<{ path: string; count: number; content: string; hash: string }> = [];
       for (const relative of uniquePaths) {
         try {
           const document = await codingReadDocument(cwd, workspaceFilePath(cwd, relative));
-          const count = countOccurrences(document.content, query, caseSensitive);
+          const count = countOccurrences(
+            document.content,
+            query,
+            caseSensitive,
+            options.regex,
+            options.wholeWord,
+          );
           if (count > 0) {
             plans.push({ path: relative, count, content: document.content, hash: document.hash });
           }
@@ -1260,7 +1408,13 @@ export function CodingWorkbench({
         onToast?.(summary);
         return;
       }
-      if (!window.confirm(`${summary}。确认执行？`)) return;
+      const confirmed = await confirmTaskAction({
+        title: "确认全部替换？",
+        description: `${summary}。替换会通过内容哈希避免覆盖期间被其他程序修改的文件。`,
+        confirmLabel: "全部替换",
+        danger: true,
+      });
+      if (!confirmed) return;
 
       const mutation = await prepareManualMutation();
       if (!mutation) return;
@@ -1271,7 +1425,14 @@ export function CodingWorkbench({
       let writeFailures = 0;
       try {
         for (const plan of plans) {
-          const next = replaceAll(plan.content, query, replacement, caseSensitive);
+          const next = replaceAll(
+            plan.content,
+            query,
+            replacement,
+            caseSensitive,
+            options.regex,
+            options.wholeWord,
+          );
           try {
             await codingWriteDocument(
               cwd,
@@ -1308,6 +1469,7 @@ export function CodingWorkbench({
     },
     [
       blockInterruptedManualMutation,
+      confirmTaskAction,
       cwd,
       finishManualMutation,
       onToast,
@@ -1315,12 +1477,21 @@ export function CodingWorkbench({
     ],
   );
 
-  // Each workspace tab owns its editor/context state. Switching tabs should
-  // feel like switching IDE windows, not like closing every open document.
+  // Each recent project keeps its editor/context state for the current app
+  // session, so switching projects does not discard unsaved drafts.
   useEffect(() => {
     const previous = previousWorkspaceRef.current;
     if (previous && previous !== cwd) {
       const tabState = useTabStore.getState();
+      saveCodingHotExit({
+        version: 1,
+        root: previous,
+        tabs: tabState.tabs,
+        activeId: tabState.activeId,
+        selectedDirectory,
+        expandedPaths: treeExpandedPathsRef.current.get(previous) ?? [],
+        savedAt: Date.now(),
+      });
       workspaceUiStateRef.current.set(previous, {
         tabs: tabState.tabs,
         activeId: tabState.activeId,
@@ -1330,11 +1501,25 @@ export function CodingWorkbench({
       });
     }
     if (previous === cwd) return;
-    const saved = cwd ? workspaceUiStateRef.current.get(cwd) : undefined;
+    const memorySaved = cwd ? workspaceUiStateRef.current.get(cwd) : undefined;
+    const diskSaved = cwd && !memorySaved ? loadCodingHotExit(cwd) : null;
+    const saved = memorySaved ?? (diskSaved ? {
+      tabs: diskSaved.tabs,
+      activeId: diskSaved.activeId,
+      contextPaths: [],
+      editorContext: null,
+      selectedDirectory: diskSaved.selectedDirectory,
+    } : undefined);
+    if (cwd && diskSaved) treeExpandedPathsRef.current.set(cwd, diskSaved.expandedPaths);
     useTabStore.setState({
       tabs: saved?.tabs ?? [],
       activeId: saved?.activeId ?? null,
     });
+    if (diskSaved) {
+      for (const tab of diskSaved.tabs) {
+        if (isFileTab(tab) && !isDirty(tab)) void loadFile(tab.id, true, false);
+      }
+    }
     setSymbolsByPath({});
     setWorkspaceSymbols([]);
     setEditorContext(saved?.editorContext ?? null);
@@ -1342,7 +1527,13 @@ export function CodingWorkbench({
     setSelectedDirectory(saved?.selectedDirectory ?? cwd);
     useFileTreeSelectionStore.getState().clear();
     previousWorkspaceRef.current = cwd;
-  }, [cwd]);
+  }, [cwd, loadFile]);
+
+  useEffect(() => {
+    if (!cwd || previousWorkspaceRef.current !== cwd) return;
+    const timer = window.setTimeout(persistHotExitNow, 250);
+    return () => window.clearTimeout(timer);
+  }, [activeTabId, cwd, persistHotExitNow, tabs, treePersistenceRevision]);
 
   useEffect(() => {
     hydrateLayout();
@@ -1398,6 +1589,14 @@ export function CodingWorkbench({
       onToast?.(`打开文件夹失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
   }, [onSelectWorkspace, onToast]);
+
+  const openAnotherProject = useCallback(() => {
+    if (onAddCodingWorkspace) {
+      onAddCodingWorkspace();
+      return;
+    }
+    void pickWorkspace();
+  }, [onAddCodingWorkspace, pickWorkspace]);
 
   const createWorkspaceEntry = useCallback(async (directory: boolean) => {
     const name: string | null = await new Promise((resolve) => {
@@ -1975,7 +2174,7 @@ export function CodingWorkbench({
           ...contextPaths,
           ...additionalContextPaths,
           ...(documentation?.request.target?.path ? [documentation.request.target.path] : []),
-        ])];
+        ].map((path) => workspaceRelativePath(cwd, path)).filter(Boolean))];
         const managedPrompt = documentation
           ? buildCodingWorkflowPrompt(
               trimmedRequirement,
@@ -1993,6 +2192,12 @@ export function CodingWorkbench({
           return;
         }
         createdId = created.id;
+        try {
+          localStorage.removeItem(codingTaskDraftKey(cwd));
+        } catch {
+          // Task creation succeeded; draft cleanup is best-effort.
+        }
+        await codingApi.setTaskContext(cwd, created.id, effectiveContextPaths);
         // Persist a task-start checkpoint before the Agent can touch the
         // workspace. Git repositories get HEAD protection; ordinary folders
         // get an application-owned filesystem checkpoint.
@@ -2127,10 +2332,15 @@ export function CodingWorkbench({
   );
 
   const activateCodingTask = useCallback(async (taskId: string) => {
+    if (task?.id !== taskId && task && isBusyPhase(task.phase)) {
+      onToast?.("当前任务正在执行，请先停止后再切换任务");
+      return;
+    }
     setSending(true);
     try {
       await useTaskStore.getState().selectTask(taskId);
       const selected = useTaskStore.getState().task;
+      setContextPaths(selected?.contextPaths ?? []);
       if (selected?.sessionId) {
         await onActivateSession?.(selected.sessionId, cwd);
         if (selected.modelId) setModelId(selected.modelId);
@@ -2140,7 +2350,25 @@ export function CodingWorkbench({
     } finally {
       setSending(false);
     }
-  }, [cwd, onActivateSession, onToast]);
+  }, [cwd, onActivateSession, onToast, task]);
+
+  const beginNewTask = useCallback(() => {
+    if (activeTaskCount > 0) {
+      onToast?.(`当前项目有 ${activeTaskCount} 个任务仍在执行，请先停止后再新建任务`);
+      return;
+    }
+    useTaskStore.setState({
+      task: null,
+      changeSet: null,
+      verifications: [],
+      problems: [],
+      ledger: [],
+      orchestrator: null,
+    });
+    setContextPaths([]);
+    setPhaseReason(undefined);
+    setBlocker(undefined);
+  }, [activeTaskCount, onToast]);
 
   // ---- SP3: AI actions (right-click submenu) ----
 
@@ -2291,12 +2519,51 @@ export function CodingWorkbench({
     }
   }, [cwd, onStartRun, onToast, requestTaskInput, startTask]);
 
+  const persistTaskContext = useCallback((taskId: string, paths: string[]) => {
+    // Tauri invocations may complete out of order. Serialize context writes so
+    // rapid add/remove actions cannot resurrect an older selection on disk.
+    contextSaveQueueRef.current = contextSaveQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        await codingApi.setTaskContext(cwd, taskId, paths);
+      })
+      .catch((error) => {
+        onToast?.(`保存任务上下文失败：${String(error).replace(/^Error:\s*/, "")}`);
+      });
+  }, [cwd, onToast]);
+
   /** SP3: «加入上下文» — push selected paths into `contextPaths`. */
   const addManyToContext = useCallback((paths: string[]) => {
     if (paths.length === 0) return;
-    setContextPaths((current) => [...new Set([...current, ...paths])]);
-    onToast?.(`已添加 ${paths.length} 个到上下文`);
-  }, [onToast]);
+    setContextPaths((current) => {
+      const normalized = paths
+        .map((path) => workspaceRelativePath(cwd, path))
+        .filter(Boolean);
+      const next = [...new Set([...current, ...normalized])];
+      if (task) {
+        persistTaskContext(task.id, next);
+      }
+      return next;
+    });
+    onToast?.(`已添加 ${paths.length} 个到${task ? "当前任务" : "新任务"}上下文`);
+  }, [cwd, onToast, persistTaskContext, task]);
+
+  const removeFromContext = useCallback((path: string) => {
+    setContextPaths((current) => {
+      const next = current.filter((entry) => entry !== path);
+      if (task) {
+        persistTaskContext(task.id, next);
+      }
+      return next;
+    });
+  }, [persistTaskContext, task]);
+
+  const clearContext = useCallback(() => {
+    setContextPaths([]);
+    if (task) {
+      persistTaskContext(task.id, []);
+    }
+  }, [persistTaskContext, task]);
   const buildContextMenuItems = useCallback(
     (target: NonNullable<typeof contextMenu>): ContextMenuItem[] => {
       const cb = useClipboardStore.getState();
@@ -2310,7 +2577,7 @@ export function CodingWorkbench({
         items.push({
           id: "undo",
           label: `撤销 ${humanOpLabel(undoEntry.op)}`,
-          shortcut: "⌘Z",
+          shortcut: shortcutLabel("⌘Z", "Ctrl+Z"),
           onSelect: () => void performHistoryAction("undo"),
         });
         items.push({ kind: "separator", id: "sep-undo", dividerBefore: true });
@@ -2343,7 +2610,7 @@ export function CodingWorkbench({
       items.push({
         id: "copy",
         label: "复制",
-        shortcut: "⌘C",
+        shortcut: shortcutLabel("⌘C", "Ctrl+C"),
         onSelect: () => {
           useClipboardStore.getState().setCopy(target.selectedPaths);
           onToast?.(`已复制 ${target.selectedPaths.length} 个条目`);
@@ -2352,7 +2619,7 @@ export function CodingWorkbench({
       items.push({
         id: "cut",
         label: "剪切",
-        shortcut: "⌘X",
+        shortcut: shortcutLabel("⌘X", "Ctrl+X"),
         onSelect: () => {
           useClipboardStore.getState().setCut(target.selectedPaths);
           onToast?.(`已剪切 ${target.selectedPaths.length} 个条目`);
@@ -2361,7 +2628,7 @@ export function CodingWorkbench({
       items.push({
         id: "paste",
         label: "粘贴到此处",
-        shortcut: "⌘V",
+        shortcut: shortcutLabel("⌘V", "Ctrl+V"),
         disabled: cb.paths.length === 0,
         onSelect: () => {
           void performPaste(target.pasteTargetDir);
@@ -2595,6 +2862,23 @@ export function CodingWorkbench({
     task,
   ]);
 
+  const stopActiveTask = useCallback(async () => {
+    if (!cwd || !task || !isBusyPhase(task.phase)) return;
+    try {
+      if (activeRunId) await codingApi.cancelVerification(activeRunId);
+      onCancelRun?.();
+      // A streaming turn is finalized by useTaskLifecycle when its stream
+      // falls. Scheduler/verification phases without a stream need an explicit
+      // persisted interruption so the stop control always has an effect.
+      if (!streaming) {
+        await codingApi.reportInterrupted(cwd, task.id, "stopped");
+        await useTaskStore.getState().refreshTaskState();
+      }
+    } catch (error) {
+      onToast?.(`停止任务失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  }, [activeRunId, cwd, onCancelRun, onToast, streaming, task]);
+
   // The backend is the scheduler. A managed follow-up is sent only for its
   // explicit persisted nextAction, so closing/reopening the app resumes the
   // exact unfinished node without relying on renderer timing or local guesses.
@@ -2654,33 +2938,66 @@ export function CodingWorkbench({
   const rollbackTask = useCallback(async () => {
     if (!cwd || !task) return;
     const count = changeSet?.changes.length ?? 0;
-    if (
-      !window.confirm(
-        `将把 ${count} 个任务相关文件精确恢复到任务开始时的内容。已提交的任务不能回滚。确认继续？`,
-      )
-    ) {
-      return;
-    }
+    const changeKinds = new Map(
+      (changeSet?.changes ?? []).map((change) => [change.path, change.kind] as const),
+    );
+    const changePaths = new Set(changeKinds.keys());
+    const dirtyTaskTabs = useTabStore.getState().tabs.filter((tab) =>
+      isFileTab(tab)
+      && tab.draft !== tab.original
+      && changePaths.has(workspaceRelativePath(cwd, tab.relativePath)),
+    );
+    const confirmed = await confirmTaskAction({
+      title: `回滚当前任务的 ${count} 个文件？`,
+      description: dirtyTaskTabs.length > 0
+        ? `将精确恢复任务开始时的内容，并放弃 ${dirtyTaskTabs.length} 个任务文件中未保存的草稿。恢复后的文件会保持打开，其他标签和草稿会保留。`
+        : "将精确恢复任务开始时的内容。恢复后的文件会保持打开，与本任务无关的标签和草稿会保留。",
+      confirmLabel: "回滚任务",
+      danger: true,
+    });
+    if (!confirmed) return;
     try {
       const restored = await codingApi.rollbackTask(cwd, task.id);
       await useTaskStore.getState().refreshTaskState();
-      useTabStore.getState().closeAll();
+      const restoredPaths = new Set(restored.map((path) => workspaceRelativePath(cwd, path)));
+      const tabStore = useTabStore.getState();
+      for (const tab of [...tabStore.tabs]) {
+        if (!isFileTab(tab)) continue;
+        const relativePath = workspaceRelativePath(cwd, tab.relativePath);
+        if (!restoredPaths.has(relativePath)) continue;
+        // Files created by the task no longer exist after rollback; every
+        // other restored file stays in place and refreshes to its baseline.
+        if (changeKinds.get(relativePath) === "added") tabStore.closeTab(tab.id);
+        else await loadFile(tab.id, true, false);
+      }
       onToast?.(`已回滚 ${restored.length} 个文件`);
     } catch (error) {
       onToast?.(`回滚失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
-  }, [changeSet?.changes, cwd, onToast, task]);
+  }, [changeSet?.changes, confirmTaskAction, cwd, loadFile, onToast, task]);
 
   const discardChange = useCallback(
     async (path: string) => {
       if (!cwd || !task) return;
-      if (!window.confirm(`将丢弃 ${path} 的全部改动，确认继续？`)) return;
+      const tab = matchingOpenFileTab(path);
+      const hasDraft = Boolean(tab && isFileTab(tab) && tab.draft !== tab.original);
+      const confirmed = await confirmTaskAction({
+        title: `丢弃 ${path} 的全部改动？`,
+        description: hasDraft
+          ? "该文件还有未保存草稿，丢弃后将恢复任务开始时的内容。"
+          : "该文件将恢复为任务开始时的内容。",
+        confirmLabel: "丢弃改动",
+        danger: true,
+      });
+      if (!confirmed) return;
       const mutation = await prepareManualMutation();
       if (!mutation) return;
       setBusyPath(path);
       try {
         await codingApi.discardFile(cwd, task.id, path);
         await finishManualMutation(mutation);
+        const openTab = matchingOpenFileTab(path);
+        if (openTab) useTabStore.getState().closeTab(openTab.id);
       } catch (error) {
         const message = String(error).replace(/^Error:\s*/, "");
         await blockInterruptedManualMutation(mutation, `丢弃文件改动失败：${message}`);
@@ -2691,6 +3008,7 @@ export function CodingWorkbench({
     },
     [
       blockInterruptedManualMutation,
+      confirmTaskAction,
       cwd,
       finishManualMutation,
       onToast,
@@ -2768,20 +3086,35 @@ export function CodingWorkbench({
 
   const commitChanges = useCallback(async () => {
     if (!cwd || !task) return;
-    setCommitting(true);
     try {
       const input = await codingApi.commitInput(cwd, task.id);
-      const message = window.prompt("提交信息", input.split("\n")[0]?.replace(/^任务名称：/, "") ?? "");
-      if (!message?.trim()) return;
-      const hash = await codingApi.commit(cwd, task.id, message.trim());
-      await useTaskStore.getState().refreshTaskState();
-      onToast?.(`已提交 ${hash.slice(0, 8)}`);
+      requestTaskInput({
+        title: "提交任务变更",
+        description: `将提交 ${changeSet?.changes.length ?? 0} 个已通过交付门禁的任务文件。`,
+        confirmLabel: "创建提交",
+        fields: [{
+          name: "message",
+          label: "提交信息",
+          defaultValue: input.split("\n")[0]?.replace(/^任务名称：/, "") ?? "",
+          required: true,
+          maxLength: 200,
+        }],
+        action: async (values) => {
+          setCommitting(true);
+          try {
+            const hash = await codingApi.commit(cwd, task.id, values.message.trim());
+            await useTaskStore.getState().refreshTaskState();
+            onToast?.(`已提交 ${hash.slice(0, 8)}`);
+          } finally {
+            setCommitting(false);
+          }
+        },
+        onError: (error) => onToast?.(`提交失败：${String(error).replace(/^Error:\s*/, "")}`),
+      });
     } catch (error) {
       onToast?.(`提交失败：${String(error).replace(/^Error:\s*/, "")}`);
-    } finally {
-      setCommitting(false);
     }
-  }, [cwd, onToast, task]);
+  }, [changeSet?.changes.length, cwd, onToast, requestTaskInput, task]);
 
   const requestExplanation = useCallback(async (
     scope: "function" | "class" | "module" | "system",
@@ -2920,24 +3253,18 @@ export function CodingWorkbench({
       hasTask: Boolean(task),
       busy: streaming || isBusyPhase(task?.phase),
       taskPhase: task?.phase,
-      problemCount: problems.length,
+      problemCount: combinedProblems.length,
       changedFileCount: taskChangeCount,
       canCommitChanges: changeSet?.baselineMode !== "filesystem",
       canRollbackChanges: (changeSet?.rollbackUnsafeFiles?.length ?? 0) === 0,
       setActivityView,
       setBottomView,
+      openSymbols: () => setPaletteMode("symbols"),
       openDocTab: (kind) => useTabStore.getState().openDoc(kind),
       runAllVerifications: () => void runVerifications(verificationCommands),
       rerunVerification: () => void runVerifications(verificationCommands),
       rollbackTask: () => void rollbackTask(),
-      newTask: () => useTaskStore.setState({
-        task: null,
-        changeSet: null,
-        verifications: [],
-        problems: [],
-        ledger: [],
-        orchestrator: null,
-      }),
+      newTask: beginNewTask,
       commitChanges: () => void commitChanges(),
       explain: requestExplanation,
       generateComments,
@@ -2951,6 +3278,7 @@ export function CodingWorkbench({
     [
       commitChanges,
       activeFileTab,
+      beginNewTask,
       changeSet?.baselineMode,
       changeSet?.rollbackUnsafeFiles?.length,
       cwd,
@@ -2960,7 +3288,7 @@ export function CodingWorkbench({
       openFindReferences,
       openGoToDefinition,
       openImpactAnalysis,
-      problems.length,
+      combinedProblems.length,
       rebuildIndex,
       requestExplanation,
       rollbackTask,
@@ -3267,30 +3595,13 @@ export function CodingWorkbench({
             <strong>Echo Code</strong>
           </div>
           <span className="coding-workbench__topbar-separator" aria-hidden="true" />
-          <WorkspaceTabBar
-            workspaces={codingWorkspaces ?? []}
-            activeCwd={activeCodingWorkspaceCwd ?? cwd}
-            onSelect={(next: string) => onSelectWorkspace?.(next)}
-            onClose={(closed: string) => onCloseCodingWorkspace?.(closed)}
-            onAdd={() => {
-              if (onAddCodingWorkspace) onAddCodingWorkspace();
-              else void pickWorkspace();
-            }}
-          />
-          <TaskSwitcher
-            tasks={summaries}
-            activeId={task?.id}
-            onSelect={(taskId) => void activateCodingTask(taskId)}
-            onNew={() => useTaskStore.setState({
-              task: null,
-              changeSet: null,
-              verifications: [],
-              problems: [],
-              ledger: [],
-              orchestrator: null,
-            })}
-            onRename={renameCodingTask}
-            onDelete={deleteCodingTask}
+          <ProjectSwitcher
+            projects={recentCodingProjects}
+            activeCwd={activeCodingWorkspaceCwd || cwd}
+            dirtyCount={dirtyFileCount}
+            onSelect={switchProject}
+            onRemove={removeRecentProject}
+            onOpenFolder={openAnotherProject}
           />
         </div>
         <button
@@ -3298,11 +3609,11 @@ export function CodingWorkbench({
           className="coding-workbench__palette-btn"
           onClick={() => setPaletteMode("commands")}
           aria-label="打开命令面板"
-          title="命令面板 ⌘⇧P"
+          title={`命令面板 ${shortcutLabel("⌘⇧P", "Ctrl+Shift+P")}`}
         >
           <Search size={13} />
           <span>搜索命令与文件</span>
-          <kbd>⌘⇧P</kbd>
+          <kbd>{shortcutLabel("⌘⇧P", "Ctrl+Shift+P")}</kbd>
         </button>
         <div className="coding-workbench__topbar-right" data-tauri-drag-region>
           <button
@@ -3318,54 +3629,74 @@ export function CodingWorkbench({
 
       <div className="coding-workbench__activity">
         <ActivityBar
-          active={activityView}
+          active={activityView === "symbols" ? "files" : activityView}
           onChange={setActivityView}
+          changeCount={taskChangeCount}
           contextCount={contextPaths.length}
         />
       </div>
 
       <aside className="coding-workbench__explorer" aria-label="资源管理器">
-        <div className="coding-explorer__heading">
-          <span>{EXPLORER_TITLES[activityView]}</span>
-          {activityView === "files" && (
-            <span className="coding-explorer__heading-actions">
-              <button
-                type="button"
-                className={"coding-explorer__heading-actions-btn" + (showHidden ? " is-active" : "")}
-                onClick={() => setShowHidden(!showHidden)}
-                title={showHidden ? "隐藏 dotfile（含 .gitignore / .echoagentignore）" : "显示隐藏文件"}
-                aria-label={showHidden ? "隐藏 dotfile" : "显示所有文件"}
-                aria-pressed={showHidden}
-              >
-                {showHidden ? <Eye size={13} /> : <EyeOff size={13} />}
-              </button>
-              <button type="button" onClick={() => void createWorkspaceEntry(false)} title="新建文件" aria-label="新建文件">
-                <FilePlus2 size={13} />
-              </button>
-              <button type="button" onClick={() => void createWorkspaceEntry(true)} title="新建目录" aria-label="新建目录">
-                <FolderPlus size={13} />
-              </button>
-            </span>
-          )}
-        </div>
         {activityView === "files" && (
-          <FileTreeView
-            rootPath={cwd}
-            selectedPath={activeTabId ?? undefined}
-            selectedDirectoryPath={selectedDirectory}
-            onFileSelect={(path) => void openFile(path)}
-            onDirectorySelect={setSelectedDirectory}
-            onToast={onToast}
-            refreshKey={treeRefresh.revision}
-            refreshPaths={treeRefresh.paths}
-            cutPaths={cutPaths}
-            onContextMenu={handleFileTreeContextMenu}
-            renamingPath={renamingPath}
-            onRenameSubmit={performRename}
-            onRenameCancel={() => setRenamingPath(null)}
-            includeHidden={showHidden}
-            gitStatusByPath={gitStatusByPath}
+          <FileExplorerView
+            root={cwd}
+            tabs={tabs}
+            activeId={activeTabId}
+            symbols={symbols}
+            activeFileName={activeRelativePath}
+            showHidden={showHidden}
+            onSelectTab={(id) => useTabStore.getState().setActive(id)}
+            onCloseTab={closeTabSafely}
+            onOpenSymbol={(symbol) => {
+              void openFile(symbol.path);
+              setReveal({ line: symbol.line, column: 1, key: Date.now() });
+            }}
+            onNewFile={() => void createWorkspaceEntry(false)}
+            onNewDirectory={() => void createWorkspaceEntry(true)}
+            onRefresh={() => {
+              setTreeRefresh((current) => ({ revision: current.revision + 1, paths: [] }));
+              void useGitSnapshotStore.getState().refresh(cwd);
+            }}
+            onCollapseAll={() => setTreeCollapseKey((value) => value + 1)}
+            onRevealActive={() => {
+              if (!activeFileTab) return;
+              setTreeReveal((current) => ({ path: activeFileTab.id, key: current.key + 1 }));
+            }}
+            onToggleHidden={() => setShowHidden(!showHidden)}
+            fileTree={(
+              <FileTreeView
+                key={cwd}
+                rootPath={cwd}
+                selectedPath={activeFileTab?.id}
+                selectedDirectoryPath={selectedDirectory}
+                onFileSelect={(path) => void openFile(path)}
+                onDirectorySelect={setSelectedDirectory}
+                onToast={onToast}
+                refreshKey={treeRefresh.revision}
+                refreshPaths={treeRefresh.paths}
+                collapseKey={treeCollapseKey}
+                revealPath={treeReveal.path}
+                revealKey={treeReveal.key}
+                initialExpandedPaths={treeExpandedPathsRef.current.get(cwd) ?? []}
+                onExpandedPathsChange={(paths) => {
+                  treeExpandedPathsRef.current.set(cwd, paths);
+                  setTreePersistenceRevision((value) => value + 1);
+                }}
+                cutPaths={cutPaths}
+                onContextMenu={handleFileTreeContextMenu}
+                renamingPath={renamingPath}
+                onRenameSubmit={performRename}
+                onRenameCancel={() => setRenamingPath(null)}
+                includeHidden={showHidden}
+                gitStatusByPath={gitStatusByPath}
+              />
+            )}
           />
+        )}
+        {activityView !== "files" && (
+          <div className="coding-explorer__heading">
+            <span>{EXPLORER_TITLES[activityView]}</span>
+          </div>
         )}
         {contextMenu && (
           <FileTreeContextMenu
@@ -3441,11 +3772,11 @@ export function CodingWorkbench({
         {activityView === "context" && (
           <ContextPackView
             paths={contextPaths}
+            scopeLabel={task ? `任务“${task.name}”的` : "新任务"}
             activePath={activeRelativePath}
             onAdd={(path) => addManyToContext([path])}
-            onRemove={(path) =>
-              setContextPaths((current) => current.filter((entry) => entry !== path))
-            }
+            onRemove={removeFromContext}
+            onClear={clearContext}
           />
         )}
       </aside>
@@ -3477,6 +3808,11 @@ export function CodingWorkbench({
             activeFileTab
             && diffLoadingPath === workspaceRelativePath(cwd, activeFileTab.relativePath),
           )}
+          reviewBusy={Boolean(activeFileTab && reviewingPath === activeFileTab.relativePath)}
+          reviewedPath={activeFileTab && changeSet?.reviewedFiles.includes(activeFileTab.relativePath)
+            ? activeFileTab.relativePath
+            : undefined}
+          onMarkReviewed={markTaskDiffReviewed}
           onReload={(id) => void reloadFile(id)}
           onSymbolAction={(action, symbol) => {
             const key = { name: symbol, file: activeRelativePath };
@@ -3489,6 +3825,9 @@ export function CodingWorkbench({
               ...current,
               [path]: list.map((symbol) => ({ ...symbol, path })),
             }))
+          }
+          onDiagnostics={(path, diagnostics) =>
+            setEditorDiagnostics((current) => ({ ...current, [path]: diagnostics }))
           }
           onEditorContext={setEditorContext}
           onGenerateDocumentation={(context) => void generateComments(context)}
@@ -3568,6 +3907,18 @@ export function CodingWorkbench({
       />
 
       <aside className="coding-workbench__agent" aria-label="Agent 面板">
+        <div className="coding-agent__taskbar">
+          <span>开发任务</span>
+          <TaskSwitcher
+            tasks={summaries}
+            activeId={task?.id}
+            newDisabled={activeTaskCount > 0}
+            onSelect={(taskId) => void activateCodingTask(taskId)}
+            onNew={beginNewTask}
+            onRename={renameCodingTask}
+            onDelete={deleteCodingTask}
+          />
+        </div>
         {task ? (
           <AgentPane
             task={task}
@@ -3585,7 +3936,7 @@ export function CodingWorkbench({
             sending={sending || lifecycleSettling}
             onModelChange={(next) => void changeTaskModel(next)}
             onSend={sendFollowup}
-            onCancel={() => onCancelRun?.()}
+            onCancel={() => void stopActiveTask()}
             onContinue={continueInterruptedTask}
             onOpenChanges={() => setActivityView("changes")}
             onOpenReport={() => useTabStore.getState().openDoc("delivery")}
@@ -3598,6 +3949,7 @@ export function CodingWorkbench({
         ) : (
           <TaskStarter
             models={models}
+            workspaceRoot={cwd}
             modelId={modelId}
             onModelChange={(next) => void changeTaskModel(next)}
             starting={starting}
@@ -3620,7 +3972,7 @@ export function CodingWorkbench({
           onViewChange={setBottomView}
           onCollapse={() => toggleBottom(false)}
           onResize={setBottomHeight}
-          problems={problems}
+          problems={combinedProblems}
           records={verifications}
           detected={verificationCommands}
           running={runningVerification}
@@ -3638,6 +3990,7 @@ export function CodingWorkbench({
           onOpenVerificationOutput={(record) =>
             setCommandOutput([record.stdout, record.stderr].filter(Boolean).join("\n"))
           }
+          onClearOutput={() => setCommandOutput("")}
           onToast={onToast}
         />
       )}
@@ -3648,7 +4001,7 @@ export function CodingWorkbench({
             {statusSummary({
               phase: task.phase,
               changedFileCount: taskChangeCount,
-              problemCount: problems.length,
+              problemCount: combinedProblems.length,
               repairRound: orchestrator?.repairRounds.length,
               maxRepairRounds: orchestrator?.maxRepairRounds,
             })}
@@ -3656,9 +4009,9 @@ export function CodingWorkbench({
         ) : (
           <span>就绪</span>
         )}
-        {problems.length > 0 && (
+        {combinedProblems.length > 0 && (
           <button type="button" onClick={() => setBottomView("problems")}>
-            {problems.length} 个问题
+            {combinedProblems.length} 个问题
           </button>
         )}
         <span className="coding-workbench__status-spacer" />

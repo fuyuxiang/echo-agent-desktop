@@ -1752,6 +1752,14 @@ export interface CodingSearchHit {
   preview: string;
 }
 
+export interface CodingSearchOptions {
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  regex?: boolean;
+  includeGlob?: string;
+  excludeGlob?: string;
+}
+
 export interface CodingTerminalEvent {
   terminalId: string;
   dataBase64: string;
@@ -1874,8 +1882,12 @@ export async function codingRestoreFromTrash(
   });
 }
 
-export async function codingSearchWorkspace(root: string, query: string): Promise<CodingSearchHit[]> {
-  return invoke<CodingSearchHit[]>("coding_search_workspace", { root, query });
+export async function codingSearchWorkspace(
+  root: string,
+  query: string,
+  options: CodingSearchOptions = {},
+): Promise<CodingSearchHit[]> {
+  return invoke<CodingSearchHit[]>("coding_search_workspace", { root, query, options });
 }
 
 export async function codingTerminalCreate(

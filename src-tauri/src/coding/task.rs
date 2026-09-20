@@ -161,6 +161,11 @@ pub struct CodingTask {
     pub id: String,
     pub name: String,
     pub requirement: String,
+    /// Workspace-relative paths explicitly pinned by the user for this task.
+    /// Keeping them with the task prevents context from leaking across tasks
+    /// and makes a resumed task reconstruct the same Agent input contract.
+    #[serde(default)]
+    pub context_paths: Vec<String>,
     pub phase: TaskPhase,
     #[serde(default)]
     pub phase_reason: Option<String>,
@@ -303,6 +308,7 @@ pub fn create_task(root: &Path, name: &str, requirement: &str) -> Result<CodingT
         id: uuid::Uuid::now_v7().to_string(),
         name: trimmed.to_string(),
         requirement: requirement.clone(),
+        context_paths: Vec::new(),
         phase: TaskPhase::Idle,
         phase_reason: None,
         blocker: None,
@@ -348,6 +354,46 @@ pub fn create_task(root: &Path, name: &str, requirement: &str) -> Result<CodingT
     };
     save(root, &task)?;
     Ok(task)
+}
+
+pub fn set_context_paths(
+    root: &Path,
+    task_id: &str,
+    paths: Vec<String>,
+) -> Result<CodingTask, String> {
+    store::with_task_transaction(root, task_id, || {
+        let mut normalized = Vec::new();
+        let mut seen = HashSet::new();
+        for raw in paths {
+            let path = raw.trim().replace('\\', "/");
+            if path.starts_with('/')
+                || path.contains(':')
+                || path.contains('\0')
+                || path.split('/').any(|segment| segment == "..")
+            {
+                return Err(format!("无效的任务上下文路径：{raw}"));
+            }
+            let path = path.trim_start_matches("./").trim_matches('/').to_string();
+            if path.is_empty()
+                || path.len() > 4_096
+                || path
+                    .split('/')
+                    .any(|segment| segment.is_empty() || segment == ".")
+            {
+                return Err(format!("无效的任务上下文路径：{raw}"));
+            }
+            if seen.insert(path.clone()) {
+                normalized.push(path);
+            }
+            if normalized.len() > 256 {
+                return Err("每个任务最多可固定 256 个上下文路径".into());
+            }
+        }
+        let mut task = load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
+        task.context_paths = normalized;
+        save(root, &task)?;
+        Ok(load(root, task_id).unwrap_or(task))
+    })
 }
 
 pub fn bind_runtime(
@@ -1109,6 +1155,19 @@ pub async fn coding_task_bind_runtime(
 }
 
 #[tauri::command]
+pub async fn coding_task_set_context(
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+    paths: Vec<String>,
+) -> Result<CodingTask, String> {
+    let root = access.require_workspace(&root)?;
+    tokio::task::spawn_blocking(move || set_context_paths(&root, &task_id, paths))
+        .await
+        .map_err(|error| format!("保存任务上下文失败：{error}"))?
+}
+
+#[tauri::command]
 pub async fn coding_task_confirm_acceptance(
     access: State<'_, FilesystemAccess>,
     root: String,
@@ -1142,6 +1201,22 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert!(list.iter().any(|task| task.name == "重构登录"));
         assert!(list.iter().any(|task| task.name == "修复导出"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn context_paths_are_task_scoped_deduplicated_and_workspace_relative() {
+        let root = temp_root();
+        let task = create_task(&root, "修复登录", "修复登录流程").unwrap();
+        let updated = set_context_paths(
+            &root,
+            &task.id,
+            vec!["./src/auth.ts".into(), "src/auth.ts".into(), "docs".into()],
+        )
+        .unwrap();
+        assert_eq!(updated.context_paths, vec!["src/auth.ts", "docs"]);
+        assert!(set_context_paths(&root, &task.id, vec!["/etc/passwd".into()]).is_err());
+        assert!(set_context_paths(&root, &task.id, vec!["../outside".into()]).is_err());
         std::fs::remove_dir_all(&root).ok();
     }
 

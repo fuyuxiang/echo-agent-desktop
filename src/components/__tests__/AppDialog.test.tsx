@@ -70,7 +70,36 @@ function PromptHarness({ action }: { action: (values: Record<string, string>) =>
   );
 }
 
+function AwaitableConfirmHarness() {
+  const [result, setResult] = useState("等待决定");
+  const { confirm, dialog } = useAppDialog();
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => void confirm({ title: "继续操作？", confirmLabel: "继续" })
+          .then((confirmed) => setResult(confirmed ? "已确认" : "已取消"))}
+      >
+        询问
+      </button>
+      <output>{result}</output>
+      {dialog}
+    </>
+  );
+}
+
 describe("AppDialog", () => {
+  it("可等待用户确认结果，并在取消时返回 false", async () => {
+    render(<AwaitableConfirmHarness />);
+    fireEvent.click(screen.getByRole("button", { name: "询问" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.getByText("已取消")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "询问" }));
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    await waitFor(() => expect(screen.getByText("已确认")).toBeInTheDocument());
+  });
+
   it("危险确认默认聚焦取消，Escape 取消并恢复触发器焦点", () => {
     const action = vi.fn();
     render(<ConfirmHarness action={action} />);

@@ -1,5 +1,13 @@
-import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, LoaderCircle } from "lucide-react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  ClipboardCopy,
+  LoaderCircle,
+  Trash2,
+  WrapText,
+} from "lucide-react";
 
 import type { ChatMessage } from "@/stores/session-store";
 
@@ -31,6 +39,7 @@ interface BottomPanelProps {
   onRunAll: () => void;
   onCancelVerification?: () => void;
   onOpenVerificationOutput?: (record: VerificationRecord) => void;
+  onClearOutput?: () => void;
   onToast?: (message: string) => void;
 }
 
@@ -102,10 +111,12 @@ export function BottomPanel({
   onRunAll,
   onCancelVerification,
   onOpenVerificationOutput,
+  onClearOutput,
   onToast,
 }: BottomPanelProps) {
   const outputRef = useRef<HTMLPreElement | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const [wrapOutput, setWrapOutput] = useState(true);
 
   useEffect(() => {
     if (view === "output" && outputRef.current) {
@@ -204,9 +215,52 @@ export function BottomPanel({
           />
         )}
         {view === "output" && (
-          <pre className="coding-bottom__output" ref={outputRef}>
-            {output || "尚无命令输出。"}
-          </pre>
+          <div className="coding-output">
+            <div className="coding-output__toolbar" role="toolbar" aria-label="输出操作">
+              <button
+                type="button"
+                disabled={!output}
+                onClick={() => {
+                  if (!navigator.clipboard) {
+                    onToast?.("当前环境不支持复制命令输出");
+                    return;
+                  }
+                  void navigator.clipboard.writeText(output)
+                    .then(() => onToast?.("已复制命令输出"))
+                    .catch(() => onToast?.("复制命令输出失败"));
+                }}
+                aria-label="复制输出"
+                title="复制输出"
+              >
+                <ClipboardCopy size={12} />
+              </button>
+              <button
+                type="button"
+                className={wrapOutput ? "is-active" : ""}
+                onClick={() => setWrapOutput((value) => !value)}
+                aria-label="切换自动换行"
+                aria-pressed={wrapOutput}
+                title="自动换行"
+              >
+                <WrapText size={12} />
+              </button>
+              <button
+                type="button"
+                disabled={!output}
+                onClick={onClearOutput}
+                aria-label="清空输出"
+                title="清空输出"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+            <pre
+              className={`coding-bottom__output${wrapOutput ? " is-wrapped" : ""}`}
+              ref={outputRef}
+            >
+              {output || "尚无命令输出。"}
+            </pre>
+          </div>
         )}
         {view === "trace" && <TraceView messages={messages} />}
 

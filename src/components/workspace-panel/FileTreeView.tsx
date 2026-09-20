@@ -111,6 +111,16 @@ interface FileTreeViewProps {
   refreshKey?: number;
   /** Changed workspace paths associated with refreshKey, for targeted reloads. */
   refreshPaths?: string[];
+  /** Increment to collapse every expanded directory. */
+  collapseKey?: number;
+  /** File to reveal by expanding its ancestors and scrolling it into view. */
+  revealPath?: string;
+  /** Increment to repeat a reveal request for the same path. */
+  revealKey?: number;
+  /** Expansion state restored when this tree is mounted for a workspace. */
+  initialExpandedPaths?: string[];
+  /** Persist expansion state in the owning workspace. */
+  onExpandedPathsChange?: (paths: string[]) => void;
   /** Paths that are cut and awaiting paste; rendered with reduced opacity. */
   cutPaths?: Set<string>;
   /** Right-click on a tree node. The parent typically opens a context menu. */
@@ -140,6 +150,11 @@ export function FileTreeView({
   onToast,
   refreshKey = 0,
   refreshPaths = [],
+  collapseKey = 0,
+  revealPath,
+  revealKey = 0,
+  initialExpandedPaths = [],
+  onExpandedPathsChange,
   cutPaths,
   onContextMenu,
   renamingPath,
@@ -156,18 +171,23 @@ export function FileTreeView({
   const [errors, setErrors] = useState<Map<string, string>>(new Map());
   const loadedRef = useRef<LoadedMap>(new Map());
   const loadingRef = useRef<Set<string>>(new Set());
+  const initializedRootRef = useRef<string | null>(null);
   const scopeGenerationRef = useRef(0);
   const requestGenerationRef = useRef(new Map<string, number>());
   const reportedErrorsRef = useRef(new Map<string, string>());
   const previousRefreshKeyRef = useRef(refreshKey);
+  const previousCollapseKeyRef = useRef(collapseKey);
+  const previousRevealKeyRef = useRef<number | null>(null);
   const onToastRef = useRef(onToast);
+  const onExpandedPathsChangeRef = useRef(onExpandedPathsChange);
 
   const root = rootPath ?? "";
   const rootLoaded = loaded.has(root);
 
   useEffect(() => {
     onToastRef.current = onToast;
-  }, [onToast]);
+    onExpandedPathsChangeRef.current = onExpandedPathsChange;
+  }, [onExpandedPathsChange, onToast]);
 
   const updateLoaded = useCallback((updater: (current: LoadedMap) => LoadedMap) => {
     setLoaded((current) => {
@@ -248,6 +268,8 @@ export function FileTreeView({
   // A workspace switch is the only operation that clears the visible tree.
   // Late responses from the old workspace are invalidated before state resets.
   useEffect(() => {
+    if (initializedRootRef.current === root) return;
+    initializedRootRef.current = root;
     scopeGenerationRef.current += 1;
     requestGenerationRef.current.clear();
     reportedErrorsRef.current.clear();
@@ -255,21 +277,32 @@ export function FileTreeView({
     loadingRef.current = new Set();
     setLoaded(loadedRef.current);
     setLoadingDirs(loadingRef.current);
-    setExpanded(new Set());
+    const restoredExpanded = new Set(initialExpandedPaths);
+    setExpanded(restoredExpanded);
+    onExpandedPathsChangeRef.current?.([...restoredExpanded]);
     setErrors(new Map());
     previousRefreshKeyRef.current = refreshKey;
     if (!root) return;
-    void loadDir(root, true);
-  }, [loadDir, root]); // refreshKey is only snapshotted for the new root.
+    void (async () => {
+      await loadDir(root, true);
+      await Promise.all(
+        initialExpandedPaths
+          .filter((path) => normalize(path).startsWith(`${normalize(root)}/`))
+          .map((path) => loadDir(path)),
+      );
+    })();
+  }, [loadDir, root]); // refreshKey/initial expansion are snapshotted for the new root.
 
-  // SP2: toggling "show hidden" must drop the cached entries because they may
-  // now be missing (dotfile hidden) or duplicated (dotfile shown).
+  // Toggling hidden files refreshes every loaded directory in place. Keeping
+  // the cache visible avoids collapsing the tree or flashing a loading state.
   const previousIncludeHiddenRef = useRef(includeHidden);
   useEffect(() => {
     if (!root) return;
     if (previousIncludeHiddenRef.current === includeHidden) return;
     previousIncludeHiddenRef.current = includeHidden;
-    void loadDir(root, true);
+    const directories = [...loadedRef.current.keys()];
+    if (directories.length === 0) directories.push(root);
+    for (const directory of directories) void loadDir(directory, true);
   }, [includeHidden, loadDir, root]);
 
   // File writes refresh in the background. Existing entries and expansion
@@ -285,6 +318,47 @@ export function FileTreeView({
     for (const dirPath of targets) void loadDir(dirPath, true);
   }, [loadDir, refreshKey, refreshPaths, root]);
 
+  useEffect(() => {
+    if (previousCollapseKeyRef.current === collapseKey) return;
+    previousCollapseKeyRef.current = collapseKey;
+    setExpanded(new Set());
+    onExpandedPathsChangeRef.current?.([]);
+  }, [collapseKey]);
+
+  useEffect(() => {
+    if (!root || !revealPath || previousRevealKeyRef.current === revealKey) return;
+    previousRevealKeyRef.current = revealKey;
+    const normalizedRoot = normalize(root);
+    const normalizedTarget = normalize(revealPath);
+    if (!normalizedTarget.startsWith(`${normalizedRoot}/`)) return;
+
+    const segments = normalizedTarget.slice(normalizedRoot.length + 1).split("/").filter(Boolean);
+    segments.pop();
+    const parents: string[] = [];
+    let current = root.replace(/[\\/]+$/, "");
+    for (const segment of segments) {
+      current = `${current}/${segment}`;
+      parents.push(current);
+    }
+
+    let cancelled = false;
+    void (async () => {
+      for (const parent of parents) {
+        await loadDir(parent);
+        if (cancelled) return;
+      }
+      setExpanded((value) => {
+        const next = new Set(value);
+        for (const parent of parents) next.add(parent);
+        onExpandedPathsChangeRef.current?.([...next]);
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadDir, revealKey, revealPath, root]);
+
   const toggleDir = useCallback(
     async (dirPath: string) => {
       const opening = !expanded.has(dirPath);
@@ -292,6 +366,7 @@ export function FileTreeView({
         const next = new Set(prev);
         if (next.has(dirPath)) next.delete(dirPath);
         else next.add(dirPath);
+        onExpandedPathsChangeRef.current?.([...next]);
         return next;
       });
       if (opening) await loadDir(dirPath);
@@ -337,6 +412,27 @@ export function FileTreeView({
   const listHandleRef = useRef<FixedSizeListHandle | null>(null);
   const containerHeight = useElementSize(treeRef, "height");
   const shouldVirtualize = visibleRows.length >= topLevelThreshold;
+
+  useEffect(() => {
+    if (!revealPath || previousRevealKeyRef.current !== revealKey) return;
+    const index = visibleRows.findIndex(
+      (row) => row.kind === "entry" && normalize(row.entry.path) === normalize(revealPath),
+    );
+    if (index < 0) return;
+    if (shouldVirtualize) {
+      listHandleRef.current?.scrollToIndex(index);
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const candidates = treeRef.current?.querySelectorAll<HTMLElement>("[data-tree-path]");
+      const node = [...(candidates ?? [])].find(
+        (candidate) => normalize(candidate.dataset.treePath ?? "") === normalize(revealPath),
+      );
+      node?.scrollIntoView?.({ block: "nearest" });
+      node?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [revealKey, revealPath, shouldVirtualize, visibleRows]);
 
   if (!root) {
     return (
@@ -524,6 +620,58 @@ function TreeNode({
     }
   };
 
+  const focusPath = (tree: HTMLElement | null, path: string | undefined) => {
+    if (!tree || !path) return;
+    const candidates = tree.querySelectorAll<HTMLElement>("[data-tree-path]");
+    const node = [...candidates].find(
+      (candidate) => normalize(candidate.dataset.treePath ?? "") === normalize(path),
+    );
+    node?.focus();
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const tree = event.currentTarget.closest<HTMLElement>('[role="tree"]');
+    const index = visiblePaths.indexOf(entry.path);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const nextIndex = event.key === "ArrowDown"
+        ? Math.min(visiblePaths.length - 1, index + 1)
+        : Math.max(0, index - 1);
+      const path = visiblePaths[nextIndex];
+      if (path) useFileTreeSelectionStore.getState().select([path], path);
+      focusPath(tree, path);
+      return;
+    }
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      const path = event.key === "Home" ? visiblePaths[0] : visiblePaths[visiblePaths.length - 1];
+      if (path) useFileTreeSelectionStore.getState().select([path], path);
+      focusPath(tree, path);
+      return;
+    }
+    if (event.key === "ArrowRight" && isDir) {
+      event.preventDefault();
+      if (!isExpanded) onToggleDir(entry.path);
+      else focusPath(tree, visiblePaths[index + 1]);
+      return;
+    }
+    if (event.key === "ArrowLeft" && isDir && isExpanded) {
+      event.preventDefault();
+      onToggleDir(entry.path);
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      const parent = normalize(entry.path).split("/").slice(0, -1).join("/");
+      focusPath(tree, visiblePaths.find((path) => normalize(path) === parent));
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      handleClick(event as unknown as React.MouseEvent);
+    }
+  };
+
   const handleContextMenu = (event: React.MouseEvent) => {
     if (!onContextMenu || isSymlink) return;
     event.preventDefault();
@@ -556,12 +704,20 @@ function TreeNode({
         className={classes}
         style={{ paddingInlineStart: `${depth * 14 + 8}px` }}
         role="treeitem"
+        tabIndex={
+          isSingleSelected
+          || (!selectedPath && !selectedDirectoryPath && visiblePaths[0] === entry.path)
+            ? 0
+            : -1
+        }
         aria-expanded={isDir ? isExpanded : undefined}
         aria-selected={isMultiSelected}
+        data-tree-path={entry.path}
         data-cut={isCut || undefined}
         draggable={!isSymlink}
         aria-disabled={isSymlink || undefined}
         onClick={handleClick}
+        onKeyDown={handleKeyDown}
         onContextMenu={handleContextMenu}
         onDragStart={(event) => {
           if (isSymlink) {

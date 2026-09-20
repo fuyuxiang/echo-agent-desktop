@@ -1627,15 +1627,30 @@ pub async fn coding_changeset_diff(
     // Bind the displayed diff to a fresh native snapshot. This also invalidates
     // a previous review mark if an external editor changed the file.
     sync_changes(&root, &task_id).await?;
+    tokio::task::spawn_blocking(move || change_diff(&root, &task_id, &path))
+        .await
+        .map_err(|error| format!("读取任务差异失败：{error}"))?
+}
+
+#[tauri::command]
+pub async fn coding_changeset_mark_reviewed(
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+    path: String,
+) -> Result<ChangeSetView, String> {
+    let root = access.require_workspace(&root)?;
+    // Refresh first so the explicit acknowledgement is bound to the exact
+    // bytes currently displayed and cannot approve a stale diff.
+    sync_changes(&root, &task_id).await?;
     tokio::task::spawn_blocking(move || {
         store::with_task_transaction(&root, &task_id, || {
-            let diff = change_diff(&root, &task_id, &path)?;
-            mark_reviewed(&root, &task_id, &path)?;
-            Ok(diff)
+            let set = mark_reviewed(&root, &task_id, &path)?;
+            Ok(ChangeSetView::from(&set))
         })
     })
     .await
-    .map_err(|error| format!("读取任务差异失败：{error}"))?
+    .map_err(|error| format!("标记差异已审阅失败：{error}"))?
 }
 
 #[tauri::command]

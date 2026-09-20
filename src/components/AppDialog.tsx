@@ -45,8 +45,11 @@ export interface PromptOptions extends DialogBaseOptions {
 }
 
 type DialogRequest =
-  | ({ id: number; kind: "confirmation" } & ConfirmationOptions)
+  | ({ id: number; kind: "confirmation"; resolveDecision?: (confirmed: boolean) => void } & ConfirmationOptions)
   | ({ id: number; kind: "prompt" } & PromptOptions);
+type DialogRequestInput =
+  | ({ kind: "confirmation"; resolveDecision?: (confirmed: boolean) => void } & ConfirmationOptions)
+  | ({ kind: "prompt" } & PromptOptions);
 
 /**
  * Hosts one application-native action dialog for a panel. Actions execute
@@ -65,37 +68,70 @@ export function useAppDialog(scopeKey?: string | number | null) {
     // let a late click execute its captured action after navigation reuses the
     // same panel instance for another scope. A layout effect removes the stale
     // action before the changed scope can be painted or clicked.
-    setRequest(null);
+    setRequest((current) => {
+      current?.kind === "confirmation" && current.resolveDecision?.(false);
+      return null;
+    });
   }, [scopeKey]);
 
-  const openRequest = useCallback((next: Omit<DialogRequest, "id">) => {
-    setRequest({ ...next, id: nextId.current } as DialogRequest);
+  const openRequest = useCallback((next: DialogRequestInput) => {
+    setRequest((current) => {
+      // There is intentionally only one application dialog per host. If a
+      // newer workflow replaces an awaitable confirmation, settle the old one
+      // as cancelled instead of leaving its caller suspended forever.
+      if (current?.kind === "confirmation") current.resolveDecision?.(false);
+      return { ...next, id: nextId.current } as DialogRequest;
+    });
     nextId.current += 1;
   }, []);
+
+  useLayoutEffect(() => () => {
+    if (request?.kind === "confirmation") request.resolveDecision?.(false);
+  }, [request]);
 
   const requestConfirmation = useCallback((options: ConfirmationOptions) => {
     openRequest({ kind: "confirmation", ...options });
   }, [openRequest]);
 
+  /**
+   * Awaitable confirmation for workflows that must continue only after the
+   * user has made a decision (for example replace-all and workspace exit).
+   * Ordinary callers can keep using `requestConfirmation` with an action.
+   */
+  const confirm = useCallback((options: Omit<ConfirmationOptions, "action">) =>
+    new Promise<boolean>((resolve) => {
+      openRequest({
+        kind: "confirmation",
+        ...options,
+        action: () => undefined,
+        resolveDecision: resolve,
+      });
+    }), [openRequest]);
+
   const requestInput = useCallback((options: PromptOptions) => {
     openRequest({ kind: "prompt", ...options });
   }, [openRequest]);
 
-  const close = useCallback((requestId: number) => {
+  const close = useCallback((requestId: number, confirmed: boolean) => {
     // An async action can finish after navigation has invalidated its dialog
     // and a newer request has opened. Only its own completion may close state.
-    setRequest((current) => current?.id === requestId ? null : current);
+    setRequest((current) => {
+      if (current?.id !== requestId) return current;
+      if (current.kind === "confirmation") current.resolveDecision?.(confirmed);
+      return null;
+    });
   }, []);
 
   return {
     requestConfirmation,
+    confirm,
     requestInput,
     dialog: request && typeof document !== "undefined"
       ? createPortal(
         <AppActionDialog
           key={request.id}
           request={request}
-          onClose={() => close(request.id)}
+          onClose={(confirmed) => close(request.id, confirmed)}
         />,
         document.body,
       )
@@ -103,7 +139,13 @@ export function useAppDialog(scopeKey?: string | number | null) {
   };
 }
 
-function AppActionDialog({ request, onClose }: { request: DialogRequest; onClose: () => void }) {
+function AppActionDialog({
+  request,
+  onClose,
+}: {
+  request: DialogRequest;
+  onClose: (confirmed: boolean) => void;
+}) {
   const titleId = useId();
   const descriptionId = useId();
   const errorId = useId();
@@ -117,7 +159,7 @@ function AppActionDialog({ request, onClose }: { request: DialogRequest; onClose
   );
 
   const cancel = useCallback(() => {
-    if (!submittingRef.current) onClose();
+    if (!submittingRef.current) onClose(false);
   }, [onClose]);
   const dialogRef = useModalFocus<HTMLDivElement>(true, cancel, request.returnFocus);
 
@@ -146,7 +188,7 @@ function AppActionDialog({ request, onClose }: { request: DialogRequest; onClose
     try {
       if (request.kind === "confirmation") await request.action();
       else await request.action(values);
-      onClose();
+      onClose(true);
     } catch (actionError) {
       const message = String(actionError).replace(/^Error:\s*/, "") || "操作失败，请重试。";
       setError(message);

@@ -1,10 +1,10 @@
 /**
  * Text replacement for the search view.
  *
- * The backend search command is fixed-string only and has no replace, so replace
- * is performed here over the existing read/write commands. Those carry a hash
- * check, which means a file changed by the Agent mid-replace is rejected rather
- * than clobbered.
+ * The backend search command and this replacement helper share literal/regex,
+ * case and whole-word options. Replacement is performed over hash-checked
+ * document writes, so a file changed by the Agent mid-replace is rejected
+ * rather than clobbered.
  */
 
 export interface ReplacePlanEntry {
@@ -13,33 +13,46 @@ export interface ReplacePlanEntry {
   count: number;
 }
 
-/** Count non-overlapping occurrences of a literal needle. */
-function literalPattern(needle: string, caseSensitive: boolean): RegExp {
+/** Count non-overlapping occurrences under the active search contract. */
+function literalPattern(
+  needle: string,
+  caseSensitive: boolean,
+  regex = false,
+  wholeWord = false,
+): RegExp {
   const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(escaped, caseSensitive ? "gu" : "giu");
+  const source = regex ? needle : escaped;
+  return new RegExp(wholeWord ? `\\b(?:${source})\\b` : source, caseSensitive ? "gu" : "giu");
 }
 
 export function countOccurrences(
   content: string,
   needle: string,
   caseSensitive = true,
+  regex = false,
+  wholeWord = false,
 ): number {
   if (!needle) return 0;
-  return [...content.matchAll(literalPattern(needle, caseSensitive))].length;
+  return [...content.matchAll(literalPattern(needle, caseSensitive, regex, wholeWord))].length;
 }
 
-/** Replace every literal occurrence, returning the new text and how many changed. */
+/** Replace every occurrence, returning the new text and how many changed. */
 export function replaceAll(
   content: string,
   needle: string,
   replacement: string,
   caseSensitive = true,
+  regex = false,
+  wholeWord = false,
 ): { content: string; count: number } {
   if (!needle) return { content, count: 0 };
-  const count = countOccurrences(content, needle, caseSensitive);
+  const pattern = literalPattern(needle, caseSensitive, regex, wholeWord);
+  const count = [...content.matchAll(pattern)].length;
   if (count === 0) return { content, count: 0 };
   return {
-    content: content.replace(literalPattern(needle, caseSensitive), () => replacement),
+    content: regex
+      ? content.replace(pattern, replacement)
+      : content.replace(pattern, () => replacement),
     count,
   };
 }

@@ -329,3 +329,76 @@ describe("FileTreeView virtual rows", () => {
     expect(retry).toHaveAttribute("title", "permission denied");
   });
 });
+
+describe("FileTreeView explorer navigation", () => {
+  beforeEach(() => listDir.mockReset());
+
+  it("重新进入项目时恢复已展开目录及其内容", async () => {
+    listDir.mockImplementation((path: string) => Promise.resolve(
+      path === "/repo"
+        ? [dir("/repo", "src")]
+        : [file("/repo/src", "restored.ts")],
+    ));
+    render(tree({ initialExpandedPaths: ["/repo/src"] }));
+
+    expect(await screen.findByRole("treeitem", { name: /restored\.ts/ })).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: /src/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("可一键折叠所有目录", async () => {
+    listDir.mockImplementation((path: string) => Promise.resolve(
+      path === "/repo" ? [dir("/repo", "src")] : [file("/repo/src", "a.ts")],
+    ));
+    const user = userEvent.setup();
+    const view = render(tree({ collapseKey: 0 }));
+    await user.click(await screen.findByRole("treeitem", { name: /src/ }));
+    expect(await screen.findByRole("treeitem", { name: /a\.ts/ })).toBeInTheDocument();
+
+    view.rerender(tree({ collapseKey: 1 }));
+    expect(screen.getByRole("treeitem", { name: /src/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("treeitem", { name: /a\.ts/ })).not.toBeInTheDocument();
+  });
+
+  it("切换隐藏文件时原地刷新已加载目录并保留展开状态", async () => {
+    listDir.mockImplementation((path: string) => Promise.resolve(
+      path === "/repo" ? [dir("/repo", "src")] : [file("/repo/src", "visible.ts")],
+    ));
+    const user = userEvent.setup();
+    const view = render(tree({ includeHidden: false }));
+    const source = await screen.findByRole("treeitem", { name: /src/ });
+    await user.click(source);
+    expect(await screen.findByRole("treeitem", { name: /visible\.ts/ })).toBeInTheDocument();
+
+    view.rerender(tree({ includeHidden: true }));
+    await waitFor(() => {
+      expect(listDir.mock.calls.filter(([path]) => path === "/repo/src")).toHaveLength(2);
+    });
+    expect(screen.getByRole("treeitem", { name: /src/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("treeitem", { name: /visible\.ts/ })).toBeInTheDocument();
+  });
+
+  it("定位文件时自动展开父目录", async () => {
+    listDir.mockImplementation((path: string) => Promise.resolve(
+      path === "/repo" ? [dir("/repo", "src")] : [file("/repo/src", "target.ts")],
+    ));
+    render(tree({ revealPath: "/repo/src/target.ts", revealKey: 1 }));
+
+    expect(await screen.findByRole("treeitem", { name: /target\.ts/ })).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: /src/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("支持用方向键展开目录并移动焦点", async () => {
+    listDir.mockImplementation((path: string) => Promise.resolve(
+      path === "/repo" ? [dir("/repo", "src")] : [file("/repo/src", "keyboard.ts")],
+    ));
+    const user = userEvent.setup();
+    render(tree());
+    const source = await screen.findByRole("treeitem", { name: /src/ });
+    source.focus();
+    await user.keyboard("{ArrowRight}");
+    const child = await screen.findByRole("treeitem", { name: /keyboard\.ts/ });
+    expect(source).toHaveAttribute("aria-expanded", "true");
+    await user.keyboard("{ArrowRight}");
+    expect(child).toHaveFocus();
+  });
+});

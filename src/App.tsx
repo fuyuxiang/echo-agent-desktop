@@ -231,11 +231,11 @@ function Shell() {
   const [newSessionTargetCwd, setNewSessionTargetCwd] = useState("");
   /** Repository owned by the dedicated Coding Workspace. */
   const [codingWorkspaceCwd, setCodingWorkspaceCwd] = useState("");
-  // SP4: multi-tab workbench — list of registered cwd + active tab.
+  // Dedicated Coding projects: one active project plus a persisted recent list.
   const [codingWorkspaces, setCodingWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeCodingWorkspaceCwd, setActiveCodingWorkspaceCwd] = useState("");
 
-  // SP4: hydrate coding tab strip from localStorage on first mount.
+  // Hydrate recent Coding projects from localStorage on first mount.
   useEffect(() => {
     try {
       const raw = localStorage.getItem("echo-coding-workspaces");
@@ -254,7 +254,7 @@ function Shell() {
     }
   }, []);
 
-  // SP4: persist tab strip whenever it changes.
+  // Persist recent Coding projects whenever the list changes.
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -1362,7 +1362,7 @@ function Shell() {
     promptTextOverride?: string,
   ): Promise<string | undefined> => {
     setCodingWorkspaceCwd(root);
-    // SP4: also register the new cwd in the multi-tab strip + activate it.
+    // Register the task's repository in recent Coding projects and activate it.
     if (root) {
       setCodingWorkspaces((current) =>
         current.some((w) => w.cwd === root)
@@ -1687,7 +1687,7 @@ function Shell() {
 
   const handleSelectCodingWorkspace = (newCwd: string) => {
     setCodingWorkspaceCwd(newCwd);
-    // SP4: also register the cwd in the multi-tab strip + activate it.
+    // Register the cwd in recent Coding projects and activate it.
     if (newCwd) {
       setCodingWorkspaces((current) =>
         current.some((w) => w.cwd === newCwd)

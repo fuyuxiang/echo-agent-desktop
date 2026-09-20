@@ -8,6 +8,7 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
+  Search,
   Trash2,
 } from "lucide-react";
 
@@ -19,6 +20,7 @@ interface TaskSwitcherProps {
   activeId?: string | null;
   onSelect: (taskId: string) => void;
   onNew: () => void;
+  newDisabled?: boolean;
   onRename: (task: TaskSummary, returnFocus?: HTMLElement | null) => void;
   onDelete: (task: TaskSummary, returnFocus?: HTMLElement | null) => void;
 }
@@ -35,13 +37,16 @@ export function TaskSwitcher({
   activeId,
   onSelect,
   onNew,
+  newDisabled = false,
   onRename,
   onDelete,
 }: TaskSwitcherProps) {
   const [open, setOpen] = useState(false);
   const [actionTaskId, setActionTaskId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLDivElement | null>(null);
   const toggleRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -67,6 +72,17 @@ export function TaskSwitcher({
   }, [open]);
 
   const active = tasks.find((task) => task.id === activeId);
+  const filteredTasks = tasks.filter((task) => task.name.toLowerCase().includes(query.trim().toLowerCase()));
+
+  const moveFocus = (delta: number) => {
+    const items = [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    if (items.length === 0) return;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = current < 0
+      ? delta > 0 ? 0 : items.length - 1
+      : (current + delta + items.length) % items.length;
+    items[next]?.focus();
+  };
 
   return (
     <div className={`coding-task-switcher${active ? "" : " is-empty"}`} ref={containerRef}>
@@ -76,6 +92,12 @@ export function TaskSwitcher({
         onClick={() => {
           setOpen((value) => !value);
           setActionTaskId(null);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          event.preventDefault();
+          setOpen(true);
+          window.requestAnimationFrame(() => moveFocus(event.key === "ArrowDown" ? 1 : -1));
         }}
         aria-expanded={open}
         aria-haspopup="menu"
@@ -87,9 +109,42 @@ export function TaskSwitcher({
       </button>
 
       {open && (
-        <div className="coding-task-switcher__menu" role="menu">
+        <div
+          ref={menuRef}
+          className="coding-task-switcher__menu"
+          role="menu"
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              moveFocus(1);
+            } else if (event.key === "ArrowUp") {
+              event.preventDefault();
+              moveFocus(-1);
+            } else if (event.key === "Home") {
+              event.preventDefault();
+              const first = menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)');
+              first?.focus();
+            } else if (event.key === "End") {
+              event.preventDefault();
+              const items = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)');
+              items?.[items.length - 1]?.focus();
+            }
+          }}
+        >
+          {tasks.length > 5 && (
+            <label className="coding-task-switcher__search">
+              <Search size={12} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索开发任务"
+                aria-label="搜索开发任务"
+              />
+            </label>
+          )}
           {tasks.length === 0 && <div className="coding-row">当前仓库还没有开发任务</div>}
-          {tasks.map((task) => {
+          {tasks.length > 0 && filteredTasks.length === 0 && <div className="coding-row">没有匹配的任务</div>}
+          {filteredTasks.map((task) => {
             const phase = describePhase(task.phase);
             const actionsOpen = actionTaskId === task.id;
             return (
@@ -117,7 +172,7 @@ export function TaskSwitcher({
                       <CircleDot size={12} />
                     )}
                     <span>{task.name}</span>
-                    <small>{phase.label}</small>
+                    <small title={new Date(task.updatedAt).toLocaleString()}>{phase.label}</small>
                   </button>
                   <button
                     type="button"
@@ -169,13 +224,15 @@ export function TaskSwitcher({
           <button
             type="button"
             role="menuitem"
+            disabled={newDisabled}
+            title={newDisabled ? "请先停止正在执行的任务" : "新建开发任务"}
             onClick={() => {
               setOpen(false);
               onNew();
             }}
           >
             <Plus size={12} />
-            <span>新建开发任务</span>
+            <span>{newDisabled ? "执行中不可新建" : "新建开发任务"}</span>
           </button>
         </div>
       )}

@@ -1,27 +1,41 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, LoaderCircle, Replace, Search } from "lucide-react";
+import { AlertTriangle, ChevronDown, LoaderCircle, Replace, Search } from "lucide-react";
 
-import { codingSearchWorkspace, type CodingSearchHit } from "@/lib/agent-client";
+import {
+  codingSearchWorkspace,
+  type CodingSearchHit,
+  type CodingSearchOptions,
+} from "@/lib/agent-client";
 
 interface SearchViewProps {
   root: string;
   onOpenHit: (hit: CodingSearchHit) => void;
-  onReplaceAll: (query: string, replacement: string, hits: CodingSearchHit[]) => Promise<void>;
+  onReplaceAll: (
+    query: string,
+    replacement: string,
+    hits: CodingSearchHit[],
+    options: CodingSearchOptions,
+  ) => Promise<void>;
   busy?: boolean;
 }
 
 /**
  * Workspace text search with replace.
  *
- * The backend search is fixed-string, so no regex toggle is offered rather than
- * showing one that silently does literal matching. Replace runs through the
- * hash-checked document write, and always asks for confirmation first because it
- * edits files the user may not have opened.
+ * Search and replace share one explicit match contract. Replace runs through
+ * hash-checked document writes and asks for confirmation because it may edit
+ * files the user has not opened.
  */
 export function SearchView({ root, onOpenHit, onReplaceAll, busy = false }: SearchViewProps) {
   const [query, setQuery] = useState("");
   const [replacement, setReplacement] = useState("");
   const [showReplace, setShowReplace] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
+  const [regex, setRegex] = useState(false);
+  const [includeGlob, setIncludeGlob] = useState("");
+  const [excludeGlob, setExcludeGlob] = useState("");
   const [hits, setHits] = useState<CodingSearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +51,13 @@ export function SearchView({ root, onOpenHit, onReplaceAll, busy = false }: Sear
     let cancelled = false;
     setLoading(true);
     const timer = setTimeout(() => {
-      void codingSearchWorkspace(root, trimmed)
+      void codingSearchWorkspace(root, trimmed, {
+        caseSensitive,
+        wholeWord,
+        regex,
+        includeGlob: includeGlob.trim(),
+        excludeGlob: excludeGlob.trim(),
+      })
         .then((results) => {
           if (!cancelled) {
             setHits(results);
@@ -55,7 +75,7 @@ export function SearchView({ root, onOpenHit, onReplaceAll, busy = false }: Sear
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query, revision, root]);
+  }, [caseSensitive, excludeGlob, includeGlob, query, regex, revision, root, wholeWord]);
 
   const grouped = hits.reduce<Record<string, CodingSearchHit[]>>((accumulator, hit) => {
     (accumulator[hit.path] ??= []).push(hit);
@@ -64,10 +84,16 @@ export function SearchView({ root, onOpenHit, onReplaceAll, busy = false }: Sear
 
   const runReplace = useCallback(async () => {
     if (!query.trim() || hits.length === 0) return;
-    await onReplaceAll(query.trim(), replacement, hits);
+    await onReplaceAll(query.trim(), replacement, hits, {
+      caseSensitive,
+      wholeWord,
+      regex,
+      includeGlob: includeGlob.trim(),
+      excludeGlob: excludeGlob.trim(),
+    });
     // Re-run the search so the list reflects what is now on disk.
     setRevision((value) => value + 1);
-  }, [hits, onReplaceAll, query, replacement]);
+  }, [caseSensitive, excludeGlob, hits, includeGlob, onReplaceAll, query, regex, replacement, wholeWord]);
 
   return (
     <div className="coding-explorer-view">
@@ -93,7 +119,20 @@ export function SearchView({ root, onOpenHit, onReplaceAll, busy = false }: Sear
         >
           <Replace size={13} />
         </button>
+        <div className="coding-search__match-options" role="group" aria-label="搜索匹配选项">
+          <button type="button" className={caseSensitive ? "is-active" : ""} onClick={() => setCaseSensitive((value) => !value)} aria-pressed={caseSensitive} title="区分大小写">Aa</button>
+          <button type="button" className={wholeWord ? "is-active" : ""} onClick={() => setWholeWord((value) => !value)} aria-pressed={wholeWord} title="全字匹配">W</button>
+          <button type="button" className={regex ? "is-active" : ""} onClick={() => setRegex((value) => !value)} aria-pressed={regex} title="使用正则表达式">.*</button>
+          <button type="button" className={showFilters ? "is-active" : ""} onClick={() => setShowFilters((value) => !value)} aria-expanded={showFilters} title="包含与排除文件"><ChevronDown size={12} /></button>
+        </div>
       </div>
+
+      {showFilters && (
+        <div className="coding-search__filters">
+          <input value={includeGlob} onChange={(event) => setIncludeGlob(event.target.value)} placeholder="包含文件，如 src/**,*.ts" aria-label="包含文件" />
+          <input value={excludeGlob} onChange={(event) => setExcludeGlob(event.target.value)} placeholder="排除文件，如 **/*.test.ts" aria-label="排除文件" />
+        </div>
+      )}
 
       {showReplace && (
         <div className="coding-search__replace">

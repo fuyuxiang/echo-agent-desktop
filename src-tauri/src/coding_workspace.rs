@@ -137,6 +137,21 @@ pub struct CodingSearchHit {
     preview: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodingSearchOptions {
+    #[serde(default)]
+    case_sensitive: bool,
+    #[serde(default)]
+    whole_word: bool,
+    #[serde(default)]
+    regex: bool,
+    #[serde(default)]
+    include_glob: String,
+    #[serde(default)]
+    exclude_glob: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodingWriteDocumentRequest {
@@ -2078,12 +2093,28 @@ pub async fn coding_terminal_close(
     Ok(true)
 }
 
-fn fallback_code_search(root: &Path, query: &str) -> Vec<CodingSearchHit> {
-    let case_sensitive = query.chars().any(char::is_uppercase);
-    let needle = if case_sensitive {
+fn fallback_code_search(
+    root: &Path,
+    query: &str,
+    options: &CodingSearchOptions,
+) -> Vec<CodingSearchHit> {
+    let case_sensitive = options.case_sensitive;
+    let pattern = if options.regex {
         query.to_string()
     } else {
-        query.to_lowercase()
+        regex::escape(query)
+    };
+    let pattern = if options.whole_word {
+        format!(r"\b(?:{pattern})\b")
+    } else {
+        pattern
+    };
+    let matcher = match regex::RegexBuilder::new(&pattern)
+        .case_insensitive(!case_sensitive)
+        .build()
+    {
+        Ok(matcher) => matcher,
+        Err(_) => return Vec::new(),
     };
     let mut hits = Vec::new();
     let mut stack = vec![(root.to_path_buf(), 0usize)];
@@ -2120,6 +2151,10 @@ fn fallback_code_search(root: &Path, query: &str) -> Vec<CodingSearchHit> {
             if !file_type.is_file() {
                 continue;
             }
+            let relative = relative_display(root, &path);
+            if !search_path_allowed(&relative, options) {
+                continue;
+            }
             scanned += 1;
             let Ok(metadata) = entry.metadata() else {
                 continue;
@@ -2131,16 +2166,11 @@ fn fallback_code_search(root: &Path, query: &str) -> Vec<CodingSearchHit> {
                 continue;
             };
             for (line_index, line) in content.lines().enumerate() {
-                let haystack = if case_sensitive {
-                    line.to_string()
-                } else {
-                    line.to_lowercase()
-                };
-                if let Some(column) = haystack.find(&needle) {
+                if let Some(found) = matcher.find(line) {
                     hits.push(CodingSearchHit {
-                        path: relative_display(root, &path),
+                        path: relative.clone(),
                         line: line_index + 1,
-                        column: haystack[..column].chars().count() + 1,
+                        column: line[..found.start()].chars().count() + 1,
                         preview: bounded_search_preview(line),
                     });
                     if hits.len() >= MAX_SEARCH_RESULTS {
@@ -2152,6 +2182,46 @@ fn fallback_code_search(root: &Path, query: &str) -> Vec<CodingSearchHit> {
     }
     hits.sort_by(|left, right| left.path.cmp(&right.path).then(left.line.cmp(&right.line)));
     hits
+}
+
+fn search_glob_matches(path: &str, raw: &str) -> bool {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .any(|glob| {
+            // Match basename-only patterns at any depth, like ripgrep's --glob.
+            let candidate = if glob.contains('/') {
+                path
+            } else {
+                path.rsplit('/').next().unwrap_or(path)
+            };
+            let mut pattern = String::from("^");
+            let mut chars = glob.chars().peekable();
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '*' if chars.peek() == Some(&'*') => {
+                        chars.next();
+                        if chars.peek() == Some(&'/') {
+                            chars.next();
+                            pattern.push_str("(?:.*/)?");
+                        } else {
+                            pattern.push_str(".*");
+                        }
+                    }
+                    '*' => pattern.push_str("[^/]*"),
+                    '?' => pattern.push_str("[^/]"),
+                    _ => pattern.push_str(&regex::escape(&ch.to_string())),
+                }
+            }
+            pattern.push('$');
+            regex::Regex::new(&pattern).is_ok_and(|matcher| matcher.is_match(candidate))
+        })
+}
+
+fn search_path_allowed(path: &str, options: &CodingSearchOptions) -> bool {
+    (options.include_glob.trim().is_empty() || search_glob_matches(path, &options.include_glob))
+        && (options.exclude_glob.trim().is_empty()
+            || !search_glob_matches(path, &options.exclude_glob))
 }
 
 fn bounded_search_preview(line: &str) -> String {
@@ -2171,41 +2241,79 @@ pub async fn coding_search_workspace(
     access: State<'_, FilesystemAccess>,
     root: String,
     query: String,
+    options: Option<CodingSearchOptions>,
 ) -> Result<Vec<CodingSearchHit>, String> {
     let root = access.require_workspace(&root)?;
     let query = query.trim();
     if query.is_empty() || query.chars().count() > 256 || query.contains('\0') {
         return Err("搜索词不能为空且不能超过 256 个字符".into());
     }
+    let options = options.unwrap_or_default();
+    for value in [&options.include_glob, &options.exclude_glob] {
+        if value.chars().count() > 512 || value.split(',').count() > 16 || value.contains('\0') {
+            return Err("文件包含/排除规则过长或数量过多".into());
+        }
+        if value.split(',').map(str::trim).any(|glob| {
+            glob.starts_with('!') || glob.chars().any(|ch| matches!(ch, '[' | ']' | '{' | '}'))
+        }) {
+            return Err("文件规则仅支持逗号分隔的 *、** 和 ? 通配符".into());
+        }
+    }
+    if options.regex && regex::Regex::new(query).is_err() {
+        return Err("正则表达式无效".into());
+    }
     let mut command = Command::new("rg");
+    command.args([
+        "--line-number",
+        "--column",
+        "--no-heading",
+        "--no-messages",
+        "--color",
+        "never",
+        "--max-count",
+        "100",
+        "--max-filesize",
+        "4M",
+        "--glob",
+        "!.git/**",
+        "--glob",
+        "!node_modules/**",
+        "--glob",
+        "!target/**",
+        "--glob",
+        "!dist/**",
+        "--glob",
+        "!build/**",
+    ]);
+    if options.case_sensitive {
+        command.arg("--case-sensitive");
+    } else {
+        command.arg("--ignore-case");
+    }
+    if !options.regex {
+        command.arg("--fixed-strings");
+    }
+    if options.whole_word {
+        command.arg("--word-regexp");
+    }
+    for glob in options
+        .include_glob
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        command.args(["--glob", glob]);
+    }
+    for glob in options
+        .exclude_glob
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        command.args(["--glob", &format!("!{glob}")]);
+    }
     command
-        .args([
-            "--line-number",
-            "--column",
-            "--no-heading",
-            "--no-messages",
-            "--color",
-            "never",
-            "--smart-case",
-            "--fixed-strings",
-            "--max-count",
-            "100",
-            "--max-filesize",
-            "4M",
-            "--glob",
-            "!.git/**",
-            "--glob",
-            "!node_modules/**",
-            "--glob",
-            "!target/**",
-            "--glob",
-            "!dist/**",
-            "--glob",
-            "!build/**",
-            "--",
-            query,
-            ".",
-        ])
+        .args(["--", query, "."])
         .current_dir(&root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -2218,9 +2326,11 @@ pub async fn coding_search_workspace(
             // must run on the blocking pool rather than a tokio worker.
             let root = root.clone();
             let owned_query = query.to_string();
-            return tokio::task::spawn_blocking(move || fallback_code_search(&root, &owned_query))
-                .await
-                .map_err(|error| format!("代码搜索失败：{error}"));
+            return tokio::task::spawn_blocking(move || {
+                fallback_code_search(&root, &owned_query, &options)
+            })
+            .await
+            .map_err(|error| format!("代码搜索失败：{error}"));
         }
         Err(error) => return Err(format!("无法启动代码搜索：{error}")),
     };
@@ -2894,10 +3004,31 @@ mod tests {
             "export const cancelOrder = true;\n",
         )
         .unwrap();
-        let hits = fallback_code_search(temp.path(), "cancelOrder");
+        let hits =
+            fallback_code_search(temp.path(), "cancelOrder", &CodingSearchOptions::default());
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, "src/app.ts");
         assert_eq!((hits[0].line, hits[0].column), (1, 14));
+    }
+
+    #[test]
+    fn fallback_search_honors_match_and_file_filters() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("src/app.ts"), "Foo food foo\n").unwrap();
+        std::fs::write(temp.path().join("src/app.test.ts"), "foo\n").unwrap();
+        std::fs::write(temp.path().join("README.md"), "foo\n").unwrap();
+        let options = CodingSearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+            regex: false,
+            include_glob: "*.ts".into(),
+            exclude_glob: "**/*.test.ts".into(),
+        };
+        let hits = fallback_code_search(temp.path(), "foo", &options);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "src/app.ts");
+        assert_eq!(hits[0].column, 1);
     }
 
     #[cfg(unix)]

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -67,5 +67,17 @@ describe("TaskSwitcher", () => {
 
     expect(props.onSelect).toHaveBeenCalledWith("running");
     expect(screen.queryByRole("menuitem", { name: "打开任务：订单管理，已停止" })).not.toBeInTheDocument();
+  });
+
+  it("支持从切换按钮用方向键进入并选择任务", async () => {
+    const user = userEvent.setup();
+    const props = setup();
+    const toggle = screen.getByRole("button", { name: "切换开发任务" });
+    toggle.focus();
+    await user.keyboard("{ArrowDown}");
+    const first = screen.getByRole("menuitem", { name: "打开任务：订单管理，已停止" });
+    await waitFor(() => expect(first).toHaveFocus());
+    await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    expect(props.onSelect).toHaveBeenCalledWith("running");
   });
 });

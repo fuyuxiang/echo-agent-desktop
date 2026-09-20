@@ -58,6 +58,8 @@ export const codingApi = {
     invoke<CodingTask>("coding_task_rename", { root, taskId, name }),
   bindTaskRuntime: (root: string, taskId: string, sessionId: string, modelId: string) =>
     invoke<CodingTask>("coding_task_bind_runtime", { root, taskId, sessionId, modelId }),
+  setTaskContext: (root: string, taskId: string, paths: string[]) =>
+    invoke<CodingTask>("coding_task_set_context", { root, taskId, paths }),
   confirmAcceptance: (root: string, taskId: string, criterionId: string) =>
     invoke<CodingTask>("coding_task_confirm_acceptance", { root, taskId, criterionId }),
 
@@ -86,6 +88,8 @@ export const codingApi = {
     invoke<ChangeSet>("coding_changeset_capture_baseline", { root, taskId, dirtyFiles }),
   changeDiff: (root: string, taskId: string, path: string) =>
     invoke<ChangeDiff>("coding_changeset_diff", { root, taskId, path }),
+  markReviewed: (root: string, taskId: string, path: string) =>
+    invoke<ChangeSet>("coding_changeset_mark_reviewed", { root, taskId, path }),
   recordChange: (root: string, taskId: string, change: FileChange) =>
     invoke<ChangeSet>("coding_changeset_record_change", { root, taskId, change }),
   discardFile: (root: string, taskId: string, path: string) =>

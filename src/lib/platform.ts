@@ -21,3 +21,9 @@ export function isWindows(): boolean {
 /** 模块级常量:运行期平台不会变化,避免重复解析。 */
 export const IS_MACOS = isMacOS();
 export const IS_WINDOWS = isWindows();
+
+/** Use platform-native names in visible shortcut hints; event handlers still
+ * accept both Meta and Ctrl so external keyboards remain usable. */
+export function shortcutLabel(macOS: string, other: string): string {
+  return IS_MACOS ? macOS : other;
+}
