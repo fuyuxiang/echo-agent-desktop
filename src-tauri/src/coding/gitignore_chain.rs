@@ -87,7 +87,12 @@ mod tests {
         write(&root.join(".gitignore"), "dist/\n");
         let dist = root.join("dist");
         fs::create_dir(&dist).unwrap();
-        assert!(apply_nested_gitignore(root, &dist, true, DEFAULT_IGNORE_FILES));
+        assert!(apply_nested_gitignore(
+            root,
+            &dist,
+            true,
+            DEFAULT_IGNORE_FILES
+        ));
     }
 
     #[test]
@@ -126,7 +131,10 @@ mod tests {
     #[test]
     fn is_ignore_rules_file_recognises_three_basenames() {
         for name in [".gitignore", ".ignore", ".echoagentignore"] {
-            assert!(is_ignore_rules_file(Path::new(name)), "should recognise {name}");
+            assert!(
+                is_ignore_rules_file(Path::new(name)),
+                "should recognise {name}"
+            );
         }
         assert!(!is_ignore_rules_file(Path::new("README.md")));
         assert!(!is_ignore_rules_file(Path::new("foo.gitignore")));
@@ -141,7 +149,12 @@ mod tests {
         write(&root.join(".customignore"), "vendor/\n");
         let dist = root.join("dist");
         fs::create_dir(&dist).unwrap();
-        assert!(!apply_nested_gitignore(root, &dist, true, &[".customignore"]));
+        assert!(!apply_nested_gitignore(
+            root,
+            &dist,
+            true,
+            &[".customignore"]
+        ));
     }
 
     #[test]
@@ -151,6 +164,11 @@ mod tests {
         write(&root.join(".echoagentignore"), "build/\n");
         let build = root.join("build");
         fs::create_dir(&build).unwrap();
-        assert!(apply_nested_gitignore(root, &build, true, DEFAULT_IGNORE_FILES));
+        assert!(apply_nested_gitignore(
+            root,
+            &build,
+            true,
+            DEFAULT_IGNORE_FILES
+        ));
     }
 }
