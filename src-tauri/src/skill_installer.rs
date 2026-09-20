@@ -908,7 +908,9 @@ fn discover_skill_roots_with_limit(
         }
         roots.push(candidate);
         if roots.len() > max_packages {
-            return Err(format!("一次最多处理 {max_packages} 个独立技能，请拆分后重试"));
+            return Err(format!(
+                "一次最多处理 {max_packages} 个独立技能，请拆分后重试"
+            ));
         }
     }
     Ok(roots)
