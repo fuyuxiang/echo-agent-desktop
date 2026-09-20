@@ -2475,6 +2475,65 @@
   height: 100%;
 }
 
+.coding-monaco--state,
+.coding-monaco__inline-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  height: 100%;
+  color: var(--echo-text-weak);
+  text-align: left;
+}
+
+.coding-monaco--state > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 460px;
+}
+
+.coding-monaco--state strong {
+  color: var(--echo-text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.coding-monaco--state small {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.coding-monaco--state.is-error {
+  color: var(--echo-status-error, #d92d20);
+}
+
+.coding-monaco--state.is-error code {
+  margin-top: 3px;
+  color: var(--echo-text-weak);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.coding-monaco--state button {
+  padding: 4px 10px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 5px;
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-strong);
+  font: inherit;
+  cursor: pointer;
+}
+
+.coding-monaco--state button:hover {
+  background: var(--echo-bg-active);
+}
+
+.coding-monaco__inline-loading {
+  width: 100%;
+  font-size: 12px;
+}
+
 .coding-workbench .is-spinning {
   animation: coding-spin 900ms linear infinite;
 }

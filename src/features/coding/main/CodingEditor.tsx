@@ -1,9 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Editor, { DiffEditor, type BeforeMount, type DiffOnMount, type OnMount } from "@monaco-editor/react";
 import type { IDisposable, editor as MonacoEditor } from "monaco-editor";
+import { AlertTriangle, LoaderCircle } from "lucide-react";
 
 import { useTheme } from "@/components/ThemeProvider";
+import { reportEvent } from "@/lib/telemetry-contract";
 import type { EditorCodeContext } from "../lib/documentation";
+import { initializeMonaco } from "../lib/monaco-bootstrap";
 
 export interface CodingEditorDiagnostic {
   path: string;
@@ -55,6 +58,18 @@ interface DocumentSymbolLike {
 }
 
 const MAX_SELECTION_CONTEXT = 12_000;
+const MONACO_STARTUP_TIMEOUT_MS = 10_000;
+
+type MonacoStartupState =
+  | { status: "loading" }
+  | { status: "ready" }
+  | { status: "error"; detail: string };
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  const message = String(error).trim();
+  return message && message !== "[object Object]" ? message : "未知初始化错误";
+}
 
 function editorModelUri(path: string): string {
   const normalized = path.replace(/\\/g, "/");
@@ -101,6 +116,7 @@ export function CodingEditor({
   onDocumentationAction,
 }: CodingEditorProps) {
   const { theme } = useTheme();
+  const [startup, setStartup] = useState<MonacoStartupState>({ status: "loading" });
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const diagnosticsDisposableRef = useRef<IDisposable | null>(null);
   const selectionDisposableRef = useRef<IDisposable | null>(null);
@@ -124,6 +140,33 @@ export function CodingEditor({
     contextHandlerRef.current = onContextChange;
     documentationActionHandlerRef.current = onDocumentationAction;
   }, [onChange, onContextChange, onDiagnostics, onDocumentationAction, onSave, onSymbolAction, onSymbols]);
+
+  useEffect(() => {
+    let active = true;
+    let settled = false;
+    const fail = (cause: unknown) => {
+      if (!active || settled) return;
+      settled = true;
+      const detail = errorMessage(cause);
+      console.error("[EchoAgent] Monaco editor initialization failed", cause);
+      reportEvent("coding.editor.initialization_failed", "error", { detail });
+      setStartup({ status: "error", detail });
+    };
+    const timeoutId = window.setTimeout(
+      () => fail(new Error("本地编辑器资源初始化超时")),
+      MONACO_STARTUP_TIMEOUT_MS,
+    );
+    void initializeMonaco().then(() => {
+      if (!active || settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      setStartup({ status: "ready" });
+    }).catch(fail);
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, []);
 
   useEffect(() => {
     if (!reveal || !editorRef.current) return;
@@ -355,6 +398,41 @@ export function CodingEditor({
 
   const monacoTheme = theme === "dark" ? "vs-dark" : "vs";
 
+  if (startup.status === "loading") {
+    return (
+      <div className="coding-monaco coding-monaco--state" role="status" aria-live="polite">
+        <LoaderCircle size={18} className="is-spinning" />
+        <div>
+          <strong>正在启动代码编辑器…</strong>
+          <small>首次打开可能需要片刻，编辑器资源正在从本地加载。</small>
+        </div>
+      </div>
+    );
+  }
+
+  if (startup.status === "error") {
+    return (
+      <div className="coding-monaco coding-monaco--state is-error" role="alert">
+        <AlertTriangle size={18} />
+        <div>
+          <strong>代码编辑器启动失败</strong>
+          <small>文件内容未被修改。请重新加载应用后重试。</small>
+          <code>{startup.detail}</code>
+        </div>
+        <button type="button" onClick={() => window.location.reload()}>
+          重新加载
+        </button>
+      </div>
+    );
+  }
+
+  const loading = (
+    <div className="coding-monaco__inline-loading" role="status">
+      <LoaderCircle size={16} className="is-spinning" />
+      正在准备编辑器…
+    </div>
+  );
+
   const sharedOptions = {
     automaticLayout: true,
     fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
@@ -380,6 +458,7 @@ export function CodingEditor({
           originalModelPath={`${editorModelUri(path)}?version=original`}
           modifiedModelPath={editorModelUri(path)}
           theme={monacoTheme}
+          loading={loading}
           beforeMount={configureMonaco}
           onMount={registerDiff}
           options={{
@@ -402,6 +481,7 @@ export function CodingEditor({
         value={value}
         language={language}
         theme={monacoTheme}
+        loading={loading}
         beforeMount={configureMonaco}
         onMount={registerSave}
         onChange={(next) => onChange(next ?? "")}

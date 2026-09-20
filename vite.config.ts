@@ -51,6 +51,7 @@ export default defineConfig({
           ],
           katex: ["katex", "rehype-katex"],
           mermaid: ["mermaid"],
+          monaco: ["monaco-editor", "@monaco-editor/react"],
         },
       },
     },
