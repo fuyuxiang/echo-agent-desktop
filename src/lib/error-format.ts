@@ -31,6 +31,9 @@ interface AgentErrorData {
 const INCOMPATIBLE_MODEL_RESPONSE_MESSAGE =
   "⚠️ 模型服务返回了与当前连接协议不兼容的响应，本轮已安全停止。请在「设置 → 模型与连接」中确认 API 协议与服务商一致（OpenAI Chat Completions / Responses 或 Anthropic Messages），然后重试。";
 
+const AMBIGUOUS_PARALLEL_TOOL_MESSAGE =
+  "⚠️ 模型服务返回的工具调用无法安全区分。系统已尝试兼容处理并停止本轮，不会执行可能错误的操作。请重试；若持续出现，请切换模型或检查服务商的工具调用兼容性。";
+
 function isIncompatibleModelResponse(message: string): boolean {
   const lower = message.toLowerCase();
   const unknownFinishReason = lower.includes("unknown variant")
@@ -168,6 +171,9 @@ function fmtDuration(ms?: number): string {
 export function formatAgentError(raw: string): string | null {
   if (raw.toLowerCase().includes("no auth method id provided")) {
     return "⚠️ 模型凭证同步尚未完成。请稍候后重试；若持续出现，请刷新模型配置。";
+  }
+  if (raw.includes("并行工具调用缺少稳定标识")) {
+    return AMBIGUOUS_PARALLEL_TOOL_MESSAGE;
   }
   // Cover both the current structured Runtime error and legacy builds that
   // leaked serde's raw `unknown variant` diagnostic into the banner.

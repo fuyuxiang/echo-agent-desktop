@@ -176,6 +176,18 @@ pub fn stream_chat_completions<'a>(
         let mut tool_call_acc: BTreeMap<u32, (String, String, String)> = BTreeMap::new();
         let mut tool_wire_slots: HashMap<u32, Vec<u32>> = HashMap::new();
         let mut tool_id_slots: HashMap<String, u32> = HashMap::new();
+        // Do not expose provisional tool deltas until the complete stream has
+        // proven that every wire index maps unambiguously. Some compatible
+        // gateways introduce a second call with the same index in a later SSE
+        // chunk, then omit IDs from argument continuations. Forwarding earlier
+        // deltas would make the request look externally observed and prevent
+        // the actor from safely retrying with parallel tools disabled.
+        let mut buffered_tool_deltas: Vec<(
+            u32,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )> = Vec::new();
 
         // Index counter spanning text + reasoning chunks (matches the
         // shell's chunk_index used for notification correlation).
@@ -382,13 +394,12 @@ pub fn stream_chat_completions<'a>(
                         }
                     }
 
-                    yield SamplingEvent::ToolCallDelta {
-                        request_id: request_id.clone(),
+                    buffered_tool_deltas.push((
                         tool_index,
-                        id: id_for_event,
-                        name: name_for_event,
-                        arguments_delta: args_for_event,
-                    };
+                        id_for_event,
+                        name_for_event,
+                        args_for_event,
+                    ));
                 }
             }
 
@@ -404,6 +415,18 @@ pub fn stream_chat_completions<'a>(
                 };
                 return;
             }
+        }
+
+        // The stream completed without an ambiguous association. Only now is
+        // it safe to publish the tool-call deltas to downstream state/UI.
+        for (tool_index, id, name, arguments_delta) in buffered_tool_deltas {
+            yield SamplingEvent::ToolCallDelta {
+                request_id: request_id.clone(),
+                tool_index,
+                id,
+                name,
+                arguments_delta,
+            };
         }
 
         // ── Build the final response ─────────────────────────────────
@@ -907,6 +930,44 @@ mod tests {
             !events
                 .iter()
                 .any(|event| matches!(event, SamplingEvent::Completed { .. }))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SamplingEvent::ToolCallDelta { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_wire_index_across_chunks_is_buffered_then_fails_safely() {
+        let chunks = vec![
+            Ok(parallel_tool_chunk(vec![(
+                Some(0),
+                Some("call_a"),
+                Some("grep"),
+                "{",
+            )])),
+            Ok(parallel_tool_chunk(vec![(
+                Some(0),
+                Some("call_b"),
+                Some("read_file"),
+                "{",
+            )])),
+            Ok(parallel_tool_chunk(vec![(Some(0), None, None, "}")])),
+        ];
+        let events = collect(stream_chat_completions(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        assert!(matches!(events.last(), Some(SamplingEvent::Failed { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SamplingEvent::ToolCallDelta { .. }))
         );
     }
 

@@ -231,7 +231,7 @@ async fn submit_emits_started_first_token_channel_completed() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ambiguous_parallel_tools_retry_once_with_parallel_disabled() {
+async fn ambiguous_parallel_tools_split_across_chunks_retry_once_with_parallel_disabled() {
     let bodies = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
     let bodies_handler = Arc::clone(&bodies);
     let app = Router::new().route(
@@ -244,24 +244,58 @@ async fn ambiguous_parallel_tools_retry_once_with_parallel_disabled() {
                 let events = if fallback == Some(false) {
                     sse::chat_completion_events("recovered sequentially", "test-model")
                 } else {
-                    let malformed = json!({
-                        "id": "chatcmpl-ambiguous",
-                        "object": "chat.completion.chunk",
-                        "created": 0,
-                        "model": "test-model",
-                        "choices": [{
-                            "index": 0,
-                            "delta": {
-                                "role": "assistant",
-                                "tool_calls": [
-                                    {"index": 0, "id": "call-a", "type": "function", "function": {"name": "grep", "arguments": "{"}},
-                                    {"index": 0, "id": "call-b", "type": "function", "function": {"name": "read_file", "arguments": "{"}}
-                                ]
-                            },
-                            "finish_reason": null
-                        }]
-                    });
-                    vec![Event::default().data(malformed.to_string())]
+                    let malformed_chunks = [
+                        json!({
+                            "id": "chatcmpl-ambiguous",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": "test-model",
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "role": "assistant",
+                                    "tool_calls": [
+                                        {"index": 0, "id": "call-a", "type": "function", "function": {"name": "grep", "arguments": "{"}}
+                                    ]
+                                },
+                                "finish_reason": null
+                            }]
+                        }),
+                        json!({
+                            "id": "chatcmpl-ambiguous",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": "test-model",
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [
+                                        {"index": 0, "id": "call-b", "type": "function", "function": {"name": "read_file", "arguments": "{"}}
+                                    ]
+                                },
+                                "finish_reason": null
+                            }]
+                        }),
+                        json!({
+                            "id": "chatcmpl-ambiguous",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": "test-model",
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "tool_calls": [
+                                        {"index": 0, "type": "function", "function": {"arguments": "}"}}
+                                    ]
+                                },
+                                "finish_reason": null
+                            }]
+                        }),
+                    ];
+                    malformed_chunks
+                        .into_iter()
+                        .map(|chunk| Event::default().data(chunk.to_string()))
+                        .collect()
                 };
                 Sse::new(stream::iter(
                     events.into_iter().map(Ok::<_, std::convert::Infallible>),
