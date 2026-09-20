@@ -46,6 +46,7 @@ import type {
   SkillInfo,
   SkillInstallResult,
   SkillPackageInspection,
+  SkillPackageInspectionOutcome,
   SlashCommand,
   SubagentLiveEvent,
   TurnErrorEvent,
@@ -832,16 +833,23 @@ export async function skillsInspectPackage(path: string): Promise<SkillPackageIn
   return invoke<SkillPackageInspection>("skills_inspect_package", { path });
 }
 
+/** Discover and inspect every independent Skill in a folder, Markdown file, or ZIP. */
+export async function skillsInspectPackages(path: string): Promise<SkillPackageInspectionOutcome[]> {
+  return invoke<SkillPackageInspectionOutcome[]>("skills_inspect_packages", { path });
+}
+
 /** Safely copy and atomically install/update a package under ~/.echo-agent/skills. */
 export async function skillsInstallPackage(
   path: string,
   expectedSourceHash: string,
   approveHighRisk = false,
+  packageRoot?: string,
 ): Promise<SkillInstallResult> {
   return invoke<SkillInstallResult>("skills_install_package", {
     path,
     expectedSourceHash,
     approveHighRisk,
+    packageRoot: packageRoot ?? null,
   });
 }
 

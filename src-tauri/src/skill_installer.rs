@@ -27,6 +27,8 @@ const MAX_FILES: usize = 200;
 const MAX_TOTAL_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_DEPTH: usize = 12;
+const MAX_DISCOVERED_PACKAGES: usize = 50;
+const MAX_DISCOVERY_ENTRIES: usize = MAX_FILES * MAX_FILES;
 
 static SKILL_INSTALL_TRANSACTION: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -59,6 +61,10 @@ pub struct SkillRiskFinding {
 #[serde(rename_all = "camelCase")]
 pub struct SkillPackageInspection {
     pub source_path: String,
+    /// Relative root inside a selected directory/ZIP bundle. `None` means the
+    /// selected source itself is the Skill root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_root: Option<String>,
     pub name: String,
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -77,6 +83,21 @@ pub struct SkillPackageInspection {
     pub installed_path: Option<String>,
 }
 
+/// One independently inspectable Skill discovered inside a selected source.
+/// Package-level parse/capability failures stay on their own row so one bad
+/// sibling does not hide otherwise valid Skills from a bundle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillPackageInspectionOutcome {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inspection: Option<SkillPackageInspection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillInstallResult {
@@ -93,6 +114,8 @@ struct InstallManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
     source_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    package_root: Option<String>,
     source_hash: String,
     installed_at: String,
     risk_level: SkillRiskLevel,
@@ -103,6 +126,7 @@ struct PreparedPackage {
     root: PathBuf,
     cleanup_root: Option<PathBuf>,
     source_path: String,
+    package_root: Option<String>,
 }
 
 impl Drop for PreparedPackage {
@@ -146,17 +170,34 @@ pub async fn skills_inspect_package(
 }
 
 #[tauri::command]
+pub async fn skills_inspect_packages(
+    access: State<'_, crate::shell_fs::FilesystemAccess>,
+    path: String,
+) -> Result<Vec<SkillPackageInspectionOutcome>, String> {
+    let path = require_authorized_package(&access, &path)?;
+    tauri::async_runtime::spawn_blocking(move || inspect_paths(&path))
+        .await
+        .map_err(|error| format!("检查技能包失败：{error}"))?
+}
+
+#[tauri::command]
 pub async fn skills_install_package(
     access: State<'_, crate::shell_fs::FilesystemAccess>,
     path: String,
     expected_source_hash: String,
     approve_high_risk: bool,
+    package_root: Option<String>,
 ) -> Result<SkillInstallResult, String> {
     crate::policy::require_feature("skills")?;
     crate::policy::require_skill_upload()?;
     let path = require_authorized_package(&access, &path)?;
     tauri::async_runtime::spawn_blocking(move || {
-        install_path(&path, &expected_source_hash, approve_high_risk)
+        install_path(
+            &path,
+            package_root.as_deref(),
+            &expected_source_hash,
+            approve_high_risk,
+        )
     })
     .await
     .map_err(|error| format!("安装技能包失败：{error}"))?
@@ -274,21 +315,17 @@ pub fn validate_registered_source(path: &str) -> Result<(), String> {
     {
         return Err("单文件技能必须是 Markdown 文件".into());
     }
-    let mut hits = Vec::new();
-    if metadata.is_dir() {
-        find_skill_files(input, input, 0, &mut hits)?;
+    let skill_files = if metadata.is_dir() {
+        discover_skill_roots_with_limit(input, MAX_FILES)?
+            .into_iter()
+            .map(|root| root.join("SKILL.md"))
+            .collect::<Vec<_>>()
     } else if metadata.is_file() {
-        hits.push(input.to_path_buf());
+        vec![input.to_path_buf()]
     } else {
         return Err("不支持的技能路径类型".into());
-    }
-    if hits.is_empty() {
-        return Err("所选路径下未找到 SKILL.md".into());
-    }
-    if hits.len() > MAX_FILES {
-        return Err(format!("一次最多注册 {MAX_FILES} 个技能"));
-    }
-    for hit in hits {
+    };
+    for hit in skill_files {
         let markdown = read_skill_text(&hit, MAX_FILE_BYTES)
             .map_err(|e| format!("{} 必须是 UTF-8 Markdown：{e}", hit.display()))?;
         let root = hit.parent().unwrap_or(input);
@@ -315,11 +352,12 @@ fn inspect_path(path: &str) -> Result<SkillPackageInspection, String> {
 
 fn install_path(
     path: &str,
+    package_root: Option<&str>,
     expected_source_hash: &str,
     approve_high_risk: bool,
 ) -> Result<SkillInstallResult, String> {
     let _transaction = lock_skill_install_transaction()?;
-    let prepared = prepare_package(Path::new(path))?;
+    let prepared = prepare_selected_package(Path::new(path), package_root)?;
     let inspection = inspect_prepared(&prepared)?;
     require_matching_source_hash(expected_source_hash, &inspection.source_hash)?;
     if inspection.risk_level == SkillRiskLevel::High && !approve_high_risk {
@@ -363,6 +401,7 @@ fn install_prepared(
         name: inspection.name.clone(),
         version: inspection.version.clone(),
         source_path: prepared.source_path.clone(),
+        package_root: prepared.package_root.clone(),
         source_hash: inspection.source_hash.clone(),
         installed_at: Utc::now().to_rfc3339(),
         risk_level: inspection.risk_level,
@@ -442,6 +481,13 @@ fn uninstall_path_in(requested: &Path, root: &Path, clear_config: bool) -> Resul
 }
 
 fn prepare_package(input: &Path) -> Result<PreparedPackage, String> {
+    prepare_selected_package(input, None)
+}
+
+fn prepare_selected_package(
+    input: &Path,
+    requested_package_root: Option<&str>,
+) -> Result<PreparedPackage, String> {
     let meta = fs::symlink_metadata(input)
         .map_err(|e| format!("无法读取所选路径 {}: {e}", input.display()))?;
     if meta.file_type().is_symlink() {
@@ -453,19 +499,12 @@ fn prepare_package(input: &Path) -> Result<PreparedPackage, String> {
         .to_string_lossy()
         .into_owned();
     if meta.is_dir() {
-        let root = locate_skill_root(input)?;
+        let roots = discover_skill_roots(input)?;
+        let root = select_skill_root(input, &roots, requested_package_root)?;
+        let package_root = relative_package_root(input, &root)?;
         // Work from an owned snapshot. Otherwise a directory could change
         // after risk inspection but before hashing/installing or uploading.
-        let temp = staging_root().join(Uuid::now_v7().to_string());
-        if let Err(error) = copy_package(&root, &temp) {
-            let _ = fs::remove_dir_all(&temp);
-            return Err(error);
-        }
-        return Ok(PreparedPackage {
-            root: temp.clone(),
-            cleanup_root: Some(temp),
-            source_path,
-        });
+        return snapshot_package(&root, source_path, package_root);
     }
     if !meta.is_file() {
         return Err("仅支持技能文件夹、Markdown 文件或 ZIP 压缩包".into());
@@ -476,8 +515,11 @@ fn prepare_package(input: &Path) -> Result<PreparedPackage, String> {
         .unwrap_or_default()
         .to_ascii_lowercase();
     match ext.as_str() {
-        "zip" => prepare_zip(input, source_path),
+        "zip" => prepare_zip(input, source_path, requested_package_root),
         "md" | "markdown" => {
+            if requested_package_root.is_some() {
+                return Err("单文件技能不包含可选的子技能".into());
+            }
             if meta.len() > MAX_FILE_BYTES {
                 return Err("技能 Markdown 文件超过 8MB 限制".into());
             }
@@ -496,13 +538,55 @@ fn prepare_package(input: &Path) -> Result<PreparedPackage, String> {
                 root: temp.clone(),
                 cleanup_root: Some(temp),
                 source_path,
+                package_root: None,
             })
         }
         _ => Err("不支持的技能包格式，请选择文件夹、.md 或 .zip".into()),
     }
 }
 
-fn prepare_zip(input: &Path, source_path: String) -> Result<PreparedPackage, String> {
+fn snapshot_package(
+    root: &Path,
+    source_path: String,
+    package_root: Option<String>,
+) -> Result<PreparedPackage, String> {
+    let temp = staging_root().join(Uuid::now_v7().to_string());
+    if let Err(error) = copy_package(root, &temp) {
+        let _ = fs::remove_dir_all(&temp);
+        return Err(error);
+    }
+    Ok(PreparedPackage {
+        root: temp.clone(),
+        cleanup_root: Some(temp),
+        source_path,
+        package_root,
+    })
+}
+
+fn prepare_zip(
+    input: &Path,
+    source_path: String,
+    requested_package_root: Option<&str>,
+) -> Result<PreparedPackage, String> {
+    let temp = extract_zip_to_staging(input)?;
+    let result = (|| {
+        let roots = discover_skill_roots(&temp)?;
+        let root = select_skill_root(&temp, &roots, requested_package_root)?;
+        let package_root = relative_package_root(&temp, &root)?;
+        Ok(PreparedPackage {
+            root,
+            cleanup_root: Some(temp.clone()),
+            source_path,
+            package_root,
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&temp);
+    }
+    result
+}
+
+fn extract_zip_to_staging(input: &Path) -> Result<PathBuf, String> {
     let compressed = crate::shell_fs::read_regular_file_bounded(input, MAX_TOTAL_BYTES)
         .map_err(|error| format!("读取 ZIP 失败：{error}"))?;
     let temp = staging_root().join(Uuid::now_v7().to_string());
@@ -557,14 +641,10 @@ fn prepare_zip(input: &Path, source_path: String) -> Result<PreparedPackage, Str
                 .flush()
                 .map_err(|e| format!("写入解压文件失败：{e}"))?;
         }
-        locate_skill_root(&temp)
+        Ok(temp.clone())
     })();
     match result {
-        Ok(root) => Ok(PreparedPackage {
-            root,
-            cleanup_root: Some(temp),
-            source_path,
-        }),
+        Ok(root) => Ok(root),
         Err(error) => {
             let _ = fs::remove_dir_all(&temp);
             Err(error)
@@ -572,12 +652,115 @@ fn prepare_zip(input: &Path, source_path: String) -> Result<PreparedPackage, Str
     }
 }
 
+fn inspect_paths(path: &str) -> Result<Vec<SkillPackageInspectionOutcome>, String> {
+    let input = Path::new(path);
+    let metadata = fs::symlink_metadata(input)
+        .map_err(|error| format!("无法读取所选路径 {}: {error}", input.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err("技能来源不能是符号链接".into());
+    }
+    let source_path = input
+        .canonicalize()
+        .unwrap_or_else(|_| input.to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+
+    if metadata.is_dir() {
+        let roots = discover_skill_roots(input)?;
+        return inspect_directory_roots(input, &source_path, roots, true);
+    }
+    if !metadata.is_file() {
+        return Err("仅支持技能文件夹、Markdown 文件或 ZIP 压缩包".into());
+    }
+
+    let extension = input
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if extension == "zip" {
+        let temp = extract_zip_to_staging(input)?;
+        let result = (|| {
+            let roots = discover_skill_roots(&temp)?;
+            inspect_directory_roots(&temp, &source_path, roots, false)
+        })();
+        let _ = fs::remove_dir_all(&temp);
+        return result;
+    }
+    if extension == "md" || extension == "markdown" {
+        let prepared = prepare_package(input)?;
+        let label = input
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("SKILL.md")
+            .to_string();
+        return Ok(vec![inspection_outcome(label, prepared)]);
+    }
+    Err("不支持的技能包格式，请选择文件夹、.md 或 .zip".into())
+}
+
+fn inspect_directory_roots(
+    base: &Path,
+    source_path: &str,
+    roots: Vec<PathBuf>,
+    snapshot: bool,
+) -> Result<Vec<SkillPackageInspectionOutcome>, String> {
+    let mut outcomes = Vec::with_capacity(roots.len());
+    for root in roots {
+        let package_root = relative_package_root(base, &root)?;
+        let label = package_root.clone().unwrap_or_else(|| {
+            base.file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("SKILL.md")
+                .to_string()
+        });
+        let prepared = if snapshot {
+            snapshot_package(&root, source_path.to_string(), package_root.clone())
+        } else {
+            Ok(PreparedPackage {
+                root,
+                cleanup_root: None,
+                source_path: source_path.to_string(),
+                package_root: package_root.clone(),
+            })
+        };
+        match prepared {
+            Ok(prepared) => outcomes.push(inspection_outcome(label, prepared)),
+            Err(error) => outcomes.push(SkillPackageInspectionOutcome {
+                label,
+                package_root,
+                inspection: None,
+                error: Some(error),
+            }),
+        }
+    }
+    Ok(outcomes)
+}
+
+fn inspection_outcome(label: String, prepared: PreparedPackage) -> SkillPackageInspectionOutcome {
+    let package_root = prepared.package_root.clone();
+    match inspect_prepared(&prepared) {
+        Ok(inspection) => SkillPackageInspectionOutcome {
+            label,
+            package_root,
+            inspection: Some(inspection),
+            error: None,
+        },
+        Err(error) => SkillPackageInspectionOutcome {
+            label,
+            package_root,
+            inspection: None,
+            error: Some(error),
+        },
+    }
+}
+
 fn inspect_prepared(prepared: &PreparedPackage) -> Result<SkillPackageInspection, String> {
     let files = collect_package_files(&prepared.root)?;
     let skill_file = files
         .iter()
-        .find(|f| f.relative.file_name().and_then(|n| n.to_str()) == Some("SKILL.md"))
-        .ok_or("技能包缺少 SKILL.md")?;
+        .find(|file| file.relative == Path::new("SKILL.md"))
+        .ok_or("技能包根目录缺少 SKILL.md")?;
     let markdown = read_skill_text(&skill_file.absolute, MAX_FILE_BYTES)
         .map_err(|e| format!("SKILL.md 必须是 UTF-8 文本：{e}"))?;
     let (name, description, version, mut warnings) =
@@ -617,6 +800,7 @@ fn inspect_prepared(prepared: &PreparedPackage) -> Result<SkillPackageInspection
     let installed = find_managed_by_name(&name);
     Ok(SkillPackageInspection {
         source_path: prepared.source_path.clone(),
+        package_root: prepared.package_root.clone(),
         name,
         description,
         version,
@@ -682,25 +866,116 @@ fn add_capability_risk_findings(
 }
 
 fn locate_skill_root(root: &Path) -> Result<PathBuf, String> {
+    let roots = discover_skill_roots(root)?;
+    select_skill_root(root, &roots, None)
+}
+
+fn discover_skill_roots(root: &Path) -> Result<Vec<PathBuf>, String> {
+    discover_skill_roots_with_limit(root, MAX_DISCOVERED_PACKAGES)
+}
+
+fn discover_skill_roots_with_limit(
+    root: &Path,
+    max_packages: usize,
+) -> Result<Vec<PathBuf>, String> {
     let mut hits = Vec::new();
-    find_skill_files(root, root, 0, &mut hits)?;
-    match hits.as_slice() {
-        [] => Err("未找到 SKILL.md".into()),
-        [only] => Ok(only.parent().unwrap_or(root).to_path_buf()),
-        _ => Err("一次只能安装一个技能，所选内容包含多个 SKILL.md".into()),
+    let mut scanned = 0usize;
+    find_skill_files(root, root, 0, &mut scanned, &mut hits)?;
+    if hits.is_empty() {
+        return Err("未找到 SKILL.md".into());
     }
+    hits.sort_by(|left, right| {
+        let left_root = left.parent().unwrap_or(root);
+        let right_root = right.parent().unwrap_or(root);
+        left_root
+            .components()
+            .count()
+            .cmp(&right_root.components().count())
+            .then_with(|| left_root.cmp(right_root))
+    });
+
+    // A SKILL.md below another Skill root is reference material belonging to
+    // that package, not an independent package. This mirrors the runtime
+    // catalog, which only treats top-level logical roots as installable Skills.
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for hit in hits {
+        let candidate = hit.parent().unwrap_or(root).to_path_buf();
+        if roots
+            .iter()
+            .any(|parent| candidate != *parent && candidate.starts_with(parent))
+        {
+            continue;
+        }
+        roots.push(candidate);
+        if roots.len() > max_packages {
+            return Err(format!("一次最多处理 {max_packages} 个独立技能，请拆分后重试"));
+        }
+    }
+    Ok(roots)
+}
+
+fn select_skill_root(
+    base: &Path,
+    roots: &[PathBuf],
+    requested_package_root: Option<&str>,
+) -> Result<PathBuf, String> {
+    if let Some(requested) = requested_package_root {
+        let requested_path = Path::new(requested);
+        validate_relative_path(requested_path)?;
+        for root in roots {
+            if relative_package_root(base, root)?.as_deref() == Some(requested) {
+                return Ok(root.clone());
+            }
+        }
+        return Err("所选子技能已不存在或路径已变化，请重新检查技能包".into());
+    }
+    match roots {
+        [only] => Ok(only.clone()),
+        _ => Err(format!(
+            "所选内容包含 {} 个独立技能，请使用批量安装入口",
+            roots.len()
+        )),
+    }
+}
+
+fn relative_package_root(base: &Path, root: &Path) -> Result<Option<String>, String> {
+    let relative = root
+        .strip_prefix(base)
+        .map_err(|_| "技能根目录超出所选内容")?;
+    if relative.as_os_str().is_empty() {
+        return Ok(None);
+    }
+    validate_relative_path(relative)?;
+    let components = relative
+        .components()
+        .map(|component| {
+            component
+                .as_os_str()
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "技能子目录名称必须是有效 UTF-8".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some(components.join("/")))
 }
 
 fn find_skill_files(
     base: &Path,
     dir: &Path,
     depth: usize,
+    scanned: &mut usize,
     hits: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
     if depth > MAX_DEPTH {
         return Err(format!("技能目录嵌套超过 {MAX_DEPTH} 层"));
     }
     for entry in fs::read_dir(dir).map_err(|e| format!("读取技能目录失败：{e}"))? {
+        *scanned += 1;
+        if *scanned > MAX_DISCOVERY_ENTRIES {
+            return Err(format!(
+                "所选目录包含超过 {MAX_DISCOVERY_ENTRIES} 个条目，请缩小范围后重试"
+            ));
+        }
         let entry = entry.map_err(|e| format!("读取技能目录失败：{e}"))?;
         let path = entry.path();
         let meta = fs::symlink_metadata(&path).map_err(|e| format!("读取技能文件失败：{e}"))?;
@@ -711,10 +986,13 @@ fn find_skill_files(
             if ignored_dir(&path) {
                 continue;
             }
-            find_skill_files(base, &path, depth + 1, hits)?;
+            find_skill_files(base, &path, depth + 1, scanned, hits)?;
         } else if meta.is_file() && entry.file_name() == "SKILL.md" {
             let relative = path.strip_prefix(base).map_err(|_| "技能文件超出根目录")?;
             validate_relative_path(relative)?;
+            if hits.len() >= MAX_FILES {
+                return Err(format!("SKILL.md 数量超过 {MAX_FILES} 个限制"));
+            }
             hits.push(path);
         }
     }
@@ -1343,13 +1621,112 @@ mod tests {
     }
 
     #[test]
-    fn package_rejects_multiple_skill_files() {
+    fn single_package_entry_rejects_multiple_independent_skills() {
         let dir = tempfile::tempdir().unwrap();
         write_skill(&dir.path().join("one"), "one");
         write_skill(&dir.path().join("two"), "two");
         assert!(locate_skill_root(dir.path())
             .unwrap_err()
-            .contains("一次只能安装一个"));
+            .contains("2 个独立技能"));
+    }
+
+    #[test]
+    fn nested_skill_markdown_is_reference_material_not_a_second_package() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(dir.path(), "Use references/example/SKILL.md.");
+        write_skill(&dir.path().join("references/example"), "Reference only.");
+
+        let roots = discover_skill_roots(dir.path()).unwrap();
+        assert_eq!(roots, vec![dir.path().to_path_buf()]);
+
+        let prepared = prepare_package(dir.path()).unwrap();
+        let report = inspect_prepared(&prepared).unwrap();
+        assert_eq!(report.file_count, 2);
+        assert_eq!(report.package_root, None);
+        assert!(prepared.root.join("references/example/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn bundle_inspection_expands_and_selects_independent_skills() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(&dir.path().join("one"), "one");
+        write_skill(&dir.path().join("two"), "two");
+
+        let outcomes = inspect_paths(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0].package_root.as_deref(), Some("one"));
+        assert_eq!(outcomes[1].package_root.as_deref(), Some("two"));
+        assert!(outcomes.iter().all(|outcome| outcome.inspection.is_some()));
+
+        let selected = prepare_selected_package(dir.path(), Some("two")).unwrap();
+        assert_eq!(selected.package_root.as_deref(), Some("two"));
+        assert!(selected.root.join("SKILL.md").is_file());
+        assert!(!selected.root.join("one").exists());
+
+        let managed = tempfile::tempdir().unwrap();
+        let inspection = inspect_prepared(&selected).unwrap();
+        let installed = install_prepared(&selected, inspection, managed.path()).unwrap();
+        let manifest = read_manifest(Path::new(&installed.installed_path)).unwrap();
+        assert_eq!(manifest.package_root.as_deref(), Some("two"));
+        assert!(prepare_selected_package(dir.path(), Some("../one"))
+            .err()
+            .unwrap()
+            .contains("不安全路径"));
+    }
+
+    #[test]
+    fn zip_bundle_expands_siblings_but_keeps_nested_skill_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip_path = dir.path().join("bundle.zip");
+        let output = fs::File::create(&zip_path).unwrap();
+        let mut writer = zip::ZipWriter::new(output);
+        let options = zip::write::SimpleFileOptions::default();
+        for (path, name) in [
+            ("one/SKILL.md", "one-skill"),
+            ("one/references/example/SKILL.md", "reference-only"),
+            ("two/SKILL.md", "two-skill"),
+        ] {
+            writer.start_file(path, options).unwrap();
+            writer
+                .write_all(format!("---\nname: {name}\ndescription: test\n---\nBody").as_bytes())
+                .unwrap();
+        }
+        writer.finish().unwrap();
+
+        let outcomes = inspect_paths(zip_path.to_str().unwrap()).unwrap();
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0].package_root.as_deref(), Some("one"));
+        assert_eq!(outcomes[1].package_root.as_deref(), Some("two"));
+
+        let selected = prepare_selected_package(&zip_path, Some("one")).unwrap();
+        assert!(selected.root.join("SKILL.md").is_file());
+        assert!(selected.root.join("references/example/SKILL.md").is_file());
+        assert!(!selected.root.join("two").exists());
+    }
+
+    #[test]
+    fn bundle_keeps_valid_siblings_when_one_skill_is_invalid() {
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(&dir.path().join("valid"), "valid");
+        fs::create_dir_all(dir.path().join("broken")).unwrap();
+        fs::write(dir.path().join("broken/SKILL.md"), "").unwrap();
+
+        let outcomes = inspect_paths(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| outcome.inspection.is_some())
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| outcome.error.is_some())
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -1364,8 +1741,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_skill(dir.path(), "Use this carefully.");
         fs::write(dir.path().join(INSTALL_MANIFEST), "private").unwrap();
-        fs::create_dir_all(dir.path().join("references")).unwrap();
+        fs::create_dir_all(dir.path().join("references/example")).unwrap();
         fs::write(dir.path().join("references/policy.md"), "policy").unwrap();
+        fs::write(
+            dir.path().join("references/example/SKILL.md"),
+            "nested reference",
+        )
+        .unwrap();
 
         let (name, bytes) =
             package_skill_for_upload(dir.path().join("SKILL.md").to_str().unwrap()).unwrap();
@@ -1373,6 +1755,7 @@ mod tests {
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         assert!(archive.by_name("SKILL.md").is_ok());
         assert!(archive.by_name("references/policy.md").is_ok());
+        assert!(archive.by_name("references/example/SKILL.md").is_ok());
         assert!(archive.by_name(INSTALL_MANIFEST).is_err());
     }
 }

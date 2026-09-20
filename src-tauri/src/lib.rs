@@ -437,6 +437,7 @@ pub fn run() {
             skills::skills_remove,
             skills::skills_toggle,
             skill_installer::skills_inspect_package,
+            skill_installer::skills_inspect_packages,
             skill_installer::skills_install_package,
             skill_installer::skills_uninstall_package,
             // organization server connection, RAG, documents, and managed Skills

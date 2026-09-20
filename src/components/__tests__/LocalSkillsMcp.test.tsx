@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 
 const mocks = vi.hoisted(() => ({
   inspect: vi.fn(),
+  inspectMany: vi.fn(),
   install: vi.fn(),
   catalogRead: vi.fn(),
   mcpList: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("@/stores/session-store", () => {
 vi.mock("@/lib/ensure-session", () => ({ ensureSession: vi.fn(async () => "session-1") }));
 vi.mock("@/lib/agent-client", () => ({
   skillsInspectPackage: mocks.inspect,
+  skillsInspectPackages: mocks.inspectMany,
   skillsInstallPackage: mocks.install,
   skillsCatalogReadSkill: mocks.catalogRead,
   filesystemPickFiles: mocks.pickFiles,
@@ -54,7 +56,7 @@ describe("本地 Skills / MCP 完整流程", () => {
     vi.clearAllMocks();
     mocks.pickFiles.mockResolvedValue(["/tmp/demo-skill"]);
     mocks.pickDirectory.mockResolvedValue("/tmp/demo-skill");
-    mocks.inspect.mockResolvedValue({
+    const inspection = {
       sourcePath: "/tmp/demo-skill",
       name: "demo-skill",
       description: "Demo",
@@ -94,7 +96,9 @@ describe("本地 Skills / MCP 完整流程", () => {
       },
       sourceHash: "a".repeat(64),
       alreadyInstalled: false,
-    });
+    };
+    mocks.inspect.mockResolvedValue(inspection);
+    mocks.inspectMany.mockResolvedValue([{ label: "demo-skill", inspection }]);
     mocks.install.mockResolvedValue({
       installedPath: "/tmp/managed/demo-skill",
       updated: false,
@@ -125,7 +129,7 @@ describe("本地 Skills / MCP 完整流程", () => {
   });
 
   it("低风险 Skill 默认也只检查，需要用户显式点击安装", async () => {
-    mocks.inspect.mockResolvedValueOnce({
+    const inspection = {
       sourcePath: "/tmp/demo-skill",
       name: "demo-skill",
       description: "Demo",
@@ -137,7 +141,8 @@ describe("本地 Skills / MCP 完整流程", () => {
       warnings: [],
       sourceHash: "b".repeat(64),
       alreadyInstalled: false,
-    });
+    };
+    mocks.inspectMany.mockResolvedValueOnce([{ label: "demo-skill", inspection }]);
     render(<ImportSkillModal onClose={vi.fn()} />);
 
     expect(screen.getByRole("checkbox", { name: /低风险时自动安装/ })).not.toBeChecked();

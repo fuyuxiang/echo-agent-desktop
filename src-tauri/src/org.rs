@@ -3081,7 +3081,6 @@ fn extract_skill_package(
             return Err("Skill ZIP contains too many files".into());
         }
         let mut total = 0u64;
-        let mut skill_entries = 0usize;
         for index in 0..archive.len() {
             let mut file = archive
                 .by_index(index)
@@ -3102,12 +3101,6 @@ fn extract_skill_package(
                 .to_path_buf();
             if relative.components().count() > 12 {
                 return Err("Skill ZIP directory nesting is too deep".into());
-            }
-            if relative.file_name().is_some_and(|name| name == "SKILL.md") {
-                skill_entries += 1;
-                if skill_entries > 1 {
-                    return Err("Skill ZIP must contain exactly one SKILL.md entry".into());
-                }
             }
             let target = temp.join(relative);
             if file.is_dir() {
@@ -3135,8 +3128,11 @@ fn extract_skill_package(
                 .set_permissions(permissions)
                 .map_err(|e| format!("protect managed Skill file: {e}"))?;
         }
-        if skill_entries != 1 || !temp.join("SKILL.md").is_file() {
-            return Err("Skill ZIP root must contain exactly one SKILL.md".into());
+        // Only the root entry defines the installed Skill. Nested SKILL.md
+        // files are legitimate reference material and are kept in the signed
+        // package just like any other documentation.
+        if !temp.join("SKILL.md").is_file() {
+            return Err("Skill ZIP root must contain SKILL.md".into());
         }
         echo_agent_tools::implementations::skills::capability::load_manifest(&temp)
             .map_err(|error| format!("Skill capability manifest is invalid: {error}"))?;
@@ -4523,16 +4519,28 @@ mod tests {
             )
             .unwrap();
         writer.write_all(b"approved policy").unwrap();
+        writer
+            .start_file(
+                "references/example/SKILL.md",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        writer.write_all(b"nested reference instructions").unwrap();
         let package = writer.finish().unwrap().into_inner();
 
         let temp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(temp.path().join("references")).unwrap();
+        std::fs::create_dir_all(temp.path().join("references/example")).unwrap();
         std::fs::write(
             temp.path().join("SKILL.md"),
             b"---\nname: verified\nversion: 1.0.0\n---\n",
         )
         .unwrap();
         std::fs::write(temp.path().join("references/policy.md"), b"approved policy").unwrap();
+        std::fs::write(
+            temp.path().join("references/example/SKILL.md"),
+            b"nested reference instructions",
+        )
+        .unwrap();
         assert!(verify_extracted_skill(&package, temp.path()).is_ok());
 
         std::fs::write(temp.path().join("SKILL.md"), b"tampered instructions").unwrap();

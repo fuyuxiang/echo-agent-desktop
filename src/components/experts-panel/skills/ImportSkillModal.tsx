@@ -1,6 +1,11 @@
 import { useMemo, useRef, useState } from "react";
 import { XCloseIcon, FolderOpenIcon } from "@/foundation/components/Icon/icons";
-import { filesystemPickDirectory, filesystemPickFiles, skillsInspectPackage, skillsInstallPackage } from "@/lib/agent-client";
+import {
+  filesystemPickDirectory,
+  filesystemPickFiles,
+  skillsInspectPackages,
+  skillsInstallPackage,
+} from "@/lib/agent-client";
 import type { SkillPackageInspection, SkillRiskLevel } from "@/lib/types";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { SkillCapabilityStatus } from "./SkillCapabilityStatus";
@@ -17,6 +22,10 @@ interface PendingItem {
   id: string;
   /** 用户选中的本地绝对路径。 */
   path: string;
+  /** 列表中显示的文件名或包内相对路径。 */
+  displayName: string;
+  /** 目录/ZIP 中某个独立技能的相对根路径。 */
+  packageRoot?: string;
   status: "inspecting" | "ready" | "installing" | "done" | "error";
   inspection: SkillPackageInspection | null;
   error: string | null;
@@ -54,10 +63,7 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-/** Managed local Skill installer: inspect first, then copy/update atomically.
- *
- * 重写为列表队列:支持多选文件/批量 inspect,提供「安装全部低风险」与逐项安装。
- * 选择目录仍走单条 inspect(目录本身就是一个技能包,不是多个)。 */
+/** Managed local Skill installer: discover, inspect, then install atomically. */
 export function ImportSkillModal({
   onClose, onToast, onInstalled,
 }: {
@@ -87,27 +93,47 @@ export function ImportSkillModal({
   };
 
   const createPendingItem = (path: string): PendingItem => ({
-      id: nextItemId(),
-      path,
-      status: "inspecting",
-      inspection: null,
-      error: null,
-      approvedHighRisk: false,
+    id: nextItemId(),
+    path,
+    displayName: basenameOf(path),
+    status: "inspecting",
+    inspection: null,
+    error: null,
+    approvedHighRisk: false,
   });
 
-  const inspectOne = async (item: PendingItem): Promise<PendingItem> => {
+  const inspectOne = async (item: PendingItem): Promise<PendingItem[]> => {
     try {
-      const report = await skillsInspectPackage(item.path);
-      const completedItem: PendingItem = { ...item, status: "ready", inspection: report };
+      const outcomes = await skillsInspectPackages(item.path);
+      if (outcomes.length === 0) throw new Error("未发现可安装的技能");
+      const completedItems = outcomes.map((outcome, index): PendingItem => {
+        const inspection = outcome.inspection ?? null;
+        const error = outcome.error
+          ?? (inspection ? null : "该技能未返回检查结果");
+        const packageRoot = outcome.packageRoot ?? inspection?.packageRoot;
+        const outcomeLabel = outcome.label || packageRoot || item.displayName;
+        return {
+          ...item,
+          id: index === 0 ? item.id : nextItemId(),
+          displayName: packageRoot
+            ? `${item.displayName} / ${outcomeLabel}`
+            : outcomeLabel,
+          packageRoot,
+          status: inspection ? "ready" : "error",
+          inspection,
+          error,
+          approvedHighRisk: false,
+        };
+      });
       updateItems((prev) =>
-        prev.map((it) => (it.id === item.id ? completedItem : it)),
+        prev.flatMap((it) => (it.id === item.id ? completedItems : [it])),
       );
-      return completedItem;
+      return completedItems;
     } catch (e) {
       const message = String(e).replace(/^Error:\s*/, "");
       const failed: PendingItem = { ...item, status: "error", error: message };
       updateItems((prev) => prev.map((it) => (it.id === item.id ? failed : it)));
-      return failed;
+      return [failed];
     }
   };
 
@@ -125,7 +151,14 @@ export function ImportSkillModal({
       prev.map((it) => (it.id === id ? { ...it, status: "installing" } : it)),
     );
     try {
-      const result = await skillsInstallPackage(target.path, inspection.sourceHash, approve);
+      const result = target.packageRoot === undefined
+        ? await skillsInstallPackage(target.path, inspection.sourceHash, approve)
+        : await skillsInstallPackage(
+            target.path,
+            inspection.sourceHash,
+            approve,
+            target.packageRoot,
+          );
       updateItems((prev) =>
         prev.map((it) =>
           it.id === id ? { ...it, status: "done", inspection: result.inspection } : it,
@@ -183,7 +216,7 @@ export function ImportSkillModal({
       const pending = selected.map(createPendingItem);
       updateItems((prev) => [...prev, ...pending]);
       // 本地解压和风险扫描最多 3 路并发，避免大批量包同时占用内存和线程。
-      const inspected = await mapWithConcurrency(pending, 3, inspectOne);
+      const inspected = (await mapWithConcurrency(pending, 3, inspectOne)).flat();
       // 先等待整批检查完成,才能对 Skill 名做去重并串行安装。
       if (autoInstall) await installLowRiskItems(inspected);
     } catch (cause) {
@@ -199,7 +232,7 @@ export function ImportSkillModal({
       const pending = createPendingItem(selected);
       updateItems((prev) => [...prev, pending]);
       const inspected = await inspectOne(pending);
-      if (autoInstall) await installLowRiskItems([inspected]);
+      if (autoInstall) await installLowRiskItems(inspected);
     } catch (cause) {
       setGlobalError(`选择技能文件夹失败：${String(cause).replace(/^Error:\s*/, "")}`);
     }
@@ -212,6 +245,7 @@ export function ImportSkillModal({
     [items],
   );
   const busy = isBusy(items);
+  const identifying = items.some((item) => item.status === "inspecting");
 
   return (
     <div className="modal-overlay sk-import-overlay" onClick={(event) => {
@@ -229,7 +263,7 @@ export function ImportSkillModal({
         <div className="sk-import-head">
           <div>
             <h3>安装本地技能</h3>
-            <p>可一次选择多个 Markdown / ZIP，逐项检查后批量安装低风险项</p>
+            <p>可多选 Markdown / ZIP，也可从文件夹或 ZIP 中自动识别多个技能</p>
           </div>
           <button
             type="button"
@@ -262,7 +296,7 @@ export function ImportSkillModal({
             </div>
           </div>
           <button type="button" className="sk-import-folder" onClick={pickFolder} disabled={busy}>
-            或选择一个包含 SKILL.md 的文件夹
+            或选择技能文件夹（自动识别全部技能）
           </button>
 
           <label className="sk-import-check">
@@ -280,7 +314,11 @@ export function ImportSkillModal({
           {items.length > 0 && (
             <div className="sk-batch">
               <div className="sk-batch-head">
-                <span>已选择 {items.length} 个技能包</span>
+                <span>
+                  {identifying
+                    ? `正在识别技能，当前 ${items.length} 项`
+                    : `已识别 ${items.length} 个技能`}
+                </span>
                 {readyLowCount > 0 && (
                   <button
                     type="button"
@@ -314,6 +352,7 @@ export function ImportSkillModal({
               <div className="sk-import-req-title">安装检查</div>
               <ul className="sk-import-req-list">
                 <li>验证 SKILL.md、文件数量、大小和目录安全</li>
+                <li>自动区分并列技能与技能内嵌套的参考文档</li>
                 <li>校验 echo.skill.json 执行入口、依赖、账号和产物契约</li>
                 <li>扫描脚本、敏感文件访问、网络和依赖安装风险</li>
                 <li>生成内容指纹，并支持后续原子更新和安全卸载</li>
@@ -340,7 +379,7 @@ function SkillBatchRow({
   onRemove: () => void;
 }) {
   const inspection = item.inspection;
-  const fileName = basenameOf(item.path);
+  const fileName = item.displayName;
   const requiresApproval =
     inspection?.riskLevel === "high" && item.status === "ready";
   const canInstall =
@@ -355,7 +394,12 @@ function SkillBatchRow({
   return (
     <li className={`sk-batch-row sk-batch-row--${item.status}`}>
       <div className="sk-batch-row-main">
-        <div className="sk-batch-row-name" title={item.path}>{fileName}</div>
+        <div
+          className="sk-batch-row-name"
+          title={item.packageRoot ? `${item.path} / ${item.packageRoot}` : item.path}
+        >
+          {fileName}
+        </div>
         <div className="sk-batch-row-status">
           {item.status === "inspecting" && <span>检查中…</span>}
           {item.status === "ready" && inspection && (

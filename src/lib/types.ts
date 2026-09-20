@@ -486,6 +486,8 @@ export interface SkillCapabilityReport {
 
 export interface SkillPackageInspection {
   sourcePath: string;
+  /** Relative Skill root when a directory or ZIP contains multiple Skills. */
+  packageRoot?: string;
   name: string;
   description: string;
   version?: string;
@@ -499,6 +501,14 @@ export interface SkillPackageInspection {
   sourceHash: string;
   alreadyInstalled: boolean;
   installedPath?: string;
+}
+
+/** Per-Skill result returned while expanding a folder or ZIP bundle. */
+export interface SkillPackageInspectionOutcome {
+  label: string;
+  packageRoot?: string;
+  inspection?: SkillPackageInspection;
+  error?: string;
 }
 
 export interface SkillInstallResult {
