@@ -2548,7 +2548,7 @@
 .coding-palette__scrim {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: var(--echo-layer-dialog);
   display: flex;
   justify-content: center;
   padding-top: 12vh;

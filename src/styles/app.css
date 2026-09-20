@@ -178,7 +178,7 @@
    * .main-topbar's backdrop-filter stacking context, where the later chat
    * error/utility bars would otherwise cover it and intercept its clicks. */
   position: fixed;
-  z-index: 1200;
+  z-index: var(--echo-layer-popover);
   min-width: 168px;
   max-width: calc(100vw - 16px);
   box-sizing: border-box;
@@ -817,7 +817,7 @@
 .feedback-dialog__overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: var(--echo-layer-dialog);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3458,7 +3458,7 @@ button.knowledge-trace__item:hover {
   position: fixed;
   top: 0;
   left: 0;
-  z-index: 9999;
+  z-index: var(--echo-layer-drag);
   pointer-events: none;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   cursor: grabbing;
@@ -4308,14 +4308,14 @@ button.diff__path {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1100;
+  z-index: var(--echo-layer-dialog);
 }
 
 /* Shared in-app replacement for native confirm/prompt dialogs. */
 .app-dialog-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1500;
+  z-index: var(--echo-layer-confirm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4397,7 +4397,7 @@ button.diff__path {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: var(--echo-layer-dialog);
   animation: settings-fade-in 0.15s ease-out;
 }
 @keyframes settings-fade-in {
@@ -4694,7 +4694,7 @@ button.diff__path {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1001;
+  z-index: var(--echo-layer-dialog-local);
   animation: settings-fade-in 0.12s ease-out;
 }
 .models-settings-panel__editor {
@@ -5421,7 +5421,7 @@ button.diff__path {
   bottom: 48px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 200;
+  z-index: var(--echo-layer-toast);
   padding: 8px 16px;
   background: var(--echo-bg-pill-active);
   color: var(--echo-text-white);
@@ -5622,7 +5622,7 @@ button.diff__path {
   border-radius: 12px;
   background: var(--echo-bg-primary);
   box-shadow: 0 12px 32px rgba(0, 0, 0, .14), 0 2px 8px rgba(0, 0, 0, .06);
-  z-index: 1250;
+  z-index: var(--echo-layer-popover);
 }
 .knowledge-picker__heading {
   padding: 2px 4px 4px;
@@ -5827,7 +5827,7 @@ button.diff__path {
   border-radius: 12px;
   box-shadow: 0 8px 24px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.06);
   padding: 6px 0;
-  z-index: 1200;
+  z-index: var(--echo-layer-popover);
   animation: iam-fadeIn .15s ease-out;
 }
 @keyframes iam-fadeIn {
@@ -5897,7 +5897,7 @@ button.diff__path {
   border-radius: 12px;
   box-shadow: 0 8px 24px rgba(0,0,0,.12), 0 2px 8px rgba(0,0,0,.06);
   padding: 6px 0;
-  z-index: 1201;
+  z-index: calc(var(--echo-layer-popover) + 1);
   animation: iam-fadeIn .12s ease-out;
 }
 .iam-submenu__scroll {
@@ -7205,7 +7205,7 @@ button.diff__path {
   border-radius: 12px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
   padding: 6px;
-  z-index: 1200;
+  z-index: var(--echo-layer-popover);
   animation: sidebarMoreFadeIn 0.14s ease-out;
 }
 @keyframes sidebarMoreFadeIn {
@@ -7367,7 +7367,7 @@ button.diff__path {
   border-radius: 12px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06), 0 4px 8px rgba(0, 0, 0, 0.04);
   padding: 8px;
-  z-index: 1200;
+  z-index: var(--echo-layer-popover);
   animation: taskFilterFadeIn 0.14s ease-out;
 }
 @keyframes taskFilterFadeIn {
@@ -7632,7 +7632,7 @@ button.diff__path {
   border: 1px solid var(--echo-border-default);
   border-radius: var(--echo-radius-md, 6px);
   box-shadow: var(--echo-shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.16));
-  z-index: 50;
+  z-index: var(--echo-layer-popover);
 }
 /* Selectors portal into body and receive viewport-clamped fixed coordinates
    inline, so rounded cards and scroll containers cannot clip them. */
@@ -7722,7 +7722,7 @@ button.diff__path {
   align-items: flex-start;
   justify-content: center;
   padding-top: 12vh;
-  z-index: 900;
+  z-index: var(--echo-layer-dialog);
   animation: settings-fade-in 0.12s ease-out;
 }
 .conversation-search-modal {
@@ -9411,7 +9411,7 @@ button.diff__path {
 .about-dialog__overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: var(--echo-layer-dialog);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -9540,7 +9540,7 @@ button.diff__path {
 .update-dialog__overlay {
   position: fixed;
   inset: 0;
-  z-index: 1100;
+  z-index: var(--echo-layer-update);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -9653,7 +9653,7 @@ button.diff__path {
   border: 1px solid var(--echo-border-default);
   border-radius: 12px;
   box-shadow: var(--echo-shadow-lg, 0 10px 40px rgba(0, 0, 0, 0.2));
-  z-index: 1200;
+  z-index: var(--echo-layer-popover);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -10504,7 +10504,7 @@ button.diff__path {
   right: 0;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 900;
+  z-index: var(--echo-layer-float);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -10541,7 +10541,7 @@ button.diff__path {
   right: 40px;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 901;
+  z-index: calc(var(--echo-layer-float) + 1);
   width: 300px;
   max-height: 480px;
   display: flex;
@@ -10552,6 +10552,20 @@ button.diff__path {
   box-shadow: var(--echo-shadow-lg, 0 14px 48px rgba(0, 0, 0, 0.22));
   padding: 12px;
   animation: secondary-sidebar__slide-in 0.18s ease;
+}
+
+/* CSS is the no-flash safety net while the modal focus registry is being
+ * updated after mount. SecondarySidebar also unmounts these nodes in React so
+ * the hover state cannot reappear when the dialog closes. */
+body:has([aria-modal="true"]) .secondary-sidebar__trigger,
+body:has([aria-modal="true"]) .secondary-sidebar__floating {
+  display: none;
+}
+
+/* Programmatic dialogs do not necessarily generate a click/pointerout before
+ * mounting, so suppress an old page hint during the focus-registry handoff. */
+body:has([aria-modal="true"]) .global-tooltip {
+  display: none;
 }
 @keyframes secondary-sidebar__slide-in {
   from {
@@ -10702,7 +10716,7 @@ button.diff__path {
 .trust-dialog__overlay {
   position: fixed;
   inset: 0;
-  z-index: 1100;
+  z-index: var(--echo-layer-critical);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -11117,7 +11131,7 @@ button.diff__path {
 .myfiles-filter-wrap { position: relative; }
 .myfiles-filter-btn { height: 32px; padding: 0 14px; border-radius: 6px; border: 1px solid var(--echo-border-default); background: var(--echo-bg-secondary); color: var(--echo-text-medium); font-size: 12px; cursor: pointer; transition: all .12s ease; white-space: nowrap; }
 .myfiles-filter-btn:hover { border-color: var(--echo-brand); }
-.myfiles-filter-dropdown { position: absolute; top: calc(100% + 4px); left: 0; min-width: 140px; background: var(--echo-bg-primary); border: 1px solid var(--echo-border-default); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: 4px 0; z-index: 1200; }
+.myfiles-filter-dropdown { position: absolute; top: calc(100% + 4px); left: 0; min-width: 140px; background: var(--echo-bg-primary); border: 1px solid var(--echo-border-default); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: 4px 0; z-index: var(--echo-layer-popover); }
 .myfiles-filter-option { display: block; width: 100%; padding: 7px 14px; border: none; background: none; text-align: left; font-size: 12px; color: var(--echo-text-medium); cursor: pointer; transition: background .12s ease; }
 .myfiles-filter-option:hover { background: var(--echo-bg-secondary); }
 .myfiles-filter-option--active { color: var(--echo-brand); font-weight: 500; }
@@ -11155,7 +11169,7 @@ button.diff__path {
 .memory-editor__overlay {
   position: fixed;
   inset: 0;
-  z-index: 1100;
+  z-index: var(--echo-layer-dialog);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -11608,7 +11622,7 @@ button.diff__path {
 .automation-editor__overlay {
   position: fixed;
   inset: 0;
-  z-index: 1100;
+  z-index: var(--echo-layer-dialog);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -12224,7 +12238,7 @@ button.diff__path {
 .assistant-editor__overlay {
   position: fixed;
   inset: 0;
-  z-index: 1100;
+  z-index: var(--echo-layer-dialog);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -13122,7 +13136,7 @@ button.diff__path {
 .colleagues-panel-hire-item:hover { border-color: var(--echo-brand); background: var(--echo-bg-hover); }
 
 /* Create Colleague Dialog */
-.create-colleague-overlay { z-index: 1100; }
+.create-colleague-overlay { z-index: var(--echo-layer-dialog); }
 .create-colleague-dialog { width: 620px; max-width: calc(100vw - 48px); max-height: calc(100vh - 80px); display: flex; flex-direction: column; background: var(--echo-bg-primary); border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); overflow: hidden; }
 .create-colleague-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--echo-border-default); }
 .create-colleague-header h3 { margin: 0; font-size: 16px; font-weight: 600; }
@@ -13637,7 +13651,7 @@ button.diff__path {
 .sk-toggle--locked { cursor: not-allowed; opacity: .68; }
 
 /* import modal (截图 5) */
-.sk-import-overlay { z-index: 1200; }
+.sk-import-overlay { z-index: var(--echo-layer-dialog-local); }
 .sk-import { width: 480px; max-width: calc(100vw - 40px); background: var(--echo-bg-primary); border-radius: 16px; box-shadow: 0 12px 44px rgba(0,0,0,0.22); overflow: hidden; }
 .sk-import--managed { width: 600px; max-height: calc(100vh - 64px); display: flex; flex-direction: column; }
 .sk-import-head { display: flex; align-items: center; justify-content: space-between; padding: 22px 24px; }
@@ -13780,7 +13794,7 @@ button.diff__path {
 .cn-token-help { font-size: 11.5px; color: var(--echo-text-weak); line-height: 1.5; }
 
 /* ---- MCP modal (截图 6) ---- */
-.mcp-overlay { z-index: 1200; }
+.mcp-overlay { z-index: var(--echo-layer-dialog); }
 .mcp-modal { width: 820px; max-width: calc(100vw - 48px); max-height: calc(100vh - 64px); display: flex; flex-direction: column; background: var(--echo-bg-primary); border-radius: 16px; box-shadow: 0 12px 44px rgba(0,0,0,0.22); overflow: hidden; }
 .um-scroll--mcp { display: flex; padding: 0; overflow: hidden; }
 .mcp-modal--embedded { width: 100%; max-width: none; max-height: none; height: 100%; border-radius: 0; box-shadow: none; background: transparent; }
@@ -13935,7 +13949,7 @@ button.diff__path {
 
 /* ---- Expert Detail Modal ---- */
 .ec-modal-overlay {
-  position: fixed; inset: 0; z-index: 9999;
+  position: fixed; inset: 0; z-index: var(--echo-layer-dialog);
   display: flex; align-items: center; justify-content: center;
   background: rgba(0,0,0,0.45);
   backdrop-filter: blur(2px);
@@ -14014,7 +14028,7 @@ button.diff__path {
  * Skill detail view (full-screen overlay, mirrors EchoAgent SkillDetailView)
  * ====================================================================== */
 .sk-detail-overlay {
-  position: fixed; inset: 0; z-index: 1000;
+  position: fixed; inset: 0; z-index: var(--echo-layer-dialog);
   background: rgba(0,0,0,0.35); backdrop-filter: blur(2px);
   display: flex; justify-content: center; align-items: flex-start;
   overflow-y: auto; padding: 32px 0;
@@ -14620,7 +14634,7 @@ button.diff__path {
   border: 1px solid var(--echo-border-subtle);
   border-radius: var(--echo-radius-md, 6px);
   box-shadow: var(--echo-shadow-md);
-  z-index: 1000;
+  z-index: var(--echo-layer-popover);
 }
 .at-menu__header {
   font-size: 11px;

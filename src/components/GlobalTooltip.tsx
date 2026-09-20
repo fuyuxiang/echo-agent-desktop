@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAnchoredFloating } from "@/lib/use-anchored-floating";
+import { useModalPresence } from "@/lib/use-modal-focus";
 
 interface ActiveTooltip {
   element: HTMLElement;
@@ -25,6 +26,7 @@ function tooltipTarget(value: EventTarget | null): HTMLElement | null {
  */
 export function GlobalTooltip() {
   const [active, setActive] = useState<ActiveTooltip | null>(null);
+  const modalOpen = useModalPresence();
   const hoveredRef = useRef<HTMLElement | null>(null);
   const focusedRef = useRef<HTMLElement | null>(null);
   const nextKeyRef = useRef(1);
@@ -49,6 +51,13 @@ export function GlobalTooltip() {
     focusedRef.current = null;
     setActive(null);
   }, []);
+
+  // A dialog can appear programmatically (for example an automatic update),
+  // without a pointer or keyboard activation that would normally dismiss the
+  // hint. Never let a stale page tooltip float above a newly opened scrim.
+  useEffect(() => {
+    if (modalOpen) dismiss();
+  }, [dismiss, modalOpen]);
 
   useEffect(() => {
     const onPointerOver = (event: PointerEvent) => {
@@ -78,7 +87,12 @@ export function GlobalTooltip() {
       showCurrent();
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") dismiss();
+      // Keyboard activation can open a menu without producing a click (for
+      // example ArrowDown on a menu button). Clear the hint before the newly
+      // opened surface is painted so the higher tooltip layer cannot cover it.
+      if (["Escape", "Enter", " ", "ArrowDown", "ArrowUp"].includes(event.key)) {
+        dismiss();
+      }
     };
 
     document.addEventListener("pointerover", onPointerOver);
@@ -111,7 +125,7 @@ export function GlobalTooltip() {
     return () => observer.disconnect();
   }, [active, dismiss]);
 
-  return active ? (
+  return active && !modalOpen ? (
     <TooltipBubble key={active.key} anchor={active.element} text={active.text} />
   ) : null;
 }
@@ -130,7 +144,7 @@ function TooltipBubble({ anchor, text }: { anchor: HTMLElement; text: string }) 
       width: "content",
       estimatedHeight: 30,
       offset: 6,
-      zIndex: 2000,
+      zIndex: "var(--echo-layer-tooltip)",
     },
   );
 

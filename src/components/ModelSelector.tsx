@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, Check } from "lucide-react";
 import {
@@ -32,6 +32,7 @@ export function ModelSelector({
   menuPlacement = "top",
   menuAlign = "end",
   menuWidth = "content",
+  menuZIndex,
 }: {
   /** Currently selected model id (displayed on the trigger). */
   modelId?: string;
@@ -45,6 +46,8 @@ export function ModelSelector({
   menuPlacement?: FloatingPlacement;
   menuAlign?: FloatingAlignment;
   menuWidth?: FloatingWidth;
+  /** Use the dialog-local layer when this portalled menu is launched inside a modal. */
+  menuZIndex?: CSSProperties["zIndex"];
 }) {
   const [open, setOpen] = useState(false);
   const reactId = useId();
@@ -63,6 +66,7 @@ export function ModelSelector({
       width: menuWidth,
       estimatedHeight: Math.min(320, Math.max(52, models.length * 48 + 8)),
       offset: 6,
+      zIndex: menuZIndex,
     },
   );
 

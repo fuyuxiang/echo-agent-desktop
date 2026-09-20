@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { GlobalTooltip } from "../GlobalTooltip";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 function rect(left: number, top: number, width = 32, height = 32): DOMRect {
   return {
@@ -14,6 +15,11 @@ function rect(left: number, top: number, width = 32, height = 32): DOMRect {
     height,
     toJSON: () => ({}),
   };
+}
+
+function ProgrammaticDialog() {
+  const ref = useModalFocus<HTMLDivElement>(true, () => {});
+  return <div ref={ref} role="dialog" aria-modal="true" aria-label="程序弹窗" tabIndex={-1} />;
 }
 
 describe("GlobalTooltip", () => {
@@ -34,7 +40,7 @@ describe("GlobalTooltip", () => {
     const tooltip = screen.getByRole("tooltip");
     expect(tooltip).toHaveTextContent("更多操作");
     expect(tooltip.parentElement).toBe(document.body);
-    expect(tooltip).toHaveStyle({ position: "fixed", zIndex: "2000" });
+    expect(tooltip).toHaveStyle({ position: "fixed", zIndex: "var(--echo-layer-tooltip)" });
     expect(trigger).toHaveAttribute("aria-describedby", tooltip.id);
   });
 
@@ -71,5 +77,43 @@ describe("GlobalTooltip", () => {
 
     fireEvent.click(trigger);
     expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("方向键打开菜单前会清理键盘 tooltip", () => {
+    render(
+      <>
+        <button type="button" data-tip="更多操作">更多</button>
+        <GlobalTooltip />
+      </>,
+    );
+    const trigger = screen.getByRole("button", { name: "更多" });
+
+    fireEvent.focusIn(trigger);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("程序化弹窗出现时也会移除已显示的页面 tooltip", async () => {
+    const view = render(
+      <>
+        <button type="button" data-tip="页面提示">页面按钮</button>
+        <GlobalTooltip />
+      </>,
+    );
+    const trigger = screen.getByRole("button", { name: "页面按钮" });
+    fireEvent.pointerOver(trigger);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+
+    view.rerender(
+      <>
+        <button type="button" data-tip="页面提示">页面按钮</button>
+        <GlobalTooltip />
+        <ProgrammaticDialog />
+      </>,
+    );
+
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
   });
 });

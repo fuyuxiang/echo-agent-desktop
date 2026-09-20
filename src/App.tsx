@@ -94,6 +94,7 @@ import { IS_MACOS, IS_WINDOWS } from "./lib/platform";
 import { friendlyError } from "./lib/error-format";
 import { applySessionScopedFailure } from "./lib/session-scoped-failure";
 import { isGlobalShortcutBlocked } from "./lib/keyboard-scope";
+import { useModalPresence } from "./lib/use-modal-focus";
 import { hydrateKnowledgeSources } from "./lib/kb-source-storage";
 import {
   permissionModeStatusFromEvent,
@@ -298,10 +299,23 @@ function Shell() {
   const questionStore = useQuestionStore;
   const updateStatus = useUpdateStore((state) => state.status);
   const availableUpdateVersion = useUpdateStore((state) => state.update?.version);
+  const modalOpen = useModalPresence();
 
   const openSettings = useCallback((section: SettingsSectionId = "model") => {
     setSettingsSection(section);
+    setSearchOpen(false);
+    setAboutOpen(false);
     setSettingsOpen(true);
+  }, []);
+  const openSearch = useCallback(() => {
+    setSettingsOpen(false);
+    setAboutOpen(false);
+    setSearchOpen(true);
+  }, []);
+  const openAbout = useCallback(() => {
+    setSettingsOpen(false);
+    setSearchOpen(false);
+    setAboutOpen(true);
   }, []);
   const resolveTrustRequest = useCallback(() => setTrustRequest(null), []);
 
@@ -362,11 +376,18 @@ function Shell() {
   useEffect(() => {
     if (updateStatus !== "available" || !availableUpdateVersion) return;
     if (promptedUpdateVersionRef.current === availableUpdateVersion) return;
+    // Do not interrupt an operation that already owns focus. The effect runs
+    // again when the active dialog closes, so the update prompt is deferred
+    // instead of lost or stacked above an unrelated workflow.
+    if (modalOpen || settingsOpen || searchOpen || aboutOpen) return;
     promptedUpdateVersionRef.current = availableUpdateVersion;
     setUpdateDialogOpen(true);
-  }, [availableUpdateVersion, updateStatus]);
+  }, [aboutOpen, availableUpdateVersion, modalOpen, searchOpen, settingsOpen, updateStatus]);
 
   const handleCheckForUpdates = useCallback(() => {
+    setSettingsOpen(false);
+    setSearchOpen(false);
+    setAboutOpen(false);
     setUpdateDialogOpen(true);
     void useUpdateStore.getState().check(true);
   }, []);
@@ -1824,7 +1845,7 @@ function Shell() {
         handleNewSession();
       } else if (key === "k") {
         event.preventDefault();
-        setSearchOpen(true);
+        openSearch();
       } else if (event.key === ",") {
         event.preventDefault();
         openSettings("model");
@@ -1835,7 +1856,7 @@ function Shell() {
     };
     window.addEventListener("keydown", onShortcut);
     return () => window.removeEventListener("keydown", onShortcut);
-  }, [models]);
+  }, [models, openSearch, openSettings]);
 
   const handleSelectSession = async (
     sessionId: string,
@@ -2019,7 +2040,7 @@ function Shell() {
         return true;
       case "search":
       case "history":
-        setSearchOpen(true);
+        openSearch();
         return true;
       case "help":
         openSettings("help");
@@ -2318,7 +2339,7 @@ function Shell() {
       {!IS_MACOS && (
         <TitleBar
           onPlaceholder={handlePlaceholder}
-          onShowAbout={() => setAboutOpen(true)}
+          onShowAbout={openAbout}
           onCheckForUpdates={handleCheckForUpdates}
           hideMenus={IS_WINDOWS}
         />
@@ -2330,7 +2351,7 @@ function Shell() {
           onNavigate={handleNavigate}
           onOpenSettings={() => openSettings("model")}
           onToggleCollapse={() => setSidebarCollapsed(true)}
-          onOpenSearch={() => setSearchOpen(true)}
+          onOpenSearch={openSearch}
           onPlaceholder={handlePlaceholder}
           onToast={showToast}
           onOpenProject={handleOpenProjectFromSidebar}

@@ -25,10 +25,10 @@ interface AnchoredFloatingOptions {
   estimatedHeight?: number;
   offset?: number;
   viewportMargin?: number;
-  zIndex?: number;
+  zIndex?: CSSProperties["zIndex"];
 }
 
-const hiddenStyle = (zIndex: number): CSSProperties => ({
+const hiddenStyle = (zIndex: CSSProperties["zIndex"]): CSSProperties => ({
   position: "fixed",
   right: "auto",
   bottom: "auto",
@@ -54,7 +54,7 @@ export function useAnchoredFloating(
     estimatedHeight = 240,
     offset = 8,
     viewportMargin = 8,
-    zIndex = 1200,
+    zIndex = "var(--echo-layer-popover)",
   } = options;
   const [layout, setLayout] = useState<FloatingLayout | null>(null);
 

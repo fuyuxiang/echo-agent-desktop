@@ -82,7 +82,7 @@ describe("ProjectsPanel 项目操作菜单", () => {
     const menu = screen.getByRole("menu", { name: "测试项目 操作菜单" });
     expect(menu.parentElement).toBe(document.body);
     expect(menu.closest(".project-card2")).toBeNull();
-    expect(menu).toHaveStyle({ position: "fixed", zIndex: "1200" });
+    expect(menu).toHaveStyle({ position: "fixed", zIndex: "var(--echo-layer-popover)" });
     expect(menu).toHaveAttribute("data-placement", "bottom");
     expect(screen.getByRole("menuitem", { name: "删除" })).toBeVisible();
   });

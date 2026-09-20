@@ -60,7 +60,7 @@ const MENU_MARGIN = 8;
 const MENU_OFFSET = 6;
 const MENU_ESTIMATED_WIDTH = 184;
 const MENU_ESTIMATED_HEIGHT = 124;
-const MENU_Z_INDEX = 1200;
+const MENU_Z_INDEX = "var(--echo-layer-popover)";
 const MENU_ITEM_SELECTOR = '[role="menuitem"]:not(:disabled)';
 
 export function TopbarActions({

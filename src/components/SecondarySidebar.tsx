@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentsList } from "@/lib/agent-client";
 import type { AgentEntry } from "@/lib/types";
+import { useModalPresence } from "@/lib/use-modal-focus";
 import { EchoAssistantNavIcon, ChevronRightIcon } from "@/foundation/components/Icon/icons";
 
 // ---- hover-peek timing (mirrors EchoAgent use-hover-peek) ----
@@ -127,7 +128,8 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [previewAgent, setPreviewAgent] = useState<AgentEntry | null>(null);
-  const { hoverPeek, triggerBindings, floatingBindings, closePeek } = useHoverPeek(false);
+  const modalOpen = useModalPresence();
+  const { hoverPeek, triggerBindings, floatingBindings, closePeek } = useHoverPeek(modalOpen);
   const displayedPreview = previewAgent ?? agents[0] ?? null;
 
   useEffect(() => {
@@ -155,6 +157,10 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
     },
     [onSelectExpert, onToast, closePeek],
   );
+
+  // A global hover surface must never sit above a modal scrim or retain a
+  // stale open state that reappears when the dialog closes.
+  if (modalOpen) return null;
 
   return (
     <>

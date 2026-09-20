@@ -493,6 +493,7 @@ function ConfigDrawer({
                 menuPlacement="bottom"
                 menuAlign="start"
                 menuWidth="anchor"
+                menuZIndex="var(--echo-layer-dialog-popover)"
               />
               {unavailableModelId && (
                 <p className="proj-model-setting__warning" role="alert">

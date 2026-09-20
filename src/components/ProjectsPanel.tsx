@@ -67,7 +67,7 @@ const PROJECT_MENU_MARGIN = 8;
 const PROJECT_MENU_OFFSET = 4;
 const PROJECT_MENU_ESTIMATED_WIDTH = 140;
 const PROJECT_MENU_ESTIMATED_HEIGHT = 150;
-const PROJECT_MENU_Z_INDEX = 1200;
+const PROJECT_MENU_Z_INDEX = "var(--echo-layer-popover)";
 
 interface ProjectMenuPosition {
   left: number;

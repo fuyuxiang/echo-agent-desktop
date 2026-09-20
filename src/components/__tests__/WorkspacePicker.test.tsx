@@ -40,7 +40,7 @@ describe("WorkspacePicker", () => {
 
     const menu = screen.getByRole("menu", { name: "选择工作目录" });
     expect(menu.parentElement).toBe(document.body);
-    expect(menu).toHaveStyle({ position: "fixed", zIndex: "1200" });
+    expect(menu).toHaveStyle({ position: "fixed", zIndex: "var(--echo-layer-popover)" });
     expect(menu).toHaveAttribute("data-placement", "bottom");
     expect(trigger).toHaveAttribute("aria-controls", menu.id);
     expect(trigger).toHaveAttribute("data-tip", "当前工作目录：/work/one");

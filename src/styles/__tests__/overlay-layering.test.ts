@@ -1,0 +1,47 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const readCss = (name: string) =>
+  readFileSync(resolve(process.cwd(), "src/styles", name), "utf8");
+
+const tokensCss = readCss("tokens.css");
+const appCss = readCss("app.css");
+const codingCss = readCss("coding-workbench.css");
+
+function layerValue(name: string): number {
+  const match = tokensCss.match(new RegExp(`--echo-layer-${name}:\\s*(\\d+);`));
+  if (!match) throw new Error(`missing layer token: ${name}`);
+  return Number(match[1]);
+}
+
+describe("global overlay layering contract", () => {
+  it("orders hover chrome, dialogs, critical prompts and feedback deliberately", () => {
+    expect(layerValue("float")).toBeLessThan(layerValue("dialog"));
+    expect(layerValue("popover")).toBeLessThan(layerValue("dialog"));
+    expect(layerValue("dialog")).toBeLessThan(layerValue("dialog-popover"));
+    expect(layerValue("dialog-popover")).toBeLessThan(layerValue("dialog-local"));
+    expect(layerValue("dialog-local")).toBeLessThan(layerValue("confirm"));
+    expect(layerValue("confirm")).toBeLessThan(layerValue("update"));
+    expect(layerValue("update")).toBeLessThan(layerValue("critical"));
+    expect(layerValue("critical")).toBeLessThan(layerValue("toast"));
+    expect(layerValue("toast")).toBeLessThan(layerValue("tooltip"));
+  });
+
+  it("keeps every known full-screen surface on the shared contract", () => {
+    expect(appCss).toMatch(/\.conversation-search-modal__overlay\s*\{[^}]*z-index:\s*var\(--echo-layer-dialog\)/s);
+    expect(appCss).toMatch(/\.update-dialog__overlay\s*\{[^}]*z-index:\s*var\(--echo-layer-update\)/s);
+    expect(appCss).toMatch(/\.trust-dialog__overlay\s*\{[^}]*z-index:\s*var\(--echo-layer-critical\)/s);
+    expect(appCss).toMatch(/\.toast\s*\{[^}]*z-index:\s*var\(--echo-layer-toast\)/s);
+    expect(codingCss).toMatch(/\.coding-palette__scrim\s*\{[^}]*z-index:\s*var\(--echo-layer-dialog\)/s);
+  });
+
+  it("hides global hover chrome as soon as an aria-modal surface exists", () => {
+    expect(appCss).toMatch(
+      /body:has\(\[aria-modal="true"\]\) \.secondary-sidebar__trigger,[\s\S]*body:has\(\[aria-modal="true"\]\) \.secondary-sidebar__floating\s*\{\s*display:\s*none;/,
+    );
+    expect(appCss).toMatch(
+      /body:has\(\[aria-modal="true"\]\) \.global-tooltip\s*\{\s*display:\s*none;/,
+    );
+  });
+});

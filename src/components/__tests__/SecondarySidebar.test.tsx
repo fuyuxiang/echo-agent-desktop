@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { SecondarySidebar } from "../SecondarySidebar";
 import { agentsList } from "@/lib/agent-client";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 vi.mock("@/lib/agent-client", () => ({
   agentsList: vi.fn(),
@@ -32,6 +34,26 @@ async function settle() {
     vi.advanceTimersByTime(200);
     await Promise.resolve();
   });
+}
+
+function TestDialog({ onClose }: { onClose: () => void }) {
+  const ref = useModalFocus<HTMLDivElement>(true, onClose);
+  return (
+    <div ref={ref} role="dialog" aria-modal="true" aria-label="测试弹窗" tabIndex={-1}>
+      <button type="button" data-modal-initial-focus onClick={onClose}>关闭测试弹窗</button>
+    </div>
+  );
+}
+
+function ModalHarness() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>打开测试弹窗</button>
+      <SecondarySidebar onSelectExpert={vi.fn()} onToast={vi.fn()} />
+      {open && <TestDialog onClose={() => setOpen(false)} />}
+    </>
+  );
 }
 
 describe("SecondarySidebar", () => {
@@ -92,5 +114,26 @@ describe("SecondarySidebar", () => {
     fireEvent.focus(buttons[2]);
 
     expect(document.querySelector(".secondary-sidebar__preview")).toHaveTextContent("小玄子");
+  });
+
+  it("弹窗打开时移除全局悬浮入口和面板，关闭后不恢复旧 hover 状态", async () => {
+    render(<ModalHarness />);
+    await settle();
+
+    const trigger = document.querySelector(".secondary-sidebar__trigger") as HTMLElement;
+    fireEvent.mouseEnter(trigger);
+    await settle();
+    expect(document.querySelector(".secondary-sidebar__floating")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "打开测试弹窗" }));
+    await settle();
+    expect(screen.getByRole("dialog", { name: "测试弹窗" })).toBeInTheDocument();
+    expect(document.querySelector(".secondary-sidebar__trigger")).toBeNull();
+    expect(document.querySelector(".secondary-sidebar__floating")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭测试弹窗" }));
+    await settle();
+    expect(document.querySelector(".secondary-sidebar__trigger")).toBeTruthy();
+    expect(document.querySelector(".secondary-sidebar__floating")).toBeNull();
   });
 });

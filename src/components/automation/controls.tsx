@@ -34,7 +34,7 @@ import {
 // Floating dropdown helpers
 // ============================================================
 
-const FLOATING_Z_INDEX = 1100;
+const FLOATING_Z_INDEX = "var(--echo-layer-popover)";
 
 interface FloatingOptions {
   preferredPlacement?: "top" | "bottom";

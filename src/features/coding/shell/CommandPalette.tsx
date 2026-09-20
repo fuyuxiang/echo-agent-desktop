@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CornerDownLeft, FileCode2, Hash, Search, Terminal } from "lucide-react";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 import {
   filterCommands,
@@ -65,6 +66,7 @@ export function CommandPalette({
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const dialogRef = useModalFocus<HTMLDivElement>(true, onClose);
 
   useEffect(() => {
     setQuery("");
@@ -170,16 +172,19 @@ export function CommandPalette({
       }}
     >
       <div
+        ref={dialogRef}
         className="coding-palette"
         role="dialog"
         aria-modal="true"
         aria-label="命令面板"
+        tabIndex={-1}
         onKeyDown={onKeyDown}
       >
         <div className="coding-palette__field">
           <Icon size={15} />
           <input
             ref={inputRef}
+            data-modal-initial-focus
             autoFocus
             value={query}
             onChange={(event) => setQuery(event.target.value)}

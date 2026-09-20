@@ -3,6 +3,7 @@ import { Search, X, Clock, FileText } from "lucide-react";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { agentListSessions, sessionSearch } from "@/lib/agent-client";
 import type { SearchHit, SessionSummary } from "@/lib/types";
+import { useModalFocus } from "@/lib/use-modal-focus";
 
 /**
  * Session search overlay — now powered by EchoAgent's FTS5 full-text index.
@@ -37,64 +38,28 @@ export function SearchOverlay({
   const [searchError, setSearchError] = useState<string | null>(null);
   const [openingId, setOpeningId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const modalRef = useRef<HTMLDivElement>(null);
-  const previousFocusRef = useRef<HTMLElement | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchGenerationRef = useRef(0);
   const lifecycleGenerationRef = useRef(0);
   const openingRef = useRef(false);
+  const modalRef = useModalFocus<HTMLDivElement>(open, onClose);
 
   useEffect(() => {
     if (open) {
       const lifecycleGeneration = ++lifecycleGenerationRef.current;
-      previousFocusRef.current = document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
       setQuery("");
       setRemoteHits([]);
       setSearchError(null);
       setOpeningId(null);
-      const t = setTimeout(() => inputRef.current?.focus(), 0);
       return () => {
-        clearTimeout(t);
         searchGenerationRef.current += 1;
         if (lifecycleGenerationRef.current === lifecycleGeneration) {
           lifecycleGenerationRef.current += 1;
         }
         openingRef.current = false;
-        previousFocusRef.current?.focus();
       };
     }
   }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-        return;
-      }
-      if (e.key !== "Tab") return;
-      const focusable = Array.from(
-        modalRef.current?.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ) ?? [],
-      );
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
 
   // Debounced remote search. Only kicks in for queries ≥ 2 chars.
   const runRemoteSearch = useCallback(async (q: string) => {
@@ -187,19 +152,22 @@ export function SearchOverlay({
 
   return (
     <div
+      ref={modalRef}
       className="conversation-search-modal__overlay"
       role="dialog"
       aria-modal="true"
       aria-label="搜索会话"
+      tabIndex={-1}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="conversation-search-modal" ref={modalRef}>
+      <div className="conversation-search-modal">
         <div className="conversation-search-modal__input-wrapper">
           <Search size={16} strokeWidth={1.75} className="conversation-search-modal__icon" />
           <input
             ref={inputRef}
+            data-modal-initial-focus
             className="conversation-search-modal__input"
             placeholder="搜索会话标题或内容…"
             aria-label="搜索会话标题或内容"

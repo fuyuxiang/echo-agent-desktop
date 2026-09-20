@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { TopbarActions } from "../TopbarActions";
 import { GlobalTooltip } from "../GlobalTooltip";
+import { useModalFocus } from "@/lib/use-modal-focus";
 import {
   agentSetSessionArchived,
   agentSetSessionPinned,
@@ -33,6 +34,11 @@ function setViewport(width: number, height: number) {
   Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
 }
 
+function ProgrammaticDialog() {
+  const ref = useModalFocus<HTMLDivElement>(true, () => {});
+  return <div ref={ref} role="dialog" aria-modal="true" aria-label="程序弹窗" tabIndex={-1} />;
+}
+
 describe("TopbarActions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -57,7 +63,7 @@ describe("TopbarActions", () => {
     const tooltip = screen.getByRole("tooltip");
     expect(tooltip).toHaveTextContent("更多操作");
     expect(tooltip.parentElement).toBe(document.body);
-    expect(tooltip).toHaveStyle({ position: "fixed", zIndex: "2000" });
+    expect(tooltip).toHaveStyle({ position: "fixed", zIndex: "var(--echo-layer-tooltip)" });
   });
 
   it("通过 body portal 以 fixed 浮层渲染，不受顶栏层叠上下文和裁剪影响", () => {
@@ -70,9 +76,24 @@ describe("TopbarActions", () => {
     const menu = screen.getByRole("menu", { name: "当前会话操作" });
     expect(menu.parentElement).toBe(document.body);
     expect(menu.closest(".topbar-actions")).toBeNull();
-    expect(menu).toHaveStyle({ position: "fixed", zIndex: "1200" });
+    expect(menu).toHaveStyle({ position: "fixed", zIndex: "var(--echo-layer-popover)" });
     expect(menu).toHaveAttribute("data-placement", "bottom");
     expect(within(menu).getByRole("menuitem", { name: "归档会话" })).toBeVisible();
+  });
+
+  it("程序化弹窗接管焦点时会关闭旧 portal 菜单", async () => {
+    const view = render(<TopbarActions sessionId="session-1" title="测试会话" />);
+    fireEvent.click(screen.getByRole("button", { name: "更多操作" }));
+    expect(screen.getByRole("menu", { name: "当前会话操作" })).toBeInTheDocument();
+
+    view.rerender(
+      <>
+        <TopbarActions sessionId="session-1" title="测试会话" />
+        <ProgrammaticDialog />
+      </>,
+    );
+
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "当前会话操作" })).toBeNull());
   });
 
   it("视口底部空间不足时向上展开并保持在可视区域", () => {

@@ -619,17 +619,36 @@ body.dark,
  */
 /* EchoAgent Z-Index */
 :root {
+  /* Shared application layer contract. Local component layers stay below 100;
+   * global hover chrome starts at 900; blocking surfaces are ordered above it.
+   * Keep these values centralized: a component should express its role rather
+   * than inventing a new global z-index. */
+  --echo-layer-float: 900;
+  --echo-layer-popover: 1100;
+  --echo-layer-dialog: 1200;
+  /* Portalled controls launched from inside a dialog must opt into this
+   * layer explicitly; ordinary page popovers stay below every scrim. */
+  --echo-layer-dialog-popover: 1300;
+  --echo-layer-dialog-local: 1400;
+  --echo-layer-confirm: 1500;
+  --echo-layer-update: 1600;
+  --echo-layer-critical: 1650;
+  --echo-layer-toast: 1700;
+  --echo-layer-drag: 1800;
+  --echo-layer-tooltip: 2000;
+
+  /* Compatibility aliases retained for migrated colleagues surfaces. */
   --echo-colleagues-layer-chat-float: 900;
   --echo-colleagues-layer-chat-menu: 2;
-  --echo-colleagues-layer-dialog: 1200;
-  --echo-colleagues-layer-dialog-popover: 1205;
-  --echo-colleagues-layer-dialog-local-modal: 1208;
-  --echo-colleagues-layer-dialog-hire: 1210;
-  --echo-colleagues-layer-dialog-tdocs: 1220;
-  --echo-colleagues-layer-dialog-bind-channel: 1230;
-  --echo-colleagues-layer-dialog-publish: 1240;
-  --echo-colleagues-layer-promo: 1400;
-  --echo-colleagues-layer-promo-loading: 1410;
-  --echo-colleagues-layer-confirm: 1500;
+  --echo-colleagues-layer-dialog: var(--echo-layer-dialog);
+  --echo-colleagues-layer-dialog-popover: var(--echo-layer-dialog-popover);
+  --echo-colleagues-layer-dialog-local-modal: var(--echo-layer-dialog-local);
+  --echo-colleagues-layer-dialog-hire: 1410;
+  --echo-colleagues-layer-dialog-tdocs: 1420;
+  --echo-colleagues-layer-dialog-bind-channel: 1430;
+  --echo-colleagues-layer-dialog-publish: 1440;
+  --echo-colleagues-layer-promo: 1450;
+  --echo-colleagues-layer-promo-loading: 1460;
+  --echo-colleagues-layer-confirm: var(--echo-layer-confirm);
   --echo-colleagues-layer-confirm-top: 1600;
 }

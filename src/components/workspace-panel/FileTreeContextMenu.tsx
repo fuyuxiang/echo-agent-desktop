@@ -211,7 +211,7 @@ export function FileTreeContextMenu({
       className="context-menu"
       role="menu"
       aria-label={ariaLabel}
-      style={{ position: "fixed", ...position, zIndex: 1400 }}
+      style={{ position: "fixed", ...position, zIndex: "var(--echo-layer-popover)" }}
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => handleMenuKeyDown(event, onClose)}
     >

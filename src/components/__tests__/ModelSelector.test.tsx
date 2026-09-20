@@ -30,8 +30,24 @@ describe("ModelSelector", () => {
 
     const menu = screen.getByRole("listbox", { name: "选择模型" });
     expect(menu.parentElement).toBe(document.body);
-    expect(menu).toHaveStyle({ position: "fixed" });
+    expect(menu).toHaveStyle({ position: "fixed", zIndex: "var(--echo-layer-popover)" });
     expect(menu).toHaveAttribute("data-placement", "bottom");
+  });
+
+  it("弹窗内的 portal 菜单可显式使用弹窗局部层", () => {
+    render(
+      <ModelSelector
+        modelId="model-a"
+        models={[{ id: "model-a", label: "模型 A" }]}
+        onModelChange={vi.fn()}
+        menuZIndex="var(--echo-layer-dialog-popover)"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "模型 A" }));
+    expect(screen.getByRole("listbox", { name: "选择模型" })).toHaveStyle({
+      zIndex: "var(--echo-layer-dialog-popover)",
+    });
   });
 
   it("加载模型信息时不显示未选择，恢复后显示实际模型", () => {
