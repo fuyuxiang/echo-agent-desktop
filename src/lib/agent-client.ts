@@ -58,6 +58,7 @@ import type { PlanApprovalRequest } from "@/stores/session-store";
 import { isUpstreamBrandedModelId } from "@/lib/model-branding";
 import { preparePromptWithPersonalKnowledge } from "@/lib/knowledge-context";
 import {
+  organizationScopeIdsForSession,
   useKnowledgeStore,
   type KnowledgeSource,
 } from "@/stores/knowledge-store";
@@ -290,6 +291,10 @@ function knowledgeSourcesKey(sources: KnowledgeSource[]): string {
   return `${sources.includes("personal") ? "1" : "0"}:${sources.includes("organization") ? "1" : "0"}`;
 }
 
+function knowledgeConfigurationKey(sources: KnowledgeSource[], organizationScopeIds: string[]): string {
+  return `${knowledgeSourcesKey(sources)}:${[...organizationScopeIds].sort().join(",")}`;
+}
+
 /** Invalidate MCP reconciliation acknowledgements after a Runtime/session lifecycle boundary. */
 export function invalidateAgentKnowledgeSourceSync(sessionId?: string): boolean {
   if (sessionId) return appliedKnowledgeSources.delete(sessionId);
@@ -302,6 +307,7 @@ export function invalidateAgentKnowledgeSourceSync(sessionId?: string): boolean 
 export async function agentSetKnowledgeSources(
   sessionId: string,
   sources: KnowledgeSource[],
+  organizationScopeIds: string[] = [],
 ): Promise<AgentKnowledgeSourcesResult> {
   const personal = sources.includes("personal");
   const organization = sources.includes("organization");
@@ -309,6 +315,7 @@ export async function agentSetKnowledgeSources(
     sessionId,
     personal,
     organization,
+    organizationScopeIds: organization ? organizationScopeIds : [],
   });
   const mismatches = [
     result.personalSelected !== personal ? "个人知识选择状态" : null,
@@ -320,7 +327,7 @@ export async function agentSetKnowledgeSources(
     throw new Error(`Runtime 未能确认知识来源状态：${mismatches.join("、")}`);
   }
   appliedKnowledgeSources.set(sessionId, {
-    key: knowledgeSourcesKey(sources),
+    key: knowledgeConfigurationKey(sources, organizationScopeIds),
     result,
   });
   return result;
@@ -332,14 +339,15 @@ async function synchronizeKnowledgeSources(
 ): Promise<KnowledgeSource[]> {
   const store = useKnowledgeStore.getState();
   const sources = store.bindSessionSources(sessionId);
-  const key = knowledgeSourcesKey(sources);
+  const organizationScopeIds = organizationScopeIdsForSession(sessionId);
+  const key = knowledgeConfigurationKey(sources, organizationScopeIds);
   let result = appliedKnowledgeSources.get(sessionId)?.key === key
     ? appliedKnowledgeSources.get(sessionId)?.result
     : undefined;
   let synchronizationError: string | undefined;
   if (!result) {
     try {
-      result = await agentSetKnowledgeSources(sessionId, sources);
+      result = await agentSetKnowledgeSources(sessionId, sources, organizationScopeIds);
     } catch (error) {
       synchronizationError = String(error).replace(/^Error:\s*/, "");
       console.warn("[EchoAgent] Knowledge source synchronization failed:", error);

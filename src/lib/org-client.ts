@@ -143,36 +143,6 @@ export interface SkillSyncResult {
   }>;
 }
 
-export interface AskCitation {
-  id: string;
-  docId: string;
-  chunkId: string;
-  title: string;
-  scopeKind: OrgScopeKind;
-  page?: number | null;
-  heading?: string | null;
-  quote: string;
-  openUrl: string;
-  stale: boolean;
-}
-
-export interface AskFinal {
-  answer: string;
-  citations: AskCitation[];
-  confidence: number;
-  insufficient: boolean;
-  traceId: string;
-  qaEventId?: string;
-  mode: "fast" | "deep";
-  verification: string;
-}
-
-export interface OrgAskEvent {
-  requestId: string;
-  event: "meta" | "status" | "citation" | "delta" | "verification" | "final" | "error";
-  data: unknown;
-}
-
 export const orgSession = () => invoke<OrgSession>("org_session");
 export interface OrgModelSyncResult {
   configured: boolean;
@@ -243,19 +213,8 @@ export const orgSubmitSkill = (filePath: string, scopeId: string, version?: stri
   );
 export const orgSkillSubmissionsMine = () => invoke<Submission[]>("org_skill_submissions_mine");
 export const orgSyncSkills = () => invoke<SkillSyncResult>("org_sync_skills");
-export const orgAskStart = (question: string, mode: string, scopeIds?: string[]) =>
-  invoke<string>("org_ask_start", {
-    question,
-    mode,
-    scopeKinds: null,
-    scopeIds: scopeIds ?? null,
-  });
-export const orgAskCancel = (requestId: string) =>
-  invoke<boolean>("org_ask_cancel", { requestId });
 export const orgQaFeedback = (qaEventId: string, feedback: "helpful" | "not_helpful" | "wrong") =>
   invoke<unknown>("org_qa_feedback", { qaEventId, feedback });
-export const listenOrgAsk = (handler: (event: OrgAskEvent) => void): Promise<UnlistenFn> =>
-  listen<OrgAskEvent>("org://ask-event", ({ payload }) => handler(payload));
 
 /** Fired after native organization Skill activation/deactivation is persisted. */
 export const listenOrgSkillsChanged = (handler: () => void): Promise<UnlistenFn> =>

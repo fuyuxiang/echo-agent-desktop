@@ -37,8 +37,12 @@ export interface KnowledgeTurnTrace {
 interface PersistedKnowledgePreferences {
   /** Selection for the next task composer. Consumed when that task is created. */
   defaultSources: KnowledgeSource[];
+  /** Optional organization scopes for the next task; empty means every authorized scope. */
+  defaultOrganizationScopeIds: string[];
   /** Knowledge selection is task-owned so later messages keep the same scope. */
   sessionSources: Record<string, KnowledgeSource[]>;
+  /** Per-task organization scope boundary; empty means every authorized scope. */
+  sessionOrganizationScopeIds: Record<string, string[]>;
 }
 
 interface KnowledgeState extends PersistedKnowledgePreferences {
@@ -47,6 +51,8 @@ interface KnowledgeState extends PersistedKnowledgePreferences {
   turnTraces: Record<string, Record<string, KnowledgeTurnTrace>>;
   setDefaultSources: (sources: KnowledgeSource[]) => void;
   setSessionSources: (sessionId: string, sources: KnowledgeSource[]) => void;
+  setDefaultOrganizationScopeIds: (scopeIds: string[]) => void;
+  setSessionOrganizationScopeIds: (sessionId: string, scopeIds: string[]) => void;
   forgetSession: (sessionId: string) => void;
   bindSessionSources: (sessionId: string, consumeDefault?: boolean) => KnowledgeSource[];
   setSourceCount: (count: number) => void;
@@ -63,7 +69,8 @@ interface KnowledgeState extends PersistedKnowledgePreferences {
   ) => void;
 }
 
-const STORAGE_KEY = "echoagent.knowledge-preferences.v2";
+const STORAGE_KEY = "echoagent.knowledge-preferences.v3";
+const V2_STORAGE_KEY = "echoagent.knowledge-preferences.v2";
 const LEGACY_STORAGE_KEY = "echoagent.knowledge-preferences.v1";
 const MAX_PERSISTED_SESSIONS = 500;
 const MAX_TURN_TRACES_PER_SESSION = 50;
@@ -77,8 +84,36 @@ function normalizeSources(value: unknown): KnowledgeSource[] {
   return (["personal", "organization"] as const).filter((source) => selected.has(source));
 }
 
+function normalizeScopeIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0 && item.length <= 256 && !/[,\u0000-\u001f\u007f]/.test(item)))]
+    .slice(0, 64);
+}
+
+function boundSessionPreferences(
+  sessionSources: Record<string, KnowledgeSource[]>,
+  sessionOrganizationScopeIds: Record<string, string[]>,
+): void {
+  const sourceKeys = Object.keys(sessionSources);
+  for (const key of sourceKeys.slice(0, Math.max(0, sourceKeys.length - MAX_PERSISTED_SESSIONS))) {
+    delete sessionSources[key];
+    delete sessionOrganizationScopeIds[key];
+  }
+  for (const key of Object.keys(sessionOrganizationScopeIds)) {
+    if (!sessionSources[key]?.includes("organization")) delete sessionOrganizationScopeIds[key];
+  }
+}
+
 function loadPreferences(): PersistedKnowledgePreferences {
-  const fallback: PersistedKnowledgePreferences = { defaultSources: [], sessionSources: {} };
+  const fallback: PersistedKnowledgePreferences = {
+    defaultSources: [],
+    defaultOrganizationScopeIds: [],
+    sessionSources: {},
+    sessionOrganizationScopeIds: {},
+  };
   if (typeof localStorage === "undefined") return fallback;
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as unknown;
@@ -90,7 +125,38 @@ function loadPreferences(): PersistedKnowledgePreferences {
           if (sessionId.trim()) sessionSources[sessionId] = normalizeSources(value);
         }
       }
-      return { defaultSources: normalizeSources(raw.defaultSources), sessionSources };
+      const sessionOrganizationScopeIds: Record<string, string[]> = {};
+      if (raw.sessionOrganizationScopeIds && typeof raw.sessionOrganizationScopeIds === "object") {
+        for (const [sessionId, value] of Object.entries(raw.sessionOrganizationScopeIds as Record<string, unknown>).slice(-MAX_PERSISTED_SESSIONS)) {
+          if (sessionId.trim()) sessionOrganizationScopeIds[sessionId] = normalizeScopeIds(value);
+        }
+      }
+      const defaultSources = normalizeSources(raw.defaultSources);
+      boundSessionPreferences(sessionSources, sessionOrganizationScopeIds);
+      return {
+        defaultSources,
+        defaultOrganizationScopeIds: defaultSources.includes("organization")
+          ? normalizeScopeIds(raw.defaultOrganizationScopeIds)
+          : [],
+        sessionSources,
+        sessionOrganizationScopeIds,
+      };
+    }
+
+    const v2 = JSON.parse(localStorage.getItem(V2_STORAGE_KEY) ?? "null") as unknown;
+    if (v2 && typeof v2 === "object") {
+      const raw = v2 as Record<string, unknown>;
+      const sessionSources: Record<string, KnowledgeSource[]> = {};
+      if (raw.sessionSources && typeof raw.sessionSources === "object") {
+        for (const [sessionId, value] of Object.entries(raw.sessionSources as Record<string, unknown>).slice(-MAX_PERSISTED_SESSIONS)) {
+          if (sessionId.trim()) sessionSources[sessionId] = normalizeSources(value);
+        }
+      }
+      return {
+        ...fallback,
+        defaultSources: normalizeSources(raw.defaultSources),
+        sessionSources,
+      };
     }
 
     // V1 had an implicit personal-knowledge switch. Preserve only existing
@@ -104,18 +170,22 @@ function loadPreferences(): PersistedKnowledgePreferences {
         if (sessionId.trim()) sessionSources[sessionId] = mode === "auto" ? ["personal"] : [];
       }
     }
-    return { defaultSources: [], sessionSources };
+    return { ...fallback, sessionSources };
   } catch {
     return fallback;
   }
 }
 
-function persistPreferences(state: Pick<KnowledgeState, "defaultSources" | "sessionSources">): void {
+function persistPreferences(state: Pick<KnowledgeState,
+  "defaultSources" | "defaultOrganizationScopeIds" | "sessionSources" | "sessionOrganizationScopeIds"
+>): void {
   if (typeof localStorage === "undefined") return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       defaultSources: state.defaultSources,
+      defaultOrganizationScopeIds: state.defaultOrganizationScopeIds,
       sessionSources: state.sessionSources,
+      sessionOrganizationScopeIds: state.sessionOrganizationScopeIds,
     }));
   } catch {
     // Preference persistence must never block a task submission.
@@ -144,28 +214,51 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
   turnTraces: {},
   setDefaultSources: (sources) => set((state) => {
     const defaultSources = normalizeSources(sources);
-    persistPreferences({ ...state, defaultSources });
-    return { defaultSources };
+    const defaultOrganizationScopeIds = defaultSources.includes("organization")
+      ? state.defaultOrganizationScopeIds
+      : [];
+    persistPreferences({ ...state, defaultSources, defaultOrganizationScopeIds });
+    return { defaultSources, defaultOrganizationScopeIds };
   }),
   setSessionSources: (sessionId, sources) => set((state) => {
     const sessionSources = { ...state.sessionSources };
+    const sessionOrganizationScopeIds = { ...state.sessionOrganizationScopeIds };
     delete sessionSources[sessionId];
     sessionSources[sessionId] = normalizeSources(sources);
-    for (const key of Object.keys(sessionSources).slice(0, Math.max(0, Object.keys(sessionSources).length - MAX_PERSISTED_SESSIONS))) {
-      delete sessionSources[key];
+    if (!sessionSources[sessionId].includes("organization")) delete sessionOrganizationScopeIds[sessionId];
+    boundSessionPreferences(sessionSources, sessionOrganizationScopeIds);
+    persistPreferences({ ...state, sessionSources, sessionOrganizationScopeIds });
+    return { sessionSources, sessionOrganizationScopeIds };
+  }),
+  setDefaultOrganizationScopeIds: (scopeIds) => set((state) => {
+    const defaultOrganizationScopeIds = state.defaultSources.includes("organization")
+      ? normalizeScopeIds(scopeIds)
+      : [];
+    persistPreferences({ ...state, defaultOrganizationScopeIds });
+    return { defaultOrganizationScopeIds };
+  }),
+  setSessionOrganizationScopeIds: (sessionId, scopeIds) => set((state) => {
+    const sessionOrganizationScopeIds = { ...state.sessionOrganizationScopeIds };
+    if (state.sessionSources[sessionId]?.includes("organization")) {
+      sessionOrganizationScopeIds[sessionId] = normalizeScopeIds(scopeIds);
+    } else {
+      delete sessionOrganizationScopeIds[sessionId];
     }
-    persistPreferences({ ...state, sessionSources });
-    return { sessionSources };
+    boundSessionPreferences({ ...state.sessionSources }, sessionOrganizationScopeIds);
+    persistPreferences({ ...state, sessionOrganizationScopeIds });
+    return { sessionOrganizationScopeIds };
   }),
   forgetSession: (sessionId) => set((state) => {
     const sessionSources = { ...state.sessionSources };
+    const sessionOrganizationScopeIds = { ...state.sessionOrganizationScopeIds };
     const retrievals = { ...state.retrievals };
     const turnTraces = { ...state.turnTraces };
     delete sessionSources[sessionId];
+    delete sessionOrganizationScopeIds[sessionId];
     delete retrievals[sessionId];
     delete turnTraces[sessionId];
-    persistPreferences({ ...state, sessionSources });
-    return { sessionSources, retrievals, turnTraces };
+    persistPreferences({ ...state, sessionSources, sessionOrganizationScopeIds });
+    return { sessionSources, sessionOrganizationScopeIds, retrievals, turnTraces };
   }),
   bindSessionSources: (sessionId, consumeDefault = false) => {
     const state = get();
@@ -173,11 +266,22 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     if (existing) return existing;
     const sources = consumeDefault ? normalizeSources(state.defaultSources) : [];
     const sessionSources = { ...state.sessionSources, [sessionId]: sources };
+    const sessionOrganizationScopeIds = {
+      ...state.sessionOrganizationScopeIds,
+      [sessionId]: consumeDefault ? normalizeScopeIds(state.defaultOrganizationScopeIds) : [],
+    };
+    boundSessionPreferences(sessionSources, sessionOrganizationScopeIds);
     // A Home composer selection applies to the task being created, not every
     // future task. New tasks therefore return to the privacy-first default.
     const defaultSources = consumeDefault ? [] : state.defaultSources;
-    persistPreferences({ defaultSources, sessionSources });
-    set({ defaultSources, sessionSources });
+    const defaultOrganizationScopeIds = consumeDefault ? [] : state.defaultOrganizationScopeIds;
+    persistPreferences({
+      defaultSources,
+      defaultOrganizationScopeIds,
+      sessionSources,
+      sessionOrganizationScopeIds,
+    });
+    set({ defaultSources, defaultOrganizationScopeIds, sessionSources, sessionOrganizationScopeIds });
     return sources;
   },
   setSourceCount: (sourceCount) => set({ sourceCount: Math.max(0, sourceCount) }),
@@ -222,4 +326,11 @@ export function knowledgeSourcesForSession(sessionId?: string): KnowledgeSource[
   return normalizeSources(sessionId
     ? state.sessionSources[sessionId] ?? []
     : state.defaultSources);
+}
+
+export function organizationScopeIdsForSession(sessionId?: string): string[] {
+  const state = useKnowledgeStore.getState();
+  return normalizeScopeIds(sessionId
+    ? state.sessionOrganizationScopeIds[sessionId] ?? []
+    : state.defaultOrganizationScopeIds);
 }

@@ -1698,30 +1698,20 @@ button,
 /* ---------- Organization memory ---------- */
 
 .org-memory {
-  padding: 40px var(--ui-page-gutter) 64px;
-  background:
-    radial-gradient(circle at 88% 0%, color-mix(in srgb, var(--echo-brand) 9%, transparent), transparent 30%),
-    transparent;
+  padding: 24px 30px 48px;
+  background: var(--ui-canvas);
 }
 
 .org-memory__header,
-.org-memory__scopebar,
-.org-memory__tabs,
-.org-memory__error,
-.org-ask,
-.org-library {
-  max-width: var(--ui-content-width);
+.org-memory__workspace {
+  max-width: 1280px;
 }
 
 .org-memory__header h1 {
-  font-size: 26px;
+  font-size: 22px;
   letter-spacing: -0.025em;
 }
 
-.org-memory__scopebar,
-.org-memory__tabs,
-.org-ask__composer,
-.org-answer,
 .org-library,
 .org-login-card {
   border-color: var(--ui-line);
@@ -1919,7 +1909,6 @@ button,
 
 @container app-main (max-width: 960px) {
   .project-page,
-  .org-memory,
   .resources-panel,
   .plugins-panel,
   .marketplace-panel,
@@ -2109,16 +2098,6 @@ button,
   .org-library__toolbar {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .org-memory__scopebar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .org-memory__scopebar select {
-    width: 100%;
-    min-width: 0;
   }
 
   .org-memory__header-actions,
@@ -2365,8 +2344,7 @@ button,
   .plugins-panel,
   .marketplace-panel,
   .placeholder-page--panel,
-  .project-page,
-  .org-memory {
+  .project-page {
     padding-left: 24px;
     padding-right: 24px;
   }

@@ -465,8 +465,6 @@ pub fn run() {
             org::org_submit_skill,
             org::org_skill_submissions_mine,
             org::org_sync_skills,
-            org::org_ask_start,
-            org::org_ask_cancel,
             org::org_qa_feedback,
             org::org_local_kb_sources_get,
             org::org_local_kb_sources_set,

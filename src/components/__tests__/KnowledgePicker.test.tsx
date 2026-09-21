@@ -23,7 +23,9 @@ describe("KnowledgePicker", () => {
     });
     useKnowledgeStore.setState({
       defaultSources: [],
+      defaultOrganizationScopeIds: [],
       sessionSources: {},
+      sessionOrganizationScopeIds: {},
       sourceCount: 0,
       retrievals: {},
       turnTraces: {},
@@ -71,7 +73,7 @@ describe("KnowledgePicker", () => {
     expect(setKnowledgeSourcesMock).toHaveBeenLastCalledWith("session-1", [
       "personal",
       "organization",
-    ]);
+    ], []);
 
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /个人知识库/ }));
     await waitFor(() => expect(useKnowledgeStore.getState().sessionSources["session-1"])
@@ -106,5 +108,85 @@ describe("KnowledgePicker", () => {
     expect(useKnowledgeStore.getState().defaultSources).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "登录组织" }));
     expect(onOpenOrganization).toHaveBeenCalledOnce();
+  });
+
+  it("可把当前任务的组织检索限定到单一授权范围", async () => {
+    useOrgSessionStore.setState({
+      hydrated: true,
+      session: {
+        loggedIn: true,
+        organizationMemoryEnabled: true,
+        bootstrap: {
+          apiVersion: 1,
+          user: { id: "u1", username: "u1", displayName: "用户", role: "member", clearance: 1 },
+          scopes: [
+            { id: "team-1", kind: "team", name: "产品团队" },
+            { id: "org-1", kind: "org", name: "全公司" },
+          ],
+          policy: {},
+          serverTime: Date.now(),
+        },
+      },
+    });
+    useKnowledgeStore.setState({
+      sessionSources: { "session-scope": ["organization"] },
+      sessionOrganizationScopeIds: { "session-scope": [] },
+    });
+    render(<KnowledgePicker sessionId="session-scope" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "组织知识" }));
+    fireEvent.change(screen.getByLabelText("组织知识范围"), { target: { value: "team-1" } });
+
+    await waitFor(() => expect(useKnowledgeStore.getState()
+      .sessionOrganizationScopeIds["session-scope"]).toEqual(["team-1"]));
+    expect(setKnowledgeSourcesMock).toHaveBeenLastCalledWith(
+      "session-scope",
+      ["organization"],
+      ["team-1"],
+    );
+    expect(screen.getByText("本任务只检索“产品团队”")).toBeInTheDocument();
+  });
+
+  it("已依赖组织知识的任务在登录失效后不会静默降级", () => {
+    const onOpenOrganization = vi.fn();
+    useOrgSessionStore.setState({ hydrated: true, session: { loggedIn: false } });
+    useKnowledgeStore.setState({
+      sessionSources: { stale: ["organization"] },
+      sessionOrganizationScopeIds: { stale: ["team-1"] },
+    });
+    render(<KnowledgePicker sessionId="stale" onOpenOrganization={onOpenOrganization} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "组织知识" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("当前任务仍依赖组织知识");
+    fireEvent.click(screen.getByRole("button", { name: "重新登录" }));
+    expect(onOpenOrganization).toHaveBeenCalledOnce();
+    expect(useKnowledgeStore.getState().sessionSources.stale).toEqual(["organization"]);
+  });
+
+  it("原授权范围失效时不会在界面上伪装成检索全部范围", () => {
+    useOrgSessionStore.setState({
+      hydrated: true,
+      session: {
+        loggedIn: true,
+        organizationMemoryEnabled: true,
+        bootstrap: {
+          apiVersion: 1,
+          user: { id: "u1", username: "u1", displayName: "用户", role: "member", clearance: 1 },
+          scopes: [{ id: "team-new", kind: "team", name: "新团队" }],
+          policy: {},
+          serverTime: Date.now(),
+        },
+      },
+    });
+    useKnowledgeStore.setState({
+      sessionSources: { stale_scope: ["organization"] },
+      sessionOrganizationScopeIds: { stale_scope: ["team-old"] },
+    });
+    render(<KnowledgePicker sessionId="stale_scope" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "组织知识" }));
+    expect(screen.getByLabelText("组织知识范围")).toHaveValue("__invalid__");
+    expect(screen.getByRole("alert")).toHaveTextContent("不会自动扩大检索范围");
+    expect(screen.getByText("为避免越界检索，请明确选择新范围")).toBeInTheDocument();
   });
 });

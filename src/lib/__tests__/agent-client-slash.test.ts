@@ -37,7 +37,9 @@ describe("agentSend attachment contract", () => {
     ));
     useKnowledgeStore.setState({
       defaultSources: [],
+      defaultOrganizationScopeIds: [],
       sessionSources: {},
+      sessionOrganizationScopeIds: {},
       retrievals: {},
       turnTraces: {},
     });
@@ -62,6 +64,7 @@ describe("agentSend attachment contract", () => {
       sessionId: "session-1",
       personal: false,
       organization: false,
+      organizationScopeIds: [],
     });
   });
 
@@ -174,6 +177,30 @@ describe("agentSend attachment contract", () => {
     }));
     expect(useKnowledgeStore.getState().turnTraces["session-org-ready"]["prompt-org-ready"])
       .toMatchObject({ organization: { state: "available" } });
+  });
+
+  it("将任务选定的组织范围下发给原生层", async () => {
+    useKnowledgeStore.getState().setSessionSources("session-org-scope", ["organization"]);
+    useKnowledgeStore.getState().setSessionOrganizationScopeIds("session-org-scope", ["team-1"]);
+    invokeMock.mockImplementation((command) => Promise.resolve(
+      command === "agent_set_knowledge_sources"
+        ? {
+            personalSelected: false,
+            organizationSelected: true,
+            personalAttached: false,
+            organizationAttached: true,
+          }
+        : undefined,
+    ));
+
+    await agentSend("session-org-scope", "检索团队知识");
+
+    expect(invokeMock).toHaveBeenCalledWith("agent_set_knowledge_sources", {
+      sessionId: "session-org-scope",
+      personal: false,
+      organization: true,
+      organizationScopeIds: ["team-1"],
+    });
   });
 });
 

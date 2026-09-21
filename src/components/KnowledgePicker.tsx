@@ -31,7 +31,14 @@ export function KnowledgePicker({
   const sourceCount = useKnowledgeStore((state) => state.sourceCount);
   const defaultSources = useKnowledgeStore((state) => state.defaultSources);
   const sessionSources = useKnowledgeStore((state) => sessionId ? state.sessionSources[sessionId] : undefined);
+  const defaultOrganizationScopeIds = useKnowledgeStore((state) => state.defaultOrganizationScopeIds);
+  const sessionOrganizationScopeIds = useKnowledgeStore((state) => sessionId
+    ? state.sessionOrganizationScopeIds[sessionId]
+    : undefined);
   const selected = sessionId ? sessionSources ?? [] : defaultSources;
+  const organizationScopeIds = sessionId
+    ? sessionOrganizationScopeIds ?? []
+    : defaultOrganizationScopeIds;
   const providers = useMemo(() => listKbProviders(), [sourceCount]);
   const orgSession = useOrgSessionStore((state) => state.session);
   const orgHydrated = useOrgSessionStore((state) => state.hydrated);
@@ -68,20 +75,26 @@ export function KnowledgePicker({
     };
   }, [open]);
 
-  const applySelection = (next: KnowledgeSource[]) => {
+  const applySelection = (next: KnowledgeSource[], nextOrganizationScopeIds = organizationScopeIds) => {
     if (syncingRef.current) return;
+    const appliedOrganizationScopeIds = next.includes("organization")
+      ? nextOrganizationScopeIds
+      : [];
     const state = useKnowledgeStore.getState();
     if (sessionId) {
       const previous = [...selected];
       state.setSessionSources(sessionId, next);
       syncingRef.current = true;
       setSyncing(true);
-      void agentSetKnowledgeSources(sessionId, next)
+      const previousOrganizationScopeIds = [...organizationScopeIds];
+      state.setSessionOrganizationScopeIds(sessionId, appliedOrganizationScopeIds);
+      void agentSetKnowledgeSources(sessionId, next, appliedOrganizationScopeIds)
         .catch((error) => {
           // Native reconciliation is transactional; mirror that behaviour in
           // the picker so the checkmarks always describe the capabilities the
           // Runtime actually owns.
           useKnowledgeStore.getState().setSessionSources(sessionId, previous);
+          useKnowledgeStore.getState().setSessionOrganizationScopeIds(sessionId, previousOrganizationScopeIds);
           onToast?.(`知识来源同步失败，已恢复上一选择：${String(error).replace(/^Error:\s*/, "")}`);
         })
         .finally(() => {
@@ -90,6 +103,7 @@ export function KnowledgePicker({
         });
     } else {
       state.setDefaultSources(next);
+      state.setDefaultOrganizationScopeIds(appliedOrganizationScopeIds);
     }
   };
 
@@ -110,8 +124,16 @@ export function KnowledgePicker({
 
   const personalSelected = selected.includes("personal");
   const organizationSelected = selected.includes("organization");
+  const selectedOrganizationScope = organizationScopeIds.length === 1
+    ? orgSession?.bootstrap?.scopes.find((scope) => scope.id === organizationScopeIds[0])
+    : undefined;
+  const organizationScopeInvalid = organizationSelected
+    && organizationAvailable
+    && organizationScopeIds.length > 0
+    && !selectedOrganizationScope;
   const hasUnavailableSelection = (personalSelected && sourceCount === 0)
-    || (organizationSelected && !organizationAvailable);
+    || (organizationSelected && !organizationAvailable)
+    || organizationScopeInvalid;
   const label = sourceLabel(selected);
   const detail = selected.length === 0
     ? "未选择知识来源，本次任务不会读取个人或组织知识库"
@@ -196,6 +218,60 @@ export function KnowledgePicker({
             </span>
           </button>
 
+          {organizationSelected && organizationAvailable && (
+            <label className="knowledge-picker__scope-field">
+              <span>组织知识范围</span>
+              <select
+                aria-label="组织知识范围"
+                value={organizationScopeInvalid ? "__invalid__" : organizationScopeIds[0] ?? ""}
+                disabled={syncing}
+                onChange={(event) => applySelection(
+                  selected,
+                  event.target.value ? [event.target.value] : [],
+                )}
+              >
+                {organizationScopeInvalid && <option value="__invalid__" disabled>原选范围已失效</option>}
+                <option value="">全部有权限的范围</option>
+                {orgSession?.bootstrap?.scopes.map((scope) => (
+                  <option key={scope.id} value={scope.id}>
+                    {scope.kind === "personal" ? "仅自己" : scope.kind === "team" ? "团队" : "全组织"} · {scope.name}
+                  </option>
+                ))}
+              </select>
+              <small>
+                {selectedOrganizationScope
+                  ? `本任务只检索“${selectedOrganizationScope.name}”`
+                  : organizationScopeInvalid
+                    ? "为避免越界检索，请明确选择新范围"
+                    : "默认检索当前账号有权访问的全部组织范围"}
+              </small>
+            </label>
+          )}
+
+          {organizationScopeInvalid && (
+            <div className="knowledge-picker__source-warning" role="alert">
+              <strong>原组织范围已不可用</strong>
+              <span>当前任务不会自动扩大检索范围，请在上方重新选择。</span>
+            </div>
+          )}
+
+          {organizationSelected && !organizationAvailable && (
+            <div className="knowledge-picker__source-warning" role="alert">
+              <strong>当前任务仍依赖组织知识</strong>
+              <span>{organizationReason}。重新登录，或明确移除组织知识后继续。</span>
+              <div>
+                {onOpenOrganization && (
+                  <button type="button" disabled={syncing} onClick={() => { setOpen(false); onOpenOrganization(); }}>
+                    重新登录
+                  </button>
+                )}
+                <button type="button" disabled={syncing} onClick={() => toggle("organization")}>
+                  移除组织知识
+                </button>
+              </div>
+            </div>
+          )}
+
           {syncing && (
             <div className="knowledge-picker__connected" role="status" aria-live="polite">
               正在为当前任务同步知识来源…
@@ -214,7 +290,7 @@ export function KnowledgePicker({
                 管理个人知识库
               </button>
             )}
-            {!organizationAvailable && onOpenOrganization && (
+            {!organizationAvailable && !organizationSelected && onOpenOrganization && (
               <button type="button" disabled={syncing} onClick={() => { setOpen(false); onOpenOrganization(); }}>
                 {orgSession?.loggedIn ? "查看组织连接" : "登录组织"}
               </button>

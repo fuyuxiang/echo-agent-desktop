@@ -1362,6 +1362,7 @@ pub async fn agent_set_knowledge_sources(
     session_id: String,
     personal: bool,
     organization: bool,
+    organization_scope_ids: Option<Vec<String>>,
 ) -> Result<KnowledgeSourcesView, String> {
     if !valid_session_id(&session_id) {
         return Err("会话 ID 无效或过长".into());
@@ -1373,8 +1374,30 @@ pub async fn agent_set_knowledge_sources(
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
+    let organization_scope_ids = organization_scope_ids.unwrap_or_default();
+    if organization_scope_ids.len() > 64
+        || organization_scope_ids.iter().any(|scope_id| {
+            scope_id.trim().is_empty()
+                || scope_id.chars().count() > 256
+                || scope_id
+                    .chars()
+                    .any(|character| character.is_control() || character == ',')
+        })
+    {
+        return Err("组织知识范围无效或过多".into());
+    }
     let previous = crate::org_mcp::session_selection(&session_id);
-    crate::org_mcp::set_session_selection(&session_id, personal, organization);
+    let previous_scope_ids = crate::org_mcp::session_organization_scope_ids(&session_id);
+    crate::org_mcp::set_session_selection(
+        &session_id,
+        personal,
+        organization,
+        if organization {
+            organization_scope_ids
+        } else {
+            Vec::new()
+        },
+    );
     if let Err(error) = crate::org_mcp::reconcile_session(&tx, &session_id).await {
         // Selection changes are transactional. In particular, a failed detach
         // must never let a prompt proceed while a source the user deselected is
@@ -1383,6 +1406,7 @@ pub async fn agent_set_knowledge_sources(
             &session_id,
             previous.personal,
             previous.organization,
+            previous_scope_ids,
         );
         if let Err(rollback_error) = crate::org_mcp::reconcile_session(&tx, &session_id).await {
             return Err(format!(

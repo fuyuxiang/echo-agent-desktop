@@ -20,7 +20,9 @@ describe("personal knowledge prompt preparation", () => {
     cancelSemanticSearchMock.mockResolvedValue(true);
     useKnowledgeStore.setState({
       defaultSources: [],
+      defaultOrganizationScopeIds: [],
       sessionSources: {},
+      sessionOrganizationScopeIds: {},
       sourceCount: 0,
       retrievals: {},
       turnTraces: {},

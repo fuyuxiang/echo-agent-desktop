@@ -1738,6 +1738,13 @@ function Shell() {
     setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
   };
 
+  const handleStartOrganizationConversation = () => {
+    const knowledge = useKnowledgeStore.getState();
+    knowledge.setDefaultSources(["organization"]);
+    knowledge.setDefaultOrganizationScopeIds([]);
+    handleNewSession();
+  };
+
   /** Navigate to home page without resetting session state (used after expert summon). */
   const handleGoHome = () => {
     selectionGenerationRef.current += 1;
@@ -2477,6 +2484,7 @@ function Shell() {
                   onNavigate={handleNavigate}
                   onOpenSession={handleSelectSession}
                   onGoHome={handleGoHome}
+                  onStartOrganizationConversation={handleStartOrganizationConversation}
                   onToast={showToast}
                   cwd={isMemoryResourceView(placeholderView)
                     ? activeSessionCwd || newSessionTargetCwd

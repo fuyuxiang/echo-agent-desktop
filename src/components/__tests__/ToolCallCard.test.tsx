@@ -1,7 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ToolCallCard, ToolCallDetailBody } from "../ToolCallCard";
 import type { ToolCallView } from "@/stores/session-store";
+
+const orgApi = vi.hoisted(() => ({
+  orgFetchDocument: vi.fn(),
+  orgQaFeedback: vi.fn(),
+}));
+
+vi.mock("@/lib/org-client", () => orgApi);
 
 const base: ToolCallView = {
   toolCallId: "tc1",
@@ -12,6 +19,13 @@ const base: ToolCallView = {
 };
 
 describe("ToolCallCard", () => {
+  beforeEach(() => {
+    orgApi.orgFetchDocument.mockReset();
+    orgApi.orgFetchDocument.mockResolvedValue({ text: "完整原文内容" });
+    orgApi.orgQaFeedback.mockReset();
+    orgApi.orgQaFeedback.mockResolvedValue(undefined);
+  });
+
   it("renders compact row and opens detail on click", () => {
     const onOpen = vi.fn();
     render(<ToolCallCard tc={base} onOpen={onOpen} />);
@@ -109,5 +123,35 @@ describe("ToolCallCard", () => {
       />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("组织知识回答可查看引用原文并提交反馈", async () => {
+    render(
+      <ToolCallDetailBody
+        tc={{
+          ...base,
+          kind: "echoagent_organization_memory__knowledge_ask",
+          title: "查询组织知识",
+          content: [{ type: "text", text: JSON.stringify({
+            answer: "必须先进行灰度验证。",
+            qa_event_id: "qa-1",
+            citations: [{
+              doc_id: "doc-1",
+              docTitle: "发布规范",
+              quote: "所有发布必须先灰度。",
+              citation: { heading: "上线流程", page: 3 },
+            }],
+          }) }],
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "查看原文" }));
+    await waitFor(() => expect(orgApi.orgFetchDocument).toHaveBeenCalledWith("doc-1", 3));
+    expect(await screen.findByText("完整原文内容")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "有帮助" }));
+    await waitFor(() => expect(orgApi.orgQaFeedback).toHaveBeenCalledWith("qa-1", "helpful"));
+    expect(screen.getByText("感谢反馈，已记录")).toBeInTheDocument();
   });
 });

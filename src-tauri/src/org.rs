@@ -28,7 +28,6 @@ use std::sync::{
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::io::ReaderStream;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
 #[cfg(target_os = "windows")]
@@ -53,9 +52,6 @@ const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const MAX_PROFILE_FIELD_CHARS: usize = 512;
 const MAX_SIGNING_FIELD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ERROR_MESSAGE_CHARS: usize = 2_048;
-const MAX_ASK_QUESTION_CHARS: usize = 32 * 1024;
-const MAX_ASK_SCOPES: usize = 100;
-const MAX_PENDING_ASKS: usize = 32;
 const MAX_MANAGED_SKILLS: usize = 512;
 const MAX_MANAGED_SKILL_FILES: usize = 512;
 const MAX_MANAGED_SKILL_DEPTH: usize = 12;
@@ -98,7 +94,6 @@ struct OrgSession {
 struct OrgInner {
     client: reqwest::Client,
     session: AsyncMutex<OrgSession>,
-    cancellations: Mutex<HashMap<String, CancellationToken>>,
     /// Serializes the network/download portion of managed-Skill syncs. State
     /// transactions use a separate bounded file lock so logout never waits on
     /// a potentially slow organization server.
@@ -153,7 +148,6 @@ impl Default for OrgState {
                     refresh_token,
                     ..Default::default()
                 }),
-                cancellations: Mutex::new(HashMap::new()),
                 skill_sync: AsyncMutex::new(()),
                 skill_state_transaction: Mutex::new(()),
                 model_state_transaction: Mutex::new(()),
@@ -989,16 +983,6 @@ fn clear_local_session(
     }
 }
 
-fn cancel_pending_requests(inner: &Arc<OrgInner>) {
-    let pending = {
-        let mut cancellations = inner.cancellations.lock().unwrap();
-        std::mem::take(&mut *cancellations)
-    };
-    for token in pending.into_values() {
-        token.cancel();
-    }
-}
-
 async fn read_response_bounded(
     response: Response,
     max_bytes: u64,
@@ -1466,17 +1450,21 @@ async fn mcp_ask_inner(input: Value) -> Result<Value, String> {
     }
     let bytes = read_response_bounded(response, MAX_SSE_TOTAL_BYTES, "knowledge answer").await?;
     require_account_context(&state.inner, &authenticated.context).await?;
-    let text =
-        String::from_utf8(bytes).map_err(|_| "knowledge answer is not valid UTF-8".to_string())?;
-    for block in text.split("\n\n") {
-        if block.lines().any(|line| line == "event: final") {
-            let data = block
-                .lines()
-                .filter_map(|line| line.strip_prefix("data: "))
-                .collect::<Vec<_>>()
-                .join("\n");
-            return serde_json::from_str(&data)
-                .map_err(|e| format!("decode knowledge final event: {e}"));
+    let mut pending = bytes;
+    let mut events = drain_sse_events(&mut pending)?;
+    if !pending.iter().all(u8::is_ascii_whitespace) {
+        events.push(parse_sse_block(&pending)?);
+    }
+    for (event, data) in events {
+        if event == "final" {
+            return Ok(data);
+        }
+        if event == "error" {
+            let message = data
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("organization knowledge service returned an error");
+            return Err(message.to_string());
         }
     }
     Err("knowledge answer stream ended without a final event".into())
@@ -1740,7 +1728,6 @@ pub async fn org_login(
     // Do not revoke the active account merely because a replacement login
     // fails (bad password, offline server, malformed response). Switch the
     // local security boundary only after the new identity is authenticated.
-    cancel_pending_requests(&state.inner);
     let login_context = {
         let mut session = state.inner.session.lock().await;
         let previous_profile = session.profile.clone();
@@ -1853,7 +1840,6 @@ pub async fn org_login(
 
 #[tauri::command]
 pub async fn org_logout(app: AppHandle, state: State<'_, OrgState>) -> Result<(), String> {
-    cancel_pending_requests(&state.inner);
     crate::org_mcp::set_capability_enabled(false);
     // Local logout is the security boundary and must not wait for an offline
     // organization server. Revoke the remote device token afterwards with a
@@ -3985,80 +3971,6 @@ pub fn start_background_sync(app: AppHandle) {
     });
 }
 
-async fn run_ask_stream(
-    app: AppHandle,
-    state: OrgState,
-    request_id: String,
-    cancel: CancellationToken,
-    input: Value,
-) -> Result<(), String> {
-    let authenticated = authenticated_response(
-        &state.inner,
-        Method::POST,
-        "/api/v1/knowledge/ask",
-        Some(input),
-    )
-    .await?;
-    let response = authenticated.response;
-    if !response.status().is_success() {
-        return Err(format!("knowledge ask: HTTP {}", response.status()));
-    }
-    let mut stream = response.bytes_stream();
-    // Keep raw bytes until a complete SSE frame is available. Decoding every
-    // network chunk independently can corrupt UTF-8 when a Chinese character
-    // is split across two chunks.
-    let mut pending = Vec::new();
-    let mut terminal_seen = false;
-    let mut total_bytes = 0_u64;
-    loop {
-        let next = tokio::select! {
-            _ = cancel.cancelled() => break,
-            value = stream.next() => value,
-        };
-        let Some(chunk) = next else {
-            break;
-        };
-        let chunk = chunk.map_err(|e| format!("read answer stream: {e}"))?;
-        total_bytes = total_bytes
-            .checked_add(chunk.len() as u64)
-            .ok_or_else(|| "knowledge answer length overflow".to_string())?;
-        if total_bytes > MAX_SSE_TOTAL_BYTES {
-            return Err("knowledge answer exceeds 32 MiB".into());
-        }
-        pending.extend_from_slice(&chunk);
-        require_account_context_generation(&state.inner, &authenticated.context)?;
-        for (event, payload) in drain_sse_events(&mut pending)? {
-            terminal_seen |= matches!(event.as_str(), "final" | "error");
-            let _ = app.emit(
-                "org://ask-event",
-                json!({ "requestId": request_id, "event": event, "data": payload }),
-            );
-        }
-        if pending.len() > MAX_SSE_EVENT_BYTES {
-            return Err("knowledge answer event exceeds 2 MiB".into());
-        }
-    }
-    if cancel.is_cancelled() {
-        return Ok(());
-    }
-    require_account_context(&state.inner, &authenticated.context).await?;
-    // A compliant sender normally terminates every event with a blank line,
-    // but accept a final unterminated frame when the connection closes cleanly.
-    if !pending.iter().all(u8::is_ascii_whitespace) {
-        let (event, payload) = parse_sse_block(&pending)?;
-        terminal_seen |= matches!(event.as_str(), "final" | "error");
-        let _ = app.emit(
-            "org://ask-event",
-            json!({ "requestId": request_id, "event": event, "data": payload }),
-        );
-    }
-    if terminal_seen {
-        Ok(())
-    } else {
-        Err("knowledge answer stream ended without a final event".into())
-    }
-}
-
 fn sse_boundary(bytes: &[u8]) -> Option<(usize, usize)> {
     let lf = bytes.windows(2).position(|window| window == b"\n\n");
     let crlf = bytes.windows(4).position(|window| window == b"\r\n\r\n");
@@ -4101,96 +4013,6 @@ fn drain_sse_events(pending: &mut Vec<u8>) -> Result<Vec<(String, Value)>, Strin
         }
     }
     Ok(events)
-}
-
-#[tauri::command]
-pub async fn org_ask_start(
-    app: AppHandle,
-    state: State<'_, OrgState>,
-    question: String,
-    mode: Option<String>,
-    scope_kinds: Option<Vec<String>>,
-    scope_ids: Option<Vec<String>>,
-) -> Result<String, String> {
-    if question.trim().is_empty() || question.chars().count() > MAX_ASK_QUESTION_CHARS {
-        return Err("organization question is empty or too long".into());
-    }
-    let mode = mode.unwrap_or_else(|| "auto".into());
-    if !matches!(mode.as_str(), "auto" | "fast" | "deep") {
-        return Err("organization knowledge mode is invalid".into());
-    }
-    for (label, values) in [
-        ("scopeKinds", scope_kinds.as_ref()),
-        ("scopeIds", scope_ids.as_ref()),
-    ] {
-        if values.is_some_and(|values| {
-            values.len() > MAX_ASK_SCOPES
-                || values.iter().any(|value| {
-                    value.trim().is_empty()
-                        || value.chars().count() > MAX_PROFILE_FIELD_CHARS
-                        || value.chars().any(char::is_control)
-                })
-        }) {
-            return Err(format!("organization {label} is invalid or too large"));
-        }
-    }
-    let request_id = Uuid::now_v7().to_string();
-    let cancel = CancellationToken::new();
-    {
-        let mut cancellations = state.inner.cancellations.lock().unwrap();
-        if cancellations.len() >= MAX_PENDING_ASKS {
-            return Err(format!(
-                "at most {MAX_PENDING_ASKS} organization questions may run concurrently"
-            ));
-        }
-        cancellations.insert(request_id.clone(), cancel.clone());
-    }
-    let owned_state = state.inner.clone();
-    let task_state = OrgState {
-        inner: owned_state.clone(),
-    };
-    let task_id = request_id.clone();
-    let mut input = json!({
-        "question": question,
-        "mode": mode,
-    });
-    if let Some(kinds) = scope_kinds {
-        input["scopeKinds"] = json!(kinds);
-    }
-    if let Some(ids) = scope_ids {
-        input["scopeIds"] = json!(ids);
-    }
-    tauri::async_runtime::spawn(async move {
-        let result = run_ask_stream(app.clone(), task_state, task_id.clone(), cancel, input).await;
-        if let Err(error) = result {
-            let _ = app.emit(
-                "org://ask-event",
-                json!({
-                    "requestId": task_id,
-                    "event": "error",
-                    "data": { "message": error }
-                }),
-            );
-        }
-        owned_state.cancellations.lock().unwrap().remove(&task_id);
-    });
-    Ok(request_id)
-}
-
-#[tauri::command]
-pub fn org_ask_cancel(state: State<'_, OrgState>, request_id: String) -> bool {
-    if let Some(cancel) = state
-        .inner
-        .cancellations
-        .lock()
-        .unwrap()
-        .remove(&request_id)
-    {
-        cancel.cancel();
-        true
-    } else {
-        false
-    }
 }
 
 #[cfg(test)]
@@ -4328,7 +4150,6 @@ mod tests {
         let inner = OrgInner {
             client: reqwest::Client::new(),
             session: AsyncMutex::new(OrgSession::default()),
-            cancellations: Mutex::new(HashMap::new()),
             skill_sync: AsyncMutex::new(()),
             skill_state_transaction: Mutex::new(()),
             model_state_transaction: Mutex::new(()),
@@ -4438,30 +4259,6 @@ mod tests {
             events,
             vec![("status".into(), Value::String("first\nsecond".into()))]
         );
-    }
-
-    #[test]
-    fn logout_cancellation_drains_all_pending_requests() {
-        let first = CancellationToken::new();
-        let second = CancellationToken::new();
-        let inner = Arc::new(OrgInner {
-            client: reqwest::Client::new(),
-            session: AsyncMutex::new(OrgSession::default()),
-            cancellations: Mutex::new(HashMap::from([
-                ("first".into(), first.clone()),
-                ("second".into(), second.clone()),
-            ])),
-            skill_sync: AsyncMutex::new(()),
-            skill_state_transaction: Mutex::new(()),
-            model_state_transaction: Mutex::new(()),
-            skill_epoch: AtomicU64::new(0),
-            model_epoch: AtomicU64::new(0),
-            account_generation: AtomicU64::new(0),
-        });
-        cancel_pending_requests(&inner);
-        assert!(first.is_cancelled());
-        assert!(second.is_cancelled());
-        assert!(inner.cancellations.lock().unwrap().is_empty());
     }
 
     fn installed(id: &str, scope: &str, protected: bool) -> InstalledSkill {

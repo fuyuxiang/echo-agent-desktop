@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Archive,
@@ -12,24 +12,17 @@ import {
   LogOut,
   RefreshCw,
   History,
-  ThumbsDown,
-  ThumbsUp,
-  Send,
+  LayoutDashboard,
+  MessageSquareText,
   Plus,
   Upload,
   UserRound,
   UsersRound,
-  WandSparkles,
   XCircle,
 } from "lucide-react";
-import { Markdown } from "./Markdown";
 import {
-  listenOrgAsk,
-  orgAskCancel,
-  orgAskStart,
   orgDocumentSubmissionsMine,
   orgArchiveDocument,
-  orgFetchDocument,
   orgListDocuments,
   orgListMemories,
   orgListScopes,
@@ -44,12 +37,9 @@ import {
   orgNewDocumentVersion,
   orgPublishDocument,
   orgPublishSkill,
-  orgQaFeedback,
   orgSetSkillPreference,
   orgSubmitSkill,
   orgSyncSkills,
-  type AskCitation,
-  type AskFinal,
   type OrgDocument,
   type OrgMemory,
   type OrgMemoryKind,
@@ -62,7 +52,7 @@ import {
 import { useOrgSessionStore } from "@/stores/org-session-store";
 import { filesystemPickFiles } from "@/lib/agent-client";
 
-type Tab = "ask" | "memories" | "documents" | "skills";
+type Tab = "overview" | "memories" | "documents" | "skills";
 
 const memoryKindLabel: Record<OrgMemoryKind, string> = {
   fact: "事实",
@@ -135,9 +125,11 @@ function ScopeIcon({ kind }: { kind: OrgScope["kind"] }) {
 export function OrganizationMemoryPanel({
   onToast,
   cwd,
+  onStartConversation,
 }: {
   onToast?: (message: string) => void;
   cwd?: string;
+  onStartConversation?: () => void;
 }) {
   const [session, setSession] = useState<OrgSession | null>(null);
   const mirroredSession = useOrgSessionStore((state) => state.session);
@@ -154,9 +146,10 @@ export function OrganizationMemoryPanel({
   const [serverUrl, setServerUrl] = useState("https://");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [tab, setTab] = useState<Tab>("ask");
+  const [tab, setTab] = useState<Tab>("overview");
   const [scopes, setScopes] = useState<OrgScope[]>([]);
   const [selectedScope, setSelectedScope] = useState("");
+  const [writeScope, setWriteScope] = useState("");
   const [publishScope, setPublishScope] = useState("");
   const [documents, setDocuments] = useState<OrgDocument[]>([]);
   const [memories, setMemories] = useState<OrgMemory[]>([]);
@@ -164,14 +157,6 @@ export function OrganizationMemoryPanel({
   const [documentSubmissions, setDocumentSubmissions] = useState<Submission[]>([]);
   const [skills, setSkills] = useState<OrgSkill[]>([]);
   const [skillSubmissions, setSkillSubmissions] = useState<Submission[]>([]);
-  const [question, setQuestion] = useState("");
-  const [mode, setMode] = useState("auto");
-  const [answer, setAnswer] = useState<AskFinal | null>(null);
-  const [streamingAnswer, setStreamingAnswer] = useState("");
-  const [streamingCitations, setStreamingCitations] = useState<AskCitation[]>([]);
-  const [askStatus, setAskStatus] = useState("");
-  const [asking, setAsking] = useState(false);
-  const [feedbackSent, setFeedbackSent] = useState(false);
   const [showMemoryForm, setShowMemoryForm] = useState(false);
   const [memoryKind, setMemoryKind] = useState<OrgMemoryKind>("howto");
   const [memoryContent, setMemoryContent] = useState("");
@@ -179,8 +164,6 @@ export function OrganizationMemoryPanel({
   const [memoryOutcome, setMemoryOutcome] = useState("");
   const [memoryWorkspace, setMemoryWorkspace] = useState("");
   const [memoryValidUntil, setMemoryValidUntil] = useState("");
-  const activeRequest = useRef<string | null>(null);
-  const ignoredRequests = useRef(new Set<string>());
 
   useEffect(() => {
     if (mirroredSession) setSession(mirroredSession);
@@ -204,6 +187,9 @@ export function OrganizationMemoryPanel({
     setMemories(nextMemories);
     setMemoryPromotions(promotions.filter((item) => item.payloadType === "memory"));
     setSelectedScope((current) => nextScopes.some((scope) => scope.id === current)
+      ? current
+      : "");
+    setWriteScope((current) => nextScopes.some((scope) => scope.id === current)
       ? current
       : nextScopes.find((scope) => scope.kind === "personal")?.id || nextScopes[0]?.id || "");
     setPublishScope((current) => nextScopes.some((scope) => scope.id === current && scope.kind !== "personal")
@@ -236,50 +222,9 @@ export function OrganizationMemoryPanel({
     return () => window.clearInterval(timer);
   }, [session?.loggedIn, documentSubmissions, documents, loadWorkspace]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void listenOrgAsk((event) => {
-      if (ignoredRequests.current.has(event.requestId)) return;
-      if (activeRequest.current && event.requestId !== activeRequest.current) return;
-      if (event.event === "status") {
-        const data = event.data as { message?: string };
-        setAskStatus(data.message ?? "正在处理…");
-      } else if (event.event === "citation") {
-        const citation = event.data as AskCitation;
-        setStreamingCitations((current) => current.some((item) => item.id === citation.id) ? current : [...current, citation]);
-      } else if (event.event === "delta") {
-        const data = event.data as { text?: string };
-        if (data.text) setStreamingAnswer((current) => current + data.text);
-      } else if (event.event === "final") {
-        setAnswer(event.data as AskFinal);
-        setStreamingAnswer("");
-        setStreamingCitations([]);
-        setAskStatus("");
-        setAsking(false);
-        activeRequest.current = null;
-      } else if (event.event === "error") {
-        const data = event.data as { message?: string };
-        setError(data.message ?? "组织问答失败");
-        setStreamingAnswer("");
-        setStreamingCitations([]);
-        setAskStatus("");
-        setAsking(false);
-        activeRequest.current = null;
-      }
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, []);
-
   const uploadScope = useMemo(
-    () => scopes.find((scope) => scope.id === selectedScope),
-    [scopes, selectedScope],
+    () => scopes.find((scope) => scope.id === writeScope),
+    [scopes, writeScope],
   );
   const allowSkillSubmission = session?.bootstrap?.policy.allowSkillSubmission !== false;
   const allowDocumentUpload = uploadScope?.kind !== "personal"
@@ -343,12 +288,11 @@ export function OrganizationMemoryPanel({
   };
 
   const resetWorkspace = () => {
-    if (activeRequest.current) ignoredRequests.current.add(activeRequest.current);
-    activeRequest.current = null;
     setSession({ loggedIn: false });
     clearMirroredOrgSession();
     setScopes([]);
     setSelectedScope("");
+    setWriteScope("");
     setPublishScope("");
     setDocuments([]);
     setMemories([]);
@@ -356,12 +300,7 @@ export function OrganizationMemoryPanel({
     setDocumentSubmissions([]);
     setSkills([]);
     setSkillSubmissions([]);
-    setAnswer(null);
-    setFeedbackSent(false);
-    setStreamingAnswer("");
-    setStreamingCitations([]);
-    setAskStatus("");
-    setAsking(false);
+    setTab("overview");
   };
 
   const handleLogout = async () => {
@@ -376,42 +315,6 @@ export function OrganizationMemoryPanel({
       setError(String(reason));
     } finally {
       setBusy(false);
-    }
-  };
-
-  const handleAsk = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const text = question.trim();
-    if (!text || asking) return;
-    setError(null);
-    setAnswer(null);
-    setStreamingAnswer("");
-    setStreamingCitations([]);
-    setAsking(true);
-    setAskStatus("正在连接组织知识服务…");
-    try {
-      const requestId = await orgAskStart(text, mode, selectedScope ? [selectedScope] : undefined);
-      activeRequest.current = requestId;
-    } catch (reason) {
-      setAsking(false);
-      setAskStatus("");
-      setError(String(reason));
-    }
-  };
-
-  const cancelAsk = async () => {
-    const requestId = activeRequest.current;
-    if (requestId) ignoredRequests.current.add(requestId);
-    activeRequest.current = null;
-    setAsking(false);
-    setAskStatus("");
-    setStreamingAnswer("");
-    setStreamingCitations([]);
-    if (!requestId) return;
-    try {
-      await orgAskCancel(requestId);
-    } catch (reason) {
-      setError(String(reason));
     }
   };
 
@@ -478,12 +381,12 @@ export function OrganizationMemoryPanel({
 
   const submitMemoryCandidate = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!selectedScope || !memoryContent.trim()) return;
+    if (!writeScope || !memoryContent.trim()) return;
     setBusy(true);
     setError(null);
     try {
       await orgSubmitMemoryCandidate({
-        targetScopeId: selectedScope,
+        targetScopeId: writeScope,
         kind: memoryKind,
         content: memoryContent.trim(),
         rationale: memoryRationale.trim(),
@@ -622,15 +525,6 @@ export function OrganizationMemoryPanel({
     } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
 
-  const sendFeedback = async (feedback: "helpful" | "not_helpful" | "wrong") => {
-    if (!answer?.qaEventId) return;
-    try {
-      await orgQaFeedback(answer.qaEventId, feedback);
-      setFeedbackSent(true);
-      onToast?.("感谢反馈");
-    } catch (reason) { setError(String(reason)); }
-  };
-
   const syncSkills = async () => {
     setBusy(true);
     setError(null);
@@ -669,12 +563,24 @@ export function OrganizationMemoryPanel({
     );
   }
 
+  const pendingCount = documentSubmissions.filter((item) => item.state === "pending" || item.scanStatus === "queued" || item.scanStatus === "scanning").length
+    + skillSubmissions.filter((item) => item.state === "pending" || item.scanStatus === "queued" || item.scanStatus === "scanning").length
+    + memoryPromotions.filter((item) => item.state === "pending").length
+    + documents.filter((item) => ["pending", "parsing", "chunking", "embedding"].includes(item.status)).length;
+  const pageTitle = tab === "overview" ? "组织知识"
+    : tab === "memories" ? "经验"
+      : tab === "documents" ? "文档" : "组织 Skills";
+  const pageDescription = tab === "overview" ? "管理可供 Agent 使用的组织经验、文档与 Skills。"
+    : tab === "memories" ? "沉淀决策、规范、操作手册和踩坑记录，供 Agent 在任务前召回。"
+      : tab === "documents" ? "管理组织知识来源、版本状态和检索可用性。"
+        : "查看组织分发的能力包，并管理当前设备上的安装状态。";
+
   return (
     <div className="org-memory">
       <header className="org-memory__header">
         <div>
-          <div className="org-memory__eyebrow">ENTERPRISE MEMORY</div>
-          <h1>组织</h1>
+          <div className="org-memory__eyebrow">组织工作台</div>
+          <h1>{session.bootstrap?.scopes.find((scope) => scope.kind === "org")?.name ?? "组织知识管理中心"}</h1>
           <p>{session.user?.displayName ?? session.user?.username} · {session.serverUrl}</p>
           <span className={`org-memory__capability ${session.organizationMemoryEnabled ? "is-active" : ""}`}>
             <i />{session.organizationMemoryEnabled
@@ -690,64 +596,42 @@ export function OrganizationMemoryPanel({
         </div>
       </header>
 
-      <div className="org-memory__scopebar">
-        <span>当前知识范围</span>
-        <select value={selectedScope} onChange={(event) => setSelectedScope(event.target.value)}>
-          <option value="">我有权限的全部范围</option>
-          {scopes.map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}
-        </select>
-        {uploadScope && <span className={`org-scope-badge org-scope-badge--${uploadScope.kind}`}><ScopeIcon kind={uploadScope.kind} />{scopeLabel(uploadScope.kind)}</span>}
-      </div>
+      <div className="org-memory__workspace">
+        <nav className="org-memory__nav" aria-label="组织功能">
+          <div className="org-memory__nav-label">工作台</div>
+          <button className={tab === "overview" ? "active" : ""} aria-current={tab === "overview" ? "page" : undefined} onClick={() => setTab("overview")}><LayoutDashboard size={16} /><span>概览</span></button>
+          <div className="org-memory__nav-label">知识资产</div>
+          <button className={tab === "memories" ? "active" : ""} aria-current={tab === "memories" ? "page" : undefined} onClick={() => setTab("memories")}><BrainCircuit size={16} /><span>经验</span><em>{memories.length}</em></button>
+          <button className={tab === "documents" ? "active" : ""} aria-current={tab === "documents" ? "page" : undefined} onClick={() => setTab("documents")}><FileText size={16} /><span>文档</span><em>{documents.length}</em></button>
+          <div className="org-memory__nav-label">能力分发</div>
+          <button className={tab === "skills" ? "active" : ""} aria-current={tab === "skills" ? "page" : undefined} onClick={() => setTab("skills")}><CheckCircle2 size={16} /><span>Skills</span><em>{skills.length}</em></button>
+        </nav>
 
-      <nav className="org-memory__tabs">
-        <button className={tab === "ask" ? "active" : ""} onClick={() => setTab("ask")}><WandSparkles size={16} />组织问答</button>
-        <button className={tab === "memories" ? "active" : ""} onClick={() => setTab("memories")}><BrainCircuit size={16} />经验 <span>{visibleMemories.length}</span></button>
-        <button className={tab === "documents" ? "active" : ""} onClick={() => setTab("documents")}><FileText size={16} />文档 <span>{visibleDocuments.length}</span></button>
-        <button className={tab === "skills" ? "active" : ""} onClick={() => setTab("skills")}><CheckCircle2 size={16} />Skills <span>{visibleSkills.length}</span></button>
-      </nav>
-
-      {error && <div className="org-memory__error"><XCircle size={15} />{error}<button onClick={() => setError(null)}>关闭</button></div>}
-      {uploadProgress && (
-        <div className="org-memory__upload-progress" role="status" aria-live="polite">
-          <Loader2 className="org-memory__spin" size={15} />
-          <span>{uploadProgress.label}</span>
-          <strong>{uploadProgress.completed}/{uploadProgress.total}</strong>
-        </div>
-      )}
-
-      {tab === "ask" && (
-        <section className="org-ask">
-          <div className="org-ask__intro">
-            <h2>向组织知识提问</h2>
-            <p>答案只使用你有权限查看的当前文档和已审核经验；结论保留原文引用与时效信息。个人空间内容不会被同事检索。</p>
+        <main className="org-memory__content">
+          <div className="org-memory__page-header">
+            <div><h2>{pageTitle}</h2><p>{pageDescription}</p></div>
+            {tab !== "overview" && <label className="org-memory__filter"><span>查看范围</span><select value={selectedScope} onChange={(event) => setSelectedScope(event.target.value)}><option value="">全部授权范围</option>{scopes.map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label>}
           </div>
-          <form className="org-ask__composer" onSubmit={handleAsk}>
-            <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="例如：公司的差旅住宿标准是什么？" rows={4} />
-            <div>
-              <select value={mode} onChange={(event) => setMode(event.target.value)}>
-                <option value="auto">自动判断</option><option value="fast">快速检索</option><option value="deep">深度综合</option>
-              </select>
-              {asking ? <button type="button" onClick={() => void cancelAsk()}><XCircle size={15} />停止</button> : <button className="org-memory__primary" disabled={!question.trim()}><Send size={15} />提问</button>}
+
+          {error && <div className="org-memory__error"><XCircle size={15} />{error}<button onClick={() => setError(null)}>关闭</button></div>}
+          {uploadProgress && <div className="org-memory__upload-progress" role="status" aria-live="polite"><Loader2 className="org-memory__spin" size={15} /><span>{uploadProgress.label}</span><strong>{uploadProgress.completed}/{uploadProgress.total}</strong></div>}
+
+          {tab === "overview" && <section className="org-overview">
+            <div className="org-overview__hero">
+              <div className="org-overview__hero-icon"><MessageSquareText size={22} /></div>
+              <div><h3>在对话中使用组织知识</h3><p>发起任务时自动选择组织知识，可连续追问，也可以让 Agent 结合组织规则直接执行。</p></div>
+              <button className="org-memory__primary" onClick={onStartConversation} disabled={!session.organizationMemoryEnabled || !onStartConversation}>发起对话</button>
             </div>
-          </form>
-          {askStatus && <div className="org-ask__status"><Loader2 className="org-memory__spin" size={15} />{askStatus}</div>}
-          {asking && (streamingAnswer || streamingCitations.length > 0) && (
-            <article className="org-answer">
-              <div className="org-answer__meta"><span>正在生成</span></div>
-              {streamingAnswer && <Markdown>{streamingAnswer}</Markdown>}
-              {streamingCitations.length > 0 && <CitationList citations={streamingCitations} />}
-            </article>
-          )}
-          {answer && (
-            <article className="org-answer">
-              <div className="org-answer__meta"><span>{answer.mode === "deep" ? "深度综合" : "快速检索"}</span><span>置信度 {Math.round(answer.confidence * 100)}%</span><span>{answer.verification}</span></div>
-              {answer.insufficient ? <div className="org-answer__empty">授权范围内没有足够证据回答这个问题。</div> : <Markdown>{answer.answer}</Markdown>}
-              {answer.citations.length > 0 && <CitationList citations={answer.citations} />}
-              {answer.qaEventId && <div className="org-library__actions">{feedbackSent ? <span>已记录反馈</span> : <><button onClick={() => void sendFeedback("helpful")}><ThumbsUp size={13} />有帮助</button><button onClick={() => void sendFeedback("not_helpful")}><ThumbsDown size={13} />没帮助</button><button onClick={() => void sendFeedback("wrong")}>引用有误</button></>}</div>}
-            </article>
-          )}
-        </section>
-      )}
+            <div className="org-overview__metrics" aria-label="组织知识概况">
+              <button type="button" onClick={() => setTab("memories")}><span>已发布经验</span><strong>{memories.length}</strong><small>{memoryPromotions.filter((item) => item.state === "pending").length} 条待审核</small></button>
+              <button type="button" onClick={() => setTab("documents")}><span>可检索文档</span><strong>{documents.filter((item) => item.status === "ready").length}</strong><small>{documents.filter((item) => item.status !== "ready" && item.status !== "archived").length} 条处理中</small></button>
+              <button type="button" onClick={() => setTab("skills")}><span>已安装 Skills</span><strong>{skills.filter((item) => item.enabled).length}/{skills.length}</strong><small>{skills.filter((item) => item.mandatory).length} 个组织强制</small></button>
+            </div>
+            <div className="org-overview__attention">
+              <div><h3>需要关注</h3><p>聚合当前账号需要处理的提交、同步与索引状态。</p></div>
+              {pendingCount === 0 ? <div className="org-library__empty">当前没有待处理事项</div> : <div className="org-overview__attention-row"><AlertTriangle size={17} /><span>共有 {pendingCount} 项内容正在审核、扫描或建立索引</span><button type="button" onClick={() => setTab(documents.some((item) => item.status !== "ready" && item.status !== "archived") ? "documents" : "skills")}>查看详情</button></div>}
+            </div>
+          </section>}
 
       {tab === "memories" && (
         <section className="org-library">
@@ -756,10 +640,11 @@ export function OrganizationMemoryPanel({
             <button className="org-memory__primary" onClick={() => {
               setMemoryWorkspace((value) => value || cwd || "");
               setShowMemoryForm((value) => !value);
-            }} disabled={!selectedScope}><Plus size={15} />提交经验</button>
+            }} disabled={!writeScope}><Plus size={15} />提交经验</button>
           </div>
           {showMemoryForm && (
             <form className="org-memory-form" onSubmit={submitMemoryCandidate}>
+              <label>发布范围<select value={writeScope} onChange={(event) => setWriteScope(event.target.value)} required><option value="">选择范围</option>{scopes.map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label>
               <label>类型<select value={memoryKind} onChange={(event) => setMemoryKind(event.target.value as OrgMemoryKind)}>{Object.entries(memoryKindLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
               <label className="org-memory-form__wide">经验内容<textarea required maxLength={2000} rows={4} value={memoryContent} onChange={(event) => setMemoryContent(event.target.value)} placeholder="写成可直接指导下一次任务的明确结论或步骤" /></label>
               <label className="org-memory-form__wide">为什么有效<textarea maxLength={2000} rows={2} value={memoryRationale} onChange={(event) => setMemoryRationale(event.target.value)} placeholder="背景、适用条件或决策依据（建议填写）" /></label>
@@ -785,7 +670,11 @@ export function OrganizationMemoryPanel({
         <section className="org-library">
           <div className="org-library__toolbar">
             <div><h2>共享文档</h2><p>个人范围自动发布；团队/组织范围由成员提交、知识管理员审核后才进入检索。</p></div>
-            <div className="org-library__actions">{uploadScope?.kind === "personal" && <select value={publishScope} onChange={(event) => setPublishScope(event.target.value)}><option value="">选择副本发布目标</option>{scopes.filter((scope) => scope.kind !== "personal").map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select>}<button className="org-memory__primary" onClick={() => void pickAndUploadDocument()} disabled={busy || !uploadScope || !allowDocumentUpload}><Upload size={15} />上传到当前范围</button></div>
+            <div className="org-library__actions">
+              <label className="org-library__scope-field"><span>上传到</span><select aria-label="文档上传范围" value={writeScope} onChange={(event) => setWriteScope(event.target.value)}><option value="">选择上传范围</option>{scopes.map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label>
+              {documents.some((document) => document.scopeKind === "personal") && scopes.some((scope) => scope.kind !== "personal") && <label className="org-library__scope-field"><span>副本发布到</span><select aria-label="文档副本发布目标" value={publishScope} onChange={(event) => setPublishScope(event.target.value)}><option value="">选择副本发布目标</option>{scopes.filter((scope) => scope.kind !== "personal").map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label>}
+              <button className="org-memory__primary" onClick={() => void pickAndUploadDocument()} disabled={busy || !uploadScope || !allowDocumentUpload}><Upload size={15} />上传文档</button>
+            </div>
           </div>
           <div className="org-library__list">
             {visibleDocuments.length === 0 && <div className="org-library__empty">当前授权范围还没有已发布文档</div>}
@@ -806,7 +695,11 @@ export function OrganizationMemoryPanel({
         <section className="org-library">
           <div className="org-library__toolbar">
             <div><h2>组织 Skills</h2><p>点击安装后下载到用户全局 <code>~/.echo-agent/skills/organization</code>，专家技能页直接读取并使用。</p></div>
-            <div className="org-library__actions"><button onClick={() => void syncSkills()} disabled={busy}><RefreshCw size={15} />安全同步</button><button className="org-memory__primary" onClick={() => void pickAndUploadSkill()} disabled={busy || !uploadScope || !allowSkillSubmission}><Upload size={15} />上传 ZIP</button></div>
+            <div className="org-library__actions">
+              <label className="org-library__scope-field"><span>提交到</span><select aria-label="Skill 提交范围" value={writeScope} onChange={(event) => setWriteScope(event.target.value)}><option value="">选择提交范围</option>{scopes.map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label>
+              {skills.some((skill) => skill.scopeKind === "personal") && scopes.some((scope) => scope.kind !== "personal") && <label className="org-library__scope-field"><span>副本发布到</span><select aria-label="Skill 副本发布目标" value={publishScope} onChange={(event) => setPublishScope(event.target.value)}><option value="">选择副本发布目标</option>{scopes.filter((scope) => scope.kind !== "personal").map((scope) => <option key={scope.id} value={scope.id}>{scopeLabel(scope.kind)} · {scope.name}</option>)}</select></label>}
+              <button onClick={() => void syncSkills()} disabled={busy}><RefreshCw size={15} />安全同步</button><button className="org-memory__primary" onClick={() => void pickAndUploadSkill()} disabled={busy || !uploadScope || !allowSkillSubmission}><Upload size={15} />提交 Skill</button>
+            </div>
           </div>
           <div className="org-skill-grid">
             {visibleSkills.length === 0 && <div className="org-library__empty">当前授权范围还没有已发布 Skills</div>}
@@ -821,43 +714,10 @@ export function OrganizationMemoryPanel({
           <SubmissionList title="我的 Skill 提交" submissions={visibleSkillSubmissions} />
         </section>
       )}
+        </main>
+      </div>
     </div>
   );
-}
-
-export function parseEchoDocumentUrl(value: string): { docId: string; page?: number } {
-  const url = new URL(value);
-  if (url.protocol !== "echo:" || url.hostname !== "doc") throw new Error("引用链接协议无效");
-  const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
-  const docId = parts[0];
-  if (!docId) throw new Error("引用缺少文档 ID");
-  const pageFromPath = parts[1] === "page" ? Number(parts[2]) : undefined;
-  const pageFromQuery = url.searchParams.has("page") ? Number(url.searchParams.get("page")) : undefined;
-  const page = pageFromPath ?? pageFromQuery;
-  if (page !== undefined && (!Number.isInteger(page) || page < 1)) throw new Error("引用页码无效");
-  return { docId, ...(page !== undefined ? { page } : {}) };
-}
-
-function CitationList({ citations }: { citations: AskCitation[] }) {
-  const [preview, setPreview] = useState<{ id: string; text: string } | null>(null);
-  const [loadingId, setLoadingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const openCitation = async (citation: AskCitation) => {
-    if (preview?.id === citation.id) { setPreview(null); return; }
-    setLoadingId(citation.id);
-    setError(null);
-    try {
-      const target = parseEchoDocumentUrl(citation.openUrl);
-      if (target.docId !== citation.docId) throw new Error("引用文档 ID 与签名结果不一致");
-      const document = await orgFetchDocument(target.docId, target.page ?? citation.page ?? undefined);
-      setPreview({ id: citation.id, text: document.text });
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setLoadingId(null);
-    }
-  };
-  return <div className="org-citations"><h3>引用依据</h3>{error && <div className="org-citation__error">{error}</div>}{citations.map((citation) => <div className="org-citation" key={citation.id}><div><span>{citation.id}</span><strong>{citation.title}</strong>{citation.page != null && <em>第 {citation.page} 页</em>}{citation.stale && <em className="org-citation__stale">可能过时</em>}<button onClick={() => void openCitation(citation)} disabled={loadingId === citation.id}>{loadingId === citation.id ? <Loader2 className="org-memory__spin" size={12} /> : <FileText size={12} />}{preview?.id === citation.id ? "收起原文" : "查看原文"}</button></div><blockquote>{citation.quote}</blockquote>{preview?.id === citation.id && <pre className="org-citation__preview">{preview.text}</pre>}</div>)}</div>;
 }
 
 function SubmissionList({ title, submissions }: { title: string; submissions: Submission[] }) {

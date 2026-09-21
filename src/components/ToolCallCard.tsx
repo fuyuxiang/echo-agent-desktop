@@ -1,9 +1,11 @@
+import { useState } from "react";
 import type { ToolCallView } from "@/stores/session-store";
 import type { DiffContent, CommandOutputContent, ImageToolContent } from "@/lib/types";
 import { checkCommandRisk, riskLabel } from "@/lib/command-risk";
 import { precheckCommand } from "@/lib/sandbox-guard";
 import { computeUnifiedDiff, hunksToUnifiedLines, summarizeDiff, type DiffLine } from "@/lib/unified-diff";
 import { CheckIcon } from "@/foundation/components/Icon/icons";
+import { orgFetchDocument, orgQaFeedback } from "@/lib/org-client";
 import {
   detectToolRenderer,
   rendererLabel,
@@ -268,14 +270,19 @@ function parseOrganizationResult(text: string | undefined): Record<string, unkno
 }
 
 function OrganizationKnowledgeResult({ value }: { value: Record<string, unknown> }) {
-  const evidence = Array.isArray(value.evidence)
+  const [preview, setPreview] = useState<{ id: string; text: string } | null>(null);
+  const [loadingCitation, setLoadingCitation] = useState<string | null>(null);
+  const [interactionError, setInteractionError] = useState<string | null>(null);
+  const [feedbackSent, setFeedbackSent] = useState(false);
+  const rawEvidence = Array.isArray(value.evidence)
     ? value.evidence
     : Array.isArray(value.chunks)
       ? value.chunks
       : Array.isArray(value.citations)
         ? value.citations
         : [];
-  const memories = Array.isArray(value.memories) ? value.memories : [];
+  const evidence = rawEvidence.filter(isRecord);
+  const memories = Array.isArray(value.memories) ? value.memories.filter(isRecord) : [];
   const missingFacts = Array.isArray(value.missingFacts) ? value.missingFacts : [];
   const confidence = typeof value.confidence === "number" ? value.confidence : null;
   const sufficient = typeof value.sufficient === "boolean"
@@ -283,6 +290,47 @@ function OrganizationKnowledgeResult({ value }: { value: Record<string, unknown>
     : typeof value.insufficient === "boolean"
       ? !value.insufficient
       : null;
+  const qaEventId = typeof value.qaEventId === "string"
+    ? value.qaEventId
+    : typeof value.qa_event_id === "string"
+      ? value.qa_event_id
+      : null;
+  const openEvidence = async (source: Record<string, unknown>, index: number) => {
+    const citation = source.citation && typeof source.citation === "object"
+      ? source.citation as Record<string, unknown>
+      : {};
+    const docId = String(source.docId ?? source.doc_id ?? citation.docId ?? citation.doc_id ?? "").trim();
+    const pageValue = citation.page ?? source.page;
+    const page = typeof pageValue === "number" && Number.isInteger(pageValue) && pageValue > 0
+      ? pageValue
+      : undefined;
+    if (!docId) return;
+    const id = String(source.chunkId ?? source.id ?? `${docId}-${index}`);
+    if (preview?.id === id) {
+      setPreview(null);
+      return;
+    }
+    setInteractionError(null);
+    setLoadingCitation(id);
+    try {
+      const document = await orgFetchDocument(docId, page);
+      setPreview({ id, text: document.text });
+    } catch (error) {
+      setInteractionError(`引用原文读取失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setLoadingCitation(null);
+    }
+  };
+  const sendFeedback = async (feedback: "helpful" | "not_helpful" | "wrong") => {
+    if (!qaEventId || feedbackSent) return;
+    setInteractionError(null);
+    try {
+      await orgQaFeedback(qaEventId, feedback);
+      setFeedbackSent(true);
+    } catch (error) {
+      setInteractionError(`反馈提交失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  };
   return <div className="org-tool-result">
     <div className="org-tool-result__summary">
       {sufficient !== null && <span className={sufficient ? "is-good" : "is-warning"}>{sufficient ? "证据充分" : "证据有缺口"}</span>}
@@ -292,15 +340,23 @@ function OrganizationKnowledgeResult({ value }: { value: Record<string, unknown>
     {typeof value.answer === "string" && value.answer && <p className="org-tool-result__answer">{value.answer}</p>}
     {missingFacts.length > 0 && <div className="org-tool-result__missing"><strong>仍需确认</strong>{missingFacts.slice(0, 5).map((item, index) => <span key={index}>{String(item)}</span>)}</div>}
     {memories.length > 0 && <div className="org-tool-result__section"><strong>相关经验与规则</strong>{memories.slice(0, 8).map((item, index) => {
-      const memory = item as Record<string, unknown>;
+      const memory = item;
       return <article key={String(memory.id ?? index)}><header><span>{memoryKindName(memory.kind)}</span>{memory.stale === true && <em>已过期</em>}</header><p>{String(memory.content ?? "")}</p>{typeof memory.rationale === "string" && memory.rationale && <small>{memory.rationale}</small>}</article>;
     })}</div>}
     {evidence.length > 0 && <div className="org-tool-result__section"><strong>文档依据</strong>{evidence.slice(0, 12).map((item, index) => {
-      const source = item as Record<string, unknown>;
+      const source = item;
       const citation = source.citation && typeof source.citation === "object" ? source.citation as Record<string, unknown> : {};
-      return <article key={String(source.chunkId ?? source.id ?? index)}><header><span>{String(source.docTitle ?? source.title ?? source.doc ?? `依据 ${index + 1}`)}</span>{(source.stale === true) && <em>可能过时</em>}</header><small>{String(citation.heading ?? source.heading ?? "")}{citation.page != null || source.page != null ? ` · 第 ${String(citation.page ?? source.page)} 页` : ""}</small><p>{clipEvidence(String(source.text ?? source.quote ?? ""))}</p></article>;
+      const docId = String(source.docId ?? source.doc_id ?? citation.docId ?? citation.doc_id ?? "").trim();
+      const id = String(source.chunkId ?? source.id ?? `${docId}-${index}`);
+      return <article key={id}><header><span>{String(source.docTitle ?? source.title ?? source.doc ?? `依据 ${index + 1}`)}</span>{(source.stale === true) && <em>可能过时</em>}</header><small>{String(citation.heading ?? source.heading ?? "")}{citation.page != null || source.page != null ? ` · 第 ${String(citation.page ?? source.page)} 页` : ""}</small><p>{clipEvidence(String(source.text ?? source.quote ?? ""))}</p>{docId && <button type="button" className="org-tool-result__source-button" disabled={loadingCitation === id} onClick={() => void openEvidence(source, index)}>{loadingCitation === id ? "正在读取…" : preview?.id === id ? "收起原文" : "查看原文"}</button>}{preview?.id === id && <pre className="org-tool-result__source-preview">{preview.text}</pre>}</article>;
     })}</div>}
+    {qaEventId && <div className="org-tool-result__feedback" aria-label="组织知识回答反馈">{feedbackSent ? <span>感谢反馈，已记录</span> : <><span>这些组织知识有帮助吗？</span><button type="button" onClick={() => void sendFeedback("helpful")}>有帮助</button><button type="button" onClick={() => void sendFeedback("not_helpful")}>没帮助</button><button type="button" onClick={() => void sendFeedback("wrong")}>引用有误</button></>}</div>}
+    {interactionError && <div className="org-tool-result__error" role="alert">{interactionError}</div>}
   </div>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function PersonalKnowledgeResult({

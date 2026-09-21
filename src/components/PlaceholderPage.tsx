@@ -70,6 +70,8 @@ interface PlaceholderPageProps {
   onOpenSession?: (sessionId: string, cwd?: string) => void;
   /** Navigate to the home page (used after expert summon). */
   onGoHome?: () => void;
+  /** Start a new task with organization knowledge selected once. */
+  onStartOrganizationConversation?: () => void;
   /** Surface transient feedback (errors, success toasts). */
   onToast?: (message: string) => void;
   /** Current cwd (for memory workspace scope, projects panel). */
@@ -135,6 +137,7 @@ export function PlaceholderPage({
   onNavigate,
   onOpenSession,
   onGoHome,
+  onStartOrganizationConversation,
   onToast,
   cwd,
   onSelectWorkspace,
@@ -191,7 +194,7 @@ export function PlaceholderPage({
   }
 
   if (label === "组织") {
-    return <DeferredPanel><OrganizationMemoryPanel onToast={onToast} cwd={cwd} /></DeferredPanel>;
+    return <DeferredPanel><OrganizationMemoryPanel onToast={onToast} cwd={cwd} onStartConversation={onStartOrganizationConversation} /></DeferredPanel>;
   }
 
   if (["专家·技能·连接器", "技能", "连接器"].includes(label)) {
