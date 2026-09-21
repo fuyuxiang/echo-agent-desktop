@@ -7,6 +7,12 @@ import { useTheme } from "@/components/ThemeProvider";
 import { reportEvent } from "@/lib/telemetry-contract";
 import type { EditorCodeContext } from "../lib/documentation";
 import { initializeMonaco } from "../lib/monaco-bootstrap";
+import {
+  hasMonacoRuntimeThemeStyles,
+  installEchoMonacoThemes,
+  resolveEchoMonacoTheme,
+  type EchoMonacoTheme,
+} from "../lib/monaco-theme";
 
 export interface CodingEditorDiagnostic {
   path: string;
@@ -59,6 +65,9 @@ interface DocumentSymbolLike {
 
 const MAX_SELECTION_CONTEXT = 12_000;
 const MONACO_STARTUP_TIMEOUT_MS = 10_000;
+const FORCED_COLORS_QUERY = "(forced-colors: active)";
+
+let themeFallbackReported = false;
 
 type MonacoStartupState =
   | { status: "loading" }
@@ -78,7 +87,36 @@ function editorModelUri(path: string): string {
   return `file://${normalized.startsWith("/") ? "" : "/"}${normalized}`;
 }
 
+function forcedColorsAreActive(): boolean {
+  return typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia(FORCED_COLORS_QUERY).matches;
+}
+
+function scheduleThemeHealthCheck(
+  monaco: Parameters<OnMount>[1],
+  themeName: EchoMonacoTheme,
+): void {
+  const schedule = typeof window.requestAnimationFrame === "function"
+    ? window.requestAnimationFrame.bind(window)
+    : (callback: FrameRequestCallback) => window.setTimeout(callback, 0);
+
+  schedule(() => {
+    if (hasMonacoRuntimeThemeStyles()) return;
+    // Re-applying the theme repairs transient WebView style injection failures.
+    // The static scoped palette in coding-workbench.css remains the final guard.
+    monaco.editor.setTheme(themeName);
+    schedule(() => {
+      if (hasMonacoRuntimeThemeStyles() || themeFallbackReported) return;
+      themeFallbackReported = true;
+      console.warn("[EchoAgent] Monaco runtime theme styles are unavailable; using static fallback");
+      reportEvent("coding.editor.theme_styles_missing", "warn", { theme: themeName });
+    });
+  });
+}
+
 const configureMonaco: BeforeMount = (monaco) => {
+  installEchoMonacoThemes(monaco);
   monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
     allowNonTsExtensions: true,
     allowJs: true,
@@ -116,6 +154,7 @@ export function CodingEditor({
   onDocumentationAction,
 }: CodingEditorProps) {
   const { theme } = useTheme();
+  const [forcedColors, setForcedColors] = useState(forcedColorsAreActive);
   const [startup, setStartup] = useState<MonacoStartupState>({ status: "loading" });
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const diagnosticsDisposableRef = useRef<IDisposable | null>(null);
@@ -140,6 +179,15 @@ export function CodingEditor({
     contextHandlerRef.current = onContextChange;
     documentationActionHandlerRef.current = onDocumentationAction;
   }, [onChange, onContextChange, onDiagnostics, onDocumentationAction, onSave, onSymbolAction, onSymbols]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia(FORCED_COLORS_QUERY);
+    const update = () => setForcedColors(query.matches);
+    update();
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -318,6 +366,8 @@ export function CodingEditor({
   };
 
   const registerSave: OnMount = (editor, monaco) => {
+    monaco.editor.setTheme(monacoTheme);
+    scheduleThemeHealthCheck(monaco, monacoTheme);
     editorRef.current = editor;
     registerDiagnostics(editor, monaco);
     publishSymbols(editor, monaco);
@@ -374,6 +424,8 @@ export function CodingEditor({
   };
 
   const registerDiff: DiffOnMount = (editor, monaco) => {
+    monaco.editor.setTheme(monacoTheme);
+    scheduleThemeHealthCheck(monaco, monacoTheme);
     const modified = editor.getModifiedEditor();
     symbolsGenerationRef.current += 1;
     outlineSymbolsRef.current = [];
@@ -396,7 +448,7 @@ export function CodingEditor({
     modified.focus();
   };
 
-  const monacoTheme = theme === "dark" ? "vs-dark" : "vs";
+  const monacoTheme = resolveEchoMonacoTheme(theme, forcedColors);
 
   if (startup.status === "loading") {
     return (
@@ -440,7 +492,8 @@ export function CodingEditor({
     lineHeight: 21,
     minimap: { enabled: true, maxColumn: 90, renderCharacters: false },
     padding: { top: 10, bottom: 10 },
-    renderWhitespace: "selection" as const,
+    experimentalWhitespaceRendering: "off" as const,
+    renderWhitespace: "none" as const,
     scrollBeyondLastLine: false,
     smoothScrolling: true,
     tabSize: 2,

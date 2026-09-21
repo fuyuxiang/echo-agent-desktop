@@ -971,10 +971,10 @@ fn editor_language(path: &Path) -> String {
         .to_ascii_lowercase()
         .as_str()
     {
-        "ts" => "typescript",
-        "tsx" => "typescriptreact",
-        "js" | "mjs" | "cjs" => "javascript",
-        "jsx" => "javascriptreact",
+        // Monaco uses the same language id for TS/TSX (and JS/JSX); JSX mode
+        // is selected from the model URI extension by its language service.
+        "ts" | "tsx" => "typescript",
+        "js" | "mjs" | "cjs" | "jsx" => "javascript",
         "rs" => "rust",
         "java" => "java",
         "kt" | "kts" => "kotlin",
@@ -2837,6 +2837,8 @@ mod tests {
     fn recognizes_common_languages_and_manifests() {
         assert_eq!(language_for_extension("tsx"), Some("TypeScript"));
         assert_eq!(language_for_extension("java"), Some("Java"));
+        assert_eq!(editor_language(Path::new("src/view.tsx")), "typescript");
+        assert_eq!(editor_language(Path::new("src/view.jsx")), "javascript");
         assert_eq!(manifest_kind("pom.xml"), Some("Maven"));
         assert_eq!(manifest_kind("package.json"), Some("Node.js"));
     }

@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   initializeMonaco: vi.fn(),
   reportEvent: vi.fn(),
+  editorProps: null as null | {
+    theme?: string;
+    options?: Record<string, unknown>;
+    value?: string;
+  },
 }));
 
 vi.mock("../lib/monaco-bootstrap", () => ({
@@ -19,7 +24,10 @@ vi.mock("@/components/ThemeProvider", () => ({
 }));
 
 vi.mock("@monaco-editor/react", () => {
-  const Editor = ({ value }: { value?: string }) => <div data-testid="monaco-editor">{value}</div>;
+  const Editor = (props: { value?: string; theme?: string; options?: Record<string, unknown> }) => {
+    mocks.editorProps = props;
+    return <div data-testid="monaco-editor">{props.value}</div>;
+  };
   const DiffEditor = ({ modified }: { modified?: string }) => (
     <div data-testid="monaco-diff-editor">{modified}</div>
   );
@@ -44,6 +52,7 @@ describe("CodingEditor startup", () => {
   beforeEach(() => {
     mocks.initializeMonaco.mockReset();
     mocks.reportEvent.mockReset();
+    mocks.editorProps = null;
   });
 
   it("shows a localized startup state and renders after local Monaco is ready", async () => {
@@ -58,6 +67,11 @@ describe("CodingEditor startup", () => {
 
     await act(async () => resolve({}));
     expect(screen.getByTestId("monaco-editor")).toHaveTextContent("const value = 1;");
+    expect(mocks.editorProps?.theme).toBe("echo-light");
+    expect(mocks.editorProps?.options).toMatchObject({
+      experimentalWhitespaceRendering: "off",
+      renderWhitespace: "none",
+    });
   });
 
   it("turns initialization failures into an actionable error instead of an endless spinner", async () => {

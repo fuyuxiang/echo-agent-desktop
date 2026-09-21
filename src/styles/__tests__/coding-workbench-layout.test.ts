@@ -29,4 +29,14 @@ describe("coding workbench grid contract", () => {
     );
     expect(css).toMatch(/\.coding-agent__stream-content\s*>\s*\*\s*\{[^}]*flex:\s*none;/s);
   });
+
+  it("keeps Monaco syntax, caret, and selection visible without runtime theme CSS", () => {
+    for (const theme of ["echo-light", "echo-dark", "echo-hc-light", "echo-hc-dark"]) {
+      expect(css).toContain(`.coding-monaco .monaco-editor.${theme} {`);
+    }
+    expect(css).toMatch(/\.coding-monaco \.monaco-editor\s*\{[^}]*forced-color-adjust:\s*none;/s);
+    expect(css).toMatch(/\.coding-monaco \.monaco-editor \.mtk1\s*\{[^}]*--echo-monaco-token-1/s);
+    expect(css).toMatch(/\.coding-monaco \.monaco-editor \.cursors-layer > \.cursor\s*\{[^}]*editorCursor-foreground/s);
+    expect(css).toMatch(/\.coding-monaco \.monaco-editor \.focused \.selected-text\s*\{[^}]*selectionBackground/s);
+  });
 });
