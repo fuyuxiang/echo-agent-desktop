@@ -61,6 +61,24 @@ describe("OrganizationMemoryPanel", () => {
     mockWorkspace();
   });
 
+  it("登录凭据失效后回填服务器和账号，只要求重新输入密码", async () => {
+    api.orgSession.mockResolvedValue({
+      loggedIn: false,
+      organizationMemoryEnabled: false,
+      serverUrl: "https://memory.example.com",
+      username: "alice",
+      requiresReauthentication: true,
+    });
+
+    render(<OrganizationMemoryPanel />);
+
+    expect(await screen.findByLabelText("服务器地址")).toHaveValue("https://memory.example.com");
+    expect(screen.getByLabelText("账号")).toHaveValue("alice");
+    expect(screen.getByLabelText("密码")).toHaveValue("");
+    expect(screen.getByText("登录状态已过期，服务器和账号已为你保留，请重新输入密码。")).toBeInTheDocument();
+    expect(api.orgListScopes).not.toHaveBeenCalled();
+  });
+
   it("登录后进入管理概览且不再提供独立组织问答", async () => {
     const onStartConversation = vi.fn();
     render(<OrganizationMemoryPanel onStartConversation={onStartConversation} />);
@@ -212,6 +230,13 @@ describe("OrganizationMemoryPanel", () => {
     expect(screen.getByRole("heading", { name: "连接组织" })).toBeInTheDocument();
     expect(screen.queryByText("Alice · https://memory.example.com")).not.toBeInTheDocument();
     expect(useOrgSessionStore.getState().session?.loggedIn).toBe(false);
+    expect(useOrgSessionStore.getState().session).toMatchObject({
+      serverUrl: "https://memory.example.com",
+      username: "alice",
+      requiresReauthentication: false,
+    });
+    expect(screen.getByLabelText("服务器地址")).toHaveValue("https://memory.example.com");
+    expect(screen.getByLabelText("账号")).toHaveValue("alice");
     await act(async () => finishLogout?.());
   });
 

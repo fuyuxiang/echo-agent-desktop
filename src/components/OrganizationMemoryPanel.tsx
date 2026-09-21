@@ -144,7 +144,6 @@ export function OrganizationMemoryPanel({
   const [session, setSession] = useState<OrgSession | null>(null);
   const mirroredSession = useOrgSessionStore((state) => state.session);
   const mirrorOrgSession = useOrgSessionStore((state) => state.setSession);
-  const clearMirroredOrgSession = useOrgSessionStore((state) => state.clearSession);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{
@@ -215,7 +214,9 @@ export function OrganizationMemoryPanel({
         setSession(nextSession);
         mirrorOrgSession(nextSession);
         if (nextSession.serverUrl) setServerUrl(nextSession.serverUrl);
-        if (nextSession.user?.username) setUsername(nextSession.user.username);
+        if (nextSession.username || nextSession.user?.username) {
+          setUsername(nextSession.username ?? nextSession.user?.username ?? "");
+        }
         if (nextSession.loggedIn) await loadWorkspace();
       })
       .catch((reason) => alive && setError(String(reason)))
@@ -307,8 +308,12 @@ export function OrganizationMemoryPanel({
       const nextSession = await orgSession();
       setSession(nextSession);
       mirrorOrgSession(nextSession);
+      if (nextSession.serverUrl) setServerUrl(nextSession.serverUrl);
+      if (nextSession.username || nextSession.user?.username) {
+        setUsername(nextSession.username ?? nextSession.user?.username ?? "");
+      }
       if (!nextSession.loggedIn) {
-        resetWorkspace();
+        resetWorkspace(nextSession);
         return;
       }
       await loadWorkspace();
@@ -319,9 +324,9 @@ export function OrganizationMemoryPanel({
     }
   };
 
-  const resetWorkspace = () => {
-    setSession({ loggedIn: false });
-    clearMirroredOrgSession();
+  const resetWorkspace = (signedOutSession: OrgSession = { loggedIn: false }) => {
+    setSession(signedOutSession);
+    mirrorOrgSession(signedOutSession);
     setScopes([]);
     setSelectedScope("");
     setWriteScope("");
@@ -340,7 +345,12 @@ export function OrganizationMemoryPanel({
     setError(null);
     // Hide the previous user's workspace immediately. Native logout clears its
     // local session before making a short best-effort server revocation call.
-    resetWorkspace();
+    resetWorkspace({
+      loggedIn: false,
+      serverUrl: serverUrl.trim() || undefined,
+      username: username.trim() || session?.user?.username,
+      requiresReauthentication: false,
+    });
     try {
       await orgLogout();
     } catch (reason) {
@@ -583,13 +593,19 @@ export function OrganizationMemoryPanel({
           <h1>连接组织</h1>
           <p>登录企业服务器后，可在授权范围内共享文档、Skills 和经验；Agent 会在执行前自动召回规则、手册与踩坑记录。</p>
           <form onSubmit={handleLogin}>
+            {session?.requiresReauthentication && (
+              <div className="org-memory__reauth" role="status">
+                <AlertTriangle size={15} />
+                <span>登录状态已过期，服务器和账号已为你保留，请重新输入密码。</span>
+              </div>
+            )}
             <label>服务器地址<input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} placeholder="https://memory.company.com" required /></label>
             <label>账号<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required /></label>
-            <label>密码<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" required /></label>
+            <label>密码<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" autoFocus={session?.requiresReauthentication === true} required /></label>
             {error && <div className="org-memory__error"><XCircle size={15} />{error}</div>}
             <button className="org-memory__primary" disabled={busy}>{busy && <Loader2 className="org-memory__spin" size={15} />}安全登录</button>
           </form>
-          <div className="org-login-card__security"><LockKeyhole size={14} />生产服务器强制 HTTPS；访问令牌只保存在 Rust 内存中。</div>
+          <div className="org-login-card__security"><LockKeyhole size={14} />密码不会保存；自动续期凭据由系统安全存储保护，访问令牌只留在内存中。</div>
         </div>
       </div>
     );

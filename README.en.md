@@ -169,11 +169,13 @@ EchoAgent stores application state under `~/.echo-agent/` by default. Set `ECHO_
 | --- | --- |
 | Model, permission, and runtime configuration | `~/.echo-agent/config.toml` |
 | MCP configuration | `~/.echo-agent/mcp.json` |
+| Organization sign-in hint (server and username) | `~/.echo-agent/organization-login-hint.json` |
 | Sessions and workspace history | `~/.echo-agent/sessions/` |
 | Agents, skills, and memory | `~/.echo-agent/agents/`, `~/.echo-agent/skills/`, `~/.echo-agent/memory/` |
 | Expert, connector, and built-in skill catalogs | `~/.echo-agent/experts-marketplace/`, `~/.echo-agent/connectors-marketplace/`, `~/.echo-agent/resources/builtin-skills/` |
 
 - Provider API keys are currently stored in the local `config.toml`. EchoAgent tightens file permissions on Unix; Windows protection depends on the current user's ACL. Never commit this file or attach it to a public issue.
+- Organization passwords are never stored. Refresh credentials are protected by Keychain on macOS and current-user DPAPI on Windows, with an owner-only file fallback on other platforms; when a credential expires, only the non-secret server and username are retained for sign-in recovery.
 - “Local-first” describes application state and execution control, not full offline operation. Model, MCP, WebDAV, notification, and optional organization features contact their configured services.
 - Memory is enabled by default. The current Runtime uses preset SiliconFlow endpoints for `BAAI/bge-m3` embeddings and `BAAI/bge-reranker-v2-m3` reranking. Review the relevant configuration before handling sensitive content, or disable memory under **Settings → Memory**.
 - For untrusted repositories, use Approval mode, grant only the required directories, and inspect risky actions individually.

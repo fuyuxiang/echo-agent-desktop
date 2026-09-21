@@ -169,11 +169,13 @@ EchoAgent 默认将应用状态保存在 `~/.echo-agent/`；启动前设置 `ECH
 | --- | --- |
 | 模型、权限与运行配置 | `~/.echo-agent/config.toml` |
 | MCP 配置 | `~/.echo-agent/mcp.json` |
+| 组织登录提示（服务器与账号） | `~/.echo-agent/organization-login-hint.json` |
 | 会话与工作空间历史 | `~/.echo-agent/sessions/` |
 | Agents、Skills 与记忆 | `~/.echo-agent/agents/`、`~/.echo-agent/skills/`、`~/.echo-agent/memory/` |
 | 专家、连接器与内置技能目录 | `~/.echo-agent/experts-marketplace/`、`~/.echo-agent/connectors-marketplace/`、`~/.echo-agent/resources/builtin-skills/` |
 
 - Provider API Key 当前保存在本机 `config.toml`。Unix 系统会收紧文件权限；Windows 的保护边界取决于当前用户 ACL。请勿将该文件提交到版本控制或附加到公开 Issue。
+- 组织密码不会保存。用于自动续期的凭据在 macOS 上由 Keychain 保护，在 Windows 上由当前用户 DPAPI 保护，其他平台回退到仅当前用户可读的本地文件；凭据失效后仅保留非敏感的服务器和账号以便重新登录。
 - “本地优先”指应用状态与执行控制位于本机，不代表完全离线。模型、MCP、WebDAV、通知和可选组织能力会访问各自配置的服务。
 - 记忆默认开启；当前 Runtime 使用预设的 SiliconFlow Endpoint 完成 `BAAI/bge-m3` 向量化与 `BAAI/bge-reranker-v2-m3` 重排。处理敏感内容前请审查相关配置，或在「设置 → 记忆」中关闭。
 - 对来源未知的仓库，建议使用「审批模式」、只授权必要目录，并逐项检查风险操作。

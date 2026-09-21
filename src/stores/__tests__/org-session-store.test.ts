@@ -55,6 +55,7 @@ describe("org-session-store", () => {
         loggedIn: true,
         organizationMemoryEnabled: true,
         serverUrl: "https://memory.example.com",
+        username: "alice",
         user: { id: "u1", username: "alice", displayName: "Alice", role: "member", clearance: 1 },
         bootstrap: {
           apiVersion: 1,
@@ -76,6 +77,12 @@ describe("org-session-store", () => {
       available: false,
       reason: "登录组织后可用",
       identity: "signed-out",
+    });
+    expect(useOrgSessionStore.getState().session).toMatchObject({
+      loggedIn: false,
+      serverUrl: "https://memory.example.com",
+      username: "alice",
+      requiresReauthentication: false,
     });
   });
 });

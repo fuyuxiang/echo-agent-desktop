@@ -21,6 +21,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::process::Command;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex, OnceLock,
@@ -65,8 +67,11 @@ const MAX_FEEDBACK_CHARS: usize = 16_384;
 const MAX_FALLBACK_CREDENTIALS: usize = 32;
 
 #[cfg(target_os = "macos")]
-const CREDENTIAL_SERVICE: &str = "com.echoagent.organization";
+const CREDENTIAL_SERVICE: &str = "com.echoagent.organization.v2";
+#[cfg(target_os = "macos")]
+const LEGACY_CREDENTIAL_SERVICE: &str = "com.echoagent.organization";
 const PROFILE_FILE: &str = "organization-profile.json";
+const LOGIN_HINT_FILE: &str = "organization-login-hint.json";
 const SKILL_STATE_FILE: &str = "organization-skills.json";
 const SKILL_STATE_LOCK_FILE: &str = ".organization-skills.lock";
 const MODEL_STATE_LOCK_FILE: &str = ".organization-model.lock";
@@ -82,6 +87,16 @@ struct OrgProfile {
     device_id: String,
 }
 
+/// Non-secret identity fields retained independently from the authenticated
+/// session. Losing or revoking a refresh token must not force users to type
+/// their organization endpoint and account name again.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OrgLoginHint {
+    server_url: String,
+    username: String,
+}
+
 #[derive(Debug, Clone, Default)]
 struct OrgSession {
     profile: Option<OrgProfile>,
@@ -89,6 +104,8 @@ struct OrgSession {
     refresh_token: Option<String>,
     user: Option<Value>,
     bootstrap: Option<Value>,
+    login_hint: Option<OrgLoginHint>,
+    requires_reauthentication: bool,
 }
 
 struct OrgInner {
@@ -120,13 +137,60 @@ pub struct OrgState {
 
 impl Default for OrgState {
     fn default() -> Self {
-        let profile = read_json::<OrgProfile>(&profile_path())
-            .ok()
-            .filter(|profile| validate_profile(profile).is_ok());
-        let refresh_token = profile
+        let persisted_profile = match read_optional_json::<OrgProfile>(&profile_path()) {
+            Ok(profile) => profile,
+            Err(error) => {
+                tracing::warn!(%error, "failed to restore organization profile");
+                None
+            }
+        };
+        let profile_hint = persisted_profile
             .as_ref()
-            .and_then(|p| credential_read(&credential_account(p)).ok().flatten())
-            .and_then(|token| validated_token(&token, "organization refresh token").ok());
+            .and_then(|profile| login_hint_from_profile(profile).ok());
+        let profile = persisted_profile.and_then(|profile| match validate_profile(&profile) {
+            Ok(()) => Some(profile),
+            Err(error) => {
+                tracing::warn!(%error, "ignored invalid persisted organization profile");
+                None
+            }
+        });
+        let stored_hint = match read_optional_json::<OrgLoginHint>(&login_hint_path()) {
+            Ok(Some(hint)) => match validate_login_hint(&hint) {
+                Ok(()) => Some(hint),
+                Err(error) => {
+                    tracing::warn!(%error, "ignored invalid organization login hint");
+                    None
+                }
+            },
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(%error, "failed to restore organization login hint");
+                None
+            }
+        };
+        let login_hint = profile_hint.or(stored_hint);
+        if let Some(hint) = login_hint.as_ref() {
+            if let Err(error) = write_json_private(&login_hint_path(), hint) {
+                tracing::warn!(%error, "failed to migrate organization login hint");
+            }
+        }
+        let refresh_token = profile.as_ref().and_then(|profile| {
+            match credential_read(&credential_account(profile)) {
+                Ok(Some(token)) => match validated_token(&token, "organization refresh token") {
+                    Ok(token) => Some(token),
+                    Err(error) => {
+                        tracing::warn!(%error, "ignored invalid persisted organization credential");
+                        None
+                    }
+                },
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to restore organization credential");
+                    None
+                }
+            }
+        });
+        let requires_reauthentication = profile.is_some() && refresh_token.is_none();
         // This private CA only augments the organization HTTP client. Model
         // providers, MCP servers, and every other outbound client keep their
         // existing public-root trust policy.
@@ -146,6 +210,8 @@ impl Default for OrgState {
                 session: AsyncMutex::new(OrgSession {
                     profile,
                     refresh_token,
+                    login_hint,
+                    requires_reauthentication,
                     ..Default::default()
                 }),
                 skill_sync: AsyncMutex::new(()),
@@ -178,7 +244,7 @@ async fn enforce_model_for_current_session(inner: &Arc<OrgInner>) -> Result<bool
     // a concurrent login, and then delete that new account's configuration.
     let session = inner.session.lock().await;
     with_model_state_transaction(inner, || {
-        if session.profile.is_none() {
+        if !session_has_credential(&session) {
             crate::providers::remove_organization_model_config()
         } else {
             crate::providers::enforce_organization_model_lease()
@@ -192,6 +258,8 @@ pub struct OrgSessionView {
     logged_in: bool,
     organization_memory_enabled: bool,
     server_url: Option<String>,
+    username: Option<String>,
+    requires_reauthentication: bool,
     user: Option<Value>,
     bootstrap: Option<Value>,
 }
@@ -206,6 +274,10 @@ pub struct OrgModelSyncView {
 
 fn profile_path() -> PathBuf {
     crate::paths::echo_agent_home_dir().join(PROFILE_FILE)
+}
+
+fn login_hint_path() -> PathBuf {
+    crate::paths::echo_agent_home_dir().join(LOGIN_HINT_FILE)
 }
 
 fn skill_state_path() -> PathBuf {
@@ -508,7 +580,11 @@ pub async fn org_local_kb_sources_set(
 
 pub(crate) async fn local_knowledge_allowed() -> bool {
     let state = shared_state();
-    if state.inner.session.lock().await.profile.is_none() {
+    let has_credential = {
+        let session = state.inner.session.lock().await;
+        session_has_credential(&session)
+    };
+    if !has_credential {
         return true;
     }
     match update_bootstrap(&state.inner).await {
@@ -534,6 +610,14 @@ fn fallback_credentials_path() -> PathBuf {
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
     let bytes = read_file_bounded(path, MAX_LOCAL_JSON_BYTES, "JSON store")?;
     serde_json::from_slice(&bytes).map_err(|e| format!("parse {}: {e}", path.display()))
+}
+
+fn read_optional_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Option<T>, String> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("inspect {}: {error}", path.display())),
+        Ok(_) => read_json(path).map(Some),
+    }
 }
 
 fn read_json_or_default_if_missing<T>(path: &Path) -> Result<T, String>
@@ -615,35 +699,127 @@ fn signing_key_account(profile: &OrgProfile) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn credential_write(account: &str, secret: &str) -> Result<(), String> {
+fn keychain_write(service: &str, account: &str, secret: &str) -> Result<(), String> {
     if secret.len() > MAX_TOKEN_BYTES {
         return Err("organization credential exceeds the safety limit".into());
     }
-    set_generic_password(CREDENTIAL_SERVICE, account, secret.as_bytes())
+    set_generic_password(service, account, secret.as_bytes())
         .map_err(|error| format!("write macOS Keychain credential: {error}"))
 }
 
 #[cfg(target_os = "macos")]
-fn credential_read(account: &str) -> Result<Option<String>, String> {
-    let bytes = match get_generic_password(CREDENTIAL_SERVICE, account) {
+fn keychain_read(service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
+    let bytes = match get_generic_password(service, account) {
         Ok(bytes) => bytes,
         Err(error) if error.code() == errSecItemNotFound => return Ok(None),
         Err(error) => return Err(format!("read macOS Keychain credential: {error}")),
     };
+    Ok(Some(bytes))
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_keychain_cli_read(account: &str) -> Result<Option<Vec<u8>>, String> {
+    let output = Command::new("/usr/bin/security")
+        .args([
+            "find-generic-password",
+            "-a",
+            account,
+            "-s",
+            LEGACY_CREDENTIAL_SERVICE,
+            "-w",
+        ])
+        .output()
+        .map_err(|error| format!("open macOS Keychain compatibility reader: {error}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let mut bytes = output.stdout;
+    while matches!(bytes.last(), Some(b'\n' | b'\r')) {
+        bytes.pop();
+    }
+    Ok(Some(bytes))
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_keychain_cli_delete(account: &str) -> Result<(), String> {
+    let status = Command::new("/usr/bin/security")
+        .args([
+            "delete-generic-password",
+            "-a",
+            account,
+            "-s",
+            LEGACY_CREDENTIAL_SERVICE,
+        ])
+        .status()
+        .map_err(|error| format!("open macOS Keychain compatibility cleanup: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("macOS Keychain compatibility cleanup was rejected".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn credential_write(account: &str, secret: &str) -> Result<(), String> {
+    keychain_write(CREDENTIAL_SERVICE, account, secret)
+}
+
+#[cfg(target_os = "macos")]
+fn credential_read(account: &str) -> Result<Option<String>, String> {
+    let (bytes, migrate) = match keychain_read(CREDENTIAL_SERVICE, account)? {
+        Some(bytes) => (Some(bytes), false),
+        None => match keychain_read(LEGACY_CREDENTIAL_SERVICE, account) {
+            Ok(value) => (value, true),
+            // Releases before 0.3.10 created Keychain entries through the
+            // `security` tool. Their ACL can reject direct process access
+            // after an application update, while the original tool remains
+            // authorized. Read once through that compatibility path and copy
+            // into the stable v2 service owned by EchoAgent.
+            Err(direct_error) => match legacy_keychain_cli_read(account)? {
+                Some(bytes) => (Some(bytes), true),
+                None => return Err(direct_error),
+            },
+        },
+    };
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
     if bytes.len() > MAX_TOKEN_BYTES {
         return Err("organization credential exceeds the safety limit".into());
     }
-    String::from_utf8(bytes)
-        .map(Some)
-        .map_err(|_| "macOS Keychain credential is not valid UTF-8".to_string())
+    let secret = String::from_utf8(bytes)
+        .map_err(|_| "macOS Keychain credential is not valid UTF-8".to_string())?;
+    // Idempotent migration. Keeping the legacy item until explicit logout
+    // avoids a destructive cut-over if the process exits between operations.
+    if migrate {
+        keychain_write(CREDENTIAL_SERVICE, account, &secret)?;
+    }
+    Ok(Some(secret))
 }
 
 #[cfg(target_os = "macos")]
 fn credential_delete(account: &str) -> Result<(), String> {
+    let mut errors = Vec::new();
     match delete_generic_password(CREDENTIAL_SERVICE, account) {
-        Ok(()) => Ok(()),
-        Err(error) if error.code() == errSecItemNotFound => Ok(()),
-        Err(error) => Err(format!("delete macOS Keychain credential: {error}")),
+        Ok(()) => {}
+        Err(error) if error.code() == errSecItemNotFound => {}
+        Err(error) => errors.push(format!("delete macOS Keychain credential: {error}")),
+    }
+    match delete_generic_password(LEGACY_CREDENTIAL_SERVICE, account) {
+        Ok(()) => {}
+        Err(error) if error.code() == errSecItemNotFound => {}
+        Err(direct_error) => {
+            if let Err(compatibility_error) = legacy_keychain_cli_delete(account) {
+                errors.push(format!(
+                    "delete legacy macOS Keychain credential: {direct_error}; {compatibility_error}"
+                ));
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
     }
 }
 
@@ -870,12 +1046,31 @@ fn normalize_server_url(raw: &str) -> Result<String, String> {
     Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
-fn validate_profile(profile: &OrgProfile) -> Result<(), String> {
-    if normalize_server_url(&profile.server_url)? != profile.server_url {
-        return Err("organization profile contains a non-canonical server URL".into());
+fn validate_login_hint(hint: &OrgLoginHint) -> Result<(), String> {
+    if normalize_server_url(&hint.server_url)? != hint.server_url {
+        return Err("organization login hint contains a non-canonical server URL".into());
     }
+    if hint.username.trim().is_empty()
+        || hint.username.chars().count() > MAX_USERNAME_CHARS
+        || hint.username.chars().any(char::is_control)
+    {
+        return Err("organization login hint username is invalid or too long".into());
+    }
+    Ok(())
+}
+
+fn login_hint_from_profile(profile: &OrgProfile) -> Result<OrgLoginHint, String> {
+    let hint = OrgLoginHint {
+        server_url: profile.server_url.clone(),
+        username: profile.username.clone(),
+    };
+    validate_login_hint(&hint)?;
+    Ok(hint)
+}
+
+fn validate_profile(profile: &OrgProfile) -> Result<(), String> {
+    let _ = login_hint_from_profile(profile)?;
     for (label, value) in [
-        ("username", profile.username.as_str()),
         ("user id", profile.user_id.as_str()),
         ("device id", profile.device_id.as_str()),
     ] {
@@ -889,6 +1084,10 @@ fn validate_profile(profile: &OrgProfile) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn session_has_credential(session: &OrgSession) -> bool {
+    session.profile.is_some() && session.refresh_token.is_some()
 }
 
 fn validated_token(value: &str, label: &str) -> Result<String, String> {
@@ -939,9 +1138,24 @@ fn clear_local_session(
     inner: &OrgInner,
     session: &mut OrgSession,
     profile: Option<&OrgProfile>,
+    requires_reauthentication: bool,
 ) -> Result<(), String> {
     crate::org_mcp::set_capability_enabled(false);
     let mut errors = Vec::new();
+    let login_hint = profile
+        .and_then(|profile| match login_hint_from_profile(profile) {
+            Ok(hint) => Some(hint),
+            Err(error) => {
+                errors.push(error);
+                None
+            }
+        })
+        .or_else(|| session.login_hint.clone());
+    if let Some(hint) = login_hint.as_ref() {
+        if let Err(error) = write_json_private(&login_hint_path(), hint) {
+            errors.push(format!("persist organization login hint: {error}"));
+        }
+    }
     invalidate_account_generation(inner);
     // Revoke Runtime paths while the account's signing credential is still
     // available for strict sidecar validation. Every cleanup step remains
@@ -975,7 +1189,11 @@ fn clear_local_session(
     }) {
         errors.push(error);
     }
-    *session = OrgSession::default();
+    *session = OrgSession {
+        login_hint,
+        requires_reauthentication,
+        ..Default::default()
+    };
     if errors.is_empty() {
         Ok(())
     } else {
@@ -1080,7 +1298,7 @@ async fn refresh(
                 if require_account_context_locked(inner, &session, expected).is_err() {
                     return Err("organization account changed while refresh was in flight".into());
                 }
-                let cleanup = clear_local_session(inner, &mut session, Some(&profile));
+                let cleanup = clear_local_session(inner, &mut session, Some(&profile), true);
                 return Err(match cleanup {
                     Ok(()) => error,
                     Err(cleanup_error) => {
@@ -1111,6 +1329,7 @@ async fn refresh(
     credential_write(&credential_account(&profile), &next_refresh)?;
     session.access_token = Some(access);
     session.refresh_token = Some(next_refresh);
+    session.requires_reauthentication = false;
     Ok(())
 }
 
@@ -1653,10 +1872,32 @@ async fn require_policy(inner: &Arc<OrgInner>, key: &str) -> Result<AccountConte
 }
 
 fn session_view(session: &OrgSession) -> OrgSessionView {
+    let server_url = session
+        .profile
+        .as_ref()
+        .map(|profile| profile.server_url.clone())
+        .or_else(|| {
+            session
+                .login_hint
+                .as_ref()
+                .map(|hint| hint.server_url.clone())
+        });
+    let username = session
+        .profile
+        .as_ref()
+        .map(|profile| profile.username.clone())
+        .or_else(|| {
+            session
+                .login_hint
+                .as_ref()
+                .map(|hint| hint.username.clone())
+        });
     OrgSessionView {
-        logged_in: session.profile.is_some() && session.refresh_token.is_some(),
+        logged_in: session_has_credential(session),
         organization_memory_enabled: crate::org_mcp::capability_enabled(),
-        server_url: session.profile.as_ref().map(|p| p.server_url.clone()),
+        server_url,
+        username,
+        requires_reauthentication: session.requires_reauthentication,
         user: session.user.clone(),
         bootstrap: session.bootstrap.clone(),
     }
@@ -1724,6 +1965,7 @@ pub async fn org_login(
         device_id,
     };
     validate_profile(&profile)?;
+    let login_hint = login_hint_from_profile(&profile)?;
     let new_credential_account = credential_account(&profile);
     // Do not revoke the active account merely because a replacement login
     // fails (bad password, offline server, malformed response). Switch the
@@ -1750,6 +1992,12 @@ pub async fn org_login(
                     }
                 });
             }
+            if let Err(error) = write_json_private(&login_hint_path(), &login_hint) {
+                // The authenticated profile contains the same non-secret
+                // fields, so login remains usable. A later refresh/logout will
+                // retry materializing the independent hint.
+                tracing::warn!(%error, "failed to persist organization login hint");
+            }
             if let Some(previous_profile) = previous_profile
                 .as_ref()
                 .filter(|previous| credential_account(previous) != new_credential_account)
@@ -1774,6 +2022,8 @@ pub async fn org_login(
             refresh_token: Some(refresh_token),
             user: Some(user),
             bootstrap: None,
+            login_hint: Some(login_hint),
+            requires_reauthentication: false,
         };
         AccountContext {
             account_id: new_credential_account.clone(),
@@ -1797,13 +2047,17 @@ pub async fn org_login(
                 )
             } else {
                 let profile = session.profile.clone();
-                let message =
-                    match clear_local_session(&state.inner, &mut session, profile.as_ref()) {
-                        Ok(()) => error,
-                        Err(cleanup_error) => {
-                            format!("{error}; local session cleanup: {cleanup_error}")
-                        }
-                    };
+                let message = match clear_local_session(
+                    &state.inner,
+                    &mut session,
+                    profile.as_ref(),
+                    false,
+                ) {
+                    Ok(()) => error,
+                    Err(cleanup_error) => {
+                        format!("{error}; local session cleanup: {cleanup_error}")
+                    }
+                };
                 (message, false)
             }
         };
@@ -1848,7 +2102,8 @@ pub async fn org_logout(app: AppHandle, state: State<'_, OrgState>) -> Result<()
         let mut session = state.inner.session.lock().await;
         let current_profile = session.profile.clone();
         let access_token = session.access_token.clone();
-        let cleanup = clear_local_session(&state.inner, &mut session, current_profile.as_ref());
+        let cleanup =
+            clear_local_session(&state.inner, &mut session, current_profile.as_ref(), false);
         (current_profile, access_token, cleanup)
     };
     crate::org_mcp::reconcile_all_sessions(&app).await;
@@ -1874,7 +2129,11 @@ pub async fn org_session(
     app: AppHandle,
     state: State<'_, OrgState>,
 ) -> Result<OrgSessionView, String> {
-    if state.inner.session.lock().await.profile.is_some() {
+    let has_credential = {
+        let session = state.inner.session.lock().await;
+        session_has_credential(&session)
+    };
+    if has_credential {
         if update_bootstrap(&state.inner).await.is_ok() {
             match sync_organization_model_config(&state.inner).await {
                 Ok(Some(model_id)) => {
@@ -3931,8 +4190,11 @@ pub fn start_background_sync(app: AppHandle) {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
         loop {
             interval.tick().await;
-            let has_profile = state.inner.session.lock().await.profile.is_some();
-            if !has_profile {
+            let has_credential = {
+                let session = state.inner.session.lock().await;
+                session_has_credential(&session)
+            };
+            if !has_credential {
                 continue;
             }
             if let Err(error) = update_bootstrap(&state.inner).await {
@@ -4048,6 +4310,49 @@ mod tests {
         let mut invalid = valid;
         invalid.username = "x".repeat(MAX_PROFILE_FIELD_CHARS + 1);
         assert!(validate_profile(&invalid).is_err());
+    }
+
+    #[test]
+    fn login_hint_round_trip_keeps_only_non_secret_identity_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(LOGIN_HINT_FILE);
+        let hint = OrgLoginHint {
+            server_url: "https://memory.example.com".into(),
+            username: "alice".into(),
+        };
+
+        validate_login_hint(&hint).unwrap();
+        write_json_private(&path, &hint).unwrap();
+        let restored = read_optional_json::<OrgLoginHint>(&path).unwrap();
+
+        assert_eq!(restored, Some(hint));
+        let serialized = std::fs::read_to_string(path).unwrap();
+        assert!(!serialized.contains("password"));
+        assert!(!serialized.contains("token"));
+    }
+
+    #[test]
+    fn signed_out_session_returns_prefill_and_reauthentication_state() {
+        let session = OrgSession {
+            login_hint: Some(OrgLoginHint {
+                server_url: "https://memory.example.com".into(),
+                username: "alice".into(),
+            }),
+            requires_reauthentication: true,
+            ..Default::default()
+        };
+
+        let view = session_view(&session);
+
+        assert!(!view.logged_in);
+        assert_eq!(
+            view.server_url.as_deref(),
+            Some("https://memory.example.com")
+        );
+        assert_eq!(view.username.as_deref(), Some("alice"));
+        assert!(view.requires_reauthentication);
+        assert!(view.user.is_none());
+        assert!(view.bootstrap.is_none());
     }
 
     #[test]

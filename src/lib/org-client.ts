@@ -32,6 +32,10 @@ export interface OrgSession {
   /** Whether Agent sessions currently receive organization-memory tools. */
   organizationMemoryEnabled?: boolean;
   serverUrl?: string;
+  /** Non-secret account hint available even when authentication must be renewed. */
+  username?: string;
+  /** The saved refresh credential is missing, invalid, or was rejected. */
+  requiresReauthentication?: boolean;
   user?: OrgUser;
   bootstrap?: OrgBootstrap;
 }

@@ -81,7 +81,15 @@ export const useOrgSessionStore = create<OrgSessionState>((set, get) => ({
   },
 
   setSession: (session) => set({ session, hydrated: true }),
-  clearSession: () => set({ session: { loggedIn: false }, hydrated: true }),
+  clearSession: () => set((state) => ({
+    session: {
+      loggedIn: false,
+      serverUrl: state.session?.serverUrl,
+      username: state.session?.username ?? state.session?.user?.username,
+      requiresReauthentication: false,
+    },
+    hydrated: true,
+  })),
 }));
 
 /** Test/support reset; does not touch native credentials. */
