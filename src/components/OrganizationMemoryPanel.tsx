@@ -88,6 +88,16 @@ const readableBytes = (bytes: number) => {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 };
 
+const submissionIsActive = (submission: Submission) => (
+  submission.state === "pending"
+  || submission.scanStatus === "queued"
+  || submission.scanStatus === "scanning"
+);
+
+const documentIsProcessing = (document: OrgDocument) => (
+  ["pending", "parsing", "chunking", "embedding"].includes(document.status)
+);
+
 async function settleWithConcurrency<T>(
   items: string[],
   limit: number,
@@ -215,12 +225,34 @@ export function OrganizationMemoryPanel({
 
   useEffect(() => {
     if (!session?.loggedIn) return;
-    const active = documentSubmissions.some((item) => item.scanStatus === "queued" || item.scanStatus === "scanning")
-      || documents.some((item) => ["pending", "parsing", "chunking", "embedding"].includes(item.status));
+    const active = documentSubmissions.some(submissionIsActive)
+      || skillSubmissions.some(submissionIsActive)
+      || memoryPromotions.some((item) => item.state === "pending")
+      || documents.some(documentIsProcessing);
     if (!active) return;
-    const timer = window.setInterval(() => { void loadWorkspace(); }, 3000);
-    return () => window.clearInterval(timer);
-  }, [session?.loggedIn, documentSubmissions, documents, loadWorkspace]);
+    let disposed = false;
+    let refreshInFlight = false;
+    const timer = window.setInterval(() => {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      void loadWorkspace()
+        .catch((reason) => {
+          if (!disposed) console.warn("[EchoAgent] Organization workspace polling failed:", reason);
+        })
+        .finally(() => { refreshInFlight = false; });
+    }, 3000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    session?.loggedIn,
+    documentSubmissions,
+    documents,
+    loadWorkspace,
+    memoryPromotions,
+    skillSubmissions,
+  ]);
 
   const uploadScope = useMemo(
     () => scopes.find((scope) => scope.id === writeScope),
@@ -563,10 +595,11 @@ export function OrganizationMemoryPanel({
     );
   }
 
-  const pendingCount = documentSubmissions.filter((item) => item.state === "pending" || item.scanStatus === "queued" || item.scanStatus === "scanning").length
-    + skillSubmissions.filter((item) => item.state === "pending" || item.scanStatus === "queued" || item.scanStatus === "scanning").length
-    + memoryPromotions.filter((item) => item.state === "pending").length
-    + documents.filter((item) => ["pending", "parsing", "chunking", "embedding"].includes(item.status)).length;
+  const pendingMemoryCount = memoryPromotions.filter((item) => item.state === "pending").length;
+  const pendingDocumentCount = documentSubmissions.filter(submissionIsActive).length
+    + documents.filter(documentIsProcessing).length;
+  const pendingSkillCount = skillSubmissions.filter(submissionIsActive).length;
+  const pendingCount = pendingMemoryCount + pendingDocumentCount + pendingSkillCount;
   const pageTitle = tab === "overview" ? "组织知识"
     : tab === "memories" ? "经验"
       : tab === "documents" ? "文档" : "组织 Skills";
@@ -629,7 +662,10 @@ export function OrganizationMemoryPanel({
             </div>
             <div className="org-overview__attention">
               <div><h3>需要关注</h3><p>聚合当前账号需要处理的提交、同步与索引状态。</p></div>
-              {pendingCount === 0 ? <div className="org-library__empty">当前没有待处理事项</div> : <div className="org-overview__attention-row"><AlertTriangle size={17} /><span>共有 {pendingCount} 项内容正在审核、扫描或建立索引</span><button type="button" onClick={() => setTab(documents.some((item) => item.status !== "ready" && item.status !== "archived") ? "documents" : "skills")}>查看详情</button></div>}
+              {pendingCount === 0 && <div className="org-library__empty">当前没有待处理事项</div>}
+              {pendingMemoryCount > 0 && <div className="org-overview__attention-row"><AlertTriangle size={17} /><span>{pendingMemoryCount} 条经验待审核</span><button type="button" onClick={() => setTab("memories")}>查看经验</button></div>}
+              {pendingDocumentCount > 0 && <div className="org-overview__attention-row"><AlertTriangle size={17} /><span>{pendingDocumentCount} 项文档正在审核、扫描或建立索引</span><button type="button" onClick={() => setTab("documents")}>查看文档</button></div>}
+              {pendingSkillCount > 0 && <div className="org-overview__attention-row"><AlertTriangle size={17} /><span>{pendingSkillCount} 个 Skill 正在审核或扫描</span><button type="button" onClick={() => setTab("skills")}>查看 Skills</button></div>}
             </div>
           </section>}
 

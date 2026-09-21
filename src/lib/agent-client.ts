@@ -62,6 +62,10 @@ import {
   useKnowledgeStore,
   type KnowledgeSource,
 } from "@/stores/knowledge-store";
+import {
+  organizationKnowledgeAvailability,
+  useOrgSessionStore,
+} from "@/stores/org-session-store";
 
 // ---------- commands ----------
 
@@ -292,7 +296,23 @@ function knowledgeSourcesKey(sources: KnowledgeSource[]): string {
 }
 
 function knowledgeConfigurationKey(sources: KnowledgeSource[], organizationScopeIds: string[]): string {
-  return `${knowledgeSourcesKey(sources)}:${[...organizationScopeIds].sort().join(",")}`;
+  const organizationIdentity = sources.includes("organization")
+    ? organizationKnowledgeAvailability().identity
+    : "local-only";
+  return `${knowledgeSourcesKey(sources)}:${organizationIdentity}:${[...organizationScopeIds].sort().join(",")}`;
+}
+
+function organizationSelectionError(organizationScopeIds: string[]): string | undefined {
+  const availability = organizationKnowledgeAvailability();
+  if (!availability.available) return availability.reason;
+
+  const allowedScopeIds = new Set(
+    useOrgSessionStore.getState().session?.bootstrap?.scopes.map((scope) => scope.id) ?? [],
+  );
+  if (organizationScopeIds.some((scopeId) => !allowedScopeIds.has(scopeId))) {
+    return "原组织知识范围已失效，请重新选择知识范围";
+  }
+  return undefined;
 }
 
 /** Invalidate MCP reconciliation acknowledgements after a Runtime/session lifecycle boundary. */
@@ -311,6 +331,17 @@ export async function agentSetKnowledgeSources(
 ): Promise<AgentKnowledgeSourcesResult> {
   const personal = sources.includes("personal");
   const organization = sources.includes("organization");
+  const organizationError = organization
+    ? organizationSelectionError(organizationScopeIds)
+    : undefined;
+  if (organizationError) {
+    invalidateAgentKnowledgeSourceSync(sessionId);
+    throw new Error(`组织知识库不可用：${organizationError}`);
+  }
+  const configurationKey = knowledgeConfigurationKey(sources, organizationScopeIds);
+  // Any mutation attempt makes the previous acknowledgement unsafe to reuse.
+  // A failed native transaction may also report that rollback failed.
+  invalidateAgentKnowledgeSourceSync(sessionId);
   const result = await invoke<AgentKnowledgeSourcesResult>("agent_set_knowledge_sources", {
     sessionId,
     personal,
@@ -326,8 +357,11 @@ export async function agentSetKnowledgeSources(
   if (mismatches.length > 0) {
     throw new Error(`Runtime 未能确认知识来源状态：${mismatches.join("、")}`);
   }
+  if (configurationKey !== knowledgeConfigurationKey(sources, organizationScopeIds)) {
+    throw new Error("组织账号在知识来源同步期间发生变化，请重试");
+  }
   appliedKnowledgeSources.set(sessionId, {
-    key: knowledgeConfigurationKey(sources, organizationScopeIds),
+    key: configurationKey,
     result,
   });
   return result;
@@ -341,11 +375,14 @@ async function synchronizeKnowledgeSources(
   const sources = store.bindSessionSources(sessionId);
   const organizationScopeIds = organizationScopeIdsForSession(sessionId);
   const key = knowledgeConfigurationKey(sources, organizationScopeIds);
-  let result = appliedKnowledgeSources.get(sessionId)?.key === key
+  const organizationPrerequisiteError = sources.includes("organization")
+    ? organizationSelectionError(organizationScopeIds)
+    : undefined;
+  let result = !organizationPrerequisiteError && appliedKnowledgeSources.get(sessionId)?.key === key
     ? appliedKnowledgeSources.get(sessionId)?.result
     : undefined;
-  let synchronizationError: string | undefined;
-  if (!result) {
+  let synchronizationError = organizationPrerequisiteError;
+  if (!result && !synchronizationError) {
     try {
       result = await agentSetKnowledgeSources(sessionId, sources, organizationScopeIds);
     } catch (error) {
@@ -377,7 +414,7 @@ async function synchronizeKnowledgeSources(
         ? { state: "available" }
         : {
             state: "unavailable",
-            message: `组织知识库连接失败：${attachmentError ?? "服务尚未就绪"}`,
+            message: `组织知识库不可用：${attachmentError ?? "服务尚未就绪"}`,
           }
       : undefined,
   );
@@ -388,8 +425,11 @@ async function synchronizeKnowledgeSources(
         message: `知识工具连接失败：${attachmentError}`,
       }, promptId);
     }
+    const guidance = organizationPrerequisiteError
+      ? "请在组织工作台恢复登录或权限，并重新选择有效范围后再试"
+      : "请重试；若持续失败，请完全退出后重启应用";
     throw new Error(
-      `知识来源尚未就绪，本次消息未发送：${attachmentError}。请重试；若持续失败，请完全退出后重启应用。`,
+      `知识来源尚未就绪，本次消息未发送：${attachmentError}。${guidance}。`,
     );
   }
   return sources;

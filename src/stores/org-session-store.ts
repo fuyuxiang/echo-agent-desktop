@@ -11,6 +11,43 @@ interface OrgSessionState {
 
 let hydrationInFlight: Promise<OrgSession | null> | null = null;
 
+export interface OrganizationKnowledgeAvailability {
+  available: boolean;
+  reason: string;
+  /** Account/server identity used to partition renderer-side Runtime acks. */
+  identity: string;
+}
+
+export function organizationKnowledgeAvailability(
+  state: Pick<OrgSessionState, "session" | "hydrated"> = useOrgSessionStore.getState(),
+): OrganizationKnowledgeAvailability {
+  const { session, hydrated } = state;
+  const hasSharedScope = Boolean(session?.bootstrap?.scopes.some(
+    (scope) => scope.kind === "team" || scope.kind === "org",
+  ));
+  const identity = session?.loggedIn && session.serverUrl && session.user?.id
+    ? JSON.stringify([session.serverUrl, session.user.id])
+    : "signed-out";
+
+  if (!hydrated) {
+    return { available: false, reason: "正在检查组织连接状态", identity };
+  }
+  if (!session?.loggedIn) {
+    return { available: false, reason: "登录组织后可用", identity };
+  }
+  if (!hasSharedScope) {
+    return { available: false, reason: "当前账号暂无团队或组织知识权限", identity };
+  }
+  if (session.organizationMemoryEnabled !== true) {
+    return { available: false, reason: "组织服务不可连接或登录已过期", identity };
+  }
+  return {
+    available: true,
+    reason: "使用组织账号中你有权限的知识",
+    identity,
+  };
+}
+
 /**
  * Application-wide organization identity.
  *

@@ -6,11 +6,13 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import { useKnowledgeStore } from "@/stores/knowledge-store";
+import { resetOrgSessionMirror, useOrgSessionStore } from "@/stores/org-session-store";
 import {
   agentCancel,
   invalidateAgentKnowledgeSourceSync,
   agentSend,
   agentSendNow,
+  agentSetKnowledgeSources,
   commandsList,
   memoryClearSessionSummaries,
   memoryDelete,
@@ -24,6 +26,35 @@ const invokeMock = vi.mocked(invoke);
 describe("agentSend attachment contract", () => {
   beforeEach(() => {
     invalidateAgentKnowledgeSourceSync();
+    resetOrgSessionMirror();
+    useOrgSessionStore.setState({
+      hydrated: true,
+      session: {
+        loggedIn: true,
+        organizationMemoryEnabled: true,
+        serverUrl: "https://memory.example.com",
+        user: {
+          id: "user-1",
+          username: "alice",
+          displayName: "Alice",
+          role: "member",
+          clearance: 1,
+        },
+        bootstrap: {
+          apiVersion: 1,
+          user: {
+            id: "user-1",
+            username: "alice",
+            displayName: "Alice",
+            role: "member",
+            clearance: 1,
+          },
+          scopes: [{ id: "team-1", kind: "team", name: "研发团队" }],
+          policy: {},
+          serverTime: 1,
+        },
+      },
+    });
     invokeMock.mockReset();
     invokeMock.mockImplementation((command) => Promise.resolve(
       command === "agent_set_knowledge_sources"
@@ -201,6 +232,110 @@ describe("agentSend attachment contract", () => {
       organization: true,
       organizationScopeIds: ["team-1"],
     });
+  });
+
+  it("注销后即使存在成功缓存也阻止组织知识消息发送", async () => {
+    useKnowledgeStore.getState().setSessionSources("session-org-logout", ["organization"]);
+    invokeMock.mockImplementation((command) => Promise.resolve(
+      command === "agent_set_knowledge_sources"
+        ? {
+            personalSelected: false,
+            organizationSelected: true,
+            personalAttached: false,
+            organizationAttached: true,
+          }
+        : undefined,
+    ));
+
+    await agentSend("session-org-logout", "第一条");
+    useOrgSessionStore.getState().clearSession();
+
+    await expect(agentSend("session-org-logout", "注销后的第二条"))
+      .rejects.toThrow("登录组织后可用");
+    expect(invokeMock.mock.calls.filter(([command]) => command === "agent_send")).toHaveLength(1);
+    expect(invokeMock.mock.calls.filter(([command]) => (
+      command === "agent_set_knowledge_sources"
+    ))).toHaveLength(1);
+  });
+
+  it("组织范围失效时在调用原生层前阻止发送", async () => {
+    useKnowledgeStore.getState().setSessionSources("session-stale-scope", ["organization"]);
+    useKnowledgeStore.getState().setSessionOrganizationScopeIds(
+      "session-stale-scope",
+      ["deleted-team"],
+    );
+
+    await expect(agentSend(
+      "session-stale-scope",
+      "读取旧团队知识",
+      [],
+      "读取旧团队知识",
+      "prompt-stale-scope",
+    )).rejects.toThrow("原组织知识范围已失效");
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(useKnowledgeStore.getState().turnTraces["session-stale-scope"]["prompt-stale-scope"])
+      .toMatchObject({
+        organization: {
+          state: "unavailable",
+          message: expect.stringContaining("重新选择知识范围"),
+        },
+      });
+  });
+
+  it("切换组织账号后不复用旧账号的 Runtime 确认", async () => {
+    useKnowledgeStore.getState().setSessionSources("session-account-switch", ["organization"]);
+    invokeMock.mockImplementation((command) => Promise.resolve(
+      command === "agent_set_knowledge_sources"
+        ? {
+            personalSelected: false,
+            organizationSelected: true,
+            personalAttached: false,
+            organizationAttached: true,
+          }
+        : undefined,
+    ));
+    await agentSend("session-account-switch", "账号一");
+
+    const current = useOrgSessionStore.getState().session!;
+    useOrgSessionStore.setState({
+      session: {
+        ...current,
+        user: { ...current.user!, id: "user-2", username: "bob", displayName: "Bob" },
+      },
+    });
+    await agentSend("session-account-switch", "账号二");
+
+    expect(invokeMock.mock.calls.filter(([command]) => (
+      command === "agent_set_knowledge_sources"
+    ))).toHaveLength(2);
+  });
+
+  it("知识来源变更失败后不会退回使用旧成功缓存", async () => {
+    const sessionId = "session-failed-mutation";
+    useKnowledgeStore.getState().setSessionSources(sessionId, ["organization"]);
+    let rejectMutation = false;
+    invokeMock.mockImplementation((command) => {
+      if (command !== "agent_set_knowledge_sources") return Promise.resolve(undefined);
+      if (rejectMutation) return Promise.reject(new Error("Runtime 回滚状态未知"));
+      return Promise.resolve({
+        personalSelected: false,
+        organizationSelected: true,
+        personalAttached: false,
+        organizationAttached: true,
+      });
+    });
+
+    await agentSend(sessionId, "首次同步");
+    rejectMutation = true;
+    await expect(agentSetKnowledgeSources(sessionId, ["organization"]))
+      .rejects.toThrow("Runtime 回滚状态未知");
+    rejectMutation = false;
+    await agentSend(sessionId, "失败后重试");
+
+    expect(invokeMock.mock.calls.filter(([command]) => (
+      command === "agent_set_knowledge_sources"
+    ))).toHaveLength(3);
   });
 });
 

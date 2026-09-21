@@ -134,6 +134,75 @@ describe("OrganizationMemoryPanel", () => {
     await waitFor(() => expect(api.orgSetSkillPreference).toHaveBeenCalledWith("skill-1", true));
   });
 
+  it("概览按待处理类型展示并导航到正确工作区", async () => {
+    api.orgMemoryPromotionsMine.mockResolvedValue([{
+      id: "memory-pending",
+      payloadType: "memory",
+      payload: { kind: "howto", content: "上线前检查回滚" },
+      source: "conversation",
+      state: "pending",
+      scopeName: teamScope.name,
+      scopeKind: teamScope.kind,
+      createdAt: 1,
+    }]);
+    api.orgDocumentSubmissionsMine.mockResolvedValue([{
+      id: "document-pending",
+      title: "发布手册",
+      state: "pending",
+      scopeId: teamScope.id,
+      scopeName: teamScope.name,
+      scopeKind: teamScope.kind,
+      createdAt: 1,
+    }]);
+    api.orgSkillSubmissionsMine.mockResolvedValue([{
+      id: "skill-pending",
+      name: "release-check",
+      state: "pending",
+      scopeId: teamScope.id,
+      scopeName: teamScope.name,
+      scopeKind: teamScope.kind,
+      createdAt: 1,
+    }]);
+
+    render(<OrganizationMemoryPanel />);
+    expect(await screen.findByText("1 条经验待审核")).toBeInTheDocument();
+    expect(screen.getByText("1 项文档正在审核、扫描或建立索引")).toBeInTheDocument();
+    expect(screen.getByText("1 个 Skill 正在审核或扫描")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看经验" }));
+    expect(screen.getByRole("heading", { name: "经验" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "概览" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看文档" }));
+    expect(screen.getByRole("heading", { name: "文档" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "概览" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看 Skills" }));
+    expect(screen.getAllByRole("heading", { name: "组织 Skills" })).toHaveLength(2);
+  });
+
+  it("经验或 Skill 待审核时持续刷新工作区状态", async () => {
+    vi.useFakeTimers();
+    try {
+      api.orgMemoryPromotionsMine.mockResolvedValue([{
+        id: "memory-polling",
+        payloadType: "memory",
+        payload: { kind: "fact", content: "需要等待审核" },
+        source: "conversation",
+        state: "pending",
+        scopeName: teamScope.name,
+        scopeKind: teamScope.kind,
+        createdAt: 1,
+      }]);
+      render(<OrganizationMemoryPanel />);
+      await act(async () => { await Promise.resolve(); });
+      expect(api.orgMemoryPromotionsMine).toHaveBeenCalledTimes(1);
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(api.orgMemoryPromotionsMine).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("注销请求未返回时立即隐藏旧组织数据", async () => {
     let finishLogout: (() => void) | undefined;
     api.orgLogout.mockImplementation(() => new Promise<void>((resolve) => { finishLogout = resolve; }));

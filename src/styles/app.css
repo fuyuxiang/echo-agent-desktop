@@ -14642,3 +14642,7 @@ body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
 .file-tree__node--disabled:hover {
   background: transparent;
 }
+
+.org-overview__attention-row + .org-overview__attention-row {
+  border-top: 1px solid var(--echo-border-default);
+}

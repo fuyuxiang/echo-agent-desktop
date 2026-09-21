@@ -40,6 +40,10 @@ const MAX_SCOPE_ITEMS: usize = 64;
 const RECONCILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const ATTACHMENT_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 const ATTACHMENT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+// Organization context/ask may legitimately consume the entire 120-second
+// upstream HTTP budget. Keep the outer MCP deadline slightly larger so the
+// Runtime does not cancel a healthy request while the bridge is still waiting.
+const ORGANIZATION_AGENTIC_TOOL_TIMEOUT_SECS: u64 = 135;
 
 const PERSONAL_TOOL_NAMES: &[&str] = &["local_knowledge_search", "local_knowledge_fetch"];
 const ORGANIZATION_TOOL_NAMES: &[&str] = &[
@@ -58,10 +62,9 @@ const ORGANIZATION_TOOL_NAMES: &[&str] = &[
 static BOUND_PORT: OnceLock<u16> = OnceLock::new();
 static PROCESS_TOKEN: OnceLock<String> = OnceLock::new();
 static CAPABILITY_ENABLED: AtomicBool = AtomicBool::new(false);
-static SESSION_SELECTIONS: OnceLock<std::sync::Mutex<HashMap<String, KnowledgeSourceSelection>>> =
-    OnceLock::new();
-static SESSION_ORGANIZATION_SCOPES: OnceLock<std::sync::Mutex<HashMap<String, Vec<String>>>> =
-    OnceLock::new();
+static SESSION_CONFIGURATIONS: OnceLock<
+    std::sync::Mutex<HashMap<String, SessionKnowledgeConfiguration>>,
+> = OnceLock::new();
 static RECONCILE_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -71,62 +74,90 @@ pub(crate) struct KnowledgeSourceSelection {
     pub organization: bool,
 }
 
-fn session_selections() -> &'static std::sync::Mutex<HashMap<String, KnowledgeSourceSelection>> {
-    SESSION_SELECTIONS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
-}
-
-fn session_organization_scopes() -> &'static std::sync::Mutex<HashMap<String, Vec<String>>> {
-    SESSION_ORGANIZATION_SCOPES.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
-}
-
-pub(crate) fn set_session_selection(
-    session_id: &str,
-    personal: bool,
-    organization: bool,
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SessionKnowledgeConfiguration {
+    selection: KnowledgeSourceSelection,
     organization_scope_ids: Vec<String>,
-) {
-    session_selections().lock().unwrap().insert(
-        session_id.to_string(),
-        KnowledgeSourceSelection {
-            personal,
-            organization,
-        },
-    );
-    session_organization_scopes()
-        .lock()
-        .unwrap()
-        .insert(session_id.to_string(), organization_scope_ids);
 }
 
-pub(crate) fn forget_session_selection(session_id: &str) {
-    session_selections().lock().unwrap().remove(session_id);
-    session_organization_scopes()
-        .lock()
-        .unwrap()
-        .remove(session_id);
+fn session_configurations(
+) -> &'static std::sync::Mutex<HashMap<String, SessionKnowledgeConfiguration>> {
+    SESSION_CONFIGURATIONS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
-pub(crate) fn clear_session_selections() {
-    session_selections().lock().unwrap().clear();
-    session_organization_scopes().lock().unwrap().clear();
-}
-
-pub(crate) fn session_selection(session_id: &str) -> KnowledgeSourceSelection {
-    session_selections()
-        .lock()
-        .unwrap()
-        .get(session_id)
-        .copied()
-        .unwrap_or_default()
-}
-
-pub(crate) fn session_organization_scope_ids(session_id: &str) -> Vec<String> {
-    session_organization_scopes()
+fn session_configuration(session_id: &str) -> SessionKnowledgeConfiguration {
+    session_configurations()
         .lock()
         .unwrap()
         .get(session_id)
         .cloned()
         .unwrap_or_default()
+}
+
+fn stored_session_configuration(session_id: &str) -> Option<SessionKnowledgeConfiguration> {
+    session_configurations()
+        .lock()
+        .unwrap()
+        .get(session_id)
+        .cloned()
+}
+
+fn set_session_configuration(
+    session_id: &str,
+    personal: bool,
+    organization: bool,
+    organization_scope_ids: Vec<String>,
+) {
+    session_configurations().lock().unwrap().insert(
+        session_id.to_string(),
+        SessionKnowledgeConfiguration {
+            selection: KnowledgeSourceSelection {
+                personal,
+                organization,
+            },
+            organization_scope_ids: if organization {
+                organization_scope_ids
+            } else {
+                Vec::new()
+            },
+        },
+    );
+}
+
+fn restore_session_configuration(
+    session_id: &str,
+    configuration: Option<SessionKnowledgeConfiguration>,
+) {
+    let mut configurations = session_configurations().lock().unwrap();
+    if let Some(configuration) = configuration {
+        configurations.insert(session_id.to_string(), configuration);
+    } else {
+        configurations.remove(session_id);
+    }
+}
+
+fn remove_session_configuration(session_id: &str) {
+    session_configurations().lock().unwrap().remove(session_id);
+}
+
+fn clear_session_configurations() {
+    session_configurations().lock().unwrap().clear();
+}
+
+pub(crate) async fn forget_session_selection(session_id: &str) {
+    let _guard = RECONCILE_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    remove_session_configuration(session_id);
+}
+
+pub(crate) async fn clear_session_selections() {
+    let _guard = RECONCILE_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    clear_session_configurations();
 }
 
 pub(crate) fn effective_selection(requested: KnowledgeSourceSelection) -> KnowledgeSourceSelection {
@@ -637,6 +668,44 @@ fn unavailable_tool_result() -> Value {
     )
 }
 
+fn validate_document_scope_metadata(
+    document: &Value,
+    organization_scope_ids: &[String],
+) -> Result<(), String> {
+    if organization_scope_ids.is_empty() {
+        return Ok(());
+    }
+    let scope_id = document
+        .get("scopeId")
+        .or_else(|| document.get("scope_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "organization document metadata is missing its scope".to_string())?;
+    if organization_scope_ids
+        .iter()
+        .any(|allowed| allowed == scope_id)
+    {
+        Ok(())
+    } else {
+        Err("document is outside the organization knowledge scope selected for this task".into())
+    }
+}
+
+async fn enforce_document_scope(
+    document_id: &str,
+    organization_scope_ids: &[String],
+) -> Result<(), String> {
+    if organization_scope_ids.is_empty() {
+        return Ok(());
+    }
+    // The fetch API authorizes against the account, not the narrower task
+    // scope. Resolve trusted server metadata first and enforce the task-owned
+    // scope in this bridge before any document content is returned.
+    let path = format!("/api/v1/docs/{}", urlencoding::encode(document_id));
+    let document = crate::org::mcp_json(Method::GET, &path, None).await?;
+    validate_document_scope_metadata(&document, organization_scope_ids)
+}
+
 async fn tools_call(
     params: &Value,
     app: Option<&AppHandle>,
@@ -812,6 +881,7 @@ async fn tools_call(
         }
         "knowledge_fetch_document" | "knowledge_fetch_doc" => {
             let doc_id = required_string_bounded(&arguments, "doc_id", MAX_IDENTIFIER_CHARS)?;
+            enforce_document_scope(doc_id, organization_scope_ids).await?;
             let mut input = json!({ "docId": doc_id });
             if let Some(page) = validated_page(&arguments)? {
                 input["page"] = json!(page);
@@ -1301,20 +1371,39 @@ async fn wait_for_attachment_ready(
     }
 }
 
-pub(crate) async fn reconcile_session(
+fn upsert_payload(
+    session_id: &str,
+    url: &str,
+    authorization: &str,
+    selection: KnowledgeSourceSelection,
+    organization_scope_ids: &[String],
+) -> Value {
+    json!({
+        "session_id": session_id,
+        "server_name": MCP_SERVER_NAME,
+        "persist": false,
+        "url": url,
+        "headers": {
+            AUTH_HEADER: authorization,
+            SOURCES_HEADER: encode_selection(selection),
+            ORGANIZATION_SCOPES_HEADER: organization_scope_ids.join(",")
+        },
+        "enabled": true,
+        "tool_timeouts": {
+            "knowledge_context": ORGANIZATION_AGENTIC_TOOL_TIMEOUT_SECS,
+            "knowledge_ask": ORGANIZATION_AGENTIC_TOOL_TIMEOUT_SECS
+        }
+    })
+}
+
+async fn reconcile_session_locked(
     tx: &echo_agent_acp::AcpAgentTx,
     session_id: &str,
 ) -> Result<(), String> {
-    // Order all live config mutations and read the latest selection only after
-    // acquiring the lock. This prevents a late background auth refresh from
-    // overwriting a newer user choice for the same internal server.
-    let _guard = RECONCILE_LOCK
-        .get_or_init(|| tokio::sync::Mutex::new(()))
-        .lock()
-        .await;
-    let selection = effective_selection(session_selection(session_id));
+    let configuration = session_configuration(session_id);
+    let selection = effective_selection(configuration.selection);
     let organization_scope_ids = if selection.organization {
-        session_organization_scope_ids(session_id)
+        configuration.organization_scope_ids
     } else {
         Vec::new()
     };
@@ -1327,18 +1416,13 @@ pub(crate) async fn reconcile_session(
     let (method, payload) = if let Some((url, authorization)) = config {
         (
             "echo.agent/mcp/upsert",
-            json!({
-                "session_id": session_id,
-                "server_name": MCP_SERVER_NAME,
-                "persist": false,
-                "url": url,
-                "headers": {
-                    AUTH_HEADER: authorization,
-                    SOURCES_HEADER: encode_selection(selection),
-                    ORGANIZATION_SCOPES_HEADER: organization_scope_ids.join(",")
-                },
-                "enabled": true
-            }),
+            upsert_payload(
+                session_id,
+                &url,
+                &authorization,
+                selection,
+                &organization_scope_ids,
+            ),
         )
     } else {
         (
@@ -1360,6 +1444,48 @@ pub(crate) async fn reconcile_session(
 
     if should_attach {
         wait_for_attachment_ready(tx, session_id, selection).await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn reconcile_session(
+    tx: &echo_agent_acp::AcpAgentTx,
+    session_id: &str,
+) -> Result<(), String> {
+    // Order all live config mutations and read the latest configuration only
+    // after acquiring the lock. A background auth refresh can no longer
+    // overwrite a newer user choice for the same internal server.
+    let _guard = RECONCILE_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    reconcile_session_locked(tx, session_id).await
+}
+
+pub(crate) async fn update_session_configuration(
+    tx: &echo_agent_acp::AcpAgentTx,
+    session_id: &str,
+    personal: bool,
+    organization: bool,
+    organization_scope_ids: Vec<String>,
+) -> Result<(), String> {
+    // Snapshot, update, Runtime reconciliation, and rollback form one ordered
+    // transaction. Keeping the guard across awaits is intentional: another
+    // selection cannot be committed and then overwritten by this rollback.
+    let _guard = RECONCILE_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let previous = stored_session_configuration(session_id);
+    set_session_configuration(session_id, personal, organization, organization_scope_ids);
+    if let Err(error) = reconcile_session_locked(tx, session_id).await {
+        restore_session_configuration(session_id, previous);
+        if let Err(rollback_error) = reconcile_session_locked(tx, session_id).await {
+            return Err(format!(
+                "知识来源同步失败：{error}；恢复上一状态也失败：{rollback_error}"
+            ));
+        }
+        return Err(format!("知识来源同步失败，已恢复上一状态：{error}"));
     }
     Ok(())
 }
@@ -1610,6 +1736,82 @@ mod tests {
             .copied()
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn session_configuration_keeps_selection_and_scope_in_one_snapshot() {
+        let session_id = "test-atomic-knowledge-configuration";
+        set_session_configuration(session_id, true, true, vec!["team-a".into()]);
+        assert_eq!(
+            session_configuration(session_id),
+            SessionKnowledgeConfiguration {
+                selection: KnowledgeSourceSelection {
+                    personal: true,
+                    organization: true,
+                },
+                organization_scope_ids: vec!["team-a".into()],
+            }
+        );
+
+        set_session_configuration(session_id, true, false, vec!["must-be-dropped".into()]);
+        assert_eq!(
+            session_configuration(session_id),
+            SessionKnowledgeConfiguration {
+                selection: KnowledgeSourceSelection {
+                    personal: true,
+                    organization: false,
+                },
+                organization_scope_ids: Vec::new(),
+            }
+        );
+        remove_session_configuration(session_id);
+    }
+
+    #[test]
+    fn document_fetch_rejects_metadata_outside_the_task_scope() {
+        let allowed = vec!["team-a".to_string(), "org-a".to_string()];
+        assert_eq!(
+            validate_document_scope_metadata(&json!({ "scope_id": "team-a" }), &allowed),
+            Ok(())
+        );
+        assert_eq!(
+            validate_document_scope_metadata(&json!({ "scopeId": "org-a" }), &allowed),
+            Ok(())
+        );
+        assert!(
+            validate_document_scope_metadata(&json!({ "scope_id": "team-b" }), &allowed)
+                .unwrap_err()
+                .contains("outside")
+        );
+        assert!(validate_document_scope_metadata(&json!({}), &allowed).is_err());
+        assert_eq!(
+            validate_document_scope_metadata(&json!({}), &Vec::new()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn organization_agentic_tools_receive_a_deadline_above_http_timeout() {
+        let payload = upsert_payload(
+            "session-a",
+            "http://127.0.0.1:1/mcp",
+            "Bearer secret",
+            KnowledgeSourceSelection {
+                personal: false,
+                organization: true,
+            },
+            &["team-a".into()],
+        );
+        assert_eq!(
+            payload["tool_timeouts"]["knowledge_context"],
+            ORGANIZATION_AGENTIC_TOOL_TIMEOUT_SECS
+        );
+        assert_eq!(
+            payload["tool_timeouts"]["knowledge_ask"],
+            ORGANIZATION_AGENTIC_TOOL_TIMEOUT_SECS
+        );
+        assert!(ORGANIZATION_AGENTIC_TOOL_TIMEOUT_SECS > 120);
+        assert_eq!(payload["headers"][ORGANIZATION_SCOPES_HEADER], "team-a");
     }
 
     fn mcp_entry(

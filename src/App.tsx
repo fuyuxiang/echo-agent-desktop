@@ -342,6 +342,9 @@ function Shell() {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void listenOrgSessionChanged(({ session }) => {
+      // Login, logout, account switches, and capability changes all invalidate
+      // Runtime acknowledgements issued under the previous organization view.
+      invalidateAgentKnowledgeSourceSync();
       useOrgSessionStore.getState().setSession(session);
     }).then((stop) => {
       if (disposed) stop();
@@ -799,10 +802,10 @@ function Shell() {
             const isKnowledgeBridge = p.name === KNOWLEDGE_MCP_SERVER_NAME;
             const intentionalShutdown = p.reason === "config_removed" || p.reason === "disabled";
             const connectionLost = p.status === "unavailable" || p.status === "needsauth";
-            if (isKnowledgeBridge && connectionLost && !intentionalShutdown) {
+            if (isKnowledgeBridge && (connectionLost || intentionalShutdown || p.reason === "config_changed")) {
               const hadReadyAcknowledgement = invalidateAgentKnowledgeSourceSync(p.sessionId);
               const selected = useKnowledgeStore.getState().sessionSources[p.sessionId] ?? [];
-              if (hadReadyAcknowledgement && selected.length > 0) {
+              if (hadReadyAcknowledgement && selected.length > 0 && !intentionalShutdown) {
                 const labels = [
                   selected.includes("personal") ? "个人知识" : null,
                   selected.includes("organization") ? "组织知识" : null,

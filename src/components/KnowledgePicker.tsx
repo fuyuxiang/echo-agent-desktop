@@ -3,7 +3,10 @@ import { BookOpen, Building2, Check, ChevronDown, FolderOpen } from "lucide-reac
 import { agentSetKnowledgeSources } from "@/lib/agent-client";
 import { listKbProviders } from "@/lib/knowledge-base";
 import { useKnowledgeStore, type KnowledgeSource } from "@/stores/knowledge-store";
-import { useOrgSessionStore } from "@/stores/org-session-store";
+import {
+  organizationKnowledgeAvailability,
+  useOrgSessionStore,
+} from "@/stores/org-session-store";
 
 function sourceLabel(sources: KnowledgeSource[]): string {
   if (sources.length === 0) return "知识来源";
@@ -42,22 +45,12 @@ export function KnowledgePicker({
   const providers = useMemo(() => listKbProviders(), [sourceCount]);
   const orgSession = useOrgSessionStore((state) => state.session);
   const orgHydrated = useOrgSessionStore((state) => state.hydrated);
-  const hasSharedScope = Boolean(orgSession?.bootstrap?.scopes.some(
-    (scope) => scope.kind === "team" || scope.kind === "org",
-  ));
-  const organizationAvailable = orgHydrated
-    && orgSession?.loggedIn === true
-    && hasSharedScope
-    && orgSession.organizationMemoryEnabled === true;
-  const organizationReason = !orgHydrated
-    ? "正在检查组织连接状态"
-    : !orgSession?.loggedIn
-      ? "登录组织后可用"
-      : !hasSharedScope
-        ? "当前账号暂无团队或组织知识权限"
-        : !orgSession.organizationMemoryEnabled
-          ? "组织服务不可连接或登录已过期"
-          : "使用组织账号中你有权限的知识";
+  const organizationAvailability = organizationKnowledgeAvailability({
+    session: orgSession,
+    hydrated: orgHydrated,
+  });
+  const organizationAvailable = organizationAvailability.available;
+  const organizationReason = organizationAvailability.reason;
 
   useEffect(() => {
     if (!open) return;

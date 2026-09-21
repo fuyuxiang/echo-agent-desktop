@@ -1386,35 +1386,14 @@ pub async fn agent_set_knowledge_sources(
     {
         return Err("组织知识范围无效或过多".into());
     }
-    let previous = crate::org_mcp::session_selection(&session_id);
-    let previous_scope_ids = crate::org_mcp::session_organization_scope_ids(&session_id);
-    crate::org_mcp::set_session_selection(
+    crate::org_mcp::update_session_configuration(
+        &tx,
         &session_id,
         personal,
         organization,
-        if organization {
-            organization_scope_ids
-        } else {
-            Vec::new()
-        },
-    );
-    if let Err(error) = crate::org_mcp::reconcile_session(&tx, &session_id).await {
-        // Selection changes are transactional. In particular, a failed detach
-        // must never let a prompt proceed while a source the user deselected is
-        // still attached to the resident Runtime session.
-        crate::org_mcp::set_session_selection(
-            &session_id,
-            previous.personal,
-            previous.organization,
-            previous_scope_ids,
-        );
-        if let Err(rollback_error) = crate::org_mcp::reconcile_session(&tx, &session_id).await {
-            return Err(format!(
-                "知识来源同步失败：{error}；恢复上一状态也失败：{rollback_error}"
-            ));
-        }
-        return Err(format!("知识来源同步失败，已恢复上一状态：{error}"));
-    }
+        organization_scope_ids,
+    )
+    .await?;
     let active = crate::org_mcp::effective_selection(crate::org_mcp::KnowledgeSourceSelection {
         personal,
         organization,
@@ -1533,7 +1512,7 @@ pub async fn agent_shutdown(
         scheduler.abort();
     }
     crate::automations::clear_runtime_sessions();
-    crate::org_mcp::clear_session_selections();
+    crate::org_mcp::clear_session_selections().await;
     state.clear_orphaned_sessions();
     state.clear_session_workspaces();
     crate::agent_admin::clear_runtime_capabilities();
@@ -1937,7 +1916,7 @@ pub async fn agent_delete_session(
             }
         };
     state.forget_session_workspace(&session_id);
-    crate::org_mcp::forget_session_selection(&session_id);
+    crate::org_mcp::forget_session_selection(&session_id).await;
     crate::permission_config::forget_session_permission_mode(&session_id);
     if let Err(error) = crate::meta::clear_session_metadata(&session_id) {
         tracing::warn!(%error, %session_id, "session deleted but sidecar metadata cleanup failed");
