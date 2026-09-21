@@ -80,6 +80,8 @@ interface Usage {
   totalTokens?: number;
 }
 
+export type AgentMode = "default" | "ask" | "plan" | "browser_use" | "computer_use";
+
 /** One parked `echo.agent/exit_plan_mode` reverse request. */
 export interface PlanApprovalRequest {
   requestId: string;
@@ -117,6 +119,8 @@ export interface SessionTranscript {
   plan: Plan | null;
   /** Authoritative mode from ACP CurrentModeUpdate. */
   planMode: boolean;
+  /** Full authoritative mode, including Browser Use and Computer Use. */
+  agentMode?: AgentMode;
   /** Ordered, replayable approvals owned by this session. */
   planApprovals: PlanApprovalRequest[];
   suppressReplay: boolean;
@@ -152,6 +156,8 @@ interface SessionState {
   error: string | null;
   /** Plan mode on/off — mirror of the focused session's authoritative mode. */
   planMode: boolean;
+  /** Full authoritative Runtime mode for the focused session. */
+  agentMode: AgentMode;
 
   // --- lifecycle ---
   setSession: (id: string | null) => void;
@@ -223,6 +229,7 @@ interface SessionState {
   setPlan: (plan: Plan | null) => void;
   /** Apply an authoritative mode value to a session (focused by default). */
   setPlanMode: (enabled: boolean, sessionId?: string) => void;
+  setAgentMode: (mode: AgentMode, sessionId?: string) => void;
   requestPlanApproval: (request: PlanApprovalRequest) => void;
   dismissPlanApproval: (requestId: string, sessionId?: string) => void;
 }
@@ -237,6 +244,7 @@ const EMPTY_TRANSCRIPT: SessionTranscript = {
   usage: {},
   plan: null,
   planMode: false,
+  agentMode: "default",
   planApprovals: [],
   suppressReplay: false,
   dismissedControlPromptIds: [],
@@ -802,6 +810,7 @@ function mirrorOf(t: SessionTranscript | undefined) {
     usage: t?.usage ?? {},
     plan: t?.plan ?? null,
     planMode: t?.planMode ?? false,
+    agentMode: t?.agentMode ?? (t?.planMode ? "plan" : "default"),
     planApproval: t?.planApprovals?.[0] ?? null,
     control: t?.control,
   };
@@ -846,6 +855,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
     control: undefined,
     error: null,
     planMode: false,
+    agentMode: "default",
 
     setSession: (id) =>
       set((s) => {
@@ -1506,8 +1516,17 @@ export const useSessionStore = create<SessionState>((set, get) => {
           case "current_mode_update": {
             const raw = u as unknown as Record<string, unknown>;
             const modeId = raw.currentModeId ?? raw.current_mode_id;
-            // Unknown modes are intentionally not treated as plan mode.
-            return { ...tr, planMode: modeId === "plan" };
+            const knownModes: AgentMode[] = [
+              "default",
+              "ask",
+              "plan",
+              "browser_use",
+              "computer_use",
+            ];
+            const agentMode = typeof modeId === "string" && knownModes.includes(modeId as AgentMode)
+              ? modeId as AgentMode
+              : "default";
+            return { ...tr, planMode: agentMode === "plan", agentMode };
           }
           case "plan_approval_request": {
             const request = u as unknown as PlanApprovalRequest;
@@ -1572,7 +1591,28 @@ export const useSessionStore = create<SessionState>((set, get) => {
     setPlanMode: (enabled, sessionId) => {
       const sid = sessionId ?? get().sessionId;
       if (!sid) return;
-      applyToTranscript(sid, (transcript) => ({ ...transcript, planMode: enabled }));
+      applyToTranscript(sid, (transcript) => ({
+        ...transcript,
+        planMode: enabled,
+        // A delayed legacy "plan disabled" notification can arrive after a
+        // CurrentModeUpdate for Browser/Computer Use. Only leave `plan`; never
+        // overwrite a newer authoritative non-plan mode.
+        agentMode: enabled
+          ? "plan"
+          : transcript.agentMode === "plan"
+            ? "default"
+            : transcript.agentMode ?? "default",
+      }));
+    },
+
+    setAgentMode: (mode, sessionId) => {
+      const sid = sessionId ?? get().sessionId;
+      if (!sid) return;
+      applyToTranscript(sid, (transcript) => ({
+        ...transcript,
+        planMode: mode === "plan",
+        agentMode: mode,
+      }));
     },
 
     requestPlanApproval: (request) => {

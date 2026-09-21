@@ -37,6 +37,7 @@ import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
 import { useStickToBottom } from "./use-stick-to-bottom";
 import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
 import { stripAttachmentTransportContext } from "@/lib/user-message";
+import { AutomationControls } from "./AutomationControls";
 import { useAppDialog } from "./AppDialog";
 import type {
   MessageRetryKind,
@@ -499,6 +500,12 @@ export function ChatView({
         {/* Context and session tools share one responsive utility bar. */}
         <div className="chatview__utility-bar">
           <div className="chatview__utility-context">
+            <AutomationControls
+              sessionId={sessionId}
+              streaming={streaming}
+              onToast={onToast}
+              placement="toolbar"
+            />
             {cwd && workspaces && onSelectWorkspace && (
               <div className="chatview__workspace-bar">
                 <WorkspacePicker
@@ -763,6 +770,12 @@ export function ChatView({
         </div>
         <div className="chatview__footer">
           {/* Inline permission / question cards: session-scoped, never block sidebar. */}
+          <AutomationControls
+            sessionId={sessionId}
+            streaming={streaming}
+            onToast={onToast}
+            placement="approval"
+          />
           <PermissionInlineCard sessionId={sessionId} />
           <QuestionInlineCard sessionId={sessionId} />
           {control && (

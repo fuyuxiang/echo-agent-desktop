@@ -7,6 +7,7 @@ import { useSessionsStore, HOME_DRAFT_KEY } from "@/stores/sessions-store";
 import { usePendingExpertStore } from "@/stores/pending-expert-store";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
 import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
+import type { AutomationMode } from "@/lib/automation-client";
 
 /** EchoAgent 首页：单一任务入口。 */
 export function HomePage({
@@ -30,6 +31,8 @@ export function HomePage({
   onOpenOrganization,
   commandRefreshKey,
   onClientSlashCommand,
+  taskMode,
+  onTaskModeChange,
 }: {
   onSend: (text: string, attachments?: string[]) => boolean | void | Promise<boolean | void>;
   streaming: boolean;
@@ -53,6 +56,8 @@ export function HomePage({
   onClientSlashCommand?: (
     invocation: SlashCommandInvocation,
   ) => boolean | void | Promise<boolean | void>;
+  taskMode?: AutomationMode;
+  onTaskModeChange?: (mode: AutomationMode) => void;
 }) {
   // 受控填充 Composer 的内容 + nonce（召唤专家后写入 quick prompt）。
   const [externalText, setExternalText] = useState("");
@@ -103,6 +108,30 @@ export function HomePage({
         </header>
 
         <section className="home__composer-area">
+          {onTaskModeChange && (
+            <div className="home-mode-picker" aria-label="新任务模式">
+              <span>执行方式</span>
+              <div className="home-mode-picker__options">
+                {([
+                  ["default", "Agent", "对话、分析和文件任务"],
+                  ["browser_use", "Browser Use", "在隔离浏览器中完成网页任务"],
+                  ["computer_use", "Computer Use", "通过截图安全操作桌面"],
+                ] as const).map(([value, label, description]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`home-mode-picker__option${(taskMode ?? "default") === value ? " home-mode-picker__option--active" : ""}`}
+                    aria-pressed={(taskMode ?? "default") === value}
+                    disabled={Boolean(creatingSession) || streaming}
+                    title={description}
+                    onClick={() => onTaskModeChange(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <Composer
             streaming={streaming}
             onSend={onSend}

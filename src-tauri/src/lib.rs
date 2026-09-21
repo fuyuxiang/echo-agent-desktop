@@ -11,6 +11,7 @@ mod agents_store;
 mod app_updater;
 mod attachment_blob;
 mod attachment_preview;
+mod automation;
 mod automations;
 mod bridge;
 mod coding;
@@ -62,6 +63,7 @@ fn request_graceful_exit(app: tauri::AppHandle) {
         use tauri::Manager;
 
         let state = app.state::<AppState>();
+        automation::shutdown_all().await;
         commands::stop_agent_runtime(&state).await;
         app.exit(0);
     });
@@ -344,6 +346,7 @@ pub fn run() {
             // The authenticated knowledge bridge is reachable on loopback for
             // personal local knowledge. Organization tools are added only after
             // a verified login and shared-scope bootstrap.
+            automation::serve(app.handle().clone());
             org_mcp::serve(app.handle().clone());
             org::start_background_sync(app.handle().clone());
             personal_knowledge::start_background_index(app.handle().clone());
@@ -550,6 +553,15 @@ pub fn run() {
             agent_admin::plugins_action,
             agent_admin::marketplace_list,
             agent_admin::marketplace_action,
+            // first-party Browser Use / Computer Use runtime and safety UI
+            automation::automation_status,
+            automation::automation_pause,
+            automation::automation_resume,
+            automation::automation_stop,
+            automation::automation_set_private_network,
+            automation::automation_request_computer_permissions,
+            automation::automation_pending_approvals,
+            automation::automation_resolve_approval,
             // authoritative team runtime registry (shared with the MCP tools)
             team_mcp::team_snapshot,
             // notification center

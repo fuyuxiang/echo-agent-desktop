@@ -3973,6 +3973,7 @@ impl MvpAgent {
         let agent_name = std::env::var("ECHO_AGENT_AGENT").ok();
         let resolved = match agent_name.as_deref() {
             Some("browser-use") | Some("browser_use") => AgentDefinition::browser_use(),
+            Some("computer-use") | Some("computer_use") => AgentDefinition::computer_use(),
             Some("echo-agent-build-concise") | Some("echo_agent_build_concise") => {
                 AgentDefinition::echo_agent_build_concise()
             }

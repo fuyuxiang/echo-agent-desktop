@@ -1046,6 +1046,50 @@ button,
   gap: 16px;
 }
 
+.home-mode-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 4px;
+  color: var(--echo-text-weak);
+  font-size: 12px;
+}
+
+.home-mode-picker__options {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.home-mode-picker__option {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: 999px;
+  background: var(--ui-surface);
+  color: var(--echo-text-medium);
+  font: inherit;
+  cursor: pointer;
+}
+
+.home-mode-picker__option:hover:not(:disabled) {
+  border-color: var(--ui-brand-line);
+  color: var(--echo-brand);
+}
+
+.home-mode-picker__option--active {
+  border-color: var(--ui-brand-line);
+  background: var(--ui-brand-soft);
+  color: var(--echo-brand);
+  font-weight: 650;
+}
+
+.home-mode-picker__option:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .echo-composer-wrap--home {
   padding: 0;
   border-radius: 18px;
@@ -1118,6 +1162,18 @@ button,
 
 /* ---------- Chat ---------- */
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .main-topbar {
   height: 56px;
   border-bottom: 1px solid var(--ui-line);
@@ -1155,7 +1211,195 @@ button,
 
 .chatview__utility-context {
   flex: 1 1 auto;
+  gap: 8px;
   overflow: hidden;
+}
+
+.automation-control {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--echo-text-medium);
+  font-size: 11px;
+}
+
+.automation-control__mode {
+  display: inline-flex;
+  height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--ui-line);
+  border-radius: 8px;
+  background: var(--ui-surface);
+}
+
+.automation-control__mode select {
+  max-width: 116px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--echo-text-strong);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.automation-control__mode select:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.automation-control__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--echo-text-weak);
+}
+
+.automation-control--browser_use .automation-control__dot,
+.automation-control--computer_use .automation-control__dot {
+  background: #18a978;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #18a978 14%, transparent);
+}
+
+.automation-control__summary {
+  overflow: hidden;
+  max-width: 220px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-control > button {
+  height: 28px;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border: 1px solid var(--ui-line);
+  border-radius: 7px;
+  background: var(--ui-surface);
+  color: var(--echo-text-medium);
+  font: inherit;
+  cursor: pointer;
+}
+
+.automation-control > button:hover:not(:disabled) {
+  border-color: var(--ui-brand-line);
+  color: var(--echo-brand);
+}
+
+.automation-control > button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.automation-control > .automation-control__end:hover:not(:disabled) {
+  border-color: color-mix(in srgb, #dc4545 45%, var(--ui-line));
+  color: #c53b3b;
+}
+
+.automation-control__private {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.automation-control__private input {
+  accent-color: var(--echo-brand);
+}
+
+.automation-approval {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, #e59825 50%, var(--ui-line));
+  border-radius: 12px;
+  background: color-mix(in srgb, #e59825 8%, var(--ui-surface));
+  box-shadow: var(--echo-shadow-sm);
+}
+
+.automation-approval__icon {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  background: #e59825;
+  color: white;
+  font-weight: 800;
+}
+
+.automation-approval__body {
+  min-width: 0;
+}
+
+.automation-approval__body strong,
+.automation-approval__body p {
+  display: block;
+  margin: 0;
+}
+
+.automation-approval__body p {
+  margin-top: 3px;
+  color: var(--echo-text-medium);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.automation-approval__body details {
+  margin-top: 6px;
+  color: var(--echo-text-weak);
+  font-size: 11px;
+}
+
+.automation-approval__body pre {
+  max-height: 120px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 7px;
+  border-radius: 6px;
+  background: var(--echo-bg-tertiary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.automation-approval__body small {
+  display: block;
+  margin-top: 5px;
+  color: var(--echo-text-weak);
+}
+
+.automation-approval__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.automation-approval__actions button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: 7px;
+  background: var(--ui-surface);
+  color: var(--echo-text-medium);
+  font: inherit;
+  cursor: pointer;
+}
+
+.automation-approval__actions .automation-approval__approve {
+  border-color: var(--echo-brand);
+  background: var(--echo-brand);
+  color: white;
+}
+
+.automation-approval__actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .chatview__utility-actions {
@@ -2156,6 +2400,31 @@ button,
 
   .chatview__utility-actions {
     justify-content: flex-start;
+  }
+
+  .automation-control__summary {
+    display: none;
+  }
+
+  .automation-approval {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .automation-approval__actions {
+    grid-column: 2;
+    justify-content: flex-end;
+  }
+
+  .home-mode-picker {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .home-mode-picker__options {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
   }
 
   .chatview__plan-panel,

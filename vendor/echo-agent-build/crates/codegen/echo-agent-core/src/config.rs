@@ -698,6 +698,7 @@ pub enum BuiltinAgentName {
     Explore,
     Plan,
     BrowserUse,
+    ComputerUse,
     #[strum(serialize = "echo-agent-build-orchestrator")]
     EchoAgentBuildOrchestrator,
 }
@@ -729,6 +730,7 @@ impl BuiltinAgentName {
             Self::Explore => AgentDefinition::explore(),
             Self::Plan => AgentDefinition::plan(),
             Self::BrowserUse => AgentDefinition::browser_use(),
+            Self::ComputerUse => AgentDefinition::computer_use(),
             Self::EchoAgentBuildOrchestrator => AgentDefinition::echo_agent_build_orchestrator(),
         }
     }
@@ -1656,15 +1658,53 @@ impl AgentDefinition {
         Self {
             prompt_mode: PromptMode::Full,
             agents_md: false,
+            discover_skills: false,
+            inject_default_tools: false,
+            tool_config: ToolServerConfig::default(),
             prompt_body: Some(
-                "You are a web browsing agent. You can navigate, interact with, and \
-                 extract information from web pages. Use the available browsing tools \
-                 to complete the user's request."
+                "You are EchoAgent in Browser Use mode. Complete the user's web task using only \
+                 the first-party browser_* and automation_* tools. Start the controlled browser, \
+                 navigate as needed, then inspect browser_snapshot before interacting. Prefer stable \
+                 elementRef values over coordinates. Take a browser_screenshot when layout or visual \
+                 state matters. After any action that changes the page, observe the page again before \
+                 deciding what to do next. Never claim that an action succeeded unless the resulting \
+                 page state confirms it. Respect pauses and approval requests; do not work around a \
+                 denied action. Do not expose passwords, tokens, cookies, or other secrets in your \
+                 response. Local and private-network addresses are blocked unless the user explicitly \
+                 enables that session setting. When the task is complete, summarize the result and any \
+                 action that still needs the user."
                     .to_string(),
             ),
             ..Self::base(
                 BuiltinAgentName::BrowserUse,
                 "Web browsing and interaction agent.",
+            )
+        }
+    }
+    /// Computer Use agent definition. All interaction is grounded in the
+    /// latest captured frame so stale coordinates cannot be replayed.
+    pub fn computer_use() -> Self {
+        Self {
+            prompt_mode: PromptMode::Full,
+            agents_md: false,
+            discover_skills: false,
+            inject_default_tools: false,
+            tool_config: ToolServerConfig::default(),
+            prompt_body: Some(
+                "You are EchoAgent in Computer Use mode. Complete the user's desktop task using only \
+                 the first-party computer_* and automation_* tools. Capture a computer_screenshot \
+                 before every coordinate-based action and pass that exact frameId with coordinates \
+                 from the returned image. After a click, drag, scroll, key press, or text entry, capture \
+                 a new screenshot before the next interaction. Never reuse a stale frameId and never \
+                 guess unseen UI state. Respect pauses and approval requests; do not work around a \
+                 denied action. Avoid exposing credentials or other secrets. Never claim success until \
+                 the newest screenshot visibly confirms the intended result. When complete, summarize \
+                 the outcome and any action that still needs the user."
+                    .to_string(),
+            ),
+            ..Self::base(
+                BuiltinAgentName::ComputerUse,
+                "Visual desktop interaction agent.",
             )
         }
     }
@@ -1907,7 +1947,8 @@ mod tests {
             | BuiltinAgentName::Explore
             | BuiltinAgentName::Plan
             | BuiltinAgentName::Opencode
-            | BuiltinAgentName::BrowserUse => false,
+            | BuiltinAgentName::BrowserUse
+            | BuiltinAgentName::ComputerUse => true,
         }
     }
     /// Invariant: structural `is_strict_harness()` must match the
@@ -2313,6 +2354,15 @@ completionRequirement:
         assert_eq!(def.name, "browser-use");
         assert_eq!(def.prompt_mode, PromptMode::Full);
         assert!(!def.agents_md);
+        assert!(!def.inject_default_tools);
+    }
+    #[test]
+    fn test_builtin_computer_use() {
+        let def = AgentDefinition::computer_use();
+        assert_eq!(def.name, "computer-use");
+        assert_eq!(def.prompt_mode, PromptMode::Full);
+        assert!(!def.agents_md);
+        assert!(!def.inject_default_tools);
     }
     #[test]
     fn test_completion_requirement_round_trips() {
@@ -2613,6 +2663,7 @@ description: Test default tool config
             ("explore", BuiltinAgentName::Explore),
             ("plan", BuiltinAgentName::Plan),
             ("browser-use", BuiltinAgentName::BrowserUse),
+            ("computer-use", BuiltinAgentName::ComputerUse),
         ] {
             let parsed = BuiltinAgentName::from_str(s).unwrap();
             assert_eq!(parsed, expected, "from_str failed for: {s}");

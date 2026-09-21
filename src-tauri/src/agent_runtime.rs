@@ -421,6 +421,12 @@ pub async fn new_session_with_options(
     ) {
         servers.push(authenticated_team_mcp_server(url, authorization));
     }
+    if let (Some(url), Some(authorization)) = (
+        crate::automation::server_url(),
+        crate::automation::authorization_header(),
+    ) {
+        servers.push(authenticated_automation_mcp_server(url, authorization));
+    }
     let mut req = acp::NewSessionRequest::new(cwd.to_path_buf()).mcp_servers(servers);
     let permission_mode = permission_mode_override
         .map(str::to_string)
@@ -448,6 +454,17 @@ fn authenticated_team_mcp_server(url: String, authorization: String) -> acp::Mcp
     acp::McpServer::Http(
         acp::McpServerHttp::new(crate::team_mcp::MCP_SERVER_NAME, url).headers(vec![
             acp::HttpHeader::new(crate::team_mcp::AUTH_HEADER, authorization),
+        ]),
+    )
+}
+
+fn authenticated_automation_mcp_server(url: String, authorization: String) -> acp::McpServer {
+    acp::McpServer::Http(
+        acp::McpServerHttp::new(crate::automation::MCP_SERVER_NAME, url).headers(vec![
+            acp::HttpHeader::new(crate::automation::AUTH_HEADER, authorization),
+            // The Runtime expands this placeholder from its authoritative
+            // session actor. The model never chooses the automation session.
+            acp::HttpHeader::new(crate::automation::SESSION_HEADER, "${session_id}"),
         ]),
     )
 }
@@ -671,7 +688,10 @@ pub async fn set_session_model(tx: &AcpAgentTx, session_id: &str, model_id: &str
 /// `CurrentModeUpdate` that the frontend consumes; callers must not infer the
 /// resulting mode from stale local state.
 pub async fn set_session_mode_id(tx: &AcpAgentTx, session_id: &str, mode_id: &str) -> Result<()> {
-    if !matches!(mode_id, "default" | "plan" | "ask") {
+    if !matches!(
+        mode_id,
+        "default" | "plan" | "ask" | "browser_use" | "computer_use"
+    ) {
         return Err(anyhow!("unsupported session mode: {mode_id}"));
     }
     tracing::info!(session_id, mode_id, "echoagent: set_session_mode send");
@@ -867,6 +887,20 @@ mod tests {
         let encoded = value.to_string();
         assert!(encoded.contains(crate::team_mcp::AUTH_HEADER));
         assert!(encoded.contains("Bearer test-token"));
+    }
+
+    #[test]
+    fn injected_automation_mcp_server_is_authenticated_and_session_bound() {
+        let value = serde_json::to_value(authenticated_automation_mcp_server(
+            "http://127.0.0.1:4321/mcp".into(),
+            "Bearer automation-token".into(),
+        ))
+        .expect("serialize automation MCP server");
+        let encoded = value.to_string();
+        assert!(encoded.contains(crate::automation::AUTH_HEADER));
+        assert!(encoded.contains("Bearer automation-token"));
+        assert!(encoded.contains(crate::automation::SESSION_HEADER));
+        assert!(encoded.contains("${session_id}"));
     }
 
     #[tokio::test]

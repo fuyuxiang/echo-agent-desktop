@@ -92,6 +92,7 @@ import {
 import { defaultHttpSender, exportEventsBatch, type OtlpConfig } from "./lib/otlp-exporter";
 import { IS_MACOS, IS_WINDOWS } from "./lib/platform";
 import { friendlyError } from "./lib/error-format";
+import type { AutomationMode } from "./lib/automation-client";
 import { applySessionScopedFailure } from "./lib/session-scoped-failure";
 import { isGlobalShortcutBlocked } from "./lib/keyboard-scope";
 import { useModalPresence } from "./lib/use-modal-focus";
@@ -225,6 +226,7 @@ function Shell() {
   const [modelSwitching, setModelSwitching] = useState(false);
   const [loadingSession, setLoadingSession] = useState<{ sessionId: string; generation: number } | null>(null);
   const [creatingSession, setCreatingSession] = useState(false);
+  const [newTaskMode, setNewTaskMode] = useState<AutomationMode>("default");
   const [homeSendError, setHomeSendError] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   /** Workspace selected for the next session; independent of the active session cwd. */
@@ -1141,15 +1143,21 @@ function Shell() {
     if (!modelId) return false;
     if (!ensureQuotaAllowsSend()) return false;
     newSessionPendingRef.current = true;
+    const requestedMode = newTaskMode;
+    const cwd = newSessionTargetCwd;
+    let createdSessionId: string | null = null;
     setCreatingSession(true);
     setHomeSendError(null);
     try {
-      const cwd = newSessionTargetCwd;
       const permissionState = usePermissionModeStore.getState();
       const draftPermissionMode = permissionState.capabilityStatus?.locked
         ? permissionState.capabilityStatus.permissionMode
         : permissionState.homeMode;
       const sessionId = await agentNewSession(cwd, modelId, draftPermissionMode);
+      createdSessionId = sessionId;
+      if (requestedMode !== "default") {
+        await setCodingMode(sessionId, requestedMode);
+      }
       useKnowledgeStore.getState().bindSessionSources(sessionId, true);
       setCurrentModelId(modelId);
       sessionsStore.getState().setCurrent(sessionId);
@@ -1186,10 +1194,18 @@ function Shell() {
         attachments,
       });
       if (!accepted) return false;
+      setNewTaskMode("default");
       setHomeSendError(null);
       return true;
     } catch (e) {
       console.error('[EchoAgent] handleSendNew error:', e);
+      if (createdSessionId && sessionsStore.getState().currentSessionId !== createdSessionId) {
+        try {
+          await agentDeleteSession(createdSessionId, cwd);
+        } catch (cleanupError) {
+          console.warn("[EchoAgent] failed to clean up an unstarted automation session", cleanupError);
+        }
+      }
       const error = friendlyError(e);
       setHomeSendError(error);
       showToast(`创建会话失败：${error}`, 6000);
@@ -1738,6 +1754,7 @@ function Shell() {
     sessionsStore.getState().setCurrent(null);
     sessionStore.getState().reset();
     usePermissionModeStore.getState().resetHomeMode();
+    setNewTaskMode("default");
     setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
   };
 
@@ -2584,6 +2601,8 @@ function Shell() {
                   onOpenOrganization={() => handleNavigate("组织")}
                   commandRefreshKey={commandRefreshKey}
                   onClientSlashCommand={handleClientSlashCommand}
+                  taskMode={newTaskMode}
+                  onTaskModeChange={setNewTaskMode}
                 />
               )}
             </Suspense>

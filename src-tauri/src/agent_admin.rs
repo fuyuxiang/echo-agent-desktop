@@ -1698,9 +1698,9 @@ pub async fn folder_trust_respond(
 // Plan mode
 // ========================================================================
 
-/// Select the native runtime mode used by Echo Code. This is separate from
-/// the permission policy: `ask` and `plan` are read-only prompt modes, while
-/// `agent` maps to ACP's normal `default` mode.
+/// Select the native runtime mode used by EchoAgent. Browser Use and Computer
+/// Use install purpose-built prompts while their tools remain isolated in the
+/// session-bound, authenticated automation MCP server.
 #[tauri::command]
 pub async fn set_coding_mode(
     state: State<'_, AppState>,
@@ -1712,8 +1712,13 @@ pub async fn set_coding_mode(
         "ask" => "ask",
         "plan" => "plan",
         "agent" => "default",
+        "browser_use" => "browser_use",
+        "computer_use" => "computer_use",
         _ => return Err("unsupported coding mode".into()),
     };
+    let automation_mode = crate::automation::AutomationMode::parse(mode_id)
+        .unwrap_or(crate::automation::AutomationMode::Default);
+    crate::automation::validate_mode_capability(automation_mode)?;
     let tx = state
         .tx
         .lock()
@@ -1722,7 +1727,10 @@ pub async fn set_coding_mode(
         .ok_or("agent not initialized")?;
     crate::agent_runtime::set_session_mode_id(&tx, &session_id, mode_id)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    crate::automation::set_session_mode(&session_id, automation_mode).await?;
+    crate::meta::set_agent_mode(&session_id, mode_id)?;
+    Ok(())
 }
 
 /// Set plan mode idempotently via ACP `session/set_mode`. EchoAgent confirms
@@ -1742,7 +1750,11 @@ pub async fn set_plan_mode(
         .ok_or("agent not initialized")?;
     crate::agent_runtime::set_session_mode(&tx, &session_id, enabled)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    crate::automation::set_session_mode(&session_id, crate::automation::AutomationMode::Default)
+        .await?;
+    crate::meta::set_agent_mode(&session_id, if enabled { "plan" } else { "default" })?;
+    Ok(())
 }
 
 /// Backward-compatible command name for older frontend bundles. Its behavior

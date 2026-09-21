@@ -34,6 +34,30 @@ describe("HomePage", () => {
     expect(screen.queryByText("财报分析全流程")).toBeNull();
   });
 
+  it("可在创建任务前选择 Browser Use 或 Computer Use", () => {
+    const onTaskModeChange = vi.fn();
+    const { rerender } = render(
+      <HomePage
+        {...base}
+        taskMode="default"
+        onTaskModeChange={onTaskModeChange}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Agent" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Browser Use" }));
+    expect(onTaskModeChange).toHaveBeenCalledWith("browser_use");
+
+    rerender(
+      <HomePage
+        {...base}
+        taskMode="computer_use"
+        onTaskModeChange={onTaskModeChange}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Computer Use" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("点击移除按钮清空 pending 专家,且不破坏输入框中的预填文字", async () => {
     usePendingExpertStore.getState().set({
       name: "小坦克",

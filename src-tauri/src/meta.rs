@@ -30,6 +30,7 @@ const MAX_EXPERT_SOURCE_CHARS: usize = 64;
 const MAX_EXPERT_AVATAR_CHARS: usize = 4_096;
 const MAX_STATUS_TIMESTAMP_CHARS: usize = 128;
 const PERMISSION_MODES: [&str; 3] = ["ask", "auto", "always-approve"];
+const AGENT_MODES: [&str; 5] = ["default", "ask", "plan", "browser_use", "computer_use"];
 const SESSION_STATUSES: [&str; 12] = [
     "working",
     "completed",
@@ -103,6 +104,10 @@ pub struct EchoAgentState {
     /// to `ask`; there is intentionally no user-selectable global fallback.
     #[serde(default)]
     pub session_permission_modes: HashMap<String, String>,
+    /// Active product mode for each task. Kept outside Runtime history so
+    /// Browser Use / Computer Use survives app and renderer upgrades.
+    #[serde(default)]
+    pub session_agent_modes: HashMap<String, String>,
     /// Last lifecycle state: session_id → SessionLifecycle.
     #[serde(default)]
     pub session_statuses: HashMap<String, SessionLifecycle>,
@@ -116,6 +121,7 @@ impl Default for EchoAgentState {
             archived_sessions: Vec::new(),
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
+            session_agent_modes: HashMap::new(),
             session_statuses: HashMap::new(),
         }
     }
@@ -209,6 +215,7 @@ fn validate_state(state: &EchoAgentState) -> Result<(), String> {
         || state.archived_sessions.len() > MAX_SESSION_ENTRIES
         || state.expert_sessions.len() > MAX_SESSION_ENTRIES
         || state.session_permission_modes.len() > MAX_SESSION_ENTRIES
+        || state.session_agent_modes.len() > MAX_SESSION_ENTRIES
         || state.session_statuses.len() > MAX_SESSION_ENTRIES
     {
         return Err("会话元数据条目超过安全上限".into());
@@ -230,6 +237,11 @@ fn validate_state(state: &EchoAgentState) -> Result<(), String> {
     for (session_id, mode) in &state.session_permission_modes {
         if !valid_session_id(session_id) || !PERMISSION_MODES.contains(&mode.as_str()) {
             return Err("会话权限模式包含无效数据".into());
+        }
+    }
+    for (session_id, mode) in &state.session_agent_modes {
+        if !valid_session_id(session_id) || !AGENT_MODES.contains(&mode.as_str()) {
+            return Err("会话代理模式包含无效数据".into());
         }
     }
     for (session_id, lifecycle) in &state.session_statuses {
@@ -279,6 +291,20 @@ fn sanitize_state(mut state: EchoAgentState) -> EchoAgentState {
         keys.sort();
         for key in keys.into_iter().skip(MAX_SESSION_ENTRIES) {
             state.session_permission_modes.remove(&key);
+        }
+    }
+    state.session_agent_modes.retain(|session_id, mode| {
+        valid_session_id(session_id) && AGENT_MODES.contains(&mode.as_str())
+    });
+    if state.session_agent_modes.len() > MAX_SESSION_ENTRIES {
+        let mut keys = state
+            .session_agent_modes
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        for key in keys.into_iter().skip(MAX_SESSION_ENTRIES) {
+            state.session_agent_modes.remove(&key);
         }
     }
     state.session_statuses.retain(|session_id, lifecycle| {
@@ -560,6 +586,43 @@ pub fn set_permission_mode(session_id: &str, mode: &str) -> Result<String, Strin
     set_permission_mode_at(&state_path(), session_id, mode)
 }
 
+/// Return the task-owned agent mode. Legacy sessions default to the regular
+/// agent and never acquire automation capabilities implicitly.
+pub fn agent_mode(session_id: &str) -> Option<String> {
+    if !valid_session_id(session_id) {
+        return None;
+    }
+    read_state().session_agent_modes.get(session_id).cloned()
+}
+
+fn set_agent_mode_at(path: &Path, session_id: &str, mode: &str) -> Result<String, String> {
+    if !valid_session_id(session_id) {
+        return Err("会话 ID 无效或过长".into());
+    }
+    if !AGENT_MODES.contains(&mode) {
+        return Err(format!("unknown agent mode: {mode}"));
+    }
+    update_state_at(path, |state| {
+        if !state.session_agent_modes.contains_key(session_id)
+            && state.session_agent_modes.len() >= MAX_SESSION_ENTRIES
+        {
+            return Err("会话代理模式数量超过安全上限".into());
+        }
+        let changed = state
+            .session_agent_modes
+            .get(session_id)
+            .is_none_or(|current| current != mode);
+        state
+            .session_agent_modes
+            .insert(session_id.to_string(), mode.to_string());
+        Ok((mode.to_string(), changed))
+    })
+}
+
+pub fn set_agent_mode(session_id: &str, mode: &str) -> Result<String, String> {
+    set_agent_mode_at(&state_path(), session_id, mode)
+}
+
 #[cfg(test)]
 fn clear_permission_mode_at(path: &Path, session_id: &str) -> Result<bool, String> {
     if !valid_session_id(session_id) {
@@ -653,6 +716,7 @@ fn clear_session_metadata_at(path: &Path, session_id: &str) -> Result<bool, Stri
         changed |= state.archived_sessions.len() != archived_len;
         changed |= state.expert_sessions.remove(session_id).is_some();
         changed |= state.session_permission_modes.remove(session_id).is_some();
+        changed |= state.session_agent_modes.remove(session_id).is_some();
         changed |= state.session_statuses.remove(session_id).is_some();
         Ok((changed, changed))
     })
@@ -678,6 +742,7 @@ mod tests {
         assert!(state.pinned_sessions.is_empty());
         assert!(state.archived_sessions.is_empty());
         assert!(state.session_permission_modes.is_empty());
+        assert!(state.session_agent_modes.is_empty());
         assert!(state.session_statuses.is_empty());
     }
 
@@ -691,6 +756,7 @@ mod tests {
             archived_sessions: vec![],
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
+            session_agent_modes: HashMap::new(),
             session_statuses: HashMap::new(),
         };
         let set = state.pinned_set();
@@ -707,6 +773,7 @@ mod tests {
             archived_sessions: vec!["a1".into(), "a2".into()],
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::new(),
+            session_agent_modes: HashMap::new(),
             session_statuses: HashMap::new(),
         };
         let set = state.archived_set();
@@ -732,6 +799,7 @@ mod tests {
             archived_sessions: vec!["a1".into(), "a2".into()],
             expert_sessions: HashMap::new(),
             session_permission_modes: HashMap::from([("s1".into(), "auto".into())]),
+            session_agent_modes: HashMap::from([("s1".into(), "browser_use".into())]),
             session_statuses: HashMap::from([(
                 "s1".into(),
                 SessionLifecycle {
@@ -762,6 +830,7 @@ mod tests {
         assert!(state.pinned_sessions.is_empty());
         assert!(state.archived_sessions.is_empty());
         assert!(state.session_permission_modes.is_empty());
+        assert!(state.session_agent_modes.is_empty());
         assert!(state.session_statuses.is_empty());
     }
 
@@ -828,6 +897,27 @@ mod tests {
     }
 
     #[test]
+    fn agent_modes_are_persisted_and_reject_unknown_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("echoagent-state.json");
+
+        assert_eq!(
+            set_agent_mode_at(&path, "session-a", "browser_use").unwrap(),
+            "browser_use"
+        );
+        assert!(set_agent_mode_at(&path, "session-b", "unsafe").is_err());
+        let state = read_state_from(&path, true).unwrap();
+        assert_eq!(
+            state
+                .session_agent_modes
+                .get("session-a")
+                .map(String::as_str),
+            Some("browser_use")
+        );
+        assert!(!state.session_agent_modes.contains_key("session-b"));
+    }
+
+    #[test]
     fn session_statuses_are_validated_persisted_and_recovered_after_restart() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("echoagent-state.json");
@@ -871,6 +961,9 @@ mod tests {
         state
             .session_permission_modes
             .insert("session-a".into(), "ask".into());
+        state
+            .session_agent_modes
+            .insert("session-a".into(), "computer_use".into());
         state.session_statuses.insert(
             "session-a".into(),
             SessionLifecycle {
@@ -885,6 +978,7 @@ mod tests {
         assert!(cleared.pinned_sessions.is_empty());
         assert!(cleared.archived_sessions.is_empty());
         assert!(cleared.session_permission_modes.is_empty());
+        assert!(cleared.session_agent_modes.is_empty());
         assert!(cleared.session_statuses.is_empty());
     }
 

@@ -67,6 +67,7 @@ echo-agent-tool-runtime = { path = "../vendor/echo-agent-build/crates/common/ech
 echo-agent-tool-protocol = { path = "../vendor/echo-agent-build/crates/common/echo-agent-tool-protocol" }
 echo-agent-tool-types = { path = "../vendor/echo-agent-build/crates/common/echo-agent-tool-types" }
 futures = "0.3"
+tokio-tungstenite = "0.29"
 schemars = "1"
 agent-client-protocol = { version = "0.10.4", features = ["unstable"] }
 dirs = "6"
@@ -104,11 +105,19 @@ tauri-plugin-single-instance = "2"
 security-framework = "3.7"
 security-framework-sys = "2.17"
 objc2-foundation = { version = "0.3.2", features = ["std", "NSError", "NSFileManager", "NSString", "NSURL"] }
+core-graphics = { version = "0.25", features = ["elcapitan", "highsierra"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Call Windows DPAPI directly. Spawning PowerShell made credential persistence
 # depend on .NET assembly loading and discarded the actual encryption error.
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security_Cryptography",
+  "Win32_Storage_FileSystem",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 tempfile = "3"

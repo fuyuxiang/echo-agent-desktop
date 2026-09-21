@@ -14,6 +14,8 @@ pub enum SessionMode {
     Default,
     Plan,
     Ask,
+    BrowserUse,
+    ComputerUse,
 }
 
 impl SessionMode {
@@ -38,7 +40,7 @@ mod tests {
 
     #[test]
     fn round_trip_known_ids() {
-        for &id in &["default", "plan", "ask"] {
+        for &id in &["default", "plan", "ask", "browser_use", "computer_use"] {
             let mode = SessionMode::from_id(id);
             assert_eq!(mode.as_id(), id, "round-trip failed for {id}");
         }
@@ -46,7 +48,7 @@ mod tests {
 
     #[test]
     fn unknown_id_falls_back_to_default() {
-        assert_eq!(SessionMode::from_id("browser_use"), SessionMode::Default);
+        assert_eq!(SessionMode::from_id("future_mode"), SessionMode::Default);
         assert_eq!(SessionMode::from_id(""), SessionMode::Default);
         assert_eq!(SessionMode::from_id("PLAN"), SessionMode::Default); // case-sensitive
     }
@@ -56,5 +58,7 @@ mod tests {
         assert!(SessionMode::Plan.is_plan());
         assert!(!SessionMode::Default.is_plan());
         assert!(!SessionMode::Ask.is_plan());
+        assert!(!SessionMode::BrowserUse.is_plan());
+        assert!(!SessionMode::ComputerUse.is_plan());
     }
 }

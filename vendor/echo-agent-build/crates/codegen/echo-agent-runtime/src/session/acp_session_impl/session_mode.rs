@@ -6,7 +6,9 @@ pub(super) fn prompt_mode_from_session_mode_id(session_mode_id: &acp::SessionMod
     match SessionMode::from_id(session_mode_id.0.as_ref()) {
         SessionMode::Plan => PromptMode::Plan,
         SessionMode::Ask => PromptMode::Ask,
-        SessionMode::Default => PromptMode::Agent,
+        SessionMode::Default | SessionMode::BrowserUse | SessionMode::ComputerUse => {
+            PromptMode::Agent
+        }
     }
 }
 /// Inverse of [`prompt_mode_from_session_mode_id`]: the mode id a client
@@ -90,7 +92,6 @@ impl SessionActor {
             let turn_in_flight = self.state.lock().await.running_task.is_some();
             self.plan_mode.lock().user_exit(turn_in_flight);
             self.persist_plan_mode_state();
-            self.enqueue_current_mode_update(session_mode_id.clone());
             tracing::info!(
                 session_id = %self.session_info.id.0,
                 new_mode = %session_mode_id.0,
@@ -116,6 +117,8 @@ impl SessionActor {
         }
         let agent_def = match session_mode_id.0.as_ref() {
             "browser_use" => Some(AgentDefinition::browser_use()),
+            "computer_use" => Some(AgentDefinition::computer_use()),
+            "default" | "ask" => Some(AgentDefinition::default_echo_agent_build()),
             name => {
                 let cwd = self.tool_context.cwd.as_path();
                 echo_agent_core::discovery::by_name_in_cwd(name, cwd)
@@ -148,6 +151,7 @@ impl SessionActor {
             }
             self.chat_state_handle.replace_conversation(conversation);
         }
+        self.enqueue_current_mode_update(session_mode_id);
     }
     /// Settle the mode a turn runs in, applying the prompt's declaration when
     /// it made one.

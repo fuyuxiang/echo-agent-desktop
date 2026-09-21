@@ -195,12 +195,22 @@ describe("session-store transcripts", () => {
     expect(useSessionStore.getState().planMode).toBe(false);
     store.setSession("A");
     expect(useSessionStore.getState().planMode).toBe(true);
+    expect(useSessionStore.getState().agentMode).toBe("plan");
     store.applyUpdate({
       sessionUpdate: "current_mode_update",
-      currentModeId: "default",
+      currentModeId: "browser_use",
       __sessionId: "A",
     } as never);
     expect(useSessionStore.getState().planMode).toBe(false);
+    expect(useSessionStore.getState().agentMode).toBe("browser_use");
+    store.setPlanMode(false, "A");
+    expect(useSessionStore.getState().agentMode).toBe("browser_use");
+    store.applyUpdate({
+      sessionUpdate: "current_mode_update",
+      currentModeId: "computer_use",
+      __sessionId: "A",
+    } as never);
+    expect(useSessionStore.getState().agentMode).toBe("computer_use");
   });
 
   it("计划审批重放去重，并按 requestId 解除", () => {

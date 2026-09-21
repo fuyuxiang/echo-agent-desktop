@@ -44,6 +44,10 @@ fn prompt_mode_from_session_mode_id_uses_acp_session_mode() {
         PromptMode::Agent,
         prompt_mode_from_session_mode_id(&acp::SessionModeId::new("browser_use"))
     );
+    assert_eq!(
+        PromptMode::Agent,
+        prompt_mode_from_session_mode_id(&acp::SessionModeId::new("computer_use"))
+    );
 }
 fn fn_def(name: &str) -> ToolDefinition {
     ToolDefinition::function(name, None::<&str>, serde_json::json!({"type": "object"}))

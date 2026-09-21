@@ -1149,6 +1149,7 @@ pub async fn agent_new_session(
         );
         state.record_session_workspace(&session_id, Path::new(&cwd));
         crate::team_mcp::persist_registration(&tx, &session_id);
+        crate::automation::persist_registration(&tx, &session_id);
         crate::org_mcp::reconcile_registration(&tx, &session_id);
         return Ok(session_id);
     }
@@ -1204,6 +1205,7 @@ pub async fn agent_new_session(
                     return;
                 }
                 crate::team_mcp::persist_registration(&task_tx, &session_id);
+                crate::automation::persist_registration(&task_tx, &session_id);
                 crate::org_mcp::reconcile_registration(&task_tx, &session_id);
                 if crate::policy::locked_permission_mode().is_none() {
                     if let Err(error) =
@@ -1216,6 +1218,9 @@ pub async fn agent_new_session(
                     &session_id,
                     &task_permission_mode,
                 );
+                if let Err(error) = crate::meta::set_agent_mode(&session_id, "default") {
+                    tracing::error!(%error, %session_id, "failed to persist orphaned task agent mode");
+                }
                 task_state.record_session_workspace(&session_id, Path::new(&task_cwd));
                 task_state.record_orphaned_session(OrphanedSession {
                     session_id: session_id.clone(),
@@ -1276,10 +1281,13 @@ pub async fn agent_new_session(
         }
     }
     crate::permission_config::mark_session_permission_mode_synced(&session_id, &permission_mode);
+    crate::meta::set_agent_mode(&session_id, "default")
+        .map_err(|error| format!("无法保存当前任务的代理模式：{error}"))?;
     state.record_session_workspace(&session_id, Path::new(&cwd));
     // Team MCP remains a durable local tool. Knowledge tools are attached only
     // after the user explicitly selects sources for this task.
     crate::team_mcp::persist_registration(&tx, &session_id);
+    crate::automation::persist_registration(&tx, &session_id);
     crate::org_mcp::reconcile_registration(&tx, &session_id);
     Ok(session_id)
 }
@@ -1329,7 +1337,21 @@ pub async fn agent_load_session(
     // Restore durable local MCP tools, then reapply this task's explicit
     // knowledge-source choice against the capabilities currently available.
     crate::team_mcp::persist_registration(&tx, &session_id);
+    crate::automation::persist_registration(&tx, &session_id);
     crate::org_mcp::reconcile_registration(&tx, &session_id);
+    let agent_mode = crate::meta::agent_mode(&session_id).unwrap_or_else(|| "default".into());
+    if agent_mode != "default" {
+        if let Err(error) =
+            crate::agent_runtime::set_session_mode_id(&tx, &session_id, &agent_mode).await
+        {
+            tracing::warn!(%error, %session_id, %agent_mode, "failed to restore task agent mode");
+        }
+    }
+    let automation_mode = crate::automation::AutomationMode::parse(&agent_mode)
+        .unwrap_or(crate::automation::AutomationMode::Default);
+    if let Err(error) = crate::automation::set_session_mode(&session_id, automation_mode).await {
+        tracing::warn!(%error, %session_id, %agent_mode, "failed to restore automation mode");
+    }
     Ok(current_model_id)
 }
 
@@ -1490,6 +1512,14 @@ pub async fn agent_cancel(
         "stop" => "stop",
         _ => return Err("无效的取消动作".into()),
     };
+    let automation_result = if cancel_trigger == "pause" {
+        crate::automation::pause_session(&session_id).await
+    } else {
+        crate::automation::stop_session(&session_id).await
+    };
+    if let Err(error) = automation_result {
+        tracing::warn!(%error, %session_id, cancel_trigger, "failed to stop automation while cancelling turn");
+    }
     agent_runtime::cancel(&tx, &session_id, cancel_trigger, prompt_id.as_deref())
         .await
         .map_err(|e| e.to_string())
@@ -1507,6 +1537,7 @@ pub async fn agent_shutdown(
     folder_trusts: State<'_, FolderTrusts>,
 ) -> Result<(), String> {
     // Trigger the cancel token so the agent thread's `cancelled().await` resolves.
+    crate::automation::shutdown_all().await;
     stop_agent_runtime(&state).await;
     if let Some(scheduler) = state.automation_scheduler.lock().unwrap().take() {
         scheduler.abort();
@@ -1916,6 +1947,7 @@ pub async fn agent_delete_session(
             }
         };
     state.forget_session_workspace(&session_id);
+    crate::automation::forget_session(&session_id).await;
     crate::org_mcp::forget_session_selection(&session_id).await;
     crate::permission_config::forget_session_permission_mode(&session_id);
     if let Err(error) = crate::meta::clear_session_metadata(&session_id) {

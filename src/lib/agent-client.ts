@@ -1507,7 +1507,7 @@ export async function folderTrustRespond(
 /** Select EchoAgent's native Ask / Plan / Agent prompt mode. */
 export async function setCodingMode(
   sessionId: string,
-  mode: "ask" | "plan" | "agent",
+  mode: "ask" | "plan" | "agent" | "browser_use" | "computer_use",
 ): Promise<void> {
   await invoke<void>("set_coding_mode", { sessionId, mode });
 }
