@@ -81,10 +81,16 @@ export function useAnchoredFloating(
     }
 
     const maxViewportWidth = Math.max(0, viewportWidth - viewportMargin * 2);
+    // `offsetWidth` is integer-rounded. Writing that rounded value back as a
+    // border-box width can make intrinsically-sized text a fraction of a pixel
+    // too narrow. CJK text then wraps its final glyph onto a second line. Keep
+    // the sub-pixel measurement for positioning and let CSS continue to own
+    // the intrinsic width in `content` mode.
+    const contentRectWidth = floating.getBoundingClientRect().width;
     const measuredWidth = width === "anchor"
       ? rect.width
       : width === "content"
-        ? floating.offsetWidth
+        ? contentRectWidth || floating.offsetWidth
         : width;
     const floatingWidth = Math.min(
       Math.max(0, measuredWidth || rect.width),
@@ -170,7 +176,10 @@ export function useAnchoredFloating(
           bottom: "auto",
           left: layout.left,
           top: layout.top,
-          width: layout.width,
+          // Do not lock content-sized surfaces to a measured width. Apart
+          // from avoiding fractional-pixel wrapping, this lets menus and
+          // tooltips respond when their text or font metrics change.
+          width: width === "content" ? undefined : layout.width,
           maxWidth: `calc(100vw - ${viewportMargin * 2}px)`,
           maxHeight: layout.maxHeight,
           overflowY: "auto",

@@ -229,6 +229,7 @@
  * backdrop-filter stacking contexts and overflow containers cannot cover it. */
 .global-tooltip {
   box-sizing: border-box;
+  width: max-content;
   max-width: min(360px, calc(100vw - 16px));
   background: var(--echo-bg-elevated, #fff);
   color: var(--echo-text-strong);
@@ -238,7 +239,8 @@
   font-size: 12px;
   line-height: 16px;
   overflow-wrap: anywhere;
-  white-space: normal;
+  white-space: pre-line;
+  text-wrap: balance;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   pointer-events: none;
   animation: global-tooltip__fade-in 0.12s ease;
@@ -10564,7 +10566,7 @@ body:has([aria-modal="true"]) .secondary-sidebar__floating {
 
 /* Programmatic dialogs do not necessarily generate a click/pointerout before
  * mounting, so suppress an old page hint during the focus-registry handoff. */
-body:has([aria-modal="true"]) .global-tooltip {
+body:has([aria-modal="true"]) .global-tooltip:not(.global-tooltip--dialog) {
   display: none;
 }
 @keyframes secondary-sidebar__slide-in {

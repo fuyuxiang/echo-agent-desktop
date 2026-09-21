@@ -48,7 +48,7 @@ describe("TopbarActions", () => {
     vi.mocked(exportTextFile).mockResolvedValue(null);
   });
 
-  it("更多操作 hover 提示通过全局 portal 渲染，不会被下层工具栏遮挡", () => {
+  it("更多操作 hover 提示通过全局 portal 渲染，不会被下层工具栏遮挡", async () => {
     render(
       <>
         <TopbarActions sessionId="session-1" title="测试会话" />
@@ -60,7 +60,7 @@ describe("TopbarActions", () => {
 
     fireEvent.pointerOver(trigger);
 
-    const tooltip = screen.getByRole("tooltip");
+    const tooltip = await screen.findByRole("tooltip");
     expect(tooltip).toHaveTextContent("更多操作");
     expect(tooltip.parentElement).toBe(document.body);
     expect(tooltip).toHaveStyle({ position: "fixed", zIndex: "var(--echo-layer-tooltip)" });

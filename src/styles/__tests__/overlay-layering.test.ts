@@ -36,12 +36,19 @@ describe("global overlay layering contract", () => {
     expect(codingCss).toMatch(/\.coding-palette__scrim\s*\{[^}]*z-index:\s*var\(--echo-layer-dialog\)/s);
   });
 
-  it("hides global hover chrome as soon as an aria-modal surface exists", () => {
+  it("hides page hover chrome behind a modal while allowing hints inside it", () => {
     expect(appCss).toMatch(
       /body:has\(\[aria-modal="true"\]\) \.secondary-sidebar__trigger,[\s\S]*body:has\(\[aria-modal="true"\]\) \.secondary-sidebar__floating\s*\{\s*display:\s*none;/,
     );
     expect(appCss).toMatch(
-      /body:has\(\[aria-modal="true"\]\) \.global-tooltip\s*\{\s*display:\s*none;/,
+      /body:has\(\[aria-modal="true"\]\) \.global-tooltip:not\(\.global-tooltip--dialog\)\s*\{\s*display:\s*none;/,
     );
+  });
+
+  it("keeps short tooltip copy intrinsically sized instead of forcing early CJK wraps", () => {
+    expect(appCss).toMatch(
+      /\.global-tooltip\s*\{[^}]*width:\s*max-content;[^}]*max-width:\s*min\(360px,\s*calc\(100vw - 16px\)\);/s,
+    );
+    expect(appCss).toMatch(/\.global-tooltip\s*\{[^}]*white-space:\s*pre-line;/s);
   });
 });
