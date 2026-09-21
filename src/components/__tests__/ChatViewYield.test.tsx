@@ -417,7 +417,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "重新生成" }));
 
-    await waitFor(() => expect(rewindExecute).toHaveBeenCalledWith("s1", 4, "conversation", true));
+    await waitFor(() => expect(rewindExecute).toHaveBeenCalledWith("s1", 4, "conversation_only", true));
     expect(baseProps.onRetrySend).toHaveBeenCalledWith({
       sessionId: "s1",
       displayText: "执行任务",
@@ -463,7 +463,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     expect(rewindPoints).not.toHaveBeenCalled();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "重新执行" }));
-    await waitFor(() => expect(rewindExecute).toHaveBeenCalledWith("s1", 0, "conversation", true));
+    await waitFor(() => expect(rewindExecute).toHaveBeenCalledWith("s1", 0, "conversation_only", true));
     expect(baseProps.onRetrySend).toHaveBeenCalledWith({
       sessionId: "s1",
       displayText: "帮我查查 ls",

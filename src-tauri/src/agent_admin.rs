@@ -23,6 +23,7 @@ use std::sync::{Mutex, OnceLock};
 use echo_agent_runtime::session::memory::{
     init_sqlite_vec, storage::normalize_memory_content, MemoryIndex, MemoryScope, MemoryStorage,
 };
+use echo_agent_runtime::session::RewindMode as RuntimeRewindMode;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
@@ -1165,8 +1166,36 @@ fn parse_rewind_execution(
     })
 }
 
-/// Rewind a session to a specific prompt index. `mode` ∈ "all" (default) |
-/// "conversation" (don't touch files) | "files".
+fn normalize_rewind_mode(mode: Option<&str>) -> Result<RuntimeRewindMode, String> {
+    match mode.unwrap_or("all") {
+        "all" => Ok(RuntimeRewindMode::All),
+        // Accept the retired desktop spellings at the IPC boundary so an old
+        // renderer cannot break during an application update. The payload sent
+        // to Runtime is always serialized from its own enum below.
+        "conversation_only" | "conversation" => Ok(RuntimeRewindMode::ConversationOnly),
+        "files_only" | "files" | "code_only" => Ok(RuntimeRewindMode::FilesOnly),
+        _ => Err("回溯模式无效".into()),
+    }
+}
+
+fn rewind_execute_payload(
+    session_id: &str,
+    target_prompt_index: u32,
+    mode: Option<&str>,
+    force: bool,
+) -> Result<serde_json::Value, String> {
+    let mode = normalize_rewind_mode(mode)?;
+    Ok(serde_json::json!({
+        "sessionId": session_id,
+        "targetPromptIndex": target_prompt_index,
+        "mode": mode,
+        "force": force,
+    }))
+}
+
+/// Rewind a session to a specific prompt index. Current clients use Runtime's
+/// canonical `all` / `conversation_only` / `files_only` wire values; legacy
+/// desktop values are normalized at this boundary for update compatibility.
 #[tauri::command]
 pub async fn rewind_execute(
     state: State<'_, AppState>,
@@ -1176,22 +1205,18 @@ pub async fn rewind_execute(
     force: Option<bool>,
 ) -> Result<RewindExecution, String> {
     require_live_session(&state, &session_id)?;
-    let mode = mode.unwrap_or_else(|| "all".into());
-    if !matches!(mode.as_str(), "all" | "conversation" | "files") {
-        return Err("回溯模式无效".into());
-    }
     let tx = state
         .tx
         .lock()
         .unwrap()
         .clone()
         .ok_or("agent not initialized")?;
-    let payload = serde_json::json!({
-        "sessionId": session_id,
-        "targetPromptIndex": target_prompt_index,
-        "mode": mode,
-        "force": force.unwrap_or(false),
-    });
+    let payload = rewind_execute_payload(
+        &session_id,
+        target_prompt_index,
+        mode.as_deref(),
+        force.unwrap_or(false),
+    )?;
     let params = raw_params(&payload);
     let response: serde_json::Value = call_ext(&tx, "echo.agent/rewind/execute", params)
         .await
@@ -2347,9 +2372,9 @@ mod tests {
         normalize_plugin_action, parse_model_reload_ack, parse_rewind_execution,
         parse_slash_commands, remember_marketplace, remember_plugins,
         request_internal_reload_and_wait, require_listed_marketplace_source,
-        require_listed_plugin_id, resolve_memory_path, rewind_point_values, secure_remote_source,
-        validate_admin_action, MemoryEntryScope, MemoryIndex, MemoryStorage, ModelReloadAck,
-        RawSearchHit, RunningTaskSource, MAX_ADMIN_ACTION_STRING_BYTES,
+        require_listed_plugin_id, resolve_memory_path, rewind_execute_payload, rewind_point_values,
+        secure_remote_source, validate_admin_action, MemoryEntryScope, MemoryIndex, MemoryStorage,
+        ModelReloadAck, RawSearchHit, RunningTaskSource, MAX_ADMIN_ACTION_STRING_BYTES,
     };
 
     #[test]
@@ -2374,6 +2399,35 @@ mod tests {
             "prompt_preview": "missing index"
         }));
         assert!(malformed.is_err());
+    }
+
+    #[test]
+    fn rewind_execute_payload_uses_runtime_canonical_modes() {
+        for (input, expected) in [
+            (None, "all"),
+            (Some("all"), "all"),
+            (Some("conversation_only"), "conversation_only"),
+            (Some("files_only"), "files_only"),
+            // Compatibility with desktop builds released before the Runtime
+            // adopted its canonical snake_case enum values.
+            (Some("conversation"), "conversation_only"),
+            (Some("files"), "files_only"),
+            (Some("code_only"), "files_only"),
+        ] {
+            let payload =
+                rewind_execute_payload("session-1", 7, input, true).expect("supported rewind mode");
+            assert_eq!(payload["sessionId"], "session-1");
+            assert_eq!(payload["targetPromptIndex"], 7);
+            assert_eq!(payload["force"], true);
+            assert_eq!(payload["mode"], expected);
+        }
+    }
+
+    #[test]
+    fn rewind_execute_payload_rejects_unknown_mode_before_runtime() {
+        let error = rewind_execute_payload("session-1", 0, Some("conversation_v2"), false)
+            .expect_err("unknown rewind mode must be rejected");
+        assert_eq!(error, "回溯模式无效");
     }
 
     #[test]

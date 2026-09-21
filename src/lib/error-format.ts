@@ -169,6 +169,13 @@ function fmtDuration(ms?: number): string {
  * Returns null if the error can't be parsed (caller should fall back to raw).
  */
 export function formatAgentError(raw: string): string | null {
+  const lowerRaw = raw.toLowerCase();
+  if (
+    lowerRaw.includes("rewind/execute")
+    && (lowerRaw.includes("invalid params") || lowerRaw.includes("unknown variant"))
+  ) {
+    return "⚠️ 回溯服务与当前应用版本不兼容。请重启应用或更新到最新版本后重试；本次操作未修改对话或文件。";
+  }
   if (raw.toLowerCase().includes("no auth method id provided")) {
     return "⚠️ 模型凭证同步尚未完成。请稍候后重试；若持续出现，请刷新模型配置。";
   }

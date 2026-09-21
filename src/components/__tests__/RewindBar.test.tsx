@@ -39,7 +39,11 @@ describe("RewindBar wiring", () => {
     expect(onToast).toHaveBeenCalled();
   });
 
-  it("回溯成功后调用 onRewound 与 onToast", async () => {
+  it.each([
+    ["全量", "all"],
+    ["仅对话", "conversation_only"],
+    ["仅文件", "files_only"],
+  ] as const)("使用%s模式回溯时发送 Runtime 规范值", async (modeLabel, wireMode) => {
     const onRewound = vi.fn();
     const onToast = vi.fn();
     render(
@@ -47,16 +51,16 @@ describe("RewindBar wiring", () => {
     );
     // 打开下拉触发加载回溯点。
     fireEvent.click(screen.getByRole("button", { name: /回溯/ }));
-    // 选"仅对话"模式(模式下拉与时间线动作按钮共名片段,先精确选中模式)。
-    const modeBtn = await screen.findByRole("button", { name: "仅对话" });
+    // 模式按钮与时间线动作按钮共名片段，先精确选中模式。
+    const modeBtn = await screen.findByRole("button", { name: modeLabel });
     fireEvent.click(modeBtn);
-    // 时间线动作按钮的可访问名是"回溯到此处（仅对话)",点击它真正触发回溯。
+    // 时间线动作按钮的可访问名包含模式标签。
     const actionBtn = await screen.findByRole("button", {
-      name: /回溯到此处.*仅对话/,
+      name: new RegExp(`回溯到此处.*${modeLabel}`),
     });
     fireEvent.click(actionBtn);
     await waitFor(() => expect(onRewound).toHaveBeenCalledWith("s1"));
-    expect(rewindExecute).toHaveBeenCalledWith("s1", 0, "conversation", true);
+    expect(rewindExecute).toHaveBeenCalledWith("s1", 0, wireMode, true);
     expect(onToast).toHaveBeenCalled();
   });
 

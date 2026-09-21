@@ -103,6 +103,17 @@ describe("formatAgentError", () => {
     expect(formatAgentError(raw)).toBeNull();
   });
 
+  it("将回溯协议错配转为安全且可操作的提示", () => {
+    const raw = "ext echo.agent/rewind/execute: Error { code: -32602: Invalid params, message: \"Invalid params\", data: Some(String(\"invalid params: unknown variant `conversation`, expected one of `all`, `conversation_only`, `code_only`, `files_only`\")) }";
+
+    const result = formatAgentError(raw);
+
+    expect(result).toContain("回溯服务");
+    expect(result).toContain("重启应用或更新");
+    expect(result).toContain("未修改对话或文件");
+    expect(result).not.toContain("unknown variant");
+  });
+
   it("returns null for unparseable string", () => {
     expect(formatAgentError("some random error")).toBeNull();
   });

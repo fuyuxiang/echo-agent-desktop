@@ -3,7 +3,8 @@
  *
  * 两个能力：
  *  - Rewind（回溯）：调 `echo.agent/rewind/{points,execute}`，回到指定 prompt 索引。
- *    支持 mode: conversation（仅回退对话）/ files（仅文件）/ all（全量，含对话+文件+记忆）。
+ *    支持 Runtime 规范 mode: conversation_only（仅回退对话）/
+ *    files_only（仅文件）/ all（全量，含对话+文件+记忆）。
  *  - Fork（分叉）：调 `echo.agent/session/fork`，复制会话到新 id 探索不同方向。
  *
  * 增强点（对齐 EchoAgent）：
@@ -17,7 +18,8 @@ import {
   rewindPoints,
   sessionFork,
 } from "@/lib/agent-client";
-import type { RewindPoint } from "@/lib/types";
+import type { RewindMode, RewindPoint } from "@/lib/types";
+import { friendlyError } from "@/lib/error-format";
 import {
   ClockIcon,
   ChevronDownIcon,
@@ -26,21 +28,15 @@ import {
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useAppDialog } from "./AppDialog";
 
-/** Rewind mode options matching EchoAgent's echo.agent/rewind/execute mode param.
- *  NOTE: EchoAgent's RewindMode enum only has All/ConversationOnly/FilesOnly —
- *  there is no "memory"-only mode (all already includes memory). Don't add
- *  "memory" here or EchoAgent's serde will reject it at runtime. */
-type RewindMode = "conversation" | "files" | "all";
-
 const MODE_LABELS: Record<RewindMode, string> = {
-  conversation: "仅对话",
-  files: "仅文件",
+  conversation_only: "仅对话",
+  files_only: "仅文件",
   all: "全量",
 };
 
 const MODE_TITLES: Record<RewindMode, string> = {
-  conversation: "回退对话历史，不影响文件",
-  files: "回退文件改动，不影响对话",
+  conversation_only: "回退对话历史，不影响文件",
+  files_only: "回退文件改动，不影响对话",
   all: "回退所有（对话 + 文件 + 记忆）",
 };
 
@@ -92,7 +88,7 @@ export function RewindBar({
         && requestGenerationRef.current === generation
       ) {
         setPoints([]);
-        setLoadError(String(error).replace(/^Error:\s*/, ""));
+        setLoadError(friendlyError(error));
       }
     } finally {
       if (
@@ -130,7 +126,7 @@ export function RewindBar({
       await onRewound?.(targetSessionId);
       if (activeSessionRef.current === targetSessionId) setOpen(false);
     } catch (e) {
-      onToast?.(`回溯失败：${String(e).replace(/^Error:\s*/, "")}`);
+      onToast?.(`回溯失败：${friendlyError(e)}`);
     } finally {
       if (activeSessionRef.current === targetSessionId) setBusy(false);
     }
@@ -153,7 +149,7 @@ export function RewindBar({
           if (activeSessionRef.current === targetSessionId) setBusy(false);
         }
       },
-      onError: (error) => onToast?.(`分叉失败：${String(error).replace(/^Error:\s*/, "")}`),
+      onError: (error) => onToast?.(`分叉失败：${friendlyError(error)}`),
     });
   };
 

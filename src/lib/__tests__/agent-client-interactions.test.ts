@@ -14,6 +14,7 @@ import {
   folderTrustRespond,
   permissionModeGet,
   permissionModeSet,
+  rewindExecute,
   setPlanMode,
   taskKill,
   tasksList,
@@ -158,6 +159,19 @@ describe("agent interaction command contracts", () => {
   it("returns the durable automation run record id", async () => {
     invokeMock.mockResolvedValue("run-123");
     await expect(automationsRun("automation-1")).resolves.toBe("run-123");
+  });
+
+  it("发送 Runtime 规范的回溯模式值", async () => {
+    invokeMock.mockResolvedValue({ targetPromptIndex: 4, promptText: "执行任务" });
+
+    await rewindExecute("session-1", 4, "conversation_only", true);
+
+    expect(invokeMock).toHaveBeenCalledWith("rewind_execute", {
+      sessionId: "session-1",
+      targetPromptIndex: 4,
+      mode: "conversation_only",
+      force: true,
+    });
   });
 
   it("scopes running-task queries and kills to the selected session", async () => {

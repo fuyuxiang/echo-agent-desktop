@@ -34,6 +34,7 @@ import type {
   PermissionRule,
   PromptComplete,
   RewindExecution,
+  RewindMode,
   RewindPoint,
   RunningTask,
   SearchHit,
@@ -1384,14 +1385,14 @@ export async function rewindPoints(sessionId: string): Promise<RewindPoint[]> {
 export async function rewindExecute(
   sessionId: string,
   targetPromptIndex: number,
-  mode?: string,
-  force?: boolean,
+  mode: RewindMode,
+  force = false,
 ): Promise<RewindExecution> {
   return invoke<RewindExecution>("rewind_execute", {
     sessionId,
     targetPromptIndex,
-    mode: mode ?? null,
-    force: force ?? null,
+    mode,
+    force,
   });
 }
 

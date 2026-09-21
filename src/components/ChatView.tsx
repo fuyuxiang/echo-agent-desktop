@@ -26,7 +26,7 @@ import { WorkspacePicker } from "./WorkspacePicker";
 import { useMessageQueueStore } from "@/stores/message-queue-store";
 import { selectQuestionForSession, useQuestionStore } from "@/stores/question-store";
 import { buildTimeline } from "@/lib/timeline-utils";
-import { formatAgentError } from "@/lib/error-format";
+import { formatAgentError, friendlyError } from "@/lib/error-format";
 import { useSubagentStore } from "@/stores/subagent-store";
 import type { SessionControlAction } from "@/lib/session-control";
 import type { ModelOption } from "./ModelSelector";
@@ -281,7 +281,7 @@ export function ChatView({
       const execution = await rewindExecute(
         targetSessionId,
         targetPoint.promptIndex,
-        "conversation",
+        "conversation_only",
         true,
       );
       await onRewound?.(targetSessionId);
@@ -342,14 +342,14 @@ export function ChatView({
         cancelLabel: "取消",
         danger: true,
         action: () => performRetry(kind),
-        onError: (error) => onToast?.(`重新执行失败：${String(error).replace(/^Error:\s*/, "")}`),
+        onError: (error) => onToast?.(`重新执行失败：${friendlyError(error)}`),
       });
       return;
     }
 
     void performRetry(kind).catch((error) => {
       const action = kind === "regenerate" ? "重新生成" : "重试";
-      onToast?.(`${action}失败：${String(error).replace(/^Error:\s*/, "")}`);
+      onToast?.(`${action}失败：${friendlyError(error)}`);
     });
   }, [messages, onToast, performRetry, requestConfirmation]);
 

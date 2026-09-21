@@ -720,6 +720,9 @@ export interface SearchHit {
 
 // ---------- rewind ----------
 
+/** Canonical Runtime wire values for selecting what a rewind restores. */
+export type RewindMode = "all" | "conversation_only" | "files_only";
+
 export interface RewindPoint {
   promptIndex: number;
   promptPreview?: string;
