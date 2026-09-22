@@ -36,6 +36,11 @@ describe("global overlay layering contract", () => {
     expect(codingCss).toMatch(/\.coding-palette__scrim\s*\{[^}]*z-index:\s*var\(--echo-layer-dialog\)/s);
   });
 
+  it("keeps coding dropdowns on the shared popover layer", () => {
+    expect(codingCss).toMatch(/\.coding-project-switcher__menu\s*\{[^}]*z-index:\s*var\(--echo-layer-popover\)/s);
+    expect(codingCss).toMatch(/\.coding-task-switcher__menu\s*\{[^}]*z-index:\s*var\(--echo-layer-popover\)/s);
+  });
+
   it("hides page hover chrome behind a modal while allowing hints inside it", () => {
     expect(appCss).toMatch(
       /body:has\(\[aria-modal="true"\]\) \.secondary-sidebar__trigger,[\s\S]*body:has\(\[aria-modal="true"\]\) \.secondary-sidebar__floating\s*\{\s*display:\s*none;/,

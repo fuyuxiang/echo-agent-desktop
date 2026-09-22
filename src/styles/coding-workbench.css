@@ -152,7 +152,7 @@
   position: absolute;
   top: calc(100% + 5px);
   left: 0;
-  z-index: 50;
+  z-index: var(--echo-layer-popover);
   width: min(380px, calc(100vw - 24px));
   max-height: min(480px, calc(100vh - 72px));
   padding: 5px;
@@ -1320,7 +1320,7 @@
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  z-index: 40;
+  z-index: var(--echo-layer-popover);
   display: flex;
   flex-direction: column;
   min-width: 260px;
