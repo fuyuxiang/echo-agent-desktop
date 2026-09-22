@@ -221,6 +221,42 @@ describe("PermissionPicker", () => {
       .toHaveBeenCalledWith("session-1", "always-approve"));
   });
 
+  it("切换成功 Toast 在电脑模式激活时追加电脑操作边界", async () => {
+    useSessionsStore.setState({ independent: [session("session-1")] });
+    mocks.permissionModeGet.mockResolvedValue(modeStatus("session-1"));
+    mocks.permissionModeSet.mockResolvedValue(setResult("session-1", "always-approve"));
+    const { useSessionStore } = await import("@/stores/session-store");
+    useSessionStore.setState((state) => ({
+      ...state,
+      transcripts: {
+        ...state.transcripts,
+        "session-1": {
+          ...state.transcripts["session-1"],
+          agentMode: "computer_use",
+          messages: [],
+          streamingMessageId: null,
+          pendingSendNowPromptId: null,
+          usage: { input: 0, output: 0, cached: 0, turnCount: 0 },
+          plan: null,
+          planMode: false,
+          planApprovals: [],
+          suppressReplay: false,
+          dismissedControlPromptIds: [],
+        },
+      },
+    }));
+    const onToast = vi.fn();
+    const user = userEvent.setup();
+    render(<PermissionPicker sessionId="session-1" onToast={onToast} />);
+
+    await user.click(await screen.findByRole("button", { name: /审批模式/ }));
+    await user.click(screen.getByRole("menuitemradio", { name: /^本任务始终允许/ }));
+    await user.click(screen.getByRole("button", { name: "仅当前任务始终允许" }));
+
+    await waitFor(() => expect(onToast)
+      .toHaveBeenCalledWith(expect.stringMatching(/电脑操作会逐次确认/)));
+  });
+
   it("组织策略锁定时展示原因并禁止任务修改", async () => {
     useSessionsStore.setState({ independent: [session("session-1")] });
     mocks.permissionModeGet.mockResolvedValue(modeStatus("session-1", {

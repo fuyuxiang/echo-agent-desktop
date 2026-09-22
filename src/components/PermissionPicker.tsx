@@ -24,6 +24,7 @@ import {
   usePermissionModeStore,
 } from "@/stores/permission-mode-store";
 import { useSessionsStore } from "@/stores/sessions-store";
+import { useSessionStore } from "@/stores/session-store";
 
 const MODES: { id: PermissionMode; label: string; desc: string }[] = [
   {
@@ -206,6 +207,8 @@ export function PermissionPicker({
         const remaining = result?.remainingPending ?? 0;
         const parts = [`当前任务已切换为“${label}”`];
         if (remaining > 0) parts.push(`当前 ${remaining} 个待审批操作仍需你确认`);
+        const agentMode = useSessionStore.getState().transcripts[sessionId]?.agentMode;
+        if (agentMode === "computer_use") parts.push("电脑操作会逐次确认");
         onToast?.(parts.join("，"));
       } catch (e) {
         onToast?.(`权限模式切换失败：${String(e).replace(/^Error:\s*/, "")}`);
