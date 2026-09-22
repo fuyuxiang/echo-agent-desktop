@@ -1194,6 +1194,18 @@ button,
   font-weight: 650;
 }
 
+.automation-control__hint {
+  display: inline-flex;
+  align-items: center;
+  cursor: help;
+  color: var(--echo-color-text-warning-default, #b45309);
+  opacity: 0.85;
+}
+
+.automation-control__hint:hover {
+  opacity: 1;
+}
+
 .automation-control__summary {
   overflow: hidden;
   max-width: 220px;
