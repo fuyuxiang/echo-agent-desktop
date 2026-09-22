@@ -1365,3 +1365,11 @@ describe("CodingWorkbench skeleton", () => {
     expect(shell.style.getPropertyValue("--coding-agent-width")).toBe("460px");
   });
 });
+
+describe("CodingWorkbench footer status bar", () => {
+  it("renders placeholder when no file is open", async () => {
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByRole("navigation", { name: "活动栏" });
+    expect(screen.getAllByText("——").length).toBeGreaterThanOrEqual(3);
+  });
+});

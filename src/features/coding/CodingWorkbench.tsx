@@ -94,13 +94,14 @@ import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/Co
 import { ProjectSwitcher } from "./shell/ProjectSwitcher";
 import { TaskSwitcher } from "./shell/TaskSwitcher";
 import {
+  DEFAULT_MINIMAP_RENDER_CHARACTERS,
   completeFileTabLoad,
   isDirty,
   isFileTab,
   useTabStore,
   type FileTab,
   type SymbolKey,
-  type WorkbenchTab,
+  type WorkspaceUiState,
 } from "./store/tab-store";
 import { useTaskStore } from "./store/task-store";
 import { useFileTreeSelectionStore } from "./store/file-tree-selection-store";
@@ -480,6 +481,17 @@ export function CodingWorkbench({
   const [treeReveal, setTreeReveal] = useState<{ path?: string; key: number }>({ key: 0 });
   /** Bumped whenever the task's evidence changes, so an open report reloads. */
   const [reportRevision, setReportRevision] = useState(0);
+  /** Bumped when any per-workspace UI state (minimap mode, ...) mutates so React re-reads the ref. */
+  const [uiStateRevision, setUiStateRevision] = useState(0);
+  // Read once so the type-checker keeps the variable alive (the value is not
+  // used directly—bumping the revision is what triggers the re-render).
+  void uiStateRevision;
+  /** Latest cursor position from the active editor; rendered in the footer status bar. */
+  const [cursor, setCursor] = useState<{ line: number; column: number } | null>(null);
+  /** Detected line ending of the active document (`null` until first read). */
+  const [eol, setEol] = useState<"LF" | "CRLF" | null>(null);
+  /** Monaco language id of the active document (`null` until first read). */
+  const [languageId, setLanguageId] = useState<string | null>(null);
   const repairPromptRef = useRef<string | null>(null);
   const workflowActionRef = useRef<string | null>(null);
   const pendingTreePathsRef = useRef(new Set<string>());
@@ -491,13 +503,7 @@ export function CodingWorkbench({
   const contextSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const workbenchMountedRef = useRef(true);
   const previousWorkspaceRef = useRef("");
-  const workspaceUiStateRef = useRef(new Map<string, {
-    tabs: WorkbenchTab[];
-    activeId: string | null;
-    contextPaths: string[];
-    editorContext: EditorCodeContext | null;
-    selectedDirectory: string;
-  }>());
+  const workspaceUiStateRef = useRef(new Map<string, WorkspaceUiState>());
   const treeExpandedPathsRef = useRef(new Map<string, string[]>());
   const workbenchRef = useRef<HTMLDivElement>(null);
   const workbenchSize = useElementSize(workbenchRef);
@@ -1498,6 +1504,9 @@ export function CodingWorkbench({
         contextPaths,
         editorContext,
         selectedDirectory,
+        minimapRenderCharacters:
+          workspaceUiStateRef.current.get(previous)?.minimapRenderCharacters
+            ?? DEFAULT_MINIMAP_RENDER_CHARACTERS,
       });
     }
     if (previous === cwd) return;
@@ -1509,6 +1518,7 @@ export function CodingWorkbench({
       contextPaths: [],
       editorContext: null,
       selectedDirectory: diskSaved.selectedDirectory,
+      minimapRenderCharacters: DEFAULT_MINIMAP_RENDER_CHARACTERS,
     } : undefined);
     if (cwd && diskSaved) treeExpandedPathsRef.current.set(cwd, diskSaved.expandedPaths);
     useTabStore.setState({
@@ -3803,6 +3813,29 @@ export function CodingWorkbench({
           onClose={closeTabSafely}
           onDraftChange={(id, draft) => useTabStore.getState().updateDraft(id, draft)}
           onSave={(id) => void saveFile(id)}
+          minimapRenderCharacters={
+            (cwd ? workspaceUiStateRef.current.get(cwd)?.minimapRenderCharacters : undefined)
+              ?? DEFAULT_MINIMAP_RENDER_CHARACTERS
+          }
+          onMinimapRenderCharactersChange={(next) => {
+            if (!cwd) return;
+            const key = cwd;
+            const current = workspaceUiStateRef.current.get(key) ?? {
+              tabs: [],
+              activeId: null,
+              contextPaths: [],
+              editorContext: null,
+              selectedDirectory: cwd,
+              minimapRenderCharacters: DEFAULT_MINIMAP_RENDER_CHARACTERS,
+            };
+            workspaceUiStateRef.current.set(key, { ...current, minimapRenderCharacters: next });
+            setUiStateRevision((value) => value + 1);
+          }}
+          onCursorChange={setCursor}
+          onLanguageChange={(info) => {
+            setLanguageId(info.language);
+            setEol(info.eol);
+          }}
           onViewChange={handleFileViewChange}
           viewBusy={Boolean(
             activeFileTab
@@ -4021,6 +4054,12 @@ export function CodingWorkbench({
             ? changeSet.baselineMode === "filesystem" ? "本地检查点" : "Git 基线"
             : "Agent 就绪"}
         </span>
+        <span className="coding-workbench__status-spacer" />
+        <span aria-label="光标位置">
+          {cursor ? `Ln ${cursor.line}, Col ${cursor.column}` : "——"}
+        </span>
+        <span aria-label="换行符">{eol ?? "——"}</span>
+        <span aria-label="语言">{languageId ?? "——"}</span>
       </footer>
 
       {paletteMode && (

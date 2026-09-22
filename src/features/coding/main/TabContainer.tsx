@@ -24,6 +24,14 @@ interface TabContainerProps {
   onSymbols?: (path: string, symbols: EditorSymbol[]) => void;
   onEditorContext?: (context: EditorCodeContext) => void;
   onGenerateDocumentation?: (context?: EditorCodeContext) => void;
+  /** Controlled switch for the active editor's minimap characters vs colored blocks. */
+  minimapRenderCharacters?: boolean;
+  /** Fires when the caller toggles the minimap characters; emitted by the editor's settings. */
+  onMinimapRenderCharactersChange?: (next: boolean) => void;
+  /** Cursor position forwarded from the active editor to the workbench footer status bar. */
+  onCursorChange?: (cursor: { line: number; column: number }) => void;
+  /** Language/EOL forwarded from the active editor to the workbench footer status bar. */
+  onLanguageChange?: (info: { language: string; eol: "LF" | "CRLF" }) => void;
   renderDoc: (kind: DocTabKind) => React.ReactNode;
   renderVirtual?: (tab: VirtualTab) => React.ReactNode;
   reveal?: { line: number; column: number; key: number };
@@ -67,6 +75,10 @@ export function TabContainer({
   onSymbols,
   onEditorContext,
   onGenerateDocumentation,
+  minimapRenderCharacters,
+  onMinimapRenderCharactersChange,
+  onCursorChange,
+  onLanguageChange,
   renderDoc,
   renderVirtual,
   reveal,
@@ -215,6 +227,10 @@ export function TabContainer({
             mode={active.view}
             readOnly={active.view === "diff" && active.diffModified !== undefined}
             reveal={reveal}
+            minimapRenderCharacters={minimapRenderCharacters}
+            onMinimapRenderCharactersChange={onMinimapRenderCharactersChange}
+            onCursorChange={onCursorChange}
+            onLanguageChange={onLanguageChange}
             onChange={(draft) => onDraftChange(active.id, draft)}
             onSave={() => onSave(active.id)}
             onDiagnostics={onDiagnostics}
