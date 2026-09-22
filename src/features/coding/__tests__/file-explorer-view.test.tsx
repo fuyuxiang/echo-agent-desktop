@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -80,5 +80,34 @@ describe("FileExplorerView", () => {
     expect(props.onSelectTab).toHaveBeenCalledWith("/repo/src/index.ts");
     expect(props.onCloseTab).toHaveBeenCalledWith("/repo/src/index.ts");
     expect(props.onOpenSymbol).toHaveBeenCalledWith(expect.objectContaining({ name: "run" }));
+  });
+});
+
+describe("FileExplorerView filter input", () => {
+  it("calls onFilterChange when input typed", () => {
+    const onFilterChange = vi.fn();
+    render(
+      <FileExplorerView
+        root="/r"
+        tabs={[]}
+        activeId={null}
+        symbols={[]}
+        showHidden={false}
+        fileTree={<div />}
+        onSelectTab={() => {}}
+        onCloseTab={() => {}}
+        onOpenSymbol={() => {}}
+        onNewFile={() => {}}
+        onNewDirectory={() => {}}
+        onRefresh={() => {}}
+        onCollapseAll={() => {}}
+        onRevealActive={() => {}}
+        onToggleHidden={() => {}}
+        filter=""
+        onFilterChange={onFilterChange}
+      />,
+    );
+    fireEvent.change(screen.getByPlaceholderText(/过滤/), { target: { value: "ts" } });
+    expect(onFilterChange).toHaveBeenCalledWith("ts");
   });
 });

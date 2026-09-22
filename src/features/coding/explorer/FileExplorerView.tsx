@@ -13,8 +13,14 @@ import {
   X,
 } from "lucide-react";
 
+import { Tooltip } from "@/components/workspace-panel/Overlay";
 import type { PaletteSymbol } from "../shell/CommandPalette";
 import { isDirty, isFileTab, type WorkbenchTab } from "../store/tab-store";
+
+const IGNORED_DIRS_HINT = `已隐藏（构建/VCS 噪音）：
+node_modules、.git、.svn、.hg、target、dist、build、.next、.nuxt、.cache、.turbo、__pycache__、.venv、venv、.idea、.vscode
+
+隐藏文件（以 . 开头）：点击 👁 图标切换显示`;
 
 interface FileExplorerViewProps {
   root: string;
@@ -33,6 +39,8 @@ interface FileExplorerViewProps {
   onCollapseAll: () => void;
   onRevealActive: () => void;
   onToggleHidden: () => void;
+  filter?: string;
+  onFilterChange?: (next: string) => void;
 }
 
 function basename(path: string): string {
@@ -96,6 +104,8 @@ export function FileExplorerView({
   onCollapseAll,
   onRevealActive,
   onToggleHidden,
+  filter,
+  onFilterChange,
 }: FileExplorerViewProps) {
   const [openEditorsOpen, setOpenEditorsOpen] = useState(true);
   const [filesOpen, setFilesOpen] = useState(true);
@@ -138,6 +148,15 @@ export function FileExplorerView({
           >
             {showHidden ? <Eye size={13} /> : <EyeOff size={13} />}
           </button>
+          <Tooltip content={IGNORED_DIRS_HINT}>
+            <button
+              type="button"
+              className="coding-explorer__heading-help"
+              aria-label="查看资源管理器隐藏规则"
+            >
+              ?
+            </button>
+          </Tooltip>
         </span>
       </div>
 
@@ -195,6 +214,15 @@ export function FileExplorerView({
         onToggle={() => setFilesOpen((value) => !value)}
         className="coding-explorer-section--files"
       >
+        {onFilterChange && (
+          <input
+            type="search"
+            placeholder="过滤文件名…"
+            value={filter ?? ""}
+            onChange={(event) => onFilterChange(event.target.value)}
+            className="coding-explorer__filter-input"
+          />
+        )}
         {fileTree}
       </Section>
 

@@ -3370,3 +3370,36 @@
 .coding-breadcrumb__segment--button:hover {
   background: var(--echo-bg-hover, rgba(0, 0, 0, 4%));
 }
+
+.coding-explorer__filter-input {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 4px 8px 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  background: var(--echo-bg-input, #ffffff);
+  color: var(--echo-text-default);
+  border: 1px solid var(--echo-border-default);
+  border-radius: 4px;
+}
+
+.coding-explorer__heading-help {
+  border: none;
+  background: transparent;
+  color: var(--echo-text-weak);
+  font-size: 11px;
+  padding: 0 4px;
+  cursor: help;
+}
+
+.file-tree__empty--cwd-hint {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.file-tree__empty-actions {
+  display: flex;
+  gap: 4px;
+}
