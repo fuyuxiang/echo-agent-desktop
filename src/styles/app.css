@@ -10015,6 +10015,17 @@ button.diff__path {
   grid-area: check;
   color: var(--echo-color-text-brand-default);
 }
+/* 始终允许档视觉降级：避免被误以为"一键梭哈"。 */
+.permission-picker__mode[data-mode-id="always-approve"] {
+  border-left: 2px solid var(--echo-warning, #d97706);
+  border-radius: var(--echo-radius-lg, 8px);
+}
+.permission-picker__mode[data-mode-id="always-approve"] .permission-picker__mode-label {
+  color: var(--echo-color-text-warning-default, #b45309);
+}
+.permission-picker__mode[data-mode-id="always-approve"] .permission-picker__mode-desc {
+  color: var(--echo-color-text-warning-default, #b45309);
+}
 .permission-picker__confirm {
   display: flex;
   flex-direction: column;

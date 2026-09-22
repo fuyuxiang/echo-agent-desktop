@@ -297,6 +297,7 @@ export function PermissionPicker({
                 key={m.id}
                 ref={m.id === "always-approve" ? alwaysOptionRef : undefined}
                 type="button"
+                data-mode-id={m.id}
                 className={
                   "permission-picker__mode" +
                   (m.id === mode ? " permission-picker__mode--active" : "")
