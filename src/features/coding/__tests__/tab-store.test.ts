@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { isDirty, useTabStore, type FileTab } from "../store/tab-store";
+import { isDirty, useTabStore, type FileTab, type WorkspaceUiState } from "../store/tab-store";
 
 function fileTab(overrides: Partial<FileTab> = {}) {
   return {
@@ -225,5 +225,17 @@ describe("tab store", () => {
     useTabStore.getState().openVirtual("impactAnalysis", "/repo", { name: "authenticate" });
     expect(useTabStore.getState().tabs).toHaveLength(2);
     expect(useTabStore.getState().activeId).toBe("virtual:impactAnalysis:authenticate");
+  });
+});
+
+describe("WorkspaceUiState", () => {
+  it("defaults minimapRenderCharacters to true", () => {
+    const state: WorkspaceUiState = {
+      tabs: [],
+      expandedPaths: [],
+      cutPaths: new Set(),
+      minimapRenderCharacters: true,
+    };
+    expect(state.minimapRenderCharacters).toBe(true);
   });
 });

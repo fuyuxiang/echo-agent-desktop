@@ -133,6 +133,20 @@ export function isDirty(tab: WorkbenchTab): boolean {
   return isFileTab(tab) && tab.draft !== tab.original;
 }
 
+/**
+ * Per-workspace UI state retained across tab switches so each project keeps
+ * its own minimap rendering mode, tree expansion, and cut/copy markers.
+ */
+export interface WorkspaceUiState {
+  tabs: WorkbenchTab[];
+  expandedPaths: string[];
+  cutPaths: Set<string>;
+  minimapRenderCharacters: boolean;
+}
+
+/** Default for the minimap render mode (characters vs solid blocks). */
+export const DEFAULT_MINIMAP_RENDER_CHARACTERS = true;
+
 function virtualTabId(kind: VirtualTabKind, symbol: SymbolKey): string {
   return `virtual:${kind}:${symbol.name}`;
 }
