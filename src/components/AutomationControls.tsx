@@ -22,6 +22,7 @@ import {
 import { friendlyError } from "@/lib/error-format";
 import { useSessionStore, type AgentMode } from "@/stores/session-store";
 import { useAppDialog } from "./AppDialog";
+import { HelpCircleIcon } from "@/foundation/components/Icon/icons";
 
 interface AutomationControlsProps {
   sessionId: string | null;
@@ -196,6 +197,13 @@ function AutomationToolbar({
         <ModeIcon size={14} strokeWidth={1.9} aria-hidden="true" />
         <span>{modeLabel}</span>
       </span>
+      {mode === "computer_use" && (
+        <HelpCircleIcon
+          size="sm"
+          className="automation-control__hint"
+          title="操作电脑（点击 / 拖动 / 输入 / 按键）始终会逐次确认，避免误触敏感操作"
+        />
+      )}
       <span className="automation-control__summary" title={automation.error || statusText(status, mode)}>
         {automation.error || statusText(status, mode)}
       </span>
