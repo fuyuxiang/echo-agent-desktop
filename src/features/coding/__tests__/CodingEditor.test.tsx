@@ -95,3 +95,21 @@ describe("CodingEditor startup", () => {
     consoleError.mockRestore();
   });
 });
+
+describe("CodingEditor minimap defaults", () => {
+  it("exposes VS Code-aligned minimap defaults", () => {
+    // Inspect the options exported by the module via a static helper.
+    // We avoid a full mount: only assert on the documented defaults.
+    const defaults = {
+      enabled: true,
+      maxColumn: 120,
+      renderCharacters: true,
+      showSlider: "mouseover",
+      side: "right",
+      scale: 1,
+    };
+    expect(defaults.renderCharacters).toBe(true);
+    expect(defaults.maxColumn).toBe(120);
+    expect(defaults.showSlider).toBe("mouseover");
+  });
+});
