@@ -1075,7 +1075,7 @@ pub fn spawn_dispatcher(
     plan_approvals: PlanApprovals,
     folder_trusts: FolderTrusts,
 ) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         while let Some(msg) = rx.recv().await {
             handle_client_message(
                 &app,

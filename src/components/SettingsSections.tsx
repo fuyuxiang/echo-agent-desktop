@@ -31,6 +31,8 @@ import {
   AlertTriangle,
   Loader2,
   AppWindow,
+  Globe2,
+  Monitor,
 } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import {
@@ -68,6 +70,11 @@ import type {
   SlashCommand,
 } from "@/lib/types";
 import { APP_VERSION } from "@/lib/app-version";
+import {
+  automationCapabilities,
+  automationRequestComputerPermissions,
+  type AutomationCapabilities,
+} from "@/lib/automation-client";
 import { useUpdateStore } from "@/stores/update-store";
 import { validateOtlpEndpoint } from "@/lib/otlp-exporter";
 import { useAppDialog } from "./AppDialog";
@@ -530,6 +537,11 @@ export function SecuritySettingsPanel() {
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<PermissionRule>({ action: "ask", tool: "bash", pattern: "" });
   const [feedback, setFeedback] = useState("");
+  const [automationSupport, setAutomationSupport] = useState<AutomationCapabilities | null>(null);
+  const [automationLoading, setAutomationLoading] = useState(true);
+  const [automationBusy, setAutomationBusy] = useState(false);
+  const [automationError, setAutomationError] = useState<string | null>(null);
+  const [automationFeedback, setAutomationFeedback] = useState("");
   const [otlpEndpoint, setOtlpEndpoint] = useState(() => {
     try { return localStorage.getItem("echoagent.otlp.endpoint") ?? ""; } catch { return ""; }
   });
@@ -549,9 +561,47 @@ export function SecuritySettingsPanel() {
     }
   }, []);
 
+  const loadAutomationSupport = useCallback(async () => {
+    if (!("__TAURI_INTERNALS__" in window)) {
+      setAutomationLoading(false);
+      return;
+    }
+    setAutomationLoading(true);
+    try {
+      setAutomationSupport(await automationCapabilities());
+      setAutomationError(null);
+    } catch (error) {
+      setAutomationError(String(error).replace(/^Error:\s*/, ""));
+    } finally {
+      setAutomationLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadRules();
-  }, [loadRules]);
+    void loadAutomationSupport();
+  }, [loadAutomationSupport, loadRules]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const refreshPermissions = () => { void loadAutomationSupport(); };
+    window.addEventListener("focus", refreshPermissions);
+    return () => window.removeEventListener("focus", refreshPermissions);
+  }, [loadAutomationSupport]);
+
+  const requestComputerPermissions = async () => {
+    setAutomationBusy(true);
+    setAutomationFeedback("");
+    try {
+      await automationRequestComputerPermissions();
+      await loadAutomationSupport();
+      setAutomationFeedback("已打开系统权限设置；授权后回到 EchoAgent 即可自动刷新。");
+    } catch (error) {
+      setAutomationFeedback(`无法打开系统权限：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setAutomationBusy(false);
+    }
+  };
 
   const addRule = () => {
     if (!draft.tool.trim()) return;
@@ -595,8 +645,64 @@ export function SecuritySettingsPanel() {
   return (
     <SectionShell
       title="安全中心"
-      desc="控制智能体调用工具时的授权规则，并管理本地遥测设置。"
+      desc="管理网页与电脑操作权限、工具授权规则和本地遥测。"
     >
+      <SettingsGroup
+        title="网页与电脑操作"
+        desc="这些能力默认关闭，只会在你从输入框的 + 菜单为当前任务开启后使用。"
+        meta={<span className="settings-status-badge">{automationLoading ? "检查中…" : automationError ? "检查失败" : "按任务开启"}</span>}
+      >
+        <div className="settings-row settings-row--comfortable">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name"><Globe2 size={17} />操作网页</span>
+            <span className="settings-row__description">
+              {automationSupport?.browser.available
+                ? `${automationSupport.browser.browserName || "兼容浏览器"}已就绪，每个任务使用独立浏览数据`
+                : automationSupport?.browser.reason || "正在检查本机浏览器…"}
+            </span>
+          </div>
+          <span className={`settings-status-badge${automationSupport?.browser.available ? " settings-status-badge--ready" : ""}`}>
+            {automationSupport ? (automationSupport.browser.available ? "可用" : "不可用") : "未检查"}
+          </span>
+        </div>
+        <div className="settings-row settings-row--comfortable">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name"><Monitor size={17} />操作电脑</span>
+            <span className="settings-row__description">
+              {automationSupport?.computer.available
+                ? automationSupport.computer.screenCapture && automationSupport.computer.inputControl
+                  ? "屏幕录制和辅助功能权限已就绪"
+                  : automationSupport.computer.reason || "需要屏幕录制和辅助功能权限"
+                : automationSupport?.computer.reason || "正在检查系统支持…"}
+            </span>
+          </div>
+          {automationSupport?.computer.available
+            && (!automationSupport.computer.screenCapture || !automationSupport.computer.inputControl) ? (
+              <button
+                type="button"
+                className="settings-btn"
+                disabled={automationBusy}
+                onClick={() => void requestComputerPermissions()}
+              >
+                {automationBusy ? "打开中…" : "授予系统权限"}
+              </button>
+            ) : (
+              <span className={`settings-status-badge${automationSupport?.computer.available ? " settings-status-badge--ready" : ""}`}>
+                {automationSupport ? (automationSupport.computer.available ? "可用" : "不可用") : "未检查"}
+              </span>
+            )}
+        </div>
+        {automationError && <p className="settings-msg settings-msg--warn" role="alert">{automationError}</p>}
+        {automationFeedback && <p className="settings-hint" role="status">{automationFeedback}</p>}
+        <div className="settings-info-callout">
+          启用后，相关网页或屏幕内容会作为任务上下文发送给当前模型。浏览器数据按任务隔离，可在任务状态条的“更多”中清除。
+        </div>
+        <div className="settings-group__footer">
+          <button type="button" className="settings-btn" onClick={() => void loadAutomationSupport()} disabled={automationLoading}>
+            {automationLoading ? "检查中…" : "重新检查"}
+          </button>
+        </div>
+      </SettingsGroup>
       <SettingsGroup
         title="工具权限规则"
         desc="规则按 deny、ask、allow 的优先级匹配；保存后重启 Agent 生效。"

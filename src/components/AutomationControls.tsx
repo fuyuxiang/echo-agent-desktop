@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Globe2, Monitor, MoreHorizontal } from "lucide-react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { setCodingMode } from "@/lib/agent-client";
 import {
@@ -134,7 +135,7 @@ function selectedAutomationMode(mode: AgentMode): AutomationMode {
 }
 
 function statusText(status: AutomationStatus | null, mode: AutomationMode): string {
-  if (!status) return mode === "default" ? "标准 Agent" : "正在检查自动化环境…";
+  if (!status) return mode === "default" ? "" : "正在检查可用性…";
   if (mode === "browser_use") {
     if (!status.browser.available) return status.browser.reason || "未找到兼容浏览器";
     if (status.paused) return "浏览器控制已暂停，你可以安全接管";
@@ -150,7 +151,7 @@ function statusText(status: AutomationStatus | null, mode: AutomationMode): stri
     }
     return status.paused ? "电脑控制已暂停，你可以安全接管" : "屏幕与输入权限已就绪";
   }
-  return "标准 Agent";
+  return "";
 }
 
 function AutomationToolbar({
@@ -178,65 +179,44 @@ function AutomationToolbar({
     }
   }, [automation, onToast]);
 
-  const changeMode = (next: AutomationMode) => {
-    if (!sessionId || next === mode) return;
-    if (next === "browser_use" && status && !status.browser.available) {
-      onToast?.(status.browser.reason || "当前设备无法使用 Browser Use");
-      return;
-    }
-    if (next === "computer_use" && status && !status.computer.available) {
-      onToast?.(status.computer.reason || "当前设备无法使用 Computer Use");
-      return;
-    }
-    void run(async () => {
-      await setCodingMode(sessionId, next === "default" ? "agent" : next);
-      await automation.refresh();
-    }, next === "default" ? "已切换到标准 Agent" : next === "browser_use" ? "已启用 Browser Use" : "已启用 Computer Use");
-  };
-
   const computerNeedsPermission = mode === "computer_use" && status?.computer.available
     && (!status.computer.screenCapture || !status.computer.inputControl);
 
+  if (mode === "default") return <>{dialog}</>;
+
+  const modeLabel = mode === "browser_use" ? "操作网页" : "操作电脑";
+  const ModeIcon = mode === "browser_use" ? Globe2 : Monitor;
+
   return (
     <div className={`automation-control automation-control--${mode}`}>
-      <label className="automation-control__mode">
-        <span className="automation-control__dot" aria-hidden="true" />
-        <span className="sr-only">任务模式</span>
-        <select
-          aria-label="任务模式"
-          value={mode}
-          disabled={!sessionId || streaming || busy}
-          onChange={(event) => changeMode(event.target.value as AutomationMode)}
+      <span
+        className="automation-control__mode"
+        title={`${modeLabel}启用时，相关网页或屏幕内容会发送给当前模型`}
+      >
+        <ModeIcon size={14} strokeWidth={1.9} aria-hidden="true" />
+        <span>{modeLabel}</span>
+      </span>
+      <span className="automation-control__summary" title={automation.error || statusText(status, mode)}>
+        {automation.error || statusText(status, mode)}
+      </span>
+      {computerNeedsPermission && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void run(async () => {
+            await automationRequestComputerPermissions();
+            await automation.refresh();
+          }, "已打开系统权限设置，授权后请回到 EchoAgent")}
         >
-          <option value="default">Agent</option>
-          <option value="browser_use" disabled={status ? !status.browser.available : false}>Browser Use</option>
-          <option value="computer_use" disabled={status ? !status.computer.available : false}>Computer Use</option>
-        </select>
-      </label>
-
-      {mode !== "default" && (
-        <>
-          <span className="automation-control__summary" title={automation.error || statusText(status, mode)}>
-            {automation.error || statusText(status, mode)}
-          </span>
-          <span
-            className="automation-control__privacy"
-            title="当前网页或屏幕内容会作为任务上下文发送给你配置的模型服务商"
-          >
-            内容将发送给当前模型
-          </span>
-          {computerNeedsPermission && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void run(async () => {
-                await automationRequestComputerPermissions();
-                await automation.refresh();
-              }, "已打开系统权限设置，授权后请回到 EchoAgent")}
-            >
-              授予权限
-            </button>
-          )}
+          授予权限
+        </button>
+      )}
+      <details className="automation-control__more">
+        <summary role="button" aria-label="更多自动化选项" title="更多选项">
+          <MoreHorizontal size={16} aria-hidden="true" />
+        </summary>
+        <div className="automation-control__more-menu">
+          <p>网页或屏幕内容会发送给当前模型。</p>
           {mode === "browser_use" && status?.browser.available && (
             <label className="automation-control__private" title="默认阻止本机、局域网和企业内网地址">
               <input
@@ -248,7 +228,7 @@ function AutomationToolbar({
                   void run(() => automationSetPrivateNetwork(sessionId!, allowed));
                 }}
               />
-              内网
+              允许访问本机与内网
             </label>
           )}
           {mode === "browser_use" && status?.browserHasData && (
@@ -267,28 +247,29 @@ function AutomationToolbar({
                 ),
               })}
             >
-              清除数据
+              清除本任务浏览器数据
             </button>
           )}
-          {status?.paused ? (
-            <button type="button" disabled={busy} onClick={() => void run(() => automationResume(sessionId!), "自动化已继续")}>继续</button>
-          ) : (
-            <button type="button" disabled={busy} onClick={() => void run(() => automationPause(sessionId!), "自动化已暂停，可以接管")}>接管</button>
-          )}
-          <button
-            type="button"
-            className="automation-control__end"
-            disabled={busy}
-            onClick={() => void run(async () => {
-              await automationStop(sessionId!);
-              await setCodingMode(sessionId!, "agent");
-              await automation.refresh();
-            }, "已结束自动化并切回 Agent")}
-          >
-            结束
-          </button>
-        </>
+        </div>
+      </details>
+      {status?.paused ? (
+        <button type="button" disabled={busy || streaming} onClick={() => void run(() => automationResume(sessionId!), "已继续执行")}>继续</button>
+      ) : (
+        <button type="button" disabled={busy} onClick={() => void run(() => automationPause(sessionId!), "已暂停，现在可以安全接管")}>接管</button>
       )}
+      <button
+        type="button"
+        className="automation-control__end"
+        disabled={busy}
+        onClick={() => void run(async () => {
+          await automationStop(sessionId!);
+          await setCodingMode(sessionId!, "agent");
+          useSessionStore.getState().setAgentMode("default", sessionId!);
+          await automation.refresh();
+        }, `已结束${modeLabel}`)}
+      >
+        结束
+      </button>
       {dialog}
     </div>
   );

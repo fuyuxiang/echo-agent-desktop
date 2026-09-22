@@ -172,6 +172,19 @@ describe("SettingsPanel", () => {
     }
   }, 15_000);
 
+  it("安全中心说明网页与电脑操作按任务开启，不设置高风险全局默认值", async () => {
+    render(
+      <ThemeProvider>
+        <SettingsPanel open initialSection="security" onClose={() => {}} />
+      </ThemeProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "网页与电脑操作", level: 3 }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/\+ 菜单为当前任务开启/)).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /默认.*操作电脑/ })).toBeNull();
+  });
+
   it("移除助理设置，并将智能体邮箱统一显示为通知中心", async () => {
     renderSettings();
 

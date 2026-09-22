@@ -34,7 +34,7 @@ describe("HomePage", () => {
     expect(screen.queryByText("财报分析全流程")).toBeNull();
   });
 
-  it("可在创建任务前选择 Browser Use 或 Computer Use", () => {
+  it("首页不展示模式胶囊，从 + 菜单按任务开启网页或电脑操作", async () => {
     const onTaskModeChange = vi.fn();
     const { rerender } = render(
       <HomePage
@@ -44,8 +44,14 @@ describe("HomePage", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Agent" })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", { name: "Browser Use" }));
+    expect(screen.queryByLabelText("新任务模式")).toBeNull();
+    expect(screen.queryByText("Browser Use")).toBeNull();
+    expect(screen.queryByText("Computer Use")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /操作网页/ }));
     expect(onTaskModeChange).toHaveBeenCalledWith("browser_use");
 
     rerender(
@@ -55,7 +61,9 @@ describe("HomePage", () => {
         onTaskModeChange={onTaskModeChange}
       />,
     );
-    expect(screen.getByRole("button", { name: "Computer Use" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("操作电脑")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭操作电脑" }));
+    expect(onTaskModeChange).toHaveBeenLastCalledWith("default");
   });
 
   it("点击移除按钮清空 pending 专家,且不破坏输入框中的预填文字", async () => {

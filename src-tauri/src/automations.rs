@@ -2520,9 +2520,9 @@ pub fn start_scheduler(
     app: AppHandle,
     tx: echo_agent_acp::AcpAgentTx,
     default_cwd: PathBuf,
-) -> tokio::task::JoinHandle<()> {
+) -> tauri::async_runtime::JoinHandle<()> {
     fail_stale_running_records();
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         // Give the renderer time to subscribe to interaction events before a
         // recovered unattended turn can request input.
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;

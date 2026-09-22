@@ -1046,57 +1046,6 @@ button,
   gap: 16px;
 }
 
-.home-mode-picker {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 4px;
-  color: var(--echo-text-weak);
-  font-size: 12px;
-}
-
-.home-mode-picker__reason {
-  width: 100%;
-  color: #b54747;
-  text-align: right;
-}
-
-.home-mode-picker__options {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.home-mode-picker__option {
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--ui-line);
-  border-radius: 999px;
-  background: var(--ui-surface);
-  color: var(--echo-text-medium);
-  font: inherit;
-  cursor: pointer;
-}
-
-.home-mode-picker__option:hover:not(:disabled) {
-  border-color: var(--ui-brand-line);
-  color: var(--echo-brand);
-}
-
-.home-mode-picker__option--active {
-  border-color: var(--ui-brand-line);
-  background: var(--ui-brand-soft);
-  color: var(--echo-brand);
-  font-weight: 650;
-}
-
-.home-mode-picker__option:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
 .echo-composer-wrap--home {
   padding: 0;
   border-radius: 18px;
@@ -1233,57 +1182,21 @@ button,
 
 .automation-control__mode {
   display: inline-flex;
-  height: 30px;
+  height: 28px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   padding: 0 8px;
-  border: 1px solid var(--ui-line);
-  border-radius: 8px;
-  background: var(--ui-surface);
-}
-
-.automation-control__mode select {
-  max-width: 116px;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--echo-text-strong);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.automation-control__mode select:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
-.automation-control__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--echo-text-weak);
-}
-
-.automation-control--browser_use .automation-control__dot,
-.automation-control--computer_use .automation-control__dot {
-  background: #18a978;
-  box-shadow: 0 0 0 3px color-mix(in srgb, #18a978 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--echo-brand) 24%, var(--ui-line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--echo-brand) 8%, var(--ui-surface));
+  color: var(--echo-brand);
+  font-weight: 650;
 }
 
 .automation-control__summary {
   overflow: hidden;
   max-width: 220px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.automation-control__privacy {
-  flex: 0 1 auto;
-  overflow: hidden;
-  max-width: 150px;
-  color: var(--echo-text-weak);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1325,6 +1238,78 @@ button,
 
 .automation-control__private input {
   accent-color: var(--echo-brand);
+}
+
+.automation-control__more {
+  position: relative;
+  flex: none;
+}
+
+.automation-control__more > summary {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--ui-line);
+  border-radius: 7px;
+  background: var(--ui-surface);
+  color: var(--echo-text-medium);
+  cursor: pointer;
+  list-style: none;
+}
+
+.automation-control__more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.automation-control__more > summary:hover,
+.automation-control__more[open] > summary {
+  border-color: var(--ui-brand-line);
+  color: var(--echo-brand);
+}
+
+.automation-control__more > summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--echo-brand) 45%, transparent);
+  outline-offset: 1px;
+}
+
+.automation-control__more-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: var(--echo-layer-popover);
+  display: grid;
+  width: 250px;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--ui-line);
+  border-radius: 10px;
+  background: var(--ui-surface);
+  box-shadow: var(--echo-shadow-md);
+}
+
+.automation-control__more-menu p {
+  margin: 0;
+  color: var(--echo-text-weak);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.automation-control__more-menu > button {
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--ui-line);
+  border-radius: 7px;
+  background: var(--ui-surface);
+  color: var(--echo-text-medium);
+  font: inherit;
+  cursor: pointer;
+}
+
+.automation-control__more-menu > button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, #dc4545 45%, var(--ui-line));
+  color: #c53b3b;
 }
 
 .automation-approval {
@@ -2454,18 +2439,6 @@ button,
   .automation-approval__actions {
     grid-column: 2;
     justify-content: flex-end;
-  }
-
-  .home-mode-picker {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 7px;
-  }
-
-  .home-mode-picker__options {
-    width: 100%;
-    overflow-x: auto;
-    padding-bottom: 2px;
   }
 
   .chatview__plan-panel,

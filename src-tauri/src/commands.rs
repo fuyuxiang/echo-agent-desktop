@@ -80,7 +80,7 @@ pub struct AppState {
     /// Background automation scheduler bound to the current agent runtime.
     /// Replacing/aborting it on restart prevents a stale task from retaining a
     /// closed ACP sender forever.
-    pub automation_scheduler: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    pub automation_scheduler: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     /// Last model configuration positively acknowledged by the embedded
     /// Runtime. Disk configuration alone must never unlock message sending.
     pub(crate) runtime_models: Mutex<RuntimeModelState>,

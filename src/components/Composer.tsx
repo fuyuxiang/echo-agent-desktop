@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Mic, X, type LucideIcon } from "lucide-react";
+import { Globe2, Mic, Monitor, X, type LucideIcon } from "lucide-react";
 import { ChevronDownIcon, SendPlaneIcon } from "@/foundation/components/Icon/icons";
 import { ModelSelector, type ModelOption } from "./ModelSelector";
 import { ThumbImg } from "./experts-panel/shared/ThumbImg";
@@ -30,6 +30,11 @@ import {
 import { replaceAtToken } from "@/lib/at-commands";
 import { InputAddMenu } from "./InputAddMenu";
 import { KnowledgePicker } from "./KnowledgePicker";
+import {
+  automationCapabilities,
+  type AutomationCapabilities,
+  type AutomationMode,
+} from "@/lib/automation-client";
 import {
   registerAsrProvider,
   getActiveAsr,
@@ -128,6 +133,10 @@ export function Composer({
   onSelectExpert,
   onSelectSkill,
   onNavigateConnectors,
+  automationMode = "default",
+  automationModeDisabled = false,
+  showAutomationModeBadge = false,
+  onAutomationModeChange,
   // Slash-command context and desktop-owned command execution.
   commandSessionId,
   commandRefreshKey,
@@ -220,6 +229,13 @@ export function Composer({
   onSelectSkill?: (skillName: string) => void;
   /** 加号菜单:跳转到连接器管理面板。 */
   onNavigateConnectors?: () => void;
+  /** Optional task-scoped webpage/computer capability exposed from the + menu. */
+  automationMode?: AutomationMode;
+  /** Prevent capability changes while a task is being created or is running. */
+  automationModeDisabled?: boolean;
+  /** Home shows the selected capability as a removable chip; chats use the status toolbar. */
+  showAutomationModeBadge?: boolean;
+  onAutomationModeChange?: (mode: AutomationMode) => void | Promise<void>;
   /** Current session used to request the runtime's context-aware command catalog. */
   commandSessionId?: string;
   /** Incremented when the runtime publishes available_commands_update. */
@@ -250,6 +266,8 @@ export function Composer({
   const [text, setText] = useState("");
   const textRef = useRef("");
   const [attachments, setAttachments] = useState<string[]>([]);
+  const [automationSupport, setAutomationSupport] = useState<AutomationCapabilities | null>(null);
+  const automationModeAvailable = Boolean(onAutomationModeChange);
   const attachmentsRef = useRef<string[]>([]);
   const attachmentSizesRef = useRef(new Map<string, number>());
   // Only clipboard blobs created by this Composer are disposable. Picker,
@@ -432,6 +450,20 @@ export function Composer({
   const mountedRef = useRef(true);
   const onDraftChangeRef = useRef(onDraftChange);
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!automationModeAvailable || !("__TAURI_INTERNALS__" in window)) return;
+    let disposed = false;
+    void automationCapabilities()
+      .then((support) => {
+        if (!disposed) setAutomationSupport(support);
+      })
+      .catch(() => {
+        // Session creation and mode switching still perform an authoritative
+        // backend check. Keep browser previews usable when Tauri IPC is absent.
+      });
+    return () => { disposed = true; };
+  }, [automationModeAvailable]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1270,7 +1302,36 @@ export function Composer({
               }
             }}
             onNavigateConnectors={onNavigateConnectors}
+            automationMode={automationMode}
+            automationCapabilities={automationSupport}
+            automationModeDisabled={automationModeDisabled}
+            onAutomationModeChange={onAutomationModeChange}
           />
+          {showAutomationModeBadge && automationMode !== "default" && (
+            <span
+              className={`echo-composer__automation-badge echo-composer__automation-badge--${automationMode}`}
+              title={automationMode === "browser_use"
+                ? "本任务可以在独立浏览器中操作网页"
+                : "本任务可以查看屏幕并操作本机应用"}
+            >
+              {automationMode === "browser_use"
+                ? <Globe2 size={14} strokeWidth={1.8} aria-hidden="true" />
+                : <Monitor size={14} strokeWidth={1.8} aria-hidden="true" />}
+              <span>{automationMode === "browser_use" ? "操作网页" : "操作电脑"}</span>
+              <button
+                type="button"
+                className="echo-composer__automation-badge-remove"
+                disabled={automationModeDisabled}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void onAutomationModeChange?.("default");
+                }}
+                aria-label={`关闭${automationMode === "browser_use" ? "操作网页" : "操作电脑"}`}
+              >
+                <X size={11} strokeWidth={2} />
+              </button>
+            </span>
+          )}
           {activeExpertName && (
             <span className="echo-composer__expert-badge" title={`当前专家：${activeExpertName}`}>
               <ThumbImg name={activeExpertName} local={activeExpertAvatar} size={18} shape="circle" />

@@ -52,7 +52,22 @@ describe("AutomationControls", () => {
     vi.mocked(automationClient.automationPendingApprovals).mockResolvedValue([]);
   });
 
-  it("禁用后端判定不可用的模式，并展示隐私和数据清理入口", async () => {
+  it("默认任务不渲染 Agent 模式控件", async () => {
+    useSessionStore.setState({ agentMode: "default" });
+    const { container } = render(
+      <AutomationControls
+        sessionId="session-1"
+        streaming={false}
+        placement="toolbar"
+      />,
+    );
+    await act(async () => {});
+
+    expect(container.querySelector(".automation-control")).toBeNull();
+    expect(screen.queryByText("Agent")).toBeNull();
+  });
+
+  it("只在能力启用后展示紧凑状态，隐私和数据清理收入更多菜单", async () => {
     render(
       <AutomationControls
         sessionId="session-1"
@@ -62,9 +77,12 @@ describe("AutomationControls", () => {
     );
 
     await screen.findByText("Chrome 将在需要时自动启动");
-    expect(screen.getByRole("option", { name: "Computer Use" })).toBeDisabled();
-    expect(screen.getByText("内容将发送给当前模型")).toBeInTheDocument();
-    const clearTrigger = screen.getByRole("button", { name: "清除数据" });
+    expect(screen.getByText("操作网页")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "任务模式" })).toBeNull();
+    expect(screen.queryByText("Browser Use")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "更多自动化选项" }));
+    expect(screen.getByText("网页或屏幕内容会发送给当前模型。")).toBeInTheDocument();
+    const clearTrigger = screen.getByRole("button", { name: "清除本任务浏览器数据" });
     await act(async () => { fireEvent.click(clearTrigger); });
     expect(await screen.findByText("清除该任务的浏览器数据？")).toBeInTheDocument();
     const clearButtons = screen.getAllByRole("button", { name: "清除数据" });

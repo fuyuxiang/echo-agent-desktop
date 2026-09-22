@@ -1167,7 +1167,7 @@ mod platform {
     fn connect_x11() -> Result<(RustConnection, usize), String> {
         if wayland_session() {
             return Err(
-                "当前是 Wayland 会话。为避免绕过桌面安全边界，Computer Use 只在 Linux X11 会话中启用；请登录“Xorg/X11”会话后重试。".into(),
+                "当前是 Wayland 会话。为避免绕过桌面安全边界，操作电脑功能只在 Linux X11 会话中启用；请登录“Xorg/X11”会话后重试。".into(),
             );
         }
         connect(None).map_err(|error| format!("连接 Linux X11 桌面失败：{error}"))

@@ -20,12 +20,14 @@ let storeState: {
   error: string | null;
   plan: null;
   sessionId: string | null;
+  agentMode: "default" | "browser_use" | "computer_use";
   control?: {
     action: "pause" | "stop";
     phase: "pausing" | "paused" | "stopping" | "stopped";
     requestedAt: number;
   };
   resumeSession: (sessionId: string) => void;
+  setAgentMode: (mode: "default" | "browser_use" | "computer_use") => void;
   discardMessagesFrom: ReturnType<typeof vi.fn>;
 } = {
   messages: [],
@@ -34,9 +36,13 @@ let storeState: {
   error: null,
   plan: null,
   sessionId: "s1",
+  agentMode: "default",
   control: undefined,
   resumeSession: () => {
     storeState = { ...storeState, control: undefined };
+  },
+  setAgentMode: (agentMode) => {
+    storeState = { ...storeState, agentMode };
   },
   discardMessagesFrom: vi.fn(),
 };
@@ -78,7 +84,7 @@ vi.mock("@/lib/agent-client", async () => {
     "sessionSearch", "sessionFork", "agentsList", "agentsGet", "agentsSave",
     "agentsDelete", "agentsTemplate", "mcpList", "mcpUpsert", "mcpDelete",
     "mcpToggle", "mcpConfigPath", "mcpConfigRead", "mcpConfigSave", "mcpAuthTrigger",
-    "mcpAuthStatus", "togglePlanMode", "internalReload", "automationsSnapshot",
+    "mcpAuthStatus", "togglePlanMode", "setCodingMode", "internalReload", "automationsSnapshot",
     "automationsSave", "automationsDelete", "automationsSetStatus", "automationsRun",
     "automationRecordsArchive", "automationRecordsDelete",
     "agentsDefaultsGet", "agentsDefaultsSave",
@@ -102,6 +108,7 @@ vi.mock("@/lib/agent-client", async () => {
   // 个别需要特定返回。
   mod.rewindExecute = vi.fn(asyncEmpty);
   mod.rewindPoints = vi.fn(asyncArr);
+  mod.setCodingMode = vi.fn(asyncEmpty);
   mod.providersList = async () => ({ providers: [], models: [] });
   mod.flattenModels = () => [];
   mod.agentAuthStatus = async () => ({ ready: true, providers: [] });
@@ -118,7 +125,7 @@ vi.mock("@/lib/agent-client", async () => {
 
 import { ChatView } from "../ChatView";
 import { ThemeProvider } from "../ThemeProvider";
-import { rewindExecute, rewindPoints } from "@/lib/agent-client";
+import { rewindExecute, rewindPoints, setCodingMode } from "@/lib/agent-client";
 
 /** 用 ThemeProvider 包裹(ChatView 内的 MessageItem/Markdown 需要 useTheme)。 */
 function renderChat() {
@@ -157,6 +164,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
       error: null,
       plan: null,
       sessionId: "s1",
+      agentMode: "default",
       control: undefined,
     });
     baseProps.onSend.mockClear();
@@ -168,6 +176,7 @@ describe("ChatView pause/yield/resume 闭环", () => {
     scrollIntoViewMock.mockClear();
     vi.mocked(rewindExecute).mockReset().mockResolvedValue({ targetPromptIndex: 0 });
     vi.mocked(rewindPoints).mockReset().mockResolvedValue([]);
+    vi.mocked(setCodingMode).mockClear();
   });
 
   afterEach(() => {
@@ -181,6 +190,18 @@ describe("ChatView pause/yield/resume 闭环", () => {
     for (const label of ["查找", "变更", "子代理", "团队", "浏览器", "分享"]) {
       expect(toolbar).toContainElement(screen.getByRole("button", { name: label }));
     }
+  });
+
+  it("已有任务也从输入框 + 菜单开启网页操作", async () => {
+    renderChat();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /操作网页/ }));
+
+    await waitFor(() => expect(setCodingMode).toHaveBeenCalledWith("s1", "browser_use"));
+    expect(baseProps.onToast).toHaveBeenCalledWith("已启用操作网页");
   });
 
   it("查询变化后首个真实命中立即定位，后续导航平滑滚动", async () => {

@@ -1219,7 +1219,7 @@ pub fn persist_registration(tx: &echo_agent_acp::AcpAgentTx, session_id: &str) {
     };
     let tx = tx.clone();
     let session_id = session_id.to_string();
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         // payload 形状同 mcp.rs build_upsert_payload（wire key 为 snake_case）。
         let payload = serde_json::json!({
             "session_id": session_id,

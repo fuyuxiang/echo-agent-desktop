@@ -3,7 +3,7 @@ import { PauseIcon } from "@/foundation/components/Icon/icons";
 import { useSessionStore, type ToolCallView } from "@/stores/session-store";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { createMarkdownHostConfig } from "@/lib/markdown-host";
-import { rewindExecute, rewindPoints } from "@/lib/agent-client";
+import { rewindExecute, rewindPoints, setCodingMode } from "@/lib/agent-client";
 import {
   collectSessionArtifacts,
   findToolCall,
@@ -38,6 +38,7 @@ import { useStickToBottom } from "./use-stick-to-bottom";
 import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
 import { stripAttachmentTransportContext } from "@/lib/user-message";
 import { AutomationControls } from "./AutomationControls";
+import type { AutomationMode } from "@/lib/automation-client";
 import { useAppDialog } from "./AppDialog";
 import type {
   MessageRetryKind,
@@ -131,6 +132,7 @@ export function ChatView({
   const error = useSessionStore((s) => s.error);
   const plan = useSessionStore((s) => s.plan);
   const sessionId = useSessionStore((s) => s.sessionId);
+  const agentMode = useSessionStore((s) => s.agentMode);
   const control = useSessionStore((s) => s.control);
   const resumeSession = useSessionStore((s) => s.resumeSession);
   const awaitingQuestion = Boolean(useQuestionStore(selectQuestionForSession(sessionId)));
@@ -149,6 +151,29 @@ export function ChatView({
   // 子代理运行时面板(对齐 EchoAgent team-runtime)。
   const [subagentsOpen, setSubagentsOpen] = useState(false);
   const [teamsOpen, setTeamsOpen] = useState(false);
+  const [automationModeChanging, setAutomationModeChanging] = useState(false);
+  const automationMode: AutomationMode = agentMode === "browser_use" || agentMode === "computer_use"
+    ? agentMode
+    : "default";
+  const handleAutomationModeChange = useCallback(async (nextMode: AutomationMode) => {
+    if (!sessionId || streaming || automationModeChanging || nextMode === automationMode) return;
+    setAutomationModeChanging(true);
+    try {
+      await setCodingMode(sessionId, nextMode === "default" ? "agent" : nextMode);
+      // CurrentModeUpdate remains authoritative; this immediate local update
+      // avoids a visible delay on runtimes that acknowledge asynchronously.
+      useSessionStore.getState().setAgentMode(nextMode, sessionId);
+      onToast?.(nextMode === "default"
+        ? "已关闭网页和电脑操作"
+        : nextMode === "browser_use"
+          ? "已启用操作网页"
+          : "已启用操作电脑");
+    } catch (error) {
+      onToast?.(`切换工具失败：${friendlyError(error)}`);
+    } finally {
+      setAutomationModeChanging(false);
+    }
+  }, [automationMode, automationModeChanging, onToast, sessionId, streaming]);
   const handlePause = useCallback(async () => {
     if (!sessionId || !streaming) return;
     await onCancel("pause");
@@ -883,6 +908,9 @@ export function ChatView({
             externalTextNonce={resendNonce}
             onSelectExpert={onSelectExpert}
             onNavigateConnectors={onNavigateConnectors}
+            automationMode={automationMode}
+            automationModeDisabled={streaming || automationModeChanging}
+            onAutomationModeChange={handleAutomationModeChange}
             knowledgeSessionId={sessionId ?? undefined}
             onOpenKnowledgeBase={onOpenKnowledgeBase}
             onOpenOrganization={onOpenOrganization}

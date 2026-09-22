@@ -5575,6 +5575,45 @@ button.diff__path {
   outline: 2px solid var(--echo-brand, #00c29a);
   outline-offset: 1px;
 }
+.echo-composer__automation-badge {
+  display: inline-flex;
+  min-width: 0;
+  height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 4px 0 8px;
+  border: 1px solid color-mix(in srgb, var(--echo-brand) 24%, var(--echo-border-default));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--echo-brand) 8%, var(--echo-bg-primary));
+  color: var(--echo-brand);
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.echo-composer__automation-badge-remove {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: currentColor;
+  cursor: pointer;
+}
+.echo-composer__automation-badge-remove:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--echo-brand) 14%, transparent);
+}
+.echo-composer__automation-badge-remove:disabled {
+  cursor: default;
+  opacity: .45;
+}
+.echo-composer__automation-badge-remove:focus-visible {
+  outline: 2px solid var(--echo-brand);
+  outline-offset: 1px;
+}
 .knowledge-picker {
   position: relative;
   flex: none;
@@ -5824,7 +5863,8 @@ button.diff__path {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 0;
-  min-width: 180px;
+  width: 264px;
+  min-width: 248px;
   background: var(--echo-bg-primary);
   border: 1px solid var(--echo-border-default);
   border-radius: 12px;
@@ -5865,6 +5905,16 @@ button.diff__path {
 .iam-item--active {
   background: var(--echo-bg-hover);
 }
+.iam-item--selected {
+  color: var(--echo-brand);
+}
+.iam-item--disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+.iam-item--disabled:hover {
+  background: transparent;
+}
 .iam-item__icon {
   display: flex;
   align-items: center;
@@ -5874,12 +5924,33 @@ button.diff__path {
   flex-shrink: 0;
   color: var(--echo-text-medium);
 }
-.iam-item__label {
+.iam-item__copy {
   flex: 1;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.iam-item__label {
   font-size: 13px;
   line-height: 20px;
   color: var(--echo-text-strong);
   white-space: nowrap;
+}
+.iam-item--selected .iam-item__label,
+.iam-item--selected .iam-item__icon {
+  color: var(--echo-brand);
+}
+.iam-item__description {
+  overflow: hidden;
+  color: var(--echo-text-tertiary);
+  font-size: 11px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iam-item__check {
+  flex: none;
+  color: var(--echo-brand);
 }
 .iam-item__chevron {
   display: flex;

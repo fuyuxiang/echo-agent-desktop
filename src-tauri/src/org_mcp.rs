@@ -1259,7 +1259,7 @@ fn rpc_error(id: Value, code: i64, message: String) -> Response {
 pub fn reconcile_registration(tx: &echo_agent_acp::AcpAgentTx, session_id: &str) {
     let tx = tx.clone();
     let session_id = session_id.to_string();
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         if let Err(error) = reconcile_session(&tx, &session_id).await {
             tracing::debug!(?error, %session_id, "organization MCP session reconciliation skipped");
         }

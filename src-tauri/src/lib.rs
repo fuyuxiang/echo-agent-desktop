@@ -346,7 +346,12 @@ pub fn run() {
             // The authenticated knowledge bridge is reachable on loopback for
             // personal local knowledge. Organization tools are added only after
             // a verified login and shared-scope bootstrap.
-            automation::serve(app.handle().clone());
+            if let Err(error) = automation::serve(app.handle().clone()) {
+                // Automation is an optional capability. Keep the desktop usable
+                // and expose the degraded state through automation_capabilities
+                // instead of aborting the native launch callback.
+                tracing::error!(%error, "automation MCP server failed to start");
+            }
             org_mcp::serve(app.handle().clone());
             org::start_background_sync(app.handle().clone());
             personal_knowledge::start_background_index(app.handle().clone());

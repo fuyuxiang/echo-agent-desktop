@@ -14,13 +14,49 @@ import { InputAddMenu } from "../InputAddMenu";
 import { agentsList } from "@/lib/agent-client";
 
 describe("InputAddMenu", () => {
-  it("不展示内置模式入口", async () => {
+  it("未提供任务能力回调时不展示操作入口", async () => {
     render(<InputAddMenu onPickFiles={vi.fn()} />);
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "添加" }));
     });
-    expect(screen.queryByText("模式")).toBeNull();
+    expect(screen.queryByText("操作网页")).toBeNull();
+    expect(screen.queryByText("操作电脑")).toBeNull();
+  });
+
+  it("在 + 菜单中用中文能力名按任务开启，不暴露内部模式名", async () => {
+    const onAutomationModeChange = vi.fn();
+    render(
+      <InputAddMenu
+        onPickFiles={vi.fn()}
+        automationMode="default"
+        automationCapabilities={{
+          browser: { available: true, browserName: "Chrome" },
+          computer: {
+            available: false,
+            platform: "macOS",
+            screenCapture: false,
+            inputControl: false,
+            reason: "需要系统权限",
+          },
+        }}
+        onAutomationModeChange={onAutomationModeChange}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /操作网页/ }));
+    expect(onAutomationModeChange).toHaveBeenCalledWith("browser_use");
+    expect(screen.queryByText("Browser Use")).toBeNull();
+    expect(screen.queryByText("Computer Use")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    });
+    expect(screen.getByRole("menuitemradio", { name: /操作电脑/ }))
+      .toHaveAttribute("aria-disabled", "true");
   });
 
   it("连接器子菜单只展示后端实际启用的 MCP 服务", async () => {
@@ -60,7 +96,7 @@ describe("InputAddMenu", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("menu", { name: "添加内容" })).toBeInTheDocument();
 
-    const addFiles = screen.getByRole("menuitem", { name: "点击选择文件" });
+    const addFiles = screen.getByRole("menuitem", { name: "添加文件" });
     expect(addFiles).toHaveFocus();
     fireEvent.keyDown(addFiles, { key: "ArrowDown" });
     const experts = screen.getByRole("menuitem", { name: "专家" });

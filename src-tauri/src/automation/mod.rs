@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
@@ -36,10 +37,9 @@ const MAX_RPC_RESPONSE_BYTES: usize = 24 * 1024 * 1024;
 const MAX_TOOL_ARGUMENT_BYTES: usize = 128 * 1024;
 const MAX_SESSION_ID_CHARS: usize = 256;
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
 
-static BOUND_PORT: OnceLock<u16> = OnceLock::new();
-static PROCESS_TOKEN: OnceLock<String> = OnceLock::new();
-static MANAGER: OnceLock<Arc<AutomationManager>> = OnceLock::new();
+static SERVICE: OnceLock<Arc<AutomationService>> = OnceLock::new();
 static PERSISTED: Mutex<bool> = Mutex::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +172,13 @@ struct AutomationManager {
     approvals: AsyncMutex<HashMap<String, PendingApproval>>,
 }
 
+struct AutomationService {
+    manager: Arc<AutomationManager>,
+    port: u16,
+    token: String,
+    ready: AtomicBool,
+}
+
 impl AutomationManager {
     fn new(app: AppHandle) -> Self {
         Self {
@@ -254,10 +261,10 @@ impl AutomationManager {
         if *session.mode.lock().unwrap() != required {
             return Err(match required {
                 AutomationMode::BrowserUse => {
-                    "当前任务未启用 Browser Use，请先切换到浏览器模式".into()
+                    "当前任务未开启操作网页，请从输入框的 + 菜单开启".into()
                 }
                 AutomationMode::ComputerUse => {
-                    "当前任务未启用 Computer Use，请先切换到电脑模式".into()
+                    "当前任务未开启操作电脑，请从输入框的 + 菜单开启".into()
                 }
                 AutomationMode::Default => "当前任务模式不允许此操作".into(),
             });
@@ -431,44 +438,60 @@ impl AutomationManager {
 }
 
 fn manager() -> Result<&'static Arc<AutomationManager>, String> {
-    MANAGER
+    let service = SERVICE
         .get()
-        .ok_or_else(|| "自动化服务尚未启动".to_string())
+        .ok_or_else(|| "自动化服务尚未启动".to_string())?;
+    if !service.ready.load(Ordering::Acquire) {
+        return Err(automation_service_unavailable_reason());
+    }
+    Ok(&service.manager)
 }
 
-pub fn serve(app: AppHandle) {
-    if MANAGER.get().is_some() {
-        return;
+fn automation_service_unavailable_reason() -> String {
+    "自动化服务未就绪，请重启 EchoAgent 后重试".to_string()
+}
+
+pub fn serve(app: AppHandle) -> Result<(), String> {
+    if let Some(service) = SERVICE.get() {
+        return if service.ready.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(automation_service_unavailable_reason())
+        };
     }
-    let Some(listener) = bind_loopback() else {
-        tracing::error!("automation MCP: failed to bind loopback socket");
-        return;
-    };
-    let port = match listener.local_addr() {
-        Ok(address) => address.port(),
-        Err(error) => {
-            tracing::error!(%error, "automation MCP: failed to read bound address");
-            return;
-        }
-    };
+    let listener = bind_loopback()
+        .ok_or_else(|| "automation MCP: failed to bind loopback socket".to_string())?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| format!("automation MCP: failed to read bound address: {error}"))?
+        .port();
     let token = uuid::Uuid::now_v7().to_string();
     let authorization = format!("Bearer {token}");
-    let automation = Arc::new(AutomationManager::new(app));
-    if MANAGER.set(automation.clone()).is_err()
-        || BOUND_PORT.set(port).is_err()
-        || PROCESS_TOKEN.set(token).is_err()
-    {
-        tracing::error!("automation MCP: process state was initialized twice");
-        return;
+    let service = Arc::new(AutomationService {
+        manager: Arc::new(AutomationManager::new(app)),
+        port,
+        token,
+        ready: AtomicBool::new(false),
+    });
+    if SERVICE.set(service.clone()).is_err() {
+        return Err("automation MCP: process state was initialized twice".to_string());
     }
-    let listener = match to_tokio_listener(listener) {
-        Ok(listener) => listener,
-        Err(error) => {
-            tracing::error!(%error, "automation MCP: failed to register listener");
-            return;
-        }
-    };
+
+    // Tauri invokes setup on the native event-loop thread, which is not entered
+    // into Tokio's IO runtime. Keep both std -> Tokio registration and Axum on
+    // Tauri's runtime. A bounded startup acknowledgement prevents sessions from
+    // observing an endpoint that has not actually been registered yet.
+    let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
+    let task_service = service.clone();
     tauri::async_runtime::spawn(async move {
+        let listener = match to_tokio_listener(listener).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                let message = format!("automation MCP: failed to register listener: {error}");
+                let _ = startup_tx.send(Err(message));
+                return;
+            }
+        };
         let expected_host = format!("127.0.0.1:{port}");
         let router = Router::new()
             .route(
@@ -481,32 +504,61 @@ pub fn serve(app: AppHandle) {
             .with_state(ServerState {
                 authorization,
                 expected_host,
-                manager: automation,
+                manager: task_service.manager.clone(),
             });
+
+        task_service.ready.store(true, Ordering::Release);
+        let _ = startup_tx.send(Ok(()));
+        tracing::info!(port, "automation MCP server listening");
         if let Err(error) = axum::serve(listener, router).await {
             tracing::error!(%error, "automation MCP server stopped");
         }
+        task_service.ready.store(false, Ordering::Release);
+        if let Ok(mut persisted) = PERSISTED.lock() {
+            *persisted = false;
+        }
     });
-    tracing::info!(port, "automation MCP server listening");
+
+    match startup_rx.recv_timeout(SERVER_START_TIMEOUT) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("automation MCP: startup task stopped unexpectedly".to_string())
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            tracing::warn!(
+                timeout_seconds = SERVER_START_TIMEOUT.as_secs(),
+                "automation MCP startup acknowledgement timed out; continuing in degraded mode"
+            );
+            Ok(())
+        }
+    }
 }
 
 fn bind_loopback() -> Option<TcpListener> {
     TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).ok()
 }
 
-fn to_tokio_listener(listener: TcpListener) -> std::io::Result<tokio::net::TcpListener> {
+async fn to_tokio_listener(listener: TcpListener) -> std::io::Result<tokio::net::TcpListener> {
     listener.set_nonblocking(true)?;
     tokio::net::TcpListener::from_std(listener)
 }
 
 pub fn server_url() -> Option<String> {
-    BOUND_PORT
-        .get()
-        .map(|port| format!("http://127.0.0.1:{port}/mcp"))
+    SERVICE.get().and_then(|service| {
+        service
+            .ready
+            .load(Ordering::Acquire)
+            .then(|| format!("http://127.0.0.1:{}/mcp", service.port))
+    })
 }
 
 pub fn authorization_header() -> Option<String> {
-    PROCESS_TOKEN.get().map(|token| format!("Bearer {token}"))
+    SERVICE.get().and_then(|service| {
+        service
+            .ready
+            .load(Ordering::Acquire)
+            .then(|| format!("Bearer {}", service.token))
+    })
 }
 
 pub async fn set_session_mode(session_id: &str, mode: AutomationMode) -> Result<(), String> {
@@ -524,7 +576,7 @@ pub fn validate_mode_capability(mode: AutomationMode) -> Result<(), String> {
             } else {
                 Err(capability
                     .reason
-                    .unwrap_or_else(|| "Browser Use 当前不可用".into()))
+                    .unwrap_or_else(|| "操作网页当前不可用".into()))
             }
         }
         AutomationMode::ComputerUse => {
@@ -534,15 +586,15 @@ pub fn validate_mode_capability(mode: AutomationMode) -> Result<(), String> {
             } else {
                 Err(capability
                     .reason
-                    .unwrap_or_else(|| "Computer Use 当前不可用".into()))
+                    .unwrap_or_else(|| "操作电脑当前不可用".into()))
             }
         }
     }
 }
 
 pub async fn forget_session(session_id: &str) {
-    if let Some(manager) = MANAGER.get() {
-        manager.forget_session(session_id).await;
+    if let Some(service) = SERVICE.get() {
+        service.manager.forget_session(session_id).await;
     }
 }
 
@@ -555,17 +607,28 @@ pub async fn stop_session(session_id: &str) -> Result<(), String> {
 }
 
 pub async fn shutdown_all() {
-    if let Some(manager) = MANAGER.get() {
-        manager.shutdown_all().await;
+    if let Some(service) = SERVICE.get() {
+        service.manager.shutdown_all().await;
     }
 }
 
 #[tauri::command]
 pub fn automation_capabilities() -> AutomationCapabilities {
-    AutomationCapabilities {
+    let mut capabilities = AutomationCapabilities {
         browser: browser::capability(),
         computer: ComputerController::capability(),
+    };
+    let ready = SERVICE
+        .get()
+        .is_some_and(|service| service.ready.load(Ordering::Acquire));
+    if !ready {
+        let reason = automation_service_unavailable_reason();
+        capabilities.browser.available = false;
+        capabilities.browser.reason = Some(reason.clone());
+        capabilities.computer.available = false;
+        capabilities.computer.reason = Some(reason);
     }
+    capabilities
 }
 
 #[tauri::command]
@@ -1593,7 +1656,7 @@ fn validate_upload_paths(
             .canonicalize()
             .map_err(|error| format!("无法读取待上传文件 {} ：{error}", candidate.display()))?;
         if !canonical.starts_with(&workspace) {
-            return Err("为防止本地数据泄露，Browser Use 只允许上传当前任务工作区内的文件".into());
+            return Err("为防止本地数据泄露，操作网页时只允许上传当前任务工作区内的文件".into());
         }
         let metadata = std::fs::metadata(&canonical)
             .map_err(|error| format!("无法检查待上传文件：{error}"))?;
@@ -1727,7 +1790,7 @@ pub fn persist_registration(tx: &echo_agent_acp::AcpAgentTx, session_id: &str) {
     };
     let tx = tx.clone();
     let session_id = session_id.to_string();
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let mut headers = serde_json::Map::new();
         headers.insert(AUTH_HEADER.into(), Value::String(authorization));
         headers.insert(SESSION_HEADER.into(), Value::String("${session_id}".into()));
@@ -1754,6 +1817,25 @@ pub fn persist_registration(tx: &echo_agent_acp::AcpAgentTx, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listener_registration_from_sync_context_uses_tauri_runtime() {
+        let listener = bind_loopback().expect("bind loopback listener");
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+
+        tauri::async_runtime::spawn(async move {
+            let result = to_tokio_listener(listener)
+                .await
+                .and_then(|listener| listener.local_addr());
+            let _ = result_tx.send(result);
+        });
+
+        let address = result_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("Tauri runtime should poll listener registration")
+            .expect("listener registration should succeed");
+        assert!(address.ip().is_loopback());
+    }
 
     #[test]
     fn modes_are_explicit_and_closed() {
