@@ -154,6 +154,11 @@ fn preset(kind: &str) -> Option<ProviderPreset> {
             api_backend: "responses",
             auth_scheme: "bearer",
         }),
+        "minimax" => Some(ProviderPreset {
+            base_url: Some("https://api.minimax.cn/v1"),
+            api_backend: "chat_completions",
+            auth_scheme: "bearer",
+        }),
         "deepseek" => Some(ProviderPreset {
             base_url: Some("https://api.deepseek.com"),
             api_backend: "chat_completions",
@@ -197,6 +202,8 @@ fn infer_provider_kind(table: &Map<String, Value>) -> String {
         "chat_completions" | "responses" => {
             if base.contains("api.openai.com") {
                 "openai".into()
+            } else if base.contains("api.minimax.cn") || base.contains("api.minimaxi.com") {
+                "minimax".into()
             } else if base.contains("api.deepseek.com") {
                 "deepseek".into()
             } else if base.contains("dashscope.aliyuncs.com") {
@@ -505,6 +512,82 @@ fn resolved_provider_api_key(table: &Map<String, Value>) -> Option<String> {
                     .filter(|value| !value.is_empty())
             })
         })
+}
+
+/// Secret-bearing provider context used only by native meeting jobs.  It is
+/// deliberately never serialized across the Tauri boundary.
+pub(crate) struct MeetingProviderAccess {
+    pub api_key: String,
+    pub base_url: String,
+    pub remote_model_id: String,
+}
+
+/// Resolve a selected model to a verified MiniMax connection while keeping the
+/// credential inside the native process.  Model-name matching is intentionally
+/// not used: a model called "MiniMax" behind an unrelated gateway is not proof
+/// that the Speech-to-Text endpoint exists.
+pub(crate) fn meeting_provider_access(
+    model_id: &str,
+    expected_provider_id: &str,
+) -> Result<MeetingProviderAccess, String> {
+    let config = read_config();
+    let model = config
+        .get("model")
+        .and_then(Value::as_table)
+        .and_then(|models| models.get(model_id))
+        .and_then(Value::as_table)
+        .ok_or("当前模型已不存在，请重新选择 MiniMax 模型")?;
+    // Current configurations reference a shared provider. Legacy BYOK models
+    // stored the same fields directly in `[model.<id>]`; keep those usable so
+    // adding meeting support does not force a destructive settings migration.
+    let referenced_provider_id = model.get("model_provider").and_then(Value::as_str);
+    if referenced_provider_id.is_some_and(|provider_id| provider_id != expected_provider_id) {
+        return Err("会议任务的模型提供商已变化，请新建会议后重试".into());
+    }
+    let provider = if let Some(provider_id) = referenced_provider_id {
+        config
+            .get("model_providers")
+            .and_then(Value::as_table)
+            .and_then(|providers| providers.get(provider_id))
+            .and_then(Value::as_table)
+            .ok_or("MiniMax 连接已被删除")?
+    } else {
+        model
+    };
+    let base_url = provider
+        .get("base_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("MiniMax Base URL 未配置")?
+        .trim_end_matches('/')
+        .to_string();
+    let organization_kind = provider
+        .get("organization_provider")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let kind = infer_provider_kind(provider);
+    let official_host = url::Url::parse(&base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "api.minimax.cn" || host == "api.minimaxi.com");
+    if kind != "minimax" && organization_kind != "minimax" && !official_host {
+        return Err("当前模型提供商未声明 MiniMax 录音转写能力".into());
+    }
+    let api_key = resolved_provider_api_key(provider).ok_or("MiniMax API Key 未配置或已失效")?;
+    let remote_model_id = model
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(model_id)
+        .to_string();
+    Ok(MeetingProviderAccess {
+        api_key,
+        base_url,
+        remote_model_id,
+    })
 }
 
 /// Mask helper: returns `Some("••••")` only when a static key or referenced
@@ -1054,6 +1137,7 @@ fn apply_organization_model_config(
         "anthropic" => "anthropic",
         "deepseek" => "deepseek",
         "qwen" | "dashscope" => "qwen",
+        "minimax" => "minimax",
         "anthropic-compatible" | "anthropic_compatible" | "custom_anthropic" => "custom_anthropic",
         _ => "custom",
     };
@@ -2115,6 +2199,20 @@ base_url = "https://example.com"
             Value::String("https://api.openai.com/v1".into()),
         );
         assert_eq!(infer_provider_kind(&table), "openai");
+    }
+
+    #[test]
+    fn infer_minimax_enables_meeting_capability_without_model_name_matching() {
+        let mut table = Map::new();
+        table.insert(
+            "api_backend".into(),
+            Value::String("chat_completions".into()),
+        );
+        table.insert(
+            "base_url".into(),
+            Value::String("https://api.minimax.cn/v1".into()),
+        );
+        assert_eq!(infer_provider_kind(&table), "minimax");
     }
 
     #[test]

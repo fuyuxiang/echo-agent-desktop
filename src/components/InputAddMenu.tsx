@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, Globe2, Monitor, Paperclip } from "lucide-react";
+import { AudioLines, Check, ChevronRight, Globe2, Monitor, Paperclip } from "lucide-react";
 import {
   AddIcon,
   ExpertTabIcon,
@@ -16,13 +16,15 @@ interface InputAddMenuProps {
   onSelectExpert?: (agent: AgentEntry) => void;
   onSelectSkill?: (skillName: string) => void;
   onNavigateConnectors?: () => void;
+  meetingMinutesAvailable?: boolean;
+  onOpenMeetingMinutes?: () => void;
   automationMode?: AutomationMode;
   automationCapabilities?: AutomationCapabilities | null;
   automationModeDisabled?: boolean;
   onAutomationModeChange?: (mode: AutomationMode) => void | Promise<void>;
 }
 
-type MenuItemId = "add-files" | "browser-use" | "computer-use" | "experts" | "skills" | "connectors";
+type MenuItemId = "add-files" | "meeting-minutes" | "browser-use" | "computer-use" | "experts" | "skills" | "connectors";
 type CatalogId = "experts" | "skills" | "connectors";
 
 interface MenuItem {
@@ -35,6 +37,13 @@ interface MenuItem {
 const FILE_ITEMS: MenuItem[] = [
   { id: "add-files", label: "添加文件", icon: <Paperclip size={16} /> },
 ];
+
+const MEETING_ITEM: MenuItem = {
+  id: "meeting-minutes",
+  label: "录音转写",
+  description: "保存录音、转写并生成会议纪要",
+  icon: <AudioLines size={16} />,
+};
 
 const AUTOMATION_ITEMS: MenuItem[] = [
   {
@@ -67,6 +76,8 @@ export function InputAddMenu({
   onSelectExpert,
   onSelectSkill,
   onNavigateConnectors,
+  meetingMinutesAvailable = false,
+  onOpenMeetingMinutes,
   automationMode = "default",
   automationCapabilities,
   automationModeDisabled = false,
@@ -88,9 +99,12 @@ export function InputAddMenu({
   const [connectors, setConnectors] = useState<McpServerEntry[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogErrors, setCatalogErrors] = useState<Partial<Record<CatalogId, string>>>({});
+  const fileItems = meetingMinutesAvailable && onOpenMeetingMinutes
+    ? [...FILE_ITEMS, MEETING_ITEM]
+    : FILE_ITEMS;
   const menuGroups = onAutomationModeChange
-    ? [FILE_ITEMS, AUTOMATION_ITEMS, CATALOG_ITEMS]
-    : [FILE_ITEMS, CATALOG_ITEMS];
+    ? [fileItems, AUTOMATION_ITEMS, CATALOG_ITEMS]
+    : [fileItems, CATALOG_ITEMS];
   const flatItems = menuGroups.flat();
 
   const loadData = useCallback(async () => {
@@ -232,6 +246,11 @@ export function InputAddMenu({
     if (id === "add-files") {
       close();
       onPickFiles();
+      return;
+    }
+    if (id === "meeting-minutes") {
+      close(false);
+      onOpenMeetingMinutes?.();
       return;
     }
     if (id === "browser-use" || id === "computer-use") {

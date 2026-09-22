@@ -30,6 +30,9 @@ const MarketplacePanel = lazy(() =>
 const KnowledgeBasePanel = lazy(() =>
   import("./KnowledgeBasePanel").then((module) => ({ default: module.KnowledgeBasePanel })),
 );
+const MeetingMinutesPanel = lazy(() =>
+  import("./MeetingMinutesPanel").then((module) => ({ default: module.MeetingMinutesPanel })),
+);
 const UsageQuotaPanel = lazy(() =>
   import("./UsageQuotaPanel").then((module) => ({ default: module.UsageQuotaPanel })),
 );
@@ -123,6 +126,9 @@ interface PlaceholderPageProps {
   ) => Promise<string | undefined>;
   projectModels?: ModelOption[];
   projectDefaultModelId?: string;
+  meetingModelId?: string;
+  meetingModels?: ModelOption[];
+  onOpenMeetingMinutes?: (modelId?: string) => void;
   onClientSlashCommand?: (invocation: SlashCommandInvocation) => boolean | void | Promise<boolean | void>;
   onRenameSession?: (sessionId: string, title: string, cwd?: string) => Promise<void>;
   onArchiveSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
@@ -161,6 +167,9 @@ export function PlaceholderPage({
   onStartProjectConversation,
   projectModels,
   projectDefaultModelId,
+  meetingModelId,
+  meetingModels,
+  onOpenMeetingMinutes,
   onClientSlashCommand,
   onRenameSession,
   onArchiveSession,
@@ -182,6 +191,7 @@ export function PlaceholderPage({
           onClientSlashCommand={onClientSlashCommand}
           onNavigateConnectors={() => onNavigate?.("专家·技能·连接器")}
           onOpenKnowledgeBase={() => onNavigate?.("知识库")}
+          onOpenMeetingMinutes={onOpenMeetingMinutes ?? (() => onNavigate?.("录音转写"))}
           onOpenOrganization={() => onNavigate?.("组织")}
           onOpenSession={onOpenSession}
           onRenameSession={onRenameSession}
@@ -289,6 +299,19 @@ export function PlaceholderPage({
             onToast={onToast}
           />
         </div>
+      </DeferredPanel>
+    );
+  }
+
+  if (label === "录音转写") {
+    return (
+      <DeferredPanel>
+        <MeetingMinutesPanel
+          modelId={meetingModelId}
+          models={meetingModels ?? []}
+          onToast={onToast}
+          onOpenModelSettings={onOpenModelSettings}
+        />
       </DeferredPanel>
     );
   }

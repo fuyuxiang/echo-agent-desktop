@@ -59,6 +59,7 @@ interface ProjectsPanelProps {
   onClientSlashCommand?: (invocation: SlashCommandInvocation) => boolean | void | Promise<boolean | void>;
   onNavigateConnectors?: () => void;
   onOpenKnowledgeBase?: () => void;
+  onOpenMeetingMinutes?: (modelId?: string) => void;
   onOpenOrganization?: () => void;
 }
 
@@ -93,6 +94,7 @@ export function ProjectsPanel({
   onClientSlashCommand,
   onNavigateConnectors,
   onOpenKnowledgeBase,
+  onOpenMeetingMinutes,
   onOpenOrganization,
 }: ProjectsPanelProps) {
   const projects = useProjectsStore((s) => s.projects);
@@ -145,6 +147,7 @@ export function ProjectsPanel({
           onClientSlashCommand={onClientSlashCommand}
           onNavigateConnectors={onNavigateConnectors}
           onOpenKnowledgeBase={onOpenKnowledgeBase}
+          onOpenMeetingMinutes={onOpenMeetingMinutes}
           onOpenOrganization={onOpenOrganization}
         />
         {dialog}

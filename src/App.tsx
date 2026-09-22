@@ -136,6 +136,7 @@ const SearchOverlay = lazy(() => import("./components/SearchOverlay").then((modu
 const AboutDialog = lazy(() => import("./components/AboutDialog").then((module) => ({ default: module.AboutDialog })));
 const UpdateDialog = lazy(() => import("./components/UpdateDialog").then((module) => ({ default: module.UpdateDialog })));
 const FolderTrustDialog = lazy(() => import("./components/FolderTrustDialog").then((module) => ({ default: module.FolderTrustDialog })));
+const MeetingRecordingIndicator = lazy(() => import("./components/MeetingRecordingIndicator").then((module) => ({ default: module.MeetingRecordingIndicator })));
 
 function publishQuotaAlert(
   records: UsageRecord[],
@@ -218,6 +219,7 @@ function Shell() {
   const [automationRefreshSignal, setAutomationRefreshSignal] = useState(0);
   const [commandRefreshKey, setCommandRefreshKey] = useState(0);
   const [placeholderView, setPlaceholderView] = useState<string | null>(null);
+  const [meetingLaunchModelId, setMeetingLaunchModelId] = useState<string | undefined>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toast, setToast] = useState<{ message: string; actions: ToastAction[] } | null>(null);
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(undefined);
@@ -2525,6 +2527,12 @@ function Shell() {
                   codingModelId={activeSessionModelId ?? newSessionModelId}
                   projectModels={models}
                   projectDefaultModelId={newSessionModelId}
+                  meetingModelId={meetingLaunchModelId ?? activeSessionModelId ?? newSessionModelId}
+                  meetingModels={models}
+                  onOpenMeetingMinutes={(modelId) => {
+                    setMeetingLaunchModelId(modelId);
+                    handleNavigate("录音转写");
+                  }}
                   onOpenModelSettings={() => openSettings("model")}
                   onClientSlashCommand={handleClientSlashCommand}
                   onExitCodingWorkspace={() => {
@@ -2575,6 +2583,10 @@ function Shell() {
                   onOpenSubagentSession={handleSelectSession}
                   onNavigateConnectors={() => setPlaceholderView("专家·技能·连接器")}
                   onOpenKnowledgeBase={() => handleNavigate("知识库")}
+                  onOpenMeetingMinutes={() => {
+                    setMeetingLaunchModelId(activeSessionModelId);
+                    handleNavigate("录音转写");
+                  }}
                   onOpenOrganization={() => handleNavigate("组织")}
                   commandRefreshKey={commandRefreshKey}
                   onClientSlashCommand={handleClientSlashCommand}
@@ -2598,6 +2610,10 @@ function Shell() {
                   onSelectExpert={handleStartWithExpert}
                   onNavigateConnectors={() => setPlaceholderView("专家·技能·连接器")}
                   onOpenKnowledgeBase={() => handleNavigate("知识库")}
+                  onOpenMeetingMinutes={() => {
+                    setMeetingLaunchModelId(currentModelId);
+                    handleNavigate("录音转写");
+                  }}
                   onOpenOrganization={() => handleNavigate("组织")}
                   commandRefreshKey={commandRefreshKey}
                   onClientSlashCommand={handleClientSlashCommand}
@@ -2614,6 +2630,15 @@ function Shell() {
         actions={toast?.actions}
         onDismiss={dismissToast}
       />
+      <Suspense fallback={null}>
+        <MeetingRecordingIndicator
+          onOpen={(modelId) => {
+            setMeetingLaunchModelId(modelId);
+            handleNavigate("录音转写");
+          }}
+          onToast={showToast}
+        />
+      </Suspense>
       {searchOpen && (
         <Suspense fallback={null}>
           <SearchOverlay

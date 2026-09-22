@@ -28,6 +28,7 @@ export function HomePage({
   onSelectExpert,
   onNavigateConnectors,
   onOpenKnowledgeBase,
+  onOpenMeetingMinutes,
   onOpenOrganization,
   commandRefreshKey,
   onClientSlashCommand,
@@ -51,6 +52,7 @@ export function HomePage({
   onSelectExpert?: (agent: AgentEntry) => void;
   onNavigateConnectors?: () => void;
   onOpenKnowledgeBase?: () => void;
+  onOpenMeetingMinutes?: () => void;
   onOpenOrganization?: () => void;
   commandRefreshKey?: number;
   onClientSlashCommand?: (
@@ -140,6 +142,7 @@ export function HomePage({
             showAutomationModeBadge
             onAutomationModeChange={onTaskModeChange}
             onOpenKnowledgeBase={onOpenKnowledgeBase}
+            onOpenMeetingMinutes={onOpenMeetingMinutes}
             onOpenOrganization={onOpenOrganization}
             commandRefreshKey={commandRefreshKey}
             onClientSlashCommand={onClientSlashCommand}

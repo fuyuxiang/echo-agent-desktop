@@ -154,6 +154,7 @@ export function Composer({
   usageMsgCount,
   knowledgeSessionId,
   onOpenKnowledgeBase,
+  onOpenMeetingMinutes,
   onOpenOrganization,
 }: {
   streaming: boolean;
@@ -260,6 +261,8 @@ export function Composer({
   knowledgeSessionId?: string;
   /** Opens the personal knowledge management page. */
   onOpenKnowledgeBase?: () => void;
+  /** Opens the durable MiniMax recording/transcription workbench. */
+  onOpenMeetingMinutes?: () => void;
   /** Opens organization login/connection management. */
   onOpenOrganization?: () => void;
 }) {
@@ -1302,6 +1305,8 @@ export function Composer({
               }
             }}
             onNavigateConnectors={onNavigateConnectors}
+            meetingMinutesAvailable={models?.some((model) => model.id === modelId && model.providerKind === "minimax")}
+            onOpenMeetingMinutes={onOpenMeetingMinutes}
             automationMode={automationMode}
             automationCapabilities={automationSupport}
             automationModeDisabled={automationModeDisabled}

@@ -14,6 +14,37 @@ import { InputAddMenu } from "../InputAddMenu";
 import { agentsList } from "@/lib/agent-client";
 
 describe("InputAddMenu", () => {
+  it("仅在当前模型具备会议能力时显示录音转写", async () => {
+    const onOpenMeetingMinutes = vi.fn();
+    const { rerender } = render(
+      <InputAddMenu
+        onPickFiles={vi.fn()}
+        meetingMinutesAvailable={false}
+        onOpenMeetingMinutes={onOpenMeetingMinutes}
+      />,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    });
+    expect(screen.queryByRole("menuitem", { name: /录音转写/ })).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加" }));
+      rerender(
+        <InputAddMenu
+          onPickFiles={vi.fn()}
+          meetingMinutesAvailable
+          onOpenMeetingMinutes={onOpenMeetingMinutes}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /录音转写/ }));
+    });
+    expect(onOpenMeetingMinutes).toHaveBeenCalledTimes(1);
+  });
+
   it("未提供任务能力回调时不展示操作入口", async () => {
     render(<InputAddMenu onPickFiles={vi.fn()} />);
 

@@ -63,6 +63,7 @@ export function ProjectDetailView({
   onClientSlashCommand,
   onNavigateConnectors,
   onOpenKnowledgeBase,
+  onOpenMeetingMinutes,
   onOpenOrganization,
 }: {
   project: ProjectMeta;
@@ -88,6 +89,7 @@ export function ProjectDetailView({
   onClientSlashCommand?: (invocation: SlashCommandInvocation) => boolean | void | Promise<boolean | void>;
   onNavigateConnectors?: () => void;
   onOpenKnowledgeBase?: () => void;
+  onOpenMeetingMinutes?: (modelId?: string) => void;
   onOpenOrganization?: () => void;
 }) {
   // 读最新（交互后 store 更新，父传入的快照可能过期）。
@@ -341,6 +343,7 @@ export function ProjectDetailView({
               onDismissExpert={() => setComposerExpert(null)}
               onNavigateConnectors={onNavigateConnectors}
               onOpenKnowledgeBase={onOpenKnowledgeBase}
+              onOpenMeetingMinutes={() => onOpenMeetingMinutes?.(projectModelId)}
               onOpenOrganization={onOpenOrganization}
               onClientSlashCommand={onClientSlashCommand}
               filePaths={mentionCandidates.filePaths}

@@ -24,6 +24,7 @@ mod experts;
 mod ext;
 mod logging;
 mod mcp;
+mod meeting_minutes;
 mod meta;
 mod notifications;
 mod org;
@@ -520,6 +521,21 @@ pub fn run() {
             // send, thumbnails, ACP metadata) keeps working.
             attachment_blob::save_attachment_blob,
             attachment_blob::discard_attachment_blob,
+            // Durable long-form recording, MiniMax ASR, minutes and exports.
+            meeting_minutes::meeting_create,
+            meeting_minutes::meeting_append_pcm,
+            meeting_minutes::meeting_set_paused,
+            meeting_minutes::meeting_finish_recording,
+            meeting_minutes::meeting_import_audio,
+            meeting_minutes::meeting_process,
+            meeting_minutes::meeting_regenerate_minutes,
+            meeting_minutes::meeting_update,
+            meeting_minutes::meeting_list,
+            meeting_minutes::meeting_get,
+            meeting_minutes::meeting_job_active,
+            meeting_minutes::meeting_export,
+            meeting_minutes::meeting_delete,
+            meeting_minutes::meeting_open_audio,
             // connector marketplace (live from a local EchoAgent marketplace dir)
             connectors_catalog::connectors_default_root,
             connectors_catalog::connectors_list_roots,

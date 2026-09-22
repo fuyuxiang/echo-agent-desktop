@@ -67,6 +67,7 @@ export function ChatView({
   onOpenSubagentSession,
   onNavigateConnectors,
   onOpenKnowledgeBase,
+  onOpenMeetingMinutes,
   onOpenOrganization,
   apiReady = true,
   setupHint,
@@ -112,6 +113,7 @@ export function ChatView({
   onOpenSubagentSession?: (sessionId: string, cwd?: string) => void | Promise<void>;
   onNavigateConnectors?: () => void;
   onOpenKnowledgeBase?: () => void;
+  onOpenMeetingMinutes?: () => void;
   onOpenOrganization?: () => void;
   /** False when this session has no configured model or usable credential. */
   apiReady?: boolean;
@@ -913,6 +915,7 @@ export function ChatView({
             onAutomationModeChange={handleAutomationModeChange}
             knowledgeSessionId={sessionId ?? undefined}
             onOpenKnowledgeBase={onOpenKnowledgeBase}
+            onOpenMeetingMinutes={onOpenMeetingMinutes}
             onOpenOrganization={onOpenOrganization}
             commandSessionId={sessionId ?? undefined}
             commandRefreshKey={commandRefreshKey}

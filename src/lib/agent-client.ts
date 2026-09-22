@@ -651,6 +651,7 @@ export async function agentResolvePlanApproval(
 export type ProviderKind =
   | "anthropic"
   | "openai"
+  | "minimax"
   | "deepseek"
   | "qwen"
   | "custom"

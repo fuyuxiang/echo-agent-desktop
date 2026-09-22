@@ -60,6 +60,7 @@ interface ProviderPreset {
 const PROVIDER_KINDS: ProviderKind[] = [
   "openai",
   "anthropic",
+  "minimax",
   "deepseek",
   "qwen",
   "custom",
@@ -82,6 +83,14 @@ const PROVIDER_PRESETS: Record<ProviderKind, ProviderPreset> = {
     apiBackend: "messages",
     authScheme: "x_api_key",
     placeholderKey: "sk-ant-...",
+  },
+  minimax: {
+    label: "MiniMax 官方接口（支持录音转写）",
+    shortLabel: "MiniMax",
+    baseUrl: "https://api.minimax.cn/v1",
+    apiBackend: "chat_completions",
+    authScheme: "bearer",
+    placeholderKey: "MiniMax API Key",
   },
   deepseek: {
     label: "DeepSeek 官方接口",
@@ -798,6 +807,8 @@ function ConnectionEditor({
                 <KeyRound size={11} />
                 {draft.providerKind === "openai"
                   ? "使用 OpenAI Platform API Key；ChatGPT 订阅登录不能作为模型 API 凭据。"
+                  : draft.providerKind === "minimax"
+                    ? "同一 MiniMax API Key 用于对话、录音转写与会议纪要；语音额度需在 MiniMax 开放平台单独开通。"
                   : "保存在本机私有配置中；编辑时无需重复输入。"}
               </span>
             </div>
