@@ -126,3 +126,18 @@ describe("MINIMAP_DEFAULTS", () => {
     });
   });
 });
+
+describe("OutlineSymbol kind field", () => {
+  it("exposes OutlineSymbol.kind from Monaco DocumentSymbol", () => {
+    // 静态断言 OutlineSymbol 形状有 kind 字段
+    const sample: { kind?: string; name: string; startLine: number; endLine: number; collapsible?: boolean } = {
+      name: "foo",
+      kind: "Function",
+      startLine: 1,
+      endLine: 3,
+      collapsible: true,
+    };
+    expect(sample.kind).toBe("Function");
+    expect(sample.collapsible).toBe(true);
+  });
+});

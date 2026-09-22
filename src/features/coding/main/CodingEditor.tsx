@@ -24,6 +24,7 @@ export interface CodingEditorDiagnostic {
 
 export interface EditorSymbol {
   name: string;
+  kind?: string;
   detail?: string;
   line: number;
   endLine?: number;
@@ -61,13 +62,17 @@ interface CodingEditorProps {
 
 interface OutlineSymbol {
   name: string;
+  kind?: string;
   detail?: string;
   startLine: number;
   endLine: number;
+  /** True for top-level symbols that should be collapsible. */
+  collapsible?: boolean;
 }
 
 interface DocumentSymbolLike {
   name: string;
+  kind?: unknown;
   detail?: string;
   range: { startLineNumber: number; endLineNumber?: number };
   children?: DocumentSymbolLike[];
@@ -352,9 +357,11 @@ export function CodingEditor({
       const flatten = (entries: DocumentSymbolLike[]): OutlineSymbol[] => entries.flatMap((symbol) => {
         const current: OutlineSymbol = {
           name: symbol.name,
+          kind: symbol.kind ? String(symbol.kind) : symbol.detail,
           detail: symbol.detail,
           startLine: symbol.range.startLineNumber,
           endLine: symbol.range.endLineNumber ?? symbol.range.startLineNumber,
+          collapsible: (symbol.children?.length ?? 0) > 0,
         };
         return [current, ...flatten(symbol.children ?? [])];
       });
@@ -362,6 +369,7 @@ export function CodingEditor({
       outlineSymbolsRef.current = flattened;
       const symbols = flattened.map((symbol) => ({
         name: symbol.name,
+        kind: symbol.kind,
         detail: symbol.detail,
         line: symbol.startLine,
         endLine: symbol.endLine,

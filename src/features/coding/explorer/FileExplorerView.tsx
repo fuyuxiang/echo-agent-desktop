@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import {
+  Box,
   ChevronDown,
   ChevronRight,
   Eye,
@@ -7,9 +8,11 @@ import {
   FileCode2,
   FilePlus2,
   FolderPlus,
+  FunctionSquare,
   ListCollapse,
   LocateFixed,
   RefreshCw,
+  Variable,
   X,
 } from "lucide-react";
 
@@ -46,6 +49,14 @@ interface FileExplorerViewProps {
 function basename(path: string): string {
   const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
   return normalized.split("/").filter(Boolean).pop() ?? path;
+}
+
+function outlineIcon(kind?: string): ReactNode {
+  if (!kind) return null;
+  if (kind.includes("Function") || kind.includes("Method")) return <FunctionSquare size={11} />;
+  if (kind.includes("Class") || kind.includes("Struct") || kind.includes("Interface")) return <Box size={11} />;
+  if (kind.includes("Variable") || kind.includes("Constant") || kind.includes("Property")) return <Variable size={11} />;
+  return null;
 }
 
 function Section({
@@ -110,6 +121,7 @@ export function FileExplorerView({
   const [openEditorsOpen, setOpenEditorsOpen] = useState(true);
   const [filesOpen, setFilesOpen] = useState(true);
   const [outlineOpen, setOutlineOpen] = useState(true);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const openTabs = tabs;
 
   return (
@@ -238,18 +250,38 @@ export function FileExplorerView({
           <div className="coding-explorer-section__empty">当前文件没有可显示的符号</div>
         ) : (
           <div className="coding-outline" aria-label={`${activeFileName} 的大纲`}>
-            {symbols.map((symbol, index) => (
-              <button
-                key={`${symbol.name}:${symbol.line}:${index}`}
-                type="button"
-                onClick={() => onOpenSymbol(symbol)}
-                title={symbol.detail ?? symbol.name}
-              >
-                <span>{symbol.name}</span>
-                {symbol.detail && <small>{symbol.detail}</small>}
-                <b>{symbol.line}</b>
-              </button>
-            ))}
+            {symbols.map((symbol, index) => {
+              const key = `${symbol.name}:${symbol.line}:${index}`;
+              const isCollapsed = collapsed.has(key);
+              const showToggle = symbol.kind?.includes("Class") || symbol.kind?.includes("Function");
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={`coding-outline__row${isCollapsed ? " is-collapsed" : ""}`}
+                  onClick={() => {
+                    setCollapsed((current) => {
+                      const next = new Set(current);
+                      if (next.has(key)) next.delete(key);
+                      else next.add(key);
+                      return next;
+                    });
+                    onOpenSymbol(symbol);
+                  }}
+                  title={symbol.detail ?? symbol.name}
+                >
+                  {showToggle ? (
+                    isCollapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />
+                  ) : (
+                    <span aria-hidden="true" />
+                  )}
+                  {outlineIcon(symbol.kind)}
+                  <span className="coding-outline__name">{symbol.name}</span>
+                  {symbol.detail && <small className="coding-outline__detail">{symbol.detail}</small>}
+                  <b className="coding-outline__line">{symbol.line}</b>
+                </button>
+              );
+            })}
           </div>
         )}
       </Section>

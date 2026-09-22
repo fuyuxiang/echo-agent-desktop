@@ -14,6 +14,7 @@ export type PaletteMode = "commands" | "files" | "symbols";
 
 export interface PaletteSymbol {
   name: string;
+  kind?: string;
   detail?: string;
   path: string;
   line: number;
