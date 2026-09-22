@@ -1,4 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
+import type * as monaco from "monaco-editor";
+
+// Capture every setLanguageConfiguration call the bootstrap module makes at
+// import time. monaco-editor 0.52 does NOT expose getLanguageConfiguration
+// on the public `monaco.languages` API, so we record calls instead of reading
+// state back. The bootstrap module runs the for-loop before any test code
+// executes, so the spy must be installed before the module is imported.
+const setLanguageConfigurationCalls = vi.hoisted<
+  Array<[string, monaco.languages.LanguageConfiguration]>
+>(() => []);
+
+vi.mock("monaco-editor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("monaco-editor")>();
+  return {
+    ...actual,
+    languages: {
+      ...actual.languages,
+      setLanguageConfiguration: (
+        id: string,
+        config: monaco.languages.LanguageConfiguration,
+      ) => {
+        setLanguageConfigurationCalls.push([id, config]);
+        return actual.languages.setLanguageConfiguration(id, config);
+      },
+    },
+  };
+});
 
 // The bootstrap module wires five `?worker` imports that vite resolves to
 // inline worker bundles. jsdom has no Worker constructor, so stub them with
@@ -54,5 +81,24 @@ describe("monaco-bootstrap language registry", () => {
       expect(registered.has(id), `missing language id: ${id}`).toBe(true);
     }
   }, 20_000);
+});
+
+describe("monaco language configuration", () => {
+  const CONFIGURED_IDS = ["yaml", "shell", "sql", "python", "go", "rust"];
+
+  it.each(CONFIGURED_IDS)(
+    "registers %s with comments and autoClosingPairs",
+    (id) => {
+      const matching = setLanguageConfigurationCalls.find(
+        ([calledId]) => calledId === id,
+      );
+      expect(matching, `language ${id} has no configuration`).toBeDefined();
+      const [, config] = matching as [string, Record<string, unknown>];
+      expect(
+        config.comments || config.brackets || config.autoClosingPairs,
+        `language ${id} configuration is missing required fields`,
+      ).toBeDefined();
+    },
+  );
 });
 

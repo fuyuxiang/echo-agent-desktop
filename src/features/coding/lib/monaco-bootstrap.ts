@@ -34,6 +34,139 @@ import "monaco-editor/esm/vs/basic-languages/shell/shell.contribution";
 import "monaco-editor/esm/vs/basic-languages/sql/sql.contribution";
 import "monaco-editor/esm/vs/basic-languages/ini/ini.contribution";
 
+/** Provide bracket/auto-closing configuration for languages Monaco ships
+ *  without an opinionated default. Without this, smart-indent and paired
+ *  quote insertion behave inconsistently across languages. */
+const LANGUAGE_CONFIGURATIONS: Array<
+  [string, monaco.languages.LanguageConfiguration]
+> = [
+  [
+    "yaml",
+    {
+      comments: { lineComment: "#" },
+      brackets: [
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"],
+      ],
+      autoClosingPairs: [
+        { open: "{", close: "}" },
+        { open: "[", close: "]" },
+        { open: "(", close: ")" },
+        { open: '"', close: '"', notIn: ["string"] },
+        { open: "'", close: "'", notIn: ["string"] },
+      ],
+      surroundingPairs: [
+        { open: "{", close: "}" },
+        { open: "[", close: "]" },
+        { open: "(", close: ")" },
+        { open: '"', close: '"' },
+        { open: "'", close: "'" },
+      ],
+    },
+  ],
+  [
+    "shell",
+    {
+      comments: { lineComment: "#" },
+      brackets: [
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"],
+      ],
+      autoClosingPairs: [
+        { open: "{", close: "}" },
+        { open: "[", close: "]" },
+        { open: "(", close: ")" },
+        { open: '"', close: '"', notIn: ["string"] },
+        { open: "'", close: "'", notIn: ["string"] },
+        { open: "`", close: "`", notIn: ["string"] },
+      ],
+      surroundingPairs: [
+        { open: "{", close: "}" },
+        { open: "[", close: "]" },
+        { open: "(", close: ")" },
+        { open: '"', close: '"' },
+        { open: "'", close: "'" },
+        { open: "`", close: "`" },
+      ],
+    },
+  ],
+  [
+    "sql",
+    {
+      comments: { lineComment: "--" },
+      brackets: [
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"],
+      ],
+      autoClosingPairs: [
+        { open: "(", close: ")" },
+        { open: '"', close: '"', notIn: ["string"] },
+        { open: "'", close: "'", notIn: ["string"] },
+      ],
+    },
+  ],
+  [
+    "python",
+    {
+      comments: { lineComment: "#" },
+      brackets: [
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"],
+      ],
+      autoClosingPairs: [
+        { open: "{", close: "}" },
+        { open: "[", close: "]" },
+        { open: "(", close: ")" },
+        { open: '"', close: '"', notIn: ["string"] },
+        { open: "'", close: "'", notIn: ["string"] },
+      ],
+    },
+  ],
+  [
+    "go",
+    {
+      comments: { lineComment: "//" },
+      brackets: [
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"],
+      ],
+      autoClosingPairs: [
+        { open: "{", close: "}" },
+        { open: "[", close: "]" },
+        { open: "(", close: ")" },
+        { open: '"', close: '"', notIn: ["string"] },
+        { open: "`", close: "`", notIn: ["string"] },
+      ],
+    },
+  ],
+  [
+    "rust",
+    {
+      comments: { lineComment: "//" },
+      brackets: [
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"],
+      ],
+      autoClosingPairs: [
+        { open: "{", close: "}" },
+        { open: "[", close: "]" },
+        { open: "(", close: ")" },
+        { open: '"', close: '"', notIn: ["string"] },
+      ],
+    },
+  ],
+];
+
+for (const [id, config] of LANGUAGE_CONFIGURATIONS) {
+  monaco.languages.setLanguageConfiguration(id, config);
+}
+
 type MonacoApi = typeof monaco;
 type MonacoEnvironment = {
   getWorker?: (workerId: string, label: string) => Worker;

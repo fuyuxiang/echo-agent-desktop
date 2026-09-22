@@ -9,3 +9,20 @@ import "@testing-library/jest-dom/vitest";
 if (typeof document !== "undefined" && typeof document.queryCommandSupported !== "function") {
   document.queryCommandSupported = () => false;
 }
+
+// monaco-editor 0.52 的 StandaloneThemeService 在构造期与延迟回调里都会
+// 读取 mainWindow.matchMedia(forced-colors) 探测系统高对比度;jsdom 没有
+// 这个 API,直接抛 TypeError 变成 unhandled rejection。补一个永远
+// matches=false 的 stub,Monaco 就不会再触发。
+if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
+  window.matchMedia = (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  });
+}
