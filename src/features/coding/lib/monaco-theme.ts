@@ -160,23 +160,11 @@ function themeData(palette: ThemePalette): Monaco.editor.IStandaloneThemeData {
 
   return {
     base: palette.base,
-    // A self-contained token map makes the generated `.mtk*` indexes stable.
-    // The scoped CSS fallback can therefore preserve syntax colors even when a
-    // desktop WebView drops Monaco's dynamically injected theme stylesheet.
-    inherit: false,
-    encodedTokensColors: [
-      palette.foreground,
-      palette.background,
-      palette.comment,
-      palette.keyword,
-      palette.string,
-      palette.type,
-      palette.number,
-      palette.invalid,
-      palette.property,
-      palette.callable,
-      palette.delimiter,
-    ],
+    // Keep Monaco's complete language token rules and override only Echo's
+    // palette. Hard-coding `.mtk*` color indexes is unsafe because Monaco
+    // de-duplicates and rebuilds that runtime color map whenever the theme
+    // changes.
+    inherit: true,
     rules: [
       { token: "", foreground, background },
       { token: "comment", foreground: comment, fontStyle: "italic" },
@@ -244,5 +232,14 @@ export function resolveEchoMonacoTheme(
 
 export function hasMonacoRuntimeThemeStyles(root: Document = document): boolean {
   return Array.from(root.querySelectorAll<HTMLStyleElement>("style.monaco-colors"))
-    .some((style) => (style.textContent ?? "").includes(".mtk1"));
+    .some((style) => {
+      const colors = new Set<string>();
+      const css = style.textContent ?? "";
+      const tokenRule = /\.mtk\d+\s*\{[^}]*\bcolor\s*:\s*([^;}]+)[;}]/g;
+      for (const match of css.matchAll(tokenRule)) {
+        colors.add(match[1].trim().toLowerCase());
+        if (colors.size >= 2) return true;
+      }
+      return false;
+    });
 }

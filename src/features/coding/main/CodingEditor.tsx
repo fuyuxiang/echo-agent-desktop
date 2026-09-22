@@ -104,12 +104,13 @@ function scheduleThemeHealthCheck(
   schedule(() => {
     if (hasMonacoRuntimeThemeStyles()) return;
     // Re-applying the theme repairs transient WebView style injection failures.
-    // The static scoped palette in coding-workbench.css remains the final guard.
+    // Monaco must remain the single owner of its generated `.mtk*` color map;
+    // a static index-based override can silently flatten all syntax colors.
     monaco.editor.setTheme(themeName);
     schedule(() => {
       if (hasMonacoRuntimeThemeStyles() || themeFallbackReported) return;
       themeFallbackReported = true;
-      console.warn("[EchoAgent] Monaco runtime theme styles are unavailable; using static fallback");
+      console.warn("[EchoAgent] Monaco runtime theme styles are unavailable; syntax colors may be degraded");
       reportEvent("coding.editor.theme_styles_missing", "warn", { theme: themeName });
     });
   });
