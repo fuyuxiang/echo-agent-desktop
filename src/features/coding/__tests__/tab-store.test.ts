@@ -232,8 +232,10 @@ describe("WorkspaceUiState", () => {
   it("defaults minimapRenderCharacters to true", () => {
     const state: WorkspaceUiState = {
       tabs: [],
-      expandedPaths: [],
-      cutPaths: new Set(),
+      activeId: null,
+      contextPaths: [],
+      editorContext: null,
+      selectedDirectory: "",
       minimapRenderCharacters: true,
     };
     expect(state.minimapRenderCharacters).toBe(true);

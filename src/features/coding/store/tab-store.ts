@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import type { EditorCodeContext } from "../lib/documentation";
+
 /** Virtual document tabs produced by the workbench rather than the filesystem. */
 export type DocTabKind = "delivery" | "taskDag" | "profile";
 
@@ -135,12 +137,17 @@ export function isDirty(tab: WorkbenchTab): boolean {
 
 /**
  * Per-workspace UI state retained across tab switches so each project keeps
- * its own minimap rendering mode, tree expansion, and cut/copy markers.
+ * its own tab set, editor context, and minimap rendering mode.
+ *
+ * Tree expansion lives in `treeExpandedPathsRef` and cut/copy markers live
+ * in `useClipboardStore`; neither is part of this record.
  */
 export interface WorkspaceUiState {
   tabs: WorkbenchTab[];
-  expandedPaths: string[];
-  cutPaths: Set<string>;
+  activeId: string | null;
+  contextPaths: string[];
+  editorContext: EditorCodeContext | null;
+  selectedDirectory: string;
   minimapRenderCharacters: boolean;
 }
 
