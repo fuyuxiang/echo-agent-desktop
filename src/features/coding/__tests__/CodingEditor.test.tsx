@@ -34,7 +34,7 @@ vi.mock("@monaco-editor/react", () => {
   return { default: Editor, Editor, DiffEditor };
 });
 
-import { CodingEditor } from "../main/CodingEditor";
+import { CodingEditor, MINIMAP_DEFAULTS } from "../main/CodingEditor";
 
 function props() {
   return {
@@ -111,5 +111,18 @@ describe("CodingEditor minimap defaults", () => {
     expect(defaults.renderCharacters).toBe(true);
     expect(defaults.maxColumn).toBe(120);
     expect(defaults.showSlider).toBe("mouseover");
+  });
+});
+
+describe("MINIMAP_DEFAULTS", () => {
+  it("matches the documented shape", () => {
+    expect(MINIMAP_DEFAULTS).toEqual({
+      enabled: true,
+      maxColumn: 120,
+      renderCharacters: true,
+      showSlider: "mouseover",
+      side: "right",
+      scale: 1,
+    });
   });
 });

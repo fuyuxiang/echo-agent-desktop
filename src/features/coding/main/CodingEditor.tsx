@@ -47,6 +47,14 @@ interface CodingEditorProps {
   onContextChange?: (context: EditorCodeContext) => void;
   /** Context-menu/shortcut entry for the same documentation flow as /doc. */
   onDocumentationAction?: (context: EditorCodeContext) => void;
+  /** Controlled switch for rendering minimap characters vs colored blocks. */
+  minimapRenderCharacters?: boolean;
+  /** Fires when the caller toggles the minimap characters; surface for the workbench settings. */
+  onMinimapRenderCharactersChange?: (next: boolean) => void;
+  /** Cursor position listener for the workbench footer status bar. */
+  onCursorChange?: (cursor: { line: number; column: number }) => void;
+  /** Language/EOL listener for the workbench footer status bar. */
+  onLanguageChange?: (info: { language: string; eol: "LF" | "CRLF" }) => void;
 }
 
 interface OutlineSymbol {
@@ -66,6 +74,15 @@ interface DocumentSymbolLike {
 const MAX_SELECTION_CONTEXT = 12_000;
 const MONACO_STARTUP_TIMEOUT_MS = 10_000;
 const FORCED_COLORS_QUERY = "(forced-colors: active)";
+
+export const MINIMAP_DEFAULTS = {
+  enabled: true,
+  maxColumn: 120,
+  renderCharacters: true,
+  showSlider: "mouseover" as const,
+  side: "right" as const,
+  scale: 1,
+} satisfies NonNullable<MonacoEditor.IEditorOptions["minimap"]>;
 
 let themeFallbackReported = false;
 
@@ -153,7 +170,15 @@ export function CodingEditor({
   onSymbolAction,
   onContextChange,
   onDocumentationAction,
+  minimapRenderCharacters,
+  onMinimapRenderCharactersChange,
+  onCursorChange,
+  onLanguageChange,
 }: CodingEditorProps) {
+  // `onMinimapRenderCharactersChange` is the controlled-input counterpart of
+  // `minimapRenderCharacters`; the parent wires its own state setter through it
+  // and the editor reacts to prop changes via the `useEffect` below.
+  void onMinimapRenderCharactersChange;
   const { theme } = useTheme();
   const [forcedColors, setForcedColors] = useState(forcedColorsAreActive);
   const [startup, setStartup] = useState<MonacoStartupState>({ status: "loading" });
@@ -170,6 +195,9 @@ export function CodingEditor({
   const symbolActionHandlerRef = useRef(onSymbolAction);
   const contextHandlerRef = useRef(onContextChange);
   const documentationActionHandlerRef = useRef(onDocumentationAction);
+  const minimapRenderCharactersRef = useRef(minimapRenderCharacters);
+  const cursorChangeHandlerRef = useRef(onCursorChange);
+  const languageChangeHandlerRef = useRef(onLanguageChange);
 
   useEffect(() => {
     diagnosticsHandlerRef.current = onDiagnostics;
@@ -224,6 +252,16 @@ export function CodingEditor({
     editorRef.current.revealPositionInCenter(position);
     editorRef.current.focus();
   }, [reveal]);
+
+  useEffect(() => {
+    minimapRenderCharactersRef.current = minimapRenderCharacters;
+    editorRef.current?.updateOptions({
+      minimap: {
+        ...MINIMAP_DEFAULTS,
+        renderCharacters: minimapRenderCharacters ?? MINIMAP_DEFAULTS.renderCharacters,
+      },
+    });
+  }, [minimapRenderCharacters]);
 
   useEffect(() => () => {
     symbolsGenerationRef.current += 1;
@@ -372,6 +410,28 @@ export function CodingEditor({
     editorRef.current = editor;
     registerDiagnostics(editor, monaco);
     publishSymbols(editor, monaco);
+    // Cursor context for the workbench footer status bar.
+    editor.onDidChangeCursorPosition((event) => {
+      cursorChangeHandlerRef.current?.({
+        line: event.position.lineNumber,
+        column: event.position.column,
+      });
+    });
+    // Language / EOL context for the workbench footer status bar.
+    const model = editor.getModel();
+    if (model) {
+      model.onDidChangeLanguage(() => {
+        languageChangeHandlerRef.current?.({
+          language: model.getLanguageId(),
+          eol: model.getEOL() === "\r\n" ? "CRLF" : "LF",
+        });
+      });
+      // Publish once on mount so the footer reflects the current language.
+      languageChangeHandlerRef.current?.({
+        language: model.getLanguageId(),
+        eol: model.getEOL() === "\r\n" ? "CRLF" : "LF",
+      });
+    }
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
       saveHandlerRef.current(),
     );
@@ -432,6 +492,13 @@ export function CodingEditor({
     outlineSymbolsRef.current = [];
     editorRef.current = modified;
     registerDiagnostics(modified, monaco);
+    // Cursor context for the workbench footer status bar (diff view).
+    modified.onDidChangeCursorPosition((event) => {
+      cursorChangeHandlerRef.current?.({
+        line: event.position.lineNumber,
+        column: event.position.column,
+      });
+    });
     modified.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
       saveHandlerRef.current(),
     );
@@ -492,12 +559,8 @@ export function CodingEditor({
     fontSize: 13,
     lineHeight: 21,
     minimap: {
-      enabled: true,
-      maxColumn: 120,
-      renderCharacters: true,
-      showSlider: "mouseover" as const,
-      side: "right" as const,
-      scale: 1,
+      ...MINIMAP_DEFAULTS,
+      renderCharacters: minimapRenderCharacters ?? MINIMAP_DEFAULTS.renderCharacters,
     },
     padding: { top: 10, bottom: 10 },
     experimentalWhitespaceRendering: "off" as const,
