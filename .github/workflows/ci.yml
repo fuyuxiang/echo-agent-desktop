@@ -99,7 +99,9 @@ jobs:
           workspaces: src-tauri -> target
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --lib --target x86_64-apple-darwin
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --lib --target aarch64-apple-darwin
-      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib automation:: -j 2
+      - run: >-
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          --lib automation:: -j 2
 
   automation-windows:
     name: Automation / Windows
@@ -117,7 +119,9 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --lib
-      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib automation:: -j 2
+      - run: >-
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          --lib automation:: -j 2
 
   windows-search-bundle:
     name: Windows built-in tool reliability
