@@ -5863,8 +5863,9 @@ button.diff__path {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 0;
-  width: 264px;
-  min-width: 248px;
+  width: 280px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
   background: var(--echo-bg-primary);
   border: 1px solid var(--echo-border-default);
   border-radius: 12px;
@@ -5890,7 +5891,8 @@ button.diff__path {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 12px;
+  height: 52px;
+  padding: 8px 14px;
   cursor: pointer;
   border: 0;
   border-radius: 0;
@@ -5900,10 +5902,16 @@ button.diff__path {
   text-align: left;
   transition: background .1s;
   user-select: none;
+  box-sizing: border-box;
 }
 .iam-item:hover,
 .iam-item--active {
   background: var(--echo-bg-hover);
+}
+.iam-item:focus-visible {
+  outline: none;
+  background: var(--echo-bg-hover);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--echo-brand) 65%, transparent);
 }
 .iam-item--selected {
   color: var(--echo-brand);
@@ -5923,6 +5931,9 @@ button.diff__path {
   height: 20px;
   flex-shrink: 0;
   color: var(--echo-text-medium);
+}
+.iam-item:not(:has(.iam-item__description)) .iam-item__copy {
+  justify-content: center;
 }
 .iam-item__copy {
   flex: 1;
@@ -5963,9 +5974,13 @@ button.diff__path {
 .iam-submenu {
   position: absolute;
   left: calc(100% + 4px);
-  top: 0;
-  min-width: 200px;
-  max-width: 280px;
+  top: var(--iam-submenu-top, 0);
+  width: 280px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
   background: var(--echo-bg-primary);
   border: 1px solid var(--echo-border-default);
   border-radius: 12px;
@@ -5974,8 +5989,12 @@ button.diff__path {
   z-index: calc(var(--echo-layer-popover) + 1);
   animation: iam-fadeIn .12s ease-out;
 }
+.iam-submenu--left {
+  right: calc(100% + 4px);
+  left: auto;
+}
 .iam-submenu__scroll {
-  max-height: 300px;
+  max-height: min(300px, calc(100vh - 28px));
   overflow-y: auto;
 }
 .iam-sub-item {
@@ -5983,6 +6002,7 @@ button.diff__path {
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-height: 48px;
   padding: 7px 12px;
   border: none;
   background: none;
@@ -5991,9 +6011,15 @@ button.diff__path {
   font-size: 13px;
   color: var(--echo-text-strong);
   transition: background .1s;
+  box-sizing: border-box;
 }
 .iam-sub-item:hover {
   background: var(--echo-bg-hover);
+}
+.iam-sub-item:focus-visible {
+  outline: none;
+  background: var(--echo-bg-hover);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--echo-brand) 65%, transparent);
 }
 .iam-sub-avatar {
   display: flex;
@@ -6076,6 +6102,11 @@ button.diff__path {
 }
 .iam-sub-footer:hover {
   background: var(--echo-bg-hover);
+}
+.iam-sub-footer:focus-visible {
+  outline: none;
+  background: var(--echo-bg-hover);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--echo-brand) 65%, transparent);
 }
 
 /* ---------- Recording transcription / meeting minutes ---------- */

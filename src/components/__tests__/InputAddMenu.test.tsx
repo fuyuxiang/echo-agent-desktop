@@ -55,6 +55,19 @@ describe("InputAddMenu", () => {
     expect(screen.queryByText("操作电脑")).toBeNull();
   });
 
+  it("鼠标打开菜单时保留触发器焦点，不强制高亮添加文件", async () => {
+    render(<InputAddMenu onPickFiles={vi.fn()} />);
+
+    const trigger = screen.getByRole("button", { name: "添加" });
+    trigger.focus();
+    await act(async () => {
+      fireEvent.click(trigger, { detail: 1 });
+    });
+
+    expect(trigger).toHaveFocus();
+    expect(screen.getByRole("menuitem", { name: "添加文件" })).not.toHaveFocus();
+  });
+
   it("在 + 菜单中用中文能力名按任务开启，不暴露内部模式名", async () => {
     const onAutomationModeChange = vi.fn();
     render(
@@ -110,6 +123,73 @@ describe("InputAddMenu", () => {
     await waitFor(() => expect(onNavigateConnectors).toHaveBeenCalledTimes(1));
   });
 
+  it("显示录音转写时，三个目录子菜单仍跟随各自的实际行位置", async () => {
+    render(
+      <InputAddMenu
+        onPickFiles={vi.fn()}
+        meetingMinutesAvailable
+        onOpenMeetingMinutes={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "添加" }), { detail: 1 });
+    const rows = [
+      { label: "专家", offsetTop: 176 },
+      { label: "技能", offsetTop: 228 },
+      { label: "连接器", offsetTop: 280 },
+    ];
+
+    for (const { label, offsetTop } of rows) {
+      const row = screen.getByRole("menuitem", { name: label });
+      Object.defineProperty(row, "offsetTop", { configurable: true, value: offsetTop });
+      fireEvent.mouseEnter(row);
+
+      const submenu = await screen.findByRole("menu", { name: `${label}子菜单` });
+      await waitFor(() => {
+        expect(submenu.style.getPropertyValue("--iam-submenu-top")).toBe(`${offsetTop}px`);
+      });
+    }
+  });
+
+  it("空间不足时上移二级菜单并自动翻到主菜单左侧", async () => {
+    render(<InputAddMenu onPickFiles={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "添加" }), { detail: 1 });
+    const connectorRow = screen.getByRole("menuitem", { name: "连接器" });
+    Object.defineProperty(connectorRow, "offsetTop", { configurable: true, value: 600 });
+    fireEvent.mouseEnter(connectorRow);
+
+    const submenu = await screen.findByRole("menu", { name: "连接器子菜单" });
+    const popover = screen.getByRole("menu", { name: "添加内容" });
+    Object.defineProperty(submenu, "offsetHeight", { configurable: true, value: 300 });
+    Object.defineProperty(submenu, "offsetWidth", { configurable: true, value: 280 });
+    const popoverTop = 100;
+    const popoverRight = window.innerWidth - 20;
+    const popoverLeft = popoverRight - 280;
+    const rectSpy = vi.spyOn(popover, "getBoundingClientRect").mockReturnValue({
+      x: popoverLeft,
+      y: popoverTop,
+      top: popoverTop,
+      right: popoverRight,
+      bottom: popoverTop + 400,
+      left: popoverLeft,
+      width: 280,
+      height: 400,
+      toJSON: () => ({}),
+    });
+
+    try {
+      fireEvent(window, new Event("resize"));
+      const expectedTop = window.innerHeight - 8 - popoverTop - 300;
+      await waitFor(() => {
+        expect(submenu.style.getPropertyValue("--iam-submenu-top")).toBe(`${expectedTop}px`);
+        expect(submenu).toHaveClass("iam-submenu--left");
+      });
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
   it("支持方向键进入子菜单，Escape 关闭并恢复触发器焦点", async () => {
     vi.mocked(agentsList).mockResolvedValueOnce([
       {
@@ -123,7 +203,7 @@ describe("InputAddMenu", () => {
     render(<InputAddMenu onPickFiles={vi.fn()} onSelectExpert={vi.fn()} />);
 
     const trigger = screen.getByRole("button", { name: "添加" });
-    fireEvent.click(trigger);
+    fireEvent.click(trigger, { detail: 0 });
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("menu", { name: "添加内容" })).toBeInTheDocument();
 

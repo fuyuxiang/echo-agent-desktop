@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { AudioLines, Check, ChevronRight, Globe2, Monitor, Paperclip } from "lucide-react";
 import {
   AddIcon,
@@ -26,6 +27,8 @@ interface InputAddMenuProps {
 
 type MenuItemId = "add-files" | "meeting-minutes" | "browser-use" | "computer-use" | "experts" | "skills" | "connectors";
 type CatalogId = "experts" | "skills" | "connectors";
+type SubmenuStyle = CSSProperties & { "--iam-submenu-top": string };
+type SubmenuSide = "left" | "right";
 
 interface MenuItem {
   id: MenuItemId;
@@ -33,6 +36,9 @@ interface MenuItem {
   icon: React.ReactNode;
   description?: string;
 }
+
+const SUBMENU_GAP = 4;
+const SUBMENU_VIEWPORT_INSET = 8;
 
 const FILE_ITEMS: MenuItem[] = [
   { id: "add-files", label: "添加文件", icon: <Paperclip size={16} /> },
@@ -85,11 +91,15 @@ export function InputAddMenu({
 }: InputAddMenuProps) {
   const [open, setOpen] = useState(false);
   const [hoveredItem, setHoveredItem] = useState<MenuItemId | null>(null);
+  const [submenuTop, setSubmenuTop] = useState(0);
+  const [submenuSide, setSubmenuSide] = useState<SubmenuSide>("right");
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const mainItemRefs = useRef(new Map<MenuItemId, HTMLButtonElement>());
   const submenuRef = useRef<HTMLDivElement>(null);
   const loadGenerationRef = useRef(0);
+  const focusFirstItemOnOpenRef = useRef(false);
   const pendingSubmenuFocusRef = useRef(false);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -140,7 +150,9 @@ export function InputAddMenu({
   }, [open, loadData]);
 
   useEffect(() => {
-    if (open) mainItemRefs.current.get("add-files")?.focus();
+    if (!open || !focusFirstItemOnOpenRef.current) return;
+    mainItemRefs.current.get("add-files")?.focus();
+    focusFirstItemOnOpenRef.current = false;
   }, [open]);
 
   // Close on outside click
@@ -148,6 +160,7 @@ export function InputAddMenu({
     if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        focusFirstItemOnOpenRef.current = false;
         setOpen(false);
         setHoveredItem(null);
       }
@@ -158,6 +171,7 @@ export function InputAddMenu({
 
   useEffect(() => {
     if (!disabled) return;
+    focusFirstItemOnOpenRef.current = false;
     setOpen(false);
     setHoveredItem(null);
   }, [disabled]);
@@ -168,6 +182,7 @@ export function InputAddMenu({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        focusFirstItemOnOpenRef.current = false;
         setOpen(false);
         setHoveredItem(null);
         triggerRef.current?.focus();
@@ -191,7 +206,7 @@ export function InputAddMenu({
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     // Direct actions never open the catalog flyout.
     if (!isCatalogItem(id)) { setHoveredItem(null); return; }
-    hoverTimerRef.current = setTimeout(() => setHoveredItem(id), 150);
+    hoverTimerRef.current = setTimeout(() => openSubmenu(id), 150);
   };
 
   const handleItemLeave = () => {
@@ -208,6 +223,7 @@ export function InputAddMenu({
   };
 
   const close = (restoreFocus = true) => {
+    focusFirstItemOnOpenRef.current = false;
     pendingSubmenuFocusRef.current = false;
     setOpen(false);
     setHoveredItem(null);
@@ -238,11 +254,60 @@ export function InputAddMenu({
   }, [catalogErrors, catalogLoading, connectors, experts, hoveredItem, skills]);
 
   const openSubmenu = (id: CatalogId, moveFocus = false) => {
+    setSubmenuTop(mainItemRefs.current.get(id)?.offsetTop ?? 0);
     setHoveredItem(id);
     if (moveFocus) focusSubmenu();
   };
 
-  const handleItemClick = (id: MenuItemId) => {
+  const updateSubmenuPosition = useCallback(() => {
+    if (!hoveredItem || !isCatalogItem(hoveredItem)) return;
+
+    const anchor = mainItemRefs.current.get(hoveredItem);
+    const popover = popoverRef.current;
+    const submenu = submenuRef.current;
+    if (!anchor || !popover || !submenu) return;
+
+    const popoverRect = popover.getBoundingClientRect();
+    const submenuHeight = submenu.offsetHeight;
+    const preferredTop = anchor.offsetTop;
+    const minTop = SUBMENU_VIEWPORT_INSET - popoverRect.top;
+    const maxTop = window.innerHeight
+      - SUBMENU_VIEWPORT_INSET
+      - popoverRect.top
+      - submenuHeight;
+    const nextTop = Math.round(
+      Math.max(minTop, Math.min(preferredTop, Math.max(minTop, maxTop))),
+    );
+    setSubmenuTop((current) => current === nextTop ? current : nextTop);
+
+    const roomOnRight = window.innerWidth
+      - SUBMENU_VIEWPORT_INSET
+      - popoverRect.right
+      - SUBMENU_GAP;
+    const roomOnLeft = popoverRect.left - SUBMENU_VIEWPORT_INSET - SUBMENU_GAP;
+    const nextSide: SubmenuSide = roomOnRight >= submenu.offsetWidth || roomOnRight >= roomOnLeft
+      ? "right"
+      : "left";
+    setSubmenuSide((current) => current === nextSide ? current : nextSide);
+  }, [hoveredItem]);
+
+  useLayoutEffect(() => {
+    if (!hoveredItem) return;
+
+    updateSubmenuPosition();
+    window.addEventListener("resize", updateSubmenuPosition);
+    const observer = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(updateSubmenuPosition);
+    if (submenuRef.current) observer?.observe(submenuRef.current);
+
+    return () => {
+      window.removeEventListener("resize", updateSubmenuPosition);
+      observer?.disconnect();
+    };
+  }, [catalogErrors, catalogLoading, connectors.length, experts.length, hoveredItem, skills.length, updateSubmenuPosition]);
+
+  const handleItemClick = (id: MenuItemId, moveFocusToSubmenu = false) => {
     if (id === "add-files") {
       close();
       onPickFiles();
@@ -263,7 +328,18 @@ export function InputAddMenu({
       void onAutomationModeChange?.(automationMode === nextMode ? "default" : nextMode);
       return;
     }
-    openSubmenu(id, true);
+    openSubmenu(id, moveFocusToSubmenu);
+  };
+
+  const handleTriggerClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    const openedFromKeyboard = event.detail === 0;
+    setHoveredItem(null);
+    setOpen((current) => {
+      const willOpen = !current;
+      focusFirstItemOnOpenRef.current = willOpen && openedFromKeyboard;
+      return willOpen;
+    });
   };
 
   const handleMainKeyDown = (
@@ -440,7 +516,8 @@ export function InputAddMenu({
 
     return (
       <div
-        className="iam-submenu"
+        className={`iam-submenu iam-submenu--${submenuSide}`}
+        style={{ "--iam-submenu-top": `${submenuTop}px` } as SubmenuStyle}
         role="menu"
         tabIndex={-1}
         aria-label={`${flatItems.find((item) => item.id === hoveredItem)?.label ?? "添加"}子菜单`}
@@ -458,7 +535,7 @@ export function InputAddMenu({
     <div className="iam-wrap" ref={containerRef}>
       <button
         className="echo-composer__add"
-        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        onClick={handleTriggerClick}
         disabled={disabled}
         aria-label="添加"
         aria-haspopup="menu"
@@ -471,7 +548,13 @@ export function InputAddMenu({
       </button>
 
       {open && !disabled && (
-        <div className="iam-popover" id="composer-add-menu" role="menu" aria-label="添加内容">
+        <div
+          className="iam-popover"
+          id="composer-add-menu"
+          role="menu"
+          aria-label="添加内容"
+          ref={popoverRef}
+        >
           {menuGroups.map((group, gi) => (
             <div key={gi}>
               {gi > 0 && <div className="iam-divider" />}
@@ -507,7 +590,7 @@ export function InputAddMenu({
                     }
                     onMouseEnter={() => handleItemEnter(item.id)}
                     onMouseLeave={handleItemLeave}
-                    onClick={() => handleItemClick(item.id)}
+                    onClick={(event) => handleItemClick(item.id, event.detail === 0)}
                     role={mode ? "menuitemradio" : "menuitem"}
                     aria-checked={mode ? selected : undefined}
                     aria-disabled={modeUnavailable || undefined}
