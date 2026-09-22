@@ -136,12 +136,14 @@ body[data-vscode-theme-name="IDE Light"] {
   --echo-text-muted: var(--echo-color-text-disabled);
   --echo-text-link: var(--echo-palette-brand-8);
   --echo-text-on-primary: var(--echo-palette-white-100);
+  --echo-text-default: var(--echo-text-strong);
   --echo-bg-primary: var(--echo-palette-white-100);
   --echo-bg-secondary: var(--echo-color-bg-secondary-hover-active);
   --echo-bg-tertiary: var(--echo-color-bg-primary-hover);
   --echo-bg-hover: color-mix(in srgb, var(--echo-palette-black-100) 5%, transparent);
   --echo-bg-active: color-mix(in srgb, var(--echo-palette-black-100) 8%, transparent);
   --echo-bg-overlay: var(--echo-palette-black-40);
+  --echo-bg-inverse: #1f2937;
   --echo-border-default: color-mix(in srgb, var(--echo-palette-black-100) 8%, transparent);
   --echo-border-weak: color-mix(in srgb, var(--echo-palette-black-100) 4%, transparent);
   --echo-border-subtle: var(--echo-palette-gray-3);
@@ -570,6 +572,7 @@ body.dark,
   --echo-shadow-xl: 0 8px 32px color-mix(in srgb, var(--echo-palette-black-100) 20%, transparent);
   --echo-shadow-popover: 0 4px 12px -4px color-mix(in srgb, var(--echo-palette-black-100) 4%, transparent), 0 3px 6px -8px color-mix(in srgb, var(--echo-palette-black-100) 4%, transparent);
   --echo-shadow-input: 0 12px 24px -8px color-mix(in srgb, var(--echo-palette-black-100) 2%, transparent), 0 2px 4px -4px color-mix(in srgb, var(--echo-palette-black-100) 2%, transparent);
+  --echo-shadow-modal: 0 12px 48px rgba(0, 0, 0, 24%);
 }
 
 /**

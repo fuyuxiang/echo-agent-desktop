@@ -3275,7 +3275,7 @@
 .overlay-tooltip {
   position: fixed;
   z-index: var(--echo-layer-tooltip);
-  background: var(--echo-bg-inverse, #1f2937);
+  background: var(--echo-bg-inverse);
   color: var(--echo-text-inverse, #f9fafb);
   padding: 6px 10px;
   border-radius: 6px;
@@ -3315,7 +3315,7 @@
   padding: 16px 20px;
   min-width: 320px;
   max-width: min(560px, calc(100vw - 32px));
-  box-shadow: var(--echo-shadow-modal, 0 12px 48px rgba(0, 0, 0, 24%));
+  box-shadow: var(--echo-shadow-modal);
 }
 
 .overlay-modal__title {
