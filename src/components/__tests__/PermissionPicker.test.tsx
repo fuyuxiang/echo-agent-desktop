@@ -212,6 +212,7 @@ describe("PermissionPicker", () => {
 
     const dialog = screen.getByRole("alertdialog", { name: "确认本任务始终允许" });
     expect(within(dialog).getByText(/已经弹出的待审批操作不会被自动批准/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/操作电脑不会被自动批准/)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "取消" })).toHaveFocus();
     expect(mocks.permissionModeSet).not.toHaveBeenCalled();
 

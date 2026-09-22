@@ -327,7 +327,7 @@ export function PermissionPicker({
               }}
             >
               <strong>确认提高当前任务的权限？</strong>
-              <span>后续工具调用可能修改文件或执行命令。已经弹出的待审批操作不会被自动批准。</span>
+              <span>后续工具调用可能修改文件或执行命令。已经弹出的待审批操作不会被自动批准；操作电脑不会被自动批准。</span>
               <div className="permission-picker__confirm-actions">
                 <button ref={confirmCancelRef} type="button" className="btn btn--ghost" disabled={busy} onClick={cancelAlwaysConfirmation}>取消</button>
                 <button type="button" className="btn btn--danger" disabled={busy} onClick={() => void applySelection("always-approve")}>
