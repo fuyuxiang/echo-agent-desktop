@@ -6,7 +6,7 @@ use std::time::Duration;
 
 const MAX_SCREENSHOT_WIDTH: u32 = 1920;
 const MAX_SCREENSHOT_HEIGHT: u32 = 1200;
-const MAX_FRAME_AGE_MS: u64 = 2 * 60 * 1_000;
+const MAX_FRAME_AGE_MS: u64 = 30 * 1_000;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +46,7 @@ pub struct FrameMeta {
     pub logical_height: f64,
     pub scale_factor: f64,
     pub captured_at_ms: u64,
+    pub target_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -56,7 +57,20 @@ pub struct ScreenshotFrame {
 
 #[derive(Debug, Default)]
 pub struct ComputerController {
-    last_frame: Option<FrameMeta>,
+    last_frame: Option<StoredFrame>,
+}
+
+#[derive(Debug)]
+struct StoredFrame {
+    meta: FrameMeta,
+    visual_signature: Vec<u8>,
+    foreground_target: Option<ForegroundTarget>,
+}
+
+#[derive(Debug, Clone)]
+struct ForegroundTarget {
+    id: String,
+    name: String,
 }
 
 impl ComputerController {
@@ -74,6 +88,7 @@ impl ComputerController {
     }
 
     pub fn screenshot(&mut self, display_id: Option<&str>) -> Result<ScreenshotFrame, String> {
+        let foreground_target = platform::foreground_target();
         let captured = platform::capture(display_id)?;
         if captured.width == 0 || captured.height == 0 {
             return Err("屏幕截图尺寸无效".into());
@@ -90,6 +105,7 @@ impl ComputerController {
         }
         let image_width = dynamic.width();
         let image_height = dynamic.height();
+        let visual_signature = visual_signature(&dynamic);
         let mut png = Cursor::new(Vec::new());
         dynamic
             .write_to(&mut png, ImageFormat::Png)
@@ -114,8 +130,13 @@ impl ComputerController {
                 .unwrap_or_default()
                 .as_millis()
                 .min(u128::from(u64::MAX)) as u64,
+            target_name: foreground_target.as_ref().map(|target| target.name.clone()),
         };
-        self.last_frame = Some(meta.clone());
+        self.last_frame = Some(StoredFrame {
+            meta: meta.clone(),
+            visual_signature,
+            foreground_target,
+        });
         Ok(ScreenshotFrame {
             png_base64: base64::engine::general_purpose::STANDARD.encode(png.into_inner()),
             meta,
@@ -123,11 +144,13 @@ impl ComputerController {
     }
 
     pub fn move_pointer(&mut self, frame_id: &str, x: f64, y: f64) -> Result<(f64, f64), String> {
+        self.verify_frame_unchanged(frame_id)?;
         let (desktop_x, desktop_y) = self.resolve_point(frame_id, x, y)?;
-        platform::move_pointer(desktop_x, desktop_y)?;
         // Hover effects, menus and tooltips can change the visual target even
-        // when the pointer only moves. Require a fresh observation afterwards.
+        // when the pointer only moves. Invalidate before dispatch so a partial
+        // OS-level failure can never make the old frame reusable.
         self.last_frame = None;
+        platform::move_pointer(desktop_x, desktop_y)?;
         Ok((desktop_x, desktop_y))
     }
 
@@ -139,9 +162,10 @@ impl ComputerController {
         button: &str,
         count: u32,
     ) -> Result<(f64, f64), String> {
+        self.verify_frame_unchanged(frame_id)?;
         let (desktop_x, desktop_y) = self.resolve_point(frame_id, x, y)?;
-        platform::click(desktop_x, desktop_y, button, count.clamp(1, 3))?;
         self.last_frame = None;
+        platform::click(desktop_x, desktop_y, button, count.clamp(1, 3))?;
         Ok((desktop_x, desktop_y))
     }
 
@@ -154,8 +178,10 @@ impl ComputerController {
         to_y: f64,
         duration_ms: u64,
     ) -> Result<(), String> {
+        self.verify_frame_unchanged(frame_id)?;
         let (desktop_from_x, desktop_from_y) = self.resolve_point(frame_id, from_x, from_y)?;
         let (desktop_to_x, desktop_to_y) = self.resolve_point(frame_id, to_x, to_y)?;
+        self.last_frame = None;
         platform::drag(
             desktop_from_x,
             desktop_from_y,
@@ -163,37 +189,39 @@ impl ComputerController {
             desktop_to_y,
             duration_ms.clamp(100, 5_000),
         )?;
-        self.last_frame = None;
         Ok(())
     }
 
     pub fn scroll(&mut self, frame_id: &str, delta_x: i32, delta_y: i32) -> Result<(), String> {
+        self.verify_frame_unchanged(frame_id)?;
         self.require_frame(frame_id)?;
+        self.last_frame = None;
         platform::scroll(
             delta_x.clamp(-10_000, 10_000),
             delta_y.clamp(-10_000, 10_000),
         )?;
-        self.last_frame = None;
         Ok(())
     }
 
     pub fn type_text(&mut self, frame_id: &str, text: &str) -> Result<(), String> {
+        self.verify_frame_unchanged(frame_id)?;
         self.require_frame(frame_id)?;
         if text.len() > 64 * 1024 {
             return Err("单次输入不能超过 64KB".into());
         }
-        platform::type_text(text)?;
         self.last_frame = None;
+        platform::type_text(text)?;
         Ok(())
     }
 
     pub fn key(&mut self, frame_id: &str, key: &str, modifiers: &[String]) -> Result<(), String> {
+        self.verify_frame_unchanged(frame_id)?;
         self.require_frame(frame_id)?;
         if key.is_empty() || key.chars().count() > 64 || modifiers.len() > 4 {
             return Err("按键参数无效".into());
         }
-        platform::key(key, modifiers)?;
         self.last_frame = None;
+        platform::key(key, modifiers)?;
         Ok(())
     }
 
@@ -203,13 +231,15 @@ impl ComputerController {
             || !y.is_finite()
             || x < 0.0
             || y < 0.0
-            || x > f64::from(frame.image_width)
-            || y > f64::from(frame.image_height)
+            || x > f64::from(frame.meta.image_width)
+            || y > f64::from(frame.meta.image_height)
         {
             return Err("操作坐标超出截图范围".into());
         }
-        let desktop_x = frame.origin_x + x * frame.logical_width / f64::from(frame.image_width);
-        let desktop_y = frame.origin_y + y * frame.logical_height / f64::from(frame.image_height);
+        let desktop_x =
+            frame.meta.origin_x + x * frame.meta.logical_width / f64::from(frame.meta.image_width);
+        let desktop_y = frame.meta.origin_y
+            + y * frame.meta.logical_height / f64::from(frame.meta.image_height);
         Ok((desktop_x, desktop_y))
     }
 
@@ -217,22 +247,86 @@ impl ComputerController {
         self.last_frame = None;
     }
 
-    fn require_frame(&self, frame_id: &str) -> Result<&FrameMeta, String> {
+    pub fn frame_meta(&self, frame_id: &str) -> Result<FrameMeta, String> {
+        Ok(self.require_frame(frame_id)?.meta.clone())
+    }
+
+    fn require_frame(&self, frame_id: &str) -> Result<&StoredFrame, String> {
         let frame = self
             .last_frame
             .as_ref()
-            .filter(|frame| frame.frame_id == frame_id)
+            .filter(|frame| frame.meta.frame_id == frame_id)
             .ok_or_else(|| "截图已过期，请先重新调用 computer_screenshot".to_string())?;
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis()
             .min(u128::from(u64::MAX)) as u64;
-        if now_ms.saturating_sub(frame.captured_at_ms) > MAX_FRAME_AGE_MS {
-            return Err("截图已超过两分钟，为避免错位操作，请重新截图".into());
+        if now_ms.saturating_sub(frame.meta.captured_at_ms) > MAX_FRAME_AGE_MS {
+            return Err("截图已超过 30 秒，为避免错位操作，请重新截图".into());
         }
         Ok(frame)
     }
+
+    fn verify_frame_unchanged(&self, frame_id: &str) -> Result<(), String> {
+        let stored = self.require_frame(frame_id)?;
+        if let Some(target) = stored.foreground_target.as_ref() {
+            platform::restore_foreground(target)?;
+            // Activation is asynchronous on both macOS and Windows. Give the
+            // compositor one short frame to settle before comparing pixels.
+            std::thread::sleep(Duration::from_millis(180));
+        }
+        let captured = platform::capture(Some(&stored.meta.display_id))?;
+        if (captured.origin_x - stored.meta.origin_x).abs() > f64::EPSILON
+            || (captured.origin_y - stored.meta.origin_y).abs() > f64::EPSILON
+            || (captured.logical_width - stored.meta.logical_width).abs() > f64::EPSILON
+            || (captured.logical_height - stored.meta.logical_height).abs() > f64::EPSILON
+        {
+            return Err("显示器布局在截图后已变化，为避免错位操作请重新截图".into());
+        }
+        let image = RgbaImage::from_raw(captured.width, captured.height, captured.rgba)
+            .ok_or_else(|| "屏幕验证像素数据不完整".to_string())?;
+        let mut dynamic = DynamicImage::ImageRgba8(image);
+        if dynamic.width() > MAX_SCREENSHOT_WIDTH || dynamic.height() > MAX_SCREENSHOT_HEIGHT {
+            dynamic = dynamic.resize(
+                MAX_SCREENSHOT_WIDTH,
+                MAX_SCREENSHOT_HEIGHT,
+                image::imageops::FilterType::Triangle,
+            );
+        }
+        if dynamic.width() != stored.meta.image_width
+            || dynamic.height() != stored.meta.image_height
+            || !visual_signatures_match(&stored.visual_signature, &visual_signature(&dynamic))
+        {
+            return Err("屏幕内容在截图后已明显变化，为避免点错窗口或控件，请重新截图".into());
+        }
+        Ok(())
+    }
+}
+
+fn visual_signature(image: &DynamicImage) -> Vec<u8> {
+    image
+        .resize_exact(32, 18, image::imageops::FilterType::Triangle)
+        .to_luma8()
+        .into_raw()
+}
+
+fn visual_signatures_match(expected: &[u8], actual: &[u8]) -> bool {
+    if expected.len() != actual.len() || expected.is_empty() {
+        return false;
+    }
+    let mut total_difference = 0_u64;
+    let mut substantially_changed = 0_usize;
+    for (&before, &after) in expected.iter().zip(actual) {
+        let difference = before.abs_diff(after);
+        total_difference += u64::from(difference);
+        if difference > 48 {
+            substantially_changed += 1;
+        }
+    }
+    let mean_difference = total_difference as f64 / expected.len() as f64;
+    let changed_ratio = substantially_changed as f64 / expected.len() as f64;
+    mean_difference <= 12.0 && changed_ratio <= 0.20
 }
 
 #[derive(Debug)]
@@ -257,6 +351,7 @@ mod platform {
         ScrollEventUnit,
     };
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
 
     #[link(name = "ApplicationServices", kind = "framework")]
     unsafe extern "C" {
@@ -302,6 +397,45 @@ mod platform {
             .map_err(|error| format!("打开 macOS 辅助功能设置失败：{error}"))?;
         }
         Ok(())
+    }
+
+    pub fn foreground_target() -> Option<ForegroundTarget> {
+        let application = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+        let pid = application.processIdentifier();
+        if pid <= 0 {
+            return None;
+        }
+        let name = application
+            .localizedName()
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| format!("进程 {pid}"));
+        Some(ForegroundTarget {
+            id: pid.to_string(),
+            name,
+        })
+    }
+
+    pub fn restore_foreground(target: &ForegroundTarget) -> Result<(), String> {
+        let pid = target
+            .id
+            .parse::<libc::pid_t>()
+            .map_err(|_| "已记录的 macOS 目标进程无效".to_string())?;
+        if NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .is_some_and(|application| application.processIdentifier() == pid)
+        {
+            return Ok(());
+        }
+        let application = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+            .ok_or_else(|| format!("目标应用“{}”已退出，请重新截图", target.name))?;
+        if application.activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows) {
+            Ok(())
+        } else {
+            Err(format!(
+                "无法切回截图时的目标应用“{}”，操作已取消",
+                target.name
+            ))
+        }
     }
 
     pub fn displays() -> Result<Vec<DisplayInfo>, String> {
@@ -379,7 +513,9 @@ mod platform {
         for y in 0..height as usize {
             let src = &raw[y * bytes_per_row..y * bytes_per_row + width as usize * 4];
             let dst = &mut rgba[y * width as usize * 4..(y + 1) * width as usize * 4];
-            for (source, target) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+            for x in 0..width as usize {
+                let source = &src[x * 4..x * 4 + 4];
+                let target = &mut dst[x * 4..x * 4 + 4];
                 // CGDisplayCreateImage returns native-endian premultiplied BGRA
                 // on supported macOS displays.
                 target[0] = source[2];
@@ -473,29 +609,32 @@ mod platform {
         .map_err(|_| "创建拖拽按下事件失败".to_string())?
         .post(CGEventTapLocation::HID);
         let steps = (duration_ms / 16).clamp(4, 120);
-        for step in 1..=steps {
-            let ratio = step as f64 / steps as f64;
-            let x = from_x + (to_x - from_x) * ratio;
-            let y = from_y + (to_y - from_y) * ratio;
-            CGEvent::new_mouse_event(
-                source()?,
-                CGEventType::LeftMouseDragged,
-                point(x, y),
-                CGMouseButton::Left,
-            )
-            .map_err(|_| "创建拖拽移动事件失败".to_string())?
-            .post(CGEventTapLocation::HID);
-            std::thread::sleep(Duration::from_millis(16));
-        }
-        CGEvent::new_mouse_event(
+        let movement = (|| {
+            for step in 1..=steps {
+                let ratio = step as f64 / steps as f64;
+                let x = from_x + (to_x - from_x) * ratio;
+                let y = from_y + (to_y - from_y) * ratio;
+                CGEvent::new_mouse_event(
+                    source()?,
+                    CGEventType::LeftMouseDragged,
+                    point(x, y),
+                    CGMouseButton::Left,
+                )
+                .map_err(|_| "创建拖拽移动事件失败".to_string())?
+                .post(CGEventTapLocation::HID);
+                std::thread::sleep(Duration::from_millis(16));
+            }
+            Ok(())
+        })();
+        let release = CGEvent::new_mouse_event(
             source()?,
             CGEventType::LeftMouseUp,
             point(to_x, to_y),
             CGMouseButton::Left,
         )
-        .map_err(|_| "创建拖拽释放事件失败".to_string())?
-        .post(CGEventTapLocation::HID);
-        Ok(())
+        .map_err(|_| "创建拖拽释放事件失败".to_string())
+        .map(|event| event.post(CGEventTapLocation::HID));
+        movement.and(release)
     }
 
     pub fn scroll(delta_x: i32, delta_y: i32) -> Result<(), String> {
@@ -607,7 +746,8 @@ mod platform {
     use super::*;
     use std::mem::{size_of, zeroed};
     use std::ptr::{null, null_mut};
-    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::core::BOOL;
+    use windows_sys::Win32::Foundation::{LPARAM, RECT};
     use windows_sys::Win32::Graphics::Gdi::*;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -626,44 +766,118 @@ mod platform {
         Ok(())
     }
 
-    fn virtual_bounds() -> (i32, i32, i32, i32) {
+    pub fn foreground_target() -> Option<ForegroundTarget> {
+        let window = unsafe { GetForegroundWindow() };
+        if window.is_null() {
+            return None;
+        }
+        let length = unsafe { GetWindowTextLengthW(window) }.max(0) as usize;
+        let mut buffer = vec![0_u16; length.saturating_add(1)];
+        let copied = unsafe { GetWindowTextW(window, buffer.as_mut_ptr(), buffer.len() as i32) };
+        let name = if copied > 0 {
+            String::from_utf16_lossy(&buffer[..copied as usize])
+        } else {
+            "Windows 应用".to_string()
+        };
+        Some(ForegroundTarget {
+            id: (window as usize).to_string(),
+            name,
+        })
+    }
+
+    pub fn restore_foreground(target: &ForegroundTarget) -> Result<(), String> {
+        let address = target
+            .id
+            .parse::<usize>()
+            .map_err(|_| "已记录的 Windows 目标窗口无效".to_string())?;
+        let window = address as windows_sys::Win32::Foundation::HWND;
+        if unsafe { IsWindow(window) } == 0 {
+            return Err(format!("目标窗口“{}”已关闭，请重新截图", target.name));
+        }
+        if unsafe { GetForegroundWindow() } == window {
+            return Ok(());
+        }
         unsafe {
-            (
-                GetSystemMetrics(SM_XVIRTUALSCREEN),
-                GetSystemMetrics(SM_YVIRTUALSCREEN),
-                GetSystemMetrics(SM_CXVIRTUALSCREEN),
-                GetSystemMetrics(SM_CYVIRTUALSCREEN),
-            )
+            ShowWindow(window, SW_RESTORE);
+        }
+        if unsafe { SetForegroundWindow(window) } == 0 {
+            Err(format!(
+                "无法切回截图时的目标窗口“{}”，操作已取消",
+                target.name
+            ))
+        } else {
+            Ok(())
         }
     }
 
     pub fn displays() -> Result<Vec<DisplayInfo>, String> {
-        let (x, y, width, height) = virtual_bounds();
-        if width <= 0 || height <= 0 {
-            return Err("无法获取 Windows 虚拟桌面尺寸".into());
+        unsafe extern "system" fn collect_monitor(
+            monitor: HMONITOR,
+            _dc: HDC,
+            _rect: *mut RECT,
+            data: LPARAM,
+        ) -> BOOL {
+            let monitors = unsafe { &mut *(data as *mut Vec<(HMONITOR, MONITORINFO)>) };
+            let mut info: MONITORINFO = unsafe { zeroed() };
+            info.cbSize = size_of::<MONITORINFO>() as u32;
+            if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
+                monitors.push((monitor, info));
+            }
+            1
         }
-        Ok(vec![DisplayInfo {
-            id: "virtual-desktop".into(),
-            name: "Windows 虚拟桌面".into(),
-            primary: true,
-            origin_x: f64::from(x),
-            origin_y: f64::from(y),
-            logical_width: f64::from(width),
-            logical_height: f64::from(height),
-            pixel_width: width as u32,
-            pixel_height: height as u32,
-            scale_factor: 1.0,
-        }])
+
+        let mut monitors = Vec::<(HMONITOR, MONITORINFO)>::new();
+        let enumerated = unsafe {
+            EnumDisplayMonitors(
+                null_mut(),
+                null(),
+                Some(collect_monitor),
+                (&mut monitors as *mut Vec<(HMONITOR, MONITORINFO)>) as LPARAM,
+            )
+        };
+        if enumerated == 0 || monitors.is_empty() {
+            return Err("无法枚举 Windows 显示器".into());
+        }
+        Ok(monitors
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, (monitor, info))| {
+                let width = info.rcMonitor.right - info.rcMonitor.left;
+                let height = info.rcMonitor.bottom - info.rcMonitor.top;
+                (width > 0 && height > 0).then(|| DisplayInfo {
+                    id: (monitor as usize).to_string(),
+                    name: format!("Windows 显示器 {}", index + 1),
+                    primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
+                    origin_x: f64::from(info.rcMonitor.left),
+                    origin_y: f64::from(info.rcMonitor.top),
+                    logical_width: f64::from(width),
+                    logical_height: f64::from(height),
+                    pixel_width: width as u32,
+                    pixel_height: height as u32,
+                    // PerMonitorV2 awareness makes these physical desktop
+                    // coordinates. Keeping logical and captured pixels equal
+                    // avoids the mixed-DPI offset bug of the old virtual canvas.
+                    scale_factor: 1.0,
+                })
+            })
+            .collect())
     }
 
     pub fn capture(display_id: Option<&str>) -> Result<CapturedDisplay, String> {
-        if display_id.is_some_and(|id| id != "virtual-desktop") {
-            return Err("指定的显示器不存在".into());
+        let displays = displays()?;
+        let selected = match display_id {
+            Some(id) => displays.into_iter().find(|display| display.id == id),
+            None => displays
+                .iter()
+                .find(|display| display.primary)
+                .cloned()
+                .or_else(|| displays.into_iter().next()),
         }
-        let (x, y, width, height) = virtual_bounds();
-        if width <= 0 || height <= 0 {
-            return Err("无法获取 Windows 虚拟桌面尺寸".into());
-        }
+        .ok_or_else(|| "指定的显示器不存在".to_string())?;
+        let x = selected.origin_x.round() as i32;
+        let y = selected.origin_y.round() as i32;
+        let width = selected.pixel_width as i32;
+        let height = selected.pixel_height as i32;
         unsafe {
             let screen_dc = GetDC(null_mut());
             if screen_dc.is_null() {
@@ -726,11 +940,11 @@ mod platform {
                 pixel[3] = 255;
             }
             Ok(CapturedDisplay {
-                display_id: "virtual-desktop".into(),
-                origin_x: f64::from(x),
-                origin_y: f64::from(y),
-                logical_width: f64::from(width),
-                logical_height: f64::from(height),
+                display_id: selected.id,
+                origin_x: selected.origin_x,
+                origin_y: selected.origin_y,
+                logical_width: selected.logical_width,
+                logical_height: selected.logical_height,
                 width: width as u32,
                 height: height as u32,
                 rgba: bgra,
@@ -795,15 +1009,19 @@ mod platform {
         move_pointer(from_x, from_y)?;
         mouse(MOUSEEVENTF_LEFTDOWN, 0)?;
         let steps = (duration_ms / 16).clamp(4, 120);
-        for step in 1..=steps {
-            let ratio = step as f64 / steps as f64;
-            move_pointer(
-                from_x + (to_x - from_x) * ratio,
-                from_y + (to_y - from_y) * ratio,
-            )?;
-            std::thread::sleep(Duration::from_millis(16));
-        }
-        mouse(MOUSEEVENTF_LEFTUP, 0)
+        let movement = (|| {
+            for step in 1..=steps {
+                let ratio = step as f64 / steps as f64;
+                move_pointer(
+                    from_x + (to_x - from_x) * ratio,
+                    from_y + (to_y - from_y) * ratio,
+                )?;
+                std::thread::sleep(Duration::from_millis(16));
+            }
+            Ok(())
+        })();
+        let release = mouse(MOUSEEVENTF_LEFTUP, 0);
+        movement.and(release)
     }
 
     pub fn scroll(delta_x: i32, delta_y: i32) -> Result<(), String> {
@@ -845,25 +1063,36 @@ mod platform {
     }
 
     pub fn key(key: &str, modifiers: &[String]) -> Result<(), String> {
-        let mut mods = Vec::new();
-        for modifier in modifiers {
-            let vk = match modifier.to_ascii_lowercase().as_str() {
-                "shift" => VK_SHIFT,
-                "control" | "ctrl" => VK_CONTROL,
-                "alt" | "option" => VK_MENU,
-                "meta" | "command" | "cmd" => VK_LWIN,
-                other => return Err(format!("不支持的修饰键：{other}")),
-            };
-            keyboard(vk, 0, 0)?;
-            mods.push(vk);
-        }
         let vk = virtual_key(key)?;
-        keyboard(vk, 0, 0)?;
-        keyboard(vk, 0, KEYEVENTF_KEYUP)?;
-        for vk in mods.into_iter().rev() {
-            keyboard(vk, 0, KEYEVENTF_KEYUP)?;
+        let mods = modifiers
+            .iter()
+            .map(|modifier| match modifier.to_ascii_lowercase().as_str() {
+                "shift" => Ok(VK_SHIFT),
+                "control" | "ctrl" => Ok(VK_CONTROL),
+                "alt" | "option" => Ok(VK_MENU),
+                "meta" | "command" | "cmd" => Ok(VK_LWIN),
+                other => Err(format!("不支持的修饰键：{other}")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut pressed = Vec::new();
+        for &modifier in &mods {
+            if let Err(error) = keyboard(modifier, 0, 0) {
+                for &held in pressed.iter().rev() {
+                    let _ = keyboard(held, 0, KEYEVENTF_KEYUP);
+                }
+                return Err(error);
+            }
+            pressed.push(modifier);
         }
-        Ok(())
+        let key_result = keyboard(vk, 0, 0).and_then(|_| keyboard(vk, 0, KEYEVENTF_KEYUP));
+        let mut release_error = None;
+        for &modifier in pressed.iter().rev() {
+            if let Err(error) = keyboard(modifier, 0, KEYEVENTF_KEYUP) {
+                release_error.get_or_insert(error);
+            }
+        }
+        key_result.and_then(|_| release_error.map_or(Ok(()), Err))
     }
 
     fn virtual_key(key: &str) -> Result<u16, String> {
@@ -882,56 +1111,547 @@ mod platform {
             "end" => VK_END,
             "pageup" => VK_PRIOR,
             "pagedown" => VK_NEXT,
-            value if value.len() == 1 => value.as_bytes()[0].to_ascii_uppercase() as u16,
+            "insert" => VK_INSERT,
+            "printscreen" => VK_SNAPSHOT,
+            ";" | ":" => VK_OEM_1,
+            "=" | "+" => VK_OEM_PLUS,
+            "," | "<" => VK_OEM_COMMA,
+            "-" | "_" => VK_OEM_MINUS,
+            "." | ">" => VK_OEM_PERIOD,
+            "/" | "?" => VK_OEM_2,
+            "`" | "~" => VK_OEM_3,
+            "[" | "{" => VK_OEM_4,
+            "\\" | "|" => VK_OEM_5,
+            "]" | "}" => VK_OEM_6,
+            "'" | "\"" => VK_OEM_7,
+            value
+                if value.len() == 1
+                    && value
+                        .as_bytes()
+                        .first()
+                        .is_some_and(u8::is_ascii_alphanumeric) =>
+            {
+                value.as_bytes()[0].to_ascii_uppercase() as u16
+            }
+            value if value.starts_with('f') && value[1..].parse::<u16>().is_ok() => {
+                let number = value[1..].parse::<u16>().unwrap_or_default();
+                if !(1..=24).contains(&number) {
+                    return Err(format!("不支持的按键：{key}"));
+                }
+                VK_F1 + number - 1
+            }
             other => return Err(format!("不支持的按键：{other}")),
         })
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
 mod platform {
     use super::*;
-    fn unavailable() -> String {
-        "当前项目的 Linux 桌面版尚在适配中，Computer Use 仅在已发布的 macOS 和 Windows 平台可用。"
-            .into()
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{
+        AtomEnum, ConfigureWindowAux, ConnectionExt as _, ImageFormat, ImageOrder, InputFocus,
+        StackMode, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
+        MOTION_NOTIFY_EVENT,
+    };
+    use x11rb::protocol::xtest::ConnectionExt as _;
+    use x11rb::rust_connection::RustConnection;
+    use x11rb::{connect, CURRENT_TIME};
+
+    fn wayland_session() -> bool {
+        std::env::var("XDG_SESSION_TYPE").is_ok_and(|value| value.eq_ignore_ascii_case("wayland"))
+            || (std::env::var_os("WAYLAND_DISPLAY").is_some()
+                && std::env::var_os("DISPLAY").is_none())
     }
+
+    fn connect_x11() -> Result<(RustConnection, usize), String> {
+        if wayland_session() {
+            return Err(
+                "当前是 Wayland 会话。为避免绕过桌面安全边界，Computer Use 只在 Linux X11 会话中启用；请登录“Xorg/X11”会话后重试。".into(),
+            );
+        }
+        connect(None).map_err(|error| format!("连接 Linux X11 桌面失败：{error}"))
+    }
+
+    fn connection_with_xtest() -> Result<(RustConnection, usize), String> {
+        let (connection, screen) = connect_x11()?;
+        connection
+            .xtest_get_version(2, 2)
+            .map_err(|error| format!("检查 XTEST 扩展失败：{error}"))?
+            .reply()
+            .map_err(|error| format!("X11 服务器未提供 XTEST 输入扩展：{error}"))?;
+        Ok((connection, screen))
+    }
+
     pub fn capability() -> ComputerCapability {
+        let result = connection_with_xtest();
+        let reason = result.as_ref().err().cloned();
         ComputerCapability {
-            available: false,
-            platform: std::env::consts::OS.into(),
-            screen_capture: false,
-            input_control: false,
-            reason: Some(unavailable()),
+            available: result.is_ok(),
+            platform: "Linux X11".into(),
+            screen_capture: result.is_ok(),
+            input_control: result.is_ok(),
+            reason,
         }
     }
+
     pub fn request_permissions() -> Result<(), String> {
-        Err(unavailable())
+        connection_with_xtest().map(|_| ())
     }
+
+    pub fn foreground_target() -> Option<ForegroundTarget> {
+        let (connection, screen_index) = connect_x11().ok()?;
+        let screen = connection.setup().roots.get(screen_index)?;
+        let active_atom = connection
+            .intern_atom(false, b"_NET_ACTIVE_WINDOW")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        let window = connection
+            .get_property(false, screen.root, active_atom, AtomEnum::WINDOW, 0, 1)
+            .ok()?
+            .reply()
+            .ok()?
+            .value32()?
+            .next()?;
+        let name_atom = connection
+            .intern_atom(false, b"_NET_WM_NAME")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        let name = connection
+            .get_property(false, window, name_atom, AtomEnum::ANY, 0, 512)
+            .ok()?
+            .reply()
+            .ok()
+            .and_then(|reply| String::from_utf8(reply.value).ok())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| format!("X11 窗口 {window}"));
+        Some(ForegroundTarget {
+            id: window.to_string(),
+            name,
+        })
+    }
+
+    pub fn restore_foreground(target: &ForegroundTarget) -> Result<(), String> {
+        let (connection, _) = connection_with_xtest()?;
+        let window = target
+            .id
+            .parse::<u32>()
+            .map_err(|_| "已记录的 X11 目标窗口无效".to_string())?;
+        connection
+            .configure_window(
+                window,
+                &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
+            )
+            .map_err(|error| format!("置顶 X11 目标窗口失败：{error}"))?
+            .check()
+            .map_err(|error| format!("目标窗口“{}”已不可用：{error}", target.name))?;
+        connection
+            .set_input_focus(InputFocus::PARENT, window, CURRENT_TIME)
+            .map_err(|error| format!("聚焦 X11 目标窗口失败：{error}"))?
+            .check()
+            .map_err(|error| format!("无法切回目标窗口“{}”：{error}", target.name))?;
+        connection
+            .flush()
+            .map_err(|error| format!("刷新 X11 窗口状态失败：{error}"))
+    }
+
     pub fn displays() -> Result<Vec<DisplayInfo>, String> {
-        Err(unavailable())
+        let (connection, screen_index) = connect_x11()?;
+        let screen = connection
+            .setup()
+            .roots
+            .get(screen_index)
+            .ok_or_else(|| "X11 默认屏幕不存在".to_string())?;
+        Ok(vec![DisplayInfo {
+            id: screen_index.to_string(),
+            name: format!("X11 桌面 {}", screen_index + 1),
+            primary: true,
+            origin_x: 0.0,
+            origin_y: 0.0,
+            logical_width: f64::from(screen.width_in_pixels),
+            logical_height: f64::from(screen.height_in_pixels),
+            pixel_width: u32::from(screen.width_in_pixels),
+            pixel_height: u32::from(screen.height_in_pixels),
+            scale_factor: 1.0,
+        }])
     }
-    pub fn capture(_: Option<&str>) -> Result<CapturedDisplay, String> {
-        Err(unavailable())
+
+    pub fn capture(display_id: Option<&str>) -> Result<CapturedDisplay, String> {
+        let (connection, screen_index) = connect_x11()?;
+        if display_id.is_some_and(|id| id != screen_index.to_string()) {
+            return Err("指定的 X11 显示器不存在".into());
+        }
+        let setup = connection.setup();
+        let screen = setup
+            .roots
+            .get(screen_index)
+            .ok_or_else(|| "X11 默认屏幕不存在".to_string())?;
+        let width = screen.width_in_pixels;
+        let height = screen.height_in_pixels;
+        let reply = connection
+            .get_image(
+                ImageFormat::Z_PIXMAP,
+                screen.root,
+                0,
+                0,
+                width,
+                height,
+                u32::MAX,
+            )
+            .map_err(|error| format!("请求 X11 屏幕像素失败：{error}"))?
+            .reply()
+            .map_err(|error| format!("读取 X11 屏幕像素失败：{error}"))?;
+        let format = setup
+            .pixmap_formats
+            .iter()
+            .find(|format| format.depth == reply.depth)
+            .ok_or_else(|| format!("不支持的 X11 像素深度：{}", reply.depth))?;
+        let visual = screen
+            .allowed_depths
+            .iter()
+            .flat_map(|depth| depth.visuals.iter())
+            .find(|visual| {
+                visual.visual_id == reply.visual || visual.visual_id == screen.root_visual
+            })
+            .ok_or_else(|| "无法读取 X11 TrueColor 格式".to_string())?;
+        let bytes_per_pixel = usize::from(format.bits_per_pixel.div_ceil(8));
+        if !matches!(bytes_per_pixel, 2..=4) {
+            return Err(format!(
+                "不支持的 X11 每像素位数：{}",
+                format.bits_per_pixel
+            ));
+        }
+        let pad = usize::from(format.scanline_pad);
+        if pad == 0 {
+            return Err("X11 像素行对齐参数无效".into());
+        }
+        let row_bits = usize::from(width) * usize::from(format.bits_per_pixel);
+        let stride = row_bits.div_ceil(pad) * pad / 8;
+        if reply.data.len() < stride * usize::from(height) {
+            return Err("X11 截图像素数据不完整".into());
+        }
+        let mut rgba = vec![0_u8; usize::from(width) * usize::from(height) * 4];
+        for y in 0..usize::from(height) {
+            for x in 0..usize::from(width) {
+                let offset = y * stride + x * bytes_per_pixel;
+                let bytes = &reply.data[offset..offset + bytes_per_pixel];
+                let pixel = if u8::from(setup.image_byte_order) == u8::from(ImageOrder::LSB_FIRST) {
+                    bytes
+                        .iter()
+                        .enumerate()
+                        .fold(0_u32, |value, (index, byte)| {
+                            value | (u32::from(*byte) << (index * 8))
+                        })
+                } else {
+                    bytes
+                        .iter()
+                        .fold(0_u32, |value, byte| (value << 8) | u32::from(*byte))
+                };
+                let destination = (y * usize::from(width) + x) * 4;
+                rgba[destination] = channel(pixel, visual.red_mask);
+                rgba[destination + 1] = channel(pixel, visual.green_mask);
+                rgba[destination + 2] = channel(pixel, visual.blue_mask);
+                rgba[destination + 3] = 255;
+            }
+        }
+        Ok(CapturedDisplay {
+            display_id: screen_index.to_string(),
+            origin_x: 0.0,
+            origin_y: 0.0,
+            logical_width: f64::from(width),
+            logical_height: f64::from(height),
+            width: u32::from(width),
+            height: u32::from(height),
+            rgba,
+        })
     }
-    pub fn move_pointer(_: f64, _: f64) -> Result<(), String> {
-        Err(unavailable())
+
+    fn channel(pixel: u32, mask: u32) -> u8 {
+        if mask == 0 {
+            return 0;
+        }
+        let shifted = (pixel & mask) >> mask.trailing_zeros();
+        let maximum = mask >> mask.trailing_zeros();
+        ((u64::from(shifted) * 255) / u64::from(maximum)) as u8
     }
-    pub fn click(_: f64, _: f64, _: &str, _: u32) -> Result<(), String> {
-        Err(unavailable())
+
+    fn fake_input(type_: u8, detail: u8, x: i16, y: i16) -> Result<(), String> {
+        let (connection, screen_index) = connection_with_xtest()?;
+        let root = connection.setup().roots[screen_index].root;
+        connection
+            .xtest_fake_input(type_, detail, CURRENT_TIME, root, x, y, 0)
+            .map_err(|error| format!("发送 X11 输入事件失败：{error}"))?
+            .check()
+            .map_err(|error| format!("X11 输入事件被拒绝：{error}"))?;
+        connection
+            .flush()
+            .map_err(|error| format!("刷新 X11 输入失败：{error}"))
     }
-    pub fn drag(_: f64, _: f64, _: f64, _: f64, _: u64) -> Result<(), String> {
-        Err(unavailable())
+
+    pub fn move_pointer(x: f64, y: f64) -> Result<(), String> {
+        fake_input(
+            MOTION_NOTIFY_EVENT,
+            0,
+            x.round().clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16,
+            y.round().clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16,
+        )
     }
-    pub fn scroll(_: i32, _: i32) -> Result<(), String> {
-        Err(unavailable())
+
+    fn mouse_button(button: u8, pressed: bool) -> Result<(), String> {
+        fake_input(
+            if pressed {
+                BUTTON_PRESS_EVENT
+            } else {
+                BUTTON_RELEASE_EVENT
+            },
+            button,
+            0,
+            0,
+        )
     }
-    pub fn type_text(_: &str) -> Result<(), String> {
-        Err(unavailable())
+
+    pub fn click(x: f64, y: f64, button: &str, count: u32) -> Result<(), String> {
+        let button = match button {
+            "left" => 1,
+            "middle" => 2,
+            "right" => 3,
+            _ => return Err("鼠标按键只能是 left、right 或 middle".into()),
+        };
+        move_pointer(x, y)?;
+        for _ in 0..count {
+            mouse_button(button, true)?;
+            mouse_button(button, false)?;
+            std::thread::sleep(Duration::from_millis(60));
+        }
+        Ok(())
     }
-    pub fn key(_: &str, _: &[String]) -> Result<(), String> {
-        Err(unavailable())
+
+    pub fn drag(
+        from_x: f64,
+        from_y: f64,
+        to_x: f64,
+        to_y: f64,
+        duration_ms: u64,
+    ) -> Result<(), String> {
+        move_pointer(from_x, from_y)?;
+        mouse_button(1, true)?;
+        let steps = (duration_ms / 16).clamp(4, 120);
+        let movement = (|| {
+            for step in 1..=steps {
+                let ratio = step as f64 / steps as f64;
+                move_pointer(
+                    from_x + (to_x - from_x) * ratio,
+                    from_y + (to_y - from_y) * ratio,
+                )?;
+                std::thread::sleep(Duration::from_millis(16));
+            }
+            Ok(())
+        })();
+        let release = mouse_button(1, false);
+        movement.and(release)
+    }
+
+    pub fn scroll(delta_x: i32, delta_y: i32) -> Result<(), String> {
+        for (delta, negative, positive) in [(delta_y, 4_u8, 5_u8), (delta_x, 6_u8, 7_u8)] {
+            let button = if delta < 0 { negative } else { positive };
+            let steps = (delta.unsigned_abs().div_ceil(100)).clamp(1, 100);
+            if delta != 0 {
+                for _ in 0..steps {
+                    mouse_button(button, true)?;
+                    mouse_button(button, false)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn type_text(text: &str) -> Result<(), String> {
+        let (connection, screen_index) = connection_with_xtest()?;
+        let setup = connection.setup();
+        let root = setup.roots[screen_index].root;
+        let count = setup
+            .max_keycode
+            .saturating_sub(setup.min_keycode)
+            .saturating_add(1);
+        let mapping = connection
+            .get_keyboard_mapping(setup.min_keycode, count)
+            .map_err(|error| format!("读取 X11 键盘映射失败：{error}"))?
+            .reply()
+            .map_err(|error| format!("读取 X11 键盘映射失败：{error}"))?;
+        let per_key = usize::from(mapping.keysyms_per_keycode);
+        if per_key == 0 {
+            return Err("X11 键盘映射为空".into());
+        }
+        let slot_index = mapping
+            .keysyms
+            .chunks(per_key)
+            .rposition(|symbols| symbols.iter().all(|symbol| *symbol == 0))
+            .unwrap_or_else(|| usize::from(count.saturating_sub(1)));
+        let slot_offset = slot_index * per_key;
+        let original = mapping
+            .keysyms
+            .get(slot_offset..slot_offset + per_key)
+            .ok_or_else(|| "X11 键盘映射数据不完整".to_string())?
+            .to_vec();
+        let keycode = setup
+            .min_keycode
+            .checked_add(
+                u8::try_from(slot_index).map_err(|_| "X11 键盘映射索引超出范围".to_string())?,
+            )
+            .ok_or_else(|| "X11 键码超出范围".to_string())?;
+
+        let send = |type_, code| -> Result<(), String> {
+            connection
+                .xtest_fake_input(type_, code, CURRENT_TIME, root, 0, 0, 0)
+                .map_err(|error| format!("发送 X11 键盘事件失败：{error}"))?
+                .check()
+                .map_err(|error| format!("X11 键盘事件被拒绝：{error}"))
+        };
+        let type_result = (|| {
+            for character in text.chars() {
+                let codepoint = character as u32;
+                let keysym = if codepoint <= 0xff {
+                    codepoint
+                } else {
+                    0x0100_0000 | codepoint
+                };
+                let mut temporary = vec![0_u32; per_key];
+                temporary[0] = keysym;
+                connection
+                    .change_keyboard_mapping(1, keycode, mapping.keysyms_per_keycode, &temporary)
+                    .map_err(|error| format!("设置 X11 Unicode 键位失败：{error}"))?
+                    .check()
+                    .map_err(|error| format!("设置 X11 Unicode 键位失败：{error}"))?;
+                send(KEY_PRESS_EVENT, keycode)?;
+                send(KEY_RELEASE_EVENT, keycode)?;
+            }
+            connection
+                .flush()
+                .map_err(|error| format!("刷新 X11 文本输入失败：{error}"))
+        })();
+        let restore_result = connection
+            .change_keyboard_mapping(1, keycode, mapping.keysyms_per_keycode, &original)
+            .map_err(|error| format!("恢复 X11 键盘映射失败：{error}"))
+            .and_then(|cookie| {
+                cookie
+                    .check()
+                    .map_err(|error| format!("恢复 X11 键盘映射失败：{error}"))
+            })
+            .and_then(|_| {
+                connection
+                    .flush()
+                    .map_err(|error| format!("刷新 X11 键盘映射失败：{error}"))
+            });
+        type_result.and(restore_result)
+    }
+
+    pub fn key(key: &str, modifiers: &[String]) -> Result<(), String> {
+        let (connection, screen_index) = connection_with_xtest()?;
+        let root = connection.setup().roots[screen_index].root;
+        let keycode = find_keycode(&connection, key_keysym(key)?)?;
+        let modifier_codes = modifiers
+            .iter()
+            .map(|modifier| {
+                modifier_keysym(modifier).and_then(|sym| find_keycode(&connection, sym))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let send = |type_, code| -> Result<(), String> {
+            connection
+                .xtest_fake_input(type_, code, CURRENT_TIME, root, 0, 0, 0)
+                .map_err(|error| format!("发送 X11 键盘事件失败：{error}"))?
+                .check()
+                .map_err(|error| format!("X11 键盘事件被拒绝：{error}"))
+        };
+        let mut pressed = Vec::new();
+        for code in modifier_codes {
+            if let Err(error) = send(KEY_PRESS_EVENT, code) {
+                for held in pressed.into_iter().rev() {
+                    let _ = send(KEY_RELEASE_EVENT, held);
+                }
+                return Err(error);
+            }
+            pressed.push(code);
+        }
+        let result = send(KEY_PRESS_EVENT, keycode).and_then(|_| send(KEY_RELEASE_EVENT, keycode));
+        for held in pressed.into_iter().rev() {
+            let _ = send(KEY_RELEASE_EVENT, held);
+        }
+        connection
+            .flush()
+            .map_err(|error| format!("刷新 X11 键盘输入失败：{error}"))?;
+        result
+    }
+
+    fn find_keycode(connection: &RustConnection, keysym: u32) -> Result<u8, String> {
+        let setup = connection.setup();
+        let count = setup
+            .max_keycode
+            .saturating_sub(setup.min_keycode)
+            .saturating_add(1);
+        let mapping = connection
+            .get_keyboard_mapping(setup.min_keycode, count)
+            .map_err(|error| format!("读取 X11 键盘映射失败：{error}"))?
+            .reply()
+            .map_err(|error| format!("读取 X11 键盘映射失败：{error}"))?;
+        let per_key = usize::from(mapping.keysyms_per_keycode);
+        if per_key == 0 {
+            return Err("X11 键盘映射为空".into());
+        }
+        mapping
+            .keysyms
+            .chunks(per_key)
+            .position(|symbols| symbols.contains(&keysym))
+            .and_then(|index| u8::try_from(index).ok())
+            .and_then(|index| setup.min_keycode.checked_add(index))
+            .ok_or_else(|| format!("当前 X11 键盘布局不包含 keysym 0x{keysym:x}"))
+    }
+
+    fn modifier_keysym(modifier: &str) -> Result<u32, String> {
+        Ok(match modifier.to_ascii_lowercase().as_str() {
+            "shift" => 0xffe1,
+            "control" | "ctrl" => 0xffe3,
+            "alt" | "option" => 0xffe9,
+            "meta" | "command" | "cmd" => 0xffeb,
+            other => return Err(format!("不支持的修饰键：{other}")),
+        })
+    }
+
+    fn key_keysym(key: &str) -> Result<u32, String> {
+        Ok(match key.to_ascii_lowercase().as_str() {
+            "enter" | "return" => 0xff0d,
+            "tab" => 0xff09,
+            "space" => 0x20,
+            "backspace" => 0xff08,
+            "delete" => 0xffff,
+            "escape" | "esc" => 0xff1b,
+            "left" | "arrowleft" => 0xff51,
+            "up" | "arrowup" => 0xff52,
+            "right" | "arrowright" => 0xff53,
+            "down" | "arrowdown" => 0xff54,
+            "home" => 0xff50,
+            "end" => 0xff57,
+            "pageup" => 0xff55,
+            "pagedown" => 0xff56,
+            "insert" => 0xff63,
+            value if value.starts_with('f') && value[1..].parse::<u32>().is_ok() => {
+                let number = value[1..].parse::<u32>().unwrap_or_default();
+                if !(1..=24).contains(&number) {
+                    return Err(format!("不支持的按键：{key}"));
+                }
+                0xffbd + number
+            }
+            value if value.chars().count() == 1 => value.chars().next().unwrap() as u32,
+            other => return Err(format!("不支持的按键：{other}")),
+        })
     }
 }
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+compile_error!("Computer Use has no backend for this target OS");
 
 #[cfg(test)]
 mod tests {
@@ -940,20 +1660,25 @@ mod tests {
     #[test]
     fn stale_frames_are_rejected() {
         let controller = ComputerController {
-            last_frame: Some(FrameMeta {
-                frame_id: "current".into(),
-                display_id: "d".into(),
-                image_width: 100,
-                image_height: 50,
-                origin_x: -20.0,
-                origin_y: 10.0,
-                logical_width: 200.0,
-                logical_height: 100.0,
-                scale_factor: 0.5,
-                captured_at_ms: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64,
+            last_frame: Some(StoredFrame {
+                meta: FrameMeta {
+                    frame_id: "current".into(),
+                    display_id: "d".into(),
+                    image_width: 100,
+                    image_height: 50,
+                    origin_x: -20.0,
+                    origin_y: 10.0,
+                    logical_width: 200.0,
+                    logical_height: 100.0,
+                    scale_factor: 0.5,
+                    captured_at_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                    target_name: None,
+                },
+                visual_signature: vec![0; 32 * 18],
+                foreground_target: None,
             }),
         };
         assert!(controller.resolve_point("old", 10.0, 10.0).is_err());
@@ -962,5 +1687,15 @@ mod tests {
             (80.0, 60.0)
         );
         assert!(controller.resolve_point("current", 101.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn visual_guard_allows_minor_noise_but_rejects_replaced_screen() {
+        let baseline = vec![100_u8; 32 * 18];
+        let mut minor = baseline.clone();
+        minor[..20].fill(130);
+        assert!(visual_signatures_match(&baseline, &minor));
+        let replaced = vec![220_u8; 32 * 18];
+        assert!(!visual_signatures_match(&baseline, &replaced));
     }
 }

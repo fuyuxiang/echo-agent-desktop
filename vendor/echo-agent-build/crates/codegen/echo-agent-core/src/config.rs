@@ -1670,7 +1670,9 @@ impl AgentDefinition {
                  deciding what to do next. Never claim that an action succeeded unless the resulting \
                  page state confirms it. Respect pauses and approval requests; do not work around a \
                  denied action. Do not expose passwords, tokens, cookies, or other secrets in your \
-                 response. Local and private-network addresses are blocked unless the user explicitly \
+                 response. Never pass a password or other credential to browser_type; pause and ask \
+                 the user to take over the controlled browser for credential entry, and only continue \
+                 after the user resumes. Local and private-network addresses are blocked unless the user explicitly \
                  enables that session setting. When the task is complete, summarize the result and any \
                  action that still needs the user."
                     .to_string(),
@@ -1697,7 +1699,8 @@ impl AgentDefinition {
                  from the returned image. After a click, drag, scroll, key press, or text entry, capture \
                  a new screenshot before the next interaction. Never reuse a stale frameId and never \
                  guess unseen UI state. Respect pauses and approval requests; do not work around a \
-                 denied action. Avoid exposing credentials or other secrets. Never claim success until \
+                 denied action. Never pass credentials or other secrets to computer_type; pause and ask \
+                 the user to take over for credential entry, then wait for the user to resume. Never claim success until \
                  the newest screenshot visibly confirms the intended result. When complete, summarize \
                  the outcome and any action that still needs the user."
                     .to_string(),

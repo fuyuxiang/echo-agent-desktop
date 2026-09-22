@@ -28,6 +28,12 @@ export interface AutomationStatus {
   browserRunning: boolean;
   browserUrl?: string | null;
   browserTitle?: string | null;
+  browserHasData: boolean;
+}
+
+export interface AutomationCapabilities {
+  browser: BrowserCapability;
+  computer: ComputerCapability;
 }
 
 export interface AutomationApproval {
@@ -47,6 +53,9 @@ export interface AutomationApprovalClosedEvent {
 export const automationStatus = (sessionId: string) =>
   invoke<AutomationStatus>("automation_status", { sessionId });
 
+export const automationCapabilities = () =>
+  invoke<AutomationCapabilities>("automation_capabilities");
+
 export const automationPause = (sessionId: string) =>
   invoke<AutomationStatus>("automation_pause", { sessionId });
 
@@ -55,6 +64,9 @@ export const automationResume = (sessionId: string) =>
 
 export const automationStop = (sessionId: string) =>
   invoke<AutomationStatus>("automation_stop", { sessionId });
+
+export const automationClearBrowserData = (sessionId: string) =>
+  invoke<AutomationStatus>("automation_clear_browser_data", { sessionId });
 
 export const automationSetPrivateNetwork = (sessionId: string, allowed: boolean) =>
   invoke<AutomationStatus>("automation_set_private_network", { sessionId, allowed });

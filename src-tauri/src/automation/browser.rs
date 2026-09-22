@@ -1,8 +1,8 @@
+use super::network_proxy::{resolve_allowed_destination, BrowserNetworkProxy};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -68,6 +68,7 @@ pub struct BrowserController {
     profile_dir: PathBuf,
     target_id: Option<String>,
     allow_private_network: bool,
+    network_proxy: BrowserNetworkProxy,
     next_cdp_id: u64,
 }
 
@@ -103,6 +104,8 @@ impl BrowserController {
             let _ = std::fs::remove_file(&active_port_file);
         }
 
+        let network_proxy = BrowserNetworkProxy::start(allow_private_network).await?;
+
         let mut command = Command::new(&executable);
         command
             .arg("--remote-debugging-address=127.0.0.1")
@@ -112,7 +115,18 @@ impl BrowserController {
             .arg("--no-default-browser-check")
             .arg("--disable-sync")
             .arg("--disable-background-mode")
+            .arg("--disable-background-networking")
             .arg("--disable-component-update")
+            .arg("--disable-default-apps")
+            .arg("--disable-extensions")
+            .arg("--disable-quic")
+            .arg("--no-service-autorun")
+            .arg("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
+            .arg(format!("--proxy-server=http://{}", network_proxy.address()))
+            // Chromium implicitly bypasses proxies for loopback destinations.
+            // Remove that bypass so localhost and private-network requests are
+            // subject to the same user-controlled policy as every subresource.
+            .arg("--proxy-bypass-list=<-loopback>")
             .arg("--window-size=1280,900")
             .arg("about:blank")
             .stdin(Stdio::null())
@@ -131,6 +145,7 @@ impl BrowserController {
             profile_dir,
             target_id: None,
             allow_private_network,
+            network_proxy,
             next_cdp_id: 1,
         };
         let target = controller.ensure_page().await?;
@@ -154,6 +169,7 @@ impl BrowserController {
 
     pub fn set_allow_private_network(&mut self, allowed: bool) {
         self.allow_private_network = allowed;
+        self.network_proxy.set_allow_private_network(allowed);
     }
 
     /// Re-check the live page rather than trusting only the URL originally
@@ -350,11 +366,14 @@ impl BrowserController {
             json!({ "type": "mousePressed", "x": x, "y": y, "button": button, "clickCount": click_count.clamp(1, 3) }),
         )
         .await?;
-        self.call_page(
-            "Input.dispatchMouseEvent",
-            json!({ "type": "mouseReleased", "x": x, "y": y, "button": button, "clickCount": click_count.clamp(1, 3) }),
-        )
-        .await?;
+        let release = json!({ "type": "mouseReleased", "x": x, "y": y, "button": button, "clickCount": click_count.clamp(1, 3) });
+        if let Err(error) = self
+            .call_page("Input.dispatchMouseEvent", release.clone())
+            .await
+        {
+            let _ = self.call_page("Input.dispatchMouseEvent", release).await;
+            return Err(error);
+        }
         tokio::time::sleep(Duration::from_millis(250)).await;
         Ok(json!({ "clicked": true, "x": x, "y": y, "button": button }))
     }
@@ -408,12 +427,16 @@ impl BrowserController {
         if target.get("disabled").and_then(Value::as_bool) == Some(true) {
             return Err("目标输入框处于禁用状态".into());
         }
+        if target.get("type").and_then(Value::as_str) == Some("password") {
+            return Err(
+                "为保护凭据，代理不能接收或填写密码框。请暂停自动化并由用户接管填写。".into(),
+            );
+        }
         self.call_page("Input.insertText", json!({ "text": text }))
             .await?;
         Ok(json!({
             "typed": true,
             "characters": text.chars().count(),
-            "sensitive": target.get("type").and_then(Value::as_str) == Some("password")
         }))
     }
 
@@ -507,7 +530,7 @@ impl BrowserController {
                 complete,
             });
         }
-        downloads.sort_by(|left, right| right.modified_at_ms.cmp(&left.modified_at_ms));
+        downloads.sort_by_key(|download| std::cmp::Reverse(download.modified_at_ms));
         downloads.truncate(100);
         Ok(downloads)
     }
@@ -530,7 +553,10 @@ impl BrowserController {
         self.call_page("Input.dispatchKeyEvent", down).await?;
         let mut up = base;
         up["type"] = Value::String("keyUp".into());
-        self.call_page("Input.dispatchKeyEvent", up).await?;
+        if let Err(error) = self.call_page("Input.dispatchKeyEvent", up.clone()).await {
+            let _ = self.call_page("Input.dispatchKeyEvent", up).await;
+            return Err(error);
+        }
         Ok(json!({ "pressed": key, "modifiers": modifiers }))
     }
 
@@ -565,21 +591,34 @@ impl BrowserController {
             json!({ "type": "mousePressed", "x": from_x, "y": from_y, "button": "left", "clickCount": 1 }),
         )
         .await?;
-        for step in 1..=8 {
-            let fraction = f64::from(step) / 8.0;
-            let x = from_x + (to_x - from_x) * fraction;
-            let y = from_y + (to_y - from_y) * fraction;
-            self.call_page(
-                "Input.dispatchMouseEvent",
-                json!({ "type": "mouseMoved", "x": x, "y": y, "button": "left", "buttons": 1 }),
-            )
-            .await?;
+        let movement = async {
+            for step in 1..=8 {
+                let fraction = f64::from(step) / 8.0;
+                let x = from_x + (to_x - from_x) * fraction;
+                let y = from_y + (to_y - from_y) * fraction;
+                self.call_page(
+                    "Input.dispatchMouseEvent",
+                    json!({ "type": "mouseMoved", "x": x, "y": y, "button": "left", "buttons": 1 }),
+                )
+                .await?;
+            }
+            Ok::<(), String>(())
         }
-        self.call_page(
-            "Input.dispatchMouseEvent",
-            json!({ "type": "mouseReleased", "x": to_x, "y": to_y, "button": "left", "clickCount": 1 }),
-        )
-        .await?;
+        .await;
+        let release_event = json!({ "type": "mouseReleased", "x": to_x, "y": to_y, "button": "left", "clickCount": 1 });
+        let release = match self
+            .call_page("Input.dispatchMouseEvent", release_event.clone())
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                let _ = self
+                    .call_page("Input.dispatchMouseEvent", release_event)
+                    .await;
+                Err(error)
+            }
+        };
+        movement.and(release)?;
         Ok(json!({ "dragged": true, "from": [from_x, from_y], "to": [to_x, to_y] }))
     }
 
@@ -599,7 +638,7 @@ impl BrowserController {
             self.port,
             urlencoding::encode(&url)
         );
-        let target = reqwest::Client::new()
+        let target = control_client()?
             .put(endpoint)
             .send()
             .await
@@ -622,7 +661,7 @@ impl BrowserController {
             .ok_or_else(|| "指定的浏览器标签页不存在".to_string())?;
         self.target_id = Some(target.id.clone());
         let endpoint = format!("http://127.0.0.1:{}/json/activate/{}", self.port, target.id);
-        reqwest::Client::new()
+        control_client()?
             .get(endpoint)
             .send()
             .await
@@ -634,7 +673,7 @@ impl BrowserController {
 
     pub async fn close_tab(&mut self, target_id: &str) -> Result<Value, String> {
         let endpoint = format!("http://127.0.0.1:{}/json/close/{target_id}", self.port);
-        reqwest::Client::new()
+        control_client()?
             .get(endpoint)
             .send()
             .await
@@ -699,11 +738,14 @@ impl BrowserController {
     }
 
     async fn call_page(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let target = self.ensure_page().await?;
-        let id = self.next_cdp_id;
-        self.next_cdp_id = self.next_cdp_id.saturating_add(1);
-        let request = json!({ "id": id, "method": method, "params": params });
         let future = async {
+            // Target discovery is part of the command deadline. Otherwise a
+            // wedged local DevTools HTTP endpoint could hold the browser mutex
+            // forever and make pause/stop/status appear frozen.
+            let target = self.ensure_page().await?;
+            let id = self.next_cdp_id;
+            self.next_cdp_id = self.next_cdp_id.saturating_add(1);
+            let request = json!({ "id": id, "method": method, "params": params });
             let (mut websocket, _) =
                 tokio_tungstenite::connect_async(&target.websocket_debugger_url)
                     .await
@@ -763,7 +805,7 @@ impl BrowserController {
 
     async fn targets(&self) -> Result<Vec<BrowserTarget>, String> {
         let endpoint = format!("http://127.0.0.1:{}/json/list", self.port);
-        reqwest::Client::new()
+        control_client()?
             .get(endpoint)
             .send()
             .await
@@ -774,6 +816,15 @@ impl BrowserController {
             .await
             .map_err(|error| format!("解析浏览器标签页失败：{error}"))
     }
+}
+
+fn control_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|error| format!("创建浏览器本地控制连接失败：{error}"))
 }
 
 pub fn capability() -> BrowserCapability {
@@ -828,6 +879,10 @@ pub async fn remove_profile(session_id: &str) -> Result<(), String> {
             .await
             .map_err(|error| format!("清理受控浏览器数据失败：{error}"))
     }
+}
+
+pub fn profile_exists(session_id: &str) -> bool {
+    profile_dir(session_id).is_ok_and(|path| path.is_dir())
 }
 
 async fn wait_for_debug_port(path: &Path, timeout: Duration) -> Result<u16, String> {
@@ -960,61 +1015,13 @@ async fn validate_navigation_url(raw: &str, allow_private_network: bool) -> Resu
     }
     if !allow_private_network {
         let port = url.port_or_known_default().unwrap_or(443);
-        let addresses = tokio::net::lookup_host((host, port))
+        resolve_allowed_destination(host, port, false)
             .await
-            .map_err(|error| format!("无法解析目标主机：{error}"))?;
-        for address in addresses {
-            if is_private_or_local(address.ip()) {
-                return Err(
-                    "默认禁止访问本机或内网地址；请由用户在自动化面板中显式授权内网访问".into(),
-                );
-            }
-        }
+            .map_err(|_| {
+                "默认禁止访问本机或内网地址；请由用户在自动化面板中显式授权内网访问".to_string()
+            })?;
     }
     Ok(url)
-}
-
-fn is_private_or_local(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            let octets = ip.octets();
-            ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_broadcast()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || octets[0] == 0
-                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
-                || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
-                || (octets[0] == 198 && matches!(octets[1], 18 | 19))
-                || octets[0] >= 240
-                || ip == Ipv4Addr::new(169, 254, 169, 254)
-        }
-        IpAddr::V6(ip) => {
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || is_unique_local_v6(ip)
-                || is_link_local_v6(ip)
-                || is_site_local_v6(ip)
-                || ip
-                    .to_ipv4_mapped()
-                    .is_some_and(|mapped| is_private_or_local(IpAddr::V4(mapped)))
-        }
-    }
-}
-
-fn is_unique_local_v6(ip: Ipv6Addr) -> bool {
-    ip.segments()[0] & 0xfe00 == 0xfc00
-}
-
-fn is_link_local_v6(ip: Ipv6Addr) -> bool {
-    ip.segments()[0] & 0xffc0 == 0xfe80
-}
-
-fn is_site_local_v6(ip: Ipv6Addr) -> bool {
-    ip.segments()[0] & 0xffc0 == 0xfec0
 }
 
 fn cdp_modifiers(modifiers: &[String]) -> Result<u8, String> {
@@ -1074,6 +1081,8 @@ fn compact_json(value: &Value, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::automation::network_proxy::is_private_or_local;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     #[test]
     fn private_ip_policy_is_fail_closed() {
@@ -1129,6 +1138,16 @@ mod tests {
             .and_then(|element| element["ref"].as_str())
             .expect("button ref")
             .to_string();
+        let password_ref = elements
+            .iter()
+            .find(|element| element["type"] == "password")
+            .and_then(|element| element["ref"].as_str())
+            .expect("password ref")
+            .to_string();
+        assert!(browser
+            .type_text(&password_ref, "must-never-be-entered", true)
+            .await
+            .is_err());
         browser
             .type_text(&input_ref, "EchoAgent", true)
             .await

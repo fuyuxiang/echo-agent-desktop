@@ -7,7 +7,11 @@ import { useSessionsStore, HOME_DRAFT_KEY } from "@/stores/sessions-store";
 import { usePendingExpertStore } from "@/stores/pending-expert-store";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
 import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
-import type { AutomationMode } from "@/lib/automation-client";
+import {
+  automationCapabilities,
+  type AutomationCapabilities,
+  type AutomationMode,
+} from "@/lib/automation-client";
 
 /** EchoAgent 首页：单一任务入口。 */
 export function HomePage({
@@ -62,10 +66,25 @@ export function HomePage({
   // 受控填充 Composer 的内容 + nonce（召唤专家后写入 quick prompt）。
   const [externalText, setExternalText] = useState("");
   const [externalTextNonce, setExternalTextNonce] = useState(0);
+  const [automationSupport, setAutomationSupport] = useState<AutomationCapabilities | null>(null);
   // 首页草稿(哨兵 key):用户离开首页再回来,未发送的字还在。
   const homeDraft = useSessionsStore((s) => s.drafts[HOME_DRAFT_KEY] ?? "");
   const setDraft = useSessionsStore((s) => s.setDraft);
   const mentionCandidates = useWorkspaceMentions(cwd);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let disposed = false;
+    void automationCapabilities()
+      .then((support) => {
+        if (!disposed) setAutomationSupport(support);
+      })
+      .catch(() => {
+        // Storybook/browser previews have no Tauri backend. Session creation
+        // still performs the authoritative backend capability check.
+      });
+    return () => { disposed = true; };
+  }, []);
 
   // Pending expert (set after "召唤" in the detail modal).
   const pendingExpert = usePendingExpertStore((s) => s.expert);
@@ -117,19 +136,35 @@ export function HomePage({
                   ["browser_use", "Browser Use", "在隔离浏览器中完成网页任务"],
                   ["computer_use", "Computer Use", "通过截图安全操作桌面"],
                 ] as const).map(([value, label, description]) => (
+                  (() => {
+                    const capability = value === "browser_use"
+                      ? automationSupport?.browser
+                      : value === "computer_use"
+                        ? automationSupport?.computer
+                        : null;
+                    const unavailable = capability?.available === false;
+                    return (
                   <button
                     key={value}
                     type="button"
                     className={`home-mode-picker__option${(taskMode ?? "default") === value ? " home-mode-picker__option--active" : ""}`}
                     aria-pressed={(taskMode ?? "default") === value}
-                    disabled={Boolean(creatingSession) || streaming}
-                    title={description}
+                    disabled={Boolean(creatingSession) || streaming || unavailable}
+                    title={unavailable ? capability?.reason || `${label} 当前不可用` : description}
                     onClick={() => onTaskModeChange(value)}
                   >
                     {label}
                   </button>
+                    );
+                  })()
                 ))}
               </div>
+              {(taskMode === "browser_use" && automationSupport?.browser.available === false) && (
+                <small className="home-mode-picker__reason">{automationSupport.browser.reason || "当前设备无法使用 Browser Use"}</small>
+              )}
+              {(taskMode === "computer_use" && automationSupport?.computer.available === false) && (
+                <small className="home-mode-picker__reason">{automationSupport.computer.reason || "当前设备无法使用 Computer Use"}</small>
+              )}
             </div>
           )}
           <Composer

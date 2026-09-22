@@ -554,10 +554,12 @@ pub fn run() {
             agent_admin::marketplace_list,
             agent_admin::marketplace_action,
             // first-party Browser Use / Computer Use runtime and safety UI
+            automation::automation_capabilities,
             automation::automation_status,
             automation::automation_pause,
             automation::automation_resume,
             automation::automation_stop,
+            automation::automation_clear_browser_data,
             automation::automation_set_private_network,
             automation::automation_request_computer_permissions,
             automation::automation_pending_approvals,

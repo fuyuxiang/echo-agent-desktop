@@ -1048,12 +1048,19 @@ button,
 
 .home-mode-picker {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 0 4px;
   color: var(--echo-text-weak);
   font-size: 12px;
+}
+
+.home-mode-picker__reason {
+  width: 100%;
+  color: #b54747;
+  text-align: right;
 }
 
 .home-mode-picker__options {
@@ -1272,6 +1279,15 @@ button,
   white-space: nowrap;
 }
 
+.automation-control__privacy {
+  flex: 0 1 auto;
+  overflow: hidden;
+  max-width: 150px;
+  color: var(--echo-text-weak);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .automation-control > button {
   height: 28px;
   flex: 0 0 auto;
@@ -1355,6 +1371,31 @@ button,
   margin-top: 6px;
   color: var(--echo-text-weak);
   font-size: 11px;
+}
+
+.automation-approval__details {
+  display: grid;
+  gap: 4px;
+  margin: 7px 0 0;
+  font-size: 11px;
+}
+
+.automation-approval__details > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.automation-approval__details dt {
+  color: var(--echo-text-weak);
+}
+
+.automation-approval__details dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--echo-text-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .automation-approval__body pre {

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { setCodingMode } from "@/lib/agent-client";
 import {
+  automationClearBrowserData,
   automationPause,
   automationPendingApprovals,
   automationRequestComputerPermissions,
@@ -19,6 +20,7 @@ import {
 } from "@/lib/automation-client";
 import { friendlyError } from "@/lib/error-format";
 import { useSessionStore, type AgentMode } from "@/stores/session-store";
+import { useAppDialog } from "./AppDialog";
 
 interface AutomationControlsProps {
   sessionId: string | null;
@@ -30,19 +32,26 @@ interface AutomationControlsProps {
 interface AutomationSessionState {
   status: AutomationStatus | null;
   approvals: AutomationApproval[];
+  error: string | null;
   refresh: () => Promise<void>;
   setStatus: (status: AutomationStatus) => void;
   removeApproval: (requestId: string) => void;
 }
 
+function hasTauriRuntime(): boolean {
+  return "__TAURI_INTERNALS__" in window;
+}
+
 function useAutomationSession(sessionId: string | null): AutomationSessionState {
   const [status, setStatus] = useState<AutomationStatus | null>(null);
   const [approvals, setApprovals] = useState<AutomationApproval[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!sessionId) {
       setStatus(null);
       setApprovals([]);
+      setError(null);
       return;
     }
     const [nextStatus, nextApprovals] = await Promise.all([
@@ -51,6 +60,7 @@ function useAutomationSession(sessionId: string | null): AutomationSessionState 
     ]);
     setStatus(nextStatus);
     setApprovals(nextApprovals);
+    setError(null);
   }, [sessionId]);
 
   useEffect(() => {
@@ -58,6 +68,7 @@ function useAutomationSession(sessionId: string | null): AutomationSessionState 
     const unlisteners: UnlistenFn[] = [];
     setStatus(null);
     setApprovals([]);
+    if (!hasTauriRuntime()) return;
 
     const setup = async () => {
       try {
@@ -83,9 +94,10 @@ function useAutomationSession(sessionId: string | null): AutomationSessionState 
         }
         unlisteners.push(...registered);
         await refresh();
-      } catch {
+      } catch (setupError) {
         // Browser preview and tests do not expose Tauri IPC. The controls stay
         // inert there; the desktop backend remains the source of truth.
+        if (!disposed) setError(friendlyError(setupError));
       }
     };
     void setup();
@@ -95,11 +107,26 @@ function useAutomationSession(sessionId: string | null): AutomationSessionState 
     };
   }, [refresh, sessionId]);
 
+  useEffect(() => {
+    if (!sessionId || !hasTauriRuntime()) return;
+    const refreshIfVisible = () => {
+      if (document.visibilityState === "visible") {
+        void refresh().catch((refreshError) => setError(friendlyError(refreshError)));
+      }
+    };
+    window.addEventListener("focus", refreshIfVisible);
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    return () => {
+      window.removeEventListener("focus", refreshIfVisible);
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+    };
+  }, [refresh, sessionId]);
+
   const removeApproval = useCallback((requestId: string) => {
     setApprovals((current) => current.filter((item) => item.requestId !== requestId));
   }, []);
 
-  return { status, approvals, refresh, setStatus, removeApproval };
+  return { status, approvals, error, refresh, setStatus, removeApproval };
 }
 
 function selectedAutomationMode(mode: AgentMode): AutomationMode {
@@ -136,6 +163,7 @@ function AutomationToolbar({
   const mode = selectedAutomationMode(agentMode);
   const [busy, setBusy] = useState(false);
   const status = automation.status;
+  const { requestConfirmation, dialog } = useAppDialog(sessionId);
 
   const run = useCallback(async (operation: () => Promise<AutomationStatus | void>, success?: string) => {
     setBusy(true);
@@ -152,6 +180,14 @@ function AutomationToolbar({
 
   const changeMode = (next: AutomationMode) => {
     if (!sessionId || next === mode) return;
+    if (next === "browser_use" && status && !status.browser.available) {
+      onToast?.(status.browser.reason || "当前设备无法使用 Browser Use");
+      return;
+    }
+    if (next === "computer_use" && status && !status.computer.available) {
+      onToast?.(status.computer.reason || "当前设备无法使用 Computer Use");
+      return;
+    }
     void run(async () => {
       await setCodingMode(sessionId, next === "default" ? "agent" : next);
       await automation.refresh();
@@ -173,15 +209,21 @@ function AutomationToolbar({
           onChange={(event) => changeMode(event.target.value as AutomationMode)}
         >
           <option value="default">Agent</option>
-          <option value="browser_use">Browser Use</option>
-          <option value="computer_use">Computer Use</option>
+          <option value="browser_use" disabled={status ? !status.browser.available : false}>Browser Use</option>
+          <option value="computer_use" disabled={status ? !status.computer.available : false}>Computer Use</option>
         </select>
       </label>
 
       {mode !== "default" && (
         <>
-          <span className="automation-control__summary" title={statusText(status, mode)}>
-            {statusText(status, mode)}
+          <span className="automation-control__summary" title={automation.error || statusText(status, mode)}>
+            {automation.error || statusText(status, mode)}
+          </span>
+          <span
+            className="automation-control__privacy"
+            title="当前网页或屏幕内容会作为任务上下文发送给你配置的模型服务商"
+          >
+            内容将发送给当前模型
           </span>
           {computerNeedsPermission && (
             <button
@@ -209,6 +251,25 @@ function AutomationToolbar({
               内网
             </label>
           )}
+          {mode === "browser_use" && status?.browserHasData && (
+            <button
+              type="button"
+              disabled={busy}
+              title="停止受控浏览器并删除该任务的 Cookie、登录状态、缓存和下载"
+              onClick={() => requestConfirmation({
+                title: "清除该任务的浏览器数据？",
+                description: "将停止受控浏览器，并删除 Cookie、登录状态、缓存和已下载文件。此操作无法撤销。",
+                confirmLabel: "清除数据",
+                danger: true,
+                action: () => run(
+                  () => automationClearBrowserData(sessionId!),
+                  "浏览器数据已清除，自动化保持暂停",
+                ),
+              })}
+            >
+              清除数据
+            </button>
+          )}
           {status?.paused ? (
             <button type="button" disabled={busy} onClick={() => void run(() => automationResume(sessionId!), "自动化已继续")}>继续</button>
           ) : (
@@ -228,6 +289,7 @@ function AutomationToolbar({
           </button>
         </>
       )}
+      {dialog}
     </div>
   );
 }
@@ -238,10 +300,36 @@ function AutomationApprovalCard({
 }: { automation: AutomationSessionState; onToast?: (message: string) => void }) {
   const request = automation.approvals[0];
   const [resolving, setResolving] = useState(false);
+  const rejectRef = useRef<HTMLButtonElement>(null);
   const remaining = automation.approvals.length - 1;
-  const detailText = useMemo(() => {
-    if (!request?.details || typeof request.details !== "object") return "";
-    return JSON.stringify(request.details, null, 2);
+  const detailRows = useMemo(() => {
+    if (!request?.details || typeof request.details !== "object") return [];
+    const details = request.details as Record<string, unknown>;
+    const target = details.target && typeof details.target === "object"
+      ? details.target as Record<string, unknown>
+      : null;
+    const safeUrl = typeof details.url === "string" ? (() => {
+      try {
+        const parsed = new URL(details.url as string);
+        return `${parsed.origin}${parsed.pathname}`.slice(0, 300);
+      } catch {
+        return "";
+      }
+    })() : "";
+    return [
+      ["网站", safeUrl],
+      ["页面", typeof details.pageTitle === "string" ? details.pageTitle : ""],
+      ["目标控件", target && typeof target.name === "string" ? target.name : ""],
+      ["目标应用", typeof details.targetName === "string" ? details.targetName : ""],
+      ["文件", Array.isArray(details.files) ? details.files.join("、") : ""],
+      ["文本长度", typeof details.characters === "number" ? `${details.characters} 个字符` : ""],
+      ["按键", typeof details.key === "string" ? details.key : ""],
+      ["显示器", typeof details.displayId === "string" ? details.displayId : ""],
+    ].filter((row): row is [string, string] => Boolean(row[1]));
+  }, [request]);
+
+  useEffect(() => {
+    if (request) rejectRef.current?.focus();
   }, [request]);
 
   if (!request) return null;
@@ -259,21 +347,22 @@ function AutomationApprovalCard({
   };
 
   return (
-    <section className="automation-approval" role="alert" aria-live="assertive">
+    <section className="automation-approval" role="alertdialog" aria-modal="true" aria-labelledby="automation-approval-title">
       <div className="automation-approval__icon" aria-hidden="true">!</div>
       <div className="automation-approval__body">
-        <strong>{request.title}</strong>
+        <strong id="automation-approval-title">{request.title}</strong>
         <p>{request.description}</p>
-        {detailText && (
-          <details>
-            <summary>查看操作详情</summary>
-            <pre>{detailText}</pre>
-          </details>
+        {detailRows.length > 0 && (
+          <dl className="automation-approval__details">
+            {detailRows.map(([label, value]) => (
+              <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
+            ))}
+          </dl>
         )}
         {remaining > 0 && <small>还有 {remaining} 个操作等待确认</small>}
       </div>
       <div className="automation-approval__actions">
-        <button type="button" disabled={resolving} onClick={() => void resolve(false)}>拒绝</button>
+        <button ref={rejectRef} type="button" disabled={resolving} onClick={() => void resolve(false)}>拒绝</button>
         <button type="button" className="automation-approval__approve" disabled={resolving} onClick={() => void resolve(true)}>
           允许本次
         </button>

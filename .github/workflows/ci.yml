@@ -80,6 +80,45 @@ jobs:
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -j 2
 
+  automation-macos:
+    name: Automation / macOS Intel + Apple Silicon
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '23.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --lib --target x86_64-apple-darwin
+      - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --lib --target aarch64-apple-darwin
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib automation:: -j 2
+
+  automation-windows:
+    name: Automation / Windows
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '23.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --lib
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib automation:: -j 2
+
   windows-search-bundle:
     name: Windows built-in tool reliability
     runs-on: windows-latest

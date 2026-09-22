@@ -6,6 +6,7 @@
 
 mod browser;
 mod computer;
+mod network_proxy;
 
 use axum::{
     extract::{DefaultBodyLimit, State},
@@ -23,7 +24,9 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::{oneshot, Mutex as AsyncMutex};
+use tokio::sync::RwLockReadGuard;
+use tokio::sync::{oneshot, Mutex as AsyncMutex, RwLock as AsyncRwLock};
+use tokio_util::sync::CancellationToken;
 
 pub const MCP_SERVER_NAME: &str = "echoagent-automation";
 pub const AUTH_HEADER: &str = "Authorization";
@@ -74,6 +77,14 @@ pub struct AutomationStatus {
     pub browser_running: bool,
     pub browser_url: Option<String>,
     pub browser_title: Option<String>,
+    pub browser_has_data: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutomationCapabilities {
+    pub browser: browser::BrowserCapability,
+    pub computer: computer::ComputerCapability,
 }
 
 struct AutomationSession {
@@ -82,18 +93,53 @@ struct AutomationSession {
     allow_private_network: Mutex<bool>,
     browser: AsyncMutex<Option<BrowserController>>,
     computer: Mutex<ComputerController>,
+    action_token: Mutex<CancellationToken>,
+    execution_gate: AsyncRwLock<()>,
 }
 
 impl AutomationSession {
     fn new(mode: AutomationMode) -> Self {
+        // A restored task must never silently regain control after an app
+        // restart. A deliberate mode switch starts active; restoring an
+        // already-automated task starts paused until the user resumes in UI.
+        let restored_automation = mode != AutomationMode::Default;
         Self {
             mode: Mutex::new(mode),
-            paused: Mutex::new(false),
+            paused: Mutex::new(restored_automation),
             allow_private_network: Mutex::new(false),
             browser: AsyncMutex::new(None),
             computer: Mutex::new(ComputerController::default()),
+            action_token: Mutex::new(CancellationToken::new()),
+            execution_gate: AsyncRwLock::new(()),
         }
     }
+
+    fn action_token(&self) -> CancellationToken {
+        self.action_token.lock().unwrap().clone()
+    }
+
+    fn cancel_actions(&self) {
+        self.action_token.lock().unwrap().cancel();
+    }
+
+    fn reset_action_token(&self) {
+        *self.action_token.lock().unwrap() = CancellationToken::new();
+    }
+}
+
+async fn enter_action<'a>(
+    session: &'a AutomationSession,
+    token: &CancellationToken,
+    required: AutomationMode,
+) -> Result<RwLockReadGuard<'a, ()>, String> {
+    let guard = session.execution_gate.read().await;
+    if token.is_cancelled() || *session.paused.lock().unwrap() {
+        return Err("自动化已暂停。用户接管期间不会执行任何浏览器或电脑操作。".into());
+    }
+    if *session.mode.lock().unwrap() != required {
+        return Err("任务模式已变化，本次自动化操作已取消".into());
+    }
+    Ok(guard)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,6 +156,14 @@ pub struct AutomationApproval {
 struct PendingApproval {
     request: AutomationApproval,
     response: oneshot::Sender<bool>,
+}
+
+struct BrowserApprovalPlan {
+    title: String,
+    description: String,
+    details: Value,
+    expected_url: String,
+    expected_target: Option<(String, Value)>,
 }
 
 struct AutomationManager {
@@ -144,14 +198,17 @@ impl AutomationManager {
 
     async fn set_mode(&self, session_id: &str, mode: AutomationMode) -> Result<(), String> {
         let session = self.session(session_id).await?;
+        session.cancel_actions();
+        self.reject_session_approvals(session_id).await;
+        let _exclusive = session.execution_gate.write().await;
         *session.mode.lock().unwrap() = mode;
         *session.paused.lock().unwrap() = false;
+        session.reset_action_token();
         if !mode.allows_browser() {
             if let Some(mut browser) = session.browser.lock().await.take() {
                 let _ = browser.stop().await;
             }
         }
-        self.reject_session_approvals(session_id).await;
         self.emit_status(session_id).await;
         Ok(())
     }
@@ -178,6 +235,7 @@ impl AutomationManager {
                 .as_ref()
                 .and_then(|status| status.url.clone()),
             browser_title: browser_status.and_then(|status| status.title),
+            browser_has_data: browser::profile_exists(session_id),
         })
     }
 
@@ -212,11 +270,19 @@ impl AutomationManager {
 
     async fn pause(&self, session_id: &str, paused: bool) -> Result<(), String> {
         let session = self.session(session_id).await?;
-        *session.paused.lock().unwrap() = paused;
         if paused {
+            // Cancel first, then wait for the exclusive gate. Once this method
+            // returns, no action admitted under the old token can still run.
+            session.cancel_actions();
+            *session.paused.lock().unwrap() = true;
             // Taking over is a hard boundary: no earlier approval request may
             // remain live and resume an operation behind the user's back.
             self.reject_session_approvals(session_id).await;
+            let _exclusive = session.execution_gate.write().await;
+        } else {
+            let _exclusive = session.execution_gate.write().await;
+            session.reset_action_token();
+            *session.paused.lock().unwrap() = false;
         }
         self.emit_status(session_id).await;
         Ok(())
@@ -224,15 +290,22 @@ impl AutomationManager {
 
     async fn stop(&self, session_id: &str) -> Result<(), String> {
         let session = self.session(session_id).await?;
+        session.cancel_actions();
         *session.paused.lock().unwrap() = true;
+        self.reject_session_approvals(session_id).await;
+        let _exclusive = session.execution_gate.write().await;
         let browser_result = if let Some(mut browser) = session.browser.lock().await.take() {
             browser.stop().await
         } else {
             Ok(())
         };
-        self.reject_session_approvals(session_id).await;
         self.emit_status(session_id).await;
         browser_result
+    }
+
+    async fn clear_browser_data(&self, session_id: &str) -> Result<(), String> {
+        self.stop(session_id).await?;
+        browser::remove_profile(session_id).await
     }
 
     async fn reject_session_approvals(&self, session_id: &str) {
@@ -276,7 +349,11 @@ impl AutomationManager {
         title: &str,
         description: &str,
         details: Value,
+        cancellation: &CancellationToken,
     ) -> Result<(), String> {
+        if cancellation.is_cancelled() {
+            return Err("自动化已暂停，操作未进入确认阶段".into());
+        }
         let request_id = uuid::Uuid::now_v7().to_string();
         let request = AutomationApproval {
             request_id: request_id.clone(),
@@ -298,15 +375,27 @@ impl AutomationManager {
             self.approvals.lock().await.remove(&request_id);
             return Err("无法显示自动化安全确认，操作已取消".into());
         }
-        match tokio::time::timeout(APPROVAL_TIMEOUT, rx).await {
+        let result = tokio::select! {
+            _ = cancellation.cancelled() => {
+                Err("自动化已暂停，待确认操作已取消".into())
+            }
+            response = tokio::time::timeout(APPROVAL_TIMEOUT, rx) => match response {
             Ok(Ok(true)) => Ok(()),
             Ok(Ok(false)) => Err("用户拒绝了该高风险自动化操作".into()),
             Ok(Err(_)) => Err("自动化安全确认已关闭，操作未执行".into()),
-            Err(_) => {
-                self.approvals.lock().await.remove(&request_id);
-                Err("自动化安全确认等待超时，操作未执行".into())
+            Err(_) => Err("自动化安全确认等待超时，操作未执行".into()),
             }
+        };
+        // The normal UI resolution path already removes the request and emits
+        // this event. Cancellation and timeout have no UI caller, so close the
+        // card here instead of leaving a stale decision on screen.
+        if self.approvals.lock().await.remove(&request_id).is_some() {
+            let _ = self.app.emit(
+                "automation://approval-closed",
+                json!({ "requestId": request_id, "sessionId": session_id }),
+            );
         }
+        result
     }
 
     async fn shutdown_all(&self) {
@@ -472,7 +561,21 @@ pub async fn shutdown_all() {
 }
 
 #[tauri::command]
+pub fn automation_capabilities() -> AutomationCapabilities {
+    AutomationCapabilities {
+        browser: browser::capability(),
+        computer: ComputerController::capability(),
+    }
+}
+
+#[tauri::command]
 pub async fn automation_status(session_id: String) -> Result<AutomationStatus, String> {
+    manager()?.status(&session_id).await
+}
+
+#[tauri::command]
+pub async fn automation_clear_browser_data(session_id: String) -> Result<AutomationStatus, String> {
+    manager()?.clear_browser_data(&session_id).await?;
     manager()?.status(&session_id).await
 }
 
@@ -500,6 +603,7 @@ pub async fn automation_set_private_network(
     allowed: bool,
 ) -> Result<AutomationStatus, String> {
     if allowed {
+        let approval_token = CancellationToken::new();
         manager()?
             .approve(
                 &session_id,
@@ -507,6 +611,7 @@ pub async fn automation_set_private_network(
                 "允许访问本机和内网",
                 "受控浏览器将可以访问环回地址、局域网和企业内网。网页可能接触本机服务，请确认当前任务确实需要此权限。",
                 json!({ "allowed": true }),
+                &approval_token,
             )
             .await?;
     }
@@ -657,32 +762,31 @@ fn tools_list_result() -> Value {
     json!({ "tools": [
         tool("automation_status", "Read Browser Use and Computer Use capability, mode and lifecycle status for this task.", object_schema(&[])),
         tool("automation_pause", "Pause all browser/computer actions so the user can take over safely.", object_schema(&[])),
-        tool("automation_resume", "Resume a paused automation session after the user returns control.", object_schema(&[])),
         tool("automation_stop", "Stop the controlled browser and all automation for this task.", object_schema(&[])),
 
         tool("browser_start", "Start the task-isolated controlled browser. Call before other browser tools.", object_schema(&[])),
         tool("browser_navigate", "Navigate the controlled browser to an absolute public http/https URL and wait for DOM readiness.", schema(json!({ "url": {"type":"string","maxLength":4096} }), &["url"])),
         tool("browser_snapshot", "Return current page title, URL, readable text and interactive elements with stable element refs.", object_schema(&[])),
         tool("browser_screenshot", "Capture the visible controlled-browser viewport. Returns an image and viewport metadata.", object_schema(&[])),
-        tool("browser_click", "Click an element ref from browser_snapshot, or viewport coordinates. Consequential controls require independent user confirmation.", schema(json!({
+        tool("browser_click", "Click an element ref from browser_snapshot, or viewport coordinates. Every click requires independent user confirmation.", schema(json!({
             "elementRef":{"type":"string","maxLength":128}, "x":{"type":"number"}, "y":{"type":"number"},
             "button":{"type":"string","enum":["left","right","middle"],"default":"left"}, "clickCount":{"type":"integer","minimum":1,"maximum":3,"default":1}
         }), &[])),
         tool("browser_hover", "Move the browser pointer over an element ref.", schema(json!({"elementRef":{"type":"string","maxLength":128}}), &["elementRef"])),
-        tool("browser_type", "Focus an input/contenteditable element and type text. Password fields always require user confirmation.", schema(json!({
+        tool("browser_type", "Focus an input/contenteditable element and type text after confirmation. Password fields must be completed manually during user takeover; never pass credentials to this tool.", schema(json!({
             "elementRef":{"type":"string","maxLength":128}, "text":{"type":"string","maxLength":65536}, "replace":{"type":"boolean","default":true}
         }), &["elementRef","text"])),
-        tool("browser_select", "Select one or more values/text labels in a select element.", schema(json!({
+        tool("browser_select", "Select one or more values/text labels in a select element after user confirmation.", schema(json!({
             "elementRef":{"type":"string","maxLength":128}, "values":{"type":"array","minItems":1,"maxItems":100,"items":{"type":"string","maxLength":1024}}
         }), &["elementRef","values"])),
         tool("browser_upload", "Upload workspace files through a file input. This always pauses for user confirmation before any file is disclosed to the website.", schema(json!({
             "elementRef":{"type":"string","maxLength":128}, "paths":{"type":"array","minItems":1,"maxItems":20,"items":{"type":"string","maxLength":4096}}
         }), &["elementRef","paths"])),
-        tool("browser_key", "Press one browser key with optional modifiers. Enter/Return may require confirmation when a form is active.", schema(json!({
+        tool("browser_key", "Press one browser key with optional modifiers after user confirmation.", schema(json!({
             "key":{"type":"string","maxLength":64}, "modifiers":{"type":"array","maxItems":4,"items":{"type":"string","enum":["shift","ctrl","control","alt","option","cmd","command","meta"]}}
         }), &["key"])),
         tool("browser_scroll", "Scroll the current browser viewport by pixel deltas.", schema(json!({"deltaX":{"type":"number","default":0},"deltaY":{"type":"number"}}), &["deltaY"])),
-        tool("browser_drag", "Drag between two viewport coordinates.", schema(json!({"fromX":{"type":"number"},"fromY":{"type":"number"},"toX":{"type":"number"},"toY":{"type":"number"}}), &["fromX","fromY","toX","toY"])),
+        tool("browser_drag", "Drag between two viewport coordinates after user confirmation.", schema(json!({"fromX":{"type":"number"},"fromY":{"type":"number"},"toX":{"type":"number"},"toY":{"type":"number"}}), &["fromX","fromY","toX","toY"])),
         tool("browser_tabs", "List browser tabs or create/select/close one.", schema(json!({
             "action":{"type":"string","enum":["list","new","select","close"],"default":"list"}, "targetId":{"type":"string","maxLength":256}, "url":{"type":"string","maxLength":4096}
         }), &[])),
@@ -694,18 +798,18 @@ fn tools_list_result() -> Value {
         tool("computer_displays", "List controllable displays and their logical/pixel coordinate systems.", object_schema(&[])),
         tool("computer_screenshot", "Capture a display. Returns a frameId, coordinate metadata and PNG image. Coordinate actions must use this frameId.", schema(json!({"displayId":{"type":"string","maxLength":128}}), &[])),
         tool("computer_move", "Move the pointer using coordinates from a current computer_screenshot frame. Hover UI may change, so the frame is invalidated.", schema(json!({"frameId":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}}), &["frameId","x","y"])),
-        tool("computer_click", "Click using coordinates from a current screenshot. The frame is invalidated after the action.", schema(json!({
-            "frameId":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right","middle"],"default":"left"},"clickCount":{"type":"integer","minimum":1,"maximum":3,"default":1},"consequential":{"type":"boolean","default":false},"intent":{"type":"string","maxLength":500}
+        tool("computer_click", "Click using coordinates from a current screenshot after user confirmation. The frame is invalidated after the action.", schema(json!({
+            "frameId":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right","middle"],"default":"left"},"clickCount":{"type":"integer","minimum":1,"maximum":3,"default":1}
         }), &["frameId","x","y"])),
-        tool("computer_drag", "Drag between two coordinates from a current screenshot and invalidate the frame.", schema(json!({
+        tool("computer_drag", "Drag between two coordinates from a current screenshot after user confirmation and invalidate the frame.", schema(json!({
             "frameId":{"type":"string"},"fromX":{"type":"number"},"fromY":{"type":"number"},"toX":{"type":"number"},"toY":{"type":"number"},"durationMs":{"type":"integer","minimum":100,"maximum":5000,"default":500}
         }), &["frameId","fromX","fromY","toX","toY"])),
         tool("computer_scroll", "Scroll the active desktop target using a current screenshot frame. Positive deltaY scrolls down and the frame is invalidated.", schema(json!({"frameId":{"type":"string"},"deltaX":{"type":"integer","default":0},"deltaY":{"type":"integer"}}), &["frameId","deltaY"])),
-        tool("computer_type", "Type text into the focused desktop control. Set sensitive=true for credentials and consequential=true for text that will be published/sent.", schema(json!({
-            "frameId":{"type":"string"},"text":{"type":"string","maxLength":65536},"sensitive":{"type":"boolean","default":false},"consequential":{"type":"boolean","default":false},"intent":{"type":"string","maxLength":500}
+        tool("computer_type", "Type text into the focused desktop control after user confirmation. Text is never shown in the confirmation card.", schema(json!({
+            "frameId":{"type":"string"},"text":{"type":"string","maxLength":65536}
         }), &["frameId","text"])),
-        tool("computer_key", "Press a desktop key with optional modifiers. Consequential shortcuts require confirmation.", schema(json!({
-            "frameId":{"type":"string"},"key":{"type":"string","maxLength":64},"modifiers":{"type":"array","maxItems":4,"items":{"type":"string"}},"consequential":{"type":"boolean","default":false},"intent":{"type":"string","maxLength":500}
+        tool("computer_key", "Press a desktop key with optional modifiers after user confirmation.", schema(json!({
+            "frameId":{"type":"string"},"key":{"type":"string","maxLength":64},"modifiers":{"type":"array","maxItems":4,"items":{"type":"string"}}
         }), &["frameId","key"])),
         tool("computer_wait", "Wait briefly before taking the next screenshot.", schema(json!({"milliseconds":{"type":"integer","minimum":50,"maximum":30000,"default":1000}}), &[]))
     ] })
@@ -762,11 +866,6 @@ async fn tools_call(
             serde_json::to_value(manager.status(session_id).await?)
                 .map_err(|error| error.to_string())?
         }
-        "automation_resume" => {
-            manager.pause(session_id, false).await?;
-            serde_json::to_value(manager.status(session_id).await?)
-                .map_err(|error| error.to_string())?
-        }
         "automation_stop" => {
             manager.stop(session_id).await?;
             serde_json::to_value(manager.status(session_id).await?)
@@ -792,7 +891,10 @@ async fn browser_tool(
     let session = manager
         .ensure_active(session_id, AutomationMode::BrowserUse)
         .await?;
+    let action_token = session.action_token();
     if name == "browser_stop" {
+        let _action_guard =
+            enter_action(&session, &action_token, AutomationMode::BrowserUse).await?;
         if let Some(mut browser) = session.browser.lock().await.take() {
             browser.stop().await?;
         }
@@ -828,224 +930,319 @@ async fn browser_tool(
 
     // Never hold the browser mutex while waiting for a human decision. This
     // keeps status/pause/stop responsive throughout the approval window.
-    let mut approved_url: Option<String> = None;
-    let mut approved_risk: Option<String> = None;
-    let mut upload_paths: Vec<String> = Vec::new();
-    match name {
-        "browser_click" => {
-            if let Some(reference) = optional_str(args, "elementRef")? {
-                let mut guard = session.browser.lock().await;
-                let browser = guard.as_mut().expect("browser inserted above");
-                if let Some(reason) = risky_browser_element(browser, reference).await? {
-                    approved_url = Some(browser.current_url().await?);
-                    approved_risk = Some(reason.clone());
-                    drop(guard);
-                    manager
-                        .approve(
-                            session_id,
-                            name,
-                            "确认网页上的重要操作",
-                            &reason,
-                            json!({ "elementRef": reference }),
-                        )
-                        .await?;
+    let upload_paths = if name == "browser_upload" {
+        validate_upload_paths(manager, session_id, args)?
+    } else {
+        Vec::new()
+    };
+    let approval_plan = if matches!(
+        name,
+        "browser_click"
+            | "browser_type"
+            | "browser_select"
+            | "browser_upload"
+            | "browser_key"
+            | "browser_drag"
+    ) {
+        let reference = match name {
+            "browser_type" | "browser_select" | "browser_upload" => {
+                Some(required_str(args, "elementRef")?)
+            }
+            "browser_click" => optional_str(args, "elementRef")?,
+            _ => None,
+        };
+        if name == "browser_click" && reference.is_none() {
+            required_f64(args, "x")?;
+            required_f64(args, "y")?;
+        }
+        let mut guard = session.browser.lock().await;
+        let browser = guard.as_mut().expect("browser inserted above");
+        let (url, page_title, target) = browser_approval_context(browser, reference).await?;
+        let common = json!({
+            "url": url,
+            "pageTitle": page_title,
+            "target": target,
+        });
+        let (title, description, details) = match name {
+            "browser_click" => {
+                let high_risk = target.as_ref().is_some_and(browser_target_looks_risky);
+                let title = if high_risk {
+                    "确认网页上的重要点击"
+                } else {
+                    "确认网页点击"
+                };
+                let description = if high_risk {
+                    "该控件可能发送、购买、删除或确认重要操作。请核对网站和目标后继续。"
+                } else {
+                    "代理即将点击当前网页。请核对网站和目标后继续。"
+                };
+                (
+                    title,
+                    description,
+                    merge_json(
+                        common,
+                        json!({
+                            "x": optional_f64(args, "x")?,
+                            "y": optional_f64(args, "y")?,
+                            "button": optional_str(args, "button")?.unwrap_or("left"),
+                            "clickCount": optional_u64(args, "clickCount")?.unwrap_or(1),
+                        }),
+                    ),
+                )
+            }
+            "browser_type" => {
+                let password = target
+                    .as_ref()
+                    .and_then(|value| value.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("password");
+                if password {
+                    return Err("为保护凭据，代理不能接收或填写密码框。请暂停自动化，请用户接管受控浏览器完成填写，再由用户点击“继续”。".into());
+                }
+                (
+                    "确认向网页填写文本",
+                    "文本可能在输入时立即发送给网站。为保护隐私，确认卡片不显示具体内容。",
+                    merge_json(
+                        common,
+                        json!({
+                            "characters": required_str(args, "text")?.chars().count(),
+                            "passwordField": password,
+                            "replace": optional_bool(args, "replace")?.unwrap_or(true),
+                        }),
+                    ),
+                )
+            }
+            "browser_select" => (
+                "确认更改网页选项",
+                "更改选项可能立即触发网站操作。请核对目标后继续。",
+                merge_json(
+                    common,
+                    json!({ "selectionCount": required_string_array(args, "values", 100)?.len() }),
+                ),
+            ),
+            "browser_upload" => {
+                let names = upload_paths
+                    .iter()
+                    .filter_map(|path| std::path::Path::new(path).file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                (
+                    "确认向网站上传文件",
+                    "文件内容将离开本机并提交给当前网站。仅允许上传当前任务工作区内的普通文件。",
+                    merge_json(
+                        common,
+                        json!({ "files": names, "fileCount": upload_paths.len() }),
+                    ),
+                )
+            }
+            "browser_key" => (
+                "确认网页按键操作",
+                "按键或快捷键可能提交内容、执行命令或改变网站状态。",
+                merge_json(
+                    common,
+                    json!({
+                        "key": required_str(args, "key")?,
+                        "modifiers": optional_string_array(args, "modifiers", 4)?,
+                    }),
+                ),
+            ),
+            "browser_drag" => (
+                "确认网页拖动操作",
+                "拖动可能更改顺序、位置或触发网站操作。",
+                merge_json(
+                    common,
+                    json!({
+                        "fromX": required_f64(args, "fromX")?,
+                        "fromY": required_f64(args, "fromY")?,
+                        "toX": required_f64(args, "toX")?,
+                        "toY": required_f64(args, "toY")?,
+                    }),
+                ),
+            ),
+            _ => unreachable!(),
+        };
+        Some(BrowserApprovalPlan {
+            title: title.to_string(),
+            description: description.to_string(),
+            details,
+            expected_url: url,
+            expected_target: reference.map(str::to_string).zip(target),
+        })
+    } else {
+        None
+    };
+
+    if let Some(plan) = approval_plan.as_ref() {
+        manager
+            .approve(
+                session_id,
+                name,
+                &plan.title,
+                &plan.description,
+                plan.details.clone(),
+                &action_token,
+            )
+            .await?;
+    }
+
+    let _action_guard = enter_action(&session, &action_token, AutomationMode::BrowserUse).await?;
+    let operation = async {
+        let mut guard = session.browser.lock().await;
+        let browser = guard.as_mut().expect("browser inserted above");
+        browser.enforce_current_url_policy().await?;
+        if let Some(plan) = approval_plan {
+            if browser.current_url().await? != plan.expected_url {
+                return Err("等待确认期间网页已变化，为避免误操作已取消，请重新检查页面".into());
+            }
+            if let Some((reference, expected)) = plan.expected_target {
+                let actual = browser_element_signature(browser, &reference).await?;
+                if actual != expected {
+                    return Err("等待确认期间目标控件已变化，操作已取消".into());
                 }
             }
         }
-        "browser_type" => {
-            let reference = required_str(args, "elementRef")?;
-            let mut guard = session.browser.lock().await;
-            let browser = guard.as_mut().expect("browser inserted above");
-            if browser_element_is_password(browser, reference).await? {
-                approved_url = Some(browser.current_url().await?);
+        let result = match name {
+            "browser_start" => {
+                serde_json::to_value(browser.status().await?).map_err(|error| error.to_string())?
+            }
+            "browser_navigate" => browser.navigate(required_str(args, "url")?).await?,
+            "browser_snapshot" => browser.snapshot().await?,
+            "browser_screenshot" => {
+                let (data, meta) = browser.screenshot().await?;
                 drop(guard);
-                manager
-                    .approve(
-                        session_id,
-                        name,
-                        "确认填写敏感信息",
-                        "目标是密码输入框。为保护凭据，本次填写必须由你单独确认。",
-                        json!({ "elementRef": reference, "characters": required_str(args, "text")?.chars().count() }),
+                manager.emit_status(session_id).await;
+                return Ok(tool_image_result(meta, "image/png", data));
+            }
+            "browser_click" => {
+                let reference = optional_str(args, "elementRef")?;
+                browser
+                    .click(
+                        reference,
+                        optional_f64(args, "x")?,
+                        optional_f64(args, "y")?,
+                        optional_str(args, "button")?.unwrap_or("left"),
+                        optional_u64(args, "clickCount")?.unwrap_or(1) as u32,
                     )
-                    .await?;
+                    .await?
             }
-        }
-        "browser_key" => {
-            let key = required_str(args, "key")?;
-            if matches!(key.to_ascii_lowercase().as_str(), "enter" | "return") {
-                approved_url = Some(
-                    session
-                        .browser
-                        .lock()
-                        .await
-                        .as_mut()
-                        .expect("browser inserted above")
-                        .current_url()
-                        .await?,
-                );
-                manager
-                    .approve(
-                        session_id,
-                        name,
-                        "确认提交当前网页内容",
-                        "Enter/Return 可能提交表单、发送消息或确认交易，请确认后继续。",
-                        json!({ "key": key }),
+            "browser_hover" => browser.hover(required_str(args, "elementRef")?).await?,
+            "browser_type" => {
+                let reference = required_str(args, "elementRef")?;
+                browser
+                    .type_text(
+                        reference,
+                        required_str(args, "text")?,
+                        optional_bool(args, "replace")?.unwrap_or(true),
                     )
-                    .await?;
+                    .await?
             }
-        }
-        "browser_upload" => {
-            upload_paths = validate_upload_paths(manager, session_id, args)?;
-            approved_url = Some(
-                session
-                    .browser
-                    .lock()
-                    .await
-                    .as_mut()
-                    .expect("browser inserted above")
-                    .current_url()
-                    .await?,
-            );
-            let names = upload_paths
-                .iter()
-                .filter_map(|path| std::path::Path::new(path).file_name())
-                .map(|name| name.to_string_lossy().into_owned())
-                .collect::<Vec<_>>();
-            manager
-                .approve(
-                    session_id,
-                    name,
-                    "确认向网站上传文件",
-                    "文件内容将离开本机并提交给当前网站。仅允许上传当前任务工作区内的普通文件。",
-                    json!({ "files": names, "fileCount": upload_paths.len() }),
-                )
-                .await?;
-        }
-        _ => {}
-    }
-
-    manager
-        .ensure_active(session_id, AutomationMode::BrowserUse)
-        .await?;
-    let mut guard = session.browser.lock().await;
-    let browser = guard.as_mut().expect("browser inserted above");
-    browser.enforce_current_url_policy().await?;
-    if let Some(expected_url) = approved_url {
-        if browser.current_url().await? != expected_url {
-            return Err("等待确认期间网页已变化，为避免误操作已取消，请重新检查页面".into());
-        }
-    }
-    if let (Some(reference), Some(expected_reason)) =
-        (optional_str(args, "elementRef")?, approved_risk.as_deref())
-    {
-        if risky_browser_element(browser, reference).await?.as_deref() != Some(expected_reason) {
-            return Err("等待确认期间目标控件已变化，操作已取消".into());
-        }
-    }
-    let result = match name {
-        "browser_start" => {
-            serde_json::to_value(browser.status().await?).map_err(|error| error.to_string())?
-        }
-        "browser_navigate" => browser.navigate(required_str(args, "url")?).await?,
-        "browser_snapshot" => browser.snapshot().await?,
-        "browser_screenshot" => {
-            let (data, meta) = browser.screenshot().await?;
-            drop(guard);
-            manager.emit_status(session_id).await;
-            return Ok(tool_image_result(meta, "image/png", data));
-        }
-        "browser_click" => {
-            let reference = optional_str(args, "elementRef")?;
-            browser
-                .click(
-                    reference,
-                    optional_f64(args, "x")?,
-                    optional_f64(args, "y")?,
-                    optional_str(args, "button")?.unwrap_or("left"),
-                    optional_u64(args, "clickCount")?.unwrap_or(1) as u32,
-                )
-                .await?
-        }
-        "browser_hover" => browser.hover(required_str(args, "elementRef")?).await?,
-        "browser_type" => {
-            let reference = required_str(args, "elementRef")?;
-            browser
-                .type_text(
-                    reference,
-                    required_str(args, "text")?,
-                    optional_bool(args, "replace")?.unwrap_or(true),
-                )
-                .await?
-        }
-        "browser_select" => {
-            let values = required_string_array(args, "values", 100)?;
-            browser
-                .select(required_str(args, "elementRef")?, &values)
-                .await?
-        }
-        "browser_upload" => {
-            browser
-                .upload(required_str(args, "elementRef")?, &upload_paths)
-                .await?
-        }
-        "browser_key" => {
-            let key = required_str(args, "key")?;
-            browser
-                .key(key, &optional_string_array(args, "modifiers", 4)?)
-                .await?
-        }
-        "browser_scroll" => {
-            browser
-                .scroll(
-                    optional_f64(args, "deltaX")?.unwrap_or(0.0),
-                    required_f64(args, "deltaY")?,
-                )
-                .await?
-        }
-        "browser_drag" => {
-            browser
-                .drag(
-                    required_f64(args, "fromX")?,
-                    required_f64(args, "fromY")?,
-                    required_f64(args, "toX")?,
-                    required_f64(args, "toY")?,
-                )
-                .await?
-        }
-        "browser_tabs" => match optional_str(args, "action")?.unwrap_or("list") {
-            "list" => {
-                serde_json::to_value(browser.tabs().await?).map_err(|error| error.to_string())?
+            "browser_select" => {
+                let values = required_string_array(args, "values", 100)?;
+                browser
+                    .select(required_str(args, "elementRef")?, &values)
+                    .await?
             }
-            "new" => serde_json::to_value(browser.new_tab(optional_str(args, "url")?).await?)
-                .map_err(|error| error.to_string())?,
-            "select" => {
-                serde_json::to_value(browser.select_tab(required_str(args, "targetId")?).await?)
-                    .map_err(|error| error.to_string())?
+            "browser_upload" => {
+                browser
+                    .upload(required_str(args, "elementRef")?, &upload_paths)
+                    .await?
             }
-            "close" => browser.close_tab(required_str(args, "targetId")?).await?,
-            _ => return Err("tabs action 必须是 list、new、select 或 close".into()),
-        },
-        "browser_wait" => {
-            browser
-                .wait(optional_u64(args, "milliseconds")?.unwrap_or(1_000))
-                .await?
-        }
-        "browser_downloads" => {
-            serde_json::to_value(browser.downloads()?).map_err(|error| error.to_string())?
-        }
-        _ => return Err(format!("unknown browser tool: {name}")),
+            "browser_key" => {
+                let key = required_str(args, "key")?;
+                browser
+                    .key(key, &optional_string_array(args, "modifiers", 4)?)
+                    .await?
+            }
+            "browser_scroll" => {
+                browser
+                    .scroll(
+                        optional_f64(args, "deltaX")?.unwrap_or(0.0),
+                        required_f64(args, "deltaY")?,
+                    )
+                    .await?
+            }
+            "browser_drag" => {
+                browser
+                    .drag(
+                        required_f64(args, "fromX")?,
+                        required_f64(args, "fromY")?,
+                        required_f64(args, "toX")?,
+                        required_f64(args, "toY")?,
+                    )
+                    .await?
+            }
+            "browser_tabs" => match optional_str(args, "action")?.unwrap_or("list") {
+                "list" => serde_json::to_value(browser.tabs().await?)
+                    .map_err(|error| error.to_string())?,
+                "new" => serde_json::to_value(browser.new_tab(optional_str(args, "url")?).await?)
+                    .map_err(|error| error.to_string())?,
+                "select" => {
+                    serde_json::to_value(browser.select_tab(required_str(args, "targetId")?).await?)
+                        .map_err(|error| error.to_string())?
+                }
+                "close" => browser.close_tab(required_str(args, "targetId")?).await?,
+                _ => return Err("tabs action 必须是 list、new、select 或 close".into()),
+            },
+            "browser_wait" => {
+                browser
+                    .wait(optional_u64(args, "milliseconds")?.unwrap_or(1_000))
+                    .await?
+            }
+            "browser_downloads" => {
+                serde_json::to_value(browser.downloads()?).map_err(|error| error.to_string())?
+            }
+            _ => return Err(format!("unknown browser tool: {name}")),
+        };
+        browser.enforce_current_url_policy().await?;
+        drop(guard);
+        manager.emit_status(session_id).await;
+        Ok(tool_json_result(result))
     };
-    browser.enforce_current_url_policy().await?;
-    drop(guard);
-    manager.emit_status(session_id).await;
-    Ok(tool_json_result(result))
+    if matches!(name, "browser_click" | "browser_key" | "browser_drag") {
+        // These commands have paired press/release events. Once admitted,
+        // finish the short sequence so a pause cannot strand a pressed mouse
+        // button or keyboard key. pause() still waits on the execution gate,
+        // therefore no action remains in flight when takeover returns.
+        operation.await
+    } else {
+        tokio::select! {
+            biased;
+            _ = action_token.cancelled() => Err("自动化已暂停，正在执行的浏览器操作已取消".into()),
+            result = operation => result,
+        }
+    }
 }
 
-async fn risky_browser_element(
+async fn browser_approval_context(
+    browser: &mut BrowserController,
+    reference: Option<&str>,
+) -> Result<(String, String, Option<Value>), String> {
+    let snapshot = browser.snapshot().await?;
+    let url = snapshot
+        .get("url")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "浏览器快照缺少当前网址".to_string())?
+        .to_string();
+    let title = snapshot
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let target = reference
+        .map(|reference| element_signature_from_snapshot(&snapshot, reference))
+        .transpose()?;
+    Ok((url, title, target))
+}
+
+async fn browser_element_signature(
     browser: &mut BrowserController,
     reference: &str,
-) -> Result<Option<String>, String> {
+) -> Result<Value, String> {
     let snapshot = browser.snapshot().await?;
+    element_signature_from_snapshot(&snapshot, reference)
+}
+
+fn element_signature_from_snapshot(snapshot: &Value, reference: &str) -> Result<Value, String> {
     let element = snapshot
         .get("elements")
         .and_then(Value::as_array)
@@ -1053,10 +1250,24 @@ async fn risky_browser_element(
             elements
                 .iter()
                 .find(|element| element.get("ref").and_then(Value::as_str) == Some(reference))
-        });
-    let Some(element) = element else {
-        return Ok(None);
-    };
+        })
+        .ok_or_else(|| "页面元素已失效，请重新获取页面快照".to_string())?;
+    // Deliberately exclude bounds, current value and checked state. Layout and
+    // transient state may change while a user reads the card, but the semantic
+    // identity of the approved target must remain stable. Password/value data
+    // can therefore never enter an approval event either.
+    Ok(json!({
+        "ref": reference,
+        "tag": element.get("tag").and_then(Value::as_str).unwrap_or_default(),
+        "role": element.get("role").and_then(Value::as_str).unwrap_or_default(),
+        "name": element.get("name").and_then(Value::as_str).unwrap_or_default(),
+        "type": element.get("type").and_then(Value::as_str).unwrap_or_default(),
+        "href": element.get("href").and_then(Value::as_str),
+        "disabled": element.get("disabled").and_then(Value::as_bool).unwrap_or(false),
+    }))
+}
+
+fn browser_target_looks_risky(element: &Value) -> bool {
     let searchable = ["name", "href", "type"]
         .into_iter()
         .filter_map(|key| element.get(key).and_then(Value::as_str))
@@ -1068,32 +1279,14 @@ async fn risky_browser_element(
         "delete", "remove", "confirm", "accept", "agree", "sign in", "log in", "付款", "购买",
         "下单", "发送", "发布", "删除", "确认", "同意",
     ];
-    if RISKY.iter().any(|keyword| searchable.contains(keyword)) {
-        let label = element
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("未命名控件");
-        return Ok(Some(format!(
-            "即将点击“{label}”。该控件可能提交、发送、购买、删除或确认重要操作。"
-        )));
-    }
-    Ok(None)
+    RISKY.iter().any(|keyword| searchable.contains(keyword))
 }
 
-async fn browser_element_is_password(
-    browser: &mut BrowserController,
-    reference: &str,
-) -> Result<bool, String> {
-    let snapshot = browser.snapshot().await?;
-    Ok(snapshot
-        .get("elements")
-        .and_then(Value::as_array)
-        .is_some_and(|elements| {
-            elements.iter().any(|element| {
-                element.get("ref").and_then(Value::as_str) == Some(reference)
-                    && element.get("type").and_then(Value::as_str) == Some("password")
-            })
-        }))
+fn merge_json(mut base: Value, extra: Value) -> Value {
+    if let (Some(base), Some(extra)) = (base.as_object_mut(), extra.as_object()) {
+        base.extend(extra.clone());
+    }
+    base
 }
 
 async fn computer_tool(
@@ -1105,12 +1298,15 @@ async fn computer_tool(
     let session = manager
         .ensure_active(session_id, AutomationMode::ComputerUse)
         .await?;
+    let action_token = session.action_token();
     let result = match name {
         "computer_capabilities" => serde_json::to_value(ComputerController::capability())
             .map_err(|error| error.to_string())?,
         "computer_displays" => serde_json::to_value(ComputerController::displays()?)
             .map_err(|error| error.to_string())?,
         "computer_screenshot" => {
+            let _action_guard =
+                enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
             let frame = session
                 .computer
                 .lock()
@@ -1120,6 +1316,8 @@ async fn computer_tool(
             return Ok(tool_image_result(meta, "image/png", frame.png_base64));
         }
         "computer_move" => {
+            let _action_guard =
+                enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
             let (x, y) = session.computer.lock().unwrap().move_pointer(
                 required_str(args, "frameId")?,
                 required_f64(args, "x")?,
@@ -1128,22 +1326,33 @@ async fn computer_tool(
             json!({ "moved": true, "desktopX": x, "desktopY": y, "frameInvalidated": true })
         }
         "computer_click" => {
-            if optional_bool(args, "consequential")?.unwrap_or(false) {
-                manager
-                    .approve(
-                        session_id,
-                        name,
-                        "确认电脑上的重要操作",
-                        optional_str(args, "intent")?.unwrap_or("该点击可能产生外部或不可逆影响。"),
-                        args.clone(),
-                    )
-                    .await?;
-                manager
-                    .ensure_active(session_id, AutomationMode::ComputerUse)
-                    .await?;
-            }
+            let frame_id = required_str(args, "frameId")?;
+            let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
+            manager
+                .approve(
+                    session_id,
+                    name,
+                    "确认电脑点击",
+                    "点击可能提交、发送、购买、删除或确认操作。请核对截图位置后继续。",
+                    json!({
+                        "frameId": frame_id,
+                        "displayId": frame.display_id,
+                        "targetName": frame.target_name,
+                        "x": required_f64(args, "x")?,
+                        "y": required_f64(args, "y")?,
+                        "button": optional_str(args, "button")?.unwrap_or("left"),
+                        "clickCount": optional_u64(args, "clickCount")?.unwrap_or(1),
+                    }),
+                    &action_token,
+                )
+                .await?;
+            manager
+                .ensure_active(session_id, AutomationMode::ComputerUse)
+                .await?;
+            let _action_guard =
+                enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
             let (x, y) = session.computer.lock().unwrap().click(
-                required_str(args, "frameId")?,
+                frame_id,
                 required_f64(args, "x")?,
                 required_f64(args, "y")?,
                 optional_str(args, "button")?.unwrap_or("left"),
@@ -1152,8 +1361,34 @@ async fn computer_tool(
             json!({ "clicked": true, "desktopX": x, "desktopY": y, "frameInvalidated": true })
         }
         "computer_drag" => {
+            let frame_id = required_str(args, "frameId")?;
+            let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
+            manager
+                .approve(
+                    session_id,
+                    name,
+                    "确认电脑拖动操作",
+                    "拖动可能移动文件、改变顺序或触发应用操作。",
+                    json!({
+                        "frameId": frame_id,
+                        "displayId": frame.display_id,
+                        "targetName": frame.target_name,
+                        "fromX": required_f64(args, "fromX")?,
+                        "fromY": required_f64(args, "fromY")?,
+                        "toX": required_f64(args, "toX")?,
+                        "toY": required_f64(args, "toY")?,
+                        "durationMs": optional_u64(args, "durationMs")?.unwrap_or(500),
+                    }),
+                    &action_token,
+                )
+                .await?;
+            manager
+                .ensure_active(session_id, AutomationMode::ComputerUse)
+                .await?;
+            let _action_guard =
+                enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
             session.computer.lock().unwrap().drag(
-                required_str(args, "frameId")?,
+                frame_id,
                 required_f64(args, "fromX")?,
                 required_f64(args, "fromY")?,
                 required_f64(args, "toX")?,
@@ -1163,6 +1398,8 @@ async fn computer_tool(
             json!({ "dragged": true, "frameInvalidated": true })
         }
         "computer_scroll" => {
+            let _action_guard =
+                enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
             let delta_x = optional_i64(args, "deltaX")?
                 .unwrap_or(0)
                 .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
@@ -1176,71 +1413,81 @@ async fn computer_tool(
             json!({ "scrolled": true, "frameInvalidated": true })
         }
         "computer_type" => {
-            let sensitive = optional_bool(args, "sensitive")?.unwrap_or(false);
-            let consequential = optional_bool(args, "consequential")?.unwrap_or(false);
-            if sensitive || consequential {
-                manager
-                    .approve(
-                        session_id,
-                        name,
-                        if sensitive { "确认填写敏感信息" } else { "确认发送或发布文本" },
-                        optional_str(args, "intent")?.unwrap_or(if sensitive {
-                            "即将在当前电脑窗口中填写敏感文本。文本内容不会显示在确认卡片中。"
-                        } else {
-                            "输入内容可能被发送、发布或提交到外部系统。"
-                        }),
-                        json!({ "characters": required_str(args, "text")?.chars().count(), "sensitive": sensitive, "consequential": consequential }),
-                    )
-                    .await?;
-                manager
-                    .ensure_active(session_id, AutomationMode::ComputerUse)
-                    .await?;
-            }
+            let frame_id = required_str(args, "frameId")?;
+            let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
+            let characters = required_str(args, "text")?.chars().count();
+            manager
+                .approve(
+                    session_id,
+                    name,
+                    "确认在电脑中输入文本",
+                    "文本可能被当前应用立即读取、发送或提交。为保护隐私，确认卡片不显示具体内容。",
+                    json!({
+                        "frameId": frame_id,
+                        "displayId": frame.display_id,
+                        "targetName": frame.target_name,
+                        "characters": characters,
+                    }),
+                    &action_token,
+                )
+                .await?;
+            manager
+                .ensure_active(session_id, AutomationMode::ComputerUse)
+                .await?;
+            let _action_guard =
+                enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
             session
                 .computer
                 .lock()
                 .unwrap()
-                .type_text(required_str(args, "frameId")?, required_str(args, "text")?)?;
-            json!({ "typed": true, "characters": required_str(args, "text")?.chars().count(), "frameInvalidated": true })
+                .type_text(frame_id, required_str(args, "text")?)?;
+            json!({ "typed": true, "characters": characters, "frameInvalidated": true })
         }
         "computer_key" => {
+            let frame_id = required_str(args, "frameId")?;
+            let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
             let key = required_str(args, "key")?;
             let modifiers = optional_string_array(args, "modifiers", 4)?;
-            let implicit_consequential =
-                matches!(key.to_ascii_lowercase().as_str(), "enter" | "return")
-                    || modifiers.iter().any(|modifier| {
-                        matches!(
-                            modifier.to_ascii_lowercase().as_str(),
-                            "cmd" | "command" | "meta" | "ctrl" | "control"
-                        )
-                    });
-            if optional_bool(args, "consequential")?.unwrap_or(false) || implicit_consequential {
-                manager
-                    .approve(
-                        session_id,
-                        name,
-                        "确认电脑快捷键操作",
-                        optional_str(args, "intent")?
-                            .unwrap_or("该按键可能提交内容、执行快捷命令或改变外部状态。"),
-                        json!({ "key": key, "modifiers": modifiers }),
-                    )
-                    .await?;
-                manager
-                    .ensure_active(session_id, AutomationMode::ComputerUse)
-                    .await?;
-            }
-            session.computer.lock().unwrap().key(
-                required_str(args, "frameId")?,
-                key,
-                &modifiers,
-            )?;
+            manager
+                .approve(
+                    session_id,
+                    name,
+                    "确认电脑按键操作",
+                    "按键或快捷键可能提交内容、执行命令或改变应用状态。",
+                    json!({
+                        "frameId": frame_id,
+                        "displayId": frame.display_id,
+                        "targetName": frame.target_name,
+                        "key": key,
+                        "modifiers": modifiers,
+                    }),
+                    &action_token,
+                )
+                .await?;
+            manager
+                .ensure_active(session_id, AutomationMode::ComputerUse)
+                .await?;
+            let _action_guard =
+                enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
+            session
+                .computer
+                .lock()
+                .unwrap()
+                .key(frame_id, key, &modifiers)?;
             json!({ "pressed": key, "modifiers": modifiers, "frameInvalidated": true })
         }
         "computer_wait" => {
             let milliseconds = optional_u64(args, "milliseconds")?
                 .unwrap_or(1_000)
                 .clamp(50, 30_000);
-            tokio::time::sleep(Duration::from_millis(milliseconds)).await;
+            tokio::select! {
+                _ = action_token.cancelled() => {
+                    return Err("自动化已暂停，等待操作已取消".into());
+                }
+                _ = tokio::time::sleep(Duration::from_millis(milliseconds)) => {}
+            }
+            let _action_guard =
+                enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
             session.computer.lock().unwrap().invalidate_frame();
             json!({ "waitedMs": milliseconds })
         }
@@ -1529,6 +1776,14 @@ mod tests {
         assert!(tools
             .iter()
             .all(|tool| tool["inputSchema"]["additionalProperties"] == false));
+        assert!(!tools.iter().any(|tool| tool["name"] == "automation_resume"));
+        for tool_name in ["computer_click", "computer_type", "computer_key"] {
+            let tool = tools.iter().find(|tool| tool["name"] == tool_name).unwrap();
+            let properties = tool["inputSchema"]["properties"].as_object().unwrap();
+            assert!(!properties.contains_key("consequential"));
+            assert!(!properties.contains_key("sensitive"));
+            assert!(!properties.contains_key("intent"));
+        }
     }
 
     #[test]
