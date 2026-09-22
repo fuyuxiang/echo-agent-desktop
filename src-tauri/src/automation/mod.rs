@@ -47,6 +47,10 @@ const SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
 /// 与任务级 PermissionMode::always-approve 是正交的两套安全机制：
 /// - always-approve 控制"分类器/审批模式"
 /// - 本列表控制"真实桌面上的副作用"
+///
+/// `allow(dead_code)` 是因为本期保留给 policy::lock_computer_always_confirm
+/// 等后续组织策略层读取；当前仅测试与注释引用。
+#[allow(dead_code)]
 pub(crate) const ALWAYS_CONFIRM_TOOLS: &[&str] = &[
     "computer_click",
     "computer_drag",
@@ -54,6 +58,7 @@ pub(crate) const ALWAYS_CONFIRM_TOOLS: &[&str] = &[
     "computer_key",
 ];
 
+#[allow(dead_code)]
 pub(crate) fn requires_independent_confirmation(tool_name: &str) -> bool {
     ALWAYS_CONFIRM_TOOLS.contains(&tool_name)
 }
@@ -1407,6 +1412,8 @@ async fn computer_tool(
             )?;
             json!({ "moved": true, "desktopX": x, "desktopY": y, "frameInvalidated": true })
         }
+        // 硬安全约束：本工具的真实桌面副作用（点击）不可逆，必须逐次用户确认。
+        // 详见 ALWAYS_CONFIRM_TOOLS；不要在此处改为按权限模式跳过 approve。
         "computer_click" => {
             let frame_id = required_str(args, "frameId")?;
             let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
@@ -1442,6 +1449,8 @@ async fn computer_tool(
             )?;
             json!({ "clicked": true, "desktopX": x, "desktopY": y, "frameInvalidated": true })
         }
+        // 硬安全约束：拖动可能移动文件 / 改变顺序，必须逐次确认。
+        // 详见 ALWAYS_CONFIRM_TOOLS。
         "computer_drag" => {
             let frame_id = required_str(args, "frameId")?;
             let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
@@ -1494,6 +1503,8 @@ async fn computer_tool(
             )?;
             json!({ "scrolled": true, "frameInvalidated": true })
         }
+        // 硬安全约束：键盘输入可能被当前应用立即读取/发送/提交，必须逐次确认。
+        // 详见 ALWAYS_CONFIRM_TOOLS。
         "computer_type" => {
             let frame_id = required_str(args, "frameId")?;
             let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
@@ -1525,6 +1536,8 @@ async fn computer_tool(
                 .type_text(frame_id, required_str(args, "text")?)?;
             json!({ "typed": true, "characters": characters, "frameInvalidated": true })
         }
+        // 硬安全约束：按键或快捷键可能提交内容/执行命令/改变应用状态，必须逐次确认。
+        // 详见 ALWAYS_CONFIRM_TOOLS。
         "computer_key" => {
             let frame_id = required_str(args, "frameId")?;
             let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
