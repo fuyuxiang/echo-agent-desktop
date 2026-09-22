@@ -39,7 +39,7 @@ const MODES: { id: PermissionMode; label: string; desc: string }[] = [
   {
     id: "always-approve",
     label: "本任务始终允许",
-    desc: "仅当前任务的后续工具调用会自动批准",
+    desc: "仅当前任务的常规工具调用自动批准；操作电脑（点击、拖动、输入、按键）会逐次确认",
   },
 ];
 
