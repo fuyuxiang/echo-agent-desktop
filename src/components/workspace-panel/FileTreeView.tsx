@@ -139,6 +139,10 @@ interface FileTreeViewProps {
   topLevelThreshold?: number;
   /** SP2: row height used by the virtual list, in px. */
   virtualItemHeight?: number;
+  /** Case-insensitive substring filter applied to entry.name; empty = no filter. */
+  filter?: string;
+  /** Invoked when the cwd-empty state "选择其他目录" action is clicked. */
+  onSelectDirectory?: (path: string) => void;
 }
 
 export function FileTreeView({
@@ -164,6 +168,8 @@ export function FileTreeView({
   gitStatusByPath,
   topLevelThreshold = 200,
   virtualItemHeight = 26,
+  filter,
+  onSelectDirectory,
 }: FileTreeViewProps) {
   const [loaded, setLoaded] = useState<LoadedMap>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -401,9 +407,18 @@ export function FileTreeView({
     walk(rootEntries, 0);
     return out;
   }, [rootEntries, expanded, loaded, loadingDirs, errors]);
+  const filterLower = (filter ?? "").toLowerCase();
+  const filteredRows = useMemo(
+    () => filterLower
+      ? visibleRows.filter(
+        (row) => row.kind === "entry" && row.entry.name.toLowerCase().includes(filterLower),
+      )
+      : visibleRows,
+    [filterLower, visibleRows],
+  );
   const visiblePaths = useMemo(
-    () => visibleRows.flatMap((row) => row.kind === "entry" ? [row.entry.path] : []),
-    [visibleRows],
+    () => filteredRows.flatMap((row) => row.kind === "entry" ? [row.entry.path] : []),
+    [filteredRows],
   );
 
   // SP2: virtualisation + container size hooks must run before any early
@@ -411,11 +426,11 @@ export function FileTreeView({
   const treeRef = useRef<HTMLDivElement | null>(null);
   const listHandleRef = useRef<FixedSizeListHandle | null>(null);
   const containerHeight = useElementSize(treeRef, "height");
-  const shouldVirtualize = visibleRows.length >= topLevelThreshold;
+  const shouldVirtualize = filteredRows.length >= topLevelThreshold;
 
   useEffect(() => {
     if (!revealPath || previousRevealKeyRef.current !== revealKey) return;
-    const index = visibleRows.findIndex(
+    const index = filteredRows.findIndex(
       (row) => row.kind === "entry" && normalize(row.entry.path) === normalize(revealPath),
     );
     if (index < 0) return;
@@ -432,7 +447,7 @@ export function FileTreeView({
       node?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [revealKey, revealPath, shouldVirtualize, visibleRows]);
+  }, [revealKey, revealPath, shouldVirtualize, filteredRows]);
 
   if (!root) {
     return (
@@ -454,7 +469,16 @@ export function FileTreeView({
   }
 
   if (rootEntries.length === 0) {
-    return <div className="file-tree__empty">这里还是空的，放些文件进来再开始吧。</div>;
+    return (
+      <div className="file-tree__empty file-tree__empty--cwd-hint">
+        <span>当前工作区 <code>{root}</code> 没有可见文件。</span>
+        <div className="file-tree__empty-actions">
+          <button type="button" onClick={() => onSelectDirectory?.(root)}>
+            选择其他目录
+          </button>
+        </div>
+      </div>
+    );
   }
 
   const renderTreeNode = (entry: DirEntry, depth = 0, renderChildren = true) => {
@@ -497,7 +521,7 @@ export function FileTreeView({
       {shouldVirtualize && containerHeight && containerHeight > 0 ? (
         <FixedSizeList
           ref={listHandleRef}
-          items={visibleRows}
+          items={filteredRows}
           itemHeight={virtualItemHeight}
           height={containerHeight}
           renderItem={(row) => {
@@ -530,7 +554,10 @@ export function FileTreeView({
           ariaLabel="工作区文件树"
         />
       ) : (
-        rootEntries.map((entry) => renderTreeNode(entry))
+        (filterLower
+          ? rootEntries.filter((entry) => entry.name.toLowerCase().includes(filterLower))
+          : rootEntries
+        ).map((entry) => renderTreeNode(entry))
       )}
     </div>
   );
