@@ -39,6 +39,7 @@ import {
 import { isGlobalShortcutBlocked } from "@/lib/keyboard-scope";
 import { shortcutLabel } from "@/lib/platform";
 import "@/styles/coding-workbench.css";
+import { editor as MonacoEditor } from "monaco-editor";
 
 import { AgentPane } from "./agent/AgentPane";
 import { TaskStarter } from "./agent/TaskStarter";
@@ -89,6 +90,7 @@ import { ProjectProfileTab } from "./main/docs/ProjectProfileTab";
 import { TaskDagTab } from "./main/docs/TaskDagTab";
 import { BottomPanel } from "./panels/BottomPanel";
 import { TabContainer } from "./main/TabContainer";
+import { FooterStatusBar } from "./FooterStatusBar";
 import { ActivityBar } from "./shell/ActivityBar";
 import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/CommandPalette";
 import { ProjectSwitcher } from "./shell/ProjectSwitcher";
@@ -492,6 +494,8 @@ export function CodingWorkbench({
   const [eol, setEol] = useState<"LF" | "CRLF" | null>(null);
   /** Monaco language id of the active document (`null` until first read). */
   const [languageId, setLanguageId] = useState<string | null>(null);
+  /** Live Monaco editor handle so the footer can apply EOL / indent changes directly to the model. */
+  const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const repairPromptRef = useRef<string | null>(null);
   const workflowActionRef = useRef<string | null>(null);
   const pendingTreePathsRef = useRef(new Set<string>());
@@ -3836,6 +3840,9 @@ export function CodingWorkbench({
             setLanguageId(info.language);
             setEol(info.eol);
           }}
+          onEditorReady={(editor) => {
+            editorRef.current = editor;
+          }}
           onViewChange={handleFileViewChange}
           viewBusy={Boolean(
             activeFileTab
@@ -4028,39 +4035,49 @@ export function CodingWorkbench({
         />
       )}
 
-      <footer className="coding-workbench__status" role="status" aria-label="工作台状态">
-        {task ? (
-          <span>
-            {statusSummary({
-              phase: task.phase,
-              changedFileCount: taskChangeCount,
-              problemCount: combinedProblems.length,
-              repairRound: orchestrator?.repairRounds.length,
-              maxRepairRounds: orchestrator?.maxRepairRounds,
-            })}
-          </span>
-        ) : (
-          <span>就绪</span>
-        )}
-        {combinedProblems.length > 0 && (
-          <button type="button" onClick={() => setBottomView("problems")}>
-            {combinedProblems.length} 个问题
-          </button>
-        )}
-        <span className="coding-workbench__status-spacer" />
-        {indexing && <span>正在建立文件索引…</span>}
-        <span>
-          {changeSet
-            ? changeSet.baselineMode === "filesystem" ? "本地检查点" : "Git 基线"
-            : "Agent 就绪"}
-        </span>
-        <span className="coding-workbench__status-spacer" />
-        <span aria-label="光标位置">
-          {cursor ? `Ln ${cursor.line}, Col ${cursor.column}` : "——"}
-        </span>
-        <span aria-label="换行符">{eol ?? "——"}</span>
-        <span aria-label="语言">{languageId ?? "——"}</span>
-      </footer>
+      <FooterStatusBar
+        cursor={cursor}
+        eol={eol}
+        language={languageId}
+        indent={{ kind: "space", size: 2 }}
+        onEolChange={(next) => {
+          const editor = editorRef.current;
+          const model = editor?.getModel();
+          if (model) model.setEOL(next === "CRLF" ? MonacoEditor.EndOfLineSequence.CRLF : MonacoEditor.EndOfLineSequence.LF);
+          setEol(next);
+        }}
+        onIndentChange={(next) => {
+          const editor = editorRef.current;
+          if (!editor) return;
+          editor.updateOptions({
+            tabSize: next.size,
+            insertSpaces: next.kind === "space",
+          });
+        }}
+        onLanguageChange={() => {
+          /* 切换语言需要打开 CommandPalette，先留空；Task 9 后续接 Popover 后实现 */
+        }}
+        taskSummary={
+          task
+            ? statusSummary({
+                phase: task.phase,
+                changedFileCount: taskChangeCount,
+                problemCount: combinedProblems.length,
+                repairRound: orchestrator?.repairRounds.length,
+                maxRepairRounds: orchestrator?.maxRepairRounds,
+              })
+            : "就绪"
+        }
+        problemCount={combinedProblems.length}
+        indexing={indexing}
+        changeSetMode={
+          changeSet
+            ? changeSet.baselineMode === "filesystem"
+              ? "filesystem"
+              : "git"
+            : "ready"
+        }
+      />
 
       {paletteMode && (
         <CommandPalette

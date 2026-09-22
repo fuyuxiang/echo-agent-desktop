@@ -1,4 +1,5 @@
 import { AlertTriangle, Check, ChevronRight, FileCode2, FileText, LoaderCircle, X } from "lucide-react";
+import type { editor as Monaco } from "monaco-editor";
 
 import { shortcutLabel } from "@/lib/platform";
 
@@ -32,6 +33,8 @@ interface TabContainerProps {
   onCursorChange?: (cursor: { line: number; column: number }) => void;
   /** Language/EOL forwarded from the active editor to the workbench footer status bar. */
   onLanguageChange?: (info: { language: string; eol: "LF" | "CRLF" }) => void;
+  /** Monaco editor instance, forwarded so the workbench footer can apply EOL / indent changes directly. */
+  onEditorReady?: (editor: Monaco.IStandaloneCodeEditor) => void;
   renderDoc: (kind: DocTabKind) => React.ReactNode;
   renderVirtual?: (tab: VirtualTab) => React.ReactNode;
   reveal?: { line: number; column: number; key: number };
@@ -79,6 +82,7 @@ export function TabContainer({
   onMinimapRenderCharactersChange,
   onCursorChange,
   onLanguageChange,
+  onEditorReady,
   renderDoc,
   renderVirtual,
   reveal,
@@ -231,6 +235,7 @@ export function TabContainer({
             onMinimapRenderCharactersChange={onMinimapRenderCharactersChange}
             onCursorChange={onCursorChange}
             onLanguageChange={onLanguageChange}
+            onEditorReady={onEditorReady}
             onChange={(draft) => onDraftChange(active.id, draft)}
             onSave={() => onSave(active.id)}
             onDiagnostics={onDiagnostics}

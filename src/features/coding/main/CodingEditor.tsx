@@ -55,6 +55,8 @@ interface CodingEditorProps {
   onCursorChange?: (cursor: { line: number; column: number }) => void;
   /** Language/EOL listener for the workbench footer status bar. */
   onLanguageChange?: (info: { language: string; eol: "LF" | "CRLF" }) => void;
+  /** Fires once the Monaco editor instance is mounted, for parent-owned bridges like the footer status bar. */
+  onEditorReady?: (editor: MonacoEditor.IStandaloneCodeEditor) => void;
 }
 
 interface OutlineSymbol {
@@ -174,6 +176,7 @@ export function CodingEditor({
   onMinimapRenderCharactersChange,
   onCursorChange,
   onLanguageChange,
+  onEditorReady,
 }: CodingEditorProps) {
   // `onMinimapRenderCharactersChange` is the controlled-input counterpart of
   // `minimapRenderCharacters`; the parent wires its own state setter through it
@@ -198,6 +201,7 @@ export function CodingEditor({
   const minimapRenderCharactersRef = useRef(minimapRenderCharacters);
   const cursorChangeHandlerRef = useRef(onCursorChange);
   const languageChangeHandlerRef = useRef(onLanguageChange);
+  const editorReadyHandlerRef = useRef(onEditorReady);
 
   useEffect(() => {
     diagnosticsHandlerRef.current = onDiagnostics;
@@ -207,7 +211,8 @@ export function CodingEditor({
     symbolActionHandlerRef.current = onSymbolAction;
     contextHandlerRef.current = onContextChange;
     documentationActionHandlerRef.current = onDocumentationAction;
-  }, [onChange, onContextChange, onDiagnostics, onDocumentationAction, onSave, onSymbolAction, onSymbols]);
+    editorReadyHandlerRef.current = onEditorReady;
+  }, [onChange, onContextChange, onDiagnostics, onDocumentationAction, onEditorReady, onSave, onSymbolAction, onSymbols]);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -408,6 +413,7 @@ export function CodingEditor({
     monaco.editor.setTheme(monacoTheme);
     scheduleThemeHealthCheck(monaco, monacoTheme);
     editorRef.current = editor;
+    editorReadyHandlerRef.current?.(editor);
     registerDiagnostics(editor, monaco);
     publishSymbols(editor, monaco);
     // Cursor context for the workbench footer status bar.
@@ -491,6 +497,7 @@ export function CodingEditor({
     symbolsGenerationRef.current += 1;
     outlineSymbolsRef.current = [];
     editorRef.current = modified;
+    editorReadyHandlerRef.current?.(modified);
     registerDiagnostics(modified, monaco);
     // Cursor context for the workbench footer status bar (diff view).
     modified.onDidChangeCursorPosition((event) => {
