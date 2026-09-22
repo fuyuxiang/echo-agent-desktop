@@ -39,6 +39,25 @@ const MAX_SESSION_ID_CHARS: usize = 256;
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// 工具白名单：无论任务级权限模式（ask/auto/always-approve）如何，
+/// 都必须在执行前经用户独立确认。这是为了保护用户真实桌面——
+/// AI 一旦自动执行 click/drag/type/key，可能造成不可逆后果
+///（购买、删除、确认对话框、退出应用、键盘快捷键误触）。
+///
+/// 与任务级 PermissionMode::always-approve 是正交的两套安全机制：
+/// - always-approve 控制"分类器/审批模式"
+/// - 本列表控制"真实桌面上的副作用"
+pub(crate) const ALWAYS_CONFIRM_TOOLS: &[&str] = &[
+    "computer_click",
+    "computer_drag",
+    "computer_type",
+    "computer_key",
+];
+
+pub(crate) fn requires_independent_confirmation(tool_name: &str) -> bool {
+    ALWAYS_CONFIRM_TOOLS.contains(&tool_name)
+}
+
 static SERVICE: OnceLock<Arc<AutomationService>> = OnceLock::new();
 static PERSISTED: Mutex<bool> = Mutex::new(false);
 
@@ -1872,5 +1891,30 @@ mod tests {
     fn session_ids_reject_control_characters() {
         assert!(validate_session_id("session-1").is_ok());
         assert!(validate_session_id("bad\nvalue").is_err());
+    }
+
+    #[test]
+    fn requires_independent_confirmation_matches_const_list() {
+        for tool in super::ALWAYS_CONFIRM_TOOLS {
+            assert!(
+                super::requires_independent_confirmation(tool),
+                "expected always-confirm for {tool}"
+            );
+        }
+        for tool in [
+            "computer_capabilities",
+            "computer_displays",
+            "computer_screenshot",
+            "computer_move",
+            "computer_scroll",
+            "computer_wait",
+            "browser_click",
+            "browser_navigate",
+        ] {
+            assert!(
+                !super::requires_independent_confirmation(tool),
+                "expected NOT always-confirm for {tool}"
+            );
+        }
     }
 }
