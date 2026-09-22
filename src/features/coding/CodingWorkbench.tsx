@@ -481,6 +481,8 @@ export function CodingWorkbench({
   const [treeCollapseKey, setTreeCollapseKey] = useState(0);
   const [treePersistenceRevision, setTreePersistenceRevision] = useState(0);
   const [treeReveal, setTreeReveal] = useState<{ path?: string; key: number }>({ key: 0 });
+  /** Filename substring filter shared by the explorer input and the file tree. */
+  const [explorerFilter, setExplorerFilter] = useState("");
   /** Bumped whenever the task's evidence changes, so an open report reloads. */
   const [reportRevision, setReportRevision] = useState(0);
   /** Bumped when any per-workspace UI state (minimap mode, ...) mutates so React re-reads the ref. */
@@ -3659,6 +3661,8 @@ export function CodingWorkbench({
             symbols={symbols}
             activeFileName={activeRelativePath}
             showHidden={showHidden}
+            filter={explorerFilter}
+            onFilterChange={setExplorerFilter}
             onSelectTab={(id) => useTabStore.getState().setActive(id)}
             onCloseTab={closeTabSafely}
             onOpenSymbol={(symbol) => {
@@ -3703,6 +3707,7 @@ export function CodingWorkbench({
                 onRenameCancel={() => setRenamingPath(null)}
                 includeHidden={showHidden}
                 gitStatusByPath={gitStatusByPath}
+                filter={explorerFilter}
               />
             )}
           />
