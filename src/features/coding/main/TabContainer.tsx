@@ -35,22 +35,45 @@ interface TabContainerProps {
   onLanguageChange?: (info: { language: string; eol: "LF" | "CRLF" }) => void;
   /** Monaco editor instance, forwarded so the workbench footer can apply EOL / indent changes directly. */
   onEditorReady?: (editor: Monaco.IStandaloneCodeEditor) => void;
+  /** Absolute directory path chosen by clicking a breadcrumb segment (everything except the final filename). */
+  onBreadcrumbSelect?: (directoryPath: string) => void;
   renderDoc: (kind: DocTabKind) => React.ReactNode;
   renderVirtual?: (tab: VirtualTab) => React.ReactNode;
   reveal?: { line: number; column: number; key: number };
 }
 
 /** Path segments shown above the editor, VS Code style. */
-function Breadcrumb({ tab }: { tab: FileTab }) {
+function Breadcrumb({ tab, onSelect }: { tab: FileTab; onSelect?: (directoryPath: string) => void }) {
   const segments = tab.relativePath.split("/").filter(Boolean);
+  // Pre-compute how many leading absolute-path segments precede the relative
+  // path in `tab.id` so each breadcrumb button can map to its own directory.
+  const idParts = tab.id.split("/");
+  const absPrefixLen = idParts.length - segments.length;
   return (
     <div className="coding-breadcrumb" aria-label="文件路径">
-      {segments.map((segment, index) => (
-        <span key={`${segment}:${index}`}>
-          {index > 0 && <ChevronRight size={11} />}
-          {segment}
-        </span>
-      ))}
+      {segments.map((segment, index) => {
+        const isLast = index === segments.length - 1;
+        const directoryPath = idParts.slice(0, absPrefixLen + index + 1).join("/");
+        return (
+          <span key={`${segment}:${index}`}>
+            {index > 0 && <ChevronRight size={11} />}
+            {isLast || !onSelect ? (
+              <span className={`coding-breadcrumb__segment${isLast ? " is-current" : ""}`}>
+                {segment}
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="coding-breadcrumb__segment coding-breadcrumb__segment--button"
+                onClick={() => onSelect(directoryPath)}
+                title={`跳到目录 ${directoryPath}`}
+              >
+                {segment}
+              </button>
+            )}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -83,6 +106,7 @@ export function TabContainer({
   onCursorChange,
   onLanguageChange,
   onEditorReady,
+  onBreadcrumbSelect,
   renderDoc,
   renderVirtual,
   reveal,
@@ -134,7 +158,7 @@ export function TabContainer({
 
       {active && isFileTab(active) && (
         <div className="coding-tabs__toolbar">
-          <Breadcrumb tab={active} />
+          <Breadcrumb tab={active} onSelect={onBreadcrumbSelect} />
           <div className="coding-tabs__views" role="group" aria-label="文件视图">
             {active.view === "diff" && active.diffTaskId && onMarkReviewed && (
               <button
@@ -150,6 +174,19 @@ export function TabContainer({
                 {reviewedPath === active.relativePath ? "已审阅" : "标记已审阅"}
               </button>
             )}
+            <button
+              type="button"
+              className={`coding-tabs__minimap-toggle${minimapRenderCharacters ? " is-on" : ""}`}
+              onClick={() => onMinimapRenderCharactersChange?.(!minimapRenderCharacters)}
+              title={
+                minimapRenderCharacters
+                  ? "关闭 minimap 字符预览（点击切换为色块）"
+                  : "开启 minimap 字符预览（点击切换为字符）"
+              }
+              aria-pressed={minimapRenderCharacters ?? false}
+            >
+              {minimapRenderCharacters ? "Map" : "MapOff"} 缩略图
+            </button>
             <button
               type="button"
               onClick={() => onGenerateDocumentation?.()}

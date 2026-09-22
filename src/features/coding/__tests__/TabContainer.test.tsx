@@ -184,3 +184,19 @@ describe("TabContainer", () => {
     expect(strip).toHaveTextContent("工程画像");
   });
 });
+
+describe("TabContainer minimap toggle", () => {
+  it("toggles minimapRenderCharacters when the toolbar button is clicked", async () => {
+    const user = userEvent.setup();
+    const onMinimapChange = vi.fn();
+    render(
+      <TabContainer
+        {...setupProps([file()])}
+        minimapRenderCharacters={true}
+        onMinimapRenderCharactersChange={onMinimapChange}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /缩略图/ }));
+    expect(onMinimapChange).toHaveBeenCalledWith(false);
+  });
+});

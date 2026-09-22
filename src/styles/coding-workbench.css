@@ -3343,3 +3343,30 @@
   font-size: 13px;
   color: var(--echo-text-default);
 }
+
+.coding-tabs__minimap-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+  color: var(--echo-text-weak);
+}
+
+.coding-tabs__minimap-toggle.is-on {
+  color: var(--echo-accent, #0969da);
+}
+
+.coding-breadcrumb__segment--button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.coding-breadcrumb__segment--button:hover {
+  background: var(--echo-bg-hover, rgba(0, 0, 0, 4%));
+}
