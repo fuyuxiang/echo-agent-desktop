@@ -76,7 +76,9 @@ describe("PermissionInlineCard", () => {
     const choices = screen.getByRole("group", { name: "授权选择" });
     expect(within(choices).getAllByRole("button")).toHaveLength(3);
     expect(within(choices).getByRole("button", { name: "允许本次" })).toBeInTheDocument();
-    expect(within(choices).getByRole("button", { name: /本任务始终允许/ })).toBeInTheDocument();
+    const alwaysButton = within(choices).getByRole("button", { name: /本任务始终允许/ });
+    expect(alwaysButton).toBeInTheDocument();
+    expect(alwaysButton.getAttribute("title")).toMatch(/操作电脑仍逐次确认/);
     expect(within(choices).getByRole("button", { name: "拒绝" })).toBeInTheDocument();
     expect(screen.getAllByText("允许本次")).toHaveLength(1);
     expect(screen.getByText("更多授权选项")).toBeInTheDocument();

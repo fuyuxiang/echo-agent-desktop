@@ -180,7 +180,9 @@ export function PermissionInlineCard({ sessionId }: { sessionId: string | null }
         className={`btn perm-inline__action${
           isDanger ? " btn--danger" : isPrimary ? " btn--primary" : " btn--ghost"
         }${isTaskAlways ? " perm-inline__action--elevated" : ""}`}
-        title={option.title}
+        title={isTaskAlways
+          ? `${option.title} · 仅影响本任务的常规工具调用；操作电脑仍逐次确认`
+          : option.title}
         onClick={() => {
           if (isTaskAlways) {
             setError(null);
