@@ -236,7 +236,7 @@ describe("PermissionPicker", () => {
           messages: [],
           streamingMessageId: null,
           pendingSendNowPromptId: null,
-          usage: { input: 0, output: 0, cached: 0, turnCount: 0 },
+          usage: {},
           plan: null,
           planMode: false,
           planApprovals: [],
