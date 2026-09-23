@@ -22,6 +22,7 @@ const hostHtml = `<html><body><iframe id="ide" src="${iframeUrl.toString()}" sty
   window.echoReady = false;
   window.echoActiveFile = null;
   window.echoWorkspace = null;
+  window.echoAgentBounds = null;
   window.echoBeforeCount = 0;
   window.echoAfterCount = 0;
   window.echoMutationPaths = [];
@@ -31,6 +32,7 @@ const hostHtml = `<html><body><iframe id="ide" src="${iframeUrl.toString()}" sty
     if (event.data.type === 'echo/ready') window.echoReady = true;
     if (event.data.type === 'echo/active-file') window.echoActiveFile = event.data.path;
     if (event.data.type === 'echo/workspace') window.echoWorkspace = event.data.path;
+    if (event.data.type === 'echo/agent-bounds') window.echoAgentBounds = event.data.bounds;
     if (event.data.type === 'echo/before-mutation') {
       window.echoBeforeCount++;
       window.echoMutationPaths.push(event.data.paths);
@@ -57,6 +59,15 @@ const browser = await chromium.launch({
 });
 try {
   const page = await browser.newPage();
+  if (process.env.ECHO_SMOKE_PREVIOUS_LOCALE) {
+    await page.addInitScript(({ port, locale }) => {
+      if (location.port !== port) return;
+      if (sessionStorage.getItem("echo-smoke-locale-seeded")) return;
+      localStorage.setItem("localeId", locale);
+      localStorage.removeItem("echo-code-default-locale-v1");
+      sessionStorage.setItem("echo-smoke-locale-seeded", "1");
+    }, { port: new URL(backend).port, locale: process.env.ECHO_SMOKE_PREVIOUS_LOCALE });
+  }
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -75,10 +86,30 @@ try {
   const ide = page.frameLocator("#ide");
   await ide.locator("#theia-app-shell").waitFor({ timeout: 30_000 });
   await ide.locator("#files").waitFor({ state: "attached", timeout: 30_000 });
+  await ide.locator(".echo-code-start h1").getByText("打开文件开始编辑").waitFor({ timeout: 15_000 });
+  await ide.getByText("资源管理器", { exact: true }).first().waitFor({ state: "attached", timeout: 15_000 });
+  await ide.locator(".theia-compact-menu").waitFor({ state: "attached", timeout: 15_000 });
+  await ide.locator("#echo-agent-dock").waitFor({ state: "visible", timeout: 15_000 });
+  await page.waitForFunction(() => window.echoAgentBounds?.width > 300, undefined, { timeout: 15_000 });
+  if (process.env.ECHO_SMOKE_PREVIOUS_LOCALE === "en") {
+    const locale = await ide.locator("body").evaluate(() => localStorage.getItem("localeId"));
+    if (locale !== "zh-cn") throw new Error(`Legacy English locale was not migrated: ${locale}`);
+  }
+  await page.screenshot({ path: "/private/tmp/echo-theia-welcome.png", fullPage: true });
+  console.log("Chinese explorer, compact IDE menu, and Echo start page are visible.");
+  for (const theme of ["dark", "light"]) {
+    await page.evaluate(({ theme, origin }) => {
+      document.querySelector("#ide").contentWindow.postMessage({
+        type: "echo/set-theme", token: "smoke-bridge-token", theme,
+      }, origin);
+    }, { theme, origin: new URL(backend).origin });
+    await ide.locator(`body.theia-${theme}`).waitFor({ timeout: 15_000 });
+  }
+  console.log("Theia follows the Echo host theme.");
   if (process.env.ECHO_SMOKE_EDIT === "1") {
     await page.evaluate(({ path, origin }) => {
       document.querySelector("#ide").contentWindow.postMessage({
-        type: "echo/open-file", token: "smoke-bridge-token", path,
+        type: "echo/open-file", token: "smoke-bridge-token", path, line: 1,
       }, origin);
     }, { path: testFile, origin: new URL(backend).origin });
     await page.waitForFunction(path => window.echoActiveFile === path, testFile, { timeout: 15_000 });

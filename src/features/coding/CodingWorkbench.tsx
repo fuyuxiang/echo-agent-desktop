@@ -15,6 +15,9 @@ import {
   FolderGit2,
   Hammer,
   MessageSquare,
+  PanelRightClose,
+  PanelRightOpen,
+  PanelTop,
   Plus,
   Search,
   Settings2,
@@ -43,7 +46,7 @@ import { editor as MonacoEditor } from "monaco-editor";
 
 import { AgentPane } from "./agent/AgentPane";
 import { TaskStarter } from "./agent/TaskStarter";
-import { TheiaIdeFrame, type TheiaMutationTicket } from "./TheiaIdeFrame";
+import { TheiaIdeFrame, type TheiaAgentBounds, type TheiaMutationTicket } from "./TheiaIdeFrame";
 import { TheiaTaskReview } from "./TheiaTaskReview";
 import { ChangeSetView } from "./explorer/ChangeSetView";
 import { ContextPackView } from "./explorer/ContextPackView";
@@ -442,8 +445,37 @@ export function CodingWorkbench({
   const [theiaActiveFile, setTheiaActiveFile] = useState<string | null>(null);
   const [theiaReviewPath, setTheiaReviewPath] = useState<string | null>(null);
   const [theiaPreviewInput, setTheiaPreviewInput] = useState("");
+  const [theiaPreviewOpen, setTheiaPreviewOpen] = useState(false);
+  const [theiaAgentOpen, setTheiaAgentOpen] = useState(true);
+  const [theiaAgentBounds, setTheiaAgentBounds] = useState<TheiaAgentBounds | null>(null);
+  const theiaPreviewRef = useRef<HTMLDivElement>(null);
   const [theiaPreviewRequest, setTheiaPreviewRequest] = useState<{ url: string; id: number } | null>(null);
+  const [theiaOpenFileRequest, setTheiaOpenFileRequest] = useState<{ path: string; id: number; line?: number } | null>(null);
+  const openTheiaFile = useCallback((rawPath: string, line?: number) => {
+    const root = cwd.replaceAll("\\", "/").replace(/\/+$/, "");
+    const path = rawPath.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/\.\//g, "/");
+    if (!path || path.split("/").includes("..")) {
+      onToast?.("文件路径无效");
+      return;
+    }
+    const absolute = path.startsWith("/") || /^[A-Za-z]:\//.test(path) ? path : `${root}/${path}`;
+    const compareRoot = /^[A-Za-z]:\//.test(root) ? root.toLowerCase() : root;
+    const comparePath = /^[A-Za-z]:\//.test(absolute) ? absolute.toLowerCase() : absolute;
+    if (!comparePath.startsWith(`${compareRoot}/`)) {
+      onToast?.("只能打开当前项目内的文件");
+      return;
+    }
+    setTheiaOpenFileRequest({ path: absolute, line, id: Date.now() });
+  }, [cwd, onToast]);
   const [theiaVerificationOutput, setTheiaVerificationOutput] = useState("");
+  useEffect(() => {
+    if (!theiaPreviewOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!theiaPreviewRef.current?.contains(event.target as Node)) setTheiaPreviewOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [theiaPreviewOpen]);
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
   const [filePaths, setFilePaths] = useState<string[]>([]);
   const [indexing, setIndexing] = useState(false);
@@ -3630,7 +3662,7 @@ export function CodingWorkbench({
   }
 
   if (!window.location.search.includes("legacy-coding")) return (
-    <div ref={workbenchRef} className="coding-workbench coding-workbench--theia" style={style}>
+    <div ref={workbenchRef} className={`coding-workbench coding-workbench--theia${theiaAgentOpen ? "" : " coding-workbench--agent-closed"}`} style={style}>
       <header className="coding-workbench__topbar" data-tauri-drag-region>
         <div className="coding-workbench__topbar-left" data-tauri-drag-region>
           <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
@@ -3650,26 +3682,37 @@ export function CodingWorkbench({
             onOpenFolder={openAnotherProject}
           />
         </div>
-        <form className="echo-theia-preview-form" onSubmit={(event) => {
-          event.preventDefault();
-          const raw = theiaPreviewInput.trim();
-          if (!raw) return;
-          try {
-            const url = new URL(raw.startsWith("http://") || raw.startsWith("https://") ? raw : `http://${raw}`);
-            setTheiaPreviewRequest({ url: url.toString(), id: Date.now() });
-          } catch {
-            onToast?.("请输入有效的预览地址，例如 localhost:5173");
-          }
-        }}>
-          <input
-            aria-label="网页预览地址"
-            placeholder="localhost:5173"
-            value={theiaPreviewInput}
-            onChange={(event) => setTheiaPreviewInput(event.target.value)}
-          />
-          <button type="submit">预览</button>
-        </form>
         <div className="coding-workbench__topbar-right" data-tauri-drag-region>
+          <div className="echo-theia-preview" ref={theiaPreviewRef}>
+            <button type="button" className="echo-theia-toolbar-button" aria-label="网页预览" aria-expanded={theiaPreviewOpen} onClick={() => setTheiaPreviewOpen((open) => !open)}>
+              <PanelTop size={15} /> <span>网页预览</span>
+            </button>
+            {theiaPreviewOpen && (
+              <form className="echo-theia-preview-form" onKeyDown={(event) => {
+                if (event.key === "Escape") setTheiaPreviewOpen(false);
+              }} onSubmit={(event) => {
+                event.preventDefault();
+                const raw = theiaPreviewInput.trim();
+                if (!raw) return;
+                try {
+                  const url = new URL(raw.startsWith("http://") || raw.startsWith("https://") ? raw : `http://${raw}`);
+                  setTheiaPreviewRequest({ url: url.toString(), id: Date.now() });
+                  setTheiaPreviewOpen(false);
+                } catch {
+                  onToast?.("请输入有效的预览地址，例如 localhost:5173");
+                }
+              }}>
+                <label htmlFor="echo-theia-preview-url">预览地址</label>
+                <div>
+                  <input id="echo-theia-preview-url" aria-label="网页预览地址" autoFocus placeholder="localhost:5173" value={theiaPreviewInput} onChange={(event) => setTheiaPreviewInput(event.target.value)} />
+                  <button type="submit">打开</button>
+                </div>
+              </form>
+            )}
+          </div>
+          <button type="button" className="coding-icon-btn" onClick={() => setTheiaAgentOpen((open) => !open)} aria-label={theiaAgentOpen ? "收起 Agent 面板" : "展开 Agent 面板"} aria-pressed={theiaAgentOpen}>
+            {theiaAgentOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+          </button>
           <button type="button" className="coding-icon-btn" onClick={onOpenSettings} aria-label="设置">
             <Settings2 size={15} />
           </button>
@@ -3684,6 +3727,10 @@ export function CodingWorkbench({
           onActiveFile={setTheiaActiveFile}
           onToast={onToast}
           previewRequest={theiaPreviewRequest}
+          openFileRequest={theiaOpenFileRequest}
+          agentVisible={theiaAgentOpen}
+          onAgentBounds={setTheiaAgentBounds}
+          onAgentVisibilityChange={setTheiaAgentOpen}
         />
         {theiaReviewPath && task && (
           <TheiaTaskReview
@@ -3691,6 +3738,11 @@ export function CodingWorkbench({
             taskId={task.id}
             path={theiaReviewPath}
             onClose={() => setTheiaReviewPath(null)}
+            onOpenFile={() => {
+              openTheiaFile(theiaReviewPath);
+              setTheiaReviewPath(null);
+            }}
+            rightInset={theiaAgentBounds ? Math.max(0, workbenchSize.width - theiaAgentBounds.left) : 0}
             onReviewed={async () => {
               await useTaskStore.getState().refreshTaskState();
               setReportRevision((value) => value + 1);
@@ -3698,24 +3750,19 @@ export function CodingWorkbench({
             onToast={onToast}
           />
         )}
-      </main>
-
-      <div
-        className="coding-workbench__vsplit echo-theia-agent__splitter"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="调整 Agent 面板宽度"
-        tabIndex={0}
-        onPointerDown={startAgentDrag}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowLeft") setAgentWidth(effectiveLayout.agentWidth + 16);
-          if (event.key === "ArrowRight") setAgentWidth(effectiveLayout.agentWidth - 16);
-        }}
-      />
-
-      <aside className="echo-theia-agent" aria-label="Coding Agent">
-        <div className="coding-agent__taskbar">
-          <span>开发任务</span>
+      <aside
+        className="echo-theia-agent"
+        aria-label="Coding Agent"
+        aria-hidden={!theiaAgentBounds}
+        style={theiaAgentBounds ? {
+          left: theiaAgentBounds.left,
+          top: theiaAgentBounds.top,
+          width: theiaAgentBounds.width,
+          height: theiaAgentBounds.height,
+        } : { display: "none" }}
+      >
+        <div className="echo-theia-agent__heading">
+          <span className="echo-theia-agent__title"><Sparkles size={15} /> 开发任务</span>
           <TaskSwitcher
             tasks={summaries}
             activeId={task?.id}
@@ -3759,6 +3806,7 @@ export function CodingWorkbench({
               onContinue={continueInterruptedTask}
               onOpenChanges={() => setTheiaPanel("changes")}
               onOpenReport={() => setTheiaPanel("changes")}
+              onOpenFile={openTheiaFile}
               onToast={onToast}
               onPathsDropped={(paths) => addManyToContext(paths)}
             />
@@ -3812,6 +3860,7 @@ export function CodingWorkbench({
           )}
         </div>
       </aside>
+      </main>
       {taskDialog}
     </div>
   );

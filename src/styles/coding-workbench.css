@@ -19,8 +19,29 @@
 
 /* Echo Code's IDE surface is provided by the vendored Theia workbench. */
 .coding-workbench--theia {
-  grid-template-columns: minmax(0, 1fr) 4px var(--coding-agent-width, 380px);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 44px minmax(0, 1fr);
+  font-size: 13px;
+}
+
+.coding-workbench--theia .coding-workbench__topbar {
+  position: relative;
+  z-index: 4;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  background: var(--echo-bg-primary);
+}
+
+.coding-workbench--theia .coding-workbench__topbar-right {
+  gap: 6px;
+}
+
+.coding-workbench--agent-closed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.coding-workbench--agent-closed .echo-theia-agent {
+  display: none;
 }
 
 .echo-theia-workspace {
@@ -87,14 +108,60 @@
   cursor: pointer;
 }
 
-.echo-theia-preview-form {
-  display: flex;
+.echo-theia-preview {
+  position: relative;
+}
+
+.echo-theia-toolbar-button {
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  width: 100%;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--echo-text-medium);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.echo-theia-toolbar-button:hover,
+.echo-theia-toolbar-button[aria-expanded="true"] {
+  border-color: var(--echo-border-subtle);
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-strong);
+}
+
+.echo-theia-preview-form {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: var(--echo-layer-popover);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  width: min(328px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 9px;
+  background: var(--echo-bg-primary);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 18%);
+}
+
+.echo-theia-preview-form label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--echo-text-secondary);
+}
+
+.echo-theia-preview-form > div {
+  display: flex;
+  gap: 6px;
 }
 
 .echo-theia-preview-form input {
+  flex: 1;
   width: 100%;
   min-width: 0;
   height: 27px;
@@ -107,20 +174,56 @@
 }
 
 .echo-theia-agent {
-  grid-column: 3;
-  grid-row: 2;
+  position: absolute;
+  z-index: 4;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border-left: 1px solid var(--echo-border-subtle);
   background: var(--echo-bg-primary);
 }
 
-.echo-theia-agent__splitter {
-  grid-column: 2;
-  grid-row: 2;
+.echo-theia-agent__heading {
+  display: flex;
+  flex: 0 0 35px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--echo-border-subtle);
+  background: var(--echo-bg-primary);
+}
+
+.echo-theia-agent__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--echo-text-strong);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.echo-theia-agent__title svg {
+  color: var(--echo-brand);
+}
+
+.echo-theia-agent__heading .coding-task-switcher {
+  min-width: 0;
+}
+
+.echo-theia-agent__heading .coding-task-switcher > button {
+  max-width: 145px;
+  border-color: transparent;
+  font-size: 11px;
+}
+
+.echo-theia-agent__heading .coding-task-switcher__menu {
+  right: 0;
+  left: auto;
 }
 
 .echo-theia-agent__tabs {
@@ -131,12 +234,19 @@
 
 .echo-theia-agent__tabs button {
   flex: 1 1 0;
-  height: 33px;
+  height: 34px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--echo-text-secondary);
   cursor: pointer;
+}
+
+@media (max-width: 1150px) {
+  .echo-theia-toolbar-button span,
+  .coding-workbench--theia .coding-workbench__product strong {
+    display: none;
+  }
 }
 
 .echo-theia-agent__tabs button[aria-selected="true"] {
@@ -171,6 +281,16 @@
 .echo-theia-agent__content > .coding-agent,
 .echo-theia-agent__content > .coding-agent__starter {
   height: 100%;
+}
+
+.coding-workbench--theia .coding-agent__panel-head {
+  background: var(--echo-bg-primary);
+}
+
+.coding-workbench--theia .coding-agent__composer,
+.coding-workbench--theia .coding-agent__starter-card {
+  border-radius: 8px;
+  box-shadow: none;
 }
 
 .echo-theia-agent__output {

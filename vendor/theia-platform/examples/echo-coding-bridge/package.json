@@ -5,7 +5,8 @@
   "license": "MIT",
   "theiaExtensions": [
     {
-      "frontend": "lib/browser/echo-frontend-module"
+      "frontend": "lib/browser/echo-frontend-module",
+      "backend": "lib/node/echo-backend-module"
     }
   ],
   "dependencies": {

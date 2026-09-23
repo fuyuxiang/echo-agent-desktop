@@ -7,6 +7,13 @@ export interface TheiaMutationTicket {
   closeRound: boolean;
 }
 
+export interface TheiaAgentBounds {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 interface TheiaIdeFrameProps {
   root: string;
   onBeforeMutation: (operation: string, paths: string[]) => Promise<TheiaMutationTicket | null>;
@@ -14,6 +21,10 @@ interface TheiaIdeFrameProps {
   onActiveFile?: (path: string | null) => void;
   onToast?: (message: string) => void;
   previewRequest?: { url: string; id: number } | null;
+  openFileRequest?: { path: string; id: number; line?: number } | null;
+  agentVisible?: boolean;
+  onAgentBounds?: (bounds: TheiaAgentBounds | null) => void;
+  onAgentVisibilityChange?: (visible: boolean) => void;
 }
 
 interface TheiaEndpoint {
@@ -36,6 +47,10 @@ export function TheiaIdeFrame({
   onActiveFile,
   onToast,
   previewRequest,
+  openFileRequest,
+  agentVisible = true,
+  onAgentBounds,
+  onAgentVisibilityChange,
 }: TheiaIdeFrameProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const resettingWorkspace = useRef(false);
@@ -46,11 +61,31 @@ export function TheiaIdeFrame({
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
+  const [theme, setTheme] = useState(() => document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light");
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light");
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (status !== "ready" || !baseUrl) return;
+    frameRef.current?.contentWindow?.postMessage({ type: "echo/set-theme", token, theme }, new URL(baseUrl).origin);
+  }, [baseUrl, status, theme, token]);
+
+  useEffect(() => {
+    if (status !== "ready" || !baseUrl) return;
+    frameRef.current?.contentWindow?.postMessage({ type: "echo/set-agent-visible", token, visible: agentVisible }, new URL(baseUrl).origin);
+  }, [agentVisible, baseUrl, status, token]);
 
   useEffect(() => {
     let cancelled = false;
     setStatus("starting");
     setEndpoint(null);
+    onAgentBounds?.(null);
     invoke<TheiaEndpoint>("coding_theia_start", { root })
       .then((next) => {
         if (cancelled) return;
@@ -92,6 +127,13 @@ export function TheiaIdeFrame({
   }, [baseUrl, previewRequest, status, token]);
 
   useEffect(() => {
+    if (status !== "ready" || !baseUrl || !openFileRequest) return;
+    frameRef.current?.contentWindow?.postMessage({
+      type: "echo/open-file", token, path: openFileRequest.path, line: openFileRequest.line,
+    }, new URL(baseUrl).origin);
+  }, [baseUrl, openFileRequest, status, token]);
+
+  useEffect(() => {
     if (!baseUrl) return;
     const theiaOrigin = new URL(baseUrl).origin;
     const onMessage = (event: MessageEvent) => {
@@ -102,6 +144,27 @@ export function TheiaIdeFrame({
       if (message.type === "echo/ready") {
         resettingWorkspace.current = false;
         setStatus("ready");
+        (event.source as Window).postMessage({ type: "echo/request-agent-bounds", token }, theiaOrigin);
+        return;
+      }
+      if (message.type === "echo/agent-bounds") {
+        const bounds = message.bounds;
+        if (bounds === null) {
+          onAgentBounds?.(null);
+          onAgentVisibilityChange?.(false);
+        } else if (bounds && typeof bounds === "object") {
+          const next = bounds as Record<string, unknown>;
+          const { left, top, width, height } = next;
+          const frame = frameRef.current;
+          if (frame && [left, top, width, height].every((value) => typeof value === "number" && Number.isFinite(value))
+              && (left as number) >= 0 && (top as number) >= 0
+              && (width as number) > 40 && (height as number) > 40
+              && (left as number) + (width as number) <= frame.clientWidth + 2
+              && (top as number) + (height as number) <= frame.clientHeight + 2) {
+            onAgentBounds?.({ left: left as number, top: top as number, width: width as number, height: height as number });
+            onAgentVisibilityChange?.(true);
+          }
+        }
         return;
       }
       if (message.type === "echo/workspace") {
@@ -155,7 +218,7 @@ export function TheiaIdeFrame({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [baseUrl, onActiveFile, onAfterMutation, onBeforeMutation, onToast, root, token]);
+  }, [baseUrl, onActiveFile, onAfterMutation, onAgentBounds, onAgentVisibilityChange, onBeforeMutation, onToast, root, token]);
 
   return (
     <div className="echo-theia" aria-label="Theia 代码工作台">

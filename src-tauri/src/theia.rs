@@ -49,6 +49,15 @@ impl Drop for TheiaServer {
 }
 
 fn browser_app_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    {
+        // During development, ide:stage refreshes this directory without
+        // rebuilding the Tauri resource bundle next to the debug binary.
+        let staged = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/theia/browser");
+        if staged.join("lib/backend/main.js").is_file() {
+            return Ok(staged);
+        }
+    }
     let bundled = app
         .path()
         .resource_dir()
@@ -69,15 +78,6 @@ fn node_executable(app: &AppHandle) -> PathBuf {
     if let Ok(explicit) = std::env::var("ECHO_THEIA_NODE") {
         return PathBuf::from(explicit);
     }
-    if let Ok(resources) = app.path().resource_dir() {
-        #[cfg(target_os = "windows")]
-        let bundled = resources.join("theia/node/node.exe");
-        #[cfg(not(target_os = "windows"))]
-        let bundled = resources.join("theia/node/bin/node");
-        if bundled.is_file() {
-            return bundled;
-        }
-    }
     #[cfg(debug_assertions)]
     {
         #[cfg(target_os = "windows")]
@@ -88,6 +88,15 @@ fn node_executable(app: &AppHandle) -> PathBuf {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/theia/node/bin/node");
         if staged.is_file() {
             return staged;
+        }
+    }
+    if let Ok(resources) = app.path().resource_dir() {
+        #[cfg(target_os = "windows")]
+        let bundled = resources.join("theia/node/node.exe");
+        #[cfg(not(target_os = "windows"))]
+        let bundled = resources.join("theia/node/bin/node");
+        if bundled.is_file() {
+            return bundled;
         }
     }
     PathBuf::from("node")

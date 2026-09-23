@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { DiffEditor } from "@monaco-editor/react";
-import { Check, LoaderCircle, X } from "lucide-react";
+import { Check, ExternalLink, LoaderCircle, X } from "lucide-react";
 import { codingApi } from "./lib/tauri-api";
 
 interface Props {
@@ -8,14 +8,25 @@ interface Props {
   taskId: string;
   path: string;
   onClose: () => void;
+  onOpenFile: () => void;
   onReviewed: () => Promise<void>;
   onToast?: (message: string) => void;
+  rightInset?: number;
 }
 
-export function TheiaTaskReview({ root, taskId, path, onClose, onReviewed, onToast }: Props) {
+export function TheiaTaskReview({ root, taskId, path, onClose, onOpenFile, onReviewed, onToast, rightInset = 0 }: Props) {
   const [diff, setDiff] = useState<{ original: string; modified: string; binary: boolean } | null>(null);
   const [error, setError] = useState("");
   const [reviewing, setReviewing] = useState(false);
+  const [theme, setTheme] = useState(() => document.documentElement.getAttribute("data-theme") === "dark" ? "vs-dark" : "vs");
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "vs-dark" : "vs");
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,10 +54,11 @@ export function TheiaTaskReview({ root, taskId, path, onClose, onReviewed, onToa
   };
 
   return (
-    <section className="echo-theia-review" aria-label={`任务差异 ${path}`}>
+    <section className="echo-theia-review" aria-label={`任务差异 ${path}`} style={{ right: rightInset }}>
       <header className="echo-theia-review__header">
         <div><strong>任务差异</strong><span>{path}</span></div>
         <div>
+          <button type="button" onClick={onOpenFile}><ExternalLink size={14} />打开文件</button>
           <button type="button" disabled={!diff || diff.binary || reviewing} onClick={() => void markReviewed()}>
             {reviewing ? <LoaderCircle size={14} className="is-spinning" /> : <Check size={14} />}
             标记已审阅
@@ -62,7 +74,7 @@ export function TheiaTaskReview({ root, taskId, path, onClose, onReviewed, onToa
           original={diff.original}
           modified={diff.modified}
           language={path.split(".").slice(-1)[0] ?? "plaintext"}
-          theme="vs-dark"
+          theme={theme}
           options={{ readOnly: true, renderSideBySide: true, minimap: { enabled: false }, automaticLayout: true }}
         />
       )}

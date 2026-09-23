@@ -10,6 +10,10 @@ const resourcesRoot = join(projectRoot, "src-tauri/resources/theia");
 const runtimeRoot = join(resourcesRoot, "browser");
 const app = JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8"));
 const runtimeFile = (path) => !path.endsWith(".map") && !path.endsWith(".d.ts") && !path.endsWith(".tsbuildinfo");
+const copyUnlessSameFile = (source, target) => {
+  if (existsSync(target) && realpathSync(source) === realpathSync(target)) return;
+  cpSync(source, target);
+};
 
 if (!existsSync(join(appRoot, "lib/backend/main.js"))) {
   throw new Error("Build Theia first: pnpm ide:build");
@@ -83,7 +87,7 @@ const nodeTarget = process.platform === "win32"
   ? join(resourcesRoot, "node/node.exe")
   : join(resourcesRoot, "node/bin/node");
 mkdirSync(resolve(nodeTarget, ".."), { recursive: true });
-cpSync(process.execPath, nodeTarget);
+copyUnlessSameFile(process.execPath, nodeTarget);
 const nodeDir = dirname(realpathSync(process.execPath));
 const licenseCandidates = [
   join(nodeDir, "LICENSE"),
@@ -95,7 +99,7 @@ if (process.version === "v24.21.0") {
 }
 const nodeLicense = licenseCandidates.find(existsSync);
 if (!nodeLicense) throw new Error("The bundled Node.js runtime needs its LICENSE file.");
-cpSync(nodeLicense, join(resourcesRoot, "node/LICENSE"));
+copyUnlessSameFile(nodeLicense, join(resourcesRoot, "node/LICENSE"));
 writeFileSync(join(resourcesRoot, "node/.keep"), "");
 writeFileSync(join(resourcesRoot, "runtime-platform.json"), JSON.stringify({
   platform: process.platform,

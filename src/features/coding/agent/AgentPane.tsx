@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 
 import { ExecutionProcess } from "@/components/ExecutionProcess";
-import { Markdown } from "@/components/Markdown";
+import { Markdown, type MarkdownConfig } from "@/components/Markdown";
 import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
 import { shortcutLabel } from "@/lib/platform";
 import { PermissionInlineCard } from "@/components/PermissionDialog";
@@ -44,6 +44,7 @@ interface AgentPaneProps {
   onContinue: () => void | Promise<void>;
   onOpenChanges: () => void;
   onOpenReport: () => void;
+  onOpenFile?: (path: string, line?: number) => void;
   onToast?: (message: string) => void;
   /** SP4: called when the user drops file-tree paths onto the agent pane. */
   onPathsDropped?: (paths: string[]) => void;
@@ -70,11 +71,19 @@ export function AgentPane({
   onContinue,
   onOpenChanges,
   onOpenReport,
+  onOpenFile,
   onToast,
   onPathsDropped,
 }: AgentPaneProps) {
   const [followup, setFollowup] = useState("");
   const consumeDraft = useAiDraftStore((s) => s.consume);
+  const markdownConfig = useMemo<MarkdownConfig | undefined>(() => onOpenFile ? {
+    pathClickHandler: {
+      onPathClick: (path, type, range) => {
+        if (type === "file") onOpenFile(path, range?.start);
+      },
+    },
+  } : undefined, [onOpenFile]);
 
   // SP3: consume a queued AI draft on first mount. The draft originates from
   // a context-menu action («在对话中提问») and pre-fills the followup box.
@@ -273,7 +282,7 @@ export function AgentPane({
                     <div className="coding-agent__user" key={entry.id}>
                       {entry.parts.map((part, index) =>
                         part.kind === "text" ? (
-                          <Markdown key={index} complete>{part.text}</Markdown>
+                          <Markdown key={index} complete config={markdownConfig}>{part.text}</Markdown>
                         ) : null,
                       )}
                     </div>
@@ -297,10 +306,11 @@ export function AgentPane({
                         cancellationCategory={entry.cancellationCategory}
                         agentResult={entry.agentResult}
                         hasFinalAnswer={hasFinalAnswer}
+                        onOpenKnowledgePath={onOpenFile}
                       />
                     )}
                     {groups.responseParts.map((part, index) => (
-                      <Markdown key={index} complete={entry.complete}>{part.text}</Markdown>
+                      <Markdown key={index} complete={entry.complete} config={markdownConfig}>{part.text}</Markdown>
                     ))}
                   </div>
                 );

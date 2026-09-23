@@ -1400,18 +1400,53 @@ describe("Theia workbench", () => {
     });
   });
 
-  it("opens the source-integrated IDE beside the existing Agent task pane", async () => {
-    render(<CodingWorkbench cwd="/repo" models={[]} />);
+  it("places the Agent surface inside Theia's right dock", async () => {
+    const { container } = render(<CodingWorkbench cwd="/repo" models={[]} />);
 
     expect(await screen.findByTitle("Echo Code IDE")).toHaveAttribute(
       "src",
       expect.stringContaining("echoEmbedToken=test-embed-token"),
     );
     expect(invoke).toHaveBeenCalledWith("coding_theia_start", { root: "/repo" });
-    expect(screen.getByRole("complementary", { name: "Coding Agent" })).toBeInTheDocument();
-    expect(screen.getByRole("separator", { name: "调整 Agent 面板宽度" })).toBeInTheDocument();
+    const agent = container.querySelector(".echo-theia-workspace > .echo-theia-agent") as HTMLElement;
+    expect(agent).toBeInTheDocument();
+    expect(container.querySelector(".echo-theia-agent__splitter")).not.toBeInTheDocument();
+
+    const frame = screen.getByTitle("Echo Code IDE") as HTMLIFrameElement;
+    Object.defineProperty(frame, "clientWidth", { configurable: true, value: 1200 });
+    Object.defineProperty(frame, "clientHeight", { configurable: true, value: 900 });
+    const src = new URL(frame.src);
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", {
+        origin: src.origin,
+        source: frame.contentWindow,
+        data: {
+          type: "echo/agent-bounds",
+          token: src.searchParams.get("echoBridgeToken"),
+          bounds: { left: 790, top: 44, width: 390, height: 800 },
+        },
+      }));
+    });
+    expect(agent).toHaveStyle({ left: "790px", top: "44px", width: "390px", height: "800px" });
     expect(screen.getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: /变更/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "验证" })).toBeInTheDocument();
+  });
+
+  it("keeps preview controls compact and lets the editor reclaim the Agent space", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<CodingWorkbench cwd="/repo" models={[]} />);
+    await screen.findByTitle("Echo Code IDE");
+
+    expect(screen.queryByRole("textbox", { name: "网页预览地址" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "网页预览" }));
+    expect(screen.getByRole("textbox", { name: "网页预览地址" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: "网页预览地址" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "收起 Agent 面板" }));
+    expect(container.querySelector(".coding-workbench--agent-closed")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "展开 Agent 面板" }));
+    expect(container.querySelector(".coding-workbench--agent-closed")).not.toBeInTheDocument();
   });
 });

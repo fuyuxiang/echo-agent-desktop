@@ -3,6 +3,7 @@ import { FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { EchoFileService } from './echo-file-service';
 import { EchoFrontendContribution } from './echo-frontend-contribution';
+import '../../src/browser/echo-workbench.css';
 
 export default new ContainerModule((bind, _unbind, _isBound, rebind) => {
     rebind(FileService).to(EchoFileService).inSingletonScope();
