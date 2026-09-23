@@ -23,6 +23,10 @@ export interface CodingEditorDiagnostic {
 }
 
 export interface EditorSymbol {
+  id: string;
+  parentId?: string;
+  depth: number;
+  collapsible: boolean;
   name: string;
   kind?: string;
   detail?: string;
@@ -48,19 +52,24 @@ interface CodingEditorProps {
   onContextChange?: (context: EditorCodeContext) => void;
   /** Context-menu/shortcut entry for the same documentation flow as /doc. */
   onDocumentationAction?: (context: EditorCodeContext) => void;
-  /** Controlled switch for rendering minimap characters vs colored blocks. */
-  minimapRenderCharacters?: boolean;
-  /** Fires when the caller toggles the minimap characters; surface for the workbench settings. */
-  onMinimapRenderCharactersChange?: (next: boolean) => void;
+  /** Controlled switch for minimap visibility. */
+  minimapEnabled?: boolean;
   /** Cursor position listener for the workbench footer status bar. */
   onCursorChange?: (cursor: { line: number; column: number }) => void;
-  /** Language/EOL listener for the workbench footer status bar. */
-  onLanguageChange?: (info: { language: string; eol: "LF" | "CRLF" }) => void;
+  /** Language/EOL/indent listener for the workbench footer status bar. */
+  onLanguageChange?: (info: {
+    language: string;
+    eol: "LF" | "CRLF";
+    indent: { kind: "space" | "tab"; size: number };
+  }) => void;
   /** Fires once the Monaco editor instance is mounted, for parent-owned bridges like the footer status bar. */
-  onEditorReady?: (editor: MonacoEditor.IStandaloneCodeEditor) => void;
+  onEditorReady?: (editor: MonacoEditor.IStandaloneCodeEditor | null) => void;
 }
 
 interface OutlineSymbol {
+  id: string;
+  parentId?: string;
+  depth: number;
   name: string;
   kind?: string;
   detail?: string;
@@ -81,6 +90,51 @@ interface DocumentSymbolLike {
 const MAX_SELECTION_CONTEXT = 12_000;
 const MONACO_STARTUP_TIMEOUT_MS = 10_000;
 const FORCED_COLORS_QUERY = "(forced-colors: active)";
+
+const SYMBOL_KIND_NAMES = [
+  "File", "Module", "Namespace", "Package", "Class", "Method", "Property",
+  "Field", "Constructor", "Enum", "Interface", "Function", "Variable",
+  "Constant", "String", "Number", "Boolean", "Array", "Object", "Key",
+  "Null", "EnumMember", "Struct", "Event", "Operator", "TypeParameter",
+] as const;
+
+/** Monaco returns a numeric SymbolKind. Keep UI semantics stable across providers. */
+export function documentSymbolKindName(kind: unknown, detail?: string): string | undefined {
+  if (typeof kind === "number") return SYMBOL_KIND_NAMES[kind] ?? `Symbol${kind}`;
+  if (typeof kind === "string" && kind.trim()) return kind;
+  return detail;
+}
+
+/**
+ * Build the two-level outline promised by the explorer UI. Deeper provider
+ * results are intentionally folded into their nearest visible parent instead
+ * of producing an unreadable, unbounded tree in the narrow sidebar.
+ */
+export function flattenDocumentSymbols(
+  entries: DocumentSymbolLike[],
+  documentPath: string,
+  parentId?: string,
+  depth = 0,
+): OutlineSymbol[] {
+  if (depth > 1) return [];
+  return entries.flatMap((symbol, index) => {
+    const id = `${documentPath}:${symbol.range.startLineNumber}:${depth}:${index}:${symbol.name}`;
+    const children = depth === 0
+      ? flattenDocumentSymbols(symbol.children ?? [], documentPath, id, depth + 1)
+      : [];
+    return [{
+      id,
+      parentId,
+      depth,
+      name: symbol.name,
+      kind: documentSymbolKindName(symbol.kind, symbol.detail),
+      detail: symbol.detail,
+      startLine: symbol.range.startLineNumber,
+      endLine: symbol.range.endLineNumber ?? symbol.range.startLineNumber,
+      collapsible: children.length > 0,
+    }, ...children];
+  });
+}
 
 export const MINIMAP_DEFAULTS = {
   enabled: true,
@@ -177,16 +231,11 @@ export function CodingEditor({
   onSymbolAction,
   onContextChange,
   onDocumentationAction,
-  minimapRenderCharacters,
-  onMinimapRenderCharactersChange,
+  minimapEnabled,
   onCursorChange,
   onLanguageChange,
   onEditorReady,
 }: CodingEditorProps) {
-  // `onMinimapRenderCharactersChange` is the controlled-input counterpart of
-  // `minimapRenderCharacters`; the parent wires its own state setter through it
-  // and the editor reacts to prop changes via the `useEffect` below.
-  void onMinimapRenderCharactersChange;
   const { theme } = useTheme();
   const [forcedColors, setForcedColors] = useState(forcedColorsAreActive);
   const [startup, setStartup] = useState<MonacoStartupState>({ status: "loading" });
@@ -194,6 +243,10 @@ export function CodingEditor({
   const diagnosticsDisposableRef = useRef<IDisposable | null>(null);
   const selectionDisposableRef = useRef<IDisposable | null>(null);
   const documentationActionDisposableRef = useRef<IDisposable | null>(null);
+  const cursorDisposableRef = useRef<IDisposable | null>(null);
+  const modelInfoDisposablesRef = useRef<IDisposable[]>([]);
+  const symbolRefreshDisposableRef = useRef<IDisposable | null>(null);
+  const symbolRefreshTimerRef = useRef<number | null>(null);
   const outlineSymbolsRef = useRef<OutlineSymbol[]>([]);
   const symbolsGenerationRef = useRef(0);
   const diagnosticsHandlerRef = useRef(onDiagnostics);
@@ -203,7 +256,6 @@ export function CodingEditor({
   const symbolActionHandlerRef = useRef(onSymbolAction);
   const contextHandlerRef = useRef(onContextChange);
   const documentationActionHandlerRef = useRef(onDocumentationAction);
-  const minimapRenderCharactersRef = useRef(minimapRenderCharacters);
   const cursorChangeHandlerRef = useRef(onCursorChange);
   const languageChangeHandlerRef = useRef(onLanguageChange);
   const editorReadyHandlerRef = useRef(onEditorReady);
@@ -218,6 +270,11 @@ export function CodingEditor({
     documentationActionHandlerRef.current = onDocumentationAction;
     editorReadyHandlerRef.current = onEditorReady;
   }, [onChange, onContextChange, onDiagnostics, onDocumentationAction, onEditorReady, onSave, onSymbolAction, onSymbols]);
+
+  useEffect(() => {
+    cursorChangeHandlerRef.current = onCursorChange;
+    languageChangeHandlerRef.current = onLanguageChange;
+  }, [onCursorChange, onLanguageChange]);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -264,21 +321,49 @@ export function CodingEditor({
   }, [reveal]);
 
   useEffect(() => {
-    minimapRenderCharactersRef.current = minimapRenderCharacters;
     editorRef.current?.updateOptions({
       minimap: {
         ...MINIMAP_DEFAULTS,
-        renderCharacters: minimapRenderCharacters ?? MINIMAP_DEFAULTS.renderCharacters,
+        enabled: minimapEnabled ?? MINIMAP_DEFAULTS.enabled,
       },
     });
-  }, [minimapRenderCharacters]);
+  }, [minimapEnabled]);
 
   useEffect(() => () => {
     symbolsGenerationRef.current += 1;
     diagnosticsDisposableRef.current?.dispose();
     selectionDisposableRef.current?.dispose();
     documentationActionDisposableRef.current?.dispose();
+    cursorDisposableRef.current?.dispose();
+    modelInfoDisposablesRef.current.forEach((disposable) => disposable.dispose());
+    symbolRefreshDisposableRef.current?.dispose();
+    if (symbolRefreshTimerRef.current !== null) window.clearTimeout(symbolRefreshTimerRef.current);
+    editorReadyHandlerRef.current?.(null);
   }, []);
+
+  const publishModelInfo = (model: MonacoEditor.ITextModel) => {
+    const options = model.getOptions();
+    languageChangeHandlerRef.current?.({
+      language: model.getLanguageId(),
+      eol: model.getEOL() === "\r\n" ? "CRLF" : "LF",
+      indent: {
+        kind: options.insertSpaces ? "space" : "tab",
+        size: options.tabSize,
+      },
+    });
+  };
+
+  const registerModelInfo = (model: MonacoEditor.ITextModel | null) => {
+    modelInfoDisposablesRef.current.forEach((disposable) => disposable.dispose());
+    modelInfoDisposablesRef.current = [];
+    if (!model) return;
+    const publish = () => publishModelInfo(model);
+    modelInfoDisposablesRef.current = [
+      model.onDidChangeLanguage(publish),
+      model.onDidChangeOptions(publish),
+    ];
+    publish();
+  };
 
   const editorContext = (editor: MonacoEditor.IStandaloneCodeEditor): EditorCodeContext | null => {
     const model = editor.getModel();
@@ -305,7 +390,7 @@ export function CodingEditor({
       symbol: symbol
         ? {
             name: symbol.name,
-            kind: symbol.detail,
+            kind: symbol.kind,
             startLine: symbol.startLine,
             endLine: symbol.endLine,
           }
@@ -327,9 +412,6 @@ export function CodingEditor({
     if (!model) return;
     const generation = ++symbolsGenerationRef.current;
     outlineSymbolsRef.current = [];
-    void monaco.languages
-      .getLanguages()
-      .find((entry) => entry.id === model.getLanguageId());
     // Monaco exposes symbols through the quick-outline provider; read them from
     // the model's own outline when available and degrade to an empty list.
     const provider = (
@@ -338,7 +420,8 @@ export function CodingEditor({
           all: (model: MonacoEditor.ITextModel) => Array<{
             provideDocumentSymbols?: (
               model: MonacoEditor.ITextModel,
-            ) => Promise<DocumentSymbolLike[]>;
+              token: unknown,
+            ) => DocumentSymbolLike[] | null | Promise<DocumentSymbolLike[] | null>;
           }>;
         };
       }
@@ -348,26 +431,22 @@ export function CodingEditor({
       return;
     }
     const providers = provider.all(model);
+    const cancellationToken = (
+      monaco as unknown as { CancellationToken?: { None?: unknown } }
+    ).CancellationToken?.None;
     void Promise.all(
       providers.map((entry) => Promise.resolve().then(
-        () => entry.provideDocumentSymbols?.(model) ?? [],
+        () => entry.provideDocumentSymbols?.(model, cancellationToken) ?? [],
       )),
     ).then((results) => {
       if (generation !== symbolsGenerationRef.current || editor.getModel() !== model) return;
-      const flatten = (entries: DocumentSymbolLike[]): OutlineSymbol[] => entries.flatMap((symbol) => {
-        const current: OutlineSymbol = {
-          name: symbol.name,
-          kind: symbol.kind ? String(symbol.kind) : symbol.detail,
-          detail: symbol.detail,
-          startLine: symbol.range.startLineNumber,
-          endLine: symbol.range.endLineNumber ?? symbol.range.startLineNumber,
-          collapsible: (symbol.children?.length ?? 0) > 0,
-        };
-        return [current, ...flatten(symbol.children ?? [])];
-      });
-      const flattened = results.flatMap((result) => flatten(result));
+      const flattened = flattenDocumentSymbols(results.flatMap((result) => result ?? []), path);
       outlineSymbolsRef.current = flattened;
       const symbols = flattened.map((symbol) => ({
+        id: symbol.id,
+        parentId: symbol.parentId,
+        depth: symbol.depth,
+        collapsible: Boolean(symbol.collapsible),
         name: symbol.name,
         kind: symbol.kind,
         detail: symbol.detail,
@@ -424,28 +503,24 @@ export function CodingEditor({
     editorReadyHandlerRef.current?.(editor);
     registerDiagnostics(editor, monaco);
     publishSymbols(editor, monaco);
+    symbolRefreshDisposableRef.current?.dispose();
+    symbolRefreshDisposableRef.current = editor.onDidChangeModelContent(() => {
+      if (symbolRefreshTimerRef.current !== null) window.clearTimeout(symbolRefreshTimerRef.current);
+      symbolRefreshTimerRef.current = window.setTimeout(() => {
+        symbolRefreshTimerRef.current = null;
+        publishSymbols(editor, monaco);
+      }, 300);
+    });
     // Cursor context for the workbench footer status bar.
-    editor.onDidChangeCursorPosition((event) => {
+    cursorDisposableRef.current?.dispose();
+    cursorDisposableRef.current = editor.onDidChangeCursorPosition((event) => {
       cursorChangeHandlerRef.current?.({
         line: event.position.lineNumber,
         column: event.position.column,
       });
     });
     // Language / EOL context for the workbench footer status bar.
-    const model = editor.getModel();
-    if (model) {
-      model.onDidChangeLanguage(() => {
-        languageChangeHandlerRef.current?.({
-          language: model.getLanguageId(),
-          eol: model.getEOL() === "\r\n" ? "CRLF" : "LF",
-        });
-      });
-      // Publish once on mount so the footer reflects the current language.
-      languageChangeHandlerRef.current?.({
-        language: model.getLanguageId(),
-        eol: model.getEOL() === "\r\n" ? "CRLF" : "LF",
-      });
-    }
+    registerModelInfo(editor.getModel());
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
       saveHandlerRef.current(),
     );
@@ -507,13 +582,16 @@ export function CodingEditor({
     editorRef.current = modified;
     editorReadyHandlerRef.current?.(modified);
     registerDiagnostics(modified, monaco);
+    publishSymbols(modified, monaco);
     // Cursor context for the workbench footer status bar (diff view).
-    modified.onDidChangeCursorPosition((event) => {
+    cursorDisposableRef.current?.dispose();
+    cursorDisposableRef.current = modified.onDidChangeCursorPosition((event) => {
       cursorChangeHandlerRef.current?.({
         line: event.position.lineNumber,
         column: event.position.column,
       });
     });
+    registerModelInfo(modified.getModel());
     modified.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () =>
       saveHandlerRef.current(),
     );
@@ -575,7 +653,7 @@ export function CodingEditor({
     lineHeight: 21,
     minimap: {
       ...MINIMAP_DEFAULTS,
-      renderCharacters: minimapRenderCharacters ?? MINIMAP_DEFAULTS.renderCharacters,
+      enabled: minimapEnabled ?? MINIMAP_DEFAULTS.enabled,
     },
     padding: { top: 10, bottom: 10 },
     experimentalWhitespaceRendering: "off" as const,

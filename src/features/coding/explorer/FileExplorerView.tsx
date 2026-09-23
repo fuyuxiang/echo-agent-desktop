@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Box,
   ChevronDown,
@@ -16,7 +16,6 @@ import {
   X,
 } from "lucide-react";
 
-import { Tooltip } from "@/components/workspace-panel/Overlay";
 import type { PaletteSymbol } from "../shell/CommandPalette";
 import { isDirty, isFileTab, type WorkbenchTab } from "../store/tab-store";
 
@@ -123,6 +122,11 @@ export function FileExplorerView({
   const [outlineOpen, setOutlineOpen] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const openTabs = tabs;
+  useEffect(() => setCollapsed(new Set()), [activeFileName]);
+  const visibleSymbols = useMemo(
+    () => symbols.filter((symbol) => !symbol.parentId || !collapsed.has(symbol.parentId)),
+    [collapsed, symbols],
+  );
 
   return (
     <div className="coding-file-explorer">
@@ -160,15 +164,15 @@ export function FileExplorerView({
           >
             {showHidden ? <Eye size={13} /> : <EyeOff size={13} />}
           </button>
-          <Tooltip content={IGNORED_DIRS_HINT}>
-            <button
-              type="button"
-              className="coding-explorer__heading-help"
-              aria-label="查看资源管理器隐藏规则"
-            >
-              ?
-            </button>
-          </Tooltip>
+          <button
+            type="button"
+            className="coding-explorer__heading-help"
+            aria-label="查看资源管理器隐藏规则"
+            title={IGNORED_DIRS_HINT}
+            data-tip={IGNORED_DIRS_HINT}
+          >
+            ?
+          </button>
         </span>
       </div>
 
@@ -249,37 +253,47 @@ export function FileExplorerView({
         ) : symbols.length === 0 ? (
           <div className="coding-explorer-section__empty">当前文件没有可显示的符号</div>
         ) : (
-          <div className="coding-outline" aria-label={`${activeFileName} 的大纲`}>
-            {symbols.map((symbol, index) => {
-              const key = `${symbol.name}:${symbol.line}:${index}`;
+          <div className="coding-outline" role="tree" aria-label={`${activeFileName} 的大纲`}>
+            {visibleSymbols.map((symbol, index) => {
+              const key = symbol.id ?? `${symbol.name}:${symbol.line}:${index}`;
               const isCollapsed = collapsed.has(key);
-              const showToggle = symbol.kind?.includes("Class") || symbol.kind?.includes("Function");
+              const showToggle = Boolean(symbol.collapsible);
               return (
-                <button
+                <div
                   key={key}
-                  type="button"
                   className={`coding-outline__row${isCollapsed ? " is-collapsed" : ""}`}
-                  onClick={() => {
-                    setCollapsed((current) => {
-                      const next = new Set(current);
-                      if (next.has(key)) next.delete(key);
-                      else next.add(key);
-                      return next;
-                    });
-                    onOpenSymbol(symbol);
-                  }}
+                  style={{ paddingInlineStart: `${6 + (symbol.depth ?? 0) * 14}px` }}
+                  role="treeitem"
+                  aria-level={(symbol.depth ?? 0) + 1}
+                  aria-expanded={showToggle ? !isCollapsed : undefined}
                   title={symbol.detail ?? symbol.name}
                 >
                   {showToggle ? (
-                    isCollapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />
+                    <button
+                      type="button"
+                      className="coding-outline__toggle"
+                      aria-label={isCollapsed ? `展开 ${symbol.name}` : `折叠 ${symbol.name}`}
+                      onClick={() => {
+                        setCollapsed((current) => {
+                          const next = new Set(current);
+                          if (next.has(key)) next.delete(key);
+                          else next.add(key);
+                          return next;
+                        });
+                      }}
+                    >
+                      {isCollapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
+                    </button>
                   ) : (
                     <span aria-hidden="true" />
                   )}
                   {outlineIcon(symbol.kind)}
-                  <span className="coding-outline__name">{symbol.name}</span>
-                  {symbol.detail && <small className="coding-outline__detail">{symbol.detail}</small>}
-                  <b className="coding-outline__line">{symbol.line}</b>
-                </button>
+                  <button type="button" className="coding-outline__open" aria-label={symbol.name} onClick={() => onOpenSymbol(symbol)}>
+                    <span className="coding-outline__name">{symbol.name}</span>
+                    {symbol.detail && <small className="coding-outline__detail">{symbol.detail}</small>}
+                    <b className="coding-outline__line">{symbol.line}</b>
+                  </button>
+                </div>
               );
             })}
           </div>

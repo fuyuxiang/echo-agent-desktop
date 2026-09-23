@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  listDir: vi.fn(async () => [] as unknown[]),
+  listDir: vi.fn(async (_path?: string) => [] as unknown[]),
 }));
 
 vi.mock("@/lib/agent-client", () => ({
@@ -49,8 +49,27 @@ describe("FileTreeView filter", () => {
 
   it("shows cwd-empty hint when root has no entries", async () => {
     mocks.listDir.mockResolvedValue([]);
-    render(<FileTreeView rootPath="/empty" onFileSelect={() => {}} />);
+    const onSelectDirectory = vi.fn();
+    render(<FileTreeView rootPath="/empty" onFileSelect={() => {}} onSelectDirectory={onSelectDirectory} />);
     expect(await screen.findByText(/没有可见文件/)).not.toBeNull();
-    expect(screen.getByRole("button", { name: "选择其他目录" })).not.toBeNull();
+    screen.getByRole("button", { name: "选择其他目录" }).click();
+    expect(onSelectDirectory).toHaveBeenCalledTimes(1);
+  });
+
+  it("在折叠目录内匹配文件时按需加载并保留祖先层级", async () => {
+    mocks.listDir.mockImplementation(async (path?: string) => path === "/r"
+      ? [{ name: "src", path: "/r/src", kind: "directory", size: 0, modifiedAt: 0, isLarge: false, isBinary: false }]
+      : [{ name: "deep-match.ts", path: "/r/src/deep-match.ts", kind: "file", size: 0, modifiedAt: 0, isLarge: false, isBinary: false }]);
+    render(
+      <FileTreeView
+        rootPath="/r"
+        onFileSelect={() => {}}
+        filter="deep"
+        indexedPaths={["src/deep-match.ts"]}
+      />,
+    );
+    expect(await screen.findByText("deep-match.ts")).toBeInTheDocument();
+    expect(screen.getByText("src")).toBeInTheDocument();
+    expect(mocks.listDir).toHaveBeenCalledWith("/r/src", "/r", undefined, false);
   });
 });

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { FileExplorerView } from "../explorer/FileExplorerView";
+import type { PaletteSymbol } from "../shell/CommandPalette";
 import type { WorkbenchTab } from "../store/tab-store";
 
 const tabs: WorkbenchTab[] = [
@@ -26,12 +27,12 @@ const tabs: WorkbenchTab[] = [
   },
 ];
 
-function setup() {
+function setup(symbols: PaletteSymbol[] = [{ name: "run", detail: "function", path: "/repo/src/index.ts", line: 12 }]) {
   const props = {
     root: "/repo",
     tabs,
     activeId: "/repo/src/index.ts",
-    symbols: [{ name: "run", detail: "function", path: "/repo/src/index.ts", line: 12 }],
+    symbols,
     activeFileName: "src/index.ts",
     showHidden: false,
     fileTree: <div data-testid="file-tree">tree</div>,
@@ -80,6 +81,20 @@ describe("FileExplorerView", () => {
     expect(props.onSelectTab).toHaveBeenCalledWith("/repo/src/index.ts");
     expect(props.onCloseTab).toHaveBeenCalledWith("/repo/src/index.ts");
     expect(props.onOpenSymbol).toHaveBeenCalledWith(expect.objectContaining({ name: "run" }));
+  });
+
+  it("折叠父符号时隐藏子符号，且不误触跳转", async () => {
+    const user = userEvent.setup();
+    const props = setup([
+      { id: "class:1", name: "Service", kind: "Class", path: "/repo/src/index.ts", line: 1, depth: 0, collapsible: true },
+      { id: "method:2", parentId: "class:1", name: "run", kind: "Method", path: "/repo/src/index.ts", line: 2, depth: 1, collapsible: false },
+    ]);
+    expect(screen.getByRole("button", { name: "run" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "折叠 Service" }));
+    expect(screen.queryByRole("button", { name: "run" })).not.toBeInTheDocument();
+    expect(props.onOpenSymbol).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "展开 Service" }));
+    expect(screen.getByRole("button", { name: "run" })).toBeInTheDocument();
   });
 });
 

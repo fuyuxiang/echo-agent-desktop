@@ -63,7 +63,8 @@ describe("FooterStatusBar", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /缩进/ }));
-    expect(onIndentChange).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Spaces: 4" }));
+    expect(onIndentChange).toHaveBeenCalledWith({ kind: "space", size: 4 });
   });
 
   it("calls onEolChange when EOL button clicked", () => {
@@ -83,8 +84,9 @@ describe("FooterStatusBar", () => {
         changeSetMode="ready"
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /LF|CRLF|换行/ }));
-    expect(onEolChange).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: /换行/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "CRLF" }));
+    expect(onEolChange).toHaveBeenCalledWith("CRLF");
   });
 
   it("calls onLanguageChange when language button clicked", () => {
@@ -104,7 +106,8 @@ describe("FooterStatusBar", () => {
         changeSetMode="ready"
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /TypeScript|JavaScript|Markdown/ }));
-    expect(onLanguageChange).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: /语言模式/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Python" }));
+    expect(onLanguageChange).toHaveBeenCalledWith("python");
   });
 });

@@ -48,9 +48,6 @@ const SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
 /// - always-approve 控制"分类器/审批模式"
 /// - 本列表控制"真实桌面上的副作用"
 ///
-/// `allow(dead_code)` 是因为本期保留给 policy::lock_computer_always_confirm
-/// 等后续组织策略层读取；当前仅测试与注释引用。
-#[allow(dead_code)]
 pub(crate) const ALWAYS_CONFIRM_TOOLS: &[&str] = &[
     "computer_click",
     "computer_drag",
@@ -58,7 +55,6 @@ pub(crate) const ALWAYS_CONFIRM_TOOLS: &[&str] = &[
     "computer_key",
 ];
 
-#[allow(dead_code)]
 pub(crate) fn requires_independent_confirmation(tool_name: &str) -> bool {
     ALWAYS_CONFIRM_TOOLS.contains(&tool_name)
 }
@@ -1376,6 +1372,78 @@ fn merge_json(mut base: Value, extra: Value) -> Value {
     base
 }
 
+struct ComputerApprovalPlan {
+    title: &'static str,
+    description: &'static str,
+    details: Value,
+}
+
+fn computer_approval_plan(
+    session: &AutomationSession,
+    name: &str,
+    args: &Value,
+) -> Result<ComputerApprovalPlan, String> {
+    let frame_id = required_str(args, "frameId")?;
+    let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
+    let frame_details = json!({
+        "frameId": frame_id,
+        "displayId": frame.display_id,
+        "targetName": frame.target_name,
+    });
+    match name {
+        "computer_click" => Ok(ComputerApprovalPlan {
+            title: "确认电脑点击",
+            description: "点击可能提交、发送、购买、删除或确认操作。请核对截图位置后继续。",
+            details: merge_json(
+                frame_details,
+                json!({
+                    "x": required_f64(args, "x")?,
+                    "y": required_f64(args, "y")?,
+                    "button": optional_str(args, "button")?.unwrap_or("left"),
+                    "clickCount": optional_u64(args, "clickCount")?.unwrap_or(1),
+                }),
+            ),
+        }),
+        "computer_drag" => Ok(ComputerApprovalPlan {
+            title: "确认电脑拖动操作",
+            description: "拖动可能移动文件、改变顺序或触发应用操作。",
+            details: merge_json(
+                frame_details,
+                json!({
+                    "fromX": required_f64(args, "fromX")?,
+                    "fromY": required_f64(args, "fromY")?,
+                    "toX": required_f64(args, "toX")?,
+                    "toY": required_f64(args, "toY")?,
+                    "durationMs": optional_u64(args, "durationMs")?.unwrap_or(500),
+                }),
+            ),
+        }),
+        "computer_type" => Ok(ComputerApprovalPlan {
+            title: "确认在电脑中输入文本",
+            description:
+                "文本可能被当前应用立即读取、发送或提交。为保护隐私，确认卡片不显示具体内容。",
+            details: merge_json(
+                frame_details,
+                json!({
+                    "characters": required_str(args, "text")?.chars().count(),
+                }),
+            ),
+        }),
+        "computer_key" => Ok(ComputerApprovalPlan {
+            title: "确认电脑按键操作",
+            description: "按键或快捷键可能提交内容、执行命令或改变应用状态。",
+            details: merge_json(
+                frame_details,
+                json!({
+                    "key": required_str(args, "key")?,
+                    "modifiers": optional_string_array(args, "modifiers", 4)?,
+                }),
+            ),
+        }),
+        _ => Err(format!("missing independent confirmation plan for {name}")),
+    }
+}
+
 async fn computer_tool(
     manager: &Arc<AutomationManager>,
     session_id: &str,
@@ -1386,6 +1454,22 @@ async fn computer_tool(
         .ensure_active(session_id, AutomationMode::ComputerUse)
         .await?;
     let action_token = session.action_token();
+    if requires_independent_confirmation(name) {
+        let plan = computer_approval_plan(&session, name, args)?;
+        manager
+            .approve(
+                session_id,
+                name,
+                plan.title,
+                plan.description,
+                plan.details,
+                &action_token,
+            )
+            .await?;
+        manager
+            .ensure_active(session_id, AutomationMode::ComputerUse)
+            .await?;
+    }
     let result = match name {
         "computer_capabilities" => serde_json::to_value(ComputerController::capability())
             .map_err(|error| error.to_string())?,
@@ -1416,28 +1500,6 @@ async fn computer_tool(
         // 详见 ALWAYS_CONFIRM_TOOLS；不要在此处改为按权限模式跳过 approve。
         "computer_click" => {
             let frame_id = required_str(args, "frameId")?;
-            let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
-            manager
-                .approve(
-                    session_id,
-                    name,
-                    "确认电脑点击",
-                    "点击可能提交、发送、购买、删除或确认操作。请核对截图位置后继续。",
-                    json!({
-                        "frameId": frame_id,
-                        "displayId": frame.display_id,
-                        "targetName": frame.target_name,
-                        "x": required_f64(args, "x")?,
-                        "y": required_f64(args, "y")?,
-                        "button": optional_str(args, "button")?.unwrap_or("left"),
-                        "clickCount": optional_u64(args, "clickCount")?.unwrap_or(1),
-                    }),
-                    &action_token,
-                )
-                .await?;
-            manager
-                .ensure_active(session_id, AutomationMode::ComputerUse)
-                .await?;
             let _action_guard =
                 enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
             let (x, y) = session.computer.lock().unwrap().click(
@@ -1453,29 +1515,6 @@ async fn computer_tool(
         // 详见 ALWAYS_CONFIRM_TOOLS。
         "computer_drag" => {
             let frame_id = required_str(args, "frameId")?;
-            let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
-            manager
-                .approve(
-                    session_id,
-                    name,
-                    "确认电脑拖动操作",
-                    "拖动可能移动文件、改变顺序或触发应用操作。",
-                    json!({
-                        "frameId": frame_id,
-                        "displayId": frame.display_id,
-                        "targetName": frame.target_name,
-                        "fromX": required_f64(args, "fromX")?,
-                        "fromY": required_f64(args, "fromY")?,
-                        "toX": required_f64(args, "toX")?,
-                        "toY": required_f64(args, "toY")?,
-                        "durationMs": optional_u64(args, "durationMs")?.unwrap_or(500),
-                    }),
-                    &action_token,
-                )
-                .await?;
-            manager
-                .ensure_active(session_id, AutomationMode::ComputerUse)
-                .await?;
             let _action_guard =
                 enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
             session.computer.lock().unwrap().drag(
@@ -1507,26 +1546,7 @@ async fn computer_tool(
         // 详见 ALWAYS_CONFIRM_TOOLS。
         "computer_type" => {
             let frame_id = required_str(args, "frameId")?;
-            let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
             let characters = required_str(args, "text")?.chars().count();
-            manager
-                .approve(
-                    session_id,
-                    name,
-                    "确认在电脑中输入文本",
-                    "文本可能被当前应用立即读取、发送或提交。为保护隐私，确认卡片不显示具体内容。",
-                    json!({
-                        "frameId": frame_id,
-                        "displayId": frame.display_id,
-                        "targetName": frame.target_name,
-                        "characters": characters,
-                    }),
-                    &action_token,
-                )
-                .await?;
-            manager
-                .ensure_active(session_id, AutomationMode::ComputerUse)
-                .await?;
             let _action_guard =
                 enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
             session
@@ -1540,28 +1560,8 @@ async fn computer_tool(
         // 详见 ALWAYS_CONFIRM_TOOLS。
         "computer_key" => {
             let frame_id = required_str(args, "frameId")?;
-            let frame = session.computer.lock().unwrap().frame_meta(frame_id)?;
             let key = required_str(args, "key")?;
             let modifiers = optional_string_array(args, "modifiers", 4)?;
-            manager
-                .approve(
-                    session_id,
-                    name,
-                    "确认电脑按键操作",
-                    "按键或快捷键可能提交内容、执行命令或改变应用状态。",
-                    json!({
-                        "frameId": frame_id,
-                        "displayId": frame.display_id,
-                        "targetName": frame.target_name,
-                        "key": key,
-                        "modifiers": modifiers,
-                    }),
-                    &action_token,
-                )
-                .await?;
-            manager
-                .ensure_active(session_id, AutomationMode::ComputerUse)
-                .await?;
             let _action_guard =
                 enter_action(&session, &action_token, AutomationMode::ComputerUse).await?;
             session

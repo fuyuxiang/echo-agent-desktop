@@ -30,6 +30,7 @@ describe("coding hot exit", () => {
       activeId: "doc:delivery",
       selectedDirectory: "/repo/src",
       expandedPaths: ["/repo/src"],
+      minimapEnabled: false,
       savedAt: 42,
     });
 
@@ -37,6 +38,7 @@ describe("coding hot exit", () => {
       activeId: "doc:delivery",
       selectedDirectory: "/repo/src",
       expandedPaths: ["/repo/src"],
+      minimapEnabled: false,
       savedAt: 42,
     });
     expect(loadCodingHotExit("/another-repo")).toBeNull();

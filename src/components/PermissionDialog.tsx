@@ -201,7 +201,7 @@ export function PermissionInlineCard({ sessionId }: { sessionId: string | null }
             {option.kind === "deny_always"
               ? "后续匹配操作自动拒绝"
               : isTaskAlways
-                ? "当前任务后续操作不再询问"
+                ? "常规工具自动批准，自动化副作用仍确认"
                 : "后续匹配操作不再询问"}
           </span>
         )}
@@ -258,7 +258,7 @@ export function PermissionInlineCard({ sessionId }: { sessionId: string | null }
             }}
           >
             <strong>确认提高当前任务的权限？</strong>
-            <span>将允许当前操作，且本任务后续的命令、文件修改等操作不再询问。</span>
+            <span>将允许当前操作，且本任务后续的命令、文件修改等操作不再询问；该范围仅限常规工具，网页与电脑自动化中可能产生副作用的步骤仍会单独确认。</span>
             <div className="perm-inline__confirm-actions">
               <button
                 ref={confirmCancelRef}

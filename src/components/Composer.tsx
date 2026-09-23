@@ -20,7 +20,6 @@ import { WorkspacePicker } from "./WorkspacePicker";
 import { PermissionPicker } from "./PermissionPicker";
 import { AutomationBoundaryNotice, type PermissionRole } from "./AutomationBoundaryNotice";
 import { usePermissionModeStore } from "@/stores/permission-mode-store";
-import { useSessionStore } from "@/stores/session-store";
 import { SlashCommands, type SlashCommandsHandle } from "./SlashCommands";
 import { AtMentionMenu, type AtMentionHandle, type AtMentionSymbol } from "@/components/AtMentionMenu";
 import {
@@ -437,13 +436,8 @@ export function Composer({
   // 仍显示 +N(新增 token),有占比信息时叠加(此处保守不取,避免与 pill 抢请求)。
   const cost = useMemo(() => estimateSendCost(text), [text]);
   const boundaryRole: PermissionRole | null = usePermissionModeStore((state) =>
-    commandSessionId ? state.statuses[commandSessionId]?.permissionMode ?? null : null,
+    commandSessionId ? state.statuses[commandSessionId]?.permissionMode ?? null : state.homeMode,
   );
-  const boundaryComputerActive = useSessionStore((state) => {
-    if (!commandSessionId) return false;
-    const transcripts = (state as { transcripts?: Record<string, { agentMode?: string }> }).transcripts;
-    return transcripts?.[commandSessionId]?.agentMode === "computer_use";
-  });
   // 输入历史(arrow-key recall,对齐 EchoAgent use-input-history):内存中按发送追加,
   // ↑/↓ 在输入框回溯。draftRef 暂存「回到输入框」时恢复的草稿。
   const histRef = useRef<InputHistory>(createInputHistory(50));
@@ -1300,6 +1294,9 @@ export function Composer({
             }
           }}
         />
+        {permissionInline && (
+          <AutomationBoundaryNotice role={boundaryRole} automationMode={automationMode} />
+        )}
         <div className="echo-composer__footer">
           <InputAddMenu
             disabled={!apiReady || awaitingQuestion || disabled}
@@ -1369,13 +1366,7 @@ export function Composer({
             </span>
           )}
           {permissionInline && (
-            <>
-              <AutomationBoundaryNotice
-                role={boundaryRole}
-                computerActive={boundaryComputerActive}
-              />
-              <PermissionPicker onToast={onToast} sessionId={commandSessionId} />
-            </>
+            <PermissionPicker onToast={onToast} sessionId={commandSessionId} />
           )}
           <KnowledgePicker
             sessionId={knowledgeSessionId}
@@ -1507,7 +1498,7 @@ export function Composer({
           ) : null}
           <AutomationBoundaryNotice
             role={boundaryRole}
-            computerActive={boundaryComputerActive}
+            automationMode={automationMode}
           />
           <PermissionPicker onToast={onToast} sessionId={commandSessionId} />
         </div>

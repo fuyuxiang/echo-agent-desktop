@@ -13,6 +13,14 @@ import {
 export type PaletteMode = "commands" | "files" | "symbols";
 
 export interface PaletteSymbol {
+  /** Stable identity used by hierarchical outline views. */
+  id?: string;
+  /** Parent symbol identity; absent for top-level symbols. */
+  parentId?: string;
+  /** Outline nesting depth (currently capped at one child level). */
+  depth?: number;
+  /** Whether this symbol has visible child symbols. */
+  collapsible?: boolean;
   name: string;
   kind?: string;
   detail?: string;

@@ -186,19 +186,6 @@ pub fn locked_permission_mode() -> Option<String> {
         .filter(|m| ["ask", "auto", "always-approve"].contains(&m.as_str()))
 }
 
-/// 组织策略开关：是否强制操作电脑高危工具必须逐次确认。
-///
-/// 返回 `Some(true)` = 锁死强安全（不允许放开，硬约束 ALWAYS_CONFIRM_TOOLS 永远生效）；
-/// `Some(false)` = 明确允许放开（调用方按需绕过 `approve`）；
-/// `None` = 未配置（按默认 `Some(true)` 处理，等价于强安全）。
-///
-/// 本期（2026-09-22）仅预留接口，`automation::mod::computer_tool` 不读取；
-/// 待组织管理面板落地后，调用方读此函数按需绕过 `approve`。
-#[allow(dead_code)]
-pub fn lock_computer_always_confirm() -> Option<bool> {
-    value("computer-always-confirm").and_then(|v| v.as_bool())
-}
-
 fn permission_policy_requires_runtime_restart(
     previous_locked_mode: Option<&str>,
     current_locked_mode: Option<&str>,

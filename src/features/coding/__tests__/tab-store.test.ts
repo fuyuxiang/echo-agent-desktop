@@ -229,15 +229,34 @@ describe("tab store", () => {
 });
 
 describe("WorkspaceUiState", () => {
-  it("defaults minimapRenderCharacters to true", () => {
+  it("defaults minimap visibility to true", () => {
     const state: WorkspaceUiState = {
       tabs: [],
       activeId: null,
       contextPaths: [],
       editorContext: null,
       selectedDirectory: "",
-      minimapRenderCharacters: true,
+      minimapEnabled: true,
     };
-    expect(state.minimapRenderCharacters).toBe(true);
+    expect(state.minimapEnabled).toBe(true);
+  });
+});
+
+describe("tab language override", () => {
+  beforeEach(() => useTabStore.getState().closeAll());
+
+  it("persists an explicitly selected Monaco language on the open file tab", () => {
+    useTabStore.getState().openFile({
+      id: "/repo/a.txt",
+      relativePath: "a.txt",
+      name: "a.txt",
+      language: "plaintext",
+      original: "value",
+      draft: "value",
+      hash: "h1",
+      loading: false,
+    });
+    useTabStore.getState().setLanguage("/repo/a.txt", "python");
+    expect(useTabStore.getState().tabs[0]).toMatchObject({ language: "python" });
   });
 });

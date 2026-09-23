@@ -1,28 +1,27 @@
 import { ShieldAlertIcon } from "@/foundation/components/Icon/icons";
+import type { AutomationMode } from "@/lib/automation-client";
 import "./AutomationBoundaryNotice.css";
 
 export type PermissionRole = "ask" | "auto" | "always-approve";
 
 /**
- * 任务级权限模式为「始终允许」且操作电脑模式已激活时，
- * 在 Composer 顶部常驻显示一条轻提示，告知用户电脑操作仍会逐次确认。
- *
- * 不向操作网页模式提示——browser_click 等在 vendor 层已有统一确认，
- * 不属于本期"讲清楚"的目标范围。
+ * “始终允许”只覆盖常规 Agent 工具。网页和真实桌面的副作用
+ * 仍受独立确认边界保护，因此两种自动化模式都必须说清楚。
  */
 export function AutomationBoundaryNotice({
   role,
-  computerActive,
+  automationMode,
 }: {
   role: PermissionRole | null;
-  computerActive: boolean;
+  automationMode: AutomationMode;
 }) {
-  if (role !== "always-approve" || !computerActive) return null;
+  if (role !== "always-approve" || automationMode === "default") return null;
+  const target = automationMode === "computer_use" ? "操作电脑" : "操作网页";
   return (
     <div className="automation-boundary-notice" role="note">
       <ShieldAlertIcon size="sm" />
       <span>
-        本任务已设为「始终允许」，但操作电脑（点击 / 拖动 / 输入 / 按键）始终会逐次确认，避免误触敏感操作。
+        “始终允许”仅适用于常规工具；{target}中可能产生副作用的步骤仍会在执行前逐次确认。
       </span>
     </div>
   );

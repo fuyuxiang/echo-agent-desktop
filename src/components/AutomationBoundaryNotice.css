@@ -1,15 +1,15 @@
 .automation-boundary-notice {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 5px 8px;
   border: 1px solid var(--echo-warning, #d97706);
   border-radius: 8px;
   background: var(--echo-warning-soft, rgba(217, 119, 6, 0.08));
   color: var(--echo-color-text-warning-default, #b45309);
-  font-size: 13px;
-  line-height: 1.4;
-  margin: 8px 0;
+  font-size: 11px;
+  line-height: 1.35;
+  margin: 4px 8px 2px;
 }
 
 .automation-boundary-notice svg {

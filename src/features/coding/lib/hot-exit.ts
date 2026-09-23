@@ -10,6 +10,8 @@ export interface CodingHotExitState {
   activeId: string | null;
   selectedDirectory: string;
   expandedPaths: string[];
+  /** Optional for backwards compatibility with hot-exit records written before v0.3. */
+  minimapEnabled?: boolean;
   savedAt: number;
 }
 
@@ -82,6 +84,7 @@ export function loadCodingHotExit(root: string): CodingHotExitState | null {
           .filter((path): path is string => typeof path === "string" && isInsideRoot(path, root))
           .slice(0, 512)
         : [],
+      minimapEnabled: typeof parsed.minimapEnabled === "boolean" ? parsed.minimapEnabled : undefined,
       savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
     };
   } catch {

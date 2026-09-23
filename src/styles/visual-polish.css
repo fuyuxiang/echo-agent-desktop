@@ -1197,6 +1197,9 @@ button,
 .automation-control__hint {
   display: inline-flex;
   align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
   cursor: help;
   color: var(--echo-color-text-warning-default, #b45309);
   opacity: 0.85;

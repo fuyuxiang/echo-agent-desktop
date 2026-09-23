@@ -25,16 +25,20 @@ interface TabContainerProps {
   onSymbols?: (path: string, symbols: EditorSymbol[]) => void;
   onEditorContext?: (context: EditorCodeContext) => void;
   onGenerateDocumentation?: (context?: EditorCodeContext) => void;
-  /** Controlled switch for the active editor's minimap characters vs colored blocks. */
-  minimapRenderCharacters?: boolean;
-  /** Fires when the caller toggles the minimap characters; emitted by the editor's settings. */
-  onMinimapRenderCharactersChange?: (next: boolean) => void;
+  /** Controlled switch for the active editor's minimap visibility. */
+  minimapEnabled?: boolean;
+  /** Fires when the user shows or hides the minimap. */
+  onMinimapEnabledChange?: (next: boolean) => void;
   /** Cursor position forwarded from the active editor to the workbench footer status bar. */
   onCursorChange?: (cursor: { line: number; column: number }) => void;
   /** Language/EOL forwarded from the active editor to the workbench footer status bar. */
-  onLanguageChange?: (info: { language: string; eol: "LF" | "CRLF" }) => void;
+  onLanguageChange?: (info: {
+    language: string;
+    eol: "LF" | "CRLF";
+    indent: { kind: "space" | "tab"; size: number };
+  }) => void;
   /** Monaco editor instance, forwarded so the workbench footer can apply EOL / indent changes directly. */
-  onEditorReady?: (editor: Monaco.IStandaloneCodeEditor) => void;
+  onEditorReady?: (editor: Monaco.IStandaloneCodeEditor | null) => void;
   /** Absolute directory path chosen by clicking a breadcrumb segment (everything except the final filename). */
   onBreadcrumbSelect?: (directoryPath: string) => void;
   renderDoc: (kind: DocTabKind) => React.ReactNode;
@@ -43,17 +47,25 @@ interface TabContainerProps {
 }
 
 /** Path segments shown above the editor, VS Code style. */
+export function breadcrumbDirectoryPath(tab: FileTab, segmentIndex: number): string {
+  const absolute = tab.id.replace(/\\/g, "/");
+  const relative = tab.relativePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const segments = relative.split("/").filter(Boolean);
+  const relativeIndex = absolute.toLowerCase().lastIndexOf(relative.toLowerCase());
+  const rootPrefix = relativeIndex >= 0
+    ? absolute.slice(0, relativeIndex)
+    : absolute.slice(0, Math.max(0, absolute.lastIndexOf("/") + 1));
+  const normalized = `${rootPrefix}${segments.slice(0, segmentIndex + 1).join("/")}`;
+  return tab.id.includes("\\") ? normalized.replace(/\//g, "\\") : normalized;
+}
+
 function Breadcrumb({ tab, onSelect }: { tab: FileTab; onSelect?: (directoryPath: string) => void }) {
-  const segments = tab.relativePath.split("/").filter(Boolean);
-  // Pre-compute how many leading absolute-path segments precede the relative
-  // path in `tab.id` so each breadcrumb button can map to its own directory.
-  const idParts = tab.id.split("/");
-  const absPrefixLen = idParts.length - segments.length;
+  const segments = tab.relativePath.replace(/\\/g, "/").split("/").filter(Boolean);
   return (
     <div className="coding-breadcrumb" aria-label="文件路径">
       {segments.map((segment, index) => {
         const isLast = index === segments.length - 1;
-        const directoryPath = idParts.slice(0, absPrefixLen + index + 1).join("/");
+        const directoryPath = breadcrumbDirectoryPath(tab, index);
         return (
           <span key={`${segment}:${index}`}>
             {index > 0 && <ChevronRight size={11} />}
@@ -101,8 +113,8 @@ export function TabContainer({
   onSymbols,
   onEditorContext,
   onGenerateDocumentation,
-  minimapRenderCharacters,
-  onMinimapRenderCharactersChange,
+  minimapEnabled,
+  onMinimapEnabledChange,
   onCursorChange,
   onLanguageChange,
   onEditorReady,
@@ -176,16 +188,12 @@ export function TabContainer({
             )}
             <button
               type="button"
-              className={`coding-tabs__minimap-toggle${minimapRenderCharacters ? " is-on" : ""}`}
-              onClick={() => onMinimapRenderCharactersChange?.(!minimapRenderCharacters)}
-              title={
-                minimapRenderCharacters
-                  ? "关闭 minimap 字符预览（点击切换为色块）"
-                  : "开启 minimap 字符预览（点击切换为字符）"
-              }
-              aria-pressed={minimapRenderCharacters ?? false}
+              className={`coding-tabs__minimap-toggle${minimapEnabled ? " is-on" : ""}`}
+              onClick={() => onMinimapEnabledChange?.(!minimapEnabled)}
+              title={minimapEnabled ? "隐藏代码缩略图" : "显示代码缩略图"}
+              aria-pressed={minimapEnabled ?? false}
             >
-              {minimapRenderCharacters ? "Map" : "MapOff"} 缩略图
+              {minimapEnabled ? "Map" : "MapOff"} 缩略图
             </button>
             <button
               type="button"
@@ -268,8 +276,7 @@ export function TabContainer({
             mode={active.view}
             readOnly={active.view === "diff" && active.diffModified !== undefined}
             reveal={reveal}
-            minimapRenderCharacters={minimapRenderCharacters}
-            onMinimapRenderCharactersChange={onMinimapRenderCharactersChange}
+            minimapEnabled={minimapEnabled}
             onCursorChange={onCursorChange}
             onLanguageChange={onLanguageChange}
             onEditorReady={onEditorReady}

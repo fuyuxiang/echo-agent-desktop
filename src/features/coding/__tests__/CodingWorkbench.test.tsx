@@ -185,11 +185,11 @@ describe("CodingWorkbench skeleton", () => {
     expect(await screen.findByRole("navigation", { name: "活动栏" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "资源管理器" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Agent 面板" })).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: "工作台状态" })).toBeInTheDocument();
+    expect(screen.getByRole("contentinfo", { name: "工作台状态" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "切换项目" })).toHaveTextContent("repo");
     expect(screen.getByText("项目根目录")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "切换开发任务" })).toHaveTextContent("新建任务");
-    expect(screen.getByRole("status", { name: "工作台状态" })).toHaveTextContent("Agent 就绪");
+    expect(screen.getByRole("contentinfo", { name: "工作台状态" })).toHaveTextContent("Agent 就绪");
   });
 
   it("执行中的任务会阻止切换项目，避免丢失任务上下文", async () => {

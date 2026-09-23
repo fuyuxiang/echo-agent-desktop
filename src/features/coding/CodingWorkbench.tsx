@@ -96,7 +96,7 @@ import { CommandPalette, type PaletteMode, type PaletteSymbol } from "./shell/Co
 import { ProjectSwitcher } from "./shell/ProjectSwitcher";
 import { TaskSwitcher } from "./shell/TaskSwitcher";
 import {
-  DEFAULT_MINIMAP_RENDER_CHARACTERS,
+  DEFAULT_MINIMAP_ENABLED,
   completeFileTabLoad,
   isDirty,
   isFileTab,
@@ -496,6 +496,8 @@ export function CodingWorkbench({
   const [eol, setEol] = useState<"LF" | "CRLF" | null>(null);
   /** Monaco language id of the active document (`null` until first read). */
   const [languageId, setLanguageId] = useState<string | null>(null);
+  /** Indentation options from the active Monaco model. */
+  const [indent, setIndent] = useState<{ kind: "space" | "tab"; size: number }>({ kind: "space", size: 2 });
   /** Live Monaco editor handle so the footer can apply EOL / indent changes directly to the model. */
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const repairPromptRef = useRef<string | null>(null);
@@ -749,6 +751,14 @@ export function CodingWorkbench({
     const found = tabs.find((tab) => tab.id === activeTabId);
     return found && isFileTab(found) ? found : null;
   }, [activeTabId, tabs]);
+
+  useEffect(() => {
+    editorRef.current = null;
+    setCursor(null);
+    setEol(null);
+    setLanguageId(null);
+    setIndent({ kind: "space", size: 2 });
+  }, [activeFileTab?.id, activeFileTab?.view]);
 
   const symbols = activeFileTab ? (symbolsByPath[activeFileTab.id] ?? []) : [];
   const activeRelativePath = activeFileTab?.relativePath;
@@ -1086,6 +1096,7 @@ export function CodingWorkbench({
       activeId: tabState.activeId,
       selectedDirectory,
       expandedPaths: treeExpandedPathsRef.current.get(cwd) ?? [],
+      minimapEnabled: workspaceUiStateRef.current.get(cwd)?.minimapEnabled ?? DEFAULT_MINIMAP_ENABLED,
       savedAt: Date.now(),
     });
   }, [cwd, selectedDirectory]);
@@ -1502,6 +1513,7 @@ export function CodingWorkbench({
         activeId: tabState.activeId,
         selectedDirectory,
         expandedPaths: treeExpandedPathsRef.current.get(previous) ?? [],
+        minimapEnabled: workspaceUiStateRef.current.get(previous)?.minimapEnabled ?? DEFAULT_MINIMAP_ENABLED,
         savedAt: Date.now(),
       });
       workspaceUiStateRef.current.set(previous, {
@@ -1510,9 +1522,9 @@ export function CodingWorkbench({
         contextPaths,
         editorContext,
         selectedDirectory,
-        minimapRenderCharacters:
-          workspaceUiStateRef.current.get(previous)?.minimapRenderCharacters
-            ?? DEFAULT_MINIMAP_RENDER_CHARACTERS,
+        minimapEnabled:
+          workspaceUiStateRef.current.get(previous)?.minimapEnabled
+            ?? DEFAULT_MINIMAP_ENABLED,
       });
     }
     if (previous === cwd) return;
@@ -1524,7 +1536,7 @@ export function CodingWorkbench({
       contextPaths: [],
       editorContext: null,
       selectedDirectory: diskSaved.selectedDirectory,
-      minimapRenderCharacters: DEFAULT_MINIMAP_RENDER_CHARACTERS,
+      minimapEnabled: diskSaved.minimapEnabled ?? DEFAULT_MINIMAP_ENABLED,
     } : undefined);
     if (cwd && diskSaved) treeExpandedPathsRef.current.set(cwd, diskSaved.expandedPaths);
     useTabStore.setState({
@@ -1549,7 +1561,7 @@ export function CodingWorkbench({
     if (!cwd || previousWorkspaceRef.current !== cwd) return;
     const timer = window.setTimeout(persistHotExitNow, 250);
     return () => window.clearTimeout(timer);
-  }, [activeTabId, cwd, persistHotExitNow, tabs, treePersistenceRevision]);
+  }, [activeTabId, cwd, persistHotExitNow, tabs, treePersistenceRevision, uiStateRevision]);
 
   useEffect(() => {
     hydrateLayout();
@@ -3708,6 +3720,8 @@ export function CodingWorkbench({
                 includeHidden={showHidden}
                 gitStatusByPath={gitStatusByPath}
                 filter={explorerFilter}
+                indexedPaths={filePaths}
+                onSelectDirectory={openAnotherProject}
               />
             )}
           />
@@ -3822,11 +3836,11 @@ export function CodingWorkbench({
           onClose={closeTabSafely}
           onDraftChange={(id, draft) => useTabStore.getState().updateDraft(id, draft)}
           onSave={(id) => void saveFile(id)}
-          minimapRenderCharacters={
-            (cwd ? workspaceUiStateRef.current.get(cwd)?.minimapRenderCharacters : undefined)
-              ?? DEFAULT_MINIMAP_RENDER_CHARACTERS
+          minimapEnabled={
+            (cwd ? workspaceUiStateRef.current.get(cwd)?.minimapEnabled : undefined)
+              ?? DEFAULT_MINIMAP_ENABLED
           }
-          onMinimapRenderCharactersChange={(next) => {
+          onMinimapEnabledChange={(next) => {
             if (!cwd) return;
             const key = cwd;
             const current = workspaceUiStateRef.current.get(key) ?? {
@@ -3835,18 +3849,25 @@ export function CodingWorkbench({
               contextPaths: [],
               editorContext: null,
               selectedDirectory: cwd,
-              minimapRenderCharacters: DEFAULT_MINIMAP_RENDER_CHARACTERS,
+              minimapEnabled: DEFAULT_MINIMAP_ENABLED,
             };
-            workspaceUiStateRef.current.set(key, { ...current, minimapRenderCharacters: next });
+            workspaceUiStateRef.current.set(key, { ...current, minimapEnabled: next });
             setUiStateRevision((value) => value + 1);
           }}
           onCursorChange={setCursor}
           onLanguageChange={(info) => {
             setLanguageId(info.language);
             setEol(info.eol);
+            setIndent(info.indent);
           }}
           onEditorReady={(editor) => {
             editorRef.current = editor;
+          }}
+          onBreadcrumbSelect={(directoryPath) => {
+            setSelectedDirectory(directoryPath);
+            setActivityView("files");
+            setExplorerFilter("");
+            setTreeReveal((current) => ({ path: directoryPath, key: current.key + 1 }));
           }}
           onViewChange={handleFileViewChange}
           viewBusy={Boolean(
@@ -4044,7 +4065,8 @@ export function CodingWorkbench({
         cursor={cursor}
         eol={eol}
         language={languageId}
-        indent={{ kind: "space", size: 2 }}
+        indent={indent}
+        editorEditable={Boolean(activeFileTab && activeFileTab.view === "edit" && !activeFileTab.loading && !activeFileTab.error)}
         onEolChange={(next) => {
           const editor = editorRef.current;
           const model = editor?.getModel();
@@ -4052,16 +4074,22 @@ export function CodingWorkbench({
           setEol(next);
         }}
         onIndentChange={(next) => {
-          const editor = editorRef.current;
-          if (!editor) return;
-          editor.updateOptions({
+          const model = editorRef.current?.getModel();
+          if (!model) return;
+          model.updateOptions({
             tabSize: next.size,
             insertSpaces: next.kind === "space",
           });
+          setIndent(next);
         }}
-        onLanguageChange={() => {
-          /* 切换语言需要打开 CommandPalette，先留空；Task 9 后续接 Popover 后实现 */
+        onLanguageChange={(next) => {
+          const model = editorRef.current?.getModel();
+          if (!model) return;
+          MonacoEditor.setModelLanguage(model, next);
+          if (activeFileTab) useTabStore.getState().setLanguage(activeFileTab.id, next);
+          setLanguageId(next);
         }}
+        onOpenProblems={() => setBottomView("problems")}
         taskSummary={
           task
             ? statusSummary({

@@ -197,13 +197,15 @@ function AutomationToolbar({
         <ModeIcon size={14} strokeWidth={1.9} aria-hidden="true" />
         <span>{modeLabel}</span>
       </span>
-      {mode === "computer_use" && (
-        <HelpCircleIcon
-          size="sm"
-          className="automation-control__hint"
-          title="操作电脑（点击 / 拖动 / 输入 / 按键）始终会逐次确认，避免误触敏感操作"
-        />
-      )}
+      <button
+        type="button"
+        className="automation-control__hint"
+        aria-label={`查看${modeLabel}的安全确认说明`}
+        title={`${modeLabel}中可能产生副作用的步骤会在执行前单独确认`}
+        data-tip={`${modeLabel}中可能产生副作用的步骤会在执行前单独确认`}
+      >
+        <HelpCircleIcon size="sm" aria-hidden="true" />
+      </button>
       <span className="automation-control__summary" title={automation.error || statusText(status, mode)}>
         {automation.error || statusText(status, mode)}
       </span>

@@ -34,7 +34,7 @@ vi.mock("@monaco-editor/react", () => {
   return { default: Editor, Editor, DiffEditor };
 });
 
-import { CodingEditor, MINIMAP_DEFAULTS } from "../main/CodingEditor";
+import { CodingEditor, documentSymbolKindName, flattenDocumentSymbols, MINIMAP_DEFAULTS } from "../main/CodingEditor";
 
 function props() {
   return {
@@ -127,17 +127,23 @@ describe("MINIMAP_DEFAULTS", () => {
   });
 });
 
-describe("OutlineSymbol kind field", () => {
-  it("exposes OutlineSymbol.kind from Monaco DocumentSymbol", () => {
-    // 静态断言 OutlineSymbol 形状有 kind 字段
-    const sample: { kind?: string; name: string; startLine: number; endLine: number; collapsible?: boolean } = {
-      name: "foo",
-      kind: "Function",
-      startLine: 1,
-      endLine: 3,
-      collapsible: true,
-    };
-    expect(sample.kind).toBe("Function");
-    expect(sample.collapsible).toBe(true);
+describe("document outline conversion", () => {
+  it("maps Monaco numeric SymbolKind and preserves a two-level hierarchy", () => {
+    expect(documentSymbolKindName(11)).toBe("Function");
+    expect(documentSymbolKindName(4)).toBe("Class");
+    const symbols = flattenDocumentSymbols([{
+      name: "Service",
+      kind: 4,
+      range: { startLineNumber: 1, endLineNumber: 20 },
+      children: [{
+        name: "run",
+        kind: 5,
+        range: { startLineNumber: 2, endLineNumber: 8 },
+        children: [{ name: "nested", kind: 11, range: { startLineNumber: 3 } }],
+      }],
+    }], "/repo/a.ts");
+    expect(symbols).toHaveLength(2);
+    expect(symbols[0]).toMatchObject({ name: "Service", kind: "Class", depth: 0, collapsible: true });
+    expect(symbols[1]).toMatchObject({ name: "run", kind: "Method", depth: 1, parentId: symbols[0].id });
   });
 });

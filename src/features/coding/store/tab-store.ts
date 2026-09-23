@@ -92,6 +92,7 @@ interface TabState {
   closeAll: () => void;
   setActive: (id: string) => void;
   updateDraft: (id: string, draft: string) => void;
+  setLanguage: (id: string, language: string) => void;
   setView: (id: string, view: FileTab["view"]) => void;
   setDiff: (
     id: string,
@@ -137,7 +138,7 @@ export function isDirty(tab: WorkbenchTab): boolean {
 
 /**
  * Per-workspace UI state retained across tab switches so each project keeps
- * its own tab set, editor context, and minimap rendering mode.
+ * its own tab set, editor context, and minimap visibility.
  *
  * Tree expansion lives in `treeExpandedPathsRef` and cut/copy markers live
  * in `useClipboardStore`; neither is part of this record.
@@ -148,11 +149,11 @@ export interface WorkspaceUiState {
   contextPaths: string[];
   editorContext: EditorCodeContext | null;
   selectedDirectory: string;
-  minimapRenderCharacters: boolean;
+  minimapEnabled: boolean;
 }
 
-/** Default for the minimap render mode (characters vs solid blocks). */
-export const DEFAULT_MINIMAP_RENDER_CHARACTERS = true;
+/** The minimap is visible by default and can be hidden per workspace. */
+export const DEFAULT_MINIMAP_ENABLED = true;
 
 function virtualTabId(kind: VirtualTabKind, symbol: SymbolKey): string {
   return `virtual:${kind}:${symbol.name}`;
@@ -229,6 +230,13 @@ export const useTabStore = create<TabState>((set, get) => ({
     set((state) => ({
       tabs: state.tabs.map((tab) =>
         tab.id === id && isFileTab(tab) ? { ...tab, draft } : tab,
+      ),
+    })),
+
+  setLanguage: (id, language) =>
+    set((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.id === id && isFileTab(tab) ? { ...tab, language } : tab,
       ),
     })),
 

@@ -64,6 +64,15 @@ describe("TabContainer", () => {
     expect(crumb).toHaveTextContent("login.ts");
   });
 
+  it("面包屑在 Windows 路径上返回可用的绝对目录", async () => {
+    const user = userEvent.setup();
+    const props = setupProps([file({ id: "C:\\repo\\src\\auth\\login.ts" })]);
+    const onBreadcrumbSelect = vi.fn();
+    render(<TabContainer {...props} onBreadcrumbSelect={onBreadcrumbSelect} />);
+    await user.click(screen.getByRole("button", { name: "auth" }));
+    expect(onBreadcrumbSelect).toHaveBeenCalledWith("C:\\repo\\src\\auth");
+  });
+
   it("marks a dirty tab", () => {
     setup([file({ draft: "edited" })]);
     expect(screen.getByLabelText("未保存")).toBeInTheDocument();
@@ -186,14 +195,14 @@ describe("TabContainer", () => {
 });
 
 describe("TabContainer minimap toggle", () => {
-  it("toggles minimapRenderCharacters when the toolbar button is clicked", async () => {
+  it("toggles minimap visibility when the toolbar button is clicked", async () => {
     const user = userEvent.setup();
     const onMinimapChange = vi.fn();
     render(
       <TabContainer
         {...setupProps([file()])}
-        minimapRenderCharacters={true}
-        onMinimapRenderCharactersChange={onMinimapChange}
+        minimapEnabled={true}
+        onMinimapEnabledChange={onMinimapChange}
       />,
     );
     await user.click(screen.getByRole("button", { name: /缩略图/ }));

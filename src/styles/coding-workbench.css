@@ -2116,6 +2116,39 @@
   color: var(--echo-text-strong);
 }
 
+.coding-workbench__status button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.coding-status-menu {
+  display: grid;
+  min-width: 150px;
+  gap: 2px;
+}
+
+.coding-status-menu--languages {
+  grid-template-columns: repeat(2, minmax(130px, 1fr));
+  max-height: min(420px, calc(100vh - 32px));
+  overflow: auto;
+}
+
+.coding-status-menu button {
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--echo-text-medium);
+  text-align: left;
+  cursor: pointer;
+}
+
+.coding-status-menu button:hover,
+.coding-status-menu button[aria-checked="true"] {
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-strong);
+}
+
 /* ---------- activity bar ---------- */
 
 .coding-activity {
@@ -2379,6 +2412,27 @@
 
 .coding-outline__row.is-collapsed {
   opacity: 0.7;
+}
+
+.coding-outline__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.coding-outline__open {
+  display: contents;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .coding-outline__name {
