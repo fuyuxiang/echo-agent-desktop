@@ -60,7 +60,7 @@
 
 | 依赖 | 要求 |
 | --- | --- |
-| Node.js | 20 或更高版本；CI 使用 Node.js 22 |
+| Node.js | 22 或 24+；Theia 源码构建和桌面 IDE 服务需要该版本 |
 | pnpm | 10；仓库已固定期望版本 |
 | Rust | Stable，最低 `1.92.0`，包含 `rustfmt` 与 `clippy` |
 | Protocol Buffers | 系统 `PATH` 中可用的原生 `protoc`，或设置 `PROTOC` |
@@ -130,7 +130,7 @@ name = "My Model"
 | 领域 | 能力 |
 | --- | --- |
 | **Agent 执行** | 流式会话、原生计划与任务、斜杠命令、队列发送、任务取消、历史回溯与分叉、子 Agent 实时状态和团队协作 |
-| **代码开发工作台** | Monaco 多标签编辑、全局搜索与替换、集成终端、跨文件符号索引、定义/引用/影响分析、任务 DAG、验证与诊断、差异审阅、检查点回滚和证据化交付报告 |
+| **代码开发工作台** | 内嵌 Eclipse Theia IDE（文件资源管理器、编辑器、搜索、终端、Git、预览和扩展），旁边保留 EchoAgent 的任务、对话、变更审阅、验证与交付 |
 | **浏览器与电脑操作** | 任务隔离的 Browser Use、基于屏幕快照的 Computer Use、实时能力检测、暂停/接管/恢复、逐项高风险确认与任务级数据清理 |
 | **工作空间** | 目录级会话、全文检索、文件树与安全文件操作、常见文档预览、变更跟踪、Unified Diff 与交付资产 |
 | **模型接入** | OpenAI、Anthropic、DeepSeek、通义千问预设，多 Provider、多模型，以及 OpenAI/Anthropic 兼容 Endpoint |
@@ -160,13 +160,15 @@ Browser Use 默认只允许公网 `http/https` 地址，顶层导航、子资源
 
 ### 代码开发工作台
 
-从「更多 → 代码开发」打开独立工作台。它将项目、开发任务、Agent 会话和代码操作放在一个界面中：
+从「更多 → 代码开发」打开 Echo Code。工作台左侧是基于仓库内 Eclipse Theia 1.74.0 源码构建的 IDE，右侧是现有 EchoAgent Runtime 驱动的 Coding Agent。Theia 由 Tauri 在本机环回地址启动，编辑器、文件树、搜索、终端、Git 和网页预览由 Theia 提供；任务会话、权限、Diff 审阅、验证与交付仍由 EchoAgent 管理。
 
 - **理解工程**：扫描语言、模块、Manifest、项目指令和 Git 状态；增量维护跨文件符号索引，支持工作区符号、跳转定义、查找引用与影响分析。
-- **编辑与操作**：Monaco 多标签编辑器、文件搜索/替换、新建/重命名/复制/移动/移入系统废纸篓、热退出草稿恢复和集成 PTY 终端。文件保存使用内容哈希检测 Agent 或外部程序造成的并发冲突。
+- **编辑与操作**：Theia 的 Monaco 多标签编辑器、资源管理器、全局搜索、命令面板和 PTY 终端。桌面桥接在 IDE 文件写入前检查任务阶段，并在写入后刷新变更集。预览栏可输入本地开发服务地址，在 Theia 内打开网页预览。
 - **可审查任务**：复杂任务被解析为带依赖、文件范围、契约、验收条件和验证命令的 DAG。工作台依据真实 Diff、进程退出码和诊断指纹推进阶段，不接受模型自报「已完成」作为交付证据。
 - **验证与交付**：从 Node.js、Rust、Maven/Gradle、Python、Go、CMake、Bazel 和 .NET 工程中检测实际存在的构建、测试、Lint 和类型检查命令，流式展示输出并生成结构化记录。计划自定义命令需用户单次确认，高风险破坏性命令会在原生层被拒绝。
 - **变更安全**：Git 工程基于 HEAD 与任务起始状态建立基线；非 Git 目录则使用本地文件检查点。可逐文件查看 Diff、丢弃或整体回滚；任务开始前已存在的未提交内容会标记保护，不会被自动提交。交付报告只在验证新鲜性、Diff 审阅和验收证据等门禁满足后标记可交付。
+
+构建、发布资源和 IDE 与 Agent 的桥接流程见 [Echo Code Theia 集成说明](docs/echo-code-theia.md)。
 
 ## 工作原理
 
@@ -174,7 +176,10 @@ EchoAgent 不是套在命令行工具外的 Web 壳。Agent Runtime 直接嵌入
 
 ```mermaid
 flowchart TB
-    UI[React 18 界面<br/>会话 · 代码开发 · 自动化 · 设置] <-->|Tauri Commands / Events| HOST[Tauri 2 + Rust 应用层<br/>存储 · 策略 · 调度 · 工作区能力]
+    UI[React 18 界面<br/>会话 · Coding Agent · 自动化 · 设置] <-->|Tauri Commands / Events| HOST[Tauri 2 + Rust 应用层<br/>存储 · 策略 · 调度 · 工作区能力]
+    UI <-->|项目与文件操作消息桥| IDE[Eclipse Theia 浏览器 IDE<br/>资源管理器 · 编辑器 · 终端 · 预览]
+    HOST -->|启动本地进程| IDEBACK[Node.js + Theia 后端<br/>127.0.0.1]
+    IDE <-->|本地 WebSocket| IDEBACK
     HOST <-->|类型化 ACP Channel| RUNTIME[进程内 Agent Runtime<br/>会话 · 计划 · 工具 · 权限 · 子 Agent]
     RUNTIME --> MODELS[模型 Provider<br/>OpenAI · Anthropic · Compatible]
     RUNTIME --> TOOLS[本地文件与命令<br/>MCP · Skills · Plugins]
@@ -190,8 +195,9 @@ flowchart TB
 
 ```text
 src/                       React UI、Zustand Stores 与前端领域逻辑
-src/features/coding/       代码开发工作台、编辑器与任务界面
+src/features/coding/       Theia 宿主、Coding Agent 任务与审阅界面
 src-tauri/src/             Tauri Commands、ACP Bridge、策略、存储、代码与自动化后端
+vendor/theia-platform/     Eclipse Theia 1.74.0 源码与 Echo 桥接扩展
 vendor/echo-agent-build/   内嵌 Agent Runtime 的锁定源码快照
 vendor/async-openai/       OpenAI 兼容 Rust 客户端源码快照
 vendor/nucleo/             模糊匹配库源码快照
@@ -229,6 +235,9 @@ EchoAgent 默认将应用状态保存在 `~/.echo-agent/`；启动前设置 `ECH
 | 命令 | 用途 |
 | --- | --- |
 | `pnpm tauri dev` | 运行完整桌面应用 |
+| `pnpm ide:build` | 从仓库内源码编译 Theia IDE；需要 Node.js 22 或 24+ |
+| `pnpm ide:stage` | 将 Theia 和当前平台 Node.js 运行时放入 Tauri 资源目录 |
+| `pnpm ide:prepare` | 首次构建并暂存 IDE；`pnpm tauri dev/build` 会自动调用 |
 | `pnpm dev` | 仅启动 Vite 前端；原生能力需要 Tauri 容器 |
 | `pnpm test` | 运行 Vitest 前端测试 |
 | `pnpm build` | TypeScript 类型检查并构建前端 |

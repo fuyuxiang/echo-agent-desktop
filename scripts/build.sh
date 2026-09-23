@@ -126,6 +126,11 @@ log_step "Checking vendored Runtime source"
 node "$PROJECT_ROOT/scripts/verify-vendored-runtime.mjs"
 log_ok "Vendored Runtime source is complete"
 
+log_step "Building and staging Echo Code IDE"
+pnpm ide:build
+pnpm ide:stage
+log_ok "Vendored Theia IDE and Node runtime staged"
+
 # ---------------------------------------------------------------------------
 # 5. Build the platform installer. The override disables updater signing here;
 #    the controlled release machine creates and signs canonical updater files.

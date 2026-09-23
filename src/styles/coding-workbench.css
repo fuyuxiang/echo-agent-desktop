@@ -17,6 +17,218 @@
   background: var(--echo-bg-primary);
 }
 
+/* Echo Code's IDE surface is provided by the vendored Theia workbench. */
+.coding-workbench--theia {
+  grid-template-columns: minmax(0, 1fr) 4px var(--coding-agent-width, 380px);
+  grid-template-rows: 44px minmax(0, 1fr);
+}
+
+.echo-theia-workspace {
+  grid-column: 1;
+  grid-row: 2;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.echo-theia,
+.echo-theia__frame {
+  width: 100%;
+  height: 100%;
+}
+
+.echo-theia__frame {
+  display: block;
+  border: 0;
+  background: var(--echo-bg-primary);
+}
+
+.echo-theia__cover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 13px;
+  padding: 32px;
+  text-align: center;
+  background: var(--echo-bg-primary);
+  color: var(--echo-text-secondary);
+}
+
+.echo-theia__cover strong {
+  color: var(--echo-text-strong);
+  font-size: 15px;
+}
+
+.echo-theia__cover p {
+  max-width: 420px;
+  margin: 0;
+  line-height: 1.6;
+}
+
+.echo-theia__cover button,
+.echo-theia-preview-form button,
+.echo-theia-agent__context button,
+.echo-theia-review__header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 27px;
+  padding: 0 9px;
+  border: 1px solid var(--echo-border-subtle);
+  border-radius: 6px;
+  background: var(--echo-bg-secondary);
+  color: var(--echo-text-strong);
+  cursor: pointer;
+}
+
+.echo-theia-preview-form {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+}
+
+.echo-theia-preview-form input {
+  width: 100%;
+  min-width: 0;
+  height: 27px;
+  padding: 0 9px;
+  border: 1px solid var(--echo-border-subtle);
+  border-radius: 6px;
+  outline: none;
+  background: var(--echo-bg-primary);
+  color: var(--echo-text-strong);
+}
+
+.echo-theia-agent {
+  grid-column: 3;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--echo-border-subtle);
+  background: var(--echo-bg-primary);
+}
+
+.echo-theia-agent__splitter {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.echo-theia-agent__tabs {
+  display: flex;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--echo-border-subtle);
+}
+
+.echo-theia-agent__tabs button {
+  flex: 1 1 0;
+  height: 33px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--echo-text-secondary);
+  cursor: pointer;
+}
+
+.echo-theia-agent__tabs button[aria-selected="true"] {
+  border-bottom-color: var(--echo-brand);
+  color: var(--echo-text-strong);
+  font-weight: 650;
+}
+
+.echo-theia-agent__context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--echo-border-subtle);
+}
+
+.echo-theia-agent__context span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--echo-text-secondary);
+}
+
+.echo-theia-agent__content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.echo-theia-agent__content > .coding-agent,
+.echo-theia-agent__content > .coding-agent__starter {
+  height: 100%;
+}
+
+.echo-theia-agent__output {
+  margin: 8px;
+  padding: 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  border-radius: 6px;
+  background: var(--echo-bg-secondary);
+}
+
+.echo-theia-review {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  background: var(--echo-bg-primary);
+}
+
+.echo-theia-review__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--echo-border-subtle);
+}
+
+.echo-theia-review__header > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.echo-theia-review__header span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--echo-text-secondary);
+}
+
+.echo-theia-review__state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  color: var(--echo-text-secondary);
+}
+
+.echo-theia-review .monaco-diff-editor {
+  flex: 1;
+  min-height: 0;
+}
+
 .coding-workbench__topbar {
   grid-column: 1 / -1;
   grid-row: 1 / 2;

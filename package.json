@@ -7,6 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "ide:build": "node scripts/build-theia.mjs",
+    "ide:stage": "node scripts/stage-theia-runtime.mjs",
+    "ide:prepare": "node scripts/prepare-theia.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
     "dist": "node -e \"process.platform==='win32'?require('child_process').execFileSync('powershell',['-ExecutionPolicy','Bypass','-File','scripts/build.ps1'],{stdio:'inherit'}):require('child_process').execFileSync('bash',['scripts/build.sh'],{stdio:'inherit'})\"",

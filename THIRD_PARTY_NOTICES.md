@@ -26,6 +26,32 @@ and NOTICE material remain intact.
 Additional dependency notices remain available in the embedded runtime source
 tree and its crate-specific license files.
 
+## Eclipse Theia Platform
+
+- Source: https://github.com/eclipse-theia/theia
+- Version: `v1.74.0`
+- Pinned source revision: `172494ea2564ca07690e230805861146007fae79`
+- Integration: source snapshot tracked under `vendor/theia-platform/`
+- License: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+- Local licenses and notices: `vendor/theia-platform/LICENSE-EPL`,
+  `vendor/theia-platform/LICENSE-GPL-2.0-ONLY-CLASSPATH-EXCEPTION`,
+  `vendor/theia-platform/NOTICE.md`
+
+EchoAgent adds the `@echoagent/theia-bridge` extension and adapts the browser
+example application into the Echo Code IDE. The Theia platform source retains
+upstream copyright and license headers. Coding Agent operations use EchoAgent's
+existing task and Agent runtime; Theia supplies the IDE surface.
+
+## Node.js runtime
+
+- Source: https://nodejs.org/
+- Integration: the platform Node.js executable is staged with the Theia backend
+  into `src-tauri/resources/theia/node/` during packaging.
+- License: Node.js license and bundled third-party notices, copied from the
+  selected Node.js distribution into `theia/node/LICENSE` in the app resources.
+- Fallback license copy for the pinned development runtime:
+  `vendor/nodejs/LICENSE-24.21.0`.
+
 ## async-openai
 
 - Source: https://github.com/our-forks/async-openai

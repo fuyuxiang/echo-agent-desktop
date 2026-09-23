@@ -1,0 +1,62 @@
+name: Publish API Documentation on GitHub Pages
+
+permissions:
+  id-token: write
+  pages: write
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build API Documentation
+    runs-on: ubuntu-22.04
+
+    # The current approach is silly. We should be smarter and use `actions/upload-artifact` and `actions/download-artifact` instead of rebuilding
+    # everything from scratch again. (git checkout, Node.js install, npm, etc.) It was not possible to share artifacts on Travis CI without an
+    # external storage (such as S3), so we did rebuild everything before the npm publish. We should overcome this limitation with GH Actions.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0 # To fetch all history for all branches and tags. (Will be required for caching with lerna: https://github.com/markuplint/markuplint/pull/111)
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: "24.x"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Use Python 3.13
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Install and Build
+        run: |
+          npm ci
+          npm run build
+        env:
+          NODE_OPTIONS: --max_old_space_size=4096
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # https://github.com/microsoft/vscode-ripgrep/issues/9
+
+      - name: Generate Documentation
+        run: |
+          npm run docs
+        env:
+          NODE_OPTIONS: --max_old_space_size=8192
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 #v5.0.0
+        with:
+          path: ./gh-pages
+
+  deploy:
+    name: Deploy API documentation to GitHub Pages
+    needs: build
+    runs-on: ubuntu-22.04
+    environment: github-pages
+    steps:
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 #v5.0.0

@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeDevCommand": "pnpm ide:prepare && pnpm dev",
+    "beforeBuildCommand": "pnpm ide:prepare && pnpm build"
   },
   "app": {
     "windows": [
@@ -46,7 +46,12 @@
       "../LICENSE": "LICENSE",
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
       "../vendor/echo-agent-build/LICENSE": "licenses/echo-agent-build-LICENSE",
-      "../vendor/echo-agent-build/third_party/NOTICE": "licenses/echo-agent-build-THIRD-PARTY-NOTICE"
+      "../vendor/echo-agent-build/third_party/NOTICE": "licenses/echo-agent-build-THIRD-PARTY-NOTICE",
+      "../vendor/theia-platform/LICENSE-EPL": "licenses/theia/LICENSE-EPL",
+      "../vendor/theia-platform/LICENSE-GPL-2.0-ONLY-CLASSPATH-EXCEPTION": "licenses/theia/LICENSE-GPL-2.0-ONLY-CLASSPATH-EXCEPTION",
+      "../vendor/theia-platform/NOTICE.md": "licenses/theia/NOTICE.md",
+      "resources/theia/browser": "theia/browser",
+      "resources/theia/node": "theia/node"
     }
   },
   "plugins": {

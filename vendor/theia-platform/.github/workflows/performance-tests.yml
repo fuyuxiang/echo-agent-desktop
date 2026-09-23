@@ -1,0 +1,58 @@
+name: Performance Tests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-test-performance:
+    name: Performance Tests
+
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: "24.x"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Use Python 3.13
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+
+      - name: Build
+        shell: bash
+        run: |
+          npm install -g  node-gyp
+          npm ci
+          npm run build
+        env:
+          NODE_OPTIONS: --max_old_space_size=4096
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # https://github.com/microsoft/vscode-ripgrep/issues/9
+
+      - name: Performance (browser)
+        shell: bash
+        run: npm run performance:startup:browser
+
+      - name: Performance (Electron)
+        shell: bash
+        run: xvfb-run npm run performance:startup:electron
+
+      - name: Analyze performance results
+        uses: benchmark-action/github-action-benchmark@fd31771ce86cc65eab85653da103f71ab1b4479c # v1.9.0
+        with:
+          name: Performance Benchmarks
+          tool: "customSmallerIsBetter"
+          output-file-path: performance-result.json
+          alert-threshold: "150%"
+          fail-on-alert: false
+          github-token: ${{ secrets.GITHUB_TOKEN }} # Needed for comments an GH Pages
+          benchmark-data-dir-path: tests/performance
+          auto-push: true # Push to GH Pages
+          comment-on-alert: true # Comment on commit if it causes a performance regression
+          max-items-in-chart: 100 # Don't just collect results forever

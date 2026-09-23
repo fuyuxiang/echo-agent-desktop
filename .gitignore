@@ -17,6 +17,16 @@ release
 /src-tauri/gen/
 # 内嵌 Runtime 已由主仓库直接管理，仅忽略其本机构建产物。
 /vendor/echo-agent-build/target/
+/vendor/theia-platform/**/lib/
+/vendor/theia-platform/**/src-gen/
+/vendor/theia-platform/.nx/
+/vendor/theia-platform/.browser_modules/
+/vendor/theia-platform/plugins/
+/src-tauri/resources/theia/browser/*
+!/src-tauri/resources/theia/browser/.keep
+/src-tauri/resources/theia/node/*
+!/src-tauri/resources/theia/node/.keep
+/src-tauri/resources/theia/runtime-platform.json
 
 # 本机环境与 Cargo 工具路径
 .env

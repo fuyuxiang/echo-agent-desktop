@@ -43,6 +43,8 @@ import { editor as MonacoEditor } from "monaco-editor";
 
 import { AgentPane } from "./agent/AgentPane";
 import { TaskStarter } from "./agent/TaskStarter";
+import { TheiaIdeFrame, type TheiaMutationTicket } from "./TheiaIdeFrame";
+import { TheiaTaskReview } from "./TheiaTaskReview";
 import { ChangeSetView } from "./explorer/ChangeSetView";
 import { ContextPackView } from "./explorer/ContextPackView";
 import { FileExplorerView } from "./explorer/FileExplorerView";
@@ -89,6 +91,7 @@ import { DeliveryReportTab } from "./main/docs/DeliveryReportTab";
 import { ProjectProfileTab } from "./main/docs/ProjectProfileTab";
 import { TaskDagTab } from "./main/docs/TaskDagTab";
 import { BottomPanel } from "./panels/BottomPanel";
+import { VerificationView } from "./panels/VerificationView";
 import { TabContainer } from "./main/TabContainer";
 import { FooterStatusBar } from "./FooterStatusBar";
 import { ActivityBar } from "./shell/ActivityBar";
@@ -435,6 +438,12 @@ export function CodingWorkbench({
   }, [activeCodingWorkspaceCwd, codingWorkspaces, cwd]);
 
   const [selectedDirectory, setSelectedDirectory] = useState(cwd);
+  const [theiaPanel, setTheiaPanel] = useState<"agent" | "changes" | "verification">("agent");
+  const [theiaActiveFile, setTheiaActiveFile] = useState<string | null>(null);
+  const [theiaReviewPath, setTheiaReviewPath] = useState<string | null>(null);
+  const [theiaPreviewInput, setTheiaPreviewInput] = useState("");
+  const [theiaPreviewRequest, setTheiaPreviewRequest] = useState<{ url: string; id: number } | null>(null);
+  const [theiaVerificationOutput, setTheiaVerificationOutput] = useState("");
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
   const [filePaths, setFilePaths] = useState<string[]>([]);
   const [indexing, setIndexing] = useState(false);
@@ -3561,6 +3570,21 @@ export function CodingWorkbench({
     [effectiveLayout],
   );
 
+  const beforeTheiaMutation = useCallback(async (_operation: string, _paths: string[]) => {
+    return prepareManualMutation();
+  }, [prepareManualMutation]);
+  const afterTheiaMutation = useCallback(async (
+    ticket: TheiaMutationTicket,
+    success: boolean,
+    error?: string,
+  ) => {
+    if (success) {
+      await finishManualMutation(ticket);
+    } else {
+      await blockInterruptedManualMutation(ticket, error ?? "Theia 文件操作失败");
+    }
+  }, [blockInterruptedManualMutation, finishManualMutation]);
+
   if (!cwd) {
     return (
       <div ref={workbenchRef} className="coding-workbench coding-workbench--empty">
@@ -3604,6 +3628,193 @@ export function CodingWorkbench({
       </div>
     );
   }
+
+  if (!window.location.search.includes("legacy-coding")) return (
+    <div ref={workbenchRef} className="coding-workbench coding-workbench--theia" style={style}>
+      <header className="coding-workbench__topbar" data-tauri-drag-region>
+        <div className="coding-workbench__topbar-left" data-tauri-drag-region>
+          <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
+            <ArrowLeft size={16} />
+          </button>
+          <div className="coding-workbench__product" data-tauri-drag-region>
+            <span className="coding-workbench__product-mark" aria-hidden="true"><Code2 size={14} /></span>
+            <strong>Echo Code</strong>
+          </div>
+          <span className="coding-workbench__topbar-separator" aria-hidden="true" />
+          <ProjectSwitcher
+            projects={recentCodingProjects}
+            activeCwd={activeCodingWorkspaceCwd || cwd}
+            dirtyCount={dirtyFileCount}
+            onSelect={switchProject}
+            onRemove={removeRecentProject}
+            onOpenFolder={openAnotherProject}
+          />
+        </div>
+        <form className="echo-theia-preview-form" onSubmit={(event) => {
+          event.preventDefault();
+          const raw = theiaPreviewInput.trim();
+          if (!raw) return;
+          try {
+            const url = new URL(raw.startsWith("http://") || raw.startsWith("https://") ? raw : `http://${raw}`);
+            setTheiaPreviewRequest({ url: url.toString(), id: Date.now() });
+          } catch {
+            onToast?.("请输入有效的预览地址，例如 localhost:5173");
+          }
+        }}>
+          <input
+            aria-label="网页预览地址"
+            placeholder="localhost:5173"
+            value={theiaPreviewInput}
+            onChange={(event) => setTheiaPreviewInput(event.target.value)}
+          />
+          <button type="submit">预览</button>
+        </form>
+        <div className="coding-workbench__topbar-right" data-tauri-drag-region>
+          <button type="button" className="coding-icon-btn" onClick={onOpenSettings} aria-label="设置">
+            <Settings2 size={15} />
+          </button>
+        </div>
+      </header>
+
+      <main className="echo-theia-workspace">
+        <TheiaIdeFrame
+          root={cwd}
+          onBeforeMutation={beforeTheiaMutation}
+          onAfterMutation={afterTheiaMutation}
+          onActiveFile={setTheiaActiveFile}
+          onToast={onToast}
+          previewRequest={theiaPreviewRequest}
+        />
+        {theiaReviewPath && task && (
+          <TheiaTaskReview
+            root={cwd}
+            taskId={task.id}
+            path={theiaReviewPath}
+            onClose={() => setTheiaReviewPath(null)}
+            onReviewed={async () => {
+              await useTaskStore.getState().refreshTaskState();
+              setReportRevision((value) => value + 1);
+            }}
+            onToast={onToast}
+          />
+        )}
+      </main>
+
+      <div
+        className="coding-workbench__vsplit echo-theia-agent__splitter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整 Agent 面板宽度"
+        tabIndex={0}
+        onPointerDown={startAgentDrag}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") setAgentWidth(effectiveLayout.agentWidth + 16);
+          if (event.key === "ArrowRight") setAgentWidth(effectiveLayout.agentWidth - 16);
+        }}
+      />
+
+      <aside className="echo-theia-agent" aria-label="Coding Agent">
+        <div className="coding-agent__taskbar">
+          <span>开发任务</span>
+          <TaskSwitcher
+            tasks={summaries}
+            activeId={task?.id}
+            newDisabled={activeTaskCount > 0}
+            onSelect={(taskId) => void activateCodingTask(taskId)}
+            onNew={beginNewTask}
+            onRename={renameCodingTask}
+            onDelete={deleteCodingTask}
+          />
+        </div>
+        <div className="echo-theia-agent__tabs" role="tablist" aria-label="开发任务面板">
+          <button type="button" role="tab" aria-selected={theiaPanel === "agent"} onClick={() => setTheiaPanel("agent")}>Agent</button>
+          <button type="button" role="tab" aria-selected={theiaPanel === "changes"} onClick={() => setTheiaPanel("changes")}>变更 {taskChangeCount || ""}</button>
+          <button type="button" role="tab" aria-selected={theiaPanel === "verification"} onClick={() => setTheiaPanel("verification")}>验证</button>
+        </div>
+        {theiaActiveFile && (
+          <div className="echo-theia-agent__context">
+            <span title={theiaActiveFile}>{workspaceRelativePath(cwd, theiaActiveFile)}</span>
+            <button type="button" onClick={() => addManyToContext([theiaActiveFile])}>加入上下文</button>
+          </div>
+        )}
+        <div className="echo-theia-agent__content">
+          {theiaPanel === "agent" && (task ? (
+            <AgentPane
+              task={task}
+              changeSet={changeSet}
+              verifications={verifications}
+              sessionId={activeSessionId}
+              messages={messages}
+              streaming={streaming}
+              phaseReason={phaseReason ?? task.phaseReason ?? undefined}
+              blocker={blocker !== undefined ? blocker : task.blocker}
+              awaitingPermission={awaitingPermission}
+              awaitingQuestion={awaitingQuestion}
+              models={models}
+              modelId={modelId}
+              sending={sending || lifecycleSettling}
+              onModelChange={(next) => void changeTaskModel(next)}
+              onSend={sendFollowup}
+              onCancel={() => void stopActiveTask()}
+              onContinue={continueInterruptedTask}
+              onOpenChanges={() => setTheiaPanel("changes")}
+              onOpenReport={() => setTheiaPanel("changes")}
+              onToast={onToast}
+              onPathsDropped={(paths) => addManyToContext(paths)}
+            />
+          ) : (
+            <TaskStarter
+              models={models}
+              workspaceRoot={cwd}
+              modelId={modelId}
+              onModelChange={(next) => void changeTaskModel(next)}
+              starting={starting}
+              error={startError}
+              apiReady={apiReady}
+              contextPaths={contextPaths}
+              onStart={(requirement) => void startTask(requirement)}
+              onDraftContextPaths={addManyToContext}
+              onOpenSettings={onOpenSettings}
+              onToast={onToast}
+            />
+          ))}
+          {theiaPanel === "changes" && (
+            <ChangeSetView
+              changeSet={changeSet}
+              hasTask={Boolean(task)}
+              busyPath={busyPath ?? diffLoadingPath}
+              committing={committing}
+              canCommit={task?.phase === "delivered" && !changeSet?.committedHash}
+              canRollback={!changeSet?.committedHash && !runningVerification && !streaming
+                && Boolean(task && ["paused", "stopped", "delivered", "blocked"].includes(task.phase))}
+              canDiscard={!runningVerification && !streaming && !sending
+                && Boolean(task && ["implementing", "repairing", "discovering", "paused", "stopped", "blocked", "delivered"].includes(task.phase))}
+              onOpenDiff={(change) => setTheiaReviewPath(change.path)}
+              onDiscard={(change) => void discardChange(change.path)}
+              onCommit={() => void commitChanges()}
+              onRollback={() => void rollbackTask()}
+            />
+          )}
+          {theiaPanel === "verification" && (
+            <>
+              <VerificationView
+                records={verifications}
+                detected={verificationCommands}
+                running={runningVerification}
+                hasTask={Boolean(task)}
+                onRun={(command) => void runVerifications([command])}
+                onRunAll={() => void runVerifications(verificationCommands)}
+                onCancel={() => { if (activeRunId) void codingApi.cancelVerification(activeRunId); }}
+                onOpenOutput={(record) => setTheiaVerificationOutput([record.stdout, record.stderr].filter(Boolean).join("\n"))}
+              />
+              {theiaVerificationOutput && <pre className="echo-theia-agent__output">{theiaVerificationOutput}</pre>}
+            </>
+          )}
+        </div>
+      </aside>
+      {taskDialog}
+    </div>
+  );
 
   return (
     <div

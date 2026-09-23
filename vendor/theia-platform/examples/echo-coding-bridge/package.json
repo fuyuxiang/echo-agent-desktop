@@ -1,0 +1,25 @@
+{
+  "private": true,
+  "name": "@echoagent/theia-bridge",
+  "version": "1.74.0",
+  "license": "MIT",
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/echo-frontend-module"
+    }
+  ],
+  "dependencies": {
+    "@theia/core": "1.74.0",
+    "@theia/editor": "1.74.0",
+    "@theia/filesystem": "1.74.0",
+    "@theia/workspace": "1.74.0"
+  },
+  "devDependencies": {
+    "@theia/ext-scripts": "1.74.0"
+  },
+  "scripts": {
+    "build": "theiaext build",
+    "compile": "tsc -b",
+    "clean": "theiaext clean"
+  }
+}

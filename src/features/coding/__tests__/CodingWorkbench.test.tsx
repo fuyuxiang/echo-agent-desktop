@@ -123,6 +123,7 @@ async function emitTauriEvent(name: string, payload: unknown) {
 
 describe("CodingWorkbench skeleton", () => {
   beforeEach(() => {
+    window.history.replaceState({}, "", "?legacy-coding");
     localStorage.clear();
     invoke.mockReset();
     invoke.mockImplementation(async (command: string): Promise<unknown> => {
@@ -1368,8 +1369,49 @@ describe("CodingWorkbench skeleton", () => {
 
 describe("CodingWorkbench footer status bar", () => {
   it("renders placeholder when no file is open", async () => {
+    window.history.replaceState({}, "", "?legacy-coding");
     render(<CodingWorkbench cwd="/repo" models={[]} />);
     await screen.findByRole("navigation", { name: "活动栏" });
     expect(screen.getAllByText("——").length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("Theia workbench", () => {
+  beforeEach(() => {
+    window.history.replaceState({}, "", "/");
+    invoke.mockReset();
+    invoke.mockImplementation(async (command: string): Promise<unknown> => {
+      if (command === "coding_task_list" || command === "coding_verification_detect") return [];
+      if (command === "coding_theia_start") {
+        return { url: "http://127.0.0.1:41773/", embedToken: "test-embed-token" };
+      }
+      return null;
+    });
+    useTaskStore.setState({
+      root: "",
+      summaries: [],
+      task: null,
+      changeSet: null,
+      verifications: [],
+      problems: [],
+      orchestrator: null,
+      loading: false,
+      error: null,
+    });
+  });
+
+  it("opens the source-integrated IDE beside the existing Agent task pane", async () => {
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+
+    expect(await screen.findByTitle("Echo Code IDE")).toHaveAttribute(
+      "src",
+      expect.stringContaining("echoEmbedToken=test-embed-token"),
+    );
+    expect(invoke).toHaveBeenCalledWith("coding_theia_start", { root: "/repo" });
+    expect(screen.getByRole("complementary", { name: "Coding Agent" })).toBeInTheDocument();
+    expect(screen.getByRole("separator", { name: "调整 Agent 面板宽度" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /变更/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "验证" })).toBeInTheDocument();
   });
 });

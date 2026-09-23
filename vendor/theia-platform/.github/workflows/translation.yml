@@ -1,0 +1,64 @@
+name: Automatic Translation
+
+on: workflow_dispatch
+
+jobs:
+  translation:
+    name: Translation Update
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: 24.x
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Use Python 3.13
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Install and Build
+        shell: bash
+        run: |
+          npm ci
+          npm run build
+        env:
+          NODE_OPTIONS: --max_old_space_size=4096
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # https://github.com/microsoft/vscode-ripgrep/issues/9
+
+      - id: compute-next-version
+        run: |
+          export THEIA_CORE_VERSION=$(node -p "require(\"./packages/core/package.json\").version")
+          echo "NEXT_VERSION_NUMBER=$(npx -q semver@7 --increment minor $THEIA_CORE_VERSION)" >> $GITHUB_ENV
+
+      - name: Perform Automatic Translation
+        run: |
+          node ./scripts/translation-update.js
+        env:
+          DEEPL_API_TOKEN: ${{ secrets.DEEPL_API_TOKEN }}
+
+      - name: Get Actor User Data
+        uses: octokit/request-action@b91aabaa861c777dcdb14e2387e30eddf04619ae # v3.0.0
+        id: actor_user_data
+        with:
+          route: GET /users/{user}
+          user: ${{ github.actor }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@98357b18bf14b5342f975ff684046ec3b2a07725 # v8.0.0
+        with:
+          commiter: ${{ github.actor }} <${{ fromJson(steps.actor_user_data.outputs.data).email }}>
+          author: ${{ github.actor }} <${{ fromJson(steps.actor_user_data.outputs.data).email }}>
+          branch: bot/translation-update
+          title: Translation update for version ${{ env.NEXT_VERSION_NUMBER }}
+          commit-message: Translation update for version ${{ env.NEXT_VERSION_NUMBER }}
+          body: Automated translation update for Theia version ${{ env.NEXT_VERSION_NUMBER }}. Triggered by @${{ github.actor }}.
+          labels: localization

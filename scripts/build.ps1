@@ -145,6 +145,13 @@ Log-Step "Checking vendored Runtime source"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Log-Ok "Vendored Runtime source is complete"
 
+Log-Step "Building and staging Echo Code IDE"
+& pnpm ide:build
+if ($LASTEXITCODE -ne 0) { throw "Theia IDE build failed" }
+& pnpm ide:stage
+if ($LASTEXITCODE -ne 0) { throw "Theia runtime staging failed" }
+Log-Ok "Vendored Theia IDE and Node runtime staged"
+
 # ---------------------------------------------------------------------------
 # 5. NSIS tool cache (work around GitHub download timeouts in CN).
 #    Pre-place nsis-3.11 + nsis_tauri_utils.dll in Tauri's cache so the

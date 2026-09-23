@@ -43,6 +43,7 @@ mod skills;
 mod skills_catalog;
 mod storage;
 mod team_mcp;
+mod theia;
 
 use bridge::{FolderTrusts, Permissions, PlanApprovals, Questions};
 use commands::AppState;
@@ -65,6 +66,7 @@ fn request_graceful_exit(app: tauri::AppHandle) {
 
         let state = app.state::<AppState>();
         automation::shutdown_all().await;
+        app.state::<theia::TheiaServer>().stop();
         commands::stop_agent_runtime(&state).await;
         app.exit(0);
     });
@@ -370,6 +372,7 @@ pub fn run() {
         .manage(FolderTrusts::new())
         .manage(shell_fs::FilesystemAccess::new())
         .manage(coding_workspace::CodingProcesses::new())
+        .manage(theia::TheiaServer::default())
         .manage(coding::watcher::WatcherRegistry::default())
         .manage(org::shared_state())
         .invoke_handler(tauri::generate_handler![
@@ -690,6 +693,7 @@ pub fn run() {
             coding_workspace::coding_terminal_write,
             coding_workspace::coding_terminal_resize,
             coding_workspace::coding_terminal_close,
+            theia::coding_theia_start,
             // durable local project metadata (renderer localStorage is only a cache)
             projects::projects_load,
             projects::projects_save,

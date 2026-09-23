@@ -54,7 +54,7 @@ export default defineConfig({
     strictPort: true,
     // Tauri waits for this string before launching the webview.
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/vendor/theia-platform/**"],
     },
   },
   // Produce asset URLs that work from the tauri:// or file:// origin

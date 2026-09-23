@@ -1,0 +1,12 @@
+{
+  "extends": [
+    "./base.eslintrc.json",
+    "./errors.eslintrc.json"
+  ],
+  "parserOptions": {
+    "lib": [
+      "ES2023",
+      "DOM"
+    ]
+  }
+}

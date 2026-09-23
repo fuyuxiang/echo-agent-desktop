@@ -1,0 +1,82 @@
+#
+# Copyright (c) 2020 Red Hat, Inc.  and others.
+# This program and the accompanying materials are made available under the
+# terms of the Eclipse Public License v. 2.0 which is available at
+# http://www.eclipse.org/legal/epl-2.0.
+#
+# This Source Code may also be made available under the following Secondary
+# Licenses when the conditions for such availability set forth in the Eclipse
+# Public License v. 2.0 are satisfied: GNU General Public License, version 2
+# with the GNU Classpath Exception which is available at
+# https://www.gnu.org/software/classpath/license.html.
+#
+# SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+
+# Set milestone on each pull request by using the next minor version
+# next version is computed using npm version tool
+on:
+  pull_request_target:
+    branches: [master]
+    types: [closed]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  set-milestone:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-22.04
+    steps:
+      - id: compute-milestone
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          result-encoding: string
+          script: |
+            const { data: file } = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: 'packages/core/package.json',
+              ref: context.payload.pull_request.merge_commit_sha,
+            });
+            const pkg = JSON.parse(Buffer.from(file.content, 'base64').toString('utf8'));
+
+            // No checkout = no project-local .npmrc, so npx resolves against the
+            // real registry. Same trust boundary as the publish workflow.
+            const { execFileSync } = require('child_process');
+            return execFileSync(
+              'npx', ['-q', 'semver@7.7.2', '--increment', 'minor', pkg.version],
+              { encoding: 'utf8' }
+            ).trim();
+
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const milestone = ${{ toJSON(steps.compute-milestone.outputs.result) }};
+            console.log(`Using milestone with name ${milestone}`);
+
+            const milestones = await github.paginate(github.rest.issues.listMilestones, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            let githubMilestone = milestones.find(ms => ms.title === milestone);
+            if (!githubMilestone) {
+              const { data: created } = await github.rest.issues.createMilestone({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: milestone,
+              });
+              githubMilestone = created;
+            }
+            await github.graphql(`
+              mutation($pullRequestId: ID!, $milestoneId: ID!) {
+                updatePullRequest(input: { pullRequestId: $pullRequestId, milestoneId: $milestoneId }) {
+                  pullRequest { number }
+                }
+              }
+            `, {
+              pullRequestId: context.payload.pull_request.node_id,
+              milestoneId: githubMilestone.node_id,
+            });
