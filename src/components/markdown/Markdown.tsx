@@ -27,6 +27,7 @@ import { rehypeFixAutolinkBoundary } from "./plugins/rehype-fix-autolink-boundar
 import { rehypeFindHighlight } from "./plugins/rehype-find-highlight";
 import { MarkdownPre } from "./MarkdownPre";
 import { MarkdownPreMermaid } from "./MarkdownPreMermaid";
+import { MarkdownPreviewImage } from "./MarkdownPreviewImage";
 import { MarkdownInlineCode } from "./MarkdownInlineCode";
 import type { MarkdownConfig, MarkdownProps } from "./types";
 
@@ -271,8 +272,8 @@ function MarkdownImage({
     && (/^(?:blob:|asset:|local-file:)/i.test(resolvedSrc)
       || /^https:\/\/asset\.localhost(?:\/|$)/i.test(resolvedSrc));
 
-  if (safeInlineRaster || safeResolvedResource) {
-    return <img src={resolvedSrc} alt={alt} {...imgProps} />;
+  if ((safeInlineRaster || safeResolvedResource) && resolvedSrc) {
+    return <MarkdownPreviewImage {...imgProps} src={resolvedSrc} alt={alt} />;
   }
 
   const remote = src != null && /^https?:\/\//i.test(src);

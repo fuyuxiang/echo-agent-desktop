@@ -1,5 +1,6 @@
 import { memo, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { CodeBlockActions } from "./CodeBlockActions";
+import { MarkdownPreviewImage } from "./MarkdownPreviewImage";
 import type { MarkdownConfig } from "./types";
 
 type Props = {
@@ -28,12 +29,14 @@ export const MarkdownPreMermaid = memo(function MarkdownPreMermaid({
   theme = "light",
   children,
   onDownloadMermaid,
+  onPreviewMermaid,
   codeBlockActions,
   requestId,
   onCodeBlockAction,
 }: Props) {
   const reactId = useId().replace(/:/g, "");
   const [mode, setMode] = useState<"diagram" | "code">("diagram");
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [svg, setSvg] = useState<string | null>(null);
   const [svgUrl, setSvgUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -121,6 +124,20 @@ export const MarkdownPreMermaid = memo(function MarkdownPreMermaid({
   }, [svg, code, onDownloadMermaid]);
 
   const showSource = !complete || mode === "code" || !!error;
+  const viewBox = svg?.match(/\bviewBox\s*=\s*["']([^"']+)["']/i)?.[1]
+    .trim()
+    .split(/[\s,]+/)
+    .map(Number);
+  const intrinsicSize = viewBox?.length === 4
+    && Number.isFinite(viewBox[2]) && viewBox[2] > 0
+    && Number.isFinite(viewBox[3]) && viewBox[3] > 0
+    ? { width: viewBox[2], height: viewBox[3] }
+    : undefined;
+  const openPreview = () => {
+    if (!svg || !svgUrl) return;
+    if (onPreviewMermaid) onPreviewMermaid(svg, code);
+    else setPreviewOpen(true);
+  };
 
   return (
     <div className="md-code-wrapper md-mermaid-wrapper">
@@ -128,6 +145,19 @@ export const MarkdownPreMermaid = memo(function MarkdownPreMermaid({
         <div className="md-code-header">
           <strong className="md-code-lang">mermaid</strong>
           <div className="md-mermaid-toolbar">
+            {mode === "diagram" && svgUrl ? (
+              <button
+                type="button"
+                className="md-code-action"
+                onClick={(event) => {
+                  event.currentTarget.focus();
+                  openPreview();
+                }}
+                title="放大预览图表"
+              >
+                <span className="md-code-action-label">放大</span>
+              </button>
+            ) : null}
             {complete ? (
               <button
                 type="button"
@@ -172,7 +202,16 @@ export const MarkdownPreMermaid = memo(function MarkdownPreMermaid({
           <div className="md-mermaid-loading">正在渲染图表…</div>
         ) : svg && svgUrl ? (
           <div className="md-mermaid-diagram">
-            <img src={svgUrl} alt="Mermaid 图表" />
+            <MarkdownPreviewImage
+              src={svgUrl}
+              alt="Mermaid 图表"
+              previewTitle="图表预览"
+              previewLabel="放大预览图表"
+              intrinsicSize={intrinsicSize}
+              onPreview={onPreviewMermaid ? () => onPreviewMermaid(svg, code) : undefined}
+              previewOpen={previewOpen}
+              onPreviewOpenChange={setPreviewOpen}
+            />
           </div>
         ) : (
           <pre className="md-code-pre">

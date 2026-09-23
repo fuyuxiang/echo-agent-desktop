@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { Markdown } from "../markdown/index";
 
 /**
@@ -94,10 +94,26 @@ describe("Markdown 渲染（§6 验证）", () => {
   it("仍允许有界的内联栅格图片", () => {
     render(<Markdown>{"![inline](data:image/png;base64,AAAA)"}</Markdown>);
 
-    expect(screen.getByRole("img", { name: "inline" })).toHaveAttribute(
+    const trigger = screen.getByRole("button", { name: "放大预览：inline" });
+    expect(trigger).toHaveAttribute(
       "src",
       "data:image/png;base64,AAAA",
     );
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    const dialog = screen.getByRole("dialog", { name: "图片预览：inline" });
+    expect(within(dialog).getByRole("img")).toHaveAttribute("src", "data:image/png;base64,AAAA");
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "图片预览：inline" })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("预览资源失效时显示错误，不留下空白弹窗", () => {
+    render(<Markdown>{"![inline](data:image/png;base64,AAAA)"}</Markdown>);
+    fireEvent.click(screen.getByRole("button", { name: "放大预览：inline" }));
+    const dialog = screen.getByRole("dialog", { name: "图片预览：inline" });
+    fireEvent.error(within(dialog).getByRole("img"));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("图片无法加载");
   });
 
   it("原始 HTML 不进 DOM(无 rehype-raw,script/onerror 天然不存在)", () => {
