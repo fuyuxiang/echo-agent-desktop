@@ -186,29 +186,14 @@
 
 .echo-theia-agent__heading {
   display: flex;
-  flex: 0 0 35px;
+  flex: 0 0 40px;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  padding: 0 10px 0 14px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--echo-border-subtle);
   background: var(--echo-bg-primary);
-}
-
-.echo-theia-agent__title {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  color: var(--echo-text-strong);
-  font-size: 12px;
-  font-weight: 650;
-  white-space: nowrap;
-}
-
-.echo-theia-agent__title svg {
-  color: var(--echo-brand);
 }
 
 .echo-theia-agent__heading .coding-task-switcher {
@@ -216,14 +201,40 @@
 }
 
 .echo-theia-agent__heading .coding-task-switcher > button {
-  max-width: 145px;
+  max-width: min(220px, 48vw);
   border-color: transparent;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .echo-theia-agent__heading .coding-task-switcher__menu {
   right: 0;
   left: auto;
+}
+
+.echo-theia-agent__task-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.echo-theia-agent__stop {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--echo-text-secondary);
+  cursor: pointer;
+}
+
+.echo-theia-agent__stop:hover:not(:disabled) {
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-strong);
 }
 
 .echo-theia-agent__tabs {
@@ -278,19 +289,121 @@
   overflow: auto;
 }
 
-.echo-theia-agent__content > .coding-agent,
-.echo-theia-agent__content > .coding-agent__starter {
+.echo-theia-agent__content > .coding-agent {
   height: 100%;
+}
+
+.echo-theia-agent__empty {
+  padding: 20px 16px;
+  color: var(--echo-text-secondary);
+}
+
+.echo-theia-agent__empty strong {
+  color: var(--echo-text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.echo-theia-agent__empty p {
+  max-width: 330px;
+  margin: 7px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.echo-theia-agent__composer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 7px;
+  max-height: min(44%, 330px);
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--echo-border-subtle);
+  background: var(--echo-bg-primary);
+}
+
+.echo-theia-agent__context-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-height: 58px;
+  overflow: auto;
+}
+
+.echo-theia-agent__context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 150px;
+  padding: 2px 3px 2px 7px;
+  border: 1px solid var(--echo-border-subtle);
+  border-radius: 5px;
+  background: var(--echo-bg-secondary);
+  color: var(--echo-text-secondary);
+  font-size: 10px;
+}
+
+.echo-theia-agent__context-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.echo-theia-agent__context-chip button {
+  display: grid;
+  flex: none;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.echo-theia-agent__context-chip button:hover {
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-strong);
+}
+
+.echo-theia-agent__composer-box {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 9px;
+  background: var(--echo-bg-primary);
+}
+
+.echo-theia-agent__composer-box textarea {
+  display: block;
+  width: 100%;
+  min-height: 72px;
+  max-height: 170px;
+  padding: 10px 11px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--echo-text-strong);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.echo-theia-agent__composer-box:focus-within {
+  border-color: var(--echo-brand);
+}
+
+.echo-theia-agent__composer-box > .coding-agent__composer-tools {
+  min-height: 38px;
+  padding: 5px 8px;
+  border-top: 1px solid var(--echo-border-subtle);
 }
 
 .coding-workbench--theia .coding-agent__panel-head {
   background: var(--echo-bg-primary);
-}
-
-.coding-workbench--theia .coding-agent__composer,
-.coding-workbench--theia .coding-agent__starter-card {
-  border-radius: 8px;
-  box-shadow: none;
 }
 
 .echo-theia-agent__output {

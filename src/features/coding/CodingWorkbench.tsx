@@ -23,6 +23,7 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Square,
 } from "lucide-react";
 
 import { useAppDialog } from "@/components/AppDialog";
@@ -46,6 +47,7 @@ import { editor as MonacoEditor } from "monaco-editor";
 
 import { AgentPane } from "./agent/AgentPane";
 import { TaskStarter } from "./agent/TaskStarter";
+import { TheiaAgentComposer } from "./agent/TheiaAgentComposer";
 import { TheiaIdeFrame, type TheiaAgentBounds, type TheiaMutationTicket } from "./TheiaIdeFrame";
 import { TheiaTaskReview } from "./TheiaTaskReview";
 import { ChangeSetView } from "./explorer/ChangeSetView";
@@ -69,7 +71,7 @@ import {
   mergeTaskVerificationCommands,
 } from "./lib/workflow";
 import { countOccurrences, describeReplacePlan, replaceAll } from "./lib/replace";
-import { isBusyPhase, statusSummary } from "./lib/phase";
+import { describePhase, isBusyPhase, statusSummary } from "./lib/phase";
 import {
   codingApi,
   onPhaseChanged,
@@ -2408,6 +2410,7 @@ export function CodingWorkbench({
     setSending(true);
     try {
       await useTaskStore.getState().selectTask(taskId);
+      setTheiaPanel("agent");
       const selected = useTaskStore.getState().task;
       setContextPaths(selected?.contextPaths ?? []);
       if (selected?.sessionId) {
@@ -2435,6 +2438,7 @@ export function CodingWorkbench({
       orchestrator: null,
     });
     setContextPaths([]);
+    setTheiaPanel("agent");
     setPhaseReason(undefined);
     setBlocker(undefined);
   }, [activeTaskCount, onToast]);
@@ -3314,6 +3318,8 @@ export function CodingWorkbench({
 
   /** Commands backed by the current task, verification and navigation state. */
   const taskChangeCount = changeSet?.changes.length ?? 0;
+  const theiaDisplayPanel = task ? theiaPanel : "agent";
+  const theiaPhase = task ? describePhase(task.phase) : null;
 
   const commandContext = useMemo<CommandContext>(
     () => ({
@@ -3713,7 +3719,7 @@ export function CodingWorkbench({
           <button type="button" className="coding-icon-btn" onClick={() => setTheiaAgentOpen((open) => !open)} aria-label={theiaAgentOpen ? "收起 Agent 面板" : "展开 Agent 面板"} aria-pressed={theiaAgentOpen}>
             {theiaAgentOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
           </button>
-          <button type="button" className="coding-icon-btn" onClick={onOpenSettings} aria-label="设置">
+          <button type="button" className="coding-icon-btn" onClick={onOpenSettings} aria-label="Echo 设置" title="Echo 设置：模型与 Agent">
             <Settings2 size={15} />
           </button>
         </div>
@@ -3762,7 +3768,6 @@ export function CodingWorkbench({
         } : { display: "none" }}
       >
         <div className="echo-theia-agent__heading">
-          <span className="echo-theia-agent__title"><Sparkles size={15} /> 开发任务</span>
           <TaskSwitcher
             tasks={summaries}
             activeId={task?.id}
@@ -3772,12 +3777,22 @@ export function CodingWorkbench({
             onRename={renameCodingTask}
             onDelete={deleteCodingTask}
           />
+          {task && theiaPhase && (
+            <div className="echo-theia-agent__task-status">
+              <span className={`coding-agent__phase is-${theiaPhase.tone}`}>{theiaPhase.label}</span>
+              {theiaPhase.active && (
+                <button type="button" className="echo-theia-agent__stop" onClick={() => void stopActiveTask()} disabled={sending || lifecycleSettling} title="停止当前任务" aria-label="停止当前任务">
+                  <Square size={12} />
+                </button>
+              )}
+            </div>
+          )}
         </div>
-        <div className="echo-theia-agent__tabs" role="tablist" aria-label="开发任务面板">
-          <button type="button" role="tab" aria-selected={theiaPanel === "agent"} onClick={() => setTheiaPanel("agent")}>Agent</button>
-          <button type="button" role="tab" aria-selected={theiaPanel === "changes"} onClick={() => setTheiaPanel("changes")}>变更 {taskChangeCount || ""}</button>
-          <button type="button" role="tab" aria-selected={theiaPanel === "verification"} onClick={() => setTheiaPanel("verification")}>验证</button>
-        </div>
+        {task && <div className="echo-theia-agent__tabs" role="tablist" aria-label="开发任务面板">
+          <button type="button" role="tab" aria-selected={theiaDisplayPanel === "agent"} onClick={() => setTheiaPanel("agent")}>对话</button>
+          <button type="button" role="tab" aria-selected={theiaDisplayPanel === "changes"} onClick={() => setTheiaPanel("changes")}>变更{taskChangeCount ? ` · ${taskChangeCount}` : ""}</button>
+          <button type="button" role="tab" aria-selected={theiaDisplayPanel === "verification"} onClick={() => setTheiaPanel("verification")}>验证</button>
+        </div>}
         {theiaActiveFile && (
           <div className="echo-theia-agent__context">
             <span title={theiaActiveFile}>{workspaceRelativePath(cwd, theiaActiveFile)}</span>
@@ -3785,8 +3800,9 @@ export function CodingWorkbench({
           </div>
         )}
         <div className="echo-theia-agent__content">
-          {theiaPanel === "agent" && (task ? (
+          {theiaDisplayPanel === "agent" && (task ? (
             <AgentPane
+              embeddedInTheia
               task={task}
               changeSet={changeSet}
               verifications={verifications}
@@ -3811,22 +3827,12 @@ export function CodingWorkbench({
               onPathsDropped={(paths) => addManyToContext(paths)}
             />
           ) : (
-            <TaskStarter
-              models={models}
-              workspaceRoot={cwd}
-              modelId={modelId}
-              onModelChange={(next) => void changeTaskModel(next)}
-              starting={starting}
-              error={startError}
-              apiReady={apiReady}
-              contextPaths={contextPaths}
-              onStart={(requirement) => void startTask(requirement)}
-              onDraftContextPaths={addManyToContext}
-              onOpenSettings={onOpenSettings}
-              onToast={onToast}
-            />
+            <div className="echo-theia-agent__empty">
+              <strong>描述目标，开始开发</strong>
+              <p>Agent 会理解当前项目、实施代码，并提供变更与验证结果。</p>
+            </div>
           ))}
-          {theiaPanel === "changes" && (
+          {theiaDisplayPanel === "changes" && (
             <ChangeSetView
               changeSet={changeSet}
               hasTask={Boolean(task)}
@@ -3843,7 +3849,7 @@ export function CodingWorkbench({
               onRollback={() => void rollbackTask()}
             />
           )}
-          {theiaPanel === "verification" && (
+          {theiaDisplayPanel === "verification" && (
             <>
               <VerificationView
                 records={verifications}
@@ -3859,6 +3865,27 @@ export function CodingWorkbench({
             </>
           )}
         </div>
+        <TheiaAgentComposer
+          key={`${cwd}:${task?.id ?? "new"}`}
+          workspaceRoot={cwd}
+          task={task}
+          sessionId={activeSessionId}
+          models={models}
+          modelId={modelId}
+          contextPaths={contextPaths}
+          apiReady={apiReady}
+          startError={startError}
+          starting={starting}
+          sending={sending || lifecycleSettling}
+          streaming={streaming}
+          onModelChange={(next) => void changeTaskModel(next)}
+          onStart={startTask}
+          onSend={sendFollowup}
+          onRemoveContext={removeFromContext}
+          onDraftContextPaths={addManyToContext}
+          onOpenSettings={onOpenSettings}
+          onToast={onToast}
+        />
       </aside>
       </main>
       {taskDialog}

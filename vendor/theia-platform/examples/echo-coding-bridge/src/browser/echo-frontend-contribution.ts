@@ -14,9 +14,15 @@ import { echoHostBridge } from './echo-host-bridge';
 
 const AGENT_DOCK_WIDTH_KEY = 'echo-agent-dock-width';
 
+class EchoAgentDock extends Widget {
+    protected override onActivateRequest(): void {
+        this.node.focus();
+    }
+}
+
 @injectable()
 export class EchoFrontendContribution implements FrontendApplicationContribution {
-    protected welcome?: Widget;
+    protected emptyState?: HTMLElement;
     protected agentDock?: Widget;
     protected agentDockObserver?: ResizeObserver;
     protected agentDockMutationObserver?: MutationObserver;
@@ -66,13 +72,10 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
             }
         });
         this.editors.onActiveEditorChanged(editor => {
-            if (editor) {
-                this.welcome?.close();
-                this.welcome = undefined;
-            }
             echoHostBridge.notify('echo/active-file', {
                 path: editor?.editor.uri.path.fsPath() ?? null,
             });
+            window.requestAnimationFrame(() => this.updateEmptyState());
         });
         void this.applicationState.reachedState('ready').then(async () => {
             echoHostBridge.notify('echo/ready');
@@ -90,12 +93,13 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
     async onDidInitializeLayout(app: FrontendApplication): Promise<void> {
         if (echoHostBridge.enabled) {
             this.shell = app.shell;
-            const agentDock = new Widget();
+            const agentDock = new EchoAgentDock();
             agentDock.id = 'echo-agent-dock';
             agentDock.title.label = 'Echo Agent';
             agentDock.title.caption = 'Echo Agent';
             agentDock.title.iconClass = 'codicon codicon-sparkle';
             agentDock.node.classList.add('echo-agent-dock');
+            agentDock.node.tabIndex = -1;
             this.agentDock = agentDock;
             await app.shell.addWidget(agentDock, { area: 'right' });
             app.shell.expandPanel('right');
@@ -130,29 +134,37 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
                     order: 0,
                 });
             }
-            // Replace a Welcome tab restored from an earlier Echo Code session.
-            app.shell.getWidgets('main').find(widget => widget.id === 'getting.started.widget')?.close();
-            if (this.editors.all.length === 0 && app.shell.getWidgets('main').length === 0) {
-                const welcome = new Widget();
-                welcome.id = 'echo-code-start';
-                welcome.title.label = '开始';
-                welcome.title.closable = true;
-                welcome.node.classList.add('echo-code-start');
-                welcome.node.innerHTML = `<div class="echo-code-start__content">
-                    <div class="echo-code-start__mark" aria-hidden="true"><span class="codicon codicon-file-code"></span></div>
-                    <h1>打开文件开始编辑</h1>
-                    <p>从左侧资源管理器选择文件，或使用 Ctrl/⌘ + P 快速打开。</p>
-                    <button class="echo-code-start__action" type="button">新建文件</button>
-                </div>`;
-                welcome.node.querySelector('button')?.addEventListener('click', () => {
-                    void this.commands.executeCommand(CommonCommands.NEW_UNTITLED_TEXT_FILE.id);
-                });
-                this.welcome = welcome;
-                await app.shell.addWidget(welcome, { area: 'main' });
-                app.shell.activateWidget(welcome.id);
+            // The editor's empty hint lives behind the document area. It does
+            // not create a second Welcome tab or compete with the Agent pane.
+            for (const widget of app.shell.getWidgets('main')) {
+                if (widget.id === 'getting.started.widget' || widget.id === 'echo-code-start') {
+                    widget.close();
+                }
             }
+            const emptyState = document.createElement('div');
+            emptyState.className = 'echo-editor-empty';
+            emptyState.innerHTML = `<div class="echo-editor-empty__content">
+                <span class="codicon codicon-file-code" aria-hidden="true"></span>
+                <strong>打开文件开始编辑</strong>
+                <span>从资源管理器选择文件，或使用 Ctrl/⌘ + P 快速打开</span>
+                <button type="button">新建文件</button>
+            </div>`;
+            emptyState.querySelector('button')?.addEventListener('click', () => {
+                void this.commands.executeCommand(CommonCommands.NEW_UNTITLED_TEXT_FILE.id);
+            });
+            app.shell.mainPanel.node.appendChild(emptyState);
+            this.emptyState = emptyState;
+            app.shell.onDidAddWidget(() => window.requestAnimationFrame(() => this.updateEmptyState()));
+            app.shell.onDidRemoveWidget(() => window.requestAnimationFrame(() => this.updateEmptyState()));
+            this.updateEmptyState();
             await app.shell.revealWidget(agentDock.id);
             this.scheduleAgentBounds();
+        }
+    }
+
+    protected updateEmptyState(): void {
+        if (this.emptyState && this.shell) {
+            this.emptyState.hidden = this.shell.getWidgets('main').length > 0;
         }
     }
 

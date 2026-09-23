@@ -1,17 +1,19 @@
-.echo-code-start {
-    --echo-start-accent: #00876c;
-    --echo-start-accent-foreground: #fff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: auto;
-    background: var(--theia-editor-background);
-    color: var(--theia-foreground);
-}
-
 .echo-agent-dock {
     overflow: hidden;
     background: var(--theia-editor-background);
+}
+
+body.echo-embedded #theia-right-content-panel .theia-sidepanel-toolbar {
+    background: var(--theia-editor-background);
+    border-bottom: 1px solid var(--theia-widget-border, var(--theia-list-hoverBackground));
+}
+
+body.echo-embedded #theia-right-content-panel .theia-sidepanel-title {
+    margin-left: 12px;
+    color: var(--theia-foreground);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: none;
 }
 
 body.echo-embedded {
@@ -26,51 +28,53 @@ body.theia-dark.echo-embedded {
     --theia-statusBar-border: #354248;
 }
 
-body.theia-dark .echo-code-start {
-    --echo-start-accent: #40d1b3;
-    --echo-start-accent-foreground: #07352c;
-}
-
-.echo-code-start__content {
-    width: min(440px, calc(100% - 64px));
-    margin: auto;
-}
-
-.echo-code-start__mark {
+.echo-editor-empty {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
     display: grid;
-    width: 38px;
-    height: 38px;
     place-items: center;
-    border: 1px solid var(--theia-widget-border, var(--theia-list-hoverBackground));
-    border-radius: 9px;
-    color: var(--theia-descriptionForeground);
-    font-size: 18px;
+    pointer-events: none;
+    background: var(--theia-editor-background);
+    color: var(--theia-foreground);
 }
 
-.echo-code-start h1 {
-    margin: 16px 0 7px;
-    font-size: 20px;
+.echo-editor-empty[hidden] {
+    display: none;
+}
+
+.echo-editor-empty__content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    max-width: min(360px, calc(100% - 32px));
+    text-align: center;
+}
+
+.echo-editor-empty__content > .codicon {
+    color: var(--theia-descriptionForeground);
+    font-size: 24px;
+}
+
+.echo-editor-empty__content strong {
+    font-size: 14px;
     font-weight: 600;
 }
 
-.echo-code-start p {
-    margin: 0;
+.echo-editor-empty__content > span:not(.codicon) {
     color: var(--theia-descriptionForeground);
     font-size: 12px;
-    line-height: 1.6;
+    line-height: 1.5;
 }
 
-.echo-code-start__action {
-    display: block;
-    margin: 18px 0 0;
-    padding: 6px 11px;
+.echo-editor-empty__content button {
+    margin-top: 4px;
+    padding: 5px 10px;
+    pointer-events: auto;
     border: 1px solid var(--theia-input-border, var(--theia-widget-border));
     border-radius: 5px;
     background: var(--theia-button-secondaryBackground, var(--theia-editor-background));
     color: var(--theia-button-secondaryForeground, var(--theia-foreground));
     cursor: pointer;
-}
-
-.echo-code-start__action:hover {
-    filter: brightness(0.92);
 }

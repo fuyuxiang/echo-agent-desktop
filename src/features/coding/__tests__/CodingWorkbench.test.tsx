@@ -1428,9 +1428,34 @@ describe("Theia workbench", () => {
       }));
     });
     expect(agent).toHaveStyle({ left: "790px", top: "44px", width: "390px", height: "800px" });
-    expect(screen.getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: /变更/ })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "验证" })).toBeInTheDocument();
+    expect(screen.queryByRole("tablist", { name: "开发任务面板" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "任务描述" })).toBeInTheDocument();
+    expect(agent.lastElementChild).toHaveClass("echo-theia-agent__composer");
+  });
+
+  it("keeps the task composer available while reviewing changes and verification", async () => {
+    const user = userEvent.setup();
+    useTaskStore.setState({ root: "/repo", task: verificationTask({ phase: "delivered", sessionId: "session-1" }) });
+    const { container } = render(<CodingWorkbench cwd="/repo" sessionId="session-1" models={[{ id: "model-1" }]} defaultModelId="model-1" />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    Object.defineProperty(frame, "clientWidth", { configurable: true, value: 1200 });
+    Object.defineProperty(frame, "clientHeight", { configurable: true, value: 900 });
+    const src = new URL(frame.src);
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", {
+        origin: src.origin,
+        source: frame.contentWindow,
+        data: { type: "echo/agent-bounds", token: src.searchParams.get("echoBridgeToken"), bounds: { left: 790, top: 44, width: 390, height: 800 } },
+      }));
+    });
+    const composer = container.querySelector(".echo-theia-agent__composer");
+    const textbox = screen.getByRole("textbox", { name: "给 Agent 的补充要求" });
+    fireEvent.change(textbox, { target: { value: "请处理边界情况" } });
+    await user.click(screen.getByRole("tab", { name: "变更" }));
+    expect(composer).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "给 Agent 的补充要求" })).toHaveValue("请处理边界情况");
+    await user.click(screen.getByRole("tab", { name: "验证" }));
+    expect(screen.getByRole("textbox", { name: "给 Agent 的补充要求" })).toHaveValue("请处理边界情况");
   });
 
   it("keeps preview controls compact and lets the editor reclaim the Agent space", async () => {

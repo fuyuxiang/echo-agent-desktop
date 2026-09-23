@@ -25,6 +25,8 @@ import { describePhase } from "../lib/phase";
 import type { ChangeSet, CodingTask, VerificationRecord } from "../lib/types";
 
 interface AgentPaneProps {
+  /** Theia supplies its own task header and persistent composer. */
+  embeddedInTheia?: boolean;
   task: CodingTask;
   changeSet: ChangeSet | null;
   verifications: VerificationRecord[];
@@ -52,6 +54,7 @@ interface AgentPaneProps {
 
 /** Agent activity, interaction requests and delivery summary for one task. */
 export function AgentPane({
+  embeddedInTheia = false,
   task,
   changeSet,
   verifications,
@@ -88,12 +91,13 @@ export function AgentPane({
   // SP3: consume a queued AI draft on first mount. The draft originates from
   // a context-menu action («在对话中提问») and pre-fills the followup box.
   useEffect(() => {
+    if (embeddedInTheia) return;
     const draft = consumeDraft();
     if (!draft) return;
     if (draft.createdAt + DRAFT_TTL_MS < Date.now()) return;
     if (draft.prompt) setFollowup(draft.prompt);
     if (draft.contextPaths.length > 0) onPathsDropped?.(draft.contextPaths);
-  }, [consumeDraft, onPathsDropped]);
+  }, [consumeDraft, embeddedInTheia, onPathsDropped]);
   const phase = describePhase(task.phase);
   const sessionUnavailable = !sessionId;
   const changes = changeSet?.changes ?? [];
@@ -148,7 +152,7 @@ export function AgentPane({
         }
       }}
     >
-      <header className="coding-agent__panel-head">
+      {!embeddedInTheia && <header className="coding-agent__panel-head">
         <div className="coding-agent__identity">
           <span className="coding-agent__identity-mark" aria-hidden="true">
             <Sparkles size={14} />
@@ -179,7 +183,7 @@ export function AgentPane({
             </button>
           )}
         </div>
-      </header>
+      </header>}
 
       <div className="coding-agent__body">
         {phaseReason
@@ -331,7 +335,7 @@ export function AgentPane({
           )}
         </div>
 
-        <div className="coding-agent__composer">
+        {!embeddedInTheia && <div className="coding-agent__composer">
           <textarea
             value={followup}
             onChange={(event) => setFollowup(event.target.value)}
@@ -363,7 +367,7 @@ export function AgentPane({
               <Send size={14} />
             </button>
           </div>
-        </div>
+        </div>}
       </div>
     </div>
   );
