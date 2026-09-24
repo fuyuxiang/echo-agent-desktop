@@ -88,8 +88,8 @@ export const codingApi = {
     invoke<ChangeSet>("coding_changeset_capture_baseline", { root, taskId, dirtyFiles }),
   changeDiff: (root: string, taskId: string, path: string) =>
     invoke<ChangeDiff>("coding_changeset_diff", { root, taskId, path }),
-  markReviewed: (root: string, taskId: string, path: string) =>
-    invoke<ChangeSet>("coding_changeset_mark_reviewed", { root, taskId, path }),
+  markReviewed: (root: string, taskId: string, path: string, expectedHash: string) =>
+    invoke<ChangeSet>("coding_changeset_mark_reviewed", { root, taskId, path, expectedHash }),
   recordChange: (root: string, taskId: string, change: FileChange) =>
     invoke<ChangeSet>("coding_changeset_record_change", { root, taskId, change }),
   discardFile: (root: string, taskId: string, path: string) =>

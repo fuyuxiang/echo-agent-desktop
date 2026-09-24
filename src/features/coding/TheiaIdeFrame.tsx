@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Code2, LoaderCircle, RotateCw } from "lucide-react";
 
@@ -14,6 +14,11 @@ export interface TheiaAgentBounds {
   height: number;
 }
 
+export interface TheiaIdeFrameHandle {
+  getDirtyCount: () => Promise<number>;
+  saveAll: () => Promise<boolean>;
+}
+
 interface TheiaIdeFrameProps {
   root: string;
   onBeforeMutation: (operation: string, paths: string[]) => Promise<TheiaMutationTicket | null>;
@@ -25,6 +30,7 @@ interface TheiaIdeFrameProps {
   agentVisible?: boolean;
   onAgentBounds?: (bounds: TheiaAgentBounds | null) => void;
   onAgentVisibilityChange?: (visible: boolean) => void;
+  onDirtyChange?: (count: number | null) => void;
 }
 
 interface TheiaEndpoint {
@@ -33,14 +39,18 @@ interface TheiaEndpoint {
 }
 
 function belongsToWorkspace(root: string, path: string): boolean {
-  const normalize = (value: string) => value.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+  const normalize = (value: string) => value.replaceAll("\\", "/").replace(/\/+$/, "");
+  if (path.replaceAll("\\", "/").split("/").includes("..")) return false;
   const normalizedRoot = normalize(root);
   const normalizedPath = normalize(path);
-  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
+  const windows = /^[A-Za-z]:\//.test(normalizedRoot);
+  const compareRoot = windows ? normalizedRoot.toLowerCase() : normalizedRoot;
+  const comparePath = windows ? normalizedPath.toLowerCase() : normalizedPath;
+  return comparePath === compareRoot || comparePath.startsWith(`${compareRoot}/`);
 }
 
 /** Theia owns the IDE surface; EchoAgent owns the surrounding task UI. */
-export function TheiaIdeFrame({
+export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>(function TheiaIdeFrame({
   root,
   onBeforeMutation,
   onAfterMutation,
@@ -51,8 +61,12 @@ export function TheiaIdeFrame({
   agentVisible = true,
   onAgentBounds,
   onAgentVisibilityChange,
-}: TheiaIdeFrameProps) {
+  onDirtyChange,
+}, ref) {
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const pendingRequests = useRef(new Map<string, { resolve: (count: number) => void; reject: (reason: Error) => void; timer: ReturnType<typeof setTimeout> }>());
+  const lastKnownDirtyCount = useRef<number | null>(null);
+  const hasBeenReady = useRef(false);
   const resettingWorkspace = useRef(false);
   const hasVisibleAgentDock = useRef(false);
   const token = useMemo(() => crypto.randomUUID(), [root]);
@@ -63,6 +77,55 @@ export function TheiaIdeFrame({
   const [attempt, setAttempt] = useState(0);
   const [reloadKey, setReloadKey] = useState(0);
   const [theme, setTheme] = useState(() => document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light");
+
+  const requestCount = useCallback((type: "echo/save-all" | "echo/get-dirty") => {
+    if (type === "echo/get-dirty" && status !== "ready") {
+      if (lastKnownDirtyCount.current !== null) return Promise.resolve(lastKnownDirtyCount.current);
+      if (!hasBeenReady.current) return Promise.resolve(0);
+      return Promise.reject(new Error("IDE 已断开，无法确认未保存文件"));
+    }
+    if (status !== "ready" || !baseUrl || !frameRef.current?.contentWindow) {
+      return Promise.reject(new Error("IDE 尚未加载完成"));
+    }
+    const id = crypto.randomUUID();
+    return new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pendingRequests.current.delete(id);
+        reject(new Error("等待 IDE 响应超时"));
+      }, 20_000);
+      pendingRequests.current.set(id, { resolve, reject, timer });
+      frameRef.current?.contentWindow?.postMessage({ type, token, id }, new URL(baseUrl).origin);
+    });
+  }, [baseUrl, status, token]);
+
+  useImperativeHandle(ref, () => ({
+    getDirtyCount: () => requestCount("echo/get-dirty"),
+    saveAll: async () => {
+      const count = await requestCount("echo/save-all");
+      return count === 0;
+    },
+  }), [requestCount]);
+
+  useEffect(() => () => {
+    for (const request of pendingRequests.current.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error("IDE 已关闭"));
+    }
+    pendingRequests.current.clear();
+  }, []);
+
+  useEffect(() => {
+    lastKnownDirtyCount.current = null;
+    hasBeenReady.current = false;
+  }, [root]);
+
+  useEffect(() => {
+    for (const request of pendingRequests.current.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error("IDE 已重新加载，请重试"));
+    }
+    pendingRequests.current.clear();
+  }, [reloadKey, root]);
 
   useEffect(() => {
     const observer = new MutationObserver(() => {
@@ -87,6 +150,7 @@ export function TheiaIdeFrame({
     setStatus("starting");
     setEndpoint(null);
     onAgentBounds?.(null);
+    onDirtyChange?.(null);
     invoke<TheiaEndpoint>("coding_theia_start", { root })
       .then((next) => {
         if (cancelled) return;
@@ -148,8 +212,29 @@ export function TheiaIdeFrame({
       if (message.token !== token || typeof message.type !== "string") return;
       if (message.type === "echo/ready") {
         resettingWorkspace.current = false;
+        hasBeenReady.current = true;
         setStatus("ready");
         (event.source as Window).postMessage({ type: "echo/request-agent-bounds", token }, theiaOrigin);
+        return;
+      }
+      if (message.type === "echo/dirty-state") {
+        if (typeof message.count === "number" && Number.isSafeInteger(message.count) && message.count >= 0) {
+          lastKnownDirtyCount.current = message.count;
+          onDirtyChange?.(message.count);
+        }
+        return;
+      }
+      if (message.type === "echo/response" && typeof message.id === "string") {
+        const request = pendingRequests.current.get(message.id);
+        if (!request) return;
+        pendingRequests.current.delete(message.id);
+        clearTimeout(request.timer);
+        if (message.ok === true && typeof message.value === "number" && Number.isSafeInteger(message.value) && message.value >= 0) {
+          lastKnownDirtyCount.current = message.value;
+          onDirtyChange?.(message.value);
+          request.resolve(message.value);
+        }
+        else request.reject(new Error(typeof message.error === "string" ? message.error : "IDE 保存失败"));
         return;
       }
       if (message.type === "echo/agent-bounds") {
@@ -181,6 +266,7 @@ export function TheiaIdeFrame({
           if (!resettingWorkspace.current) {
             resettingWorkspace.current = true;
             onToast?.("请使用顶部项目切换器打开代码库，IDE 已返回当前项目");
+            onDirtyChange?.(null);
             setStatus("loading");
             setReloadKey((value) => value + 1);
           }
@@ -188,7 +274,7 @@ export function TheiaIdeFrame({
         return;
       }
       if (message.type === "echo/active-file") {
-        onActiveFile?.(typeof message.path === "string" ? message.path : null);
+        onActiveFile?.(typeof message.path === "string" && belongsToWorkspace(root, message.path) ? message.path : null);
         return;
       }
       if (typeof message.id !== "string" || !event.source) return;
@@ -200,11 +286,11 @@ export function TheiaIdeFrame({
         }, theiaOrigin);
       };
       if (message.type === "echo/before-mutation") {
-        const paths = Array.isArray(message.paths)
-          ? message.paths.filter((path): path is string => typeof path === "string")
-          : [];
-        if (!paths.some((path) => belongsToWorkspace(root, path))) {
-          respond(true, { taskId: null, closeRound: false });
+        const paths = message.paths;
+        if (!Array.isArray(paths) || paths.length === 0 || !paths.every(
+          (path): path is string => typeof path === "string" && belongsToWorkspace(root, path),
+        )) {
+          respond(false, undefined, "只能修改当前项目内的文件；跨项目移动请在项目外单独处理");
           return;
         }
         void onBeforeMutation(String(message.operation ?? "write"), paths)
@@ -226,7 +312,7 @@ export function TheiaIdeFrame({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [baseUrl, onActiveFile, onAfterMutation, onAgentBounds, onAgentVisibilityChange, onBeforeMutation, onToast, root, token]);
+  }, [baseUrl, onActiveFile, onAfterMutation, onAgentBounds, onAgentVisibilityChange, onBeforeMutation, onDirtyChange, onToast, root, token]);
 
   return (
     <div className="echo-theia" aria-label="Theia 代码工作台">
@@ -266,4 +352,4 @@ export function TheiaIdeFrame({
       )}
     </div>
   );
-}
+});

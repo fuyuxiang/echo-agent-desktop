@@ -74,6 +74,7 @@ export function DeliveryReportTab({
   const [error, setError] = useState<string | null>(null);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [reloadVersion, setReloadVersion] = useState(0);
 
   useEffect(() => {
     setConfirmingId(null);
@@ -100,7 +101,7 @@ export function DeliveryReportTab({
     return () => {
       cancelled = true;
     };
-  }, [revision, root, taskId]);
+  }, [reloadVersion, revision, root, taskId]);
 
   const copyPrDescription = async () => {
     if (!report) return;
@@ -169,6 +170,7 @@ export function DeliveryReportTab({
       <div className="coding-doc__empty is-error">
         <AlertTriangle size={15} />
         {error}
+        <button type="button" onClick={() => setReloadVersion((value) => value + 1)}>重试</button>
       </div>
     );
   }

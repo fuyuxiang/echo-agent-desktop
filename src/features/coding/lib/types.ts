@@ -144,6 +144,7 @@ export interface ChangeDiff {
   original: string;
   modified: string;
   binary: boolean;
+  modifiedHash: string;
 }
 
 export type VerificationKind = "build" | "lint" | "type_check" | "test" | "custom";

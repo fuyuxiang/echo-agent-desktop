@@ -102,7 +102,7 @@ describe("TabContainer", () => {
   it("requires an explicit action before a task diff is marked reviewed", async () => {
     const user = userEvent.setup();
     const onMarkReviewed = vi.fn();
-    const tab = file({ view: "diff", diffTaskId: "task-1" });
+    const tab = file({ view: "diff", diffTaskId: "task-1", diffHash: "content-v1" });
     const { rerender } = render(
       <TabContainer
         {...setupProps([tab])}
@@ -121,6 +121,27 @@ describe("TabContainer", () => {
       />,
     );
     expect(screen.getByRole("button", { name: "已审阅" })).toBeDisabled();
+  });
+
+  it("requires a fresh acknowledgement before reviewing each binary file version", async () => {
+    const user = userEvent.setup();
+    const onMarkReviewed = vi.fn();
+    const first = file({ view: "diff", diffTaskId: "task-1", diffHash: "content-v1", diffBinary: true });
+    const { rerender } = render(<TabContainer {...setupProps([first])} onMarkReviewed={onMarkReviewed} />);
+    const review = screen.getByRole("button", { name: "标记已审阅" });
+    expect(review).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: "已核对当前版本" }));
+    expect(review).toBeEnabled();
+    await user.click(review);
+    expect(onMarkReviewed).toHaveBeenCalledWith(first);
+
+    const changed = { ...first, diffHash: "content-v2" };
+    rerender(<TabContainer {...setupProps([changed])} onMarkReviewed={onMarkReviewed} />);
+    expect(screen.getByRole("button", { name: "标记已审阅" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "已核对当前版本" })).not.toBeChecked();
+
+    rerender(<TabContainer {...setupProps([{ ...first, diffTaskId: "task-2" }])} onMarkReviewed={onMarkReviewed} />);
+    expect(screen.getByRole("button", { name: "标记已审阅" })).toBeDisabled();
   });
 
   it("starts documentation from the editor toolbar and protects unsaved drafts", async () => {

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { AlertTriangle, Check, ChevronRight, FileCode2, FileText, LoaderCircle, X } from "lucide-react";
 import type { editor as Monaco } from "monaco-editor";
 
@@ -124,6 +125,9 @@ export function TabContainer({
   reveal,
 }: TabContainerProps) {
   const active = tabs.find((tab) => tab.id === activeId) ?? null;
+  const [acknowledgedBinaryDiff, setAcknowledgedBinaryDiff] = useState<string | null>(null);
+  const activeDiffKey = active && isFileTab(active) && active.diffTaskId && active.diffHash
+    ? `${active.diffTaskId}:${active.id}:${active.diffHash}` : null;
 
   if (tabs.length === 0) {
     return (
@@ -176,10 +180,15 @@ export function TabContainer({
               <button
                 type="button"
                 className={reviewedPath === active.relativePath ? "is-reviewed" : ""}
-                disabled={reviewBusy || reviewedPath === active.relativePath}
+                disabled={reviewBusy || reviewedPath === active.relativePath || !activeDiffKey
+                  || (active.diffBinary === true && acknowledgedBinaryDiff !== activeDiffKey)}
                 onClick={() => void onMarkReviewed(active)}
                 title={reviewedPath === active.relativePath
                   ? "该内容版本已审阅；文件变化后需重新审阅"
+                  : !activeDiffKey
+                    ? "无法确认差异版本，请重新打开最新差异"
+                    : active.diffBinary && acknowledgedBinaryDiff !== activeDiffKey
+                      ? "请先核对二进制文件并确认"
                   : "确认已检查当前差异"}
               >
                 {reviewBusy ? <LoaderCircle size={11} className="is-spinning" /> : <Check size={11} />}
@@ -241,6 +250,21 @@ export function TabContainer({
               放弃本地草稿并重新加载
             </button>
           )}
+        </div>
+      )}
+
+      {active && isFileTab(active) && active.view === "diff" && active.diffTaskId && active.diffBinary && (
+        <div className="coding-tabs__binary-review">
+          <AlertTriangle size={13} />
+          <span>二进制文件无法显示文本差异。请在编辑器或专用工具中核对当前文件。</span>
+          <label>
+            <input
+              type="checkbox"
+              checked={Boolean(activeDiffKey && acknowledgedBinaryDiff === activeDiffKey)}
+              onChange={(event) => setAcknowledgedBinaryDiff(event.target.checked ? activeDiffKey : null)}
+            />
+            已核对当前版本
+          </label>
         </div>
       )}
 

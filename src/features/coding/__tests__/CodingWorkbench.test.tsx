@@ -441,7 +441,7 @@ describe("CodingWorkbench skeleton", () => {
     invoke.mockImplementation(async (command: string): Promise<unknown> => {
       if (command === "coding_task_list" || command === "coding_verification_detect") return [];
       if (command === "coding_changeset_diff") {
-        return { original: "task baseline", modified, binary: false };
+        return { original: "task baseline", modified, binary: false, modifiedHash: "h-diff" };
       }
       if (command === "coding_changeset_get") return { ...taskChangeSet };
       if (command === "coding_verification_list" || command === "coding_diagnostics_list") return [];
@@ -626,8 +626,8 @@ describe("CodingWorkbench skeleton", () => {
   it("does not switch back to diff after the user cancels an in-flight load", async () => {
     const user = userEvent.setup();
     const activeTask = verificationTask({ id: "task-1", phase: "implementing" });
-    let resolveDiff!: (diff: { original: string; modified: string; binary: boolean }) => void;
-    const pendingDiff = new Promise<{ original: string; modified: string; binary: boolean }>(
+    let resolveDiff!: (diff: { original: string; modified: string; binary: boolean; modifiedHash: string }) => void;
+    const pendingDiff = new Promise<{ original: string; modified: string; binary: boolean; modifiedHash: string }>(
       (resolve) => { resolveDiff = resolve; },
     );
     useTaskStore.setState({ root: "/repo", task: activeTask });
@@ -654,7 +654,7 @@ describe("CodingWorkbench skeleton", () => {
     expect(await screen.findByRole("button", { name: "正在加载最新差异" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "编辑" }));
     await act(async () => {
-      resolveDiff({ original: "before", modified: "after", binary: false });
+      resolveDiff({ original: "before", modified: "after", binary: false, modifiedHash: "h-diff" });
       await pendingDiff;
     });
 
@@ -1467,11 +1467,76 @@ describe("Theia workbench", () => {
     const composer = container.querySelector(".echo-theia-agent__composer");
     const textbox = screen.getByRole("textbox", { name: "给 Agent 的补充要求" });
     fireEvent.change(textbox, { target: { value: "请处理边界情况" } });
-    await user.click(screen.getByRole("tab", { name: "变更" }));
+    await user.click(screen.getByRole("tab", { name: "任务变更" }));
     expect(composer).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "给 Agent 的补充要求" })).toHaveValue("请处理边界情况");
     await user.click(screen.getByRole("tab", { name: "验证" }));
     expect(screen.getByRole("textbox", { name: "给 Agent 的补充要求" })).toHaveValue("请处理边界情况");
+  });
+
+  it("opens the delivery report from a named action in the default IDE", async () => {
+    useTaskStore.setState({ root: "/repo", task: verificationTask({ phase: "delivered" }) });
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    Object.defineProperty(frame, "clientWidth", { configurable: true, value: 1200 });
+    Object.defineProperty(frame, "clientHeight", { configurable: true, value: 900 });
+    const src = new URL(frame.src);
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", {
+        origin: src.origin,
+        source: frame.contentWindow,
+        data: { type: "echo/agent-bounds", token: src.searchParams.get("echoBridgeToken"), bounds: { left: 790, top: 44, width: 390, height: 800 } },
+      }));
+    });
+    await userEvent.click(screen.getByRole("button", { name: "打开交付报告" }));
+    expect(screen.getByRole("region", { name: "交付报告" })).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("coding_delivery_report", { root: "/repo", taskId: "verification-task" });
+  });
+
+  it("blocks opening another folder while a coding task is active", async () => {
+    const onSelectWorkspace = vi.fn();
+    const onToast = vi.fn();
+    useTaskStore.setState({ root: "/repo", task: verificationTask({ phase: "implementing" }) });
+    render(<CodingWorkbench cwd="/repo" models={[]} onSelectWorkspace={onSelectWorkspace} onToast={onToast} />);
+    await screen.findByTitle("Echo Code IDE");
+    await userEvent.click(screen.getByRole("button", { name: "切换项目" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "打开其他文件夹…" }));
+    expect(onSelectWorkspace).not.toHaveBeenCalled();
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("请先停止任务"));
+  });
+
+  it("saves dirty Theia editors before switching projects", async () => {
+    const onSelectWorkspace = vi.fn();
+    render(<CodingWorkbench cwd="/repo" codingWorkspaces={[{ cwd: "/next" }]} models={[]} onSelectWorkspace={onSelectWorkspace} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    const src = new URL(frame.src);
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+    const send = (data: Record<string, unknown>) => {
+      act(() => {
+        window.dispatchEvent(new MessageEvent("message", {
+          origin: src.origin,
+          source: frame.contentWindow,
+          data: { ...data, token: src.searchParams.get("echoBridgeToken") },
+        }));
+      });
+    };
+    send({ type: "echo/ready" });
+    send({ type: "echo/dirty-state", count: 2 });
+    expect(screen.getByLabelText("2 个未保存文件")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "切换项目" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "切换到项目 next" }));
+    await waitFor(() => expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "echo/get-dirty" }), src.origin));
+    expect(onSelectWorkspace).not.toHaveBeenCalled();
+    const dirtyRequest = postMessage.mock.calls.find(([message]) => (message as { type?: string }).type === "echo/get-dirty")![0] as { id: string };
+    send({ type: "echo/response", id: dirtyRequest.id, ok: true, value: 2 });
+
+    await userEvent.click(await screen.findByRole("button", { name: "保存并继续" }));
+    await waitFor(() => expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "echo/save-all" }), src.origin));
+    expect(onSelectWorkspace).not.toHaveBeenCalled();
+    const saveRequest = postMessage.mock.calls.find(([message]) => (message as { type?: string }).type === "echo/save-all")![0] as { id: string };
+    send({ type: "echo/response", id: saveRequest.id, ok: true, value: 0 });
+    await waitFor(() => expect(onSelectWorkspace).toHaveBeenCalledWith("/next"));
   });
 
   it("keeps preview controls compact and lets the editor reclaim the Agent space", async () => {

@@ -50,7 +50,6 @@ import {
   providersList,
   flattenModels,
   filterModelsByRuntimeCatalog,
-  filesystemPickDirectory,
   notificationAppend,
   memoryAppend,
   internalReload,
@@ -238,6 +237,10 @@ function Shell() {
   // Dedicated Coding projects: one active project plus a persisted recent list.
   const [codingWorkspaces, setCodingWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeCodingWorkspaceCwd, setActiveCodingWorkspaceCwd] = useState("");
+  const codingLeaveGuardRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerCodingLeaveGuard = useCallback((guard: (() => Promise<boolean>) | null) => {
+    codingLeaveGuardRef.current = guard;
+  }, []);
 
   // Hydrate recent Coding projects from localStorage on first mount.
   useEffect(() => {
@@ -1082,7 +1085,7 @@ function Shell() {
     showToast(`所选模型“${requestedModelId}”已被删除或停用，请重新选择`, 5000);
     return undefined;
   };
-  const handleNavigate = (label: string) => {
+  const navigateNow = (label: string) => {
     if (label === "用量统计") {
       openSettings("usage");
       return;
@@ -1106,6 +1109,16 @@ function Shell() {
     sessionsStore.getState().setCurrent(null);
     sessionStore.getState().reset();
     setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
+  };
+  const handleNavigate = (label: string) => {
+    if (placeholderView === "代码开发" && label !== "代码开发"
+        && label !== "用量统计" && codingLeaveGuardRef.current) {
+      void codingLeaveGuardRef.current().then((allowed) => {
+        if (allowed) navigateNow(label);
+      });
+      return;
+    }
+    navigateNow(label);
   };
   const handlePlaceholder = (label: string) => {
     // Route a few sidebar shortcut buttons to real panels instead of toasts.
@@ -1741,16 +1754,7 @@ function Shell() {
     });
   };
 
-  const handleAddCodingWorkspace = async () => {
-    try {
-      const selected = await filesystemPickDirectory();
-      if (selected) handleSelectCodingWorkspace(selected);
-    } catch (error) {
-      showToast(`选择代码文件夹失败：${friendlyError(error)}`);
-    }
-  };
-
-  const handleNewSession = () => {
+  const createNewSessionView = () => {
     selectionGenerationRef.current += 1;
     setPlaceholderView(null);
     sessionsStore.getState().setCurrent(null);
@@ -1758,6 +1762,15 @@ function Shell() {
     usePermissionModeStore.getState().resetHomeMode();
     setNewTaskMode("default");
     setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
+  };
+  const handleNewSession = () => {
+    if (placeholderView === "代码开发" && codingLeaveGuardRef.current) {
+      void codingLeaveGuardRef.current().then((allowed) => {
+        if (allowed) createNewSessionView();
+      });
+      return;
+    }
+    createNewSessionView();
   };
 
   const handleStartOrganizationConversation = () => {
@@ -1769,6 +1782,17 @@ function Shell() {
 
   /** Navigate to home page without resetting session state (used after expert summon). */
   const handleGoHome = () => {
+    if (placeholderView === "代码开发" && codingLeaveGuardRef.current) {
+      void codingLeaveGuardRef.current().then((allowed) => {
+        if (allowed) {
+          selectionGenerationRef.current += 1;
+          setPlaceholderView(null);
+          sessionsStore.getState().setCurrent(null);
+          setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
+        }
+      });
+      return;
+    }
     selectionGenerationRef.current += 1;
     setPlaceholderView(null);
     sessionsStore.getState().setCurrent(null);
@@ -1892,6 +1916,9 @@ function Shell() {
     sessionCwd?: string,
     preservePlaceholder = false,
   ) => {
+    if (!preservePlaceholder && placeholderView === "代码开发" && codingLeaveGuardRef.current) {
+      if (!(await codingLeaveGuardRef.current())) return;
+    }
     const generation = ++selectionGenerationRef.current;
     let entry = findSessionSummary(sessionId);
     // Subagent child sessions can be created after the last catalog refresh
@@ -2519,7 +2546,6 @@ function Shell() {
                   codingWorkspaces={codingWorkspaces}
                   activeCodingWorkspaceCwd={activeCodingWorkspaceCwd}
                   onCloseCodingWorkspace={handleCloseCodingWorkspace}
-                  onAddCodingWorkspace={handleAddCodingWorkspace}
                   workspaces={workspaces}
                   sessionId={currentSessionId ?? undefined}
                   codingApiReady={!!init.auth.ready && !!newSessionModelId}
@@ -2539,6 +2565,7 @@ function Shell() {
                     setPlaceholderView(null);
                     setSidebarCollapsed(false);
                   }}
+                  onRegisterCodingLeaveGuard={registerCodingLeaveGuard}
                   onStartCodingRun={handleStartCodingRun}
                   onActivateCodingSession={(targetSessionId, targetCwd) =>
                     handleSelectSession(targetSessionId, targetCwd, true)

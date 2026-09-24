@@ -89,14 +89,13 @@ interface PlaceholderPageProps {
   activeCodingWorkspaceCwd?: string;
   /** Close the current project or remove a path from recent projects. */
   onCloseCodingWorkspace?: (cwd: string) => void;
-  /** Open the OS folder picker to register and activate a project. */
-  onAddCodingWorkspace?: () => void;
   /** Coding Workspace Agent/runtime integration. */
   codingApiReady?: boolean;
   codingModels?: ModelOption[];
   codingModelId?: string;
   onOpenModelSettings?: () => void;
   onExitCodingWorkspace?: () => void;
+  onRegisterCodingLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void;
   /** Start an Agent session for a coding task. Returns the new session id. */
   onStartCodingRun?: (
     root: string,
@@ -151,12 +150,12 @@ export function PlaceholderPage({
   codingWorkspaces,
   activeCodingWorkspaceCwd,
   onCloseCodingWorkspace,
-  onAddCodingWorkspace,
   codingApiReady,
   codingModels,
   codingModelId,
   onOpenModelSettings,
   onExitCodingWorkspace,
+  onRegisterCodingLeaveGuard,
   onStartCodingRun,
   onActivateCodingSession,
   onChangeCodingModel,
@@ -241,12 +240,12 @@ export function PlaceholderPage({
           codingWorkspaces={codingWorkspaces ?? []}
           activeCodingWorkspaceCwd={activeCodingWorkspaceCwd ?? ""}
           onCloseCodingWorkspace={onCloseCodingWorkspace}
-          onAddCodingWorkspace={onAddCodingWorkspace}
           apiReady={codingApiReady}
           models={codingModels}
           defaultModelId={codingModelId}
           onOpenSettings={onOpenModelSettings}
           onExit={onExitCodingWorkspace}
+          onRegisterLeaveGuard={onRegisterCodingLeaveGuard}
           sessionId={sessionId}
           onStartRun={onStartCodingRun}
           onActivateSession={onActivateCodingSession}

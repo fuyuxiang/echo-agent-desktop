@@ -92,6 +92,7 @@ const nodeDir = dirname(realpathSync(process.execPath));
 const licenseCandidates = [
   join(nodeDir, "LICENSE"),
   join(nodeDir, "../LICENSE"),
+  join(nodeDir, `../node_modules/node-${process.platform}-${process.arch}/LICENSE`),
   join(nodeDir, "../share/doc/node/LICENSE"),
 ];
 if (process.version === "v24.21.0") {

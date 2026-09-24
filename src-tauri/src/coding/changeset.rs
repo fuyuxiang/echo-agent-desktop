@@ -824,6 +824,23 @@ pub fn mark_reviewed(root: &Path, task_id: &str, path: &str) -> Result<ChangeSet
     Ok(set)
 }
 
+fn mark_reviewed_if_current(
+    root: &Path,
+    task_id: &str,
+    path: &str,
+    expected_hash: &str,
+) -> Result<ChangeSet, String> {
+    if load(root, task_id)
+        .change_hashes
+        .get(path)
+        .map(String::as_str)
+        != Some(expected_hash)
+    {
+        return Err("文件内容已变化，请重新打开最新差异后再标记已审阅".to_string());
+    }
+    mark_reviewed(root, task_id, path)
+}
+
 async fn current_head(root: &Path) -> Result<String, String> {
     let output = tokio::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
@@ -1499,6 +1516,7 @@ pub struct ChangeDiff {
     pub original: String,
     pub modified: String,
     pub binary: bool,
+    pub modified_hash: String,
 }
 
 pub fn change_diff(root: &Path, task_id: &str, path: &str) -> Result<ChangeDiff, String> {
@@ -1520,27 +1538,37 @@ pub fn change_diff(root: &Path, task_id: &str, path: &str) -> Result<ChangeDiff,
         Vec::new()
     };
     let modified_bytes = match read_workspace_bytes(root, path) {
-        Ok(bytes) => bytes.unwrap_or_default(),
+        Ok(bytes) => bytes,
         Err(_) => {
             return Ok(ChangeDiff {
                 original: "文件过大或不是普通文件：不显示文本差异".into(),
                 modified: "可查看变更状态，但需使用专用工具审阅".into(),
                 binary: true,
+                modified_hash: set
+                    .change_hashes
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| "无法确认该差异的内容版本".to_string())?,
             });
         }
     };
+    let modified_hash = modified_bytes
+        .as_ref()
+        .map_or_else(|| "<deleted>".to_string(), |bytes| hash_bytes(bytes));
     let original = String::from_utf8(original_bytes);
-    let modified = String::from_utf8(modified_bytes);
+    let modified = String::from_utf8(modified_bytes.unwrap_or_default());
     match (original, modified) {
         (Ok(original), Ok(modified)) => Ok(ChangeDiff {
             original,
             modified,
             binary: false,
+            modified_hash,
         }),
         _ => Ok(ChangeDiff {
             original: "二进制文件：不显示文本差异".into(),
             modified: "二进制文件：请使用专用工具审阅".into(),
             binary: true,
+            modified_hash,
         }),
     }
 }
@@ -1638,6 +1666,7 @@ pub async fn coding_changeset_mark_reviewed(
     root: String,
     task_id: String,
     path: String,
+    expected_hash: String,
 ) -> Result<ChangeSetView, String> {
     let root = access.require_workspace(&root)?;
     // Refresh first so the explicit acknowledgement is bound to the exact
@@ -1645,7 +1674,7 @@ pub async fn coding_changeset_mark_reviewed(
     sync_changes(&root, &task_id).await?;
     tokio::task::spawn_blocking(move || {
         store::with_task_transaction(&root, &task_id, || {
-            let set = mark_reviewed(&root, &task_id, &path)?;
+            let set = mark_reviewed_if_current(&root, &task_id, &path, &expected_hash)?;
             Ok(ChangeSetView::from(&set))
         })
     })
@@ -1765,6 +1794,38 @@ mod tests {
                 .unwrap();
             assert!(output.status.success(), "git command failed: {args:?}");
         }
+    }
+
+    #[test]
+    fn review_rejects_a_version_changed_after_the_diff_was_displayed() {
+        let root = temp_root();
+        std::fs::write(root.join("source.txt"), "before\n").unwrap();
+        capture_filesystem_baseline(&root, "task-review").unwrap();
+
+        std::fs::write(root.join("source.txt"), "version one\n").unwrap();
+        let first = sync_from_filesystem(&root, "task-review").unwrap();
+        let displayed = change_diff(&root, "task-review", "source.txt").unwrap();
+        assert_eq!(
+            first.change_hashes.get("source.txt"),
+            Some(&displayed.modified_hash)
+        );
+
+        std::fs::write(root.join("source.txt"), "version two\n").unwrap();
+        let second = sync_from_filesystem(&root, "task-review").unwrap();
+        assert!(mark_reviewed_if_current(
+            &root,
+            "task-review",
+            "source.txt",
+            &displayed.modified_hash,
+        )
+        .is_err());
+        assert!(load(&root, "task-review").reviewed_files.is_empty());
+
+        let current_hash = second.change_hashes.get("source.txt").unwrap();
+        let reviewed =
+            mark_reviewed_if_current(&root, "task-review", "source.txt", current_hash).unwrap();
+        assert_eq!(reviewed.reviewed_files, vec!["source.txt"]);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

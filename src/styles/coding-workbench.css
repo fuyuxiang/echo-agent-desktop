@@ -220,6 +220,29 @@
   white-space: nowrap;
 }
 
+.echo-theia-agent__report-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 54px;
+  height: 26px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--echo-text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.echo-theia-agent__report-button:hover {
+  background: var(--echo-bg-secondary);
+  color: var(--echo-text-strong);
+}
+
 .echo-theia-agent__stop {
   display: grid;
   width: 25px;
@@ -406,6 +429,20 @@
   background: var(--echo-bg-primary);
 }
 
+.echo-theia-agent__output-panel {
+  margin: 8px;
+  min-height: 0;
+  border: 1px solid var(--echo-border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.echo-theia-agent__output-panel > strong {
+  display: block;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
 .echo-theia-agent__output {
   margin: 8px;
   padding: 10px;
@@ -413,6 +450,24 @@
   white-space: pre-wrap;
   border-radius: 6px;
   background: var(--echo-bg-secondary);
+}
+
+.echo-theia-review__binary {
+  flex-direction: column;
+  padding: 24px;
+  text-align: center;
+}
+
+.echo-theia-review__binary label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.echo-theia-report > .coding-doc {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .echo-theia-review {
@@ -3451,6 +3506,25 @@
   background: var(--echo-bg-tertiary);
   color: var(--echo-text-medium);
   font-size: 11px;
+}
+
+.coding-tabs__binary-review {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--echo-border-subtle);
+  background: var(--echo-bg-tertiary);
+  color: var(--echo-text-medium);
+  font-size: 11px;
+}
+
+.coding-tabs__binary-review label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .coding-tabs__body {

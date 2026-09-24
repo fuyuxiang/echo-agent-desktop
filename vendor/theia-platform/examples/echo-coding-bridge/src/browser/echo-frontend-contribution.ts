@@ -10,6 +10,8 @@ import { EditorManager } from '@theia/editor/lib/browser/editor-manager';
 import { FrontendApplicationStateService } from '@theia/core/lib/browser/frontend-application-state';
 import { ThemeService } from '@theia/core/lib/browser/theming';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
+import { Saveable } from '@theia/core/lib/browser/saveable';
+import { Disposable } from '@theia/core/lib/common/disposable';
 import { echoHostBridge } from './echo-host-bridge';
 
 const AGENT_DOCK_WIDTH_KEY = 'echo-agent-dock-width';
@@ -29,6 +31,7 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
     protected agentBoundsFrame = 0;
     protected lastAgentBounds = '';
     protected shell?: FrontendApplication['shell'];
+    protected readonly dirtySubscriptions = new Map<Widget, Disposable>();
     @inject(EditorManager)
     protected readonly editors: EditorManager;
     @inject(CommandRegistry)
@@ -69,6 +72,15 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
                 this.scheduleAgentBounds();
             } else if (message.type === 'echo/request-agent-bounds') {
                 this.scheduleAgentBounds();
+            } else if (message.type === 'echo/save-all' && typeof message.id === 'string' && this.shell) {
+                void this.shell.saveAll().then(() => {
+                    this.reportDirtyState();
+                    echoHostBridge.notify('echo/response', { id: message.id, ok: true, value: this.dirtyCount() });
+                }).catch(error => {
+                    echoHostBridge.notify('echo/response', { id: message.id, ok: false, error: String(error) });
+                });
+            } else if (message.type === 'echo/get-dirty' && typeof message.id === 'string') {
+                echoHostBridge.notify('echo/response', { id: message.id, ok: true, value: this.dirtyCount() });
             }
         });
         this.editors.onActiveEditorChanged(editor => {
@@ -79,6 +91,7 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
         });
         void this.applicationState.reachedState('ready').then(async () => {
             echoHostBridge.notify('echo/ready');
+            this.reportDirtyState();
             const reportWorkspace = async () => {
                 const roots = await this.workspace.roots;
                 echoHostBridge.notify('echo/workspace', {
@@ -93,6 +106,18 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
     async onDidInitializeLayout(app: FrontendApplication): Promise<void> {
         if (echoHostBridge.enabled) {
             this.shell = app.shell;
+            for (const widget of app.shell.widgets) {
+                this.watchDirtyWidget(widget);
+            }
+            app.shell.onDidAddWidget(widget => {
+                this.watchDirtyWidget(widget);
+                this.reportDirtyState();
+            });
+            app.shell.onDidRemoveWidget(widget => {
+                this.dirtySubscriptions.get(widget)?.dispose();
+                this.dirtySubscriptions.delete(widget);
+                this.reportDirtyState();
+            });
             const agentDock = new EchoAgentDock();
             agentDock.id = 'echo-agent-dock';
             agentDock.title.label = 'Echo Agent';
@@ -166,6 +191,24 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
         if (this.emptyState && this.shell) {
             this.emptyState.hidden = this.shell.getWidgets('main').length > 0;
         }
+    }
+
+    protected watchDirtyWidget(widget: Widget): void {
+        if (this.dirtySubscriptions.has(widget)) {
+            return;
+        }
+        const saveable = Saveable.get(widget);
+        if (saveable) {
+            this.dirtySubscriptions.set(widget, saveable.onDirtyChanged(() => this.reportDirtyState()));
+        }
+    }
+
+    protected dirtyCount(): number {
+        return this.shell?.widgets.filter(widget => Saveable.isDirty(widget)).length ?? 0;
+    }
+
+    protected reportDirtyState(): void {
+        echoHostBridge.notify('echo/dirty-state', { count: this.dirtyCount() });
     }
 
     protected scheduleAgentBounds(): void {

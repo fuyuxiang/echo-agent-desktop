@@ -41,6 +41,7 @@ export interface FileTab {
   diffOriginal?: string;
   diffModified?: string;
   diffBinary?: boolean;
+  diffHash?: string;
   /** The task that produced the cached review diff. */
   diffTaskId?: string;
 }
@@ -100,6 +101,7 @@ interface TabState {
     modified: string,
     binary?: boolean,
     taskId?: string,
+    diffHash?: string,
   ) => void;
   clearDiff: (id: string) => void;
   beginFileLoad: (id: string) => void;
@@ -245,7 +247,7 @@ export const useTabStore = create<TabState>((set, get) => ({
       tabs: state.tabs.map((tab) => (tab.id === id && isFileTab(tab) ? { ...tab, view } : tab)),
     })),
 
-  setDiff: (id, diffOriginal, diffModified, diffBinary = false, diffTaskId) =>
+  setDiff: (id, diffOriginal, diffModified, diffBinary = false, diffTaskId, diffHash) =>
     set((state) => ({
       tabs: state.tabs.map((tab) =>
         tab.id === id && isFileTab(tab)
@@ -255,6 +257,7 @@ export const useTabStore = create<TabState>((set, get) => ({
               diffModified,
               diffBinary,
               diffTaskId,
+              diffHash,
               view: "diff",
               loading: false,
               error: undefined,
@@ -274,6 +277,7 @@ export const useTabStore = create<TabState>((set, get) => ({
               diffModified: undefined,
               diffBinary: undefined,
               diffTaskId: undefined,
+              diffHash: undefined,
             }
           : tab,
       ),

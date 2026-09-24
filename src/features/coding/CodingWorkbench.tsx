@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
+  X,
 } from "lucide-react";
 
 import { useAppDialog } from "@/components/AppDialog";
@@ -48,7 +49,7 @@ import { editor as MonacoEditor } from "monaco-editor";
 import { AgentPane } from "./agent/AgentPane";
 import { TaskStarter } from "./agent/TaskStarter";
 import { TheiaAgentComposer } from "./agent/TheiaAgentComposer";
-import { TheiaIdeFrame, type TheiaAgentBounds, type TheiaMutationTicket } from "./TheiaIdeFrame";
+import { TheiaIdeFrame, type TheiaAgentBounds, type TheiaIdeFrameHandle, type TheiaMutationTicket } from "./TheiaIdeFrame";
 import { TheiaTaskReview } from "./TheiaTaskReview";
 import { ChangeSetView } from "./explorer/ChangeSetView";
 import { ContextPackView } from "./explorer/ContextPackView";
@@ -137,9 +138,9 @@ interface CodingWorkbenchProps {
   activeCodingWorkspaceCwd?: string;
   /** Remove a path from recent projects without deleting its files. */
   onCloseCodingWorkspace?: (cwd: string) => void;
-  onAddCodingWorkspace?: () => void;
   onToast?: (message: string) => void;
   onExit?: () => void;
+  onRegisterLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void;
   onOpenSettings?: () => void;
   models?: ModelOption[];
   defaultModelId?: string;
@@ -371,12 +372,12 @@ export function CodingWorkbench({
   onSelectWorkspace,
   onToast,
   onExit,
+  onRegisterLeaveGuard,
   onOpenSettings,
   models = [],
   codingWorkspaces,
   activeCodingWorkspaceCwd,
   onCloseCodingWorkspace,
-  onAddCodingWorkspace,
   defaultModelId,
   apiReady = false,
   sessionId: hostSessionId = null,
@@ -434,6 +435,7 @@ export function CodingWorkbench({
   const tabs = useTabStore((state) => state.tabs);
   const activeTabId = useTabStore((state) => state.activeId);
   const dirtyFileCount = useMemo(() => tabs.filter(isDirty).length, [tabs]);
+  const usingTheia = !window.location.search.includes("legacy-coding");
   const recentCodingProjects = useMemo(() => {
     const paths = [
       activeCodingWorkspaceCwd || cwd,
@@ -446,10 +448,14 @@ export function CodingWorkbench({
   const [theiaPanel, setTheiaPanel] = useState<"agent" | "changes" | "verification">("agent");
   const [theiaActiveFile, setTheiaActiveFile] = useState<string | null>(null);
   const [theiaReviewPath, setTheiaReviewPath] = useState<string | null>(null);
+  const [theiaReportOpen, setTheiaReportOpen] = useState(false);
   const [theiaPreviewInput, setTheiaPreviewInput] = useState("");
   const [theiaPreviewOpen, setTheiaPreviewOpen] = useState(false);
   const [theiaAgentOpen, setTheiaAgentOpen] = useState(true);
   const [theiaAgentBounds, setTheiaAgentBounds] = useState<TheiaAgentBounds | null>(null);
+  const [theiaDirtyCount, setTheiaDirtyCount] = useState<number | null>(null);
+  const theiaFrameRef = useRef<TheiaIdeFrameHandle>(null);
+  const visibleDirtyCount = usingTheia ? theiaDirtyCount ?? 0 : dirtyFileCount;
   const theiaPreviewRef = useRef<HTMLDivElement>(null);
   const [theiaPreviewRequest, setTheiaPreviewRequest] = useState<{ url: string; id: number } | null>(null);
   const [theiaOpenFileRequest, setTheiaOpenFileRequest] = useState<{ path: string; id: number; line?: number } | null>(null);
@@ -548,6 +554,7 @@ export function CodingWorkbench({
   const pendingTreePathsRef = useRef(new Set<string>());
   const treeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileIndexEventsRef = useRef(new Map<string, boolean>());
+  const taskSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const diffRequestGenerationRef = useRef(new Map<string, number>());
   const fileReadGenerationRef = useRef(new Map<string, number>());
   const diffTaskRef = useRef<string | null>(null);
@@ -665,6 +672,14 @@ export function CodingWorkbench({
     onToast,
   });
 
+  useEffect(() => {
+    if (runningVerification) setTheiaVerificationOutput("");
+  }, [runningVerification]);
+  useEffect(() => {
+    setTheiaReviewPath(null);
+    setTheiaReportOpen(false);
+  }, [cwd, task?.id]);
+
   // A diff is anchored to one task's baseline. Never let a cached comparison
   // from the previous task leak into a newly selected task.
   useEffect(() => {
@@ -709,9 +724,10 @@ export function CodingWorkbench({
   // SP2: refresh git snapshot on workspace switch so badges appear as soon
   // as a user lands on a new repo. Debounced inside the store.
   useEffect(() => {
+    if (usingTheia) return;
     if (cwd) void useGitSnapshotStore.getState().refresh(cwd);
     else useGitSnapshotStore.getState().clear();
-  }, [cwd]);
+  }, [cwd, usingTheia]);
 
   /**
    * The orchestrator is the only authority on phase, so the UI reacts to its
@@ -1144,11 +1160,62 @@ export function CodingWorkbench({
     });
   }, [cwd, selectedDirectory]);
 
+  const saveTheiaBeforeLeaving = useCallback(async (): Promise<boolean> => {
+    if (activeTaskCount > 0) {
+      onToast?.("当前开发任务仍在执行，请先停止任务再离开代码开发");
+      return false;
+    }
+    if (!usingTheia || !cwd) return true;
+    let dirtyCount: number;
+    try {
+      dirtyCount = await theiaFrameRef.current?.getDirtyCount() ?? -1;
+    } catch (error) {
+      return confirmTaskAction({
+        title: "无法确认 IDE 文件状态",
+        description: `${String(error).replace(/^Error:\s*/, "")}。继续离开可能丢失未保存的编辑内容。`,
+        confirmLabel: "仍要离开",
+        danger: true,
+      });
+    }
+    if (dirtyCount < 0) return false;
+    setTheiaDirtyCount(dirtyCount);
+    if (dirtyCount === 0) return true;
+    const confirmed = await confirmTaskAction({
+      title: `保存 ${dirtyCount} 个文件后离开？`,
+      description: "当前 IDE 有未保存的编辑内容。保存成功后继续，保存失败时会留在当前项目。",
+      confirmLabel: "保存并继续",
+    });
+    if (!confirmed) return false;
+    try {
+      const saved = await theiaFrameRef.current?.saveAll();
+      if (saved) return true;
+      return confirmTaskAction({
+        title: "仍有文件未保存",
+        description: "IDE 中仍有未保存的文件。继续离开会放弃这些编辑内容。",
+        confirmLabel: "放弃并离开",
+        danger: true,
+      });
+    } catch (error) {
+      return confirmTaskAction({
+        title: "IDE 文件保存失败",
+        description: `${String(error).replace(/^Error:\s*/, "")}。继续离开会放弃未保存的编辑内容。`,
+        confirmLabel: "放弃并离开",
+        danger: true,
+      });
+    }
+  }, [activeTaskCount, confirmTaskAction, cwd, onToast, usingTheia]);
+
+  useEffect(() => {
+    onRegisterLeaveGuard?.(saveTheiaBeforeLeaving);
+    return () => onRegisterLeaveGuard?.(null);
+  }, [onRegisterLeaveGuard, saveTheiaBeforeLeaving]);
+
   const exitSafely = useCallback(async () => {
+    if (!(await saveTheiaBeforeLeaving())) return;
     const dirtyCount = useTabStore.getState().tabs.filter(
       (tab) => isFileTab(tab) && tab.draft !== tab.original,
     ).length;
-    if (dirtyCount > 0) {
+    if (!usingTheia && dirtyCount > 0) {
       const confirmed = await confirmTaskAction({
         title: "离开代码开发？",
         description: `有 ${dirtyCount} 个文件尚未保存。草稿会保留在本机，但建议先保存需要写入工程的内容。`,
@@ -1156,11 +1223,11 @@ export function CodingWorkbench({
       });
       if (!confirmed) return;
     }
-    persistHotExitNow();
+    if (!usingTheia) persistHotExitNow();
     onExit?.();
-  }, [confirmTaskAction, onExit, persistHotExitNow]);
+  }, [confirmTaskAction, onExit, persistHotExitNow, saveTheiaBeforeLeaving, usingTheia]);
 
-  const switchProject = useCallback((nextCwd: string) => {
+  const switchProject = useCallback(async (nextCwd: string) => {
     if (!nextCwd || nextCwd === cwd) return;
     if (activeTaskCount > 0) {
       onToast?.(
@@ -1170,18 +1237,37 @@ export function CodingWorkbench({
       );
       return;
     }
-    if (dirtyFileCount > 0) {
+    if (cwd && !(await saveTheiaBeforeLeaving())) return;
+    if (!usingTheia && dirtyFileCount > 0) {
       onToast?.(`当前项目的 ${dirtyFileCount} 个未保存文件已保留，返回后可继续编辑`);
     }
     onSelectWorkspace?.(nextCwd);
-  }, [activeTaskCount, cwd, dirtyFileCount, onSelectWorkspace, onToast]);
+  }, [activeTaskCount, cwd, dirtyFileCount, onSelectWorkspace, onToast, saveTheiaBeforeLeaving, usingTheia]);
+
+  const pickWorkspace = useCallback(async () => {
+    try {
+      const picked = await filesystemPickDirectory();
+      if (picked) await switchProject(picked);
+    } catch (error) {
+      onToast?.(`打开文件夹失败：${String(error).replace(/^Error:\s*/, "")}`);
+    }
+  }, [onToast, switchProject]);
+
+  const openAnotherProject = useCallback(() => {
+    if (activeTaskCount > 0) {
+      onToast?.("当前开发任务仍在执行，请先停止任务再打开其他文件夹");
+      return;
+    }
+    void pickWorkspace();
+  }, [activeTaskCount, onToast, pickWorkspace]);
 
   const removeRecentProject = useCallback(async (projectCwd: string) => {
     if (projectCwd === cwd && activeTaskCount > 0) {
       onToast?.("当前开发任务仍在执行，请先停止任务再移除项目");
       return;
     }
-    if (projectCwd === cwd && dirtyFileCount > 0) {
+    if (projectCwd === cwd && usingTheia && !(await saveTheiaBeforeLeaving())) return;
+    if (projectCwd === cwd && !usingTheia && dirtyFileCount > 0) {
       const confirmed = await confirmTaskAction({
         title: "从最近项目移除？",
         description: `当前项目有 ${dirtyFileCount} 个未保存文件。草稿会保留在本机，磁盘文件不会被删除。`,
@@ -1191,21 +1277,21 @@ export function CodingWorkbench({
       if (!confirmed) return;
     }
     onCloseCodingWorkspace?.(projectCwd);
-  }, [activeTaskCount, confirmTaskAction, cwd, dirtyFileCount, onCloseCodingWorkspace, onToast]);
+  }, [activeTaskCount, confirmTaskAction, cwd, dirtyFileCount, onCloseCodingWorkspace, onToast, saveTheiaBeforeLeaving, usingTheia]);
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      persistHotExitNow();
-      const dirty = useTabStore.getState().tabs.some(
-        (tab) => isFileTab(tab) && tab.draft !== tab.original,
-      );
-      if (!dirty) return;
+      if (!usingTheia) persistHotExitNow();
+      const dirty = usingTheia
+        ? Boolean(cwd) && (theiaDirtyCount === null || theiaDirtyCount > 0)
+        : useTabStore.getState().tabs.some((tab) => isFileTab(tab) && tab.draft !== tab.original);
+      if (!dirty && activeTaskCount === 0) return;
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [persistHotExitNow]);
+  }, [activeTaskCount, persistHotExitNow, theiaDirtyCount, usingTheia]);
 
   const openTaskDiff = useCallback(async (
     path: string,
@@ -1251,6 +1337,7 @@ export function CodingWorkbench({
         diff.modified,
         diff.binary,
         activeTask.id,
+        diff.modifiedHash,
       );
 
       if (options.refreshTaskState ?? true) {
@@ -1267,6 +1354,7 @@ export function CodingWorkbench({
         diff.modified,
         diff.binary,
         activeTask.id,
+        diff.modifiedHash,
       );
       if (diff.binary && (options.notifyError ?? true)) {
         onToast?.("二进制文件无法显示文本差异，已显示文件状态摘要");
@@ -1326,10 +1414,14 @@ export function CodingWorkbench({
 
   const markTaskDiffReviewed = useCallback(async (tab: FileTab) => {
     if (!cwd || !task || tab.diffTaskId !== task.id) return;
+    if (!tab.diffHash) {
+      onToast?.("无法确认当前差异版本，请重新打开差异后再审阅");
+      return;
+    }
     const relativePath = workspaceRelativePath(cwd, tab.relativePath);
     setReviewingPath(relativePath);
     try {
-      await codingApi.markReviewed(cwd, task.id, relativePath);
+      await codingApi.markReviewed(cwd, task.id, relativePath, tab.diffHash);
       await useTaskStore.getState().refreshTaskState();
       setReportRevision((value) => value + 1);
       onToast?.(`已标记 ${relativePath} 为已审阅`);
@@ -1362,6 +1454,32 @@ export function CodingWorkbench({
     return true;
   }, [openTaskDiff]);
 
+  const queueTaskChangeSync = useCallback(() => {
+    const taskId = useTaskStore.getState().task?.id;
+    if (!usingTheia || !cwd || !taskId) return;
+    if (taskSyncTimerRef.current !== null) clearTimeout(taskSyncTimerRef.current);
+    taskSyncTimerRef.current = setTimeout(() => {
+      taskSyncTimerRef.current = null;
+      if (useTaskStore.getState().root !== cwd || useTaskStore.getState().task?.id !== taskId) return;
+      void codingApi.syncChanges(cwd, taskId)
+        .then(() => {
+          if (useTaskStore.getState().root !== cwd || useTaskStore.getState().task?.id !== taskId) return;
+          return useTaskStore.getState().refreshTaskState();
+        })
+        .then(() => {
+          if (useTaskStore.getState().root === cwd && useTaskStore.getState().task?.id === taskId) {
+            setReportRevision((value) => value + 1);
+          }
+        })
+        .catch((error) => onToast?.(`同步任务变更失败：${String(error).replace(/^Error:\s*/, "")}`));
+    }, 300);
+  }, [cwd, onToast, usingTheia]);
+
+  useEffect(() => () => {
+    if (taskSyncTimerRef.current !== null) clearTimeout(taskSyncTimerRef.current);
+    taskSyncTimerRef.current = null;
+  }, [cwd, task?.id]);
+
   // Keep clean editor tabs live for every workspace file type. If the user is
   // reviewing a diff, refresh the task-baseline comparison after the disk
   // snapshot is reconciled instead of silently falling back to identical panes.
@@ -1387,8 +1505,13 @@ export function CodingWorkbench({
     const unlisteners: Array<() => void> = [];
     void onWorkspaceFileUpdated((event) => {
       if (disposed || event.root !== cwd) return;
+      if (usingTheia) {
+        queueTaskChangeSync();
+        return;
+      }
       queueTreeRefresh(event.file);
       recordFileIndexEvent(event.file, false);
+      queueTaskChangeSync();
       void (async () => {
         await reconcileOpenFileTab(cwd, event.file);
         const refreshed = !disposed && await refreshVisibleDiff(event.file);
@@ -1400,8 +1523,13 @@ export function CodingWorkbench({
     });
     void onWorkspaceFileRemoved((event) => {
       if (disposed || event.root !== cwd) return;
+      if (usingTheia) {
+        queueTaskChangeSync();
+        return;
+      }
       queueTreeRefresh(event.file);
       recordFileIndexEvent(event.file, true);
+      queueTaskChangeSync();
       void (async () => {
         await reconcileOpenFileTab(cwd, event.file, true);
         const refreshed = !disposed && await refreshVisibleDiff(event.file);
@@ -1415,12 +1543,12 @@ export function CodingWorkbench({
       disposed = true;
       for (const unlisten of unlisteners) unlisten();
     };
-  }, [cwd, queueTreeRefresh, recordFileIndexEvent, refreshVisibleDiff]);
+  }, [cwd, queueTaskChangeSync, queueTreeRefresh, recordFileIndexEvent, refreshVisibleDiff, usingTheia]);
 
   // File-system notifications can race watcher startup. A synchronized
   // ChangeSet is the fallback, and open diff tabs are refreshed from it too.
   useEffect(() => {
-    if (!cwd || !changeSet || (task && changeSet.taskId !== task.id)) return;
+    if (usingTheia || !cwd || !changeSet || (task && changeSet.taskId !== task.id)) return;
     let disposed = false;
     void (async () => {
       for (const change of changeSet.changes) {
@@ -1432,7 +1560,7 @@ export function CodingWorkbench({
     return () => {
       disposed = true;
     };
-  }, [changeSet, cwd, refreshVisibleDiff, task?.id]);
+  }, [changeSet, cwd, refreshVisibleDiff, task?.id, usingTheia]);
 
   /**
    * Replace across the files a search matched.
@@ -1546,6 +1674,7 @@ export function CodingWorkbench({
   // Each recent project keeps its editor/context state for the current app
   // session, so switching projects does not discard unsaved drafts.
   useEffect(() => {
+    if (usingTheia) return;
     const previous = previousWorkspaceRef.current;
     if (previous && previous !== cwd) {
       const tabState = useTabStore.getState();
@@ -1598,13 +1727,14 @@ export function CodingWorkbench({
     setSelectedDirectory(saved?.selectedDirectory ?? cwd);
     useFileTreeSelectionStore.getState().clear();
     previousWorkspaceRef.current = cwd;
-  }, [cwd, loadFile]);
+  }, [cwd, loadFile, usingTheia]);
 
   useEffect(() => {
+    if (usingTheia) return;
     if (!cwd || previousWorkspaceRef.current !== cwd) return;
     const timer = window.setTimeout(persistHotExitNow, 250);
     return () => window.clearTimeout(timer);
-  }, [activeTabId, cwd, persistHotExitNow, tabs, treePersistenceRevision, uiStateRevision]);
+  }, [activeTabId, cwd, persistHotExitNow, tabs, treePersistenceRevision, uiStateRevision, usingTheia]);
 
   useEffect(() => {
     hydrateLayout();
@@ -1613,6 +1743,7 @@ export function CodingWorkbench({
   // Build the quick-open index once per workspace, abandoning it if the user
   // switches away mid-walk.
   useEffect(() => {
+    if (usingTheia) return;
     if (!cwd) {
       setFilePaths([]);
       return;
@@ -1635,7 +1766,7 @@ export function CodingWorkbench({
     return () => {
       signal.aborted = true;
     };
-  }, [cwd, reconcileFileIndexEvents]);
+  }, [cwd, reconcileFileIndexEvents, usingTheia]);
 
   const effectiveLayout = useMemo(
     () => fitWorkbenchLayout(workbenchSize.width, workbenchSize.height, {
@@ -1651,23 +1782,6 @@ export function CodingWorkbench({
     false,
   );
   const startAgentDrag = useDragWidth(effectiveLayout.agentWidth, setAgentWidth, true);
-
-  const pickWorkspace = useCallback(async () => {
-    try {
-      const picked = await filesystemPickDirectory();
-      if (picked) onSelectWorkspace?.(picked);
-    } catch (error) {
-      onToast?.(`打开文件夹失败：${String(error).replace(/^Error:\s*/, "")}`);
-    }
-  }, [onSelectWorkspace, onToast]);
-
-  const openAnotherProject = useCallback(() => {
-    if (onAddCodingWorkspace) {
-      onAddCodingWorkspace();
-      return;
-    }
-    void pickWorkspace();
-  }, [onAddCodingWorkspace, pickWorkspace]);
 
   const createWorkspaceEntry = useCallback(async (directory: boolean) => {
     const name: string | null = await new Promise((resolve) => {
@@ -2939,7 +3053,8 @@ export function CodingWorkbench({
     if (!cwd || !task || !isBusyPhase(task.phase)) return;
     try {
       if (activeRunId) await codingApi.cancelVerification(activeRunId);
-      onCancelRun?.();
+      const cancelled = await onCancelRun?.();
+      if (streaming && cancelled === false) return;
       // A streaming turn is finalized by useTaskLifecycle when its stream
       // falls. Scheduler/verification phases without a stream need an explicit
       // persisted interruption so the stop control always has an effect.
@@ -3429,7 +3544,7 @@ export function CodingWorkbench({
    * workbench must not repurpose an existing app-level shortcut.
    */
   useEffect(() => {
-    if (!cwd) return;
+    if (!cwd || usingTheia) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (isGlobalShortcutBlocked()) return;
       const lower = event.key.toLowerCase();
@@ -3596,6 +3711,7 @@ export function CodingWorkbench({
     performPaste,
     selectedDirectory,
     toggleBottom,
+    usingTheia,
   ]);
 
   const style = useMemo(
@@ -3667,7 +3783,7 @@ export function CodingWorkbench({
     );
   }
 
-  if (!window.location.search.includes("legacy-coding")) return (
+  if (usingTheia) return (
     <div ref={workbenchRef} className={`coding-workbench coding-workbench--theia${theiaAgentOpen ? "" : " coding-workbench--agent-closed"}`} style={style}>
       <header className="coding-workbench__topbar" data-tauri-drag-region>
         <div className="coding-workbench__topbar-left" data-tauri-drag-region>
@@ -3682,8 +3798,8 @@ export function CodingWorkbench({
           <ProjectSwitcher
             projects={recentCodingProjects}
             activeCwd={activeCodingWorkspaceCwd || cwd}
-            dirtyCount={dirtyFileCount}
-            onSelect={switchProject}
+            dirtyCount={visibleDirtyCount}
+            onSelect={(nextCwd) => void switchProject(nextCwd)}
             onRemove={removeRecentProject}
             onOpenFolder={openAnotherProject}
           />
@@ -3727,6 +3843,7 @@ export function CodingWorkbench({
 
       <main className="echo-theia-workspace">
         <TheiaIdeFrame
+          ref={theiaFrameRef}
           root={cwd}
           onBeforeMutation={beforeTheiaMutation}
           onAfterMutation={afterTheiaMutation}
@@ -3737,6 +3854,7 @@ export function CodingWorkbench({
           agentVisible={theiaAgentOpen}
           onAgentBounds={setTheiaAgentBounds}
           onAgentVisibilityChange={setTheiaAgentOpen}
+          onDirtyChange={setTheiaDirtyCount}
         />
         {theiaReviewPath && task && (
           <TheiaTaskReview
@@ -3755,6 +3873,28 @@ export function CodingWorkbench({
             }}
             onToast={onToast}
           />
+        )}
+        {theiaReportOpen && task && (
+          <section
+            className="echo-theia-review echo-theia-report"
+            aria-label="交付报告"
+            style={{ right: theiaAgentBounds ? Math.max(0, workbenchSize.width - theiaAgentBounds.left) : 0 }}
+          >
+            <header className="echo-theia-review__header">
+              <strong>交付报告</strong>
+              <button type="button" aria-label="关闭交付报告" onClick={() => setTheiaReportOpen(false)}><X size={16} /></button>
+            </header>
+            <DeliveryReportTab
+              root={cwd}
+              taskId={task.id}
+              revision={reportRevision}
+              onOpenFile={(path) => {
+                openTheiaFile(path);
+                setTheiaReportOpen(false);
+              }}
+              onToast={onToast}
+            />
+          </section>
         )}
       <aside
         className="echo-theia-agent"
@@ -3787,10 +3927,21 @@ export function CodingWorkbench({
               )}
             </div>
           )}
+          {task && (
+            <button
+              type="button"
+              className="echo-theia-agent__report-button"
+              onClick={() => { setTheiaReviewPath(null); setTheiaReportOpen(true); }}
+              aria-label="打开交付报告"
+              title="查看交付检查与验收证据"
+            >
+              <ShieldCheck size={15} /> 报告
+            </button>
+          )}
         </div>
         {task && <div className="echo-theia-agent__tabs" role="tablist" aria-label="开发任务面板">
           <button type="button" role="tab" aria-selected={theiaDisplayPanel === "agent"} onClick={() => setTheiaPanel("agent")}>对话</button>
-          <button type="button" role="tab" aria-selected={theiaDisplayPanel === "changes"} onClick={() => setTheiaPanel("changes")}>变更{taskChangeCount ? ` · ${taskChangeCount}` : ""}</button>
+          <button type="button" role="tab" aria-selected={theiaDisplayPanel === "changes"} onClick={() => setTheiaPanel("changes")}>任务变更{taskChangeCount ? ` · ${taskChangeCount}` : ""}</button>
           <button type="button" role="tab" aria-selected={theiaDisplayPanel === "verification"} onClick={() => setTheiaPanel("verification")}>验证</button>
         </div>}
         {theiaActiveFile && (
@@ -3821,7 +3972,7 @@ export function CodingWorkbench({
               onCancel={() => void stopActiveTask()}
               onContinue={continueInterruptedTask}
               onOpenChanges={() => setTheiaPanel("changes")}
-              onOpenReport={() => setTheiaPanel("changes")}
+              onOpenReport={() => { setTheiaReviewPath(null); setTheiaReportOpen(true); }}
               onOpenFile={openTheiaFile}
               onToast={onToast}
               onPathsDropped={(paths) => addManyToContext(paths)}
@@ -3843,7 +3994,7 @@ export function CodingWorkbench({
                 && Boolean(task && ["paused", "stopped", "delivered", "blocked"].includes(task.phase))}
               canDiscard={!runningVerification && !streaming && !sending
                 && Boolean(task && ["implementing", "repairing", "discovering", "paused", "stopped", "blocked", "delivered"].includes(task.phase))}
-              onOpenDiff={(change) => setTheiaReviewPath(change.path)}
+              onOpenDiff={(change) => { setTheiaReportOpen(false); setTheiaReviewPath(change.path); }}
               onDiscard={(change) => void discardChange(change.path)}
               onCommit={() => void commitChanges()}
               onRollback={() => void rollbackTask()}
@@ -3861,7 +4012,14 @@ export function CodingWorkbench({
                 onCancel={() => { if (activeRunId) void codingApi.cancelVerification(activeRunId); }}
                 onOpenOutput={(record) => setTheiaVerificationOutput([record.stdout, record.stderr].filter(Boolean).join("\n"))}
               />
-              {theiaVerificationOutput && <pre className="echo-theia-agent__output">{theiaVerificationOutput}</pre>}
+              {(runningVerification || theiaVerificationOutput || commandOutput) && (
+                <div className="echo-theia-agent__output-panel" aria-label="验证命令输出">
+                  <strong>{runningVerification ? "实时输出" : theiaVerificationOutput ? "历史验证输出" : "最近一次验证输出"}</strong>
+                  <pre className="echo-theia-agent__output">{runningVerification
+                    ? commandOutput || "正在等待命令输出…"
+                    : theiaVerificationOutput || commandOutput}</pre>
+                </div>
+              )}
             </>
           )}
         </div>
