@@ -112,8 +112,10 @@ describe("SettingsPanel", () => {
       expect(screen.getByRole("heading", { name: group, level: 2 })).toBeInTheDocument();
     }
 
-    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(12);
-    expect(screen.getByRole("button", { name: "Token 用量" })).toBeInTheDocument();
+    expect(container.querySelectorAll(".settings-navigation__item")).toHaveLength(14);
+    expect(screen.getByRole("button", { name: "用量统计" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "通知渠道" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "云存储" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "模型" })).toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("heading", { name: "模型与连接", level: 2 })).toBeInTheDocument();
     expect(screen.getByText("组织模型自动同步；个人 API 连接保存在本机并可挂载多个模型。"))
@@ -151,13 +153,16 @@ describe("SettingsPanel", () => {
     renderSettings();
 
     const pages = [
-      "通知中心",
+      "事件收件箱",
+      "通知渠道",
       "模型与连接",
       "智能体设置",
       "记忆",
       "系统设置",
       "个性化",
       "快捷键",
+      "用量统计",
+      "云存储",
       "已归档",
       "数据管理",
       "安全中心",
@@ -165,9 +170,14 @@ describe("SettingsPanel", () => {
     ];
 
     for (const page of pages) {
-      const navigationItem = screen.getByRole("button", { name: page === "模型与连接" ? "模型" : page });
-      fireEvent.click(navigationItem);
-      expect(await screen.findByRole("heading", { name: page, level: 2 })).toBeInTheDocument();
+    const navigationItem = screen.getByRole("button", {
+      name: page === "模型与连接" ? "模型" : page,
+    });
+    fireEvent.click(navigationItem);
+      expect(await screen.findByRole("heading", {
+        name: page === "事件收件箱" ? "通知中心" : page,
+        level: 2,
+      })).toBeInTheDocument();
       expect(navigationItem).toHaveAttribute("aria-current", "page");
     }
   }, 15_000);
@@ -185,14 +195,14 @@ describe("SettingsPanel", () => {
     expect(screen.queryByRole("checkbox", { name: /默认.*操作电脑/ })).toBeNull();
   });
 
-  it("移除助理设置，并将智能体邮箱统一显示为通知中心", async () => {
+  it("移除助理设置，并将智能体邮箱统一显示为事件收件箱", async () => {
     renderSettings();
 
     expect(screen.queryByRole("button", { name: "助理设置" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "账户管理" })).not.toBeInTheDocument();
     expect(screen.queryByText("智能体邮箱")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "通知中心" }));
+    fireEvent.click(screen.getByRole("button", { name: "事件收件箱" }));
     expect(await screen.findByRole("heading", { name: "通知中心" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "通知概览", level: 3 })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "通知记录", level: 3 })).toBeInTheDocument();

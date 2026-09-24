@@ -13,6 +13,8 @@ import {
   Shield,
   HelpCircle,
   X,
+  Cloud,
+  Send,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -28,6 +30,8 @@ import {
 } from "./SettingsSections";
 import { UsageQuotaPanel } from "./UsageQuotaPanel";
 import { ModelConnectionsPanel } from "./ModelConnectionsPanel";
+import { NotifyChannelsPanel } from "./NotifyChannelsPanel";
+import { CloudStoragePanel } from "./CloudStoragePanel";
 import { ArchivedSessionsSettingsPanel } from "./ArchivedSessionsSettingsPanel";
 import { useModalFocus } from "@/lib/use-modal-focus";
 import { useSessionsStore } from "@/stores/sessions-store";
@@ -45,6 +49,7 @@ import { useSessionsStore } from "@/stores/sessions-store";
 
 export type SettingsSectionId =
   | "agent-mail"
+  | "notify-channels"
   | "general"
   | "agent-settings"
   | "shortcuts"
@@ -54,6 +59,7 @@ export type SettingsSectionId =
   | "archived"
   | "data"
   | "usage"
+  | "cloud-storage"
   | "security"
   | "help";
 
@@ -72,7 +78,8 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "通知",
     items: [
-      { id: "agent-mail", label: "通知中心", icon: Mail },
+      { id: "agent-mail", label: "事件收件箱", icon: Mail },
+      { id: "notify-channels", label: "通知渠道", icon: Send },
     ],
   },
   {
@@ -94,7 +101,8 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "数据与支持",
     items: [
-      { id: "usage", label: "Token 用量", icon: BarChart3 },
+      { id: "usage", label: "用量统计", icon: BarChart3 },
+      { id: "cloud-storage", label: "云存储", icon: Cloud },
       { id: "archived", label: "已归档", icon: Archive },
       { id: "data", label: "数据管理", icon: Database },
       { id: "security", label: "安全中心", icon: Shield },
@@ -224,7 +232,41 @@ export function SettingsPanel({
                 onToast={onToast}
               />
             ) : active === "usage" ? (
-              <UsageQuotaPanel />
+              <div className="settings-section">
+                <header className="settings-section__header">
+                  <div className="settings-section__heading">
+                    <h2 className="settings-section__title">用量统计</h2>
+                    <p className="settings-section__desc">查看 Token 消耗、成本估算和配额策略。</p>
+                  </div>
+                </header>
+                <div className="settings-section__body">
+                  <UsageQuotaPanel />
+                </div>
+              </div>
+            ) : active === "notify-channels" ? (
+              <div className="settings-section">
+                <header className="settings-section__header">
+                  <div className="settings-section__heading">
+                    <h2 className="settings-section__title">通知渠道</h2>
+                    <p className="settings-section__desc">配置任务完成、异常和自动化事件要推送到哪里。</p>
+                  </div>
+                </header>
+                <div className="settings-section__body">
+                  <NotifyChannelsPanel onToast={onToast} />
+                </div>
+              </div>
+            ) : active === "cloud-storage" ? (
+              <div className="settings-section">
+                <header className="settings-section__header">
+                  <div className="settings-section__heading">
+                    <h2 className="settings-section__title">云存储</h2>
+                    <p className="settings-section__desc">管理文件同步和云端访问连接。</p>
+                  </div>
+                </header>
+                <div className="settings-section__body">
+                  <CloudStoragePanel onToast={onToast} />
+                </div>
+              </div>
             ) : active === "general" ? (
               <GeneralSettingsPanel />
             ) : active === "agent-settings" ? (

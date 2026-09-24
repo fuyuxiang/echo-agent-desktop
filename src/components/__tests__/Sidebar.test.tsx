@@ -54,7 +54,7 @@ describe("Sidebar", () => {
 
   it("渲染导航项", () => {
     render(<Sidebar {...base} />);
-    for (const label of ["新建任务", "项目", "专家·技能·连接器", "自动化", "更多"]) {
+    for (const label of ["新建任务", "项目", "代码开发", "专家·技能·连接器", "自动化", "更多"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
     expect(screen.queryByText("助理")).not.toBeInTheDocument();
@@ -263,14 +263,17 @@ describe("Sidebar", () => {
     const onNavigate = vi.fn();
     render(<Sidebar {...base} onNavigate={onNavigate} />);
     fireEvent.mouseEnter(screen.getByText("更多").closest(".sidebar__more-wrap")!);
-    expect(screen.getByRole("menu")).toBeInTheDocument();
-    expect(screen.getByText("我的文件")).toBeInTheDocument();
-    expect(screen.getByText("知识库")).toBeInTheDocument();
-    expect(screen.getByText("个人记忆")).toBeInTheDocument();
-    expect(screen.getByText("插件市场")).toBeInTheDocument();
-    expect(screen.getByText("用量统计")).toBeInTheDocument();
+    const menu = screen.getByRole("menu");
+    expect(menu).toBeInTheDocument();
+    expect(within(menu).getByText("我的文件")).toBeInTheDocument();
+    expect(within(menu).getByText("知识库")).toBeInTheDocument();
+    expect(within(menu).getByText("个人记忆")).toBeInTheDocument();
+    expect(within(menu).getByText("插件市场")).toBeInTheDocument();
+    for (const settingsEntry of ["用量统计", "通知渠道", "云存储", "代码开发"]) {
+      expect(within(menu).queryByText(settingsEntry)).not.toBeInTheDocument();
+    }
     for (const removed of ["灵感", "网页预览", "策略设置", "发现"]) {
-      expect(screen.queryByText(removed)).not.toBeInTheDocument();
+      expect(within(menu).queryByText(removed)).not.toBeInTheDocument();
     }
   });
 
@@ -298,12 +301,10 @@ describe("Sidebar", () => {
     expect(onNavigate).toHaveBeenCalledWith("知识库");
   });
 
-  it("「更多」菜单可进入代码开发工作台", async () => {
+  it("主导航可进入代码开发工作台", () => {
     const onNavigate = vi.fn();
-    const user = userEvent.setup();
     render(<Sidebar {...base} onNavigate={onNavigate} />);
 
-    await user.hover(screen.getByText("更多"));
     fireEvent.click(screen.getByText("代码开发"));
 
     expect(onNavigate).toHaveBeenCalledWith("代码开发");

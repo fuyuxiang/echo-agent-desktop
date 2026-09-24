@@ -8,14 +8,20 @@ export function Toast({
   message,
   actions = [],
   onDismiss,
+  offset = 0,
 }: {
   message: string | null;
   actions?: ToastAction[];
   onDismiss?: () => void;
+  offset?: number;
 }) {
   if (!message) return null;
   return (
-    <div className={`toast${actions.length > 0 ? " toast--actionable" : ""}`} role="status">
+    <div
+      className={`toast${actions.length > 0 ? " toast--actionable" : ""}`}
+      role="status"
+      style={{ bottom: 48 + offset * 54 }}
+    >
       <span className="toast__message">{message}</span>
       {actions.length > 0 && (
         <span className="toast__actions">

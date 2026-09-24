@@ -2,8 +2,8 @@
  * 辅助侧边栏（Secondary Sidebar）— 对齐 EchoAgent 的 peek-assistant 面板。
  *
  * 功能：
- *  - 右侧垂直触发条（收起态），hover 浮出助理列表
- *  - 点击助理 → 预览其能力描述 + 快速开始新会话
+ *  - 右侧垂直触发条（收起态），hover 浮出专家列表
+ *  - 点击专家 → 预览其能力描述 + 快速开始新会话
  *  - 支持 hover-peek 时序（100ms 进入延迟 / 300ms 离开缓冲），避免误触
  *  - Escape 关闭浮层
  *
@@ -169,7 +169,7 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
         <div className="secondary-sidebar__trigger-icon">
           <EchoAssistantNavIcon size="md" />
         </div>
-        <div className="secondary-sidebar__trigger-label">助理</div>
+        <div className="secondary-sidebar__trigger-label">专家</div>
         <ChevronRightIcon size="sm" className="secondary-sidebar__trigger-chevron" />
       </div>
 
@@ -177,14 +177,14 @@ export function SecondarySidebar({ onSelectExpert, onToast }: SecondarySidebarPr
       {hoverPeek && (
         <div className="secondary-sidebar__floating" {...floatingBindings}>
           <div className="secondary-sidebar__header">
-            <span className="secondary-sidebar__title">快速选择助理</span>
+            <span className="secondary-sidebar__title">快速选择专家</span>
           </div>
 
           {loading && <div className="secondary-sidebar__loading">加载中…</div>}
 
           {!loading && agents.length === 0 && (
             <div className="secondary-sidebar__empty">
-              暂无自定义助理
+              暂无自定义专家
               <span className="secondary-sidebar__empty-hint">
                 在「专家·技能·连接器」中创建
               </span>

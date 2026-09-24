@@ -168,7 +168,7 @@ function SettingsGroup({
 // ---------- 个性化 ----------
 
 export function PersonalizeSettingsPanel() {
-  const { theme, setTheme } = useTheme();
+  const { theme, preference, setTheme } = useTheme();
   const [fontSize, setFontSize] = useState<number>(() => {
     const saved = localStorage.getItem(FONT_KEY);
     return saved ? Number(saved) : 13;
@@ -192,20 +192,27 @@ export function PersonalizeSettingsPanel() {
               {theme === "dark" ? <Moon size={17} /> : <Sun size={17} />}
               主题
             </span>
-            <span className="settings-row__description">在浅色和深色界面之间切换</span>
+            <span className="settings-row__description">可固定主题，也可跟随系统外观自动切换</span>
           </div>
           <div className="settings-row__control theme-toggle" role="group" aria-label="界面主题">
             <button
-              className={`theme-toggle__btn ${theme === "light" ? "theme-toggle__btn--active" : ""}`}
+              className={`theme-toggle__btn ${preference === "system" ? "theme-toggle__btn--active" : ""}`}
+              onClick={() => setTheme("system")}
+              aria-pressed={preference === "system"}
+            >
+              <Monitor size={15} /> 跟随系统
+            </button>
+            <button
+              className={`theme-toggle__btn ${preference === "light" ? "theme-toggle__btn--active" : ""}`}
               onClick={() => setTheme("light")}
-              aria-pressed={theme === "light"}
+              aria-pressed={preference === "light"}
             >
               <Sun size={15} /> 浅色
             </button>
             <button
-              className={`theme-toggle__btn ${theme === "dark" ? "theme-toggle__btn--active" : ""}`}
+              className={`theme-toggle__btn ${preference === "dark" ? "theme-toggle__btn--active" : ""}`}
               onClick={() => setTheme("dark")}
-              aria-pressed={theme === "dark"}
+              aria-pressed={preference === "dark"}
             >
               <Moon size={15} /> 深色
             </button>

@@ -8,6 +8,7 @@ import { usePendingExpertStore } from "@/stores/pending-expert-store";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
 import { useWorkspaceMentions } from "@/lib/use-workspace-mentions";
 import type { AutomationMode } from "@/lib/automation-client";
+import { CheckCircle2, FolderOpen, KeyRound, Cpu } from "lucide-react";
 
 /** EchoAgent 首页：单一任务入口。 */
 export function HomePage({
@@ -101,6 +102,69 @@ export function HomePage({
     setExternalText(text);
     setExternalTextNonce((n) => n + 1);
   };
+
+  const hasWorkspace = Boolean(cwd);
+
+  if (!apiReady) {
+    return (
+      <div className="home home--setup">
+        <div className="home__inner home__inner--setup">
+          <header className="home__header">
+            <h1 className="home__title">先把 EchoAgent 接到你的工作区</h1>
+          </header>
+          <section className="home-setup" aria-label="首次使用设置">
+            <div className="home-setup__steps">
+              <div className="home-setup__step home-setup__step--active">
+                <span className="home-setup__icon"><Cpu size={18} /></span>
+                <div>
+                  <strong>选择模型</strong>
+                  <span>添加一个可用的模型连接，之后任务都会使用它执行。</span>
+                </div>
+              </div>
+              <div className="home-setup__step home-setup__step--active">
+                <span className="home-setup__icon"><KeyRound size={18} /></span>
+                <div>
+                  <strong>填写 API Key 并测试</strong>
+                  <span>{setupHint || "在模型设置里填写 Base URL、API Key 和 Model ID。"}</span>
+                </div>
+              </div>
+              <div className={"home-setup__step" + (hasWorkspace ? " home-setup__step--done" : "")}>
+                <span className="home-setup__icon">
+                  {hasWorkspace ? <CheckCircle2 size={18} /> : <FolderOpen size={18} />}
+                </span>
+                <div>
+                  <strong>选择第一个工作目录</strong>
+                  <span>{hasWorkspace ? cwd : "选择 Agent 可以读取和修改的项目目录。"}</span>
+                </div>
+              </div>
+            </div>
+            <div className="home-setup__actions">
+              <button type="button" className="btn btn--primary" onClick={onOpenSettings}>
+                配置模型
+              </button>
+              {workspaces && workspaces.length > 0 && onSelectWorkspace && (
+                <select
+                  className="home-setup__workspace"
+                  value={cwd ?? ""}
+                  onChange={(event) => {
+                    if (event.target.value) onSelectWorkspace(event.target.value);
+                  }}
+                  aria-label="选择工作目录"
+                >
+                  <option value="">选择工作目录</option>
+                  {workspaces.map((workspace) => (
+                    <option key={workspace.cwd} value={workspace.cwd}>
+                      {workspace.cwd}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="home">

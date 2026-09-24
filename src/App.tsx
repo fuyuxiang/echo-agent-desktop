@@ -137,6 +137,12 @@ const UpdateDialog = lazy(() => import("./components/UpdateDialog").then((module
 const FolderTrustDialog = lazy(() => import("./components/FolderTrustDialog").then((module) => ({ default: module.FolderTrustDialog })));
 const MeetingRecordingIndicator = lazy(() => import("./components/MeetingRecordingIndicator").then((module) => ({ default: module.MeetingRecordingIndicator })));
 
+type ToastEntry = {
+  id: number;
+  message: string;
+  actions: ToastAction[];
+};
+
 function publishQuotaAlert(
   records: UsageRecord[],
   config: QuotaConfig | null,
@@ -220,7 +226,7 @@ function Shell() {
   const [placeholderView, setPlaceholderView] = useState<string | null>(null);
   const [meetingLaunchModelId, setMeetingLaunchModelId] = useState<string | undefined>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [toast, setToast] = useState<{ message: string; actions: ToastAction[] } | null>(null);
+  const [toasts, setToasts] = useState<ToastEntry[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(undefined);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelCatalogError, setModelCatalogError] = useState<string | null>(null);
@@ -282,7 +288,8 @@ function Shell() {
     }
   }, [activeCodingWorkspaceCwd]);
   const [cancellingSessionId, setCancellingSessionId] = useState<string | null>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  const toastIdRef = useRef(0);
   const modelsRef = useRef<ModelOption[]>([]);
   const authReadyRef = useRef(false);
   const promptedUpdateVersionRef = useRef<string | null>(null);
@@ -291,13 +298,27 @@ function Shell() {
   const sessionCatalogGenerationRef = useRef(0);
   const modelCatalogGenerationRef = useRef(0);
 
-  const showToast = useCallback((message: string, durationMs = 2000) => {
-    setToast({ message, actions: [] });
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => {
-      toastTimer.current = null;
-      setToast(null);
-    }, durationMs);
+  const dismissToast = useCallback((id: number) => {
+    const timer = toastTimers.current.get(id);
+    if (timer) clearTimeout(timer);
+    toastTimers.current.delete(id);
+    setToasts((current) => current.filter((toast) => toast.id !== id));
+  }, []);
+
+  const enqueueToast = useCallback((message: string, actions: ToastAction[] = [], durationMs = 4000) => {
+    const id = ++toastIdRef.current;
+    setToasts((current) => [...current, { id, message, actions }].slice(-4));
+    const timer = setTimeout(() => dismissToast(id), durationMs);
+    toastTimers.current.set(id, timer);
+  }, [dismissToast]);
+
+  const showToast = useCallback((message: string, durationMs = 4000) => {
+    enqueueToast(message, [], durationMs);
+  }, [enqueueToast]);
+
+  useEffect(() => () => {
+    for (const timer of toastTimers.current.values()) clearTimeout(timer);
+    toastTimers.current.clear();
   }, []);
 
   const sessionStore = useSessionStore;
@@ -331,7 +352,7 @@ function Shell() {
     void useOrgSessionStore.getState().hydrate();
     void hydrateKnowledgeSources().catch((error) => {
       console.error("[EchoAgent] Failed to hydrate knowledge sources:", error);
-      setToast({ message: "知识源后端数据读取失败", actions: [] });
+      enqueueToast("知识源后端数据读取失败");
     });
     void hydrateProjectsFromBackend()
       .then(() => {
@@ -341,7 +362,7 @@ function Shell() {
       })
       .catch((error) => {
         console.error("[EchoAgent] Failed to hydrate projects:", error);
-        setToast({ message: "项目后端数据读取失败，已使用本地缓存", actions: [] });
+        enqueueToast("项目后端数据读取失败，已使用本地缓存");
       });
   }, []);
 
@@ -905,7 +926,7 @@ function Shell() {
           onAgentDied: ({ reason }) => {
             console.error('[EchoAgent] Agent thread died:', reason);
             const message = `AI 引擎异常退出：${reason}。请重启应用。`;
-            setToast({ message: `⚠️ ${message}`, actions: [] });
+            enqueueToast(`⚠️ ${message}`, [], 8000);
             setInit((previous) => previous
               ? {
                 ...previous,
@@ -1031,20 +1052,9 @@ function Shell() {
           : "未能获取此会话的模型信息，请重新打开任务，或在右下角选择模型"
         : runtimeSetupHint;
 
-  const dismissToast = useCallback(() => {
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = null;
-    setToast(null);
-  }, []);
-
   const showActionToast = useCallback((message: string, actions: ToastAction[], durationMs = 8000) => {
-    setToast({ message, actions });
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => {
-      toastTimer.current = null;
-      setToast(null);
-    }, durationMs);
-  }, []);
+    enqueueToast(message, actions, durationMs);
+  }, [enqueueToast]);
 
   useEffect(() => onSessionStatusPersistenceIssue(({ pendingCount }) => {
     showActionToast(
@@ -1059,10 +1069,6 @@ function Shell() {
       12_000,
     );
   }), [showActionToast, showToast]);
-
-  useEffect(() => () => {
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-  }, []);
 
   const requireConfiguredModel = (): string | undefined => {
     if (!init?.auth.ready) {
@@ -1090,6 +1096,14 @@ function Shell() {
       openSettings("usage");
       return;
     }
+    if (label === "通知渠道") {
+      openSettings("notify-channels");
+      return;
+    }
+    if (label === "云存储") {
+      openSettings("cloud-storage");
+      return;
+    }
     selectionGenerationRef.current += 1;
     setPlaceholderView(label);
     if (label === "代码开发") {
@@ -1112,7 +1126,8 @@ function Shell() {
   };
   const handleNavigate = (label: string) => {
     if (placeholderView === "代码开发" && label !== "代码开发"
-        && label !== "用量统计" && codingLeaveGuardRef.current) {
+        && label !== "用量统计" && label !== "通知渠道" && label !== "云存储"
+        && codingLeaveGuardRef.current) {
       void codingLeaveGuardRef.current().then((allowed) => {
         if (allowed) navigateNow(label);
       });
@@ -2652,11 +2667,15 @@ function Shell() {
           )}
         </main>
       </div>
-      <Toast
-        message={toast?.message ?? null}
-        actions={toast?.actions}
-        onDismiss={dismissToast}
-      />
+      {toasts.map((toast, index) => (
+        <Toast
+          key={toast.id}
+          message={toast.message}
+          actions={toast.actions}
+          offset={toasts.length - 1 - index}
+          onDismiss={() => dismissToast(toast.id)}
+        />
+      ))}
       <Suspense fallback={null}>
         <MeetingRecordingIndicator
           onOpen={(modelId) => {

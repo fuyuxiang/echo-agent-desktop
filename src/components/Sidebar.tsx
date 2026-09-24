@@ -30,9 +30,6 @@ import {
   MyFilesIconV2,
   MoreMenuImaKnowledgeIcon,
   MemoryIcon,
-  ClockIconV2,
-  AgentMailIcon,
-  CloudToolIcon,
   PluginsIcon,
   Code2Icon,
 } from "@/foundation/components/Icon/icons";
@@ -42,7 +39,7 @@ const logoMarkUrl = "/app-icon.png";
 
 const NAV = [
   { label: "项目", icon: EchoProjectNavIcon },
-  { label: "组织", icon: MoreMenuImaKnowledgeIcon },
+  { label: "代码开发", icon: Code2Icon },
   { label: "专家·技能·连接器", icon: EchoExpertNavIcon },
   { label: "自动化", icon: EchoAutomationNavIcon },
 ];
@@ -312,7 +309,7 @@ function handleMenuKeyDown(
 /**
  * "更多" 侧栏按钮的弹出菜单 — 对齐 EchoAgent：
  * - hover 打开，向右浮出（不向下盖住会话列表）
- * - 展示本地内容、代码开发、插件市场和系统工具入口。
+ * - 展示内容和能力扩展入口；系统配置类入口收束到设置。
  */
 function MoreDropdown({
   onNavigate,
@@ -420,16 +417,6 @@ function MoreDropdown({
       },
     },
     {
-      id: "coding_workspace",
-      label: "代码开发",
-      group: "工具",
-      icon: <Code2Icon size="md" />,
-      action: () => {
-        setOpen(false);
-        onNavigate("代码开发");
-      },
-    },
-    {
       id: "plugins",
       label: "插件市场",
       group: "工具",
@@ -437,36 +424,6 @@ function MoreDropdown({
       action: () => {
         setOpen(false);
         onNavigate("插件·市场");
-      },
-    },
-    {
-      id: "usage_quota",
-      label: "用量统计",
-      group: "系统",
-      icon: <ClockIconV2 size="md" />,
-      action: () => {
-        setOpen(false);
-        onNavigate("用量统计");
-      },
-    },
-    {
-      id: "notify_channels",
-      label: "通知渠道",
-      group: "系统",
-      icon: <AgentMailIcon size="md" />,
-      action: () => {
-        setOpen(false);
-        onNavigate("通知渠道");
-      },
-    },
-    {
-      id: "cloud_storage",
-      label: "云存储",
-      group: "系统",
-      icon: <CloudToolIcon size="md" />,
-      action: () => {
-        setOpen(false);
-        onNavigate("云存储");
       },
     },
   ];
@@ -520,7 +477,7 @@ function MoreDropdown({
             triggerRef.current?.focus();
           })}
         >
-          {(["内容", "工具", "系统"] as const).map((group) => (
+          {(["内容", "工具"] as const).map((group) => (
             <div className="sidebar__more-group" key={group}>
               <div className="sidebar__more-group-title">{group}</div>
               {ITEMS.filter((item) => item.group === group).map((item) => (
