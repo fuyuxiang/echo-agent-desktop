@@ -63,9 +63,15 @@ export const MarkdownPreMermaid = memo(function MarkdownPreMermaid({
     (async () => {
       try {
         const mermaid = (await import("mermaid")).default;
+        const secure = new Set(mermaid.mermaidAPI.getConfig().secure ?? []);
+        secure.add("htmlLabels");
+        secure.add("fontFamily");
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: "strict",
+          // Agent-authored init directives must not switch standalone SVGs
+          // back to HTML labels or inherited fonts.
+          secure: [...secure],
           theme: theme === "dark" ? "dark" : "default",
           // The result is displayed as a standalone SVG image. HTML labels and
           // inherited fonts can measure differently in the page and the image,

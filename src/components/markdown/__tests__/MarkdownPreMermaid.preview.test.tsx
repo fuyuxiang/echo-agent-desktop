@@ -9,6 +9,7 @@ const svg = '<svg viewBox="0 0 2400 400" xmlns="http://www.w3.org/2000/svg"></sv
 
 vi.mock("mermaid", () => ({
   default: {
+    mermaidAPI: { getConfig: vi.fn(() => ({ secure: ["securityLevel"] })) },
     initialize: vi.fn(),
     render: vi.fn(async () => ({ svg })),
   },
@@ -78,6 +79,7 @@ describe("Mermaid 图表预览", () => {
       securityLevel: "strict",
       htmlLabels: false,
       fontFamily: expect.stringContaining("PingFang SC"),
+      secure: expect.arrayContaining(["securityLevel", "htmlLabels", "fontFamily"]),
     }));
   });
 
