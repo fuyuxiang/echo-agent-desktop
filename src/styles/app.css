@@ -2751,6 +2751,10 @@ button.knowledge-trace__item:hover {
   background-color: var(--md-code-action-hover-bg);
   color: var(--md-code-title);
 }
+.md-code-action:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
 .md-code-action-icon {
   width: 14px;
   height: 14px;
@@ -2797,6 +2801,14 @@ button.knowledge-trace__item:hover {
   text-align: center;
   color: var(--echo-text-weak);
   font-size: 13px;
+}
+.md-mermaid-download-status {
+  overflow: hidden;
+  padding: 4px 16px;
+  color: var(--echo-text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .md-mermaid-diagram {
   padding: 12px 16px;

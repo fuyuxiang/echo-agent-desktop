@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { isTauri, invoke } from "@tauri-apps/api/core";
+import mermaid from "mermaid";
 import { MarkdownPreMermaid } from "../MarkdownPreMermaid";
 
 const graph = "flowchart LR\nA-->B";
@@ -12,11 +14,18 @@ vi.mock("mermaid", () => ({
   },
 }));
 
+vi.mock("@tauri-apps/api/core", () => ({
+  isTauri: vi.fn(() => false),
+  invoke: vi.fn(),
+}));
+
 describe("Mermaid 图表预览", () => {
   const originalCreate = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
   const originalRevoke = Object.getOwnPropertyDescriptor(URL, "revokeObjectURL");
 
   beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isTauri).mockReturnValue(false);
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:diagram") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
   });
@@ -60,5 +69,56 @@ describe("Mermaid 图表预览", () => {
     fireEvent.click(screen.getByRole("button", { name: "放大" }));
     expect(onPreviewMermaid).toHaveBeenCalledWith(svg, graph);
     expect(screen.queryByRole("dialog", { name: "图表预览" })).toBeNull();
+  });
+
+  it("为独立 SVG 禁用 HTML 标签并固定中文字体，避免节点文字按不同字体计算宽度", async () => {
+    render(<MarkdownPreMermaid content={graph} />);
+    await screen.findByRole("button", { name: "放大预览图表" });
+    expect(mermaid.initialize).toHaveBeenCalledWith(expect.objectContaining({
+      securityLevel: "strict",
+      htmlLabels: false,
+      fontFamily: expect.stringContaining("PingFang SC"),
+    }));
+  });
+
+  it("桌面端下载打开原生保存对话框，并显示实际保存结果", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(invoke).mockResolvedValue("/tmp/diagram.svg");
+    render(<MarkdownPreMermaid content={graph} />);
+    fireEvent.click(await screen.findByRole("button", { name: "下载" }));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("export_text_file", {
+      suggestedName: "diagram.svg",
+      extension: "svg",
+      content: svg,
+    }));
+    expect(await screen.findByRole("status")).toHaveTextContent("已保存：/tmp/diagram.svg");
+  });
+
+  it("保存被取消或失败时明确反馈", async () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(invoke).mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("磁盘不可写"));
+    render(<MarkdownPreMermaid content={graph} />);
+    const download = await screen.findByRole("button", { name: "下载" });
+    fireEvent.click(download);
+    expect(await screen.findByRole("status")).toHaveTextContent("已取消保存");
+    fireEvent.click(download);
+    expect(await screen.findByRole("status")).toHaveTextContent("下载失败：磁盘不可写");
+  });
+
+  it("浏览器端下载在链接加入页面后触发，并延后释放 Blob 地址", async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      expect(document.body.contains(this)).toBe(true);
+      expect(this.download).toBe("diagram.svg");
+    });
+    try {
+      render(<MarkdownPreMermaid content={graph} />);
+      fireEvent.click(await screen.findByRole("button", { name: "下载" }));
+      expect(await screen.findByRole("status")).toHaveTextContent("已发起下载");
+      expect(click).toHaveBeenCalledOnce();
+      expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    } finally {
+      click.mockRestore();
+    }
   });
 });
