@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writ
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { latestTheiaSourceMtime } from "./theia-source-mtime.mjs";
+import { ensureTheiaNodeWritable } from "./ensure-theia-node-writable.mjs";
 
 const projectRoot = resolve(import.meta.dirname, "..");
 const sourceRoot = join(projectRoot, "vendor/theia-platform");
@@ -87,7 +88,9 @@ const nodeTarget = process.platform === "win32"
   ? join(resourcesRoot, "node/node.exe")
   : join(resourcesRoot, "node/bin/node");
 mkdirSync(resolve(nodeTarget, ".."), { recursive: true });
+ensureTheiaNodeWritable(projectRoot, nodeTarget);
 copyUnlessSameFile(process.execPath, nodeTarget);
+ensureTheiaNodeWritable(projectRoot, nodeTarget);
 const nodeDir = dirname(realpathSync(process.execPath));
 const licenseCandidates = [
   join(nodeDir, "LICENSE"),

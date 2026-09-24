@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { latestTheiaSourceMtime } from "./theia-source-mtime.mjs";
+import { ensureTheiaNodeWritable } from "./ensure-theia-node-writable.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const resources = join(root, "src-tauri/resources/theia");
@@ -19,6 +20,7 @@ try {
 if (existsSync(runtime) && existsSync(node)
     && platform?.platform === process.platform && platform?.arch === process.arch
     && platform?.sourceMtimeMs >= latestTheiaSourceMtime(join(root, "vendor/theia-platform"))) {
+  ensureTheiaNodeWritable(root, node);
   console.log("Echo Code IDE runtime is already staged.");
   process.exit(0);
 }

@@ -75,14 +75,25 @@ fi
 ARCH="$(uname -m)"
 log_ok "macOS detected ($ARCH)"
 
+# A Rosetta shell on Apple Silicon reports x86_64, although the machine needs
+# the arm64 release. Fail before staging an Intel Node.js runtime by mistake.
+if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" == "1" && "$ARCH" != "arm64" ]]; then
+    log_err "This Apple Silicon Mac is running an Intel shell. Use a native arm64 shell and toolchain to build the darwin-aarch64 release."
+    exit 1
+fi
+
 case "$ARCH" in
     arm64)
         RELEASE_TARGET="darwin-aarch64"
         TAURI_DMG_ARCH="aarch64"
+        EXPECTED_NODE_ARCH="arm64"
+        EXPECTED_RUST_HOST="aarch64-apple-darwin"
         ;;
     x86_64)
         RELEASE_TARGET="darwin-x86_64"
         TAURI_DMG_ARCH="x64"
+        EXPECTED_NODE_ARCH="x64"
+        EXPECTED_RUST_HOST="x86_64-apple-darwin"
         ;;
     *)
         log_err "Unsupported macOS architecture: $ARCH"
@@ -98,6 +109,18 @@ for cmd in node pnpm cargo rustc; do
     fi
     log_info "$(printf '%-7s %s' "$cmd" "$("$cmd" --version 2>/dev/null | head -1)")"
 done
+
+NODE_ARCH="$(node -p 'process.arch')"
+if [[ "$NODE_ARCH" != "$EXPECTED_NODE_ARCH" ]]; then
+    log_err "Node.js architecture is $NODE_ARCH; $RELEASE_TARGET requires $EXPECTED_NODE_ARCH."
+    exit 1
+fi
+RUST_HOST="$(rustc -vV | sed -n 's/^host: //p')"
+if [[ "$RUST_HOST" != "$EXPECTED_RUST_HOST" ]]; then
+    log_err "Rust host is $RUST_HOST; $RELEASE_TARGET requires $EXPECTED_RUST_HOST."
+    exit 1
+fi
+log_ok "Node.js and Rust toolchain match $RELEASE_TARGET"
 
 # echoagent's build.rs invokes protoc; honor $PROTOC or a protoc on PATH.
 if [[ -z "${PROTOC:-}" ]] && ! command -v protoc >/dev/null 2>&1; then
@@ -143,8 +166,26 @@ pnpm tauri build --bundles dmg || BUILD_RC=$?
 # 6. Verify the app and give the installer one canonical public name.
 # ---------------------------------------------------------------------------
 BUNDLE_DIR="$PROJECT_ROOT/src-tauri/target/release/bundle/dmg"
-APP_BUNDLE="$PROJECT_ROOT/src-tauri/target/release/bundle/macos/EchoAgent.app"
 CANONICAL_DMG=""
+DMG_MOUNT_POINT=""
+DMG_MOUNTED=0
+cleanup_dmg_mount() {
+    if [[ -n "$DMG_MOUNT_POINT" ]]; then
+        if [[ $DMG_MOUNTED -eq 1 ]]; then
+            if ! hdiutil detach "$DMG_MOUNT_POINT" >/dev/null; then
+                log_err "Could not unmount DMG: $DMG_MOUNT_POINT"
+                return 1
+            fi
+            DMG_MOUNTED=0
+        fi
+        if ! rmdir "$DMG_MOUNT_POINT"; then
+            log_err "Could not remove temporary mount point: $DMG_MOUNT_POINT"
+            return 1
+        fi
+        DMG_MOUNT_POINT=""
+    fi
+}
+trap 'cleanup_dmg_mount || true' EXIT
 if [[ $BUILD_RC -eq 0 ]]; then
     DEFAULT_DMG="$BUNDLE_DIR/EchoAgent_${APP_VERSION}_${TAURI_DMG_ARCH}.dmg"
     CANONICAL_DMG="$BUNDLE_DIR/EchoAgent-v${APP_VERSION}-${RELEASE_TARGET}.dmg"
@@ -153,8 +194,22 @@ if [[ $BUILD_RC -eq 0 ]]; then
         log_err "Expected Tauri DMG not found: $DEFAULT_DMG"
         exit 1
     fi
+    if ! hdiutil verify "$DEFAULT_DMG" >/dev/null; then
+        log_err "DMG checksum verification failed: $DEFAULT_DMG"
+        exit 1
+    fi
+
+    # Inspect the app that users will actually install. Tauri may remove the
+    # intermediate .app after packaging, and an older one may also be present.
+    DMG_MOUNT_POINT="$(mktemp -d "${TMPDIR:-/tmp}/echoagent-dmg-check.XXXXXX")"
+    if ! hdiutil attach -readonly -nobrowse -quiet -mountpoint "$DMG_MOUNT_POINT" "$DEFAULT_DMG"; then
+        log_err "Could not mount the generated DMG for app verification: $DEFAULT_DMG"
+        exit 1
+    fi
+    DMG_MOUNTED=1
+    APP_BUNDLE="$DMG_MOUNT_POINT/EchoAgent.app"
     if [[ ! -d "$APP_BUNDLE" ]]; then
-        log_err "Expected app bundle not found: $APP_BUNDLE"
+        log_err "Expected EchoAgent.app not found inside: $DEFAULT_DMG"
         exit 1
     fi
 
@@ -172,6 +227,16 @@ if [[ $BUILD_RC -eq 0 ]]; then
     fi
     if ! lipo -archs "$APP_BUNDLE/Contents/MacOS/$EXECUTABLE_NAME" | tr ' ' '\n' | grep -Fxq "$ARCH"; then
         log_err "App executable does not contain expected architecture: $ARCH"
+        exit 1
+    fi
+    THEIA_ENTRY="$APP_BUNDLE/Contents/Resources/theia/browser/lib/backend/main.js"
+    NODE_EXECUTABLE="$APP_BUNDLE/Contents/Resources/theia/node/bin/node"
+    if [[ ! -f "$THEIA_ENTRY" || ! -x "$NODE_EXECUTABLE" ]]; then
+        log_err "Echo Code IDE or its Node.js runtime is missing from the app bundle"
+        exit 1
+    fi
+    if ! lipo -archs "$NODE_EXECUTABLE" | tr ' ' '\n' | grep -Fxq "$ARCH"; then
+        log_err "Bundled Node.js does not contain expected architecture: $ARCH"
         exit 1
     fi
 
@@ -194,6 +259,7 @@ if [[ $BUILD_RC -eq 0 ]]; then
         log_ok "macOS code signature and Gatekeeper assessment passed"
     fi
 
+    cleanup_dmg_mount
     mv -f "$DEFAULT_DMG" "$CANONICAL_DMG"
     log_ok "Normalized release names for $RELEASE_TARGET"
 fi
