@@ -5,10 +5,21 @@
     "rootDir": "src",
     "outDir": "lib"
   },
-  "include": ["src"],
+  "include": [
+    "src"
+  ],
   "references": [
-    { "path": "../../packages/core" },
-    { "path": "../../packages/editor" },
-    { "path": "../../packages/filesystem" }
+    {
+      "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/editor"
+    },
+    {
+      "path": "../../packages/filesystem"
+    },
+    {
+      "path": "../../packages/workspace"
+    }
   ]
 }
