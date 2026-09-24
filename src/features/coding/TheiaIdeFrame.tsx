@@ -54,6 +54,7 @@ export function TheiaIdeFrame({
 }: TheiaIdeFrameProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const resettingWorkspace = useRef(false);
+  const hasVisibleAgentDock = useRef(false);
   const token = useMemo(() => crypto.randomUUID(), [root]);
   const [endpoint, setEndpoint] = useState<TheiaEndpoint | null>(null);
   const baseUrl = endpoint?.url ?? null;
@@ -120,6 +121,10 @@ export function TheiaIdeFrame({
   }, [endpoint, root, token]);
 
   useEffect(() => {
+    hasVisibleAgentDock.current = false;
+  }, [frameUrl, reloadKey]);
+
+  useEffect(() => {
     if (status !== "ready" || !baseUrl || !previewRequest) return;
     frameRef.current?.contentWindow?.postMessage({
       type: "echo/open-preview", token, url: previewRequest.url,
@@ -151,7 +156,9 @@ export function TheiaIdeFrame({
         const bounds = message.bounds;
         if (bounds === null) {
           onAgentBounds?.(null);
-          onAgentVisibilityChange?.(false);
+          // Theia emits an empty measurement before its right dock finishes
+          // opening. Only a previously visible dock can be user-collapsed.
+          if (hasVisibleAgentDock.current) onAgentVisibilityChange?.(false);
         } else if (bounds && typeof bounds === "object") {
           const next = bounds as Record<string, unknown>;
           const { left, top, width, height } = next;
@@ -162,6 +169,7 @@ export function TheiaIdeFrame({
               && (left as number) + (width as number) <= frame.clientWidth + 2
               && (top as number) + (height as number) <= frame.clientHeight + 2) {
             onAgentBounds?.({ left: left as number, top: top as number, width: width as number, height: height as number });
+            hasVisibleAgentDock.current = true;
             onAgentVisibilityChange?.(true);
           }
         }

@@ -1420,6 +1420,14 @@ describe("Theia workbench", () => {
       window.dispatchEvent(new MessageEvent("message", {
         origin: src.origin,
         source: frame.contentWindow,
+        data: { type: "echo/agent-bounds", token: src.searchParams.get("echoBridgeToken"), bounds: null },
+      }));
+    });
+    expect(container.querySelector(".coding-workbench--agent-closed")).not.toBeInTheDocument();
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", {
+        origin: src.origin,
+        source: frame.contentWindow,
         data: {
           type: "echo/agent-bounds",
           token: src.searchParams.get("echoBridgeToken"),
@@ -1431,6 +1439,14 @@ describe("Theia workbench", () => {
     expect(screen.queryByRole("tablist", { name: "开发任务面板" })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "任务描述" })).toBeInTheDocument();
     expect(agent.lastElementChild).toHaveClass("echo-theia-agent__composer");
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", {
+        origin: src.origin,
+        source: frame.contentWindow,
+        data: { type: "echo/agent-bounds", token: src.searchParams.get("echoBridgeToken"), bounds: null },
+      }));
+    });
+    expect(container.querySelector(".coding-workbench--agent-closed")).toBeInTheDocument();
   });
 
   it("keeps the task composer available while reviewing changes and verification", async () => {
