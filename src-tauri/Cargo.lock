@@ -4025,6 +4025,7 @@ dependencies = [
  "echo-agent-memory",
  "echo-agent-pty",
  "echo-agent-runtime",
+ "echo-agent-sampler",
  "echo-agent-tool-protocol",
  "echo-agent-tool-runtime",
  "echo-agent-tool-types",

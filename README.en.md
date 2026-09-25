@@ -217,10 +217,20 @@ EchoAgent stores application state under `~/.echo-agent/` by default. Set `ECHO_
 - Provider API keys are currently stored in the local `config.toml`. EchoAgent tightens file permissions on Unix; Windows protection depends on the current user's ACL. Never commit this file or attach it to a public issue.
 - Organization passwords are never stored. Refresh credentials are protected by Keychain on macOS and current-user DPAPI on Windows, with an owner-only file fallback on other platforms; when a credential expires, only the non-secret server and username are retained for sign-in recovery.
 - “Local-first” describes application state and execution control, not full offline operation. Model, MCP, WebDAV, notification, and optional organization features contact their configured services.
-- Memory is enabled by default. The current Runtime uses preset SiliconFlow endpoints for `BAAI/bge-m3` embeddings and `BAAI/bge-reranker-v2-m3` reranking. Review the relevant configuration before handling sensitive content, or disable memory under **Settings → Memory**.
+- Built-in chat uses `http://www.ojlab.com:8088/v1` with `chat-xc`, `chat-glm`, and `chat-qwen`; `chat-xc` is the initial default. An organization model takes precedence after sign-in unless the user explicitly selects a default. Memory is enabled by default and uses `embed-pro` (1024 dimensions) and `rerank-pro` without an API key. This service currently uses plaintext HTTP; review the configuration before handling sensitive content, or disable memory under **Settings → Memory**.
+- Personal model connections use HTTPS by default. For a service that only offers HTTP, explicitly enable HTTP for that connection in the connection editor. The API key, prompts, and responses then travel in plaintext. This setting does not change HTTPS connections or organization-managed model connections.
+
 - Browser Use uploads only regular files inside the current task workspace and asks before disclosing any file to a website. Approval cards omit raw input text and URL query/fragment data, with Reject as the default focus.
 - The coding workbench's file, index, and verification APIs operate only inside an authorized root and reject symlink escapes; its verification runner also rejects known destructive commands. Non-Git checkpoints exclude dependency caches, build outputs, and repository metadata. The integrated terminal is an interactive shell launched as the current user in the workspace and is not confined by those file-API boundaries.
 - For untrusted repositories, use Approval mode, grant only the required directories, and inspect risky actions individually.
+
+| Built-in chat model | Context window | Maximum input | Maximum output |
+| --- | ---: | ---: | ---: |
+| `chat-xc` | 262,144 | 253,952 | 8,192 |
+| `chat-glm` | 131,072 | 122,880 | 8,192 |
+| `chat-qwen` | 262,144 | 196,608 | 65,536 |
+
+All limits are in tokens. Maximum input equals the context window minus maximum output. The runtime configures context and output limits per model.
 
 ## Development and verification
 

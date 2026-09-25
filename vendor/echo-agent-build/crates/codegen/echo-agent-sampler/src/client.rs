@@ -47,6 +47,52 @@ const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 128_000;
 const ENFORCE_SECURE_PROVIDER_URLS_ENV: &str = "ECHO_AGENT_ENFORCE_SECURE_PROVIDER_URLS";
 const ALLOW_INSECURE_LOOPBACK_HTTP_ENV: &str = "ECHO_AGENT_ALLOW_INSECURE_LOOPBACK_HTTP";
 
+/// URLs explicitly approved by the desktop's personal-connection settings.
+/// The allowlist is replaced after each config write, so approval for one
+/// provider cannot silently authorize a different HTTP endpoint.
+static APPROVED_INSECURE_HTTP_URLS: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashSet<String>>,
+> = std::sync::OnceLock::new();
+
+fn approved_insecure_http_urls() -> &'static std::sync::RwLock<std::collections::HashSet<String>> {
+    APPROVED_INSECURE_HTTP_URLS
+        .get_or_init(|| std::sync::RwLock::new(std::collections::HashSet::new()))
+}
+
+fn normalized_http_base_url(raw: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(raw.trim()).ok()?;
+    if parsed.scheme() != "http"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return None;
+    }
+    Some(parsed.to_string().trim_end_matches('/').to_owned())
+}
+
+/// Replace the desktop-approved HTTP endpoints. Only native settings code
+/// should call this after validating each personal provider's explicit opt-in.
+pub fn replace_approved_insecure_http_urls(urls: impl IntoIterator<Item = String>) {
+    let approved = urls
+        .into_iter()
+        .filter_map(|url| normalized_http_base_url(&url))
+        .collect();
+    *approved_insecure_http_urls()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = approved;
+}
+
+fn is_approved_insecure_http_url(raw: &str) -> bool {
+    normalized_http_base_url(raw).is_some_and(|url| {
+        approved_insecure_http_urls()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(&url)
+    })
+}
+
 fn env_enabled(name: &str) -> bool {
     std::env::var(name)
         .ok()
@@ -57,6 +103,20 @@ fn validate_sampling_base_url_with_policy(
     raw: &str,
     enforce: bool,
     allow_insecure_loopback: bool,
+) -> Result<()> {
+    validate_sampling_base_url_with_approval(
+        raw,
+        enforce,
+        allow_insecure_loopback,
+        is_approved_insecure_http_url(raw),
+    )
+}
+
+fn validate_sampling_base_url_with_approval(
+    raw: &str,
+    enforce: bool,
+    allow_insecure_loopback: bool,
+    approved_remote_http: bool,
 ) -> Result<()> {
     if !enforce {
         return Ok(());
@@ -74,6 +134,10 @@ fn validate_sampling_base_url_with_policy(
     }
     match parsed.scheme() {
         "https" => Ok(()),
+        // This exact built-in endpoint has no credential and is also allowed
+        // by the desktop provider validator. Keep both policies in sync.
+        "http" if raw.trim().trim_end_matches('/') == "http://www.ojlab.com:8088/v1" => Ok(()),
+        "http" if approved_remote_http => Ok(()),
         "http"
             if allow_insecure_loopback
                 && parsed.host_str().is_some_and(|host| {
@@ -84,7 +148,7 @@ fn validate_sampling_base_url_with_policy(
             Ok(())
         }
         "http" => Err(SamplingError::InvalidConfiguration(
-            "model provider HTTP is disabled; loopback development requires ECHO_AGENT_ALLOW_INSECURE_LOOPBACK_HTTP=1",
+            "model provider HTTP requires explicit personal-connection approval; loopback development also supports ECHO_AGENT_ALLOW_INSECURE_LOOPBACK_HTTP=1",
         )),
         _ => Err(SamplingError::InvalidConfiguration(
             "model provider base URL must use HTTPS",
@@ -2654,6 +2718,36 @@ mod tests {
                 .is_err()
         );
         assert!(
+            validate_sampling_base_url_with_approval(
+                "http://api.example.com:60100/v1",
+                true,
+                false,
+                true,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_sampling_base_url_with_approval(
+                "http://api.example.com:60100/other",
+                true,
+                false,
+                false,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_sampling_base_url_with_policy("http://www.ojlab.com:8088/v1", true, false)
+                .is_ok()
+        );
+        assert!(
+            validate_sampling_base_url_with_policy(
+                "http://www.ojlab.com.evil:8088/v1",
+                true,
+                false
+            )
+            .is_err()
+        );
+        assert!(
             validate_sampling_base_url_with_policy("http://127.0.0.1:11434/v1", true, false)
                 .is_err()
         );
@@ -2679,6 +2773,28 @@ mod tests {
         assert!(
             validate_sampling_base_url_with_policy("http://api.example.com/v1", false, false)
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn desktop_approval_is_scoped_to_one_http_base_url() {
+        replace_approved_insecure_http_urls(["http://approved.example:60100/v1".to_owned()]);
+        assert!(
+            validate_sampling_base_url_with_policy("http://approved.example:60100/v1", true, false)
+                .is_ok()
+        );
+        assert!(
+            validate_sampling_base_url_with_policy(
+                "http://approved.example:60100/other",
+                true,
+                false
+            )
+            .is_err()
+        );
+        replace_approved_insecure_http_urls(std::iter::empty());
+        assert!(
+            validate_sampling_base_url_with_policy("http://approved.example:60100/v1", true, false)
+                .is_err()
         );
     }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Building2,
   Check,
@@ -22,6 +22,7 @@ import {
 import {
   agentsDefaultsGet,
   agentsDefaultsSave,
+  agentAuthStatus,
   internalReload,
   providersDeleteModel,
   providersDeleteProvider,
@@ -130,6 +131,7 @@ interface ConnectionDraft {
   label: string;
   providerKind: ProviderKind;
   baseUrl: string;
+  allowInsecureHttp: boolean;
   apiKey: string;
   apiBackend: ApiBackend;
   authScheme: AuthScheme;
@@ -141,6 +143,27 @@ type PanelMessage = { kind: "ok" | "err" | "warn"; text: string };
 function connectionName(provider: ModelProviderEntry): string {
   if (provider.source === "organization") return provider.label || "组织提供";
   return provider.label || PROVIDER_PRESETS[provider.providerKind]?.shortLabel || provider.id;
+}
+
+function isOjlabBaseUrl(value: string): boolean {
+  return value.trim().replace(/\/+$/, "") === "http://www.ojlab.com:8088/v1";
+}
+
+function connectionBaseUrlError(value: string, allowInsecureHttp: boolean): string | null {
+  if (!value.trim()) return "请填写 Base URL。";
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return "Base URL 格式不正确。";
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return "Base URL 必须使用 HTTP 或 HTTPS。";
+  const misplacedPort = /^\/:([0-9]+)(?:\/|$)/.exec(url.pathname);
+  if (misplacedPort) return `端口号位置不对：请把 /:${misplacedPort[1]}/ 改成 :${misplacedPort[1]}/。`;
+  if (url.protocol === "http:" && !isOjlabBaseUrl(value) && !allowInsecureHttp) {
+    return "使用 HTTP 前，请确认下方的明文传输选项；也可以改用 HTTPS。";
+  }
+  return null;
 }
 
 function formatSyncTime(value?: number): string {
@@ -163,6 +186,16 @@ function modelRemoteId(model: ModelEntry): string {
   return model.remoteModelId || model.modelId;
 }
 
+function modelLimitsText(model: ModelEntry, provider: ModelProviderEntry): string | null {
+  const contextWindow = model.contextWindow ?? provider.contextWindow;
+  if (!contextWindow) return null;
+  const maxOutput = model.maxOutputTokens;
+  if (!maxOutput || maxOutput >= contextWindow) {
+    return `上下文 ${contextWindow.toLocaleString()} tokens`;
+  }
+  return `上下文 ${contextWindow.toLocaleString()} · 最大输入 ${(contextWindow - maxOutput).toLocaleString()} · 最大输出 ${maxOutput.toLocaleString()} tokens`;
+}
+
 async function reloadRuntime(): Promise<string | null> {
   try {
     await internalReload("models");
@@ -175,6 +208,7 @@ async function reloadRuntime(): Promise<string | null> {
 export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanelProps) {
   const [catalog, setCatalog] = useState<ProviderListModel>({ providers: [], models: [] });
   const [defaults, setDefaults] = useState<AgentDefaults | null>(null);
+  const [effectiveDefaultModelId, setEffectiveDefaultModelId] = useState<string | null>(null);
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<PanelMessage | null>(null);
@@ -183,18 +217,23 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
   const [importProvider, setImportProvider] = useState<ModelProviderEntry | null>(null);
   const [syncingOrganization, setSyncingOrganization] = useState(false);
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
+  const reloadGenerationRef = useRef(0);
   const organizationSession = useOrgSessionStore((state) => state.session);
   const hydrateOrganization = useOrgSessionStore((state) => state.hydrate);
   const { requestConfirmation, dialog } = useAppDialog(selectedProviderId);
 
   const reload = useCallback(async (): Promise<string | null> => {
+    const generation = ++reloadGenerationRef.current;
     try {
+      const auth = await agentAuthStatus();
       const [nextCatalog, nextDefaults] = await Promise.all([
         providersList(),
         agentsDefaultsGet(),
       ]);
+      if (generation !== reloadGenerationRef.current) return null;
       setCatalog(nextCatalog);
       setDefaults(nextDefaults);
+      setEffectiveDefaultModelId(auth.defaultModelId ?? null);
       setSelectedProviderId((current) => {
         if (current && nextCatalog.providers.some((provider) => provider.id === current)) {
           return current;
@@ -205,11 +244,12 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
       });
       return null;
     } catch (error) {
+      if (generation !== reloadGenerationRef.current) return null;
       const detail = String(error).replace(/^Error:\s*/, "");
       setMessage({ kind: "err", text: `读取模型配置失败：${detail}` });
       return detail;
     } finally {
-      setLoading(false);
+      if (generation === reloadGenerationRef.current) setLoading(false);
     }
   }, []);
 
@@ -226,7 +266,11 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
     [catalog.providers],
   );
   const personalProviders = useMemo(
-    () => catalog.providers.filter((provider) => provider.source !== "organization"),
+    () => catalog.providers.filter((provider) => provider.source !== "organization" && provider.source !== "builtin"),
+    [catalog.providers],
+  );
+  const builtinProviders = useMemo(
+    () => catalog.providers.filter((provider) => provider.source === "builtin"),
     [catalog.providers],
   );
   const selectedProvider = catalog.providers.find((provider) => provider.id === selectedProviderId) ?? null;
@@ -345,7 +389,7 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
       <header className="model-connections__header">
         <div>
           <h2>模型与连接</h2>
-          <p>组织模型自动同步；个人 API 连接保存在本机并可挂载多个模型。</p>
+          <p>内置对话模型开箱即用。默认顺序：手动指定、组织下发、个人连接、内置 chat-xc。</p>
         </div>
         <button className="echo-button echo-button--primary echo-button--medium" onClick={() => setConnectionEditor("new")}>
           <span className="echo-button__content"><Plus size={15} />添加个人连接</span>
@@ -406,6 +450,15 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
                 onSelect={setSelectedProviderId}
               />
             )}
+            {builtinProviders.length > 0 && (
+              <ConnectionGroup
+                title="内置模型"
+                providers={builtinProviders}
+                catalog={catalog}
+                selectedProviderId={selectedProviderId}
+                onSelect={setSelectedProviderId}
+              />
+            )}
           </aside>
 
           {selectedProvider && (
@@ -420,7 +473,7 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
                   <div className="model-connections__title-row">
                     <h3>{connectionName(selectedProvider)}</h3>
                     {selectedProvider.managed ? (
-                      <span className="model-connections__badge model-connections__badge--managed"><LockKeyhole size={11} />组织托管</span>
+                      <span className="model-connections__badge model-connections__badge--managed"><LockKeyhole size={11} />{selectedProvider.source === "builtin" ? "内置只读" : "组织托管"}</span>
                     ) : (
                       <span className="model-connections__badge">个人配置</span>
                     )}
@@ -446,10 +499,17 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
 
               <dl className="model-connections__facts">
                 <div><dt>接口协议</dt><dd>{protocolLabel(selectedProvider)}</dd></div>
-                <div><dt>API Key</dt><dd>{selectedProvider.managed ? "由组织安全配置 · 不可查看" : selectedProvider.credentialConfigured ? "已保存在本机" : "未配置"}</dd></div>
+                <div><dt>API Key</dt><dd>{selectedProvider.source === "builtin" || (isOjlabBaseUrl(selectedProvider.baseUrl ?? "") && !selectedProvider.apiKey) ? "此服务无需 API Key" : selectedProvider.managed ? "由组织安全配置 · 不可查看" : selectedProvider.credentialConfigured ? "已保存在本机" : "未配置"}</dd></div>
                 <div><dt>Base URL</dt><dd title={selectedProvider.baseUrl}>{selectedProvider.baseUrl || "—"}{selectedProvider.managed && <span> · 只读</span>}</dd></div>
-                <div><dt>上下文窗口</dt><dd>{selectedProvider.contextWindow ? `${selectedProvider.contextWindow.toLocaleString()} tokens` : "使用模型默认值"}</dd></div>
+                <div><dt>上下文窗口</dt><dd>{selectedProvider.contextWindow ? `${selectedProvider.contextWindow.toLocaleString()} tokens` : selectedModels.some((model) => model.contextWindow) ? "按模型配置" : "使用模型默认值"}</dd></div>
               </dl>
+              {selectedProvider.baseUrl?.startsWith("http://") && (
+                <div className="model-connections__message model-connections__message--warn">
+                  {selectedProvider.source === "builtin"
+                    ? "此连接使用 HTTP 明文传输，发送给模型的内容会经过该服务。"
+                    : "此连接使用 HTTP 明文传输；API Key、提问和模型回复可能被网络路径上的其他人看到。"}
+                </div>
+              )}
 
               <div className="model-connections__models-header">
                 <div><strong>可用模型</strong><span>{selectedModels.length} 个</span></div>
@@ -466,12 +526,14 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
               ) : (
                 <ul className="model-connections__model-list">
                   {selectedModels.map((model) => {
-                    const isDefault = defaults?.defaultModel === model.modelId;
+                    const isDefault = (effectiveDefaultModelId ?? defaults?.defaultModel) === model.modelId;
+                    const limits = modelLimitsText(model, selectedProvider);
                     return (
                       <li key={model.modelId}>
                         <div className="model-connections__model-copy">
                           <strong>{model.name || modelRemoteId(model)}</strong>
                           <span>远端模型 ID：{modelRemoteId(model)}</span>
+                          {limits && <span className="model-connections__model-limits">{limits}</span>}
                         </div>
                         <div className="model-connections__model-actions">
                           {isDefault ? (
@@ -563,7 +625,7 @@ function ConnectionGroup({
             onClick={() => onSelect(provider.id)}
             aria-current={provider.id === selectedProviderId ? "true" : undefined}
           >
-            <span className="model-connections__source-icon">{provider.managed ? <Building2 size={15} /> : <Server size={15} />}</span>
+            <span className="model-connections__source-icon">{provider.source === "organization" ? <Building2 size={15} /> : <Server size={15} />}</span>
             <span><strong>{connectionName(provider)}</strong><small>{count} 个模型 · {provider.managed ? "只读" : "个人"}</small></span>
           </button>
         );
@@ -578,6 +640,7 @@ function draftProvider(original: ModelProviderEntry | undefined, draft: Connecti
     label: draft.label.trim(),
     providerKind: draft.providerKind,
     baseUrl: draft.baseUrl.trim(),
+    allowInsecureHttp: draft.allowInsecureHttp,
     apiKey: draft.apiKey.trim() || undefined,
     apiBackend: draft.apiBackend,
     authScheme: draft.authScheme,
@@ -603,6 +666,7 @@ function ConnectionEditor({
     label: original?.label ?? (original ? connectionName(original) : ""),
     providerKind: initialKind,
     baseUrl: original?.baseUrl ?? initialPreset.baseUrl,
+    allowInsecureHttp: original?.allowInsecureHttp ?? false,
     apiKey: "",
     apiBackend: original?.apiBackend ?? initialPreset.apiBackend,
     authScheme: original?.authScheme ?? initialPreset.authScheme,
@@ -631,20 +695,16 @@ function ConnectionEditor({
       providerKind,
       label: current.label || next.shortLabel,
       baseUrl: next.baseUrl,
+      allowInsecureHttp: false,
       apiBackend: next.apiBackend,
       authScheme: next.authScheme,
     }));
   };
 
   const validate = (): string | null => {
-    if (!draft.baseUrl.trim()) return "请填写 Base URL。";
-    try {
-      const url = new URL(draft.baseUrl);
-      if (!['http:', 'https:'].includes(url.protocol)) return "Base URL 必须使用 HTTP 或 HTTPS。";
-    } catch {
-      return "Base URL 格式不正确。";
-    }
-    if (!original && !draft.apiKey.trim()) return "请填写 API Key。";
+    const baseUrlError = connectionBaseUrlError(draft.baseUrl, draft.allowInsecureHttp);
+    if (baseUrlError) return baseUrlError;
+    if (!original && !draft.apiKey.trim() && !isOjlabBaseUrl(draft.baseUrl)) return "请填写 API Key。";
     if (draft.contextWindow && Number(draft.contextWindow) <= 0) return "上下文窗口必须大于 0。";
     return null;
   };
@@ -692,7 +752,7 @@ function ConnectionEditor({
 
   const handleDiscover = async () => {
     const validation = validate();
-    if (validation) { setError(validation); return; }
+    if (validation) { setDiscoveryMessage(null); setError(validation); return; }
     setDiscovering(true);
     setError(null);
     setDiscoveryMessage(null);
@@ -772,13 +832,13 @@ function ConnectionEditor({
     <div ref={dialogRef} className="models-settings-panel__editor-overlay" role="dialog" aria-modal="true" aria-label={original ? "编辑连接" : "添加个人连接"} tabIndex={-1}>
       <div className="model-connection-editor">
         <header className="models-settings-panel__editor-header">
-          <div><div className="models-settings-panel__editor-title">{original ? "编辑个人连接" : "添加个人连接"}</div><div className="models-settings-panel__editor-note">填写 Base URL、API Key 和 Model ID 即可使用</div></div>
+          <div><div className="models-settings-panel__editor-title">{original ? "编辑个人连接" : "添加个人连接"}</div><div className="models-settings-panel__editor-note">填写 Base URL 和 Model ID；需要鉴权的服务再填写 API Key</div></div>
           <button className="echo-button echo-button--ghost echo-button--small echo-button--icon-only" onClick={onCancel} aria-label="关闭"><X size={14} /></button>
         </header>
 
         <div className="model-connection-editor__body">
           <section className="model-connection-editor__section">
-            <div className="model-connection-editor__section-title"><span>连接信息</span><small>{original?.credentialConfigured ? "Base URL 必填 · API Key 可留空复用" : "Base URL 与 API Key 必填"}</small></div>
+            <div className="model-connection-editor__section-title"><span>连接信息</span><small>{isOjlabBaseUrl(draft.baseUrl) ? "此服务无需 API Key" : original?.credentialConfigured ? "Base URL 必填 · API Key 可留空复用" : "Base URL 与 API Key 必填"}</small></div>
             <div className="models-settings-panel__field">
               <label className="models-settings-panel__label" htmlFor="model-provider-kind">接口类型</label>
               <div className="models-settings-panel__select-shell">
@@ -794,14 +854,22 @@ function ConnectionEditor({
             </div>
             <div className="models-settings-panel__field">
               <label className="models-settings-panel__label" htmlFor="model-base-url">Base URL</label>
-              <input id="model-base-url" className="models-settings-panel__input" value={draft.baseUrl} onChange={(event) => setDraft((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://api.example.com/v1" inputMode="url" />
-              <span className="model-connection-editor__help">填写 API 根地址，例如以 /v1 结尾；不要填写具体模型名称。</span>
+              <input id="model-base-url" className="models-settings-panel__input" value={draft.baseUrl} onChange={(event) => { setError(null); setDiscoveryMessage(null); setDraft((current) => isOjlabBaseUrl(event.target.value)
+                ? { ...current, baseUrl: event.target.value, providerKind: "custom", apiBackend: "chat_completions", authScheme: "bearer", apiKey: "", allowInsecureHttp: false }
+                : { ...current, baseUrl: event.target.value, allowInsecureHttp: event.target.value.trim() === current.baseUrl.trim() && current.allowInsecureHttp }); }} placeholder="https://api.example.com/v1" inputMode="url" />
+              <span className="model-connection-editor__help">填写 API 根地址，例如 https://example.com:60100/v1；端口写在主机名后。HTTPS 无需额外设置。</span>
+              {draft.baseUrl.trim().toLowerCase().startsWith("http://") && !isOjlabBaseUrl(draft.baseUrl) && (
+                <label className="model-connection-editor__help model-connection-editor__http-consent">
+                  <input type="checkbox" checked={draft.allowInsecureHttp} onChange={(event) => setDraft((current) => ({ ...current, allowInsecureHttp: event.target.checked }))} />
+                  允许此个人连接使用 HTTP。我了解 API Key、提问和模型回复会以明文传输。
+                </label>
+              )}
             </div>
             <div className="models-settings-panel__field">
               <label className="models-settings-panel__label" htmlFor="model-api-key">API Key</label>
               <div className="models-settings-panel__input-shell">
-                <input id="model-api-key" className="models-settings-panel__input models-settings-panel__input--with-trailing-icon" type={showKey ? "text" : "password"} value={draft.apiKey} onChange={(event) => setDraft((current) => ({ ...current, apiKey: event.target.value }))} placeholder={original?.credentialConfigured ? "已保存；留空表示不更换" : preset.placeholderKey} autoComplete="off" />
-                <button className="echo-button echo-button--ghost echo-button--small echo-button--icon-only models-settings-panel__input-toggle" onClick={() => setShowKey((current) => !current)} type="button" aria-label={showKey ? "隐藏 API Key" : "显示 API Key"}>{showKey ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+                <input id="model-api-key" className="models-settings-panel__input models-settings-panel__input--with-trailing-icon" type={showKey ? "text" : "password"} value={draft.apiKey} onChange={(event) => setDraft((current) => ({ ...current, apiKey: event.target.value }))} placeholder={isOjlabBaseUrl(draft.baseUrl) ? "无需填写" : original?.credentialConfigured ? "已保存；留空表示不更换" : preset.placeholderKey} autoComplete="off" disabled={isOjlabBaseUrl(draft.baseUrl)} />
+                <button className="echo-button echo-button--ghost echo-button--small echo-button--icon-only models-settings-panel__input-toggle" onClick={() => setShowKey((current) => !current)} type="button" aria-label={showKey ? "隐藏 API Key" : "显示 API Key"} disabled={isOjlabBaseUrl(draft.baseUrl)}>{showKey ? <EyeOff size={14} /> : <Eye size={14} />}</button>
               </div>
               <span className="model-connection-editor__help">
                 <KeyRound size={11} />
@@ -835,8 +903,8 @@ function ConnectionEditor({
           {showAdvanced && (
             <div className="models-settings-panel__advanced">
               <div className="models-settings-panel__field-row">
-                <div className="models-settings-panel__field"><label className="models-settings-panel__label">请求协议</label><select className="models-settings-panel__select" value={draft.apiBackend} onChange={(event) => setDraft((current) => ({ ...current, apiBackend: event.target.value as ApiBackend }))}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="messages">Messages</option></select></div>
-                <div className="models-settings-panel__field"><label className="models-settings-panel__label">认证方式</label><select className="models-settings-panel__select" value={draft.authScheme} onChange={(event) => setDraft((current) => ({ ...current, authScheme: event.target.value as AuthScheme }))}><option value="bearer">Bearer Token</option><option value="x_api_key">X-API-Key</option></select></div>
+                <div className="models-settings-panel__field"><label className="models-settings-panel__label">请求协议</label><select className="models-settings-panel__select" value={draft.apiBackend} onChange={(event) => setDraft((current) => ({ ...current, apiBackend: event.target.value as ApiBackend }))} disabled={isOjlabBaseUrl(draft.baseUrl)}><option value="chat_completions">Chat Completions</option><option value="responses">Responses</option><option value="messages">Messages</option></select></div>
+                <div className="models-settings-panel__field"><label className="models-settings-panel__label">认证方式</label><select className="models-settings-panel__select" value={draft.authScheme} onChange={(event) => setDraft((current) => ({ ...current, authScheme: event.target.value as AuthScheme }))} disabled={isOjlabBaseUrl(draft.baseUrl)}><option value="bearer">Bearer Token</option><option value="x_api_key">X-API-Key</option></select></div>
               </div>
               <div className="models-settings-panel__field"><label className="models-settings-panel__label">默认上下文窗口（可选）</label><input className="models-settings-panel__input" type="number" min={1} value={draft.contextWindow} onChange={(event) => setDraft((current) => ({ ...current, contextWindow: event.target.value }))} placeholder="例如 128000" /></div>
             </div>

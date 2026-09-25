@@ -81,8 +81,8 @@ describe("KnowledgeBasePanel", () => {
       embeddedChunkCount: 3,
       pendingEmbeddingCount: 0,
       lastUpdatedAt: Date.now(),
-      embeddingModel: "BAAI/bge-m3",
-      rerankModel: "BAAI/bge-reranker-v2-m3",
+      embeddingModel: "embed-pro",
+      rerankModel: "rerank-pro",
     };
     invokeMock.mockImplementation((command: string) => {
       if (command === "personal_knowledge_index_status") return Promise.resolve(status);
@@ -116,7 +116,7 @@ describe("KnowledgeBasePanel", () => {
     expect(await screen.findByRole("button", { name: "打开知识条目：差旅政策" })).toBeInTheDocument();
     expect(screen.queryByText("不应出现的旧结果")).toBeNull();
     expect(screen.getByText("已使用关键词、向量检索和相关性重排")).toBeInTheDocument();
-    expect(screen.getByText(/BAAI\/bge-m3 · BAAI\/bge-reranker-v2-m3/)).toBeInTheDocument();
+    expect(screen.getByText(/embed-pro · rerank-pro/)).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("personal_knowledge_search", {
       query: "出差坐高铁能报销吗",
       limit: 20,

@@ -507,7 +507,7 @@ pub(crate) fn oidc_auth_method(issuer: &str, label: Option<&str>) -> acp::AuthMe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::config::{Config, resolve_model_list};
+    use crate::agent::config::{Config, resolve_credentials, resolve_model_list};
     use agent_client_protocol as acp;
     use serial_test::serial;
 
@@ -866,6 +866,40 @@ mod tests {
                  uses to decide whether to show the login screen",
             );
         }
+    }
+
+    #[test]
+    #[serial]
+    fn desktop_keyless_model_is_available_without_login_or_auth_header() {
+        let _global = EnvGuard::unset(ECHO_AGENT_API_KEY_ENV_VAR);
+        let raw: toml::Value = toml::from_str(
+            r#"
+            [model_providers.echoagent-ojlab]
+            base_url = "http://www.ojlab.com:8088/v1"
+            api_backend = "chat_completions"
+            [model."echoagent-ojlab/chat-xc"]
+            model = "chat-xc"
+            model_provider = "echoagent-ojlab"
+            context_window = 32768
+        "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw).unwrap();
+        let models = resolve_model_list(&cfg, None);
+        let model = models.get("echoagent-ojlab/chat-xc").unwrap();
+        assert!(model.auth_provider.is_none());
+        assert!(model.has_own_credentials());
+        assert!(resolve_credentials(model, None).api_key.is_none());
+        assert!(
+            resolve_credentials(model, Some("session-secret"))
+                .api_key
+                .is_none()
+        );
+        {
+            let _first_party = EnvGuard::set(ECHO_AGENT_API_KEY_ENV_VAR, "first-party-secret");
+            assert!(resolve_credentials(model, None).api_key.is_none());
+        }
+        assert!(should_advertise_echo_agent_api_key(false, models.values()));
     }
 
     /// `ECHO_AGENT_API_KEY` alone (no per-model creds) also triggers

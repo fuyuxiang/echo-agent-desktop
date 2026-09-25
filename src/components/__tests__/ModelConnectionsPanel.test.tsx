@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   providersList: vi.fn(),
   agentsDefaultsGet: vi.fn(),
+  agentAuthStatus: vi.fn(),
   agentsDefaultsSave: vi.fn(),
   internalReload: vi.fn(),
   providersDeleteModel: vi.fn(),
@@ -45,6 +46,7 @@ describe("ModelConnectionsPanel", () => {
     resetOrgSessionMirror();
     mocks.providersList.mockResolvedValue({ providers: [], models: [] });
     mocks.agentsDefaultsGet.mockResolvedValue(defaults);
+    mocks.agentAuthStatus.mockResolvedValue({ ready: true, defaultModelId: undefined });
     mocks.internalReload.mockResolvedValue(undefined);
     mocks.orgSession.mockResolvedValue({ loggedIn: false });
     mocks.listenOrgModelsChanged.mockResolvedValue(() => {});
@@ -81,6 +83,36 @@ describe("ModelConnectionsPanel", () => {
     expect(screen.queryByRole("button", { name: "编辑连接" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除连接" })).not.toBeInTheDocument();
     expect(screen.getByText("远端模型 ID：MiniMax-M3")).toBeInTheDocument();
+  });
+
+  it("内置模型无需密钥且显示实际默认模型", async () => {
+    mocks.agentAuthStatus.mockResolvedValue({ ready: true, defaultModelId: "echoagent-ojlab/chat-xc" });
+    mocks.providersList.mockResolvedValue({
+      providers: [{
+        id: "echoagent-ojlab",
+        providerKind: "custom",
+        label: "内置模型",
+        source: "builtin",
+        managed: true,
+        credentialConfigured: true,
+        baseUrl: "http://www.ojlab.com:8088/v1",
+        apiBackend: "chat_completions",
+      }],
+      models: [
+        { modelId: "echoagent-ojlab/chat-xc", remoteModelId: "chat-xc", providerId: "echoagent-ojlab", name: "chat-xc", contextWindow: 262144, maxOutputTokens: 8192, managed: true },
+        { modelId: "echoagent-ojlab/chat-glm", remoteModelId: "chat-glm", providerId: "echoagent-ojlab", name: "chat-glm", contextWindow: 131072, maxOutputTokens: 8192, managed: true },
+        { modelId: "echoagent-ojlab/chat-qwen", remoteModelId: "chat-qwen", providerId: "echoagent-ojlab", name: "chat-qwen", contextWindow: 262144, maxOutputTokens: 65536, managed: true },
+      ],
+    });
+    render(<ModelConnectionsPanel />);
+    expect(await screen.findByText("此服务无需 API Key")).toBeInTheDocument();
+    expect(screen.getByText("此连接使用 HTTP 明文传输，发送给模型的内容会经过该服务。")).toBeInTheDocument();
+    expect(screen.getByText("内置只读")).toBeInTheDocument();
+    expect(screen.getByText("默认模型")).toBeInTheDocument();
+    expect(screen.getByText("上下文 262,144 · 最大输入 253,952 · 最大输出 8,192 tokens")).toBeInTheDocument();
+    expect(screen.getByText("上下文 131,072 · 最大输入 122,880 · 最大输出 8,192 tokens")).toBeInTheDocument();
+    expect(screen.getByText("上下文 262,144 · 最大输入 196,608 · 最大输出 65,536 tokens")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "编辑连接" })).not.toBeInTheDocument();
   });
 
   it("展示连接返回的全部模型而不截断列表", async () => {
@@ -149,6 +181,25 @@ describe("ModelConnectionsPanel", () => {
       );
     });
     expect(mocks.internalReload).toHaveBeenCalledWith("models");
+  });
+
+  it("指定服务的个人连接可以留空 API Key", async () => {
+    mocks.providersTestModelConnection.mockResolvedValue(undefined);
+    mocks.providersSaveConnection.mockResolvedValue({ providerId: "custom", modelIds: ["chat-xc"] });
+    render(<ModelConnectionsPanel />);
+    await screen.findByText("还没有可用模型");
+    fireEvent.click(screen.getAllByRole("button", { name: "添加个人连接" })[0]);
+    const dialog = screen.getByRole("dialog", { name: "添加个人连接" });
+    fireEvent.change(within(dialog).getByLabelText("Base URL"), { target: { value: "http://www.ojlab.com:8088/v1" } });
+    fireEvent.change(within(dialog).getByLabelText("模型名称 / ID"), { target: { value: "chat-xc" } });
+    expect(within(dialog).getByText("此服务无需 API Key")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("API Key")).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "测试并保存" }));
+    await waitFor(() => expect(mocks.providersSaveConnection).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: "http://www.ojlab.com:8088/v1", apiKey: undefined }),
+      [expect.objectContaining({ remoteModelId: "chat-xc" })],
+      true,
+    ));
   });
 
   it("OpenAI 作为 Responses 模型 Provider 接入而不是独立 Agent Runtime", async () => {
@@ -324,6 +375,47 @@ describe("ModelConnectionsPanel", () => {
         true,
       );
     });
+  });
+
+  it("在请求前指出端口位置错误，并要求明确同意远程 HTTP", async () => {
+    mocks.providersTestConnection.mockResolvedValue([{ id: "chat-xc" }]);
+    render(<ModelConnectionsPanel />);
+    await screen.findByText("还没有可用模型");
+    fireEvent.click(screen.getAllByRole("button", { name: "添加个人连接" })[0]);
+    const dialog = screen.getByRole("dialog", { name: "添加个人连接" });
+    const baseUrl = within(dialog).getByLabelText("Base URL");
+    fireEvent.change(baseUrl, { target: { value: "http://example.com/:60100/v1" } });
+    fireEvent.change(within(dialog).getByLabelText("API Key"), { target: { value: "test-key" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "获取模型列表（可选）" }));
+    expect(within(dialog).getByText(/端口号位置不对/)).toBeInTheDocument();
+    expect(mocks.providersTestConnection).not.toHaveBeenCalled();
+
+    fireEvent.change(baseUrl, { target: { value: "http://example.com:60100/v1" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "获取模型列表（可选）" }));
+    expect(within(dialog).getByText(/使用 HTTP 前，请确认/)).toBeInTheDocument();
+    expect(mocks.providersTestConnection).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByLabelText(/允许此个人连接使用 HTTP/));
+    fireEvent.click(within(dialog).getByRole("button", { name: "获取模型列表（可选）" }));
+    await waitFor(() => expect(mocks.providersTestConnection).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: "http://example.com:60100/v1", allowInsecureHttp: true }),
+    ));
+
+    fireEvent.change(baseUrl, { target: { value: "http://www.ojlab.com:8088/v1" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "获取模型列表（可选）" }));
+    await waitFor(() => expect(mocks.providersTestConnection).toHaveBeenCalledTimes(2));
+    expect(mocks.providersTestConnection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ baseUrl: "http://www.ojlab.com:8088/v1", allowInsecureHttp: false }),
+    );
+
+    fireEvent.change(baseUrl, { target: { value: "https://secure.example.com/v1" } });
+    fireEvent.change(within(dialog).getByLabelText("API Key"), { target: { value: "test-key" } });
+    expect(within(dialog).queryByLabelText(/允许此个人连接使用 HTTP/)).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "获取模型列表（可选）" }));
+    await waitFor(() => expect(mocks.providersTestConnection).toHaveBeenCalledTimes(3));
+    expect(mocks.providersTestConnection).toHaveBeenLastCalledWith(
+      expect.objectContaining({ baseUrl: "https://secure.example.com/v1", allowInsecureHttp: false }),
+    );
   });
 
   it("实际模型测试失败时不保存，但允许用户确认后直接保存", async () => {

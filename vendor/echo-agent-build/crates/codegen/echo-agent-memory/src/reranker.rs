@@ -11,7 +11,7 @@ const INITIAL_BACKOFF_MS: u64 = 500;
 pub struct ApiReranker {
     endpoint: String,
     model: String,
-    api_key: String,
+    api_key: Option<String>,
 }
 
 impl ApiReranker {
@@ -22,7 +22,7 @@ impl ApiReranker {
         Some(Self {
             endpoint: config.endpoint.clone()?,
             model: config.model.clone()?,
-            api_key: config.api_key.clone()?,
+            api_key: config.api_key.clone().filter(|key| !key.trim().is_empty()),
         })
     }
 
@@ -46,7 +46,7 @@ impl ApiReranker {
             "query": query,
             "documents": documents,
             "return_documents": false,
-            "top_n": top_n.min(candidates.len()),
+            "top_k": top_n.min(candidates.len()),
         });
 
         let mut last_error = String::new();
@@ -57,13 +57,12 @@ impl ApiReranker {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            let response = match echo_agent_http::shared_client()
-                .post(self.endpoint.trim_end_matches('/'))
-                .bearer_auth(&self.api_key)
-                .json(&body)
-                .send()
-                .await
-            {
+            let mut request =
+                echo_agent_http::shared_client().post(self.endpoint.trim_end_matches('/'));
+            if let Some(key) = self.api_key.as_deref() {
+                request = request.bearer_auth(key);
+            }
+            let response = match request.json(&body).send().await {
                 Ok(response) => response,
                 Err(error) => {
                     last_error = format!("request failed: {error}");
@@ -132,6 +131,18 @@ fn reorder_from_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyless_reranker_configuration_is_usable() {
+        let config = MemoryRerankerConfig {
+            enabled: true,
+            endpoint: Some("http://www.ojlab.com:8088/v1/rerank".into()),
+            model: Some("rerank-pro".into()),
+            api_key: None,
+        };
+        let client = ApiReranker::from_config(&config).unwrap();
+        assert!(client.api_key.is_none());
+    }
 
     fn candidate(id: &str) -> SearchResult {
         SearchResult {

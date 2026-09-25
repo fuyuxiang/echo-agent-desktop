@@ -3606,6 +3606,7 @@ pub(crate) fn resolve_model_list(
         if let Some(pid) = model_override.model_provider.as_deref()
             && entry.auth_provider.is_none()
             && session_bearer_unsafe
+            && !is_desktop_keyless_endpoint(&entry.info.base_url)
         {
             entry.auth_provider = Some(crate::auth::AuthProviderRef::fail_closed(format!(
                 "model_provider:{pid} (fail-closed)"
@@ -4445,13 +4446,19 @@ impl ModelEntry {
         }
         self.auth_provider.as_ref()
     }
-    /// `true` when the model has a non-empty `api_key`, an `env_key` that
-    /// resolves to a non-empty value, or a named auth provider.
+    /// `true` when the model has a credential source or uses the desktop's
+    /// explicitly approved keyless endpoint.
     /// Probes `std::env::var` at call time: result is not stable across env
     /// changes. Never executes a provider command.
     pub(crate) fn has_own_credentials(&self) -> bool {
-        self.own_credential().is_some() || self.auth_provider.is_some()
+        self.own_credential().is_some()
+            || self.auth_provider.is_some()
+            || is_desktop_keyless_endpoint(&self.info.base_url)
     }
+}
+
+fn is_desktop_keyless_endpoint(base_url: &str) -> bool {
+    base_url.trim_end_matches('/') == "http://www.ojlab.com:8088/v1"
 }
 impl std::ops::Deref for ModelEntry {
     type Target = ModelInfo;
@@ -4854,8 +4861,8 @@ pub(crate) fn first_own_credential(
         .map(str::to_owned)
         .or_else(|| env_key.and_then(EnvKeys::resolve_value))
 }
-/// Priority: model api_key/env_key > cached auth-provider token > session
-/// token > ECHO_AGENT_API_KEY.
+/// Priority: model api_key/env_key > cached auth-provider token > approved
+/// keyless endpoint > session token > ECHO_AGENT_API_KEY.
 pub(crate) fn resolve_credentials(
     model: &ModelEntry,
     session_key: Option<&str>,
@@ -4871,6 +4878,13 @@ pub(crate) fn resolve_credentials(
         debug_assert!(model.effective_auth_provider().is_some());
         (
             provider.cached_token(),
+            info.base_url.clone(),
+            echo_agent_chat_state::AuthType::ApiKey,
+        )
+    } else if is_desktop_keyless_endpoint(&info.base_url) {
+        // Never forward a session or global first-party token to this public endpoint.
+        (
+            None,
             info.base_url.clone(),
             echo_agent_chat_state::AuthType::ApiKey,
         )

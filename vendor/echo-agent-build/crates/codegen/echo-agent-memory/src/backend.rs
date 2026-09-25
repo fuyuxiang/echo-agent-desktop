@@ -192,7 +192,7 @@ async fn build_embedding_provider(
     // Enforce at runtime, in release too: a `debug_assert` would compile out of
     // shipped binaries and let a scoped credential reach an unapproved URL.
     let credentials_approved = credentials.approved_for(base_url);
-    if !credentials_approved {
+    if !credentials_approved && !credentials.is_empty() {
         tracing::error!(
             target: crate::MEMORY_LOG_TARGET,
             base_url,
@@ -215,7 +215,12 @@ async fn build_embedding_provider(
     } else {
         None
     };
-    let api_key = per_call_key.or_else(|| static_api_key.map(|s| s.to_owned()))?;
+    let api_key = per_call_key
+        .or_else(|| static_api_key.map(|s| s.to_owned()))
+        .or_else(|| {
+            (base_url.trim_end_matches('/') == "http://www.ojlab.com:8088/v1/embeddings")
+                .then(String::new)
+        })?;
     super::embedding::ApiEmbeddingProvider::from_session(config, base_url.to_owned(), api_key)
 }
 
@@ -1040,6 +1045,36 @@ mod factory_tests {
         assert!(
             !results.is_empty(),
             "should fall back to FTS when api_key is None"
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_keyless_embedding_endpoint_creates_provider() {
+        let config = MemoryEmbeddingConfig {
+            provider: "api".into(),
+            model: Some("embed-pro".into()),
+            ..Default::default()
+        };
+        let credentials = EndpointScopedCredentials::none();
+        assert!(
+            build_embedding_provider(
+                Some(&config),
+                &credentials,
+                None,
+                "http://www.ojlab.com:8088/v1/embeddings",
+            )
+            .await
+            .is_some()
+        );
+        assert!(
+            build_embedding_provider(
+                Some(&config),
+                &credentials,
+                None,
+                "http://localhost:8088/v1/embeddings",
+            )
+            .await
+            .is_none()
         );
     }
 

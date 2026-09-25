@@ -662,7 +662,7 @@ export type ApiBackend = "chat_completions" | "responses" | "messages";
 
 /** HTTP auth header style. Mirrors EchoAgent's AuthScheme enum (snake_case). */
 export type AuthScheme = "bearer" | "x_api_key";
-export type ProviderSource = "personal" | "organization" | "legacy";
+export type ProviderSource = "personal" | "organization" | "builtin" | "legacy";
 
 /**
  * One connection/auth profile — written to `[model_providers.<id>]`. A single
@@ -677,6 +677,8 @@ export interface ModelProviderEntry {
   /** Masked "••••" when read back; the real secret when saving. */
   apiKey?: string;
   baseUrl?: string;
+  /** Explicit approval to send a personal connection over plaintext HTTP. */
+  allowInsecureHttp?: boolean;
   apiBackend?: ApiBackend;
   authScheme?: AuthScheme;
   /** Max context window in tokens, shared by all referencing models. */
@@ -704,6 +706,8 @@ export interface ModelEntry {
   name?: string;
   /** Per-model context-window override (wins over the provider's value). */
   contextWindow?: number;
+  /** Per-model maximum response length, stored as max_completion_tokens. */
+  maxOutputTokens?: number;
   managed?: boolean;
 }
 

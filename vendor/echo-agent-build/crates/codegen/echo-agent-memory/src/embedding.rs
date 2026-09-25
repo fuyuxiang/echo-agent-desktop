@@ -107,7 +107,8 @@ impl ApiEmbeddingProvider {
         proxy_base_url: String,
         auth_key: String,
     ) -> Option<Self> {
-        let client = build_static_middleware_client(Some(auth_key));
+        let client =
+            build_static_middleware_client((!auth_key.trim().is_empty()).then_some(auth_key));
         Self::from_config(config, proxy_base_url, client)
     }
 

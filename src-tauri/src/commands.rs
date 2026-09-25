@@ -436,9 +436,8 @@ fn auth_status_with_runtime_reload(app: &tauri::AppHandle, state: &AppState) -> 
     status
 }
 
-/// Resolve Auto to a real BYOK/organization model, never to the Runtime's
-/// credential-less bundled fallback. The configured default wins when it is
-/// live; otherwise the first configured model in stable id order is used.
+/// Resolve Auto to a live configured model. An explicit user preference wins;
+/// otherwise the organization model, a personal model, then chat-xc wins.
 fn effective_configured_model_id(
     configured: &[String],
     runtime: &[String],
@@ -451,6 +450,26 @@ fn effective_configured_model_id(
     preferred
         .filter(|id| available(id))
         .map(str::to_string)
+        .or_else(|| {
+            configured
+                .iter()
+                .find(|id| id.starts_with("organization/") && available(id))
+                .cloned()
+        })
+        .or_else(|| {
+            configured
+                .iter()
+                .find(|id| {
+                    !id.starts_with("organization/")
+                        && !id.starts_with(crate::providers::BUILTIN_MODEL_PREFIX)
+                        && available(id)
+                })
+                .cloned()
+        })
+        .or_else(|| {
+            available(crate::providers::BUILTIN_DEFAULT_MODEL_ID)
+                .then(|| crate::providers::BUILTIN_DEFAULT_MODEL_ID.to_string())
+        })
         .or_else(|| configured.iter().find(|id| available(id)).cloned())
 }
 
@@ -679,6 +698,7 @@ pub(crate) async fn reload_models_and_sync(
     }
     let mut last_revision = None;
     for attempt in 1..=MODEL_RELOAD_ATTEMPTS {
+        crate::providers::sync_insecure_http_approvals();
         let before = crate::providers::model_config_revision();
         let result = crate::agent_admin::request_model_reload_and_wait(tx).await;
         match result {
@@ -2178,6 +2198,32 @@ mod tests {
         assert_eq!(
             effective_configured_model_id(&configured, &["bundled-default".into()], None),
             None
+        );
+    }
+
+    #[test]
+    fn automatic_model_resolution_prefers_explicit_then_organization_then_personal_then_builtin() {
+        let configured = vec![
+            "echoagent-ojlab/chat-glm".into(),
+            "echoagent-ojlab/chat-xc".into(),
+            "my-model".into(),
+            "organization/team-model".into(),
+        ];
+        assert_eq!(
+            effective_configured_model_id(&configured, &configured, None).as_deref(),
+            Some("organization/team-model")
+        );
+        assert_eq!(
+            effective_configured_model_id(&configured, &configured, Some("my-model")).as_deref(),
+            Some("my-model")
+        );
+        assert_eq!(
+            effective_configured_model_id(&configured, &configured[..3], None).as_deref(),
+            Some("my-model")
+        );
+        assert_eq!(
+            effective_configured_model_id(&configured, &configured[..2], None).as_deref(),
+            Some("echoagent-ojlab/chat-xc")
         );
     }
 

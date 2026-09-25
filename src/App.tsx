@@ -229,6 +229,8 @@ function Shell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
   const [currentModelId, setCurrentModelId] = useState<string | undefined>(undefined);
+  const newSessionModelOverrideRef = useRef<string | undefined>(undefined);
+  const recommendedModelIdRef = useRef<string | undefined>(undefined);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [modelCatalogError, setModelCatalogError] = useState<string | null>(null);
   const [modelSwitching, setModelSwitching] = useState(false);
@@ -472,7 +474,8 @@ function Shell() {
     const generation = ++modelCatalogGenerationRef.current;
     setModelCatalogError(null);
     try {
-      const [list, auth] = await Promise.all([providersList(), agentAuthStatus()]);
+      const auth = await agentAuthStatus();
+      const list = await providersList();
       if (modelCatalogGenerationRef.current !== generation) return;
       // Show only what the Runtime can actually serve. `[models]` filters
       // (allowed_models / hidden_models / disabled_models) are applied inside
@@ -486,10 +489,15 @@ function Shell() {
       );
       setModels(options);
       modelsRef.current = options;
+      const recommendedModelId = preferredDefaultId ?? auth.defaultModelId;
+      if (recommendedModelIdRef.current !== recommendedModelId) {
+        newSessionModelOverrideRef.current = undefined;
+        recommendedModelIdRef.current = recommendedModelId;
+      }
 
       // Never fall back an active session to a different model in the UI. The
       // backend session keeps its persisted model until set_model succeeds.
-      setCurrentModelId((prev) => {
+      setCurrentModelId(() => {
         const activeId = sessionsStore.getState().currentSessionId;
         if (activeId) {
           return resolveSessionModelId(
@@ -497,7 +505,15 @@ function Shell() {
             findSessionSummary(activeId)?.currentModelId,
           );
         }
-        return resolveConfiguredModelId(options, prev, preferredDefaultId);
+        const explicitChoice = newSessionModelOverrideRef.current;
+        if (explicitChoice && !isConfiguredModelId(options, explicitChoice)) {
+          newSessionModelOverrideRef.current = undefined;
+        }
+        return resolveConfiguredModelId(
+          options,
+          newSessionModelOverrideRef.current,
+          recommendedModelId,
+        );
       });
 
       // Unlock the home Composer as soon as a configured provider exists.
@@ -1123,7 +1139,7 @@ function Shell() {
     if (isMemoryResourceView(label)) return;
     sessionsStore.getState().setCurrent(null);
     sessionStore.getState().reset();
-    setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
+    setCurrentModelId(resolveConfiguredModelId(models, newSessionModelOverrideRef.current, init?.auth.defaultModelId));
   };
   const handleNavigate = (label: string) => {
     if (placeholderView === "代码开发" && label !== "代码开发"
@@ -1660,6 +1676,7 @@ function Shell() {
       return;
     }
     if (!currentSessionId) {
+      newSessionModelOverrideRef.current = modelId;
       setCurrentModelId(modelId);
       return;
     }
@@ -1777,7 +1794,7 @@ function Shell() {
     sessionStore.getState().reset();
     usePermissionModeStore.getState().resetHomeMode();
     setNewTaskMode("default");
-    setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
+    setCurrentModelId(resolveConfiguredModelId(models, newSessionModelOverrideRef.current, init?.auth.defaultModelId));
   };
   const handleNewSession = () => {
     if (placeholderView === "代码开发" && codingLeaveGuardRef.current) {
@@ -1804,7 +1821,7 @@ function Shell() {
           selectionGenerationRef.current += 1;
           setPlaceholderView(null);
           sessionsStore.getState().setCurrent(null);
-          setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
+          setCurrentModelId(resolveConfiguredModelId(models, newSessionModelOverrideRef.current, init?.auth.defaultModelId));
         }
       });
       return;
@@ -1812,7 +1829,7 @@ function Shell() {
     selectionGenerationRef.current += 1;
     setPlaceholderView(null);
     sessionsStore.getState().setCurrent(null);
-    setCurrentModelId((prev) => resolveConfiguredModelId(models, prev));
+    setCurrentModelId(resolveConfiguredModelId(models, newSessionModelOverrideRef.current, init?.auth.defaultModelId));
   };
 
   const leaveSessionIfCurrent = (sessionId: string) => {
@@ -1821,7 +1838,7 @@ function Shell() {
     sessionsStore.getState().setCurrent(null);
     sessionStore.getState().reset();
     setPlaceholderView(null);
-    setCurrentModelId((previous) => resolveConfiguredModelId(models, previous));
+    setCurrentModelId(resolveConfiguredModelId(models, newSessionModelOverrideRef.current, init?.auth.defaultModelId));
   };
 
   const clearDeletedSessionState = (sessionId: string) => {

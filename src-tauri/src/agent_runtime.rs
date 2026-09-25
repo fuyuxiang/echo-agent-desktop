@@ -46,13 +46,12 @@ use std::os::windows::fs::OpenOptionsExt;
 
 const MAX_IMAGE_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) const DESKTOP_CLIENT_IDENTIFIER: &str = "echo-agent-desktop";
-pub(crate) const MEMORY_EMBEDDING_ENDPOINT: &str = "https://api.siliconflow.cn/v1/embeddings";
-pub(crate) const MEMORY_EMBEDDING_MODEL: &str = "BAAI/bge-m3";
+pub(crate) const OJLAB_BASE_URL: &str = "http://www.ojlab.com:8088/v1";
+pub(crate) const MEMORY_EMBEDDING_ENDPOINT: &str = "http://www.ojlab.com:8088/v1/embeddings";
+pub(crate) const MEMORY_EMBEDDING_MODEL: &str = "embed-pro";
 pub(crate) const MEMORY_EMBEDDING_DIMENSIONS: usize = 1024;
-pub(crate) const MEMORY_RERANK_ENDPOINT: &str = "https://api.siliconflow.cn/v1/rerank";
-pub(crate) const MEMORY_RERANK_MODEL: &str = "BAAI/bge-reranker-v2-m3";
-pub(crate) const MEMORY_SILICONFLOW_API_KEY: &str =
-    "sk-perpdxeyiwcymvnnpvwnjbhavppnchxohcpwydulfkdwpvpv";
+pub(crate) const MEMORY_RERANK_ENDPOINT: &str = "http://www.ojlab.com:8088/v1/rerank";
+pub(crate) const MEMORY_RERANK_MODEL: &str = "rerank-pro";
 
 fn configure_memory_retrieval(cfg: &mut AgentConfig) {
     let Some(memory) = cfg.memory_config.as_mut() else {
@@ -63,7 +62,7 @@ fn configure_memory_retrieval(cfg: &mut AgentConfig) {
     memory.embedding.model = Some(MEMORY_EMBEDDING_MODEL.to_owned());
     memory.embedding.dimensions = MEMORY_EMBEDDING_DIMENSIONS;
     memory.embedding.endpoint = Some(MEMORY_EMBEDDING_ENDPOINT.to_owned());
-    memory.embedding.api_key = Some(MEMORY_SILICONFLOW_API_KEY.to_owned());
+    memory.embedding.api_key = None;
     memory.embedding.send_dimensions = false;
 
     // The model-based reranker becomes the final ordering stage. The runtime's
@@ -72,7 +71,7 @@ fn configure_memory_retrieval(cfg: &mut AgentConfig) {
     memory.search.reranker.enabled = true;
     memory.search.reranker.endpoint = Some(MEMORY_RERANK_ENDPOINT.to_owned());
     memory.search.reranker.model = Some(MEMORY_RERANK_MODEL.to_owned());
-    memory.search.reranker.api_key = Some(MEMORY_SILICONFLOW_API_KEY.to_owned());
+    memory.search.reranker.api_key = None;
 }
 
 /// One end of the ACP channel pair that lives on the Tauri (multi-thread) side.
@@ -139,6 +138,9 @@ pub fn spawn_agent_runtime(_cwd: PathBuf) -> Result<AgentHandle> {
     // Team tools 已迁移到内嵌 MCP server（team_mcp.rs，lib.rs 启动时 serve）。
     // 这里不再需要注册 —— new_session 会把 MCP server 传给 EchoAgent，EchoAgent 以
     // client 身份连接（工具名 echoagent__create_team 等）。对 EchoAgent 零补丁。
+
+    crate::providers::ensure_builtin_model_config()
+        .map_err(|error| anyhow!("install built-in model catalog: {error}"))?;
 
     // 0. Pin off the Runtime's upstream model-catalog fetch before the config is
     // read, so the load below already sees it. BYOK-only: the remote catalog adds

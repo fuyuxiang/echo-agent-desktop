@@ -118,7 +118,7 @@ describe("SettingsPanel", () => {
     expect(screen.getByRole("button", { name: "云存储" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "模型" })).toHaveAttribute("aria-current", "page");
     expect(await screen.findByRole("heading", { name: "模型与连接", level: 2 })).toBeInTheDocument();
-    expect(screen.getByText("组织模型自动同步；个人 API 连接保存在本机并可挂载多个模型。"))
+    expect(screen.getByText("内置对话模型开箱即用。默认顺序：手动指定、组织下发、个人连接、内置 chat-xc。"))
       .toBeInTheDocument();
   });
 

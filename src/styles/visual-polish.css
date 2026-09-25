@@ -378,6 +378,10 @@
   font-size: 10px;
 }
 
+.model-connections__model-copy .model-connections__model-limits {
+  white-space: normal;
+}
+
 .model-connections__default {
   display: inline-flex;
   align-items: center;
@@ -596,6 +600,21 @@
   color: var(--echo-text-weak);
   font-size: 10px;
   line-height: 1.4;
+}
+
+.model-connection-editor__http-consent {
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--echo-border-default);
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.model-connection-editor__http-consent input {
+  flex: none;
+  margin: 2px 0 0;
 }
 
 .model-connection-editor__chevron--open {

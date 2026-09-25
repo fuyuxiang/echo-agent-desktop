@@ -38,9 +38,14 @@ use futures::StreamExt;
 
 const ORGANIZATION_PROVIDER_ID: &str = "echoagent-organization";
 const ORGANIZATION_MODEL_PREFIX: &str = "organization/";
+pub(crate) const BUILTIN_PROVIDER_ID: &str = "echoagent-ojlab";
+pub(crate) const BUILTIN_MODEL_PREFIX: &str = "echoagent-ojlab/";
+pub(crate) const BUILTIN_DEFAULT_MODEL_ID: &str = "echoagent-ojlab/chat-xc";
 const MANAGED_BY_KEY: &str = "echoagent_managed_by";
 const MANAGED_BY_ORGANIZATION: &str = "organization";
+const MANAGED_BY_BUILTIN: &str = "builtin";
 const LABEL_KEY: &str = "echoagent_label";
+const ALLOW_INSECURE_HTTP_KEY: &str = "echoagent_allow_insecure_http";
 const SYNCED_AT_KEY: &str = "echoagent_synced_at";
 const LEASE_UNTIL_KEY: &str = "echoagent_lease_until";
 const ALLOW_INSECURE_LOOPBACK_HTTP_ENV: &str = "ECHO_AGENT_ALLOW_INSECURE_LOOPBACK_HTTP";
@@ -55,9 +60,29 @@ fn insecure_loopback_http_enabled() -> bool {
         .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true"))
 }
 
+fn is_ojlab_base_url(raw: &str) -> bool {
+    raw.trim().trim_end_matches('/') == crate::agent_runtime::OJLAB_BASE_URL
+}
+
+fn provider_can_omit_api_key(table: &Map<String, Value>) -> bool {
+    table
+        .get("base_url")
+        .and_then(Value::as_str)
+        .is_some_and(is_ojlab_base_url)
+        && table.get("api_backend").and_then(Value::as_str) == Some("chat_completions")
+}
+
 fn validate_provider_base_url_with_policy(
     raw: &str,
     allow_insecure_loopback: bool,
+) -> Result<url::Url, String> {
+    validate_provider_base_url_with_options(raw, allow_insecure_loopback, false)
+}
+
+fn validate_provider_base_url_with_options(
+    raw: &str,
+    allow_insecure_loopback: bool,
+    allow_explicit_http: bool,
 ) -> Result<url::Url, String> {
     let parsed =
         url::Url::parse(raw.trim()).map_err(|error| format!("Base URL 格式不正确：{error}"))?;
@@ -70,9 +95,24 @@ fn validate_provider_base_url_with_policy(
     if parsed.fragment().is_some() {
         return Err("Base URL 不得包含 fragment".into());
     }
+    if parsed
+        .path()
+        .strip_prefix("/:")
+        .and_then(|path| path.split('/').next())
+        .is_some_and(|segment| {
+            !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    {
+        return Err(
+            "端口号写在路径里了：请把 /:端口/ 改成 :端口/，例如 http://example.com:60100/v1".into(),
+        );
+    }
     match parsed.scheme() {
         "https" => Ok(parsed),
         "http" => {
+            if is_ojlab_base_url(raw) || allow_explicit_http {
+                return Ok(parsed);
+            }
             let exact_loopback = parsed.host_str().is_some_and(|host| {
                 matches!(host, "localhost" | "127.0.0.1") || host.trim_matches(['[', ']']) == "::1"
             });
@@ -92,6 +132,17 @@ fn validate_provider_base_url_with_policy(
 
 fn validate_provider_base_url(raw: &str) -> Result<url::Url, String> {
     validate_provider_base_url_with_policy(raw, insecure_loopback_http_enabled())
+}
+
+fn validate_personal_provider_base_url(
+    raw: &str,
+    allow_insecure_http: bool,
+) -> Result<url::Url, String> {
+    validate_provider_base_url_with_options(
+        raw,
+        insecure_loopback_http_enabled(),
+        allow_insecure_http,
+    )
 }
 
 fn provider_http_client(timeout: std::time::Duration) -> Result<reqwest::Client, String> {
@@ -362,6 +413,37 @@ fn write_config_unlocked(v: &Value) -> Result<(), String> {
     crate::paths::write_private_file(&path, body.as_bytes())
 }
 
+fn approved_insecure_http_urls(config: &Value) -> Vec<String> {
+    config
+        .get("model_providers")
+        .and_then(Value::as_table)
+        .into_iter()
+        .flat_map(|providers| providers.values())
+        .filter_map(Value::as_table)
+        .filter(|provider| provider.get(MANAGED_BY_KEY).is_none())
+        .filter(|provider| {
+            provider
+                .get(ALLOW_INSECURE_HTTP_KEY)
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+        .filter_map(|provider| provider.get("base_url").and_then(Value::as_str))
+        .filter(|url| {
+            validate_provider_base_url_with_options(url, false, true)
+                .is_ok_and(|parsed| parsed.scheme() == "http")
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+fn sync_insecure_http_approvals_from_config(config: &Value) {
+    echo_agent_sampler::replace_approved_insecure_http_urls(approved_insecure_http_urls(config));
+}
+
+pub(crate) fn sync_insecure_http_approvals() {
+    sync_insecure_http_approvals_from_config(&read_config());
+}
+
 /// Atomically mutate the latest config snapshot while holding the process-wide
 /// transaction lock across both the read and the replace. The upstream Runtime
 /// and desktop writers also share an advisory file lock, so async MCP/settings
@@ -386,6 +468,7 @@ pub(crate) fn update_config<T>(
     if config != original {
         write_config_unlocked(&config)?;
     }
+    sync_insecure_http_approvals_from_config(&config);
     Ok(result)
 }
 
@@ -420,6 +503,9 @@ pub struct ModelProviderEntry {
     /// (shared by all referencing models) — see ModelProviderConfig.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// Personal connection opt-in for transmitting credentials and prompts via HTTP.
+    #[serde(default)]
+    pub allow_insecure_http: bool,
     /// `personal` | `organization` | `legacy`. Derived from stored metadata.
     #[serde(default)]
     pub source: String,
@@ -455,6 +541,9 @@ pub struct ModelEntry {
     /// Per-model context-window override (wins over the provider's value).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// Maximum response length supported by this model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
     #[serde(default)]
     pub managed: bool,
 }
@@ -512,6 +601,10 @@ fn resolved_provider_api_key(table: &Map<String, Value>) -> Option<String> {
                     .filter(|value| !value.is_empty())
             })
         })
+}
+
+fn resolved_or_optional_api_key(table: &Map<String, Value>) -> Option<String> {
+    resolved_provider_api_key(table).or_else(|| provider_can_omit_api_key(table).then(String::new))
 }
 
 /// Secret-bearing provider context used only by native meeting jobs.  It is
@@ -602,8 +695,12 @@ fn masked_key(table: &Map<String, Value>) -> Option<String> {
 
 /// Read a `[model_providers.<id>]` table into an entry. The api_key is masked.
 fn provider_from_table(id: &str, table: &Map<String, Value>) -> ModelProviderEntry {
-    let managed =
-        table.get(MANAGED_BY_KEY).and_then(Value::as_str) == Some(MANAGED_BY_ORGANIZATION);
+    let source = match table.get(MANAGED_BY_KEY).and_then(Value::as_str) {
+        Some(MANAGED_BY_ORGANIZATION) => "organization",
+        Some(MANAGED_BY_BUILTIN) => "builtin",
+        _ => "personal",
+    };
+    let managed = source != "personal";
     let api_key = masked_key(table);
     ModelProviderEntry {
         id: id.to_string(),
@@ -630,9 +727,11 @@ fn provider_from_table(id: &str, table: &Map<String, Value>) -> ModelProviderEnt
             .get("context_window")
             .and_then(Value::as_integer)
             .map(|n| n as u64),
-        source: if managed { "organization" } else { "personal" }.into(),
+        allow_insecure_http: !managed
+            && table.get(ALLOW_INSECURE_HTTP_KEY).and_then(Value::as_bool) == Some(true),
+        source: source.into(),
         managed,
-        credential_configured: api_key.is_some(),
+        credential_configured: api_key.is_some() || provider_can_omit_api_key(table),
         synced_at: table
             .get(SYNCED_AT_KEY)
             .and_then(Value::as_integer)
@@ -734,6 +833,10 @@ fn group_legacy_models(
                 .and_then(|t| t.get("context_window"))
                 .and_then(Value::as_integer)
                 .map(|n| n as u64),
+            allow_insecure_http: first_table
+                .and_then(|t| t.get(ALLOW_INSECURE_HTTP_KEY))
+                .and_then(Value::as_bool)
+                == Some(true),
             source: "legacy".into(),
             managed: false,
             credential_configured: first_table.and_then(masked_key).is_some(),
@@ -754,6 +857,10 @@ fn group_legacy_models(
                     .get("context_window")
                     .and_then(Value::as_integer)
                     .map(|n| n as u64),
+                max_output_tokens: table
+                    .get("max_completion_tokens")
+                    .and_then(Value::as_integer)
+                    .and_then(|n| u32::try_from(n).ok()),
                 managed: false,
             });
         }
@@ -891,6 +998,9 @@ fn remove_unselected_provider_models(
 }
 
 fn validate_personal_provider_target(config: &Value, provider_id: &str) -> Result<(), String> {
+    if provider_id == BUILTIN_PROVIDER_ID {
+        return Err("内置模型连接不能由本地设置修改".into());
+    }
     if provider_id == ORGANIZATION_PROVIDER_ID {
         return Err("组织托管连接不能由本地设置修改".into());
     }
@@ -901,16 +1011,28 @@ fn validate_personal_provider_target(config: &Value, provider_id: &str) -> Resul
     if existing.is_some_and(is_organization_managed) {
         return Err("组织托管连接不能由本地设置修改".into());
     }
+    if existing.is_some_and(is_builtin_managed) {
+        return Err("内置模型连接不能由本地设置修改".into());
+    }
     Ok(())
 }
 
 fn validate_personal_model_target(config: &Value, model_id: &str) -> Result<(), String> {
+    if model_id.starts_with(BUILTIN_MODEL_PREFIX) {
+        return Err("内置模型不能由本地设置修改".into());
+    }
+    if model_id.starts_with(ORGANIZATION_MODEL_PREFIX) {
+        return Err("组织模型目录不能由本地设置修改".into());
+    }
     let existing = config
         .get("model")
         .and_then(Value::as_table)
         .and_then(|models| models.get(model_id));
     if existing.is_some_and(is_organization_model) {
         return Err("组织托管模型不能由本地设置修改".into());
+    }
+    if existing.is_some_and(is_builtin_model) {
+        return Err("内置模型不能由本地设置修改".into());
     }
     Ok(())
 }
@@ -976,25 +1098,42 @@ fn provider_to_table(p: &ModelProviderEntry, existing: Option<&Value>) -> Result
         "base_url",
         needs_base_url,
     )?;
-    validate_provider_base_url(&base_url)?;
-    let api_backend = resolve_field(
-        &p.api_backend,
-        existing_str("api_backend"),
-        preset.as_ref().map(|p| p.api_backend),
-        "api_backend",
-        needs_base_url,
-    )?;
-    let auth_scheme = resolve_field(
-        &p.auth_scheme,
-        existing_str("auth_scheme"),
-        preset.as_ref().map(|p| p.auth_scheme),
-        "auth_scheme",
-        needs_base_url,
-    )?;
+    let allow_insecure_http = p.allow_insecure_http
+        && !p.managed
+        && !matches!(p.source.as_str(), "organization" | "builtin");
+    let parsed_base_url = validate_personal_provider_base_url(&base_url, allow_insecure_http)?;
+    let keyless_service = is_ojlab_base_url(&base_url);
+    let api_backend = if keyless_service {
+        "chat_completions".to_owned()
+    } else {
+        resolve_field(
+            &p.api_backend,
+            existing_str("api_backend"),
+            preset.as_ref().map(|p| p.api_backend),
+            "api_backend",
+            needs_base_url,
+        )?
+    };
+    let auth_scheme = if keyless_service {
+        "bearer".to_owned()
+    } else {
+        resolve_field(
+            &p.auth_scheme,
+            existing_str("auth_scheme"),
+            preset.as_ref().map(|p| p.auth_scheme),
+            "auth_scheme",
+            needs_base_url,
+        )?
+    };
 
     table.insert("base_url".into(), Value::String(base_url));
     table.insert("api_backend".into(), Value::String(api_backend));
     table.insert("auth_scheme".into(), Value::String(auth_scheme));
+    if allow_insecure_http && parsed_base_url.scheme() == "http" && !keyless_service {
+        table.insert(ALLOW_INSECURE_HTTP_KEY.into(), Value::Boolean(true));
+    } else {
+        table.remove(ALLOW_INSECURE_HTTP_KEY);
+    }
 
     if let Some(label) = p.label.as_deref() {
         let label = label.trim();
@@ -1020,6 +1159,13 @@ fn provider_to_table(p: &ModelProviderEntry, existing: Option<&Value>) -> Result
             // Mask coming back from the UI — treat as no-op.
         } else {
             table.insert("api_key".into(), Value::String(key.to_string()));
+        }
+    }
+    if keyless_service {
+        // This public endpoint never needs a credential. Do not persist or
+        // forward an old provider key if a connection is repointed at it.
+        for field in ["api_key", "env_key", "auth_provider", "auth"] {
+            table.remove(field);
         }
     }
 
@@ -1064,6 +1210,12 @@ fn model_to_table(m: &ModelEntry, existing: Option<&Value>) -> Value {
     } else {
         // Per-model override cleared → fall back to provider's value.
         table.remove("context_window");
+    }
+    if let Some(max_output) = m.max_output_tokens {
+        table.insert(
+            "max_completion_tokens".into(),
+            Value::Integer(i64::from(max_output)),
+        );
     }
 
     // Migrate away legacy per-model connection fields (now on the provider).
@@ -1111,6 +1263,92 @@ fn is_organization_model(value: &Value) -> bool {
             .and_then(|table| table.get("model_provider"))
             .and_then(Value::as_str)
             == Some(ORGANIZATION_PROVIDER_ID)
+}
+
+fn is_builtin_managed(value: &Value) -> bool {
+    value
+        .as_table()
+        .and_then(|table| table.get(MANAGED_BY_KEY))
+        .and_then(Value::as_str)
+        == Some(MANAGED_BY_BUILTIN)
+}
+
+fn is_builtin_model(value: &Value) -> bool {
+    is_builtin_managed(value)
+        || value
+            .as_table()
+            .and_then(|table| table.get("model_provider"))
+            .and_then(Value::as_str)
+            == Some(BUILTIN_PROVIDER_ID)
+}
+
+fn apply_builtin_model_config(config: &mut Value) -> Result<(), String> {
+    let mut provider = Map::new();
+    provider.insert(
+        "base_url".into(),
+        Value::String(crate::agent_runtime::OJLAB_BASE_URL.into()),
+    );
+    provider.insert(
+        "api_backend".into(),
+        Value::String("chat_completions".into()),
+    );
+    provider.insert("auth_scheme".into(), Value::String("bearer".into()));
+    provider.insert(LABEL_KEY.into(), Value::String("内置模型".into()));
+    provider.insert(
+        MANAGED_BY_KEY.into(),
+        Value::String(MANAGED_BY_BUILTIN.into()),
+    );
+    let providers = ensure_table(config, "model_providers")?;
+    if providers
+        .get(BUILTIN_PROVIDER_ID)
+        .is_some_and(|entry| !is_builtin_managed(entry))
+    {
+        return Err("内置模型连接 ID 已被个人配置占用".into());
+    }
+    providers.insert(BUILTIN_PROVIDER_ID.into(), Value::Table(provider));
+
+    let models = ensure_table(config, "model")?;
+    for (slug, context_window, max_output_tokens) in [
+        ("chat-xc", 262_144, 8_192),
+        ("chat-glm", 131_072, 8_192),
+        ("chat-qwen", 262_144, 65_536),
+    ] {
+        let id = format!("{BUILTIN_MODEL_PREFIX}{slug}");
+        if models
+            .get(&id)
+            .is_some_and(|entry| !is_builtin_model(entry))
+        {
+            return Err(format!("内置模型 ID {id} 已被个人配置占用"));
+        }
+        let mut entry = Map::new();
+        entry.insert("model".into(), Value::String(slug.into()));
+        entry.insert("name".into(), Value::String(slug.into()));
+        entry.insert(
+            "model_provider".into(),
+            Value::String(BUILTIN_PROVIDER_ID.into()),
+        );
+        // The service's input limit is context_window - max_completion_tokens.
+        entry.insert("context_window".into(), Value::Integer(context_window));
+        entry.insert(
+            "max_completion_tokens".into(),
+            Value::Integer(max_output_tokens),
+        );
+        // The default 85% compaction threshold exceeds chat-qwen's 75%
+        // maximum-input share of its context window.
+        if slug == "chat-qwen" {
+            entry.insert("auto_compact_threshold_percent".into(), Value::Integer(70));
+        }
+        entry.insert(
+            MANAGED_BY_KEY.into(),
+            Value::String(MANAGED_BY_BUILTIN.into()),
+        );
+        models.insert(id, Value::Table(entry));
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_builtin_model_config() -> Result<(), String> {
+    update_config(apply_builtin_model_config)
 }
 
 /// Apply a downloaded organization model to an in-memory config document.
@@ -1165,6 +1403,7 @@ fn apply_organization_model_config(
         context_window: None,
         source: "organization".into(),
         managed: true,
+        allow_insecure_http: false,
         credential_configured: true,
         synced_at: Some(synced_at),
         organization_provider: Some(provider.into()),
@@ -1211,6 +1450,7 @@ fn apply_organization_model_config(
                 provider_id: ORGANIZATION_PROVIDER_ID.into(),
                 name: Some(model.into()),
                 context_window: None,
+                max_output_tokens: None,
                 managed: true,
             },
             models.get(&model_id),
@@ -1222,6 +1462,22 @@ fn apply_organization_model_config(
         // exact model slug configured by the organization administrator.
         table.insert("model".into(), Value::String(model.into()));
         models.insert(model_id.clone(), rendered);
+    }
+
+    if let Some(defaults) = config
+        .as_table_mut()
+        .and_then(|root| root.get_mut("models"))
+        .and_then(Value::as_table_mut)
+    {
+        if defaults
+            .get("default")
+            .and_then(Value::as_str)
+            .is_some_and(|selected| {
+                selected.starts_with(ORGANIZATION_MODEL_PREFIX) && selected != model_id
+            })
+        {
+            defaults.remove("default");
+        }
     }
 
     Ok(model_id)
@@ -1368,7 +1624,11 @@ pub fn providers_list() -> ProviderListModel {
                         .get("context_window")
                         .and_then(Value::as_integer)
                         .map(|n| n as u64),
-                    managed: is_organization_model(v),
+                    max_output_tokens: table
+                        .get("max_completion_tokens")
+                        .and_then(Value::as_integer)
+                        .and_then(|n| u32::try_from(n).ok()),
+                    managed: is_organization_model(v) || is_builtin_model(v),
                 });
             }
         }
@@ -1492,7 +1752,8 @@ pub fn providers_save_connection(
                 .as_table()
                 .and_then(resolved_provider_api_key)
                 .is_some();
-            if !credential_configured {
+            if !credential_configured && !rendered.as_table().is_some_and(provider_can_omit_api_key)
+            {
                 return Err("请填写 API Key".into());
             }
             providers.insert(provider_id.clone(), rendered);
@@ -1535,11 +1796,17 @@ pub fn providers_save_connection(
                 } else {
                     model.model_id.trim().to_string()
                 };
-                if model_tables
-                    .get(&local_id)
-                    .is_some_and(is_organization_model)
+                if local_id.starts_with(ORGANIZATION_MODEL_PREFIX)
+                    || model_tables
+                        .get(&local_id)
+                        .is_some_and(is_organization_model)
                 {
                     return Err("组织托管模型不能由本地设置修改".into());
+                }
+                if local_id.starts_with(BUILTIN_MODEL_PREFIX)
+                    || model_tables.get(&local_id).is_some_and(is_builtin_model)
+                {
+                    return Err("内置模型不能由本地设置修改".into());
                 }
                 if let Some(other_provider) = model_tables
                     .get(&local_id)
@@ -1620,8 +1887,15 @@ pub fn providers_save_model(
         } else {
             model.model_id.trim().to_string()
         };
-        if mdls.get(&local_id).is_some_and(is_organization_model) {
+        if local_id.starts_with(ORGANIZATION_MODEL_PREFIX)
+            || mdls.get(&local_id).is_some_and(is_organization_model)
+        {
             return Err("组织托管模型不能由本地设置修改".into());
+        }
+        if local_id.starts_with(BUILTIN_MODEL_PREFIX)
+            || mdls.get(&local_id).is_some_and(is_builtin_model)
+        {
+            return Err("内置模型不能由本地设置修改".into());
         }
         model.model_id.clone_from(&local_id);
         model.remote_model_id = Some(remote_model_id);
@@ -1770,7 +2044,11 @@ pub struct FetchedModel {
 /// Resolve the effective base_url for a fetch, given the provider kind and an
 /// optional override. Presets provide the default; `custom` requires the caller
 /// to supply `base_url`.
-fn resolve_fetch_base_url(kind: &str, base_url: &Option<String>) -> Result<String, String> {
+fn resolve_fetch_base_url(
+    kind: &str,
+    base_url: &Option<String>,
+    allow_insecure_http: bool,
+) -> Result<String, String> {
     let resolved = if let Some(url) = base_url {
         let trimmed = url.trim().trim_end_matches('/');
         if trimmed.is_empty() {
@@ -1783,7 +2061,7 @@ fn resolve_fetch_base_url(kind: &str, base_url: &Option<String>) -> Result<Strin
             None => return Err("自定义提供商必须填写 Base URL".into()),
         }
     };
-    validate_provider_base_url(&resolved)?;
+    validate_personal_provider_base_url(&resolved, allow_insecure_http)?;
     Ok(resolved)
 }
 
@@ -1801,7 +2079,7 @@ pub async fn providers_fetch_models(
     api_key: String,
     base_url: Option<String>,
 ) -> Result<Vec<FetchedModel>, String> {
-    fetch_models(&provider_kind, &api_key, &base_url, None).await
+    fetch_models(&provider_kind, &api_key, &base_url, None, false).await
 }
 
 /// Fetch models using an already-saved provider credential. The secret stays
@@ -1819,13 +2097,22 @@ pub async fn providers_fetch_models_for_provider(
         .and_then(Value::as_table)
         .ok_or("连接不存在")?;
     let provider_kind = infer_provider_kind(table);
-    let api_key = resolved_provider_api_key(table).ok_or("该连接没有可用的已保存 API Key")?;
+    let api_key = resolved_or_optional_api_key(table).ok_or("该连接没有可用的已保存 API Key")?;
     let base_url = table
         .get("base_url")
         .and_then(Value::as_str)
         .map(String::from);
     let auth_scheme = table.get("auth_scheme").and_then(Value::as_str);
-    fetch_models(&provider_kind, &api_key, &base_url, auth_scheme).await
+    let allow_insecure_http = table.get(MANAGED_BY_KEY).is_none()
+        && table.get(ALLOW_INSECURE_HTTP_KEY).and_then(Value::as_bool) == Some(true);
+    fetch_models(
+        &provider_kind,
+        &api_key,
+        &base_url,
+        auth_scheme,
+        allow_insecure_http,
+    )
+    .await
 }
 
 /// Validate an unsaved connection draft. When editing and the key is blank or
@@ -1854,13 +2141,22 @@ pub async fn providers_test_connection(
     let rendered = provider_to_table(&provider, existing)?;
     let table = rendered.as_table().ok_or("连接配置无效")?;
     let provider_kind = infer_provider_kind(table);
-    let api_key = resolved_provider_api_key(table).ok_or("请填写 API Key")?;
+    let api_key = resolved_or_optional_api_key(table).ok_or("请填写 API Key")?;
     let base_url = table
         .get("base_url")
         .and_then(Value::as_str)
         .map(String::from);
     let auth_scheme = table.get("auth_scheme").and_then(Value::as_str);
-    fetch_models(&provider_kind, &api_key, &base_url, auth_scheme).await
+    let allow_insecure_http =
+        table.get(ALLOW_INSECURE_HTTP_KEY).and_then(Value::as_bool) == Some(true);
+    fetch_models(
+        &provider_kind,
+        &api_key,
+        &base_url,
+        auth_scheme,
+        allow_insecure_http,
+    )
+    .await
 }
 
 /// Test the actual inference endpoint with a concrete model id. This is kept
@@ -1888,7 +2184,9 @@ pub async fn providers_test_model_connection(
 
     // Organization-managed connections are tested exactly as downloaded;
     // never accept webview-provided overrides for their endpoint or secret.
-    let rendered = if stored.is_some_and(is_organization_managed) {
+    let rendered = if stored
+        .is_some_and(|entry| is_organization_managed(entry) || is_builtin_managed(entry))
+    {
         stored.cloned().ok_or("连接不存在")?
     } else {
         if !provider.id.trim().is_empty() {
@@ -1904,7 +2202,7 @@ pub async fn providers_test_model_connection(
 
     let table = rendered.as_table().ok_or("连接配置无效")?;
     let provider_kind = infer_provider_kind(table);
-    let api_key = resolved_provider_api_key(table).ok_or("请填写 API Key")?;
+    let api_key = resolved_or_optional_api_key(table).ok_or("请填写 API Key")?;
     let base_url = table
         .get("base_url")
         .and_then(Value::as_str)
@@ -1918,6 +2216,8 @@ pub async fn providers_test_model_connection(
                 .unwrap_or("chat_completions")
         });
     let auth_scheme = table.get("auth_scheme").and_then(Value::as_str);
+    let allow_insecure_http = table.get(MANAGED_BY_KEY).is_none()
+        && table.get(ALLOW_INSECURE_HTTP_KEY).and_then(Value::as_bool) == Some(true);
     test_model_inference(
         &provider_kind,
         &api_key,
@@ -1925,6 +2225,7 @@ pub async fn providers_test_model_connection(
         api_backend,
         auth_scheme,
         model_id,
+        allow_insecure_http,
     )
     .await
 }
@@ -1951,13 +2252,13 @@ async fn test_model_inference(
     api_backend: &str,
     explicit_auth_scheme: Option<&str>,
     model_id: &str,
+    allow_insecure_http: bool,
 ) -> Result<(), String> {
     let key = api_key.trim();
-    if key.is_empty() {
+    let base = resolve_fetch_base_url(provider_kind, base_url, allow_insecure_http)?;
+    if key.is_empty() && !is_ojlab_base_url(&base) {
         return Err("请先填写 API Key".into());
     }
-
-    let base = resolve_fetch_base_url(provider_kind, base_url)?;
     let url = inference_endpoint(&base, api_backend)?;
     let auth_scheme = explicit_auth_scheme
         .map(str::trim)
@@ -1989,17 +2290,27 @@ async fn test_model_inference(
 
     let client = provider_http_client(std::time::Duration::from_secs(30))?;
     let mut request = client.post(&url).json(&payload);
-    request = match auth_scheme.as_str() {
-        "x_api_key" => request
-            .header("x-api-key", key)
-            .header("anthropic-version", "2023-06-01"),
-        _ => request.header("Authorization", format!("Bearer {key}")),
-    };
+    if !key.is_empty() {
+        request = match auth_scheme.as_str() {
+            "x_api_key" => request
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01"),
+            _ => request.header("Authorization", format!("Bearer {key}")),
+        };
+    }
 
     let response = request
         .send()
         .await
-        .map_err(|error| format!("请求模型失败：{error}"))?;
+        .map_err(|error| {
+            if error.is_connect() {
+                format!("无法连接模型服务。请检查 Base URL、端口和网络；HTTPS 地址还需确认服务已启用 TLS。详情：{error}")
+            } else if error.is_timeout() {
+                format!("模型服务连接超时。请检查服务状态和网络。详情：{error}")
+            } else {
+                format!("请求模型失败：{error}")
+            }
+        })?;
     let status = response.status();
     if status.is_success() {
         return Ok(());
@@ -2027,13 +2338,13 @@ async fn fetch_models(
     api_key: &str,
     base_url: &Option<String>,
     explicit_auth_scheme: Option<&str>,
+    allow_insecure_http: bool,
 ) -> Result<Vec<FetchedModel>, String> {
     let key = api_key.trim();
-    if key.is_empty() {
+    let base = resolve_fetch_base_url(provider_kind, base_url, allow_insecure_http)?;
+    if key.is_empty() && !is_ojlab_base_url(&base) {
         return Err("请先填写 API Key".into());
     }
-
-    let base = resolve_fetch_base_url(provider_kind, base_url)?;
     let auth_scheme = explicit_auth_scheme
         .map(str::trim)
         .filter(|scheme| !scheme.is_empty())
@@ -2048,12 +2359,14 @@ async fn fetch_models(
 
     let mut req = client.get(&url);
     // Auth header per the provider's scheme.
-    req = match auth_scheme.as_str() {
-        "x_api_key" => req
-            .header("x-api-key", key)
-            .header("anthropic-version", "2023-06-01"),
-        _ => req.header("Authorization", format!("Bearer {key}")),
-    };
+    if !key.is_empty() {
+        req = match auth_scheme.as_str() {
+            "x_api_key" => req
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01"),
+            _ => req.header("Authorization", format!("Bearer {key}")),
+        };
+    }
 
     let resp = req.send().await.map_err(|e| format!("请求失败：{e}"))?;
 
@@ -2098,6 +2411,11 @@ async fn fetch_models(
             if id.is_empty() || id.len() > 512 || id.chars().any(char::is_control) {
                 return None;
             }
+            if is_ojlab_base_url(&base)
+                && !matches!(id.as_str(), "chat-xc" | "chat-glm" | "chat-qwen")
+            {
+                return None;
+            }
             let owned_by = item
                 .get("owned_by")
                 .and_then(|v| v.as_str())
@@ -2118,6 +2436,111 @@ async fn fetch_models(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_catalog_is_idempotent_and_preserves_personal_and_organization_models() {
+        let mut config: Value = r#"
+[model_providers.mine]
+base_url = "https://example.com/v1"
+api_key = "personal-key"
+[model.mine]
+model_provider = "mine"
+model = "mine"
+[model_providers.echoagent-organization]
+echoagent_managed_by = "organization"
+[model."organization/team"]
+model_provider = "echoagent-organization"
+model = "team"
+"#
+        .parse()
+        .unwrap();
+        apply_builtin_model_config(&mut config).unwrap();
+        let first = config.clone();
+        apply_builtin_model_config(&mut config).unwrap();
+        assert_eq!(config, first);
+        assert!(config["model"]["mine"].is_table());
+        assert!(config["model"]["organization/team"].is_table());
+        assert_eq!(
+            config["model"][BUILTIN_DEFAULT_MODEL_ID]["model"].as_str(),
+            Some("chat-xc")
+        );
+        for (slug, context_window, max_input_tokens, max_output_tokens) in [
+            ("chat-xc", 262_144, 253_952, 8_192),
+            ("chat-glm", 131_072, 122_880, 8_192),
+            ("chat-qwen", 262_144, 196_608, 65_536),
+        ] {
+            let entry = &config["model"][format!("{BUILTIN_MODEL_PREFIX}{slug}").as_str()];
+            assert_eq!(entry["context_window"].as_integer(), Some(context_window));
+            assert_eq!(
+                entry["max_completion_tokens"].as_integer(),
+                Some(max_output_tokens)
+            );
+            assert_eq!(context_window - max_output_tokens, max_input_tokens);
+            if slug == "chat-qwen" {
+                assert_eq!(
+                    entry["auto_compact_threshold_percent"].as_integer(),
+                    Some(70)
+                );
+            }
+        }
+        let provider = config["model_providers"][BUILTIN_PROVIDER_ID]
+            .as_table()
+            .unwrap();
+        assert!(provider_can_omit_api_key(provider));
+        assert!(provider_from_table(BUILTIN_PROVIDER_ID, provider).managed);
+        assert!(resolved_provider_api_key(provider).is_none());
+        assert!(validate_personal_provider_target(&config, BUILTIN_PROVIDER_ID).is_err());
+        assert!(validate_personal_model_target(&config, BUILTIN_DEFAULT_MODEL_ID).is_err());
+    }
+
+    #[test]
+    fn only_the_named_http_service_can_run_without_a_key() {
+        assert!(validate_provider_base_url_with_policy(
+            crate::agent_runtime::OJLAB_BASE_URL,
+            false
+        )
+        .is_ok());
+        assert!(validate_provider_base_url_with_policy(
+            "http://www.ojlab.com:8088/v1/other",
+            false
+        )
+        .is_err());
+        assert!(
+            validate_provider_base_url_with_policy("http://www.ojlab.com.evil:8088/v1", false)
+                .is_err()
+        );
+        let mut provider = Map::new();
+        provider.insert(
+            "base_url".into(),
+            Value::String(crate::agent_runtime::OJLAB_BASE_URL.into()),
+        );
+        provider.insert(
+            "api_backend".into(),
+            Value::String("chat_completions".into()),
+        );
+        assert_eq!(resolved_or_optional_api_key(&provider), Some(String::new()));
+        provider.insert(
+            "base_url".into(),
+            Value::String("https://example.com/v1".into()),
+        );
+        assert_eq!(resolved_or_optional_api_key(&provider), None);
+
+        let rendered = provider_to_table(
+            &ModelProviderEntry {
+                provider_kind: "custom".into(),
+                base_url: Some(crate::agent_runtime::OJLAB_BASE_URL.into()),
+                api_backend: Some("responses".into()),
+                auth_scheme: Some("x_api_key".into()),
+                api_key: Some("must-not-be-sent".into()),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert!(rendered.as_table().unwrap().get("api_key").is_none());
+        assert_eq!(rendered["api_backend"].as_str(), Some("chat_completions"));
+        assert_eq!(rendered["auth_scheme"].as_str(), Some("bearer"));
+    }
 
     // --- model_config_revision ---
 
@@ -2264,6 +2687,68 @@ base_url = "https://example.com"
         );
         assert_eq!(table["api_backend"].as_str(), Some("responses"));
         assert_eq!(table["auth_scheme"].as_str(), Some("bearer"));
+        assert!(!table.contains_key(ALLOW_INSECURE_HTTP_KEY));
+    }
+
+    #[test]
+    fn personal_http_requires_opt_in_and_https_never_needs_it() {
+        let mut provider = ModelProviderEntry {
+            id: "custom".into(),
+            provider_kind: "custom".into(),
+            api_key: Some("test-key".into()),
+            base_url: Some("http://example.com:60100/v1".into()),
+            api_backend: Some("chat_completions".into()),
+            auth_scheme: Some("bearer".into()),
+            source: "personal".into(),
+            ..Default::default()
+        };
+        assert!(provider_to_table(&provider, None).is_err());
+        provider.allow_insecure_http = true;
+        let approved = provider_to_table(&provider, None).expect("opted-in personal HTTP");
+        let table = approved.as_table().unwrap();
+        assert_eq!(
+            table.get(ALLOW_INSECURE_HTTP_KEY).and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(provider_from_table("custom", table).allow_insecure_http);
+        assert_eq!(
+            table.get("base_url").and_then(Value::as_str),
+            Some("http://example.com:60100/v1")
+        );
+
+        provider.base_url = Some("https://example.com/v1".into());
+        let secure = provider_to_table(&provider, Some(&approved)).expect("HTTPS is unaffected");
+        assert!(!secure
+            .as_table()
+            .unwrap()
+            .contains_key(ALLOW_INSECURE_HTTP_KEY));
+
+        provider.base_url = Some("http://example.com:60100/v1".into());
+        provider.source = "organization".into();
+        provider.managed = true;
+        assert!(provider_to_table(&provider, None).is_err());
+    }
+
+    #[test]
+    fn runtime_http_approval_only_uses_personal_opted_in_urls() {
+        let config: Value = r#"
+            [model_providers.personal]
+            base_url = "http://approved.example:60100/v1"
+            echoagent_allow_insecure_http = true
+            echoagent_source = "personal"
+            [model_providers.other]
+            base_url = "http://other.example/v1"
+            [model_providers.organization]
+            base_url = "http://organization.example/v1"
+            echoagent_allow_insecure_http = true
+            echoagent_managed_by = "organization"
+        "#
+        .parse()
+        .unwrap();
+        assert_eq!(
+            approved_insecure_http_urls(&config),
+            vec!["http://approved.example:60100/v1"]
+        );
     }
 
     #[test]
@@ -2389,10 +2874,12 @@ base_url = "https://example.com"
             provider_id: "openai".into(),
             name: None,
             context_window: Some(128_000),
+            max_output_tokens: Some(8_192),
             ..Default::default()
         };
         let table = model_to_table(&m, None).as_table().unwrap().clone();
         assert_eq!(table["context_window"].as_integer().unwrap(), 128_000);
+        assert_eq!(table["max_completion_tokens"].as_integer(), Some(8_192));
     }
 
     #[test]
@@ -2528,11 +3015,18 @@ base_url = "https://example.com"
                 },
             )
             .unwrap();
+            if model == "old-model" {
+                ensure_table(&mut config, "models").unwrap().insert(
+                    "default".into(),
+                    Value::String("organization/old-model".into()),
+                );
+            }
         }
 
         let models = config.get("model").and_then(Value::as_table).unwrap();
         assert!(!models.contains_key("organization/old-model"));
         assert!(models.contains_key("organization/new-model"));
+        assert!(config["models"].get("default").is_none());
         let provider = config
             .get("model_providers")
             .and_then(Value::as_table)
@@ -2882,6 +3376,11 @@ base_url = "https://example.com"
             validate_provider_base_url_with_policy("https://api.example.com/v1", false).is_ok()
         );
         assert!(validate_provider_base_url_with_policy("http://api.example.com/v1", true).is_err());
+        assert!(
+            validate_provider_base_url_with_policy("http://example.com/:60100/v1", false)
+                .unwrap_err()
+                .contains("端口号写在路径里")
+        );
         assert!(
             validate_provider_base_url_with_policy("http://127.0.0.1:11434/v1", false).is_err()
         );

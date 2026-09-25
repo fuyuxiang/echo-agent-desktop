@@ -211,7 +211,7 @@ fn embedding_config() -> MemoryEmbeddingConfig {
         model: Some(crate::agent_runtime::MEMORY_EMBEDDING_MODEL.to_owned()),
         dimensions: crate::agent_runtime::MEMORY_EMBEDDING_DIMENSIONS,
         endpoint: Some(crate::agent_runtime::MEMORY_EMBEDDING_ENDPOINT.to_owned()),
-        api_key: Some(crate::agent_runtime::MEMORY_SILICONFLOW_API_KEY.to_owned()),
+        api_key: None,
         send_dimensions: false,
     }
 }
@@ -235,7 +235,7 @@ fn reranker_config() -> MemorySearchConfig {
     config.reranker.enabled = true;
     config.reranker.endpoint = Some(crate::agent_runtime::MEMORY_RERANK_ENDPOINT.to_owned());
     config.reranker.model = Some(crate::agent_runtime::MEMORY_RERANK_MODEL.to_owned());
-    config.reranker.api_key = Some(crate::agent_runtime::MEMORY_SILICONFLOW_API_KEY.to_owned());
+    config.reranker.api_key = None;
     config
 }
 
@@ -243,7 +243,7 @@ fn embedding_provider() -> Option<ApiEmbeddingProvider> {
     ApiEmbeddingProvider::from_session(
         &embedding_config(),
         crate::agent_runtime::MEMORY_EMBEDDING_ENDPOINT.to_owned(),
-        crate::agent_runtime::MEMORY_SILICONFLOW_API_KEY.to_owned(),
+        String::new(),
     )
 }
 
@@ -1018,7 +1018,7 @@ async fn search_hybrid(
         .with_embedding(
             embedding_config(),
             crate::agent_runtime::MEMORY_EMBEDDING_ENDPOINT.to_owned(),
-            Some(crate::agent_runtime::MEMORY_SILICONFLOW_API_KEY.to_owned()),
+            None,
         )
         .with_search_config(config);
     let coarse = tokio::select! {
@@ -1441,12 +1441,19 @@ mod tests {
     fn personal_retrieval_uses_requested_models() {
         let embedding = embedding_config();
         let search = reranker_config();
-        assert_eq!(embedding.model.as_deref(), Some("BAAI/bge-m3"));
+        assert_eq!(embedding.model.as_deref(), Some("embed-pro"));
         assert_eq!(embedding.dimensions, 1024);
         assert_eq!(
-            search.reranker.model.as_deref(),
-            Some("BAAI/bge-reranker-v2-m3")
+            embedding.endpoint.as_deref(),
+            Some(crate::agent_runtime::MEMORY_EMBEDDING_ENDPOINT)
         );
+        assert!(embedding.api_key.is_none());
+        assert_eq!(search.reranker.model.as_deref(), Some("rerank-pro"));
+        assert_eq!(
+            search.reranker.endpoint.as_deref(),
+            Some(crate::agent_runtime::MEMORY_RERANK_ENDPOINT)
+        );
+        assert!(search.reranker.api_key.is_none());
         assert!(search.reranker.enabled);
     }
 

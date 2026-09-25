@@ -59,8 +59,8 @@ describe("personal knowledge prompt preparation", () => {
         chunkCount: 1,
         embeddedChunkCount: 1,
         pendingEmbeddingCount: 0,
-        embeddingModel: "BAAI/bge-m3",
-        rerankModel: "BAAI/bge-reranker-v2-m3",
+        embeddingModel: "embed-pro",
+        rerankModel: "rerank-pro",
       },
     });
 

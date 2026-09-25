@@ -216,7 +216,6 @@ impl MemoryRerankerConfig {
                 .as_ref()
                 .is_some_and(|value| !value.is_empty())
             && self.model.as_ref().is_some_and(|value| !value.is_empty())
-            && self.api_key.as_ref().is_some_and(|value| !value.is_empty())
     }
 }
 
