@@ -708,6 +708,8 @@ export interface ModelEntry {
   contextWindow?: number;
   /** Per-model maximum response length, stored as max_completion_tokens. */
   maxOutputTokens?: number;
+  /** Explicitly remove a saved maximum response length; omitted values keep it. */
+  clearMaxOutputTokens?: boolean;
   managed?: boolean;
 }
 

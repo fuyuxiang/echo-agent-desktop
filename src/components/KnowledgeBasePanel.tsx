@@ -166,16 +166,8 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
           failures: [],
           successfulProviders: 1,
           notice: semantic.degradedReason
-            ? `语义检索暂时降级：${semantic.degradedReason}`
-            : semantic.retrievalMode === "hybrid-reranked"
-              ? "已使用关键词、向量检索和相关性重排"
-              : semantic.retrievalMode === "hybrid"
-                ? "已使用关键词与向量混合检索"
-                : semantic.retrievalMode === "keyword-reranked"
-                  ? "已使用关键词检索和相关性重排（向量召回本次未参与）"
-                  : semantic.retrievalMode === "keyword"
-                    ? "已使用关键词扩展检索（向量召回本次未参与）"
-                    : null,
+            ? "部分搜索能力暂时不可用，结果可能不完整；请稍后重试。"
+            : null,
           semanticStatus: semantic.index,
         };
       }
@@ -301,23 +293,17 @@ export function KnowledgeBasePanel({ onOpen, onToast }: KnowledgeBasePanelProps)
           })()}
         </div>
       )}
-      {sources.length > 0 && semanticStatus && (
+      {sources.length > 0 && semanticStatus && !["ready", "idle"].includes(semanticStatus.state) && (
         <div
           className="kb-panel__index-status"
           role={semanticStatus.state === "error" ? "alert" : "status"}
-          title={`Embedding：${semanticStatus.embeddingModel}；Rerank：${semanticStatus.rerankModel}`}
         >
           <span>
             {semanticStatus.state === "indexing"
-              ? semanticStatus.message ?? "正在建立语义索引…"
+              ? "正在更新知识库索引…"
               : semanticStatus.state === "error"
-                ? `语义索引失败：${semanticStatus.message ?? "未知错误"}`
-                : semanticStatus.state === "degraded"
-                  ? semanticStatus.message ?? "语义索引部分可用"
-                  : `语义索引 ${semanticStatus.embeddedChunkCount}/${semanticStatus.chunkCount} 个片段`}
-          </span>
-          <span className="kb-panel__index-time">
-            {semanticStatus.embeddingModel} · {semanticStatus.rerankModel}
+                ? "知识库索引暂时不可用，请刷新索引后重试。"
+                : "知识库搜索部分可用，结果可能不完整。"}
           </span>
         </div>
       )}

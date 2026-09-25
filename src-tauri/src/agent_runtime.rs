@@ -46,11 +46,11 @@ use std::os::windows::fs::OpenOptionsExt;
 
 const MAX_IMAGE_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) const DESKTOP_CLIENT_IDENTIFIER: &str = "echo-agent-desktop";
-pub(crate) const OJLAB_BASE_URL: &str = "http://www.ojlab.com:8088/v1";
-pub(crate) const MEMORY_EMBEDDING_ENDPOINT: &str = "http://www.ojlab.com:8088/v1/embeddings";
+pub(crate) const OJLAB_BASE_URL: &str = "http://123.56.188.16:8088/v1";
+pub(crate) const MEMORY_EMBEDDING_ENDPOINT: &str = "http://123.56.188.16:8088/v1/embeddings";
 pub(crate) const MEMORY_EMBEDDING_MODEL: &str = "embed-pro";
 pub(crate) const MEMORY_EMBEDDING_DIMENSIONS: usize = 1024;
-pub(crate) const MEMORY_RERANK_ENDPOINT: &str = "http://www.ojlab.com:8088/v1/rerank";
+pub(crate) const MEMORY_RERANK_ENDPOINT: &str = "http://123.56.188.16:8088/v1/rerank";
 pub(crate) const MEMORY_RERANK_MODEL: &str = "rerank-pro";
 
 fn configure_memory_retrieval(cfg: &mut AgentConfig) {

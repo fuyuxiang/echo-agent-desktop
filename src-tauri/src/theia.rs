@@ -2,10 +2,10 @@
 //! browser application; the EchoAgent runtime and task state stay in Tauri.
 
 use serde::Serialize;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -151,6 +151,15 @@ fn theia_ready(port: u16, embed_token: &str) -> bool {
             .any(|line| line.trim_end_matches('\r') == format!("X-Echo-Theia-Ready: {embed_token}"))
 }
 
+fn port_conflict_in_attempt(log_path: &Path, attempt_log_start: usize) -> bool {
+    fs::read(log_path)
+        .map(|content| {
+            String::from_utf8_lossy(content.get(attempt_log_start..).unwrap_or_default())
+                .contains("EADDRINUSE")
+        })
+        .unwrap_or(false)
+}
+
 #[tauri::command]
 pub async fn coding_theia_start(
     app: AppHandle,
@@ -195,6 +204,8 @@ pub async fn coding_theia_start(
     let config_dir = data_dir.join("theia-config");
     fs::create_dir_all(&config_dir).map_err(|error| format!("无法创建 IDE 配置目录：{error}"))?;
     let log_path = data_dir.join("theia.log");
+    // One launch gets one fresh log; retries within that launch remain visible.
+    File::create(&log_path).map_err(|error| format!("无法创建 IDE 日志：{error}"))?;
     for attempt in 0..3 {
         // The preferred origin restores layout. A bind/drop/spawn race can
         // still occur; an occupied port gets a fresh ephemeral retry.
@@ -211,7 +222,18 @@ pub async fn coding_theia_start(
         drop(listener);
 
         let embed_token = format!("{}{}", Uuid::now_v7().simple(), Uuid::now_v7().simple());
-        let log = File::create(&log_path).map_err(|error| format!("无法创建 IDE 日志：{error}"))?;
+        let mut log = OpenOptions::new()
+            .append(true)
+            .open(&log_path)
+            .map_err(|error| format!("无法打开 IDE 日志：{error}"))?;
+        let attempt_log_start = log.metadata().map_err(|error| error.to_string())?.len() as usize;
+        writeln!(
+            log,
+            "\n--- Theia 启动尝试 {}，端口 {} ---",
+            attempt + 1,
+            port
+        )
+        .map_err(|error| format!("无法写入 IDE 日志：{error}"))?;
         let err_log = log.try_clone().map_err(|error| error.to_string())?;
         let mut child = Command::new(&node)
             .arg(app_dir.join("lib/backend/main.js"))
@@ -229,9 +251,7 @@ pub async fn coding_theia_start(
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
             if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-                let port_taken = fs::read_to_string(&log_path)
-                    .map(|content| content.contains("EADDRINUSE"))
-                    .unwrap_or(false);
+                let port_taken = port_conflict_in_attempt(&log_path, attempt_log_start);
                 if port_taken && attempt < 2 {
                     break;
                 }
@@ -271,4 +291,21 @@ pub async fn coding_theia_start(
         "Theia 本地端口持续被占用，请查看日志：{}",
         log_path.display()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_conflict_checks_only_the_current_start_attempt() {
+        let directory = tempfile::tempdir().unwrap();
+        let log_path = directory.path().join("theia.log");
+        fs::write(&log_path, b"first attempt: EADDRINUSE\n").unwrap();
+        let second_attempt_offset = fs::metadata(&log_path).unwrap().len() as usize;
+        let mut log = OpenOptions::new().append(true).open(&log_path).unwrap();
+        writeln!(log, "second attempt: missing module").unwrap();
+        assert!(!port_conflict_in_attempt(&log_path, second_attempt_offset));
+        assert!(port_conflict_in_attempt(&log_path, 0));
+    }
 }

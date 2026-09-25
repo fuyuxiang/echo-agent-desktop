@@ -875,7 +875,7 @@ mod tests {
         let raw: toml::Value = toml::from_str(
             r#"
             [model_providers.echoagent-ojlab]
-            base_url = "http://www.ojlab.com:8088/v1"
+            base_url = "http://123.56.188.16:8088/v1"
             api_backend = "chat_completions"
             [model."echoagent-ojlab/chat-xc"]
             model = "chat-xc"

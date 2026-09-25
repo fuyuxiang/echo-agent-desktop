@@ -200,7 +200,7 @@ export function CodingWorkbench({
     previewUrls, setPreviewUrls,
     theiaPreviewOpen, setTheiaPreviewOpen,
     theiaAgentOpen, setTheiaAgentOpen,
-    agentWidth, setAgentWidth,
+    agentWidth, agentMaximumWidth, resetAgentWidth,
     theiaDirtyCount, setTheiaDirtyCount,
     theiaPreviewRequest, setTheiaPreviewRequest,
     theiaOpenFileRequest,
@@ -1359,10 +1359,10 @@ export function CodingWorkbench({
         aria-label="调整 Agent 面板宽度"
         aria-orientation="vertical"
         aria-valuemin={300}
-        aria-valuemax={800}
+        aria-valuemax={agentMaximumWidth}
         aria-valuenow={agentWidth}
         title="拖动调整宽度，双击重置"
-        onDoubleClick={() => setAgentWidth(410)}
+        onDoubleClick={resetAgentWidth}
         onKeyDown={(event) => {
           if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
             event.preventDefault();

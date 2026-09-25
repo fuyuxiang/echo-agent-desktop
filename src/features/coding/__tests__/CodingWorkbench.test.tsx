@@ -160,6 +160,13 @@ describe("Theia workbench", () => {
     fireEvent.pointerUp(window);
     expect(splitter).toHaveAttribute("aria-valuenow", "500");
     expect(window.localStorage.getItem("echo-agent-panel-width")).toBe("500");
+    vi.spyOn(workbench, "getBoundingClientRect").mockReturnValue({
+      width: 700, right: 700, left: 0, top: 0, bottom: 800, height: 800, x: 0, y: 0,
+      toJSON: () => ({}),
+    });
+    fireEvent.doubleClick(splitter);
+    expect(splitter).toHaveAttribute("aria-valuemax", "380");
+    expect(splitter).toHaveAttribute("aria-valuenow", "380");
     expect(screen.queryByRole("tablist", { name: "开发任务面板" })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "任务描述" })).toBeInTheDocument();
     expect(agent.lastElementChild).toHaveClass("echo-theia-agent__composer");

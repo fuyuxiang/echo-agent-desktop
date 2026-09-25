@@ -474,6 +474,8 @@ function Shell() {
     const generation = ++modelCatalogGenerationRef.current;
     setModelCatalogError(null);
     try {
+      // The status check may expire an organization model lease and remove its
+      // catalog entries. Read providers only after that reconciliation.
       const auth = await agentAuthStatus();
       const list = await providersList();
       if (modelCatalogGenerationRef.current !== generation) return;

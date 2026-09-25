@@ -544,6 +544,9 @@ pub struct ModelEntry {
     /// Maximum response length supported by this model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    /// Request-only flag: an omitted limit keeps the stored override; clearing it is explicit.
+    #[serde(default, skip_serializing)]
+    pub clear_max_output_tokens: bool,
     #[serde(default)]
     pub managed: bool,
 }
@@ -861,6 +864,7 @@ fn group_legacy_models(
                     .get("max_completion_tokens")
                     .and_then(Value::as_integer)
                     .and_then(|n| u32::try_from(n).ok()),
+                clear_max_output_tokens: false,
                 managed: false,
             });
         }
@@ -1211,7 +1215,9 @@ fn model_to_table(m: &ModelEntry, existing: Option<&Value>) -> Value {
         // Per-model override cleared → fall back to provider's value.
         table.remove("context_window");
     }
-    if let Some(max_output) = m.max_output_tokens {
+    if m.clear_max_output_tokens {
+        table.remove("max_completion_tokens");
+    } else if let Some(max_output) = m.max_output_tokens {
         table.insert(
             "max_completion_tokens".into(),
             Value::Integer(i64::from(max_output)),
@@ -1230,6 +1236,42 @@ fn model_to_table(m: &ModelEntry, existing: Option<&Value>) -> Value {
     }
 
     Value::Table(table)
+}
+
+fn validate_model_limits(
+    model: &ModelEntry,
+    provider_context_window: Option<u64>,
+    existing: Option<&Value>,
+) -> Result<(), String> {
+    if model.clear_max_output_tokens && model.max_output_tokens.is_some() {
+        return Err("不能同时设置和清除最大输出".into());
+    }
+    if model.context_window == Some(0) || provider_context_window == Some(0) {
+        return Err("上下文窗口必须大于 0".into());
+    }
+    let saved_max_output = existing
+        .and_then(Value::as_table)
+        .and_then(|table| table.get("max_completion_tokens"))
+        .and_then(Value::as_integer)
+        .and_then(|value| u32::try_from(value).ok());
+    let effective_max_output = if model.clear_max_output_tokens {
+        None
+    } else {
+        model.max_output_tokens.or(saved_max_output)
+    };
+    if let Some(max_output) = effective_max_output {
+        if max_output == 0 {
+            return Err("最大输出必须大于 0".into());
+        }
+        if model
+            .context_window
+            .or(provider_context_window)
+            .is_some_and(|window| u64::from(max_output) > window)
+        {
+            return Err("最大输出不能超过上下文窗口".into());
+        }
+    }
+    Ok(())
 }
 
 /// Ensure a top-level table exists in the config root, returning a mut ref.
@@ -1451,6 +1493,7 @@ fn apply_organization_model_config(
                 name: Some(model.into()),
                 context_window: None,
                 max_output_tokens: None,
+                clear_max_output_tokens: false,
                 managed: true,
             },
             models.get(&model_id),
@@ -1628,6 +1671,7 @@ pub fn providers_list() -> ProviderListModel {
                         .get("max_completion_tokens")
                         .and_then(Value::as_integer)
                         .and_then(|n| u32::try_from(n).ok()),
+                    clear_max_output_tokens: false,
                     managed: is_organization_model(v) || is_builtin_model(v),
                 });
             }
@@ -1823,7 +1867,9 @@ pub fn providers_save_connection(
                 model.remote_model_id = Some(remote_model_id);
                 model.provider_id.clone_from(&provider_id);
                 model.managed = false;
-                let rendered = model_to_table(&model, model_tables.get(&local_id));
+                let existing = model_tables.get(&local_id);
+                validate_model_limits(&model, provider.context_window, existing)?;
+                let rendered = model_to_table(&model, existing);
                 model_tables.insert(local_id.clone(), rendered);
                 model_ids.push(local_id);
             }
@@ -1870,6 +1916,14 @@ pub fn providers_save_model(
     }
     let local_id = update_config(|config| {
         validate_personal_provider_target(config, model.provider_id.trim())?;
+        let provider_context_window = config
+            .get("model_providers")
+            .and_then(Value::as_table)
+            .and_then(|providers| providers.get(model.provider_id.trim()))
+            .and_then(Value::as_table)
+            .and_then(|provider| provider.get("context_window"))
+            .and_then(Value::as_integer)
+            .and_then(|window| u64::try_from(window).ok());
         let remote_model_id = model
             .remote_model_id
             .as_deref()
@@ -1901,6 +1955,7 @@ pub fn providers_save_model(
         model.remote_model_id = Some(remote_model_id);
         model.managed = false;
         let existing = mdls.get(&local_id);
+        validate_model_limits(&model, provider_context_window, existing)?;
         let rendered = model_to_table(&model, existing);
         mdls.insert(local_id.clone(), rendered);
         Ok(local_id)
@@ -2501,12 +2556,12 @@ model = "team"
         )
         .is_ok());
         assert!(validate_provider_base_url_with_policy(
-            "http://www.ojlab.com:8088/v1/other",
+            "http://123.56.188.16:8088/v1/other",
             false
         )
         .is_err());
         assert!(
-            validate_provider_base_url_with_policy("http://www.ojlab.com.evil:8088/v1", false)
+            validate_provider_base_url_with_policy("http://123.56.188.16.evil:8088/v1", false)
                 .is_err()
         );
         let mut provider = Map::new();
@@ -2880,6 +2935,51 @@ base_url = "https://example.com"
         let table = model_to_table(&m, None).as_table().unwrap().clone();
         assert_eq!(table["context_window"].as_integer().unwrap(), 128_000);
         assert_eq!(table["max_completion_tokens"].as_integer(), Some(8_192));
+    }
+
+    #[test]
+    fn model_output_limit_can_be_preserved_or_explicitly_cleared() {
+        let mut existing = Map::new();
+        existing.insert("max_completion_tokens".into(), Value::Integer(8_192));
+        let mut model = ModelEntry {
+            model_id: "my-model".into(),
+            provider_id: "my-provider".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            model_to_table(&model, Some(&Value::Table(existing.clone())))["max_completion_tokens"]
+                .as_integer(),
+            Some(8_192)
+        );
+        model.clear_max_output_tokens = true;
+        assert!(model_to_table(&model, Some(&Value::Table(existing)))
+            .get("max_completion_tokens")
+            .is_none());
+        model.max_output_tokens = Some(16_384);
+        assert!(validate_model_limits(&model, Some(32_768), None).is_err());
+        model.clear_max_output_tokens = false;
+        model.max_output_tokens = None;
+        model.context_window = Some(4_096);
+        let existing = Value::Table(Map::from_iter([(
+            "max_completion_tokens".into(),
+            Value::Integer(8_192),
+        )]));
+        assert!(validate_model_limits(&model, Some(32_768), Some(&existing)).is_err());
+    }
+
+    #[test]
+    fn model_output_clear_flag_is_request_only() {
+        let model: ModelEntry = serde_json::from_value(serde_json::json!({
+            "modelId": "my-model",
+            "providerId": "my-provider",
+            "clearMaxOutputTokens": true
+        }))
+        .unwrap();
+        assert!(model.clear_max_output_tokens);
+        assert!(serde_json::to_value(model)
+            .unwrap()
+            .get("clearMaxOutputTokens")
+            .is_none());
     }
 
     #[test]

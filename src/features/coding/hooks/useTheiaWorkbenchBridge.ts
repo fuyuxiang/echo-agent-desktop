@@ -3,6 +3,8 @@ import type { ChatMessage } from "@/stores/session-store";
 import { localPreviewUrls } from "../lib/preview-url";
 import type { TheiaIdeFrameHandle } from "../TheiaIdeFrame";
 
+const maximumAgentWidth = (workbenchWidth: number) => Math.max(300, Math.min(800, workbenchWidth - 320));
+
 /** State and layout owned by the embedded IDE bridge, independent of task phases. */
 export function useTheiaWorkbenchBridge(
   cwd: string,
@@ -23,6 +25,7 @@ export function useTheiaWorkbenchBridge(
       return 410;
     }
   });
+  const [agentMaximumWidth, setAgentMaximumWidth] = useState(800);
   const [theiaDirtyCount, setTheiaDirtyCount] = useState<number | null>(null);
   const [theiaPreviewRequest, setTheiaPreviewRequest] = useState<{ url: string; id: number } | null>(null);
   const [theiaOpenFileRequest, setTheiaOpenFileRequest] = useState<{ path: string; id: number; line?: number } | null>(null);
@@ -68,7 +71,8 @@ export function useTheiaWorkbenchBridge(
   const resizeAgent = useCallback((clientX: number) => {
     const bounds = workbenchRef.current?.getBoundingClientRect();
     if (!bounds) return;
-    const maximum = Math.max(300, Math.min(800, bounds.width - 320));
+    const maximum = maximumAgentWidth(bounds.width);
+    setAgentMaximumWidth(maximum);
     setAgentWidth(Math.round(Math.max(300, Math.min(maximum, bounds.right - clientX))));
   }, []);
   const startAgentResize = useCallback(() => {
@@ -86,13 +90,20 @@ export function useTheiaWorkbenchBridge(
   useEffect(() => () => agentResizeCleanupRef.current?.(), []);
   useEffect(() => {
     const element = workbenchRef.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
+    if (!element) return;
+    const updateWidth = () => {
       const width = element.getBoundingClientRect().width;
       if (width <= 0) return;
-      const maximum = Math.max(300, Math.min(800, width - 320));
+      const maximum = maximumAgentWidth(width);
+      setAgentMaximumWidth(maximum);
       setAgentWidth((current) => Math.min(current, maximum));
-    });
+    };
+    updateWidth();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+    const observer = new ResizeObserver(updateWidth);
     observer.observe(element);
     return () => observer.disconnect();
   }, [cwd]);
@@ -102,15 +113,22 @@ export function useTheiaWorkbenchBridge(
 
   const resizeAgentByKey = useCallback((key: string) => {
     const width = workbenchRef.current?.getBoundingClientRect().width ?? 0;
-    const maximum = width > 0 ? Math.max(300, Math.min(800, width - 320)) : 800;
+    const maximum = width > 0 ? maximumAgentWidth(width) : 800;
+    setAgentMaximumWidth(maximum);
     setAgentWidth((current) => Math.max(300, Math.min(maximum, current + (key === "ArrowLeft" ? 20 : -20))));
+  }, []);
+  const resetAgentWidth = useCallback(() => {
+    const width = workbenchRef.current?.getBoundingClientRect().width ?? 0;
+    const maximum = width > 0 ? maximumAgentWidth(width) : 800;
+    setAgentMaximumWidth(maximum);
+    setAgentWidth(Math.min(410, maximum));
   }, []);
 
   return {
     theiaActiveFile, setTheiaActiveFile, theiaActiveSymbol, setTheiaActiveSymbol,
     theiaPreviewInput, setTheiaPreviewInput, previewUrls, setPreviewUrls,
     theiaPreviewOpen, setTheiaPreviewOpen, theiaAgentOpen, setTheiaAgentOpen,
-    agentWidth, setAgentWidth, theiaDirtyCount, setTheiaDirtyCount,
+    agentWidth, agentMaximumWidth, resetAgentWidth, theiaDirtyCount, setTheiaDirtyCount,
     theiaPreviewRequest, setTheiaPreviewRequest, theiaOpenFileRequest,
     theiaFrameRef, theiaPreviewRef, workbenchRef,
     onDetectedPreviewUrl, openTheiaFile, startAgentResize, resizeAgentByKey,

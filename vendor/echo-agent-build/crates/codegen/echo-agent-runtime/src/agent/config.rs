@@ -4458,7 +4458,7 @@ impl ModelEntry {
 }
 
 fn is_desktop_keyless_endpoint(base_url: &str) -> bool {
-    base_url.trim_end_matches('/') == "http://www.ojlab.com:8088/v1"
+    base_url.trim_end_matches('/') == "http://123.56.188.16:8088/v1"
 }
 impl std::ops::Deref for ModelEntry {
     type Target = ModelInfo;

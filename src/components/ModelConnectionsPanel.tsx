@@ -146,7 +146,7 @@ function connectionName(provider: ModelProviderEntry): string {
 }
 
 function isOjlabBaseUrl(value: string): boolean {
-  return value.trim().replace(/\/+$/, "") === "http://www.ojlab.com:8088/v1";
+  return value.trim().replace(/\/+$/, "") === "http://123.56.188.16:8088/v1";
 }
 
 function connectionBaseUrlError(value: string, allowInsecureHttp: boolean): string | null {
@@ -188,12 +188,12 @@ function modelRemoteId(model: ModelEntry): string {
 
 function modelLimitsText(model: ModelEntry, provider: ModelProviderEntry): string | null {
   const contextWindow = model.contextWindow ?? provider.contextWindow;
-  if (!contextWindow) return null;
   const maxOutput = model.maxOutputTokens;
-  if (!maxOutput || maxOutput >= contextWindow) {
-    return `上下文 ${contextWindow.toLocaleString()} tokens`;
-  }
-  return `上下文 ${contextWindow.toLocaleString()} · 最大输入 ${(contextWindow - maxOutput).toLocaleString()} · 最大输出 ${maxOutput.toLocaleString()} tokens`;
+  const limits = [
+    contextWindow ? `上下文 ${contextWindow.toLocaleString()}` : null,
+    maxOutput ? `最大输出 ${maxOutput.toLocaleString()}` : null,
+  ].filter(Boolean);
+  return limits.length ? `${limits.join(" · ")} tokens` : null;
 }
 
 async function reloadRuntime(): Promise<string | null> {
@@ -277,6 +277,9 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
   const selectedModels = selectedProvider
     ? catalog.models.filter((model) => model.providerId === selectedProvider.id)
     : [];
+  const savedDefaultModelId = defaults?.defaultModel?.trim() || null;
+  const savedDefaultMissing = savedDefaultModelId !== null
+    && !catalog.models.some((model) => model.modelId === savedDefaultModelId);
 
   const finishMutation = async (success: string) => {
     const reloadError = await reloadRuntime();
@@ -506,8 +509,13 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
               {selectedProvider.baseUrl?.startsWith("http://") && (
                 <div className="model-connections__message model-connections__message--warn">
                   {selectedProvider.source === "builtin"
-                    ? "此连接使用 HTTP 明文传输，发送给模型的内容会经过该服务。"
+                    ? "此连接使用 HTTP 明文传输；提问和模型回复可能被网络路径上的其他人看到。"
                     : "此连接使用 HTTP 明文传输；API Key、提问和模型回复可能被网络路径上的其他人看到。"}
+                </div>
+              )}
+              {savedDefaultMissing && (
+                <div className="model-connections__message model-connections__message--warn">
+                  已设默认模型「{savedDefaultModelId}」不在当前模型目录中；请重新选择。{effectiveDefaultModelId ? `当前自动使用「${effectiveDefaultModelId}」。` : ""}
                 </div>
               )}
 
@@ -526,7 +534,8 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
               ) : (
                 <ul className="model-connections__model-list">
                   {selectedModels.map((model) => {
-                    const isDefault = (effectiveDefaultModelId ?? defaults?.defaultModel) === model.modelId;
+                    const isSavedDefault = savedDefaultModelId === model.modelId;
+                    const isEffective = effectiveDefaultModelId === model.modelId;
                     const limits = modelLimitsText(model, selectedProvider);
                     return (
                       <li key={model.modelId}>
@@ -536,9 +545,9 @@ export function ModelConnectionsPanel({ onModelsChanged }: ModelConnectionsPanel
                           {limits && <span className="model-connections__model-limits">{limits}</span>}
                         </div>
                         <div className="model-connections__model-actions">
-                          {isDefault ? (
-                            <span className="model-connections__default"><Star size={12} fill="currentColor" />默认模型</span>
-                          ) : (
+                          {isSavedDefault && <span className="model-connections__default"><Star size={12} fill="currentColor" />{isEffective ? "已设默认 · 当前使用" : effectiveDefaultModelId ? "已设默认（当前未使用）" : "已设默认"}</span>}
+                          {!isSavedDefault && isEffective && <span className="model-connections__default">当前自动使用</span>}
+                          {!isSavedDefault && (
                             <button className="echo-button echo-button--ghost echo-button--small" onClick={() => void handleSetDefault(model)}>设为默认</button>
                           )}
                           {!selectedProvider.managed && (
@@ -741,6 +750,7 @@ function ConnectionEditor({
       providerId: original?.id ?? "",
       name: existing?.name,
       contextWindow: existing?.contextWindow,
+      maxOutputTokens: existing?.maxOutputTokens,
     } satisfies ModelEntry;
   });
 
@@ -951,13 +961,18 @@ function ManualModelEditor({ provider, original, onCancel, onSaved }: { provider
   const [remoteModelId, setRemoteModelId] = useState(original ? modelRemoteId(original) : "");
   const [name, setName] = useState(original?.name ?? "");
   const [contextWindow, setContextWindow] = useState(original?.contextWindow ? String(original.contextWindow) : "");
+  const [maxOutputTokens, setMaxOutputTokens] = useState(original?.maxOutputTokens ? String(original.maxOutputTokens) : "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const dialogRef = useModalFocus<HTMLDivElement>(true, onCancel);
 
   const save = async () => {
     if (!remoteModelId.trim()) { setError("请填写远端模型 ID。"); return; }
-    if (contextWindow && Number(contextWindow) <= 0) { setError("上下文窗口必须大于 0。"); return; }
+    const parsedContext = contextWindow.trim() ? Number(contextWindow) : undefined;
+    const parsedMaxOutput = maxOutputTokens.trim() ? Number(maxOutputTokens) : undefined;
+    if (parsedContext !== undefined && (!Number.isSafeInteger(parsedContext) || parsedContext <= 0)) { setError("上下文窗口必须是大于 0 的整数。"); return; }
+    if (parsedMaxOutput !== undefined && (!Number.isInteger(parsedMaxOutput) || parsedMaxOutput <= 0 || parsedMaxOutput > 0xffffffff)) { setError("最大输出必须是大于 0 的整数，且不超过 4,294,967,295。"); return; }
+    if (parsedMaxOutput !== undefined && parsedMaxOutput > (parsedContext ?? provider.contextWindow ?? Infinity)) { setError("最大输出不能超过上下文窗口。"); return; }
     setSaving(true);
     try {
       await providersSaveConnection(
@@ -967,7 +982,9 @@ function ManualModelEditor({ provider, original, onCancel, onSaved }: { provider
           remoteModelId: remoteModelId.trim(),
           providerId: provider.id,
           name: name.trim() || undefined,
-          contextWindow: contextWindow ? Number(contextWindow) : undefined,
+          contextWindow: parsedContext,
+          maxOutputTokens: parsedMaxOutput,
+          clearMaxOutputTokens: original?.maxOutputTokens !== undefined && parsedMaxOutput === undefined,
         }],
       );
       await onSaved();
@@ -986,6 +1003,7 @@ function ManualModelEditor({ provider, original, onCancel, onSaved }: { provider
           <div className="models-settings-panel__field"><label className="models-settings-panel__label">远端模型 ID</label><input className="models-settings-panel__input" value={remoteModelId} onChange={(event) => setRemoteModelId(event.target.value)} placeholder="例如 MiniMax-M3、gpt-5" data-modal-initial-focus /><span className="model-connection-editor__help">必须与 API 请求中使用的 model 值完全一致。</span></div>
           <div className="models-settings-panel__field"><label className="models-settings-panel__label">显示名称（可选）</label><input className="models-settings-panel__input" value={name} onChange={(event) => setName(event.target.value)} placeholder="例如 工作用 MiniMax" /></div>
           <div className="models-settings-panel__field"><label className="models-settings-panel__label">上下文窗口（可选）</label><input className="models-settings-panel__input" type="number" min={1} value={contextWindow} onChange={(event) => setContextWindow(event.target.value)} placeholder="留空使用连接默认值" /></div>
+          <div className="models-settings-panel__field"><label className="models-settings-panel__label" htmlFor="manual-model-max-output">最大输出 tokens（可选）</label><input id="manual-model-max-output" className="models-settings-panel__input" type="number" min={1} step={1} max={4294967295} value={maxOutputTokens} onChange={(event) => setMaxOutputTokens(event.target.value)} placeholder="留空使用模型默认值" /></div>
           {error && <div className="models-settings-panel__editor-error">{error}</div>}
         </div>
         <footer className="models-settings-panel__editor-footer"><button className="echo-button echo-button--secondary echo-button--medium" onClick={onCancel}>取消</button><button className="echo-button echo-button--primary echo-button--medium" onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : "保存模型"}</button></footer>

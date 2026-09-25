@@ -136,7 +136,7 @@ fn validate_sampling_base_url_with_approval(
         "https" => Ok(()),
         // This exact built-in endpoint has no credential and is also allowed
         // by the desktop provider validator. Keep both policies in sync.
-        "http" if raw.trim().trim_end_matches('/') == "http://www.ojlab.com:8088/v1" => Ok(()),
+        "http" if raw.trim().trim_end_matches('/') == "http://123.56.188.16:8088/v1" => Ok(()),
         "http" if approved_remote_http => Ok(()),
         "http"
             if allow_insecure_loopback
@@ -2736,12 +2736,12 @@ mod tests {
             .is_err()
         );
         assert!(
-            validate_sampling_base_url_with_policy("http://www.ojlab.com:8088/v1", true, false)
+            validate_sampling_base_url_with_policy("http://123.56.188.16:8088/v1", true, false)
                 .is_ok()
         );
         assert!(
             validate_sampling_base_url_with_policy(
-                "http://www.ojlab.com.evil:8088/v1",
+                "http://123.56.188.16.evil:8088/v1",
                 true,
                 false
             )

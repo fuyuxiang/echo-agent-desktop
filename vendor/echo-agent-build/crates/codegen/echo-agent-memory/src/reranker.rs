@@ -26,6 +26,16 @@ impl ApiReranker {
         })
     }
 
+    fn request_body(&self, query: &str, documents: &[&str], count: usize) -> serde_json::Value {
+        serde_json::json!({
+            "model": self.model,
+            "query": query,
+            "documents": documents,
+            "return_documents": false,
+            "top_n": count,
+        })
+    }
+
     #[tracing::instrument(name = "memory.rerank", skip_all, fields(candidate_count = candidates.len(), top_n))]
     pub async fn rerank(
         &self,
@@ -41,13 +51,7 @@ impl ApiReranker {
             .iter()
             .map(|candidate| candidate.snippet.as_str())
             .collect();
-        let body = serde_json::json!({
-            "model": self.model,
-            "query": query,
-            "documents": documents,
-            "return_documents": false,
-            "top_k": top_n.min(candidates.len()),
-        });
+        let body = self.request_body(query, &documents, top_n.min(candidates.len()));
 
         let mut last_error = String::new();
         for attempt in 0..MAX_RETRIES {
@@ -136,12 +140,31 @@ mod tests {
     fn keyless_reranker_configuration_is_usable() {
         let config = MemoryRerankerConfig {
             enabled: true,
-            endpoint: Some("http://www.ojlab.com:8088/v1/rerank".into()),
+            endpoint: Some("http://123.56.188.16:8088/v1/rerank".into()),
             model: Some("rerank-pro".into()),
             api_key: None,
         };
         let client = ApiReranker::from_config(&config).unwrap();
         assert!(client.api_key.is_none());
+    }
+
+    #[test]
+    fn reranker_requests_only_the_needed_results() {
+        let config = MemoryRerankerConfig {
+            enabled: true,
+            endpoint: Some("https://example.com/v1/rerank".into()),
+            model: Some("generic".into()),
+            ..Default::default()
+        };
+        let body =
+            ApiReranker::from_config(&config)
+                .unwrap()
+                .request_body("query", &["candidate"], 1);
+        assert_eq!(
+            body.get("top_n").and_then(serde_json::Value::as_u64),
+            Some(1)
+        );
+        assert!(body.get("top_k").is_none());
     }
 
     fn candidate(id: &str) -> SearchResult {

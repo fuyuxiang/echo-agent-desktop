@@ -66,7 +66,7 @@ describe("KnowledgeBasePanel", () => {
     expect(screen.getByText("docs")).toBeInTheDocument();
   });
 
-  it("桌面端优先展示向量混合检索与 rerank 结果", async () => {
+  it("桌面端展示后台排序的搜索结果，不展示后台模型细节", async () => {
     registerKbProvider({
       id: "notes",
       label: "个人笔记",
@@ -115,8 +115,8 @@ describe("KnowledgeBasePanel", () => {
 
     expect(await screen.findByRole("button", { name: "打开知识条目：差旅政策" })).toBeInTheDocument();
     expect(screen.queryByText("不应出现的旧结果")).toBeNull();
-    expect(screen.getByText("已使用关键词、向量检索和相关性重排")).toBeInTheDocument();
-    expect(screen.getByText(/embed-pro · rerank-pro/)).toBeInTheDocument();
+    expect(screen.queryByText("已使用关键词、向量检索和相关性重排")).not.toBeInTheDocument();
+    expect(screen.queryByText(/embed-pro · rerank-pro/)).not.toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledWith("personal_knowledge_search", {
       query: "出差坐高铁能报销吗",
       limit: 20,
