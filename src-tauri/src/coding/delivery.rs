@@ -16,8 +16,8 @@ use crate::coding::changeset::{self, ChangeSet, FileChange, FileChangeView};
 use crate::coding::diagnostics::{self, Problem};
 use crate::coding::orchestrator::{self, RepairRound};
 use crate::coding::review::{self, ReviewKind, ReviewRecord};
-use crate::coding::tdd;
 use crate::coding::task::{self, AcceptanceCriterion, CodingTask, TaskPhase};
+use crate::coding::tdd;
 use crate::coding::verification::{self, VerificationKind, VerificationRecord, VerificationStatus};
 use crate::shell_fs::FilesystemAccess;
 
@@ -89,11 +89,17 @@ pub struct CommitHunk {
 }
 
 fn task_commit_hunks(root: &Path, task_id: &str, path: &str) -> Result<Vec<CommitHunk>, String> {
-    if path.chars().any(|character| matches!(character, '\n' | '\r' | '\t' | '\\')) {
+    if path
+        .chars()
+        .any(|character| matches!(character, '\n' | '\r' | '\t' | '\\'))
+    {
         return Err("文件名包含无法安全表示为 Git 补丁的字符".into());
     }
     let set = changeset::load(root, task_id);
-    let change = set.changes.iter().find(|change| change.path == path && change.pre_existing)
+    let change = set
+        .changes
+        .iter()
+        .find(|change| change.path == path && change.pre_existing)
         .ok_or_else(|| "只为任务开始前已有改动的文件提供差异块选择".to_string())?;
     if matches!(change.kind, changeset::ChangeKind::Deleted) {
         return Err("起始时已有改动的已删除文件暂不支持差异块提交".into());
@@ -102,34 +108,69 @@ fn task_commit_hunks(root: &Path, task_id: &str, path: &str) -> Result<Vec<Commi
     if diff.binary || diff.modified_hash != *set.change_hashes.get(path).unwrap_or(&String::new()) {
         return Err("当前文件不是可审阅的最新文本差异，请刷新变更集".into());
     }
-    Ok(hunks_for_text(path, &diff.modified_hash, &diff.original, &diff.modified))
+    Ok(hunks_for_text(
+        path,
+        &diff.modified_hash,
+        &diff.original,
+        &diff.modified,
+    ))
 }
 
-fn hunks_for_text(path: &str, modified_hash: &str, original: &str, modified: &str) -> Vec<CommitHunk> {
+fn hunks_for_text(
+    path: &str,
+    modified_hash: &str,
+    original: &str,
+    modified: &str,
+) -> Vec<CommitHunk> {
     let text_diff = similar::TextDiff::from_lines(original, modified);
     let mut formatter = text_diff.unified_diff();
     formatter.context_radius(3);
-    formatter.iter_hunks().map(|hunk| {
-        let preview = hunk.to_string();
-        let mut hasher = Sha256::new();
-        hasher.update(path.as_bytes());
-        hasher.update(modified_hash.as_bytes());
-        hasher.update(preview.as_bytes());
-        CommitHunk { id: format!("{:x}", hasher.finalize()), preview }
-    }).collect()
+    formatter
+        .iter_hunks()
+        .map(|hunk| {
+            let preview = hunk.to_string();
+            let mut hasher = Sha256::new();
+            hasher.update(path.as_bytes());
+            hasher.update(modified_hash.as_bytes());
+            hasher.update(preview.as_bytes());
+            CommitHunk {
+                id: format!("{:x}", hasher.finalize()),
+                preview,
+            }
+        })
+        .collect()
 }
 
-fn selected_task_content(original: &str, modified: &str, selected: &[String], hunks: &[CommitHunk]) -> Result<String, String> {
+fn selected_task_content(
+    original: &str,
+    modified: &str,
+    selected: &[String],
+    hunks: &[CommitHunk],
+) -> Result<String, String> {
     let diff = similar::TextDiff::from_lines(original, modified);
     let lines = original.split_inclusive('\n').collect::<Vec<_>>();
     let selected: std::collections::BTreeSet<&str> = selected.iter().map(String::as_str).collect();
     let mut result = String::new();
     let mut cursor = 0;
     for (index, group) in diff.grouped_ops(3).into_iter().enumerate() {
-        let start = group.first().ok_or_else(|| "差异块为空".to_string())?.old_range().start;
-        let end = group.last().ok_or_else(|| "差异块为空".to_string())?.old_range().end;
+        let start = group
+            .first()
+            .ok_or_else(|| "差异块为空".to_string())?
+            .old_range()
+            .start;
+        let end = group
+            .last()
+            .ok_or_else(|| "差异块为空".to_string())?
+            .old_range()
+            .end;
         result.push_str(&lines[cursor..start].concat());
-        if selected.contains(hunks.get(index).ok_or_else(|| "差异块版本不一致".to_string())?.id.as_str()) {
+        if selected.contains(
+            hunks
+                .get(index)
+                .ok_or_else(|| "差异块版本不一致".to_string())?
+                .id
+                .as_str(),
+        ) {
             for operation in &group {
                 for change in diff.iter_changes(operation) {
                     if change.tag() != similar::ChangeTag::Delete {
@@ -423,18 +464,40 @@ pub fn build_report(root: &Path, task_id: &str) -> Result<DeliveryReport, String
     gates.push(QualityGate {
         id: GateId::TestFirst,
         title: title_for(GateId::TestFirst).into(),
-        status: if !tdd_required || tdd_evidence.waiver_reason.is_some() { GateStatus::NotApplicable }
-            else if green.is_some() { GateStatus::Satisfied }
-            else { GateStatus::NotSatisfied },
-        summary: if !tdd_required { "当前任务没有适用的测试先行检查".into() }
-            else if let Some(reason) = &tdd_evidence.waiver_reason { format!("已说明豁免：{reason}") }
-            else if green.is_some() { "RED 失败与当前版本 GREEN 通过均有原生执行记录".into() }
-            else if tdd_evidence.red_record_id.is_some() { "已记录 RED；等待当前实现版本的同命令 GREEN 通过".into() }
-            else { "尚无测试文件先行变更后的真实 RED 失败记录".into() },
-        evidence: green.map(|record| vec![
-            format!("RED：{}，版本 {}", tdd_evidence.red_record_id.as_deref().unwrap_or_default(), tdd_evidence.red_revision.as_deref().unwrap_or_default()),
-            format!("GREEN：{}，退出码 {}", record.id, record.exit_code.unwrap_or_default()),
-        ]).unwrap_or_default(),
+        status: if !tdd_required || tdd_evidence.waiver_reason.is_some() {
+            GateStatus::NotApplicable
+        } else if green.is_some() {
+            GateStatus::Satisfied
+        } else {
+            GateStatus::NotSatisfied
+        },
+        summary: if !tdd_required {
+            "当前任务没有适用的测试先行检查".into()
+        } else if let Some(reason) = &tdd_evidence.waiver_reason {
+            format!("已说明豁免：{reason}")
+        } else if green.is_some() {
+            "RED 失败与当前版本 GREEN 通过均有原生执行记录".into()
+        } else if tdd_evidence.red_record_id.is_some() {
+            "已记录 RED；等待当前实现版本的同命令 GREEN 通过".into()
+        } else {
+            "尚无测试文件先行变更后的真实 RED 失败记录".into()
+        },
+        evidence: green
+            .map(|record| {
+                vec![
+                    format!(
+                        "RED：{}，版本 {}",
+                        tdd_evidence.red_record_id.as_deref().unwrap_or_default(),
+                        tdd_evidence.red_revision.as_deref().unwrap_or_default()
+                    ),
+                    format!(
+                        "GREEN：{}，退出码 {}",
+                        record.id,
+                        record.exit_code.unwrap_or_default()
+                    ),
+                ]
+            })
+            .unwrap_or_default(),
     });
     let reviews = review::list(root, task_id);
     for (kind, id) in [
@@ -445,13 +508,23 @@ pub fn build_report(root: &Path, task_id: &str) -> Result<DeliveryReport, String
         gates.push(QualityGate {
             id,
             title: title_for(id).into(),
-            status: if set.changes.is_empty() { GateStatus::NotApplicable }
-                else if current.is_some() { GateStatus::Satisfied }
-                else { GateStatus::NotSatisfied },
-            summary: if set.changes.is_empty() { "只读任务没有文件差异".into() }
-                else if let Some(record) = current { format!("已于 {} 确认，绑定当前代码版本", record.confirmed_at) }
-                else { "尚未对当前代码版本完成确认".into() },
-            evidence: current.map(|record| vec![format!("版本 {}", record.content_revision)]).unwrap_or_default(),
+            status: if set.changes.is_empty() {
+                GateStatus::NotApplicable
+            } else if current.is_some() {
+                GateStatus::Satisfied
+            } else {
+                GateStatus::NotSatisfied
+            },
+            summary: if set.changes.is_empty() {
+                "只读任务没有文件差异".into()
+            } else if let Some(record) = current {
+                format!("已于 {} 确认，绑定当前代码版本", record.confirmed_at)
+            } else {
+                "尚未对当前代码版本完成确认".into()
+            },
+            evidence: current
+                .map(|record| vec![format!("版本 {}", record.content_revision)])
+                .unwrap_or_default(),
         });
     }
     let evidence = task
@@ -495,9 +568,15 @@ pub fn build_report(root: &Path, task_id: &str) -> Result<DeliveryReport, String
     })
 }
 
-fn current_review<'a>(records: &'a [ReviewRecord], kind: ReviewKind, set: &ChangeSet) -> Option<&'a ReviewRecord> {
+fn current_review<'a>(
+    records: &'a [ReviewRecord],
+    kind: ReviewKind,
+    set: &ChangeSet,
+) -> Option<&'a ReviewRecord> {
     let revision = set.content_revision();
-    records.iter().find(|record| record.kind == kind && record.content_revision == revision)
+    records
+        .iter()
+        .find(|record| record.kind == kind && record.content_revision == revision)
 }
 
 async fn git(root: &PathBuf, arguments: &[&str]) -> Result<String, String> {
@@ -513,7 +592,11 @@ async fn git(root: &PathBuf, arguments: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-async fn git_with_index(root: &PathBuf, index: &Path, arguments: &[&str]) -> Result<String, String> {
+async fn git_with_index(
+    root: &PathBuf,
+    index: &Path,
+    arguments: &[&str],
+) -> Result<String, String> {
     let output = tokio::process::Command::new("git")
         .args(arguments)
         .env("GIT_INDEX_FILE", index)
@@ -536,26 +619,53 @@ async fn stage_task_hunks(
     original_content: &str,
 ) -> Result<(), String> {
     let entry = git_bytes(root, &["ls-tree", "-z", baseline_head, "--", path]).await?;
-    let header = entry.split(|byte| *byte == b'\t').next().unwrap_or_default();
-    let mode = std::str::from_utf8(header).ok().and_then(|value| value.split_whitespace().next())
+    let header = entry
+        .split(|byte| *byte == b'\t')
+        .next()
+        .unwrap_or_default();
+    let mode = std::str::from_utf8(header)
+        .ok()
+        .and_then(|value| value.split_whitespace().next())
         .filter(|value| matches!(*value, "100644" | "100755"))
         .ok_or_else(|| format!("{path} 在任务 Git 基线中不是普通文本文件，无法分离原有改动"))?;
     let current_head = git_bytes(root, &["show", &format!("{baseline_head}:{path}")]).await?;
-    std::str::from_utf8(&current_head)
-        .map_err(|_| format!("{path} 的 Git 基线不是文本文件"))?;
+    std::str::from_utf8(&current_head).map_err(|_| format!("{path} 的 Git 基线不是文本文件"))?;
     let temp = tempfile::tempdir().map_err(|error| format!("创建差异块合并目录失败：{error}"))?;
     let ours = temp.path().join("head");
     let ancestor = temp.path().join("task-start");
     let theirs = temp.path().join("selected-task");
     std::fs::write(&ours, current_head).map_err(|error| format!("写入 Git 基线失败：{error}"))?;
-    std::fs::write(&ancestor, original_content).map_err(|error| format!("写入任务起点失败：{error}"))?;
-    std::fs::write(&theirs, selected_content).map_err(|error| format!("写入所选差异块失败：{error}"))?;
-    let merged = git(root, &["merge-file", "-p", &ours.to_string_lossy(), &ancestor.to_string_lossy(), &theirs.to_string_lossy()])
-        .await.map_err(|error| format!("{path} 的所选差异块与起始前改动冲突，原工作区未修改：{error}"))?;
+    std::fs::write(&ancestor, original_content)
+        .map_err(|error| format!("写入任务起点失败：{error}"))?;
+    std::fs::write(&theirs, selected_content)
+        .map_err(|error| format!("写入所选差异块失败：{error}"))?;
+    let merged = git(
+        root,
+        &[
+            "merge-file",
+            "-p",
+            &ours.to_string_lossy(),
+            &ancestor.to_string_lossy(),
+            &theirs.to_string_lossy(),
+        ],
+    )
+    .await
+    .map_err(|error| format!("{path} 的所选差异块与起始前改动冲突，原工作区未修改：{error}"))?;
     let merged_path = temp.path().join("merged");
-    std::fs::write(&merged_path, merged.as_bytes()).map_err(|error| format!("写入合并结果失败：{error}"))?;
+    std::fs::write(&merged_path, merged.as_bytes())
+        .map_err(|error| format!("写入合并结果失败：{error}"))?;
     let blob = git(root, &["hash-object", "-w", &merged_path.to_string_lossy()]).await?;
-    git_with_index(root, index, &["update-index", "--add", "--cacheinfo", &format!("{mode},{},{}", blob.trim(), path)]).await?;
+    git_with_index(
+        root,
+        index,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("{mode},{},{}", blob.trim(), path),
+        ],
+    )
+    .await?;
     Ok(())
 }
 
@@ -569,7 +679,8 @@ pub async fn coding_delivery_commit_hunks(
     let root = access.require_workspace(&root)?;
     changeset::sync_changes(&root, &task_id).await?;
     tokio::task::spawn_blocking(move || task_commit_hunks(&root, &task_id, &path))
-        .await.map_err(|error| format!("读取差异块失败：{error}"))?
+        .await
+        .map_err(|error| format!("读取差异块失败：{error}"))?
 }
 
 async fn git_bytes(root: &Path, arguments: &[&str]) -> Result<Vec<u8>, String> {
@@ -661,7 +772,8 @@ async fn ensure_selected_paths_unstaged(
     task_paths: &[String],
 ) -> Result<(), String> {
     let staged = git(root, &["diff", "--cached", "--name-only", "-z", "--"]).await?;
-    let selected: std::collections::BTreeSet<&str> = task_paths.iter().map(String::as_str).collect();
+    let selected: std::collections::BTreeSet<&str> =
+        task_paths.iter().map(String::as_str).collect();
     let overlapping: Vec<&str> = staged
         .split('\0')
         .filter(|path| selected.contains(path))
@@ -791,14 +903,23 @@ pub async fn coding_git_commit(
         changeset::resolve_in_workspace(&root, path)?;
         let available = task_commit_hunks(&root, &task_id, path)?;
         let selected_ids: std::collections::BTreeSet<_> = ids.iter().collect();
-        if selected_ids.len() != ids.len() || ids.iter().any(|id| !available.iter().any(|hunk| &hunk.id == id)) {
+        if selected_ids.len() != ids.len()
+            || ids
+                .iter()
+                .any(|id| !available.iter().any(|hunk| &hunk.id == id))
+        {
             return Err(format!("{path} 的差异块已经变化，请重新选择"));
         }
         let diff = changeset::change_diff(&root, &task_id, path)?;
-        let selected_content = selected_task_content(&diff.original, &diff.modified, ids, &available)?;
+        let selected_content =
+            selected_task_content(&diff.original, &diff.modified, ids, &available)?;
         hunk_merges.push((path.clone(), diff.original, selected_content));
     }
-    let all_paths = paths.iter().chain(hunk_selection.keys()).cloned().collect::<Vec<_>>();
+    let all_paths = paths
+        .iter()
+        .chain(hunk_selection.keys())
+        .cloned()
+        .collect::<Vec<_>>();
     ensure_selected_paths_unstaged(&root, &all_paths).await?;
     // Build the commit from HEAD in a private index. The user's staged files
     // stay untouched, even when they share the same repository.
@@ -815,13 +936,28 @@ pub async fn coding_git_commit(
         git_with_index(&root, &index_path, &add_arguments).await?;
     }
     for (path, original, selected_content) in &hunk_merges {
-        stage_task_hunks(&root, &index_path, baseline_head, path, selected_content, original).await?;
+        stage_task_hunks(
+            &root,
+            &index_path,
+            baseline_head,
+            path,
+            selected_content,
+            original,
+        )
+        .await?;
     }
     // Freeze the current index as an immutable Git tree, then validate the
     // actual blob bytes that will be committed. A same-path restage after this
     // point may change the live index, but can no longer change `tree`.
-    let tree = git_with_index(&root, &index_path, &["write-tree"]).await?.trim().to_string();
-    if tree == git(&root, &["rev-parse", &format!("{baseline_head}^{{tree}}")]).await?.trim() {
+    let tree = git_with_index(&root, &index_path, &["write-tree"])
+        .await?
+        .trim()
+        .to_string();
+    if tree
+        == git(&root, &["rev-parse", &format!("{baseline_head}^{{tree}}")])
+            .await?
+            .trim()
+    {
         return Err("所选差异块没有产生可提交的任务变更".into());
     }
     ensure_commit_tree_matches(&root, &tree, &set, &all_paths, &paths).await?;
@@ -1133,10 +1269,7 @@ mod tests {
             pre_existing: true,
         });
         let paths = committable_paths(&set);
-        assert_eq!(
-            paths,
-            vec!["src/a.ts".to_string()]
-        );
+        assert_eq!(paths, vec!["src/a.ts".to_string()]);
     }
 
     #[tokio::test]
@@ -1193,9 +1326,15 @@ mod tests {
             )]),
             ..ChangeSet::default()
         };
-        ensure_commit_tree_matches(&root, &tree, &set, &["src/a.ts".into()], &["src/a.ts".into()])
-            .await
-            .unwrap();
+        ensure_commit_tree_matches(
+            &root,
+            &tree,
+            &set,
+            &["src/a.ts".into()],
+            &["src/a.ts".into()],
+        )
+        .await
+        .unwrap();
 
         // The live index can race after write-tree, but the validated tree is
         // immutable and still contains the exact verified bytes.
@@ -1205,9 +1344,15 @@ mod tests {
             tree_content_hash(&root, &tree, "src/a.ts").await.unwrap(),
             expected
         );
-        ensure_commit_tree_matches(&root, &tree, &set, &["src/a.ts".into()], &["src/a.ts".into()])
-            .await
-            .unwrap();
+        ensure_commit_tree_matches(
+            &root,
+            &tree,
+            &set,
+            &["src/a.ts".into()],
+            &["src/a.ts".into()],
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -1216,7 +1361,9 @@ mod tests {
         let root = repository.path().to_path_buf();
         std::fs::write(root.join("task.txt"), "before\n").unwrap();
         std::fs::write(root.join("personal.txt"), "before\n").unwrap();
-        git(&root, &["init", "--initial-branch=main"]).await.unwrap();
+        git(&root, &["init", "--initial-branch=main"])
+            .await
+            .unwrap();
         git(&root, &["add", "--", "task.txt", "personal.txt"])
             .await
             .unwrap();
@@ -1234,12 +1381,18 @@ mod tests {
         )
         .await
         .unwrap();
-        let baseline = git(&root, &["rev-parse", "HEAD"]).await.unwrap().trim().to_string();
+        let baseline = git(&root, &["rev-parse", "HEAD"])
+            .await
+            .unwrap()
+            .trim()
+            .to_string();
         std::fs::write(root.join("task.txt"), "task change\n").unwrap();
         std::fs::write(root.join("personal.txt"), "personal change\n").unwrap();
         git(&root, &["add", "--", "personal.txt"]).await.unwrap();
         let selected = vec!["task.txt".to_string()];
-        ensure_selected_paths_unstaged(&root, &selected).await.unwrap();
+        ensure_selected_paths_unstaged(&root, &selected)
+            .await
+            .unwrap();
 
         let private = tempfile::tempdir().unwrap();
         let index = private.path().join("index");
@@ -1283,34 +1436,82 @@ mod tests {
     async fn selected_hunk_commits_task_delta_without_preexisting_edit() {
         let repository = tempfile::tempdir().unwrap();
         let root = repository.path().to_path_buf();
-        let head = (1..=12).map(|line| format!("line {line}\n")).collect::<String>();
+        let head = (1..=12)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
         std::fs::write(root.join("source.txt"), &head).unwrap();
         git(&root, &["init", "-q"]).await.unwrap();
         git(&root, &["add", "source.txt"]).await.unwrap();
-        git(&root, &["-c", "user.name=Echo Test", "-c", "user.email=echo@example.test", "commit", "-qm", "baseline"]).await.unwrap();
-        let baseline_head = git(&root, &["rev-parse", "HEAD"]).await.unwrap().trim().to_string();
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=Echo Test",
+                "-c",
+                "user.email=echo@example.test",
+                "commit",
+                "-qm",
+                "baseline",
+            ],
+        )
+        .await
+        .unwrap();
+        let baseline_head = git(&root, &["rev-parse", "HEAD"])
+            .await
+            .unwrap()
+            .trim()
+            .to_string();
         let original = head.replace("line 1\n", "line 1 user\n");
         let modified = original.replace("line 10\n", "line 10 task\n");
         std::fs::write(root.join("source.txt"), &modified).unwrap();
         let hunks = hunks_for_text("source.txt", "current", &original, &modified);
         assert_eq!(hunks.len(), 1);
-        let selected = selected_task_content(&original, &modified, &[hunks[0].id.clone()], &hunks).unwrap();
+        let selected =
+            selected_task_content(&original, &modified, &[hunks[0].id.clone()], &hunks).unwrap();
         let private = tempfile::tempdir().unwrap();
         let index = private.path().join("index");
-        git_with_index(&root, &index, &["read-tree", &baseline_head]).await.unwrap();
-        stage_task_hunks(&root, &index, &baseline_head, "source.txt", &selected, &original).await.unwrap();
-        let tree = git_with_index(&root, &index, &["write-tree"]).await.unwrap().trim().to_string();
-        assert_eq!(git(&root, &["show", &format!("{tree}:source.txt")]).await.unwrap(), head.replace("line 10\n", "line 10 task\n"));
-        assert_eq!(std::fs::read_to_string(root.join("source.txt")).unwrap(), modified);
+        git_with_index(&root, &index, &["read-tree", &baseline_head])
+            .await
+            .unwrap();
+        stage_task_hunks(
+            &root,
+            &index,
+            &baseline_head,
+            "source.txt",
+            &selected,
+            &original,
+        )
+        .await
+        .unwrap();
+        let tree = git_with_index(&root, &index, &["write-tree"])
+            .await
+            .unwrap()
+            .trim()
+            .to_string();
+        assert_eq!(
+            git(&root, &["show", &format!("{tree}:source.txt")])
+                .await
+                .unwrap(),
+            head.replace("line 10\n", "line 10 task\n")
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("source.txt")).unwrap(),
+            modified
+        );
     }
 
     #[test]
     fn hunk_selection_keeps_unselected_task_changes_out() {
-        let original = (1..=15).map(|line| format!("line {line}\n")).collect::<String>();
-        let modified = original.replace("line 2\n", "line 2 task\n").replace("line 14\n", "line 14 task\n");
+        let original = (1..=15)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let modified = original
+            .replace("line 2\n", "line 2 task\n")
+            .replace("line 14\n", "line 14 task\n");
         let hunks = hunks_for_text("source.txt", "current", &original, &modified);
         assert_eq!(hunks.len(), 2);
-        let selected = selected_task_content(&original, &modified, &[hunks[0].id.clone()], &hunks).unwrap();
+        let selected =
+            selected_task_content(&original, &modified, &[hunks[0].id.clone()], &hunks).unwrap();
         assert!(selected.contains("line 2 task\n"));
         assert!(selected.contains("line 14\n"));
         assert!(!selected.contains("line 14 task\n"));

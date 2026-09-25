@@ -1006,7 +1006,7 @@ pub fn meeting_list() -> Result<Vec<MeetingRecord>, String> {
             records.push(record);
         }
     }
-    records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    records.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
     Ok(records)
 }
 

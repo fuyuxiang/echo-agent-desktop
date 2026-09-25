@@ -1582,7 +1582,12 @@ pub fn change_diff(root: &Path, task_id: &str, path: &str) -> Result<ChangeDiff,
     }
 }
 
-pub fn mark_committed(root: &Path, task_id: &str, hash: &str, paths: &[String]) -> Result<ChangeSet, String> {
+pub fn mark_committed(
+    root: &Path,
+    task_id: &str,
+    hash: &str,
+    paths: &[String],
+) -> Result<ChangeSet, String> {
     let mut set = load(root, task_id);
     set.committed_hash = Some(hash.to_string());
     set.committed_paths = paths.to_vec();

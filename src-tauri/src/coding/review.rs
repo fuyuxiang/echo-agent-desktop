@@ -5,8 +5,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::coding::{changeset, store, task};
 use crate::coding::task::TaskPhase;
+use crate::coding::{changeset, store, task};
 use crate::shell_fs::FilesystemAccess;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,7 +34,9 @@ fn path(root: &Path, task_id: &str) -> std::path::PathBuf {
 }
 
 pub fn list(root: &Path, task_id: &str) -> Vec<ReviewRecord> {
-    store::read_json::<Reviews>(&path(root, task_id)).unwrap_or_default().records
+    store::read_json::<Reviews>(&path(root, task_id))
+        .unwrap_or_default()
+        .records
 }
 
 pub fn confirm(root: &Path, task_id: &str, kind: ReviewKind) -> Result<ReviewRecord, String> {
@@ -48,17 +50,26 @@ pub fn confirm(root: &Path, task_id: &str, kind: ReviewKind) -> Result<ReviewRec
     if set.verified_revision.as_deref() != Some(revision.as_str()) {
         return Err("代码已在验证后变化，请重新验证".into());
     }
-    if set.changes.is_empty() || set.changes.iter().any(|change| {
-        set.reviewed_hashes.get(&change.path) != set.change_hashes.get(&change.path)
-    }) {
+    if set.changes.is_empty()
+        || set.changes.iter().any(|change| {
+            set.reviewed_hashes.get(&change.path) != set.change_hashes.get(&change.path)
+        })
+    {
         return Err("请先打开并审阅每个任务差异文件".into());
     }
-    if kind == ReviewKind::Requirements && task.acceptance_criteria.iter().any(|criterion| !criterion.satisfied) {
+    if kind == ReviewKind::Requirements
+        && task
+            .acceptance_criteria
+            .iter()
+            .any(|criterion| !criterion.satisfied)
+    {
         return Err("请先完成所有验收标准".into());
     }
-    if kind == ReviewKind::CodeQuality && !list(root, task_id).iter().any(|entry| {
-        entry.kind == ReviewKind::Requirements && entry.content_revision == revision
-    }) {
+    if kind == ReviewKind::CodeQuality
+        && !list(root, task_id).iter().any(|entry| {
+            entry.kind == ReviewKind::Requirements && entry.content_revision == revision
+        })
+    {
         return Err("请先完成当前代码版本的需求符合性审查".into());
     }
     let record = ReviewRecord {
@@ -84,7 +95,8 @@ pub async fn coding_review_confirm(
     let root = access.require_workspace(&root)?;
     changeset::sync_changes(&root, &task_id).await?;
     tokio::task::spawn_blocking(move || confirm(&root, &task_id, kind))
-        .await.map_err(|error| format!("记录交付审查失败：{error}"))?
+        .await
+        .map_err(|error| format!("记录交付审查失败：{error}"))?
 }
 
 #[cfg(test)]
@@ -98,7 +110,9 @@ mod tests {
         let mut coding_task = task::create_task(root, "Review", "Change file").unwrap();
         changeset::capture_filesystem_baseline(root, &coding_task.id).unwrap();
         std::fs::write(root.join("source.txt"), "first\n").unwrap();
-        changeset::sync_changes(root, &coding_task.id).await.unwrap();
+        changeset::sync_changes(root, &coding_task.id)
+            .await
+            .unwrap();
         changeset::mark_reviewed(root, &coding_task.id, "source.txt").unwrap();
         changeset::mark_verification_started(root, &coding_task.id).unwrap();
         changeset::mark_verified_revision(root, &coding_task.id).unwrap();
@@ -112,9 +126,13 @@ mod tests {
         assert_eq!(list(root, &coding_task.id).len(), 2);
 
         std::fs::write(root.join("source.txt"), "second\n").unwrap();
-        changeset::sync_changes(root, &coding_task.id).await.unwrap();
+        changeset::sync_changes(root, &coding_task.id)
+            .await
+            .unwrap();
         assert!(confirm(root, &coding_task.id, ReviewKind::CodeQuality).is_err());
         let set = changeset::load(root, &coding_task.id);
-        assert!(list(root, &coding_task.id).iter().all(|review| review.content_revision != set.content_revision()));
+        assert!(list(root, &coding_task.id)
+            .iter()
+            .all(|review| review.content_revision != set.content_revision()));
     }
 }

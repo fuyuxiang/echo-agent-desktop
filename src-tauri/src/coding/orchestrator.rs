@@ -16,11 +16,11 @@ use crate::coding::changeset;
 use crate::coding::diagnostics::{self, Problem};
 use crate::coding::documentation;
 use crate::coding::store;
-use crate::coding::tdd;
 use crate::coding::task::{
     self, AcceptanceCriterion, CodingTask, ExecutionLedgerEvent, PlanIssueSeverity,
     RuntimePlanEntry, TaskNextAction, TaskNode, TaskNodeStatus, TaskPhase,
 };
+use crate::coding::tdd;
 use crate::coding::verification::{self, VerificationRecord, VerificationStatus};
 use crate::shell_fs::FilesystemAccess;
 
@@ -691,15 +691,27 @@ fn apply_unlocked(
                     blocker: None,
                 }
             } else if tdd::should_pause_for_red(root, &task, &change_set) {
-                if !task.task_nodes.iter().any(|node| node.status == TaskNodeStatus::Running) {
-                    if let Some(node) = task.task_nodes.iter_mut().rev().find(|node| node.status == TaskNodeStatus::Success) {
+                if !task
+                    .task_nodes
+                    .iter()
+                    .any(|node| node.status == TaskNodeStatus::Running)
+                {
+                    if let Some(node) = task
+                        .task_nodes
+                        .iter_mut()
+                        .rev()
+                        .find(|node| node.status == TaskNodeStatus::Success)
+                    {
                         node.status = TaskNodeStatus::Running;
                         node.completed_at = None;
                     }
                 }
                 workflow_ledger = Some((
                     "tdd_red_requested",
-                    task.task_nodes.iter().find(|node| node.status == TaskNodeStatus::Running).map(|node| node.plan_key.clone()),
+                    task.task_nodes
+                        .iter()
+                        .find(|node| node.status == TaskNodeStatus::Running)
+                        .map(|node| node.plan_key.clone()),
                     "测试文件已写入，等待真实失败的测试结果".into(),
                 ));
                 PhaseDecision {
@@ -1917,17 +1929,48 @@ mod tests_v2 {
         task::save(root, &coding_task).unwrap();
         changeset::capture_filesystem_baseline(root, &coding_task.id).unwrap();
         std::fs::create_dir_all(root.join("tests")).unwrap();
-        std::fs::write(root.join("tests/behavior.test.ts"), "test('red', () => { throw new Error('red') });\n").unwrap();
-        changeset::sync_changes(root, &coding_task.id).await.unwrap();
-        let (paused, _) = apply(root, &coding_task.id, OrchestratorEvent::ImplementationFinished).unwrap();
+        std::fs::write(
+            root.join("tests/behavior.test.ts"),
+            "test('red', () => { throw new Error('red') });\n",
+        )
+        .unwrap();
+        changeset::sync_changes(root, &coding_task.id)
+            .await
+            .unwrap();
+        let (paused, _) = apply(
+            root,
+            &coding_task.id,
+            OrchestratorEvent::ImplementationFinished,
+        )
+        .unwrap();
         assert_eq!(paused.phase, TaskPhase::Paused);
         assert_eq!(paused.phase_reason.as_deref(), Some("等待红灯测试验证"));
-        assert!(apply(root, &coding_task.id, OrchestratorEvent::InterruptedTaskResumed).is_err());
-        let mut red = verification::record_from_parts(&coding_task.id, VerificationKind::Test, "pnpm test", Some(1), String::new(), "failed".into(), 1, false, false);
+        assert!(apply(
+            root,
+            &coding_task.id,
+            OrchestratorEvent::InterruptedTaskResumed
+        )
+        .is_err());
+        let mut red = verification::record_from_parts(
+            &coding_task.id,
+            VerificationKind::Test,
+            "pnpm test",
+            Some(1),
+            String::new(),
+            "failed".into(),
+            1,
+            false,
+            false,
+        );
         red.content_revision = Some(changeset::load(root, &coding_task.id).content_revision());
         verification::append_record(root, &red).unwrap();
         tdd::record_red(root, &coding_task.id, &red.id).unwrap();
-        let (resumed, _) = apply(root, &coding_task.id, OrchestratorEvent::InterruptedTaskResumed).unwrap();
+        let (resumed, _) = apply(
+            root,
+            &coding_task.id,
+            OrchestratorEvent::InterruptedTaskResumed,
+        )
+        .unwrap();
         assert_eq!(resumed.phase, TaskPhase::Implementing);
     }
 }

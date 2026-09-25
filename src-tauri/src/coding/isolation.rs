@@ -45,14 +45,19 @@ fn manifest_path_in(root: &Path, managed: &Path) -> Option<PathBuf> {
     let base = managed.canonicalize().ok()?;
     let canonical = root.canonicalize().ok()?;
     let parent = canonical.parent()?;
-    if !parent.starts_with(&base) || parent.parent()? != base || canonical != parent.join("worktree") {
+    if !parent.starts_with(&base)
+        || parent.parent()? != base
+        || canonical != parent.join("worktree")
+    {
         return None;
     }
     Some(parent.join("manifest.json"))
 }
 
 pub fn managed_worktrees() -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(worktrees_dir()) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(worktrees_dir()) else {
+        return Vec::new();
+    };
     entries
         .flatten()
         .map(|entry| entry.path().join("worktree"))
@@ -82,7 +87,9 @@ fn create_in(root: &Path, managed: &Path) -> Result<IsolatedWorkspace, String> {
     let source = info_in(root, managed)
         .map(|workspace| PathBuf::from(workspace.source_root))
         .unwrap_or_else(|| root.to_path_buf());
-    let source = source.canonicalize().map_err(|error| format!("无法解析原项目：{error}"))?;
+    let source = source
+        .canonicalize()
+        .map_err(|error| format!("无法解析原项目：{error}"))?;
     let top = git(&source, &["rev-parse", "--show-toplevel"])?;
     if Path::new(&top).canonicalize().ok().as_deref() != Some(source.as_path()) {
         return Err("并行任务需要从 Git 仓库根目录启动".into());
@@ -91,18 +98,32 @@ fn create_in(root: &Path, managed: &Path) -> Result<IsolatedWorkspace, String> {
     let container = managed.join(uuid::Uuid::now_v7().to_string());
     std::fs::create_dir_all(&container).map_err(|error| format!("创建隔离目录失败：{error}"))?;
     let target = container.join("worktree");
-    if let Err(error) = git(&source, &["worktree", "add", "--detach", "--", &target.to_string_lossy(), &base_head]) {
+    if let Err(error) = git(
+        &source,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            "--",
+            &target.to_string_lossy(),
+            &base_head,
+        ],
+    ) {
         let _ = std::fs::remove_dir(&container);
         return Err(error);
     }
-    let canonical = target.canonicalize().map_err(|error| format!("无法解析隔离工作树：{error}"))?;
+    let canonical = target
+        .canonicalize()
+        .map_err(|error| format!("无法解析隔离工作树：{error}"))?;
     let workspace = IsolatedWorkspace {
         root: canonical.to_string_lossy().into_owned(),
         source_root: source.to_string_lossy().into_owned(),
         base_head,
         integrated_hash: None,
     };
-    if let Err(error) = crate::coding::store::write_json(&container.join("manifest.json"), &workspace) {
+    if let Err(error) =
+        crate::coding::store::write_json(&container.join("manifest.json"), &workspace)
+    {
         let _ = git(&source, &["worktree", "remove", "--force", &workspace.root]);
         return Err(error);
     }
@@ -119,15 +140,34 @@ pub fn integrate(root: &Path, task_id: &str) -> Result<IsolatedWorkspace, String
         return Err("这个隔离任务已经应用到原项目".into());
     }
     let set = changeset::load(root, task_id);
-    let commit = set.committed_hash.ok_or_else(|| "请先提交任务变更，再应用到原项目".to_string())?;
-    if task::list_tasks(Path::new(&workspace.source_root)).iter().any(|entry| matches!(entry.phase, TaskPhase::Discovering | TaskPhase::Implementing | TaskPhase::Verifying | TaskPhase::Diagnosing | TaskPhase::Repairing)) {
+    let commit = set
+        .committed_hash
+        .ok_or_else(|| "请先提交任务变更，再应用到原项目".to_string())?;
+    if task::list_tasks(Path::new(&workspace.source_root))
+        .iter()
+        .any(|entry| {
+            matches!(
+                entry.phase,
+                TaskPhase::Discovering
+                    | TaskPhase::Implementing
+                    | TaskPhase::Verifying
+                    | TaskPhase::Diagnosing
+                    | TaskPhase::Repairing
+            )
+        })
+    {
         return Err("原项目还有任务在执行，请等待其完成后再应用".into());
     }
     integrate_commit_in(root, &commit, &worktrees_dir())
 }
 
-fn integrate_commit_in(root: &Path, commit: &str, managed: &Path) -> Result<IsolatedWorkspace, String> {
-    let mut workspace = info_in(root, managed).ok_or_else(|| "当前项目不是隔离工作树".to_string())?;
+fn integrate_commit_in(
+    root: &Path,
+    commit: &str,
+    managed: &Path,
+) -> Result<IsolatedWorkspace, String> {
+    let mut workspace =
+        info_in(root, managed).ok_or_else(|| "当前项目不是隔离工作树".to_string())?;
     if workspace.integrated_hash.is_some() {
         return Err("这个隔离任务已经应用到原项目".into());
     }
@@ -138,18 +178,34 @@ fn integrate_commit_in(root: &Path, commit: &str, managed: &Path) -> Result<Isol
     let source_head = git(&source, &["rev-parse", "HEAD"])?;
     let temp = tempfile::tempdir().map_err(|error| format!("创建合并预检目录失败：{error}"))?;
     let preview = temp.path().join("merge-preview");
-    git(&source, &["worktree", "add", "--detach", "--", &preview.to_string_lossy(), &source_head])?;
-    let preview_result = git(&preview, &["cherry-pick", &commit]);
+    git(
+        &source,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            "--",
+            &preview.to_string_lossy(),
+            &source_head,
+        ],
+    )?;
+    let preview_result = git(&preview, &["cherry-pick", commit]);
     let preview_head = preview_result.and_then(|_| git(&preview, &["rev-parse", "HEAD"]));
-    let _ = git(&source, &["worktree", "remove", "--force", &preview.to_string_lossy()]);
-    let preview_head = preview_head.map_err(|error| format!("回并预检发现冲突，原项目未被修改：{error}"))?;
+    let _ = git(
+        &source,
+        &["worktree", "remove", "--force", &preview.to_string_lossy()],
+    );
+    let preview_head =
+        preview_head.map_err(|error| format!("回并预检发现冲突，原项目未被修改：{error}"))?;
     if git(&source, &["rev-parse", "HEAD"])? != source_head || !is_clean(&source)? {
         return Err("预检期间原项目发生变化，请刷新后重试".into());
     }
-    git(&source, &["merge", "--ff-only", &preview_head])
-        .map_err(|error| format!("原项目在应用时发生变化或 Git 拒绝快进，请检查状态后重试：{error}"))?;
+    git(&source, &["merge", "--ff-only", &preview_head]).map_err(|error| {
+        format!("原项目在应用时发生变化或 Git 拒绝快进，请检查状态后重试：{error}")
+    })?;
     workspace.integrated_hash = Some(git(&source, &["rev-parse", "HEAD"])?);
-    let manifest = manifest_path_in(root, managed).ok_or_else(|| "隔离工作树元数据丢失".to_string())?;
+    let manifest =
+        manifest_path_in(root, managed).ok_or_else(|| "隔离工作树元数据丢失".to_string())?;
     crate::coding::store::write_json(&manifest, &workspace)?;
     Ok(workspace)
 }
@@ -161,7 +217,8 @@ pub async fn coding_isolation_create(
 ) -> Result<IsolatedWorkspace, String> {
     let root = access.require_workspace(&root)?;
     let workspace = tokio::task::spawn_blocking(move || create(&root))
-        .await.map_err(|error| format!("创建隔离工作树失败：{error}"))??;
+        .await
+        .map_err(|error| format!("创建隔离工作树失败：{error}"))??;
     access.authorize_workspace(&workspace.root)?;
     Ok(workspace)
 }
@@ -185,7 +242,8 @@ pub async fn coding_isolation_integrate(
     let workspace = info(&root).ok_or_else(|| "当前项目不是隔离工作树".to_string())?;
     access.require_workspace(&workspace.source_root)?;
     tokio::task::spawn_blocking(move || integrate(&root, &task_id))
-        .await.map_err(|error| format!("应用隔离任务失败：{error}"))?
+        .await
+        .map_err(|error| format!("应用隔离任务失败：{error}"))?
 }
 
 #[cfg(test)]
@@ -218,14 +276,28 @@ mod tests {
         let first = create_in(source.path(), managed.path()).unwrap();
         let second = create_in(source.path(), managed.path()).unwrap();
         assert_ne!(first.root, second.root);
-        assert_eq!(info_in(Path::new(&first.root), managed.path()).unwrap().base_head, first.base_head);
+        assert_eq!(
+            info_in(Path::new(&first.root), managed.path())
+                .unwrap()
+                .base_head,
+            first.base_head
+        );
         let first_commit = commit_change(Path::new(&first.root), "a.txt", "task a\n");
         let second_commit = commit_change(Path::new(&second.root), "b.txt", "task b\n");
         integrate_commit_in(Path::new(&first.root), &first_commit, managed.path()).unwrap();
         integrate_commit_in(Path::new(&second.root), &second_commit, managed.path()).unwrap();
-        assert_eq!(std::fs::read_to_string(source.path().join("a.txt")).unwrap(), "task a\n");
-        assert_eq!(std::fs::read_to_string(source.path().join("b.txt")).unwrap(), "task b\n");
-        assert!(info_in(Path::new(&second.root), managed.path()).unwrap().integrated_hash.is_some());
+        assert_eq!(
+            std::fs::read_to_string(source.path().join("a.txt")).unwrap(),
+            "task a\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(source.path().join("b.txt")).unwrap(),
+            "task b\n"
+        );
+        assert!(info_in(Path::new(&second.root), managed.path())
+            .unwrap()
+            .integrated_hash
+            .is_some());
     }
 
     #[test]
@@ -238,9 +310,14 @@ mod tests {
         let second_commit = commit_change(Path::new(&second.root), "a.txt", "second\n");
         integrate_commit_in(Path::new(&first.root), &first_commit, managed.path()).unwrap();
         let before = git(source.path(), &["rev-parse", "HEAD"]).unwrap();
-        assert!(integrate_commit_in(Path::new(&second.root), &second_commit, managed.path()).is_err());
+        assert!(
+            integrate_commit_in(Path::new(&second.root), &second_commit, managed.path()).is_err()
+        );
         assert_eq!(git(source.path(), &["rev-parse", "HEAD"]).unwrap(), before);
-        assert_eq!(std::fs::read_to_string(source.path().join("a.txt")).unwrap(), "first\n");
+        assert_eq!(
+            std::fs::read_to_string(source.path().join("a.txt")).unwrap(),
+            "first\n"
+        );
         assert!(is_clean(source.path()).unwrap());
     }
 }

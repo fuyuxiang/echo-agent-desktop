@@ -56,9 +56,15 @@ pub fn test_commands(root: &Path, task: &CodingTask) -> Vec<String> {
         .filter(|command| command.kind == VerificationKind::Test)
         .map(|command| command.command)
         .collect::<Vec<_>>();
-    for command in task.task_nodes.iter().flat_map(|node| node.verification_commands.iter()) {
+    for command in task
+        .task_nodes
+        .iter()
+        .flat_map(|node| node.verification_commands.iter())
+    {
         let lower = command.to_lowercase();
-        if ["test", "pytest", "vitest", "jest", "spec"].iter().any(|word| lower.contains(word))
+        if ["test", "pytest", "vitest", "jest", "spec"]
+            .iter()
+            .any(|word| lower.contains(word))
             && !commands.contains(command)
         {
             commands.push(command.clone());
@@ -86,14 +92,17 @@ pub fn should_pause_for_red(root: &Path, task: &CodingTask, set: &ChangeSet) -> 
 }
 
 pub fn can_resume(root: &Path, task: &CodingTask) -> bool {
-    if task.phase_reason.as_deref() != Some("等待红灯测试验证") { return true; }
+    if task.phase_reason.as_deref() != Some("等待红灯测试验证") {
+        return true;
+    }
     let evidence = load(root, &task.id);
     evidence.red_record_id.is_some() || evidence.waiver_reason.is_some()
 }
 
 pub fn record_red(root: &Path, task_id: &str, record_id: &str) -> Result<TddEvidence, String> {
     let task = task::load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
-    if task.phase != TaskPhase::Paused || task.phase_reason.as_deref() != Some("等待红灯测试验证") {
+    if task.phase != TaskPhase::Paused || task.phase_reason.as_deref() != Some("等待红灯测试验证")
+    {
         return Err("任务未停在测试先行检查点".into());
     }
     let set = changeset::load(root, task_id);
@@ -101,7 +110,8 @@ pub fn record_red(root: &Path, task_id: &str, record_id: &str) -> Result<TddEvid
     if !only_test_changes(&set) {
         return Err("红灯运行前只允许测试文件发生变化".into());
     }
-    let record = verification::list_records(root, task_id).into_iter()
+    let record = verification::list_records(root, task_id)
+        .into_iter()
         .find(|record| record.id == record_id)
         .ok_or_else(|| "未找到该次验证的原生执行记录".to_string())?;
     if record.kind != VerificationKind::Test
@@ -125,33 +135,49 @@ pub fn record_red(root: &Path, task_id: &str, record_id: &str) -> Result<TddEvid
 
 pub fn waive(root: &Path, task_id: &str, reason: &str) -> Result<TddEvidence, String> {
     let task = task::load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
-    if !matches!(task.phase, TaskPhase::Paused | TaskPhase::Delivered | TaskPhase::Blocked) {
+    if !matches!(
+        task.phase,
+        TaskPhase::Paused | TaskPhase::Delivered | TaskPhase::Blocked
+    ) {
         return Err("请在任务暂停或完成后说明测试先行豁免原因".into());
     }
     let reason = reason.trim();
     if reason.chars().count() < 8 || reason.chars().count() > 500 {
         return Err("请填写 8 到 500 字的具体豁免原因".into());
     }
-    let evidence = TddEvidence { waiver_reason: Some(reason.into()), ..TddEvidence::default() };
+    let evidence = TddEvidence {
+        waiver_reason: Some(reason.into()),
+        ..TddEvidence::default()
+    };
     store::write_json(&path(root, task_id), &evidence)?;
     Ok(evidence)
 }
 
-pub fn green_record<'a>(evidence: &TddEvidence, records: &'a [VerificationRecord], set: &ChangeSet) -> Option<&'a VerificationRecord> {
-    if evidence.red_revision.as_deref() == Some(set.content_revision().as_str()) { return None; }
+pub fn green_record<'a>(
+    evidence: &TddEvidence,
+    records: &'a [VerificationRecord],
+    set: &ChangeSet,
+) -> Option<&'a VerificationRecord> {
+    if evidence.red_revision.as_deref() == Some(set.content_revision().as_str()) {
+        return None;
+    }
     let command = evidence.red_command.as_deref()?;
     let red_at = evidence.red_at.as_deref()?;
     let revision = set.content_revision();
-    records.iter().rev().find(|record| record.kind == VerificationKind::Test
-        && record.command == command
-        && record.status == VerificationStatus::Passed
-        && record.content_revision.as_deref() == Some(revision.as_str())
-        && record.started_at.as_str() >= red_at)
+    records.iter().rev().find(|record| {
+        record.kind == VerificationKind::Test
+            && record.command == command
+            && record.status == VerificationStatus::Passed
+            && record.content_revision.as_deref() == Some(revision.as_str())
+            && record.started_at.as_str() >= red_at
+    })
 }
 
 #[tauri::command]
 pub async fn coding_tdd_status(
-    access: State<'_, FilesystemAccess>, root: String, task_id: String,
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
 ) -> Result<TddEvidence, String> {
     let root = access.require_workspace(&root)?;
     store::validate_task_id(&task_id)?;
@@ -160,21 +186,29 @@ pub async fn coding_tdd_status(
 
 #[tauri::command]
 pub async fn coding_tdd_record_red(
-    access: State<'_, FilesystemAccess>, root: String, task_id: String, record_id: String,
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+    record_id: String,
 ) -> Result<TddEvidence, String> {
     let root = access.require_workspace(&root)?;
     changeset::sync_changes(&root, &task_id).await?;
     tokio::task::spawn_blocking(move || record_red(&root, &task_id, &record_id))
-        .await.map_err(|error| format!("记录红灯测试失败：{error}"))?
+        .await
+        .map_err(|error| format!("记录红灯测试失败：{error}"))?
 }
 
 #[tauri::command]
 pub async fn coding_tdd_waive(
-    access: State<'_, FilesystemAccess>, root: String, task_id: String, reason: String,
+    access: State<'_, FilesystemAccess>,
+    root: String,
+    task_id: String,
+    reason: String,
 ) -> Result<TddEvidence, String> {
     let root = access.require_workspace(&root)?;
     tokio::task::spawn_blocking(move || waive(&root, &task_id, &reason))
-        .await.map_err(|error| format!("记录测试先行豁免失败：{error}"))?
+        .await
+        .map_err(|error| format!("记录测试先行豁免失败：{error}"))?
 }
 
 #[cfg(test)]
@@ -183,7 +217,13 @@ mod tests {
 
     #[test]
     fn identifies_common_test_files_without_classifying_source_files() {
-        for path in ["src/user.test.ts", "src/__tests__/user.ts", "tests/api.py", "src/user_test.rs", "src/UserTest.java"] {
+        for path in [
+            "src/user.test.ts",
+            "src/__tests__/user.ts",
+            "tests/api.py",
+            "src/user_test.rs",
+            "src/UserTest.java",
+        ] {
             assert!(is_test_path(path), "{path}");
         }
         assert!(!is_test_path("src/user.ts"));
@@ -200,11 +240,27 @@ mod tests {
         task::save(root, &coding_task).unwrap();
         changeset::capture_filesystem_baseline(root, &coding_task.id).unwrap();
         std::fs::create_dir_all(root.join("tests")).unwrap();
-        std::fs::write(root.join("tests/user.test.ts"), "expect(false).toBe(true)\n").unwrap();
-        let red_set = changeset::sync_changes(root, &coding_task.id).await.unwrap();
+        std::fs::write(
+            root.join("tests/user.test.ts"),
+            "expect(false).toBe(true)\n",
+        )
+        .unwrap();
+        let red_set = changeset::sync_changes(root, &coding_task.id)
+            .await
+            .unwrap();
         assert!(only_test_changes(&red_set));
         assert!(should_pause_for_red(root, &coding_task, &red_set));
-        let mut red = verification::record_from_parts(&coding_task.id, VerificationKind::Test, "pnpm test", Some(1), String::new(), "failed".into(), 1, false, false);
+        let mut red = verification::record_from_parts(
+            &coding_task.id,
+            VerificationKind::Test,
+            "pnpm test",
+            Some(1),
+            String::new(),
+            "failed".into(),
+            1,
+            false,
+            false,
+        );
         red.content_revision = Some(red_set.content_revision());
         verification::append_record(root, &red).unwrap();
         let evidence = record_red(root, &coding_task.id, &red.id).unwrap();
@@ -212,10 +268,25 @@ mod tests {
         assert!(green_record(&evidence, &[], &red_set).is_none());
 
         std::fs::write(root.join("src.ts"), "export const fixed = true;\n").unwrap();
-        let green_set = changeset::sync_changes(root, &coding_task.id).await.unwrap();
-        let mut green = verification::record_from_parts(&coding_task.id, VerificationKind::Test, "pnpm test", Some(0), "passed".into(), String::new(), 1, false, false);
+        let green_set = changeset::sync_changes(root, &coding_task.id)
+            .await
+            .unwrap();
+        let mut green = verification::record_from_parts(
+            &coding_task.id,
+            VerificationKind::Test,
+            "pnpm test",
+            Some(0),
+            "passed".into(),
+            String::new(),
+            1,
+            false,
+            false,
+        );
         assert!(green_record(&evidence, &[green.clone()], &green_set).is_none());
         green.content_revision = Some(green_set.content_revision());
-        assert_eq!(green_record(&evidence, &[green], &green_set).map(|record| record.status), Some(VerificationStatus::Passed));
+        assert_eq!(
+            green_record(&evidence, &[green], &green_set).map(|record| record.status),
+            Some(VerificationStatus::Passed)
+        );
     }
 }
