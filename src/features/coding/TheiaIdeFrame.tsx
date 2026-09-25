@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Code2, LoaderCircle, RotateCw } from "lucide-react";
 
@@ -189,7 +189,7 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
     }, new URL(baseUrl).origin);
   }, [baseUrl, openFileRequest, status, token]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!baseUrl) return;
     const theiaOrigin = new URL(baseUrl).origin;
     const onMessage = (event: MessageEvent) => {
