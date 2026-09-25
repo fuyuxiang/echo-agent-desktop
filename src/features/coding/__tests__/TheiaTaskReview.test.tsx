@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { TheiaTaskReview } from "../TheiaTaskReview";
+import { TheiaTaskReview, reviewLanguage } from "../TheiaTaskReview";
 
 const invoke = vi.fn(async (command: string, _args?: unknown): Promise<unknown> => {
   if (command === "coding_changeset_diff") {
@@ -14,6 +14,13 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (command: string, args: unknown
 vi.mock("@monaco-editor/react", () => ({ DiffEditor: () => <div>文本差异</div> }));
 
 describe("Theia task review", () => {
+  it("uses Monaco language IDs for the files reviewed most often", () => {
+    expect(reviewLanguage("src/App.tsx")).toBe("typescript");
+    expect(reviewLanguage("src-tauri/src/main.rs")).toBe("rust");
+    expect(reviewLanguage("tests/test_api.py")).toBe("python");
+    expect(reviewLanguage("docs/README.md")).toBe("markdown");
+    expect(reviewLanguage("README")).toBe("plaintext");
+  });
   beforeEach(() => {
     invoke.mockReset();
     invoke.mockImplementation(async (command: string): Promise<unknown> => {

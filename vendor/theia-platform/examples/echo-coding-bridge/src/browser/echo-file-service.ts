@@ -24,12 +24,25 @@ export class EchoFileService extends FileService {
             }).catch(() => undefined);
             throw error;
         }
-        await echoHostBridge.request('echo/after-mutation', { ticket, success: true });
+        // The disk write already succeeded. Reporting a sync failure as a save
+        // failure makes Resource.save retry the same edit through writeFile.
+        await echoHostBridge.request('echo/after-mutation', { ticket, success: true })
+            .catch(error => console.warn('EchoAgent could not reconcile the saved file:', error));
         return result;
     }
 
     override async writeFile(...args: Parameters<FileService['writeFile']>): Promise<Awaited<ReturnType<FileService['writeFile']>>> {
         return this.mutate('write', [args[0].path.fsPath()], () => super.writeFile(...args));
+    }
+
+    // Monaco normally saves small edits through FileService.update, which goes
+    // straight to provider.updateFile instead of calling writeFile.
+    override async update(...args: Parameters<FileService['update']>): Promise<Awaited<ReturnType<FileService['update']>>> {
+        return this.mutate('write', [args[0].path.fsPath()], () => super.update(...args));
+    }
+
+    override async createFolder(...args: Parameters<FileService['createFolder']>): Promise<Awaited<ReturnType<FileService['createFolder']>>> {
+        return this.mutate('createFolder', [args[0].path.fsPath()], () => super.createFolder(...args));
     }
 
     override async move(...args: Parameters<FileService['move']>): Promise<Awaited<ReturnType<FileService['move']>>> {

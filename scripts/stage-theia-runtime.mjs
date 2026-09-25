@@ -15,6 +15,10 @@ const copyUnlessSameFile = (source, target) => {
   if (existsSync(target) && realpathSync(source) === realpathSync(target)) return;
   cpSync(source, target);
 };
+const nodeMajor = Number(process.versions.node.split(".")[0]);
+if (nodeMajor !== 22 && nodeMajor !== 24) {
+  throw new Error("Echo Code IDE runtime is validated with Node.js 22 or 24.");
+}
 
 if (!existsSync(join(appRoot, "lib/backend/main.js"))) {
   throw new Error("Build Theia first: pnpm ide:build");

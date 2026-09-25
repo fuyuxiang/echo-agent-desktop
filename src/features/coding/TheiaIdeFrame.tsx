@@ -7,13 +7,6 @@ export interface TheiaMutationTicket {
   closeRound: boolean;
 }
 
-export interface TheiaAgentBounds {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
 export interface TheiaIdeFrameHandle {
   getDirtyCount: () => Promise<number>;
   saveAll: () => Promise<boolean>;
@@ -29,15 +22,16 @@ interface TheiaIdeFrameProps {
   onToast?: (message: string) => void;
   previewRequest?: { url: string; id: number } | null;
   openFileRequest?: { path: string; id: number; line?: number } | null;
-  agentVisible?: boolean;
-  onAgentBounds?: (bounds: TheiaAgentBounds | null) => void;
-  onAgentVisibilityChange?: (visible: boolean) => void;
   onDirtyChange?: (count: number | null) => void;
 }
 
 interface TheiaEndpoint {
   url: string;
   embedToken: string;
+}
+
+interface ActiveTheiaEndpoint extends TheiaEndpoint {
+  root: string;
 }
 
 function belongsToWorkspace(root: string, path: string): boolean {
@@ -62,9 +56,6 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
   onToast,
   previewRequest,
   openFileRequest,
-  agentVisible = true,
-  onAgentBounds,
-  onAgentVisibilityChange,
   onDirtyChange,
 }, ref) {
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -72,10 +63,10 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
   const lastKnownDirtyCount = useRef<number | null>(null);
   const hasBeenReady = useRef(false);
   const resettingWorkspace = useRef(false);
-  const hasVisibleAgentDock = useRef(false);
   const token = useMemo(() => crypto.randomUUID(), [root]);
-  const [endpoint, setEndpoint] = useState<TheiaEndpoint | null>(null);
-  const baseUrl = endpoint?.url ?? null;
+  const [endpoint, setEndpoint] = useState<ActiveTheiaEndpoint | null>(null);
+  const activeEndpoint = endpoint?.root === root ? endpoint : null;
+  const baseUrl = activeEndpoint?.url ?? null;
   const [status, setStatus] = useState<"starting" | "loading" | "ready" | "error">("starting");
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
@@ -145,20 +136,14 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
   }, [baseUrl, status, theme, token]);
 
   useEffect(() => {
-    if (status !== "ready" || !baseUrl) return;
-    frameRef.current?.contentWindow?.postMessage({ type: "echo/set-agent-visible", token, visible: agentVisible }, new URL(baseUrl).origin);
-  }, [agentVisible, baseUrl, status, token]);
-
-  useEffect(() => {
     let cancelled = false;
     setStatus("starting");
     setEndpoint(null);
-    onAgentBounds?.(null);
     onDirtyChange?.(null);
     invoke<TheiaEndpoint>("coding_theia_start", { root })
       .then((next) => {
         if (cancelled) return;
-        setEndpoint(next);
+        setEndpoint({ ...next, root });
         setStatus("loading");
       })
       .catch((reason) => {
@@ -179,18 +164,16 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
   }, [status]);
 
   const frameUrl = useMemo(() => {
-    if (!endpoint) return null;
-    const url = new URL(endpoint.url);
-    url.searchParams.set("echoEmbedToken", endpoint.embedToken);
-    url.searchParams.set("echoBridgeToken", token);
-    url.searchParams.set("echoParentOrigin", window.location.origin);
+    if (!activeEndpoint) return null;
+    const url = new URL(activeEndpoint.url);
     url.hash = encodeURI(root.replaceAll("\\", "/"));
     return url.toString();
-  }, [endpoint, root, token]);
-
-  useEffect(() => {
-    hasVisibleAgentDock.current = false;
-  }, [frameUrl, reloadKey]);
+  }, [activeEndpoint, root]);
+  const frameName = useMemo(() => activeEndpoint ? `echo-embed:${JSON.stringify({
+    embedToken: activeEndpoint.embedToken,
+    bridgeToken: token,
+    parentOrigin: window.location.origin,
+  })}` : undefined, [activeEndpoint, token]);
 
   useEffect(() => {
     if (status !== "ready" || !baseUrl || !previewRequest) return;
@@ -218,7 +201,6 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
         resettingWorkspace.current = false;
         hasBeenReady.current = true;
         setStatus("ready");
-        (event.source as Window).postMessage({ type: "echo/request-agent-bounds", token }, theiaOrigin);
         return;
       }
       if (message.type === "echo/dirty-state") {
@@ -239,29 +221,6 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
           request.resolve(message.value);
         }
         else request.reject(new Error(typeof message.error === "string" ? message.error : "IDE 保存失败"));
-        return;
-      }
-      if (message.type === "echo/agent-bounds") {
-        const bounds = message.bounds;
-        if (bounds === null) {
-          onAgentBounds?.(null);
-          // Theia emits an empty measurement before its right dock finishes
-          // opening. Only a previously visible dock can be user-collapsed.
-          if (hasVisibleAgentDock.current) onAgentVisibilityChange?.(false);
-        } else if (bounds && typeof bounds === "object") {
-          const next = bounds as Record<string, unknown>;
-          const { left, top, width, height } = next;
-          const frame = frameRef.current;
-          if (frame && [left, top, width, height].every((value) => typeof value === "number" && Number.isFinite(value))
-              && (left as number) >= 0 && (top as number) >= 0
-              && (width as number) > 40 && (height as number) > 40
-              && (left as number) + (width as number) <= frame.clientWidth + 2
-              && (top as number) + (height as number) <= frame.clientHeight + 2) {
-            onAgentBounds?.({ left: left as number, top: top as number, width: width as number, height: height as number });
-            hasVisibleAgentDock.current = true;
-            onAgentVisibilityChange?.(true);
-          }
-        }
         return;
       }
       if (message.type === "echo/workspace") {
@@ -340,7 +299,7 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [baseUrl, onActiveFile, onActiveSymbol, onPreviewUrl, onAfterMutation, onAgentBounds, onAgentVisibilityChange, onBeforeMutation, onDirtyChange, onToast, root, token]);
+  }, [baseUrl, onActiveFile, onActiveSymbol, onPreviewUrl, onAfterMutation, onBeforeMutation, onDirtyChange, onToast, root, token]);
 
   return (
     <div className="echo-theia" aria-label="Theia 代码工作台">
@@ -350,6 +309,7 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
           key={`${frameUrl}:${reloadKey}`}
           className="echo-theia__frame"
           src={frameUrl}
+          name={frameName}
           title="Echo Code IDE"
           referrerPolicy="no-referrer"
           onError={() => {

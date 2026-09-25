@@ -5,10 +5,11 @@ import { describe, expect, it } from "vitest";
 const css = readFileSync(resolve(process.cwd(), "src/styles/coding-workbench.css"), "utf8");
 
 describe("coding workbench grid contract", () => {
-  it("keeps Theia on a single editor track with its Agent dock overlay", () => {
+  it("keeps Theia and the Agent panel on separate grid tracks", () => {
     expect(css).toMatch(/\.coding-workbench\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);[^}]*grid-template-rows:\s*44px minmax\(0, 1fr\);/s);
     expect(css).toMatch(/\.echo-theia-workspace\s*\{[^}]*grid-column:\s*1;[^}]*grid-row:\s*2;/s);
-    expect(css).toMatch(/\.echo-theia-agent\s*\{[^}]*position:\s*absolute;/s);
+    expect(css).toMatch(/\.coding-workbench--theia\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\).*var\(--echo-agent-width/s);
+    expect(css).toMatch(/\.echo-theia-agent\s*\{[^}]*grid-column:\s*3;/s);
     expect(css).not.toContain(".coding-workbench__activity");
   });
 

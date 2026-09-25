@@ -1,7 +1,9 @@
+import { echoEmbedSession } from '@theia/core/lib/browser/echo-embed-session';
+
 /** Messages are accepted only from the embedding EchoAgent window. */
 export class EchoHostBridge {
-    private readonly token = new URLSearchParams(window.location.search).get('echoBridgeToken');
-    private readonly parentOrigin = new URLSearchParams(window.location.search).get('echoParentOrigin');
+    private readonly token = echoEmbedSession.bridgeToken;
+    private readonly parentOrigin = echoEmbedSession.parentOrigin;
     private readonly pending = new Map<string, {
         resolve: (value: unknown) => void;
         reject: (reason: Error) => void;

@@ -4,7 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type RefObject,
+  type CSSProperties,
 } from "react";
 import {
   ArrowLeft,
@@ -34,11 +34,12 @@ import "@/styles/coding-workbench.css";
 import { AgentPane } from "./agent/AgentPane";
 import { TaskEvidenceStrip } from "./agent/TaskEvidenceStrip";
 import { TheiaAgentComposer } from "./agent/TheiaAgentComposer";
-import { TheiaIdeFrame, type TheiaAgentBounds, type TheiaIdeFrameHandle, type TheiaMutationTicket } from "./TheiaIdeFrame";
+import { TheiaIdeFrame, type TheiaMutationTicket } from "./TheiaIdeFrame";
 import { TheiaTaskReview } from "./TheiaTaskReview";
 import { ChangeSetView } from "./explorer/ChangeSetView";
 import { codingTaskDraftKey } from "./lib/task-draft-key";
-import { localPreviewUrls } from "./lib/preview-url";
+import { useTheiaWorkbenchBridge } from "./hooks/useTheiaWorkbenchBridge";
+import { useCodingMutationLifecycle } from "./hooks/useCodingMutationLifecycle";
 import {
   buildCodingWorkflowPrompt,
   buildNodeContinuationInstruction,
@@ -50,8 +51,6 @@ import {
   onPhaseChanged,
   onVerificationOutput,
   onVerificationUpdated,
-  onWorkspaceFileRemoved,
-  onWorkspaceFileUpdated,
 } from "./lib/tauri-api";
 import {
   type DetectedCommand,
@@ -111,11 +110,6 @@ interface CodingWorkbenchProps {
   onCancelRun?: () => boolean | void | Promise<boolean | void>;
 }
 
-interface ManualMutationContext {
-  taskId: string | null;
-  closeRound: boolean;
-}
-
 function basename(path: string): string {
   const segments = path.replace(/\\/g, "/").split("/").filter(Boolean);
   return segments[segments.length - 1] ?? path;
@@ -133,35 +127,6 @@ function workspaceRelativePath(root: string, path: string): string {
   }
   return normalizedRelativePath(normalizedPath);
 }
-function useElementSize(ref: RefObject<HTMLElement>): { width: number; height: number } {
-  const [size, setSize] = useState({ width: 0, height: 0 });
-
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    const update = () => {
-      const rect = element.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        setSize((current) => (
-          current.width === rect.width && current.height === rect.height
-            ? current
-            : { width: rect.width, height: rect.height }
-        ));
-      }
-    };
-    update();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
-    observer?.observe(element);
-    window.addEventListener("resize", update);
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener("resize", update);
-    };
-  }, [ref]);
-
-  return size;
-}
-
 /**
  * Integrated coding workbench: repository navigation, editing, task-bound Agent
  * execution, verification, review and delivery in one persistent workspace.
@@ -219,8 +184,6 @@ export function CodingWorkbench({
     return [...new Set(paths)].map((projectCwd) => ({ cwd: projectCwd }));
   }, [activeCodingWorkspaceCwd, codingWorkspaces, cwd]);
   const [theiaPanel, setTheiaPanel] = useState<"agent" | "changes" | "verification">("agent");
-  const [theiaActiveFile, setTheiaActiveFile] = useState<string | null>(null);
-  const [theiaActiveSymbol, setTheiaActiveSymbol] = useState<{ path: string; symbol: string } | null>(null);
   const [analysisSymbol, setAnalysisSymbol] = useState<string | null>(null);
   const [analysisMode, setAnalysisMode] = useState<"impact" | "references">("impact");
   const [analysisReady, setAnalysisReady] = useState(false);
@@ -230,49 +193,22 @@ export function CodingWorkbench({
   const [theiaReportOpen, setTheiaReportOpen] = useState(false);
   const [theiaPlanOpen, setTheiaPlanOpen] = useState(false);
   const [starterExample, setStarterExample] = useState<string | null>(null);
-  const [theiaPreviewInput, setTheiaPreviewInput] = useState("");
-  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
-  const [theiaPreviewOpen, setTheiaPreviewOpen] = useState(false);
-  const [theiaAgentOpen, setTheiaAgentOpen] = useState(true);
-  const [theiaAgentBounds, setTheiaAgentBounds] = useState<TheiaAgentBounds | null>(null);
-  const [theiaDirtyCount, setTheiaDirtyCount] = useState<number | null>(null);
-  const theiaFrameRef = useRef<TheiaIdeFrameHandle>(null);
+  const {
+    theiaActiveFile, setTheiaActiveFile,
+    theiaActiveSymbol, setTheiaActiveSymbol,
+    theiaPreviewInput, setTheiaPreviewInput,
+    previewUrls, setPreviewUrls,
+    theiaPreviewOpen, setTheiaPreviewOpen,
+    theiaAgentOpen, setTheiaAgentOpen,
+    agentWidth, setAgentWidth,
+    theiaDirtyCount, setTheiaDirtyCount,
+    theiaPreviewRequest, setTheiaPreviewRequest,
+    theiaOpenFileRequest,
+    theiaFrameRef, theiaPreviewRef, workbenchRef,
+    onDetectedPreviewUrl, openTheiaFile, startAgentResize, resizeAgentByKey,
+  } = useTheiaWorkbenchBridge(cwd, messages, onToast);
   const visibleDirtyCount = theiaDirtyCount ?? 0;
-  const theiaPreviewRef = useRef<HTMLDivElement>(null);
-  const [theiaPreviewRequest, setTheiaPreviewRequest] = useState<{ url: string; id: number } | null>(null);
-  const onDetectedPreviewUrl = useCallback((url: string) => {
-    setPreviewUrls((current) => current[0] === url
-      ? current : [url, ...current.filter((item) => item !== url)].slice(0, 4));
-  }, []);
-  useEffect(() => {
-    for (const url of localPreviewUrls(messages)) onDetectedPreviewUrl(url);
-  }, [messages, onDetectedPreviewUrl]);
-  const [theiaOpenFileRequest, setTheiaOpenFileRequest] = useState<{ path: string; id: number; line?: number } | null>(null);
-  const openTheiaFile = useCallback((rawPath: string, line?: number) => {
-    const root = cwd.replaceAll("\\", "/").replace(/\/+$/, "");
-    const path = rawPath.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/\.\//g, "/");
-    if (!path || path.split("/").includes("..")) {
-      onToast?.("文件路径无效");
-      return;
-    }
-    const absolute = path.startsWith("/") || /^[A-Za-z]:\//.test(path) ? path : `${root}/${path}`;
-    const compareRoot = /^[A-Za-z]:\//.test(root) ? root.toLowerCase() : root;
-    const comparePath = /^[A-Za-z]:\//.test(absolute) ? absolute.toLowerCase() : absolute;
-    if (!comparePath.startsWith(`${compareRoot}/`)) {
-      onToast?.("只能打开当前项目内的文件");
-      return;
-    }
-    setTheiaOpenFileRequest({ path: absolute, line, id: Date.now() });
-  }, [cwd, onToast]);
   const [theiaVerificationOutput, setTheiaVerificationOutput] = useState("");
-  useEffect(() => {
-    if (!theiaPreviewOpen) return;
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      if (!theiaPreviewRef.current?.contains(event.target as Node)) setTheiaPreviewOpen(false);
-    };
-    document.addEventListener("mousedown", closeOnOutsideClick);
-    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
-  }, [theiaPreviewOpen]);
   const [contextPaths, setContextPaths] = useState<string[]>([]);
   const [modelId, setModelId] = useState(defaultModelId);
   const [startError, setStartError] = useState<string | null>(null);
@@ -293,10 +229,9 @@ export function CodingWorkbench({
   const [detectedReady, setDetectedReady] = useState(false);
   const [commandOutput, setCommandOutput] = useState("");
   const [reportRevision, setReportRevision] = useState(0);
-  const taskSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { prepareManualMutation, finishManualMutation, blockInterruptedManualMutation } =
+    useCodingMutationLifecycle(cwd, onToast, setReportRevision);
   const contextSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const workbenchRef = useRef<HTMLDivElement>(null);
-  const workbenchSize = useElementSize(workbenchRef);
 
   const task = useTaskStore((state) => state.task);
   const lifecycleSettling = useCodingRuntimeStore((state) => task ? Boolean(state.settling[codingRuntimeKey(cwd, task.id)]) : false);
@@ -511,46 +446,6 @@ export function CodingWorkbench({
     };
   }, [cwd, task?.phase, task?.phase === "verifying" ? task.updatedAt : null]);
 
-  const prepareManualMutation = useCallback(async (): Promise<ManualMutationContext | null> => {
-    const activeTask = useTaskStore.getState().task;
-    if (!activeTask) return { taskId: null, closeRound: false };
-    if (["discovering", "implementing", "repairing"].includes(activeTask.phase)) {
-      return { taskId: activeTask.id, closeRound: false };
-    }
-    if (["paused", "stopped", "blocked", "delivered"].includes(activeTask.phase)) {
-      try {
-        await codingApi.beginFollowup(cwd, activeTask.id, "用户在编辑器中继续修改工程文件");
-        await useTaskStore.getState().refreshTaskState();
-        return { taskId: activeTask.id, closeRound: true };
-      } catch (error) {
-        onToast?.(`当前任务不能继续编辑：${String(error).replace(/^Error:\s*/, "")}`);
-        return null;
-      }
-    }
-    onToast?.(activeTask.phase === "verifying"
-      ? "正在验证当前改动，请等待验证结束后再编辑"
-      : "当前任务阶段不能修改文件");
-    return null;
-  }, [cwd, onToast]);
-
-  const finishManualMutation = useCallback(async (context: ManualMutationContext) => {
-    if (!context.taskId) return;
-    await codingApi.syncChanges(cwd, context.taskId);
-    if (context.closeRound) {
-      await codingApi.reportImplementation(cwd, context.taskId);
-    }
-    await useTaskStore.getState().refreshTaskState();
-  }, [cwd]);
-
-  const blockInterruptedManualMutation = useCallback(async (
-    context: ManualMutationContext,
-    reason: string,
-  ) => {
-    if (!context.taskId || !context.closeRound) return;
-    await codingApi.reportStartFailed(cwd, context.taskId, reason).catch(() => undefined);
-    await useTaskStore.getState().refreshTaskState().catch(() => undefined);
-  }, [cwd]);
-
   const saveTheiaBeforeLeaving = useCallback(async (): Promise<boolean> => {
     if (!cwd) return true;
     let dirtyCount: number;
@@ -643,59 +538,6 @@ export function CodingWorkbench({
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
   }, [activeTaskCount, cwd, theiaDirtyCount]);
-
-  const queueTaskChangeSync = useCallback(() => {
-    const taskId = useTaskStore.getState().task?.id;
-    if (!cwd || !taskId) return;
-    if (taskSyncTimerRef.current !== null) clearTimeout(taskSyncTimerRef.current);
-    taskSyncTimerRef.current = setTimeout(() => {
-      taskSyncTimerRef.current = null;
-      if (useTaskStore.getState().root !== cwd || useTaskStore.getState().task?.id !== taskId) return;
-      void codingApi.syncChanges(cwd, taskId)
-        .then(() => {
-          if (useTaskStore.getState().root !== cwd || useTaskStore.getState().task?.id !== taskId) return;
-          return useTaskStore.getState().refreshTaskState();
-        })
-        .then(() => {
-          if (useTaskStore.getState().root === cwd && useTaskStore.getState().task?.id === taskId) {
-            setReportRevision((value) => value + 1);
-          }
-        })
-        .catch((error) => onToast?.(`同步任务变更失败：${String(error).replace(/^Error:\s*/, "")}`));
-    }, 300);
-  }, [cwd, onToast]);
-
-  useEffect(() => () => {
-    if (taskSyncTimerRef.current !== null) clearTimeout(taskSyncTimerRef.current);
-    taskSyncTimerRef.current = null;
-  }, [cwd, task?.id]);
-
-  // Keep clean editor tabs live for every workspace file type. If the user is
-  // reviewing a diff, refresh the task-baseline comparison after the disk
-  // snapshot is reconciled instead of silently falling back to identical panes.
-  useEffect(() => {
-    if (!cwd) return;
-    let disposed = false;
-    const unlisteners: Array<() => void> = [];
-    void onWorkspaceFileUpdated((event) => {
-      if (disposed || event.root !== cwd) return;
-      queueTaskChangeSync();
-    }).then((unlisten) => {
-      if (disposed) unlisten();
-      else unlisteners.push(unlisten);
-    });
-    void onWorkspaceFileRemoved((event) => {
-      if (disposed || event.root !== cwd) return;
-      queueTaskChangeSync();
-    }).then((unlisten) => {
-      if (disposed) unlisten();
-      else unlisteners.push(unlisten);
-    });
-    return () => {
-      disposed = true;
-      for (const unlisten of unlisteners) unlisten();
-    };
-  }, [cwd, queueTaskChangeSync]);
 
   /** Derive a task name from the requirement's first clause. */
   const deriveName = useCallback((requirement: string) => {
@@ -1267,9 +1109,21 @@ export function CodingWorkbench({
   const theiaDisplayPanel = task ? theiaPanel : "agent";
   const theiaPhase = task ? describeTaskProgress(task.phase) : null;
 
-  const beforeTheiaMutation = useCallback(async (_operation: string, _paths: string[]) => {
+  const beforeTheiaMutation = useCallback(async (operation: string, _paths: string[]) => {
+    if (operation === "createFolder") {
+      // An empty directory has no task diff. Gate verification, but defer a
+      // follow-up round until a file inside it actually changes.
+      const phase = useTaskStore.getState().task?.phase;
+      if (phase && !["discovering", "implementing", "repairing", "paused", "stopped", "blocked", "delivered"].includes(phase)) {
+        onToast?.(phase === "verifying"
+          ? "正在验证当前改动，请等待验证结束后再新建文件夹"
+          : "当前任务阶段不能新建文件夹");
+        return null;
+      }
+      return { taskId: null, closeRound: false };
+    }
     return prepareManualMutation();
-  }, [prepareManualMutation]);
+  }, [onToast, prepareManualMutation]);
   const afterTheiaMutation = useCallback(async (
     ticket: TheiaMutationTicket,
     success: boolean,
@@ -1327,7 +1181,11 @@ export function CodingWorkbench({
   }
 
   return (
-    <div ref={workbenchRef} className={`coding-workbench coding-workbench--theia${theiaAgentOpen ? "" : " coding-workbench--agent-closed"}`}>
+    <div
+      ref={workbenchRef}
+      className={`coding-workbench coding-workbench--theia${theiaAgentOpen ? "" : " coding-workbench--agent-closed"}`}
+      style={{ "--echo-agent-width": `${agentWidth}px` } as CSSProperties}
+    >
       <header className="coding-workbench__topbar" data-tauri-drag-region>
         <div className="coding-workbench__topbar-left" data-tauri-drag-region>
           <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
@@ -1404,9 +1262,6 @@ export function CodingWorkbench({
           onToast={onToast}
           previewRequest={theiaPreviewRequest}
           openFileRequest={theiaOpenFileRequest}
-          agentVisible={theiaAgentOpen}
-          onAgentBounds={setTheiaAgentBounds}
-          onAgentVisibilityChange={setTheiaAgentOpen}
           onDirtyChange={setTheiaDirtyCount}
         />
         {theiaReviewPath && task && (
@@ -1419,7 +1274,6 @@ export function CodingWorkbench({
               openTheiaFile(theiaReviewPath);
               setTheiaReviewPath(null);
             }}
-            rightInset={theiaAgentBounds ? Math.max(0, workbenchSize.width - theiaAgentBounds.left) : 0}
             onReviewed={async () => {
               await useTaskStore.getState().refreshTaskState();
               setReportRevision((value) => value + 1);
@@ -1431,7 +1285,6 @@ export function CodingWorkbench({
           <section
             className="echo-theia-review echo-theia-report"
             aria-label="交付报告"
-            style={{ right: theiaAgentBounds ? Math.max(0, workbenchSize.width - theiaAgentBounds.left) : 0 }}
           >
             <header className="echo-theia-review__header">
               <strong>交付报告</strong>
@@ -1455,7 +1308,6 @@ export function CodingWorkbench({
           <section
             className="echo-theia-review echo-theia-plan"
             aria-label="执行计划"
-            style={{ right: theiaAgentBounds ? Math.max(0, workbenchSize.width - theiaAgentBounds.left) : 0 }}
           >
             <header className="echo-theia-review__header">
               <strong>执行计划</strong>
@@ -1476,7 +1328,6 @@ export function CodingWorkbench({
           <section
             className="echo-theia-review echo-theia-analysis"
             aria-label="代码影响分析"
-            style={{ right: theiaAgentBounds ? Math.max(0, workbenchSize.width - theiaAgentBounds.left) : 0 }}
           >
             <header className="echo-theia-review__header">
               <div><GitBranch size={15} /><strong>{analysisSymbol}</strong><span>近似代码分析</span></div>
@@ -1500,16 +1351,33 @@ export function CodingWorkbench({
             </div>
           </section>
         )}
+      </main>
+      {theiaAgentOpen && <div
+        className="echo-theia-agent__splitter"
+        role="separator"
+        tabIndex={0}
+        aria-label="调整 Agent 面板宽度"
+        aria-orientation="vertical"
+        aria-valuemin={300}
+        aria-valuemax={800}
+        aria-valuenow={agentWidth}
+        title="拖动调整宽度，双击重置"
+        onDoubleClick={() => setAgentWidth(410)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+            event.preventDefault();
+            resizeAgentByKey(event.key);
+          }
+        }}
+        onPointerDown={(event) => {
+          event.preventDefault();
+          startAgentResize();
+        }}
+      />}
       <aside
         className="echo-theia-agent"
         aria-label="Coding Agent"
-        aria-hidden={!theiaAgentBounds}
-        style={theiaAgentBounds ? {
-          left: theiaAgentBounds.left,
-          top: theiaAgentBounds.top,
-          width: theiaAgentBounds.width,
-          height: theiaAgentBounds.height,
-        } : { display: "none" }}
+        aria-hidden={!theiaAgentOpen}
       >
         <div className="echo-theia-agent__heading">
           <TaskSwitcher
@@ -1681,7 +1549,6 @@ export function CodingWorkbench({
           suggestedPrompt={starterExample}
         />
       </aside>
-      </main>
       {taskDialog}
     </div>
   );

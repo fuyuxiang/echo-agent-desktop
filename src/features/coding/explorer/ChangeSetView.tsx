@@ -73,8 +73,9 @@ export function ChangeSetView({
       setSelectedHunks({});
       return;
     }
-    setExcludedPaths((current) => current.filter((path) => availablePaths.includes(path)));
-  }, [changeSet?.taskId, availableKey]);
+    const currentPaths = availableKey ? availableKey.split("\0") : [];
+    setExcludedPaths((current) => current.filter((path) => currentPaths.includes(path)));
+  }, [changeSet?.taskId, availableKey, selectionTaskId]);
 
   if (!hasTask) {
     return (

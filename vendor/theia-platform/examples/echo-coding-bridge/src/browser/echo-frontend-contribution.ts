@@ -16,22 +16,9 @@ import { TerminalService } from '@theia/terminal/lib/browser/base/terminal-servi
 import { TerminalWidget } from '@theia/terminal/lib/browser/base/terminal-widget';
 import { echoHostBridge } from './echo-host-bridge';
 
-const AGENT_DOCK_WIDTH_KEY = 'echo-agent-dock-width';
-
-class EchoAgentDock extends Widget {
-    protected override onActivateRequest(): void {
-        this.node.focus();
-    }
-}
-
 @injectable()
 export class EchoFrontendContribution implements FrontendApplicationContribution {
     protected emptyState?: HTMLElement;
-    protected agentDock?: Widget;
-    protected agentDockObserver?: ResizeObserver;
-    protected agentDockMutationObserver?: MutationObserver;
-    protected agentBoundsFrame = 0;
-    protected lastAgentBounds = '';
     protected shell?: FrontendApplication['shell'];
     protected readonly dirtySubscriptions = new Map<Widget, Disposable>();
     protected cursorSubscription?: Disposable;
@@ -69,15 +56,6 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
                 void this.commands.executeCommand('mini-browser.openUrl', message.url);
             } else if (message.type === 'echo/set-theme' && (message.theme === 'light' || message.theme === 'dark')) {
                 this.themes.setCurrentTheme(message.theme, false);
-            } else if (message.type === 'echo/set-agent-visible' && typeof message.visible === 'boolean' && this.shell) {
-                if (message.visible) {
-                    this.shell.expandPanel('right');
-                } else {
-                    this.shell.collapsePanel('right');
-                }
-                this.scheduleAgentBounds();
-            } else if (message.type === 'echo/request-agent-bounds') {
-                this.scheduleAgentBounds();
             } else if (message.type === 'echo/save-all' && typeof message.id === 'string' && this.shell) {
                 void this.shell.saveAll().then(() => {
                     this.reportDirtyState();
@@ -175,36 +153,6 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
                 this.dirtySubscriptions.delete(widget);
                 this.reportDirtyState();
             });
-            const agentDock = new EchoAgentDock();
-            agentDock.id = 'echo-agent-dock';
-            agentDock.title.label = 'Echo Agent';
-            agentDock.title.caption = 'Echo Agent';
-            agentDock.title.iconClass = 'codicon codicon-sparkle';
-            agentDock.node.classList.add('echo-agent-dock');
-            agentDock.node.tabIndex = -1;
-            this.agentDock = agentDock;
-            await app.shell.addWidget(agentDock, { area: 'right' });
-            app.shell.expandPanel('right');
-            let savedWidth = 410;
-            try {
-                const value = Number(window.localStorage.getItem(AGENT_DOCK_WIDTH_KEY));
-                if (value >= 300 && value <= 800) {
-                    savedWidth = value;
-                }
-            } catch {
-                // The panel remains usable when browser storage is unavailable.
-            }
-            app.shell.resize(savedWidth, 'right');
-            const rightPanel = app.shell.rightPanelHandler.container.node;
-            this.agentDockObserver = new ResizeObserver(() => this.scheduleAgentBounds());
-            this.agentDockObserver.observe(agentDock.node);
-            this.agentDockObserver.observe(rightPanel);
-            this.agentDockMutationObserver = new MutationObserver(() => this.scheduleAgentBounds());
-            this.agentDockMutationObserver.observe(rightPanel, {
-                attributes: true, attributeFilter: ['class', 'style'], subtree: true,
-            });
-            window.addEventListener('resize', () => this.scheduleAgentBounds());
-            this.scheduleAgentBounds();
             await this.commands.executeCommand('workbench.files.action.focusFilesExplorer');
             await this.corePreferences.ready;
             if (this.corePreferences['window.menuBarVisibility'] === 'compact') {
@@ -239,8 +187,6 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
             app.shell.onDidAddWidget(() => window.requestAnimationFrame(() => this.updateEmptyState()));
             app.shell.onDidRemoveWidget(() => window.requestAnimationFrame(() => this.updateEmptyState()));
             this.updateEmptyState();
-            await app.shell.revealWidget(agentDock.id);
-            this.scheduleAgentBounds();
         }
     }
 
@@ -268,29 +214,4 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
         echoHostBridge.notify('echo/dirty-state', { count: this.dirtyCount() });
     }
 
-    protected scheduleAgentBounds(): void {
-        if (this.agentBoundsFrame) {
-            return;
-        }
-        this.agentBoundsFrame = window.requestAnimationFrame(() => {
-            this.agentBoundsFrame = 0;
-            const dock = this.agentDock;
-            const rect = dock?.node.getBoundingClientRect();
-            const bounds = dock?.isVisible && rect && rect.width > 40 && rect.height > 40
-                ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
-                : null;
-            const serialized = JSON.stringify(bounds);
-            if (serialized !== this.lastAgentBounds) {
-                this.lastAgentBounds = serialized;
-                echoHostBridge.notify('echo/agent-bounds', { bounds });
-                if (bounds && bounds.width >= 300 && bounds.width <= 800) {
-                    try {
-                        window.localStorage.setItem(AGENT_DOCK_WIDTH_KEY, String(Math.round(bounds.width)));
-                    } catch {
-                        // Keep resizing available even if layout storage is disabled.
-                    }
-                }
-            }
-        });
-    }
 }

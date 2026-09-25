@@ -15,10 +15,11 @@
 // *****************************************************************************
 
 import URI from '../common/uri';
+import { echoEmbedSession } from './echo-embed-session';
 
 /** Authenticate protected local HTTP endpoints when Theia runs in the desktop iframe. */
 export function withEchoEmbedToken(url: string): string {
-    const token = new URLSearchParams(self.location.search).get('echoEmbedToken');
+    const token = echoEmbedSession.embedToken;
     if (!token) {
         return url;
     }

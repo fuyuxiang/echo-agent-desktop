@@ -8,21 +8,22 @@ const embedToken = process.env.ECHO_THEIA_EMBED_TOKEN;
 const workspace = process.env.THEIA_WORKSPACE ?? "/private/tmp/echo-theia-workspace";
 const testFile = join(workspace, "echo-bridge-smoke.ts");
 const priorFile = existsSync(testFile) ? readFileSync(testFile, "utf8") : null;
-if (process.env.ECHO_SMOKE_EDIT === "1") writeFileSync(testFile, "export const smoke = 1;\n");
+// Keep the file much larger than the edit so Monaco takes its incremental
+// update path instead of the full writeFile fallback.
+if (process.env.ECHO_SMOKE_EDIT === "1") writeFileSync(testFile, `export const smoke = 1;\n// ${"x".repeat(500)}\n`);
 if (!embedToken) throw new Error("Set ECHO_THEIA_EMBED_TOKEN for the running Theia backend.");
 
 const hostOrigin = "http://127.0.0.1:43121";
 const iframeUrl = new URL(backend);
-iframeUrl.searchParams.set("echoEmbedToken", embedToken);
-iframeUrl.searchParams.set("echoBridgeToken", "smoke-bridge-token");
-iframeUrl.searchParams.set("echoParentOrigin", hostOrigin);
 iframeUrl.hash = encodeURI(workspace);
+const iframeName = `echo-embed:${JSON.stringify({
+  embedToken, bridgeToken: "smoke-bridge-token", parentOrigin: hostOrigin,
+})}`;
 
-const hostHtml = `<html><body><iframe id="ide" src="${iframeUrl.toString()}" style="width:1200px;height:800px"></iframe><script>
+const hostHtml = `<html><body><iframe id="ide" src="${iframeUrl.toString()}" name='${iframeName}' style="width:1200px;height:800px"></iframe><script>
   window.echoReady = false;
   window.echoActiveFile = null;
   window.echoWorkspace = null;
-  window.echoAgentBounds = null;
   window.echoBeforeCount = 0;
   window.echoAfterCount = 0;
   window.echoMutationPaths = [];
@@ -32,7 +33,6 @@ const hostHtml = `<html><body><iframe id="ide" src="${iframeUrl.toString()}" sty
     if (event.data.type === 'echo/ready') window.echoReady = true;
     if (event.data.type === 'echo/active-file') window.echoActiveFile = event.data.path;
     if (event.data.type === 'echo/workspace') window.echoWorkspace = event.data.path;
-    if (event.data.type === 'echo/agent-bounds') window.echoAgentBounds = event.data.bounds;
     if (event.data.type === 'echo/before-mutation') {
       window.echoBeforeCount++;
       window.echoMutationPaths.push(event.data.paths);
@@ -51,6 +51,14 @@ const hostServer = createServer((request, response) => {
   response.end(request.url === "/preview" ? "<h1>Echo preview smoke</h1>" : hostHtml);
 });
 await new Promise(resolve => hostServer.listen(43121, "127.0.0.1", resolve));
+const healthUrl = new URL("/__echo_health", backend);
+healthUrl.searchParams.set("echoEmbedToken", embedToken);
+const health = await fetch(healthUrl);
+if (health.status !== 204 || health.headers.get("x-echo-theia-ready") !== embedToken) {
+  throw new Error("Theia backend did not return its token-bound readiness response");
+}
+healthUrl.searchParams.set("echoEmbedToken", "wrong-token");
+if ((await fetch(healthUrl)).status !== 403) throw new Error("Theia readiness endpoint accepted an invalid token");
 
 const browser = await chromium.launch({
   executablePath: process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -84,13 +92,20 @@ try {
     throw error;
   }
   const ide = page.frameLocator("#ide");
+  const iframeSearch = await ide.locator("body").evaluate(() => window.location.search);
+  if (iframeSearch.includes("echoEmbedToken") || iframeSearch.includes("echoBridgeToken")) {
+    throw new Error(`Theia kept bootstrap credentials in its URL: ${iframeSearch}`);
+  }
+  const frameName = await ide.locator("body").evaluate(() => window.name);
+  if (frameName) throw new Error("Theia did not clear its bootstrap frame name");
   await ide.locator("#theia-app-shell").waitFor({ timeout: 30_000 });
   await ide.locator("#files").waitFor({ state: "attached", timeout: 30_000 });
-  await ide.locator(".echo-code-start h1").getByText("打开文件开始编辑").waitFor({ timeout: 15_000 });
+  await ide.locator(".echo-editor-empty strong").getByText("打开文件开始编辑").waitFor({ timeout: 15_000 });
   await ide.getByText("资源管理器", { exact: true }).first().waitFor({ state: "attached", timeout: 15_000 });
   await ide.locator(".theia-compact-menu").waitFor({ state: "attached", timeout: 15_000 });
-  await ide.locator("#echo-agent-dock").waitFor({ state: "visible", timeout: 15_000 });
-  await page.waitForFunction(() => window.echoAgentBounds?.width > 300, undefined, { timeout: 15_000 });
+  if (await ide.locator("#echo-agent-dock").count()) {
+    throw new Error("Obsolete Theia Agent dock is still mounted");
+  }
   if (process.env.ECHO_SMOKE_PREVIOUS_LOCALE === "en") {
     const locale = await ide.locator("body").evaluate(() => localStorage.getItem("localeId"));
     if (locale !== "zh-cn") throw new Error(`Legacy English locale was not migrated: ${locale}`);
@@ -106,6 +121,14 @@ try {
     await ide.locator(`body.theia-${theme}`).waitFor({ timeout: 15_000 });
   }
   console.log("Theia follows the Echo host theme.");
+  await page.evaluate(() => { window.echoReady = false; });
+  await ide.locator("body").evaluate(() => window.location.reload());
+  await page.waitForFunction(() => window.echoReady, undefined, { timeout: 30_000 });
+  await ide.locator("#theia-app-shell").waitFor({ timeout: 30_000 });
+  if (await ide.locator("body").evaluate(() => window.name || window.location.search)) {
+    throw new Error("Theia reload exposed bootstrap credentials");
+  }
+  console.log("Theia reload restored its session without URL credentials.");
   if (process.env.ECHO_SMOKE_EDIT === "1") {
     await page.evaluate(({ path, origin }) => {
       document.querySelector("#ide").contentWindow.postMessage({

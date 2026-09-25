@@ -136,6 +136,15 @@ export class BrowserConnectionTokenBackendContribution implements BackendApplica
     }
 
     protected expressMiddleware(req: express.Request, res: express.Response, next: express.NextFunction): void {
+        if (process.env.ECHO_THEIA_EMBED_TOKEN && req.path === '/__echo_health') {
+            if (!this.isEchoEmbedTokenValid(req)) {
+                res.sendStatus(403);
+                return;
+            }
+            res.setHeader('X-Echo-Theia-Ready', process.env.ECHO_THEIA_EMBED_TOKEN);
+            res.sendStatus(204);
+            return;
+        }
         if (process.env.ECHO_THEIA_EMBED_TOKEN) {
             res.setHeader('Referrer-Policy', 'no-referrer');
         }

@@ -11,10 +11,25 @@ interface Props {
   onOpenFile: () => void;
   onReviewed: () => Promise<void>;
   onToast?: (message: string) => void;
-  rightInset?: number;
 }
 
-export function TheiaTaskReview({ root, taskId, path, onClose, onOpenFile, onReviewed, onToast, rightInset = 0 }: Props) {
+const LANGUAGE_BY_EXTENSION: Record<string, string> = {
+  c: "c", cc: "cpp", cpp: "cpp", cs: "csharp", css: "css",
+  go: "go", h: "cpp", html: "html", java: "java", js: "javascript",
+  json: "json", jsx: "javascript", kt: "kotlin", less: "less",
+  md: "markdown", mdx: "mdx", php: "php", py: "python",
+  rb: "ruby", rs: "rust", scss: "scss", sh: "shell", sql: "sql",
+  swift: "swift", ts: "typescript", tsx: "typescript", xml: "xml",
+  yaml: "yaml", yml: "yaml",
+};
+
+export function reviewLanguage(path: string): string {
+  const name = path.replaceAll("\\", "/").split("/").pop() ?? "";
+  const extension = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
+  return LANGUAGE_BY_EXTENSION[extension] ?? "plaintext";
+}
+
+export function TheiaTaskReview({ root, taskId, path, onClose, onOpenFile, onReviewed, onToast }: Props) {
   const [diff, setDiff] = useState<{ original: string; modified: string; binary: boolean; modifiedHash: string } | null>(null);
   const [error, setError] = useState("");
   const [reviewing, setReviewing] = useState(false);
@@ -64,7 +79,7 @@ export function TheiaTaskReview({ root, taskId, path, onClose, onOpenFile, onRev
   };
 
   return (
-    <section className="echo-theia-review" aria-label={`任务差异 ${path}`} style={{ right: rightInset }}>
+    <section className="echo-theia-review" aria-label={`任务差异 ${path}`}>
       <header className="echo-theia-review__header">
         <div><strong>任务差异</strong><span>{path}</span></div>
         <div>
@@ -92,7 +107,7 @@ export function TheiaTaskReview({ root, taskId, path, onClose, onOpenFile, onRev
         <DiffEditor
           original={diff.original}
           modified={diff.modified}
-          language={path.split(".").slice(-1)[0] ?? "plaintext"}
+          language={reviewLanguage(path)}
           theme={theme}
           options={{ readOnly: true, renderSideBySide: true, minimap: { enabled: false }, automaticLayout: true }}
         />

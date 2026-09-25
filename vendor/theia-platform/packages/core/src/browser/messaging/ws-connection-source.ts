@@ -18,6 +18,7 @@ import { Emitter, Event } from '../../common/event';
 import { ConnectionSource } from './connection-source';
 import { Socket, io } from 'socket.io-client';
 import { Endpoint } from '../endpoint';
+import { echoEmbedSession } from '../echo-embed-session';
 import { AbstractChannel, Channel, ForwardingChannel } from '../../common/message-rpc/channel';
 import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '../../common/message-rpc/uint8-array-message-buffer';
 import { inject, injectable, postConstruct } from 'inversify';
@@ -205,7 +206,7 @@ export class WebSocketConnectionSource implements ConnectionSource {
     protected createWebSocket(url: string): Socket {
         // The desktop host embeds Theia across schemes, where WebKit blocks
         // third-party cookies. Its per-process token authenticates the socket.
-        const echoEmbedToken = new URLSearchParams(location.search).get('echoEmbedToken');
+        const echoEmbedToken = echoEmbedSession.embedToken;
         return io(url, {
             path: this.createSocketIoPath(url),
             ...(echoEmbedToken ? { query: { echoEmbedToken } } : {}),

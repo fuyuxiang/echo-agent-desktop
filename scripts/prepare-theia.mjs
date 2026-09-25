@@ -26,8 +26,8 @@ if (existsSync(runtime) && existsSync(node)
 }
 
 const major = Number(process.versions.node.split(".")[0]);
-if (major < 22 || major === 23) {
-  throw new Error("Echo Code IDE needs Node.js 22 or 24+ to build. Select a supported Node.js version and retry.");
+if (major !== 22 && major !== 24) {
+  throw new Error("Echo Code IDE is validated with Node.js 22 or 24. Select one of those versions and retry.");
 }
 
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";

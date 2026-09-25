@@ -3,6 +3,7 @@
 
 use serde::Serialize;
 use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -22,6 +23,7 @@ struct RunningServer {
     child: Child,
     port: u16,
     embed_token: String,
+    root: PathBuf,
 }
 
 #[derive(Serialize)]
@@ -115,13 +117,38 @@ fn check_node(node: &PathBuf) -> Result<(), String> {
         .next()
         .and_then(|value| value.parse::<u32>().ok())
         .unwrap_or(0);
-    if !output.status.success() || major < 22 || major == 23 {
+    if !output.status.success() || !matches!(major, 22 | 24) {
         return Err(format!(
-            "Theia 需要 Node.js 22 或更新版本，当前为 {}",
+            "Theia 当前支持已验证的 Node.js 22 或 24，当前为 {}",
             version.trim()
         ));
     }
     Ok(())
+}
+
+fn theia_ready(port: u16, embed_token: &str) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(
+        &format!("127.0.0.1:{port}")
+            .parse()
+            .expect("valid loopback address"),
+        Duration::from_millis(150),
+    ) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+    let request = format!(
+        "GET /__echo_health?echoEmbedToken={embed_token} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    stream.read_to_string(&mut response).is_ok()
+        && response.starts_with("HTTP/1.1 204")
+        && response
+            .lines()
+            .any(|line| line.trim_end_matches('\r') == format!("X-Echo-Theia-Ready: {embed_token}"))
 }
 
 #[tauri::command]
@@ -133,97 +160,115 @@ pub async fn coding_theia_start(
 ) -> Result<TheiaEndpoint, String> {
     // Theia receives the selected root via the browser URL fragment. Reuse
     // EchoAgent's workspace allow-list before exposing that folder to the IDE.
-    access.require_workspace(&root)?;
+    let authorized_root = access.require_workspace(&root)?;
 
     let mut guard = server
         .process
         .lock()
         .map_err(|_| "Theia 状态锁不可用".to_string())?;
     if let Some(running) = guard.as_mut() {
-        if running
-            .child
-            .try_wait()
-            .map_err(|error| error.to_string())?
-            .is_none()
+        if running.root == authorized_root
+            && running
+                .child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_none()
         {
             return Ok(TheiaEndpoint {
                 url: format!("http://127.0.0.1:{}/", running.port),
                 embed_token: running.embed_token.clone(),
             });
         }
-        guard.take();
+        if let Some(mut old) = guard.take() {
+            let _ = old.child.kill();
+            let _ = old.child.wait();
+        }
     }
 
     let app_dir = browser_app_dir(&app)?;
     let node = node_executable(&app);
     check_node(&node)?;
-    // A stable origin lets Theia restore layout and editor state across app
-    // launches. Fall back to an ephemeral port if another process owns it.
-    let listener = TcpListener::bind("127.0.0.1:41773")
-        .or_else(|_| TcpListener::bind("127.0.0.1:0"))
-        .map_err(|error| format!("无法分配 Theia 本地端口：{error}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|error| error.to_string())?
-        .port();
-    drop(listener);
-
-    let embed_token = format!("{}{}", Uuid::now_v7().simple(), Uuid::now_v7().simple());
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
     let config_dir = data_dir.join("theia-config");
     fs::create_dir_all(&config_dir).map_err(|error| format!("无法创建 IDE 配置目录：{error}"))?;
-    let log = File::create(data_dir.join("theia.log"))
-        .map_err(|error| format!("无法创建 IDE 日志：{error}"))?;
-    let err_log = log.try_clone().map_err(|error| error.to_string())?;
+    let log_path = data_dir.join("theia.log");
+    for attempt in 0..3 {
+        // The preferred origin restores layout. A bind/drop/spawn race can
+        // still occur; an occupied port gets a fresh ephemeral retry.
+        let listener = if attempt == 0 {
+            TcpListener::bind("127.0.0.1:41773").or_else(|_| TcpListener::bind("127.0.0.1:0"))
+        } else {
+            TcpListener::bind("127.0.0.1:0")
+        }
+        .map_err(|error| format!("无法分配 Theia 本地端口：{error}"))?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| error.to_string())?
+            .port();
+        drop(listener);
 
-    let mut child = Command::new(&node)
-        .arg(app_dir.join("lib/backend/main.js"))
-        .arg(format!("--port={port}"))
-        .arg("--hostname=127.0.0.1")
-        .env("THEIA_CONFIG_DIR", &config_dir)
-        .env("ECHO_THEIA_EMBED_TOKEN", &embed_token)
-        .current_dir(&app_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(err_log))
-        .spawn()
-        .map_err(|error| format!("Theia 启动失败：{error}"))?;
+        let embed_token = format!("{}{}", Uuid::now_v7().simple(), Uuid::now_v7().simple());
+        let log = File::create(&log_path).map_err(|error| format!("无法创建 IDE 日志：{error}"))?;
+        let err_log = log.try_clone().map_err(|error| error.to_string())?;
+        let mut child = Command::new(&node)
+            .arg(app_dir.join("lib/backend/main.js"))
+            .arg(format!("--port={port}"))
+            .arg("--hostname=127.0.0.1")
+            .env("THEIA_CONFIG_DIR", &config_dir)
+            .env("ECHO_THEIA_EMBED_TOKEN", &embed_token)
+            .current_dir(&app_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(err_log))
+            .spawn()
+            .map_err(|error| format!("Theia 启动失败：{error}"))?;
 
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while Instant::now() < deadline {
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+                let port_taken = fs::read_to_string(&log_path)
+                    .map(|content| content.contains("EADDRINUSE"))
+                    .unwrap_or(false);
+                if port_taken && attempt < 2 {
+                    break;
+                }
+                return Err(format!(
+                    "Theia 启动后退出：{status}。日志：{}",
+                    log_path.display()
+                ));
+            }
+            if theia_ready(port, &embed_token) {
+                *guard = Some(RunningServer {
+                    child,
+                    port,
+                    embed_token: embed_token.clone(),
+                    root: authorized_root,
+                });
+                return Ok(TheiaEndpoint {
+                    url: format!("http://127.0.0.1:{port}/"),
+                    embed_token,
+                });
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        if child
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_none()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
             return Err(format!(
-                "Theia 启动后退出：{status}。日志：{}",
-                data_dir.join("theia.log").display()
+                "Theia 启动超时，请查看日志：{}",
+                log_path.display()
             ));
         }
-        if TcpStream::connect_timeout(
-            &format!("127.0.0.1:{port}")
-                .parse()
-                .map_err(|error| format!("端口无效：{error}"))?,
-            Duration::from_millis(150),
-        )
-        .is_ok()
-        {
-            *guard = Some(RunningServer {
-                child,
-                port,
-                embed_token: embed_token.clone(),
-            });
-            return Ok(TheiaEndpoint {
-                url: format!("http://127.0.0.1:{port}/"),
-                embed_token,
-            });
-        }
-        std::thread::sleep(Duration::from_millis(150));
     }
-    let _ = child.kill();
-    let _ = child.wait();
     Err(format!(
-        "Theia 启动超时，请查看日志：{}",
-        data_dir.join("theia.log").display()
+        "Theia 本地端口持续被占用，请查看日志：{}",
+        log_path.display()
     ))
 }

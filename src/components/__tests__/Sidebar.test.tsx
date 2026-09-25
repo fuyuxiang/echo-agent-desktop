@@ -52,11 +52,13 @@ describe("Sidebar", () => {
     });
   });
 
-  it("渲染导航项", () => {
-    render(<Sidebar {...base} />);
-    for (const label of ["新建任务", "项目", "代码开发", "专家·技能·连接器", "自动化", "更多"]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
-    }
+  it("按工作流顺序渲染导航项", () => {
+    const { container } = render(<Sidebar {...base} />);
+    const nav = container.querySelector(".sidebar__nav");
+    expect(nav).not.toBeNull();
+    expect(within(nav as HTMLElement).getAllByRole("button").map((button) => button.textContent?.trim())).toEqual([
+      "新建任务", "项目", "代码开发", "组织", "专家·技能·连接器", "自动化", "更多常用工具",
+    ]);
     expect(screen.queryByText("助理")).not.toBeInTheDocument();
   });
 
@@ -65,6 +67,15 @@ describe("Sidebar", () => {
     render(<Sidebar {...base} onNavigate={onNavigate} />);
     fireEvent.click(screen.getByText("项目"));
     expect(onNavigate).toHaveBeenCalledWith("项目");
+  });
+
+  it("组织是直接可见的入口并进入组织页面", () => {
+    const onNavigate = vi.fn();
+    render(<Sidebar {...base} activeNav="组织" onNavigate={onNavigate} />);
+    const entry = screen.getByRole("button", { name: "组织" });
+    expect(entry).toHaveClass("sidebar__nav-item--active");
+    fireEvent.click(entry);
+    expect(onNavigate).toHaveBeenCalledWith("组织");
   });
 
   it("渲染会话列表并可选中", () => {

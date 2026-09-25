@@ -28,6 +28,7 @@ import {
   MoreDotsIcon,
   AddIcon,
   MyFilesIconV2,
+  BuildingIcon,
   MoreMenuImaKnowledgeIcon,
   MemoryIcon,
   PluginsIcon,
@@ -40,6 +41,7 @@ const logoMarkUrl = "/app-icon.png";
 const NAV = [
   { label: "项目", icon: EchoProjectNavIcon },
   { label: "代码开发", icon: Code2Icon },
+  { label: "组织", icon: BuildingIcon },
   { label: "专家·技能·连接器", icon: EchoExpertNavIcon },
   { label: "自动化", icon: EchoAutomationNavIcon },
 ];

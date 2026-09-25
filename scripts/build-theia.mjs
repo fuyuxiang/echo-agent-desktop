@@ -3,8 +3,8 @@ import { resolve, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const major = Number(process.versions.node.split(".")[0]);
-if (major < 22 || major === 23) {
-  throw new Error("Eclipse Theia requires Node.js 22 or 24+. Run this command with a supported Node.js on PATH.");
+if (major !== 22 && major !== 24) {
+  throw new Error("Echo Code IDE is validated with Node.js 22 or 24. Run this command with one of those versions on PATH.");
 }
 
 const sourceRoot = resolve(import.meta.dirname, "../vendor/theia-platform");

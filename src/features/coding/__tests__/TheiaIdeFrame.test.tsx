@@ -9,11 +9,12 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (command: string, args: unknown
 
 function sendFrameMessage(frame: HTMLIFrameElement, data: Record<string, unknown>) {
   const url = new URL(frame.src);
+  const { bridgeToken } = JSON.parse(frame.name.slice("echo-embed:".length)) as { bridgeToken: string };
   act(() => {
     window.dispatchEvent(new MessageEvent("message", {
       origin: url.origin,
       source: frame.contentWindow,
-      data: { ...data, token: url.searchParams.get("echoBridgeToken") },
+      data: { ...data, token: bridgeToken },
     }));
   });
 }
@@ -75,5 +76,18 @@ describe("Theia IDE bridge", () => {
     expect(onPreviewUrl).not.toHaveBeenCalled();
     sendFrameMessage(frame, { type: "echo/preview-url", url: "http://localhost:5173/" });
     expect(onPreviewUrl).toHaveBeenCalledWith("http://localhost:5173/");
+  });
+
+  it("starts a fresh iframe session when the project changes", async () => {
+    const callbacks = { onBeforeMutation: vi.fn(), onAfterMutation: vi.fn() };
+    const { rerender } = render(<TheiaIdeFrame root="/repo-one" {...callbacks} />);
+    const first = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    const firstToken = JSON.parse(first.name.slice("echo-embed:".length)).bridgeToken as string;
+
+    rerender(<TheiaIdeFrame root="/repo-two" {...callbacks} />);
+    const second = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    await waitFor(() => expect(new URL(second.src).hash).toBe("#/repo-two"));
+    expect(JSON.parse(second.name.slice("echo-embed:".length)).bridgeToken).not.toBe(firstToken);
+    expect(invoke).toHaveBeenCalledWith("coding_theia_start", { root: "/repo-two" });
   });
 });

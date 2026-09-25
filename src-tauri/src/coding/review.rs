@@ -46,14 +46,17 @@ pub fn confirm(root: &Path, task_id: &str, kind: ReviewKind) -> Result<ReviewRec
     }
     let set = changeset::load(root, task_id);
     changeset::ensure_changes_current(root, &set)?;
+    if set.changes.is_empty() {
+        return Err("只读任务没有文件差异，无需确认代码审查".into());
+    }
     let revision = set.content_revision();
     if set.verified_revision.as_deref() != Some(revision.as_str()) {
         return Err("代码已在验证后变化，请重新验证".into());
     }
-    if set.changes.is_empty()
-        || set.changes.iter().any(|change| {
-            set.reviewed_hashes.get(&change.path) != set.change_hashes.get(&change.path)
-        })
+    if set
+        .changes
+        .iter()
+        .any(|change| set.reviewed_hashes.get(&change.path) != set.change_hashes.get(&change.path))
     {
         return Err("请先打开并审阅每个任务差异文件".into());
     }
@@ -102,6 +105,20 @@ pub async fn coding_review_confirm(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_read_only_task_reports_no_review_is_needed() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let mut coding_task = task::create_task(root, "Explain", "Read the project").unwrap();
+        coding_task.phase = TaskPhase::Delivered;
+        task::save(root, &coding_task).unwrap();
+
+        assert_eq!(
+            confirm(root, &coding_task.id, ReviewKind::Requirements).unwrap_err(),
+            "只读任务没有文件差异，无需确认代码审查"
+        );
+    }
 
     #[tokio::test]
     async fn two_reviews_are_ordered_and_bound_to_current_content() {

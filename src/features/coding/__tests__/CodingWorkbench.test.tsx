@@ -107,8 +107,11 @@ function verificationTask(overrides: Partial<CodingTask> = {}): CodingTask {
 }
 
 describe("Theia workbench", () => {
+  const bridgeToken = (frame: HTMLIFrameElement): string =>
+    (JSON.parse(frame.name.slice("echo-embed:".length)) as { bridgeToken: string }).bridgeToken;
   beforeEach(() => {
     window.history.replaceState({}, "", "/");
+    window.localStorage.removeItem("echo-agent-panel-width");
     invoke.mockReset();
     invoke.mockImplementation(async (command: string): Promise<unknown> => {
       if (command === "coding_task_list" || command === "coding_verification_detect") return [];
@@ -130,70 +133,71 @@ describe("Theia workbench", () => {
     });
   });
 
-  it("places the Agent surface inside Theia's right dock", async () => {
+  it("keeps the Agent pane beside Theia and allows resizing independently", async () => {
     const { container } = render(<CodingWorkbench cwd="/repo" models={[]} />);
 
     expect(await screen.findByTitle("Echo Code IDE")).toHaveAttribute(
-      "src",
-      expect.stringContaining("echoEmbedToken=test-embed-token"),
+      "name",
+      expect.stringContaining("test-embed-token"),
     );
+    expect((screen.getByTitle("Echo Code IDE") as HTMLIFrameElement).src).not.toContain("echoEmbedToken");
     expect(invoke).toHaveBeenCalledWith("coding_theia_start", { root: "/repo" });
-    const agent = container.querySelector(".echo-theia-workspace > .echo-theia-agent") as HTMLElement;
+    const agent = container.querySelector(".coding-workbench > .echo-theia-agent") as HTMLElement;
     expect(agent).toBeInTheDocument();
-    expect(container.querySelector(".echo-theia-agent__splitter")).not.toBeInTheDocument();
-
-    const frame = screen.getByTitle("Echo Code IDE") as HTMLIFrameElement;
-    Object.defineProperty(frame, "clientWidth", { configurable: true, value: 1200 });
-    Object.defineProperty(frame, "clientHeight", { configurable: true, value: 900 });
-    const src = new URL(frame.src);
-    act(() => {
-      window.dispatchEvent(new MessageEvent("message", {
-        origin: src.origin,
-        source: frame.contentWindow,
-        data: { type: "echo/agent-bounds", token: src.searchParams.get("echoBridgeToken"), bounds: null },
-      }));
-    });
+    expect(container.querySelector(".echo-theia-workspace > .echo-theia-agent")).not.toBeInTheDocument();
+    const splitter = screen.getByRole("separator", { name: "调整 Agent 面板宽度" });
+    expect(splitter).toHaveAttribute("aria-valuenow", "410");
     expect(container.querySelector(".coding-workbench--agent-closed")).not.toBeInTheDocument();
-    act(() => {
-      window.dispatchEvent(new MessageEvent("message", {
-        origin: src.origin,
-        source: frame.contentWindow,
-        data: {
-          type: "echo/agent-bounds",
-          token: src.searchParams.get("echoBridgeToken"),
-          bounds: { left: 790, top: 44, width: 390, height: 800 },
-        },
-      }));
+    fireEvent.keyDown(splitter, { key: "ArrowLeft" });
+    expect(splitter).toHaveAttribute("aria-valuenow", "430");
+    const workbench = container.querySelector(".coding-workbench") as HTMLElement;
+    vi.spyOn(workbench, "getBoundingClientRect").mockReturnValue({
+      width: 1200, right: 1200, left: 0, top: 0, bottom: 800, height: 800, x: 0, y: 0,
+      toJSON: () => ({}),
     });
-    expect(agent).toHaveStyle({ left: "790px", top: "44px", width: "390px", height: "800px" });
+    fireEvent.pointerDown(splitter);
+    fireEvent.pointerMove(window, { clientX: 700 });
+    fireEvent.pointerUp(window);
+    expect(splitter).toHaveAttribute("aria-valuenow", "500");
+    expect(window.localStorage.getItem("echo-agent-panel-width")).toBe("500");
     expect(screen.queryByRole("tablist", { name: "开发任务面板" })).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "任务描述" })).toBeInTheDocument();
     expect(agent.lastElementChild).toHaveClass("echo-theia-agent__composer");
-    act(() => {
-      window.dispatchEvent(new MessageEvent("message", {
-        origin: src.origin,
-        source: frame.contentWindow,
-        data: { type: "echo/agent-bounds", token: src.searchParams.get("echoBridgeToken"), bounds: null },
-      }));
-    });
+    fireEvent.click(screen.getByRole("button", { name: "收起 Agent 面板" }));
     expect(container.querySelector(".coding-workbench--agent-closed")).toBeInTheDocument();
+  });
+
+  it("blocks an empty folder during verification without opening a follow-up round", async () => {
+    render(<CodingWorkbench cwd="/repo" models={[]} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+    const url = new URL(frame.src);
+    act(() => {
+      useTaskStore.setState({ root: "/repo", task: verificationTask() });
+    });
+    await waitFor(() => {
+      act(() => {
+        window.dispatchEvent(new MessageEvent("message", {
+          origin: url.origin,
+          source: frame.contentWindow,
+          data: {
+            type: "echo/before-mutation", id: "folder", operation: "createFolder",
+            paths: ["/repo/new-folder"], token: bridgeToken(frame),
+          },
+        }));
+      });
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "folder", ok: false }), url.origin,
+      );
+    });
+    expect(invoke).not.toHaveBeenCalledWith("coding_task_begin_followup", expect.anything());
   });
 
   it("keeps the task composer available while reviewing changes and verification", async () => {
     const user = userEvent.setup();
     useTaskStore.setState({ root: "/repo", task: verificationTask({ phase: "delivered", sessionId: "session-1" }) });
     const { container } = render(<CodingWorkbench cwd="/repo" sessionId="session-1" models={[{ id: "model-1" }]} defaultModelId="model-1" />);
-    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
-    Object.defineProperty(frame, "clientWidth", { configurable: true, value: 1200 });
-    Object.defineProperty(frame, "clientHeight", { configurable: true, value: 900 });
-    const src = new URL(frame.src);
-    act(() => {
-      window.dispatchEvent(new MessageEvent("message", {
-        origin: src.origin,
-        source: frame.contentWindow,
-        data: { type: "echo/agent-bounds", token: src.searchParams.get("echoBridgeToken"), bounds: { left: 790, top: 44, width: 390, height: 800 } },
-      }));
-    });
+    await screen.findByTitle("Echo Code IDE");
     const composer = container.querySelector(".echo-theia-agent__composer");
     const textbox = await screen.findByRole("textbox", { name: "给 Agent 的补充要求" });
     fireEvent.change(textbox, { target: { value: "请处理边界情况" } });
@@ -207,17 +211,7 @@ describe("Theia workbench", () => {
   it("opens the delivery report from a named action in the default IDE", async () => {
     useTaskStore.setState({ root: "/repo", task: verificationTask({ phase: "delivered" }) });
     render(<CodingWorkbench cwd="/repo" models={[]} />);
-    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
-    Object.defineProperty(frame, "clientWidth", { configurable: true, value: 1200 });
-    Object.defineProperty(frame, "clientHeight", { configurable: true, value: 900 });
-    const src = new URL(frame.src);
-    act(() => {
-      window.dispatchEvent(new MessageEvent("message", {
-        origin: src.origin,
-        source: frame.contentWindow,
-        data: { type: "echo/agent-bounds", token: src.searchParams.get("echoBridgeToken"), bounds: { left: 790, top: 44, width: 390, height: 800 } },
-      }));
-    });
+    await screen.findByTitle("Echo Code IDE");
     await userEvent.click(screen.getByRole("button", { name: "打开交付报告" }));
     expect(screen.getByRole("region", { name: "交付报告" })).toBeInTheDocument();
     expect(invoke).toHaveBeenCalledWith("coding_delivery_report", { root: "/repo", taskId: "verification-task" });
@@ -245,17 +239,7 @@ describe("Theia workbench", () => {
       return null;
     });
     render(<CodingWorkbench cwd="/repo" models={[]} onSelectWorkspace={onSelectWorkspace} />);
-    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
-    Object.defineProperty(frame, "clientWidth", { configurable: true, value: 1200 });
-    Object.defineProperty(frame, "clientHeight", { configurable: true, value: 900 });
-    const src = new URL(frame.src);
-    act(() => {
-      window.dispatchEvent(new MessageEvent("message", {
-        origin: src.origin,
-        source: frame.contentWindow,
-        data: { type: "echo/agent-bounds", token: src.searchParams.get("echoBridgeToken"), bounds: { left: 790, top: 44, width: 390, height: 800 } },
-      }));
-    });
+    await screen.findByTitle("Echo Code IDE");
     await userEvent.click(screen.getByRole("button", { name: "切换开发任务" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "新建开发任务" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("coding_isolation_create", { root: "/repo" }));
@@ -273,7 +257,7 @@ describe("Theia workbench", () => {
         window.dispatchEvent(new MessageEvent("message", {
           origin: src.origin,
           source: frame.contentWindow,
-          data: { ...data, token: src.searchParams.get("echoBridgeToken") },
+          data: { ...data, token: bridgeToken(frame) },
         }));
       });
     };

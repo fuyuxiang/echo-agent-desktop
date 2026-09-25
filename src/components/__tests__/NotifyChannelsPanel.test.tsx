@@ -39,8 +39,8 @@ describe("NotifyChannelsPanel", () => {
 
   it("无渠道时显示空态", async () => {
     render(<NotifyChannelsPanel />);
-    await waitFor(() => expect(backend.load).toHaveBeenCalled());
-    expect(screen.getByText("暂无通知渠道")).toBeInTheDocument();
+    expect(await screen.findByText("暂无通知渠道")).toBeInTheDocument();
+    expect(backend.load).toHaveBeenCalled();
   });
 
   it("添加渠道后持久化并显示在列表", async () => {

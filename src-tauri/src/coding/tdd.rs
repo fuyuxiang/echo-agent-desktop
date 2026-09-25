@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -99,6 +100,16 @@ pub fn can_resume(root: &Path, task: &CodingTask) -> bool {
     evidence.red_record_id.is_some() || evidence.waiver_reason.is_some()
 }
 
+fn at_or_after(actual: &str, threshold: &str) -> bool {
+    match (
+        DateTime::parse_from_rfc3339(actual),
+        DateTime::parse_from_rfc3339(threshold),
+    ) {
+        (Ok(actual), Ok(threshold)) => actual >= threshold,
+        _ => false,
+    }
+}
+
 pub fn record_red(root: &Path, task_id: &str, record_id: &str) -> Result<TddEvidence, String> {
     let task = task::load(root, task_id).ok_or_else(|| "任务不存在".to_string())?;
     if task.phase != TaskPhase::Paused || task.phase_reason.as_deref() != Some("等待红灯测试验证")
@@ -118,7 +129,7 @@ pub fn record_red(root: &Path, task_id: &str, record_id: &str) -> Result<TddEvid
         || record.status != VerificationStatus::Failed
         || !test_commands(root, &task).contains(&record.command)
         || record.content_revision.as_deref() != Some(set.content_revision().as_str())
-        || record.started_at.as_str() < task.updated_at.as_str()
+        || !at_or_after(&record.started_at, &task.updated_at)
     {
         return Err("只有检查点之后执行的计划内测试真实失败结果可作为 RED 证据".into());
     }
@@ -169,7 +180,7 @@ pub fn green_record<'a>(
             && record.command == command
             && record.status == VerificationStatus::Passed
             && record.content_revision.as_deref() == Some(revision.as_str())
-            && record.started_at.as_str() >= red_at
+            && at_or_after(&record.started_at, red_at)
     })
 }
 
@@ -214,6 +225,23 @@ pub async fn coding_tdd_waive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compares_timestamps_by_instant_across_offsets_and_precision() {
+        assert!(at_or_after(
+            "2026-09-25T08:00:00+08:00",
+            "2026-09-25T00:00:00Z"
+        ));
+        assert!(at_or_after(
+            "2026-09-25T00:00:00.100Z",
+            "2026-09-25T00:00:00Z"
+        ));
+        assert!(!at_or_after(
+            "2026-09-25T00:00:00Z",
+            "2026-09-25T08:00:00+07:00"
+        ));
+        assert!(!at_or_after("invalid", "2026-09-25T00:00:00Z"));
+    }
 
     #[test]
     fn identifies_common_test_files_without_classifying_source_files() {
