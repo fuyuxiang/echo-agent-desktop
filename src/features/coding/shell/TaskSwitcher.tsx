@@ -12,7 +12,7 @@ import {
   Trash2,
 } from "lucide-react";
 
-import { describePhase, isBusyPhase } from "../lib/phase";
+import { describeTaskProgress, isBusyPhase } from "../lib/phase";
 import type { TaskSummary } from "../lib/types";
 
 interface TaskSwitcherProps {
@@ -145,7 +145,7 @@ export function TaskSwitcher({
           {tasks.length === 0 && <div className="coding-row">当前仓库还没有开发任务</div>}
           {tasks.length > 0 && filteredTasks.length === 0 && <div className="coding-row">没有匹配的任务</div>}
           {filteredTasks.map((task) => {
-            const phase = describePhase(task.phase);
+            const phase = describeTaskProgress(task.phase);
             const actionsOpen = actionTaskId === task.id;
             return (
               <div className="coding-task-switcher__entry" key={task.id} role="none">
@@ -225,14 +225,14 @@ export function TaskSwitcher({
             type="button"
             role="menuitem"
             disabled={newDisabled}
-            title={newDisabled ? "请先停止正在执行的任务" : "新建开发任务"}
+            title={newDisabled ? "正在准备隔离工作树" : "新建开发任务"}
             onClick={() => {
               setOpen(false);
               onNew();
             }}
           >
             <Plus size={12} />
-            <span>{newDisabled ? "执行中不可新建" : "新建开发任务"}</span>
+            <span>{newDisabled ? "正在准备…" : "新建开发任务"}</span>
           </button>
         </div>
       )}

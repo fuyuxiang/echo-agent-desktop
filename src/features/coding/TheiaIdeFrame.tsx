@@ -24,6 +24,8 @@ interface TheiaIdeFrameProps {
   onBeforeMutation: (operation: string, paths: string[]) => Promise<TheiaMutationTicket | null>;
   onAfterMutation: (ticket: TheiaMutationTicket, success: boolean, error?: string) => Promise<void>;
   onActiveFile?: (path: string | null) => void;
+  onActiveSymbol?: (value: { path: string; symbol: string } | null) => void;
+  onPreviewUrl?: (url: string) => void;
   onToast?: (message: string) => void;
   previewRequest?: { url: string; id: number } | null;
   openFileRequest?: { path: string; id: number; line?: number } | null;
@@ -55,6 +57,8 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
   onBeforeMutation,
   onAfterMutation,
   onActiveFile,
+  onActiveSymbol,
+  onPreviewUrl,
   onToast,
   previewRequest,
   openFileRequest,
@@ -277,6 +281,30 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
         onActiveFile?.(typeof message.path === "string" && belongsToWorkspace(root, message.path) ? message.path : null);
         return;
       }
+      if (message.type === "echo/active-symbol") {
+        onActiveSymbol?.(
+          typeof message.path === "string"
+          && belongsToWorkspace(root, message.path)
+          && typeof message.symbol === "string"
+          && /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/.test(message.symbol)
+            ? { path: message.path, symbol: message.symbol }
+            : null,
+        );
+        return;
+      }
+      if (message.type === "echo/preview-url") {
+        if (typeof message.url !== "string") return;
+        try {
+          const url = new URL(message.url);
+          if ((url.protocol === "http:" || url.protocol === "https:")
+              && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
+            onPreviewUrl?.(url.toString());
+          }
+        } catch {
+          // Ignore terminal text that is not a valid local preview URL.
+        }
+        return;
+      }
       if (typeof message.id !== "string" || !event.source) return;
       const target = event.source;
       const respond = (ok: boolean, value?: unknown, reason?: unknown) => {
@@ -312,7 +340,7 @@ export const TheiaIdeFrame = forwardRef<TheiaIdeFrameHandle, TheiaIdeFrameProps>
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [baseUrl, onActiveFile, onAfterMutation, onAgentBounds, onAgentVisibilityChange, onBeforeMutation, onDirtyChange, onToast, root, token]);
+  }, [baseUrl, onActiveFile, onActiveSymbol, onPreviewUrl, onAfterMutation, onAgentBounds, onAgentVisibilityChange, onBeforeMutation, onDirtyChange, onToast, root, token]);
 
   return (
     <div className="echo-theia" aria-label="Theia 代码工作台">

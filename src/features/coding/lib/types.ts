@@ -138,6 +138,7 @@ export interface ChangeSet {
   changeHashes?: Record<string, string>;
   rollbackUnsafeFiles?: string[];
   committedHash?: string | null;
+  committedPaths?: string[];
 }
 
 export interface ChangeDiff {
@@ -145,6 +146,18 @@ export interface ChangeDiff {
   modified: string;
   binary: boolean;
   modifiedHash: string;
+}
+
+export interface IsolatedWorkspace {
+  root: string;
+  sourceRoot: string;
+  baseHead: string;
+  integratedHash?: string | null;
+}
+
+export interface CommitHunk {
+  id: string;
+  preview: string;
 }
 
 export type VerificationKind = "build" | "lint" | "type_check" | "test" | "custom";
@@ -177,6 +190,7 @@ export interface VerificationRecord {
   durationMs: number;
   startedAt: string;
   finishedAt: string;
+  contentRevision?: string | null;
   testSummary?: TestSummary | null;
   /** False when the runner output could not be parsed into a summary. */
   structured: boolean;
@@ -233,7 +247,18 @@ export type GateId =
   | "type_check"
   | "verification_freshness"
   | "diff_review"
-  | "acceptance";
+  | "acceptance"
+  | "requirements_review"
+  | "code_quality_review"
+  | "test_first";
+
+export interface TddEvidence {
+  redCommand?: string | null;
+  redRecordId?: string | null;
+  redRevision?: string | null;
+  redAt?: string | null;
+  waiverReason?: string | null;
+}
 export type GateStatus = "satisfied" | "not_satisfied" | "not_applicable";
 
 export interface QualityGate {
@@ -242,6 +267,14 @@ export interface QualityGate {
   status: GateStatus;
   summary: string;
   evidence: string[];
+}
+
+export type ReviewKind = "requirements" | "code_quality";
+
+export interface ReviewRecord {
+  kind: ReviewKind;
+  contentRevision: string;
+  confirmedAt: string;
 }
 
 export interface EvidenceEntry {

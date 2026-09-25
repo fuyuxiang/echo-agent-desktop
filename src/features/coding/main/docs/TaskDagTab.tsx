@@ -39,7 +39,9 @@ function NodeRow({ node, onOpenFile }: { node: TaskNode; onOpenFile: (path: stri
   const hasContracts = node.consumes.length > 0
     || node.produces.length > 0
     || node.acceptanceCriteria.length > 0
-    || node.verificationCommands.length > 0;
+    || node.verificationCommands.length > 0
+    || node.readSet.length > 0
+    || node.writeSet.length > 0;
   return (
     <div className={`coding-dag__node is-${node.status}`}>
       <div className="coding-dag__node-head">
@@ -60,6 +62,12 @@ function NodeRow({ node, onOpenFile }: { node: TaskNode; onOpenFile: (path: stri
       )}
       {hasContracts && (
         <div className="coding-dag__contracts">
+          {node.readSet.length > 0 && (
+            <div><strong>读取范围</strong><span>{node.readSet.join("、")}</span></div>
+          )}
+          {node.writeSet.length > 0 && (
+            <div><strong>写入范围</strong><span>{node.writeSet.join("、")}</span></div>
+          )}
           {node.consumes.length > 0 && (
             <div><strong>依赖接口</strong><span>{node.consumes.join("、")}</span></div>
           )}
@@ -81,8 +89,7 @@ function NodeRow({ node, onOpenFile }: { node: TaskNode; onOpenFile: (path: stri
 /**
  * Task breakdown and progress.
  *
- * Opened as a tab rather than shown as permanent chrome — progress is something
- * the user asks for, not something the workbench advertises continuously.
+ * Full plan detail for the workbench's compact, always-visible progress summary.
  */
 export function TaskDagTab({
   task,
@@ -100,6 +107,7 @@ export function TaskDagTab({
   const phase = describePhase(task.phase);
   const nodes = task.taskNodes;
   const done = nodes.filter((node) => node.status === "success").length;
+  const revisionCount = new Set(ledger.map((event) => event.planRevision).filter(Boolean)).size;
 
   return (
     <div className="coding-doc">
@@ -122,6 +130,7 @@ export function TaskDagTab({
             </b>
           </span>
         )}
+        {revisionCount > 1 && <span>计划版本 <b>{revisionCount}</b></span>}
         <span>
           变更 <b>{changedFileCount}</b>
         </span>
@@ -192,6 +201,7 @@ export function TaskDagTab({
                 </time>
                 {event.nodeKey && <b>{event.nodeKey}</b>}
                 <span>{event.message}</span>
+                {event.planRevision && <small title={event.planRevision}>计划 {event.planRevision.slice(0, 8)}</small>}
               </li>
             ))}
           </ol>

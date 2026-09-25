@@ -93,6 +93,8 @@ pub struct VerificationRecord {
     pub duration_ms: u64,
     pub started_at: String,
     pub finished_at: String,
+    #[serde(default)]
+    pub content_revision: Option<String>,
     pub test_summary: Option<TestSummary>,
     /// False when the output could not be parsed into a summary, so the UI can
     /// say so instead of implying a clean structured result.
@@ -441,6 +443,7 @@ pub fn record_from_parts(
         duration_ms,
         started_at: chrono::Utc::now().to_rfc3339(),
         finished_at: chrono::Utc::now().to_rfc3339(),
+        content_revision: None,
         structured: test_summary.is_some(),
         test_summary,
     }
@@ -539,6 +542,9 @@ pub async fn run(
             .ok_or_else(|| "该命令来自执行计划，运行前需要用户确认".to_string())?;
         processes.consume_verification_approval(token, &root, &task_id, &command_text)?;
     }
+    let content_revision = crate::coding::changeset::sync_changes(&root, &task_id)
+        .await?
+        .content_revision();
     let run_id = requested_run_id
         .filter(|value| {
             !value.is_empty()
@@ -651,6 +657,7 @@ pub async fn run(
         cancelled,
     );
     record.started_at = started_at;
+    record.content_revision = Some(content_revision);
     let write_root = root.clone();
     let write_record = record.clone();
     tokio::task::spawn_blocking(move || append_record(&write_root, &write_record))

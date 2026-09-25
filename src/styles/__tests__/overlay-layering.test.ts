@@ -33,7 +33,7 @@ describe("global overlay layering contract", () => {
     expect(appCss).toMatch(/\.update-dialog__overlay\s*\{[^}]*z-index:\s*var\(--echo-layer-update\)/s);
     expect(appCss).toMatch(/\.trust-dialog__overlay\s*\{[^}]*z-index:\s*var\(--echo-layer-critical\)/s);
     expect(appCss).toMatch(/\.toast\s*\{[^}]*z-index:\s*var\(--echo-layer-toast\)/s);
-    expect(codingCss).toMatch(/\.coding-palette__scrim\s*\{[^}]*z-index:\s*var\(--echo-layer-dialog\)/s);
+    expect(codingCss).toMatch(/\.overlay-modal\s*\{[^}]*z-index:\s*var\(--echo-layer-dialog\)/s);
   });
 
   it("keeps coding dropdowns on the shared popover layer", () => {

@@ -4,13 +4,14 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type RefObject,
 } from "react";
 import {
   ArrowLeft,
   Code2,
   FolderGit2,
+  GitBranch,
+  LoaderCircle,
   PanelRightClose,
   PanelRightOpen,
   PanelTop,
@@ -31,18 +32,19 @@ import {
 import "@/styles/coding-workbench.css";
 
 import { AgentPane } from "./agent/AgentPane";
+import { TaskEvidenceStrip } from "./agent/TaskEvidenceStrip";
 import { TheiaAgentComposer } from "./agent/TheiaAgentComposer";
 import { TheiaIdeFrame, type TheiaAgentBounds, type TheiaIdeFrameHandle, type TheiaMutationTicket } from "./TheiaIdeFrame";
 import { TheiaTaskReview } from "./TheiaTaskReview";
 import { ChangeSetView } from "./explorer/ChangeSetView";
-import { codingTaskDraftKey } from "./lib/hot-exit";
+import { codingTaskDraftKey } from "./lib/task-draft-key";
+import { localPreviewUrls } from "./lib/preview-url";
 import {
   buildCodingWorkflowPrompt,
   buildNodeContinuationInstruction,
-  buildPlanRevisionInstruction,
   mergeTaskVerificationCommands,
 } from "./lib/workflow";
-import { describePhase, isBusyPhase } from "./lib/phase";
+import { describeTaskProgress, isBusyPhase } from "./lib/phase";
 import {
   codingApi,
   onPhaseChanged,
@@ -53,15 +55,19 @@ import {
 } from "./lib/tauri-api";
 import {
   type DetectedCommand,
+  type IsolatedWorkspace,
+  type TddEvidence,
 } from "./lib/types";
-import { useTaskLifecycle } from "./lib/task-lifecycle";
+import { codingRuntimeKey, useCodingRuntimeStore } from "./lib/coding-task-runtime";
 import { useVerificationRunner } from "./lib/use-verification-runner";
 import { DeliveryReportTab } from "./main/docs/DeliveryReportTab";
+import { FindReferencesView } from "./main/FindReferencesView";
+import { ImpactAnalysisView } from "./main/ImpactAnalysisView";
+import { TaskDagTab } from "./main/docs/TaskDagTab";
 import { VerificationView } from "./panels/VerificationView";
 import { ProjectSwitcher } from "./shell/ProjectSwitcher";
 import { TaskSwitcher } from "./shell/TaskSwitcher";
 import { useTaskStore } from "./store/task-store";
-import { fitWorkbenchLayout, useWorkbenchStore } from "./store/workbench-store";
 
 interface CodingWorkbenchProps {
   cwd?: string;
@@ -181,9 +187,6 @@ export function CodingWorkbench({
   onSendMessage,
   onCancelRun,
 }: CodingWorkbenchProps) {
-  // Drive the change set, the baseline and the phase transition off the
-  // session's streaming signal — see lib/task-lifecycle for the rationale.
-  const { settling: lifecycleSettling } = useTaskLifecycle(cwd);
   const {
     requestConfirmation: requestTaskConfirmation,
     confirm: confirmTaskAction,
@@ -208,11 +211,6 @@ export function CodingWorkbench({
   const awaitingQuestion = useQuestionStore(
     (state) => (activeSessionId ? (state.queues[activeSessionId]?.length ?? 0) > 0 : false),
   );
-  const explorerWidth = useWorkbenchStore((state) => state.explorerWidth);
-  const agentWidth = useWorkbenchStore((state) => state.agentWidth);
-  const bottomHeight = useWorkbenchStore((state) => state.bottomHeight);
-  const hydrateLayout = useWorkbenchStore((state) => state.hydrateLayout);
-  const setBottomView = useWorkbenchStore((state) => state.setBottomView);
   const recentCodingProjects = useMemo(() => {
     const paths = [
       activeCodingWorkspaceCwd || cwd,
@@ -222,9 +220,18 @@ export function CodingWorkbench({
   }, [activeCodingWorkspaceCwd, codingWorkspaces, cwd]);
   const [theiaPanel, setTheiaPanel] = useState<"agent" | "changes" | "verification">("agent");
   const [theiaActiveFile, setTheiaActiveFile] = useState<string | null>(null);
+  const [theiaActiveSymbol, setTheiaActiveSymbol] = useState<{ path: string; symbol: string } | null>(null);
+  const [analysisSymbol, setAnalysisSymbol] = useState<string | null>(null);
+  const [analysisMode, setAnalysisMode] = useState<"impact" | "references">("impact");
+  const [analysisReady, setAnalysisReady] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [analysisAttempt, setAnalysisAttempt] = useState(0);
   const [theiaReviewPath, setTheiaReviewPath] = useState<string | null>(null);
   const [theiaReportOpen, setTheiaReportOpen] = useState(false);
+  const [theiaPlanOpen, setTheiaPlanOpen] = useState(false);
+  const [starterExample, setStarterExample] = useState<string | null>(null);
   const [theiaPreviewInput, setTheiaPreviewInput] = useState("");
+  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [theiaPreviewOpen, setTheiaPreviewOpen] = useState(false);
   const [theiaAgentOpen, setTheiaAgentOpen] = useState(true);
   const [theiaAgentBounds, setTheiaAgentBounds] = useState<TheiaAgentBounds | null>(null);
@@ -233,6 +240,13 @@ export function CodingWorkbench({
   const visibleDirtyCount = theiaDirtyCount ?? 0;
   const theiaPreviewRef = useRef<HTMLDivElement>(null);
   const [theiaPreviewRequest, setTheiaPreviewRequest] = useState<{ url: string; id: number } | null>(null);
+  const onDetectedPreviewUrl = useCallback((url: string) => {
+    setPreviewUrls((current) => current[0] === url
+      ? current : [url, ...current.filter((item) => item !== url)].slice(0, 4));
+  }, []);
+  useEffect(() => {
+    for (const url of localPreviewUrls(messages)) onDetectedPreviewUrl(url);
+  }, [messages, onDetectedPreviewUrl]);
   const [theiaOpenFileRequest, setTheiaOpenFileRequest] = useState<{ path: string; id: number; line?: number } | null>(null);
   const openTheiaFile = useCallback((rawPath: string, line?: number) => {
     const root = cwd.replaceAll("\\", "/").replace(/\/+$/, "");
@@ -268,19 +282,54 @@ export function CodingWorkbench({
   const [blocker, setBlocker] = useState<string | null | undefined>(undefined);
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
+  const [integrating, setIntegrating] = useState(false);
+  const [redRunning, setRedRunning] = useState(false);
+  const [redRunId, setRedRunId] = useState<string | null>(null);
+  const [tddEvidence, setTddEvidence] = useState<TddEvidence | null>(null);
+  const [isolatedWorkspace, setIsolatedWorkspace] = useState<IsolatedWorkspace | null>(null);
+  const [creatingIsolatedWorkspace, setCreatingIsolatedWorkspace] = useState(false);
+  const [projectLabels, setProjectLabels] = useState<Record<string, string>>({});
   const [detected, setDetected] = useState<DetectedCommand[]>([]);
   const [detectedReady, setDetectedReady] = useState(false);
   const [commandOutput, setCommandOutput] = useState("");
   const [reportRevision, setReportRevision] = useState(0);
-  const repairPromptRef = useRef<string | null>(null);
-  const workflowActionRef = useRef<string | null>(null);
   const taskSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const contextSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const workbenchRef = useRef<HTMLDivElement>(null);
   const workbenchSize = useElementSize(workbenchRef);
 
   const task = useTaskStore((state) => state.task);
+  const lifecycleSettling = useCodingRuntimeStore((state) => task ? Boolean(state.settling[codingRuntimeKey(cwd, task.id)]) : false);
+  const backgroundRunId = useCodingRuntimeStore((state) => task ? state.activeRunIds[codingRuntimeKey(cwd, task.id)] : undefined);
   const summaries = useTaskStore((state) => state.summaries);
+  useEffect(() => {
+    if (!cwd || !task) { setTddEvidence(null); return; }
+    let disposed = false;
+    void codingApi.tddStatus(cwd, task.id)
+      .then((evidence) => { if (!disposed) setTddEvidence(evidence); })
+      .catch(() => { if (!disposed) setTddEvidence(null); });
+    return () => { disposed = true; };
+  }, [cwd, task?.id, task?.phase, task?.updatedAt]);
+  const recentProjectsKey = recentCodingProjects.map((project) => project.cwd).join("\0");
+  const summariesKey = summaries.map((summary) => `${summary.id}:${summary.name}`).join("\0");
+  useEffect(() => {
+    let disposed = false;
+    void Promise.all(recentCodingProjects.map(async (project) => {
+      const workspace = await codingApi.isolatedWorkspaceInfo(project.cwd).catch(() => null);
+      if (!workspace) return null;
+      const tasks = await codingApi.listTasks(project.cwd).catch(() => []);
+      const sourceName = workspace.sourceRoot.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "项目";
+      const taskName = tasks[0]?.name ?? "并行任务";
+      return [project.cwd, `${sourceName} · ${taskName}`] as const;
+    })).then((entries) => {
+      if (!disposed) {
+        const labels: Record<string, string> = {};
+        for (const entry of entries) if (entry) labels[entry[0]] = entry[1];
+        setProjectLabels(labels);
+      }
+    });
+    return () => { disposed = true; };
+  }, [recentProjectsKey, summariesKey]);
   const changeSet = useTaskStore((state) => state.changeSet);
   const problems = useTaskStore((state) => state.problems);
   const ledger = useTaskStore((state) => state.ledger);
@@ -298,6 +347,18 @@ export function CodingWorkbench({
     if (task && isBusyPhase(task.phase)) activeIds.add(task.id);
     return activeIds.size;
   }, [summaries, task]);
+
+  useEffect(() => {
+    if (!cwd) {
+      setIsolatedWorkspace(null);
+      return;
+    }
+    let disposed = false;
+    void codingApi.isolatedWorkspaceInfo(cwd)
+      .then((workspace) => { if (!disposed) setIsolatedWorkspace(workspace); })
+      .catch(() => { if (!disposed) setIsolatedWorkspace(null); });
+    return () => { disposed = true; };
+  }, [cwd]);
   const verificationCommands = useMemo(
     () => mergeTaskVerificationCommands(detected, task),
     [detected, task],
@@ -312,7 +373,6 @@ export function CodingWorkbench({
     task,
     commands: verificationCommands,
     detectedReady,
-    setBottomView,
     setCommandOutput,
     requestConfirmation: requestTaskConfirmation,
     onToast,
@@ -324,7 +384,36 @@ export function CodingWorkbench({
   useEffect(() => {
     setTheiaReviewPath(null);
     setTheiaReportOpen(false);
+    setTheiaPlanOpen(false);
+    setAnalysisSymbol(null);
+    setTheiaActiveSymbol(null);
   }, [cwd, task?.id]);
+
+  useEffect(() => {
+    setPreviewUrls([]);
+    setTheiaPreviewInput("");
+  }, [cwd]);
+
+  useEffect(() => {
+    if (!analysisSymbol || !cwd) return;
+    let cancelled = false;
+    let acquired = false;
+    setAnalysisReady(false);
+    setAnalysisError(null);
+    void codingApi.indexBootstrap(cwd)
+      .then(() => {
+        acquired = true;
+        if (!cancelled) setAnalysisReady(true);
+        else void codingApi.indexRelease(cwd);
+      })
+      .catch((error) => {
+        if (!cancelled) setAnalysisError(String(error).replace(/^Error:\s*/, ""));
+      });
+    return () => {
+      cancelled = true;
+      if (acquired) void codingApi.indexRelease(cwd);
+    };
+  }, [analysisAttempt, analysisSymbol, cwd]);
 
   useEffect(() => {
     setPhaseReason(undefined);
@@ -463,10 +552,6 @@ export function CodingWorkbench({
   }, [cwd]);
 
   const saveTheiaBeforeLeaving = useCallback(async (): Promise<boolean> => {
-    if (activeTaskCount > 0) {
-      onToast?.("当前开发任务仍在执行，请先停止任务再离开代码开发");
-      return false;
-    }
     if (!cwd) return true;
     let dirtyCount: number;
     try {
@@ -505,7 +590,7 @@ export function CodingWorkbench({
         danger: true,
       });
     }
-  }, [activeTaskCount, confirmTaskAction, cwd, onToast]);
+  }, [confirmTaskAction, cwd]);
 
   useEffect(() => {
     onRegisterLeaveGuard?.(saveTheiaBeforeLeaving);
@@ -519,17 +604,9 @@ export function CodingWorkbench({
 
   const switchProject = useCallback(async (nextCwd: string) => {
     if (!nextCwd || nextCwd === cwd) return;
-    if (activeTaskCount > 0) {
-      onToast?.(
-        activeTaskCount === 1
-          ? "当前开发任务仍在执行，请先停止任务再切换项目"
-          : `当前项目有 ${activeTaskCount} 个任务仍在执行，请先停止后再切换项目`,
-      );
-      return;
-    }
     if (cwd && !(await saveTheiaBeforeLeaving())) return;
     onSelectWorkspace?.(nextCwd);
-  }, [activeTaskCount, cwd, onSelectWorkspace, onToast, saveTheiaBeforeLeaving]);
+  }, [cwd, onSelectWorkspace, saveTheiaBeforeLeaving]);
 
   const pickWorkspace = useCallback(async () => {
     try {
@@ -541,21 +618,20 @@ export function CodingWorkbench({
   }, [onToast, switchProject]);
 
   const openAnotherProject = useCallback(() => {
-    if (activeTaskCount > 0) {
-      onToast?.("当前开发任务仍在执行，请先停止任务再打开其他文件夹");
-      return;
-    }
     void pickWorkspace();
-  }, [activeTaskCount, onToast, pickWorkspace]);
+  }, [pickWorkspace]);
 
   const removeRecentProject = useCallback(async (projectCwd: string) => {
-    if (projectCwd === cwd && activeTaskCount > 0) {
-      onToast?.("当前开发任务仍在执行，请先停止任务再移除项目");
+    const active = await codingApi.listTasks(projectCwd)
+      .then((items) => items.some((item) => isBusyPhase(item.phase)))
+      .catch(() => true);
+    if (active) {
+      onToast?.("这个项目仍有任务在执行；任务完成或停止后才能从最近项目移除");
       return;
     }
     if (projectCwd === cwd && !(await saveTheiaBeforeLeaving())) return;
     onCloseCodingWorkspace?.(projectCwd);
-  }, [activeTaskCount, cwd, onCloseCodingWorkspace, onToast, saveTheiaBeforeLeaving]);
+  }, [cwd, onCloseCodingWorkspace, onToast, saveTheiaBeforeLeaving]);
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -621,18 +697,6 @@ export function CodingWorkbench({
     };
   }, [cwd, queueTaskChangeSync]);
 
-  useEffect(() => {
-    hydrateLayout();
-  }, [hydrateLayout]);
-
-  const effectiveLayout = useMemo(
-    () => fitWorkbenchLayout(workbenchSize.width, workbenchSize.height, {
-      explorerWidth,
-      agentWidth,
-      bottomHeight,
-    }),
-    [agentWidth, bottomHeight, explorerWidth, workbenchSize.height, workbenchSize.width],
-  );
   /** Derive a task name from the requirement's first clause. */
   const deriveName = useCallback((requirement: string) => {
     const firstLine = requirement.split(/[\n。；;]/)[0]?.trim() ?? requirement.trim();
@@ -690,6 +754,7 @@ export function CodingWorkbench({
             throw new Error("任务收到了不一致的 Agent 会话标识");
           }
           await codingApi.bindTaskRuntime(cwd, created.id, sessionId, modelId ?? "");
+          useCodingRuntimeStore.getState().track(cwd, created.id);
           await useTaskStore.getState().selectTask(created.id);
           boundSession = sessionId;
         };
@@ -797,10 +862,6 @@ export function CodingWorkbench({
   );
 
   const activateCodingTask = useCallback(async (taskId: string) => {
-    if (task?.id !== taskId && task && isBusyPhase(task.phase)) {
-      onToast?.("当前任务正在执行，请先停止后再切换任务");
-      return;
-    }
     setSending(true);
     try {
       await useTaskStore.getState().selectTask(taskId);
@@ -816,11 +877,22 @@ export function CodingWorkbench({
     } finally {
       setSending(false);
     }
-  }, [cwd, onActivateSession, onToast, task]);
+  }, [cwd, onActivateSession, onToast]);
 
-  const beginNewTask = useCallback(() => {
-    if (activeTaskCount > 0) {
-      onToast?.(`当前项目有 ${activeTaskCount} 个任务仍在执行，请先停止后再新建任务`);
+  const beginNewTask = useCallback(async () => {
+    if (activeTaskCount > 0 || isolatedWorkspace) {
+      if (creatingIsolatedWorkspace || !cwd) return;
+      if (!(await saveTheiaBeforeLeaving())) return;
+      setCreatingIsolatedWorkspace(true);
+      try {
+        const workspace = await codingApi.createIsolatedWorkspace(cwd);
+        onSelectWorkspace?.(workspace.root);
+        onToast?.("已创建隔离工作树；新任务可以与原任务并行执行");
+      } catch (error) {
+        onToast?.(`无法创建并行任务：${String(error).replace(/^Error:\s*/, "")}`);
+      } finally {
+        setCreatingIsolatedWorkspace(false);
+      }
       return;
     }
     useTaskStore.setState({
@@ -832,10 +904,11 @@ export function CodingWorkbench({
       orchestrator: null,
     });
     setContextPaths([]);
+    setStarterExample(null);
     setTheiaPanel("agent");
     setPhaseReason(undefined);
     setBlocker(undefined);
-  }, [activeTaskCount, onToast]);
+  }, [activeTaskCount, creatingIsolatedWorkspace, cwd, isolatedWorkspace, onSelectWorkspace, onToast, saveTheiaBeforeLeaving]);
 
   const persistTaskContext = useCallback((taskId: string, paths: string[]) => {
     // Tauri invocations may complete out of order. Serialize context writes so
@@ -965,9 +1038,15 @@ export function CodingWorkbench({
       resumed = true;
       await useTaskStore.getState().refreshTaskState();
       const activeNode = resumedTask.taskNodes.find((node) => node.status === "running");
-      const prompt = activeNode
+      const basePrompt = activeNode
         ? buildNodeContinuationInstruction(resumedTask, activeNode)
         : buildCodingWorkflowPrompt(`继续完成原始需求：${resumedTask.requirement}`, contextPaths, true);
+      const red = task.phaseReason === "等待红灯测试验证" ? await codingApi.tddStatus(cwd, task.id) : null;
+      const prompt = red?.redRecordId
+        ? `${basePrompt}\n\n测试先行 RED 已由原生命令 ${red.redCommand} 记录失败。现在实现最小代码使该测试转绿，随后运行完整验证；不要重写已经审阅的 RED 证据。`
+        : red?.waiverReason
+          ? `${basePrompt}\n\n本轮已记录测试先行不适用原因：${red.waiverReason}。按原始需求完成实现并运行适用验证，不要伪称已观察 RED。`
+          : basePrompt;
       const accepted = await onSendMessage("继续执行当前开发任务", prompt);
       if (accepted === false) throw new Error("Agent 未接收继续执行请求");
     } catch (error) {
@@ -997,7 +1076,7 @@ export function CodingWorkbench({
   const stopActiveTask = useCallback(async () => {
     if (!cwd || !task || !isBusyPhase(task.phase)) return;
     try {
-      if (activeRunId) await codingApi.cancelVerification(activeRunId);
+      if (activeRunId || backgroundRunId) await codingApi.cancelVerification(activeRunId ?? backgroundRunId!);
       const cancelled = await onCancelRun?.();
       if (streaming && cancelled === false) return;
       // A streaming turn is finalized by useTaskLifecycle when its stream
@@ -1010,63 +1089,7 @@ export function CodingWorkbench({
     } catch (error) {
       onToast?.(`停止任务失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
-  }, [activeRunId, cwd, onCancelRun, onToast, streaming, task]);
-
-  // The backend is the scheduler. A managed follow-up is sent only for its
-  // explicit persisted nextAction, so closing/reopening the app resumes the
-  // exact unfinished node without relying on renderer timing or local guesses.
-  useEffect(() => {
-    if (
-      !cwd
-      || !task?.nextAction
-      || !task.sessionId
-      || activeSessionId !== task.sessionId
-      || hostSessionId !== task.sessionId
-      || streaming
-      || sending
-      || awaitingPermission
-      || awaitingQuestion
-      || !onSendMessage
-    ) return;
-    const key = `${task.id}:${task.updatedAt}:${task.nextAction}`;
-    if (workflowActionRef.current === key) return;
-
-    const activeNode = task.taskNodes.find((node) => node.status === "running");
-    if (task.nextAction === "continue_node" && !activeNode) {
-      workflowActionRef.current = key;
-      void codingApi
-        .reportStartFailed(cwd, task.id, "调度器要求继续执行，但没有找到运行中的节点")
-        .then(() => useTaskStore.getState().refreshTaskState())
-        .catch(() => undefined);
-      return;
-    }
-
-    workflowActionRef.current = key;
-    const displayText = task.nextAction === "revise_plan"
-      ? "正在根据结构校验结果修订执行计划"
-      : `继续执行 ${activeNode?.planKey ?? "下一节点"}`;
-    const prompt = task.nextAction === "revise_plan"
-      ? buildPlanRevisionInstruction(task)
-      : buildNodeContinuationInstruction(task, activeNode!);
-    void sendFollowup(displayText, false, prompt).then(async (accepted) => {
-      if (accepted) return;
-      await codingApi
-        .reportStartFailed(cwd, task.id, "Agent 未能接收自动续跑指令")
-        .catch(() => undefined);
-      await useTaskStore.getState().refreshTaskState().catch(() => undefined);
-    });
-  }, [
-    activeSessionId,
-    awaitingPermission,
-    awaitingQuestion,
-    cwd,
-    hostSessionId,
-    onSendMessage,
-    sendFollowup,
-    sending,
-    streaming,
-    task,
-  ]);
+  }, [activeRunId, backgroundRunId, cwd, onCancelRun, onToast, streaming, task]);
 
   const rollbackTask = useCallback(async () => {
     if (!cwd || !task) return;
@@ -1122,13 +1145,13 @@ export function CodingWorkbench({
     ],
   );
 
-  const commitChanges = useCallback(async () => {
+  const commitChanges = useCallback(async (paths: string[], hunks: Record<string, string[]>) => {
     if (!cwd || !task) return;
     try {
       const input = await codingApi.commitInput(cwd, task.id);
       requestTaskInput({
         title: "提交任务变更",
-        description: `将提交 ${changeSet?.changes.length ?? 0} 个已通过交付门禁的任务文件。`,
+        description: `将提交 ${paths.length + Object.keys(hunks).length} 个已选择且通过交付门禁的任务文件。此任务只支持一次应用内提交；未选变更保留在工作区，之后需手动处理。`,
         confirmLabel: "创建提交",
         fields: [{
           name: "message",
@@ -1140,77 +1163,83 @@ export function CodingWorkbench({
         action: async (values) => {
           setCommitting(true);
           try {
-            const hash = await codingApi.commit(cwd, task.id, values.message.trim());
+            const hash = await codingApi.commit(cwd, task.id, values.message.trim(), paths, hunks);
             await useTaskStore.getState().refreshTaskState();
             onToast?.(`已提交 ${hash.slice(0, 8)}`);
           } finally {
             setCommitting(false);
           }
         },
-        onError: (error) => onToast?.(`提交失败：${String(error).replace(/^Error:\s*/, "")}`),
+        onError: (error) => {
+          void useTaskStore.getState().refreshTaskState();
+          onToast?.(`提交失败：${String(error).replace(/^Error:\s*/, "")}`);
+        },
       });
     } catch (error) {
       onToast?.(`提交失败：${String(error).replace(/^Error:\s*/, "")}`);
     }
-  }, [changeSet?.changes.length, cwd, onToast, requestTaskInput, task]);
+  }, [cwd, onToast, requestTaskInput, task]);
 
-  // A failed verification opens a repair round. Feed the structured problem
-  // list back to the exact task session once, then the lifecycle hook observes
-  // that repair turn finishing and re-enters verification.
-  useEffect(() => {
-    if (task?.phase !== "repairing") {
-      repairPromptRef.current = null;
-      return;
+  const runRedTest = useCallback((command: DetectedCommand) => {
+    if (!cwd || !task || command.kind !== "test" || redRunning) return;
+    const taskId = task.id;
+    const execute = async () => {
+      setRedRunning(true);
+      const runId = crypto.randomUUID();
+      setRedRunId(runId);
+      try {
+        const token = command.requiresApproval
+          ? await codingApi.approvePlanCommand(cwd, taskId, command.command)
+          : undefined;
+        const record = await codingApi.runVerification(cwd, taskId, "test", command.command, undefined, runId, token);
+        if (record.status !== "failed") {
+          onToast?.(record.status === "passed"
+            ? "测试已通过，尚未形成 RED 证据；请检查断言是否覆盖预期行为"
+            : "红灯测试未得到有效失败结果，请查看命令输出后重试");
+          return;
+        }
+        setTddEvidence(await codingApi.recordRedTest(cwd, taskId, record.id));
+        onToast?.("RED 失败已记录；现在可以继续实现并运行 GREEN 验证");
+      } catch (error) {
+        onToast?.(`红灯验证失败：${String(error).replace(/^Error:\s*/, "")}`);
+      } finally {
+        await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+        setRedRunId(null);
+        setRedRunning(false);
+      }
+    };
+    if (command.requiresApproval) {
+      requestTaskConfirmation({
+        title: "确认运行红灯测试",
+        description: `以下计划命令将在当前任务工作目录运行：${command.command}`,
+        confirmLabel: "确认并运行",
+        danger: true,
+        action: execute,
+      });
+    } else {
+      void execute();
     }
-    if (!task.sessionId || hostSessionId !== task.sessionId || streaming || !onSendMessage) return;
-    const round = orchestrator?.repairRounds.length ?? 0;
-    // Documentation safety repairs are opened before command verification, so
-    // they do not create a regular repair round. Include their ledger revision
-    // to ensure a second failed safety pass can trigger the next repair turn.
-    const documentationAttempt = ledger.filter(
-      (event) => event.kind === "documentation_validation_requested",
-    ).length;
-    const key = `${task.id}:${round}:${documentationAttempt}`;
-    if (repairPromptRef.current === key) return;
-    repairPromptRef.current = key;
-    const documentationSafetyFailure = problems.some(
-      (problem) => problem.kind === "documentation",
-    );
-    const documentationMissingWrite = problems.some(
-      (problem) => problem.kind === "documentation" && problem.message.includes("未产生任何文件变更"),
-    );
-    const readOnlyWrite = problems.some(
-      (problem) => problem.kind === "documentation" && problem.message.includes("只读代码解释任务"),
-    );
-    const documentationMissingOutput = problems.some(
-      (problem) => problem.kind === "documentation" && problem.message.includes("变更集中没有"),
-    );
-    const details = problems.length > 0
-      ? problems.map((problem, index) =>
-          `${index + 1}. [${problem.kind}] ${problem.file ?? "未知文件"}${problem.line ? `:${problem.line}` : ""} — ${problem.message}`,
-        ).join("\n")
-      : "验证未通过，但未能提取结构化诊断。请查看验证输出并定位根因。";
-    let instruction = "上一轮验证未通过，请修复下列问题。必须检查真实命令输出、完成代码修改并保持现有功能兼容；修复完成后简要说明。";
-    if (readOnlyWrite) {
-      instruction = "这是只读代码解释任务，但上一轮修改了工程文件。请撤销本轮产生的全部文件变更，保留对话中的证据化分析；不要创建文档来制造交付物。完成后说明已恢复哪些文件。";
-    } else if (documentationMissingWrite) {
-      instruction = "你尚未把注释或文档写入工程。请重新读取原始目标和真实代码，把必要内容直接写入目标文件；不要只在对话中给出示例或完成说明，不要改变可执行逻辑。完成后简要说明实际修改位置。";
-    } else if (documentationMissingOutput) {
-      instruction = "当前变更没有覆盖用户明确要求的全部文档产物。请重新核对原始需求，在保持现有正确注释和不改变可执行逻辑的前提下，补齐缺失的源码注释或架构文档，然后检查真实差异。";
-    } else if (documentationSafetyFailure) {
-      instruction = "注释安全校验发现了超出用户要求的代码变更。请只撤销可执行逻辑、字面量或公共结构的改动，保留正确的注释和文档；不要用改写业务代码的方式绕过校验。完成后简要说明。";
+  }, [cwd, onToast, redRunning, requestTaskConfirmation, task]);
+
+  const integrateTask = useCallback(async () => {
+    if (!cwd || !task || !isolatedWorkspace || integrating) return;
+    const confirmed = await confirmTaskAction({
+      title: "应用到原项目",
+      description: `将隔离任务的已提交变更应用到 ${isolatedWorkspace.sourceRoot}。原项目必须没有未提交改动，也不能有正在执行的任务；如发生冲突，原项目不会被覆盖。`,
+      confirmLabel: "应用变更",
+    });
+    if (!confirmed) return;
+    setIntegrating(true);
+    try {
+      const updated = await codingApi.integrateIsolatedTask(cwd, task.id);
+      setIsolatedWorkspace(updated);
+      onToast?.(`已应用到原项目：${updated.integratedHash?.slice(0, 8)}`);
+    } catch (error) {
+      onToast?.(`应用失败：${String(error).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setIntegrating(false);
     }
-    sendFollowup(`${instruction}\n\n${details}`);
-  }, [
-    hostSessionId,
-    ledger,
-    onSendMessage,
-    orchestrator?.repairRounds.length,
-    problems,
-    sendFollowup,
-    streaming,
-    task,
-  ]);
+  }, [confirmTaskAction, cwd, integrating, isolatedWorkspace, onToast, task]);
 
   const changeTaskModel = useCallback(async (nextModelId: string) => {
     const previous = modelId;
@@ -1236,16 +1265,7 @@ export function CodingWorkbench({
 
   const taskChangeCount = changeSet?.changes.length ?? 0;
   const theiaDisplayPanel = task ? theiaPanel : "agent";
-  const theiaPhase = task ? describePhase(task.phase) : null;
-  const style = useMemo(
-    () =>
-      ({
-        "--coding-explorer-width": `${effectiveLayout.explorerWidth}px`,
-        "--coding-agent-width": `${effectiveLayout.agentWidth}px`,
-        "--coding-bottom-height": `${effectiveLayout.bottomHeight}px`,
-      }) as CSSProperties,
-    [effectiveLayout],
-  );
+  const theiaPhase = task ? describeTaskProgress(task.phase) : null;
 
   const beforeTheiaMutation = useCallback(async (_operation: string, _paths: string[]) => {
     return prepareManualMutation();
@@ -1307,7 +1327,7 @@ export function CodingWorkbench({
   }
 
   return (
-    <div ref={workbenchRef} className={`coding-workbench coding-workbench--theia${theiaAgentOpen ? "" : " coding-workbench--agent-closed"}`} style={style}>
+    <div ref={workbenchRef} className={`coding-workbench coding-workbench--theia${theiaAgentOpen ? "" : " coding-workbench--agent-closed"}`}>
       <header className="coding-workbench__topbar" data-tauri-drag-region>
         <div className="coding-workbench__topbar-left" data-tauri-drag-region>
           <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
@@ -1319,7 +1339,7 @@ export function CodingWorkbench({
           </div>
           <span className="coding-workbench__topbar-separator" aria-hidden="true" />
           <ProjectSwitcher
-            projects={recentCodingProjects}
+            projects={recentCodingProjects.map((project) => ({ ...project, label: projectLabels[project.cwd] }))}
             activeCwd={activeCodingWorkspaceCwd || cwd}
             dirtyCount={visibleDirtyCount}
             onSelect={(nextCwd) => void switchProject(nextCwd)}
@@ -1347,6 +1367,14 @@ export function CodingWorkbench({
                   onToast?.("请输入有效的预览地址，例如 localhost:5173");
                 }
               }}>
+                {previewUrls.length > 0 && (
+                  <div className="echo-theia-preview-form__detected">
+                    <span>输出中发现的本机地址</span>
+                    {previewUrls.map((url) => (
+                      <button key={url} type="button" onClick={() => { setTheiaPreviewRequest({ url, id: Date.now() }); setTheiaPreviewOpen(false); }}>{url}</button>
+                    ))}
+                  </div>
+                )}
                 <label htmlFor="echo-theia-preview-url">预览地址</label>
                 <div>
                   <input id="echo-theia-preview-url" aria-label="网页预览地址" autoFocus placeholder="localhost:5173" value={theiaPreviewInput} onChange={(event) => setTheiaPreviewInput(event.target.value)} />
@@ -1371,6 +1399,8 @@ export function CodingWorkbench({
           onBeforeMutation={beforeTheiaMutation}
           onAfterMutation={afterTheiaMutation}
           onActiveFile={setTheiaActiveFile}
+          onActiveSymbol={setTheiaActiveSymbol}
+          onPreviewUrl={onDetectedPreviewUrl}
           onToast={onToast}
           previewRequest={theiaPreviewRequest}
           openFileRequest={theiaOpenFileRequest}
@@ -1416,7 +1446,58 @@ export function CodingWorkbench({
                 setTheiaReportOpen(false);
               }}
               onToast={onToast}
+              onReviewChanged={() => setReportRevision((value) => value + 1)}
+              onTddChanged={setTddEvidence}
             />
+          </section>
+        )}
+        {theiaPlanOpen && task && (
+          <section
+            className="echo-theia-review echo-theia-plan"
+            aria-label="执行计划"
+            style={{ right: theiaAgentBounds ? Math.max(0, workbenchSize.width - theiaAgentBounds.left) : 0 }}
+          >
+            <header className="echo-theia-review__header">
+              <strong>执行计划</strong>
+              <button type="button" aria-label="关闭执行计划" onClick={() => setTheiaPlanOpen(false)}><X size={16} /></button>
+            </header>
+            <TaskDagTab
+              task={task}
+              repairRounds={orchestrator?.repairRounds ?? []}
+              maxRepairRounds={orchestrator?.maxRepairRounds ?? 3}
+              changedFileCount={changeSet?.changes.length ?? 0}
+              problemCount={problems.length}
+              ledger={ledger}
+              onOpenFile={(path) => { openTheiaFile(path); setTheiaPlanOpen(false); }}
+            />
+          </section>
+        )}
+        {analysisSymbol && (
+          <section
+            className="echo-theia-review echo-theia-analysis"
+            aria-label="代码影响分析"
+            style={{ right: theiaAgentBounds ? Math.max(0, workbenchSize.width - theiaAgentBounds.left) : 0 }}
+          >
+            <header className="echo-theia-review__header">
+              <div><GitBranch size={15} /><strong>{analysisSymbol}</strong><span>近似代码分析</span></div>
+              <button type="button" aria-label="关闭代码影响分析" onClick={() => setAnalysisSymbol(null)}><X size={16} /></button>
+            </header>
+            <div className="echo-theia-analysis__tabs" role="tablist" aria-label="代码分析视图">
+              <button type="button" role="tab" aria-selected={analysisMode === "impact"} onClick={() => setAnalysisMode("impact")}>潜在影响</button>
+              <button type="button" role="tab" aria-selected={analysisMode === "references"} onClick={() => setAnalysisMode("references")}>引用线索</button>
+            </div>
+            <p className="echo-theia-analysis__notice">依据文本匹配和符号索引推测，结果可能有误报或漏报。修改前请结合语言服务与测试核对。</p>
+            <div className="echo-theia-analysis__body">
+              {analysisError ? (
+                <div className="coding-views__error">索引失败：{analysisError} <button type="button" onClick={() => setAnalysisAttempt((value) => value + 1)}>重试</button></div>
+              ) : !analysisReady ? (
+                <div className="coding-views__empty"><LoaderCircle size={15} className="is-spinning" /> 正在建立代码索引…</div>
+              ) : analysisMode === "impact" ? (
+                <ImpactAnalysisView root={cwd} symbol={analysisSymbol} onOpenSymbol={(symbol) => openTheiaFile(symbol.path, symbol.line)} />
+              ) : (
+                <FindReferencesView root={cwd} symbol={analysisSymbol} onOpenSymbol={(symbol) => openTheiaFile(symbol.path, symbol.line)} />
+              )}
+            </div>
           </section>
         )}
       <aside
@@ -1434,20 +1515,17 @@ export function CodingWorkbench({
           <TaskSwitcher
             tasks={summaries}
             activeId={task?.id}
-            newDisabled={activeTaskCount > 0}
+            newDisabled={creatingIsolatedWorkspace}
             onSelect={(taskId) => void activateCodingTask(taskId)}
             onNew={beginNewTask}
             onRename={renameCodingTask}
             onDelete={deleteCodingTask}
           />
-          {task && theiaPhase && (
+          {task && theiaPhase?.active && (
             <div className="echo-theia-agent__task-status">
-              <span className={`coding-agent__phase is-${theiaPhase.tone}`}>{theiaPhase.label}</span>
-              {theiaPhase.active && (
                 <button type="button" className="echo-theia-agent__stop" onClick={() => void stopActiveTask()} disabled={sending || lifecycleSettling} title="停止当前任务" aria-label="停止当前任务">
                   <Square size={12} />
                 </button>
-              )}
             </div>
           )}
           {task && (
@@ -1462,6 +1540,14 @@ export function CodingWorkbench({
             </button>
           )}
         </div>
+        {task && <TaskEvidenceStrip
+          root={cwd}
+          task={task}
+          revision={reportRevision}
+          needsInput={awaitingPermission || awaitingQuestion || Boolean(task.blocker)}
+          onOpenPlan={() => { setTheiaReportOpen(false); setTheiaReviewPath(null); setTheiaPlanOpen(true); }}
+          onOpenReport={() => { setTheiaPlanOpen(false); setTheiaReviewPath(null); setTheiaReportOpen(true); }}
+        />}
         {task && <div className="echo-theia-agent__tabs" role="tablist" aria-label="开发任务面板">
           <button type="button" role="tab" aria-selected={theiaDisplayPanel === "agent"} onClick={() => setTheiaPanel("agent")}>对话</button>
           <button type="button" role="tab" aria-selected={theiaDisplayPanel === "changes"} onClick={() => setTheiaPanel("changes")}>任务变更{taskChangeCount ? ` · ${taskChangeCount}` : ""}</button>
@@ -1471,12 +1557,24 @@ export function CodingWorkbench({
           <div className="echo-theia-agent__context">
             <span title={theiaActiveFile}>{workspaceRelativePath(cwd, theiaActiveFile)}</span>
             <button type="button" onClick={() => addManyToContext([theiaActiveFile])}>加入上下文</button>
+            {theiaActiveSymbol?.path === theiaActiveFile && (
+              <button
+                type="button"
+                title={`查看 ${theiaActiveSymbol.symbol} 的潜在影响和引用线索`}
+                onClick={() => {
+                  setAnalysisMode("impact");
+                  setAnalysisSymbol(theiaActiveSymbol.symbol);
+                  setTheiaPlanOpen(false);
+                  setTheiaReportOpen(false);
+                  setTheiaReviewPath(null);
+                }}
+              >潜在影响</button>
+            )}
           </div>
         )}
         <div className="echo-theia-agent__content">
           {theiaDisplayPanel === "agent" && (task ? (
             <AgentPane
-              embeddedInTheia
               task={task}
               changeSet={changeSet}
               verifications={verifications}
@@ -1487,23 +1585,29 @@ export function CodingWorkbench({
               blocker={blocker !== undefined ? blocker : task.blocker}
               awaitingPermission={awaitingPermission}
               awaitingQuestion={awaitingQuestion}
-              models={models}
-              modelId={modelId}
               sending={sending || lifecycleSettling}
-              onModelChange={(next) => void changeTaskModel(next)}
-              onSend={sendFollowup}
-              onCancel={() => void stopActiveTask()}
               onContinue={continueInterruptedTask}
+              continueDisabled={task.phase === "paused" && task.phaseReason === "等待红灯测试验证" && !tddEvidence?.redRecordId && !tddEvidence?.waiverReason}
+              onOpenVerification={() => setTheiaPanel("verification")}
               onOpenChanges={() => setTheiaPanel("changes")}
               onOpenReport={() => { setTheiaReviewPath(null); setTheiaReportOpen(true); }}
               onOpenFile={openTheiaFile}
-              onToast={onToast}
               onPathsDropped={(paths) => addManyToContext(paths)}
             />
           ) : (
             <div className="echo-theia-agent__empty">
               <strong>描述目标，开始开发</strong>
-              <p>Agent 会理解当前项目、实施代码，并提供变更与验证结果。</p>
+              <p>选一个具体目标，或直接描述你想完成的改动。</p>
+              {isolatedWorkspace && <p>隔离于 {isolatedWorkspace.sourceRoot} · 基于提交 {isolatedWorkspace.baseHead.slice(0, 8)}，不包含原项目未提交文件。</p>}
+              <div className="echo-theia-agent__examples" aria-label="示例任务">
+                {[
+                  "修复一个可复现的错误，并补上回归测试",
+                  "为现有接口增加输入校验和测试",
+                  "重构一个模块，保持现有行为并运行验证",
+                ].map((example) => (
+                  <button key={example} type="button" onClick={() => setStarterExample(example)}>{example}</button>
+                ))}
+              </div>
             </div>
           ))}
           {theiaDisplayPanel === "changes" && (
@@ -1512,15 +1616,20 @@ export function CodingWorkbench({
               hasTask={Boolean(task)}
               busyPath={busyPath}
               committing={committing}
+              integrating={integrating}
+              isolatedSource={isolatedWorkspace?.sourceRoot}
+              integratedHash={isolatedWorkspace?.integratedHash}
               canCommit={task?.phase === "delivered" && !changeSet?.committedHash}
               canRollback={!changeSet?.committedHash && !runningVerification && !streaming
                 && Boolean(task && ["paused", "stopped", "delivered", "blocked"].includes(task.phase))}
-              canDiscard={!runningVerification && !streaming && !sending
+              canDiscard={!changeSet?.committedHash && !runningVerification && !streaming && !sending
                 && Boolean(task && ["implementing", "repairing", "discovering", "paused", "stopped", "blocked", "delivered"].includes(task.phase))}
               onOpenDiff={(change) => { setTheiaReportOpen(false); setTheiaReviewPath(change.path); }}
               onDiscard={(change) => void discardChange(change.path)}
-              onCommit={() => void commitChanges()}
+              onCommit={(paths, hunks) => void commitChanges(paths, hunks)}
+              onLoadHunks={(path) => codingApi.commitHunks(cwd, task!.id, path)}
               onRollback={() => void rollbackTask()}
+              onIntegrate={() => void integrateTask()}
             />
           )}
           {theiaDisplayPanel === "verification" && (
@@ -1528,11 +1637,14 @@ export function CodingWorkbench({
               <VerificationView
                 records={verifications}
                 detected={verificationCommands}
-                running={runningVerification}
+                running={runningVerification || redRunning}
                 hasTask={Boolean(task)}
+                redCheckpoint={task?.phase === "paused" && task.phaseReason === "等待红灯测试验证"}
+                redRecorded={Boolean(tddEvidence?.redRecordId || tddEvidence?.waiverReason)}
+                onRunRed={runRedTest}
                 onRun={(command) => void runVerifications([command])}
                 onRunAll={() => void runVerifications(verificationCommands)}
-                onCancel={() => { if (activeRunId) void codingApi.cancelVerification(activeRunId); }}
+                onCancel={() => { if (activeRunId || redRunId) void codingApi.cancelVerification((activeRunId || redRunId)!); }}
                 onOpenOutput={(record) => setTheiaVerificationOutput([record.stdout, record.stderr].filter(Boolean).join("\n"))}
               />
               {(runningVerification || theiaVerificationOutput || commandOutput) && (
@@ -1566,6 +1678,7 @@ export function CodingWorkbench({
           onDraftContextPaths={addManyToContext}
           onOpenSettings={onOpenSettings}
           onToast={onToast}
+          suggestedPrompt={starterExample}
         />
       </aside>
       </main>

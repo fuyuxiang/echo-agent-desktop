@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 
 import { codingApi } from "../../lib/tauri-api";
-import type { DeliveryReport, GateStatus, QualityGate } from "../../lib/types";
+import type { DeliveryReport, GateStatus, QualityGate, ReviewKind, TddEvidence } from "../../lib/types";
 
 interface DeliveryReportTabProps {
   root: string;
@@ -18,6 +18,8 @@ interface DeliveryReportTabProps {
   revision?: number;
   onOpenFile: (path: string) => void;
   onToast?: (message: string) => void;
+  onReviewChanged?: () => void;
+  onTddChanged?: (evidence: TddEvidence) => void;
 }
 
 function GateIcon({ status }: { status: GateStatus }) {
@@ -68,16 +70,23 @@ export function DeliveryReportTab({
   revision = 0,
   onOpenFile,
   onToast,
+  onReviewChanged,
+  onTddChanged,
 }: DeliveryReportTabProps) {
   const [report, setReport] = useState<DeliveryReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [confirmingReview, setConfirmingReview] = useState<ReviewKind | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  const [waiverReason, setWaiverReason] = useState("");
+  const [waiving, setWaiving] = useState(false);
   const [reloadVersion, setReloadVersion] = useState(0);
 
   useEffect(() => {
     setConfirmingId(null);
+    setConfirmingReview(null);
     if (!root || !taskId) {
       setReport(null);
       return;
@@ -113,7 +122,7 @@ export function DeliveryReportTab({
       `### 变更（+${report.totalAdded} -${report.totalRemoved}）`,
       ...report.changes.map(
         (change) => `- ${change.path} (+${change.added} -${change.removed})${
-          change.preExisting ? "（任务开始时已修改，需手动整理提交）" : ""
+          change.preExisting ? "（任务开始时已修改，可选择任务差异块提交）" : ""
         }`,
       ),
       "",
@@ -145,12 +154,46 @@ export function DeliveryReportTab({
       setReport(next);
       setError(null);
       setConfirmingId(null);
+      onReviewChanged?.();
       onToast?.("验收标准已确认并写入交付证据");
     } catch (cause) {
       const message = String(cause).replace(/^Error:\s*/, "");
       onToast?.(`确认验收失败：${message}`);
     } finally {
       setAcceptingId(null);
+    }
+  };
+
+  const confirmReview = async (kind: ReviewKind) => {
+    if (!taskId || reviewing) return;
+    setReviewing(true);
+    try {
+      await codingApi.confirmReview(root, taskId, kind);
+      setReport(await codingApi.deliveryReport(root, taskId));
+      setConfirmingReview(null);
+      onReviewChanged?.();
+      onToast?.("审查确认已绑定当前代码版本");
+    } catch (cause) {
+      onToast?.(`审查确认失败：${String(cause).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setReviewing(false);
+    }
+  };
+
+  const waiveTestFirst = async () => {
+    if (!taskId || waiving) return;
+    setWaiving(true);
+    try {
+      const evidence = await codingApi.waiveTestFirst(root, taskId, waiverReason);
+      onTddChanged?.(evidence);
+      setReport(await codingApi.deliveryReport(root, taskId));
+      setWaiverReason("");
+      onReviewChanged?.();
+      onToast?.("测试先行豁免原因已记录");
+    } catch (cause) {
+      onToast?.(`记录豁免失败：${String(cause).replace(/^Error:\s*/, "")}`);
+    } finally {
+      setWaiving(false);
     }
   };
 
@@ -182,6 +225,10 @@ export function DeliveryReportTab({
   const passedCheckCount = [...latestChecks.values()].filter(
     (record) => record.status === "passed",
   ).length;
+  const requirementsReviewed = report.gates.some((gate) => gate.id === "requirements_review" && gate.status === "satisfied");
+  const tddGate = report.gates.find((gate) => gate.id === "test_first");
+  const mayWaiveTestFirst = (report.task.phase === "paused" && report.task.phaseReason === "等待红灯测试验证")
+    || (completed && tddGate?.status === "not_satisfied");
 
   return (
     <div className="coding-doc coding-report">
@@ -235,6 +282,52 @@ export function DeliveryReportTab({
             <GateRow key={gate.id} gate={gate} />
           ))}
         </div>
+        {mayWaiveTestFirst && (
+          <div className="coding-report__tdd-waiver">
+            <label htmlFor="coding-tdd-waiver">测试先行不适用原因</label>
+            <input
+              id="coding-tdd-waiver"
+              value={waiverReason}
+              onChange={(event) => setWaiverReason(event.target.value)}
+              placeholder="例如：仅更新现有测试数据，无可先失败的行为变更"
+              maxLength={500}
+            />
+            <button type="button" disabled={waiving || waiverReason.trim().length < 8} onClick={() => void waiveTestFirst()}>
+              {waiving ? <LoaderCircle size={12} className="is-spinning" /> : <CheckCircle2 size={12} />}
+              说明并豁免
+            </button>
+          </div>
+        )}
+        {completed && taskChanges.length > 0 && (
+          <div className="coding-report__reviews">
+            {([
+              { kind: "requirements" as const, title: "需求符合性", detail: "逐项核对原始需求、计划与验收结果。" },
+              { kind: "code_quality" as const, title: "代码质量", detail: "检查差异中的边界处理、安全性、可维护性与测试。" },
+            ]).map(({ kind, title, detail }) => {
+              const gateId = kind === "requirements" ? "requirements_review" : "code_quality_review";
+              const satisfied = report.gates.some((gate) => gate.id === gateId && gate.status === "satisfied");
+              if (satisfied) return null;
+              return (
+                <div key={kind} className="coding-report__review-action">
+                  <div><strong>{title}</strong><span>{detail}</span></div>
+                  {confirmingReview === kind ? (
+                    <div className="coding-report__acceptance-actions">
+                      <button type="button" disabled={reviewing} onClick={() => void confirmReview(kind)}>
+                        {reviewing ? <LoaderCircle size={12} className="is-spinning" /> : <CheckCircle2 size={12} />}
+                        确认已审查
+                      </button>
+                      <button type="button" disabled={reviewing} onClick={() => setConfirmingReview(null)}>取消</button>
+                    </div>
+                  ) : (
+                    <button type="button" disabled={reviewing || (kind === "code_quality" && !requirementsReviewed)} onClick={() => setConfirmingReview(kind)}>
+                      <CheckCircle2 size={12} />审查并确认
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <section>

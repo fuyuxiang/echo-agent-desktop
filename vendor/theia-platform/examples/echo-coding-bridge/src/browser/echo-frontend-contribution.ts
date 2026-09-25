@@ -12,6 +12,8 @@ import { ThemeService } from '@theia/core/lib/browser/theming';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
 import { Saveable } from '@theia/core/lib/browser/saveable';
 import { Disposable } from '@theia/core/lib/common/disposable';
+import { TerminalService } from '@theia/terminal/lib/browser/base/terminal-service';
+import { TerminalWidget } from '@theia/terminal/lib/browser/base/terminal-widget';
 import { echoHostBridge } from './echo-host-bridge';
 
 const AGENT_DOCK_WIDTH_KEY = 'echo-agent-dock-width';
@@ -32,6 +34,8 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
     protected lastAgentBounds = '';
     protected shell?: FrontendApplication['shell'];
     protected readonly dirtySubscriptions = new Map<Widget, Disposable>();
+    protected cursorSubscription?: Disposable;
+    protected readonly terminalOutputSubscriptions = new Map<TerminalWidget, Disposable>();
     @inject(EditorManager)
     protected readonly editors: EditorManager;
     @inject(CommandRegistry)
@@ -44,6 +48,8 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
     protected readonly themes: ThemeService;
     @inject(CorePreferences)
     protected readonly corePreferences: CorePreferences;
+    @inject(TerminalService)
+    protected readonly terminals: TerminalService;
     onStart(): void {
         if (echoHostBridge.enabled) {
             document.body.classList.add('echo-embedded');
@@ -84,11 +90,41 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
             }
         });
         this.editors.onActiveEditorChanged(editor => {
+            this.cursorSubscription?.dispose();
             echoHostBridge.notify('echo/active-file', {
                 path: editor?.editor.uri.path.fsPath() ?? null,
             });
+            const reportSymbol = () => {
+                if (!editor) {
+                    echoHostBridge.notify('echo/active-symbol', { path: null, symbol: null });
+                    return;
+                }
+                const textEditor = editor.editor;
+                const cursor = textEditor.cursor;
+                const selected = textEditor.document.getText(textEditor.selection).trim();
+                const line = textEditor.document.getLineContent(cursor.line + 1);
+                const before = line.slice(0, cursor.character).match(/[A-Za-z_$][A-Za-z0-9_$]*$/)?.[0] ?? '';
+                const after = line.slice(cursor.character).match(/^[A-Za-z0-9_$]*/)?.[0] ?? '';
+                const word = selected && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(selected)
+                    ? selected : `${before}${after}`;
+                echoHostBridge.notify('echo/active-symbol', {
+                    path: textEditor.uri.path.fsPath(),
+                    symbol: /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(word) ? word : null,
+                });
+            };
+            if (editor) {
+                const cursorListener = editor.editor.onCursorPositionChanged(reportSymbol);
+                const selectionListener = editor.editor.onSelectionChanged(reportSymbol);
+                this.cursorSubscription = Disposable.create(() => {
+                    cursorListener.dispose();
+                    selectionListener.dispose();
+                });
+            }
+            reportSymbol();
             window.requestAnimationFrame(() => this.updateEmptyState());
         });
+        for (const terminal of this.terminals.all) this.watchTerminalOutput(terminal);
+        this.terminals.onDidCreateTerminal(terminal => this.watchTerminalOutput(terminal));
         void this.applicationState.reachedState('ready').then(async () => {
             echoHostBridge.notify('echo/ready');
             this.reportDirtyState();
@@ -100,6 +136,27 @@ export class EchoFrontendContribution implements FrontendApplicationContribution
             };
             this.workspace.onWorkspaceChanged(() => void reportWorkspace());
             await reportWorkspace();
+        });
+    }
+
+    protected watchTerminalOutput(terminal: TerminalWidget): void {
+        if (this.terminalOutputSubscriptions.has(terminal)) return;
+        let recent = '';
+        const output = terminal.onOutput(chunk => {
+            recent = (recent + chunk.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')).slice(-1200);
+            const matches = recent.matchAll(/\b(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d{2,5})(?:\/[^\s]*)?/gi);
+            for (const match of matches) {
+                const port = Number(match[3]);
+                if (!Number.isSafeInteger(port) || port < 1 || port > 65535) continue;
+                const scheme = match[1] ?? 'http://';
+                const host = match[2] === '0.0.0.0' ? '127.0.0.1' : match[2];
+                echoHostBridge.notify('echo/preview-url', { url: `${scheme}${host}:${port}/` });
+            }
+        });
+        this.terminalOutputSubscriptions.set(terminal, output);
+        terminal.onDidDispose(() => {
+            this.terminalOutputSubscriptions.get(terminal)?.dispose();
+            this.terminalOutputSubscriptions.delete(terminal);
         });
     }
 

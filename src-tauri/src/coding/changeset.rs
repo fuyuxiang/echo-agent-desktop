@@ -135,6 +135,10 @@ pub struct ChangeSet {
     /// Preserves delivery evidence while preventing duplicate commits.
     #[serde(default)]
     pub committed_hash: Option<String>,
+    /// Paths included in that commit. A protected pre-existing file may remain
+    /// in the working tree after a partial task commit.
+    #[serde(default)]
+    pub committed_paths: Vec<String>,
 }
 
 /// Compact public projection of a persisted change set. Baseline bytes and
@@ -149,6 +153,7 @@ pub struct ChangeSetView {
     pub reviewed_files: Vec<String>,
     pub rollback_unsafe_files: Vec<String>,
     pub committed_hash: Option<String>,
+    pub committed_paths: Vec<String>,
 }
 
 impl From<&ChangeSet> for ChangeSetView {
@@ -161,6 +166,7 @@ impl From<&ChangeSet> for ChangeSetView {
             reviewed_files: set.reviewed_files.clone(),
             rollback_unsafe_files: set.rollback_unsafe_files.clone(),
             committed_hash: set.committed_hash.clone(),
+            committed_paths: set.committed_paths.clone(),
         }
     }
 }
@@ -241,6 +247,7 @@ pub fn load(root: &Path, task_id: &str) -> ChangeSet {
             verification_started_revision: None,
             rollback_unsafe_files: Vec::new(),
             committed_hash: None,
+            committed_paths: Vec::new(),
         })
 }
 
@@ -682,6 +689,7 @@ pub fn capture_baseline(
     set.verification_started_revision = None;
     set.rollback_unsafe_files.clear();
     set.committed_hash = None;
+    set.committed_paths.clear();
     save(root, &set)?;
     Ok(set)
 }
@@ -719,6 +727,7 @@ pub fn capture_filesystem_baseline(root: &Path, task_id: &str) -> Result<ChangeS
     set.verification_started_revision = None;
     set.rollback_unsafe_files.clear();
     set.committed_hash = None;
+    set.committed_paths.clear();
     save(root, &set)?;
     Ok(set)
 }
@@ -1573,9 +1582,10 @@ pub fn change_diff(root: &Path, task_id: &str, path: &str) -> Result<ChangeDiff,
     }
 }
 
-pub fn mark_committed(root: &Path, task_id: &str, hash: &str) -> Result<ChangeSet, String> {
+pub fn mark_committed(root: &Path, task_id: &str, hash: &str, paths: &[String]) -> Result<ChangeSet, String> {
     let mut set = load(root, task_id);
     set.committed_hash = Some(hash.to_string());
+    set.committed_paths = paths.to_vec();
     save(root, &set)?;
     Ok(set)
 }

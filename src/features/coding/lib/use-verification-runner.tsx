@@ -18,7 +18,6 @@ interface VerificationRunnerOptions {
   task: CodingTask | null;
   commands: DetectedCommand[];
   detectedReady: boolean;
-  setBottomView: (view: "output") => void;
   setCommandOutput: Dispatch<SetStateAction<string>>;
   requestConfirmation: (options: ConfirmationOptions) => void;
   onToast?: (message: string) => void;
@@ -34,7 +33,6 @@ export function useVerificationRunner({
   task,
   commands,
   detectedReady,
-  setBottomView,
   setCommandOutput,
   requestConfirmation,
   onToast,
@@ -63,7 +61,6 @@ export function useVerificationRunner({
         return;
       }
       setCommandOutput("");
-      if (batch.length > 0) setBottomView("output");
       let mayReport = batch.length === 0;
       try {
         for (const command of batch) {
@@ -117,7 +114,7 @@ export function useVerificationRunner({
         setRunningVerification(false);
       }
     },
-    [cwd, onToast, runningVerification, setBottomView, setCommandOutput, task],
+    [cwd, onToast, runningVerification, setCommandOutput, task],
   );
 
   const runVerifications = useCallback((batch: DetectedCommand[]) => {
@@ -151,7 +148,7 @@ export function useVerificationRunner({
       autoVerificationRef.current = null;
       return;
     }
-    if (!detectedReady || runningVerification) return;
+    if (!detectedReady || runningVerification || !commands.some((command) => command.requiresApproval)) return;
     const key = `${cwd}:${task.id}:${task.updatedAt}`;
     if (autoVerificationRef.current === key) return;
     autoVerificationRef.current = key;

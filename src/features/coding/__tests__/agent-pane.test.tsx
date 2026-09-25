@@ -10,8 +10,7 @@ vi.mock("@/components/PermissionDialog", () => ({ PermissionInlineCard: () => <d
 vi.mock("@/components/QuestionInlineCard", () => ({ QuestionInlineCard: () => <div data-testid="question-card" /> }));
 
 import { AgentPane } from "../agent/AgentPane";
-import { TaskStarter } from "../agent/TaskStarter";
-import { describePhase, isBusyPhase, statusSummary } from "../lib/phase";
+import { describePhase, describeTaskProgress, isBusyPhase } from "../lib/phase";
 import type { CodingTask, TaskNode } from "../lib/types";
 
 function task(overrides: Partial<CodingTask> = {}): CodingTask {
@@ -50,48 +49,12 @@ describe("phase presentation", () => {
     expect(isBusyPhase("blocked")).toBe(false);
   });
 
-  it("summarises meaningful counts and repair rounds", () => {
-    expect(statusSummary({ phase: "verifying", changedFileCount: 3, problemCount: 2 }))
-      .toBe("验证中 · 3 个变更 · 2 个问题");
-    expect(statusSummary({ phase: "repairing", changedFileCount: 1, problemCount: 1, repairRound: 2, maxRepairRounds: 3 }))
-      .toContain("修复 2/3");
-  });
-});
-
-describe("TaskStarter", () => {
-  function setup(overrides: Partial<Parameters<typeof TaskStarter>[0]> = {}) {
-    const props = { models: [{ id: "m1" }], modelId: "m1", onModelChange: vi.fn(), starting: false,
-      apiReady: true, contextPaths: [], onStart: vi.fn(), ...overrides };
-    render(<TaskStarter {...props} />);
-    return props;
-  }
-
-  it("starts the single Agent workflow with natural language", async () => {
-    const user = userEvent.setup();
-    const props = setup();
-    await user.type(screen.getByLabelText("任务描述"), "增加登录审计");
-    await user.click(screen.getByRole("button", { name: "开始 Agent 任务" }));
-    expect(props.onStart).toHaveBeenCalledWith("增加登录审计");
-  });
-
-  it("keeps only permission and model controls", () => {
-    setup();
-    expect(screen.getByText("和 Echo 一起构建")).toBeInTheDocument();
-    expect(screen.getByTestId("permission-picker")).toBeInTheDocument();
-    expect(screen.getByTestId("model-selector")).toBeInTheDocument();
-    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
-  });
-
-  it("requires a requirement and a configured model", () => {
-    setup({ modelId: undefined, apiReady: false });
-    expect(screen.getByRole("button", { name: "开始 Agent 任务" })).toBeDisabled();
-    expect(screen.getByText(/尚未配置可用模型/)).toBeInTheDocument();
-  });
-
-  it("shows pinned engineering context", () => {
-    setup({ contextPaths: ["src/auth/login.ts"] });
-    expect(screen.getByLabelText("已选定上下文")).toHaveTextContent("login.ts");
+  it("groups detailed scheduler phases into readable user-facing progress", () => {
+    expect(describeTaskProgress("discovering").label).toBe("分析中");
+    expect(describeTaskProgress("implementing").label).toBe("开发中");
+    for (const phase of ["verifying", "diagnosing", "repairing"] as const) {
+      expect(describeTaskProgress(phase).label).toBe("验证与修复");
+    }
   });
 });
 
@@ -179,13 +142,4 @@ describe("AgentPane", () => {
     expect(screen.queryByRole("button", { name: "回到最新消息并恢复自动跟随" })).toBeNull();
   });
 
-  it("preserves a follow-up draft when the host rejects the send", async () => {
-    const user = userEvent.setup();
-    const onSend = vi.fn(async () => false);
-    render(<AgentPane {...paneProps({ onSend })} />);
-    const input = screen.getByLabelText("给 Agent 的补充要求");
-    await user.type(input, "再补一个测试");
-    await user.click(screen.getByRole("button", { name: "发送给 Agent" }));
-    expect(input).toHaveValue("再补一个测试");
-  });
 });

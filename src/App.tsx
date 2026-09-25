@@ -61,6 +61,7 @@ import {
 } from "./lib/agent-client";
 import type { AgentEntry, SessionSummary } from "./lib/types";
 import { buildCodingWorkflowPrompt } from "./features/coding/lib/workflow";
+import { CodingTaskRuntimeManager } from "./features/coding/lib/coding-task-runtime";
 import { hydrateProjectsFromBackend, useProjectsStore, type ProjectMeta } from "./stores/projects-store";
 import {
   onSessionStatusPersistenceIssue,
@@ -2405,6 +2406,11 @@ function Shell() {
 
   return (
     <div className={`app${IS_MACOS ? " app--macos" : ""}${codingWorkspaceActive ? " app--coding" : ""}`}>
+      {init?.ok && <CodingTaskRuntimeManager roots={[...new Set([
+        ...codingWorkspaces.map((workspace) => workspace.cwd),
+        codingWorkspaceCwd,
+        activeCodingWorkspaceCwd,
+      ].filter(Boolean))]} />}
       {/* macOS 使用系统原生 Overlay 标题栏(红绿灯 + 原生菜单栏),
           不再渲染自绘 TitleBar;Windows 保留窗口控制但隐藏左侧菜单区。 */}
       {!IS_MACOS && (

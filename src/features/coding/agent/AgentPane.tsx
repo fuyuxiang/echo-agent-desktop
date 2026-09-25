@@ -1,32 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
-  LoaderCircle,
   Pause,
-  Send,
-  Sparkles,
   Square,
 } from "lucide-react";
 
 import { ExecutionProcess } from "@/components/ExecutionProcess";
 import { Markdown, type MarkdownConfig } from "@/components/Markdown";
-import { ModelSelector, type ModelOption } from "@/components/ModelSelector";
-import { shortcutLabel } from "@/lib/platform";
 import { PermissionInlineCard } from "@/components/PermissionDialog";
-import { PermissionPicker } from "@/components/PermissionPicker";
 import { QuestionInlineCard } from "@/components/QuestionInlineCard";
 import { useStickToBottom } from "@/components/use-stick-to-bottom";
-import { DRAFT_TTL_MS, useAiDraftStore } from "@/features/coding/store/ai-draft-store";
 import { partitionAssistantParts } from "@/lib/execution-process";
 import type { ChatMessage } from "@/stores/session-store";
 
-import { describePhase } from "../lib/phase";
+import { describeTaskProgress } from "../lib/phase";
 import type { ChangeSet, CodingTask, VerificationRecord } from "../lib/types";
 
 interface AgentPaneProps {
-  /** Theia supplies its own task header and persistent composer. */
-  embeddedInTheia?: boolean;
   task: CodingTask;
   changeSet: ChangeSet | null;
   verifications: VerificationRecord[];
@@ -37,24 +28,19 @@ interface AgentPaneProps {
   blocker?: string | null;
   awaitingPermission: boolean;
   awaitingQuestion: boolean;
-  models: ModelOption[];
-  modelId?: string;
   sending: boolean;
-  onModelChange: (modelId: string) => void | Promise<void>;
-  onSend: (text: string, mutating?: boolean) => boolean | void | Promise<boolean | void>;
-  onCancel: () => void;
   onContinue: () => void | Promise<void>;
+  continueDisabled?: boolean;
+  onOpenVerification?: () => void;
   onOpenChanges: () => void;
   onOpenReport: () => void;
   onOpenFile?: (path: string, line?: number) => void;
-  onToast?: (message: string) => void;
   /** SP4: called when the user drops file-tree paths onto the agent pane. */
   onPathsDropped?: (paths: string[]) => void;
 }
 
 /** Agent activity, interaction requests and delivery summary for one task. */
 export function AgentPane({
-  embeddedInTheia = false,
   task,
   changeSet,
   verifications,
@@ -65,21 +51,15 @@ export function AgentPane({
   blocker,
   awaitingPermission,
   awaitingQuestion,
-  models,
-  modelId,
   sending,
-  onModelChange,
-  onSend,
-  onCancel,
   onContinue,
+  continueDisabled = false,
+  onOpenVerification,
   onOpenChanges,
   onOpenReport,
   onOpenFile,
-  onToast,
   onPathsDropped,
 }: AgentPaneProps) {
-  const [followup, setFollowup] = useState("");
-  const consumeDraft = useAiDraftStore((s) => s.consume);
   const markdownConfig = useMemo<MarkdownConfig | undefined>(() => onOpenFile ? {
     pathClickHandler: {
       onPathClick: (path, type, range) => {
@@ -88,17 +68,7 @@ export function AgentPane({
     },
   } : undefined, [onOpenFile]);
 
-  // SP3: consume a queued AI draft on first mount. The draft originates from
-  // a context-menu action («在对话中提问») and pre-fills the followup box.
-  useEffect(() => {
-    if (embeddedInTheia) return;
-    const draft = consumeDraft();
-    if (!draft) return;
-    if (draft.createdAt + DRAFT_TTL_MS < Date.now()) return;
-    if (draft.prompt) setFollowup(draft.prompt);
-    if (draft.contextPaths.length > 0) onPathsDropped?.(draft.contextPaths);
-  }, [consumeDraft, embeddedInTheia, onPathsDropped]);
-  const phase = describePhase(task.phase);
+  const phase = describeTaskProgress(task.phase);
   const sessionUnavailable = !sessionId;
   const changes = changeSet?.changes ?? [];
   const latestChecks = new Map<string, VerificationRecord>();
@@ -121,12 +91,6 @@ export function AgentPane({
     streaming,
     sessionId,
   });
-
-  const submit = async () => {
-    if (!followup.trim() || sending || streaming) return;
-    const sent = await onSend(followup.trim());
-    if (sent !== false) setFollowup("");
-  };
 
   return (
     <div
@@ -152,39 +116,6 @@ export function AgentPane({
         }
       }}
     >
-      {!embeddedInTheia && <header className="coding-agent__panel-head">
-        <div className="coding-agent__identity">
-          <span className="coding-agent__identity-mark" aria-hidden="true">
-            <Sparkles size={14} />
-          </span>
-          <div>
-            <strong>Agent</strong>
-            <span>当前任务协作</span>
-          </div>
-        </div>
-        <div className="coding-agent__head">
-          <span className={`coding-agent__phase is-${phase.tone}`}>
-            {phase.active && <LoaderCircle size={12} className="is-spinning" />}
-            {task.phase === "delivered" && <CheckCircle2 size={12} />}
-            {task.phase === "blocked" && <AlertTriangle size={12} />}
-            {task.phase === "paused" && <Pause size={12} />}
-            {task.phase === "stopped" && <Square size={11} />}
-            {phase.label}
-          </span>
-          {phase.active && (
-            <button
-              type="button"
-              className="coding-agent__stop"
-              onClick={onCancel}
-              disabled={sending}
-              title="停止当前任务的 Agent 与验证流程"
-            >
-              <Square size={11} /> 停止
-            </button>
-          )}
-        </div>
-      </header>}
-
       <div className="coding-agent__body">
         {phaseReason
           && !blocker
@@ -235,13 +166,14 @@ export function AgentPane({
             </div>
             <div className="coding-agent__decision-actions">
               {changes.length > 0 && <button type="button" onClick={onOpenChanges}>查看当前变更</button>}
+              {continueDisabled && onOpenVerification && <button type="button" onClick={onOpenVerification}>运行 RED</button>}
               <button
                 type="button"
                 className="is-primary"
-                disabled={sending || sessionUnavailable}
+                disabled={sending || sessionUnavailable || continueDisabled}
                 onClick={() => void onContinue()}
               >
-                {sending ? "正在继续…" : "继续执行"}
+                {sending ? "正在继续…" : continueDisabled ? "等待 RED" : "继续执行"}
               </button>
             </div>
           </div>
@@ -335,39 +267,6 @@ export function AgentPane({
           )}
         </div>
 
-        {!embeddedInTheia && <div className="coding-agent__composer">
-          <textarea
-            value={followup}
-            onChange={(event) => setFollowup(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                event.preventDefault();
-                void submit();
-              }
-            }}
-            rows={2}
-            placeholder={sessionUnavailable
-              ? "当前任务未绑定 Agent 会话"
-              : streaming
-                ? "可先输入补充要求，本轮完成后发送…"
-                : `继续当前任务；${shortcutLabel("⌘ Enter", "Ctrl+Enter")} 发送…`}
-            aria-label="给 Agent 的补充要求"
-            disabled={sessionUnavailable || sending}
-          />
-          <div className="coding-agent__composer-tools">
-            <PermissionPicker onToast={onToast} sessionId={sessionId ?? undefined} />
-            <ModelSelector modelId={modelId} models={models} onModelChange={onModelChange} />
-            <button
-              type="button"
-              className="coding-agent__send"
-              disabled={sessionUnavailable || !followup.trim() || sending || streaming}
-              onClick={() => void submit()}
-              aria-label="发送给 Agent"
-            >
-              <Send size={14} />
-            </button>
-          </div>
-        </div>}
       </div>
     </div>
   );

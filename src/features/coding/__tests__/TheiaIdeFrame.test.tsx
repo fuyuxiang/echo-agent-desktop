@@ -59,4 +59,21 @@ describe("Theia IDE bridge", () => {
     await expect(saved).resolves.toBe(true);
     expect(onDirtyChange).toHaveBeenLastCalledWith(0);
   });
+
+  it("accepts only local preview URLs and symbols from the active workspace", async () => {
+    const onPreviewUrl = vi.fn();
+    const onActiveSymbol = vi.fn();
+    render(<TheiaIdeFrame root="/repo" onBeforeMutation={vi.fn()} onAfterMutation={vi.fn()} onPreviewUrl={onPreviewUrl} onActiveSymbol={onActiveSymbol} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+
+    sendFrameMessage(frame, { type: "echo/active-symbol", path: "/other/a.ts", symbol: "run" });
+    expect(onActiveSymbol).toHaveBeenLastCalledWith(null);
+    sendFrameMessage(frame, { type: "echo/active-symbol", path: "/repo/a.ts", symbol: "run" });
+    expect(onActiveSymbol).toHaveBeenLastCalledWith({ path: "/repo/a.ts", symbol: "run" });
+
+    sendFrameMessage(frame, { type: "echo/preview-url", url: "https://example.com:5173/" });
+    expect(onPreviewUrl).not.toHaveBeenCalled();
+    sendFrameMessage(frame, { type: "echo/preview-url", url: "http://localhost:5173/" });
+    expect(onPreviewUrl).toHaveBeenCalledWith("http://localhost:5173/");
+  });
 });

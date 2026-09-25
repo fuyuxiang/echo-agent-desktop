@@ -5,16 +5,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const api = vi.hoisted(() => ({
   deliveryReport: vi.fn(),
   confirmAcceptance: vi.fn(),
+  confirmReview: vi.fn(),
+  waiveTestFirst: vi.fn(),
 }));
-const analyze = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/tauri-api", () => ({ codingApi: api }));
-vi.mock("@/lib/agent-client", () => ({
-  codingAnalyzeWorkspace: (root: string) => analyze(root),
-}));
 
 import { DeliveryReportTab } from "../main/docs/DeliveryReportTab";
-import { ProjectProfileTab } from "../main/docs/ProjectProfileTab";
 import { TaskDagTab } from "../main/docs/TaskDagTab";
 import type { CodingTask, DeliveryReport, QualityGate } from "../lib/types";
 
@@ -78,6 +75,10 @@ describe("DeliveryReportTab", () => {
     api.deliveryReport.mockResolvedValue(report());
     api.confirmAcceptance.mockReset();
     api.confirmAcceptance.mockResolvedValue(undefined);
+    api.confirmReview.mockReset();
+    api.confirmReview.mockResolvedValue(undefined);
+    api.waiveTestFirst.mockReset();
+    api.waiveTestFirst.mockResolvedValue({ waiverReason: "仅维护测试数据" });
   });
 
   it("asks for a task first", () => {
@@ -111,6 +112,38 @@ describe("DeliveryReportTab", () => {
     );
     render(<DeliveryReportTab root="/repo" taskId="t1" onOpenFile={vi.fn()} />);
     expect(await screen.findByText("不适用")).toBeInTheDocument();
+  });
+
+  it("requires an explicit requirements review before code-quality confirmation", async () => {
+    const pending = report({
+      deliverable: false,
+      gates: [
+        gate({ id: "requirements_review", title: "需求符合性审查", status: "not_satisfied" }),
+        gate({ id: "code_quality_review", title: "代码质量审查", status: "not_satisfied" }),
+      ],
+    });
+    api.deliveryReport.mockResolvedValueOnce(pending).mockResolvedValue(report({
+      deliverable: false,
+      gates: [
+        gate({ id: "requirements_review", title: "需求符合性审查" }),
+        gate({ id: "code_quality_review", title: "代码质量审查", status: "not_satisfied" }),
+      ],
+    }));
+    render(<DeliveryReportTab root="/repo" taskId="t1" onOpenFile={vi.fn()} />);
+    const actions = await screen.findAllByRole("button", { name: "审查并确认" });
+    expect(actions[1]).toBeDisabled();
+    await userEvent.click(actions[0]);
+    await userEvent.click(screen.getByRole("button", { name: "确认已审查" }));
+    expect(api.confirmReview).toHaveBeenCalledWith("/repo", "t1", "requirements");
+  });
+
+  it("records an explicit reason when RED is not applicable", async () => {
+    api.deliveryReport.mockResolvedValue(report({ task: task({ phase: "paused", phaseReason: "等待红灯测试验证" }) }));
+    render(<DeliveryReportTab root="/repo" taskId="t1" onOpenFile={vi.fn()} />);
+    const reason = await screen.findByRole("textbox", { name: "测试先行不适用原因" });
+    await userEvent.type(reason, "仅维护测试数据，无生产代码行为变更");
+    await userEvent.click(screen.getByRole("button", { name: "说明并豁免" }));
+    expect(api.waiveTestFirst).toHaveBeenCalledWith("/repo", "t1", "仅维护测试数据，无生产代码行为变更");
   });
 
   it("expands an unmet gate's evidence by default", async () => {
@@ -285,72 +318,5 @@ describe("TaskDagTab", () => {
       />,
     );
     expect(screen.getByText("1/3")).toBeInTheDocument();
-  });
-});
-
-describe("ProjectProfileTab", () => {
-  beforeEach(() => {
-    analyze.mockReset();
-    analyze.mockResolvedValue({
-      root: "/repo",
-      name: "echo-agent",
-      projectType: "Node",
-      fileCount: 1234,
-      truncated: false,
-      languages: [{ language: "TypeScript", files: 900 }],
-      modules: [{ name: "web", path: "packages/web", kind: "Node", dependencies: ["core"] }],
-      validationCommands: ["pnpm test"],
-      hasGit: true,
-      gitBranch: "main",
-      gitChangedFiles: 3,
-      instructionFiles: ["AGENTS.md"],
-      scannedAt: "",
-    });
-  });
-
-  it("shows the project's shape", async () => {
-    render(<ProjectProfileTab root="/repo" onOpenFile={vi.fn()} />);
-    expect(await screen.findByText("echo-agent")).toBeInTheDocument();
-    expect(screen.getByText("1,234")).toBeInTheDocument();
-    expect(screen.getByText("TypeScript")).toBeInTheDocument();
-  });
-
-  it("states that modules are manifest-based, not a dependency graph", async () => {
-    render(<ProjectProfileTab root="/repo" onOpenFile={vi.fn()} />);
-    expect(
-      await screen.findByText(/并非源码级依赖分析/),
-    ).toBeInTheDocument();
-  });
-
-  it("opens a rule file", async () => {
-    const user = userEvent.setup();
-    const onOpenFile = vi.fn();
-    render(<ProjectProfileTab root="/repo" onOpenFile={onOpenFile} />);
-    await user.click(await screen.findByRole("button", { name: "AGENTS.md" }));
-    expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
-  });
-
-  it("warns when the scan hit its cap", async () => {
-    analyze.mockResolvedValue({
-      root: "/repo",
-      name: "big",
-      projectType: "",
-      fileCount: 12000,
-      truncated: true,
-      languages: [],
-      modules: [],
-      validationCommands: [],
-      hasGit: false,
-      instructionFiles: [],
-      scannedAt: "",
-    });
-    render(<ProjectProfileTab root="/repo" onOpenFile={vi.fn()} />);
-    expect(await screen.findByText(/超过扫描上限/)).toBeInTheDocument();
-  });
-
-  it("surfaces an analysis failure", async () => {
-    analyze.mockRejectedValue(new Error("工程分析失败"));
-    render(<ProjectProfileTab root="/repo" onOpenFile={vi.fn()} />);
-    expect(await screen.findByText("工程分析失败")).toBeInTheDocument();
   });
 });

@@ -3,6 +3,7 @@ import { Check, ChevronDown, FolderGit2, FolderOpen, X } from "lucide-react";
 
 export interface ProjectSwitcherItem {
   cwd: string;
+  label?: string;
 }
 
 interface ProjectSwitcherProps {
@@ -36,9 +37,10 @@ export function ProjectSwitcher({
   const toggleRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const entries = useMemo(() => {
-    const paths = [activeCwd, ...projects.map((project) => project.cwd)].filter(Boolean);
-    return [...new Set(paths)].map((cwd) => ({ cwd }));
+    const paths = [{ cwd: activeCwd }, ...projects].filter((project) => Boolean(project.cwd));
+    return [...new Map(paths.map((project) => [project.cwd, project])).values()];
   }, [activeCwd, projects]);
+  const activeLabel = projects.find((project) => project.cwd === activeCwd)?.label ?? projectName(activeCwd);
 
   useEffect(() => {
     if (!open) return;
@@ -93,7 +95,7 @@ export function ProjectSwitcher({
         }}
       >
         <FolderGit2 size={13} aria-hidden />
-        <span>{projectName(activeCwd)}</span>
+        <span>{activeLabel}</span>
         {dirtyCount > 0 && (
           <b title={`${dirtyCount} 个未保存文件`} aria-label={`${dirtyCount} 个未保存文件`}>
             {dirtyCount}
@@ -127,7 +129,7 @@ export function ProjectSwitcher({
           <div className="coding-project-switcher__caption">当前项目与最近项目</div>
           {entries.map((project) => {
             const active = project.cwd === activeCwd;
-            const name = projectName(project.cwd);
+            const name = project.label ?? projectName(project.cwd);
             return (
               <div
                 key={project.cwd}

@@ -25,25 +25,16 @@ export function describePhase(phase: TaskPhase): PhasePresentation {
   return PHASES[phase] ?? PHASES.idle;
 }
 
-/**
- * Short status line for the status bar: phase plus the counts that matter.
- * Deliberately terse — this is chrome, not a dashboard.
- */
-export function statusSummary(options: {
-  phase?: TaskPhase;
-  changedFileCount: number;
-  problemCount: number;
-  repairRound?: number;
-  maxRepairRounds?: number;
-}): string {
-  const parts: string[] = [];
-  if (options.phase) parts.push(describePhase(options.phase).label);
-  if (options.repairRound && options.repairRound > 0) {
-    parts.push(`修复 ${options.repairRound}/${options.maxRepairRounds ?? 3}`);
+/** User-facing progress groups. The persisted phase remains the scheduler's state. */
+export function describeTaskProgress(phase: TaskPhase): PhasePresentation {
+  if (phase === "discovering") return { label: "分析中", tone: "running", active: true };
+  if (phase === "implementing") return { label: "开发中", tone: "running", active: true };
+  if (["verifying", "diagnosing", "repairing"].includes(phase)) {
+    return { label: "验证与修复", tone: "running", active: true };
   }
-  if (options.changedFileCount > 0) parts.push(`${options.changedFileCount} 个变更`);
-  if (options.problemCount > 0) parts.push(`${options.problemCount} 个问题`);
-  return parts.join(" · ");
+  if (phase === "blocked") return { label: "需要处理", tone: "bad", active: false };
+  if (phase === "delivered") return { label: "已交付", tone: "good", active: false };
+  return describePhase(phase);
 }
 
 /** Whether a task in this phase should block a destructive action. */

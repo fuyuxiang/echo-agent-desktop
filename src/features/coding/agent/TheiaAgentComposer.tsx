@@ -6,7 +6,7 @@ import { PermissionPicker } from "@/components/PermissionPicker";
 import { DRAFT_TTL_MS, useAiDraftStore } from "@/features/coding/store/ai-draft-store";
 import { shortcutLabel } from "@/lib/platform";
 
-import { codingTaskDraftKey } from "../lib/hot-exit";
+import { codingTaskDraftKey } from "../lib/task-draft-key";
 import type { CodingTask } from "../lib/types";
 
 interface TheiaAgentComposerProps {
@@ -28,6 +28,7 @@ interface TheiaAgentComposerProps {
   onDraftContextPaths: (paths: string[]) => void;
   onOpenSettings?: () => void;
   onToast?: (message: string) => void;
+  suggestedPrompt?: string | null;
 }
 
 function draftKey(root: string, taskId?: string): string {
@@ -64,6 +65,7 @@ export function TheiaAgentComposer({
   onDraftContextPaths,
   onOpenSettings,
   onToast,
+  suggestedPrompt,
 }: TheiaAgentComposerProps) {
   const key = draftKey(workspaceRoot, task?.id);
   const [text, setText] = useState(() => readDraft(key));
@@ -71,6 +73,10 @@ export function TheiaAgentComposer({
   const submittingRef = useRef(false);
   const queuedDraft = useAiDraftStore((state) => state.draft);
   const consumeDraft = useAiDraftStore((state) => state.consume);
+
+  useEffect(() => {
+    if (suggestedPrompt && !task) setText(suggestedPrompt);
+  }, [suggestedPrompt, task]);
 
   useEffect(() => {
     if (!queuedDraft) return;
@@ -143,9 +149,9 @@ export function TheiaAgentComposer({
             : sessionUnavailable
               ? "当前任务未绑定 Agent 会话"
               : verifying
-                ? "可先输入补充要求，验证完成后发送…"
+                ? "可写入草稿，验证完成后手动发送…"
                 : streaming
-                  ? "可先输入补充要求，本轮完成后发送…"
+                  ? "可写入草稿，本轮完成后手动发送…"
                   : "给 Agent 补充要求或让它修改当前代码…"}
           aria-label={task ? "给 Agent 的补充要求" : "任务描述"}
           disabled={sessionUnavailable || sending}

@@ -1,7 +1,16 @@
 import { AlertTriangle, CheckCircle2, CircleSlash, Clock, LoaderCircle, Play, ShieldAlert, Square } from "lucide-react";
 
-import { verificationLabel } from "../store/workbench-store";
-import type { DetectedCommand, VerificationRecord } from "../lib/types";
+import type { DetectedCommand, VerificationKind, VerificationRecord } from "../lib/types";
+
+function verificationLabel(kind: VerificationKind): string {
+  switch (kind) {
+    case "build": return "构建";
+    case "lint": return "静态检查";
+    case "type_check": return "类型检查";
+    case "test": return "测试";
+    default: return "命令";
+  }
+}
 
 interface VerificationViewProps {
   records: VerificationRecord[];
@@ -12,6 +21,9 @@ interface VerificationViewProps {
   onRunAll: () => void;
   onOpenOutput: (record: VerificationRecord) => void;
   onCancel?: () => void;
+  redCheckpoint?: boolean;
+  redRecorded?: boolean;
+  onRunRed?: (command: DetectedCommand) => void;
 }
 
 function formatDuration(durationMs: number): string {
@@ -35,13 +47,16 @@ export function VerificationView({
   onRunAll,
   onOpenOutput,
   onCancel,
+  redCheckpoint = false,
+  redRecorded = false,
+  onRunRed,
 }: VerificationViewProps) {
   const latest = [...records].reverse();
 
   return (
     <div className="coding-panel">
       <div className="coding-panel__actions">
-        <button type="button" disabled={!hasTask || running || detected.length === 0} onClick={onRunAll}>
+        <button type="button" disabled={!hasTask || running || detected.length === 0 || redCheckpoint} onClick={onRunAll}>
           {running ? <LoaderCircle size={12} className="is-spinning" /> : <Play size={12} />}
           运行全部验证
         </button>
@@ -54,7 +69,7 @@ export function VerificationView({
           <button
             key={command.command}
             type="button"
-            disabled={!hasTask || running}
+            disabled={!hasTask || running || redCheckpoint}
             onClick={() => onRun(command)}
             title={command.requiresApproval
               ? `${command.command}\n来自 Agent 执行计划，点击后需确认`
@@ -64,6 +79,19 @@ export function VerificationView({
             {command.label}
           </button>
         ))}
+        {redCheckpoint && !redRecorded && detected.filter((command) => command.kind === "test").map((command) => (
+          <button
+            key={`red:${command.command}`}
+            type="button"
+            disabled={running}
+            onClick={() => onRunRed?.(command)}
+            title={`预期失败的测试先行检查：${command.command}`}
+          >
+            {running ? <LoaderCircle size={12} className="is-spinning" /> : <Play size={12} />}
+            运行 RED · {command.label}
+          </button>
+        ))}
+        {redCheckpoint && redRecorded && <span className="coding-panel__hint">RED 已记录，可继续实现</span>}
         {detected.length === 0 && (
           <span className="coding-panel__hint">未从工程清单识别到验证命令</span>
         )}

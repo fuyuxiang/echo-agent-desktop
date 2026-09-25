@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 /**
  * Bridge store between the file-tree context menu's AI actions and the
- * workbench's input panes (TaskStarter / AgentPane). Right-click AI entries
+ * workbench's task composer and Agent pane. Right-click AI entries
  * call `setDraft({ prompt, contextPaths, source })`; the input panes consume
  * the draft on mount via `consume()` and reset it back to `null`.
  *

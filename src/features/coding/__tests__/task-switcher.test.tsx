@@ -63,7 +63,7 @@ describe("TaskSwitcher", () => {
     const user = userEvent.setup();
     const props = setup();
     await user.click(screen.getByRole("button", { name: "切换开发任务" }));
-    await user.click(screen.getByRole("menuitem", { name: "打开任务：客户管理，实现中" }));
+    await user.click(screen.getByRole("menuitem", { name: "打开任务：客户管理，开发中" }));
 
     expect(props.onSelect).toHaveBeenCalledWith("running");
     expect(screen.queryByRole("menuitem", { name: "打开任务：订单管理，已停止" })).not.toBeInTheDocument();

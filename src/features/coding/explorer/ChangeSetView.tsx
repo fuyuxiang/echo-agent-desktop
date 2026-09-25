@@ -1,6 +1,7 @@
-import { Check, FolderGit2, GitCommitHorizontal, LoaderCircle, RotateCcw, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, ChevronDown, ChevronRight, FolderGit2, GitCommitHorizontal, LoaderCircle, Merge, RotateCcw, Trash2 } from "lucide-react";
 
-import type { ChangeSet, FileChange } from "../lib/types";
+import type { ChangeSet, CommitHunk, FileChange } from "../lib/types";
 
 interface ChangeSetViewProps {
   changeSet: ChangeSet | null;
@@ -10,10 +11,15 @@ interface ChangeSetViewProps {
   canCommit?: boolean;
   canRollback?: boolean;
   canDiscard?: boolean;
+  isolatedSource?: string | null;
+  integratedHash?: string | null;
+  integrating?: boolean;
   onOpenDiff: (change: FileChange) => void;
   onDiscard: (change: FileChange) => void;
-  onCommit: () => void;
+  onCommit: (paths: string[], hunks: Record<string, string[]>) => void;
+  onLoadHunks?: (path: string) => Promise<CommitHunk[]>;
   onRollback: () => void;
+  onIntegrate?: () => void;
 }
 
 const STATUS_LETTER: Record<FileChange["kind"], string> = {
@@ -38,11 +44,38 @@ export function ChangeSetView({
   canCommit = false,
   canRollback = true,
   canDiscard = true,
+  isolatedSource,
+  integratedHash,
+  integrating = false,
   onOpenDiff,
   onDiscard,
   onCommit,
+  onLoadHunks,
   onRollback,
+  onIntegrate,
 }: ChangeSetViewProps) {
+  const availablePaths = (changeSet?.changes ?? []).filter((change) => !change.preExisting).map((change) => change.path);
+  const [excludedPaths, setExcludedPaths] = useState<string[]>([]);
+  const [expandedPath, setExpandedPath] = useState<string | null>(null);
+  const [hunksByPath, setHunksByPath] = useState<Record<string, CommitHunk[]>>({});
+  const [selectedHunks, setSelectedHunks] = useState<Record<string, string[]>>({});
+  const [hunkError, setHunkError] = useState<string | null>(null);
+  const [loadingHunks, setLoadingHunks] = useState(false);
+  const [selectionTaskId, setSelectionTaskId] = useState<string | undefined>();
+  const availableKey = availablePaths.join("\0");
+  const selectedPaths = availablePaths.filter((path) => !excludedPaths.includes(path));
+  useEffect(() => {
+    if (selectionTaskId !== changeSet?.taskId) {
+      setSelectionTaskId(changeSet?.taskId);
+      setExcludedPaths([]);
+      setExpandedPath(null);
+      setHunksByPath({});
+      setSelectedHunks({});
+      return;
+    }
+    setExcludedPaths((current) => current.filter((path) => availablePaths.includes(path)));
+  }, [changeSet?.taskId, availableKey]);
+
   if (!hasTask) {
     return (
       <div className="coding-explorer-view coding-explorer-view--empty">
@@ -58,6 +91,29 @@ export function ChangeSetView({
   const totalRemoved = changes.reduce((sum, change) => sum + change.removed, 0);
   const unreviewed = changes.filter((change) => !reviewed.has(change.path)).length;
   const hasProtectedChanges = changes.some((change) => change.preExisting);
+  const selectedHunkPaths = Object.entries(selectedHunks)
+    .filter(([, ids]) => ids.length > 0)
+    .map(([path]) => path);
+  const selectedFileCount = selectedPaths.length + selectedHunkPaths.length;
+  const toggleHunks = async (path: string) => {
+    if (expandedPath === path) { setExpandedPath(null); return; }
+    setExpandedPath(path);
+    setHunkError(null);
+    if (!onLoadHunks) return;
+    setLoadingHunks(true);
+    try {
+      const hunks = await onLoadHunks(path);
+      setHunksByPath((current) => ({ ...current, [path]: hunks }));
+      setSelectedHunks((current) => ({
+        ...current,
+        [path]: (current[path] ?? []).filter((id) => hunks.some((hunk) => hunk.id === id)),
+      }));
+    } catch (error) {
+      setHunkError(String(error).replace(/^Error:\s*/, ""));
+    } finally {
+      setLoadingHunks(false);
+    }
+  };
   const filesystemCheckpoint = changeSet?.baselineMode === "filesystem";
   const unsafeFiles = new Set(changeSet?.rollbackUnsafeFiles ?? []);
   const hasUnsafeChanges = unsafeFiles.size > 0;
@@ -86,25 +142,36 @@ export function ChangeSetView({
           type="button"
           disabled={
             filesystemCheckpoint
-            || changes.length === 0
+            || selectedFileCount === 0
+            || Boolean(changeSet?.committedHash)
             || committing
             || !canCommit
-            || hasProtectedChanges
           }
-          onClick={onCommit}
+          onClick={() => onCommit(selectedPaths, Object.fromEntries(
+            Object.entries(selectedHunks).filter(([, ids]) => ids.length > 0),
+          ))}
           title={
             filesystemCheckpoint
               ? "当前任务使用本地检查点；可手工提交，或初始化 Git 并新建任务后使用应用内提交"
-              : hasProtectedChanges
-                ? "包含任务开始前已有改动的文件，为避免一并提交，请手动整理后提交"
-                : !canCommit
+              : !canCommit
                   ? "任务完成后才能提交"
                   : undefined
           }
         >
           {committing ? <LoaderCircle size={12} className="is-spinning" /> : <GitCommitHorizontal size={12} />}
-          提交
+          提交选中 {selectedFileCount} 个文件
         </button>
+        {isolatedSource && (
+          <button
+            type="button"
+            disabled={!changeSet?.committedHash || Boolean(integratedHash) || integrating}
+            onClick={onIntegrate}
+            title={integratedHash ? "已应用到原项目" : `将已提交任务应用到 ${isolatedSource}`}
+          >
+            {integrating ? <LoaderCircle size={12} className="is-spinning" /> : <Merge size={12} />}
+            {integratedHash ? "已应用" : "应用到原项目"}
+          </button>
+        )}
         <button
           type="button"
           disabled={changes.length === 0 || !canRollback || hasUnsafeChanges}
@@ -116,8 +183,17 @@ export function ChangeSetView({
         </button>
       </div>
 
+      {isolatedSource && <div className="coding-explorer__note">隔离任务 · 原项目：{isolatedSource}</div>}
+
       {changeSet?.committedHash && (
-        <div className="coding-row">已提交：{changeSet.committedHash.slice(0, 12)}</div>
+        <div className="coding-row">
+          {changeSet.committedPaths && changeSet.committedPaths.length < changes.length ? "部分提交" : "已提交"}：{changeSet.committedHash.slice(0, 12)}
+          {changeSet.committedPaths && ` · ${changeSet.committedPaths.length}/${changes.length} 个文件`}
+        </div>
+      )}
+
+      {changeSet?.committedHash && (changeSet.committedPaths?.length ?? changes.length) < changes.length && (
+        <div className="coding-explorer__note">未提交文件仍留在工作区；请核对后手动提交或丢弃。</div>
       )}
 
       {changes.length === 0 && (
@@ -126,7 +202,18 @@ export function ChangeSetView({
 
       <div className="coding-changeset__list">
         {changes.map((change) => (
-          <div key={change.path} className="coding-changeset__row">
+          <div key={change.path} className="coding-changeset__entry">
+          <div className="coding-changeset__row">
+            <input
+              type="checkbox"
+              aria-label={`选择提交 ${change.path}`}
+              title={change.preExisting ? "此文件包含任务开始前的改动，不能自动提交" : "选择提交此文件"}
+              checked={selectedPaths.includes(change.path)}
+              disabled={Boolean(change.preExisting || changeSet?.committedHash || filesystemCheckpoint)}
+              onChange={(event) => setExcludedPaths((current) => event.target.checked
+                ? current.filter((path) => path !== change.path)
+                : [...current, change.path])}
+            />
             <button type="button" onClick={() => onOpenDiff(change)} title={change.path}>
               <em className={`is-${change.kind}`}>{STATUS_LETTER[change.kind]}</em>
               <span>{change.path.split("/").pop()}</span>
@@ -152,13 +239,49 @@ export function ChangeSetView({
                 <Trash2 size={11} />
               )}
             </button>
+            {change.preExisting && !changeSet?.committedHash && !filesystemCheckpoint && (
+              <button
+                type="button"
+                className="coding-changeset__hunk-toggle"
+                onClick={() => void toggleHunks(change.path)}
+                aria-label={`选择 ${change.path} 的任务差异块`}
+                aria-expanded={expandedPath === change.path}
+                title="仅选择本任务新增的差异块"
+              >
+                {expandedPath === change.path ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              </button>
+            )}
+          </div>
+          {expandedPath === change.path && (
+            <div className="coding-changeset__hunks">
+              {loadingHunks && <div>正在读取差异块…</div>}
+              {hunkError && <div role="alert">{hunkError}</div>}
+              {!loadingHunks && !hunkError && (hunksByPath[change.path] ?? []).length === 0 && <div>没有可单独提交的文本差异块</div>}
+              {!loadingHunks && !hunkError && (hunksByPath[change.path] ?? []).map((hunk, index) => (
+                <label key={hunk.id} className="coding-changeset__hunk">
+                  <span><input
+                    type="checkbox"
+                    aria-label={`任务差异块 ${index + 1}`}
+                    checked={(selectedHunks[change.path] ?? []).includes(hunk.id)}
+                    onChange={(event) => setSelectedHunks((current) => {
+                      const ids = current[change.path] ?? [];
+                      return { ...current, [change.path]: event.target.checked
+                        ? [...ids, hunk.id]
+                        : ids.filter((id) => id !== hunk.id) };
+                    })}
+                  />任务差异块 {index + 1}</span>
+                  <pre>{hunk.preview}</pre>
+                </label>
+              ))}
+            </div>
+          )}
           </div>
         ))}
       </div>
 
       {hasProtectedChanges && (
         <div className="coding-explorer__note">
-          带“起始时已修改”标记的文件可审阅和精确回滚，但不会被自动提交，以免混入任务开始前的个人改动。
+          带“起始时已修改”标记的文件不会整文件提交。展开文件并勾选本任务差异块；与原项目内容冲突的差异块会被拒绝，不会带入旧改动。
         </div>
       )}
 

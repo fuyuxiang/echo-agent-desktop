@@ -34,6 +34,11 @@ import type {
   OrchestratorState,
   PhaseChangedEvent,
   ExecutionLedgerEvent,
+  IsolatedWorkspace,
+  CommitHunk,
+  ReviewKind,
+  ReviewRecord,
+  TddEvidence,
   Problem,
   ReferenceHit,
   RuntimePlanEntry,
@@ -47,6 +52,20 @@ import type {
 } from "./types";
 
 export const codingApi = {
+  createIsolatedWorkspace: (root: string) =>
+    invoke<IsolatedWorkspace>("coding_isolation_create", { root }),
+  isolatedWorkspaceInfo: (root: string) =>
+    invoke<IsolatedWorkspace | null>("coding_isolation_info", { root }),
+  integrateIsolatedTask: (root: string, taskId: string) =>
+    invoke<IsolatedWorkspace>("coding_isolation_integrate", { root, taskId }),
+  confirmReview: (root: string, taskId: string, kind: ReviewKind) =>
+    invoke<ReviewRecord>("coding_review_confirm", { root, taskId, kind }),
+  tddStatus: (root: string, taskId: string) =>
+    invoke<TddEvidence>("coding_tdd_status", { root, taskId }),
+  recordRedTest: (root: string, taskId: string, recordId: string) =>
+    invoke<TddEvidence>("coding_tdd_record_red", { root, taskId, recordId }),
+  waiveTestFirst: (root: string, taskId: string, reason: string) =>
+    invoke<TddEvidence>("coding_tdd_waive", { root, taskId, reason }),
   listTasks: (root: string) => invoke<TaskSummary[]>("coding_task_list", { root }),
   createTask: (root: string, name: string, requirement: string) =>
     invoke<CodingTask>("coding_task_create", { root, name, requirement }),
@@ -137,10 +156,12 @@ export const codingApi = {
     invoke<DeliveryReport>("coding_delivery_report", { root, taskId }),
   commitInput: (root: string, taskId: string) =>
     invoke<string>("coding_delivery_commit_input", { root, taskId }),
+  commitHunks: (root: string, taskId: string, path: string) =>
+    invoke<CommitHunk[]>("coding_delivery_commit_hunks", { root, taskId, path }),
   prInput: (root: string, taskId: string) =>
     invoke<DeliveryReport>("coding_delivery_pr_input", { root, taskId }),
-  commit: (root: string, taskId: string, message: string) =>
-    invoke<string>("coding_git_commit", { root, taskId, message }),
+  commit: (root: string, taskId: string, message: string, selectedPaths: string[], selectedHunks: Record<string, string[]> = {}) =>
+    invoke<string>("coding_git_commit", { root, taskId, message, selectedPaths, selectedHunks }),
 
   // Phase 2: cross-file symbol index + reference search + impact analysis.
   indexStatus: (root: string) => invoke<IndexStatus>("coding_index_status", { root }),
@@ -173,12 +194,13 @@ export const codingApi = {
       depth: depth ?? null,
       includeTests: includeTests ?? null,
     }),
+  // Theia owns visible file, search, terminal and Git interactions. These
+  // native file commands remain registered for non-Theia callers and future
+  // integrations; do not add a competing workbench file explorer here.
   createEntry: (root: string, parent: string | undefined, name: string, directory: boolean) =>
     invoke<string>("coding_create_entry", {
       request: { root, parent: parent ?? null, name, directory },
     }),
-  // SP1: file ops (delete / rename / copy / move) routed through agent-client so
-  // tests can mock a single import surface.
   deleteEntries: (root: string, paths: string[]) =>
     _codingDeleteEntries(root, paths),
   renameEntry: (root: string, path: string, newName: string) =>
@@ -187,7 +209,6 @@ export const codingApi = {
     _codingCopyEntries(root, sources, destination),
   moveEntries: (root: string, sources: string[], destination: string) =>
     _codingMoveEntries(root, sources, destination),
-  /** SP5: undo a previous `deleteEntries` call. */
   restoreFromTrash: (root: string, originalPaths: string[], restoreTokens: string[]) =>
     _codingRestoreFromTrash(root, originalPaths, restoreTokens),
 };

@@ -195,7 +195,7 @@ describe("Theia workbench", () => {
       }));
     });
     const composer = container.querySelector(".echo-theia-agent__composer");
-    const textbox = screen.getByRole("textbox", { name: "给 Agent 的补充要求" });
+    const textbox = await screen.findByRole("textbox", { name: "给 Agent 的补充要求" });
     fireEvent.change(textbox, { target: { value: "请处理边界情况" } });
     await user.click(screen.getByRole("tab", { name: "任务变更" }));
     expect(composer).toBeInTheDocument();
@@ -223,7 +223,7 @@ describe("Theia workbench", () => {
     expect(invoke).toHaveBeenCalledWith("coding_delivery_report", { root: "/repo", taskId: "verification-task" });
   });
 
-  it("blocks opening another folder while a coding task is active", async () => {
+  it("opens another folder while a coding task continues in the background", async () => {
     const onSelectWorkspace = vi.fn();
     const onToast = vi.fn();
     useTaskStore.setState({ root: "/repo", task: verificationTask({ phase: "implementing" }) });
@@ -231,8 +231,35 @@ describe("Theia workbench", () => {
     await screen.findByTitle("Echo Code IDE");
     await userEvent.click(screen.getByRole("button", { name: "切换项目" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "打开其他文件夹…" }));
-    expect(onSelectWorkspace).not.toHaveBeenCalled();
-    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("请先停止任务"));
+    expect(onSelectWorkspace).toHaveBeenCalledWith("/picked");
+    expect(onToast).not.toHaveBeenCalledWith(expect.stringContaining("请先停止任务"));
+  });
+
+  it("creates an isolated Git worktree for a parallel task in the same project", async () => {
+    const onSelectWorkspace = vi.fn();
+    invoke.mockImplementation(async (command: string): Promise<unknown> => {
+      if (command === "coding_task_list") return [{ id: "running-task", name: "正在开发", phase: "implementing", updatedAt: "now" }];
+      if (command === "coding_verification_detect") return [];
+      if (command === "coding_theia_start") return { url: "http://127.0.0.1:41773/", embedToken: "test-embed-token" };
+      if (command === "coding_isolation_create") return { root: "/managed/parallel", sourceRoot: "/repo", baseHead: "abc123" };
+      return null;
+    });
+    render(<CodingWorkbench cwd="/repo" models={[]} onSelectWorkspace={onSelectWorkspace} />);
+    const frame = await screen.findByTitle("Echo Code IDE") as HTMLIFrameElement;
+    Object.defineProperty(frame, "clientWidth", { configurable: true, value: 1200 });
+    Object.defineProperty(frame, "clientHeight", { configurable: true, value: 900 });
+    const src = new URL(frame.src);
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", {
+        origin: src.origin,
+        source: frame.contentWindow,
+        data: { type: "echo/agent-bounds", token: src.searchParams.get("echoBridgeToken"), bounds: { left: 790, top: 44, width: 390, height: 800 } },
+      }));
+    });
+    await userEvent.click(screen.getByRole("button", { name: "切换开发任务" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "新建开发任务" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("coding_isolation_create", { root: "/repo" }));
+    await waitFor(() => expect(onSelectWorkspace).toHaveBeenCalledWith("/managed/parallel"));
   });
 
   it("saves dirty Theia editors before switching projects", async () => {

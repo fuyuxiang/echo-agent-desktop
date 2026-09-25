@@ -56,6 +56,10 @@ impl FilesystemAccess {
             let _ = access.authorize_workspace(&workspace.cwd);
         }
 
+        for root in crate::coding::isolation::managed_worktrees() {
+            let _ = access.authorize_workspace(&root.to_string_lossy());
+        }
+
         // Knowledge sources are also durable user selections. Load this file
         // only once at native startup: a compromised renderer cannot expand
         // the live allow-list merely by rewriting the descriptor store.

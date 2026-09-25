@@ -6,6 +6,7 @@ import { useSessionStore } from "@/stores/session-store";
 import { codingApi } from "./tauri-api";
 import { parseRuntimePlan, runtimePlanFingerprint } from "./workflow-plan";
 import { useTaskStore } from "../store/task-store";
+import type { CodingTask } from "./types";
 
 /**
  * Bridge between Agent session events and the orchestrator's ChangeSet.
@@ -25,12 +26,19 @@ import { useTaskStore } from "../store/task-store";
  * fragile inference the old implementation got wrong. Git is used when it is
  * available; ordinary folders use an application-owned checkpoint.
  */
-export function useTaskLifecycle(cwd: string | undefined) {
-  const taskId = useTaskStore((state) => state.task?.id);
-  const taskPhase = useTaskStore((state) => state.task?.phase);
-  const taskPhaseReason = useTaskStore((state) => state.task?.phaseReason);
-  const taskBlocker = useTaskStore((state) => state.task?.blocker);
-  const taskSessionId = useTaskStore((state) => state.task?.sessionId);
+export function useTaskLifecycle(
+  cwd: string | undefined,
+  runtimeTask?: CodingTask | null,
+  onChanged?: () => Promise<void>,
+) {
+  const selectedTask = useTaskStore((state) => state.task);
+  const task = runtimeTask === undefined ? selectedTask : runtimeTask;
+  const taskId = task?.id;
+  const taskPhase = task?.phase;
+  const taskPhaseReason = task?.phaseReason;
+  const taskBlocker = task?.blocker;
+  const taskSessionId = task?.sessionId;
+  const refresh = onChanged ?? useTaskStore.getState().refreshTaskState;
   const streaming = useSessionStore((state) =>
     taskSessionId ? Boolean(state.transcripts[taskSessionId]?.streamingMessageId) : false,
   );
@@ -75,7 +83,7 @@ export function useTaskLifecycle(cwd: string | undefined) {
     lastPlanFingerprintRef.current = planFingerprint;
     void codingApi
       .syncPlan(cwd, taskId, parseRuntimePlan(runtimePlan))
-      .then(() => useTaskStore.getState().refreshTaskState())
+      .then(() => refresh())
       .catch(async (error) => {
         lastPlanFingerprintRef.current = "";
         await codingApi.reportStartFailed(
@@ -83,9 +91,9 @@ export function useTaskLifecycle(cwd: string | undefined) {
           taskId,
           `执行计划无法持久化：${String(error).replace(/^Error:\s*/, "")}`,
         ).catch(() => undefined);
-        await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+        await refresh().catch(() => undefined);
       });
-  }, [cwd, planFingerprint, runtimePlan, taskId, taskPhase, taskSessionId]);
+  }, [cwd, planFingerprint, refresh, runtimePlan, taskId, taskPhase, taskSessionId]);
 
   const completionKey = terminalMessage
     ? `${terminalMessage.promptId ?? terminalMessage.id}:${terminalMessage.stopReason}:${terminalMessage.cancelTrigger ?? ""}:${terminalMessage.cancellationCategory ?? ""}`
@@ -138,7 +146,7 @@ export function useTaskLifecycle(cwd: string | undefined) {
           await codingApi.syncChanges(cwd, taskId);
           await codingApi.reportImplementation(cwd, taskId);
         }
-        await useTaskStore.getState().refreshTaskState();
+        await refresh();
       } catch (error) {
         // Continuing after a failed sync could falsely report a clean task.
         await codingApi
@@ -148,7 +156,7 @@ export function useTaskLifecycle(cwd: string | undefined) {
             `无法同步 Agent 产生的文件变更：${String(error).replace(/^Error:\s*/, "")}`,
           )
           .catch(() => undefined);
-        await useTaskStore.getState().refreshTaskState().catch(() => undefined);
+        await refresh().catch(() => undefined);
       } finally {
         settlingRef.current = false;
         setSettling(false);
@@ -158,6 +166,7 @@ export function useTaskLifecycle(cwd: string | undefined) {
     completionKey,
     cwd,
     runtimePlan,
+    refresh,
     streaming,
     taskId,
     taskPhase,
@@ -192,7 +201,7 @@ export function useTaskLifecycle(cwd: string | undefined) {
     setSettling(true);
     void codingApi
       .reportInterrupted(cwd, taskId, outcome)
-      .then(() => useTaskStore.getState().refreshTaskState())
+      .then(() => refresh())
       .catch(() => undefined)
       .finally(() => {
         settlingRef.current = false;
@@ -201,6 +210,7 @@ export function useTaskLifecycle(cwd: string | undefined) {
   }, [
     completionKey,
     cwd,
+    refresh,
     streaming,
     taskBlocker,
     taskId,
