@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
@@ -52,6 +53,7 @@ import {
   flattenModels,
   filterModelsByRuntimeCatalog,
   notificationAppend,
+  notificationMarkRead,
   memoryAppend,
   internalReload,
   invalidateAgentKnowledgeSourceSync,
@@ -208,6 +210,8 @@ export default function App() {
 }
 
 function Shell() {
+  const notificationNavigatorRef = useRef<(sessionId: string) => Promise<void>>(async () => {});
+  const notificationAutomationNavigatorRef = useRef<(automationId: string) => Promise<void>>(async () => {});
   const [init, setInit] = useState<InitResult | null>(null);
   useEffect(() => {
     if (init?.ok && "__TAURI_INTERNALS__" in window) {
@@ -226,6 +230,8 @@ function Shell() {
   const [trustRequest, setTrustRequest] = useState<{ cwd?: string; reason?: string } | null>(null);
   const [taskRefreshSignal, setTaskRefreshSignal] = useState(0);
   const [automationRefreshSignal, setAutomationRefreshSignal] = useState(0);
+  const [notificationAutomationOpen, setNotificationAutomationOpen] = useState<{ id: string; sequence: number } | null>(null);
+  const notificationAutomationSequenceRef = useRef(0);
   const [commandRefreshKey, setCommandRefreshKey] = useState(0);
   const [placeholderView, setPlaceholderView] = useState<string | null>(null);
   const [meetingLaunchModelId, setMeetingLaunchModelId] = useState<string | undefined>();
@@ -632,13 +638,6 @@ function Shell() {
               status: "awaiting_permission",
               updatedAt: new Date().toISOString(),
             });
-            void notificationAppend(
-              "permission",
-              p.options?.[0]?.title ?? "工具执行权限请求",
-              undefined,
-              p.sessionId,
-              "warn",
-            );
           },
           onPermissionClosed: ({ requestId, sessionId }) => {
             permissionStore.getState().close(requestId, sessionId);
@@ -814,13 +813,6 @@ function Shell() {
                 break;
               }
             }
-            void notificationAppend(
-              "summary",
-              `生成会话标题：${title}`,
-              undefined,
-              sessionId,
-              "info",
-            );
           },
           onFolderTrust: (p) => {
             // EchoAgent asks the user to trust a folder before running tools.
@@ -839,13 +831,6 @@ function Shell() {
             const payload = (p ?? {}) as { enabled?: boolean; sessionId?: string };
             if (typeof payload.enabled === "boolean") {
               sessionStore.getState().setPlanMode(payload.enabled, payload.sessionId);
-              void notificationAppend(
-                "plan_mode",
-                payload.enabled ? "进入计划模式" : "退出计划模式",
-                undefined,
-                undefined,
-                "info",
-              );
             }
           },
           onMcpStatus: (p) => {
@@ -863,35 +848,23 @@ function Shell() {
                 showToast(`${labels || "知识库"}连接已中断，下次发送前将自动重连`, 6000);
               }
             }
-            void notificationAppend(
-              "mcp_status",
-              isKnowledgeBridge ? "知识库连接状态变化" : "MCP 连接器状态变化",
-              typeof p === "string" ? p : JSON.stringify(p).slice(0, 200),
-              p.sessionId,
-              isKnowledgeBridge && connectionLost && !intentionalShutdown ? "warn" : "info",
-            );
+            if (connectionLost && !intentionalShutdown) {
+              void notificationAppend(
+                "mcp_status",
+                isKnowledgeBridge ? "知识库连接已中断" : "MCP 连接器不可用",
+                p.name,
+                p.sessionId,
+                "warn",
+              );
+            }
           },
           onModelsUpdate: () => {
             // EchoAgent reloaded its model catalog — keep picker + ready state in sync.
             void refreshModels();
-            void notificationAppend(
-              "models_update",
-              "模型列表已更新",
-              undefined,
-              undefined,
-              "info",
-            );
           },
           onTaskUpdate: () => {
             // A background task changed state — bump the signal so TasksPanel refreshes.
             setTaskRefreshSignal((n) => n + 1);
-            void notificationAppend(
-              "task_update",
-              "后台任务状态变化",
-              undefined,
-              undefined,
-              "info",
-            );
           },
           onAutomationUpdate: (event) => {
             setAutomationRefreshSignal((value) => value + 1);
@@ -1044,6 +1017,11 @@ function Shell() {
   ]);
 
   const currentSessionId = sessionsStore((s) => s.currentSessionId);
+  useEffect(() => {
+    void invoke("notification_set_visible_session", {
+      sessionId: init?.ok && currentSessionId && !placeholderView && !settingsOpen ? currentSessionId : null,
+    }).catch(() => {});
+  }, [init?.ok, currentSessionId, placeholderView, settingsOpen]);
   // The active session's catalog entry drives the topbar title and cwd scoping
   // of a manual rename (mirrors EchoAgent's topbar).
   const currentEntry = sessionsStore((s) => {
@@ -1114,6 +1092,7 @@ function Shell() {
     return undefined;
   };
   const navigateNow = (label: string) => {
+    setNotificationAutomationOpen(null);
     if (label === "个人记忆" || label === "资料库" || label === "更多") {
       openSettings("personal-memory");
       return;
@@ -1953,9 +1932,13 @@ function Shell() {
     sessionId: string,
     sessionCwd?: string,
     preservePlaceholder = false,
+    strict = false,
   ) => {
     if (!preservePlaceholder && placeholderView === "代码开发" && codingLeaveGuardRef.current) {
-      if (!(await codingLeaveGuardRef.current())) return;
+      if (!(await codingLeaveGuardRef.current())) {
+        if (strict) throw new Error("请先处理代码开发中的未保存内容");
+        return;
+      }
     }
     const generation = ++selectionGenerationRef.current;
     let entry = findSessionSummary(sessionId);
@@ -1965,7 +1948,10 @@ function Shell() {
     if (!entry) {
       try {
         const list = await agentListAllSessions(true);
-        if (selectionGenerationRef.current !== generation) return;
+        if (selectionGenerationRef.current !== generation) {
+          if (strict) throw new Error("任务打开已被新的导航操作取代");
+          return;
+        }
         sessionsStore.getState().mergeSessions(list);
         entry = list.find((item) => item.sessionId === sessionId);
       } catch {
@@ -1977,23 +1963,32 @@ function Shell() {
       if (!entry && sessionCwd) {
         try {
           const list = await agentListSessions(sessionCwd, true);
-          if (selectionGenerationRef.current !== generation) return;
+          if (selectionGenerationRef.current !== generation) {
+            if (strict) throw new Error("任务打开已被新的导航操作取代");
+            return;
+          }
           sessionsStore.getState().mergeSessions(list);
           entry = list.find((item) => item.sessionId === sessionId);
         } catch (error) {
           if (selectionGenerationRef.current === generation) {
             showToast(`加载会话信息失败：${friendlyError(error)}`, 6000);
           }
+          if (strict) throw error;
           return;
         }
       }
     }
-    if (selectionGenerationRef.current !== generation) return;
+    if (selectionGenerationRef.current !== generation) {
+      if (strict) throw new Error("任务打开已被新的导航操作取代");
+      return;
+    }
     if (!entry) {
+      if (strict) throw new Error("关联任务不存在、已归档或当前无权访问");
       showToast("无法打开会话：会话不存在、已归档或当前无权访问", 5000);
       return;
     }
     if (entry.archived) {
+      if (strict) throw new Error("关联任务已归档，请先在归档管理中恢复");
       showActionToast("该会话已归档，请先恢复后继续", [
         { label: "管理归档", onClick: () => openSettings("archived") },
       ], 6000);
@@ -2022,7 +2017,10 @@ function Shell() {
       // Load with the session's own cwd. Opening history must not re-aim the
       // working directory selected for the next new task.
       const loadedModelId = await agentLoadSession(sessionId, entry.cwd);
-      if (selectionGenerationRef.current !== generation) return;
+      if (selectionGenerationRef.current !== generation) {
+        if (strict) throw new Error("任务打开已被新的导航操作取代");
+        return;
+      }
       // The load response is authoritative; older runtimes may omit models.
       const actualModelId = loadedModelId || findSessionSummary(sessionId)?.currentModelId;
       sessionsStore.getState().upsert({ sessionId, currentModelId: actualModelId });
@@ -2044,6 +2042,7 @@ function Shell() {
       if (selectionGenerationRef.current === generation && sessionsStore.getState().currentSessionId === sessionId) {
         sessionStore.getState().setError(friendlyError(e));
       }
+      if (strict) throw e;
     } finally {
       setLoadingSession((pending) => pending?.generation === generation ? null : pending);
       // Replay window is over: a *new* turn's updates for this session must be
@@ -2051,6 +2050,80 @@ function Shell() {
       sessionStore.getState().clearReplaySuppression(sessionId);
     }
   };
+
+  notificationNavigatorRef.current = (sessionId) => handleSelectSession(sessionId, undefined, false, true);
+  notificationAutomationNavigatorRef.current = async (automationId) => {
+    if (placeholderView === "代码开发" && codingLeaveGuardRef.current) {
+      if (!(await codingLeaveGuardRef.current())) throw new Error("请先处理代码开发中的未保存内容");
+    }
+    selectionGenerationRef.current += 1;
+    setNotificationAutomationOpen({ id: automationId, sequence: ++notificationAutomationSequenceRef.current });
+    setPlaceholderView("自动化");
+    sessionsStore.getState().setCurrent(null);
+    sessionStore.getState().reset();
+  };
+
+  useEffect(() => {
+    if (!init) return;
+    let disposed = false;
+    let running = false;
+    let dirty = false;
+    let unlisten: (() => void) | undefined;
+    const drain = async () => {
+      if (running) return;
+      running = true;
+      try {
+        while (dirty && !disposed) {
+          dirty = false;
+          const opens = await invoke<Array<{ id: string; sessionId?: string; requestId?: string; automationId?: string }>>(
+            "notification_take_pending_opens",
+          );
+          for (const open of opens) {
+            if (disposed) return;
+            try {
+              if (open.sessionId) await notificationNavigatorRef.current(open.sessionId);
+              else if (open.automationId) await notificationAutomationNavigatorRef.current(open.automationId);
+              else throw new Error("通知缺少关联任务");
+              setSettingsOpen(false);
+              if (open.requestId && open.sessionId) {
+                const permissionState = usePermissionStore.getState();
+                const closed = permissionState.closedRequestIds.includes(open.requestId);
+                const pending = permissionState.promote(open.requestId, open.sessionId);
+                if (closed) showToast("这项授权请求已处理，已打开关联任务", 5000);
+                else if (!pending) showToast("已打开关联任务，正在等待授权请求显示", 5000);
+              }
+              const notificationId = Number(open.id);
+              if (/^\d+$/.test(open.id) && Number.isSafeInteger(notificationId)) {
+                void notificationMarkRead(notificationId).catch(() => {});
+              }
+            } catch (error) {
+              showToast(`打开通知关联任务失败：${friendlyError(error)}`, 6000);
+            }
+          }
+        }
+      } catch (error) {
+        showToast(`读取通知跳转失败：${friendlyError(error)}`, 6000);
+      } finally {
+        running = false;
+        if (dirty && !disposed) void drain();
+      }
+    };
+    const requestDrain = () => {
+      dirty = true;
+      void drain();
+    };
+    void listen("notification://opened", requestDrain).then((stop) => {
+      if (disposed) stop();
+      else {
+        unlisten = stop;
+        requestDrain();
+      }
+    }).catch((error) => showToast(`监听通知点击失败：${friendlyError(error)}`, 6000));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [Boolean(init)]);
 
   // Rewind rewrites the backend history, so our cached transcript is stale —
   // drop it and reload from EchoAgent so the UI matches the rolled-back state.
@@ -2589,6 +2662,8 @@ function Shell() {
                   onCloseCodingWorkspace={handleCloseCodingWorkspace}
                   workspaces={workspaces}
                   sessionId={currentSessionId ?? undefined}
+                  notificationAutomationId={notificationAutomationOpen?.id}
+                  notificationAutomationSequence={notificationAutomationOpen?.sequence}
                   codingApiReady={!!init.auth.ready && !!newSessionModelId}
                   codingModels={models}
                   codingModelId={activeSessionModelId ?? newSessionModelId}
@@ -2731,7 +2806,8 @@ function Shell() {
             onModelsChanged={refreshModels}
             onRestoreSession={handleArchiveSession}
             onDeleteSession={handleDeleteSession}
-            onOpenSession={handleSelectSession}
+            onOpenSession={(sessionId) => handleSelectSession(sessionId, undefined, false, true)}
+            onOpenAutomation={(automationId) => notificationAutomationNavigatorRef.current(automationId)}
             onToast={showToast}
           />
         </Suspense>

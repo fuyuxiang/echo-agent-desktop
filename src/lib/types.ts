@@ -935,6 +935,8 @@ export interface NotificationEntry {
   title: string;
   body?: string;
   sessionId?: string;
+  requestId?: string;
+  automationId?: string;
   severity: "info" | "warn" | "error" | string;
   read: boolean;
 }

@@ -395,6 +395,9 @@ pub fn run() {
         .manage(org::shared_state())
         .invoke_handler(tauri::generate_handler![
             desktop_validation::desktop_validation_ready,
+            desktop_preferences::desktop_notification_preview_save,
+            notifications::notification_take_pending_opens,
+            notifications::notification_set_visible_session,
             backup::backup_export,
             backup::backup_inspect,
             backup::backup_restore,

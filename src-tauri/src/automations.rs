@@ -1677,22 +1677,29 @@ pub async fn automations_run(
 }
 
 async fn notify_run_failure(app: &AppHandle, automation: &Automation, error: &str) {
-    let body = format!("{}：{}", automation.name, error);
-    let _ = crate::notifications::append(
+    tracing::warn!(automation_id = %automation.id, %error, "automation run failed");
+    let notification_id = crate::notifications::append_with_target(
         crate::notifications::NotificationKind::Error,
-        "自动化任务执行失败",
-        Some(&body),
+        &format!("自动化《{}》运行失败", automation.name),
+        Some(error),
         None,
+        None,
+        Some(&automation.id),
         "error",
-    );
+    )
+    .ok();
     if automation.push_to_we_chat {
-        let _ = crate::notifications::dispatch_automation(
+        let _ = crate::notifications::dispatch_with_desktop_fallback(
             app,
             crate::notifications::NotifyMessage {
                 title: format!("自动化失败：{}", automation.name),
-                body: Some(error.to_string()),
+                body: Some("打开自动化查看运行记录".into()),
                 level: "error".into(),
                 session_id: None,
+                automation_id: Some(automation.id.clone()),
+                notification_id,
+                hidden_title: Some("自动化运行失败".into()),
+                ..Default::default()
             },
         )
         .await;

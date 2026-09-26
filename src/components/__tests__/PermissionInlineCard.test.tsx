@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolvePermission, setPermissionMode } = vi.hoisted(() => ({
@@ -54,7 +54,7 @@ describe("PermissionInlineCard", () => {
       remainingPending: 1,
       resolvedPermissions: [],
     });
-    usePermissionStore.setState({ queues: {}, closedRequestIds: [] });
+    usePermissionStore.setState({ queues: {}, closedRequestIds: [], priorityRequestBySession: {} });
     usePermissionModeStore.setState({ homeMode: "ask", statuses: {}, capabilityStatus: null });
     useSessionsStore.setState({
       independent: [{
@@ -87,6 +87,16 @@ describe("PermissionInlineCard", () => {
 
     const details = screen.getByText("查看完整操作参数").closest("details");
     expect(details).not.toHaveAttribute("open");
+  });
+
+  it("点击授权通知后将对应请求置顶并聚焦", async () => {
+    usePermissionStore.getState().request({ ...request, requestId: "permission-2", toolCallId: "tool-2" });
+    render(<PermissionInlineCard sessionId="session-1" />);
+    act(() => usePermissionStore.getState().promote("permission-2", "session-1"));
+    const card = screen.getByRole("region", { name: "操作授权" });
+    expect(card).toHaveAttribute("id", "permission-permission-2");
+    await waitFor(() => expect(card).toHaveFocus());
+    expect(usePermissionStore.getState().priorityRequestBySession["session-1"]).toBeUndefined();
   });
 
   it("仍按原 optionId 精确提交授权并在后端确认后关闭卡片", async () => {

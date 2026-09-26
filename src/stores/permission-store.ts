@@ -11,6 +11,8 @@ interface PermissionState {
   queues: Record<string, PermissionRequest[]>;
   /** Recently closed ids prevent a delayed Tauri event from resurrecting a request. */
   closedRequestIds: string[];
+  /** A clicked desktop notification can arrive before its permission event. */
+  priorityRequestBySession: Record<string, string>;
   /** Push a new request emitted by the backend. */
   request: (p: PermissionRequest) => void;
   /** Remove a request from its session's queue (without resolving the agent). */
@@ -21,6 +23,9 @@ interface PermissionState {
   clearAll: () => void;
   /** Drop stale requests owned by a session after that session is deleted. */
   clearSession: (sessionId: string) => void;
+  /** Surface the exact request chosen from a desktop notification. */
+  promote: (requestId: string, sessionId: string) => boolean;
+  consumePriority: (requestId: string, sessionId: string) => void;
 }
 
 const MAX_CLOSED_REQUEST_IDS = 256;
@@ -46,16 +51,23 @@ function withoutRequest(
 export const usePermissionStore = create<PermissionState>((set) => ({
   queues: {},
   closedRequestIds: [],
+  priorityRequestBySession: {},
   request: (p) =>
     set((s) => {
       if (s.closedRequestIds.includes(p.requestId)) return s;
       const sid = p.sessionId || "__global";
       const prev = s.queues[sid] ?? [];
       if (prev.some((pending) => pending.requestId === p.requestId)) return s;
-      return { queues: { ...s.queues, [sid]: [...prev, p] } };
+      const next = s.priorityRequestBySession[sid] === p.requestId ? [p, ...prev] : [...prev, p];
+      return { queues: { ...s.queues, [sid]: next } };
     }),
   dismiss: (requestId, sessionId) =>
-    set((s) => ({ queues: withoutRequest(s.queues, requestId, sessionId) })),
+    set((s) => ({
+      queues: withoutRequest(s.queues, requestId, sessionId),
+      priorityRequestBySession: Object.fromEntries(
+        Object.entries(s.priorityRequestBySession).filter(([sid, id]) => id !== requestId || (sessionId && sid !== sessionId)),
+      ),
+    })),
   close: (requestId, sessionId) =>
     set((s) => ({
       queues: withoutRequest(s.queues, requestId, sessionId),
@@ -63,15 +75,43 @@ export const usePermissionStore = create<PermissionState>((set) => ({
         ...s.closedRequestIds.filter((id) => id !== requestId),
         requestId,
       ].slice(-MAX_CLOSED_REQUEST_IDS),
+      priorityRequestBySession: Object.fromEntries(
+        Object.entries(s.priorityRequestBySession).filter(([sid, id]) => id !== requestId || (sessionId && sid !== sessionId)),
+      ),
     })),
-  clearAll: () => set({ queues: {}, closedRequestIds: [] }),
+  clearAll: () => set({ queues: {}, closedRequestIds: [], priorityRequestBySession: {} }),
   clearSession: (sessionId) =>
     set((state) => {
-      if (!state.queues[sessionId]) return state;
+      if (!state.queues[sessionId] && !state.priorityRequestBySession[sessionId]) return state;
       const queues = { ...state.queues };
       delete queues[sessionId];
-      return { queues };
+      const priorityRequestBySession = { ...state.priorityRequestBySession };
+      delete priorityRequestBySession[sessionId];
+      return { queues, priorityRequestBySession };
     }),
+  promote: (requestId, sessionId) => {
+    let found = false;
+    set((state) => {
+      if (state.closedRequestIds.includes(requestId)) return state;
+      const queue = state.queues[sessionId] ?? [];
+      const index = queue.findIndex((request) => request.requestId === requestId);
+      found = index >= 0;
+      return {
+        priorityRequestBySession: { ...state.priorityRequestBySession, [sessionId]: requestId },
+        queues: index > 0 ? {
+          ...state.queues,
+          [sessionId]: [queue[index], ...queue.slice(0, index), ...queue.slice(index + 1)],
+        } : state.queues,
+      };
+    });
+    return found;
+  },
+  consumePriority: (requestId, sessionId) => set((state) => {
+    if (state.priorityRequestBySession[sessionId] !== requestId) return state;
+    const priorityRequestBySession = { ...state.priorityRequestBySession };
+    delete priorityRequestBySession[sessionId];
+    return { priorityRequestBySession };
+  }),
 }));
 
 /** Select the first pending permission for a given session. */

@@ -85,6 +85,8 @@ interface AutomationPanelProps {
   cwd?: string;
   /** Incremented when the native scheduler persists a lifecycle transition. */
   refreshSignal?: number;
+  notificationAutomationId?: string;
+  notificationAutomationSequence?: number;
 }
 
 type TabKey = "tasks" | "records";
@@ -210,6 +212,8 @@ export function AutomationPanel({
   onOpenSession,
   cwd,
   refreshSignal = 0,
+  notificationAutomationId,
+  notificationAutomationSequence,
 }: AutomationPanelProps) {
   // ---------- 数据 ----------
   const [snapshot, setSnapshot] = useState<AutomationSnapshot | null>(null);
@@ -218,7 +222,8 @@ export function AutomationPanel({
   const snapshotGenerationRef = useRef(0);
   const lastRefreshSignalRef = useRef(refreshSignal);
   const [runStartingIds, setRunStartingIds] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<TabKey>("tasks");
+  const [activeTab, setActiveTab] = useState<TabKey>(notificationAutomationId ? "records" : "tasks");
+  const [focusedAutomationId, setFocusedAutomationId] = useState<string | null>(notificationAutomationId ?? null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<RecordFilter>("all");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -228,6 +233,14 @@ export function AutomationPanel({
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [archivedGroupOpen, setArchivedGroupOpen] = useState(true);
   const [showTemplatePage, setShowTemplatePage] = useState(false);
+
+  useEffect(() => {
+    if (!notificationAutomationId) return;
+    setFocusedAutomationId(notificationAutomationId);
+    setActiveTab("records");
+    setFilterStatus("all");
+    setSearchQuery("");
+  }, [notificationAutomationId, notificationAutomationSequence]);
 
   // ---------- 编辑态 ----------
   const [isCreating, setIsCreating] = useState(false);
@@ -654,6 +667,7 @@ export function AutomationPanel({
   );
   const filteredRecords = useMemo(() => {
     let items = [...completedItems, ...archivedItems];
+    if (focusedAutomationId) items = items.filter((item) => item.automationId === focusedAutomationId);
     if (filterStatus === "success") items = items.filter((i) => i.status === "success" && !i.archived);
     else if (filterStatus === "failed") items = items.filter((i) => i.status === "failed" && !i.archived);
     else if (filterStatus === "running") {
@@ -666,7 +680,7 @@ export function AutomationPanel({
       );
     }
     return items;
-  }, [completedItems, archivedItems, filterStatus, query, automationById]);
+  }, [completedItems, archivedItems, filterStatus, query, automationById, focusedAutomationId]);
 
   const groupedRecords = useMemo(() => {
     const groups: { label: string; items: AutomationRunRecord[] }[] = [];
@@ -926,6 +940,12 @@ export function AutomationPanel({
           <button type="button" className="atm-toolbar-btn" onClick={() => void refresh()} disabled={loading}>
             {loading ? "重试中…" : "重试"}
           </button>
+        </div>
+      )}
+      {focusedAutomationId && activeTab === "records" && (
+        <div className="atm-background-notice" role="status">
+          <span>正在查看“{automationById.get(focusedAutomationId)?.name ?? "关联自动化"}”的运行记录</span>
+          <button type="button" className="atm-toolbar-btn" onClick={() => setFocusedAutomationId(null)}>查看全部记录</button>
         </div>
       )}
 

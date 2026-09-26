@@ -62,6 +62,8 @@ function preferredOption(options: PermissionOption[], optionId: string): Permiss
 export function PermissionInlineCard({ sessionId }: { sessionId: string | null }) {
   const head = usePermissionStore(selectPermissionForSession(sessionId));
   const dismiss = usePermissionStore((s) => s.dismiss);
+  const priorityRequestId = usePermissionStore((s) => sessionId ? s.priorityRequestBySession[sessionId] : undefined);
+  const consumePriority = usePermissionStore((s) => s.consumePriority);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmingAlwaysId, setConfirmingAlwaysId] = useState<string | null>(null);
@@ -76,6 +78,15 @@ export function PermissionInlineCard({ sessionId }: { sessionId: string | null }
   useEffect(() => {
     if (confirmingAlwaysId) confirmCancelRef.current?.focus();
   }, [confirmingAlwaysId]);
+
+  useEffect(() => {
+    if (!sessionId || !head || priorityRequestId !== head.requestId) return;
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(`permission-${head.requestId}`)?.focus();
+      consumePriority(head.requestId, sessionId);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [sessionId, head?.requestId, priorityRequestId, consumePriority]);
 
   if (!head) return null;
 
@@ -210,7 +221,7 @@ export function PermissionInlineCard({ sessionId }: { sessionId: string | null }
   };
 
   return (
-    <section className="perm-inline" aria-label="操作授权">
+    <section id={`permission-${head.requestId}`} className="perm-inline" aria-label="操作授权" tabIndex={-1}>
       <div className="perm-inline__head">
         <span className="perm-inline__kind">{toolKindLabel(head.toolKind)}</span>
         <span className="perm-inline__title" title={head.title}>{head.title}</span>

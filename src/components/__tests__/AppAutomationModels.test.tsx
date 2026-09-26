@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps, ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
@@ -91,6 +93,8 @@ beforeEach(() => {
   vi.mocked(client.providersList).mockResolvedValue({ providers: [], models: [{ modelId: "model-a", name: "模型 A", providerId: "p" }, { modelId: "model-b", name: "模型 B", providerId: "p" }] } as never);
   vi.mocked(client.agentLoadSession).mockResolvedValue("model-a");
   vi.mocked(client.subscribeAgentEvents).mockImplementation(async (value) => { handlers = value; return () => {}; });
+  vi.mocked(listen).mockImplementation(async () => () => {});
+  vi.mocked(invoke).mockImplementation(async (command) => command === "notification_take_pending_opens" ? [] : null);
 });
 
 describe("自动化会话模型同步", () => {
@@ -223,5 +227,29 @@ describe("自动化会话模型同步", () => {
     expect(useSessionsStore.getState().independent).toEqual(expect.arrayContaining([
       expect.objectContaining({ sessionId: "project-session", currentModelId: "model-a" }),
     ]));
+  });
+
+  it("点击系统通知打开关联任务，并把通知标记为已读", async () => {
+    let onNotificationOpen: (() => void) | undefined;
+    let pending: Array<{ id: string; sessionId: string }> = [];
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "notification://opened") onNotificationOpen = () => handler({} as never);
+      return () => {};
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "notification_take_pending_opens") {
+        const opens = pending;
+        pending = [];
+        return opens;
+      }
+      return null;
+    });
+    await start();
+    act(() => useSessionsStore.getState().upsert({ sessionId: "auto-1", cwd: "/workspace", title: "日报" }));
+    expect(onNotificationOpen).toBeDefined();
+    pending = [{ id: "42", sessionId: "auto-1" }];
+    await act(async () => onNotificationOpen?.());
+    await waitFor(() => expect(client.agentLoadSession).toHaveBeenCalledWith("auto-1", "/workspace"));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("notification_mark_read", { id: 42 }));
   });
 });

@@ -55,6 +55,7 @@ import {
   echoAgentDataDir,
   desktopPreferencesGet,
   desktopPreferencesSave,
+  desktopNotificationPreviewSave,
   openEchoAgentDataDir,
   openExternalUrl,
   type MemoryConfig,
@@ -74,6 +75,7 @@ import { useUpdateStore } from "@/stores/update-store";
 import { validateOtlpEndpoint } from "@/lib/otlp-exporter";
 import { DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE, readFontSize, saveFontSize } from "@/lib/font-size";
 import { useAppDialog } from "./AppDialog";
+import { usePermissionStore } from "@/stores/permission-store";
 
 const ECHO_AGENT_DOCS_URL = "https://fuyuxiang.github.io/echo-agent/";
 const ACP_SPEC_URL = "https://agentclientprotocol.com/";
@@ -1241,29 +1243,21 @@ const KIND_FILTERS: { key: string; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "permission", label: "权限请求" },
   { key: "folder_trust", label: "文件夹信任" },
-  { key: "task_update", label: "任务更新" },
-  { key: "plan_mode", label: "计划模式" },
   { key: "mcp_status", label: "MCP 状态" },
-  { key: "models_update", label: "模型更新" },
-  { key: "summary", label: "会话标题" },
-  { key: "session_complete", label: "会话完成" },
+  { key: "session_complete", label: "任务结果" },
   { key: "error", label: "错误" },
 ];
 
-/** NotificationCenterSettingsPanel — EchoAgent 事件通知中心。
- *
- *  EchoAgent 的 agentMail 是腾讯邮箱集成（无 EchoAgent 对应）。EchoAgent 把它
- *  重新定义为 EchoAgent 事件的通知收件箱：权限请求、文件夹信任、任务更新、
- *  plan 模式切换、MCP 状态、模型更新、会话完成等所有事件都会记到这里。
- *  用户可浏览/筛选/标记已读/清空。
- *
- *  数据存在 ~/.echo-agent/echoagent-notifications.json（最多 200 条 FIFO）。
- *  写入由 App.tsx 的事件订阅回调触发（notificationAppend）。 */
+/** Local inbox for actionable requests, failures, and task results. */
 export function NotificationCenterSettingsPanel({
   onOpenSession,
+  onOpenAutomation,
+  onToast,
   onClose,
 }: {
   onOpenSession?: (sessionId: string) => void | Promise<void>;
+  onOpenAutomation?: (automationId: string) => void | Promise<void>;
+  onToast?: (message: string) => void;
   onClose?: () => void;
 }) {
   const [entries, setEntries] = useState<NotificationEntry[]>([]);
@@ -1271,6 +1265,11 @@ export function NotificationCenterSettingsPanel({
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessionOpenError, setSessionOpenError] = useState<string | null>(null);
+  const [showTaskTitle, setShowTaskTitle] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(true);
+  const [previewSaving, setPreviewSaving] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewReload, setPreviewReload] = useState(0);
   const [filter, setFilter] = useState<string>("all");
   const { requestConfirmation, dialog } = useAppDialog();
 
@@ -1289,6 +1288,33 @@ export function NotificationCenterSettingsPanel({
   useEffect(() => {
     reload();
   }, [reload]);
+
+  useEffect(() => {
+    let active = true;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    void desktopPreferencesGet().then((preferences) => {
+      if (active) setShowTaskTitle(preferences.showNotificationTaskTitle ?? false);
+    }).catch((loadError) => {
+      if (active) setPreviewError(String(loadError).replace(/^Error:\s*/, ""));
+    }).finally(() => {
+      if (active) setPreviewLoading(false);
+    });
+    return () => { active = false; };
+  }, [previewReload]);
+
+  const savePreview = async (enabled: boolean) => {
+    setPreviewSaving(true);
+    setPreviewError(null);
+    try {
+      const saved = await desktopNotificationPreviewSave(enabled);
+      setShowTaskTitle(saved.showNotificationTaskTitle);
+    } catch (saveError) {
+      setPreviewError(String(saveError).replace(/^Error:\s*/, ""));
+    } finally {
+      setPreviewSaving(false);
+    }
+  };
 
   const handleMarkRead = useCallback(
     async (id: number) => {
@@ -1339,11 +1365,34 @@ export function NotificationCenterSettingsPanel({
     });
   }, [reload, requestConfirmation]);
 
-  const openRelatedSession = async (sessionId: string) => {
+  const openRelatedSession = async (sessionId: string, requestId?: string, notificationId?: number) => {
     if (!onOpenSession) return;
     setSessionOpenError(null);
     try {
       await onOpenSession(sessionId);
+      if (requestId) {
+        const permissionState = usePermissionStore.getState();
+        const closed = permissionState.closedRequestIds.includes(requestId);
+        const pending = permissionState.promote(requestId, sessionId);
+        if (closed) {
+          onToast?.("这项授权请求已处理，已打开关联任务");
+        } else if (!pending) {
+          onToast?.("已打开关联任务，正在等待授权请求显示");
+        }
+      }
+      if (notificationId != null) void notificationMarkRead(notificationId).catch(() => {});
+      onClose?.();
+    } catch (openError) {
+      setSessionOpenError(String(openError).replace(/^Error:\s*/, ""));
+    }
+  };
+
+  const openRelatedAutomation = async (automationId: string, notificationId: number) => {
+    if (!onOpenAutomation) return;
+    setSessionOpenError(null);
+    try {
+      await onOpenAutomation(automationId);
+      void notificationMarkRead(notificationId).catch(() => {});
       onClose?.();
     } catch (openError) {
       setSessionOpenError(String(openError).replace(/^Error:\s*/, ""));
@@ -1358,7 +1407,7 @@ export function NotificationCenterSettingsPanel({
   return (
     <SectionShell
       title="通知中心"
-      desc="集中查看权限请求、任务更新、运行状态和会话结果。"
+      desc="集中查看待处理请求、连接问题和任务结果。"
       actions={
         <>
           <button className="settings-btn" onClick={reload} disabled={loading || mutating}>
@@ -1382,13 +1431,31 @@ export function NotificationCenterSettingsPanel({
       }
     >
       {sessionOpenError && (
-        <p className="settings-msg settings-msg--warn" role="alert">打开相关会话失败：{sessionOpenError}</p>
+        <p className="settings-msg settings-msg--warn" role="alert">打开关联任务失败：{sessionOpenError}</p>
       )}
       {error && (
         <p className="settings-msg settings-msg--warn" role="alert">
           通知记录不可用：{error}。原文件未被覆盖；你可以修复文件后重试，或点击“清空”重建。
         </p>
       )}
+      <SettingsGroup title="桌面通知预览" desc="控制系统通知是否显示任务名称；任务通知点击后会打开关联任务。">
+        <div className="settings-row settings-row--comfortable">
+          <div className="settings-row__label settings-row__label--stacked">
+            <span className="settings-row__name">显示任务名称</span>
+            <span className="settings-row__description">默认隐藏，避免任务标题出现在锁屏通知中。应用内通知记录仍显示完整信息。</span>
+          </div>
+          <label className="sk-toggle">
+            <input type="checkbox" aria-label="桌面通知显示任务名称" checked={showTaskTitle}
+              disabled={previewLoading || previewSaving || Boolean(previewError)}
+              onChange={(event) => void savePreview(event.target.checked)} />
+            <span className="sk-toggle-track"><span className="sk-toggle-thumb" /></span>
+          </label>
+        </div>
+        {previewError && <p className="settings-msg settings-msg--warn" role="alert">
+          桌面通知偏好不可用：{previewError}
+          <button type="button" className="settings-btn" onClick={() => setPreviewReload((value) => value + 1)}>重试</button>
+        </p>}
+      </SettingsGroup>
       <SettingsGroup
         title="通知概览"
         desc="通知仅保存在本机，可随时标记已读或清空。"
@@ -1471,10 +1538,16 @@ export function NotificationCenterSettingsPanel({
                   {entry.sessionId && (
                     onOpenSession ? (
                       <button type="button" className="notification-row__session notification-row__session--link"
-                        onClick={() => void openRelatedSession(entry.sessionId!)} disabled={mutating}>
-                        打开相关会话 #{entry.sessionId.slice(0, 8)}
+                        onClick={() => void openRelatedSession(entry.sessionId!, entry.requestId, entry.id)} disabled={mutating}>
+                        {entry.kind === "permission" ? "打开任务处理授权" : "打开相关任务"}
                       </button>
                     ) : <span className="notification-row__session">会话 #{entry.sessionId.slice(0, 8)}</span>
+                  )}
+                  {!entry.sessionId && entry.automationId && onOpenAutomation && (
+                    <button type="button" className="notification-row__session notification-row__session--link"
+                      onClick={() => void openRelatedAutomation(entry.automationId!, entry.id)} disabled={mutating}>
+                      打开自动化记录
+                    </button>
                   )}
                 </div>
               </div>
@@ -1508,7 +1581,7 @@ function kindLabel(kind: NotificationKind | string): string {
     mcp_status: "MCP 状态",
     models_update: "模型更新",
     summary: "会话标题",
-    session_complete: "会话完成",
+    session_complete: "任务结果",
     error: "错误",
     info: "信息",
   };

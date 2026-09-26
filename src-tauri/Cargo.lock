@@ -4040,6 +4040,7 @@ dependencies = [
  "image",
  "libc",
  "notify-debouncer-full",
+ "notify-rust",
  "objc2-app-kit",
  "objc2-foundation",
  "open",

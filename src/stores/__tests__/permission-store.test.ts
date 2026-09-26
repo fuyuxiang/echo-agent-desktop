@@ -6,7 +6,7 @@ import {
 } from "../permission-store";
 import type { PermissionRequest } from "@/lib/types";
 
-const resetStore = () => usePermissionStore.setState({ queues: {}, closedRequestIds: [] });
+const resetStore = () => usePermissionStore.setState({ queues: {}, closedRequestIds: [], priorityRequestBySession: {} });
 
 function makePerm(requestId: string, sessionId: string): PermissionRequest {
   return {
@@ -35,6 +35,36 @@ describe("permission-store", () => {
     s.request(makePerm("r2", "s1"));
     s.request(makePerm("r3", "s1"));
     expect(usePermissionStore.getState().queues["s1"].map((q) => q.requestId)).toEqual(["r1", "r2", "r3"]);
+  });
+
+  it("通知点击会显示准确的待授权请求且不改变其他任务", () => {
+    const store = usePermissionStore.getState();
+    store.request(makePerm("r1", "s1"));
+    store.request(makePerm("r2", "s1"));
+    store.request(makePerm("r3", "s2"));
+    expect(store.promote("r2", "s1")).toBe(true);
+    expect(usePermissionStore.getState().queues.s1.map((request) => request.requestId)).toEqual(["r2", "r1"]);
+    expect(usePermissionStore.getState().queues.s2[0].requestId).toBe("r3");
+    expect(store.promote("resolved", "s1")).toBe(false);
+  });
+
+  it("系统通知比授权事件先到时，随后到达的准确请求仍会置顶", () => {
+    const store = usePermissionStore.getState();
+    store.request(makePerm("r1", "s1"));
+    expect(store.promote("r2", "s1")).toBe(false);
+    store.request(makePerm("r2", "s1"));
+    expect(usePermissionStore.getState().queues.s1.map((request) => request.requestId)).toEqual(["r2", "r1"]);
+    store.consumePriority("r2", "s1");
+    expect(usePermissionStore.getState().priorityRequestBySession.s1).toBeUndefined();
+  });
+
+  it("已关闭的授权不会因迟到的通知点击再次出现", () => {
+    const store = usePermissionStore.getState();
+    store.close("r2", "s1");
+    expect(store.promote("r2", "s1")).toBe(false);
+    store.request(makePerm("r2", "s1"));
+    expect(usePermissionStore.getState().queues.s1).toBeUndefined();
+    expect(usePermissionStore.getState().priorityRequestBySession.s1).toBeUndefined();
   });
 
   it("重放同一 requestId 时不重复入队", () => {

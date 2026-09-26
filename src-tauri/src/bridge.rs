@@ -1260,7 +1260,7 @@ async fn handle_client_message(
                 }
                 tracing::info!(session_id = %session_id_str, "auto-approved permission after mode-switch race");
             } else {
-                let emitted = app.emit("agent://permission", frontend).is_ok();
+                let emitted = app.emit("agent://permission", frontend.clone()).is_ok();
                 if !emitted {
                     // If the native event channel itself is unavailable, never
                     // leave the agent parked on an interaction nobody can see.
@@ -1271,21 +1271,62 @@ async fn handle_client_message(
                         emit_permission_closed(app, notice);
                     }
                 }
-                let notify_app = app.clone();
-                let notify_session = session_id_str.clone();
-                tokio::spawn(async move {
-                    let _ = crate::notifications::dispatch_external(
-                        &notify_app,
-                        crate::notifications::NotifyMessage {
-                            title: "EchoAgent 权限请求".into(),
-                            body: Some("有工具等待你的授权".into()),
-                            level: "warn".into(),
-                            session_id: Some(notify_session),
-                        },
-                        None,
-                    )
-                    .await;
-                });
+                if emitted {
+                    let notify_app = app.clone();
+                    let notify_session = session_id_str.clone();
+                    let notify_request = request_id.clone();
+                    let notify_permissions = perms.clone();
+                    tokio::spawn(async move {
+                        let lookup_session = notify_session.clone();
+                        let lookup_request = notify_request.clone();
+                        let Ok((title, notification_id)) = tokio::task::spawn_blocking(move || {
+                            let title =
+                                crate::notifications::task_title_for_notification(&lookup_session)
+                                    .as_deref()
+                                    .map(|name| format!("任务《{name}》需要授权"))
+                                    .unwrap_or_else(|| "有任务需要授权".into());
+                            let notification_id = crate::notifications::append_with_target(
+                                crate::notifications::NotificationKind::Permission,
+                                &title,
+                                Some("打开任务查看请求并决定是否允许"),
+                                Some(&lookup_session),
+                                Some(&lookup_request),
+                                None,
+                                "warn",
+                            )
+                            .ok();
+                            (title, notification_id)
+                        })
+                        .await
+                        else {
+                            tracing::error!("permission notification preparation task failed");
+                            return;
+                        };
+                        if !notify_permissions
+                            .list(Some(&notify_session))
+                            .await
+                            .iter()
+                            .any(|pending| pending.request_id == notify_request)
+                        {
+                            return;
+                        }
+                        let _ = crate::notifications::dispatch_with_desktop_fallback(
+                            &notify_app,
+                            crate::notifications::NotifyMessage {
+                                title,
+                                body: Some("打开任务查看请求并决定是否允许".into()),
+                                level: "warn".into(),
+                                session_id: Some(notify_session),
+                                request_id: Some(notify_request),
+                                automation_id: None,
+                                notification_id,
+                                hidden_title: Some("任务需要授权".into()),
+                                background_only: true,
+                            },
+                        )
+                        .await;
+                    });
+                }
             }
 
             // Do not block the dispatcher: another session's updates and
@@ -1782,83 +1823,117 @@ pub(crate) fn handle_prompt_complete(app: &AppHandle, complete: CompleteEvent) {
         if let Some(completion) = automation_notification.as_ref() {
             crate::automations::emit_automation_update(app, completion.event.clone());
         }
-        let _ = crate::notifications::append(
-            if failed {
-                crate::notifications::NotificationKind::Error
-            } else {
-                crate::notifications::NotificationKind::SessionComplete
-            },
-            if failed {
-                "会话执行失败"
-            } else if stopped {
-                "会话已停止"
-            } else {
-                "会话完成"
-            },
-            complete
-                .cancellation_category
-                .as_deref()
-                .or(Some(&stop_reason)),
-            Some(&session_id),
-            if failed {
-                "error"
-            } else if stopped {
-                "warn"
-            } else {
-                "info"
-            },
-        );
-        if automation_notification
+        let body = if failed {
+            "打开任务查看错误并重试"
+        } else if stopped {
+            "打开任务查看当前进度"
+        } else {
+            "打开任务查看结果"
+        };
+        let notify_app = app.clone();
+        let notify_session = session_id.clone();
+        let push = automation_notification
             .as_ref()
-            .is_none_or(|completion| completion.push)
-        {
-            let notify_app = app.clone();
-            let notify_session = session_id.clone();
-            let notify_reason = stop_reason.clone();
-            let notify_failed = failed;
-            let notify_stopped = stopped;
-            let automation_name =
-                automation_notification.map(|completion| completion.automation_name);
-            tokio::spawn(async move {
-                let is_automation = automation_name.is_some();
-                let message = crate::notifications::NotifyMessage {
-                    title: if let Some(name) = &automation_name {
-                        if notify_failed {
-                            format!("自动化失败：{name}")
-                        } else if notify_stopped {
-                            format!("自动化已停止：{name}")
-                        } else {
-                            format!("自动化完成：{name}")
-                        }
-                    } else if notify_failed {
-                        "EchoAgent 会话失败".into()
-                    } else if notify_stopped {
-                        "EchoAgent 会话已停止".into()
+            .is_none_or(|completion| completion.push);
+        let automation_name = automation_notification.map(|completion| completion.automation_name);
+        tokio::spawn(async move {
+            let is_automation = automation_name.is_some();
+            let lookup_session = notify_session.clone();
+            let Ok((title, notification_id)) = tokio::task::spawn_blocking(move || {
+                let task_title = if automation_name.is_some() {
+                    None
+                } else {
+                    crate::notifications::task_title_for_notification(&lookup_session)
+                };
+                let title = if let Some(name) = automation_name.as_deref() {
+                    if failed {
+                        format!("自动化《{name}》运行失败")
+                    } else if stopped {
+                        format!("自动化《{name}》已停止")
                     } else {
-                        "EchoAgent 会话完成".into()
+                        format!("自动化《{name}》已完成")
+                    }
+                } else if let Some(name) = task_title.as_deref() {
+                    if failed {
+                        format!("任务《{name}》的回复失败")
+                    } else if stopped {
+                        format!("任务《{name}》的回复已停止")
+                    } else {
+                        format!("任务《{name}》的回复已完成")
+                    }
+                } else if failed {
+                    "任务回复失败".into()
+                } else if stopped {
+                    "任务回复已停止".into()
+                } else {
+                    "任务回复已完成".into()
+                };
+                let notification_id = crate::notifications::append_with_target(
+                    if failed {
+                        crate::notifications::NotificationKind::Error
+                    } else {
+                        crate::notifications::NotificationKind::SessionComplete
                     },
-                    body: Some(format!(
-                        "会话 {}（{}）",
-                        &notify_session[..notify_session.len().min(8)],
-                        notify_reason
-                    )),
-                    level: if notify_failed {
+                    &title,
+                    Some(body),
+                    Some(&lookup_session),
+                    None,
+                    None,
+                    if failed {
+                        "error"
+                    } else if stopped {
+                        "warn"
+                    } else {
+                        "info"
+                    },
+                )
+                .ok();
+                (title, notification_id)
+            })
+            .await
+            else {
+                tracing::error!("completion notification preparation task failed");
+                return;
+            };
+            if push {
+                let message = crate::notifications::NotifyMessage {
+                    title,
+                    body: Some(body.into()),
+                    level: if failed {
                         "error".into()
-                    } else if notify_stopped {
+                    } else if stopped {
                         "warn".into()
                     } else {
                         "info".into()
                     },
                     session_id: Some(notify_session),
+                    request_id: None,
+                    automation_id: None,
+                    notification_id,
+                    hidden_title: Some(
+                        if is_automation {
+                            if failed {
+                                "自动化运行失败"
+                            } else if stopped {
+                                "自动化已停止"
+                            } else {
+                                "自动化已完成"
+                            }
+                        } else if failed {
+                            "任务回复失败"
+                        } else if stopped {
+                            "任务回复已停止"
+                        } else {
+                            "任务回复已完成"
+                        }
+                        .into(),
+                    ),
+                    background_only: !is_automation,
                 };
-                if is_automation {
-                    let _ = crate::notifications::dispatch_automation(&notify_app, message).await;
-                } else {
-                    let _ =
-                        crate::notifications::dispatch_external(&notify_app, message, None).await;
-                }
-            });
-        }
+                let _ = crate::notifications::dispatch_with_desktop_fallback(&notify_app, message)
+                    .await;
+            }
+        });
     }
     let _ = app.emit("agent://complete", complete);
 }

@@ -14,8 +14,9 @@ vi.mock("@/lib/agent-client", () => ({
   commandsList: vi.fn().mockResolvedValue([]),
   exportTextFile: vi.fn().mockResolvedValue("/tmp/usage.csv"),
   echoAgentDataDir: vi.fn().mockResolvedValue("/tmp/.echo-agent"),
-  desktopPreferencesGet: vi.fn().mockResolvedValue({ closeToTray: true }),
-  desktopPreferencesSave: vi.fn(async (closeToTray: boolean) => ({ closeToTray })),
+  desktopPreferencesGet: vi.fn().mockResolvedValue({ closeToTray: true, showNotificationTaskTitle: false }),
+  desktopPreferencesSave: vi.fn(async (closeToTray: boolean) => ({ closeToTray, showNotificationTaskTitle: false })),
+  desktopNotificationPreviewSave: vi.fn(async (showTaskTitle: boolean) => ({ closeToTray: true, showNotificationTaskTitle: showTaskTitle })),
   mcpList: vi.fn().mockResolvedValue([]),
   notificationList: vi.fn().mockResolvedValue([]),
   notificationMarkRead: vi.fn().mockResolvedValue(undefined),
@@ -65,6 +66,7 @@ import {
   webSearchConfigSave,
   desktopPreferencesSave,
   desktopPreferencesGet,
+  desktopNotificationPreviewSave,
 } from "@/lib/agent-client";
 import { useSessionsStore } from "@/stores/sessions-store";
 import { useProjectsStore } from "@/stores/projects-store";
@@ -282,9 +284,36 @@ describe("SettingsPanel", () => {
     const onOpenSession = vi.fn().mockResolvedValue(undefined);
     const onClose = vi.fn();
     render(<ThemeProvider><SettingsPanel open initialSection="agent-mail" onOpenSession={onOpenSession} onClose={onClose} /></ThemeProvider>);
-    fireEvent.click(await screen.findByRole("button", { name: /打开相关会话/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /打开任务处理授权/ }));
     await waitFor(() => expect(onOpenSession).toHaveBeenCalledWith("session-123"));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("桌面通知标题预览可关闭且不影响任务跳转入口", async () => {
+    vi.mocked(notificationList).mockResolvedValueOnce([{
+      id: 10, kind: "session_complete", at: "2026-09-04T20:00:00+08:00",
+      title: "任务《整理报告》的回复已完成", severity: "info", read: false,
+      sessionId: "session-456",
+    }]);
+    const onOpenSession = vi.fn().mockResolvedValue(undefined);
+    render(<ThemeProvider><SettingsPanel open initialSection="agent-mail" onOpenSession={onOpenSession} onClose={() => {}} /></ThemeProvider>);
+    const preview = await screen.findByRole("checkbox", { name: "桌面通知显示任务名称" });
+    fireEvent.click(preview);
+    await waitFor(() => expect(desktopNotificationPreviewSave).toHaveBeenCalledWith(true));
+    fireEvent.click(screen.getByRole("button", { name: "打开相关任务" }));
+    await waitFor(() => expect(onOpenSession).toHaveBeenCalledWith("session-456"));
+  });
+
+  it("无会话的自动化失败通知可打开关联运行记录", async () => {
+    vi.mocked(notificationList).mockResolvedValueOnce([{
+      id: 11, kind: "error", at: "2026-09-04T20:00:00+08:00",
+      title: "自动化《日报》运行失败", severity: "error", read: false,
+      automationId: "automation-1",
+    }]);
+    const onOpenAutomation = vi.fn().mockResolvedValue(undefined);
+    render(<ThemeProvider><SettingsPanel open initialSection="agent-mail" onOpenAutomation={onOpenAutomation} onClose={() => {}} /></ThemeProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "打开自动化记录" }));
+    await waitFor(() => expect(onOpenAutomation).toHaveBeenCalledWith("automation-1"));
   });
 
   it("关联会话打开失败时保留设置页并显示准确错误", async () => {
@@ -295,8 +324,8 @@ describe("SettingsPanel", () => {
     const onClose = vi.fn();
     render(<ThemeProvider><SettingsPanel open initialSection="agent-mail"
       onOpenSession={vi.fn().mockRejectedValue(new Error("会话已删除"))} onClose={onClose} /></ThemeProvider>);
-    fireEvent.click(await screen.findByRole("button", { name: /打开相关会话/ }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("打开相关会话失败：会话已删除");
+    fireEvent.click(await screen.findByRole("button", { name: /打开任务处理授权/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("打开关联任务失败：会话已删除");
     expect(onClose).not.toHaveBeenCalled();
   });
 

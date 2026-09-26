@@ -2,14 +2,14 @@
 //!
 //! EchoAgent's "智能体邮箱" (agent mailbox) is a Tencent email integration
 //! (send/receive mail, turn emails into tasks). EchoAgent has no email backend,
-//! so EchoAgent redefines this tab as a **session notification center**:
-//! every interesting EchoAgent event (permission request, folder-trust prompt,
-//! task completion, plan-mode toggle, MCP status change, session summary) is
-//! appended here as a notification the user can browse, filter, and act on.
+//! so EchoAgent uses this tab as a local inbox for requests requiring action,
+//! connection problems, and task results. Routine state changes stay in their
+//! own views instead of filling the inbox.
 //!
 //! Storage: `~/.echo-agent/echoagent-notifications.json` (capped at 200 entries;
 //! older entries drop off FIFO).
 
+use std::collections::VecDeque;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
 #[cfg(unix)]
@@ -87,6 +87,11 @@ pub struct NotificationEntry {
     /// Optional related session id (for permission/summary/etc.).
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Exact pending permission, when this entry represents an approval request.
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub automation_id: Option<String>,
     /// Severity: "info" | "warn" | "error".
     #[serde(default = "default_severity")]
     pub severity: String,
@@ -118,6 +123,7 @@ const MAX_SESSION_ID_CHARS: usize = 256;
 const MAX_TITLE_BYTES: usize = 512;
 const MAX_BODY_BYTES: usize = 3_584;
 const MAX_SESSION_ID_BYTES: usize = 512;
+const MAX_REQUEST_ID_CHARS: usize = 256;
 const MAX_TIMESTAMP_CHARS: usize = 64;
 const STORE_LOCK_ATTEMPTS: usize = 200;
 const STORE_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
@@ -317,6 +323,16 @@ fn validate_entry(entry: &NotificationEntry) -> Result<(), String> {
                 || id.len() > MAX_SESSION_ID_BYTES
                 || id.chars().any(char::is_control)
         })
+        || entry.request_id.as_deref().is_some_and(|id| {
+            id.is_empty()
+                || id.chars().count() > MAX_REQUEST_ID_CHARS
+                || id.chars().any(char::is_control)
+        })
+        || entry.automation_id.as_deref().is_some_and(|id| {
+            id.is_empty()
+                || id.chars().count() > MAX_REQUEST_ID_CHARS
+                || id.chars().any(char::is_control)
+        })
         || !valid_severity(&entry.severity)
     {
         return Err("通知记录包含超限或非法字段".into());
@@ -390,6 +406,18 @@ pub fn append(
     session_id: Option<&str>,
     severity: &str,
 ) -> Result<(), String> {
+    append_with_target(kind, title, body, session_id, None, None, severity).map(|_| ())
+}
+
+pub fn append_with_target(
+    kind: NotificationKind,
+    title: &str,
+    body: Option<&str>,
+    session_id: Option<&str>,
+    request_id: Option<&str>,
+    automation_id: Option<&str>,
+    severity: &str,
+) -> Result<u64, String> {
     let path = store_path();
     update_store_at(&path, |store| {
         let id = match store.entries.iter().map(|entry| entry.id).max() {
@@ -415,6 +443,14 @@ pub fn append(
                 );
                 (!value.is_empty()).then_some(value)
             }),
+            request_id: request_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+            automation_id: automation_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
             severity: normalize_severity(severity).to_string(),
             read: false,
         });
@@ -422,7 +458,7 @@ pub fn append(
             let excess = store.entries.len() - MAX_ENTRIES;
             store.entries.drain(0..excess);
         }
-        Ok(())
+        Ok(id)
     })
 }
 
@@ -514,7 +550,7 @@ pub struct NotifyChannel {
     pub enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotifyMessage {
     pub title: String,
@@ -524,6 +560,74 @@ pub struct NotifyMessage {
     pub level: String,
     #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub automation_id: Option<String>,
+    #[serde(default)]
+    pub notification_id: Option<u64>,
+    /// Generic title used on the desktop when task titles are hidden.
+    #[serde(default)]
+    pub hidden_title: Option<String>,
+    /// Routine results only need an OS banner while the app is in the background.
+    #[serde(default)]
+    pub background_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationOpen {
+    pub id: String,
+    pub session_id: Option<String>,
+    pub request_id: Option<String>,
+    pub automation_id: Option<String>,
+}
+
+static PENDING_OPENS: OnceLock<Mutex<VecDeque<NotificationOpen>>> = OnceLock::new();
+static VISIBLE_SESSION: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn pending_opens() -> &'static Mutex<VecDeque<NotificationOpen>> {
+    PENDING_OPENS.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+fn visible_session() -> &'static Mutex<Option<String>> {
+    VISIBLE_SESSION.get_or_init(|| Mutex::new(None))
+}
+
+#[tauri::command]
+pub fn notification_set_visible_session(session_id: Option<String>) -> Result<(), String> {
+    if session_id.as_deref().is_some_and(|id| {
+        id.is_empty()
+            || id.chars().count() > MAX_SESSION_ID_CHARS
+            || id.chars().any(char::is_control)
+    }) {
+        return Err("无效的会话标识".into());
+    }
+    *visible_session()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = session_id;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn notification_take_pending_opens() -> Vec<NotificationOpen> {
+    let mut pending = pending_opens()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    pending.drain(..).collect()
+}
+
+fn record_notification_open(app: &AppHandle, target: NotificationOpen) {
+    let mut pending = pending_opens()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if pending.len() >= 128 {
+        pending.pop_front();
+    }
+    pending.push_back(target);
+    drop(pending);
+    crate::show_main_window(app);
+    let _ = app.emit("notification://opened", ());
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -724,7 +828,10 @@ pub fn notify_channel_upsert(mut channel: NotifyChannel) -> Result<(), String> {
     update_channels_at(&path, |store| upsert_channel_in_store(store, channel))
 }
 
-fn upsert_channel_in_store(store: &mut ChannelStore, mut channel: NotifyChannel) -> Result<(), String> {
+fn upsert_channel_in_store(
+    store: &mut ChannelStore,
+    mut channel: NotifyChannel,
+) -> Result<(), String> {
     if let Some(existing) = store.channels.iter_mut().find(|item| item.id == channel.id) {
         // The list API intentionally redacts webhook credentials. An edit
         // with no replacement URL keeps the existing secret server-side.
@@ -839,7 +946,101 @@ fn normalize_message(message: NotifyMessage) -> NotifyMessage {
             );
             (!value.is_empty()).then_some(value)
         }),
+        request_id: message.request_id,
+        automation_id: message.automation_id,
+        notification_id: message.notification_id,
+        hidden_title: message.hidden_title.map(|title| normalize_title(&title)),
+        background_only: message.background_only,
     }
+}
+
+pub fn task_title_for_notification(session_id: &str) -> Option<String> {
+    crate::sessions::list_all_sessions(true)
+        .ok()?
+        .into_iter()
+        .find(|session| session.session_id == session_id)
+        .map(|session| session.title.trim().to_string())
+        .filter(|title| !title.is_empty() && title != "未命名会话" && title != "新会话")
+        .map(|title| truncate_text(&title, 48, 160, false))
+}
+
+fn show_desktop_notification(app: &AppHandle, message: &NotifyMessage) -> Result<(), String> {
+    if message.background_only
+        && message.session_id.as_ref().is_some_and(|session_id| {
+            visible_session()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                == Some(session_id)
+        })
+        && app
+            .get_webview_window("main")
+            .is_some_and(|window| window.is_focused().unwrap_or(false))
+    {
+        return Ok(());
+    }
+    let show_title = crate::desktop_preferences::load(app)
+        .map(|preferences| preferences.show_notification_task_title)
+        .unwrap_or(false);
+    let title = if show_title {
+        message.title.clone()
+    } else {
+        message
+            .hidden_title
+            .clone()
+            .unwrap_or_else(|| message.title.clone())
+    };
+    let body = message.body.clone().unwrap_or_default();
+    if message.session_id.is_none() && message.automation_id.is_none() {
+        return app
+            .notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+            .map_err(|error| format!("system notification: {error}"));
+    }
+    let target = NotificationOpen {
+        id: message
+            .notification_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| uuid::Uuid::now_v7().to_string()),
+        session_id: message.session_id.clone(),
+        request_id: message.request_id.clone(),
+        automation_id: message.automation_id.clone(),
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let _ = notify_rust::set_application(if tauri::is_dev() {
+            "com.apple.Terminal"
+        } else {
+            &app.config().identifier
+        });
+        let mut notification = notify_rust::Notification::new();
+        notification.summary(&title).body(&body).auto_icon();
+        #[cfg(target_os = "windows")]
+        if !tauri::is_dev() {
+            notification.app_id(&app.config().identifier);
+        }
+        #[cfg(target_os = "linux")]
+        notification.action("default", "打开任务");
+        match notification.show() {
+            Ok(handle) => {
+                if let Err(error) = handle.wait_for_response(|response: &notify_rust::NotificationResponse| {
+                    if response.is_default_action()
+                        || matches!(response, notify_rust::NotificationResponse::Action(action) if action == "default")
+                    {
+                        record_notification_open(&app, target);
+                    }
+                }) {
+                    tracing::warn!(%error, "failed to receive desktop notification click");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "failed to show actionable desktop notification"),
+        }
+    });
+    Ok(())
 }
 
 async fn send_one(
@@ -849,13 +1050,7 @@ async fn send_one(
 ) -> Result<(), String> {
     validate_channel(channel)?;
     match channel.kind {
-        ChannelKind::Desktop => app
-            .notification()
-            .builder()
-            .title(&message.title)
-            .body(message.body.as_deref().unwrap_or_default())
-            .show()
-            .map_err(|e| format!("system notification: {e}")),
+        ChannelKind::Desktop => show_desktop_notification(app, message),
         ChannelKind::Email => Err("邮件自动投递未配置".into()),
         ChannelKind::SlackWebhook | ChannelKind::DiscordWebhook | ChannelKind::GenericWebhook => {
             let endpoint = channel.endpoint.as_deref().ok_or("missing endpoint")?;
@@ -964,10 +1159,12 @@ pub async fn dispatch_external(
     results
 }
 
-/// Deliver an opted-in automation result. A desktop notification is available
-/// out of the box; adding an explicit desktop channel replaces this fallback,
-/// while Slack/Discord/Webhook channels continue to receive the same message.
-pub async fn dispatch_automation(app: &AppHandle, message: NotifyMessage) -> Vec<DeliveryResult> {
+/// Deliver an actionable event with a built-in desktop fallback. An explicit
+/// desktop channel replaces that fallback; disabling it opts out of desktop delivery.
+pub async fn dispatch_with_desktop_fallback(
+    app: &AppHandle,
+    message: NotifyMessage,
+) -> Vec<DeliveryResult> {
     if crate::policy::require_feature("notifications").is_err() {
         return vec![DeliveryResult {
             id: "notifications-policy".into(),
@@ -1001,13 +1198,7 @@ pub async fn dispatch_automation(app: &AppHandle, message: NotifyMessage) -> Vec
     };
     let mut results = dispatch_external(app, message.clone(), None).await;
     if !desktop_configured {
-        match app
-            .notification()
-            .builder()
-            .title(&message.title)
-            .body(message.body.as_deref().unwrap_or_default())
-            .show()
-        {
+        match show_desktop_notification(app, &message) {
             Ok(()) => results.push(DeliveryResult {
                 id: "builtin-desktop".into(),
                 ok: true,
@@ -1042,6 +1233,7 @@ pub async fn notify_channel_test(app: AppHandle, id: String) -> Result<DeliveryR
             body: Some("来自 EchoAgent 的测试消息".into()),
             level: "info".into(),
             session_id: None,
+            ..Default::default()
         },
         Some(&id),
     )
@@ -1057,6 +1249,36 @@ pub async fn notify_channel_test(app: AppHandle, id: String) -> Result<DeliveryR
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_click_targets_are_drained_once_with_exact_request() {
+        let mut pending = pending_opens().lock().unwrap();
+        pending.clear();
+        pending.push_back(NotificationOpen {
+            id: "42".into(),
+            session_id: Some("session-1".into()),
+            request_id: Some("permission-2".into()),
+            automation_id: None,
+        });
+        drop(pending);
+
+        let opens = notification_take_pending_opens();
+        assert_eq!(opens.len(), 1);
+        assert_eq!(opens[0].session_id.as_deref(), Some("session-1"));
+        assert_eq!(opens[0].request_id.as_deref(), Some("permission-2"));
+        assert!(notification_take_pending_opens().is_empty());
+    }
+
+    #[test]
+    fn visible_session_rejects_invalid_identifiers() {
+        assert!(notification_set_visible_session(Some("session-1".into())).is_ok());
+        assert!(notification_set_visible_session(Some("bad\nname".into())).is_err());
+        assert_eq!(
+            visible_session().lock().unwrap().as_deref(),
+            Some("session-1")
+        );
+        notification_set_visible_session(None).unwrap();
+    }
 
     // --- NotificationKind::from_str ---
 
@@ -1164,6 +1386,8 @@ mod tests {
             title: "Test notification".into(),
             body: Some("details".into()),
             session_id: Some("sess-1".into()),
+            request_id: Some("request-1".into()),
+            automation_id: None,
             severity: "warn".into(),
             read: false,
         };
@@ -1172,6 +1396,7 @@ mod tests {
         assert_eq!(parsed.id, 42);
         assert_eq!(parsed.title, "Test notification");
         assert_eq!(parsed.severity, "warn");
+        assert_eq!(parsed.request_id.as_deref(), Some("request-1"));
         assert!(!parsed.read);
     }
 
@@ -1244,14 +1469,23 @@ mod tests {
             endpoint: Some("https://hooks.example.test/private-token".into()),
             enabled: true,
         };
-        let mut store = ChannelStore { channels: vec![original.clone()] };
-        upsert_channel_in_store(&mut store, NotifyChannel {
-            label: "New name".into(),
-            endpoint: None,
-            ..original
-        }).unwrap();
+        let mut store = ChannelStore {
+            channels: vec![original.clone()],
+        };
+        upsert_channel_in_store(
+            &mut store,
+            NotifyChannel {
+                label: "New name".into(),
+                endpoint: None,
+                ..original
+            },
+        )
+        .unwrap();
         assert_eq!(store.channels[0].label, "New name");
-        assert_eq!(store.channels[0].endpoint.as_deref(), Some("https://hooks.example.test/private-token"));
+        assert_eq!(
+            store.channels[0].endpoint.as_deref(),
+            Some("https://hooks.example.test/private-token")
+        );
     }
 
     #[test]
@@ -1431,6 +1665,7 @@ mod tests {
             body: Some("b".repeat(MAX_BODY_CHARS + 1)),
             level: "fatal".into(),
             session_id: Some("s".repeat(MAX_SESSION_ID_CHARS + 1)),
+            ..Default::default()
         });
         assert_eq!(message.title.chars().count(), MAX_TITLE_CHARS);
         assert_eq!(message.title.len(), MAX_TITLE_CHARS);
@@ -1446,6 +1681,7 @@ mod tests {
             body: None,
             level: "info".into(),
             session_id: Some("界".repeat(MAX_SESSION_ID_CHARS)),
+            ..Default::default()
         });
         assert!(multibyte.title.len() <= MAX_TITLE_BYTES);
         assert!(multibyte.session_id.unwrap().len() <= MAX_SESSION_ID_BYTES);
@@ -1466,6 +1702,7 @@ mod tests {
                 body: Some("The scheduled task finished".into()),
                 level: "info".into(),
                 session_id: Some("session-1".into()),
+                ..Default::default()
             },
         );
         assert!(value["text"].as_str().unwrap().contains("Task complete"));
@@ -1482,6 +1719,7 @@ mod tests {
             body: None,
             level: "warn".into(),
             session_id: None,
+            ..Default::default()
         };
         let slack = payload(
             &NotifyChannel {

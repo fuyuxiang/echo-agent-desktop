@@ -16,6 +16,7 @@ fn preferences_lock() -> &'static Mutex<()> {
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct DesktopPreferences {
     pub close_to_tray: bool,
+    pub(crate) show_notification_task_title: bool,
     background_notice_shown: bool,
 }
 
@@ -23,12 +24,14 @@ pub(crate) struct DesktopPreferences {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopPreferencesView {
     close_to_tray: bool,
+    show_notification_task_title: bool,
 }
 
 impl From<&DesktopPreferences> for DesktopPreferencesView {
     fn from(preferences: &DesktopPreferences) -> Self {
         Self {
             close_to_tray: preferences.close_to_tray,
+            show_notification_task_title: preferences.show_notification_task_title,
         }
     }
 }
@@ -37,6 +40,7 @@ impl Default for DesktopPreferences {
     fn default() -> Self {
         Self {
             close_to_tray: true,
+            show_notification_task_title: false,
             background_notice_shown: false,
         }
     }
@@ -113,6 +117,21 @@ pub(crate) fn desktop_preferences_save(
     Ok(DesktopPreferencesView::from(&preferences))
 }
 
+#[tauri::command]
+pub(crate) fn desktop_notification_preview_save(
+    app: AppHandle,
+    show_task_title: bool,
+) -> Result<DesktopPreferencesView, String> {
+    let path = preferences_path(&app)?;
+    let _guard = preferences_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut preferences = read_preferences(&path).unwrap_or_default();
+    preferences.show_notification_task_title = show_task_title;
+    write_preferences(&path, &preferences)?;
+    Ok(DesktopPreferencesView::from(&preferences))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -125,6 +144,7 @@ mod tests {
         let preferences = read_preferences(&dir.path().join("missing.json")).unwrap();
 
         assert!(preferences.close_to_tray);
+        assert!(!preferences.show_notification_task_title);
         assert!(!preferences.background_notice_shown);
     }
 
@@ -134,6 +154,7 @@ mod tests {
         let path = dir.path().join("desktop-preferences.json");
         let preferences = DesktopPreferences {
             close_to_tray: false,
+            show_notification_task_title: true,
             background_notice_shown: true,
         };
 
@@ -147,6 +168,7 @@ mod tests {
         let preferences: DesktopPreferences = serde_json::from_str("{}").unwrap();
 
         assert!(preferences.close_to_tray);
+        assert!(!preferences.show_notification_task_title);
         assert!(!preferences.background_notice_shown);
     }
 
@@ -168,6 +190,7 @@ mod tests {
             &path,
             &DesktopPreferences {
                 close_to_tray: false,
+                show_notification_task_title: false,
                 background_notice_shown: false,
             },
         )

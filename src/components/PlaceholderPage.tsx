@@ -140,6 +140,8 @@ interface PlaceholderPageProps {
   onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
   /** Native automation lifecycle refresh token. */
   automationRefreshSignal?: number;
+  notificationAutomationId?: string;
+  notificationAutomationSequence?: number;
 }
 
 /** EchoAgent 功能面板（项目/组织/专家能力/自动化/知识库/插件市场）。 */
@@ -180,6 +182,8 @@ export function PlaceholderPage({
   onArchiveSession,
   onDeleteSession,
   automationRefreshSignal,
+  notificationAutomationId,
+  notificationAutomationSequence,
 }: PlaceholderPageProps) {
   if (label === "项目") {
     return (
@@ -230,6 +234,8 @@ export function PlaceholderPage({
           onOpenSession={onOpenSession}
           cwd={cwd}
           refreshSignal={automationRefreshSignal}
+          notificationAutomationId={notificationAutomationId}
+          notificationAutomationSequence={notificationAutomationSequence}
         />
       </DeferredPanel>
     );

@@ -121,6 +121,7 @@ export async function agentAuthStatus(): Promise<AuthStatus> {
 export interface DesktopPreferences {
   /** Keep the native process and Runtime alive when the main window closes. */
   closeToTray: boolean;
+  showNotificationTaskTitle: boolean;
 }
 
 export async function desktopPreferencesGet(): Promise<DesktopPreferences> {
@@ -129,6 +130,10 @@ export async function desktopPreferencesGet(): Promise<DesktopPreferences> {
 
 export async function desktopPreferencesSave(closeToTray: boolean): Promise<DesktopPreferences> {
   return invoke<DesktopPreferences>("desktop_preferences_save", { closeToTray });
+}
+
+export async function desktopNotificationPreviewSave(showTaskTitle: boolean): Promise<DesktopPreferences> {
+  return invoke<DesktopPreferences>("desktop_notification_preview_save", { showTaskTitle });
 }
 
 // NOTE: the backend `agent_new_session` command returns the session id as a

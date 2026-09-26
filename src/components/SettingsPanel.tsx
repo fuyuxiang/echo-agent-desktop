@@ -159,6 +159,7 @@ export function SettingsPanel({
   onRestoreSession,
   onDeleteSession,
   onOpenSession,
+  onOpenAutomation,
   onToast,
 }: {
   open: boolean;
@@ -175,6 +176,7 @@ export function SettingsPanel({
   onRestoreSession?: (sessionId: string, archived: boolean, cwd?: string) => Promise<void>;
   onDeleteSession?: (sessionId: string, cwd?: string) => Promise<void>;
   onOpenSession?: (sessionId: string, cwd?: string) => void | Promise<void>;
+  onOpenAutomation?: (automationId: string) => void | Promise<void>;
   onToast?: (message: string) => void;
 }) {
   const [active, setActive] = useState<SettingsSectionId>(initialSection);
@@ -346,7 +348,7 @@ export function SettingsPanel({
             ) : active === "agent-mail" ? (
               <div className="settings-subview">
                 <SettingsViewTabs label="通知视图" items={NOTIFICATION_VIEWS} active={active} onSelect={setActive} />
-                <NotificationCenterSettingsPanel onOpenSession={onOpenSession} onClose={onClose} />
+                <NotificationCenterSettingsPanel onOpenSession={onOpenSession} onOpenAutomation={onOpenAutomation} onToast={onToast} onClose={onClose} />
               </div>
             ) : null}
           </div>

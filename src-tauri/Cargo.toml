@@ -21,6 +21,9 @@ embed-resource = "3"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
+# The Tauri desktop notification plugin only exposes fire-and-forget delivery.
+# notify-rust supplies the native body-click response on macOS/Windows/Linux.
+notify-rust = "=4.18.0"
 # Pin the updater minor because `app_updater.rs` injects our private CA through
 # its reqwest 0.12 client hook. Upgrading this plugin must be tested together
 # with the direct reqwest dependency below.
