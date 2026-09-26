@@ -126,6 +126,7 @@ vi.mock("@/lib/agent-client", async () => {
 import { ChatView } from "../ChatView";
 import { ThemeProvider } from "../ThemeProvider";
 import { rewindExecute, rewindPoints, setCodingMode } from "@/lib/agent-client";
+import { useSubagentStore } from "@/stores/subagent-store";
 
 /** 用 ThemeProvider 包裹(ChatView 内的 MessageItem/Markdown 需要 useTheme)。 */
 function renderChat() {
@@ -153,6 +154,7 @@ function setStore(patch: Partial<typeof storeState>) {
 
 describe("ChatView pause/yield/resume 闭环", () => {
   beforeEach(() => {
+    useSubagentStore.setState({ bySession: {} });
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
       value: scrollIntoViewMock,
@@ -189,6 +191,45 @@ describe("ChatView pause/yield/resume 闭环", () => {
     expect(toolbar).not.toBeNull();
     for (const label of ["查找", "变更", "子代理", "团队", "浏览器", "分享"]) {
       expect(toolbar).toContainElement(screen.getByRole("button", { name: label }));
+    }
+  });
+
+  it("从子代理返回后恢复展开条目和原阅读位置", async () => {
+    useSubagentStore.getState().applyEvent({ sessionId: "s1", phase: "finished", subagentId: "child",
+      childSessionId: "child", description: "核验任务", status: "completed" });
+    let rowTop = 150;
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("chatview__scroll")) return { top: 50 } as DOMRect;
+      if (this.classList.contains("subagent-panel__row")) return { top: rowTop } as DOMRect;
+      return originalRect.call(this);
+    });
+    try {
+      const openChild = vi.fn();
+      const props = { ...baseProps, cwd: "/workspace", onOpenSubagentSession: openChild };
+      const { container, rerender } = render(<ThemeProvider><ChatView {...props} /></ThemeProvider>);
+      const viewport = container.querySelector<HTMLElement>(".chatview__scroll")!;
+      Object.defineProperty(viewport, "scrollHeight", { configurable: true, value: 1000 });
+      Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 400 });
+      fireEvent.click(screen.getByRole("button", { name: "子代理" }));
+      fireEvent.click(screen.getByRole("button", { name: /核验任务/ }));
+      viewport.scrollTop = 350;
+      fireEvent.click(screen.getByRole("button", { name: "打开完整工作记录" }));
+      expect(openChild).toHaveBeenCalledWith("child", "/workspace", {
+        parentSessionId: "s1", parentCwd: "/workspace", subagentKey: "child", scrollTop: 350, rowOffset: 100,
+      });
+
+      setStore({ sessionId: "child" });
+      rerender(<ThemeProvider><ChatView {...props} /></ThemeProvider>);
+      rowTop = 250;
+      setStore({ sessionId: "s1" });
+      const restorePoint = { parentSessionId: "s1", parentCwd: "/workspace", childSessionId: "child",
+        subagentKey: "child", scrollTop: 350, rowOffset: 100, sequence: 1 };
+      rerender(<ThemeProvider><ChatView {...props} subagentScrollRestore={restorePoint} /></ThemeProvider>);
+      await waitFor(() => expect(screen.getByRole("button", { name: /核验任务/ })).toHaveAttribute("aria-expanded", "true"));
+      await waitFor(() => expect(viewport.scrollTop).toBe(450));
+    } finally {
+      rectSpy.mockRestore();
     }
   });
 

@@ -12,7 +12,7 @@ import type { SettingsSectionId } from "./components/SettingsPanel";
 import { TasksPanel } from "./components/TasksPanel";
 import { SecondarySidebar } from "./components/SecondarySidebar";
 import { TopbarActions } from "./components/TopbarActions";
-import { SidebarToggleIcon, EchoNewTaskIcon } from "./foundation/components/Icon/icons";
+import { SidebarToggleIcon, EchoNewTaskIcon, ChevronLeftIcon } from "./foundation/components/Icon/icons";
 import type { ModelOption } from "./components/ModelSelector";
 import {
   isConfiguredModelId,
@@ -124,6 +124,14 @@ import {
 } from "./lib/agent-turn";
 import type { MessageRetrySendRequest } from "./lib/message-retry";
 import {
+  activeSubagentReturnPoint,
+  popSubagentReturnPoint,
+  pushSubagentReturnPoint,
+  type SubagentOpenContext,
+  type SubagentReturnPoint,
+  type SubagentScrollRestore,
+} from "./lib/subagent-navigation";
+import {
   isAgentOwnedActiveStatus,
   isWaitingForUser,
   terminalSessionStatus,
@@ -146,6 +154,10 @@ type ToastEntry = {
   message: string;
   actions: ToastAction[];
 };
+
+type SessionSelectionIntent =
+  | { kind: "subagent"; source: SubagentOpenContext }
+  | { kind: "return"; point: SubagentReturnPoint };
 
 function publishQuotaAlert(
   records: UsageRecord[],
@@ -244,6 +256,9 @@ function Shell() {
   const [modelCatalogError, setModelCatalogError] = useState<string | null>(null);
   const [modelSwitching, setModelSwitching] = useState(false);
   const [loadingSession, setLoadingSession] = useState<{ sessionId: string; generation: number } | null>(null);
+  const [subagentTrail, setSubagentTrail] = useState<SubagentReturnPoint[]>([]);
+  const [subagentScrollRestore, setSubagentScrollRestore] = useState<SubagentScrollRestore | null>(null);
+  const subagentRestoreSequenceRef = useRef(0);
   const [creatingSession, setCreatingSession] = useState(false);
   const [newTaskMode, setNewTaskMode] = useState<AutomationMode>("default");
   const [homeSendError, setHomeSendError] = useState<string | null>(null);
@@ -1933,7 +1948,11 @@ function Shell() {
     sessionCwd?: string,
     preservePlaceholder = false,
     strict = false,
+    intent?: SessionSelectionIntent,
   ) => {
+    const focusedSessionId = sessionsStore.getState().currentSessionId;
+    if (intent?.kind === "subagent" && focusedSessionId !== intent.source.parentSessionId) return;
+    if (intent?.kind === "return" && focusedSessionId !== intent.point.childSessionId) return;
     if (!preservePlaceholder && placeholderView === "代码开发" && codingLeaveGuardRef.current) {
       if (!(await codingLeaveGuardRef.current())) {
         if (strict) throw new Error("请先处理代码开发中的未保存内容");
@@ -1998,6 +2017,18 @@ function Shell() {
     const persistedModelId = entry.currentModelId;
     const selectedModelId = resolveSessionModelId(models, persistedModelId);
     if (!preservePlaceholder) setPlaceholderView(null);
+    if (intent?.kind === "subagent") {
+      const point = { ...intent.source, childSessionId: sessionId };
+      setSubagentTrail((trail) => pushSubagentReturnPoint(trail, point));
+      setSubagentScrollRestore(null);
+    } else if (intent?.kind === "return") {
+      setSubagentTrail((trail) => popSubagentReturnPoint(trail, intent.point));
+      setSubagentScrollRestore({ ...intent.point, sequence: ++subagentRestoreSequenceRef.current });
+    } else {
+      // An unrelated task selection is not a move up the subagent hierarchy.
+      setSubagentTrail([]);
+      setSubagentScrollRestore(null);
+    }
     sessionsStore.getState().setCurrent(sessionId);
     // Reflect the model actually persisted by this session. Do not fall back to
     // the first configured model: that would only change the picker, not the
@@ -2049,6 +2080,14 @@ function Shell() {
       // ingested again. (No-op when there was no cached transcript to suppress.)
       sessionStore.getState().clearReplaySuppression(sessionId);
     }
+  };
+
+  const handleOpenSubagentSession = (sessionId: string, sessionCwd: string | undefined, source: SubagentOpenContext) =>
+    handleSelectSession(sessionId, sessionCwd, false, false, { kind: "subagent", source });
+
+  const handleReturnToParentSession = () => {
+    const point = activeSubagentReturnPoint(subagentTrail, sessionsStore.getState().currentSessionId);
+    if (point) void handleSelectSession(point.parentSessionId, point.parentCwd, false, false, { kind: "return", point });
   };
 
   notificationNavigatorRef.current = (sessionId) => handleSelectSession(sessionId, undefined, false, true);
@@ -2496,6 +2535,10 @@ function Shell() {
   };
 
   const activeNav = placeholderView ?? (currentSessionId ? "" : "新建任务");
+  const activeSubagentParent = activeSubagentReturnPoint(subagentTrail, currentSessionId);
+  const parentSessionTitle = activeSubagentParent
+    ? findSessionSummary(activeSubagentParent.parentSessionId)?.title ?? "上级任务"
+    : null;
 
   const codingWorkspaceActive = placeholderView === "代码开发";
 
@@ -2562,6 +2605,15 @@ function Shell() {
                       <EchoNewTaskIcon size="md" />
                     </button>
                   </>
+                )}
+                {activeSubagentParent && (
+                  <button type="button" className="main-topbar__return"
+                    onClick={handleReturnToParentSession}
+                    aria-label={`返回上级任务：${parentSessionTitle}`}
+                    title={`返回上级任务：${parentSessionTitle}`}>
+                    <ChevronLeftIcon size="sm" />
+                    <span>返回上级任务</span>
+                  </button>
                 )}
                 <TopbarTitle title={currentTitle} onRename={handleRenameTitle} />
                 {currentEntry?.expertName && (
@@ -2723,7 +2775,8 @@ function Shell() {
                   onForked={handleForked}
                   onToast={showToast}
                   onSelectExpert={handleStartWithExpert}
-                  onOpenSubagentSession={handleSelectSession}
+                  onOpenSubagentSession={handleOpenSubagentSession}
+                  subagentScrollRestore={subagentScrollRestore}
                   onNavigateConnectors={() => setPlaceholderView("专家·技能·连接器")}
                   onOpenKnowledgeBase={() => handleNavigate("知识库")}
                   onOpenMeetingMinutes={() => {

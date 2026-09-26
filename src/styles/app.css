@@ -78,6 +78,33 @@
   background: var(--echo-bg-hover);
   color: var(--echo-text-strong);
 }
+.main-topbar__return {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  min-height: 32px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: var(--echo-radius-lg);
+  background: transparent;
+  color: var(--echo-text-medium);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.main-topbar__return:hover {
+  background: var(--echo-bg-hover);
+  color: var(--echo-text-strong);
+}
+.main-topbar__return:focus-visible {
+  outline: 2px solid var(--echo-brand);
+  outline-offset: 2px;
+}
+@media (max-width: 640px) {
+  .main-topbar__return span { display: none; }
+}
 .main-topbar__title {
   margin-left: 8px;
   font-size: 0.875rem;

@@ -44,6 +44,7 @@ import type {
   MessageRetryKind,
   MessageRetrySendRequest,
 } from "@/lib/message-retry";
+import type { SubagentOpenContext, SubagentScrollRestore } from "@/lib/subagent-navigation";
 
 /** Center chat column: scrollable message list + composer pinned at bottom. */
 export function ChatView({
@@ -65,6 +66,7 @@ export function ChatView({
   onToast,
   onSelectExpert,
   onOpenSubagentSession,
+  subagentScrollRestore,
   onNavigateConnectors,
   onOpenKnowledgeBase,
   onOpenMeetingMinutes,
@@ -110,7 +112,9 @@ export function ChatView({
   onToast?: (msg: string) => void;
   onSelectExpert?: (agent: AgentEntry) => void;
   /** Open the child ACP session behind a subagent record. */
-  onOpenSubagentSession?: (sessionId: string, cwd?: string) => void | Promise<void>;
+  onOpenSubagentSession?: (sessionId: string, cwd: string | undefined, source: SubagentOpenContext) => void | Promise<void>;
+  /** Restore the exact parent row after returning from a child session. */
+  subagentScrollRestore?: SubagentScrollRestore | null;
   onNavigateConnectors?: () => void;
   onOpenKnowledgeBase?: () => void;
   onOpenMeetingMinutes?: () => void;
@@ -404,6 +408,10 @@ export function ChatView({
     setPreviewPath(null);
   }, [sessionId]);
 
+  useEffect(() => {
+    setSubagentsOpen(subagentScrollRestore?.parentSessionId === sessionId);
+  }, [sessionId, subagentScrollRestore?.sequence]);
+
   // Auto-open subagent panel when a subagent starts running.
   const liveSubagentCount = useSubagentStore((s) =>
     sessionId ? s.getForSession(sessionId).filter((a) => a.status === "running").length : 0,
@@ -444,12 +452,56 @@ export function ChatView({
     scrollRef,
     contentRef,
     following,
+    pauseFollowing,
     scrollToBottom,
   } = useStickToBottom({
     contentVersion: messages,
     streaming,
     sessionId,
   });
+
+  const restoredSequenceRef = useRef<number | null>(null);
+  const restoreSubagentRow = useCallback((key: string) => {
+    if (!subagentScrollRestore || subagentScrollRestore.parentSessionId !== sessionId
+      || restoredSequenceRef.current === subagentScrollRestore.sequence) return;
+    const viewport = scrollRef.current;
+    const row = Array.from(viewport?.querySelectorAll<HTMLElement>("[data-subagent-key]") ?? [])
+      .find((node) => node.dataset.subagentKey === key);
+    if (!viewport || !row) return;
+    pauseFollowing();
+    const actualOffset = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+    viewport.scrollTop += actualOffset - subagentScrollRestore.rowOffset;
+    restoredSequenceRef.current = subagentScrollRestore.sequence;
+  }, [pauseFollowing, scrollRef, sessionId, subagentScrollRestore]);
+
+  useLayoutEffect(() => {
+    if (!subagentScrollRestore || subagentScrollRestore.parentSessionId !== sessionId
+      || restoredSequenceRef.current === subagentScrollRestore.sequence) return;
+    const viewport = scrollRef.current;
+    if (!viewport) return;
+    // The transcript may still be replaying. Preserve the old position first,
+    // then refine it to the row once the subagent list is rendered.
+    pauseFollowing();
+    viewport.scrollTop = subagentScrollRestore.scrollTop;
+    restoreSubagentRow(subagentScrollRestore.subagentKey);
+  }, [messages, pauseFollowing, restoreSubagentRow, scrollRef, sessionId, subagentScrollRestore]);
+
+  const openSubagentSession = useCallback((childSessionId: string, childCwd: string | undefined, subagentKey: string) => {
+    if (!sessionId || !onOpenSubagentSession) return;
+    const viewport = scrollRef.current;
+    const row = Array.from(viewport?.querySelectorAll<HTMLElement>("[data-subagent-key]") ?? [])
+      .find((node) => node.dataset.subagentKey === subagentKey);
+    const rowOffset = viewport && row
+      ? row.getBoundingClientRect().top - viewport.getBoundingClientRect().top
+      : 0;
+    return onOpenSubagentSession(childSessionId, childCwd, {
+      parentSessionId: sessionId,
+      parentCwd: cwd,
+      subagentKey,
+      scrollTop: viewport?.scrollTop ?? 0,
+      rowOffset,
+    });
+  }, [cwd, onOpenSubagentSession, scrollRef, sessionId]);
 
   // 会话内查找:Ctrl/Cmd+F 打开。
   useEffect(() => {
@@ -724,7 +776,9 @@ export function ChatView({
                 <SubagentPanel
                   messages={messages}
                   cwd={cwd}
-                  onOpenSession={onOpenSubagentSession}
+                  onOpenSession={onOpenSubagentSession ? openSubagentSession : undefined}
+                  restorePoint={subagentScrollRestore}
+                  onRestoreReady={restoreSubagentRow}
                 />
               )}
               {teamsOpen && (

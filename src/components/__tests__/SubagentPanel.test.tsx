@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { SubagentPanel } from "../SubagentPanel";
 import { useSubagentStore } from "@/stores/subagent-store";
 import { useSessionStore } from "@/stores/session-store";
@@ -175,7 +175,29 @@ describe("SubagentPanel", () => {
     expect(screen.getByText("确认历史生命周期事件可以完整回放。")).toBeInTheDocument();
     expect(screen.getByText("child-7")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /打开完整工作记录/ }));
-    expect(openSession).toHaveBeenCalledWith("child-7", "/workspace");
+    expect(openSession).toHaveBeenCalledWith("child-7", "/workspace", "child-7");
+  });
+
+  it("返回时重新展开对应子代理，并在生命周期回放替换列表后保持定位键稳定", () => {
+    useSessionStore.setState({ sessionId: "parent" });
+    const restorePoint = { parentSessionId: "parent", childSessionId: "child-7", parentCwd: "/workspace",
+      subagentKey: "child-7", scrollTop: 120, rowOffset: 40, sequence: 1 };
+    const onRestoreReady = vi.fn();
+    const { rerender } = render(<SubagentPanel restorePoint={restorePoint} onRestoreReady={onRestoreReady}
+      messages={[spawnMsg("tool-7", "Task: 子代理", "completed", {
+        rawInput: { task_id: "child-7", description: "核验历史记录" },
+      })]} />);
+    expect(screen.getByRole("button", { name: /核验历史记录/ })).toHaveAttribute("aria-expanded", "true");
+    expect(onRestoreReady).toHaveBeenCalledWith("child-7");
+
+    act(() => useSubagentStore.getState().applyEvent({ sessionId: "parent", phase: "finished", subagentId: "child-7",
+      childSessionId: "child-7", description: "核验历史记录", status: "completed" }));
+    rerender(<SubagentPanel restorePoint={restorePoint} onRestoreReady={onRestoreReady}
+      messages={[spawnMsg("tool-7", "Task: 子代理", "completed", {
+        rawInput: { task_id: "child-7", description: "核验历史记录" },
+      })]} />);
+    expect(screen.getByRole("button", { name: /核验历史记录/ })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /核验历史记录/ })).toHaveAttribute("data-subagent-key", "child-7");
   });
 
   it("按父 prompt 将历史子代理分轮展示", () => {

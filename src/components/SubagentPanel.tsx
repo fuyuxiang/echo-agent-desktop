@@ -5,16 +5,19 @@
  * retained as a compatibility/evidence source and merged by the real
  * subagent id (not the unrelated ACP tool-call id).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { ChevronDownIcon, OpenExternalIcon } from "@/foundation/components/Icon/icons";
 import { useSubagentStore, type SubagentRuntime } from "@/stores/subagent-store";
 import { useSessionStore, type ChatMessage } from "@/stores/session-store";
 import { deriveSubagents, type SubagentActivity } from "@/lib/subagents";
+import type { SubagentScrollRestore } from "@/lib/subagent-navigation";
 
 interface SubagentPanelProps {
   messages?: ChatMessage[];
   cwd?: string;
-  onOpenSession?: (sessionId: string, cwd?: string) => void | Promise<void>;
+  onOpenSession?: (sessionId: string, cwd: string | undefined, subagentKey: string) => void | Promise<void>;
+  restorePoint?: SubagentScrollRestore | null;
+  onRestoreReady?: (subagentKey: string) => void;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -105,6 +108,10 @@ interface PanelItem {
   occurredAt?: number;
   isReplay?: boolean;
   source: "runtime" | "transcript";
+}
+
+function navigationKey(item: PanelItem): string {
+  return item.childSessionId ?? item.id;
 }
 
 function sameActivity(runtime: SubagentRuntime, activity: SubagentActivity): boolean {
@@ -281,7 +288,7 @@ function EvidenceDetails({
         <button
           type="button"
           className="subagent-panel__open-session"
-          onClick={() => void onOpenSession(item.childSessionId!, cwd)}
+          onClick={() => void onOpenSession(item.childSessionId!, cwd, navigationKey(item))}
         >
           <OpenExternalIcon size="sm" />
           打开完整工作记录
@@ -291,20 +298,28 @@ function EvidenceDetails({
   );
 }
 
-export function SubagentPanel({ messages = [], cwd, onOpenSession }: SubagentPanelProps) {
+export function SubagentPanel({ messages = [], cwd, onOpenSession, restorePoint, onRestoreReady }: SubagentPanelProps) {
   const sessionId = useSessionStore((state) => state.sessionId);
   const liveSubagents = useSubagentStore((state) =>
     sessionId ? state.getForSession(sessionId) : [],
   );
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
-  useEffect(() => setExpandedKey(null), [sessionId]);
+  useEffect(() => {
+    setExpandedKey(restorePoint?.parentSessionId === sessionId ? restorePoint.subagentKey : null);
+  }, [sessionId, restorePoint?.sequence, restorePoint?.subagentKey, restorePoint?.parentSessionId]);
 
   const fallbackActivities = useMemo(() => deriveSubagents(messages), [messages]);
   const items = useMemo(
     () => mergePanelItems(liveSubagents, fallbackActivities),
     [liveSubagents, fallbackActivities],
   );
+  useLayoutEffect(() => {
+    if (restorePoint?.parentSessionId === sessionId
+      && items.some((item) => navigationKey(item) === restorePoint.subagentKey)) {
+      onRestoreReady?.(restorePoint.subagentKey);
+    }
+  }, [items, onRestoreReady, restorePoint, sessionId]);
   const turnInfo = useMemo(() => deriveTurnInfo(messages), [messages]);
   const groups = useMemo(() => {
     const grouped = new Map<string, PanelItem[]>();
@@ -357,15 +372,17 @@ export function SubagentPanel({ messages = [], cwd, onOpenSession }: SubagentPan
               </div>
               <ul>
                 {group.items.map((item) => {
-                  const expanded = expandedKey === item.key;
+                  const stableKey = navigationKey(item);
+                  const expanded = expandedKey === stableKey;
                   const bits = progressBits(item);
                   return (
                     <li key={item.key} className={`subagent-panel__item subagent-panel__row--${item.status}`}>
                       <button
                         type="button"
                         className="subagent-panel__row"
+                        data-subagent-key={stableKey}
                         aria-expanded={expanded}
-                        onClick={() => setExpandedKey(expanded ? null : item.key)}
+                        onClick={() => setExpandedKey(expanded ? null : stableKey)}
                       >
                         <span className="subagent-panel__dot" aria-hidden="true" />
                         <span className="subagent-panel__info">
