@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { useState } from "react";
 
 vi.mock("../experts-panel", () => ({
-  ExpertsPanel: ({ initialTab }: { initialTab?: string }) => (
-    <div data-testid="experts-panel">{initialTab}</div>
+  ExpertsPanel: ({ initialTab, hideNavigation }: { initialTab?: string; hideNavigation?: boolean }) => (
+    <div data-testid="experts-panel" data-embedded={hideNavigation}>{initialTab}</div>
   ),
 }));
 vi.mock("../PluginsPanel", () => ({
@@ -53,5 +54,30 @@ describe("PlaceholderPage", () => {
   it("代码开发路由加载专属工作台", async () => {
     render(<PlaceholderPage label="代码开发" />);
     expect(await screen.findByText("coding workbench")).toBeInTheDocument();
+  });
+
+  it("能力页面保持单层导航，可往返所有类别和市场", async () => {
+    function Page() {
+      const [label, setLabel] = useState("专家·技能·连接器");
+      return <PlaceholderPage label={label} onNavigate={setLabel} />;
+    }
+    render(<Page />);
+    const panel = await screen.findByTestId("experts-panel");
+    expect(panel).toHaveAttribute("data-embedded", "true");
+    expect(screen.queryByText("专家、技能与连接器")).toBeNull();
+    expect(screen.getAllByRole("navigation", { name: "能力管理" })).toHaveLength(1);
+    const nav = screen.getByRole("navigation", { name: "能力管理" });
+    for (const [label, content] of [["技能", "skills"], ["连接器", "connectors"], ["专家", "experts"]]) {
+      fireEvent.click(within(nav).getByRole("button", { name: label }));
+      expect(await screen.findByTestId("experts-panel")).toHaveTextContent(content);
+      expect(within(nav).getByRole("button", { name: label })).toHaveAttribute("aria-current", "page");
+    }
+    fireEvent.click(within(nav).getByRole("button", { name: "插件" }));
+    expect(await screen.findByText("installed plugins")).toBeInTheDocument();
+    fireEvent.click(within(nav).getByRole("button", { name: "浏览市场" }));
+    expect(await screen.findByText("plugin marketplace")).toBeInTheDocument();
+    expect(screen.queryByText("installed plugins")).toBeNull();
+    fireEvent.click(within(nav).getByRole("button", { name: "专家" }));
+    expect(await screen.findByTestId("experts-panel")).toHaveTextContent("experts");
   });
 });

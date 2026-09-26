@@ -279,7 +279,7 @@ describe("Sidebar", () => {
     expect(within(menu).getByText("我的文件")).toBeInTheDocument();
     expect(within(menu).getByText("知识库")).toBeInTheDocument();
     expect(within(menu).getByText("个人记忆")).toBeInTheDocument();
-    expect(within(menu).getByText("插件市场")).toBeInTheDocument();
+    expect(within(menu).queryByText("插件市场")).not.toBeInTheDocument();
     for (const settingsEntry of ["用量统计", "通知渠道", "云存储", "代码开发"]) {
       expect(within(menu).queryByText(settingsEntry)).not.toBeInTheDocument();
     }
@@ -288,17 +288,19 @@ describe("Sidebar", () => {
     }
   });
 
-  it("「更多」菜单的个人记忆与插件市场进入稳定路由", () => {
+  it("「更多」菜单的个人记忆进入稳定路由", () => {
     const onNavigate = vi.fn();
-    const { rerender } = render(<Sidebar {...base} onNavigate={onNavigate} />);
+    render(<Sidebar {...base} onNavigate={onNavigate} />);
     fireEvent.mouseEnter(screen.getByText("更多").closest(".sidebar__more-wrap")!);
     fireEvent.click(screen.getByText("个人记忆"));
     expect(onNavigate).toHaveBeenCalledWith("个人记忆");
 
-    rerender(<Sidebar {...base} onNavigate={onNavigate} />);
-    fireEvent.mouseEnter(screen.getByText("更多").closest(".sidebar__more-wrap")!);
-    fireEvent.click(screen.getByText("插件市场"));
-    expect(onNavigate).toHaveBeenCalledWith("插件·市场");
+  });
+
+  it.each(["专家·技能·连接器", "技能", "连接器", "插件·市场", "插件市场"])("能力子页 %s 始终选中同一个侧栏入口", activeNav => {
+    render(<Sidebar {...base} activeNav={activeNav} />);
+    expect(screen.getByRole("button", { name: "能力" })).toHaveClass("sidebar__nav-item--active");
+    expect(screen.getByText("更多").closest("button")).not.toHaveClass("sidebar__nav-item--active");
   });
 
   it("「更多」菜单可进入知识库", async () => {

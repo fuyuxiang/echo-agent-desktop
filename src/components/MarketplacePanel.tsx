@@ -472,7 +472,7 @@ function MarketplacePluginCard({
           {sourceName && <span>来源：{sourceName}</span>}
           {plugin.author && <span>作者：{plugin.author}</span>}
           {plugin.skillCount > 0 && <span>{plugin.skillCount} 技能</span>}
-          {plugin.hasAgents && <span>含助理</span>}
+          {plugin.hasAgents && <span>含专家</span>}
           {plugin.hasHooks && <span>含 Hooks</span>}
           {plugin.hasMcp && <span>含 MCP</span>}
           {plugin.homepage && (

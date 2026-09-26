@@ -22,9 +22,10 @@ interface PluginsPanelProps {
   /** Current session id (for the plugins/list call). */
   sessionId?: string;
   onToast?: (msg: string) => void;
+  onBrowseMarket?: () => void;
 }
 
-export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
+export function PluginsPanel({ sessionId, onToast, onBrowseMarket }: PluginsPanelProps) {
   const [plugins, setPlugins] = useState<PluginEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -103,8 +104,9 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
             <PuzzlePieceIcon size="xl" color="var(--echo-text-tertiary)" />
             <p>暂无插件。</p>
             <p className="plugins-panel__hint">
-              在「市场」tab 安装插件，或把插件放到 <code>~/.echo-agent/plugins/</code>。
+              浏览市场安装插件，或把插件放到 <code>~/.echo-agent/plugins/</code>。
             </p>
+            {onBrowseMarket && <button type="button" className="form-button" onClick={onBrowseMarket}>浏览市场</button>}
           </div>
         )}
         {plugins.map((p) => (
@@ -136,7 +138,7 @@ export function PluginsPanel({ sessionId, onToast }: PluginsPanelProps) {
                   <span title="技能"><SkillIcon size="sm" /> {p.skillCount}</span>
                 )}
                 {p.agentCount !== undefined && p.agentCount > 0 && (
-                  <span title="助理"><AgentToolIcon size="sm" /> {p.agentCount}</span>
+                  <span title="专家"><AgentToolIcon size="sm" /> {p.agentCount}</span>
                 )}
                 {p.mcpServerCount !== undefined && p.mcpServerCount > 0 && (
                   <span title="MCP"><McpIcon size="sm" /> {p.mcpServerCount}</span>

@@ -231,7 +231,7 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
   if (loading && !catalog && view === "center") {
     return (
       <div className="um-page">
-        <header className="um-topbar"><div className="um-topbar-left">{pills}</div></header>
+        {pills && <header className="um-topbar"><div className="um-topbar-left">{pills}</div></header>}
         <div className="um-scroll"><div className="ec-loading">加载全局专家目录…</div></div>
       </div>
     );
@@ -241,7 +241,7 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
   if (view === "my") {
     return (
       <div className="um-page">
-        <header className="um-topbar">
+        {(catalog || pills) && <header className="um-topbar">
           <div className="um-topbar-left">
             {catalog ? (
               <button type="button" className="um-back" onClick={() => setView("center")}>
@@ -249,9 +249,9 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
               </button>
             ) : pills}
           </div>
-        </header>
+        </header>}
         <div className="um-scroll">
-          <AssistantsPanel onUseAssistant={handleUseLocal} onToast={onToast} />
+          <AssistantsPanel embedded onUseAssistant={handleUseLocal} onToast={onToast} />
         </div>
       </div>
     );
@@ -261,7 +261,7 @@ export function ExpertsTab({ pills, onGoHome, onToast }: Props) {
   return (
     <div className="um-page">
       <header className="um-topbar">
-        <div className="um-topbar-left">{pills}</div>
+        <div className="um-topbar-left">{pills ?? <h2 className="capabilities-section-title">专家目录</h2>}</div>
         <div className="um-topbar-right">
           <div className="um-search">
             <SearchIcon size="sm" className="um-search-icon" />

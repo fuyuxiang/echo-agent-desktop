@@ -422,6 +422,21 @@ describe("Composer drag-drop via Tauri native event", () => {
     expect(await screen.findByText("b.jpg")).toBeInTheDocument();
   });
 
+  it("does not attach a late native inspection result to another task", async () => {
+    let resolve!: (value: unknown) => void;
+    vi.mocked(invoke).mockImplementation(async (cmd, args) => {
+      if (cmd === "filesystem_attachment_stats") return new Promise(accept => { resolve = accept; });
+      return defaultInvoke(cmd, (args ?? {}) as Parameters<typeof defaultInvoke>[1]);
+    });
+    const onToast = vi.fn();
+    const view = render(<Composer {...base} draftKey="drop-source" onToast={onToast} />);
+    act(() => dragDropCallback!({ payload: { type: "drop", paths: ["/work/late.txt"], position: { x: 0, y: 0 } } }));
+    view.rerender(<Composer {...base} draftKey="drop-target" onToast={onToast} />);
+    await act(async () => resolve({ files: [{ inputPath: "/work/late.txt", path: "/work/late.txt", sizeBytes: 4 }], rejected: [] }));
+    expect(screen.queryByText("late.txt")).toBeNull();
+    expect(onToast).not.toHaveBeenCalled();
+  });
+
   it("drop accepts text/code/pdf paths as attachments", async () => {
     render(<Composer {...base} />);
     expect(dragDropCallback).not.toBeNull();

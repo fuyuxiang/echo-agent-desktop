@@ -85,7 +85,7 @@ export function ProjectSwitcher({
         aria-label="切换项目"
         aria-expanded={open}
         aria-haspopup="menu"
-        title={activeCwd}
+        title={`当前项目：${activeLabel}\n${activeCwd}`}
         onClick={() => setOpen((value) => !value)}
         onKeyDown={(event) => {
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -95,6 +95,7 @@ export function ProjectSwitcher({
         }}
       >
         <FolderGit2 size={13} aria-hidden />
+        <small className="coding-project-switcher__label">项目</small>
         <span>{activeLabel}</span>
         {dirtyCount > 0 && (
           <b title={`${dirtyCount} 个未保存文件`} aria-label={`${dirtyCount} 个未保存文件`}>

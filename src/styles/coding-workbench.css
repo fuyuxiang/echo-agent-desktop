@@ -833,11 +833,11 @@
   gap: 5px;
   min-width: 0;
   max-width: 230px;
-  height: 28px;
+  height: 30px;
   padding: 0 7px;
-  border: 1px solid transparent;
+  border: 1px solid var(--echo-border-default);
   border-radius: 6px;
-  background: transparent;
+  background: var(--echo-bg-secondary);
   color: var(--echo-text-medium);
   font: inherit;
   cursor: pointer;
@@ -855,6 +855,12 @@
   min-width: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.coding-project-switcher__label {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--echo-text-weak);
 }
 
 .coding-project-switcher__toggle > b {

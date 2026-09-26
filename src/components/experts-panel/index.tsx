@@ -10,20 +10,22 @@ interface Props {
   onToast?: (message: string) => void;
   /** Slash navigation can open a specific capability tab directly. */
   initialTab?: MarketTab;
+  /** The capability page owns navigation; standalone callers retain pills. */
+  hideNavigation?: boolean;
 }
 
 /** 专家·技能·连接器 — EchoAgent-style unified market page.
  *  The pill group is rendered once here and passed into each tab's topbar
  *  left slot, mirroring EchoAgent's `headerLeft` pattern. */
-export function ExpertsPanel({ onGoHome, onToast, initialTab = "experts" }: Props) {
+export function ExpertsPanel({ onGoHome, onToast, initialTab = "experts", hideNavigation = false }: Props) {
   const [tab, setTab] = useState<MarketTab>(initialTab);
 
   useEffect(() => setTab(initialTab), [initialTab]);
 
-  const pills = <MarketPills active={tab} onChange={setTab} />;
+  const pills = hideNavigation ? null : <MarketPills active={tab} onChange={setTab} />;
 
   return (
-    <div className="um-market">
+    <div className={`um-market${hideNavigation ? " um-market--embedded" : ""}`}>
       {tab === "experts" && (
         <ExpertsTab pills={pills} onGoHome={onGoHome} onToast={onToast} />
       )}

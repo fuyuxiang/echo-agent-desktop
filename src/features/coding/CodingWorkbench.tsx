@@ -7,8 +7,6 @@ import {
   type CSSProperties,
 } from "react";
 import {
-  ArrowLeft,
-  Code2,
   FolderGit2,
   GitBranch,
   LoaderCircle,
@@ -65,6 +63,7 @@ import { ImpactAnalysisView } from "./main/ImpactAnalysisView";
 import { TaskDagTab } from "./main/docs/TaskDagTab";
 import { VerificationView } from "./panels/VerificationView";
 import { ProjectSwitcher } from "./shell/ProjectSwitcher";
+import { WorkbenchIdentity } from "./shell/WorkbenchIdentity";
 import { TaskSwitcher } from "./shell/TaskSwitcher";
 import { useTaskStore } from "./store/task-store";
 
@@ -1140,17 +1139,7 @@ export function CodingWorkbench({
     return (
       <div ref={workbenchRef} className="coding-workbench coding-workbench--empty">
         <header className="coding-workbench__topbar" data-tauri-drag-region>
-          <div className="coding-workbench__topbar-left" data-tauri-drag-region>
-            <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
-              <ArrowLeft size={16} />
-            </button>
-            <div className="coding-workbench__product" data-tauri-drag-region>
-              <span className="coding-workbench__product-mark" aria-hidden="true">
-                <Code2 size={14} />
-              </span>
-              <strong>Echo Code</strong>
-            </div>
-          </div>
+          <WorkbenchIdentity onExit={exitSafely} />
         </header>
         <div className="coding-workbench__welcome">
           <FolderGit2 size={32} />
@@ -1187,15 +1176,7 @@ export function CodingWorkbench({
       style={{ "--echo-agent-width": `${agentWidth}px` } as CSSProperties}
     >
       <header className="coding-workbench__topbar" data-tauri-drag-region>
-        <div className="coding-workbench__topbar-left" data-tauri-drag-region>
-          <button type="button" className="coding-icon-btn" onClick={exitSafely} aria-label="返回">
-            <ArrowLeft size={16} />
-          </button>
-          <div className="coding-workbench__product" data-tauri-drag-region>
-            <span className="coding-workbench__product-mark" aria-hidden="true"><Code2 size={14} /></span>
-            <strong>Echo Code</strong>
-          </div>
-          <span className="coding-workbench__topbar-separator" aria-hidden="true" />
+        <WorkbenchIdentity onExit={exitSafely}>
           <ProjectSwitcher
             projects={recentCodingProjects.map((project) => ({ ...project, label: projectLabels[project.cwd] }))}
             activeCwd={activeCodingWorkspaceCwd || cwd}
@@ -1204,7 +1185,7 @@ export function CodingWorkbench({
             onRemove={removeRecentProject}
             onOpenFolder={openAnotherProject}
           />
-        </div>
+        </WorkbenchIdentity>
         <div className="coding-workbench__topbar-right" data-tauri-drag-region>
           <div className="echo-theia-preview" ref={theiaPreviewRef}>
             <button type="button" className="echo-theia-toolbar-button" aria-label="网页预览" aria-expanded={theiaPreviewOpen} onClick={() => setTheiaPreviewOpen((open) => !open)}>

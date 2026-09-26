@@ -45,6 +45,7 @@ describe("NotifyChannelsPanel", () => {
 
   it("添加渠道后持久化并显示在列表", async () => {
     render(<NotifyChannelsPanel onToast={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole("combobox")).toBeEnabled());
     const inputs = screen.getAllByRole("textbox");
     fireEvent.change(inputs[0], { target: { value: "我的Slack" } });
     fireEvent.change(inputs[1], { target: { value: "https://hooks.slack.com/x" } });

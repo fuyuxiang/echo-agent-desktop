@@ -1,11 +1,12 @@
 import "@/styles/panel-navigation.css";
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { AgentToolIcon } from "@/foundation/components/Icon/icons";
 import type { ProjectMeta } from "@/stores/projects-store";
 import { openExternalUrl, openLocalPath } from "@/lib/agent-client";
 import type { WorkspaceInfo } from "@/lib/agent-client";
 import type { ModelOption } from "./ModelSelector";
 import type { SlashCommandInvocation } from "@/lib/slash-commands";
+import { CAPABILITY_NAV_ITEMS } from "@/lib/capability-navigation";
 
 const ProjectsPanel = lazy(() =>
   import("./ProjectsPanel").then((module) => ({ default: module.ProjectsPanel })),
@@ -55,12 +56,13 @@ const CodingWorkbench = lazy(() =>
 function PanelNavigation({ family, active, onNavigate }: { family: "context" | "capabilities"; active: string; onNavigate?: (label: string) => void }) {
   const tabs = family === "context"
     ? [["知识库", "知识资料"], ["个人记忆", "个人记忆"]]
-    : [["专家·技能·连接器", "专家、技能与连接器"], ["插件·市场", "插件市场"]];
-  return <nav className="panel-navigation" aria-label={family === "context" ? "资料与记忆" : "能力管理"}>
+    : CAPABILITY_NAV_ITEMS.map(({ route, title }) => [route, title]);
+  return <nav className={`panel-navigation${family === "capabilities" ? " panel-navigation--capabilities" : ""}`} aria-label={family === "context" ? "资料与记忆" : "能力管理"}>
     <strong>{family === "context" ? "资料与记忆" : "能力"}</strong>
-    {tabs.map(([route, title]) => <button key={route} type="button" aria-current={route === active ? "page" : undefined}
-      onClick={() => onNavigate?.(route)}>{title}</button>)}
-    <span>{family === "context" ? "资料由你选择，记忆可查看和修订；是否发送由当前任务的来源设置决定。" : "选择当前任务需要的能力，可在详情中查看来源与权限。"}</span>
+    <div className="panel-navigation__links">{tabs.map(([route, title]) => <button key={route} type="button" aria-current={route === active ? "page" : undefined}
+      onClick={() => onNavigate?.(route)}>{title}</button>)}</div>
+    {family === "capabilities" && <button className="panel-navigation__market" type="button" aria-current={active === "插件市场" ? "page" : undefined} onClick={() => onNavigate?.("插件市场")}>浏览市场</button>}
+    {family === "context" && <span>资料由你选择，记忆可查看和修订；是否发送由当前任务的来源设置决定。</span>}
   </nav>;
 }
 
@@ -223,7 +225,7 @@ export function PlaceholderPage({
     const initialTab = label === "技能" ? "skills" : label === "连接器" ? "connectors" : "experts";
     return (
       <DeferredPanel>
-        <div className="panel-section"><PanelNavigation family="capabilities" active="专家·技能·连接器" onNavigate={onNavigate} /><ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} /></div>
+        <div className="panel-section panel-section--capabilities"><PanelNavigation family="capabilities" active={label} onNavigate={onNavigate} /><ExpertsPanel onGoHome={onGoHome} onToast={onToast} initialTab={initialTab} hideNavigation /></div>
       </DeferredPanel>
     );
   }
@@ -273,13 +275,11 @@ export function PlaceholderPage({
   if (label === "插件·市场" || label === "插件市场") {
     return (
       <DeferredPanel>
-        <div className="panel-section"><PanelNavigation family="capabilities" active="插件·市场" onNavigate={onNavigate} />
-        <PluginsMarketTabs
-          key={label}
-          sessionId={sessionId}
-          onToast={onToast}
-          initialTab={label === "插件市场" ? "marketplace" : "plugins"}
-        /></div>
+        <div className="panel-section panel-section--capabilities"><PanelNavigation family="capabilities" active={label} onNavigate={onNavigate} />
+          <div className="capabilities-content">
+            {label === "插件市场" ? <MarketplacePanel sessionId={sessionId} onToast={onToast} /> : <PluginsPanel sessionId={sessionId} onToast={onToast} onBrowseMarket={() => onNavigate?.("插件市场")} />}
+          </div>
+        </div>
       </DeferredPanel>
     );
   }
@@ -370,43 +370,6 @@ export function PlaceholderPage({
       <h2 className="placeholder-page__title">无法打开「{label}」</h2>
       <p className="placeholder-page__desc">当前版本未注册该功能路由，请返回首页重试。</p>
       {onGoHome && <button type="button" className="btn btn--primary" onClick={onGoHome}>返回首页</button>}
-    </div>
-  );
-}
-
-/** 双 tab 容器：插件（已安装）/ 市场（可浏览安装）。 */
-import { PuzzlePieceIcon, RepoIcon } from "@/foundation/components/Icon/icons";
-function PluginsMarketTabs({
-  sessionId,
-  onToast,
-  initialTab = "plugins",
-}: {
-  sessionId?: string;
-  onToast?: (msg: string) => void;
-  initialTab?: "plugins" | "marketplace";
-}) {
-  const [tab, setTab] = useState<"plugins" | "marketplace">(initialTab);
-  return (
-    <div className="plugins-market-wrap">
-      <div className="plugins-market-tabs">
-        <button
-          className={`plugins-market-tab ${tab === "plugins" ? "plugins-market-tab--active" : ""}`}
-          onClick={() => setTab("plugins")}
-        >
-          <PuzzlePieceIcon size="sm" /> 插件
-        </button>
-        <button
-          className={`plugins-market-tab ${tab === "marketplace" ? "plugins-market-tab--active" : ""}`}
-          onClick={() => setTab("marketplace")}
-        >
-          <RepoIcon size="sm" /> 市场
-        </button>
-      </div>
-      {tab === "plugins" ? (
-        <PluginsPanel sessionId={sessionId} onToast={onToast} />
-      ) : (
-        <MarketplacePanel sessionId={sessionId} onToast={onToast} />
-      )}
     </div>
   );
 }

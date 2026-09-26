@@ -44,4 +44,16 @@ describe("draft and outbox recovery", () => {
     expect(() => queue.getState().enqueue("s1", "draft")).toThrow();
     expect(localStorage.getItem("echoagent.outbox.v1")).toBe(raw);
   });
+
+  it("keeps attachment edits available when disk persistence fails and retries later", async () => {
+    const { draftAttachments, saveDraftAttachments } = await import("../draft-attachments");
+    saveDraftAttachments("s1", ["/work/old.png"]);
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("Full", "QuotaExceededError"); });
+    saveDraftAttachments("s1", ["/work/new.png"]);
+    expect(draftAttachments("s1")).toEqual(["/work/new.png"]);
+    write.mockRestore();
+    saveDraftAttachments("s1", ["/work/new.png"]);
+    vi.resetModules();
+    expect((await import("../draft-attachments")).draftAttachments("s1")).toEqual(["/work/new.png"]);
+  });
 });

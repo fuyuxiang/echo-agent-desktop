@@ -18,9 +18,9 @@ export type ConnectorAuthState = "none" | "installed" | "needs-auth" | "authed";
 export function ConnectorsTab({ pills, onToast }: Props) {
   return (
     <div className="um-page">
-      <header className="um-topbar">
+      {pills && <header className="um-topbar">
         <div className="um-topbar-left">{pills}</div>
-      </header>
+      </header>}
       <div className="um-scroll um-scroll--mcp">
         <McpModal embedded onClose={() => {}} onToast={onToast} />
       </div>

@@ -1,12 +1,12 @@
 /**
- * 助理面板 — 1:1 复刻 EchoAgent colleagues-panel
+ * 专家面板 — 1:1 复刻 EchoAgent colleagues-panel
  *
  * UI 结构对齐 EchoAgent:
  *  - dashboard 模式: 顶部 section-header + 卡片网格
  *  - colleague-card: 头像(带状态指示灯) + 名称 + 角色标签 + 描述 + 对话按钮
  *  - 右键/三点菜单: 编辑 / 删除
  *  - CreateColleagueDialog: modal 弹窗，含 "从模板创建" / "从专家雇佣" 两个 tab
- *  - 点击卡片 → 助理个人资料页(profile)
+ *  - 点击卡片 → 专家个人资料页(profile)
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -118,9 +118,10 @@ interface AssistantsPanelProps {
   onUseAssistant?: (agent: AgentEntry) => void;
   onToast?: (message: string) => void;
   onPlaceholder?: (label: string) => void;
+  embedded?: boolean;
 }
 
-export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProps) {
+export function AssistantsPanel({ onUseAssistant, onToast, embedded = false }: AssistantsPanelProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [userAssistants, setUserAssistants] = useState<AgentEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -142,7 +143,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
       if (reloadGeneration.current !== generation) return;
       const message = String(e).replace(/^Error:\s*/, "");
       setLoadError(message);
-      onToast?.(`加载助理失败：${message}`);
+      onToast?.(`加载专家失败：${message}`);
     } finally {
       if (reloadGeneration.current === generation) setLoading(false);
     }
@@ -201,7 +202,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
         cleanupWarning
           ? `新名称已保存，但旧文件移除失败：${cleanupWarning}`
           : draft.isNew
-            ? `已创建助理「${saved.name}」`
+            ? `已创建专家「${saved.name}」`
             : "已保存",
       );
       setEditing(null);
@@ -213,9 +214,9 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
 
   const handleDelete = useCallback((agent: AgentEntry) => {
     requestConfirmation({
-      title: `删除助理“${agent.name}”？`,
-      description: "该助理的本地配置将被删除，此操作无法撤销。",
-      confirmLabel: "删除助理",
+      title: `删除专家“${agent.name}”？`,
+      description: "该专家的本地配置将被删除，此操作无法撤销。",
+      confirmLabel: "删除专家",
       danger: true,
       action: async () => {
         await agentsDelete(agent.path);
@@ -253,20 +254,20 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
   }
 
   return (
-    <div className="colleagues-panel-shell">
+    <div className={`colleagues-panel-shell${embedded ? " colleagues-panel-shell--embedded" : ""}`}>
       <div className="colleagues-panel colleagues-panel--dashboard">
         {/* Section Header */}
         <div className="colleagues-panel-section">
           <div className="colleagues-panel-section-header colleagues-panel-section-header--dashboard">
-            <h2 className="colleagues-panel-section-title">助理</h2>
+            <h2 className="colleagues-panel-section-title">我的专家</h2>
             <div className="colleagues-panel-section-actions">
               <div className="colleagues-panel-search-wrap">
                 <SearchIcon size="sm" className="colleagues-panel-search-icon" />
                 <input
                   type="text"
                   className="colleagues-panel-search-input"
-                  aria-label="搜索助理"
-                  placeholder="搜索助理..."
+                  aria-label="搜索专家"
+                  placeholder="搜索专家..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -279,7 +280,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
                 })}
               >
                 <AddCircleIcon size="sm" />
-                <span>创建助理</span>
+                <span>创建专家</span>
               </button>
             </div>
           </div>
@@ -290,7 +291,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
           )}
           {loadError && (
             <div className="panel-inline-error" role="alert">
-              <span>助理列表加载失败：{loadError}</span>
+              <span>专家列表加载失败：{loadError}</span>
               <button type="button" onClick={() => void reload()} disabled={loading}>
                 {loading ? "重试中…" : "重试"}
               </button>
@@ -299,7 +300,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
           {!loading && !loadError && filteredAssistants.length === 0 && userAssistants.length === 0 && (
             <div className="colleagues-panel-state colleagues-panel-state--empty">
               <AssistantIcon size="xl" className="colleagues-panel-empty-icon" />
-              <p>还没有助理，从下方模板创建一个吧</p>
+              <p>创建你的第一个专家，或选择下方模板开始</p>
             </div>
           )}
 
@@ -336,7 +337,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
                         type="button"
                         className="colleague-card-profile-main"
                         onClick={() => setProfileAgent(agent)}
-                        aria-label={`查看助理 ${agent.name} 详情`}
+                        aria-label={`查看专家 ${agent.name} 详情`}
                       >
                         {/* Identity */}
                         <div className="colleague-card-identity">
@@ -349,7 +350,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
                               </span>
                             </div>
                             <div className="colleague-card-role">
-                              {agent.modelTags?.map((t) => MODEL_TAGS.find(m => m.key === t)?.label ?? t).join(" · ") || "通用助理"}
+                              {agent.modelTags?.map((t) => MODEL_TAGS.find(m => m.key === t)?.label ?? t).join(" · ") || "通用专家"}
                             </div>
                           </div>
                         </div>
@@ -423,7 +424,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
               </h3>
             </div>
             <p className="colleagues-panel-hire-hint">
-              选一个现有专家作为模板，可改名/换头像后另存为新助理。
+              选一个现有专家作为模板，可改名/换头像后另存为新专家。
             </p>
             <div className="colleagues-panel-hire-list">
               {userAssistants.slice(0, 8).map((expert) => (
@@ -431,7 +432,7 @@ export function AssistantsPanel({ onUseAssistant, onToast }: AssistantsPanelProp
                   key={expert.path}
                   className="colleagues-panel-hire-item"
                   onClick={() => openFromHireExpert(expert)}
-                  title={`基于「${expert.name}」创建新助理`}
+                  title={`基于「${expert.name}」创建新专家`}
                 >
                   <ColleagueAvatar index={expert.avatar} name={expert.name} size={32} />
                   <span>{expert.name}</span>
@@ -483,7 +484,7 @@ function ColleagueProfile({
         <div className="colleague-profile-info">
           <h2 className="colleague-profile-name">{agent.name}</h2>
           <p className="colleague-profile-role">
-            {agent.modelTags?.map((t) => MODEL_TAGS.find(m => m.key === t)?.label ?? t).join(" · ") || "通用助理"}
+            {agent.modelTags?.map((t) => MODEL_TAGS.find(m => m.key === t)?.label ?? t).join(" · ") || "通用专家"}
           </p>
           <p className="colleague-profile-desc">{agent.description ?? "（无描述）"}</p>
           <div className="colleague-profile-meta">
@@ -579,11 +580,11 @@ function CreateColleagueDialog({
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label={d.isNew ? "创建助理" : `编辑 ${d.name}`}
+        aria-label={d.isNew ? "创建专家" : `编辑 ${d.name}`}
         tabIndex={-1}
       >
         <div className="create-colleague-header">
-          <h3>{d.isNew ? "创建助理" : `编辑 ${d.name}`}</h3>
+          <h3>{d.isNew ? "创建专家" : `编辑 ${d.name}`}</h3>
           <button className="create-colleague-close" onClick={cancel} aria-label="关闭" disabled={saving}>
             <XCloseIcon size="md" />
           </button>
@@ -662,7 +663,7 @@ function CreateColleagueDialog({
               <input
                 type="text"
                 className="create-colleague-input"
-                aria-label="助理名称"
+                aria-label="专家名称"
                 value={d.name}
                 disabled={saving}
                 onChange={(e) => set("name", e.target.value)}
@@ -677,11 +678,11 @@ function CreateColleagueDialog({
               <input
                 type="text"
                 className="create-colleague-input"
-                aria-label="助理描述"
+                aria-label="专家描述"
                 value={d.description}
                 disabled={saving}
                 onChange={(e) => set("description", e.target.value)}
-                placeholder="一句话描述助理的职责"
+                placeholder="一句话描述专家的职责"
               />
             </div>
 
@@ -710,12 +711,12 @@ function CreateColleagueDialog({
               <label className="create-colleague-label">System Prompt</label>
               <textarea
                 className="create-colleague-textarea"
-                aria-label="助理 System Prompt"
+                aria-label="专家 System Prompt"
                 value={d.systemPrompt}
                 disabled={saving}
                 onChange={(e) => set("systemPrompt", e.target.value)}
                 rows={6}
-                placeholder="定义助理的角色、语气、行为约束…"
+                placeholder="定义专家的角色、语气、行为约束…"
               />
             </div>
           </div>

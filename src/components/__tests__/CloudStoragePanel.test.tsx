@@ -44,7 +44,7 @@ describe("CloudStoragePanel", () => {
   it("可编辑已有配置并保留密码掩码", async () => {
     await selectProvider();
     fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
-    expect(screen.getByPlaceholderText("显示名")).toHaveValue("团队网盘");
+    expect(screen.getByRole("textbox", { name: "存储源显示名" })).toHaveValue("团队网盘");
     expect(screen.getByDisplayValue("••••")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(saveStorageProviderConfig).toHaveBeenCalledWith(expect.objectContaining({ id: "dav", password: "••••" })));

@@ -145,8 +145,8 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
   return (
     <div className="notify-panel" role="region" aria-label="通知渠道">
       <div className="notify-panel__head">
-        <span className="notify-panel__title">通知渠道</span>
-        <span className="notify-panel__hint">推送 agent 通知到 Slack、Discord、Webhook 或系统桌面通知</span>
+        <span className="notify-panel__title">已配置渠道</span>
+        <span className="notify-panel__hint">{loading ? "正在读取…" : loadError ? "读取失败" : `${channels.length} 个渠道`}</span>
       </div>
 
       {loadError && (
@@ -187,27 +187,30 @@ export function NotifyChannelsPanel({ onToast }: { onToast?: (msg: string) => vo
 
       {/* 添加新渠道 */}
       <div className="notify-panel__add">
-        <select aria-label="通知渠道类型" value={newKind} onChange={(e) => setNewKind(e.target.value as ChannelKind)}>
+        <label className="notify-panel__field">渠道类型<select className="form-control" aria-label="通知渠道类型" value={newKind} disabled={mutating !== null || loading || Boolean(loadError)} onChange={(e) => setNewKind(e.target.value as ChannelKind)}>
           {ADDABLE_KINDS.map((kind) => (
             <option key={kind} value={kind}>{KIND_LABELS[kind]}</option>
           ))}
-        </select>
-        <input
+        </select></label>
+        <label className="notify-panel__field">显示名（可选）<input
+          className="form-control"
           type="text"
           aria-label="通知渠道显示名"
           placeholder="显示名(可选)"
           value={newLabel}
+          disabled={mutating !== null || loading || Boolean(loadError)}
           onChange={(e) => setNewLabel(e.target.value)}
-        />
-        <input
+        /></label>
+        <label className="notify-panel__field notify-panel__field--endpoint">Webhook URL<input
+          className="form-control"
           type="text"
           aria-label="Webhook URL"
           placeholder={newKind === "desktop" ? "(桌面通知无需 endpoint)" : "Webhook URL"}
           value={newEndpoint}
           onChange={(e) => setNewEndpoint(e.target.value)}
-          disabled={newKind === "desktop"}
-        />
-        <button type="button" className="notify-panel__add-btn" onClick={() => void add()} disabled={mutating !== null}>
+          disabled={newKind === "desktop" || mutating !== null || loading || Boolean(loadError)}
+        /></label>
+        <button type="button" className="form-button form-button--primary" onClick={() => void add()} disabled={mutating !== null || loading || Boolean(loadError) || (newKind !== "desktop" && !newEndpoint.trim())}>
           {mutating === "add" ? "添加中…" : "+ 添加"}
         </button>
       </div>

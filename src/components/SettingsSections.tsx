@@ -386,9 +386,9 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
       desc="本地、可审阅的跨会话记忆。会话摘要是自动提取的中间资料，不是完整聊天记录。"
     >
       {loadError && <div role="alert" className="settings-hint">配置未加载，暂时无法修改。<button className="btn-secondary" onClick={() => setReload((n) => n + 1)}>重新加载</button></div>}
-      <SettingsGroup title="检索与数据来源" desc="记忆文件保存在本机。生成摘要和整理内容会使用当前会话的模型服务。">
-        <label className="settings-row">检索方式
-          <select aria-label="记忆检索方式" disabled={loading || loadError || busy} value={config.retrievalMode ?? "local"} onChange={(event) => {
+      <SettingsGroup title="检索与数据来源">
+        <label className="settings-row settings-row--retrieval"><span className="settings-row__name">检索方式</span>
+          <select className="form-control" aria-label="记忆检索方式" aria-describedby="memory-retrieval-description" disabled={loading || loadError || busy} value={config.retrievalMode ?? "local"} onChange={(event) => {
             const mode = event.target.value;
             if (mode === "builtin") {
               requestConfirmation({ title: "启用远端记忆检索？", description: "查询与记忆片段会发送至 http://123.56.188.16:8088/v1。该服务使用明文 HTTP，请勿用于敏感资料。修改在重启 Agent 后生效。", confirmLabel: "确认使用此服务", action: () => updateConfig("retrievalMode", mode) });
@@ -399,10 +399,10 @@ export function MemorySettingsPanel({ sessionId }: { sessionId?: string }) {
             <option value="builtin">内置远端服务（HTTP）</option>
           </select>
         </label>
-        <p className="settings-hint">{config.retrievalSummary ?? "本机检索不会向独立的向量化或重排服务发送内容。"}</p>
-        <p className="settings-hint">检索方式修改后，请重启 Agent 使其生效；已有会话在重启前继续使用原配置。</p>
+        <p id="memory-retrieval-description" className="settings-field-help">{config.retrievalSummary ?? "本机检索不会向独立的向量化或重排服务发送内容。"}</p>
+        <p className="settings-field-help">修改后重启 Agent 生效；重启前，已有会话继续使用原配置。</p>
       </SettingsGroup>
-      <SettingsGroup title="记忆能力" desc="修改后会原子写入本地配置，重启 Agent 后对新会话生效。">
+      <SettingsGroup title="记忆能力" desc="提取摘要和整理内容会使用当前会话的模型服务。">
         {toggles.map((toggle) => (
           <div className="settings-row settings-row--comfortable" key={toggle.key}>
             <div className="settings-row__label settings-row__label--stacked">
@@ -772,21 +772,21 @@ export function SecuritySettingsPanel() {
         <div className="permission-rule-builder">
           <label className="permission-rule-builder__field">
             <span>处理方式</span>
-            <select className="settings-select" value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value })} aria-label="规则动作" disabled={loading || Boolean(rulesError)}>
-              <option value="deny">拒绝 deny</option>
-              <option value="ask">询问 ask</option>
-              <option value="allow">允许 allow</option>
+            <select className="form-control" value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.target.value })} aria-label="规则动作" disabled={loading || Boolean(rulesError)}>
+              <option value="deny">拒绝</option>
+              <option value="ask">询问</option>
+              <option value="allow">允许</option>
             </select>
           </label>
           <label className="permission-rule-builder__field">
             <span>工具类型</span>
-            <select className="settings-select" value={draft.tool} onChange={(e) => setDraft({ ...draft, tool: e.target.value })} aria-label="工具类型" disabled={loading || Boolean(rulesError)}>
+            <select className="form-control" value={draft.tool} onChange={(e) => setDraft({ ...draft, tool: e.target.value })} aria-label="工具类型" disabled={loading || Boolean(rulesError)}>
               {['bash', 'read', 'edit', 'grep', 'mcp', 'webfetch', 'any'].map((tool) => <option key={tool} value={tool}>{tool}</option>)}
             </select>
           </label>
           <label className="permission-rule-builder__field permission-rule-builder__field--pattern">
             <span>匹配模式（可选）</span>
-            <input className="settings-input" value={draft.pattern ?? ""} onChange={(e) => setDraft({ ...draft, pattern: e.target.value })} placeholder="例如 git *" disabled={loading || Boolean(rulesError)} />
+            <input className="form-control" value={draft.pattern ?? ""} onChange={(e) => setDraft({ ...draft, pattern: e.target.value })} placeholder="例如 git *" disabled={loading || Boolean(rulesError)} />
           </label>
         </div>
         <div className="settings-group__footer">

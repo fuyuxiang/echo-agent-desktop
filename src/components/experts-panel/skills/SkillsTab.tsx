@@ -208,7 +208,7 @@ export function SkillsTab({ pills, onToast }: Props) {
   return (
     <div className="um-page">
       <header className="um-topbar">
-        <div className="um-topbar-left">{pills}</div>
+        <div className="um-topbar-left">{pills ?? <h2 className="capabilities-section-title">已安装技能</h2>}</div>
         <div className="um-topbar-right">
           <div className="um-search">
             <SearchIcon size="sm" className="um-search-icon" />

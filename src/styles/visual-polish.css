@@ -1,7 +1,7 @@
 /*
  * EchoAgent visual polish layer
  *
- * This file intentionally loads last. It turns the existing collection of
+ * This file loads after feature layouts and before shared form controls. It turns the existing collection of
  * feature-specific layouts into one visual system without changing product
  * behavior or the component API.
  */
@@ -2015,27 +2015,6 @@ button,
   box-shadow: var(--ui-shadow-sm);
 }
 
-.plugins-market-wrap {
-  background: transparent;
-}
-
-.plugins-market-tabs {
-  width: auto;
-  margin: 18px max(32px, calc((100% - var(--ui-content-width)) / 2 + 32px)) 0;
-  padding: 4px;
-  border: 1px solid var(--ui-line);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--ui-surface) 72%, transparent);
-}
-
-.plugins-market-tab {
-  border-radius: 9px;
-}
-
-.plugins-market-tab--active {
-  box-shadow: var(--ui-shadow-xs);
-}
-
 /* ---------- Files ---------- */
 
 .myfiles-panel {
@@ -2138,12 +2117,13 @@ button,
 }
 
 .kb-panel,
-.quota-panel,
-.notify-panel,
-.storage-panel {
+.quota-panel {
   min-height: 460px;
   font-size: 14px;
 }
+
+.notify-panel,
+.storage-panel { font-size: 14px; }
 
 .kb-panel__head,
 .quota-panel__head,
@@ -2156,13 +2136,14 @@ button,
 }
 
 .kb-panel__title,
-.quota-panel__title,
-.notify-panel__title,
-.storage-panel__title {
+.quota-panel__title {
   font-size: 20px;
   font-weight: 720;
   letter-spacing: -0.02em;
 }
+
+.notify-panel__title,
+.storage-panel__title { font-size: 16px; font-weight: 650; }
 
 .kb-panel__input {
   height: 40px;
@@ -2519,12 +2500,10 @@ button,
     flex: 1 1 220px;
   }
 
-  .notify-panel__add,
   .browser-preview__toolbar {
     flex-wrap: wrap;
   }
 
-  .notify-panel__add input,
   .browser-preview__input {
     flex-basis: 260px;
   }
@@ -3376,7 +3355,6 @@ button,
 
 .settings-btn,
 .settings-reset,
-.settings-select,
 .settings-input,
 .theme-toggle__btn {
   min-height: 36px;
@@ -3763,7 +3741,6 @@ button,
 
 .settings-btn:focus-visible,
 .settings-reset:focus-visible,
-.settings-select:focus-visible,
 .settings-input:focus-visible,
 .theme-toggle__btn:focus-visible,
 .notification-filter:focus-visible,
@@ -3774,17 +3751,12 @@ button,
   outline-offset: 2px;
 }
 
-.settings-select,
 .settings-input {
   width: 100%;
   padding: 8px 11px;
   border: 1px solid var(--ui-line-strong);
   background: var(--ui-surface);
   color: var(--echo-text-strong);
-}
-
-.settings-select {
-  cursor: pointer;
 }
 
 .settings-input--narrow {
@@ -3794,13 +3766,28 @@ button,
 
 .settings-msg,
 .settings-hint {
-  margin: -16px 0 0;
+  margin: 0;
   padding: 11px 13px;
   border: 1px solid var(--ui-line);
   border-radius: 9px;
   background: var(--ui-surface-muted);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.settings-group__content > .settings-hint,
+.settings-group__content > .settings-msg {
+  margin: 8px 4px;
+}
+
+.settings-row--retrieval { flex-wrap: wrap; }
+.settings-row--retrieval > select { width: min(100%, 310px); }
+.settings-field-help {
+  margin: 0;
+  padding: 0 12px 10px;
+  color: var(--echo-text-medium);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .theme-toggle {

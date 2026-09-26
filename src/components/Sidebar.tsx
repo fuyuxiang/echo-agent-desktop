@@ -3,6 +3,7 @@ import { useSessionsStore, selectHasFilter } from "@/stores/sessions-store";
 import { useProjectsStore } from "@/stores/projects-store";
 import { useOrgSessionStore } from "@/stores/org-session-store";
 import { IS_MACOS } from "@/lib/platform";
+import { isCapabilityView } from "@/lib/capability-navigation";
 import {
   agentRenameSession,
   agentDeleteSession,
@@ -31,7 +32,6 @@ import {
   BuildingIcon,
   MoreMenuImaKnowledgeIcon,
   MemoryIcon,
-  PluginsIcon,
   Code2Icon,
 } from "@/foundation/components/Icon/icons";
 import { SessionContextMenu } from "./SessionContextMenu";
@@ -418,22 +418,11 @@ function MoreDropdown({
         onNavigate("知识库");
       },
     },
-    {
-      id: "plugins",
-      label: "插件市场",
-      group: "工具",
-      icon: <PluginsIcon size="md" />,
-      action: () => {
-        setOpen(false);
-        onNavigate("插件·市场");
-      },
-    },
   ];
   const activeMoreLabel = activeNav === "资料库" ? "个人记忆" : activeNav;
   const isActive =
     activeNav === "更多" ||
-    ITEMS.some((item) => item.label === activeMoreLabel) ||
-    activeNav === "插件·市场";
+    ITEMS.some((item) => item.label === activeMoreLabel);
 
   return (
     <div
@@ -479,7 +468,7 @@ function MoreDropdown({
             triggerRef.current?.focus();
           })}
         >
-          {(["内容", "工具"] as const).map((group) => (
+          {(["内容", "工具"] as const).filter(group => ITEMS.some(item => item.group === group)).map((group) => (
             <div className="sidebar__more-group" key={group}>
               <div className="sidebar__more-group-title">{group}</div>
               {ITEMS.filter((item) => item.group === group).map((item) => (
@@ -488,8 +477,7 @@ function MoreDropdown({
                   type="button"
                   className={
                     "sidebar__more-item" +
-                    (activeMoreLabel === item.label ||
-                    (item.id === "plugins" && activeNav === "插件·市场")
+                    (activeMoreLabel === item.label
                       ? " sidebar__more-item--active"
                       : "")
                   }
@@ -925,7 +913,7 @@ export function Sidebar({
             key={label}
             className={
               "sidebar__nav-item" +
-              (activeNav === label ? " sidebar__nav-item--active" : "")
+              (activeNav === label || (label === "专家·技能·连接器" && isCapabilityView(activeNav)) ? " sidebar__nav-item--active" : "")
             }
             onClick={() => onNavigate(label)}
           >
